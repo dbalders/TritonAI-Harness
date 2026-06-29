@@ -2,8 +2,8 @@ name: Bug report
 description: Report broken behavior, regressions, crashes, or reliability issues.
 title: "[Bug]: "
 labels:
-  - bug
-  - needs-triage
+  - type:bug
+  - status:needs-review
 body:
   - type: markdown
     attributes:

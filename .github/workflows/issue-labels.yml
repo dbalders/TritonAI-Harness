@@ -23,19 +23,54 @@ jobs:
           script: |
             const managedLabels = [
               {
-                name: "bug",
+                name: "type:bug",
                 color: "d73a4a",
                 description: "Something is broken or behaving incorrectly.",
               },
               {
-                name: "enhancement",
+                name: "type:feature",
                 color: "a2eeef",
-                description: "Requested improvement or new capability.",
+                description: "A product idea, enhancement, or new capability request.",
               },
               {
-                name: "needs-triage",
+                name: "type:docs",
+                color: "0075ca",
+                description: "Documentation-only work.",
+              },
+              {
+                name: "type:question",
+                color: "d876e3",
+                description: "A question or support-style discussion.",
+              },
+              {
+                name: "type:maintenance",
+                color: "cfd3d7",
+                description: "Internal cleanup, tooling, tests, or upkeep.",
+              },
+              {
+                name: "status:needs-review",
                 color: "fbca04",
-                description: "Issue needs maintainer review and initial categorization.",
+                description: "Needs human product or maintainer review.",
+              },
+              {
+                name: "status:accepted",
+                color: "0e8a16",
+                description: "Accepted direction, not necessarily ready for automation.",
+              },
+              {
+                name: "status:ready-for-dev",
+                color: "1d76db",
+                description: "Scoped and ready for implementation.",
+              },
+              {
+                name: "status:blocked",
+                color: "b60205",
+                description: "Blocked by tests, review, missing info, or another dependency.",
+              },
+              {
+                name: "status:declined",
+                color: "7057ff",
+                description: "Not planned or not appropriate for this project.",
               },
               {
                 name: "automation:auto",
@@ -44,38 +79,58 @@ jobs:
               },
               {
                 name: "automation:triaged",
+                color: "bfdadc",
+                description: "Reviewed by issue autopilot.",
+              },
+              {
+                name: "automation:candidate",
                 color: "bfd4f2",
-                description: "Issue autopilot triaged this issue.",
+                description: "May be suitable for automation after approval or clarification.",
               },
               {
                 name: "automation:auto-pr",
-                color: "0e8a16",
-                description: "Issue autopilot considers this suitable for an automatic PR.",
+                color: "5319e7",
+                description: "Automation is allowed to attempt a pull request.",
               },
               {
                 name: "automation:needs-human",
-                color: "fbca04",
-                description: "Issue autopilot needs maintainer input before continuing.",
-              },
-              {
-                name: "automation:declined",
-                color: "b60205",
-                description: "Issue autopilot decided not to pursue this automatically.",
+                color: "d4c5f9",
+                description: "Automation needs a maintainer decision or manual follow-up.",
               },
               {
                 name: "area:installer",
-                color: "c5def5",
-                description: "Issue belongs in the installer area.",
+                color: "f9d0c4",
+                description: "Installer, packaging, bootstrap, or managed setup.",
               },
               {
-                name: "area:t3code",
+                name: "area:app",
                 color: "c2e0c6",
-                description: "Issue belongs in the T3 Code app area.",
+                description: "T3 Code app surface or shared app code.",
               },
               {
-                name: "area:both",
+                name: "area:desktop",
+                color: "bfd4f2",
+                description: "Desktop runtime or Electron app behavior.",
+              },
+              {
+                name: "area:mobile",
                 color: "fef2c0",
-                description: "Issue likely needs coordinated installer and app changes.",
+                description: "Mobile app behavior.",
+              },
+              {
+                name: "area:settings",
+                color: "d4c5f9",
+                description: "Settings, preferences, or configuration UI.",
+              },
+              {
+                name: "area:providers",
+                color: "c5def5",
+                description: "Codex, Claude, OpenCode, or provider integrations.",
+              },
+              {
+                name: "area:docs",
+                color: "0075ca",
+                description: "Documentation surface.",
               },
             ];
 
