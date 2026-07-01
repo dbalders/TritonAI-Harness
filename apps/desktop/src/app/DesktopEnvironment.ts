@@ -102,7 +102,10 @@ function resolveDesktopAppBranding(input: {
   return {
     baseName: APP_BASE_NAME,
     stageLabel,
-    displayName: stageLabel === "Alpha" ? APP_BASE_NAME : `${APP_BASE_NAME} (${stageLabel})`,
+    displayName:
+      stageLabel === "Alpha" || stageLabel === "Dev"
+        ? APP_BASE_NAME
+        : `${APP_BASE_NAME} (${stageLabel})`,
   };
 }
 

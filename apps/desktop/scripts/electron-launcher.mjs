@@ -1,4 +1,4 @@
-// This file mostly exists because we want dev mode to say "TritonAI Harness (Dev)" instead of "electron"
+// This file mostly exists because we want dev mode to say "TritonAI Harness" instead of "electron"
 
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
@@ -15,9 +15,7 @@ const repoRoot = NodePath.resolve(desktopDir, "..", "..");
 const devBundleIdSuffix = NodePath.basename(repoRoot)
   .toLowerCase()
   .replaceAll(/[^a-z0-9]+/g, "");
-export const APP_DISPLAY_NAME = isDevelopment
-  ? "TritonAI Harness (Dev)"
-  : "TritonAI Harness";
+export const APP_DISPLAY_NAME = "TritonAI Harness";
 export const APP_BUNDLE_ID = isDevelopment
   ? `edu.ucsd.tritonai.harness.dev.${devBundleIdSuffix || "local"}`
   : "edu.ucsd.tritonai.harness";

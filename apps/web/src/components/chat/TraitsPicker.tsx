@@ -45,6 +45,11 @@ type TraitsPersistence =
     };
 
 const ULTRATHINK_PROMPT_PREFIX = "Ultrathink:\n";
+const HIDDEN_DESCRIPTOR_IDS = new Set(["serviceTier"]);
+
+function isVisibleDescriptor(descriptor: ProviderOptionDescriptor): boolean {
+  return !HIDDEN_DESCRIPTOR_IDS.has(descriptor.id);
+}
 
 function replaceDescriptorCurrentValue(
   descriptors: ReadonlyArray<ProviderOptionDescriptor>,
@@ -88,7 +93,7 @@ function getSelectedTraits(
   const descriptors = getProviderOptionDescriptors({
     caps,
     selections: modelOptions,
-  });
+  }).filter(isVisibleDescriptor);
   const selectDescriptors = descriptors.filter(
     (descriptor): descriptor is Extract<ProviderOptionDescriptor, { type: "select" }> =>
       descriptor.type === "select",

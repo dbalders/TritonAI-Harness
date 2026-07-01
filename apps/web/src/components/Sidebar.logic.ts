@@ -70,7 +70,7 @@ export function resolveSidebarStageBadgeLabel(input: {
   fallbackStageLabel: string;
 }): string | null {
   const stageLabel = resolveServerBackedAppStageLabel(input);
-  return stageLabel === "Alpha" ? null : stageLabel;
+  return stageLabel === "Alpha" || stageLabel === "Dev" ? null : stageLabel;
 }
 
 export function createThreadJumpHintVisibilityController(input: {

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
+  formatAppDisplayName,
   resolveServerBackedAppDisplayName,
   resolveServerBackedAppStageLabel,
 } from "./branding.logic";
@@ -61,6 +62,15 @@ describe("branding", () => {
 });
 
 describe("branding logic", () => {
+  it("omits Alpha and Dev suffixes from the display name", () => {
+    expect(formatAppDisplayName({ baseName: "TritonAI Harness", stageLabel: "Alpha" })).toBe(
+      "TritonAI Harness",
+    );
+    expect(formatAppDisplayName({ baseName: "TritonAI Harness", stageLabel: "Dev" })).toBe(
+      "TritonAI Harness",
+    );
+  });
+
   it("returns Nightly for nightly primary server versions", () => {
     expect(
       resolveServerBackedAppStageLabel({

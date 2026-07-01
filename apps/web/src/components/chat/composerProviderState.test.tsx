@@ -11,6 +11,7 @@ import {
   renderProviderTraitsMenuContent,
   renderProviderTraitsPicker,
 } from "./composerProviderState";
+import { shouldRenderTraitsControls } from "./TraitsPicker";
 
 // Everything in composerProviderState is now data-driven by the model's
 // optionDescriptors, so these tests use a single synthetic provider/model and
@@ -244,5 +245,45 @@ describe("provider traits render guards", () => {
 
     expect(renderProviderTraitsPicker(args)).toBeNull();
     expect(renderProviderTraitsMenuContent(args)).toBeNull();
+  });
+
+  it("hides the Codex service tier descriptor from trait controls", () => {
+    const models = modelWith([
+      selectDescriptor("serviceTier", [
+        { id: "default", label: "Standard", isDefault: true },
+        { id: "fast", label: "Fast" },
+      ]),
+    ]);
+    const args = {
+      provider: PROVIDER,
+      model: MODEL,
+      models,
+      modelOptions: undefined,
+      prompt: "",
+      onPromptChange: () => {},
+    };
+
+    expect(shouldRenderTraitsControls(args)).toBe(false);
+    expect(renderProviderTraitsPicker({ ...args, draftId: "draft-test" as never })).toBeNull();
+  });
+
+  it("keeps visible trait controls when a hidden service tier is also present", () => {
+    const models = modelWith([
+      selectDescriptor("reasoningEffort", [{ id: "high", label: "High", isDefault: true }]),
+      selectDescriptor("serviceTier", [
+        { id: "default", label: "Standard", isDefault: true },
+        { id: "fast", label: "Fast" },
+      ]),
+    ]);
+
+    expect(
+      shouldRenderTraitsControls({
+        provider: PROVIDER,
+        model: MODEL,
+        models,
+        modelOptions: undefined,
+        prompt: "",
+      }),
+    ).toBe(true);
   });
 });

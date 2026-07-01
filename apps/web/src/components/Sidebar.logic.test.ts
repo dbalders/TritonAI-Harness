@@ -56,13 +56,13 @@ describe("resolveSidebarStageBadgeLabel", () => {
     ).toBeNull();
   });
 
-  it("returns the fallback label when the primary server version is missing", () => {
+  it("hides the Dev fallback label when the primary server version is missing", () => {
     expect(
       resolveSidebarStageBadgeLabel({
         primaryServerVersion: null,
         fallbackStageLabel: "Dev",
       }),
-    ).toBe("Dev");
+    ).toBeNull();
   });
 
   it("returns the fallback label for malformed nightly prerelease versions", () => {

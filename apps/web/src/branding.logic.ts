@@ -4,7 +4,7 @@ export function formatAppDisplayName(input: {
   readonly baseName: string;
   readonly stageLabel: string;
 }): string {
-  if (input.stageLabel === "Alpha") {
+  if (input.stageLabel === "Alpha" || input.stageLabel === "Dev") {
     return input.baseName;
   }
   return `${input.baseName} (${input.stageLabel})`;

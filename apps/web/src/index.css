@@ -326,11 +326,7 @@
   --app-wordmark-text: var(--ucsd-navy);
   --app-wordmark-badge-background: color-mix(in srgb, var(--ucsd-blue) 16%, var(--color-white));
   --app-wordmark-badge-text: var(--ucsd-navy);
-  --ucsd-composer-frame: linear-gradient(
-    135deg,
-    color-mix(in srgb, var(--ucsd-blue) 68%, transparent),
-    color-mix(in srgb, var(--ucsd-yellow) 64%, transparent)
-  );
+  --ucsd-composer-frame: transparent;
   --ucsd-composer-border: color-mix(in srgb, var(--ucsd-blue) 36%, var(--color-black) 4%);
   --ucsd-composer-focus-border: var(--ucsd-blue);
   --ucsd-composer-focus-shadow: color-mix(in srgb, var(--ucsd-blue) 14%, transparent);
@@ -365,11 +361,7 @@
   --app-wordmark-text: color-mix(in srgb, var(--ucsd-yellow) 82%, var(--color-white));
   --app-wordmark-badge-background: color-mix(in srgb, var(--ucsd-blue) 34%, transparent);
   --app-wordmark-badge-text: color-mix(in srgb, var(--ucsd-yellow) 86%, var(--color-white));
-  --ucsd-composer-frame: linear-gradient(
-    135deg,
-    color-mix(in srgb, var(--ucsd-blue) 76%, transparent),
-    color-mix(in srgb, var(--ucsd-yellow) 46%, transparent)
-  );
+  --ucsd-composer-frame: transparent;
   --ucsd-composer-border: color-mix(in srgb, var(--ucsd-blue) 42%, var(--color-white) 5%);
   --ucsd-composer-focus-border: color-mix(in srgb, var(--ucsd-blue) 70%, var(--color-white) 8%);
   --ucsd-composer-focus-shadow: color-mix(in srgb, var(--ucsd-blue) 18%, transparent);
