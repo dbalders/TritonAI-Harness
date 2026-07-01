@@ -4,7 +4,6 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import {
   defaultInstanceIdForDriver,
-  type DesktopUpdateChannel,
   PROVIDER_DISPLAY_NAMES,
   ProviderDriverKind,
   type ProviderInstanceConfig,
@@ -23,7 +22,7 @@ import * as Arr from "effect/Array";
 import * as Duration from "effect/Duration";
 import * as Equal from "effect/Equal";
 import * as Result from "effect/Result";
-import { APP_VERSION, HOSTED_APP_CHANNEL, HOSTED_APP_CHANNEL_LABEL } from "../../branding";
+import { APP_VERSION } from "../../branding";
 import {
   canCheckForUpdate,
   getDesktopUpdateButtonTooltip,
@@ -32,12 +31,10 @@ import {
   resolveDesktopUpdateButtonAction,
 } from "../../components/desktopUpdate.logic";
 import { isElectron } from "../../env";
-import { buildHostedChannelSelectionUrl, type HostedAppChannel } from "../../hostedPairing";
 import { DEFAULT_THEME, isTheme, useTheme, type Theme } from "../../hooks/useTheme";
 import { usePrimarySettings, useUpdatePrimarySettings } from "../../hooks/useSettings";
 import { useThreadActions } from "../../hooks/useThreadActions";
 import { useDesktopUpdateState } from "../../state/desktopUpdate";
-import { resolveAppModelSelectionState } from "../../modelSelection";
 import { ensureLocalApi, readLocalApi } from "../../localApi";
 import {
   primaryServerObservabilityAtom,
@@ -160,41 +157,6 @@ function AboutVersionTitle() {
 
 function AboutVersionSection() {
   const updateState = useDesktopUpdateState();
-  const [isChangingUpdateChannel, setIsChangingUpdateChannel] = useState(false);
-
-  const hasDesktopBridge = typeof window !== "undefined" && Boolean(window.desktopBridge);
-  const selectedUpdateChannel = updateState?.channel ?? "latest";
-  const selectedHostedAppChannel = hasDesktopBridge ? null : HOSTED_APP_CHANNEL;
-
-  const handleUpdateChannelChange = useCallback(
-    (channel: DesktopUpdateChannel) => {
-      const bridge = window.desktopBridge;
-      if (
-        !bridge ||
-        typeof bridge.setUpdateChannel !== "function" ||
-        channel === selectedUpdateChannel
-      ) {
-        return;
-      }
-
-      setIsChangingUpdateChannel(true);
-      void bridge
-        .setUpdateChannel(channel)
-        .catch((error: unknown) => {
-          toastManager.add(
-            stackedThreadToast({
-              type: "error",
-              title: "Could not change update track",
-              description: error instanceof Error ? error.message : "Update track change failed.",
-            }),
-          );
-        })
-        .finally(() => {
-          setIsChangingUpdateChannel(false);
-        });
-    },
-    [selectedUpdateChannel],
-  );
 
   const handleButtonClick = useCallback(() => {
     const bridge = window.desktopBridge;
@@ -281,89 +243,27 @@ function AboutVersionSection() {
       : "Current version of the application.";
 
   return (
-    <>
-      <SettingsRow
-        title={<AboutVersionTitle />}
-        description={description}
-        control={
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  size="xs"
-                  variant={action === "install" ? "default" : "outline"}
-                  disabled={buttonDisabled}
-                  onClick={handleButtonClick}
-                >
-                  {buttonLabel}
-                </Button>
-              }
-            />
-            {buttonTooltip ? <TooltipPopup>{buttonTooltip}</TooltipPopup> : null}
-          </Tooltip>
-        }
-      />
-      {hasDesktopBridge ? (
-        <SettingsRow
-          title="Update track"
-          description="Stable follows full releases. Nightly follows the nightly desktop channel and can switch back to stable immediately."
-          control={
-            <Select
-              value={selectedUpdateChannel}
-              onValueChange={(value) => {
-                handleUpdateChannelChange(value as DesktopUpdateChannel);
-              }}
-            >
-              <SelectTrigger
-                className="w-full sm:w-40"
-                aria-label="Update track"
-                disabled={isChangingUpdateChannel}
+    <SettingsRow
+      title={<AboutVersionTitle />}
+      description={description}
+      control={
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                size="xs"
+                variant={action === "install" ? "default" : "outline"}
+                disabled={buttonDisabled}
+                onClick={handleButtonClick}
               >
-                <SelectValue>
-                  {selectedUpdateChannel === "nightly" ? "Nightly" : "Stable"}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectPopup align="end" alignItemWithTrigger={false}>
-                <SelectItem hideIndicator value="latest">
-                  Stable
-                </SelectItem>
-                <SelectItem hideIndicator value="nightly">
-                  Nightly
-                </SelectItem>
-              </SelectPopup>
-            </Select>
-          }
-        />
-      ) : selectedHostedAppChannel ? (
-        <SettingsRow
-          title="Update track"
-          description="Switches the hosted app release channel."
-          control={
-            <Select
-              value={selectedHostedAppChannel}
-              onValueChange={(value) => {
-                if (value === selectedHostedAppChannel) return;
-                window.location.assign(
-                  buildHostedChannelSelectionUrl({ channel: value as HostedAppChannel }),
-                );
-              }}
-            >
-              <SelectTrigger className="w-full sm:w-40" aria-label="Update track">
-                <SelectValue>{HOSTED_APP_CHANNEL_LABEL}</SelectValue>
-              </SelectTrigger>
-              <SelectPopup align="end" alignItemWithTrigger={false}>
-                <SelectItem hideIndicator value="latest">
-                  Latest
-                </SelectItem>
-                <SelectItem hideIndicator value="nightly">
-                  Nightly
-                </SelectItem>
-              </SelectPopup>
-            </Select>
-          }
-        />
-      ) : null}
-    </>
+                {buttonLabel}
+              </Button>
+            }
+          />
+          {buttonTooltip ? <TooltipPopup>{buttonTooltip}</TooltipPopup> : null}
+        </Tooltip>
+      }
+    />
   );
 }
 
@@ -816,7 +716,7 @@ export function GeneralSettingsPanel() {
       </SettingsSection>
 
       <SettingsSection title="About">
-        {isElectron || HOSTED_APP_CHANNEL ? (
+        {isElectron ? (
           <AboutVersionSection />
         ) : (
           <SettingsRow
@@ -842,6 +742,10 @@ export function ProviderSettingsPanel() {
   const settings = usePrimarySettings();
   const updateSettings = useUpdatePrimarySettings();
   const serverProviders = useAtomValue(primaryServerProvidersAtom);
+  const visibleServerProviders = useMemo(
+    () => serverProviders.filter((provider) => getDriverOption(provider.driver) !== undefined),
+    [serverProviders],
+  );
   const primaryEnvironment = usePrimaryEnvironment();
   const refreshServerProviders = useAtomCommand(serverEnvironment.refreshProviders, {
     reportFailure: false,
@@ -858,8 +762,8 @@ export function ProviderSettingsPanel() {
   const refreshingRef = useRef(false);
 
   const providerUpdateCandidates = useMemo(
-    () => collectProviderUpdateCandidates(serverProviders),
-    [serverProviders],
+    () => collectProviderUpdateCandidates(visibleServerProviders),
+    [visibleServerProviders],
   );
   const providerUpdateCandidateByInstanceId = useMemo(
     () => new Map(providerUpdateCandidates.map((candidate) => [candidate.instanceId, candidate])),
@@ -868,18 +772,16 @@ export function ProviderSettingsPanel() {
   const visibleProviderSettings = PROVIDER_SETTINGS.filter(
     (providerSettings) =>
       providerSettings.provider !== "cursor" ||
-      serverProviders.some(
+      visibleServerProviders.some(
         (provider) =>
           provider.instanceId === defaultInstanceIdForDriver(ProviderDriverKind.make("cursor")),
       ),
   );
-  const textGenerationModelSelection = resolveAppModelSelectionState(settings, serverProviders);
-  const textGenInstanceId = textGenerationModelSelection.instanceId;
   const lastCheckedAt =
-    serverProviders.length > 0
-      ? serverProviders.reduce(
+    visibleServerProviders.length > 0
+      ? visibleServerProviders.reduce(
           (latest, provider) => (provider.checkedAt > latest ? provider.checkedAt : latest),
-          serverProviders[0]!.checkedAt,
+          visibleServerProviders[0]!.checkedAt,
         )
       : null;
 
@@ -972,22 +874,13 @@ export function ProviderSettingsPanel() {
   >();
   for (const [rawId, instance] of Object.entries(settings.providerInstances ?? {})) {
     const driver = instance.driver;
+    if (getDriverOption(driver) === undefined) continue;
     const list = instancesByDriver.get(driver) ?? [];
     list.push([rawId as ProviderInstanceId, instance]);
     instancesByDriver.set(driver, list);
   }
 
-  const defaultSlotIdsBySource = new Set<string>(
-    visibleProviderSettings.map((providerSettings) =>
-      String(defaultInstanceIdForDriver(providerSettings.provider)),
-    ),
-  );
-
   const rows: InstanceRow[] = [];
-  const visibleDriverKinds = new Set<ProviderDriverKind>(
-    visibleProviderSettings.map((providerSettings) => providerSettings.provider),
-  );
-
   for (const providerSettings of visibleProviderSettings) {
     type LegacyProviderSettings = (typeof settings.providers)[keyof typeof settings.providers];
     const legacyProviders = settings.providers as Record<string, LegacyProviderSettings>;
@@ -1021,27 +914,7 @@ export function ProviderSettingsPanel() {
       rows.push({ instanceId: id, instance, driver: instance.driver, isDefault: false });
     }
   }
-  for (const [driver, list] of instancesByDriver) {
-    if (visibleDriverKinds.has(driver)) continue;
-    for (const [id, instance] of list) {
-      rows.push({
-        instanceId: id,
-        instance,
-        driver: instance.driver,
-        isDefault: defaultSlotIdsBySource.has(String(id)),
-      });
-    }
-  }
-
-  const updateProviderInstance = (
-    row: InstanceRow,
-    next: ProviderInstanceConfig,
-    options?: {
-      readonly textGenerationModelSelection?: Parameters<
-        typeof buildProviderInstanceUpdatePatch
-      >[0]["textGenerationModelSelection"];
-    },
-  ) => {
+  const updateProviderInstance = (row: InstanceRow, next: ProviderInstanceConfig) => {
     updateSettings(
       buildProviderInstanceUpdatePatch({
         settings,
@@ -1049,7 +922,6 @@ export function ProviderSettingsPanel() {
         instance: next,
         driver: row.driver,
         isDefault: row.isDefault,
-        textGenerationModelSelection: options?.textGenerationModelSelection,
       }),
     );
   };
@@ -1178,7 +1050,7 @@ export function ProviderSettingsPanel() {
       >
         {rows.map((row) => {
           const driverOption = getDriverOption(row.driver);
-          const liveProvider = serverProviders.find(
+          const liveProvider = visibleServerProviders.find(
             (candidate) => candidate.instanceId === row.instanceId,
           );
           const updateCandidate = liveProvider
@@ -1187,16 +1059,16 @@ export function ProviderSettingsPanel() {
           const isDriverUpdateRunning =
             updateCandidate !== undefined &&
             (updatingProviderDrivers.has(updateCandidate.driver) ||
-              serverProviders.some(
+              visibleServerProviders.some(
                 (provider) =>
                   provider.driver === updateCandidate.driver && isProviderUpdateActive(provider),
               ));
           const showInlineUpdateButton =
             updateCandidate !== undefined &&
-            hasOneClickUpdateProviderCandidate(updateCandidate, serverProviders);
+            hasOneClickUpdateProviderCandidate(updateCandidate, visibleServerProviders);
           const canRunInlineUpdate =
             updateCandidate !== undefined &&
-            canOneClickUpdateProviderCandidate(updateCandidate, serverProviders) &&
+            canOneClickUpdateProviderCandidate(updateCandidate, visibleServerProviders) &&
             !updatingProviderDrivers.has(updateCandidate.driver);
           const modelPreferences = settings.providerModelPreferences?.[row.instanceId] ?? {
             hiddenModels: [],
@@ -1228,17 +1100,7 @@ export function ProviderSettingsPanel() {
                 }))
               }
               onUpdate={(next) => {
-                const wasEnabled = row.instance.enabled ?? true;
-                const isDisabling = next.enabled === false && wasEnabled;
-                const shouldClearTextGen = isDisabling && textGenInstanceId === row.instanceId;
-                if (shouldClearTextGen) {
-                  updateProviderInstance(row, next, {
-                    textGenerationModelSelection:
-                      DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection,
-                  });
-                } else {
-                  updateProviderInstance(row, next);
-                }
+                updateProviderInstance(row, next);
               }}
               onDelete={row.isDefault ? undefined : () => deleteProviderInstance(row.instanceId)}
               headerAction={headerAction}

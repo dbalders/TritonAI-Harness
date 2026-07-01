@@ -250,7 +250,9 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     }
     return [...available, ...disabled];
   }, [instanceEntries, isLocked, matchesLockedProvider]);
-  const showSidebar = !isSearching && sidebarInstanceEntries.length > 0;
+  const hasInstanceSidebarChoice = sidebarInstanceEntries.length > 1;
+  const showSidebar = !isSearching && hasInstanceSidebarChoice;
+  const selectedFilterInstanceId = showSidebar ? selectedInstanceId : props.activeInstanceId;
   const instanceOrder = useMemo(
     () => instanceEntries.map((entry) => entry.instanceId),
     [instanceEntries],
@@ -336,21 +338,21 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
 
     if (props.lockedProvider !== null) {
       result = result.filter((m) => matchesLockedProvider(m));
-      if (selectedInstanceId === "favorites") {
+      if (selectedFilterInstanceId === "favorites") {
         result = result.filter((m) => favoritesSet.has(providerModelKey(m.instanceId, m.slug)));
       } else {
-        result = result.filter((m) => m.instanceId === selectedInstanceId);
+        result = result.filter((m) => m.instanceId === selectedFilterInstanceId);
       }
-    } else if (selectedInstanceId === "favorites") {
+    } else if (selectedFilterInstanceId === "favorites") {
       result = result.filter((m) => favoritesSet.has(providerModelKey(m.instanceId, m.slug)));
     } else {
-      result = result.filter((m) => m.instanceId === selectedInstanceId);
+      result = result.filter((m) => m.instanceId === selectedFilterInstanceId);
     }
 
     return sortProviderModelItems(result, {
       favoriteModelKeys: favoritesSet,
-      groupFavorites: selectedInstanceId !== "favorites",
-      instanceOrder: selectedInstanceId === "favorites" ? instanceOrder : [],
+      groupFavorites: selectedFilterInstanceId !== "favorites",
+      instanceOrder: selectedFilterInstanceId === "favorites" ? instanceOrder : [],
     });
   }, [
     favoritesSet,
@@ -359,7 +361,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     matchesLockedProvider,
     props.lockedProvider,
     searchQuery,
-    selectedInstanceId,
+    selectedFilterInstanceId,
   ]);
 
   const handleModelSelect = useCallback(
