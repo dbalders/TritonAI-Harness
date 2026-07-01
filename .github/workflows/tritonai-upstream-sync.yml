@@ -1,0 +1,120 @@
+name: TritonAI Upstream Sync
+
+on:
+  schedule:
+    - cron: "17 11 * * *"
+  workflow_dispatch:
+    inputs:
+      downstream_branch:
+        description: "TritonAI Harness branch to merge upstream into"
+        required: true
+        default: tritonai-codex-runtime
+        type: string
+      create_pr:
+        description: "Push sync branch and open a PR"
+        required: true
+        default: true
+        type: boolean
+      auto_merge_pr:
+        description: "Merge auto-merge-ready PRs after checks and Codex review"
+        required: true
+        default: false
+        type: boolean
+      skip_checks:
+        description: "Skip local quality checks"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: tritonai-upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Merge upstream into TritonAI Harness branch
+    runs-on: self-hosted
+    timeout-minutes: 60
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup upstream remote
+        run: |
+          git remote add upstream https://github.com/pingdotgg/t3code.git 2>/dev/null || true
+          git remote set-url upstream https://github.com/pingdotgg/t3code.git
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Sync and review upstream
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TRITONAI_SYNC_GITHUB_REPO: ${{ github.repository }}
+          GH_REPO: ${{ github.repository }}
+          TRITONAI_SYNC_DOWNSTREAM_BRANCH: ${{ vars.TRITONAI_SYNC_DOWNSTREAM_BRANCH || 'tritonai-codex-runtime' }}
+          TRITONAI_SYNC_UPSTREAM_REMOTE: upstream
+          TRITONAI_SYNC_UPSTREAM_URL: https://github.com/pingdotgg/t3code.git
+          TRITONAI_SYNC_UPSTREAM_BRANCH: main
+          TRITONAI_SYNC_CHECKS: ${{ vars.TRITONAI_SYNC_CHECKS || 'bun run typecheck && bun run test' }}
+          TRITONAI_SYNC_AGENT_COMMAND: ${{ secrets.TRITONAI_SYNC_AGENT_COMMAND }}
+          TRITONAI_SYNC_AGENT_CAN_EDIT: ${{ vars.TRITONAI_SYNC_AGENT_CAN_EDIT || '0' }}
+          TRITONAI_SYNC_AGENT_SECRET_ENV_ALLOWLIST: ${{ vars.TRITONAI_SYNC_AGENT_SECRET_ENV_ALLOWLIST || 'CODEX_HOME,TRITONAI_HOME,TRITONAI_API_KEY' }}
+          CODEX_HOME: ${{ vars.CODEX_HOME }}
+          TRITONAI_HOME: ${{ vars.TRITONAI_HOME }}
+          TRITONAI_API_KEY: ${{ secrets.TRITONAI_API_KEY }}
+          TRITONAI_SYNC_PR_MERGE_METHOD: ${{ vars.TRITONAI_SYNC_PR_MERGE_METHOD || 'merge' }}
+        run: |
+          downstream_branch="${{ github.event.inputs.downstream_branch }}"
+          if [[ -z "$downstream_branch" ]]; then
+            downstream_branch="${TRITONAI_SYNC_DOWNSTREAM_BRANCH:-tritonai-codex-runtime}"
+          fi
+          export TRITONAI_SYNC_DOWNSTREAM_BRANCH="$downstream_branch"
+
+          create_pr="${{ github.event.inputs.create_pr }}"
+          if [[ -z "$create_pr" ]]; then
+            create_pr="true"
+          fi
+
+          auto_merge_pr="${{ github.event.inputs.auto_merge_pr }}"
+          if [[ -z "$auto_merge_pr" ]]; then
+            auto_merge_pr="false"
+          fi
+
+          skip_checks="${{ github.event.inputs.skip_checks }}"
+          if [[ -z "$skip_checks" ]]; then
+            skip_checks="false"
+          fi
+
+          args=(--push)
+
+          if [[ "$create_pr" == "true" ]]; then
+            args+=(--create-pr)
+          fi
+
+          if [[ "$auto_merge_pr" == "true" ]]; then
+            args+=(--auto-merge-pr)
+          fi
+
+          if [[ "$skip_checks" == "true" ]]; then
+            args+=(--skip-checks)
+          fi
+
+          node scripts/tritonai-sync-upstream.mjs "${args[@]}"

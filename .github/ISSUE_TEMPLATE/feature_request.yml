@@ -29,8 +29,8 @@ body:
       options:
         - Chat or web UI
         - Desktop app
-        - Desktop installer / TritonAI Code installer
-        - AI providers, models, or agent behavior
+        - Desktop installer / TritonAI Harness installer
+        - Codex runtime, models, or agent behavior
         - Skills, plugins, or integrations
         - Remote access or environments
         - Backend, sync, or orchestration

@@ -93,9 +93,44 @@ jobs:
                 description: "Automation is allowed to attempt a pull request.",
               },
               {
+                name: "automation:upstream-sync",
+                color: "5319e7",
+                description: "Generated TritonAI Harness upstream sync work.",
+              },
+              {
+                name: "automation:auto-merge-ready",
+                color: "0e8a16",
+                description: "Automation classified this sync as safe to merge after checks.",
+              },
+              {
                 name: "automation:needs-human",
                 color: "d4c5f9",
                 description: "Automation needs a maintainer decision or manual follow-up.",
+              },
+              {
+                name: "agent-attempted",
+                color: "bfdadc",
+                description: "An agent attempted review or repair for this sync.",
+              },
+              {
+                name: "ai-review-risk",
+                color: "fbca04",
+                description: "AI review found risk or could not classify the sync as safe.",
+              },
+              {
+                name: "checks-failed",
+                color: "b60205",
+                description: "Local validation failed during automated sync.",
+              },
+              {
+                name: "needs-human-review",
+                color: "d4c5f9",
+                description: "Automation could not complete this safely without maintainer review.",
+              },
+              {
+                name: "upstream-conflict",
+                color: "b60205",
+                description: "Automated upstream sync encountered merge conflicts.",
               },
               {
                 name: "area:installer",
@@ -105,7 +140,12 @@ jobs:
               {
                 name: "area:app",
                 color: "c2e0c6",
-                description: "T3 Code app surface or shared app code.",
+                description: "TritonAI Harness app surface or shared app code.",
+              },
+              {
+                name: "area:codex-runtime",
+                color: "c5def5",
+                description: "Codex app-server runtime, model routing, or provider isolation.",
               },
               {
                 name: "area:desktop",
@@ -125,7 +165,12 @@ jobs:
               {
                 name: "area:providers",
                 color: "c5def5",
-                description: "Codex, Claude, OpenCode, or provider integrations.",
+                description: "Codex-first runtime, model, and provider integration work.",
+              },
+              {
+                name: "area:sync",
+                color: "bfd4f2",
+                description: "Downstream upstream-sync automation and release-control work.",
               },
               {
                 name: "area:docs",

@@ -33,3 +33,4 @@ node_modules/
 .env*
 !.env.example
 .issue-autopilot/
+.tritonai-sync/

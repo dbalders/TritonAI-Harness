@@ -38,7 +38,17 @@ function latestProviderCheckedAt(
   );
 }
 
+const SHOW_PROVIDER_UPDATE_NOTIFICATIONS = false;
+
 export function SidebarProviderUpdatePill() {
+  if (!SHOW_PROVIDER_UPDATE_NOTIFICATIONS) {
+    return null;
+  }
+
+  return <SidebarProviderUpdatePillEnabled />;
+}
+
+function SidebarProviderUpdatePillEnabled() {
   const navigate = useNavigate();
   const providers = useAtomValue(primaryServerProvidersAtom);
   const [dismissedKeys, setDismissedKeys] = useState<ReadonlySet<string>>(() => new Set());

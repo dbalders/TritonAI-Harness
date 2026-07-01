@@ -101,12 +101,22 @@ function isTerminalProviderUpdateToastView(view: ProviderUpdateToastView) {
   return view.phase === "failed" || view.phase === "unchanged" || view.phase === "succeeded";
 }
 
+const SHOW_PROVIDER_UPDATE_NOTIFICATIONS = false;
+
 /**
  * The single-prompt provider update notification used when there is only one
  * local environment (no WSL backend). Non-WSL users see exactly this flow — the
  * per-environment split is gated behind WSL presence.
  */
 export function ProviderUpdatePrimaryNotification() {
+  if (!SHOW_PROVIDER_UPDATE_NOTIFICATIONS) {
+    return null;
+  }
+
+  return <ProviderUpdatePrimaryNotificationEnabled />;
+}
+
+function ProviderUpdatePrimaryNotificationEnabled() {
   const navigate = useNavigate();
   const providers = useAtomValue(primaryServerProvidersAtom);
   const primaryEnvironment = usePrimaryEnvironment();

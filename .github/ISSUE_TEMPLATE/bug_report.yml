@@ -30,7 +30,7 @@ body:
         - apps/web
         - apps/server
         - apps/desktop
-        - Desktop installer / TritonAI Code installer
+        - Desktop installer / TritonAI Harness installer
         - packages/contracts or packages/shared
         - Build, CI, or release tooling
         - Docs
@@ -92,7 +92,7 @@ body:
     attributes:
       label: Environment
       description: OS, browser or desktop app version, Node/Bun version, provider/model if relevant.
-      placeholder: macOS 15.3, Chrome 135, Bun 1.3.9, provider app-server ...
+      placeholder: macOS 15.3, Chrome 135, Bun 1.3.9, Codex app-server, DeepSeek ...
 
   - type: textarea
     id: logs
