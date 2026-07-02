@@ -628,6 +628,75 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("maps interrupted turn completions to canonical interrupted turn events", () =>
+    Effect.gen(function* () {
+      const { adapter, runtime } = yield* startLifecycleRuntime();
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      yield* runtime.emit({
+        id: asEventId("evt-turn-interrupted"),
+        kind: "notification",
+        provider: ProviderDriverKind.make("codex"),
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        method: "turn/completed",
+        payload: {
+          threadId: "thread-1",
+          turn: {
+            id: "turn-1",
+            status: "interrupted",
+            items: [],
+          },
+        },
+      } satisfies ProviderEvent);
+
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+
+      NodeAssert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some") {
+        return;
+      }
+      NodeAssert.equal(firstEvent.value.type, "turn.completed");
+      if (firstEvent.value.type !== "turn.completed") {
+        return;
+      }
+      NodeAssert.equal(firstEvent.value.turnId, "turn-1");
+      NodeAssert.equal(firstEvent.value.payload.state, "interrupted");
+    }),
+  );
+
+  it.effect("maps Codex turn aborted notifications to canonical turn.aborted events", () =>
+    Effect.gen(function* () {
+      const { adapter, runtime } = yield* startLifecycleRuntime();
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      yield* runtime.emit({
+        id: asEventId("evt-turn-aborted"),
+        kind: "notification",
+        provider: ProviderDriverKind.make("codex"),
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        method: "turn/aborted",
+        message: "Interrupted by user.",
+      } satisfies ProviderEvent);
+
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+
+      NodeAssert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some") {
+        return;
+      }
+      NodeAssert.equal(firstEvent.value.type, "turn.aborted");
+      if (firstEvent.value.type !== "turn.aborted") {
+        return;
+      }
+      NodeAssert.equal(firstEvent.value.turnId, "turn-1");
+      NodeAssert.equal(firstEvent.value.payload.reason, "Interrupted by user.");
+    }),
+  );
+
   it.effect("maps session/closed lifecycle events to canonical session.exited runtime events", () =>
     Effect.gen(function* () {
       const { adapter, runtime } = yield* startLifecycleRuntime();

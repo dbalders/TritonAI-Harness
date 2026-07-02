@@ -670,14 +670,23 @@ function currentProviderThreadId(session: ProviderSession): string | undefined {
 function updateSession(
   sessionRef: Ref.Ref<ProviderSession>,
   updates: Partial<ProviderSession>,
+  options?: {
+    readonly clearLastError?: boolean;
+  },
 ): Effect.Effect<void> {
   return Effect.gen(function* () {
     const updatedAt = DateTime.formatIso(yield* DateTime.now);
-    yield* Ref.update(sessionRef, (session) => ({
-      ...session,
-      ...updates,
-      updatedAt,
-    }));
+    yield* Ref.update(sessionRef, (session) => {
+      const next = {
+        ...session,
+        ...updates,
+        updatedAt,
+      };
+      if (options?.clearLastError) {
+        delete next.lastError;
+      }
+      return next;
+    });
   });
 }
 
@@ -924,11 +933,16 @@ export const makeCodexSessionRuntime = (
             payload.turn.status === "failed" && "error" in payload.turn && payload.turn.error
               ? payload.turn.error.message
               : undefined;
-          return updateSession(sessionRef, {
-            status: payload.turn.status === "failed" ? "error" : "ready",
-            activeTurnId: undefined,
-            ...(lastError ? { lastError } : {}),
-          });
+          const status = payload.turn.status === "failed" ? "error" : "ready";
+          return updateSession(
+            sessionRef,
+            {
+              status,
+              activeTurnId: undefined,
+              ...(lastError ? { lastError } : {}),
+            },
+            { clearLastError: status === "ready" },
+          );
         }),
       ),
     );
@@ -1325,6 +1339,20 @@ export const makeCodexSessionRuntime = (
             threadId: providerThreadId,
             turnId: effectiveTurnId,
           });
+          const latestSession = yield* Ref.get(sessionRef);
+          const shouldClearActiveTurn =
+            latestSession.activeTurnId === undefined ||
+            String(latestSession.activeTurnId) === String(effectiveTurnId);
+          if (shouldClearActiveTurn) {
+            yield* updateSession(
+              sessionRef,
+              {
+                status: "ready",
+                activeTurnId: undefined,
+              },
+              { clearLastError: true },
+            );
+          }
         }),
       readThread: Effect.gen(function* () {
         const providerThreadId = yield* readProviderThreadId;
