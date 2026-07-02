@@ -78,11 +78,16 @@ const makeManualProviderMaintenanceCapabilities = (provider: ProviderDriverKind)
 const hasModelCapabilities = (model: ServerProvider["models"][number]): boolean =>
   (model.capabilities?.optionDescriptors?.length ?? 0) > 0;
 
+const shouldRetainAbsentModels = (provider: ProviderDriverKind): boolean =>
+  provider !== ProviderDriverKind.make("codex");
+
 const mergeProviderModels = (
+  provider: ProviderDriverKind,
   previousModels: ReadonlyArray<ServerProvider["models"][number]>,
   nextModels: ReadonlyArray<ServerProvider["models"][number]>,
 ): ReadonlyArray<ServerProvider["models"][number]> => {
-  if (nextModels.length === 0 && previousModels.length > 0) {
+  const retainAbsentModels = shouldRetainAbsentModels(provider);
+  if (retainAbsentModels && nextModels.length === 0 && previousModels.length > 0) {
     return previousModels;
   }
 
@@ -98,7 +103,9 @@ const mergeProviderModels = (
     };
   });
   const nextSlugs = new Set(nextModels.map((model) => model.slug));
-  return [...mergedModels, ...previousModels.filter((model) => !nextSlugs.has(model.slug))];
+  return retainAbsentModels
+    ? [...mergedModels, ...previousModels.filter((model) => !nextSlugs.has(model.slug))]
+    : mergedModels;
 };
 
 export const mergeProviderSnapshot = (
@@ -109,7 +116,11 @@ export const mergeProviderSnapshot = (
     ? nextProvider
     : {
         ...nextProvider,
-        models: mergeProviderModels(previousProvider.models, nextProvider.models),
+        models: mergeProviderModels(
+          nextProvider.driver,
+          previousProvider.models,
+          nextProvider.models,
+        ),
       };
 
 export const mergeProviderSnapshots = (

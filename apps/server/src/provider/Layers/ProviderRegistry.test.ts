@@ -583,6 +583,60 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
         ]);
       });
 
+      it("drops absent Codex models when a refresh returns a curated list", () => {
+        const previousProvider = {
+          instanceId: ProviderInstanceId.make("codex"),
+          driver: ProviderDriverKind.make("codex"),
+          status: "ready",
+          enabled: true,
+          installed: true,
+          auth: { status: "authenticated" },
+          checkedAt: "2026-04-14T00:00:00.000Z",
+          version: "1.0.0",
+          models: [
+            {
+              slug: "deepseek-v4-flash-max",
+              name: "DeepSeek v4 Flash Max",
+              isCustom: true,
+              capabilities: createModelCapabilities({
+                optionDescriptors: [],
+              }),
+            },
+            {
+              slug: "gpt-5.4",
+              name: "GPT-5.4",
+              isCustom: false,
+              capabilities: createModelCapabilities({
+                optionDescriptors: [],
+              }),
+            },
+          ],
+          slashCommands: [],
+          skills: [],
+        } as const satisfies ServerProvider;
+        const refreshedProvider = {
+          ...previousProvider,
+          checkedAt: "2026-04-14T00:01:00.000Z",
+          models: [
+            {
+              slug: "deepseek-v4-flash-max",
+              name: "DeepSeek v4 Flash Max",
+              isCustom: true,
+              capabilities: null,
+            },
+          ],
+        } satisfies ServerProvider;
+
+        assert.deepStrictEqual(mergeProviderSnapshot(previousProvider, refreshedProvider).models, [
+          {
+            slug: "deepseek-v4-flash-max",
+            name: "DeepSeek v4 Flash Max",
+            isCustom: true,
+            capabilities: null,
+          },
+        ]);
+      });
+
       it("fills missing capabilities from the previous provider snapshot", () => {
         const previousProvider = {
           instanceId: ProviderInstanceId.make("cursor"),

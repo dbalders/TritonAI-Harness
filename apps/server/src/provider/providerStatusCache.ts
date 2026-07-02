@@ -1,5 +1,5 @@
 import {
-  type ProviderDriverKind,
+  ProviderDriverKind,
   type ProviderInstanceId,
   type ServerProvider,
   ServerProvider as ServerProviderSchema,
@@ -17,9 +17,14 @@ const decodeProviderStatusCache = Schema.decodeUnknownEffect(
 );
 
 const mergeProviderModels = (
+  provider: ProviderDriverKind,
   fallbackModels: ReadonlyArray<ServerProvider["models"][number]>,
   cachedModels: ReadonlyArray<ServerProvider["models"][number]>,
 ): ReadonlyArray<ServerProvider["models"][number]> => {
+  if (provider === ProviderDriverKind.make("codex")) {
+    return fallbackModels;
+  }
+
   const fallbackSlugs = new Set(fallbackModels.map((model) => model.slug));
   return [...fallbackModels, ...cachedModels.filter((model) => !fallbackSlugs.has(model.slug))];
 };
@@ -59,7 +64,11 @@ export const hydrateCachedProvider = (input: {
   const { message: _fallbackMessage, ...fallbackWithoutMessage } = input.fallbackProvider;
   const hydratedProvider: ServerProvider = {
     ...fallbackWithoutMessage,
-    models: mergeProviderModels(input.fallbackProvider.models, input.cachedProvider.models),
+    models: mergeProviderModels(
+      input.fallbackProvider.driver,
+      input.fallbackProvider.models,
+      input.cachedProvider.models,
+    ),
     installed: input.cachedProvider.installed,
     version: input.cachedProvider.version,
     status: input.cachedProvider.status,

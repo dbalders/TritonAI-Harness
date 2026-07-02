@@ -62,7 +62,7 @@
     "babel-plugin-react-compiler": "1.0.0",
     "msw": "2.12.11",
     "tailwindcss": "^4.0.0",
-    "vite": "catalog:",
+    "vite": "npm:@voidzero-dev/vite-plus-core@0.2.1",
     "vite-plus": "catalog:"
   }
 }

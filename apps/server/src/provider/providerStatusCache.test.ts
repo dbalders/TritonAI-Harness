@@ -122,12 +122,12 @@ it.layer(NodeServices.layer)("providerStatusCache", (it) => {
   );
 
   it("hydrates cached provider status while preserving current settings-derived models", () => {
-    const cachedCodex = makeProvider(CODEX_DRIVER, {
+    const cachedClaude = makeProvider(CLAUDE_AGENT_DRIVER, {
       checkedAt: "2026-04-10T12:00:00.000Z",
       models: [
         {
-          slug: "gpt-5-mini",
-          name: "GPT-5 Mini",
+          slug: "claude-haiku-4-5",
+          name: "Claude Haiku 4.5",
           isCustom: false,
           capabilities: emptyCapabilities,
         },
@@ -142,11 +142,11 @@ it.layer(NodeServices.layer)("providerStatusCache", (it) => {
         },
       ],
     });
-    const fallbackCodex = makeProvider(CODEX_DRIVER, {
+    const fallbackClaude = makeProvider(CLAUDE_AGENT_DRIVER, {
       models: [
         {
-          slug: "gpt-5.4",
-          name: "GPT-5.4",
+          slug: "claude-sonnet-4-6",
+          name: "Claude Sonnet 4.6",
           isCustom: false,
           capabilities: emptyCapabilities,
         },
@@ -156,29 +156,69 @@ it.layer(NodeServices.layer)("providerStatusCache", (it) => {
 
     assert.deepStrictEqual(
       hydrateCachedProvider({
-        cachedProvider: cachedCodex,
-        fallbackProvider: fallbackCodex,
+        cachedProvider: cachedClaude,
+        fallbackProvider: fallbackClaude,
       }),
       {
-        ...fallbackCodex,
+        ...fallbackClaude,
         models: [
-          ...fallbackCodex.models,
+          ...fallbackClaude.models,
           {
-            slug: "gpt-5-mini",
-            name: "GPT-5 Mini",
+            slug: "claude-haiku-4-5",
+            name: "Claude Haiku 4.5",
             isCustom: false,
             capabilities: emptyCapabilities,
           },
         ],
-        installed: cachedCodex.installed,
-        version: cachedCodex.version,
-        status: cachedCodex.status,
-        auth: cachedCodex.auth,
-        checkedAt: cachedCodex.checkedAt,
-        slashCommands: cachedCodex.slashCommands,
-        skills: cachedCodex.skills,
-        message: cachedCodex.message,
+        installed: cachedClaude.installed,
+        version: cachedClaude.version,
+        status: cachedClaude.status,
+        auth: cachedClaude.auth,
+        checkedAt: cachedClaude.checkedAt,
+        slashCommands: cachedClaude.slashCommands,
+        skills: cachedClaude.skills,
+        message: cachedClaude.message,
       },
+    );
+  });
+
+  it("does not hydrate stale cached Codex models outside the configured fallback list", () => {
+    const cachedCodex = makeProvider(CODEX_DRIVER, {
+      checkedAt: "2026-04-10T12:00:00.000Z",
+      models: [
+        {
+          slug: "deepseek-v4-flash-max",
+          name: "DeepSeek v4 Flash Max",
+          isCustom: true,
+          capabilities: emptyCapabilities,
+        },
+        {
+          slug: "gpt-5.4",
+          name: "GPT-5.4",
+          isCustom: false,
+          capabilities: emptyCapabilities,
+        },
+      ],
+      message: "Cached message",
+    });
+    const fallbackCodex = makeProvider(CODEX_DRIVER, {
+      models: [
+        {
+          slug: "deepseek-v4-flash-max",
+          name: "DeepSeek v4 Flash Max",
+          isCustom: true,
+          capabilities: null,
+        },
+      ],
+      message: "Pending refresh",
+    });
+
+    assert.deepStrictEqual(
+      hydrateCachedProvider({
+        cachedProvider: cachedCodex,
+        fallbackProvider: fallbackCodex,
+      }).models,
+      fallbackCodex.models,
     );
   });
 
