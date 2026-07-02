@@ -2,7 +2,6 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect } from "react";
 
 import ChatView from "../components/ChatView";
-import { threadHasStarted } from "../components/ChatView.logic";
 import { finalizePromotedDraftThreadByRef, useComposerDraftStore } from "../composerDraftStore";
 import { resolveThreadRouteRef } from "../threadRoutes";
 import { SidebarInset } from "~/components/ui/sidebar";
@@ -37,7 +36,7 @@ function ChatThreadRouteView() {
     return store.hasDraftThreadsInEnvironment(threadRef.environmentId);
   });
   const routeThreadExists = threadExists || draftThreadExists;
-  const serverThreadStarted = threadHasStarted(serverThreadDetail);
+  const serverThreadHasMessages = (serverThreadDetail?.messages.length ?? 0) > 0;
   const environmentHasAnyThreads = environmentHasServerThreads || environmentHasDraftThreads;
 
   useEffect(() => {
@@ -51,11 +50,11 @@ function ChatThreadRouteView() {
   }, [bootstrapComplete, environmentHasAnyThreads, navigate, routeThreadExists, threadRef]);
 
   useEffect(() => {
-    if (!threadRef || !serverThreadStarted || !draftThread) {
+    if (!threadRef || !serverThreadHasMessages || !draftThread) {
       return;
     }
     finalizePromotedDraftThreadByRef(threadRef);
-  }, [draftThread, serverThreadStarted, threadRef]);
+  }, [draftThread, serverThreadHasMessages, threadRef]);
 
   if (!threadRef || !bootstrapComplete || !routeThreadExists) {
     return null;
