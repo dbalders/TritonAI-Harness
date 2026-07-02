@@ -38,10 +38,22 @@ import type {
   ServerProcessDiagnosticsResult,
   ServerProcessResourceHistoryInput,
   ServerProcessResourceHistoryResult,
+  ServerInstallProviderSkillInput,
+  ServerInstallProviderSkillResult,
+  ServerListProviderSkillCatalogResult,
+  ServerMarketplaceAddInput,
+  ServerMarketplaceRemoveInput,
+  ServerMarketplaceUpgradeInput,
+  ServerPluginInstallInput,
+  ServerPluginsListInput,
+  ServerPluginsListResult,
+  ServerPluginUninstallInput,
   ServerProviderUpdateInput,
   ServerProviderUpdatedPayload,
+  ServerRemoveProviderSkillInput,
   ServerRemoveKeybindingResult,
   ServerSignalProcessInput,
+  ServerSetProviderSkillEnabledInput,
   ServerSignalProcessResult,
   ServerTraceDiagnosticsResult,
   ServerUpsertKeybindingResult,
@@ -1134,6 +1146,24 @@ export interface LocalApi {
       input: ServerProcessResourceHistoryInput,
     ) => Promise<ServerProcessResourceHistoryResult>;
     signalProcess: (input: ServerSignalProcessInput) => Promise<ServerSignalProcessResult>;
+    listProviderSkillCatalog: () => Promise<ServerListProviderSkillCatalogResult>;
+    installProviderSkill: (
+      input: ServerInstallProviderSkillInput,
+    ) => Promise<ServerInstallProviderSkillResult>;
+    removeProviderSkill: (
+      input: ServerRemoveProviderSkillInput,
+    ) => Promise<ServerProviderUpdatedPayload>;
+    setProviderSkillEnabled: (
+      input: ServerSetProviderSkillEnabledInput,
+    ) => Promise<ServerProviderUpdatedPayload>;
+    listPlugins: (input?: ServerPluginsListInput) => Promise<ServerPluginsListResult>;
+    installPlugin: (input: ServerPluginInstallInput) => Promise<ServerPluginsListResult>;
+    uninstallPlugin: (input: ServerPluginUninstallInput) => Promise<ServerPluginsListResult>;
+    addMarketplace: (input: ServerMarketplaceAddInput) => Promise<ServerPluginsListResult>;
+    removeMarketplace: (input: ServerMarketplaceRemoveInput) => Promise<ServerPluginsListResult>;
+    upgradeMarketplace: (
+      input?: ServerMarketplaceUpgradeInput,
+    ) => Promise<ServerPluginsListResult>;
     scheduledTasks: {
       list: () => Promise<ScheduledTasksListResult>;
       create: (input: ScheduledTaskCreateInput) => Promise<ScheduledTaskMutationResult>;

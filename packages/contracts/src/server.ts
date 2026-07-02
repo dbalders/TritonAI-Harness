@@ -91,6 +91,244 @@ export const ServerProviderSkill = Schema.Struct({
 });
 export type ServerProviderSkill = typeof ServerProviderSkill.Type;
 
+export const ServerProviderSkillCatalogTier = Schema.Literals(["core", "verified", "experimental"]);
+export type ServerProviderSkillCatalogTier = typeof ServerProviderSkillCatalogTier.Type;
+
+export const ServerProviderSkillCatalogSection = Schema.Literals(["recommended", "community"]);
+export type ServerProviderSkillCatalogSection = typeof ServerProviderSkillCatalogSection.Type;
+
+export const ServerProviderSkillCatalogSourceKind = Schema.Literals([
+  "cloudflare",
+  "github",
+  "url",
+]);
+export type ServerProviderSkillCatalogSourceKind = typeof ServerProviderSkillCatalogSourceKind.Type;
+
+export const ServerProviderSkillCatalogEntry = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  name: TrimmedNonEmptyString,
+  title: TrimmedNonEmptyString,
+  description: TrimmedNonEmptyString,
+  category: TrimmedNonEmptyString,
+  tier: ServerProviderSkillCatalogTier,
+  section: ServerProviderSkillCatalogSection,
+  owner: Schema.optional(TrimmedNonEmptyString),
+  updated: Schema.optional(TrimmedNonEmptyString),
+  sourceKind: ServerProviderSkillCatalogSourceKind.pipe(
+    Schema.withDecodingDefault(Effect.succeed("cloudflare" as const)),
+  ),
+  sourceUrl: TrimmedNonEmptyString,
+  readmeUrl: Schema.optional(TrimmedNonEmptyString),
+});
+export type ServerProviderSkillCatalogEntry = typeof ServerProviderSkillCatalogEntry.Type;
+
+export const ServerProviderSkillCatalogSourceStatus = Schema.Literals([
+  "remote",
+  "bundled-fallback",
+]);
+export type ServerProviderSkillCatalogSourceStatus =
+  typeof ServerProviderSkillCatalogSourceStatus.Type;
+
+export const ServerProviderSkillCatalog = Schema.Struct({
+  version: Schema.Literal(1),
+  generatedAt: IsoDateTime,
+  sourceStatus: ServerProviderSkillCatalogSourceStatus.pipe(
+    Schema.withDecodingDefault(Effect.succeed("remote" as const)),
+  ),
+  entries: Schema.Array(ServerProviderSkillCatalogEntry),
+});
+export type ServerProviderSkillCatalog = typeof ServerProviderSkillCatalog.Type;
+
+export const ServerListProviderSkillCatalogResult = Schema.Struct({
+  catalog: ServerProviderSkillCatalog,
+});
+export type ServerListProviderSkillCatalogResult = typeof ServerListProviderSkillCatalogResult.Type;
+
+export const ServerProviderSkillBundleFile = Schema.Struct({
+  path: TrimmedNonEmptyString,
+  content: Schema.String,
+});
+export type ServerProviderSkillBundleFile = typeof ServerProviderSkillBundleFile.Type;
+
+export const ServerProviderSkillBundle = Schema.Struct({
+  version: Schema.Literal(1),
+  skillId: TrimmedNonEmptyString,
+  files: Schema.Array(ServerProviderSkillBundleFile),
+});
+export type ServerProviderSkillBundle = typeof ServerProviderSkillBundle.Type;
+
+export const ServerRemoveProviderSkillInput = Schema.Struct({
+  instanceId: ProviderInstanceId,
+  skillPath: TrimmedNonEmptyString,
+});
+export type ServerRemoveProviderSkillInput = typeof ServerRemoveProviderSkillInput.Type;
+
+export const ServerSetProviderSkillEnabledInput = Schema.Struct({
+  instanceId: ProviderInstanceId,
+  skillName: Schema.optionalKey(TrimmedNonEmptyString),
+  skillPath: Schema.optionalKey(TrimmedNonEmptyString),
+  enabled: Schema.Boolean,
+});
+export type ServerSetProviderSkillEnabledInput = typeof ServerSetProviderSkillEnabledInput.Type;
+
+export const ServerInstallProviderSkillSource = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("catalog"),
+    catalogEntryId: TrimmedNonEmptyString,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("url"),
+    url: TrimmedNonEmptyString,
+  }),
+]);
+export type ServerInstallProviderSkillSource = typeof ServerInstallProviderSkillSource.Type;
+
+export const ServerInstallProviderSkillInput = Schema.Struct({
+  instanceId: ProviderInstanceId,
+  source: ServerInstallProviderSkillSource,
+});
+export type ServerInstallProviderSkillInput = typeof ServerInstallProviderSkillInput.Type;
+
+export class ServerProviderSkillRemovalError extends Schema.TaggedErrorClass<ServerProviderSkillRemovalError>()(
+  "ServerProviderSkillRemovalError",
+  {
+    message: TrimmedNonEmptyString,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
+
+export class ServerProviderSkillConfigError extends Schema.TaggedErrorClass<ServerProviderSkillConfigError>()(
+  "ServerProviderSkillConfigError",
+  {
+    message: TrimmedNonEmptyString,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
+
+export class ServerProviderSkillCatalogError extends Schema.TaggedErrorClass<ServerProviderSkillCatalogError>()(
+  "ServerProviderSkillCatalogError",
+  {
+    message: TrimmedNonEmptyString,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
+
+export class ServerProviderSkillInstallError extends Schema.TaggedErrorClass<ServerProviderSkillInstallError>()(
+  "ServerProviderSkillInstallError",
+  {
+    message: TrimmedNonEmptyString,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
+
+const ServerPluginSource = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("local"),
+    path: TrimmedNonEmptyString,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("git"),
+    url: TrimmedNonEmptyString,
+    path: Schema.optionalKey(TrimmedNonEmptyString),
+    refName: Schema.optionalKey(TrimmedNonEmptyString),
+    sha: Schema.optionalKey(TrimmedNonEmptyString),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("remote"),
+  }),
+]);
+
+export const ServerPluginSummary = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  name: TrimmedNonEmptyString,
+  displayName: Schema.optionalKey(TrimmedNonEmptyString),
+  description: Schema.optionalKey(TrimmedNonEmptyString),
+  category: Schema.optionalKey(TrimmedNonEmptyString),
+  developerName: Schema.optionalKey(TrimmedNonEmptyString),
+  enabled: Schema.Boolean,
+  installed: Schema.Boolean,
+  availability: Schema.optionalKey(Schema.Literals(["DISABLED_BY_ADMIN", "AVAILABLE"])),
+  localVersion: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
+  remotePluginId: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
+  marketplaceName: TrimmedNonEmptyString,
+  marketplacePath: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
+  source: ServerPluginSource,
+  keywords: Schema.Array(TrimmedNonEmptyString).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+});
+export type ServerPluginSummary = typeof ServerPluginSummary.Type;
+
+export const ServerPluginMarketplace = Schema.Struct({
+  name: TrimmedNonEmptyString,
+  displayName: Schema.optionalKey(TrimmedNonEmptyString),
+  path: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
+  plugins: Schema.Array(ServerPluginSummary),
+});
+export type ServerPluginMarketplace = typeof ServerPluginMarketplace.Type;
+
+export const ServerPluginMarketplaceLoadError = Schema.Struct({
+  marketplacePath: TrimmedNonEmptyString,
+  message: TrimmedNonEmptyString,
+});
+export type ServerPluginMarketplaceLoadError = typeof ServerPluginMarketplaceLoadError.Type;
+
+export const ServerPluginsListInput = Schema.Struct({
+  includeRemote: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+});
+export type ServerPluginsListInput = typeof ServerPluginsListInput.Type;
+
+export const ServerPluginsListResult = Schema.Struct({
+  marketplaces: Schema.Array(ServerPluginMarketplace),
+  marketplaceLoadErrors: Schema.Array(ServerPluginMarketplaceLoadError).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
+  featuredPluginIds: Schema.Array(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
+});
+export type ServerPluginsListResult = typeof ServerPluginsListResult.Type;
+
+export const ServerPluginInstallInput = Schema.Struct({
+  pluginName: TrimmedNonEmptyString,
+  marketplacePath: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
+  remoteMarketplaceName: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
+});
+export type ServerPluginInstallInput = typeof ServerPluginInstallInput.Type;
+
+export const ServerPluginUninstallInput = Schema.Struct({
+  pluginId: TrimmedNonEmptyString,
+});
+export type ServerPluginUninstallInput = typeof ServerPluginUninstallInput.Type;
+
+export const ServerMarketplaceAddInput = Schema.Struct({
+  source: TrimmedNonEmptyString,
+  refName: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
+  sparsePaths: Schema.optionalKey(Schema.NullOr(Schema.Array(TrimmedNonEmptyString))),
+});
+export type ServerMarketplaceAddInput = typeof ServerMarketplaceAddInput.Type;
+
+export const ServerMarketplaceRemoveInput = Schema.Struct({
+  marketplaceName: TrimmedNonEmptyString,
+});
+export type ServerMarketplaceRemoveInput = typeof ServerMarketplaceRemoveInput.Type;
+
+export const ServerMarketplaceUpgradeInput = Schema.Struct({
+  marketplaceName: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
+});
+export type ServerMarketplaceUpgradeInput = typeof ServerMarketplaceUpgradeInput.Type;
+
+export const ServerPluginMutationResult = Schema.Struct({
+  plugins: Schema.optionalKey(ServerPluginsListResult),
+});
+export type ServerPluginMutationResult = typeof ServerPluginMutationResult.Type;
+
+export class ServerPluginOperationError extends Schema.TaggedErrorClass<ServerPluginOperationError>()(
+  "ServerPluginOperationError",
+  {
+    message: TrimmedNonEmptyString,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
+
 /**
  * Availability of a configured provider instance from the runtime's POV.
  *
@@ -550,6 +788,13 @@ export const ServerProviderUpdatedPayload = Schema.Struct({
   providers: ServerProviders,
 });
 export type ServerProviderUpdatedPayload = typeof ServerProviderUpdatedPayload.Type;
+
+export const ServerInstallProviderSkillResult = Schema.Struct({
+  providers: ServerProviders,
+  skillName: TrimmedNonEmptyString,
+  skillPath: TrimmedNonEmptyString,
+});
+export type ServerInstallProviderSkillResult = typeof ServerInstallProviderSkillResult.Type;
 
 export const ServerProviderUpdateInput = Schema.Struct({
   provider: ProviderDriverKind,

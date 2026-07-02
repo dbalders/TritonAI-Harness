@@ -194,6 +194,52 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:signal-process",
       tag: WS_METHODS.serverSignalProcess,
     }),
+    listProviderSkillCatalog: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:list-provider-skill-catalog",
+      tag: WS_METHODS.serverListProviderSkillCatalog,
+    }),
+    installProviderSkill: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:install-provider-skill",
+      tag: WS_METHODS.serverInstallProviderSkill,
+      scheduler: configScheduler,
+      concurrency: configConcurrency,
+    }),
+    removeProviderSkill: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:remove-provider-skill",
+      tag: WS_METHODS.serverRemoveProviderSkill,
+      scheduler: configScheduler,
+      concurrency: configConcurrency,
+    }),
+    setProviderSkillEnabled: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:set-provider-skill-enabled",
+      tag: WS_METHODS.serverSetProviderSkillEnabled,
+      scheduler: configScheduler,
+      concurrency: configConcurrency,
+    }),
+    listPlugins: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:list-plugins",
+      tag: WS_METHODS.serverListPlugins,
+    }),
+    installPlugin: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:install-plugin",
+      tag: WS_METHODS.serverInstallPlugin,
+    }),
+    uninstallPlugin: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:uninstall-plugin",
+      tag: WS_METHODS.serverUninstallPlugin,
+    }),
+    addMarketplace: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:add-marketplace",
+      tag: WS_METHODS.serverAddMarketplace,
+    }),
+    removeMarketplace: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:remove-marketplace",
+      tag: WS_METHODS.serverRemoveMarketplace,
+    }),
+    upgradeMarketplace: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:upgrade-marketplace",
+      tag: WS_METHODS.serverUpgradeMarketplace,
+    }),
     scheduledTasksList: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:scheduled-tasks-list",
       tag: WS_METHODS.scheduledTasksList,

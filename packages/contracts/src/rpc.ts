@@ -139,8 +139,25 @@ import {
   ServerProcessDiagnosticsResult,
   ServerProcessResourceHistoryInput,
   ServerProcessResourceHistoryResult,
+  ServerInstallProviderSkillInput,
+  ServerInstallProviderSkillResult,
+  ServerListProviderSkillCatalogResult,
+  ServerMarketplaceAddInput,
+  ServerMarketplaceRemoveInput,
+  ServerMarketplaceUpgradeInput,
+  ServerPluginInstallInput,
+  ServerPluginOperationError,
+  ServerPluginsListInput,
+  ServerPluginsListResult,
+  ServerPluginUninstallInput,
   ServerSignalProcessInput,
   ServerSignalProcessResult,
+  ServerProviderSkillCatalogError,
+  ServerProviderSkillConfigError,
+  ServerProviderSkillInstallError,
+  ServerProviderSkillRemovalError,
+  ServerRemoveProviderSkillInput,
+  ServerSetProviderSkillEnabledInput,
   ServerUpsertKeybindingInput,
   ServerUpsertKeybindingResult,
 } from "./server.ts";
@@ -232,6 +249,16 @@ export const WS_METHODS = {
   serverGetProcessDiagnostics: "server.getProcessDiagnostics",
   serverGetProcessResourceHistory: "server.getProcessResourceHistory",
   serverSignalProcess: "server.signalProcess",
+  serverListProviderSkillCatalog: "server.listProviderSkillCatalog",
+  serverInstallProviderSkill: "server.installProviderSkill",
+  serverRemoveProviderSkill: "server.removeProviderSkill",
+  serverSetProviderSkillEnabled: "server.setProviderSkillEnabled",
+  serverListPlugins: "server.listPlugins",
+  serverInstallPlugin: "server.installPlugin",
+  serverUninstallPlugin: "server.uninstallPlugin",
+  serverAddMarketplace: "server.addMarketplace",
+  serverRemoveMarketplace: "server.removeMarketplace",
+  serverUpgradeMarketplace: "server.upgradeMarketplace",
 
   // Scheduled automation methods
   scheduledTasksList: "scheduledTasks.list",
@@ -350,6 +377,76 @@ export const WsServerSignalProcessRpc = Rpc.make(WS_METHODS.serverSignalProcess,
   payload: ServerSignalProcessInput,
   success: ServerSignalProcessResult,
   error: EnvironmentAuthorizationError,
+});
+
+export const WsServerListProviderSkillCatalogRpc = Rpc.make(
+  WS_METHODS.serverListProviderSkillCatalog,
+  {
+    payload: Schema.Struct({}),
+    success: ServerListProviderSkillCatalogResult,
+    error: Schema.Union([ServerProviderSkillCatalogError, EnvironmentAuthorizationError]),
+  },
+);
+
+export const WsServerInstallProviderSkillRpc = Rpc.make(WS_METHODS.serverInstallProviderSkill, {
+  payload: ServerInstallProviderSkillInput,
+  success: ServerInstallProviderSkillResult,
+  error: Schema.Union([ServerProviderSkillInstallError, EnvironmentAuthorizationError]),
+});
+
+export const WsServerRemoveProviderSkillRpc = Rpc.make(WS_METHODS.serverRemoveProviderSkill, {
+  payload: ServerRemoveProviderSkillInput,
+  success: ServerProviderUpdatedPayload,
+  error: Schema.Union([
+    ServerProviderSkillRemovalError,
+    ServerProviderSkillInstallError,
+    EnvironmentAuthorizationError,
+  ]),
+});
+
+export const WsServerSetProviderSkillEnabledRpc = Rpc.make(
+  WS_METHODS.serverSetProviderSkillEnabled,
+  {
+    payload: ServerSetProviderSkillEnabledInput,
+    success: ServerProviderUpdatedPayload,
+    error: Schema.Union([ServerProviderSkillConfigError, EnvironmentAuthorizationError]),
+  },
+);
+
+export const WsServerListPluginsRpc = Rpc.make(WS_METHODS.serverListPlugins, {
+  payload: ServerPluginsListInput,
+  success: ServerPluginsListResult,
+  error: Schema.Union([ServerPluginOperationError, EnvironmentAuthorizationError]),
+});
+
+export const WsServerInstallPluginRpc = Rpc.make(WS_METHODS.serverInstallPlugin, {
+  payload: ServerPluginInstallInput,
+  success: ServerPluginsListResult,
+  error: Schema.Union([ServerPluginOperationError, EnvironmentAuthorizationError]),
+});
+
+export const WsServerUninstallPluginRpc = Rpc.make(WS_METHODS.serverUninstallPlugin, {
+  payload: ServerPluginUninstallInput,
+  success: ServerPluginsListResult,
+  error: Schema.Union([ServerPluginOperationError, EnvironmentAuthorizationError]),
+});
+
+export const WsServerAddMarketplaceRpc = Rpc.make(WS_METHODS.serverAddMarketplace, {
+  payload: ServerMarketplaceAddInput,
+  success: ServerPluginsListResult,
+  error: Schema.Union([ServerPluginOperationError, EnvironmentAuthorizationError]),
+});
+
+export const WsServerRemoveMarketplaceRpc = Rpc.make(WS_METHODS.serverRemoveMarketplace, {
+  payload: ServerMarketplaceRemoveInput,
+  success: ServerPluginsListResult,
+  error: Schema.Union([ServerPluginOperationError, EnvironmentAuthorizationError]),
+});
+
+export const WsServerUpgradeMarketplaceRpc = Rpc.make(WS_METHODS.serverUpgradeMarketplace, {
+  payload: ServerMarketplaceUpgradeInput,
+  success: ServerPluginsListResult,
+  error: Schema.Union([ServerPluginOperationError, EnvironmentAuthorizationError]),
 });
 
 export const WsScheduledTasksListRpc = Rpc.make(WS_METHODS.scheduledTasksList, {
@@ -778,6 +875,16 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetProcessDiagnosticsRpc,
   WsServerGetProcessResourceHistoryRpc,
   WsServerSignalProcessRpc,
+  WsServerListProviderSkillCatalogRpc,
+  WsServerInstallProviderSkillRpc,
+  WsServerRemoveProviderSkillRpc,
+  WsServerSetProviderSkillEnabledRpc,
+  WsServerListPluginsRpc,
+  WsServerInstallPluginRpc,
+  WsServerUninstallPluginRpc,
+  WsServerAddMarketplaceRpc,
+  WsServerRemoveMarketplaceRpc,
+  WsServerUpgradeMarketplaceRpc,
   WsScheduledTasksListRpc,
   WsScheduledTasksCreateRpc,
   WsScheduledTasksUpdateRpc,

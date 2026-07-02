@@ -74,6 +74,7 @@ import {
   observeRpcStreamEffect as instrumentRpcStreamEffect,
 } from "./observability/RpcInstrumentation.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
+import * as CodexManagement from "./provider/CodexManagement.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
@@ -297,6 +298,16 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.serverGetProcessDiagnostics, AuthOrchestrationReadScope],
   [WS_METHODS.serverGetProcessResourceHistory, AuthOrchestrationReadScope],
   [WS_METHODS.serverSignalProcess, AuthOrchestrationOperateScope],
+  [WS_METHODS.serverListProviderSkillCatalog, AuthOrchestrationReadScope],
+  [WS_METHODS.serverInstallProviderSkill, AuthOrchestrationOperateScope],
+  [WS_METHODS.serverRemoveProviderSkill, AuthOrchestrationOperateScope],
+  [WS_METHODS.serverSetProviderSkillEnabled, AuthOrchestrationOperateScope],
+  [WS_METHODS.serverListPlugins, AuthOrchestrationReadScope],
+  [WS_METHODS.serverInstallPlugin, AuthOrchestrationOperateScope],
+  [WS_METHODS.serverUninstallPlugin, AuthOrchestrationOperateScope],
+  [WS_METHODS.serverAddMarketplace, AuthOrchestrationOperateScope],
+  [WS_METHODS.serverRemoveMarketplace, AuthOrchestrationOperateScope],
+  [WS_METHODS.serverUpgradeMarketplace, AuthOrchestrationOperateScope],
   [WS_METHODS.scheduledTasksList, AuthOrchestrationReadScope],
   [WS_METHODS.scheduledTasksCreate, AuthOrchestrationOperateScope],
   [WS_METHODS.scheduledTasksUpdate, AuthOrchestrationOperateScope],
@@ -1279,6 +1290,82 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.serverSignalProcess, processDiagnostics.signal(input), {
             "rpc.aggregate": "server",
           }),
+        [WS_METHODS.serverListProviderSkillCatalog]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.serverListProviderSkillCatalog,
+            CodexManagement.listProviderSkillCatalog(),
+            {
+              "rpc.aggregate": "server",
+            },
+          ),
+        [WS_METHODS.serverInstallProviderSkill]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverInstallProviderSkill,
+            CodexManagement.installCodexProviderSkill(input),
+            {
+              "rpc.aggregate": "server",
+            },
+          ),
+        [WS_METHODS.serverRemoveProviderSkill]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverRemoveProviderSkill,
+            CodexManagement.removeCodexProviderSkill(input),
+            {
+              "rpc.aggregate": "server",
+            },
+          ),
+        [WS_METHODS.serverSetProviderSkillEnabled]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverSetProviderSkillEnabled,
+            CodexManagement.setCodexSkillEnabled(input),
+            {
+              "rpc.aggregate": "server",
+            },
+          ),
+        [WS_METHODS.serverListPlugins]: (input) =>
+          observeRpcEffect(WS_METHODS.serverListPlugins, CodexManagement.listCodexPlugins(input), {
+            "rpc.aggregate": "server",
+          }),
+        [WS_METHODS.serverInstallPlugin]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverInstallPlugin,
+            CodexManagement.installCodexPlugin(input),
+            {
+              "rpc.aggregate": "server",
+            },
+          ),
+        [WS_METHODS.serverUninstallPlugin]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverUninstallPlugin,
+            CodexManagement.uninstallCodexPlugin(input),
+            {
+              "rpc.aggregate": "server",
+            },
+          ),
+        [WS_METHODS.serverAddMarketplace]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverAddMarketplace,
+            CodexManagement.addCodexMarketplace(input),
+            {
+              "rpc.aggregate": "server",
+            },
+          ),
+        [WS_METHODS.serverRemoveMarketplace]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverRemoveMarketplace,
+            CodexManagement.removeCodexMarketplace(input),
+            {
+              "rpc.aggregate": "server",
+            },
+          ),
+        [WS_METHODS.serverUpgradeMarketplace]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverUpgradeMarketplace,
+            CodexManagement.upgradeCodexMarketplace(input),
+            {
+              "rpc.aggregate": "server",
+            },
+          ),
         [WS_METHODS.scheduledTasksList]: (_input) =>
           observeRpcEffect(WS_METHODS.scheduledTasksList, scheduledTasks.list(), {
             "rpc.aggregate": "scheduled-tasks",
