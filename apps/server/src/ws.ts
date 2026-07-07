@@ -17,6 +17,7 @@ import {
   AuthRelayWriteScope,
   AuthTerminalOperateScope,
   AuthAccessReadScope,
+  AuthAccessWriteScope,
   AuthAccessStreamError,
   type AuthAccessStreamEvent,
   type AuthEnvironmentScope,
@@ -27,6 +28,7 @@ import {
   type OrchestrationCommand,
   type GitActionProgressEvent,
   type GitManagerServiceError,
+  type MicrosoftGraphConnectionStatus,
   OrchestrationDispatchCommandError,
   type OrchestrationEvent,
   type OrchestrationShellStreamEvent,
@@ -112,6 +114,7 @@ import * as VcsProjectConfig from "./vcs/VcsProjectConfig.ts";
 import * as VcsProcess from "./vcs/VcsProcess.ts";
 import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
 import * as SessionStore from "./auth/SessionStore.ts";
+import * as MicrosoftGraphConnection from "./microsoftGraph/MicrosoftGraphConnection.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
 import * as RelayClient from "@t3tools/shared/relayClient";
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
@@ -120,6 +123,21 @@ const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 
 function unexpectedCompatibilityError(error: never): never {
   throw new Error(`Unhandled compatibility error: ${String(error)}`);
+}
+
+function redactMicrosoftGraphStatusForWriteOnly(
+  status: MicrosoftGraphConnectionStatus,
+): MicrosoftGraphConnectionStatus {
+  return {
+    state: status.state,
+    account: null,
+    clientId: status.clientId,
+    tenantId: status.tenantId,
+    requiredScopes: status.requiredScopes,
+    grantedScopes: [],
+    accessTokenExpiresAt: null,
+    updatedAt: null,
+  };
 }
 
 /** Preserve the setup runner's broader pre-refactor message normalization. */
@@ -309,6 +327,10 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.serverUpgradeMarketplace, AuthOrchestrationOperateScope],
   [WS_METHODS.cloudGetRelayClientStatus, AuthRelayWriteScope],
   [WS_METHODS.cloudInstallRelayClient, AuthRelayWriteScope],
+  [WS_METHODS.microsoftGraphGetStatus, AuthAccessReadScope],
+  [WS_METHODS.microsoftGraphStartSignIn, AuthAccessWriteScope],
+  [WS_METHODS.microsoftGraphPollSignIn, AuthAccessWriteScope],
+  [WS_METHODS.microsoftGraphDisconnect, AuthAccessWriteScope],
   [WS_METHODS.sourceControlLookupRepository, AuthOrchestrationReadScope],
   [WS_METHODS.sourceControlCloneRepository, AuthOrchestrationOperateScope],
   [WS_METHODS.sourceControlPublishRepository, AuthOrchestrationOperateScope],
@@ -447,6 +469,7 @@ const makeWsRpcLayer = (
       const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
       const relayClient = yield* RelayClient.RelayClient;
+      const microsoftGraph = yield* MicrosoftGraphConnection.MicrosoftGraphConnection;
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
         new EnvironmentAuthorizationError({
           message: `The authenticated token is missing required scope: ${requiredScope}.`,
@@ -1389,6 +1412,33 @@ const makeWsRpcLayer = (
             ),
             { "rpc.aggregate": "cloud" },
           ),
+        [WS_METHODS.microsoftGraphGetStatus]: (_input) =>
+          observeRpcEffect(WS_METHODS.microsoftGraphGetStatus, microsoftGraph.getStatus(), {
+            "rpc.aggregate": "microsoft-graph",
+          }),
+        [WS_METHODS.microsoftGraphStartSignIn]: (_input) =>
+          observeRpcEffect(WS_METHODS.microsoftGraphStartSignIn, microsoftGraph.startSignIn(), {
+            "rpc.aggregate": "microsoft-graph",
+          }),
+        [WS_METHODS.microsoftGraphPollSignIn]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.microsoftGraphPollSignIn,
+            microsoftGraph.pollSignIn(input).pipe(
+              Effect.map((result) =>
+                currentSession.scopes.includes(AuthAccessReadScope)
+                  ? result
+                  : {
+                      ...result,
+                      status: redactMicrosoftGraphStatusForWriteOnly(result.status),
+                    },
+              ),
+            ),
+            { "rpc.aggregate": "microsoft-graph" },
+          ),
+        [WS_METHODS.microsoftGraphDisconnect]: (_input) =>
+          observeRpcEffect(WS_METHODS.microsoftGraphDisconnect, microsoftGraph.disconnect(), {
+            "rpc.aggregate": "microsoft-graph",
+          }),
         [WS_METHODS.sourceControlLookupRepository]: (input) =>
           observeRpcEffect(
             WS_METHODS.sourceControlLookupRepository,

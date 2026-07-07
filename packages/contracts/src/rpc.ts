@@ -65,6 +65,14 @@ import {
   RelayClientStatusSchema,
 } from "./relayClient.ts";
 import {
+  MicrosoftGraphConnectionError,
+  MicrosoftGraphConnectionStatus,
+  MicrosoftGraphDisconnectResult,
+  MicrosoftGraphPollSignInInput,
+  MicrosoftGraphPollSignInResult,
+  MicrosoftGraphStartSignInResult,
+} from "./microsoftGraph.ts";
+import {
   ProjectListEntriesError,
   ProjectListEntriesInput,
   ProjectListEntriesResult,
@@ -250,6 +258,12 @@ export const WS_METHODS = {
   // Cloud environment methods
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
   cloudInstallRelayClient: "cloud.installRelayClient",
+
+  // Microsoft Graph connection methods
+  microsoftGraphGetStatus: "microsoftGraph.getStatus",
+  microsoftGraphStartSignIn: "microsoftGraph.startSignIn",
+  microsoftGraphPollSignIn: "microsoftGraph.pollSignIn",
+  microsoftGraphDisconnect: "microsoftGraph.disconnect",
 
   // Source control methods
   sourceControlLookupRepository: "sourceControl.lookupRepository",
@@ -437,6 +451,30 @@ export const WsCloudInstallRelayClientRpc = Rpc.make(WS_METHODS.cloudInstallRela
   success: RelayClientInstallProgressEventSchema,
   error: Schema.Union([RelayClientInstallFailedError, EnvironmentAuthorizationError]),
   stream: true,
+});
+
+export const WsMicrosoftGraphGetStatusRpc = Rpc.make(WS_METHODS.microsoftGraphGetStatus, {
+  payload: Schema.Struct({}),
+  success: MicrosoftGraphConnectionStatus,
+  error: Schema.Union([MicrosoftGraphConnectionError, EnvironmentAuthorizationError]),
+});
+
+export const WsMicrosoftGraphStartSignInRpc = Rpc.make(WS_METHODS.microsoftGraphStartSignIn, {
+  payload: Schema.Struct({}),
+  success: MicrosoftGraphStartSignInResult,
+  error: Schema.Union([MicrosoftGraphConnectionError, EnvironmentAuthorizationError]),
+});
+
+export const WsMicrosoftGraphPollSignInRpc = Rpc.make(WS_METHODS.microsoftGraphPollSignIn, {
+  payload: MicrosoftGraphPollSignInInput,
+  success: MicrosoftGraphPollSignInResult,
+  error: Schema.Union([MicrosoftGraphConnectionError, EnvironmentAuthorizationError]),
+});
+
+export const WsMicrosoftGraphDisconnectRpc = Rpc.make(WS_METHODS.microsoftGraphDisconnect, {
+  payload: Schema.Struct({}),
+  success: MicrosoftGraphDisconnectResult,
+  error: Schema.Union([MicrosoftGraphConnectionError, EnvironmentAuthorizationError]),
 });
 
 export const WsSourceControlLookupRepositoryRpc = Rpc.make(
@@ -816,6 +854,10 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerUpgradeMarketplaceRpc,
   WsCloudGetRelayClientStatusRpc,
   WsCloudInstallRelayClientRpc,
+  WsMicrosoftGraphGetStatusRpc,
+  WsMicrosoftGraphStartSignInRpc,
+  WsMicrosoftGraphPollSignInRpc,
+  WsMicrosoftGraphDisconnectRpc,
   WsSourceControlLookupRepositoryRpc,
   WsSourceControlCloneRepositoryRpc,
   WsSourceControlPublishRepositoryRpc,

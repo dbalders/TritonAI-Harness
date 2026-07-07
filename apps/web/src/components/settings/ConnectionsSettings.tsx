@@ -1,11 +1,16 @@
 import {
   ChevronDownIcon,
   ChevronsLeftRightEllipsisIcon,
+  CopyIcon,
+  ExternalLinkIcon,
+  LogInIcon,
+  MailIcon,
   PlusIcon,
   QrCodeIcon,
   RefreshCwIcon,
   TerminalIcon,
   TriangleAlertIcon,
+  UnplugIcon,
 } from "lucide-react";
 import { useAuth } from "@clerk/react";
 import { type ReactNode, memo, useCallback, useEffect, useMemo, useState } from "react";
@@ -29,6 +34,8 @@ import {
   type DesktopServerExposureState,
   type DesktopWslState,
   type EnvironmentId,
+  type MicrosoftGraphConnectionStatus,
+  type MicrosoftGraphStartSignInResult,
 } from "@t3tools/contracts";
 import {
   connectionStatusText,
@@ -126,6 +133,8 @@ import {
 } from "~/cloud/linkEnvironmentAtoms";
 import { authEnvironment } from "~/state/auth";
 import { environmentCatalog } from "~/connection/catalog";
+import { ensureLocalApi } from "~/localApi";
+import { serverEnvironment } from "~/state/server";
 import {
   connectPairing as connectPairingAtom,
   connectSshEnvironment as connectSshEnvironmentAtom,
@@ -167,6 +176,15 @@ function formatAccessTimestamp(value: string): string {
     return value;
   }
   return accessTimestampFormatter.format(parsed);
+}
+
+function microsoftGraphAccountLabel(status: MicrosoftGraphConnectionStatus | null): string | null {
+  const account = status?.account;
+  return account?.mail ?? account?.userPrincipalName ?? account?.displayName ?? null;
+}
+
+function microsoftGraphErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
 }
 
 const PAIRING_SCOPE_OPTIONS: ReadonlyArray<{
@@ -2148,7 +2166,55 @@ export function ConnectionsSettings() {
     (state) => state.setDefaultAdvertisedEndpointKey,
   );
   const canManageLocalBackend = currentSessionScopes?.includes(AuthAccessWriteScope) ?? false;
+  const canReadMicrosoftGraph = currentSessionScopes?.includes(AuthAccessReadScope) ?? false;
+  const canManageMicrosoftGraph = currentSessionScopes?.includes(AuthAccessWriteScope) ?? false;
   const canManageRelay = currentSessionScopes?.includes(AuthRelayWriteScope) ?? false;
+  const loadMicrosoftGraphStatusCommand = useAtomCommand(
+    serverEnvironment.microsoftGraphGetStatus,
+    { reportFailure: false },
+  );
+  const startMicrosoftGraphSignInCommand = useAtomCommand(
+    serverEnvironment.microsoftGraphStartSignIn,
+    { reportFailure: false },
+  );
+  const pollMicrosoftGraphSignInCommand = useAtomCommand(
+    serverEnvironment.microsoftGraphPollSignIn,
+    { reportFailure: false },
+  );
+  const disconnectMicrosoftGraphCommand = useAtomCommand(
+    serverEnvironment.microsoftGraphDisconnect,
+    { reportFailure: false },
+  );
+  const [microsoftGraphStatus, setMicrosoftGraphStatus] =
+    useState<MicrosoftGraphConnectionStatus | null>(null);
+  const [microsoftGraphSignInFlow, setMicrosoftGraphSignInFlow] =
+    useState<MicrosoftGraphStartSignInResult | null>(null);
+  const [microsoftGraphError, setMicrosoftGraphError] = useState<string | null>(null);
+  const [isLoadingMicrosoftGraph, setIsLoadingMicrosoftGraph] = useState(false);
+  const [isStartingMicrosoftGraphSignIn, setIsStartingMicrosoftGraphSignIn] = useState(false);
+  const [isPollingMicrosoftGraphSignIn, setIsPollingMicrosoftGraphSignIn] = useState(false);
+  const [isDisconnectingMicrosoftGraph, setIsDisconnectingMicrosoftGraph] = useState(false);
+  const microsoftGraphNowMs = useRelativeTimeTick(1_000);
+  const { copyToClipboard: copyMicrosoftGraphUserCode } =
+    useCopyToClipboard<"microsoft-graph-user-code">({
+      target: "Microsoft sign-in code",
+      onCopy: () => {
+        toastManager.add({
+          type: "success",
+          title: "Code copied",
+          description: "Paste it into the Microsoft sign-in page.",
+        });
+      },
+      onError: (error) => {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Could not copy code",
+            description: error.message,
+          }),
+        );
+      },
+    });
   const authAccessChanges = useEnvironmentQuery(
     canManageLocalBackend && primaryEnvironmentId !== null
       ? authEnvironment.accessChanges({
@@ -2341,6 +2407,132 @@ export function ConnectionsSettings() {
   const handleStartTailscaleServeDisable = useCallback((_endpoint: AdvertisedEndpoint) => {
     setDisableTailscaleServeDialogOpen(true);
   }, []);
+
+  const loadMicrosoftGraphStatus = useCallback(async () => {
+    if (!primaryEnvironmentId || !canReadMicrosoftGraph) {
+      setMicrosoftGraphStatus(null);
+      setMicrosoftGraphError(null);
+      return;
+    }
+
+    setIsLoadingMicrosoftGraph(true);
+    setMicrosoftGraphError(null);
+    const result = await loadMicrosoftGraphStatusCommand({
+      environmentId: primaryEnvironmentId,
+      input: {},
+    });
+    if (result._tag === "Failure") {
+      if (!isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        setMicrosoftGraphError(
+          microsoftGraphErrorMessage(error, "Failed to load Microsoft Graph connection."),
+        );
+      }
+      setIsLoadingMicrosoftGraph(false);
+      return;
+    }
+
+    setMicrosoftGraphStatus(result.value);
+    setIsLoadingMicrosoftGraph(false);
+  }, [canReadMicrosoftGraph, loadMicrosoftGraphStatusCommand, primaryEnvironmentId]);
+
+  const openMicrosoftGraphSignIn = useCallback(async (flow: MicrosoftGraphStartSignInResult) => {
+    const signInUrl = flow.verificationUriComplete ?? flow.verificationUri;
+    try {
+      await ensureLocalApi().shell.openExternal(signInUrl);
+      toastManager.add({
+        type: "info",
+        title: "Microsoft sign-in opened",
+        description: "Finish sign-in in the browser, then return here.",
+      });
+    } catch (error) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "warning",
+          title: "Open Microsoft sign-in manually",
+          description: microsoftGraphErrorMessage(
+            error,
+            "Use the visible sign-in button and code to finish connection.",
+          ),
+        }),
+      );
+    }
+  }, []);
+
+  const handleStartMicrosoftGraphSignIn = useCallback(async () => {
+    if (!primaryEnvironmentId || !canManageMicrosoftGraph) return;
+
+    setIsStartingMicrosoftGraphSignIn(true);
+    setMicrosoftGraphError(null);
+    const result = await startMicrosoftGraphSignInCommand({
+      environmentId: primaryEnvironmentId,
+      input: {},
+    });
+    if (result._tag === "Failure") {
+      if (!isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        const message = microsoftGraphErrorMessage(
+          error,
+          "Failed to start Microsoft Graph sign-in.",
+        );
+        setMicrosoftGraphError(message);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Could not start Microsoft sign-in",
+            description: message,
+          }),
+        );
+      }
+      setIsStartingMicrosoftGraphSignIn(false);
+      return;
+    }
+
+    setMicrosoftGraphSignInFlow(result.value);
+    await openMicrosoftGraphSignIn(result.value);
+    setIsStartingMicrosoftGraphSignIn(false);
+  }, [
+    canManageMicrosoftGraph,
+    openMicrosoftGraphSignIn,
+    primaryEnvironmentId,
+    startMicrosoftGraphSignInCommand,
+  ]);
+
+  const handleDisconnectMicrosoftGraph = useCallback(async () => {
+    if (!primaryEnvironmentId || !canManageMicrosoftGraph) return;
+
+    setIsDisconnectingMicrosoftGraph(true);
+    setMicrosoftGraphError(null);
+    const result = await disconnectMicrosoftGraphCommand({
+      environmentId: primaryEnvironmentId,
+      input: {},
+    });
+    if (result._tag === "Failure") {
+      if (!isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        const message = microsoftGraphErrorMessage(error, "Failed to disconnect Microsoft Graph.");
+        setMicrosoftGraphError(message);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Could not disconnect Microsoft Graph",
+            description: message,
+          }),
+        );
+      }
+      setIsDisconnectingMicrosoftGraph(false);
+      return;
+    }
+
+    setMicrosoftGraphStatus(result.value.status);
+    setMicrosoftGraphSignInFlow(null);
+    toastManager.add({
+      type: "success",
+      title: "Microsoft Graph disconnected",
+      description: "The saved server-side Microsoft credential was removed.",
+    });
+    setIsDisconnectingMicrosoftGraph(false);
+  }, [canManageMicrosoftGraph, disconnectMicrosoftGraphCommand, primaryEnvironmentId]);
 
   const handleRevokeDesktopPairingLink = useCallback(async (id: string) => {
     setRevokingDesktopPairingLinkId(id);
@@ -2555,6 +2747,101 @@ export function ConnectionsSettings() {
     },
     [removeEnvironment],
   );
+
+  useEffect(() => {
+    void loadMicrosoftGraphStatus();
+  }, [loadMicrosoftGraphStatus]);
+
+  useEffect(() => {
+    if (!microsoftGraphSignInFlow || !primaryEnvironmentId || !canManageMicrosoftGraph) return;
+
+    const activeEnvironmentId = primaryEnvironmentId;
+    const activeFlow = microsoftGraphSignInFlow;
+    let cancelled = false;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+    function schedulePoll(delaySeconds: number) {
+      timeoutId = setTimeout(
+        () => {
+          void poll();
+        },
+        Math.max(1, delaySeconds) * 1000,
+      );
+    }
+
+    async function poll() {
+      if (cancelled) return;
+      setIsPollingMicrosoftGraphSignIn(true);
+      const result = await pollMicrosoftGraphSignInCommand({
+        environmentId: activeEnvironmentId,
+        input: { flowId: activeFlow.flowId },
+      });
+      if (cancelled) return;
+
+      if (result._tag === "Failure") {
+        if (!isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          const message = microsoftGraphErrorMessage(
+            error,
+            "Failed to finish Microsoft Graph sign-in.",
+          );
+          setMicrosoftGraphError(message);
+          setMicrosoftGraphSignInFlow(null);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Could not finish Microsoft sign-in",
+              description: message,
+            }),
+          );
+        }
+        setIsPollingMicrosoftGraphSignIn(false);
+        return;
+      }
+
+      setMicrosoftGraphStatus(result.value.status);
+      setMicrosoftGraphError(null);
+
+      if (result.value.state === "pending") {
+        setIsPollingMicrosoftGraphSignIn(false);
+        schedulePoll(result.value.retryAfterSeconds ?? activeFlow.intervalSeconds);
+        return;
+      }
+
+      setMicrosoftGraphSignInFlow(null);
+      setIsPollingMicrosoftGraphSignIn(false);
+      if (result.value.state === "connected") {
+        toastManager.add({
+          type: "success",
+          title: "Microsoft Graph connected",
+          description: "Outlook mail and calendar access is ready for server-side features.",
+        });
+        return;
+      }
+
+      const message = result.value.message ?? "Microsoft Graph sign-in did not complete.";
+      setMicrosoftGraphError(message);
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: result.value.state === "expired" ? "Microsoft sign-in expired" : "Sign-in failed",
+          description: message,
+        }),
+      );
+    }
+
+    schedulePoll(activeFlow.intervalSeconds);
+
+    return () => {
+      cancelled = true;
+      if (timeoutId) clearTimeout(timeoutId);
+    };
+  }, [
+    canManageMicrosoftGraph,
+    microsoftGraphSignInFlow,
+    pollMicrosoftGraphSignInCommand,
+    primaryEnvironmentId,
+  ]);
 
   const handleConnectSshHost = useCallback(
     async (target: DesktopSshEnvironmentTarget, label?: string) => {
@@ -3197,6 +3484,216 @@ export function ConnectionsSettings() {
       }
     />
   );
+
+  const renderMicrosoftGraphSection = () => {
+    const isConnected = microsoftGraphStatus?.state === "connected";
+    const accountLabel = microsoftGraphAccountLabel(microsoftGraphStatus);
+    const clientId = microsoftGraphStatus?.clientId ?? microsoftGraphSignInFlow?.clientId ?? null;
+    const tenantId = microsoftGraphStatus?.tenantId ?? microsoftGraphSignInFlow?.tenantId ?? null;
+    const requiredScopes =
+      microsoftGraphStatus?.requiredScopes ?? microsoftGraphSignInFlow?.requiredScopes ?? [];
+    const grantedScopes = microsoftGraphStatus?.grantedScopes ?? [];
+    const statusDescription = !canReadMicrosoftGraph
+      ? "Requires access:read to inspect and access:write to connect."
+      : isLoadingMicrosoftGraph && microsoftGraphStatus === null
+        ? "Loading connection status."
+        : microsoftGraphSignInFlow
+          ? "Waiting for Microsoft sign-in to finish."
+          : isConnected
+            ? accountLabel
+              ? `Connected as ${accountLabel}.`
+              : "Connected to Microsoft Graph."
+            : "Not connected.";
+    const statusDot = microsoftGraphError
+      ? "error"
+      : microsoftGraphSignInFlow
+        ? "pending"
+        : isConnected
+          ? "connected"
+          : "idle";
+    const statusText =
+      statusDot === "connected"
+        ? "Microsoft Graph connected"
+        : statusDot === "pending"
+          ? "Microsoft Graph sign-in pending"
+          : statusDot === "error"
+            ? "Microsoft Graph connection error"
+            : "Microsoft Graph not connected";
+    const scopeLabel =
+      grantedScopes.length > 0
+        ? `Granted: ${grantedScopes.join(", ")}`
+        : `Required: ${requiredScopes.join(", ")}`;
+    const tokenExpiryLabel = microsoftGraphStatus?.accessTokenExpiresAt
+      ? `Access expires ${formatExpiresInLabel(
+          microsoftGraphStatus.accessTokenExpiresAt,
+          microsoftGraphNowMs,
+        )}`
+      : null;
+    const updatedAtLabel = microsoftGraphStatus?.updatedAt
+      ? `Updated ${formatAccessTimestamp(microsoftGraphStatus.updatedAt)}`
+      : null;
+
+    return (
+      <SettingsSection title="Microsoft Graph" icon={<MailIcon className="size-3" />}>
+        <SettingsRow
+          title={
+            <span className="inline-flex min-w-0 items-center gap-2">
+              <ConnectionStatusDot
+                tooltipText={statusText}
+                dotClassName={
+                  statusDot === "connected"
+                    ? "bg-success"
+                    : statusDot === "pending"
+                      ? "bg-warning"
+                      : statusDot === "error"
+                        ? "bg-destructive"
+                        : "bg-muted-foreground/40"
+                }
+                pingClassName={statusDot === "pending" ? "bg-warning/30" : null}
+              />
+              <span>Outlook and calendar</span>
+            </span>
+          }
+          description={statusDescription}
+          status={
+            <div className="flex flex-col gap-1">
+              {microsoftGraphError ? (
+                <span className="block text-destructive">{microsoftGraphError}</span>
+              ) : null}
+              {canReadMicrosoftGraph && microsoftGraphStatus ? (
+                <span>
+                  {[scopeLabel, tokenExpiryLabel, updatedAtLabel].filter(Boolean).join(" · ")}
+                </span>
+              ) : null}
+            </div>
+          }
+          control={
+            isConnected ? (
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={
+                  !canManageMicrosoftGraph ||
+                  primaryEnvironmentId === null ||
+                  isDisconnectingMicrosoftGraph
+                }
+                onClick={() => void handleDisconnectMicrosoftGraph()}
+              >
+                {isDisconnectingMicrosoftGraph ? (
+                  <Spinner className="size-3" />
+                ) : (
+                  <UnplugIcon className="size-3" />
+                )}
+                Disconnect
+              </Button>
+            ) : (
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={
+                  !canManageMicrosoftGraph ||
+                  primaryEnvironmentId === null ||
+                  isStartingMicrosoftGraphSignIn
+                }
+                onClick={() => void handleStartMicrosoftGraphSignIn()}
+              >
+                {isStartingMicrosoftGraphSignIn ? (
+                  <Spinner className="size-3" />
+                ) : (
+                  <LogInIcon className="size-3" />
+                )}
+                Sign in
+              </Button>
+            )
+          }
+        >
+          {microsoftGraphSignInFlow ? (
+            <div
+              className="mt-3 border-t border-border/60 py-3"
+              aria-live="polite"
+              aria-busy={isPollingMicrosoftGraphSignIn}
+            >
+              <div className="flex flex-col gap-3 rounded-md bg-muted/30 px-3 py-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0">
+                  <p className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+                    Microsoft code
+                  </p>
+                  <p className="mt-1 font-mono text-base font-semibold tracking-normal text-foreground">
+                    {microsoftGraphSignInFlow.userCode}
+                  </p>
+                  <p className="mt-1 text-[11px] text-muted-foreground">
+                    Expires{" "}
+                    {formatExpiresInLabel(microsoftGraphSignInFlow.expiresAt, microsoftGraphNowMs)}
+                  </p>
+                </div>
+                <div className="flex shrink-0 gap-1.5">
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <Button
+                          size="icon-xs"
+                          variant="ghost"
+                          aria-label="Copy Microsoft sign-in code"
+                          onClick={() =>
+                            copyMicrosoftGraphUserCode(
+                              microsoftGraphSignInFlow.userCode,
+                              "microsoft-graph-user-code",
+                            )
+                          }
+                        >
+                          <CopyIcon className="size-3.5" />
+                        </Button>
+                      }
+                    />
+                    <TooltipPopup side="top">Copy code</TooltipPopup>
+                  </Tooltip>
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <Button
+                          size="icon-xs"
+                          variant="ghost"
+                          aria-label="Open Microsoft sign-in"
+                          onClick={() => void openMicrosoftGraphSignIn(microsoftGraphSignInFlow)}
+                        >
+                          <ExternalLinkIcon className="size-3.5" />
+                        </Button>
+                      }
+                    />
+                    <TooltipPopup side="top">Open sign-in</TooltipPopup>
+                  </Tooltip>
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          {clientId && tenantId ? (
+            <div className="grid gap-2 border-t border-border/60 py-3 text-[11px] text-muted-foreground sm:grid-cols-2">
+              <div className="min-w-0">
+                <span className="block font-medium text-muted-foreground/80">Client ID</span>
+                <code className="mt-1 block truncate font-mono text-foreground/80" title={clientId}>
+                  {clientId}
+                </code>
+              </div>
+              <div className="min-w-0">
+                <span className="block font-medium text-muted-foreground/80">Tenant ID</span>
+                <code className="mt-1 block truncate font-mono text-foreground/80" title={tenantId}>
+                  {tenantId}
+                </code>
+              </div>
+              <div className="min-w-0 sm:col-span-2">
+                <span className="block font-medium text-muted-foreground/80">Delegated scopes</span>
+                <span className="mt-1 block break-words text-foreground/80">
+                  {requiredScopes.join(", ")}
+                </span>
+              </div>
+            </div>
+          ) : null}
+        </SettingsRow>
+      </SettingsSection>
+    );
+  };
+
   const renderAuthorizedClients = (presentation: AccessSectionPresentation) => (
     <>
       {desktopAccessManagementError ? (
@@ -3610,6 +4107,8 @@ export function ConnectionsSettings() {
           <CloudLinkRow canManageRelay={canManageRelay} />
         </SettingsSection>
       )}
+
+      {renderMicrosoftGraphSection()}
 
       <SettingsSection
         title="Remote environments"

@@ -82,6 +82,7 @@ import * as CloudCliState from "./cloud/CliState.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
+import * as MicrosoftGraphConnection from "./microsoftGraph/MicrosoftGraphConnection.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
 import {
   clearPersistedServerRuntimeState,
@@ -277,6 +278,10 @@ const CloudManagedEndpointRuntimeLive = Layer.mergeAll(
     Layer.provide(ServerSecretStore.layer),
     Layer.provide(RelayClientLive),
   ),
+);
+
+const MicrosoftGraphConnectionLayerLive = MicrosoftGraphConnection.layerLive.pipe(
+  Layer.provide(ServerSecretStore.layer),
 );
 
 const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
@@ -479,6 +484,7 @@ export const makeServerLayer = Layer.unwrap(
 
     return serverApplicationLayer.pipe(
       Layer.provideMerge(RuntimeServicesLive),
+      Layer.provideMerge(MicrosoftGraphConnectionLayerLive),
       Layer.provideMerge(serverRelayBrokerTracingLayer),
       Layer.provideMerge(HttpServerLive),
       Layer.provide(ObservabilityLive),

@@ -15,6 +15,10 @@ import {
   GitCommandError,
   KeybindingRule,
   MessageId,
+  MicrosoftGraphClientId,
+  type MicrosoftGraphConnectionStatus,
+  MicrosoftGraphRequiredScopes,
+  MicrosoftGraphTenantId,
   ExternalLauncherCommandNotFoundError,
   type OrchestrationThreadShell,
   TerminalNotRunningError,
@@ -110,6 +114,7 @@ import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as CloudManagedEndpointRuntime from "./cloud/ManagedEndpointRuntime.ts";
 import * as CloudCliTokenManager from "./cloud/CliTokenManager.ts";
+import * as MicrosoftGraphConnection from "./microsoftGraph/MicrosoftGraphConnection.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
@@ -122,6 +127,16 @@ const defaultModelSelection = {
   instanceId: ProviderInstanceId.make("codex"),
   model: "gpt-5-codex",
 } as const;
+const defaultMicrosoftGraphStatus = (): MicrosoftGraphConnectionStatus => ({
+  state: "not_connected",
+  account: null,
+  clientId: MicrosoftGraphClientId,
+  tenantId: MicrosoftGraphTenantId,
+  requiredScopes: [...MicrosoftGraphRequiredScopes],
+  grantedScopes: [],
+  accessTokenExpiresAt: null,
+  updatedAt: null,
+});
 const testEnvironmentDescriptor = {
   environmentId: EnvironmentId.make("environment-test"),
   label: "Test environment",
@@ -349,6 +364,9 @@ const buildAppUnderTest = (options?: {
     >;
     relayClient?: Partial<RelayClient.RelayClient["Service"]>;
     cloudCliTokenManager?: Partial<CloudCliTokenManager.CloudCliTokenManager["Service"]>;
+    microsoftGraphConnection?: Partial<
+      MicrosoftGraphConnection.MicrosoftGraphConnection["Service"]
+    >;
   };
 }) =>
   Effect.gen(function* () {
@@ -799,6 +817,23 @@ const buildAppUnderTest = (options?: {
           clear: Effect.void,
           ...options?.layers?.cloudCliTokenManager,
         }),
+      ),
+      Layer.provide(
+        Layer.succeed(
+          MicrosoftGraphConnection.MicrosoftGraphConnection,
+          MicrosoftGraphConnection.MicrosoftGraphConnection.of({
+            getStatus: () => Effect.succeed(defaultMicrosoftGraphStatus()),
+            startSignIn: () => Effect.die(new Error("Unexpected Microsoft Graph sign-in.")),
+            pollSignIn: () => Effect.die(new Error("Unexpected Microsoft Graph sign-in poll.")),
+            disconnect: () =>
+              Effect.succeed({
+                status: defaultMicrosoftGraphStatus(),
+              }),
+            requestGraphJson: () =>
+              Effect.die(new Error("Unexpected Microsoft Graph request in server route test.")),
+            ...options?.layers?.microsoftGraphConnection,
+          }),
+        ),
       ),
       Layer.provideMerge(makeAuthTestLayer()),
       Layer.provideMerge(ServerSecretStore.layer),

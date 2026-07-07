@@ -240,5 +240,35 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:upgrade-marketplace",
       tag: WS_METHODS.serverUpgradeMarketplace,
     }),
+    microsoftGraphGetStatus: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:microsoft-graph-get-status",
+      tag: WS_METHODS.microsoftGraphGetStatus,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId }) => environmentId,
+      },
+    }),
+    microsoftGraphStartSignIn: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:microsoft-graph-start-sign-in",
+      tag: WS_METHODS.microsoftGraphStartSignIn,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId }) => environmentId,
+      },
+    }),
+    microsoftGraphPollSignIn: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:microsoft-graph-poll-sign-in",
+      tag: WS_METHODS.microsoftGraphPollSignIn,
+      concurrency: {
+        mode: "latest",
+        key: ({ environmentId, input }) => `${environmentId}:${input.flowId}`,
+      },
+    }),
+    microsoftGraphDisconnect: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:microsoft-graph-disconnect",
+      tag: WS_METHODS.microsoftGraphDisconnect,
+      scheduler: configScheduler,
+      concurrency: configConcurrency,
+    }),
   };
 }
