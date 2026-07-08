@@ -10,8 +10,10 @@ This automation keeps the TritonAI Harness downstream branch close to upstream `
 - `bun run tritonai:sync:review`
 - `bun run tritonai:sync:pr`
 - `bun run tritonai:sync:auto`
+- `scripts/tritonai-release-sync.mjs`
+- `bun run tritonai:release-sync:pr`
 
-The script fetches upstream, creates a generated `sync/upstream-*` branch in a temporary worktree, merges upstream into the configured downstream branch, runs checks, and optionally asks a Codex command to classify the result.
+The upstream sync script creates generated `sync/upstream-*` branches in a temporary worktree. The parent release sync script uses generated `sync/release-*` branches so release PRs cannot overwrite ordinary upstream sync PRs.
 
 ## Review Modes
 
@@ -64,6 +66,7 @@ This lets a Codex review command use the intended TritonAI/Codex configuration w
 Generated PRs use these managed labels when applicable:
 
 - `automation:upstream-sync`
+- `automation:release-sync`
 - `automation:auto-merge-ready`
 - `needs-human-review`
 - `upstream-conflict`
@@ -86,3 +89,13 @@ If checks fail, merge conflicts appear, or Codex review is missing/risky, the re
 ## GitHub Workflow
 
 `.github/workflows/tritonai-upstream-sync.yml` is scheduled and manually dispatchable. It expects a self-hosted runner because the fork may need local Codex/TritonAI configuration. The workflow can push a sync branch and open a PR; auto-merge defaults off and should only be enabled after manual sync runs are predictable.
+
+## Parent Release Sync
+
+`scripts/tritonai-release-sync.mjs` is adapted from the T3Code fork's release sync helper. It finds the latest stable GitHub release from `pingdotgg/t3code`, merges that tag into the configured TritonAI Harness downstream branch, runs `TRITONAI_RELEASE_SYNC_CHECKS`, and can push/open a review PR.
+
+The default downstream branch in this repo is `main`. Override it with:
+
+```sh
+export TRITONAI_RELEASE_SYNC_DOWNSTREAM_BRANCH=main
+```

@@ -9,7 +9,7 @@ const DEFAULT_UPSTREAM_REMOTE = "upstream";
 const DEFAULT_UPSTREAM_URL = "https://github.com/pingdotgg/t3code.git";
 const DEFAULT_UPSTREAM_BRANCH = "main";
 const DEFAULT_DOWNSTREAM_REMOTE = "origin";
-const DEFAULT_DOWNSTREAM_BRANCH = "tritonai-codex-runtime";
+const DEFAULT_DOWNSTREAM_BRANCH = "main";
 const DEFAULT_SYNC_BRANCH_PREFIX = "sync/upstream-";
 const DEFAULT_CHECKS = "bun run typecheck && bun run test";
 const DEFAULT_SECRET_ALLOWLIST = "CODEX_HOME,TRITONAI_HOME,TRITONAI_API_KEY";
@@ -127,6 +127,14 @@ function ensureRemote(remote, url, cwd) {
     run("git", ["remote", "add", remote, url], { cwd });
   }
   run("git", ["remote", "set-url", remote, url], { cwd });
+}
+
+function fetchRemoteBranch(remote, branch, cwd) {
+  run(
+    "git",
+    ["fetch", "--prune", remote, `+refs/heads/${branch}:refs/remotes/${remote}/${branch}`],
+    { cwd },
+  );
 }
 
 function isAncestor(ancestor, descendant, cwd) {
@@ -333,8 +341,8 @@ function main() {
   );
 
   ensureRemote(upstreamRemote, upstreamUrl, repoRoot);
-  run("git", ["fetch", upstreamRemote, upstreamBranch, "--prune"], { cwd: repoRoot });
-  run("git", ["fetch", downstreamRemote, downstreamBranch, "--prune"], { cwd: repoRoot });
+  fetchRemoteBranch(upstreamRemote, upstreamBranch, repoRoot);
+  fetchRemoteBranch(downstreamRemote, downstreamBranch, repoRoot);
 
   const upstreamRef = `${upstreamRemote}/${upstreamBranch}`;
   const downstreamRef = `${downstreamRemote}/${downstreamBranch}`;

@@ -16,7 +16,7 @@ reviews:
     enabled: true
     drafts: false
     base_branches:
-      - "tritonai-codex-runtime"
+      - "main"
 
 knowledge_base:
   code_guidelines:

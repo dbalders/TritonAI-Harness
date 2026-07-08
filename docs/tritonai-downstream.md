@@ -5,9 +5,10 @@ TritonAI Harness is the UCSD-oriented downstream of upstream T3 Code. The downst
 ## Branch Structure
 
 - `upstream/main`: upstream source from `https://github.com/pingdotgg/t3code.git`.
-- `main`: fork mirror branch when a clean upstream mirror is useful.
-- `tritonai-codex-runtime`: active TritonAI Harness downstream branch.
+- `vendor/t3code-main`: fork mirror branch when a clean upstream mirror is useful.
+- `main`: active TritonAI Harness downstream branch.
 - `sync/upstream-*`: generated branches from upstream sync attempts.
+- `sync/release-*`: generated branches from parent release sync attempts.
 
 Use project-specific branch names. Do not create tool-owned branch prefixes such as `codex/...`.
 
@@ -42,7 +43,7 @@ The script exits with:
 
 Useful environment overrides:
 
-- `TRITONAI_SYNC_DOWNSTREAM_BRANCH=tritonai-codex-runtime`
+- `TRITONAI_SYNC_DOWNSTREAM_BRANCH=main`
 - `TRITONAI_SYNC_UPSTREAM_REMOTE=upstream`
 - `TRITONAI_SYNC_UPSTREAM_URL=https://github.com/pingdotgg/t3code.git`
 - `TRITONAI_SYNC_UPSTREAM_BRANCH=main`
@@ -83,3 +84,16 @@ Installer and updater changes should consume GitHub Release assets from the Trit
 - `.blockmap` files
 
 Branches are for source integration. GitHub Releases are for installer and updater consumption.
+
+To prepare a PR that merges the latest stable parent T3 Code release into TritonAI Harness:
+
+```sh
+bun run tritonai:release-sync:pr
+```
+
+Useful release-sync overrides:
+
+- `TRITONAI_RELEASE_SYNC_DOWNSTREAM_BRANCH=main`
+- `TRITONAI_RELEASE_SYNC_BRANCH_PREFIX=sync/release-`
+- `TRITONAI_RELEASE_SYNC_PARENT_REPO=pingdotgg/t3code`
+- `TRITONAI_RELEASE_SYNC_CHECKS="vp check && vp run typecheck"`

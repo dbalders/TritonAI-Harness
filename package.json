@@ -77,6 +77,7 @@
     "tritonai:sync:review": "node scripts/tritonai-sync-upstream.mjs",
     "tritonai:sync:pr": "node scripts/tritonai-sync-upstream.mjs --push --create-pr",
     "tritonai:sync:auto": "node scripts/tritonai-sync-upstream.mjs --push --create-pr --auto-merge-pr",
+    "tritonai:release-sync:pr": "node scripts/tritonai-release-sync.mjs --push --create-pr",
     "sync:repos": "node scripts/sync-reference-repos.ts"
   },
   "devDependencies": {
