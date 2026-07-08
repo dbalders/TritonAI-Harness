@@ -172,8 +172,6 @@ jobs:
     if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
-    environment:
-      name: production
     outputs:
       clerk_publishable_key: ${{ steps.public_config.outputs.clerk_publishable_key }}
       clerk_jwt_template: ${{ steps.public_config.outputs.clerk_jwt_template }}

@@ -19,8 +19,6 @@ jobs:
     name: Deploy production relay
     runs-on: ubuntu-24.04
     timeout-minutes: 15
-    environment:
-      name: production
     env:
       CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
       PLANETSCALE_ORGANIZATION: ${{ vars.PLANETSCALE_ORGANIZATION }}
