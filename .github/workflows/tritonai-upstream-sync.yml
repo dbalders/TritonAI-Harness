@@ -54,7 +54,7 @@ jobs:
 
       - name: Refresh vendor mirror branch
         run: |
-          git fetch origin vendor/t3code-main --prune || true
+          git fetch --prune origin +refs/heads/vendor/t3code-main:refs/remotes/origin/vendor/t3code-main || true
           git push origin refs/remotes/upstream/main:refs/heads/vendor/t3code-main --force-with-lease
 
       - name: Setup Bun
