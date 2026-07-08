@@ -98,6 +98,11 @@ jobs:
                 description: "Generated TritonAI Harness upstream sync work.",
               },
               {
+                name: "automation:release-sync",
+                color: "5319e7",
+                description: "Generated TritonAI Harness parent release sync work.",
+              },
+              {
                 name: "automation:auto-merge-ready",
                 color: "0e8a16",
                 description: "Automation classified this sync as safe to merge after checks.",

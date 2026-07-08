@@ -129,6 +129,14 @@ function ensureRemote(remote, url, cwd) {
   run("git", ["remote", "set-url", remote, url], { cwd });
 }
 
+function fetchRemoteBranch(remote, branch, cwd) {
+  run(
+    "git",
+    ["fetch", "--prune", remote, `+refs/heads/${branch}:refs/remotes/${remote}/${branch}`],
+    { cwd },
+  );
+}
+
 function isAncestor(ancestor, descendant, cwd) {
   return gitStatus(["merge-base", "--is-ancestor", ancestor, descendant], { cwd }).status === 0;
 }
@@ -333,8 +341,8 @@ function main() {
   );
 
   ensureRemote(upstreamRemote, upstreamUrl, repoRoot);
-  run("git", ["fetch", upstreamRemote, upstreamBranch, "--prune"], { cwd: repoRoot });
-  run("git", ["fetch", downstreamRemote, downstreamBranch, "--prune"], { cwd: repoRoot });
+  fetchRemoteBranch(upstreamRemote, upstreamBranch, repoRoot);
+  fetchRemoteBranch(downstreamRemote, downstreamBranch, repoRoot);
 
   const upstreamRef = `${upstreamRemote}/${upstreamBranch}`;
   const downstreamRef = `${downstreamRemote}/${downstreamBranch}`;

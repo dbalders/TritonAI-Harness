@@ -13,7 +13,7 @@ This automation keeps the TritonAI Harness downstream branch close to upstream `
 - `scripts/tritonai-release-sync.mjs`
 - `bun run tritonai:release-sync:pr`
 
-The script fetches upstream, creates a generated `sync/upstream-*` branch in a temporary worktree, merges upstream into the configured downstream branch, runs checks, and optionally asks a Codex command to classify the result.
+The upstream sync script creates generated `sync/upstream-*` branches in a temporary worktree. The parent release sync script uses generated `sync/release-*` branches so release PRs cannot overwrite ordinary upstream sync PRs.
 
 ## Review Modes
 
@@ -66,6 +66,7 @@ This lets a Codex review command use the intended TritonAI/Codex configuration w
 Generated PRs use these managed labels when applicable:
 
 - `automation:upstream-sync`
+- `automation:release-sync`
 - `automation:auto-merge-ready`
 - `needs-human-review`
 - `upstream-conflict`

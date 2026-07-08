@@ -10,9 +10,9 @@ const DEFAULT_PARENT_REMOTE = "upstream";
 const DEFAULT_PARENT_URL = "https://github.com/pingdotgg/t3code.git";
 const DEFAULT_DOWNSTREAM_REMOTE = "origin";
 const DEFAULT_DOWNSTREAM_BRANCH = "main";
-const DEFAULT_SYNC_BRANCH_PREFIX = "sync/upstream-";
+const DEFAULT_SYNC_BRANCH_PREFIX = "sync/release-";
 const DEFAULT_CHECKS = "vp check && vp run typecheck";
-const SYNC_LABEL = "automation:upstream-sync";
+const SYNC_LABEL = "automation:release-sync";
 
 function parseArgs(args) {
   const parsed = {
@@ -114,6 +114,14 @@ function ensureRemote(remote, url, cwd) {
   run("git", ["remote", "set-url", remote, url], { cwd });
 }
 
+function fetchRemoteBranch(remote, branch, cwd) {
+  run(
+    "git",
+    ["fetch", "--prune", remote, `+refs/heads/${branch}:refs/remotes/${remote}/${branch}`],
+    { cwd },
+  );
+}
+
 function isAncestor(ancestor, descendant, cwd) {
   return gitStatus(["merge-base", "--is-ancestor", ancestor, descendant], { cwd }).status === 0;
 }
@@ -183,22 +191,6 @@ function openSyncPrs({ repo, syncBranchPrefix, cwd }) {
 function prRecordsRelease(pr, releaseTag, releaseSha) {
   const fields = [pr.title, pr.body, pr.headRefName].filter(Boolean).join("\n");
   return fields.includes(releaseTag) || fields.includes(releaseSha);
-}
-
-function checkoutBranchForPr({ pr, downstreamRemote, worktree, cwd }) {
-  const localBranch = pr.headRefName;
-  const remoteBranch = `${downstreamRemote}/${pr.headRefName}`;
-  run("git", ["fetch", downstreamRemote, `${pr.headRefName}:${localBranch}`], {
-    cwd,
-    check: false,
-  });
-  if (gitStatus(["rev-parse", "--verify", localBranch], { cwd }).status === 0) {
-    run("git", ["worktree", "add", worktree, localBranch], { cwd });
-    return localBranch;
-  }
-  run("git", ["fetch", downstreamRemote, pr.headRefName], { cwd });
-  run("git", ["worktree", "add", "-b", localBranch, worktree, remoteBranch], { cwd });
-  return localBranch;
 }
 
 function createWorktree({ branch, downstreamRef, worktree, cwd }) {
@@ -309,7 +301,7 @@ function main() {
 
   ensureRemote(parentRemote, parentUrl, repoRoot);
   run("git", ["fetch", parentRemote, "--tags", "--prune"], { cwd: repoRoot });
-  run("git", ["fetch", downstreamRemote, downstreamBranch, "--prune"], { cwd: repoRoot });
+  fetchRemoteBranch(downstreamRemote, downstreamBranch, repoRoot);
 
   const release = latestStableRelease(parentRepo, repoRoot);
   const releaseTag = String(release.tagName);
@@ -346,9 +338,7 @@ function main() {
     return 0;
   }
 
-  const reusablePr = prs[0] ?? null;
-  const branch =
-    reusablePr?.headRefName ?? `${syncBranchPrefix}${releaseTag}-${releaseSha.slice(0, 12)}`;
+  const branch = `${syncBranchPrefix}${releaseTag}-${releaseSha.slice(0, 12)}`;
   const worktreeRoot = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "tritonai-release-sync-"));
   const worktree = NodePath.join(worktreeRoot, "worktree");
   const report = {
@@ -365,12 +355,7 @@ function main() {
   };
 
   try {
-    if (reusablePr) {
-      checkoutBranchForPr({ pr: reusablePr, downstreamRemote, worktree, cwd: repoRoot });
-      run("git", ["reset", "--hard", downstreamRef], { cwd: worktree });
-    } else {
-      createWorktree({ branch, downstreamRef, worktree, cwd: repoRoot });
-    }
+    createWorktree({ branch, downstreamRef, worktree, cwd: repoRoot });
 
     report.mergeStatus = mergeRelease({ releaseSha, worktree });
     if (report.mergeStatus === "conflicted") {
@@ -400,14 +385,14 @@ function main() {
       });
     }
 
-    let prUrl = reusablePr?.url ?? null;
+    let prUrl = null;
     if (args.createPr) {
       prUrl = createOrUpdatePullRequest({
         repo,
-        pr: reusablePr,
+        pr: null,
         branch,
         baseBranch: downstreamBranch,
-        title: `Review upstream sync: release ${releaseTag}`,
+        title: `Review release sync: ${releaseTag}`,
         body: buildPrBody(report, labels),
         labels,
         cwd: worktree,

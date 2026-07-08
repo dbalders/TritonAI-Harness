@@ -8,6 +8,7 @@ TritonAI Harness is the UCSD-oriented downstream of upstream T3 Code. The downst
 - `vendor/t3code-main`: fork mirror branch when a clean upstream mirror is useful.
 - `main`: active TritonAI Harness downstream branch.
 - `sync/upstream-*`: generated branches from upstream sync attempts.
+- `sync/release-*`: generated branches from parent release sync attempts.
 
 Use project-specific branch names. Do not create tool-owned branch prefixes such as `codex/...`.
 
@@ -93,5 +94,6 @@ bun run tritonai:release-sync:pr
 Useful release-sync overrides:
 
 - `TRITONAI_RELEASE_SYNC_DOWNSTREAM_BRANCH=main`
+- `TRITONAI_RELEASE_SYNC_BRANCH_PREFIX=sync/release-`
 - `TRITONAI_RELEASE_SYNC_PARENT_REPO=pingdotgg/t3code`
 - `TRITONAI_RELEASE_SYNC_CHECKS="vp check && vp run typecheck"`
