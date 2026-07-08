@@ -1,4 +1,4 @@
-export const GITHUB_REPOSITORY_URL = "https://github.com/dbalders/t3code";
+export const GITHUB_REPOSITORY_URL = "https://github.com/dbalders/TritonAI-Harness";
 
 export const MARKETING_STATS = {
   githubStars: "12k+",

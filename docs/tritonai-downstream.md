@@ -4,9 +4,8 @@ TritonAI Harness is the UCSD-oriented downstream of upstream T3 Code. The downst
 
 ## Branch Structure
 
-- `upstream/main`: upstream source from `https://github.com/pingdotgg/t3code.git`.
-- `vendor/t3code-main`: fork mirror branch when a clean upstream mirror is useful.
-- `main`: active TritonAI Harness downstream branch.
+- `vendor/t3code-main`: clean mirror of upstream `https://github.com/pingdotgg/t3code.git` `main`.
+- `main`: active TritonAI Harness product branch.
 - `sync/upstream-*`: generated branches from upstream sync attempts.
 - `sync/release-*`: generated branches from parent release sync attempts.
 
@@ -75,7 +74,7 @@ For now, keep DeepSeek as the review model if your Codex config exposes it. Do n
 
 ## Release Control
 
-Installer and updater changes should consume GitHub Release assets from the TritonAI fork only after the fork publishes compatible Electron assets:
+Installer and updater changes should consume GitHub Release assets from `dbalders/TritonAI-Harness` only after the Harness repo publishes compatible Electron assets:
 
 - `latest-mac.yml`
 - `latest.yml`

@@ -589,10 +589,14 @@ describe("DesktopBackendConfiguration", () => {
       );
 
       const previousWslEnv = process.env.WSLENV;
+      const previousOpenAiKey = process.env.OPENAI_API_KEY;
+      const previousAnthropicKey = process.env.ANTHROPIC_API_KEY;
       const previousTritonAiKey = process.env.TRITONAI_API_KEY;
       const previousUcsdAiBaseUrl = process.env.UCSD_AI_BASE_URL;
       try {
         process.env.WSLENV = "GOPATH/p";
+        delete process.env.OPENAI_API_KEY;
+        delete process.env.ANTHROPIC_API_KEY;
         delete process.env.TRITONAI_API_KEY;
         delete process.env.UCSD_AI_BASE_URL;
 
@@ -621,6 +625,8 @@ describe("DesktopBackendConfiguration", () => {
         );
       } finally {
         restoreEnv("WSLENV", previousWslEnv);
+        restoreEnv("OPENAI_API_KEY", previousOpenAiKey);
+        restoreEnv("ANTHROPIC_API_KEY", previousAnthropicKey);
         restoreEnv("TRITONAI_API_KEY", previousTritonAiKey);
         restoreEnv("UCSD_AI_BASE_URL", previousUcsdAiBaseUrl);
       }
