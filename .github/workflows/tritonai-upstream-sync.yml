@@ -41,15 +41,21 @@ jobs:
     runs-on: self-hosted
     timeout-minutes: 60
     steps:
-      - name: Checkout fork
+      - name: Checkout Harness repo
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - name: Setup upstream remote
+      - name: Setup T3 Code upstream remote
         run: |
           git remote add upstream https://github.com/pingdotgg/t3code.git 2>/dev/null || true
           git remote set-url upstream https://github.com/pingdotgg/t3code.git
+          git fetch --prune upstream +refs/heads/main:refs/remotes/upstream/main
+
+      - name: Refresh vendor mirror branch
+        run: |
+          git fetch origin vendor/t3code-main --prune || true
+          git push origin refs/remotes/upstream/main:refs/heads/vendor/t3code-main --force-with-lease
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
