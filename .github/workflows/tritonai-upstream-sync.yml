@@ -8,7 +8,7 @@ on:
       downstream_branch:
         description: "TritonAI Harness branch to merge upstream into"
         required: true
-        default: tritonai-codex-runtime
+        default: main
         type: string
       create_pr:
         description: "Push sync branch and open a PR"
@@ -69,7 +69,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TRITONAI_SYNC_GITHUB_REPO: ${{ github.repository }}
           GH_REPO: ${{ github.repository }}
-          TRITONAI_SYNC_DOWNSTREAM_BRANCH: ${{ vars.TRITONAI_SYNC_DOWNSTREAM_BRANCH || 'tritonai-codex-runtime' }}
+          TRITONAI_SYNC_DOWNSTREAM_BRANCH: ${{ vars.TRITONAI_SYNC_DOWNSTREAM_BRANCH || 'main' }}
           TRITONAI_SYNC_UPSTREAM_REMOTE: upstream
           TRITONAI_SYNC_UPSTREAM_URL: https://github.com/pingdotgg/t3code.git
           TRITONAI_SYNC_UPSTREAM_BRANCH: main
@@ -84,7 +84,7 @@ jobs:
         run: |
           downstream_branch="${{ github.event.inputs.downstream_branch }}"
           if [[ -z "$downstream_branch" ]]; then
-            downstream_branch="${TRITONAI_SYNC_DOWNSTREAM_BRANCH:-tritonai-codex-runtime}"
+            downstream_branch="${TRITONAI_SYNC_DOWNSTREAM_BRANCH:-main}"
           fi
           export TRITONAI_SYNC_DOWNSTREAM_BRANCH="$downstream_branch"
 
