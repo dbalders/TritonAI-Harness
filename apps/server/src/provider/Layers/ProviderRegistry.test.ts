@@ -16,6 +16,7 @@ import {
   ClaudeSettings,
   CodexSettings,
   DEFAULT_SERVER_SETTINGS,
+  DEFAULT_TRITONAI_CODEX_MODEL,
   ProviderDriverKind,
   ProviderInstanceId,
   ServerSettings,
@@ -30,7 +31,11 @@ import { deepMerge } from "@t3tools/shared/Struct";
 import { createModelCapabilities } from "@t3tools/shared/model";
 import { applyServerSettingsPatch } from "@t3tools/shared/serverSettings";
 
-import { checkCodexProviderStatus, type CodexAppServerProviderSnapshot } from "./CodexProvider.ts";
+import {
+  checkCodexProviderStatus,
+  makePendingCodexProvider,
+  type CodexAppServerProviderSnapshot,
+} from "./CodexProvider.ts";
 import { checkClaudeProviderStatus } from "./ClaudeProvider.ts";
 import * as OpenCodeRuntime from "../opencodeRuntime.ts";
 import * as ProviderEventLoggers from "./ProviderEventLoggers.ts";
@@ -302,6 +307,35 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
   "ProviderRegistry",
   (it) => {
     describe("checkCodexProviderStatus", () => {
+      it.effect("exposes reasoning controls for the pending TritonAI model", () =>
+        Effect.gen(function* () {
+          const status = yield* makePendingCodexProvider(defaultCodexSettings);
+          const model = status.models.find(
+            (candidate) => candidate.slug === DEFAULT_TRITONAI_CODEX_MODEL,
+          );
+          if (!model) {
+            throw new Error(`Expected ${DEFAULT_TRITONAI_CODEX_MODEL} to be available.`);
+          }
+
+          assert.strictEqual(model.name, "DeepSeek v4 Flash");
+          assert.strictEqual(model.isCustom, true);
+          assert.deepStrictEqual(model.capabilities?.optionDescriptors, [
+            {
+              id: "reasoningEffort",
+              label: "Reasoning",
+              type: "select",
+              options: [
+                { id: "minimal", label: "Minimal" },
+                { id: "low", label: "Low" },
+                { id: "medium", label: "Medium", isDefault: true },
+                { id: "high", label: "High" },
+              ],
+              currentValue: "medium",
+            },
+          ]);
+        }),
+      );
+
       it.effect("uses the app-server account and model list for provider status", () =>
         Effect.gen(function* () {
           const status = yield* checkCodexProviderStatus(defaultCodexSettings, () =>
@@ -595,8 +629,8 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           version: "1.0.0",
           models: [
             {
-              slug: "deepseek-v4-flash-max",
-              name: "DeepSeek v4 Flash Max",
+              slug: "deepseek-v4-flash",
+              name: "DeepSeek v4 Flash",
               isCustom: true,
               capabilities: createModelCapabilities({
                 optionDescriptors: [],
@@ -619,8 +653,8 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           checkedAt: "2026-04-14T00:01:00.000Z",
           models: [
             {
-              slug: "deepseek-v4-flash-max",
-              name: "DeepSeek v4 Flash Max",
+              slug: "deepseek-v4-flash",
+              name: "DeepSeek v4 Flash",
               isCustom: true,
               capabilities: null,
             },
@@ -629,8 +663,8 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
 
         assert.deepStrictEqual(mergeProviderSnapshot(previousProvider, refreshedProvider).models, [
           {
-            slug: "deepseek-v4-flash-max",
-            name: "DeepSeek v4 Flash Max",
+            slug: "deepseek-v4-flash",
+            name: "DeepSeek v4 Flash",
             isCustom: true,
             capabilities: null,
           },
