@@ -123,8 +123,8 @@ it("adds TritonAI reasoning controls to non-reasoning capabilities", () => {
     }),
   );
 
-  assert.deepStrictEqual(capabilities.optionDescriptors?.map((descriptor) => descriptor.id), [
-    "reasoningEffort",
-    "serviceTier",
-  ]);
+  assert.deepStrictEqual(
+    capabilities.optionDescriptors?.map((descriptor) => descriptor.id),
+    ["reasoningEffort", "serviceTier"],
+  );
 });
