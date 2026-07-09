@@ -39,6 +39,16 @@ describe("sidebar interactive cursors", () => {
     expect(html).toContain('data-sidebar-state="collapsed"');
   });
 
+  it("uses the compact default sidebar width", () => {
+    const html = renderToStaticMarkup(
+      <SidebarProvider>
+        <div />
+      </SidebarProvider>,
+    );
+
+    expect(html).toContain("--sidebar-width:14.4rem");
+  });
+
   it("keeps the sidebar trigger interactive inside Electron drag regions", () => {
     const html = renderToStaticMarkup(
       <SidebarProvider>
