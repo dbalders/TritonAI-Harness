@@ -133,6 +133,20 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       ipcRenderer.removeListener(IpcChannels.UPDATE_STATE_CHANNEL, wrappedListener);
     };
   },
+  getInstallerUpdateState: () => ipcRenderer.invoke(IpcChannels.INSTALLER_UPDATE_GET_STATE_CHANNEL),
+  checkInstallerUpdate: () => ipcRenderer.invoke(IpcChannels.INSTALLER_UPDATE_CHECK_CHANNEL),
+  openInstallerUpdate: () => ipcRenderer.invoke(IpcChannels.INSTALLER_UPDATE_OPEN_CHANNEL),
+  onInstallerUpdateState: (listener) => {
+    const wrappedListener = (_event: Electron.IpcRendererEvent, state: unknown) => {
+      if (typeof state !== "object" || state === null) return;
+      listener(state as Parameters<typeof listener>[0]);
+    };
+
+    ipcRenderer.on(IpcChannels.INSTALLER_UPDATE_STATE_CHANNEL, wrappedListener);
+    return () => {
+      ipcRenderer.removeListener(IpcChannels.INSTALLER_UPDATE_STATE_CHANNEL, wrappedListener);
+    };
+  },
   preview: {
     createTab: (tabId) => ipcRenderer.invoke(IpcChannels.PREVIEW_CREATE_TAB_CHANNEL, { tabId }),
     closeTab: (tabId) => ipcRenderer.invoke(IpcChannels.PREVIEW_CLOSE_TAB_CHANNEL, { tabId }),
