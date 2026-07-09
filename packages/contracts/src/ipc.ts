@@ -272,6 +272,73 @@ export const DesktopUpdateCheckResultSchema = Schema.Struct({
   state: DesktopUpdateStateSchema,
 });
 
+export type InstallerUpdateStatus =
+  | "disabled"
+  | "idle"
+  | "checking"
+  | "up-to-date"
+  | "available"
+  | "opening"
+  | "error";
+
+export type InstallerVersionMarkerStatus = "valid" | "missing" | "corrupt";
+
+export interface InstallerUpdateState {
+  enabled: boolean;
+  status: InstallerUpdateStatus;
+  installedVersion: string | null;
+  availableVersion: string | null;
+  markerStatus: InstallerVersionMarkerStatus;
+  checkedAt: string | null;
+  message: string | null;
+  errorContext: "check" | "open" | null;
+  canRetry: boolean;
+}
+
+export const InstallerUpdateStatusSchema = Schema.Literals([
+  "disabled",
+  "idle",
+  "checking",
+  "up-to-date",
+  "available",
+  "opening",
+  "error",
+]);
+export const InstallerVersionMarkerStatusSchema = Schema.Literals(["valid", "missing", "corrupt"]);
+export const InstallerUpdateStateSchema = Schema.Struct({
+  enabled: Schema.Boolean,
+  status: InstallerUpdateStatusSchema,
+  installedVersion: Schema.NullOr(Schema.String),
+  availableVersion: Schema.NullOr(Schema.String),
+  markerStatus: InstallerVersionMarkerStatusSchema,
+  checkedAt: Schema.NullOr(Schema.String),
+  message: Schema.NullOr(Schema.String),
+  errorContext: Schema.NullOr(Schema.Literals(["check", "open"])),
+  canRetry: Schema.Boolean,
+});
+
+export interface InstallerUpdateActionResult {
+  accepted: boolean;
+  completed: boolean;
+  state: InstallerUpdateState;
+}
+
+export const InstallerUpdateActionResultSchema = Schema.Struct({
+  accepted: Schema.Boolean,
+  completed: Schema.Boolean,
+  state: InstallerUpdateStateSchema,
+});
+
+export interface InstallerUpdateCheckResult {
+  checked: boolean;
+  state: InstallerUpdateState;
+}
+
+export const InstallerUpdateCheckResultSchema = Schema.Struct({
+  checked: Schema.Boolean,
+  state: InstallerUpdateStateSchema,
+});
+
 // Stable id for the Windows-native primary backend. Desktop side wraps
 // this with a brand inside DesktopBackendManager; web side keeps it as
 // a plain string so the env-runtime can compare against it without
@@ -1013,6 +1080,10 @@ export interface DesktopBridge {
   downloadUpdate: () => Promise<DesktopUpdateActionResult>;
   installUpdate: () => Promise<DesktopUpdateActionResult>;
   onUpdateState: (listener: (state: DesktopUpdateState) => void) => () => void;
+  getInstallerUpdateState: () => Promise<InstallerUpdateState>;
+  checkInstallerUpdate: () => Promise<InstallerUpdateCheckResult>;
+  openInstallerUpdate: () => Promise<InstallerUpdateActionResult>;
+  onInstallerUpdateState: (listener: (state: InstallerUpdateState) => void) => () => void;
   /**
    * Desktop-only preview surface. Present iff the renderer is hosted by the
    * Electron desktop build; web builds have `preview === undefined`.
