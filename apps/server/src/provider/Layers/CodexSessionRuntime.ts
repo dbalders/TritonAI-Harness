@@ -64,7 +64,25 @@ const RECOVERABLE_THREAD_RESUME_ERROR_SNIPPETS = [
 ];
 
 export function hasConfiguredMcpServer(appServerArgs: ReadonlyArray<string> | undefined): boolean {
-  return appServerArgs?.some((argument) => argument.includes("mcp_servers.")) === true;
+  const configuredServers = new Set<string>();
+  const disabledServers = new Set<string>();
+
+  for (const argument of appServerArgs ?? []) {
+    const match = /^mcp_servers\.([^.]+)\.([^=]+)=(.*)$/.exec(argument);
+    if (!match) continue;
+
+    const serverName = match[1];
+    const property = match[2];
+    const value = match[3];
+    if (!serverName || !property || value === undefined) continue;
+
+    configuredServers.add(serverName);
+    if (property === "enabled" && value.trim() === "false") {
+      disabledServers.add(serverName);
+    }
+  }
+
+  return configuredServers.values().some((serverName) => !disabledServers.has(serverName));
 }
 
 export const CodexResumeCursorSchema = Schema.Struct({
