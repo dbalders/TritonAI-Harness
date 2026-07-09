@@ -1,33 +1,40 @@
-<!--
-⚠️ READ BEFORE OPENING ⚠️
+## Summary
 
-We are not actively accepting contributions right now.
-
-You can still open a PR, but please do so knowing there is a high chance
-we may close it without merging it, or never review it.
-
-- Small, focused PRs are strongly preferred. Bug fixes are most likely to be merged.
-- New features will most likely just annoy us.
-- 1,000+ line PRs with a bunch of new features will probably get you banned from the repo.
--->
-
-## What Changed
-
-<!-- Describe the change clearly and keep scope tight. -->
+<!-- What changed? Keep the scope concrete and reviewable. -->
 
 ## Why
 
-<!-- Explain the problem being solved and why this approach is the right one. -->
+<!-- What problem or user outcome does this address? -->
+
+## Validation
+
+<!-- List the exact commands and manual checks that passed. State anything not run. -->
+
+- [ ] `vp check`
+- [ ] `vp run typecheck`
+- [ ] Relevant tests passed
+- [ ] Native mobile lint passed, if applicable
+
+## Risk and Recovery
+
+<!-- Describe failure modes, data/security implications, and the rollback or recovery path. -->
 
 ## UI Changes
 
-<!-- If this PR changes UI, include clear before/after screenshots.
-     If the change involves motion or interaction, include a short video.
-     Delete this section if not applicable. -->
+<!-- Add before/after screenshots for visual changes and a short video for motion or interaction changes. Delete if not applicable. -->
+
+## Release and Deployment Impact
+
+<!-- Note desktop packaging, mobile, relay, environment, migration, signing, or release implications. Write "None" when there is no impact. -->
+
+## Upstream Alignment
+
+<!-- Explain whether this matches upstream T3 Code or why intentional TritonAI/UCSD divergence is required. -->
 
 ## Checklist
 
-- [ ] This PR is small and focused
-- [ ] I explained what changed and why
-- [ ] I included before/after screenshots for any UI changes
-- [ ] I included a video for animation/interaction changes
+- [ ] The PR is ready for review and is not a draft
+- [ ] The change is focused and avoids unrelated churn
+- [ ] New behavior has regression coverage where practical
+- [ ] No secrets, credentials, private URLs, or sensitive logs are included
+- [ ] Actionable review findings have been resolved or explicitly answered

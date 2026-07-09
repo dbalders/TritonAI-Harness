@@ -190,14 +190,15 @@ function readJsonObject(file) {
 
 function reportLabels(report) {
   const labels = ["automation:upstream-sync"];
-  if (report.status === "auto-merge-ready") labels.push("automation:auto-merge-ready");
-  if (report.status === "needs-human-review") labels.push("needs-human-review");
+  if (
+    report.status === "needs-human-review" ||
+    report.reviewStatus === "risk" ||
+    report.reviewStatus === "not-configured"
+  ) {
+    labels.push("needs review");
+  }
   if (report.mergeStatus === "conflicted") labels.push("upstream-conflict");
   if (report.checkStatus === "failed") labels.push("checks-failed");
-  if (report.reviewStatus === "risk" || report.reviewStatus === "not-configured") {
-    labels.push("ai-review-risk");
-  }
-  if (report.agentAttempted) labels.push("agent-attempted");
   return [...new Set(labels)];
 }
 
