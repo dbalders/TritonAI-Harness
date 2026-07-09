@@ -91,56 +91,36 @@ export const ServerProviderSkill = Schema.Struct({
 });
 export type ServerProviderSkill = typeof ServerProviderSkill.Type;
 
-export const ServerProviderSkillCatalogTier = Schema.Literals(["core", "verified", "experimental"]);
-export type ServerProviderSkillCatalogTier = typeof ServerProviderSkillCatalogTier.Type;
-
-export const ServerProviderSkillCatalogSection = Schema.Literals(["recommended", "community"]);
+export const ServerProviderSkillCatalogSection = Schema.Literals(["ai-team", "community"]);
 export type ServerProviderSkillCatalogSection = typeof ServerProviderSkillCatalogSection.Type;
-
-export const ServerProviderSkillCatalogSourceKind = Schema.Literals([
-  "cloudflare",
-  "github",
-  "url",
-]);
-export type ServerProviderSkillCatalogSourceKind = typeof ServerProviderSkillCatalogSourceKind.Type;
 
 export const ServerProviderSkillCatalogEntry = Schema.Struct({
   id: TrimmedNonEmptyString,
   name: TrimmedNonEmptyString,
   title: TrimmedNonEmptyString,
   description: TrimmedNonEmptyString,
-  category: TrimmedNonEmptyString,
-  tier: ServerProviderSkillCatalogTier,
   section: ServerProviderSkillCatalogSection,
-  owner: Schema.optional(TrimmedNonEmptyString),
-  updated: Schema.optional(TrimmedNonEmptyString),
-  sourceKind: ServerProviderSkillCatalogSourceKind.pipe(
-    Schema.withDecodingDefault(Effect.succeed("cloudflare" as const)),
-  ),
+  maintainer: Schema.optional(TrimmedNonEmptyString),
+  revision: TrimmedNonEmptyString,
   sourceUrl: TrimmedNonEmptyString,
-  readmeUrl: Schema.optional(TrimmedNonEmptyString),
 });
 export type ServerProviderSkillCatalogEntry = typeof ServerProviderSkillCatalogEntry.Type;
 
-export const ServerProviderSkillCatalogSourceStatus = Schema.Literals([
-  "remote",
-  "bundled-fallback",
-]);
-export type ServerProviderSkillCatalogSourceStatus =
-  typeof ServerProviderSkillCatalogSourceStatus.Type;
-
 export const ServerProviderSkillCatalog = Schema.Struct({
   version: Schema.Literal(1),
-  generatedAt: IsoDateTime,
-  sourceStatus: ServerProviderSkillCatalogSourceStatus.pipe(
-    Schema.withDecodingDefault(Effect.succeed("remote" as const)),
-  ),
+  repositoryUrl: TrimmedNonEmptyString,
+  revision: TrimmedNonEmptyString,
+  fetchedAt: IsoDateTime,
   entries: Schema.Array(ServerProviderSkillCatalogEntry),
 });
 export type ServerProviderSkillCatalog = typeof ServerProviderSkillCatalog.Type;
 
 export const ServerListProviderSkillCatalogResult = Schema.Struct({
-  catalog: ServerProviderSkillCatalog,
+  catalog: Schema.optional(ServerProviderSkillCatalog),
+  managedSkillNames: Schema.Array(TrimmedNonEmptyString),
+  managedSkillsStatus: Schema.Literals(["absent", "invalid", "valid"]),
+  unavailableReason: Schema.optional(TrimmedNonEmptyString),
+  managedManifestWarning: Schema.optional(TrimmedNonEmptyString),
 });
 export type ServerListProviderSkillCatalogResult = typeof ServerListProviderSkillCatalogResult.Type;
 
@@ -175,6 +155,7 @@ export const ServerInstallProviderSkillSource = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("catalog"),
     catalogEntryId: TrimmedNonEmptyString,
+    revision: TrimmedNonEmptyString,
   }),
   Schema.Struct({
     type: Schema.Literal("url"),
