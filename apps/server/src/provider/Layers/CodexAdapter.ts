@@ -1413,6 +1413,11 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
                   `mcp_servers.t3-code.url=${mcpSession.endpoint}`,
                   "-c",
                   'mcp_servers.t3-code.bearer_token_env_var="T3_MCP_BEARER_TOKEN"',
+                  // TritonAI's current Responses bridge rejects Codex namespace tools.
+                  // Keep the session wiring intact so this can be re-enabled centrally
+                  // once the bridge expands namespace tools into ordinary functions.
+                  "-c",
+                  "mcp_servers.t3-code.enabled=false",
                 ],
               }
             : {}),

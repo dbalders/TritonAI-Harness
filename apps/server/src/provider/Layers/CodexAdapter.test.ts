@@ -6,6 +6,7 @@ import * as NodePath from "node:path";
 import {
   ApprovalRequestId,
   CodexSettings,
+  EnvironmentId,
   EventId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -35,6 +36,7 @@ import * as Stream from "effect/Stream";
 import * as CodexErrors from "effect-codex-app-server/errors";
 
 import { ServerConfig } from "../../config.ts";
+import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderAdapterValidationError } from "../Errors.ts";
 import type { CodexAdapterShape } from "../Services/CodexAdapter.ts";
@@ -285,6 +287,51 @@ validationLayer("CodexAdapterLive validation", (it) => {
         threadId: asThreadId("thread-1"),
         runtimeMode: "full-access",
       });
+    }),
+  );
+  it.effect("disables the TritonAI MCP namespace while preserving session wiring", () =>
+    Effect.gen(function* () {
+      validationRuntimeFactory.factory.mockClear();
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("thread-mcp-namespace-disabled");
+      McpProviderSession.setMcpProviderSession({
+        environmentId: EnvironmentId.make("environment-1"),
+        threadId,
+        providerSessionId: "provider-session-1",
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        endpoint: "http://127.0.0.1:43123/mcp",
+        authorizationHeader: "Bearer test-token",
+      });
+
+      try {
+        yield* adapter.startSession({
+          provider: ProviderDriverKind.make("codex"),
+          threadId,
+          runtimeMode: "full-access",
+        });
+
+        NodeAssert.deepStrictEqual(validationRuntimeFactory.factory.mock.calls[0]?.[0], {
+          appServerArgs: [
+            "-c",
+            "mcp_servers.t3-code.url=http://127.0.0.1:43123/mcp",
+            "-c",
+            'mcp_servers.t3-code.bearer_token_env_var="T3_MCP_BEARER_TOKEN"',
+            "-c",
+            "mcp_servers.t3-code.enabled=false",
+          ],
+          binaryPath: "codex",
+          cwd: process.cwd(),
+          environment: {
+            ...process.env,
+            T3_MCP_BEARER_TOKEN: "test-token",
+          },
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          threadId,
+          runtimeMode: "full-access",
+        });
+      } finally {
+        McpProviderSession.clearMcpProviderSession(threadId);
+      }
     }),
   );
 });

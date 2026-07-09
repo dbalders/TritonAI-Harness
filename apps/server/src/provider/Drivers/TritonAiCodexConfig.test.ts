@@ -37,6 +37,7 @@ describe("TritonAiCodexConfig", () => {
       'model_providers.ucsd.wire_api="responses"',
       "model_providers.ucsd.requires_openai_auth=false",
       "model_providers.ucsd.stream_idle_timeout_ms=300000",
+      "features.multi_agent=false",
     ]);
   });
 
