@@ -2,8 +2,7 @@ name: Feature request
 description: Propose a scoped improvement or new capability.
 title: "[Feature]: "
 labels:
-  - type:feature
-  - status:needs-review
+  - feature
 body:
   - type: markdown
     attributes:

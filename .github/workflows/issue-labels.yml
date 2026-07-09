@@ -23,74 +23,99 @@ jobs:
           script: |
             const managedLabels = [
               {
-                name: "type:bug",
-                color: "d73a4a",
-                description: "Something is broken or behaving incorrectly.",
-              },
-              {
-                name: "type:feature",
+                name: "feature",
                 color: "a2eeef",
                 description: "A product idea, enhancement, or new capability request.",
               },
               {
-                name: "type:docs",
+                name: "bug",
+                color: "d73a4a",
+                description: "Something is broken or behaving incorrectly.",
+              },
+              {
+                name: "documentation",
                 color: "0075ca",
                 description: "Documentation-only work.",
               },
               {
-                name: "type:question",
+                name: "question",
                 color: "d876e3",
                 description: "A question or support-style discussion.",
               },
               {
-                name: "type:maintenance",
+                name: "maintenance",
                 color: "cfd3d7",
                 description: "Internal cleanup, tooling, tests, or upkeep.",
               },
               {
-                name: "status:needs-review",
-                color: "fbca04",
-                description: "Needs human product or maintainer review.",
+                name: "research",
+                color: "d876e3",
+                description: "Investigation or decision work before implementation.",
               },
               {
-                name: "status:accepted",
-                color: "0e8a16",
-                description: "Accepted direction, not necessarily ready for automation.",
-              },
-              {
-                name: "status:ready-for-dev",
-                color: "1d76db",
-                description: "Scoped and ready for implementation.",
-              },
-              {
-                name: "status:blocked",
+                name: "blocked",
                 color: "b60205",
                 description: "Blocked by tests, review, missing info, or another dependency.",
               },
               {
-                name: "status:declined",
-                color: "7057ff",
-                description: "Not planned or not appropriate for this project.",
+                name: "needs review",
+                color: "fbca04",
+                description: "Needs human product or maintainer review.",
               },
               {
-                name: "automation:auto",
-                color: "5319e7",
-                description: "Maintainer approved automatic issue implementation.",
+                name: "needs decision",
+                color: "d4c5f9",
+                description: "Needs a maintainer decision or manual follow-up.",
               },
               {
-                name: "automation:triaged",
-                color: "bfdadc",
-                description: "Reviewed by issue autopilot.",
-              },
-              {
-                name: "automation:candidate",
+                name: "automation candidate",
                 color: "bfd4f2",
                 description: "May be suitable for automation after approval or clarification.",
               },
               {
-                name: "automation:auto-pr",
+                name: "auto PR",
                 color: "5319e7",
                 description: "Automation is allowed to attempt a pull request.",
+              },
+              {
+                name: "accepted",
+                color: "0e8a16",
+                description: "Accepted direction, not necessarily ready for automation.",
+              },
+              {
+                name: "ready",
+                color: "1d76db",
+                description: "Scoped and ready for implementation.",
+              },
+              {
+                name: "declined",
+                color: "7057ff",
+                description: "Not planned or not appropriate for this project.",
+              },
+              {
+                name: "S",
+                color: "ededed",
+                description: "Small issue scope estimate.",
+              },
+              {
+                name: "M",
+                color: "ededed",
+                description: "Medium issue scope estimate.",
+              },
+              {
+                name: "L",
+                color: "ededed",
+                description: "Large issue scope estimate.",
+              },
+              {
+                name: "XL",
+                color: "ededed",
+                description: "Extra-large issue scope estimate.",
+              },
+              {
+                name: "XXL",
+                color: "ededed",
+                description: "Very large issue scope estimate.",
               },
               {
                 name: "automation:upstream-sync",
@@ -106,11 +131,6 @@ jobs:
                 name: "automation:auto-merge-ready",
                 color: "0e8a16",
                 description: "Automation classified this sync as safe to merge after checks.",
-              },
-              {
-                name: "automation:needs-human",
-                color: "d4c5f9",
-                description: "Automation needs a maintainer decision or manual follow-up.",
               },
               {
                 name: "agent-attempted",
@@ -136,51 +156,6 @@ jobs:
                 name: "upstream-conflict",
                 color: "b60205",
                 description: "Automated upstream sync encountered merge conflicts.",
-              },
-              {
-                name: "area:installer",
-                color: "f9d0c4",
-                description: "Installer, packaging, bootstrap, or managed setup.",
-              },
-              {
-                name: "area:app",
-                color: "c2e0c6",
-                description: "TritonAI Harness app surface or shared app code.",
-              },
-              {
-                name: "area:codex-runtime",
-                color: "c5def5",
-                description: "Codex app-server runtime, model routing, or provider isolation.",
-              },
-              {
-                name: "area:desktop",
-                color: "bfd4f2",
-                description: "Desktop runtime or Electron app behavior.",
-              },
-              {
-                name: "area:mobile",
-                color: "fef2c0",
-                description: "Mobile app behavior.",
-              },
-              {
-                name: "area:settings",
-                color: "d4c5f9",
-                description: "Settings, preferences, or configuration UI.",
-              },
-              {
-                name: "area:providers",
-                color: "c5def5",
-                description: "Codex-first runtime, model, and provider integration work.",
-              },
-              {
-                name: "area:sync",
-                color: "bfd4f2",
-                description: "Downstream upstream-sync automation and release-control work.",
-              },
-              {
-                name: "area:docs",
-                color: "0075ca",
-                description: "Documentation surface.",
               },
             ];
 
