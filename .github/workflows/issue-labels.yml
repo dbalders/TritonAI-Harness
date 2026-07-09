@@ -93,6 +93,11 @@ jobs:
                 description: "Not planned or not appropriate for this project.",
               },
               {
+                name: "duplicate",
+                color: "cfd3d7",
+                description: "Already tracked by another issue or pull request.",
+              },
+              {
                 name: "automation:upstream-sync",
                 color: "5319e7",
                 description: "Generated TritonAI Harness upstream sync work.",
@@ -103,35 +108,29 @@ jobs:
                 description: "Generated TritonAI Harness parent release sync work.",
               },
               {
-                name: "automation:auto-merge-ready",
-                color: "0e8a16",
-                description: "Automation classified this sync as safe to merge after checks.",
-              },
-              {
-                name: "agent-attempted",
-                color: "bfdadc",
-                description: "An agent attempted review or repair for this sync.",
-              },
-              {
-                name: "ai-review-risk",
-                color: "fbca04",
-                description: "AI review found risk or could not classify the sync as safe.",
-              },
-              {
                 name: "checks-failed",
                 color: "b60205",
                 description: "Local validation failed during automated sync.",
-              },
-              {
-                name: "needs-human-review",
-                color: "d4c5f9",
-                description: "Automation could not complete this safely without maintainer review.",
               },
               {
                 name: "upstream-conflict",
                 color: "b60205",
                 description: "Automated upstream sync encountered merge conflicts.",
               },
+            ];
+            const retiredLabels = [
+              "agent-attempted",
+              "ai-review-risk",
+              "automation:auto-merge-ready",
+              "enhancement",
+              "good first issue",
+              "help wanted",
+              "invalid",
+              "needs-human-review",
+              "vouch:denounced",
+              "vouch:trusted",
+              "vouch:unvouched",
+              "wontfix",
             ];
 
             for (const label of managedLabels) {
@@ -171,6 +170,20 @@ jobs:
                   if (createError.status !== 422) {
                     throw createError;
                   }
+                }
+              }
+            }
+
+            for (const name of retiredLabels) {
+              try {
+                await github.rest.issues.deleteLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name,
+                });
+              } catch (error) {
+                if (error.status !== 404) {
+                  throw error;
                 }
               }
             }

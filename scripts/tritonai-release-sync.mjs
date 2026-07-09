@@ -210,7 +210,7 @@ function mergeRelease({ releaseSha, worktree }) {
 
 function labelsFor(report) {
   const labels = [SYNC_LABEL];
-  if (report.status === "needs-human-review") labels.push("needs-human-review");
+  if (report.status === "needs-human-review") labels.push("needs review");
   if (report.mergeStatus !== "clean") labels.push("upstream-conflict");
   if (report.checkStatus === "failed") labels.push("checks-failed");
   return [...new Set(labels)];
