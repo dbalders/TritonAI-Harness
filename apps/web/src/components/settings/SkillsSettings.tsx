@@ -458,6 +458,7 @@ export function SkillsSettingsPanel() {
       setCatalogError(result.unavailableReason ?? null);
       setManagedManifestWarning(result.managedManifestWarning ?? null);
     } catch (error) {
+      setCatalog(null);
       setCatalogError(error instanceof Error ? error.message : "Failed to load skill catalog.");
     } finally {
       setCatalogLoading(false);
