@@ -100,17 +100,19 @@ function reasoningEffortLabel(reasoningEffort: string): string {
   return REASONING_EFFORT_LABELS[reasoningEffort] ?? reasoningEffort;
 }
 
+function makeTritonAiReasoningEffortDescriptor(): ProviderOptionDescriptor {
+  return {
+    id: "reasoningEffort",
+    label: "Reasoning",
+    type: "select",
+    options: TRITONAI_REASONING_EFFORT_OPTIONS.map((option) => ({ ...option })),
+    currentValue: DEFAULT_TRITONAI_REASONING_EFFORT,
+  };
+}
+
 function makeTritonAiCodexFallbackCapabilities(): ModelCapabilities {
   return createModelCapabilities({
-    optionDescriptors: [
-      {
-        id: "reasoningEffort",
-        label: "Reasoning",
-        type: "select",
-        options: TRITONAI_REASONING_EFFORT_OPTIONS.map((option) => ({ ...option })),
-        currentValue: DEFAULT_TRITONAI_REASONING_EFFORT,
-      },
-    ],
+    optionDescriptors: [makeTritonAiReasoningEffortDescriptor()],
   });
 }
 
@@ -118,11 +120,26 @@ function hasOptionDescriptors(capabilities: ModelCapabilities | null | undefined
   return (capabilities?.optionDescriptors?.length ?? 0) > 0;
 }
 
-function tritonAiCodexCapabilities(
+function hasReasoningEffortDescriptor(capabilities: ModelCapabilities | null | undefined): boolean {
+  return (
+    capabilities?.optionDescriptors?.some((descriptor) => descriptor.id === "reasoningEffort") ??
+    false
+  );
+}
+
+export function tritonAiCodexCapabilities(
   capabilities: ModelCapabilities | null | undefined,
 ): ModelCapabilities {
-  if (capabilities && hasOptionDescriptors(capabilities)) {
+  if (capabilities && hasReasoningEffortDescriptor(capabilities)) {
     return capabilities;
+  }
+  if (capabilities && hasOptionDescriptors(capabilities)) {
+    return createModelCapabilities({
+      optionDescriptors: [
+        makeTritonAiReasoningEffortDescriptor(),
+        ...(capabilities.optionDescriptors ?? []),
+      ],
+    });
   }
   return makeTritonAiCodexFallbackCapabilities();
 }
