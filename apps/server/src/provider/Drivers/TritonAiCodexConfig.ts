@@ -39,5 +39,7 @@ export function makeTritonAiCodexConfigArgs(env: NodeJS.ProcessEnv = process.env
     `${providerKey}.requires_openai_auth=false`,
     "--config",
     `${providerKey}.stream_idle_timeout_ms=300000`,
+    "--config",
+    "features.multi_agent=false",
   ];
 }

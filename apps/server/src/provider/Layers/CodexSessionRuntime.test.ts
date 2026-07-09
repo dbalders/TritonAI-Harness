@@ -217,6 +217,29 @@ describe("hasConfiguredMcpServer", () => {
       true,
     );
   });
+
+  it("ignores disabled MCP servers while detecting other active servers", () => {
+    NodeAssert.equal(
+      hasConfiguredMcpServer([
+        "-c",
+        'mcp_servers.t3-code.url="http://127.0.0.1/mcp"',
+        "-c",
+        "mcp_servers.t3-code.enabled=false",
+      ]),
+      false,
+    );
+    NodeAssert.equal(
+      hasConfiguredMcpServer([
+        "-c",
+        'mcp_servers.t3-code.url="http://127.0.0.1/mcp"',
+        "-c",
+        "mcp_servers.t3-code.enabled=false",
+        "-c",
+        'mcp_servers.other.url="http://127.0.0.1/other"',
+      ]),
+      true,
+    );
+  });
 });
 
 describe("isRecoverableThreadResumeError", () => {
