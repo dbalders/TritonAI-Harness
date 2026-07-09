@@ -65,6 +65,7 @@ function curateVisibleCodexModels(
             ...model,
             name: DEFAULT_TRITONAI_CODEX_MODEL_DISPLAY_NAME,
             shortName: "DeepSeek",
+            capabilities: tritonAiCodexCapabilities(model.capabilities),
           }
         : model,
     );
@@ -87,9 +88,60 @@ const REASONING_EFFORT_LABELS: Readonly<Record<string, string>> = {
 };
 
 const DEFAULT_SERVICE_TIER_ID = "default";
+const DEFAULT_TRITONAI_REASONING_EFFORT = "medium";
+const TRITONAI_REASONING_EFFORT_OPTIONS = [
+  { id: "minimal", label: "Minimal" },
+  { id: "low", label: "Low" },
+  { id: DEFAULT_TRITONAI_REASONING_EFFORT, label: "Medium", isDefault: true },
+  { id: "high", label: "High" },
+] as const;
 
 function reasoningEffortLabel(reasoningEffort: string): string {
   return REASONING_EFFORT_LABELS[reasoningEffort] ?? reasoningEffort;
+}
+
+function makeTritonAiReasoningEffortDescriptor(): ProviderOptionDescriptor {
+  return {
+    id: "reasoningEffort",
+    label: "Reasoning",
+    type: "select",
+    options: TRITONAI_REASONING_EFFORT_OPTIONS.map((option) => ({ ...option })),
+    currentValue: DEFAULT_TRITONAI_REASONING_EFFORT,
+  };
+}
+
+function makeTritonAiCodexFallbackCapabilities(): ModelCapabilities {
+  return createModelCapabilities({
+    optionDescriptors: [makeTritonAiReasoningEffortDescriptor()],
+  });
+}
+
+function hasOptionDescriptors(capabilities: ModelCapabilities | null | undefined): boolean {
+  return (capabilities?.optionDescriptors?.length ?? 0) > 0;
+}
+
+function hasReasoningEffortDescriptor(capabilities: ModelCapabilities | null | undefined): boolean {
+  return (
+    capabilities?.optionDescriptors?.some((descriptor) => descriptor.id === "reasoningEffort") ??
+    false
+  );
+}
+
+export function tritonAiCodexCapabilities(
+  capabilities: ModelCapabilities | null | undefined,
+): ModelCapabilities {
+  if (capabilities && hasReasoningEffortDescriptor(capabilities)) {
+    return capabilities;
+  }
+  if (capabilities && hasOptionDescriptors(capabilities)) {
+    return createModelCapabilities({
+      optionDescriptors: [
+        makeTritonAiReasoningEffortDescriptor(),
+        ...(capabilities.optionDescriptors ?? []),
+      ],
+    });
+  }
+  return makeTritonAiCodexFallbackCapabilities();
 }
 
 function codexAccountAuthLabel(account: CodexSchema.V2GetAccountResponse["account"]) {

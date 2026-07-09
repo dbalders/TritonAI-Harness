@@ -187,8 +187,8 @@ it.layer(NodeServices.layer)("providerStatusCache", (it) => {
       checkedAt: "2026-04-10T12:00:00.000Z",
       models: [
         {
-          slug: "deepseek-v4-flash-max",
-          name: "DeepSeek v4 Flash Max",
+          slug: "deepseek-v4-flash",
+          name: "DeepSeek v4 Flash",
           isCustom: true,
           capabilities: emptyCapabilities,
         },
@@ -204,8 +204,8 @@ it.layer(NodeServices.layer)("providerStatusCache", (it) => {
     const fallbackCodex = makeProvider(CODEX_DRIVER, {
       models: [
         {
-          slug: "deepseek-v4-flash-max",
-          name: "DeepSeek v4 Flash Max",
+          slug: "deepseek-v4-flash",
+          name: "DeepSeek v4 Flash",
           isCustom: true,
           capabilities: null,
         },

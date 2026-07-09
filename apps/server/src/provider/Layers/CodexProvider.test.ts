@@ -1,6 +1,8 @@
 import { assert, it } from "@effect/vitest";
 
-import { mapCodexModelCapabilities } from "./CodexProvider.ts";
+import { createModelCapabilities } from "@t3tools/shared/model";
+
+import { mapCodexModelCapabilities, tritonAiCodexCapabilities } from "./CodexProvider.ts";
 
 it("maps current Codex model capability fields", () => {
   const capabilities = mapCodexModelCapabilities({
@@ -101,4 +103,28 @@ it("uses standard routing when the catalog has no default service tier", () => {
       currentValue: "default",
     },
   ]);
+});
+
+it("adds TritonAI reasoning controls to non-reasoning capabilities", () => {
+  const capabilities = tritonAiCodexCapabilities(
+    createModelCapabilities({
+      optionDescriptors: [
+        {
+          id: "serviceTier",
+          label: "Service Tier",
+          type: "select",
+          options: [
+            { id: "default", label: "Standard", isDefault: true },
+            { id: "fast", label: "Fast" },
+          ],
+          currentValue: "default",
+        },
+      ],
+    }),
+  );
+
+  assert.deepStrictEqual(
+    capabilities.optionDescriptors?.map((descriptor) => descriptor.id),
+    ["reasoningEffort", "serviceTier"],
+  );
 });
