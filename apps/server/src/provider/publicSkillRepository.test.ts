@@ -125,6 +125,7 @@ describe("public skill repository", () => {
       expect(
         calls.some((call) => call.args.includes("fetch") && call.args.at(-1) === REVISION),
       ).toBe(true);
+      expect(calls.every((call) => call.env?.HOME === call.cwd)).toBe(true);
     }).pipe(Effect.provide(repositoryLayer({ calls })));
   });
 

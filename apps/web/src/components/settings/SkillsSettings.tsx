@@ -452,9 +452,7 @@ export function SkillsSettingsPanel() {
       const result = unwrapAtomCommandResult(
         await listCatalogCommand({ environmentId: primaryEnvironmentId, input: {} }),
       );
-      if (result.catalog) {
-        setCatalog(result.catalog);
-      }
+      setCatalog(result.catalog ?? null);
       setManagedSkillNames(new Set(result.managedSkillNames));
       setManagedSkillsStatus(result.managedSkillsStatus);
       setCatalogError(result.unavailableReason ?? null);

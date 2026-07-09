@@ -70,7 +70,7 @@ function processOutput(stdout: string) {
   return stdout.trim();
 }
 
-function gitEnvironment(platform: NodeJS.Platform): NodeJS.ProcessEnv {
+function gitEnvironment(platform: NodeJS.Platform, homeDirectory: string): NodeJS.ProcessEnv {
   const nullDevice = platform === "win32" ? "NUL" : "/dev/null";
   const environment: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(process.env)) {
@@ -78,6 +78,8 @@ function gitEnvironment(platform: NodeJS.Platform): NodeJS.ProcessEnv {
   }
   return {
     ...environment,
+    HOME: homeDirectory,
+    ...(platform === "win32" ? { USERPROFILE: homeDirectory } : {}),
     GIT_CONFIG_GLOBAL: nullDevice,
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_CONFIG_SYSTEM: nullDevice,
@@ -116,7 +118,7 @@ function resolveMainRevision(
           `refs/heads/${PUBLIC_SKILLS_DEFAULT_BRANCH}`,
         ]),
         cwd,
-        env: gitEnvironment(platform),
+        env: gitEnvironment(platform, cwd),
         timeoutMs: GIT_TIMEOUT_MS,
         maxOutputBytes: 64 * 1024,
       })
@@ -155,7 +157,7 @@ function initializeRepository<E>(
           command: "git",
           args: hardenedGitArgs(command),
           cwd: repositoryPath,
-          env: gitEnvironment(platform),
+          env: gitEnvironment(platform, repositoryPath),
           timeoutMs: GIT_TIMEOUT_MS,
           maxOutputBytes: 256 * 1024,
         })
@@ -226,7 +228,7 @@ function listTree<E>(
           ...paths,
         ]),
         cwd: repositoryPath,
-        env: gitEnvironment(platform),
+        env: gitEnvironment(platform, repositoryPath),
         timeoutMs: GIT_TIMEOUT_MS,
         maxOutputBytes: 2 * 1024 * 1024,
       })
@@ -270,7 +272,7 @@ function readBlob<E>(
         command: "git",
         args: hardenedGitArgs(["-C", repositoryPath, "cat-file", "blob", object]),
         cwd: repositoryPath,
-        env: gitEnvironment(platform),
+        env: gitEnvironment(platform, repositoryPath),
         timeoutMs: GIT_TIMEOUT_MS,
         maxOutputBytes: MAX_SKILL_BYTES + 1024,
       })
