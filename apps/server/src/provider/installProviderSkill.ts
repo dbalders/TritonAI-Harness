@@ -4,9 +4,6 @@ import {
   type ServerInstallProviderSkillResult,
   ServerProviderSkillBundle,
   type ServerProviderSkillBundle as ServerProviderSkillBundleData,
-  ServerProviderSkillCatalog,
-  type ServerProviderSkillCatalogEntry,
-  ServerProviderSkillCatalogError,
   ServerProviderSkillInstallError,
   type ServerProvider,
   type ServerProviderSkill,
@@ -22,34 +19,24 @@ import * as Stream from "effect/Stream";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
 import * as VcsProcess from "../vcs/VcsProcess.ts";
-import {
-  DEFAULT_UCSD_SKILL_BUNDLES,
-  DEFAULT_UCSD_SKILL_CATALOG,
-  DEFAULT_UCSD_SKILL_CATALOG_URL,
-} from "./skillCatalogDefaults.ts";
+import { loadPublicSkillBundle } from "./publicSkillRepository.ts";
 
 const GIT_CLONE_TIMEOUT_MS = 120_000;
 const MAX_BUNDLE_FILE_COUNT = 200;
 const MAX_BUNDLE_BYTES = 2 * 1024 * 1024;
 const MAX_INSTALL_SOURCE_BYTES = MAX_BUNDLE_BYTES + 512 * 1024;
 const SAFE_SKILL_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/u;
-const CATALOG_URL_ENV = "T3CODE_SKILL_CATALOG_URL";
 
 interface NormalizedGitHubUrl {
   readonly cloneUrl: string;
   readonly refAndPathSegments?: ReadonlyArray<string>;
 }
 
-const decodeSkillCatalogJson = Schema.decodeUnknownEffect(
-  Schema.fromJsonString(ServerProviderSkillCatalog),
-);
 const decodeSkillBundleJson = Schema.decodeUnknownEffect(
   Schema.fromJsonString(ServerProviderSkillBundle),
 );
 const decodeInstallInput = Schema.decodeUnknownEffect(ServerInstallProviderSkillInput);
 const isInstallError = Schema.is(ServerProviderSkillInstallError);
-const fallbackBundles: Readonly<Record<string, ServerProviderSkillBundleData>> =
-  DEFAULT_UCSD_SKILL_BUNDLES;
 
 const SkillFrontmatter = Schema.Struct({
   name: Schema.String,
@@ -61,22 +48,11 @@ function schemaIssue(error: Schema.SchemaError): string {
   return SchemaIssue.makeFormatterDefault()(error.issue);
 }
 
-function catalogError(message: string, cause?: unknown) {
-  return new ServerProviderSkillCatalogError({
-    message,
-    ...(cause !== undefined ? { cause } : {}),
-  });
-}
-
 function installError(message: string, cause?: unknown) {
   return new ServerProviderSkillInstallError({
     message,
     ...(cause !== undefined ? { cause } : {}),
   });
-}
-
-function configuredCatalogUrl(environment: NodeJS.ProcessEnv = process.env): string {
-  return environment[CATALOG_URL_ENV]?.trim() || DEFAULT_UCSD_SKILL_CATALOG_URL;
 }
 
 function parseUrl(rawUrl: string): URL | null {
@@ -112,28 +88,6 @@ function ensureHttpUrl(rawUrl: string): Effect.Effect<URL, ServerProviderSkillIn
   return installError(
     "Skill source must be an HTTPS URL. HTTP is only allowed for loopback development sources.",
   );
-}
-
-function fetchText(
-  url: string,
-  errorFactory: (message: string, cause?: unknown) => ServerProviderSkillCatalogError,
-): Effect.Effect<string, ServerProviderSkillCatalogError, HttpClient.HttpClient> {
-  return Effect.gen(function* () {
-    const httpClient = yield* HttpClient.HttpClient;
-    return yield* httpClient
-      .execute(
-        HttpClientRequest.get(url).pipe(
-          HttpClientRequest.setHeader("accept", "application/json, text/plain;q=0.9, */*;q=0.8"),
-        ),
-      )
-      .pipe(
-        Effect.flatMap(HttpClientResponse.filterStatusOk),
-        Effect.flatMap((response) => response.text),
-        Effect.mapError((cause) =>
-          errorFactory(`Failed to fetch skill catalog resource from ${url}.`, cause),
-        ),
-      );
-  });
 }
 
 function fetchInstallText(
@@ -202,33 +156,6 @@ function readLimitedInstallText(url: string, response: HttpClientResponse.HttpCl
   );
 }
 
-export const listProviderSkillCatalog = Effect.fn("listProviderSkillCatalog")(function* (
-  environment?: NodeJS.ProcessEnv,
-) {
-  const url = configuredCatalogUrl(environment);
-  const remote = yield* fetchText(url, catalogError).pipe(
-    Effect.flatMap((raw) =>
-      decodeSkillCatalogJson(raw).pipe(
-        Effect.mapError((error) => catalogError(`Skill catalog from ${url} was invalid.`, error)),
-      ),
-    ),
-    Effect.option,
-  );
-
-  if (remote._tag === "Some") {
-    return {
-      catalog: {
-        ...remote.value,
-        sourceStatus: "remote" as const,
-      },
-    };
-  }
-
-  return {
-    catalog: DEFAULT_UCSD_SKILL_CATALOG,
-  };
-});
-
 function bundleFromSkillMarkdown(
   skillId: string,
   content: string,
@@ -263,58 +190,28 @@ function loadBundleFromUrl(
   );
 }
 
-function validateCatalogEntryBundle(
-  entry: ServerProviderSkillCatalogEntry,
-  bundle: ServerProviderSkillBundleData,
-): Effect.Effect<ServerProviderSkillBundleData, ServerProviderSkillInstallError> {
-  return Effect.gen(function* () {
-    const entrypoint = bundle.files.find((file) => file.path.replace(/\\/gu, "/") === "SKILL.md");
-    if (!entrypoint) {
-      return yield* installError("Skill bundle must contain SKILL.md at its root.");
-    }
-    const frontmatter = yield* extractFrontmatter(entrypoint.content);
-    const expectedNames = new Set([entry.id, entry.name]);
-    if (!expectedNames.has(bundle.skillId) || !expectedNames.has(frontmatter.name)) {
-      return yield* installError(
-        `Catalog entry '${entry.id}' does not match fetched skill bundle '${frontmatter.name}'.`,
-      );
-    }
-    return bundle;
-  });
-}
-
-function fallbackBundleForCatalogEntry(
-  entry: ServerProviderSkillCatalogEntry,
-): Effect.Effect<ServerProviderSkillBundleData, ServerProviderSkillInstallError> {
-  const fallback = fallbackBundles[entry.id];
-  if (!fallback) {
-    return installError("The selected catalog skill is not available in the bundled fallback.");
-  }
-  return validateSkillBundle(fallback).pipe(
-    Effect.flatMap((bundle) => validateCatalogEntryBundle(entry, bundle)),
-  );
-}
-
 function loadBundleForCatalogEntry(
   catalogEntryId: string,
-  environment?: NodeJS.ProcessEnv,
+  revision: string,
 ): Effect.Effect<
   ServerProviderSkillBundleData,
   ServerProviderSkillInstallError,
-  FileSystem.FileSystem | HttpClient.HttpClient | Path.Path | VcsProcess.VcsProcess
+  FileSystem.FileSystem | Path.Path | VcsProcess.VcsProcess
 > {
-  return listProviderSkillCatalog(environment).pipe(
-    Effect.flatMap(({ catalog }) => {
-      const entry = catalog.entries.find((candidate) => candidate.id === catalogEntryId);
-      if (!entry) {
-        return installError("The selected catalog skill was not found.");
+  return loadPublicSkillBundle({ id: catalogEntryId, revision }).pipe(
+    Effect.flatMap(validateSkillBundle),
+    Effect.flatMap((bundle) => {
+      const expectedName = catalogEntryId.split("/")[1];
+      const entrypoint = bundle.files.find((file) => file.path.replace(/\\/gu, "/") === "SKILL.md");
+      if (!expectedName || !entrypoint) {
+        return installError("The selected public skill is invalid.");
       }
-      if (catalog.sourceStatus === "bundled-fallback") {
-        return fallbackBundleForCatalogEntry(entry);
-      }
-      return loadBundleForUrl(entry.sourceUrl).pipe(
-        Effect.catch(() => fallbackBundleForCatalogEntry(entry)),
-        Effect.flatMap((bundle) => validateCatalogEntryBundle(entry, bundle)),
+      return extractFrontmatter(entrypoint.content).pipe(
+        Effect.flatMap((frontmatter) =>
+          frontmatter.name === expectedName && bundle.skillId === expectedName
+            ? Effect.succeed(bundle)
+            : installError(`Public skill '${catalogEntryId}' does not match its SKILL.md name.`),
+        ),
       );
     }),
   );
@@ -1182,7 +1079,6 @@ export function mergeInstalledProviderSkill(input: {
 export const installProviderSkill = Effect.fn("installProviderSkill")(function* (input: {
   readonly request: unknown;
   readonly skillsDirectory: string;
-  readonly environment?: NodeJS.ProcessEnv;
 }): Effect.fn.Return<
   Omit<ServerInstallProviderSkillResult, "providers"> & {
     readonly rollback: ProviderSkillInstallRollback;
@@ -1197,7 +1093,7 @@ export const installProviderSkill = Effect.fn("installProviderSkill")(function* 
   );
   const bundle =
     request.source.type === "catalog"
-      ? yield* loadBundleForCatalogEntry(request.source.catalogEntryId, input.environment)
+      ? yield* loadBundleForCatalogEntry(request.source.catalogEntryId, request.source.revision)
       : yield* loadBundleForUrl(request.source.url);
   return yield* installSkillBundle({
     bundle,

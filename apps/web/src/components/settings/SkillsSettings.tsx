@@ -27,6 +27,11 @@ import {
   formatProviderSkillDisplayName,
   formatProviderSkillInstallSource,
 } from "../../providerSkillPresentation";
+import {
+  groupProviderSkills,
+  type ProviderCatalogSkillItem as CatalogSkillItem,
+  type ProviderSkillRow as CodexSkillRow,
+} from "../../providerSkillGrouping";
 import { ensureLocalApi } from "../../localApi";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { primaryServerProvidersAtom, serverEnvironment } from "../../state/server";
@@ -38,15 +43,7 @@ import { Input } from "../ui/input";
 import { Switch } from "../ui/switch";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 
-interface CodexSkillRow {
-  readonly provider: ServerProvider;
-  readonly skill: ServerProviderSkill;
-}
-
-interface CatalogSkillItem {
-  readonly entry: ServerProviderSkillCatalogEntry;
-  readonly installedRow: CodexSkillRow | null;
-}
+const EMPTY_SKILL_ROWS: ReadonlyArray<CodexSkillRow> = [];
 
 function unwrapAtomCommandResult<A, E>(result: AtomCommandResult<A, E>): A {
   if (result._tag === "Failure") {
@@ -75,46 +72,18 @@ function skillRowKey(row: CodexSkillRow): string {
   return `${row.provider.instanceId}:${row.skill.path || row.skill.name}`;
 }
 
-function formatCatalogTierLabel(tier: ServerProviderSkillCatalogEntry["tier"]): string {
-  switch (tier) {
-    case "core":
-      return "Core";
-    case "verified":
-      return "Verified";
-    case "experimental":
-      return "Experimental";
-  }
-}
-
-function buildCatalogItems(
-  entries: ReadonlyArray<ServerProviderSkillCatalogEntry>,
-  rows: ReadonlyArray<CodexSkillRow>,
-  section: ServerProviderSkillCatalogEntry["section"],
-): ReadonlyArray<CatalogSkillItem> {
-  const installedByName = new Map<string, CodexSkillRow>();
-  for (const row of rows) {
-    if (!installedByName.has(row.skill.name)) {
-      installedByName.set(row.skill.name, row);
-    }
-  }
-
-  return entries
-    .filter((entry) => entry.section === section)
-    .map((entry) => ({
-      entry,
-      installedRow: installedByName.get(entry.name) ?? null,
-    }))
-    .toSorted((left, right) => left.entry.title.localeCompare(right.entry.title));
-}
-
 function SkillSettingsRow({
   row,
+  managed = false,
+  removalBlocked = false,
   updating,
   removing,
   onSetEnabled,
   onRemove,
 }: {
   readonly row: CodexSkillRow;
+  readonly managed?: boolean;
+  readonly removalBlocked?: boolean;
   readonly updating: boolean;
   readonly removing: boolean;
   readonly onSetEnabled: (
@@ -129,7 +98,7 @@ function SkillSettingsRow({
 }) {
   const displayName = formatProviderSkillDisplayName(row.skill);
   const status = skillStatusLabel(row);
-  const sourceLabel = formatProviderSkillInstallSource(row.skill);
+  const sourceLabel = managed ? "Managed by TritonAI" : formatProviderSkillInstallSource(row.skill);
   const details = [
     providerLabel(row.provider),
     sourceLabel,
@@ -144,6 +113,11 @@ function SkillSettingsRow({
           <Badge size="sm" variant={skillStatusVariant(status)}>
             {status}
           </Badge>
+          {managed ? (
+            <Badge size="sm" variant="outline">
+              Managed
+            </Badge>
+          ) : null}
         </span>
       }
       description={
@@ -167,16 +141,18 @@ function SkillSettingsRow({
               void onSetEnabled(row.provider.instanceId, row.skill, Boolean(checked))
             }
           />
-          <Button
-            size="icon-xs"
-            variant="outline"
-            className="text-muted-foreground"
-            disabled={updating || removing}
-            aria-label={`Remove ${displayName}`}
-            onClick={() => void onRemove(row.provider.instanceId, row.skill)}
-          >
-            <Trash2Icon className="size-3.5" />
-          </Button>
+          {!managed && !removalBlocked ? (
+            <Button
+              size="icon-xs"
+              variant="outline"
+              className="text-muted-foreground"
+              disabled={updating || removing}
+              aria-label={`Remove ${displayName}`}
+              onClick={() => void onRemove(row.provider.instanceId, row.skill)}
+            >
+              <Trash2Icon className="size-3.5" />
+            </Button>
+          ) : null}
         </div>
       }
     />
@@ -189,6 +165,7 @@ function CatalogSkillSettingsRow({
   installing,
   updating,
   removing,
+  removalBlocked,
   onInstall,
   onSetEnabled,
   onRemove,
@@ -198,6 +175,7 @@ function CatalogSkillSettingsRow({
   readonly installing: boolean;
   readonly updating: boolean;
   readonly removing: boolean;
+  readonly removalBlocked: boolean;
   readonly onInstall: (entry: ServerProviderSkillCatalogEntry) => Promise<void>;
   readonly onSetEnabled: (
     providerInstanceId: ProviderInstanceId,
@@ -211,9 +189,8 @@ function CatalogSkillSettingsRow({
 }) {
   const row = item.installedRow;
   const details = [
-    item.entry.category,
-    formatCatalogTierLabel(item.entry.tier),
-    item.entry.owner,
+    item.entry.section === "ai-team" ? "AI Team public library" : "Community public library",
+    item.entry.maintainer ? `Maintained by ${item.entry.maintainer}` : null,
   ].filter(Boolean);
 
   return (
@@ -230,6 +207,11 @@ function CatalogSkillSettingsRow({
               Available
             </Badge>
           )}
+          {item.managed ? (
+            <Badge size="sm" variant="outline">
+              Managed
+            </Badge>
+          ) : null}
         </span>
       }
       description={item.entry.description}
@@ -240,15 +222,14 @@ function CatalogSkillSettingsRow({
             <code className="block truncate font-mono text-[10px] text-muted-foreground/70">
               {row.skill.path}
             </code>
-          ) : item.entry.readmeUrl ? (
-            <button
-              type="button"
-              className="inline-flex w-fit items-center gap-1 text-[11px] text-primary hover:underline"
-              onClick={() => void ensureLocalApi().shell.openExternal(item.entry.readmeUrl!)}
-            >
-              Source <ExternalLinkIcon className="size-3" />
-            </button>
           ) : null}
+          <button
+            type="button"
+            className="inline-flex w-fit items-center gap-1 text-[11px] text-primary hover:underline"
+            onClick={() => void ensureLocalApi().shell.openExternal(item.entry.sourceUrl)}
+          >
+            View source <ExternalLinkIcon className="size-3" />
+          </button>
         </div>
       }
       control={
@@ -262,16 +243,18 @@ function CatalogSkillSettingsRow({
                 void onSetEnabled(row.provider.instanceId, row.skill, Boolean(checked))
               }
             />
-            <Button
-              size="icon-xs"
-              variant="outline"
-              className="text-muted-foreground"
-              disabled={updating || removing}
-              aria-label={`Remove ${item.entry.title}`}
-              onClick={() => void onRemove(row.provider.instanceId, row.skill)}
-            >
-              <Trash2Icon className="size-3.5" />
-            </Button>
+            {!item.managed && !removalBlocked ? (
+              <Button
+                size="icon-xs"
+                variant="outline"
+                className="text-muted-foreground"
+                disabled={updating || removing}
+                aria-label={`Remove ${item.entry.title}`}
+                onClick={() => void onRemove(row.provider.instanceId, row.skill)}
+              >
+                <Trash2Icon className="size-3.5" />
+              </Button>
+            ) : null}
           </div>
         ) : (
           <Button
@@ -293,12 +276,14 @@ function CatalogSkillSection({
   title,
   icon,
   items,
+  managedRows = EMPTY_SKILL_ROWS,
   emptyTitle,
   emptyDescription,
   installDisabled,
   installingSkillKey,
   updatingSkillKey,
   removingSkillKey,
+  removalBlocked,
   onInstall,
   onSetEnabled,
   onRemove,
@@ -306,12 +291,14 @@ function CatalogSkillSection({
   readonly title: string;
   readonly icon: ReactNode;
   readonly items: ReadonlyArray<CatalogSkillItem>;
+  readonly managedRows?: ReadonlyArray<CodexSkillRow>;
   readonly emptyTitle: string;
   readonly emptyDescription: string;
   readonly installDisabled: boolean;
   readonly installingSkillKey: string | null;
   readonly updatingSkillKey: string | null;
   readonly removingSkillKey: string | null;
+  readonly removalBlocked: boolean;
   readonly onInstall: (entry: ServerProviderSkillCatalogEntry) => Promise<void>;
   readonly onSetEnabled: (
     providerInstanceId: ProviderInstanceId,
@@ -323,7 +310,8 @@ function CatalogSkillSection({
     skill: ServerProviderSkill,
   ) => Promise<void>;
 }) {
-  const installedCount = items.filter((item) => item.installedRow).length;
+  const installedCount = items.filter((item) => item.installedRow).length + managedRows.length;
+  const totalCount = items.length + managedRows.length;
 
   return (
     <SettingsSection
@@ -331,11 +319,11 @@ function CatalogSkillSection({
       icon={icon}
       headerAction={
         <span className="text-[11px] text-muted-foreground">
-          {installedCount}/{items.length} installed
+          {installedCount}/{totalCount} installed
         </span>
       }
     >
-      {items.length === 0 ? (
+      {totalCount === 0 ? (
         <div className="p-8">
           <Empty>
             <EmptyHeader>
@@ -348,22 +336,37 @@ function CatalogSkillSection({
           </Empty>
         </div>
       ) : (
-        items.map((item) => {
-          const installedKey = item.installedRow ? skillRowKey(item.installedRow) : null;
-          return (
-            <CatalogSkillSettingsRow
-              key={item.entry.id}
-              item={item}
-              installDisabled={installDisabled}
-              installing={installingSkillKey === `catalog:${item.entry.id}`}
-              updating={installedKey !== null && updatingSkillKey === installedKey}
-              removing={installedKey !== null && removingSkillKey === installedKey}
-              onInstall={onInstall}
+        <>
+          {managedRows.map((row) => (
+            <SkillSettingsRow
+              key={skillRowKey(row)}
+              row={row}
+              managed
+              removalBlocked={removalBlocked}
               onSetEnabled={onSetEnabled}
               onRemove={onRemove}
+              updating={updatingSkillKey === skillRowKey(row)}
+              removing={false}
             />
-          );
-        })
+          ))}
+          {items.map((item) => {
+            const installedKey = item.installedRow ? skillRowKey(item.installedRow) : null;
+            return (
+              <CatalogSkillSettingsRow
+                key={item.entry.id}
+                item={item}
+                installDisabled={installDisabled}
+                installing={installingSkillKey === `catalog:${item.entry.id}`}
+                updating={installedKey !== null && updatingSkillKey === installedKey}
+                removing={installedKey !== null && removingSkillKey === installedKey}
+                removalBlocked={removalBlocked}
+                onInstall={onInstall}
+                onSetEnabled={onSetEnabled}
+                onRemove={onRemove}
+              />
+            );
+          })}
+        </>
       )}
     </SettingsSection>
   );
@@ -389,8 +392,13 @@ export function SkillsSettingsPanel() {
     reportFailure: false,
   });
   const [catalog, setCatalog] = useState<ServerProviderSkillCatalog | null>(null);
+  const [managedSkillNames, setManagedSkillNames] = useState<ReadonlySet<string>>(new Set());
+  const [managedSkillsStatus, setManagedSkillsStatus] = useState<"absent" | "invalid" | "valid">(
+    "absent",
+  );
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [managedManifestWarning, setManagedManifestWarning] = useState<string | null>(null);
   const [installUrl, setInstallUrl] = useState("");
   const [installingSkillKey, setInstallingSkillKey] = useState<string | null>(null);
   const [removingSkillKey, setRemovingSkillKey] = useState<string | null>(null);
@@ -417,27 +425,19 @@ export function SkillsSettingsPanel() {
     [codexProviders],
   );
   const catalogEntries = catalog?.entries ?? [];
-  const recommendedItems = useMemo(
-    () => buildCatalogItems(catalogEntries, rows, "recommended"),
-    [catalogEntries, rows],
+  const skillGroups = useMemo(
+    () => groupProviderSkills({ entries: catalogEntries, rows, managedSkillNames }),
+    [catalogEntries, managedSkillNames, rows],
   );
-  const communityItems = useMemo(
-    () => buildCatalogItems(catalogEntries, rows, "community"),
-    [catalogEntries, rows],
-  );
-  const catalogSkillNames = useMemo(
-    () => new Set(catalogEntries.map((entry) => entry.name)),
-    [catalogEntries],
-  );
-  const otherRows = useMemo(
-    () => rows.filter((row) => !catalogSkillNames.has(row.skill.name)),
-    [catalogSkillNames, rows],
-  );
+  const { aiTeamItems, communityItems, managedOnlyRows, otherRows } = skillGroups;
   const disabledCount = rows.filter((row) => !row.skill.enabled).length;
   const installedCatalogCount =
-    recommendedItems.filter((item) => item.installedRow).length +
-    communityItems.filter((item) => item.installedRow).length;
+    aiTeamItems.filter((item) => item.installedRow).length +
+    communityItems.filter((item) => item.installedRow).length +
+    managedOnlyRows.length;
   const installDisabled = installProvider === null || primaryEnvironmentId === null;
+  const catalogInstallDisabled = installDisabled || catalogError !== null;
+  const removalBlocked = managedSkillsStatus === "invalid";
 
   const loadCatalog = useCallback(async () => {
     setCatalogLoading(true);
@@ -445,12 +445,20 @@ export function SkillsSettingsPanel() {
     try {
       if (!primaryEnvironmentId) {
         setCatalog(null);
+        setManagedSkillNames(new Set());
+        setManagedSkillsStatus("absent");
         return;
       }
       const result = unwrapAtomCommandResult(
         await listCatalogCommand({ environmentId: primaryEnvironmentId, input: {} }),
       );
-      setCatalog(result.catalog);
+      if (result.catalog) {
+        setCatalog(result.catalog);
+      }
+      setManagedSkillNames(new Set(result.managedSkillNames));
+      setManagedSkillsStatus(result.managedSkillsStatus);
+      setCatalogError(result.unavailableReason ?? null);
+      setManagedManifestWarning(result.managedManifestWarning ?? null);
     } catch (error) {
       setCatalogError(error instanceof Error ? error.message : "Failed to load skill catalog.");
     } finally {
@@ -464,7 +472,9 @@ export function SkillsSettingsPanel() {
 
   const installSkill = useCallback(
     async (
-      source: { type: "catalog"; catalogEntryId: string } | { type: "url"; url: string },
+      source:
+        | { type: "catalog"; catalogEntryId: string; revision: string }
+        | { type: "url"; url: string },
       key: string,
     ) => {
       if (!primaryEnvironmentId || !installProvider) {
@@ -494,7 +504,10 @@ export function SkillsSettingsPanel() {
 
   const installCatalogSkill = useCallback(
     async (entry: ServerProviderSkillCatalogEntry) => {
-      await installSkill({ type: "catalog", catalogEntryId: entry.id }, `catalog:${entry.id}`);
+      await installSkill(
+        { type: "catalog", catalogEntryId: entry.id, revision: entry.revision },
+        `catalog:${entry.id}`,
+      );
     },
     [installSkill],
   );
@@ -572,43 +585,74 @@ export function SkillsSettingsPanel() {
 
   return (
     <SettingsPageContainer>
-      <CatalogSkillSection
-        title="Recommended Skills"
-        icon={<SparklesIcon className="size-3.5" />}
-        items={recommendedItems}
-        emptyTitle={catalogLoading ? "Loading recommended skills" : "No recommended skills"}
-        emptyDescription={
-          catalogLoading
-            ? "The UCSD skill catalog is loading."
-            : "Recommended UCSD skills will appear here when the catalog is available."
-        }
-        installDisabled={installDisabled}
-        installingSkillKey={installingSkillKey}
-        updatingSkillKey={updatingSkillKey}
-        removingSkillKey={removingSkillKey}
-        onInstall={installCatalogSkill}
-        onSetEnabled={setSkillEnabled}
-        onRemove={removeSkill}
-      />
+      {catalogError ? (
+        <SettingsSection
+          title="Public Skills Library"
+          icon={<CloudIcon className="size-3.5" />}
+          headerAction={
+            <Button
+              size="xs"
+              variant="outline"
+              disabled={catalogLoading}
+              aria-label="Retry loading public skills"
+              onClick={() => void loadCatalog()}
+            >
+              <RefreshCwIcon className="size-3.5" />
+              {catalogLoading ? "Retrying..." : "Retry"}
+            </Button>
+          }
+        >
+          <SettingsRow
+            title="Public skills unavailable"
+            description={`${catalogError} Installed skills remain available below.`}
+          />
+        </SettingsSection>
+      ) : null}
 
-      <CatalogSkillSection
-        title="Community Skills"
-        icon={<UsersIcon className="size-3.5" />}
-        items={communityItems}
-        emptyTitle={catalogLoading ? "Loading community skills" : "No community skills"}
-        emptyDescription={
-          catalogLoading
-            ? "The UCSD skill catalog is loading."
-            : "Community-created skills will appear here when the catalog is available."
-        }
-        installDisabled={installDisabled}
-        installingSkillKey={installingSkillKey}
-        updatingSkillKey={updatingSkillKey}
-        removingSkillKey={removingSkillKey}
-        onInstall={installCatalogSkill}
-        onSetEnabled={setSkillEnabled}
-        onRemove={removeSkill}
-      />
+      {catalog !== null || catalogLoading || managedOnlyRows.length > 0 ? (
+        <CatalogSkillSection
+          title="AI Team"
+          icon={<SparklesIcon className="size-3.5" />}
+          items={aiTeamItems}
+          managedRows={managedOnlyRows}
+          emptyTitle={catalogLoading ? "Loading AI Team skills" : "No AI Team skills"}
+          emptyDescription={
+            catalogLoading
+              ? "The public skills library is loading."
+              : "AI Team skills will appear here when the public library is available."
+          }
+          installDisabled={catalogInstallDisabled}
+          installingSkillKey={installingSkillKey}
+          updatingSkillKey={updatingSkillKey}
+          removingSkillKey={removingSkillKey}
+          removalBlocked={removalBlocked}
+          onInstall={installCatalogSkill}
+          onSetEnabled={setSkillEnabled}
+          onRemove={removeSkill}
+        />
+      ) : null}
+
+      {catalog !== null || catalogLoading ? (
+        <CatalogSkillSection
+          title="Community"
+          icon={<UsersIcon className="size-3.5" />}
+          items={communityItems}
+          emptyTitle={catalogLoading ? "Loading community skills" : "No community skills"}
+          emptyDescription={
+            catalogLoading
+              ? "The public skills library is loading."
+              : "Community-created skills will appear here when the public library is available."
+          }
+          installDisabled={catalogInstallDisabled}
+          installingSkillKey={installingSkillKey}
+          updatingSkillKey={updatingSkillKey}
+          removingSkillKey={removingSkillKey}
+          removalBlocked={removalBlocked}
+          onInstall={installCatalogSkill}
+          onSetEnabled={setSkillEnabled}
+          onRemove={removeSkill}
+        />
+      ) : null}
 
       <SettingsSection
         title="Add From Link"
@@ -659,12 +703,14 @@ export function SkillsSettingsPanel() {
       </SettingsSection>
 
       <SettingsSection
-        title="Other Codex Skills"
+        title="Other"
         icon={<BookOpenIcon className="size-3.5" />}
         headerAction={
           <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
             <span>{rows.length} installed</span>
-            {installedCatalogCount > 0 ? <span>{installedCatalogCount} catalog</span> : null}
+            {installedCatalogCount > 0 ? (
+              <span>{installedCatalogCount} library/managed</span>
+            ) : null}
             {disabledCount > 0 ? <span>{disabledCount} disabled</span> : null}
           </div>
         }
@@ -692,7 +738,8 @@ export function SkillsSettingsPanel() {
                 </EmptyMedia>
                 <EmptyTitle>No other skills</EmptyTitle>
                 <EmptyDescription>
-                  Skills from the UCSD catalog stay in Recommended or Community.
+                  Public and managed skills appear in AI Team or Community when their source is
+                  available.
                 </EmptyDescription>
               </EmptyHeader>
             </Empty>
@@ -706,14 +753,18 @@ export function SkillsSettingsPanel() {
               onRemove={removeSkill}
               updating={updatingSkillKey === skillRowKey(row)}
               removing={removingSkillKey === skillRowKey(row)}
+              removalBlocked={removalBlocked}
             />
           ))
         )}
       </SettingsSection>
 
-      {catalogError ? (
-        <SettingsSection title="Catalog Error">
-          <SettingsRow title="Skill catalog failed to load" description={catalogError} />
+      {managedManifestWarning ? (
+        <SettingsSection title="Managed Skills">
+          <SettingsRow
+            title="Managed skills could not be identified"
+            description={`${managedManifestWarning} Skill removal is disabled until the Installer repairs it.`}
+          />
         </SettingsSection>
       ) : null}
 

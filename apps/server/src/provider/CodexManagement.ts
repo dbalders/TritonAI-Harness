@@ -38,9 +38,10 @@ import { mergeProviderInstanceEnvironment } from "./ProviderInstanceEnvironment.
 import {
   discardProviderSkillInstallRollback,
   installProviderSkill,
-  listProviderSkillCatalog,
   rollbackProviderSkillInstall,
 } from "./installProviderSkill.ts";
+import { loadManagedSkillManifest } from "./managedSkillManifest.ts";
+import { discoverPublicSkillCatalog } from "./publicSkillRepository.ts";
 import {
   removeProviderSkillFolder,
   resolveProviderSkillRemovalTarget,
@@ -527,6 +528,28 @@ export const installCodexProviderSkill = Effect.fn("installCodexProviderSkill")(
   };
 });
 
+export const listProviderSkillCatalog = Effect.fn("listProviderSkillCatalog")(function* () {
+  const target = yield* resolveCodexManagementTarget().pipe(Effect.option);
+  const path = yield* Path.Path;
+  const managed =
+    target._tag === "Some"
+      ? yield* loadManagedSkillManifest(path.join(target.value.sharedHomePath, "skills"))
+      : { skillNames: [], status: "absent" as const };
+  const catalog = yield* discoverPublicSkillCatalog().pipe(Effect.result);
+
+  return {
+    managedSkillNames: [...managed.skillNames],
+    managedSkillsStatus: managed.status,
+    ...(managed.warning ? { managedManifestWarning: managed.warning } : {}),
+    ...(catalog._tag === "Success"
+      ? { catalog: catalog.success }
+      : {
+          unavailableReason:
+            "The public skills library is unavailable. Check your internet connection and retry.",
+        }),
+  };
+});
+
 export const removeCodexProviderSkill = Effect.fn("removeCodexProviderSkill")(function* (
   input: unknown,
 ) {
@@ -540,6 +563,21 @@ export const removeCodexProviderSkill = Effect.fn("removeCodexProviderSkill")(fu
   );
   const registry = yield* ProviderRegistry.ProviderRegistry;
   const providers = yield* registry.getProviders;
+  const path = yield* Path.Path;
+  const managed = yield* loadManagedSkillManifest(path.join(target.sharedHomePath, "skills"));
+  if (managed.status === "invalid") {
+    return yield* skillInstallError(
+      "The TritonAI managed-skills manifest is invalid, so skill removal is disabled until it is repaired.",
+    );
+  }
+  const requestedSkill = providers
+    .find((candidate) => candidate.instanceId === request.instanceId)
+    ?.skills.find((skill) => skill.path === request.skillPath);
+  if (requestedSkill && managed.skillNames.includes(requestedSkill.name)) {
+    return yield* skillInstallError(
+      `Skill '${requestedSkill.name}' is managed by TritonAI and cannot be removed here.`,
+    );
+  }
   const removalTarget = yield* resolveProviderSkillRemovalTarget({ providers, request }).pipe(
     Effect.mapError((cause) => skillInstallError(cause.message, cause)),
   );
@@ -592,5 +630,3 @@ const ensureSkillBelongsToCodexHome = Effect.fn("ensureSkillBelongsToCodexHome")
     );
   }
 });
-
-export { listProviderSkillCatalog };
