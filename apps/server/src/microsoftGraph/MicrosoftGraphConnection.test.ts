@@ -43,6 +43,23 @@ function makeGraphLayer(handler: (request: GraphHttpRequest) => FakeGraphRespons
   return makeGraphEffectLayer((request) => Effect.sync(() => handler(request)));
 }
 
+function makeGraphEffectLayerWithSecretStore(
+  handler: (
+    request: GraphHttpRequest,
+  ) => Effect.Effect<FakeGraphResponse, MicrosoftGraphConnectionError>,
+  secretStore: ServerSecretStore.ServerSecretStore["Service"],
+) {
+  const secretLayer = Layer.succeed(ServerSecretStore.ServerSecretStore, secretStore);
+  const httpLayer = Layer.succeed(MicrosoftGraphConnection.MicrosoftGraphHttpClient, {
+    requestJson: handler,
+  });
+  const graphLayer = MicrosoftGraphConnection.layer.pipe(
+    Layer.provide(httpLayer),
+    Layer.provide(secretLayer),
+  );
+  return Layer.merge(graphLayer, secretLayer);
+}
+
 function deviceCodeResponse() {
   return {
     status: 200,
@@ -225,6 +242,107 @@ it.layer(NodeServices.layer)("MicrosoftGraphConnection", (it) => {
           }
           throw new Error(`Unexpected request: ${request.url}`);
         }),
+      ),
+    );
+  });
+
+  it.effect("does not advance the in-memory access token when refresh persistence fails", () => {
+    let storedCredential: Uint8Array | null = null;
+    let setCount = 0;
+    const secretStore = ServerSecretStore.ServerSecretStore.of({
+      get: () => Effect.succeed(storedCredential ? Option.some(storedCredential) : Option.none()),
+      set: (_name, value) => {
+        setCount += 1;
+        if (setCount === 2) {
+          return Effect.fail(
+            new ServerSecretStore.SecretStorePersistError({
+              resource: "secret microsoft-graph-refresh-token-cache",
+              cause: new Error("simulated persist failure"),
+            }),
+          );
+        }
+        storedCredential = value;
+        return Effect.void;
+      },
+      create: (_name, value) =>
+        Effect.sync(() => {
+          storedCredential = value;
+        }),
+      getOrCreateRandom: (_name, bytes) => Effect.succeed(new Uint8Array(bytes)),
+      remove: () =>
+        Effect.sync(() => {
+          storedCredential = null;
+        }),
+    });
+
+    return Effect.gen(function* () {
+      const service = yield* MicrosoftGraphConnection.MicrosoftGraphConnection;
+      const secrets = yield* ServerSecretStore.ServerSecretStore;
+
+      const start = yield* service.startSignIn();
+      const connected = yield* service.pollSignIn({ flowId: start.flowId });
+      assert.equal(connected.state, "connected");
+      assert.isString(connected.status.accessTokenExpiresAt);
+      const initialAccessTokenExpiresAt = connected.status.accessTokenExpiresAt;
+
+      const error = yield* service
+        .requestGraphJson({
+          path: "/v1.0/me/messages?$top=1",
+        })
+        .pipe(
+          Effect.match({
+            onFailure: (error) => error,
+            onSuccess: () => null,
+          }),
+        );
+      assert.isNotNull(error);
+      assert.equal(error?.code, "storage_error");
+
+      const status = yield* service.getStatus();
+      assert.equal(status.accessTokenExpiresAt, initialAccessTokenExpiresAt);
+
+      const encoded = yield* secrets.get(
+        MicrosoftGraphConnection.MICROSOFT_GRAPH_CREDENTIAL_SECRET_NAME,
+      );
+      assert.isTrue(Option.isSome(encoded));
+      if (Option.isSome(encoded)) {
+        const persisted = new TextDecoder().decode(encoded.value);
+        assert.include(persisted, "refresh-token");
+        assert.notInclude(persisted, "new-refresh-token");
+      }
+    }).pipe(
+      Effect.provide(
+        makeGraphEffectLayerWithSecretStore(
+          (request) =>
+            Effect.sync(() => {
+              if (request.url === graphDeviceCodeUrl) {
+                return deviceCodeResponse();
+              }
+              if (
+                request.url === graphTokenUrl &&
+                request.form?.grant_type?.includes("device_code")
+              ) {
+                return tokenResponse({
+                  accessToken: "soon-expiring-access-token",
+                  refreshToken: "refresh-token",
+                  expiresIn: 60,
+                });
+              }
+              if (request.url === graphTokenUrl && request.form?.grant_type === "refresh_token") {
+                assert.equal(request.form.refresh_token, "refresh-token");
+                return tokenResponse({
+                  accessToken: "refreshed-access-token",
+                  refreshToken: "new-refresh-token",
+                });
+              }
+              if (request.url.startsWith("https://graph.microsoft.com/v1.0/me?")) {
+                assert.equal(request.headers?.authorization, "Bearer soon-expiring-access-token");
+                return accountResponse();
+              }
+              throw new Error(`Unexpected request: ${request.url}`);
+            }),
+          secretStore,
+        ),
       ),
     );
   });

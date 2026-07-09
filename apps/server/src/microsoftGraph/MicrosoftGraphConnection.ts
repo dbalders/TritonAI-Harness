@@ -420,11 +420,6 @@ export const make = Effect.fn("makeMicrosoftGraphConnection")(function* () {
     function* (response: JsonHttpResponse, existing?: PersistedCredential) {
       const now = yield* nowEpochMs();
       const token = yield* parseTokenResponse(response, now, existing);
-      activeAccessToken = {
-        accessToken: token.accessToken,
-        expiresAtEpochMs: token.expiresAtEpochMs,
-        grantedScopes: token.grantedScopes,
-      };
       const account = existing?.account ?? (yield* loadAccount(token.accessToken));
       const credential: PersistedCredential = {
         version: 1,
@@ -436,6 +431,11 @@ export const make = Effect.fn("makeMicrosoftGraphConnection")(function* () {
         updatedAt: isoFromEpochMs(now),
       };
       yield* writeCredential(credential);
+      activeAccessToken = {
+        accessToken: token.accessToken,
+        expiresAtEpochMs: token.expiresAtEpochMs,
+        grantedScopes: token.grantedScopes,
+      };
       return credential;
     },
   );
