@@ -197,7 +197,15 @@ function AboutVersionSection() {
     void bridge
       .checkInstallerUpdate()
       .then((result) => {
-        if (result.state.status === "up-to-date") {
+        if (result.state.status === "available") {
+          toastManager.add({
+            type: "success",
+            title: "TritonAI update available",
+            description: result.state.availableVersion
+              ? `Full Installer ${result.state.availableVersion} is available. Click "Get Update" to download.`
+              : "A newer full TritonAI Installer is available.",
+          });
+        } else if (result.state.status === "up-to-date") {
           toastManager.add({
             type: "success",
             title: "TritonAI is up to date",

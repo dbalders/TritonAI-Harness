@@ -86,7 +86,7 @@ const checkForUpdatesFromMenu = Effect.gen(function* () {
     if (confirmation.response !== 0) return;
 
     const openResult = yield* updates.open;
-    if (!openResult.completed) {
+    if (openResult.accepted && !openResult.completed) {
       yield* electronDialog.showMessageBox({
         type: "warning",
         title: "Could not open installer download",
