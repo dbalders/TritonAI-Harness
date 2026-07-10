@@ -42,6 +42,29 @@ describe("managed skill install ownership", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
+  it.effect("does not create a missing Installer-owned skill from a valid manifest", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "managed-skill-install-test-" });
+      const skillsDirectory = path.join(root, "skills");
+      const skillDirectory = path.join(skillsDirectory, "secure-skill");
+      yield* fs.makeDirectory(skillsDirectory, { recursive: true });
+      yield* fs.writeFileString(
+        path.join(skillsDirectory, ".tritonai-managed-skills.json"),
+        '{"version":1,"kind":"tritonai-secure","skills":["secure-skill"]}',
+      );
+
+      const error = yield* installSkillBundle({
+        bundle: bundle("secure-skill", "untrusted-content"),
+        skillsDirectory,
+      }).pipe(Effect.flip);
+
+      expect(error.message).toContain("managed by the TritonAI Installer");
+      expect(yield* fs.exists(skillDirectory)).toBe(false);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("does not refresh an existing skill when ownership is invalid", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

@@ -22,6 +22,7 @@ const MAX_CATALOG_SKILLS = 200;
 const MAX_SKILL_FILE_COUNT = 200;
 const MAX_SKILL_BYTES = 2 * 1024 * 1024;
 const MAX_GITHUB_METADATA_BYTES = 2 * 1024 * 1024;
+const PUBLIC_SKILLS_REQUEST_TIMEOUT = "15 seconds";
 const SAFE_SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,127}$/u;
 const GIT_SHA_PATTERN = /^[0-9a-f]{40}$/u;
 
@@ -157,7 +158,18 @@ function fetchPublicSkillText<E>(input: {
       input.failureMessage,
       input.tooLargeMessage,
     );
-  });
+  }).pipe(
+    Effect.timeoutOrElse({
+      duration: PUBLIC_SKILLS_REQUEST_TIMEOUT,
+      orElse: () =>
+        Effect.fail(
+          input.errorFactory(
+            `${input.failureMessage} Request timed out.`,
+            new Error("The GitHub request timed out."),
+          ),
+        ),
+    }),
+  );
 }
 
 function resolveRevision<E>(

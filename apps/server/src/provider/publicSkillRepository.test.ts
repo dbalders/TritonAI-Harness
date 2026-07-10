@@ -1,6 +1,8 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as TestClock from "effect/testing/TestClock";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
 import { discoverPublicSkillCatalog, loadPublicSkillBundle } from "./publicSkillRepository.ts";
@@ -27,6 +29,7 @@ function treeEntry(input: {
 
 function repositoryLayer(input?: {
   readonly failResolve?: boolean;
+  readonly hangResolve?: boolean;
   readonly symlink?: boolean;
   readonly truncated?: boolean;
   readonly calls?: string[];
@@ -63,6 +66,7 @@ function repositoryLayer(input?: {
       const url = new URL(request.url);
       let response: Response;
       if (url.pathname.includes("/commits/")) {
+        if (input?.hangResolve) return Effect.never;
         response = input?.failResolve
           ? new Response("offline", { status: 503 })
           : Response.json({ sha: REVISION, commit: { tree: { sha: TREE_SHA } } });
@@ -111,6 +115,17 @@ describe("public skill repository", () => {
       const error = yield* Effect.flip(discoverPublicSkillCatalog());
       expect(error.message).toContain("could not be reached");
     }).pipe(Effect.provide(repositoryLayer({ failResolve: true }))),
+  );
+
+  it.effect("times out when the public source does not respond", () =>
+    Effect.gen(function* () {
+      const errorFiber = yield* discoverPublicSkillCatalog().pipe(Effect.flip, Effect.forkChild);
+      yield* Effect.yieldNow;
+      yield* TestClock.adjust("15 seconds");
+      const error = yield* Fiber.join(errorFiber);
+
+      expect(error.message).toContain("Request timed out");
+    }).pipe(Effect.provide(repositoryLayer({ hangResolve: true }))),
   );
 
   it.effect("rejects a truncated GitHub tree", () =>

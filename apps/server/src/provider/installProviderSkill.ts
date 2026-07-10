@@ -809,24 +809,24 @@ export function installSkillBundle(input: {
     const skillDirectory = pathService.join(skillsDirectory, skillName);
     const skillPath = pathService.join(skillDirectory, "SKILL.md");
 
+    const managed = yield* loadManagedSkillManifest(skillsDirectory);
+    if (managedSkillManifestBlocksMutation(managed.status)) {
+      return yield* installError(
+        `Skill '${skillName}' cannot be installed while TritonAI managed-skill ownership cannot be verified. Run the Installer to repair the manifest first.`,
+      );
+    }
+    if (managed.status === "valid" && managed.skillNames.includes(skillName)) {
+      return yield* installError(
+        `Skill '${skillName}' is managed by the TritonAI Installer and cannot be replaced here.`,
+      );
+    }
+
     const skillDirectoryExists = yield* fs
       .exists(skillDirectory)
       .pipe(
         Effect.mapError((cause) => installError(`Failed to inspect ${skillDirectory}.`, cause)),
       );
     if (skillDirectoryExists) {
-      const managed = yield* loadManagedSkillManifest(skillsDirectory);
-      if (managedSkillManifestBlocksMutation(managed.status)) {
-        return yield* installError(
-          `Skill '${skillName}' cannot be refreshed while TritonAI managed-skill ownership cannot be verified. Run the Installer to repair the manifest first.`,
-        );
-      }
-      if (managed.status === "valid" && managed.skillNames.includes(skillName)) {
-        return yield* installError(
-          `Skill '${skillName}' is managed by the TritonAI Installer and cannot be replaced here.`,
-        );
-      }
-
       const existingEntrypoint = yield* fs
         .exists(skillPath)
         .pipe(Effect.mapError((cause) => installError(`Failed to inspect ${skillPath}.`, cause)));
