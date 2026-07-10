@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 
 import * as NodeChildProcess from "node:child_process";
+import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
-const DEFAULT_UPSTREAM_REMOTE = "upstream";
+const DEFAULT_UPSTREAM_REMOTE = "t3code-upstream";
 const DEFAULT_UPSTREAM_URL = "https://github.com/pingdotgg/t3code.git";
 const DEFAULT_UPSTREAM_BRANCH = "main";
 const DEFAULT_DOWNSTREAM_REMOTE = "origin";
@@ -18,7 +19,6 @@ function parseArgs(args) {
   const parsed = {
     push: false,
     createPr: false,
-    autoMergePr: false,
     keepWorktree: false,
     skipChecks: false,
     noLlm: false,
@@ -31,11 +31,6 @@ function parseArgs(args) {
         parsed.push = true;
         break;
       case "--create-pr":
-        parsed.createPr = true;
-        parsed.push = true;
-        break;
-      case "--auto-merge-pr":
-        parsed.autoMergePr = true;
         parsed.createPr = true;
         parsed.push = true;
         break;
@@ -70,7 +65,6 @@ function printHelp() {
 Options:
   --push              Push the generated sync branch.
   --create-pr         Push and open a GitHub PR.
-  --auto-merge-pr     Merge an auto-merge-ready PR.
   --keep-worktree     Keep the temporary worktree for inspection.
   --skip-checks       Skip TRITONAI_SYNC_CHECKS.
   --no-llm            Do not run the Codex/agent review command.
@@ -117,16 +111,60 @@ function gitStatus(args, options = {}) {
   return run("git", args, { ...options, capture: true, check: false });
 }
 
+function validateRemoteName(remote, role) {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(remote)) {
+    throw new Error(`Unsafe ${role} remote name: ${remote}`);
+  }
+}
+
 function remoteExists(remote, cwd) {
   const result = gitStatus(["remote", "get-url", remote], { cwd });
   return result.status === 0;
 }
 
-function ensureRemote(remote, url, cwd) {
+function ensureFetchOnlyRemote(remote, url, downstreamRemote, cwd) {
+  validateRemoteName(remote, "parent");
+  validateRemoteName(downstreamRemote, "downstream");
+  if (remote === downstreamRemote) {
+    throw new Error(
+      `Parent remote ${remote} must be separate from downstream remote ${downstreamRemote}.`,
+    );
+  }
+
+  if (remoteExists(downstreamRemote, cwd)) {
+    const downstreamUrls = git(["remote", "get-url", "--all", downstreamRemote], {
+      cwd,
+    }).split("\n");
+    if (downstreamUrls.includes(url)) {
+      throw new Error(
+        `Parent fetch URL ${url} must not also be configured on downstream remote ${downstreamRemote}.`,
+      );
+    }
+  }
+
   if (!remoteExists(remote, cwd)) {
     run("git", ["remote", "add", remote, url], { cwd });
+  } else {
+    const configuredUrls = git(["remote", "get-url", "--all", remote], { cwd }).split("\n");
+    if (configuredUrls.length !== 1 || configuredUrls[0] !== url) {
+      throw new Error(
+        `Refusing parent remote ${remote}: expected only fetch URL ${url}, found ${configuredUrls.join(", ")}.`,
+      );
+    }
   }
-  run("git", ["remote", "set-url", remote, url], { cwd });
+
+  run("git", ["config", "--unset-all", `remote.${remote}.pushurl`], { cwd, check: false });
+  run("git", ["config", "--add", `remote.${remote}.pushurl`, "DISABLED"], { cwd });
+  const fetchUrls = git(["remote", "get-url", "--all", remote], { cwd }).split("\n");
+  const pushUrls = git(["remote", "get-url", "--push", "--all", remote], { cwd }).split("\n");
+  if (
+    fetchUrls.length !== 1 ||
+    fetchUrls[0] !== url ||
+    pushUrls.length !== 1 ||
+    pushUrls[0] !== "DISABLED"
+  ) {
+    throw new Error(`Parent remote ${remote} is not the verified fetch-only boundary.`);
+  }
 }
 
 function fetchRemoteBranch(remote, branch, cwd) {
@@ -171,7 +209,7 @@ function makeSanitizedEnv({ sourceEnv = process.env, allowSecretNames = [], extr
 }
 
 function nowStamp() {
-  return new Date().toISOString().replace(/[-:]/g, "").replace(/\..+$/u, "Z");
+  return new Date().toISOString().replace(/[-:.]/g, "");
 }
 
 function shell(command, options = {}) {
@@ -235,7 +273,6 @@ function runAgentReview({ worktree, report, allowSecretNames }) {
   if (!command) {
     return {
       reviewStatus: "not-configured",
-      autoMerge: false,
       reason: "TRITONAI_SYNC_AGENT_COMMAND is not set.",
       summary: "No Codex review command was configured.",
       risks: ["Run manual review or configure TRITONAI_SYNC_AGENT_COMMAND."],
@@ -258,7 +295,7 @@ ${worktree}
 
 Return only JSON with:
 {
-  "auto_merge": boolean,
+  "approved": boolean,
   "reason": "short reason",
   "summary": "what happened",
   "risks": ["risk or follow-up"]
@@ -283,7 +320,6 @@ ${JSON.stringify(report, null, 2)}
   if (result.status !== 0) {
     return {
       reviewStatus: "failed",
-      autoMerge: false,
       reason: `Agent command exited with ${result.status}.`,
       summary: "Codex review command failed.",
       risks: ["Manual review required because the configured review command failed."],
@@ -293,8 +329,7 @@ ${JSON.stringify(report, null, 2)}
 
   const parsed = readJsonObject(responseFile);
   return {
-    reviewStatus: parsed?.auto_merge === true ? "approved" : "risk",
-    autoMerge: parsed?.auto_merge === true,
+    reviewStatus: parsed?.approved === true ? "approved" : "risk",
     reason: String(parsed?.reason ?? ""),
     summary: String(parsed?.summary ?? ""),
     risks: Array.isArray(parsed?.risks) ? parsed.risks.map(String) : [],
@@ -302,8 +337,19 @@ ${JSON.stringify(report, null, 2)}
   };
 }
 
-function createPullRequest({ branch, title, body, labels, cwd }) {
-  const args = ["pr", "create", "--head", branch, "--title", title, "--body", body];
+function createPullRequest({ branch, baseBranch, title, body, labels, cwd }) {
+  const args = [
+    "pr",
+    "create",
+    "--base",
+    baseBranch,
+    "--head",
+    branch,
+    "--title",
+    title,
+    "--body",
+    body,
+  ];
   const repo = process.env.TRITONAI_SYNC_GITHUB_REPO ?? process.env.GH_REPO;
   if (repo) {
     args.push("--repo", repo);
@@ -311,20 +357,94 @@ function createPullRequest({ branch, title, body, labels, cwd }) {
   for (const label of labels) {
     args.push("--label", label);
   }
-  const result = run("gh", args, { cwd, check: false });
+  const result = run("gh", args, { cwd, capture: true, check: false });
   if (result.status !== 0) {
     throw new Error("gh pr create failed. The PR may already exist.");
   }
+
+  const viewArgs = ["pr", "view", branch, "--json", "isDraft", "--jq", ".isDraft"];
+  if (repo) viewArgs.push("--repo", repo);
+  const draftResult = run("gh", viewArgs, { cwd, capture: true, check: false });
+  if (draftResult.status !== 0 || draftResult.stdout.trim() !== "false") {
+    throw new Error("Created PR could not be verified as ready for review (isDraft=false).");
+  }
 }
 
-function autoMergePullRequest({ branch, cwd }) {
-  const repo = process.env.TRITONAI_SYNC_GITHUB_REPO ?? process.env.GH_REPO;
-  const method = process.env.TRITONAI_SYNC_PR_MERGE_METHOD ?? "merge";
-  const args = ["pr", "merge", branch, `--${method}`, "--delete-branch"];
-  if (repo) {
-    args.push("--repo", repo);
+function conflictEvidence(worktree) {
+  const files = git(["diff", "--name-only", "--diff-filter=U"], { cwd: worktree });
+  const stages = git(["ls-files", "--unmerged"], { cwd: worktree });
+  return {
+    files: files ? files.split("\n") : [],
+    stages: stages ? stages.split("\n") : [],
+    workingTreeHashes: Object.fromEntries(
+      (files ? files.split("\n") : []).map((file) => {
+        const path = NodePath.join(worktree, file);
+        return [
+          file,
+          NodeFS.existsSync(path)
+            ? NodeCrypto.createHash("sha256").update(NodeFS.readFileSync(path)).digest("hex")
+            : "missing",
+        ];
+      }),
+    ),
+  };
+}
+
+function cleanupAutomationWorktree({
+  repoRoot,
+  worktreeRoot,
+  worktree,
+  created,
+  keepWorktree,
+  expectedConflictEvidence,
+}) {
+  if (!created || !NodeFS.existsSync(worktree)) return true;
+  if (keepWorktree) {
+    console.error(`Kept sync worktree at ${worktree}`);
+    return false;
   }
-  run("gh", args, { cwd });
+
+  const topLevel = gitStatus(["rev-parse", "--show-toplevel"], { cwd: worktree });
+  if (
+    topLevel.status !== 0 ||
+    NodeFS.realpathSync(topLevel.stdout.trim()) !== NodeFS.realpathSync(worktree)
+  ) {
+    console.error(`Kept unverified sync worktree at ${worktree}`);
+    return false;
+  }
+
+  const mergeInProgress = gitStatus(["rev-parse", "--verify", "-q", "MERGE_HEAD"], {
+    cwd: worktree,
+  });
+  if (mergeInProgress.status === 0) {
+    if (
+      !expectedConflictEvidence ||
+      JSON.stringify(conflictEvidence(worktree)) !== JSON.stringify(expectedConflictEvidence)
+    ) {
+      console.error(`Kept changed conflict worktree at ${worktree}; refusing to delete user work.`);
+      return false;
+    }
+    const abortResult = gitStatus(["merge", "--abort"], { cwd: worktree });
+    if (abortResult.status !== 0) {
+      console.error(`Could not abort conflicted merge at ${worktree}; the worktree was preserved.`);
+      return false;
+    }
+  }
+
+  NodeFS.rmSync(NodePath.join(worktree, ".tritonai-sync"), { recursive: true, force: true });
+  const status = gitStatus(["status", "--porcelain"], { cwd: worktree });
+  if (status.status !== 0 || status.stdout.trim()) {
+    console.error(`Kept dirty sync worktree at ${worktree}; refusing to delete user work.`);
+    return false;
+  }
+
+  const removed = gitStatus(["worktree", "remove", worktree], { cwd: repoRoot });
+  if (removed.status !== 0) {
+    console.error(`Could not safely remove sync worktree at ${worktree}; it was preserved.`);
+    return false;
+  }
+  NodeFS.rmSync(worktreeRoot, { recursive: true, force: true });
+  return true;
 }
 
 function main() {
@@ -337,11 +457,12 @@ function main() {
   const downstreamBranch = process.env.TRITONAI_SYNC_DOWNSTREAM_BRANCH ?? DEFAULT_DOWNSTREAM_BRANCH;
   const syncBranchPrefix = process.env.TRITONAI_SYNC_BRANCH_PREFIX ?? DEFAULT_SYNC_BRANCH_PREFIX;
   const checks = process.env.TRITONAI_SYNC_CHECKS ?? DEFAULT_CHECKS;
+  const checksConfigured = checks.trim().length > 0;
   const allowSecretNames = parseCsv(
     process.env.TRITONAI_SYNC_AGENT_SECRET_ENV_ALLOWLIST ?? DEFAULT_SECRET_ALLOWLIST,
   );
 
-  ensureRemote(upstreamRemote, upstreamUrl, repoRoot);
+  ensureFetchOnlyRemote(upstreamRemote, upstreamUrl, downstreamRemote, repoRoot);
   fetchRemoteBranch(upstreamRemote, upstreamBranch, repoRoot);
   fetchRemoteBranch(downstreamRemote, downstreamBranch, repoRoot);
 
@@ -378,26 +499,31 @@ function main() {
     downstreamSha,
     syncBranch: branch,
     mergeStatus: "not-run",
-    checkStatus: args.skipChecks ? "skipped" : "not-run",
+    checkStatus: args.skipChecks ? "skipped" : checksConfigured ? "not-run" : "not-configured",
     reviewStatus: args.noLlm ? "skipped" : "not-run",
     summary: "",
     risks: [],
     agentAttempted: false,
   };
+  let expectedConflictEvidence = null;
+  let worktreeCreated = false;
 
   try {
-    run("git", ["worktree", "add", "-b", branch, worktree, downstreamRef], { cwd: repoRoot });
+    run("git", ["worktree", "add", "--detach", worktree, downstreamRef], { cwd: repoRoot });
+    worktreeCreated = true;
     const mergeResult = gitStatus(["merge", "--no-edit", upstreamSha], { cwd: worktree });
     report.mergeStatus = mergeResult.status === 0 ? "clean" : "conflicted";
 
     if (mergeResult.status !== 0) {
       report.summary = "Upstream merge produced conflicts.";
       report.risks = ["Resolve merge conflicts before merging upstream changes."];
+      expectedConflictEvidence = conflictEvidence(worktree);
+      report.conflictEvidence = expectedConflictEvidence;
       console.log(JSON.stringify(report, null, 2));
       return args.allowNeedsReview ? 0 : 2;
     }
 
-    if (!args.skipChecks) {
+    if (!args.skipChecks && checksConfigured) {
       const checkEnv = makeSanitizedEnv({ allowSecretNames: [] });
       const checkResult = shell(checks, { cwd: worktree, env: checkEnv, check: false });
       report.checkStatus = checkResult.status === 0 ? "passed" : "failed";
@@ -416,38 +542,42 @@ function main() {
       report.reviewReason = review.reason;
     }
 
-    const checksOk = report.checkStatus === "passed" || report.checkStatus === "skipped";
-    const reviewOk = report.reviewStatus === "approved" || report.reviewStatus === "skipped";
+    const checksOk = report.checkStatus === "passed";
+    const reviewOk = report.reviewStatus === "approved";
     if (report.mergeStatus === "clean" && checksOk && reviewOk) {
-      report.status = "auto-merge-ready";
+      report.status = "review-ready";
     }
 
     const labels = reportLabels(report);
     if (args.push) {
-      run("git", ["push", downstreamRemote, `${branch}:${branch}`, "--force-with-lease"], {
+      run("git", ["push", downstreamRemote, `HEAD:refs/heads/${branch}`], {
         cwd: worktree,
       });
     }
     if (args.createPr) {
       createPullRequest({
         branch,
+        baseBranch: downstreamBranch,
         cwd: worktree,
         labels,
         title: `Sync upstream ${upstreamBranch} into ${downstreamBranch}`,
         body: buildPrBody(report, labels),
       });
     }
-    if (args.autoMergePr && report.status === "auto-merge-ready") {
-      autoMergePullRequest({ branch, cwd: worktree });
-    }
-
     console.log(JSON.stringify({ ...report, labels }, null, 2));
-    return report.status === "auto-merge-ready" || args.allowNeedsReview ? 0 : 2;
+    return report.status === "review-ready" || args.allowNeedsReview ? 0 : 2;
   } finally {
-    if (args.keepWorktree) {
-      console.error(`Kept sync worktree at ${worktree}`);
-    } else if (NodeFS.existsSync(worktreeRoot)) {
-      run("git", ["worktree", "remove", "--force", worktree], { cwd: repoRoot, check: false });
+    if (
+      cleanupAutomationWorktree({
+        repoRoot,
+        worktreeRoot,
+        worktree,
+        created: worktreeCreated,
+        keepWorktree: args.keepWorktree,
+        expectedConflictEvidence,
+      }) &&
+      NodeFS.existsSync(worktreeRoot)
+    ) {
       NodeFS.rmSync(worktreeRoot, { recursive: true, force: true });
     }
   }

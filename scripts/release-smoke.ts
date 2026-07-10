@@ -6,6 +6,7 @@ import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 import * as Console from "effect/Console";
 import * as Effect from "effect/Effect";
+import { parse } from "yaml";
 
 const repoRoot = NodePath.resolve(NodePath.dirname(NodeURL.fileURLToPath(import.meta.url)), "..");
 
@@ -185,9 +186,106 @@ function assertMissing(path: string, message: string): void {
   }
 }
 
+type WorkflowStep = {
+  readonly id?: string;
+  readonly name?: string;
+  readonly if?: string;
+  readonly run?: string;
+};
+
+type WorkflowJob = {
+  readonly if?: string;
+  readonly outputs?: Record<string, string>;
+  readonly steps?: ReadonlyArray<WorkflowStep>;
+};
+
+function assertReleaseRelayWorkflowContract(tempRoot: string): void {
+  const workflowPath = NodePath.resolve(repoRoot, ".github/workflows/release.yml");
+  const workflow = parse(NodeFS.readFileSync(workflowPath, "utf8")) as {
+    readonly jobs?: Record<string, WorkflowJob>;
+  };
+  const relayJob = workflow.jobs?.relay_public_config;
+  if (!relayJob?.steps) {
+    throw new Error("Release workflow is missing relay_public_config steps.");
+  }
+
+  const gate = relayJob.steps.find((step) => step.id === "relay_config");
+  if (!gate?.run) {
+    throw new Error("Release workflow is missing the downstream relay configuration gate.");
+  }
+  if (relayJob.outputs?.configured !== "${{ steps.relay_config.outputs.configured }}") {
+    throw new Error("Release workflow does not expose the relay configured result.");
+  }
+
+  const outputPath = NodePath.resolve(tempRoot, "relay-config-output.txt");
+  const runGate = (env: NodeJS.ProcessEnv): string => {
+    NodeFS.rmSync(outputPath, { force: true });
+    NodeChildProcess.execFileSync("bash", ["-c", gate.run!], {
+      cwd: repoRoot,
+      env: { ...process.env, ...env, GITHUB_OUTPUT: outputPath },
+      stdio: "pipe",
+    });
+    return NodeFS.readFileSync(outputPath, "utf8");
+  };
+
+  assertContains(
+    runGate({
+      CLOUDFLARE_ACCOUNT_ID: "",
+      CLOUDFLARE_API_TOKEN: "",
+      RELAY_DOMAIN: "",
+      RELAY_API_ZONE_NAME: "",
+      CLERK_PUBLISHABLE_KEY: "",
+      CLERK_JWT_TEMPLATE: "",
+      CLERK_CLI_OAUTH_CLIENT_ID: "",
+    }),
+    "configured=false",
+    "Missing downstream relay config must skip relay setup without failing the release.",
+  );
+  assertContains(
+    runGate({
+      CLOUDFLARE_ACCOUNT_ID: "account",
+      CLOUDFLARE_API_TOKEN: "token",
+      RELAY_DOMAIN: "relay.example.test",
+      RELAY_API_ZONE_NAME: "",
+      CLERK_PUBLISHABLE_KEY: "pk_test",
+      CLERK_JWT_TEMPLATE: "relay",
+      CLERK_CLI_OAUTH_CLIENT_ID: "client",
+    }),
+    "configured=true",
+    "Complete downstream relay config must enable relay setup.",
+  );
+
+  for (const step of relayJob.steps.filter((candidate) => candidate.id !== "relay_config")) {
+    if (step.if !== "steps.relay_config.outputs.configured == 'true'") {
+      throw new Error(`Relay step ${step.name ?? step.id ?? "unknown"} is not gated on config.`);
+    }
+  }
+
+  for (const jobName of ["build", "publish_cli"] as const) {
+    const job = workflow.jobs?.[jobName];
+    for (const stepName of [
+      "Download relay client tracing config",
+      "Load relay client tracing config",
+    ]) {
+      const step = job?.steps?.find((candidate) => candidate.name === stepName);
+      if (step?.if !== "needs.relay_public_config.outputs.configured == 'true'") {
+        throw new Error(`${jobName} must make ${stepName} optional when relay config is absent.`);
+      }
+    }
+  }
+
+  const deployWeb = workflow.jobs?.deploy_web;
+  assertContains(
+    deployWeb?.if ?? "",
+    "needs.relay_public_config.outputs.configured == 'true'",
+    "Hosted T3 Connect deployment must skip when downstream relay config is absent.",
+  );
+}
+
 const tempRoot = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-release-smoke-"));
 
 try {
+  assertReleaseRelayWorkflowContract(tempRoot);
   copyWorkspaceManifestFixture(tempRoot);
 
   NodeChildProcess.execFileSync(

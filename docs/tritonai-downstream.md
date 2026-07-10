@@ -13,7 +13,9 @@ Use project-specific branch names. Do not create tool-owned branch prefixes such
 
 ## Local Upstream Sync
 
-The sync script creates a temporary git worktree so the normal checkout can stay dirty while the merge is evaluated elsewhere.
+The sync script evaluates the merge in a detached temporary worktree so the normal checkout can
+stay dirty and failed runs do not leave local sync branches behind. A generated branch is published
+only when `--push` or `--create-pr` is requested.
 
 Dry orientation run:
 
@@ -36,14 +38,14 @@ bun run tritonai:sync:pr
 
 The script exits with:
 
-- `0`: already current, auto-merge-ready, or allowed needs-review result.
+- `0`: already current, review-ready, or explicitly allowed needs-review result.
 - `2`: human review needed.
 - `1`: script, git, or environment failure.
 
 Useful environment overrides:
 
 - `TRITONAI_SYNC_DOWNSTREAM_BRANCH=main`
-- `TRITONAI_SYNC_UPSTREAM_REMOTE=upstream`
+- `TRITONAI_SYNC_UPSTREAM_REMOTE=t3code-upstream`
 - `TRITONAI_SYNC_UPSTREAM_URL=https://github.com/pingdotgg/t3code.git`
 - `TRITONAI_SYNC_UPSTREAM_BRANCH=main`
 - `TRITONAI_SYNC_CHECKS="bun run typecheck && bun run test"`
@@ -51,7 +53,8 @@ Useful environment overrides:
 
 ## Codex Review Command
 
-The sync script owns git, branch publishing, PR creation, and optional PR merge. Codex should only review the temporary worktree and write a JSON decision to the response file.
+The sync script owns git, branch publishing, and ready-for-review PR creation. It never merges a PR.
+Codex should only review the temporary worktree and write a JSON decision to the response file.
 
 Example:
 
@@ -63,7 +66,7 @@ The response must be JSON:
 
 ```json
 {
-  "auto_merge": false,
+  "approved": false,
   "reason": "short reason",
   "summary": "what happened",
   "risks": ["risk or follow-up"]
@@ -89,6 +92,9 @@ To prepare a PR that merges the latest stable parent T3 Code release into Triton
 ```sh
 bun run tritonai:release-sync:pr
 ```
+
+Release-sync PRs always remain `needs-human-review` because that script has no configured automated
+review step. Passing checks make the PR easier to review; they do not classify it as review-ready.
 
 Useful release-sync overrides:
 

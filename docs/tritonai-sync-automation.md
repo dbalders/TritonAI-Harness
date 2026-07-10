@@ -9,11 +9,12 @@ This automation keeps the TritonAI Harness downstream branch close to upstream `
 - `bun run tritonai:sync:check`
 - `bun run tritonai:sync:review`
 - `bun run tritonai:sync:pr`
-- `bun run tritonai:sync:auto`
 - `scripts/tritonai-release-sync.mjs`
 - `bun run tritonai:release-sync:pr`
 
-The upstream sync script creates generated `sync/upstream-*` branches in a temporary worktree. The parent release sync script uses generated `sync/release-*` branches so release PRs cannot overwrite ordinary upstream sync PRs.
+The upstream sync script evaluates merges in a detached temporary worktree and publishes generated
+`sync/upstream-*` branches only when requested. The parent release sync script uses generated
+`sync/release-*` branch names so release PRs cannot overwrite ordinary upstream sync PRs.
 
 ## Review Modes
 
@@ -44,6 +45,8 @@ The agent command receives:
 - `TRITONAI_SYNC_AGENT_CAN_EDIT`
 
 The command should write only the final JSON response to `TRITONAI_SYNC_AGENT_RESPONSE_FILE`.
+Approval is represented by an `"approved": true` field. A skipped, failed, risky, or
+unconfigured review always leaves the sync in `needs-human-review`.
 
 ## Secret Handling
 
@@ -67,28 +70,30 @@ Generated PRs use these managed labels when applicable:
 
 - `automation:upstream-sync`
 - `automation:release-sync`
-- `automation:auto-merge-ready`
-- `needs-human-review`
+- `needs review`
 - `upstream-conflict`
 - `checks-failed`
-- `ai-review-risk`
-- `agent-attempted`
 
 The label sync workflow creates or updates those labels.
 
 ## Hard Gates
 
-The automation will not mark a sync as auto-merge-ready unless:
+The automation will not mark a sync as review-ready unless:
 
 - The upstream merge completed cleanly.
-- Checks passed or were explicitly skipped.
-- Codex review approved the merge, or review was explicitly skipped.
+- Checks passed.
+- Codex review approved the merge.
 
-If checks fail, merge conflicts appear, or Codex review is missing/risky, the result stays `needs-human-review`.
+If checks or review are skipped, failed, missing, or risky, the result stays
+`needs-human-review`. The automation can create a ready-for-review PR, but it never
+enables or performs auto-merge.
 
 ## GitHub Workflow
 
-`.github/workflows/tritonai-upstream-sync.yml` is scheduled and manually dispatchable. It expects a self-hosted runner because the fork may need local Codex/TritonAI configuration. The workflow can push a sync branch and open a PR; auto-merge defaults off and should only be enabled after manual sync runs are predictable.
+`.github/workflows/tritonai-upstream-sync.yml` is scheduled and manually dispatchable. It expects a self-hosted runner because the fork may need local Codex/TritonAI configuration. The workflow can push a sync branch and open a ready-for-review PR, but it cannot merge it.
+
+Both sync scripts use `t3code-upstream` as a verified fetch-only parent remote.
+They refuse a mismatched fetch URL and enforce `pushurl=DISABLED` before fetching.
 
 ## Parent Release Sync
 
@@ -99,3 +104,15 @@ The default downstream branch in this repo is `main`. Override it with:
 ```sh
 export TRITONAI_RELEASE_SYNC_DOWNSTREAM_BRANCH=main
 ```
+
+## Mobile Workflow Alignment
+
+`.github/workflows/mobile-eas-preview.yml` matches current parent `main`. Its
+label gate and `EXPO_TOKEN` preflight make the workflow a safe no-op when the
+downstream repository has no Expo secret.
+
+The current parent `.github/workflows/mobile-eas-production.yml` is intentionally
+excluded. It can build and auto-submit to TestFlight or publish a production OTA
+update, which crosses TritonAI's explicit release/publishing authority boundary.
+That production workflow should only be adopted with a separate downstream
+mobile release decision and credential plan.

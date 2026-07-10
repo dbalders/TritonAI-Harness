@@ -173,6 +173,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
+      configured: ${{ steps.relay_config.outputs.configured }}
       clerk_publishable_key: ${{ steps.public_config.outputs.clerk_publishable_key }}
       clerk_jwt_template: ${{ steps.public_config.outputs.clerk_jwt_template }}
       clerk_cli_oauth_client_id: ${{ steps.public_config.outputs.clerk_cli_oauth_client_id }}
@@ -186,12 +187,46 @@ jobs:
       CLERK_JWT_TEMPLATE: ${{ vars.CLERK_JWT_TEMPLATE }}
       CLERK_CLI_OAUTH_CLIENT_ID: ${{ vars.CLERK_CLI_OAUTH_CLIENT_ID }}
     steps:
+      - id: relay_config
+        name: Check downstream relay configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          relay_domain="${RELAY_DOMAIN:-}"
+          if [[ -z "$relay_domain" && -n "${RELAY_API_ZONE_NAME:-}" ]]; then
+            relay_domain="relay.$RELAY_API_ZONE_NAME"
+          fi
+          required=(
+            CLOUDFLARE_ACCOUNT_ID
+            CLOUDFLARE_API_TOKEN
+            relay_domain
+            CLERK_PUBLISHABLE_KEY
+            CLERK_JWT_TEMPLATE
+            CLERK_CLI_OAUTH_CLIENT_ID
+          )
+          missing=()
+          for name in "${required[@]}"; do
+            if [[ -z "${!name:-}" ]]; then
+              missing+=("$name")
+            fi
+          done
+          if (( ${#missing[@]} > 0 )); then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            printf 'Skipping downstream T3 Connect relay setup; missing: %s\n' "${missing[*]}"
+            exit 0
+          fi
+
+          echo "configured=true" >> "$GITHUB_OUTPUT"
+
       - name: Checkout
+        if: steps.relay_config.outputs.configured == 'true'
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.preflight.outputs.ref }}
 
       - name: Setup Vite+
+        if: steps.relay_config.outputs.configured == 'true'
         uses: voidzero-dev/setup-vp@v1
         with:
           node-version-file: package.json
@@ -202,6 +237,7 @@ jobs:
 
       - id: relay_state
         name: Read production relay tracing config
+        if: steps.relay_config.outputs.configured == 'true'
         shell: bash
         run: |
           vp run --filter t3code-relay deploy \
@@ -211,6 +247,7 @@ jobs:
             --github-env-file "$RUNNER_TEMP/relay-client-tracing.env"
 
       - name: Upload relay client tracing config
+        if: steps.relay_config.outputs.configured == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: relay-client-tracing-config
@@ -220,6 +257,7 @@ jobs:
 
       - id: public_config
         name: Resolve production relay public config
+        if: steps.relay_config.outputs.configured == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -301,7 +339,7 @@ jobs:
     name: Build ${{ matrix.label }}
     # build_wsl_node_pty stays in `needs` so it runs first and its artifact is
     # available to download, but only the Windows matrix entry consumes it. We
-    # therefore gate the job on preflight + relay (must succeed) WITHOUT requiring
+    # therefore gate the job on preflight + the optional relay resolver WITHOUT requiring
     # build_wsl_node_pty, so a failed Linux prebuild doesn't skip the macOS/Linux
     # builds. `!cancelled()` (not `!failure()`) lets the job run even when
     # build_wsl_node_pty failed; the Windows-only download step below then fails
@@ -359,12 +397,14 @@ jobs:
           run-install: true
 
       - name: Download relay client tracing config
+        if: needs.relay_public_config.outputs.configured == 'true'
         uses: actions/download-artifact@v8
         with:
           name: relay-client-tracing-config
           path: ${{ runner.temp }}/relay-client-tracing
 
       - name: Load relay client tracing config
+        if: needs.relay_public_config.outputs.configured == 'true'
         shell: bash
         run: |
           config_path="$RUNNER_TEMP/relay-client-tracing/relay-client-tracing.env"
@@ -635,12 +675,14 @@ jobs:
               - --filter=@t3tools/scripts...
 
       - name: Download relay client tracing config
+        if: needs.relay_public_config.outputs.configured == 'true'
         uses: actions/download-artifact@v8
         with:
           name: relay-client-tracing-config
           path: ${{ runner.temp }}/relay-client-tracing
 
       - name: Load relay client tracing config
+        if: needs.relay_public_config.outputs.configured == 'true'
         shell: bash
         run: |
           config_path="$RUNNER_TEMP/relay-client-tracing/relay-client-tracing.env"
@@ -780,7 +822,7 @@ jobs:
   deploy_web:
     name: Deploy hosted web app
     needs: [preflight, relay_public_config, release]
-    if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.relay_public_config.result == 'success' && needs.release.result == 'success' }}
+    if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.relay_public_config.result == 'success' && needs.relay_public_config.outputs.configured == 'true' && needs.release.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
@@ -811,12 +853,14 @@ jobs:
               - --filter=@t3tools/web...
 
       - name: Download relay client tracing config
+        if: needs.relay_public_config.outputs.configured == 'true'
         uses: actions/download-artifact@v8
         with:
           name: relay-client-tracing-config
           path: ${{ runner.temp }}/relay-client-tracing
 
       - name: Load relay client tracing config
+        if: needs.relay_public_config.outputs.configured == 'true'
         shell: bash
         run: |
           config_path="$RUNNER_TEMP/relay-client-tracing/relay-client-tracing.env"
@@ -971,7 +1015,8 @@ jobs:
       needs.preflight.result == 'success' &&
       needs.relay_public_config.result == 'success' &&
       needs.release.result == 'success' &&
-      needs.deploy_web.result == 'success' &&
+      (needs.deploy_web.result == 'success' ||
+       (needs.relay_public_config.outputs.configured != 'true' && needs.deploy_web.result == 'skipped')) &&
       (needs.finalize.result == 'success' || needs.finalize.result == 'skipped')
     needs: [preflight, relay_public_config, release, deploy_web, finalize]
     runs-on: ubuntu-24.04

@@ -15,11 +15,6 @@ on:
         required: true
         default: true
         type: boolean
-      auto_merge_pr:
-        description: "Merge auto-merge-ready PRs after checks and Codex review"
-        required: true
-        default: false
-        type: boolean
       skip_checks:
         description: "Skip local quality checks"
         required: true
@@ -48,14 +43,20 @@ jobs:
 
       - name: Setup T3 Code upstream remote
         run: |
-          git remote add upstream https://github.com/pingdotgg/t3code.git 2>/dev/null || true
-          git remote set-url upstream https://github.com/pingdotgg/t3code.git
-          git fetch --prune upstream +refs/heads/main:refs/remotes/upstream/main
+          if git remote get-url t3code-upstream >/dev/null 2>&1; then
+            test "$(git remote get-url --all t3code-upstream)" = "https://github.com/pingdotgg/t3code.git"
+          else
+            git remote add t3code-upstream https://github.com/pingdotgg/t3code.git
+          fi
+          git config --unset-all remote.t3code-upstream.pushurl || :
+          git config --add remote.t3code-upstream.pushurl DISABLED
+          test "$(git remote get-url --push --all t3code-upstream)" = "DISABLED"
+          git fetch --prune t3code-upstream +refs/heads/main:refs/remotes/t3code-upstream/main
 
       - name: Refresh vendor mirror branch
         run: |
           git fetch --prune origin +refs/heads/vendor/t3code-main:refs/remotes/origin/vendor/t3code-main || true
-          git push origin refs/remotes/upstream/main:refs/heads/vendor/t3code-main --force-with-lease
+          git push origin refs/remotes/t3code-upstream/main:refs/heads/vendor/t3code-main --force-with-lease
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -76,7 +77,7 @@ jobs:
           TRITONAI_SYNC_GITHUB_REPO: ${{ github.repository }}
           GH_REPO: ${{ github.repository }}
           TRITONAI_SYNC_DOWNSTREAM_BRANCH: ${{ vars.TRITONAI_SYNC_DOWNSTREAM_BRANCH || 'main' }}
-          TRITONAI_SYNC_UPSTREAM_REMOTE: upstream
+          TRITONAI_SYNC_UPSTREAM_REMOTE: t3code-upstream
           TRITONAI_SYNC_UPSTREAM_URL: https://github.com/pingdotgg/t3code.git
           TRITONAI_SYNC_UPSTREAM_BRANCH: main
           TRITONAI_SYNC_CHECKS: ${{ vars.TRITONAI_SYNC_CHECKS || 'bun run typecheck && bun run test' }}
@@ -86,7 +87,6 @@ jobs:
           CODEX_HOME: ${{ vars.CODEX_HOME }}
           TRITONAI_HOME: ${{ vars.TRITONAI_HOME }}
           TRITONAI_API_KEY: ${{ secrets.TRITONAI_API_KEY }}
-          TRITONAI_SYNC_PR_MERGE_METHOD: ${{ vars.TRITONAI_SYNC_PR_MERGE_METHOD || 'merge' }}
         run: |
           downstream_branch="${{ github.event.inputs.downstream_branch }}"
           if [[ -z "$downstream_branch" ]]; then
@@ -99,11 +99,6 @@ jobs:
             create_pr="true"
           fi
 
-          auto_merge_pr="${{ github.event.inputs.auto_merge_pr }}"
-          if [[ -z "$auto_merge_pr" ]]; then
-            auto_merge_pr="false"
-          fi
-
           skip_checks="${{ github.event.inputs.skip_checks }}"
           if [[ -z "$skip_checks" ]]; then
             skip_checks="false"
@@ -113,10 +108,6 @@ jobs:
 
           if [[ "$create_pr" == "true" ]]; then
             args+=(--create-pr)
-          fi
-
-          if [[ "$auto_merge_pr" == "true" ]]; then
-            args+=(--auto-merge-pr)
           fi
 
           if [[ "$skip_checks" == "true" ]]; then
