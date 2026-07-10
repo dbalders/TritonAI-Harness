@@ -1,7 +1,6 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import type * as Electron from "electron";
@@ -11,7 +10,7 @@ import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as ElectronDialog from "../electron/ElectronDialog.ts";
 import * as ElectronMenu from "../electron/ElectronMenu.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
-import * as DesktopUpdates from "../updates/DesktopUpdates.ts";
+import * as InstallerUpdates from "../updates/InstallerUpdates.ts";
 import * as DesktopWindow from "./DesktopWindow.ts";
 
 export class DesktopApplicationMenuActionError extends Schema.TaggedErrorClass<DesktopApplicationMenuActionError>()(
@@ -34,11 +33,9 @@ export class DesktopApplicationMenu extends Context.Service<
 >()("@t3tools/desktop/window/DesktopApplicationMenu") {}
 
 type DesktopApplicationMenuRuntimeServices =
-  | DesktopUpdates.DesktopUpdates
+  | InstallerUpdates.InstallerUpdates
   | DesktopWindow.DesktopWindow
   | ElectronDialog.ElectronDialog;
-
-const { logInfo: logUpdaterInfo } = makeComponentLogger("desktop-updater");
 
 const { logError: logMenuError } = makeComponentLogger("desktop-menu");
 
@@ -50,51 +47,75 @@ const dispatchMenuAction = Effect.fn("desktop.menu.dispatchMenuAction")(function
 });
 
 const checkForUpdatesFromMenu = Effect.gen(function* () {
-  const updates = yield* DesktopUpdates.DesktopUpdates;
+  const updates = yield* InstallerUpdates.InstallerUpdates;
   const electronDialog = yield* ElectronDialog.ElectronDialog;
-  const result = yield* updates.check("menu");
+  const result = yield* updates.check;
   const updateState = result.state;
 
-  if (updateState.status === "up-to-date") {
+  if (!updateState.enabled || updateState.status === "disabled") {
+    yield* electronDialog.showMessageBox({
+      type: "info",
+      title: "Updates unavailable",
+      message: "Full TritonAI Installer updates are not available in this build.",
+      ...(updateState.message ? { detail: updateState.message } : {}),
+      buttons: ["OK"],
+    });
+  } else if (updateState.status === "up-to-date") {
     yield* electronDialog.showMessageBox({
       type: "info",
       title: "You're up to date!",
-      message: `TritonAI Harness ${updateState.currentVersion} is currently the newest version available.`,
+      message: updateState.installedVersion
+        ? `TritonAI ${updateState.installedVersion} is currently the newest version available.`
+        : "The latest full TritonAI Installer is already installed.",
       buttons: ["OK"],
     });
+  } else if (updateState.status === "available") {
+    const version = updateState.availableVersion;
+    const confirmation = yield* electronDialog.showMessageBox({
+      type: "info",
+      title: "TritonAI update available",
+      message: version
+        ? `Full Installer ${version} is available.`
+        : "A newer full TritonAI Installer is available.",
+      detail:
+        "The full Installer updates Harness, Codex, managed skills, and configuration together.",
+      buttons: ["Get Update", "Later"],
+      defaultId: 0,
+      cancelId: 1,
+    });
+    if (confirmation.response !== 0) return;
+
+    const openResult = yield* updates.open;
+    if (openResult.accepted && !openResult.completed) {
+      yield* electronDialog.showMessageBox({
+        type: "warning",
+        title: "Could not open installer download",
+        message: "The full TritonAI Installer download could not be opened.",
+        detail: openResult.state.message ?? "Check your default browser and try again.",
+        buttons: ["OK"],
+      });
+    }
   } else if (updateState.status === "error") {
     yield* electronDialog.showMessageBox({
       type: "warning",
       title: "Update check failed",
-      message: "Could not check for updates.",
+      message: "Could not check for full Installer updates.",
       detail: updateState.message ?? "An unknown error occurred. Please try again later.",
+      buttons: ["OK"],
+    });
+  } else {
+    yield* electronDialog.showMessageBox({
+      type: "info",
+      title: "Update check in progress",
+      message: "TritonAI is already checking for a full Installer update.",
       buttons: ["OK"],
     });
   }
 }).pipe(Effect.withSpan("desktop.menu.checkForUpdates"));
 
-const handleCheckForUpdatesMenuClick = Effect.gen(function* () {
-  const updates = yield* DesktopUpdates.DesktopUpdates;
-  const electronDialog = yield* ElectronDialog.ElectronDialog;
-  const disabledReason = yield* updates.disabledReason;
-  if (Option.isSome(disabledReason)) {
-    yield* logUpdaterInfo("manual update check requested, but updates are disabled", {
-      disabledReason: disabledReason.value,
-    });
-    yield* electronDialog.showMessageBox({
-      type: "info",
-      title: "Updates unavailable",
-      message: "Automatic updates are not available right now.",
-      detail: disabledReason.value,
-      buttons: ["OK"],
-    });
-    return;
-  }
-
-  const desktopWindow = yield* DesktopWindow.DesktopWindow;
-  yield* desktopWindow.ensureMain;
-  yield* checkForUpdatesFromMenu;
-}).pipe(Effect.withSpan("desktop.menu.handleCheckForUpdatesClick"));
+const handleCheckForUpdatesMenuClick = checkForUpdatesFromMenu.pipe(
+  Effect.withSpan("desktop.menu.handleCheckForUpdatesClick"),
+);
 
 export const make = Effect.gen(function* () {
   const electronApp = yield* ElectronApp.ElectronApp;
