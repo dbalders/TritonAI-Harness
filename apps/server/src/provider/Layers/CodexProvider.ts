@@ -51,14 +51,24 @@ const CODEX_PRESENTATION = {
 const VISIBLE_CODEX_MODEL_SLUGS = new Set<string>(TRITONAI_VISIBLE_CODEX_MODELS);
 
 function codexModelDisplayName(slug: string): string {
-  return slug === DEFAULT_TRITONAI_CODEX_MODEL ? DEFAULT_TRITONAI_CODEX_MODEL_DISPLAY_NAME : slug;
+  if (slug === DEFAULT_TRITONAI_CODEX_MODEL) return DEFAULT_TRITONAI_CODEX_MODEL_DISPLAY_NAME;
+  if (slug === "gpt-5.5") return "GPT-5.5";
+  if (slug === "claude-opus-4-8") return "Claude Opus 4.8";
+  return slug;
 }
 
-function curateVisibleCodexModels(
+export function curateVisibleCodexModels(
   models: ReadonlyArray<ServerProviderModel>,
+  configuredModels: ReadonlyArray<string>,
 ): ReadonlyArray<ServerProviderModel> {
-  return models
-    .filter((model) => VISIBLE_CODEX_MODEL_SLUGS.has(model.slug))
+  const configuredModelSlugs = new Set(configuredModels.map((model) => model.trim()));
+  const modelsWithDefault = appendCustomCodexModels(models, [DEFAULT_TRITONAI_CODEX_MODEL]);
+  return modelsWithDefault
+    .filter(
+      (model) =>
+        VISIBLE_CODEX_MODEL_SLUGS.has(model.slug) &&
+        (model.slug === DEFAULT_TRITONAI_CODEX_MODEL || configuredModelSlugs.has(model.slug)),
+    )
     .map((model) =>
       model.slug === DEFAULT_TRITONAI_CODEX_MODEL
         ? {
@@ -67,7 +77,10 @@ function curateVisibleCodexModels(
             shortName: "DeepSeek",
             capabilities: tritonAiCodexCapabilities(model.capabilities),
           }
-        : model,
+        : {
+            ...model,
+            name: codexModelDisplayName(model.slug),
+          },
     );
 }
 
@@ -270,7 +283,7 @@ function parseCodexModelListResponse(
   }));
 }
 
-function appendCustomCodexModels(
+export function appendCustomCodexModels(
   models: ReadonlyArray<ServerProviderModel>,
   customModels: ReadonlyArray<string>,
 ): ReadonlyArray<ServerProviderModel> {
@@ -450,7 +463,10 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
     return {
       account: accountResponse,
       version,
-      models: curateVisibleCodexModels(appendCustomCodexModels([], input.customModels ?? [])),
+      models: curateVisibleCodexModels(
+        appendCustomCodexModels([], input.customModels ?? []),
+        input.customModels ?? [],
+      ),
       skills: [],
     } satisfies CodexAppServerProviderSnapshot;
   }
@@ -468,7 +484,10 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
   return {
     account: accountResponse,
     version,
-    models: curateVisibleCodexModels(appendCustomCodexModels(models, input.customModels ?? [])),
+    models: curateVisibleCodexModels(
+      appendCustomCodexModels(models, input.customModels ?? []),
+      input.customModels ?? [],
+    ),
     skills: parseCodexSkillsListResponse(skillsResponse, input.cwd),
   } satisfies CodexAppServerProviderSnapshot;
 });
@@ -489,6 +508,7 @@ const emptyCodexModelsFromSettings = (codexSettings: CodexSettings): ServerProvi
       isCustom: true,
       capabilities: null,
     })),
+    codexSettings.customModels,
   );
 };
 

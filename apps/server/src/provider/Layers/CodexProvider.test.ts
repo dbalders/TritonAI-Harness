@@ -2,7 +2,36 @@ import { assert, it } from "@effect/vitest";
 
 import { createModelCapabilities } from "@t3tools/shared/model";
 
-import { mapCodexModelCapabilities, tritonAiCodexCapabilities } from "./CodexProvider.ts";
+import {
+  appendCustomCodexModels,
+  curateVisibleCodexModels,
+  mapCodexModelCapabilities,
+  tritonAiCodexCapabilities,
+} from "./CodexProvider.ts";
+
+it("keeps the key-gated TritonAI models visible with product display names", () => {
+  const configuredModels = ["deepseek-v4-flash", "gpt-5.5", "claude-opus-4-8", "gpt-5.4"];
+  const reportedModels = appendCustomCodexModels([], configuredModels);
+  const models = curateVisibleCodexModels(reportedModels, configuredModels);
+
+  assert.deepStrictEqual(
+    curateVisibleCodexModels([], []).map(({ slug }) => slug),
+    ["deepseek-v4-flash"],
+  );
+  assert.deepStrictEqual(
+    curateVisibleCodexModels(reportedModels, []).map(({ slug }) => slug),
+    ["deepseek-v4-flash"],
+  );
+
+  assert.deepStrictEqual(
+    models.map(({ slug, name }) => ({ slug, name })),
+    [
+      { slug: "deepseek-v4-flash", name: "DeepSeek v4 Flash" },
+      { slug: "gpt-5.5", name: "GPT-5.5" },
+      { slug: "claude-opus-4-8", name: "Claude Opus 4.8" },
+    ],
+  );
+});
 
 it("maps current Codex model capability fields", () => {
   const capabilities = mapCodexModelCapabilities({
