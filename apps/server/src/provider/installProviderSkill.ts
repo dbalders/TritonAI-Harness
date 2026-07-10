@@ -19,6 +19,10 @@ import * as Stream from "effect/Stream";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
 import * as VcsProcess from "../vcs/VcsProcess.ts";
+import {
+  loadManagedSkillManifest,
+  managedSkillManifestBlocksMutation,
+} from "./managedSkillManifest.ts";
 import { loadPublicSkillBundle } from "./publicSkillRepository.ts";
 
 const GIT_CLONE_TIMEOUT_MS = 120_000;
@@ -196,7 +200,7 @@ function loadBundleForCatalogEntry(
 ): Effect.Effect<
   ServerProviderSkillBundleData,
   ServerProviderSkillInstallError,
-  FileSystem.FileSystem | Path.Path | VcsProcess.VcsProcess
+  HttpClient.HttpClient
 > {
   return loadPublicSkillBundle({ id: catalogEntryId, revision }).pipe(
     Effect.flatMap(validateSkillBundle),
@@ -778,7 +782,7 @@ function loadBundleForUrl(
   });
 }
 
-function installSkillBundle(input: {
+export function installSkillBundle(input: {
   readonly bundle: ServerProviderSkillBundleData;
   readonly skillsDirectory: string;
 }): Effect.Effect<
@@ -804,6 +808,18 @@ function installSkillBundle(input: {
     const skillsDirectory = pathService.resolve(input.skillsDirectory);
     const skillDirectory = pathService.join(skillsDirectory, skillName);
     const skillPath = pathService.join(skillDirectory, "SKILL.md");
+
+    const managed = yield* loadManagedSkillManifest(skillsDirectory);
+    if (managedSkillManifestBlocksMutation(managed.status)) {
+      return yield* installError(
+        `Skill '${skillName}' cannot be installed while TritonAI managed-skill ownership cannot be verified. Run the Installer to repair the manifest first.`,
+      );
+    }
+    if (managed.status === "valid" && managed.skillNames.includes(skillName)) {
+      return yield* installError(
+        `Skill '${skillName}' is managed by the TritonAI Installer and cannot be replaced here.`,
+      );
+    }
 
     const skillDirectoryExists = yield* fs
       .exists(skillDirectory)

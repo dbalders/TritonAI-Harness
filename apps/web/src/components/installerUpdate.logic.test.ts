@@ -57,17 +57,18 @@ describe("installer update sidebar behavior", () => {
     expect(resolveInstallerUpdateButtonAction(state)).toBe("none");
   });
 
-  it("disables non-retryable unsupported-platform errors", () => {
+  it("hides unsupported packaged targets", () => {
     const state = {
       ...baseState,
-      status: "error",
-      errorContext: "check",
+      enabled: false,
+      status: "disabled",
+      errorContext: null,
       canRetry: false,
-      message: "Installer updates are unavailable for this platform.",
+      message: null,
     } as const;
-    expect(shouldShowInstallerUpdateButton(state)).toBe(true);
+    expect(shouldShowInstallerUpdateButton(state)).toBe(false);
     expect(resolveInstallerUpdateButtonAction(state)).toBe("none");
-    expect(isInstallerUpdateButtonDisabled(state)).toBe(true);
+    expect(isInstallerUpdateButtonDisabled(state)).toBe(false);
   });
 
   it("surfaces accepted open failures and ignores non-actions", () => {

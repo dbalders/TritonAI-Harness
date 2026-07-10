@@ -1,8 +1,13 @@
 import type {
+  ServerManagedSkillsStatus,
   ServerProvider,
   ServerProviderSkill,
   ServerProviderSkillCatalogEntry,
 } from "@t3tools/contracts";
+
+export function isProviderSkillRemovalBlocked(status: ServerManagedSkillsStatus): boolean {
+  return status === "invalid" || status === "unknown";
+}
 
 export interface ProviderSkillRow {
   readonly provider: ServerProvider;

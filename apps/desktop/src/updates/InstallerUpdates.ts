@@ -135,6 +135,15 @@ export function parseStableInstallerRelease(raw: unknown): StableInstallerReleas
   return { version, assets: raw.assets };
 }
 
+const INSTALLER_ASSET_NAME_BY_TARGET: Readonly<Record<string, (version: string) => string>> = {
+  "darwin/arm64": (version) => `TritonAI-Installer-${version}-arm64.dmg`,
+  "win32/x64": (version) => `TritonAI-Installer-Setup-${version}-x64.exe`,
+};
+
+function installerTargetKey(platform: NodeJS.Platform, arch: string): string {
+  return `${platform}/${arch}`;
+}
+
 export function expectedInstallerAssetName(
   version: string,
   platform: NodeJS.Platform,
@@ -144,15 +153,16 @@ export function expectedInstallerAssetName(
   if (!normalizedVersion) {
     throw new Error("The latest TritonAI Installer version was invalid.");
   }
-  if (platform === "darwin" && arch === "arm64") {
-    return `UCSD-AI-Tools-Installer-${normalizedVersion}-arm64.dmg`;
+  if (!isSupportedInstallerTarget(platform, arch)) {
+    throw new Error(
+      `TritonAI Installer updates are not available for ${platform}/${arch}. Use a supported macOS arm64 or Windows x64 computer.`,
+    );
   }
-  if (platform === "win32" && arch === "x64") {
-    return `UCSD-AI-Tools-Installer-Setup-${normalizedVersion}-x64.exe`;
-  }
-  throw new Error(
-    `TritonAI Installer updates are not available for ${platform}/${arch}. Use a supported macOS arm64 or Windows x64 computer.`,
-  );
+  return INSTALLER_ASSET_NAME_BY_TARGET[installerTargetKey(platform, arch)]!(normalizedVersion);
+}
+
+export function isSupportedInstallerTarget(platform: NodeJS.Platform, arch: string): boolean {
+  return installerTargetKey(platform, arch) in INSTALLER_ASSET_NAME_BY_TARGET;
 }
 
 function validateInstallerAssetUrl(
@@ -264,7 +274,9 @@ export interface InstallerUpdateControllerOptions {
 }
 
 export function createInstallerUpdateController(options: InstallerUpdateControllerOptions) {
-  let state = createInitialState(options.enabled);
+  let state = createInitialState(
+    options.enabled && isSupportedInstallerTarget(options.platform, options.arch),
+  );
   let selectedAsset: InstallerReleaseAsset | null = null;
   let checkInFlight = false;
   let openInFlight = false;

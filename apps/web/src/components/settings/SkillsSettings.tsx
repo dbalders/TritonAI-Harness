@@ -5,6 +5,7 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import type {
   ProviderInstanceId,
+  ServerManagedSkillsStatus,
   ServerProvider,
   ServerProviderSkill,
   ServerProviderSkillCatalog,
@@ -29,6 +30,7 @@ import {
 } from "../../providerSkillPresentation";
 import {
   groupProviderSkills,
+  isProviderSkillRemovalBlocked,
   type ProviderCatalogSkillItem as CatalogSkillItem,
   type ProviderSkillRow as CodexSkillRow,
 } from "../../providerSkillGrouping";
@@ -393,9 +395,8 @@ export function SkillsSettingsPanel() {
   });
   const [catalog, setCatalog] = useState<ServerProviderSkillCatalog | null>(null);
   const [managedSkillNames, setManagedSkillNames] = useState<ReadonlySet<string>>(new Set());
-  const [managedSkillsStatus, setManagedSkillsStatus] = useState<"absent" | "invalid" | "valid">(
-    "absent",
-  );
+  const [managedSkillsStatus, setManagedSkillsStatus] =
+    useState<ServerManagedSkillsStatus>("unknown");
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [managedManifestWarning, setManagedManifestWarning] = useState<string | null>(null);
@@ -437,7 +438,7 @@ export function SkillsSettingsPanel() {
     managedOnlyRows.length;
   const installDisabled = installProvider === null || primaryEnvironmentId === null;
   const catalogInstallDisabled = installDisabled || catalogError !== null;
-  const removalBlocked = managedSkillsStatus === "invalid";
+  const removalBlocked = isProviderSkillRemovalBlocked(managedSkillsStatus);
 
   const loadCatalog = useCallback(async () => {
     setCatalogLoading(true);
@@ -446,7 +447,7 @@ export function SkillsSettingsPanel() {
       if (!primaryEnvironmentId) {
         setCatalog(null);
         setManagedSkillNames(new Set());
-        setManagedSkillsStatus("absent");
+        setManagedSkillsStatus("unknown");
         setManagedManifestWarning(null);
         return;
       }
@@ -461,8 +462,8 @@ export function SkillsSettingsPanel() {
     } catch (error) {
       setCatalog(null);
       setManagedSkillNames(new Set());
-      setManagedSkillsStatus("absent");
-      setManagedManifestWarning(null);
+      setManagedSkillsStatus("unknown");
+      setManagedManifestWarning("Managed skill ownership could not be verified.");
       setCatalogError(error instanceof Error ? error.message : "Failed to load skill catalog.");
     } finally {
       setCatalogLoading(false);
