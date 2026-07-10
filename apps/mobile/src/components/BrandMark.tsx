@@ -2,7 +2,7 @@ import { Image, View } from "react-native";
 
 import { AppText as Text } from "./AppText";
 
-const BRAND_MARK_SOURCE = require("../../../../assets/dev/tritonai-harness-dev-1024.png");
+const BRAND_MARK_SOURCE = require("../../../../assets/prod/tritonai-logo.png");
 
 export function BrandMark(props: { readonly compact?: boolean; readonly stageLabel?: string }) {
   const compact = props.compact ?? false;

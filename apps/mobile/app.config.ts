@@ -29,7 +29,7 @@ const VARIANT_CONFIG: Record<
     appName: "T3 Code Dev",
     scheme: "t3code-dev",
     appIcon: "./assets/dev-icon.png",
-    splashIcon: "./assets/dev-splash-icon.png",
+    splashIcon: "./assets/splash-icon.png",
     webFavicon: "./assets/dev-favicon.png",
     iosIcon: "./assets/icon-composer-dev.icon",
     androidIconForeground: "./assets/dev-android-icon-foreground.png",
