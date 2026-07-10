@@ -2,6 +2,9 @@ import type { InstallerUpdateState } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  getInstallerSettingsButtonLabel,
+  getInstallerSettingsDescription,
+  getInstallerSettingsVersion,
   getInstallerUpdateActionError,
   getInstallerUpdateButtonTooltip,
   isInstallerUpdateButtonDisabled,
@@ -27,6 +30,13 @@ describe("installer update sidebar behavior", () => {
     expect(shouldShowInstallerUpdateButton(state)).toBe(true);
     expect(resolveInstallerUpdateButtonAction(state)).toBe("open");
     expect(getInstallerUpdateButtonTooltip(state)).toContain("Harness, Codex, and managed skills");
+  });
+
+  it("keeps manual checks available while the sidebar remains passive", () => {
+    const current = { ...baseState, status: "up-to-date" } as const;
+    expect(resolveInstallerUpdateButtonAction(current)).toBe("check");
+    expect(isInstallerUpdateButtonDisabled(current)).toBe(false);
+    expect(shouldShowInstallerUpdateButton(current)).toBe(false);
   });
 
   it("offers check and open retries for the matching error context", () => {
@@ -68,7 +78,7 @@ describe("installer update sidebar behavior", () => {
     } as const;
     expect(shouldShowInstallerUpdateButton(state)).toBe(false);
     expect(resolveInstallerUpdateButtonAction(state)).toBe("none");
-    expect(isInstallerUpdateButtonDisabled(state)).toBe(false);
+    expect(isInstallerUpdateButtonDisabled(state)).toBe(true);
   });
 
   it("surfaces accepted open failures and ignores non-actions", () => {
@@ -97,5 +107,37 @@ describe("installer update sidebar behavior", () => {
       markerStatus: "missing",
     } as const;
     expect(getInstallerUpdateButtonTooltip(state)).toContain("could not be confirmed");
+  });
+});
+
+describe("installer update settings behavior", () => {
+  it("presents the Installer version as the product version and Harness as a component", () => {
+    const state = { ...baseState, status: "up-to-date" } as const;
+    expect(getInstallerSettingsVersion(state)).toBe("1.0.0");
+    expect(getInstallerSettingsDescription(state, "0.9.5")).toBe(
+      "Full Installer version. Harness component 0.9.5.",
+    );
+    expect(getInstallerSettingsButtonLabel(state)).toBe("Check for Updates");
+  });
+
+  it("makes an available full Installer update explicit", () => {
+    const state = {
+      ...baseState,
+      status: "available",
+      availableVersion: "1.1.0",
+    } as const;
+    expect(getInstallerSettingsDescription(state, "0.9.5")).toBe(
+      "Full Installer 1.1.0 is available. Harness component 0.9.5.",
+    );
+    expect(getInstallerSettingsButtonLabel(state)).toBe("Get Update 1.1.0");
+  });
+
+  it("does not mislabel the Harness version when the Installer marker is unavailable", () => {
+    expect(getInstallerSettingsVersion(null)).toBe("Unknown");
+    expect(getInstallerSettingsDescription(null, "0.9.5")).toBe(
+      "Full Installer version unavailable. Harness component 0.9.5.",
+    );
+    expect(getInstallerSettingsButtonLabel(null)).toBe("Updates Unavailable");
+    expect(isInstallerUpdateButtonDisabled(null)).toBe(true);
   });
 });

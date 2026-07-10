@@ -13,7 +13,7 @@ import * as ElectronMenu from "../electron/ElectronMenu.ts";
 import * as DesktopApplicationMenu from "./DesktopApplicationMenu.ts";
 import * as DesktopConfig from "../app/DesktopConfig.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
-import * as DesktopUpdates from "../updates/DesktopUpdates.ts";
+import * as InstallerUpdates from "../updates/InstallerUpdates.ts";
 import * as DesktopWindow from "./DesktopWindow.ts";
 
 const environmentInput = {
@@ -55,16 +55,12 @@ const electronDialogLayer = Layer.succeed(ElectronDialog.ElectronDialog, {
   showErrorBox: () => Effect.void,
 } satisfies ElectronDialog.ElectronDialog["Service"]);
 
-const desktopUpdatesLayer = Layer.succeed(DesktopUpdates.DesktopUpdates, {
+const installerUpdatesLayer = Layer.succeed(InstallerUpdates.InstallerUpdates, {
   getState: Effect.die("unexpected getState"),
-  emitState: Effect.void,
-  disabledReason: Effect.succeed(Option.none()),
   configure: Effect.void,
-  setChannel: () => Effect.die("unexpected setChannel"),
-  check: () => Effect.die("unexpected check"),
-  download: Effect.die("unexpected download"),
-  install: Effect.die("unexpected install"),
-} satisfies DesktopUpdates.DesktopUpdates["Service"]);
+  check: Effect.die("unexpected check"),
+  open: Effect.die("unexpected open"),
+} satisfies InstallerUpdates.InstallerUpdates["Service"]);
 
 const makeDesktopWindowLayer = (selectedAction: Deferred.Deferred<string>) =>
   Layer.succeed(DesktopWindow.DesktopWindow, {
@@ -105,7 +101,7 @@ describe("DesktopApplicationMenu", () => {
           DesktopApplicationMenu.layer.pipe(
             Layer.provideMerge(makeElectronMenuLayer(applicationMenuTemplate)),
             Layer.provideMerge(makeDesktopWindowLayer(selectedAction)),
-            Layer.provideMerge(desktopUpdatesLayer),
+            Layer.provideMerge(installerUpdatesLayer),
             Layer.provideMerge(electronDialogLayer),
             Layer.provideMerge(electronAppLayer),
             Layer.provideMerge(
@@ -132,6 +128,82 @@ describe("DesktopApplicationMenu", () => {
 
       settingsClick({} as Electron.MenuItem, {} as Electron.BrowserWindow, {} as KeyboardEvent);
       assert.equal(yield* Deferred.await(selectedAction), "open-settings");
+    }),
+  );
+
+  it.effect("checks the full Installer version from the native menu", () =>
+    Effect.gen(function* () {
+      const selectedAction = yield* Deferred.make<string>();
+      const applicationMenuTemplate =
+        yield* Deferred.make<readonly Electron.MenuItemConstructorOptions[]>();
+      const shownMessage = yield* Deferred.make<Electron.MessageBoxOptions>();
+      const checkResult = {
+        checked: true,
+        state: {
+          enabled: true,
+          status: "up-to-date",
+          installedVersion: "1.2.3",
+          availableVersion: null,
+          markerStatus: "valid",
+          checkedAt: "2026-07-10T12:00:00.000Z",
+          message: null,
+          errorContext: null,
+          canRetry: false,
+        },
+      } as const;
+      const updateLayer = Layer.succeed(InstallerUpdates.InstallerUpdates, {
+        getState: Effect.succeed(checkResult.state),
+        configure: Effect.void,
+        check: Effect.succeed(checkResult),
+        open: Effect.die("unexpected open"),
+      } satisfies InstallerUpdates.InstallerUpdates["Service"]);
+      const dialogLayer = Layer.succeed(ElectronDialog.ElectronDialog, {
+        pickFolder: () => Effect.succeed(Option.none()),
+        confirm: () => Effect.succeed(false),
+        showMessageBox: (options) =>
+          Deferred.succeed(shownMessage, options).pipe(
+            Effect.as({ response: 0, checkboxChecked: false }),
+          ),
+        showErrorBox: () => Effect.void,
+      } satisfies ElectronDialog.ElectronDialog["Service"]);
+
+      yield* Effect.gen(function* () {
+        const menu = yield* DesktopApplicationMenu.DesktopApplicationMenu;
+        yield* menu.configure;
+      }).pipe(
+        Effect.provide(
+          DesktopApplicationMenu.layer.pipe(
+            Layer.provideMerge(makeElectronMenuLayer(applicationMenuTemplate)),
+            Layer.provideMerge(makeDesktopWindowLayer(selectedAction)),
+            Layer.provideMerge(updateLayer),
+            Layer.provideMerge(dialogLayer),
+            Layer.provideMerge(electronAppLayer),
+            Layer.provideMerge(
+              DesktopEnvironment.layer(environmentInput).pipe(
+                Layer.provide(Layer.mergeAll(NodeServices.layer, DesktopConfig.layerTest({}))),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      const template = yield* Deferred.await(applicationMenuTemplate);
+      const helpMenu = template.find((item) => item.role === "help");
+      assert.isDefined(helpMenu);
+      if (!Array.isArray(helpMenu.submenu)) {
+        throw new Error("Expected Help menu submenu to be an array.");
+      }
+      const updateItem = helpMenu.submenu.find((item) => item.label === "Check for Updates...");
+      assert.isDefined(updateItem);
+      const updateClick = updateItem.click;
+      if (typeof updateClick !== "function") {
+        throw new Error("Expected update menu item to have a click handler.");
+      }
+
+      updateClick({} as Electron.MenuItem, {} as Electron.BrowserWindow, {} as KeyboardEvent);
+      const message = yield* Deferred.await(shownMessage);
+      assert.equal(message.title, "You're up to date!");
+      assert.equal(message.message, "TritonAI 1.2.3 is currently the newest version available.");
     }),
   );
 });

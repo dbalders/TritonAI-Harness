@@ -307,10 +307,13 @@ export function createInstallerUpdateController(options: InstallerUpdateControll
     try {
       // Resolve support before making a network request.
       expectedInstallerAssetName("0.0.0", options.platform, options.arch);
-      const [rawRelease, marker] = await Promise.all([
-        options.fetchRelease(),
-        options.readMarker(),
-      ]);
+      const marker = await options.readMarker();
+      await setState({
+        ...state,
+        installedVersion: marker.version,
+        markerStatus: marker.status,
+      });
+      const rawRelease = await options.fetchRelease();
       const release = parseStableInstallerRelease(rawRelease);
       selectedAsset = selectInstallerReleaseAsset(release, options.platform, options.arch);
       const checkedAt = nowIso();

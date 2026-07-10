@@ -23,17 +23,19 @@ import * as Equal from "effect/Equal";
 import * as Result from "effect/Result";
 import { APP_VERSION } from "../../branding";
 import {
-  canCheckForUpdate,
-  getDesktopUpdateButtonTooltip,
-  getDesktopUpdateInstallConfirmationMessage,
-  isDesktopUpdateButtonDisabled,
-  resolveDesktopUpdateButtonAction,
-} from "../../components/desktopUpdate.logic";
+  getInstallerSettingsButtonLabel,
+  getInstallerSettingsDescription,
+  getInstallerSettingsVersion,
+  getInstallerUpdateActionError,
+  getInstallerUpdateButtonTooltip,
+  isInstallerUpdateButtonDisabled,
+  resolveInstallerUpdateButtonAction,
+} from "../../components/installerUpdate.logic";
 import { isElectron } from "../../env";
 import { DEFAULT_THEME, isTheme, useTheme, type Theme } from "../../hooks/useTheme";
 import { usePrimarySettings, useUpdatePrimarySettings } from "../../hooks/useSettings";
 import { useThreadActions } from "../../hooks/useThreadActions";
-import { useDesktopUpdateState } from "../../state/desktopUpdate";
+import { useInstallerUpdateState } from "../../state/installerUpdate";
 import { ensureLocalApi, readLocalApi } from "../../localApi";
 import {
   primaryServerObservabilityAtom,
@@ -138,67 +140,77 @@ function ProviderLastChecked({ lastCheckedAt }: { lastCheckedAt: string | null }
   );
 }
 
-function AboutVersionTitle() {
+function AboutVersionTitle({ version }: { readonly version: string }) {
   return (
     <span className="inline-flex items-center gap-2">
       <span>Version</span>
-      <code className="text-[11px] font-medium text-muted-foreground">{APP_VERSION}</code>
+      <code className="text-[11px] font-medium text-muted-foreground">{version}</code>
     </span>
   );
 }
 
 function AboutVersionSection() {
-  const updateState = useDesktopUpdateState();
+  const updateState = useInstallerUpdateState();
 
   const handleButtonClick = useCallback(() => {
     const bridge = window.desktopBridge;
-    if (!bridge) return;
+    if (!bridge || !updateState) return;
 
-    const action = updateState ? resolveDesktopUpdateButtonAction(updateState) : "none";
+    const action = resolveInstallerUpdateButtonAction(updateState);
 
-    if (action === "download") {
-      void bridge.downloadUpdate().catch((error: unknown) => {
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Could not download update",
-            description: error instanceof Error ? error.message : "Download failed.",
-          }),
-        );
-      });
-      return;
-    }
-
-    if (action === "install") {
-      const confirmed = window.confirm(
-        getDesktopUpdateInstallConfirmationMessage(
-          updateState ?? { availableVersion: null, downloadedVersion: null },
-        ),
-      );
-      if (!confirmed) return;
-      void bridge.installUpdate().catch((error: unknown) => {
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Could not install update",
-            description: error instanceof Error ? error.message : "Install failed.",
-          }),
-        );
-      });
-      return;
-    }
-
-    if (typeof bridge.checkForUpdate !== "function") return;
-    void bridge
-      .checkForUpdate()
-      .then((result) => {
-        if (!result.checked) {
+    if (action === "open") {
+      void bridge
+        .openInstallerUpdate()
+        .then((result) => {
+          if (result.completed) {
+            toastManager.add({
+              type: "success",
+              title: "Installer download opened",
+              description:
+                "Run the full TritonAI Installer to update Harness, Codex, and managed skills.",
+            });
+            return;
+          }
+          const actionError = getInstallerUpdateActionError(result);
+          if (!actionError) return;
           toastManager.add(
             stackedThreadToast({
               type: "error",
-              title: "Could not check for updates",
-              description:
-                result.state.message ?? "Automatic updates are not available in this build.",
+              title: "Could not open installer download",
+              description: actionError,
+            }),
+          );
+        })
+        .catch((error: unknown) => {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Could not open installer download",
+              description: error instanceof Error ? error.message : "An unexpected error occurred.",
+            }),
+          );
+        });
+      return;
+    }
+
+    if (action !== "check") return;
+    void bridge
+      .checkInstallerUpdate()
+      .then((result) => {
+        if (result.state.status === "up-to-date") {
+          toastManager.add({
+            type: "success",
+            title: "TritonAI is up to date",
+            description: result.state.installedVersion
+              ? `Full Installer ${result.state.installedVersion} is the latest version.`
+              : "The latest full Installer is already installed.",
+          });
+        } else if (result.state.status === "error") {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Could not check for installer updates",
+              description: result.state.message ?? "Try again after checking your network.",
             }),
           );
         }
@@ -207,36 +219,23 @@ function AboutVersionSection() {
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Could not check for updates",
+            title: "Could not check for installer updates",
             description: error instanceof Error ? error.message : "Update check failed.",
           }),
         );
       });
   }, [updateState]);
 
-  const action = updateState ? resolveDesktopUpdateButtonAction(updateState) : "none";
-  const buttonTooltip = updateState ? getDesktopUpdateButtonTooltip(updateState) : null;
-  const buttonDisabled =
-    action === "none"
-      ? !canCheckForUpdate(updateState)
-      : isDesktopUpdateButtonDisabled(updateState);
-
-  const actionLabel: Record<string, string> = { download: "Download", install: "Install" };
-  const statusLabel: Record<string, string> = {
-    checking: "Checking…",
-    downloading: "Downloading…",
-    "up-to-date": "Up to Date",
-  };
-  const buttonLabel =
-    actionLabel[action] ?? statusLabel[updateState?.status ?? ""] ?? "Check for Updates";
-  const description =
-    action === "download" || action === "install"
-      ? "Update available."
-      : "Current version of the application.";
+  const action = updateState ? resolveInstallerUpdateButtonAction(updateState) : "none";
+  const buttonTooltip = updateState ? getInstallerUpdateButtonTooltip(updateState) : null;
+  const buttonDisabled = isInstallerUpdateButtonDisabled(updateState);
+  const buttonLabel = getInstallerSettingsButtonLabel(updateState);
+  const description = getInstallerSettingsDescription(updateState, APP_VERSION);
+  const version = getInstallerSettingsVersion(updateState);
 
   return (
     <SettingsRow
-      title={<AboutVersionTitle />}
+      title={<AboutVersionTitle version={version} />}
       description={description}
       control={
         <Tooltip>
@@ -244,7 +243,7 @@ function AboutVersionSection() {
             render={
               <Button
                 size="xs"
-                variant={action === "install" ? "default" : "outline"}
+                variant={action === "open" ? "default" : "outline"}
                 disabled={buttonDisabled}
                 onClick={handleButtonClick}
               >
@@ -712,7 +711,7 @@ export function GeneralSettingsPanel() {
           <AboutVersionSection />
         ) : (
           <SettingsRow
-            title={<AboutVersionTitle />}
+            title={<AboutVersionTitle version={APP_VERSION} />}
             description="Current version of the application."
           />
         )}

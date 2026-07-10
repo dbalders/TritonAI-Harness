@@ -223,6 +223,22 @@ describe("installer update controller", () => {
     });
     expect((await failingCheck.check()).state.message).not.toContain("secret upstream detail");
 
+    const currentButOffline = createInstallerUpdateController({
+      enabled: true,
+      platform: "darwin",
+      arch: "arm64",
+      readMarker: async () => ({ status: "valid", version: "1.5.0" }),
+      fetchRelease: async () => {
+        throw new Error("offline");
+      },
+      openExternal: async () => true,
+    });
+    expect((await currentButOffline.check()).state).toMatchObject({
+      status: "error",
+      installedVersion: "1.5.0",
+      markerStatus: "valid",
+    });
+
     const failingOpen = createInstallerUpdateController({
       enabled: true,
       platform: "darwin",
