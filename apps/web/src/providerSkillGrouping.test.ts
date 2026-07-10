@@ -5,7 +5,11 @@ import type {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { groupProviderSkills, type ProviderSkillRow } from "./providerSkillGrouping";
+import {
+  groupProviderSkills,
+  isProviderSkillRemovalBlocked,
+  type ProviderSkillRow,
+} from "./providerSkillGrouping";
 
 const provider = {
   instanceId: "codex" as ProviderInstanceId,
@@ -59,5 +63,12 @@ describe("groupProviderSkills", () => {
 
     expect(result.communityItems).toEqual([]);
     expect(result.managedOnlyRows).toHaveLength(1);
+  });
+
+  it("blocks removal while managed ownership is invalid or unknown", () => {
+    expect(isProviderSkillRemovalBlocked("invalid")).toBe(true);
+    expect(isProviderSkillRemovalBlocked("unknown")).toBe(true);
+    expect(isProviderSkillRemovalBlocked("absent")).toBe(false);
+    expect(isProviderSkillRemovalBlocked("valid")).toBe(false);
   });
 });

@@ -115,10 +115,13 @@ export const ServerProviderSkillCatalog = Schema.Struct({
 });
 export type ServerProviderSkillCatalog = typeof ServerProviderSkillCatalog.Type;
 
+export const ServerManagedSkillsStatus = Schema.Literals(["absent", "invalid", "unknown", "valid"]);
+export type ServerManagedSkillsStatus = typeof ServerManagedSkillsStatus.Type;
+
 export const ServerListProviderSkillCatalogResult = Schema.Struct({
   catalog: Schema.optional(ServerProviderSkillCatalog),
   managedSkillNames: Schema.Array(TrimmedNonEmptyString),
-  managedSkillsStatus: Schema.Literals(["absent", "invalid", "valid"]),
+  managedSkillsStatus: ServerManagedSkillsStatus,
   unavailableReason: Schema.optional(TrimmedNonEmptyString),
   managedManifestWarning: Schema.optional(TrimmedNonEmptyString),
 });

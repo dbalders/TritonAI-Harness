@@ -4,9 +4,19 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
-import { loadManagedSkillManifest } from "./managedSkillManifest.ts";
+import {
+  loadManagedSkillManifest,
+  managedSkillManifestBlocksMutation,
+} from "./managedSkillManifest.ts";
 
 describe("loadManagedSkillManifest", () => {
+  it("blocks mutations when ownership is invalid or unknown", () => {
+    expect(managedSkillManifestBlocksMutation("invalid")).toBe(true);
+    expect(managedSkillManifestBlocksMutation("unknown")).toBe(true);
+    expect(managedSkillManifestBlocksMutation("absent")).toBe(false);
+    expect(managedSkillManifestBlocksMutation("valid")).toBe(false);
+  });
+
   it.effect("loads, deduplicates, and sorts installer-owned secure skill names", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -31,7 +41,7 @@ describe("loadManagedSkillManifest", () => {
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("preserves backward compatibility when the manifest is absent", () =>
+  it.effect("reports known absence when the manifest does not exist", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const skillsDirectory = yield* fs.makeTempDirectory({ prefix: "managed-skills-test-" });

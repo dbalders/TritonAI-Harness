@@ -145,14 +145,18 @@ export function expectedInstallerAssetName(
     throw new Error("The latest TritonAI Installer version was invalid.");
   }
   if (platform === "darwin" && arch === "arm64") {
-    return `UCSD-AI-Tools-Installer-${normalizedVersion}-arm64.dmg`;
+    return `TritonAI-Installer-${normalizedVersion}-arm64.dmg`;
   }
   if (platform === "win32" && arch === "x64") {
-    return `UCSD-AI-Tools-Installer-Setup-${normalizedVersion}-x64.exe`;
+    return `TritonAI-Installer-Setup-${normalizedVersion}-x64.exe`;
   }
   throw new Error(
     `TritonAI Installer updates are not available for ${platform}/${arch}. Use a supported macOS arm64 or Windows x64 computer.`,
   );
+}
+
+export function isSupportedInstallerTarget(platform: NodeJS.Platform, arch: string): boolean {
+  return (platform === "darwin" && arch === "arm64") || (platform === "win32" && arch === "x64");
 }
 
 function validateInstallerAssetUrl(
@@ -264,7 +268,9 @@ export interface InstallerUpdateControllerOptions {
 }
 
 export function createInstallerUpdateController(options: InstallerUpdateControllerOptions) {
-  let state = createInitialState(options.enabled);
+  let state = createInitialState(
+    options.enabled && isSupportedInstallerTarget(options.platform, options.arch),
+  );
   let selectedAsset: InstallerReleaseAsset | null = null;
   let checkInFlight = false;
   let openInFlight = false;

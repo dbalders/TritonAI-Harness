@@ -17,6 +17,7 @@ import {
   ServerRemoveProviderSkillInput,
   ServerSetProviderSkillEnabledInput,
 } from "@t3tools/contracts";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -40,7 +41,10 @@ import {
   installProviderSkill,
   rollbackProviderSkillInstall,
 } from "./installProviderSkill.ts";
-import { loadManagedSkillManifest } from "./managedSkillManifest.ts";
+import {
+  loadManagedSkillManifest,
+  managedSkillManifestBlocksMutation,
+} from "./managedSkillManifest.ts";
 import { discoverPublicSkillCatalog } from "./publicSkillRepository.ts";
 import {
   removeProviderSkillFolder,
@@ -215,7 +219,12 @@ const resolveCodexManagementTarget = Effect.fn("resolveCodexManagementTarget")(f
       pluginError(`Codex settings were invalid: ${schemaIssue(cause)}`, cause),
     ),
   );
-  const environment = mergeProviderInstanceEnvironment(instanceConfig?.environment);
+  const hostPlatform = yield* HostProcessPlatform;
+  const environment = mergeProviderInstanceEnvironment(
+    instanceConfig?.environment,
+    process.env,
+    hostPlatform,
+  );
   const configuredHomePath = codexSettings.homePath.trim();
   const managedConfig = {
     ...codexSettings,
@@ -529,12 +538,16 @@ export const installCodexProviderSkill = Effect.fn("installCodexProviderSkill")(
 });
 
 export const listProviderSkillCatalog = Effect.fn("listProviderSkillCatalog")(function* () {
-  const target = yield* resolveCodexManagementTarget().pipe(Effect.option);
+  const target = yield* resolveCodexManagementTarget().pipe(Effect.result);
   const path = yield* Path.Path;
   const managed =
-    target._tag === "Some"
-      ? yield* loadManagedSkillManifest(path.join(target.value.sharedHomePath, "skills"))
-      : { skillNames: [], status: "absent" as const };
+    target._tag === "Success"
+      ? yield* loadManagedSkillManifest(path.join(target.success.sharedHomePath, "skills"))
+      : {
+          skillNames: [],
+          status: "unknown" as const,
+          warning: "The managed secure skills manifest could not be located.",
+        };
   const catalog = yield* discoverPublicSkillCatalog().pipe(Effect.result);
 
   return {
@@ -565,9 +578,9 @@ export const removeCodexProviderSkill = Effect.fn("removeCodexProviderSkill")(fu
   const providers = yield* registry.getProviders;
   const path = yield* Path.Path;
   const managed = yield* loadManagedSkillManifest(path.join(target.sharedHomePath, "skills"));
-  if (managed.status === "invalid") {
+  if (managedSkillManifestBlocksMutation(managed.status)) {
     return yield* skillInstallError(
-      "The TritonAI managed-skills manifest is invalid, so skill removal is disabled until it is repaired.",
+      "The TritonAI managed-skills manifest could not be verified, so skill removal is disabled until it is repaired.",
     );
   }
   const requestedSkill = providers

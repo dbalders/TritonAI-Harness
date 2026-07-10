@@ -17,8 +17,8 @@ function release(version: string, assets?: readonly Record<string, unknown>[]) {
     tag_name: version,
     assets: assets ?? [
       {
-        name: `UCSD-AI-Tools-Installer-${normalized}-arm64.dmg`,
-        browser_download_url: `https://github.com/dbalders/TritonAI-Installer/releases/download/v${normalized}/UCSD-AI-Tools-Installer-${normalized}-arm64.dmg`,
+        name: `TritonAI-Installer-${normalized}-arm64.dmg`,
+        browser_download_url: `https://github.com/dbalders/TritonAI-Installer/releases/download/v${normalized}/TritonAI-Installer-${normalized}-arm64.dmg`,
       },
     ],
   };
@@ -42,16 +42,16 @@ describe("installer version comparison and release selection", () => {
   it("selects only the exact full installer for each supported target", () => {
     const macRelease = parseStableInstallerRelease(release("1.5.0"));
     expect(selectInstallerReleaseAsset(macRelease, "darwin", "arm64").name).toBe(
-      "UCSD-AI-Tools-Installer-1.5.0-arm64.dmg",
+      "TritonAI-Installer-1.5.0-arm64.dmg",
     );
 
-    const windowsName = "UCSD-AI-Tools-Installer-Setup-1.5.0-x64.exe";
+    const windowsName = "TritonAI-Installer-Setup-1.5.0-x64.exe";
     const windowsRelease = parseStableInstallerRelease(
       release("1.5.0", [
         {
-          name: "UCSD-AI-Tools-Installer-1.5.0-x64-portable.exe",
+          name: "TritonAI-Installer-1.5.0-x64-portable.exe",
           browser_download_url:
-            "https://github.com/dbalders/TritonAI-Installer/releases/download/v1.5.0/UCSD-AI-Tools-Installer-1.5.0-x64-portable.exe",
+            "https://github.com/dbalders/TritonAI-Installer/releases/download/v1.5.0/TritonAI-Installer-1.5.0-x64-portable.exe",
         },
         {
           name: `${windowsName}.blockmap`,
@@ -72,17 +72,54 @@ describe("installer version comparison and release selection", () => {
     );
     const missing = parseStableInstallerRelease(release("1.5.0", []));
     expect(() => selectInstallerReleaseAsset(missing, "darwin", "arm64")).toThrow(
-      "missing UCSD-AI-Tools-Installer-1.5.0-arm64.dmg",
+      "missing TritonAI-Installer-1.5.0-arm64.dmg",
     );
     const unsafe = parseStableInstallerRelease(
       release("1.5.0", [
         {
-          name: "UCSD-AI-Tools-Installer-1.5.0-arm64.dmg",
-          browser_download_url: "https://example.com/UCSD-AI-Tools-Installer-1.5.0-arm64.dmg",
+          name: "TritonAI-Installer-1.5.0-arm64.dmg",
+          browser_download_url: "https://example.com/TritonAI-Installer-1.5.0-arm64.dmg",
         },
       ]),
     );
     expect(() => selectInstallerReleaseAsset(unsafe, "darwin", "arm64")).toThrow("missing");
+
+    const wrongPlatform = parseStableInstallerRelease(
+      release("1.5.0", [
+        {
+          name: "TritonAI-Installer-Setup-1.5.0-x64.exe",
+          browser_download_url:
+            "https://github.com/dbalders/TritonAI-Installer/releases/download/v1.5.0/TritonAI-Installer-Setup-1.5.0-x64.exe",
+        },
+      ]),
+    );
+    expect(() => selectInstallerReleaseAsset(wrongPlatform, "darwin", "arm64")).toThrow(
+      "missing TritonAI-Installer-1.5.0-arm64.dmg",
+    );
+
+    for (const browser_download_url of [
+      "https://github.com.evil.example/dbalders/TritonAI-Installer/releases/download/v1.5.0/TritonAI-Installer-1.5.0-arm64.dmg",
+      "https://github.com/dbalders/TritonAI-Installer/releases/download/v1.5.0/TritonAI-Installer-1.5.0-arm64.dmg?redirect=evil",
+      "https://github.com/dbalders/TritonAI-Installer/releases/download/v1.5.0/TritonAI-Installer-1.5.0-arm64.dmg%2F..%2Fevil.dmg",
+    ]) {
+      const malicious = parseStableInstallerRelease(
+        release("1.5.0", [{ name: "TritonAI-Installer-1.5.0-arm64.dmg", browser_download_url }]),
+      );
+      expect(() => selectInstallerReleaseAsset(malicious, "darwin", "arm64")).toThrow("missing");
+    }
+
+    const legacy = parseStableInstallerRelease(
+      release("1.5.0", [
+        {
+          name: "UCSD-AI-Tools-Installer-1.5.0-arm64.dmg",
+          browser_download_url:
+            "https://github.com/dbalders/TritonAI-Installer/releases/download/v1.5.0/UCSD-AI-Tools-Installer-1.5.0-arm64.dmg",
+        },
+      ]),
+    );
+    expect(() => selectInstallerReleaseAsset(legacy, "darwin", "arm64")).toThrow(
+      "missing TritonAI-Installer-1.5.0-arm64.dmg",
+    );
   });
 });
 
@@ -147,7 +184,7 @@ describe("installer update controller", () => {
     const action = await controller.open();
     expect(action).toMatchObject({ accepted: true, completed: true });
     expect(openExternal).toHaveBeenCalledWith(
-      "https://github.com/dbalders/TritonAI-Installer/releases/download/v1.5.0/UCSD-AI-Tools-Installer-1.5.0-arm64.dmg",
+      "https://github.com/dbalders/TritonAI-Installer/releases/download/v1.5.0/TritonAI-Installer-1.5.0-arm64.dmg",
     );
     expect(action.state.message).toContain("Harness, Codex, and managed skills");
   });
@@ -212,11 +249,11 @@ describe("installer update controller", () => {
       fetchRelease,
       openExternal: async () => true,
     });
-    expect((await controller.check()).state).toMatchObject({
-      status: "error",
-      message: expect.stringContaining("darwin/x64"),
-      canRetry: false,
+    expect(controller.getState()).toMatchObject({
+      enabled: false,
+      status: "disabled",
     });
+    expect((await controller.check()).checked).toBe(false);
     expect(fetchRelease).not.toHaveBeenCalled();
   });
 });

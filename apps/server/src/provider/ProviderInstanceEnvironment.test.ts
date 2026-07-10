@@ -7,15 +7,41 @@ describe("mergeProviderInstanceEnvironment", () => {
     expect(
       mergeProviderInstanceEnvironment(
         [
-          { name: "OPENROUTER_API_KEY", value: "sk-or-test", sensitive: true },
-          { name: "ANTHROPIC_API_KEY", value: "", sensitive: false },
+          { name: "TOOL_SETTING", value: "configured", sensitive: true },
+          { name: "EMPTY_SETTING", value: "", sensitive: false },
         ],
-        { ANTHROPIC_API_KEY: "inherited", PATH: "/bin" },
+        { EMPTY_SETTING: "inherited", PATH: "/bin" },
       ),
     ).toMatchObject({
-      OPENROUTER_API_KEY: "sk-or-test",
-      ANTHROPIC_API_KEY: "",
+      TOOL_SETTING: "configured",
+      EMPTY_SETTING: "",
       PATH: "/bin",
     });
+  });
+
+  it("deduplicates Windows environment keys case-insensitively", () => {
+    expect(
+      mergeProviderInstanceEnvironment(
+        [{ name: "PATH", value: "C:\\Users\\tester\\AppData\\Roaming\\npm", sensitive: false }],
+        {
+          Path: "C:\\Windows\\System32",
+          PATHEXT: ".COM;.EXE;.BAT;.CMD",
+        },
+        "win32",
+      ),
+    ).toEqual({
+      PATH: "C:\\Users\\tester\\AppData\\Roaming\\npm",
+      PATHEXT: ".COM;.EXE;.BAT;.CMD",
+    });
+  });
+
+  it("preserves differently-cased keys on non-Windows hosts", () => {
+    expect(
+      mergeProviderInstanceEnvironment(
+        [{ name: "PATH", value: "/custom/bin", sensitive: false }],
+        { Path: "/inherited/bin" },
+        "darwin",
+      ),
+    ).toEqual({ Path: "/inherited/bin", PATH: "/custom/bin" });
   });
 });

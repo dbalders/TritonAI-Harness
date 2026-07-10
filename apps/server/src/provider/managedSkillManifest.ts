@@ -19,8 +19,14 @@ const decodeManagedSkillManifest = Schema.decodeUnknownEffect(
 
 export interface ManagedSkillManifestResult {
   readonly skillNames: ReadonlyArray<string>;
-  readonly status: "absent" | "invalid" | "valid";
+  readonly status: "absent" | "invalid" | "unknown" | "valid";
   readonly warning?: string;
+}
+
+export function managedSkillManifestBlocksMutation(
+  status: ManagedSkillManifestResult["status"],
+): boolean {
+  return status === "invalid" || status === "unknown";
 }
 
 export const loadManagedSkillManifest = Effect.fn("loadManagedSkillManifest")(function* (
@@ -29,8 +35,15 @@ export const loadManagedSkillManifest = Effect.fn("loadManagedSkillManifest")(fu
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const manifestPath = path.join(skillsDirectory, MANIFEST_FILE_NAME);
-  const exists = yield* fs.exists(manifestPath).pipe(Effect.orElseSucceed(() => false));
-  if (!exists) {
+  const exists = yield* fs.exists(manifestPath).pipe(Effect.result);
+  if (exists._tag === "Failure") {
+    return {
+      skillNames: EMPTY_MANAGED_SKILL_NAMES,
+      status: "unknown",
+      warning: "The managed secure skills manifest could not be inspected.",
+    } satisfies ManagedSkillManifestResult;
+  }
+  if (!exists.success) {
     return {
       skillNames: EMPTY_MANAGED_SKILL_NAMES,
       status: "absent",
@@ -42,12 +55,14 @@ export const loadManagedSkillManifest = Effect.fn("loadManagedSkillManifest")(fu
     Effect.orElseSucceed(() => false),
   );
   const info = yield* fs.stat(manifestPath).pipe(Effect.result);
-  if (
-    isLink ||
-    info._tag === "Failure" ||
-    info.success.type !== "File" ||
-    info.success.size > MAX_MANIFEST_BYTES
-  ) {
+  if (info._tag === "Failure") {
+    return {
+      skillNames: EMPTY_MANAGED_SKILL_NAMES,
+      status: "unknown",
+      warning: "The managed secure skills manifest could not be inspected.",
+    } satisfies ManagedSkillManifestResult;
+  }
+  if (isLink || info.success.type !== "File" || info.success.size > MAX_MANIFEST_BYTES) {
     return {
       skillNames: EMPTY_MANAGED_SKILL_NAMES,
       status: "invalid",
@@ -59,7 +74,7 @@ export const loadManagedSkillManifest = Effect.fn("loadManagedSkillManifest")(fu
   if (content._tag === "Failure") {
     return {
       skillNames: EMPTY_MANAGED_SKILL_NAMES,
-      status: "invalid",
+      status: "unknown",
       warning: "The managed secure skills manifest could not be read.",
     } satisfies ManagedSkillManifestResult;
   }
