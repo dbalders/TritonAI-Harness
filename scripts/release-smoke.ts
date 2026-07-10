@@ -6,6 +6,7 @@ import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 import * as Console from "effect/Console";
 import * as Effect from "effect/Effect";
+import { parse } from "yaml";
 
 const repoRoot = NodePath.resolve(NodePath.dirname(NodeURL.fileURLToPath(import.meta.url)), "..");
 
@@ -33,6 +34,24 @@ const workspaceFiles = [
   "packages/effect-codex-app-server/package.json",
   "scripts/package.json",
 ] as const;
+
+type WorkflowStep = {
+  readonly id?: string;
+  readonly name?: string;
+  readonly if?: string;
+  readonly run?: string;
+};
+
+type WorkflowJob = {
+  readonly if?: string;
+  readonly needs?: string | readonly string[];
+  readonly outputs?: Readonly<Record<string, string>>;
+  readonly steps?: readonly WorkflowStep[];
+};
+
+type Workflow = {
+  readonly jobs?: Readonly<Record<string, WorkflowJob>>;
+};
 
 function copyWorkspaceManifestFixture(targetRoot: string): void {
   for (const relativePath of workspaceFiles) {
@@ -185,10 +204,186 @@ function assertMissing(path: string, message: string): void {
   }
 }
 
+function getWorkflowJob(workflow: Workflow, jobId: string): WorkflowJob {
+  const job = workflow.jobs?.[jobId];
+  if (job === undefined) {
+    throw new Error(`Expected workflow job ${jobId}.`);
+  }
+  return job;
+}
+
+function getWorkflowStep(job: WorkflowJob, stepId: string): WorkflowStep {
+  const step = job.steps?.find((candidate) => candidate.id === stepId);
+  if (step === undefined) {
+    throw new Error(`Expected workflow step ${stepId}.`);
+  }
+  return step;
+}
+
+function getWorkflowStepByName(job: WorkflowJob, name: string): WorkflowStep {
+  const step = job.steps?.find((candidate) => candidate.name === name);
+  if (step === undefined) {
+    throw new Error(`Expected workflow step named ${name}.`);
+  }
+  return step;
+}
+
+function runConfigurationGate(
+  step: WorkflowStep,
+  outputPath: string,
+  environment: Readonly<Record<string, string>>,
+  expected: "true" | "false",
+): void {
+  if (step.run === undefined) {
+    throw new Error("Expected configuration gate to have a run script.");
+  }
+
+  NodeFS.writeFileSync(outputPath, "");
+  NodeChildProcess.execFileSync("bash", ["-c", step.run], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      ...environment,
+      GITHUB_OUTPUT: outputPath,
+    },
+    stdio: "pipe",
+  });
+
+  const output = NodeFS.readFileSync(outputPath, "utf8");
+  assertContains(
+    output,
+    `configured=${expected}`,
+    `Expected configuration gate to resolve configured=${expected}.`,
+  );
+}
+
+function assertOptionalT3ConnectWorkflows(targetRoot: string): void {
+  const releaseWorkflow = parse(
+    NodeFS.readFileSync(NodePath.resolve(repoRoot, ".github/workflows/release.yml"), "utf8"),
+  ) as Workflow;
+  const relayConfigJob = getWorkflowJob(releaseWorkflow, "relay_public_config");
+  const releaseConfigStep = getWorkflowStep(relayConfigJob, "relay_config");
+
+  if (relayConfigJob.outputs?.configured !== "${{ steps.relay_config.outputs.configured }}") {
+    throw new Error("Expected release workflow to expose the T3 Connect configuration state.");
+  }
+
+  const releaseEnvironment = {
+    CLOUDFLARE_ACCOUNT_ID: "",
+    CLOUDFLARE_API_TOKEN: "",
+    RELAY_DOMAIN: "",
+    RELAY_API_ZONE_NAME: "",
+    CLERK_PUBLISHABLE_KEY: "",
+    CLERK_JWT_TEMPLATE: "",
+    CLERK_CLI_OAUTH_CLIENT_ID: "",
+  };
+  const releaseOutputPath = NodePath.resolve(targetRoot, "release-config-output");
+  runConfigurationGate(releaseConfigStep, releaseOutputPath, releaseEnvironment, "false");
+  runConfigurationGate(
+    releaseConfigStep,
+    releaseOutputPath,
+    {
+      ...releaseEnvironment,
+      CLOUDFLARE_ACCOUNT_ID: "account",
+      CLOUDFLARE_API_TOKEN: "token",
+      RELAY_API_ZONE_NAME: "example.com",
+      CLERK_PUBLISHABLE_KEY: "pk_test_example",
+      CLERK_JWT_TEMPLATE: "t3code",
+      CLERK_CLI_OAUTH_CLIENT_ID: "client",
+    },
+    "true",
+  );
+
+  for (const stepName of [
+    "Checkout",
+    "Setup Vite+",
+    "Read production relay tracing config",
+    "Upload relay client tracing config",
+    "Resolve production relay public config",
+  ]) {
+    assertContains(
+      getWorkflowStepByName(relayConfigJob, stepName).if ?? "",
+      "steps.relay_config.outputs.configured == 'true'",
+      `Expected release step ${stepName} to skip when T3 Connect is not configured.`,
+    );
+  }
+
+  for (const jobId of ["build", "publish_cli"]) {
+    const job = getWorkflowJob(releaseWorkflow, jobId);
+    for (const stepName of [
+      "Download relay client tracing config",
+      "Load relay client tracing config",
+    ]) {
+      assertContains(
+        getWorkflowStepByName(job, stepName).if ?? "",
+        "needs.relay_public_config.outputs.configured == 'true'",
+        `Expected ${jobId} to skip ${stepName} when T3 Connect is not configured.`,
+      );
+    }
+  }
+
+  assertContains(
+    getWorkflowJob(releaseWorkflow, "deploy_web").if ?? "",
+    "needs.relay_public_config.outputs.configured == 'true'",
+    "Expected hosted web deployment to require T3 Connect configuration.",
+  );
+  assertContains(
+    getWorkflowJob(releaseWorkflow, "announce_discord").if ?? "",
+    "needs.relay_public_config.outputs.configured != 'true'",
+    "Expected release announcements to allow an intentionally skipped hosted web deployment.",
+  );
+
+  const deployWorkflow = parse(
+    NodeFS.readFileSync(NodePath.resolve(repoRoot, ".github/workflows/deploy-relay.yml"), "utf8"),
+  ) as Workflow;
+  const deployConfigJob = getWorkflowJob(deployWorkflow, "check_config");
+  const deployConfigStep = getWorkflowStep(deployConfigJob, "relay_config");
+  const deployJob = getWorkflowJob(deployWorkflow, "deploy_relay");
+
+  if (deployConfigJob.outputs?.configured !== "${{ steps.relay_config.outputs.configured }}") {
+    throw new Error("Expected relay deploy workflow to expose its configuration state.");
+  }
+  assertContains(
+    deployJob.if ?? "",
+    "needs.check_config.outputs.configured == 'true'",
+    "Expected relay deployment to skip when T3 Connect is not configured.",
+  );
+
+  const deployEnvironment = {
+    CLOUDFLARE_ACCOUNT_ID: "",
+    CLOUDFLARE_API_TOKEN: "",
+    PLANETSCALE_ORGANIZATION: "",
+    PLANETSCALE_API_TOKEN_ID: "",
+    PLANETSCALE_API_TOKEN: "",
+    AXIOM_ORG_ID: "",
+    AXIOM_TOKEN: "",
+    RELAY_DOMAIN: "",
+    RELAY_API_ZONE_NAME: "",
+    RELAY_TUNNEL_ZONE_NAME: "",
+    CLERK_PUBLISHABLE_KEY: "",
+    CLERK_JWT_AUDIENCE: "",
+    CLERK_SECRET_KEY: "",
+    APNS_ENVIRONMENT: "",
+    APNS_TEAM_ID: "",
+    APNS_KEY_ID: "",
+    APNS_BUNDLE_ID: "",
+    APNS_PRIVATE_KEY: "",
+  };
+  const deployOutputPath = NodePath.resolve(targetRoot, "deploy-config-output");
+  runConfigurationGate(deployConfigStep, deployOutputPath, deployEnvironment, "false");
+  runConfigurationGate(
+    deployConfigStep,
+    deployOutputPath,
+    Object.fromEntries(Object.keys(deployEnvironment).map((name) => [name, "configured"])),
+    "true",
+  );
+}
+
 const tempRoot = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-release-smoke-"));
 
 try {
   copyWorkspaceManifestFixture(tempRoot);
+  assertOptionalT3ConnectWorkflows(tempRoot);
 
   NodeChildProcess.execFileSync(
     process.execPath,
