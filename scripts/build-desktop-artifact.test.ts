@@ -2,8 +2,10 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/unstable/process";
@@ -427,10 +429,43 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       );
 
       const win = config.win as Record<string, unknown>;
+      const nsis = config.nsis as Record<string, unknown>;
       assert.equal(win.icon, "icon.ico");
       assert.equal(win.signAndEditExecutable, true);
       assert.notProperty(win, "azureSignOptions");
+      assert.equal(nsis.include, "apps/desktop/resources/installer.nsh");
     }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
+  );
+
+  it.effect("keeps the Windows process check exact, case-insensitive, and injection-safe", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const repoRoot = yield* path.fromFileUrl(new URL("..", import.meta.url));
+      const source = yield* fs.readFileString(
+        path.join(repoRoot, "apps/desktop/resources/installer.nsh"),
+      );
+      const powerShellLine = source
+        .split("\n")
+        .find((line) => line.includes("Get-CimInstance -ClassName Win32_Process"));
+
+      assert.include(source, "!macro customCheckAppRunning");
+      assert.include(source, "TRITONAI_NSIS_TARGET_EXECUTABLE");
+      assert.include(source, "$$_.ExecutablePath");
+      assert.include(source, "[System.StringComparison]::OrdinalIgnoreCase");
+      assert.include(source, "${isUpdated}");
+      assert.include(source, "MB_OKCANCEL|MB_ICONEXCLAMATION");
+      assert.include(source, "Stop-Process -Id $$proc.ProcessId -ErrorAction Stop");
+      assert.include(source, "Stop-Process -Id $$proc.ProcessId -Force -ErrorAction Stop");
+      assert.include(source, "MB_RETRYCANCEL|MB_ICONEXCLAMATION");
+      assert.isAtLeast(
+        source.match(/Get-CimInstance -ClassName Win32_Process -ErrorAction Stop/g)?.length ?? 0,
+        4,
+      );
+      assert.isDefined(powerShellLine);
+      assert.notInclude(powerShellLine ?? "", "$INSTDIR");
+      assert.notInclude(source, "$$_.Path");
+    }),
   );
 
   it("promotes target fff binaries to direct staged dependencies", () => {
