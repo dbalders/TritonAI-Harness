@@ -5,8 +5,12 @@
     ${if} $1 == 0
       StrCpy $0 1
     ${else}
-      nsExec::Exec `"$PowerShellPath" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$target = [Environment]::GetEnvironmentVariable('TRITONAI_NSIS_TARGET_EXECUTABLE', 'Process'); if ([string]::IsNullOrEmpty($$target)) { exit 1 }; if (@(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop | Where-Object { $$_.ExecutablePath -and [string]::Equals($$_.ExecutablePath, $$target, [System.StringComparison]::OrdinalIgnoreCase) }).Count -gt 0) { exit 0 } else { exit 1 }"`
+      nsExec::Exec `"$PowerShellPath" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$target = [Environment]::GetEnvironmentVariable('TRITONAI_NSIS_TARGET_EXECUTABLE', 'Process'); if ([string]::IsNullOrEmpty($$target)) { exit 2 }; try { $$matches = @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop | Where-Object { $$_.ExecutablePath -and [string]::Equals($$_.ExecutablePath, $$target, [System.StringComparison]::OrdinalIgnoreCase) }) } catch { exit 2 }; if ($$matches.Count -gt 0) { exit 0 } else { exit 1 }"`
       Pop $0
+      ${if} $0 == 1
+        StrCpy $0 0
+        Goto processCheckComplete
+      ${endif}
     ${endif}
 
     ${if} $0 == 0
@@ -23,6 +27,7 @@
       Pop $0
     ${endif}
 
+    processCheckComplete:
     System::Call 'Kernel32::SetEnvironmentVariable(t, t)i ("TRITONAI_NSIS_TARGET_EXECUTABLE", "").r1'
     ${if} $0 != 0
       MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "The installed ${PRODUCT_NAME} app is still running and could not be closed automatically. Close it from Task Manager and click Retry to continue." /SD IDCANCEL IDRETRY retryCloseInstalledApp

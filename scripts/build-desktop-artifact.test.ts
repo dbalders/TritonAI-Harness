@@ -445,9 +445,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       const source = yield* fs.readFileString(
         path.join(repoRoot, "apps/desktop/resources/installer.nsh"),
       );
-      const powerShellLine = source
-        .split("\n")
-        .find((line) => line.includes("Get-CimInstance -ClassName Win32_Process"));
+      const powerShellLines = source.split("\n").filter((line) => line.includes("$PowerShellPath"));
 
       assert.include(source, "!macro customCheckAppRunning");
       assert.include(source, "TRITONAI_NSIS_TARGET_EXECUTABLE");
@@ -458,12 +456,16 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.include(source, "Stop-Process -Id $$proc.ProcessId -ErrorAction Stop");
       assert.include(source, "Stop-Process -Id $$proc.ProcessId -Force -ErrorAction Stop");
       assert.include(source, "MB_RETRYCANCEL|MB_ICONEXCLAMATION");
+      assert.include(source, "${if} $0 == 1");
+      assert.include(source, "catch { exit 2 }");
       assert.isAtLeast(
         source.match(/Get-CimInstance -ClassName Win32_Process -ErrorAction Stop/g)?.length ?? 0,
         4,
       );
-      assert.isDefined(powerShellLine);
-      assert.notInclude(powerShellLine ?? "", "$INSTDIR");
+      assert.isAtLeast(powerShellLines.length, 2);
+      for (const powerShellLine of powerShellLines) {
+        assert.notInclude(powerShellLine, "$INSTDIR");
+      }
       assert.notInclude(source, "$$_.Path");
     }),
   );
