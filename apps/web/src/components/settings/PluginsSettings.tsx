@@ -7,11 +7,13 @@ import { SettingsPageContainer, SettingsSection } from "./settingsLayout";
 function EmptyPluginSection({
   title,
   icon,
+  emptyIcon,
   emptyTitle,
   emptyDescription,
 }: {
   readonly title: string;
   readonly icon: ReactNode;
+  readonly emptyIcon: ReactNode;
   readonly emptyTitle: string;
   readonly emptyDescription: string;
 }) {
@@ -24,9 +26,7 @@ function EmptyPluginSection({
       <div className="p-8">
         <Empty>
           <EmptyHeader>
-            <EmptyMedia variant="icon">
-              <PuzzleIcon />
-            </EmptyMedia>
+            <EmptyMedia variant="icon">{emptyIcon}</EmptyMedia>
             <EmptyTitle>{emptyTitle}</EmptyTitle>
             <EmptyDescription>{emptyDescription}</EmptyDescription>
           </EmptyHeader>
@@ -42,6 +42,7 @@ export function PluginsSettingsPanel() {
       <EmptyPluginSection
         title="Installed Plugins"
         icon={<PuzzleIcon className="size-3.5" />}
+        emptyIcon={<PuzzleIcon />}
         emptyTitle="No installed plugins"
         emptyDescription="Installed plugins will appear here."
       />
@@ -49,6 +50,7 @@ export function PluginsSettingsPanel() {
       <EmptyPluginSection
         title="Available Plugins"
         icon={<DownloadIcon className="size-3.5" />}
+        emptyIcon={<DownloadIcon />}
         emptyTitle="No available plugins"
         emptyDescription="Available TritonAI plugins will appear here."
       />
