@@ -238,6 +238,7 @@ function fetchPublicSkillText<E>(
     ) {
       const until = rateLimitCooldownUntil(response.headers, now, runtime.defaultCooldownMs);
       yield* Ref.update(runtime.cooldownUntil, (current) => Math.max(current, until));
+      yield* Stream.runDrain(response.stream).pipe(Effect.ignore);
       return yield* Effect.fail(
         input.errorFactory(`${input.failureMessage} GitHub rate limit was reached.`),
       );
@@ -508,7 +509,12 @@ export const make = Effect.fn("PublicSkillRepository.make")(function* (
   );
   const contentCache = yield* Cache.makeWith<string, string, PublicSkillRepositoryFailure>(
     (key) => {
-      const [revision, filePath, expectedBytes] = JSON.parse(key) as [string, string, number];
+      const [revision, filePath, expectedBytes] = JSON.parse(key) as [
+        string,
+        string,
+        number,
+        string,
+      ];
       return readRepositoryFile(runtime, revision, filePath, expectedBytes, repositoryError);
     },
     {
