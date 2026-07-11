@@ -6,9 +6,7 @@ This is not a clean-room rewrite. The repo keeps the upstream T3 Code history an
 
 ## Installation
 
-Install from the [latest Desktop_Installer release](https://github.com/dbalders/Desktop_Installer/releases/latest). That installer sets up TritonAI Harness, the managed Codex backend, TritonAI provider settings, and UCSD skills.
-
-The release may be private until publication. Once it is public, the `releases/latest` link should keep pointing at the current installer.
+Install from the [latest TritonAI-Installer release](https://github.com/dbalders/TritonAI-Installer/releases/latest). That installer sets up TritonAI Harness, the managed Codex backend, TritonAI provider settings, and UCSD skills.
 
 Do not use the upstream T3 Code npm package for TritonAI Harness. It is not the UCSD-managed install path.
 
