@@ -66,7 +66,7 @@ jobs:
           NIGHTLY_SHA: ${{ github.sha }}
           NIGHTLY_RUN_NUMBER: ${{ github.run_number }}
         run: |
-          if [[ "${GITHUB_EVENT_NAME}" == "schedule" || ( "${GITHUB_EVENT_NAME}" == "workflow_dispatch" && "${DISPATCH_CHANNEL:-stable}" == "nightly" ) ]]; then
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" && "${DISPATCH_CHANNEL:-stable}" == "nightly" ]]; then
             nightly_date="$(date -u -d "$NIGHTLY_DATE" +%Y%m%d)"
 
             node scripts/resolve-nightly-release.ts \
@@ -491,11 +491,17 @@ jobs:
       #       exit 1
       #     fi
 
-      - name: Verify controlled release exists
+      - name: Verify controlled release is published
+        shell: bash
         env:
           GH_TOKEN: ${{ steps.app_token.outputs.token }}
           RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
-        run: gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
+        run: |
+          is_draft="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')"
+          if [[ "$is_draft" != "false" ]]; then
+            echo "Controlled release $RELEASE_TAG must be published before attaching Windows assets." >&2
+            exit 1
+          fi
 
       - name: Attach Windows release assets
         uses: softprops/action-gh-release@v2
