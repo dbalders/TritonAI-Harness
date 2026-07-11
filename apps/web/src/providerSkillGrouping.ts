@@ -5,7 +5,7 @@ import type {
   ServerProviderSkillCatalogEntry,
 } from "@t3tools/contracts";
 
-export function isProviderSkillRemovalBlocked(status: ServerManagedSkillsStatus): boolean {
+export function isProviderSkillMutationBlocked(status: ServerManagedSkillsStatus): boolean {
   return status === "invalid" || status === "unknown";
 }
 
@@ -37,7 +37,7 @@ export function groupProviderSkills(input: {
     return {
       entry,
       installedRow,
-      managed: installedRow !== null && input.managedSkillNames.has(installedRow.skill.name),
+      managed: input.managedSkillNames.has(entry.name),
     };
   };
   const byTitle = (left: ProviderCatalogSkillItem, right: ProviderCatalogSkillItem) =>

@@ -30,7 +30,7 @@ import {
 } from "../../providerSkillPresentation";
 import {
   groupProviderSkills,
-  isProviderSkillRemovalBlocked,
+  isProviderSkillMutationBlocked,
   type ProviderCatalogSkillItem as CatalogSkillItem,
   type ProviderSkillRow as CodexSkillRow,
 } from "../../providerSkillGrouping";
@@ -204,6 +204,10 @@ function CatalogSkillSettingsRow({
             <Badge size="sm" variant={skillStatusVariant(skillStatusLabel(row))}>
               {skillStatusLabel(row)}
             </Badge>
+          ) : item.managed ? (
+            <Badge size="sm" variant="warning">
+              Missing
+            </Badge>
           ) : (
             <Badge size="sm" variant="outline">
               Available
@@ -258,6 +262,8 @@ function CatalogSkillSettingsRow({
               </Button>
             ) : null}
           </div>
+        ) : item.managed ? (
+          <span className="text-[11px] text-muted-foreground">Run Installer to repair</span>
         ) : (
           <Button
             size="xs"
@@ -436,9 +442,11 @@ export function SkillsSettingsPanel() {
     aiTeamItems.filter((item) => item.installedRow).length +
     communityItems.filter((item) => item.installedRow).length +
     managedOnlyRows.length;
-  const installDisabled = installProvider === null || primaryEnvironmentId === null;
+  const ownershipBlocked = isProviderSkillMutationBlocked(managedSkillsStatus);
+  const installDisabled =
+    installProvider === null || primaryEnvironmentId === null || ownershipBlocked;
   const catalogInstallDisabled = installDisabled || catalogError !== null;
-  const removalBlocked = isProviderSkillRemovalBlocked(managedSkillsStatus);
+  const removalBlocked = ownershipBlocked;
 
   const loadCatalog = useCallback(async () => {
     setCatalogLoading(true);
@@ -766,8 +774,8 @@ export function SkillsSettingsPanel() {
       {managedManifestWarning ? (
         <SettingsSection title="Managed Skills">
           <SettingsRow
-            title="Managed skills could not be identified"
-            description={`${managedManifestWarning} Skill removal is disabled until the Installer repairs it.`}
+            title="Managed skills need Installer repair"
+            description={`${managedManifestWarning} Installing and removing skills are disabled until the full TritonAI Installer repairs managed-skill ownership. Browsing and enable/disable controls remain available.`}
           />
         </SettingsSection>
       ) : null}
