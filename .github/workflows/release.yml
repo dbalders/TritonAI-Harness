@@ -7,17 +7,9 @@ on:
       - "!v*-nightly.*"
   workflow_dispatch:
     inputs:
-      channel:
-        description: "Release channel"
-        required: false
-        default: stable
-        type: choice
-        options:
-          - stable
-          - nightly
       version:
         description: "Release version (for example 1.2.3 or v1.2.3)"
-        required: false
+        required: true
         type: string
 
 permissions:
@@ -34,17 +26,71 @@ jobs:
       version: ${{ steps.release_meta.outputs.version }}
       tag: ${{ steps.release_meta.outputs.tag }}
       release_name: ${{ steps.release_meta.outputs.name }}
-      short_sha: ${{ steps.release_meta.outputs.short_sha }}
-      previous_tag: ${{ steps.previous_tag.outputs.previous_tag }}
       cli_dist_tag: ${{ steps.release_meta.outputs.cli_dist_tag }}
       is_prerelease: ${{ steps.release_meta.outputs.is_prerelease }}
       make_latest: ${{ steps.release_meta.outputs.make_latest }}
-      ref: ${{ github.sha }}
+      ref: ${{ steps.release_meta.outputs.ref }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+
+      - id: release_meta
+        name: Resolve release version
+        shell: bash
+        env:
+          DISPATCH_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            raw="${DISPATCH_VERSION}"
+            if [[ -z "$raw" ]]; then
+              echo "workflow_dispatch releases require the version input." >&2
+              exit 1
+            fi
+          else
+            raw="${GITHUB_REF_NAME}"
+          fi
+
+          version="${raw#v}"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid release version: $raw" >&2
+            exit 1
+          fi
+
+          echo "release_channel=stable" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          echo "name=TritonAI Harness v$version" >> "$GITHUB_OUTPUT"
+          echo "cli_dist_tag=latest" >> "$GITHUB_OUTPUT"
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            echo "ref=v$version" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          fi
+          if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+            echo "make_latest=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "make_latest=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Verify controlled release is published
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release_meta.outputs.tag }}
+        run: |
+          is_draft="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')"
+          if [[ "$is_draft" != "false" ]]; then
+            echo "Controlled release $RELEASE_TAG must be published before starting release automation." >&2
+            exit 1
+          fi
+
+      - name: Check out controlled release tag
+        if: github.event_name == 'workflow_dispatch'
+        run: git switch --detach "${{ steps.release_meta.outputs.ref }}"
 
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@v1
@@ -56,60 +102,6 @@ jobs:
       - name: Ensure Electron runtime is installed
         run: vp run --filter @t3tools/desktop ensure:electron
 
-      - id: release_meta
-        name: Resolve release version
-        shell: bash
-        env:
-          DISPATCH_CHANNEL: ${{ github.event.inputs.channel }}
-          DISPATCH_VERSION: ${{ github.event.inputs.version }}
-          NIGHTLY_DATE: ${{ github.run_started_at }}
-          NIGHTLY_SHA: ${{ github.sha }}
-          NIGHTLY_RUN_NUMBER: ${{ github.run_number }}
-        run: |
-          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" && "${DISPATCH_CHANNEL:-stable}" == "nightly" ]]; then
-            nightly_date="$(date -u -d "$NIGHTLY_DATE" +%Y%m%d)"
-
-            node scripts/resolve-nightly-release.ts \
-              --date "$nightly_date" \
-              --run-number "$NIGHTLY_RUN_NUMBER" \
-              --sha "$NIGHTLY_SHA" \
-              --github-output
-
-            echo "release_channel=nightly" >> "$GITHUB_OUTPUT"
-            echo "cli_dist_tag=nightly" >> "$GITHUB_OUTPUT"
-            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
-            echo "make_latest=false" >> "$GITHUB_OUTPUT"
-          else
-            if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
-              raw="${DISPATCH_VERSION}"
-              if [[ -z "$raw" ]]; then
-                echo "workflow_dispatch stable releases require the version input." >&2
-                exit 1
-              fi
-            else
-              raw="${GITHUB_REF_NAME}"
-            fi
-
-            version="${raw#v}"
-            if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
-              echo "Invalid release version: $raw" >&2
-              exit 1
-            fi
-
-            echo "release_channel=stable" >> "$GITHUB_OUTPUT"
-            echo "version=$version" >> "$GITHUB_OUTPUT"
-            echo "tag=v$version" >> "$GITHUB_OUTPUT"
-            echo "name=TritonAI Harness v$version" >> "$GITHUB_OUTPUT"
-            echo "cli_dist_tag=latest" >> "$GITHUB_OUTPUT"
-            if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
-              echo "make_latest=true" >> "$GITHUB_OUTPUT"
-            else
-              echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
-              echo "make_latest=false" >> "$GITHUB_OUTPUT"
-            fi
-          fi
-
       - name: Check
         run: vp check
 
@@ -118,14 +110,6 @@ jobs:
 
       - name: Test
         run: vp run test
-
-      - id: previous_tag
-        name: Resolve previous release tag
-        run: |
-          node scripts/resolve-previous-release-tag.ts \
-            --channel "${{ steps.release_meta.outputs.release_channel }}" \
-            --current-tag "${{ steps.release_meta.outputs.tag }}" \
-            --github-output
 
   # node-pty publishes no Linux prebuilt and the WSL backend runs under the
   # distro's own (Linux) Node, which can't load the Windows/Electron binary. We
@@ -490,18 +474,6 @@ jobs:
       #       echo "No Windows updater manifests found to merge." >&2
       #       exit 1
       #     fi
-
-      - name: Verify controlled release is published
-        shell: bash
-        env:
-          GH_TOKEN: ${{ steps.app_token.outputs.token }}
-          RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
-        run: |
-          is_draft="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')"
-          if [[ "$is_draft" != "false" ]]; then
-            echo "Controlled release $RELEASE_TAG must be published before attaching Windows assets." >&2
-            exit 1
-          fi
 
       - name: Attach Windows release assets
         uses: softprops/action-gh-release@v2
