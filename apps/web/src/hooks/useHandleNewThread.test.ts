@@ -32,7 +32,7 @@ describe("createNewThreadDraft", () => {
         defaultThreadEnvMode: "local",
         newWorktreesStartFromOrigin: false,
       },
-      options: { initialPrompt: TRITONAI_FIRST_RUN_PROMPT },
+      options: { newDraftPrompt: TRITONAI_FIRST_RUN_PROMPT },
     });
 
     expect(useComposerDraftStore.getState().getComposerDraft(draftId)?.prompt).toBe(

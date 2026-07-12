@@ -256,7 +256,7 @@ export function TritonAiFirstRunOnboardingBootstrap(props: { pathname: string })
         }
 
         await createNewThread(projectRef, {
-          initialPrompt: TRITONAI_FIRST_RUN_PROMPT,
+          newDraftPrompt: TRITONAI_FIRST_RUN_PROMPT,
           replace: true,
         });
         updateSettings({ tritonAiFirstRunOnboardingCompleted: true });

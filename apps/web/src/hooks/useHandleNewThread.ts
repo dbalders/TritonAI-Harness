@@ -41,7 +41,8 @@ interface NewThreadOptions {
   worktreePath?: string | null;
   envMode?: DraftThreadEnvMode;
   startFromOrigin?: boolean;
-  initialPrompt?: string;
+  /** Seeds only a newly created draft; reused drafts keep their existing composer content. */
+  newDraftPrompt?: string;
   replace?: boolean;
 }
 
@@ -74,8 +75,8 @@ export function createNewThreadDraft(input: {
     runtimeMode: DEFAULT_RUNTIME_MODE,
   });
   applyStickyState(draftId);
-  if (input.options?.initialPrompt !== undefined) {
-    setPrompt(draftId, input.options.initialPrompt);
+  if (input.options?.newDraftPrompt !== undefined) {
+    setPrompt(draftId, input.options.newDraftPrompt);
   }
 
   return draftId;
