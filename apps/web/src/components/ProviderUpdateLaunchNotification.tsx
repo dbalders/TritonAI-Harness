@@ -16,8 +16,6 @@ import {
 import { ProviderUpdatePrimaryNotification } from "./ProviderUpdatePrimaryNotification";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 
-const SHOW_PROVIDER_UPDATE_NOTIFICATIONS = false;
-
 /**
  * True when a desktop-local secondary backend (the parallel WSL backend) is
  * present alongside the primary. Local secondaries connect over loopback with a
@@ -40,14 +38,6 @@ function useHasLocalSecondaryEnvironment(): boolean {
  * single-prompt flow so non-WSL users see no change.
  */
 export function ProviderUpdateLaunchNotification() {
-  if (!SHOW_PROVIDER_UPDATE_NOTIFICATIONS) {
-    return null;
-  }
-
-  return <ProviderUpdateLaunchNotificationEnabled />;
-}
-
-function ProviderUpdateLaunchNotificationEnabled() {
   const hasLocalSecondary = useHasLocalSecondaryEnvironment();
 
   return hasLocalSecondary ? (

@@ -1,6 +1,15 @@
 "use client";
 
-import { ChevronDownIcon, PlusIcon, Trash2Icon, XIcon } from "lucide-react";
+import {
+  ArrowUpCircleIcon,
+  ChevronDownIcon,
+  CopyIcon,
+  DownloadIcon,
+  LoaderIcon,
+  PlusIcon,
+  Trash2Icon,
+  XIcon,
+} from "lucide-react";
 import * as Arr from "effect/Array";
 import * as Result from "effect/Result";
 import { useState, type ReactNode } from "react";
@@ -15,14 +24,18 @@ import {
 } from "@t3tools/contracts";
 
 import { cn } from "../../lib/utils";
+import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { normalizeProviderAccentColor } from "../../providerInstances";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { Collapsible, CollapsibleContent } from "../ui/collapsible";
 import { DraftInput } from "../ui/draft-input";
+import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
+import { ScrollArea } from "../ui/scroll-area";
 import { Switch } from "../ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
+import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import type { DriverOption } from "./providerDriverMeta";
 import { ProviderSettingsForm } from "./ProviderSettingsForm";
@@ -31,6 +44,7 @@ import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import { ProviderAccentColorPicker } from "./ProviderAccentColorPicker";
 import { RedactedSensitiveText } from "./RedactedSensitiveText";
 import {
+  getProviderVersionAdvisoryPresentation,
   PROVIDER_STATUS_STYLES,
   getProviderSummary,
   getProviderVersionLabel,
@@ -333,6 +347,8 @@ interface ProviderInstanceCardProps {
   readonly onHiddenModelsChange: (next: ReadonlyArray<string>) => void;
   readonly onFavoriteModelsChange: (next: ReadonlyArray<string>) => void;
   readonly onModelOrderChange: (next: ReadonlyArray<string>) => void;
+  readonly onRunUpdate?: (() => void) | undefined;
+  readonly isUpdating?: boolean | undefined;
 }
 
 /**
@@ -375,6 +391,8 @@ export function ProviderInstanceCard({
   onHiddenModelsChange,
   onFavoriteModelsChange,
   onModelOrderChange,
+  onRunUpdate,
+  isUpdating = false,
 }: ProviderInstanceCardProps) {
   const enabled = instance.enabled ?? true;
   // The server-reported status wins when present; otherwise fall back to
@@ -392,10 +410,30 @@ export function ProviderInstanceCard({
     : null;
   const summary = rawSummary;
   const versionLabel = getProviderVersionLabel(liveProvider?.version);
+  const versionAdvisory = getProviderVersionAdvisoryPresentation(liveProvider?.versionAdvisory);
+  const updateCommand = versionAdvisory?.updateCommand ?? null;
   const FallbackIconComponent = driverOption?.icon;
   const displayName =
     instance.displayName?.trim() || driverOption?.label || String(instance.driver);
   const accentColor = normalizeProviderAccentColor(instance.accentColor);
+  const { copyToClipboard } = useCopyToClipboard<{ providerName: string }>({
+    onCopy: ({ providerName }) => {
+      toastManager.add({
+        type: "success",
+        title: `${providerName} update command copied`,
+        description: "Run it in a terminal when you are ready to update.",
+      });
+    },
+    onError: (error, { providerName }) => {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: `Could not copy ${providerName} update command`,
+          description: error.message,
+        }),
+      );
+    },
+  });
 
   // Narrow `instance.driver` for callers that key on the closed
   // `ProviderDriverKind` union (e.g. `normalizeModelSlug`'s alias table). Custom
@@ -569,6 +607,101 @@ export function ProviderInstanceCard({
             <div className="flex min-w-0 flex-wrap items-center gap-2">
               {titleHeadNode}
               {versionCodeNode}
+              {versionAdvisory ? (
+                <Popover>
+                  <PopoverTrigger
+                    render={
+                      <Button
+                        type="button"
+                        size="icon-xs"
+                        variant="ghost"
+                        className={cn(
+                          "size-5 rounded-sm p-0",
+                          versionAdvisory.emphasis === "strong"
+                            ? "text-warning hover:text-warning"
+                            : "text-primary hover:text-primary",
+                        )}
+                        aria-label="Update available — view details"
+                      >
+                        <ArrowUpCircleIcon className="size-3.5 [animation:bounce_2.4s_ease-in-out_infinite] motion-reduce:animate-none" />
+                      </Button>
+                    }
+                  />
+                  <PopoverPopup
+                    side="bottom"
+                    align="start"
+                    className="w-[min(21rem,calc(100vw-1.5rem))] [--popup-width:min(21rem,calc(100vw-1.5rem))]"
+                  >
+                    <div className="grid min-w-0 gap-3">
+                      <div className="grid gap-0.5">
+                        <p className="text-[13px] font-semibold leading-tight text-foreground">
+                          Update available
+                        </p>
+                        <p
+                          className={cn(
+                            "text-xs leading-snug",
+                            versionAdvisory.emphasis === "strong"
+                              ? "text-warning"
+                              : "text-muted-foreground",
+                          )}
+                        >
+                          {versionAdvisory.detail}
+                        </p>
+                      </div>
+                      {onRunUpdate ? (
+                        <Button
+                          type="button"
+                          size="xs"
+                          variant="default"
+                          className="w-full"
+                          disabled={isUpdating}
+                          onClick={onRunUpdate}
+                        >
+                          {isUpdating ? <LoaderIcon className="animate-spin" /> : <DownloadIcon />}
+                          {isUpdating ? "Updating" : "Update now"}
+                        </Button>
+                      ) : null}
+                      {onRunUpdate && updateCommand ? (
+                        <div className="flex items-center gap-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                          <span aria-hidden className="h-px flex-1 bg-border" />
+                          or, update manually using
+                          <span aria-hidden className="h-px flex-1 bg-border" />
+                        </div>
+                      ) : null}
+                      {updateCommand ? (
+                        <div className="flex min-w-0 items-center gap-1 rounded-md border border-border/70 bg-muted/40 py-0.5 pr-0.5 pl-2">
+                          <ScrollArea scrollFade className="h-8 min-w-0 flex-1 rounded-none">
+                            <code className="flex h-full w-max items-center whitespace-nowrap pr-3 font-mono text-[11px] text-foreground">
+                              {updateCommand}
+                            </code>
+                          </ScrollArea>
+                          <Tooltip>
+                            <TooltipTrigger
+                              render={
+                                <Button
+                                  type="button"
+                                  size="icon-xs"
+                                  variant="ghost"
+                                  className="size-6 shrink-0 rounded-sm p-0 text-muted-foreground hover:text-foreground"
+                                  onClick={() =>
+                                    copyToClipboard(updateCommand, {
+                                      providerName: displayName,
+                                    })
+                                  }
+                                  aria-label="Copy update command"
+                                >
+                                  <CopyIcon className="size-3" />
+                                </Button>
+                              }
+                            />
+                            <TooltipPopup side="top">Copy command</TooltipPopup>
+                          </Tooltip>
+                        </div>
+                      ) : null}
+                    </div>
+                  </PopoverPopup>
+                </Popover>
+              ) : null}
               {titleTailNode}
             </div>
             {authRowNode}
