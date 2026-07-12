@@ -129,6 +129,7 @@ export function makeDevelopmentLauncherScript({
           `if [ -z "\${TRITONAI_HOME:-}" ]; then export TRITONAI_HOME=${shellSingleQuote(capturedTritonAiHome)}; fi`,
         ]
       : []),
+    // A live legacy input outranks only the captured legacy fallback and is sanitized before exec.
     'if [ -z "${TRITONAI_HOME:-}" ] && [ -n "${T3CODE_HOME:-}" ]; then export TRITONAI_HOME="$T3CODE_HOME"; fi',
     ...(typeof capturedLegacyHome === "string" && capturedLegacyHome.trim().length > 0
       ? [

@@ -102,4 +102,15 @@ describe("electron development launcher", () => {
 
     assert.equal(output, "TRITONAI_HOME=/tmp/captured-tritonai\nT3CODE_HOME=\n");
   });
+
+  it("promotes a live legacy input when no home was captured", () => {
+    const output = executeLauncher({
+      capturedEnvironment: {},
+      runtimeEnvironment: {
+        T3CODE_HOME: "/tmp/runtime-legacy",
+      },
+    });
+
+    assert.equal(output, "TRITONAI_HOME=/tmp/runtime-legacy\nT3CODE_HOME=\n");
+  });
 });
