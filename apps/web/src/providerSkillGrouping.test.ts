@@ -7,7 +7,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   groupProviderSkills,
-  isProviderSkillRemovalBlocked,
+  isProviderSkillMutationBlocked,
   type ProviderSkillRow,
 } from "./providerSkillGrouping";
 
@@ -65,10 +65,22 @@ describe("groupProviderSkills", () => {
     expect(result.managedOnlyRows).toHaveLength(1);
   });
 
-  it("blocks removal while managed ownership is invalid or unknown", () => {
-    expect(isProviderSkillRemovalBlocked("invalid")).toBe(true);
-    expect(isProviderSkillRemovalBlocked("unknown")).toBe(true);
-    expect(isProviderSkillRemovalBlocked("absent")).toBe(false);
-    expect(isProviderSkillRemovalBlocked("valid")).toBe(false);
+  it("keeps a manifest-owned catalog skill managed when its folder is missing", () => {
+    const result = groupProviderSkills({
+      entries: [entry("secure-review", "ai-team")],
+      rows: [],
+      managedSkillNames: new Set(["secure-review"]),
+    });
+
+    expect(result.aiTeamItems).toEqual([
+      expect.objectContaining({ installedRow: null, managed: true }),
+    ]);
+  });
+
+  it("blocks installation and removal while managed ownership is invalid or unknown", () => {
+    expect(isProviderSkillMutationBlocked("invalid")).toBe(true);
+    expect(isProviderSkillMutationBlocked("unknown")).toBe(true);
+    expect(isProviderSkillMutationBlocked("absent")).toBe(false);
+    expect(isProviderSkillMutationBlocked("valid")).toBe(false);
   });
 });
