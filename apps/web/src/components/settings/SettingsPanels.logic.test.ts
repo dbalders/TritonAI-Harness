@@ -14,17 +14,20 @@ import {
 
 describe("providerUpdateTrackingKey", () => {
   it("scopes in-flight provider updates to both environment and driver", () => {
+    const environmentId = EnvironmentId.make("primary-a");
     const driver = ProviderDriverKind.make("codex");
+    const updateKey = providerUpdateTrackingKey({ environmentId, driver });
 
-    expect(
-      providerUpdateTrackingKey({
-        environmentId: EnvironmentId.make("primary-a"),
-        driver,
-      }),
-    ).not.toBe(
+    expect(updateKey).not.toBe(
       providerUpdateTrackingKey({
         environmentId: EnvironmentId.make("primary-b"),
         driver,
+      }),
+    );
+    expect(updateKey).not.toBe(
+      providerUpdateTrackingKey({
+        environmentId,
+        driver: ProviderDriverKind.make("other-driver"),
       }),
     );
   });
