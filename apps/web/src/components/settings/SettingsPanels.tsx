@@ -66,6 +66,7 @@ import { DRIVER_OPTIONS, getDriverOption } from "./providerDriverMeta";
 import {
   buildProviderInstanceUpdatePatch,
   formatDiagnosticsDescription,
+  providerUpdateTrackingKey,
 } from "./SettingsPanels.logic";
 import {
   SettingResetButton,
@@ -762,12 +763,12 @@ export function ProviderSettingsPanel() {
   });
   const [isRefreshingProviders, setIsRefreshingProviders] = useState(false);
   const [isAddInstanceDialogOpen, setIsAddInstanceDialogOpen] = useState(false);
-  const [updatingProviderDrivers, setUpdatingProviderDrivers] = useState<
-    ReadonlySet<ProviderDriverKind>
-  >(() => new Set());
+  const [updatingProviderKeys, setUpdatingProviderKeys] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
   const [openInstanceDetails, setOpenInstanceDetails] = useState<Record<string, boolean>>({});
   const refreshingRef = useRef(false);
-  const updatingProviderDriversRef = useRef<Set<ProviderDriverKind>>(new Set());
+  const updatingProviderKeysRef = useRef<Set<string>>(new Set());
 
   const providerUpdateCandidates = useMemo(
     () => collectProviderUpdateCandidates(visibleServerProviders),
@@ -822,19 +823,21 @@ export function ProviderSettingsPanel() {
   const runProviderUpdate = useCallback(
     async (candidate: ProviderUpdateCandidate) => {
       if (!primaryEnvironment) return;
-      if (updatingProviderDriversRef.current.has(candidate.driver)) {
+      const environmentId = primaryEnvironment.environmentId;
+      const updateKey = providerUpdateTrackingKey({ environmentId, driver: candidate.driver });
+      if (updatingProviderKeysRef.current.has(updateKey)) {
         return;
       }
-      updatingProviderDriversRef.current.add(candidate.driver);
-      setUpdatingProviderDrivers((previous) => {
+      updatingProviderKeysRef.current.add(updateKey);
+      setUpdatingProviderKeys((previous) => {
         const next = new Set(previous);
-        next.add(candidate.driver);
+        next.add(updateKey);
         return next;
       });
 
       try {
         const result = await updateProvider({
-          environmentId: primaryEnvironment.environmentId,
+          environmentId,
           input: {
             provider: candidate.driver,
             instanceId: candidate.instanceId,
@@ -854,13 +857,13 @@ export function ProviderSettingsPanel() {
           );
         }
       } finally {
-        updatingProviderDriversRef.current.delete(candidate.driver);
-        setUpdatingProviderDrivers((previous) => {
-          if (!previous.has(candidate.driver)) {
+        updatingProviderKeysRef.current.delete(updateKey);
+        setUpdatingProviderKeys((previous) => {
+          if (!previous.has(updateKey)) {
             return previous;
           }
           const next = new Set(previous);
-          next.delete(candidate.driver);
+          next.delete(updateKey);
           return next;
         });
       }
@@ -1064,9 +1067,16 @@ export function ProviderSettingsPanel() {
           const updateCandidate = liveProvider
             ? providerUpdateCandidateByInstanceId.get(liveProvider.instanceId)
             : undefined;
+          const updateKey =
+            updateCandidate && primaryEnvironment
+              ? providerUpdateTrackingKey({
+                  environmentId: primaryEnvironment.environmentId,
+                  driver: updateCandidate.driver,
+                })
+              : null;
           const isDriverUpdateRunning =
             updateCandidate !== undefined &&
-            (updatingProviderDrivers.has(updateCandidate.driver) ||
+            ((updateKey !== null && updatingProviderKeys.has(updateKey)) ||
               visibleServerProviders.some(
                 (provider) =>
                   provider.driver === updateCandidate.driver && isProviderUpdateActive(provider),
