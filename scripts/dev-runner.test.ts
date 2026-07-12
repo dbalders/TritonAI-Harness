@@ -127,7 +127,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
   });
 
   describe("createDevRunnerEnv", () => {
-    it.effect("defaults TRITONAI_HOME and legacy T3CODE_HOME to ~/.tritonai-harness", () =>
+    it.effect("defaults only TRITONAI_HOME to ~/.tritonai-harness", () =>
       Effect.gen(function* () {
         const path = yield* Path.Path;
         const env = yield* createDevRunnerEnv({
@@ -146,7 +146,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
 
         const defaultHome = path.resolve(NodeOS.homedir(), ".tritonai-harness");
         assert.equal(env.TRITONAI_HOME, defaultHome);
-        assert.equal(env.T3CODE_HOME, defaultHome);
+        assert.isUndefined(env.T3CODE_HOME);
       }),
     );
 
@@ -155,7 +155,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         const path = yield* Path.Path;
         const env = yield* createDevRunnerEnv({
           mode: "dev:server",
-          baseEnv: {},
+          baseEnv: { T3CODE_HOME: "/tmp/legacy-home" },
           serverOffset: 0,
           webOffset: 0,
           t3Home: "/tmp/custom-t3",
@@ -168,7 +168,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         });
 
         assert.equal(env.TRITONAI_HOME, path.resolve("/tmp/custom-t3"));
-        assert.equal(env.T3CODE_HOME, path.resolve("/tmp/custom-t3"));
+        assert.isUndefined(env.T3CODE_HOME);
         assert.equal(env.T3CODE_PORT, "4222");
         assert.equal(env.VITE_HTTP_URL, "http://localhost:4222");
         assert.equal(env.VITE_WS_URL, "ws://localhost:4222");
@@ -243,7 +243,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         });
 
         assert.equal(env.TRITONAI_HOME, path.resolve("/tmp/my-t3"));
-        assert.equal(env.T3CODE_HOME, path.resolve("/tmp/my-t3"));
+        assert.isUndefined(env.T3CODE_HOME);
       }),
     );
 
@@ -272,7 +272,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         });
 
         assert.equal(env.TRITONAI_HOME, path.resolve("/tmp/my-t3"));
-        assert.equal(env.T3CODE_HOME, path.resolve("/tmp/my-t3"));
+        assert.isUndefined(env.T3CODE_HOME);
         assert.equal(env.PORT, "5733");
         assert.equal(env.VITE_DEV_SERVER_URL, "http://127.0.0.1:5733");
         assert.equal(env.HOST, "127.0.0.1");

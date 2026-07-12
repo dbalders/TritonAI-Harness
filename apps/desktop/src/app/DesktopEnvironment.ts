@@ -155,7 +155,7 @@ const make = Effect.fn("desktop.environment.make")(function* (
       : input.platform === "darwin"
         ? path.join(homeDirectory, "Library", "Application Support")
         : Option.getOrElse(config.xdgConfigHome, () => path.join(homeDirectory, ".config"));
-  const baseDir = Option.getOrElse(Option.firstSomeOf([config.tritonaiHome, config.t3Home]), () =>
+  const baseDir = Option.getOrElse(config.t3Home, () =>
     path.join(homeDirectory, DEFAULT_TRITONAI_HOME_DIRNAME),
   );
   const rootDir = path.resolve(input.dirname, "../../..");

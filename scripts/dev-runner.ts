@@ -34,10 +34,9 @@ const MAX_PORT = 65535;
 const DESKTOP_DEV_LOOPBACK_HOST = "127.0.0.1";
 const DEV_PORT_PROBE_HOSTS = ["127.0.0.1", "0.0.0.0", "::1", "::"] as const;
 
-export const DEFAULT_TRITONAI_HOME = Effect.map(Effect.service(Path.Path), (path) =>
+export const DEFAULT_T3_HOME = Effect.map(Effect.service(Path.Path), (path) =>
   path.join(NodeOS.homedir(), DEFAULT_TRITONAI_HOME_DIRNAME),
 );
-export const DEFAULT_T3_HOME = DEFAULT_TRITONAI_HOME;
 
 const MODE_ARGS = {
   dev: [
@@ -150,9 +149,9 @@ const optionalStringConfig = (name: string): Config.Config<string | undefined> =
     Config.map((value) => Option.getOrUndefined(value)),
   );
 const optionalHomeConfig = Config.all({
-  tritonaiHome: optionalStringConfig(TRITONAI_HOME_ENV),
-  t3Home: optionalStringConfig(LEGACY_T3CODE_HOME_ENV),
-}).pipe(Config.map(({ tritonaiHome, t3Home }) => tritonaiHome ?? t3Home));
+  preferredHome: optionalStringConfig(TRITONAI_HOME_ENV),
+  legacyHome: optionalStringConfig(LEGACY_T3CODE_HOME_ENV),
+}).pipe(Config.map(({ preferredHome, legacyHome }) => preferredHome ?? legacyHome));
 const optionalBooleanConfig = (name: string): Config.Config<boolean | undefined> =>
   Config.boolean(name).pipe(
     Config.option,
@@ -221,7 +220,7 @@ function resolveBaseDir(baseDir: string | undefined): Effect.Effect<string, neve
       return path.resolve(configured);
     }
 
-    return yield* DEFAULT_TRITONAI_HOME;
+    return yield* DEFAULT_T3_HOME;
   });
 }
 
@@ -264,9 +263,9 @@ export function createDevRunnerEnv({
       VITE_DEV_SERVER_URL:
         devUrl?.toString() ??
         `http://${isDesktopMode ? DESKTOP_DEV_LOOPBACK_HOST : "localhost"}:${webPort}`,
-      TRITONAI_HOME: resolvedBaseDir,
-      T3CODE_HOME: resolvedBaseDir,
+      [TRITONAI_HOME_ENV]: resolvedBaseDir,
     };
+    delete output[LEGACY_T3CODE_HOME_ENV];
 
     if (!isDesktopMode) {
       output.T3CODE_PORT = String(serverPort);
@@ -532,7 +531,7 @@ export function runDevRunnerWithInput(input: DevRunnerCliInput) {
         : "";
 
     yield* Effect.logInfo(
-      `[dev-runner] mode=${input.mode} source=${source}${selectionSuffix} serverPort=${String(env.T3CODE_PORT)} webPort=${String(env.PORT)} baseDir=${String(env.TRITONAI_HOME ?? env.T3CODE_HOME)}`,
+      `[dev-runner] mode=${input.mode} source=${source}${selectionSuffix} serverPort=${String(env.T3CODE_PORT)} webPort=${String(env.PORT)} baseDir=${String(env[TRITONAI_HOME_ENV])}`,
     );
 
     if (input.dryRun) {
@@ -598,7 +597,7 @@ const devRunnerCli = Command.make("dev-runner", {
   ),
   t3Home: Flag.string("home-dir").pipe(
     Flag.withDescription(
-      "Base directory for all TritonAI Harness data (equivalent to TRITONAI_HOME; T3CODE_HOME is still accepted as a legacy fallback).",
+      "Base directory for all TritonAI Harness data (equivalent to TRITONAI_HOME).",
     ),
     Flag.withFallbackConfig(optionalHomeConfig),
   ),
