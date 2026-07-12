@@ -1,4 +1,5 @@
 import type {
+  EnvironmentId,
   ProviderDriverKind,
   ProviderInstanceConfig,
   ProviderInstanceId,
@@ -6,6 +7,13 @@ import type {
   UnifiedSettings,
 } from "@t3tools/contracts";
 import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
+
+export function providerUpdateTrackingKey(input: {
+  readonly environmentId: EnvironmentId;
+  readonly driver: ProviderDriverKind;
+}): string {
+  return `${input.environmentId}:${input.driver}`;
+}
 
 function collapseOtelSignalsUrl(input: {
   readonly tracesUrl: string;

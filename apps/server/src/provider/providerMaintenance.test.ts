@@ -109,7 +109,7 @@ it.layer(NodeServices.layer)("providerMaintenance", (it) => {
     ),
   );
 
-  it.effect("does not fetch latest provider versions when update checks are disabled", () =>
+  it.effect("does not fetch or mark an update available when update checks are disabled", () =>
     enrichProviderSnapshotWithVersionAdvisory(
       installedPackageToolProvider,
       packageToolUpdate.resolve(),
@@ -130,6 +130,7 @@ it.layer(NodeServices.layer)("providerMaintenance", (it) => {
           currentVersion: "1.0.0",
           latestVersion: null,
           checkedAt: "2026-04-10T00:00:00.000Z",
+          message: null,
         });
       }),
     ),

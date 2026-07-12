@@ -1,5 +1,6 @@
 import {
   DEFAULT_SERVER_SETTINGS,
+  EnvironmentId,
   ProviderDriverKind,
   ProviderInstanceId,
   type ProviderInstanceConfig,
@@ -8,7 +9,29 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   buildProviderInstanceUpdatePatch,
   formatDiagnosticsDescription,
+  providerUpdateTrackingKey,
 } from "./SettingsPanels.logic";
+
+describe("providerUpdateTrackingKey", () => {
+  it("scopes in-flight provider updates to both environment and driver", () => {
+    const environmentId = EnvironmentId.make("primary-a");
+    const driver = ProviderDriverKind.make("codex");
+    const updateKey = providerUpdateTrackingKey({ environmentId, driver });
+
+    expect(updateKey).not.toBe(
+      providerUpdateTrackingKey({
+        environmentId: EnvironmentId.make("primary-b"),
+        driver,
+      }),
+    );
+    expect(updateKey).not.toBe(
+      providerUpdateTrackingKey({
+        environmentId,
+        driver: ProviderDriverKind.make("other-driver"),
+      }),
+    );
+  });
+});
 
 describe("formatDiagnosticsDescription", () => {
   it("collapses trace and metric URLs that share the same OTEL base path", () => {
