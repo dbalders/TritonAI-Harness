@@ -23,12 +23,63 @@ import {
   getProjectOrderKey,
   selectProjectGroupingSettings,
 } from "../logicalProject";
-import { readThreadShell, useProjects, useServerConfigs, useThread } from "../state/entities";
+import {
+  readProject,
+  readThreadShell,
+  useProjects,
+  useServerConfigs,
+  useThread,
+} from "../state/entities";
 import { resolveNewDraftStartFromOrigin } from "../lib/chatThreadActions";
 import { resolveThreadRouteTarget } from "../threadRoutes";
 import { isTritonAiChatsWorkspacePath } from "../tritonAiWorkspace";
 import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore";
 import { useClientSettings } from "./useSettings";
+
+interface NewThreadOptions {
+  branch?: string | null;
+  worktreePath?: string | null;
+  envMode?: DraftThreadEnvMode;
+  startFromOrigin?: boolean;
+  initialPrompt?: string;
+  replace?: boolean;
+}
+
+export function createNewThreadDraft(input: {
+  projectRef: ScopedProjectRef;
+  logicalProjectKey: string;
+  environmentSettings: Pick<
+    typeof DEFAULT_SERVER_SETTINGS,
+    "defaultThreadEnvMode" | "newWorktreesStartFromOrigin"
+  >;
+  options?: NewThreadOptions;
+}) {
+  const draftId = newDraftId();
+  const initialEnvMode = input.options?.envMode ?? input.environmentSettings.defaultThreadEnvMode;
+  const { applyStickyState, setLogicalProjectDraftThreadId, setPrompt } =
+    useComposerDraftStore.getState();
+
+  setLogicalProjectDraftThreadId(input.logicalProjectKey, input.projectRef, draftId, {
+    threadId: newThreadId(),
+    createdAt: new Date().toISOString(),
+    branch: input.options?.branch ?? null,
+    worktreePath: input.options?.worktreePath ?? null,
+    envMode: initialEnvMode,
+    startFromOrigin:
+      input.options?.startFromOrigin ??
+      resolveNewDraftStartFromOrigin({
+        envMode: initialEnvMode,
+        newWorktreesStartFromOrigin: input.environmentSettings.newWorktreesStartFromOrigin,
+      }),
+    runtimeMode: DEFAULT_RUNTIME_MODE,
+  });
+  applyStickyState(draftId);
+  if (input.options?.initialPrompt !== undefined) {
+    setPrompt(draftId, input.options.initialPrompt);
+  }
+
+  return draftId;
+}
 
 export function useNewThreadHandler() {
   const projects = useProjects();
@@ -41,29 +92,21 @@ export function useNewThreadHandler() {
   }, [router]);
 
   return useCallback(
-    (
-      projectRef: ScopedProjectRef,
-      options?: {
-        branch?: string | null;
-        worktreePath?: string | null;
-        envMode?: DraftThreadEnvMode;
-        startFromOrigin?: boolean;
-      },
-    ): Promise<void> => {
+    (projectRef: ScopedProjectRef, options?: NewThreadOptions): Promise<void> => {
       const {
         getDraftSessionByLogicalProjectKey,
         getDraftSession,
         getDraftThread,
-        applyStickyState,
         setDraftThreadContext,
         setLogicalProjectDraftThreadId,
       } = useComposerDraftStore.getState();
       const currentRouteTarget = getCurrentRouteTarget();
-      const project = projects.find(
-        (candidate) =>
-          candidate.id === projectRef.projectId &&
-          candidate.environmentId === projectRef.environmentId,
-      );
+      const project =
+        projects.find(
+          (candidate) =>
+            candidate.id === projectRef.projectId &&
+            candidate.environmentId === projectRef.environmentId,
+        ) ?? readProject(projectRef);
       const environmentSettings =
         serverConfigs.get(projectRef.environmentId)?.settings ?? DEFAULT_SERVER_SETTINGS;
       const logicalProjectKey = project
@@ -121,6 +164,7 @@ export function useNewThreadHandler() {
           await router.navigate({
             to: "/draft/$draftId",
             params: { draftId: reusableStoredDraftThread.draftId },
+            ...(options?.replace !== undefined ? { replace: options.replace } : {}),
           });
         })();
       }
@@ -157,30 +201,17 @@ export function useNewThreadHandler() {
         return Promise.resolve();
       }
 
-      const draftId = newDraftId();
-      const threadId = newThreadId();
-      const createdAt = new Date().toISOString();
-      const initialEnvMode = options?.envMode ?? environmentSettings.defaultThreadEnvMode;
+      const draftId = createNewThreadDraft({
+        projectRef,
+        logicalProjectKey,
+        environmentSettings,
+        ...(options ? { options } : {}),
+      });
       return (async () => {
-        setLogicalProjectDraftThreadId(logicalProjectKey, projectRef, draftId, {
-          threadId,
-          createdAt,
-          branch: options?.branch ?? null,
-          worktreePath: options?.worktreePath ?? null,
-          envMode: initialEnvMode,
-          startFromOrigin:
-            options?.startFromOrigin ??
-            resolveNewDraftStartFromOrigin({
-              envMode: initialEnvMode,
-              newWorktreesStartFromOrigin: environmentSettings.newWorktreesStartFromOrigin,
-            }),
-          runtimeMode: DEFAULT_RUNTIME_MODE,
-        });
-        applyStickyState(draftId);
-
         await router.navigate({
           to: "/draft/$draftId",
           params: { draftId },
+          ...(options?.replace !== undefined ? { replace: options.replace } : {}),
         });
       })();
     },
