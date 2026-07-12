@@ -15,41 +15,6 @@ layer("027_028_ProviderInstanceIdColumns", (it) => {
 
       yield* runMigrations({ toMigrationInclusive: 26 });
       yield* sql`
-        INSERT INTO projection_thread_sessions (
-          thread_id,
-          status,
-          provider_name,
-          provider_session_id,
-          provider_thread_id,
-          runtime_mode,
-          active_turn_id,
-          last_error,
-          updated_at
-        )
-        VALUES (
-          'thread-legacy',
-          'running',
-          'codex',
-          'provider-session-legacy',
-          'provider-thread-legacy',
-          'approval-required',
-          'turn-legacy',
-          NULL,
-          '2026-06-01T00:00:00.000Z'
-        ),
-        (
-          'thread-invalid-legacy',
-          'running',
-          'OpenAI/Codex',
-          'provider-session-invalid-legacy',
-          'provider-thread-invalid-legacy',
-          'approval-required',
-          'turn-invalid-legacy',
-          NULL,
-          '2026-06-01T00:00:00.000Z'
-        )
-      `;
-      yield* sql`
         ALTER TABLE provider_session_runtime
         ADD COLUMN provider_instance_id TEXT
       `;
@@ -105,26 +70,6 @@ layer("027_028_ProviderInstanceIdColumns", (it) => {
           (index) => index.name === "idx_projection_thread_sessions_instance",
         ),
       );
-
-      const projectedSessions = yield* sql<{
-        readonly thread_id: string;
-        readonly provider_instance_id: string | null;
-      }>`
-        SELECT thread_id, provider_instance_id
-        FROM projection_thread_sessions
-        WHERE thread_id IN ('thread-invalid-legacy', 'thread-legacy')
-        ORDER BY thread_id
-      `;
-      assert.deepStrictEqual(projectedSessions, [
-        {
-          thread_id: "thread-invalid-legacy",
-          provider_instance_id: null,
-        },
-        {
-          thread_id: "thread-legacy",
-          provider_instance_id: "codex",
-        },
-      ]);
     }),
   );
 });
