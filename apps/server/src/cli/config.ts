@@ -36,9 +36,7 @@ export const hostFlag = Flag.string("host").pipe(
   Flag.optional,
 );
 export const baseDirFlag = Flag.string("base-dir").pipe(
-  Flag.withDescription(
-    "Base directory path (equivalent to TRITONAI_HOME; T3CODE_HOME is still accepted as a legacy fallback).",
-  ),
+  Flag.withDescription("Base directory path (equivalent to TRITONAI_HOME)."),
   Flag.optional,
 );
 export const devUrlFlag = Flag.string("dev-url").pipe(
@@ -80,6 +78,14 @@ export const tailscaleServePortFlag = Flag.integer("tailscale-serve-port").pipe(
   Flag.optional,
 );
 
+const optionalStringConfig = (name: string): Config.Config<string | undefined> =>
+  Config.string(name).pipe(Config.option, Config.map(Option.getOrUndefined));
+
+const homeConfig = Config.all({
+  preferredHome: optionalStringConfig(TRITONAI_HOME_ENV),
+  legacyHome: optionalStringConfig(LEGACY_T3CODE_HOME_ENV),
+}).pipe(Config.map(({ preferredHome, legacyHome }) => preferredHome ?? legacyHome));
+
 const EnvServerConfig = Config.all({
   logLevel: Config.logLevel("T3CODE_LOG_LEVEL").pipe(Config.withDefault("Info")),
   traceMinLevel: Config.logLevel("T3CODE_TRACE_MIN_LEVEL").pipe(Config.withDefault("Info")),
@@ -109,14 +115,7 @@ const EnvServerConfig = Config.all({
   ),
   port: Config.port("T3CODE_PORT").pipe(Config.option, Config.map(Option.getOrUndefined)),
   host: Config.string("T3CODE_HOST").pipe(Config.option, Config.map(Option.getOrUndefined)),
-  tritonaiHome: Config.string(TRITONAI_HOME_ENV).pipe(
-    Config.option,
-    Config.map(Option.getOrUndefined),
-  ),
-  t3Home: Config.string(LEGACY_T3CODE_HOME_ENV).pipe(
-    Config.option,
-    Config.map(Option.getOrUndefined),
-  ),
+  t3Home: homeConfig,
   devUrl: Config.url("VITE_DEV_SERVER_URL").pipe(Config.option, Config.map(Option.getOrUndefined)),
   noBrowser: Config.boolean("T3CODE_NO_BROWSER").pipe(
     Config.option,
@@ -277,7 +276,6 @@ export const resolveServerConfig = (
       Option.getOrUndefined(
         resolveOptionPrecedence(
           normalizedFlags.baseDir,
-          Option.fromUndefinedOr(env.tritonaiHome),
           Option.fromUndefinedOr(env.t3Home),
           Option.fromUndefinedOr(bootstrap?.t3Home),
         ),

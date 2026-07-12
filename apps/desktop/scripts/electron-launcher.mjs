@@ -108,11 +108,11 @@ export function makeDevelopmentLauncherScript({
   desktopRoot,
   environment,
 }) {
+  const capturedTritonAiHome = environment.TRITONAI_HOME;
+  const capturedLegacyHome = environment.T3CODE_HOME;
   const envEntries = [
     ["VITE_DEV_SERVER_URL", environment.VITE_DEV_SERVER_URL],
     ["T3CODE_PORT", environment.T3CODE_PORT],
-    ["TRITONAI_HOME", environment.TRITONAI_HOME],
-    ["T3CODE_HOME", environment.T3CODE_HOME],
     ["T3CODE_COMMIT_HASH", environment.T3CODE_COMMIT_HASH],
     ["T3CODE_OTLP_TRACES_URL", environment.T3CODE_OTLP_TRACES_URL],
     ["T3CODE_OTLP_EXPORT_INTERVAL_MS", environment.T3CODE_OTLP_EXPORT_INTERVAL_MS],
@@ -124,6 +124,19 @@ export function makeDevelopmentLauncherScript({
       ([name, value]) =>
         `if [ -z "\${${name}:-}" ]; then export ${name}=${shellSingleQuote(value)}; fi`,
     ),
+    ...(typeof capturedTritonAiHome === "string" && capturedTritonAiHome.trim().length > 0
+      ? [
+          `if [ -z "\${TRITONAI_HOME:-}" ]; then export TRITONAI_HOME=${shellSingleQuote(capturedTritonAiHome)}; fi`,
+        ]
+      : []),
+    // A live legacy input outranks only the captured legacy fallback and is sanitized before exec.
+    'if [ -z "${TRITONAI_HOME:-}" ] && [ -n "${T3CODE_HOME:-}" ]; then export TRITONAI_HOME="$T3CODE_HOME"; fi',
+    ...(typeof capturedLegacyHome === "string" && capturedLegacyHome.trim().length > 0
+      ? [
+          `if [ -z "\${TRITONAI_HOME:-}" ]; then export TRITONAI_HOME=${shellSingleQuote(capturedLegacyHome)}; fi`,
+        ]
+      : []),
+    "unset T3CODE_HOME",
     `exec ${shellSingleQuote(electronBinaryPath)} --t3code-dev-root=${shellSingleQuote(desktopRoot)} ${shellSingleQuote(mainEntryPath)} "$@"`,
     "",
   ].join("\n");

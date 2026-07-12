@@ -35,6 +35,20 @@ const makeEnvironment = (
   DesktopEnvironment.DesktopEnvironment.pipe(Effect.provide(makeEnvironmentLayer(overrides, env)));
 
 describe("DesktopEnvironment", () => {
+  it.effect("prefers TRITONAI_HOME over the legacy home input", () =>
+    Effect.gen(function* () {
+      const environment = yield* makeEnvironment(
+        {},
+        {
+          TRITONAI_HOME: " /tmp/tritonai ",
+          T3CODE_HOME: "/tmp/legacy",
+        },
+      );
+
+      assert.equal(environment.baseDir, "/tmp/tritonai");
+    }),
+  );
+
   it.effect("derives state paths and development identity inside Effect", () =>
     Effect.gen(function* () {
       const environment = yield* makeEnvironment(
@@ -119,6 +133,7 @@ describe("DesktopEnvironment", () => {
     Effect.gen(function* () {
       const environment = yield* makeEnvironment();
 
+      assert.equal(environment.baseDir, "/Users/alice/.tritonai-harness");
       assert.deepEqual(environment.resolvePickFolderDefaultPath(null), Option.none());
       assert.deepEqual(
         environment.resolvePickFolderDefaultPath({ initialPath: " " }),

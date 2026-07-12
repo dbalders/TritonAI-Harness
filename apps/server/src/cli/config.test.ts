@@ -56,7 +56,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     return fd;
   });
 
-  it.effect("falls back to effect/config values when flags are omitted", () =>
+  it.effect("prefers TRITONAI_HOME over the legacy home input when flags are omitted", () =>
     Effect.gen(function* () {
       const { join } = yield* Path.Path;
       const baseDir = join(NodeOS.tmpdir(), "t3-cli-config-env-base");
@@ -87,7 +87,8 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
                   T3CODE_MODE: "desktop",
                   T3CODE_PORT: "4001",
                   T3CODE_HOST: "0.0.0.0",
-                  T3CODE_HOME: baseDir,
+                  TRITONAI_HOME: baseDir,
+                  T3CODE_HOME: join(NodeOS.tmpdir(), "ignored-legacy-base"),
                   VITE_DEV_SERVER_URL: "http://127.0.0.1:5173",
                   T3CODE_NO_BROWSER: "true",
                   T3CODE_AUTO_BOOTSTRAP_PROJECT_FROM_CWD: "false",
@@ -381,7 +382,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     }),
   );
 
-  it.effect("applies flag then env precedence over bootstrap envelope values", () =>
+  it.effect("accepts the legacy home input between flags and bootstrap values", () =>
     Effect.gen(function* () {
       const { join } = yield* Path.Path;
       const baseDir = join(NodeOS.tmpdir(), "t3-cli-config-env-wins");
