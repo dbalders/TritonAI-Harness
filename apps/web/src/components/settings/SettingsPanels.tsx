@@ -1077,7 +1077,7 @@ export function ProviderSettingsPanel() {
           const canRunInlineUpdate =
             updateCandidate !== undefined &&
             canOneClickUpdateProviderCandidate(updateCandidate, visibleServerProviders) &&
-            !updatingProviderDrivers.has(updateCandidate.driver);
+            !isDriverUpdateRunning;
           const modelPreferences = settings.providerModelPreferences?.[row.instanceId] ?? {
             hiddenModels: [],
             modelOrder: [],
