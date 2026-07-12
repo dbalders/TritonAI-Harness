@@ -8,32 +8,27 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import type { EnvironmentId, ProjectId, ScopedProjectRef } from "@t3tools/contracts";
-import { useNavigate } from "@tanstack/react-router";
+import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { Atom } from "effect/unstable/reactivity";
 import { useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { APP_BASE_NAME } from "./branding";
-import { useComposerDraftStore, type DraftId } from "./composerDraftStore";
+import { useComposerDraftStore } from "./composerDraftStore";
 import {
   useClientSettingsHydrated,
   usePrimarySettings,
   useUpdatePrimarySettings,
 } from "./hooks/useSettings";
-import {
-  deriveLogicalProjectKeyFromSettings,
-  selectProjectGroupingSettings,
-} from "./logicalProject";
+import { useNewThreadHandler } from "./hooks/useHandleNewThread";
 import { inferProjectTitleFromPath } from "./lib/projectPaths";
-import { newDraftId, newProjectId, newThreadId } from "./lib/utils";
+import { newProjectId } from "./lib/utils";
 import { readProject, useEnvironmentThreadRefs, useProjects } from "./state/entities";
 import { usePrimaryEnvironmentId } from "./state/environments";
 import { projectEnvironment } from "./state/projects";
 import { environmentShell } from "./state/shell";
 import { useAtomCommand } from "./state/use-atom-command";
-import { buildDraftThreadRouteParams } from "./threadRoutes";
 import {
   TRITONAI_CHATS_WORKSPACE,
   TRITONAI_FIRST_RUN_PROMPT,
@@ -44,7 +39,6 @@ import {
   resolveTritonAiChatsWorkspacePath,
   resolveTritonAiFirstRunWorkspacePath,
 } from "./tritonAiWorkspace";
-import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE } from "./types";
 
 const ONBOARDING_PROJECT_TITLE = "TritonAI";
 const PROJECT_CREATE_WAIT_TIMEOUT_MS = 5_000;
@@ -146,35 +140,9 @@ function waitForProject(input: {
   });
 }
 
-function createFirstRunDraft(input: {
-  projectRef: ScopedProjectRef;
-  logicalProjectKey: string;
-  envMode: "local" | "worktree";
-}): DraftId {
-  const draftId = newDraftId();
-  const draftStore = useComposerDraftStore.getState();
-  draftStore.setLogicalProjectDraftThreadId(input.logicalProjectKey, input.projectRef, draftId, {
-    threadId: newThreadId(),
-    createdAt: new Date().toISOString(),
-    branch: null,
-    worktreePath: null,
-    envMode: input.envMode,
-    runtimeMode: DEFAULT_RUNTIME_MODE,
-    interactionMode: DEFAULT_INTERACTION_MODE,
-  });
-  draftStore.applyStickyState(draftId);
-
-  const composerDraft = draftStore.getComposerDraft(draftId);
-  if (!composerDraft || composerDraft.prompt.length === 0) {
-    draftStore.setPrompt(draftId, TRITONAI_FIRST_RUN_PROMPT);
-  }
-
-  return draftId;
-}
-
 export function TritonAiFirstRunOnboardingBootstrap(props: { pathname: string }) {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
-  const navigate = useNavigate();
+  const createNewThread = useNewThreadHandler();
   const updateSettings = useUpdatePrimarySettings();
   const createProject = useAtomCommand(projectEnvironment.create, {
     label: "first-run TritonAI project create",
@@ -185,11 +153,9 @@ export function TritonAiFirstRunOnboardingBootstrap(props: { pathname: string })
   const onboardingCompleted = usePrimarySettings(
     (settings) => settings.tritonAiFirstRunOnboardingCompleted,
   );
-  const defaultThreadEnvMode = usePrimarySettings((settings) => settings.defaultThreadEnvMode);
   const defaultModelSelection = usePrimarySettings(
     (settings) => settings.textGenerationModelSelection,
   );
-  const projectGroupingSettings = usePrimarySettings(selectProjectGroupingSettings);
   const projects = useProjects();
   const primaryThreadRefs = useEnvironmentThreadRefs(primaryEnvironmentId);
   const primaryShellState = useAtomValue(
@@ -289,19 +255,8 @@ export function TritonAiFirstRunOnboardingBootstrap(props: { pathname: string })
           return;
         }
 
-        const logicalProjectKey = deriveLogicalProjectKeyFromSettings(
-          project,
-          projectGroupingSettings,
-        );
-        const draftId = createFirstRunDraft({
-          projectRef,
-          logicalProjectKey,
-          envMode: defaultThreadEnvMode,
-        });
-
-        await navigate({
-          to: "/draft/$draftId",
-          params: buildDraftThreadRouteParams(draftId),
+        await createNewThread(projectRef, {
+          newDraftPrompt: TRITONAI_FIRST_RUN_PROMPT,
           replace: true,
         });
         updateSettings({ tritonAiFirstRunOnboardingCompleted: true });
@@ -314,17 +269,15 @@ export function TritonAiFirstRunOnboardingBootstrap(props: { pathname: string })
   }, [
     clientSettingsHydrated,
     composerDraftsHydrated,
+    createNewThread,
     createProject,
     defaultModelSelection,
-    defaultThreadEnvMode,
     draftStateSummary.composerDraftCount,
     draftStateSummary.draftThreadCount,
-    navigate,
     onboardingCompleted,
     primaryEnvironmentId,
     primaryShellState.snapshot,
     primaryThreadRefs.length,
-    projectGroupingSettings,
     projects,
     props.pathname,
     updateSettings,
