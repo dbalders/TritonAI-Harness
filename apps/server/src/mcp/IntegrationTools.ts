@@ -68,6 +68,7 @@ function registerTool(
   server: McpServer.McpServer["Service"],
   definition: IntegrationProviderTool,
   isAvailable: (name: string) => boolean,
+  reservedToolNames: ReadonlySet<string>,
 ) {
   assertReadOnlyTool(definition);
   const registration: Parameters<typeof server.addTool>[0] = {
@@ -126,7 +127,10 @@ function registerTool(
       ),
   };
   return Effect.suspend(() => {
-    if (server.tools.some(({ tool }) => tool.name === definition.name)) {
+    if (
+      reservedToolNames.has(definition.name) ||
+      server.tools.some(({ tool }) => tool.name === definition.name)
+    ) {
       return Effect.fail(new IntegrationToolRegistrationError({ toolName: definition.name }));
     }
     return server.addTool(registration);
@@ -139,45 +143,49 @@ const activeToolAvailable = (name: string) =>
 export const registrationLayerFor = (
   definitions: ReadonlyArray<IntegrationProviderTool>,
   isAvailable: (name: string) => boolean = activeToolAvailable,
+  reservedToolNames: ReadonlySet<string> = new Set(),
 ) => {
   for (const definition of definitions) assertReadOnlyTool(definition);
   return Layer.effectDiscard(
     Effect.gen(function* () {
       const server = yield* McpServer.McpServer;
-      for (const definition of definitions) yield* registerTool(server, definition, isAvailable);
+      for (const definition of definitions) {
+        yield* registerTool(server, definition, isAvailable, reservedToolNames);
+      }
     }),
   );
 };
 
-export const registrationLayer = Layer.effectDiscard(
-  Effect.gen(function* () {
-    const server = yield* McpServer.McpServer;
-    const context = yield* Effect.context<never>();
-    const runFork = Effect.runForkWith(context);
-    const registered = new Set<string>();
-    const integrationSubscriptions = new Set<() => void>();
-    const register = (definition: IntegrationProviderTool) => {
-      if (registered.has(definition.name)) return;
-      registered.add(definition.name);
-      runFork(
-        registerTool(server, definition, activeToolAvailable).pipe(
-          Effect.catchCause((cause) =>
-            Effect.logError("integration tool registration failed", {
-              toolName: definition.name,
-              cause,
-            }),
+export const registrationLayer = (reservedToolNames: ReadonlySet<string> = new Set()) =>
+  Layer.effectDiscard(
+    Effect.gen(function* () {
+      const server = yield* McpServer.McpServer;
+      const context = yield* Effect.context<never>();
+      const runFork = Effect.runForkWith(context);
+      const registered = new Set<string>();
+      const integrationSubscriptions = new Set<() => void>();
+      const register = (definition: IntegrationProviderTool) => {
+        if (registered.has(definition.name)) return;
+        registered.add(definition.name);
+        runFork(
+          registerTool(server, definition, activeToolAvailable, reservedToolNames).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logError("integration tool registration failed", {
+                toolName: definition.name,
+                cause,
+              }),
+            ),
           ),
-        ),
+        );
+      };
+      const unsubscribeRegistry = Integrations.observeIntegrationRegistry((registry) => {
+        integrationSubscriptions.add(registry.observeToolDefinitions(register));
+      });
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          unsubscribeRegistry();
+          for (const unsubscribe of integrationSubscriptions) unsubscribe();
+        }),
       );
-    };
-    const unsubscribeRegistry = Integrations.observeIntegrationRegistry((registry) => {
-      integrationSubscriptions.add(registry.observeToolDefinitions(register));
-    });
-    yield* Effect.addFinalizer(() =>
-      Effect.sync(() => {
-        unsubscribeRegistry();
-        for (const unsubscribe of integrationSubscriptions) unsubscribe();
-      }),
-    );
-  }),
-);
+    }),
+  );

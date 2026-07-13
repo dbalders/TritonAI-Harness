@@ -55,7 +55,6 @@ import * as ProviderEventLoggers from "./ProviderEventLoggers.ts";
 import * as AnalyticsService from "../../telemetry/AnalyticsService.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
-import * as Integrations from "../../integrations/IntegrationRegistry.ts";
 const isModelSelection = Schema.is(ModelSelection);
 
 /**
@@ -219,9 +218,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     McpSessionRegistry.issueActiveMcpCredential({
       threadId,
       providerInstanceId,
-      capabilities: McpSessionRegistry.providerSessionCapabilities(
-        Integrations.getIntegrationRegistryOptional()?.hasAvailableToolsSync() === true,
-      ),
+      capabilities: McpSessionRegistry.providerSessionCapabilities(),
     }).pipe(
       Effect.tap((credential) =>
         credential

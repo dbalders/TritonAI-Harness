@@ -97,6 +97,26 @@ it.effect("rejects integration tool names that collide with existing MCP tools",
   }).pipe(Effect.scoped),
 );
 
+it.effect("rejects reserved built-in names before built-in registration completes", () =>
+  Effect.gen(function* () {
+    const exit = yield* Effect.exit(
+      Effect.void.pipe(
+        Effect.provide(
+          registrationLayerFor([fixtureTool], () => true, new Set([fixtureTool.name])).pipe(
+            Layer.provideMerge(McpServer.McpServer.layer),
+          ),
+        ),
+      ),
+    );
+    expect(exit._tag).toBe("Failure");
+    if (exit._tag === "Failure") {
+      expect(Cause.pretty(exit.cause)).toContain(
+        "Integration tool fixture.read conflicts with an existing MCP tool name.",
+      );
+    }
+  }).pipe(Effect.scoped),
+);
+
 it("normalizes arbitrary provider results into JSON object content", () => {
   expect(normalizeIntegrationToolResult("ready")).toEqual({ result: "ready" });
   expect(normalizeIntegrationToolResult([1, 2])).toEqual({ result: [1, 2] });

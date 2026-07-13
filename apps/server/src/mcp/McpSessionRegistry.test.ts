@@ -40,7 +40,7 @@ it.effect("stores only a token hash, resolves the bearer token, and revokes by t
     const issued = yield* registry.issue({
       threadId,
       providerInstanceId: ProviderInstanceId.make("codex"),
-      capabilities: McpSessionRegistry.providerSessionCapabilities(false),
+      capabilities: McpSessionRegistry.providerSessionCapabilities(),
     });
     expect(issued.config.endpoint).toBe("http://127.0.0.1:43123/mcp");
     const token = issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
@@ -48,7 +48,7 @@ it.effect("stores only a token hash, resolves the bearer token, and revokes by t
 
     const resolved = yield* registry.resolve(token);
     expect(resolved?.threadId).toBe(threadId);
-    expect(resolved?.capabilities).toEqual(new Set(["preview"]));
+    expect(resolved?.capabilities).toEqual(new Set(["preview", "integrations.read"]));
 
     yield* registry.revokeThread(threadId);
     expect(yield* registry.resolve(token)).toBeUndefined();
@@ -71,7 +71,7 @@ it.effect("builds MCP endpoints from the bound server host", () =>
       const issued = yield* registry.issue({
         threadId: ThreadId.make(`thread-${hostname}`),
         providerInstanceId: ProviderInstanceId.make("codex"),
-        capabilities: McpSessionRegistry.providerSessionCapabilities(true),
+        capabilities: McpSessionRegistry.providerSessionCapabilities(),
       });
       expect(issued.config.endpoint).toBe(expectedEndpoint);
       const token = issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
@@ -89,7 +89,7 @@ it.effect("expires credentials after inactivity", () =>
     const issued = yield* registry.issue({
       threadId: ThreadId.make("thread-2"),
       providerInstanceId: ProviderInstanceId.make("claude"),
-      capabilities: McpSessionRegistry.providerSessionCapabilities(false),
+      capabilities: McpSessionRegistry.providerSessionCapabilities(),
     });
     const token = issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
     timestamp += 101;

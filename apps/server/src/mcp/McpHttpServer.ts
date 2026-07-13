@@ -21,8 +21,9 @@ import {
   PreviewSnapshotTool,
   PreviewSnapshotToolkit,
   PreviewStandardToolkit,
+  PreviewToolkit,
 } from "./toolkits/preview/tools.ts";
-import { registrationLayer as IntegrationToolsRegistrationLive } from "./IntegrationTools.ts";
+import { registrationLayer as integrationToolsRegistrationLayer } from "./IntegrationTools.ts";
 
 const unauthorized = HttpServerResponse.jsonUnsafe(
   {
@@ -207,6 +208,10 @@ const PreviewSnapshotRegistrationLive = Layer.effectDiscard(registerPreviewSnaps
 export const PreviewToolkitRegistrationLive = Layer.mergeAll(
   PreviewStandardToolkitRegistrationLive,
   PreviewSnapshotRegistrationLive,
+);
+
+const IntegrationToolsRegistrationLive = integrationToolsRegistrationLayer(
+  new Set(Object.keys(PreviewToolkit.tools)),
 );
 
 const McpTransportLive = McpServer.layerHttp({

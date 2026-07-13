@@ -56,12 +56,12 @@ export interface McpSessionRegistryOptions {
 const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1_000;
 const DEFAULT_MAXIMUM_LIFETIME_MS = 8 * 60 * 60 * 1_000;
 
-export const providerSessionCapabilities = (
-  integrationAccessGranted: boolean,
-): ReadonlySet<McpInvocationContext.McpCapability> =>
-  new Set<McpInvocationContext.McpCapability>(
-    integrationAccessGranted ? ["preview", "integrations.read"] : ["preview"],
-  );
+// The credential grants only the generic read boundary. Individual integration
+// tools remain hidden and fail closed unless their plugin, connection, and
+// required capability are active. Keeping this grant stable lets a user activate
+// an integration without restarting an already-running provider session.
+export const providerSessionCapabilities = (): ReadonlySet<McpInvocationContext.McpCapability> =>
+  new Set<McpInvocationContext.McpCapability>(["preview", "integrations.read"]);
 
 const bytesToHex = (bytes: Uint8Array): string =>
   Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
