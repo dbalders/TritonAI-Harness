@@ -37,6 +37,7 @@ function makeFakeCodexBinary(
     exitCode?: number;
     stderr?: string;
     requireImage?: boolean;
+    requireModel?: string;
     requireServiceTier?: string;
     requireReasoningEffort?: string;
     requireTritonAiProviderConfig?: boolean;
@@ -58,6 +59,7 @@ function makeFakeCodexBinary(
         "#!/bin/sh",
         'output_path=""',
         'seen_image="0"',
+        'seen_model=""',
         'seen_service_tier=""',
         'seen_reasoning_effort=""',
         'seen_model_provider=""',
@@ -71,6 +73,12 @@ function makeFakeCodexBinary(
         '    if [ -n "$1" ]; then',
         '      seen_image="1"',
         "    fi",
+        "    shift",
+        "    continue",
+        "  fi",
+        '  if [ "$1" = "--model" ]; then',
+        "    shift",
+        '    seen_model="$1"',
         "    shift",
         "    continue",
         "  fi",
@@ -136,6 +144,14 @@ function makeFakeCodexBinary(
               `if [ "$seen_service_tier" != "service_tier=\\"${input.requireServiceTier}\\"" ]; then`,
               '  printf "%s\\n" "unexpected service tier config: $seen_service_tier" >&2',
               `  exit 5`,
+              "fi",
+            ]
+          : []),
+        ...(input.requireModel
+          ? [
+              `if [ "$seen_model" != "${input.requireModel}" ]; then`,
+              '  printf "%s\\n" "unexpected model: $seen_model" >&2',
+              `  exit 13`,
               "fi",
             ]
           : []),
@@ -223,6 +239,7 @@ function withFakeCodexEnv<A, E, R>(
     exitCode?: number;
     stderr?: string;
     requireImage?: boolean;
+    requireModel?: string;
     requireServiceTier?: string;
     requireReasoningEffort?: string;
     requireTritonAiProviderConfig?: boolean;
@@ -252,6 +269,7 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGeneration", (it) => {
           body: "\n- added migration\n- updated tests\n",
         }),
         requireTritonAiProviderConfig: true,
+        requireModel: DEFAULT_TRITONAI_CODEX_MODEL,
         stdinMustNotContain: "branch must be a short semantic git branch fragment",
       },
       (textGeneration) =>
@@ -261,7 +279,10 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGeneration", (it) => {
             branch: "feature/codex-effect",
             stagedSummary: "M README.md",
             stagedPatch: "diff --git a/README.md b/README.md",
-            modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+            modelSelection: createModelSelection(
+              ProviderInstanceId.make("codex"),
+              "deepseek-v4-flash",
+            ),
           });
 
           expect(generated.subject.length).toBeLessThanOrEqual(72);

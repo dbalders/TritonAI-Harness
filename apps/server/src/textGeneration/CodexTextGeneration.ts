@@ -29,7 +29,7 @@ import {
   sanitizeThreadTitle,
   toJsonSchemaObject,
 } from "./TextGenerationUtils.ts";
-import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
+import { getModelSelectionStringOptionValue, normalizeModelSlug } from "@t3tools/shared/model";
 import { getCodexServiceTierOptionValue } from "../codexModelOptions.ts";
 import { makeTritonAiCodexConfigArgs } from "../provider/Drivers/TritonAiCodexConfig.ts";
 
@@ -179,6 +179,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
         getModelSelectionStringOptionValue(modelSelection, "reasoningEffort") ??
         CODEX_GIT_TEXT_GENERATION_REASONING_EFFORT;
       const serviceTier = getCodexServiceTierOptionValue(modelSelection);
+      const model = normalizeModelSlug(modelSelection.model) ?? modelSelection.model;
       const spawnCommand = yield* resolveSpawnCommand(
         codexConfig.binaryPath || "codex",
         [
@@ -189,7 +190,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
           "-s",
           "read-only",
           "--model",
-          modelSelection.model,
+          model,
           "--config",
           `model_reasoning_effort="${reasoningEffort}"`,
           ...(serviceTier ? ["--config", `service_tier="${serviceTier}"`] : []),
