@@ -3,7 +3,11 @@ import * as Duration from "effect/Duration";
 import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 import { TrimmedNonEmptyString, TrimmedString } from "./baseSchemas.ts";
-import { DEFAULT_GIT_TEXT_GENERATION_MODEL, ProviderOptionSelections } from "./model.ts";
+import {
+  DEFAULT_GIT_TEXT_GENERATION_MODEL,
+  ModelCapabilities,
+  ProviderOptionSelections,
+} from "./model.ts";
 import { ModelSelection } from "./orchestration.ts";
 import { ProviderInstanceConfig, ProviderInstanceId } from "./providerInstance.ts";
 import { DEFAULT_TRITONAI_CODEX_HOME_PATH, DEFAULT_TRITONAI_CODEX_MODEL } from "./tritonai.ts";
@@ -164,6 +168,13 @@ export function makeProviderSettingsSchema<const Fields extends Schema.Struct.Fi
   );
 }
 
+const CustomModelMetadata = Schema.Struct({
+  name: TrimmedNonEmptyString,
+  shortName: Schema.optionalKey(TrimmedNonEmptyString),
+  capabilities: Schema.optionalKey(Schema.NullOr(ModelCapabilities)),
+});
+const CustomModelMetadataMap = Schema.Record(TrimmedNonEmptyString, CustomModelMetadata);
+
 export const CodexSettings = makeProviderSettingsSchema(
   {
     enabled: Schema.Boolean.pipe(
@@ -205,6 +216,10 @@ export const CodexSettings = makeProviderSettingsSchema(
     ),
     customModels: Schema.Array(Schema.String).pipe(
       Schema.withDecodingDefault(Effect.succeed([DEFAULT_TRITONAI_CODEX_MODEL])),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    customModelMetadata: CustomModelMetadataMap.pipe(
+      Schema.withDecodingDefault(Effect.succeed({})),
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
     ),
   },
@@ -484,6 +499,7 @@ const CodexSettingsPatch = Schema.Struct({
   homePath: Schema.optionalKey(TrimmedString),
   shadowHomePath: Schema.optionalKey(TrimmedString),
   customModels: Schema.optionalKey(Schema.Array(Schema.String)),
+  customModelMetadata: Schema.optionalKey(CustomModelMetadataMap),
 });
 
 const ClaudeSettingsPatch = Schema.Struct({

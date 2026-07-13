@@ -181,6 +181,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         homePath: "/Users/julius/.codex",
         shadowHomePath: "",
         customModels: [DEFAULT_TRITONAI_CODEX_MODEL],
+        customModelMetadata: {},
       });
       assert.deepEqual(next.providers.claudeAgent, {
         enabled: false,
@@ -422,6 +423,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         homePath: "",
         shadowHomePath: "",
         customModels: [DEFAULT_TRITONAI_CODEX_MODEL],
+        customModelMetadata: {},
       });
       assert.deepEqual(next.providers.claudeAgent, {
         enabled: false,

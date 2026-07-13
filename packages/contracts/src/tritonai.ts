@@ -15,4 +15,3 @@ export const TRITONAI_CODEX_MODEL_PROVIDER_ID = "ucsd";
 export const TRITONAI_CODEX_MODEL_PROVIDER_NAME = "UCSD TritonAI";
 export const DEFAULT_TRITONAI_CODEX_MODEL = "api-deepseek-v4-flash";
 export const DEFAULT_TRITONAI_CODEX_MODEL_DISPLAY_NAME = "DeepSeek v4 Flash";
-export const TRITONAI_VISIBLE_CODEX_MODELS = [DEFAULT_TRITONAI_CODEX_MODEL] as const;

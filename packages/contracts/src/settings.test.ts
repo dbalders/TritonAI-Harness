@@ -109,6 +109,51 @@ describe("ServerSettings worktree defaults", () => {
   });
 });
 
+describe("Codex custom model metadata", () => {
+  it("decodes Installer-provided presentation and capabilities", () => {
+    const decoded = decodeServerSettings({
+      providers: {
+        codex: {
+          customModels: ["configured-model"],
+          customModelMetadata: {
+            "configured-model": {
+              name: "Configured Model",
+              shortName: "Configured",
+              capabilities: {
+                optionDescriptors: [
+                  {
+                    id: "reasoningEffort",
+                    label: "Reasoning",
+                    type: "select",
+                    options: [{ id: "medium", label: "Medium", isDefault: true }],
+                    currentValue: "medium",
+                  },
+                ],
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(decoded.providers.codex.customModelMetadata["configured-model"]).toEqual({
+      name: "Configured Model",
+      shortName: "Configured",
+      capabilities: {
+        optionDescriptors: [
+          {
+            id: "reasoningEffort",
+            label: "Reasoning",
+            type: "select",
+            options: [{ id: "medium", label: "Medium", isDefault: true }],
+            currentValue: "medium",
+          },
+        ],
+      },
+    });
+  });
+});
+
 describe("ServerSettingsPatch.providerInstances", () => {
   it("treats providerInstances as an optional whole-map replacement", () => {
     const patch = decodeServerSettingsPatch({});
