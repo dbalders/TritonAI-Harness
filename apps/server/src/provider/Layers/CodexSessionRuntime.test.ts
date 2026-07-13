@@ -2,6 +2,8 @@ import * as NodeAssert from "node:assert/strict";
 
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import { describe } from "vite-plus/test";
 import { DEFAULT_TRITONAI_CODEX_MODEL, ThreadId } from "@t3tools/contracts";
@@ -19,6 +21,9 @@ import {
   isRecoverableThreadResumeError,
   openCodexThread,
   readCompatibleResumeThreadId,
+  reconcilePluginSkillAvailability,
+  resolvePluginSkillAvailability,
+  withPluginSkillLease,
 } from "./CodexSessionRuntime.ts";
 const isCodexAppServerRequestError = Schema.is(CodexErrors.CodexAppServerRequestError);
 
@@ -242,10 +247,12 @@ describe("buildTurnStartParams", () => {
           {
             name: "microsoft-365-mail",
             path: "/tmp/plugin-skills/microsoft-365-mail/SKILL.md",
+            root: "/tmp/plugin-skills/mail-root",
           },
           {
             name: "microsoft-365-calendar",
             path: "/tmp/plugin-skills/microsoft-365-calendar/SKILL.md",
+            root: "/tmp/plugin-skills/calendar-root",
           },
         ],
       }),
@@ -287,6 +294,86 @@ describe("buildTurnStartParams", () => {
       ],
     });
   });
+});
+
+describe("integration plugin skill availability", () => {
+  it("preserves independently rooted skills when another plugin is revoked", () => {
+    const available = new Set(["microsoft-365-mail"]);
+    const mail = {
+      name: "microsoft-365-mail",
+      path: "/tmp/plugin-skills/mail-root/microsoft-365-mail/SKILL.md",
+      root: "/tmp/plugin-skills/mail-root",
+    } as const;
+    const calendar = {
+      name: "microsoft-365-calendar",
+      path: "/tmp/plugin-skills/calendar-root/microsoft-365-calendar/SKILL.md",
+      root: "/tmp/plugin-skills/calendar-root",
+    } as const;
+
+    NodeAssert.deepStrictEqual(
+      resolvePluginSkillAvailability({
+        pluginSkills: [mail, calendar],
+        isPluginSkillAvailable: (name) => available.has(name),
+      }),
+      { skills: [mail], extraRoots: [mail.root] },
+    );
+  });
+
+  it.effect("reconciles revocation during root refresh and omits the skill from the turn", () =>
+    Effect.gen(function* () {
+      let available = true;
+      const rootUpdates: Array<ReadonlyArray<string>> = [];
+      const options = {
+        pluginSkills: [
+          {
+            name: "skill-only-fixture",
+            path: "/tmp/plugin-skills/fixture-root/skill-only-fixture/SKILL.md",
+            root: "/tmp/plugin-skills/fixture-root",
+          },
+        ],
+        isPluginSkillAvailable: () => available,
+      } as const;
+
+      const revoked = yield* reconcilePluginSkillAvailability(options, (extraRoots) =>
+        Effect.sync(() => {
+          rootUpdates.push([...extraRoots]);
+          available = false;
+        }),
+      );
+      NodeAssert.deepStrictEqual(rootUpdates, [[options.pluginSkills[0].root], []]);
+      NodeAssert.deepStrictEqual(revoked, { skills: [], extraRoots: [] });
+      const params = yield* buildTurnStartParams({
+        threadId: "provider-thread-1",
+        runtimeMode: "full-access",
+        prompt: "$skill-only-fixture run the check",
+        pluginSkills: revoked.skills,
+      });
+      NodeAssert.deepStrictEqual(params.input, [
+        { type: "text", text: "$skill-only-fixture run the check" },
+      ]);
+    }),
+  );
+
+  it.effect("holds a skill reservation until turn submission settles", () =>
+    Effect.gen(function* () {
+      const submission = yield* Deferred.make<void>();
+      let released = false;
+      const fiber = yield* withPluginSkillLease(
+        {
+          release: () => {
+            released = true;
+          },
+        },
+        Deferred.await(submission),
+      ).pipe(Effect.forkChild);
+
+      yield* Effect.yieldNow;
+      NodeAssert.equal(released, false);
+      yield* Deferred.succeed(submission, undefined);
+      yield* Fiber.join(fiber);
+      NodeAssert.equal(released, true);
+    }),
+  );
 });
 
 describe("T3 browser developer instructions", () => {

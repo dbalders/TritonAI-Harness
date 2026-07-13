@@ -106,13 +106,19 @@ describe("built-in integration packages", () => {
       ]);
       expect(
         await NodeFSP.readFile(
-          NodePath.join(runtime!.root, "skill-only-fixture", "SKILL.md"),
+          NodePath.join(runtime!.root, "skill-only-fixture", "skill-only-fixture", "SKILL.md"),
           "utf8",
         ),
       ).toContain("skill-only-fixture-ok");
       expect(
         await NodeFSP.readFile(
-          NodePath.join(runtime!.root, "authenticated-mcp-fixture", "agents", "openai.yaml"),
+          NodePath.join(
+            runtime!.root,
+            "authenticated-mcp-fixture",
+            "authenticated-mcp-fixture",
+            "agents",
+            "openai.yaml",
+          ),
           "utf8",
         ),
       ).toContain("API Key MCP Fixture");

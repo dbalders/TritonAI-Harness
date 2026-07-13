@@ -85,9 +85,17 @@ export interface IntegrationRuntimeSkill {
   readonly path: string;
 }
 
+export interface PreparedIntegrationRuntimeSkill extends IntegrationRuntimeSkill {
+  readonly root: string;
+}
+
 export interface IntegrationSkillRuntime {
   readonly root: string;
-  readonly skills: ReadonlyArray<IntegrationRuntimeSkill>;
+  readonly skills: ReadonlyArray<PreparedIntegrationRuntimeSkill>;
+}
+
+export interface IntegrationSkillReservation {
+  readonly release: () => void;
 }
 
 interface PersistedIntegrationState {
@@ -210,6 +218,8 @@ export class RegistryRuntime {
   #availableTools = new Set<string>();
   readonly #revocations = new Map<string, number>();
   readonly #activeInvocations = new Map<string, Set<AbortController>>();
+  readonly #activeSkillReservations = new Map<string, number>();
+  readonly #skillReservationWaiters = new Map<string, Set<() => void>>();
   readonly #skills: IntegrationSkillMaterializer;
   readonly #removeInstalledPackage: (path: string) => Promise<void>;
 
@@ -416,13 +426,28 @@ export class RegistryRuntime {
     return run;
   }
 
-  #beginRevocation(id: string): () => void {
+  #waitForSkillReservations(id: string): Promise<void> {
+    if (!this.#activeSkillReservations.has(id)) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      const waiters = this.#skillReservationWaiters.get(id) ?? new Set<() => void>();
+      waiters.add(resolve);
+      this.#skillReservationWaiters.set(id, waiters);
+    });
+  }
+
+  #beginRevocation(id: string): {
+    readonly ready: Promise<void>;
+    readonly finish: () => void;
+  } {
     this.#revocations.set(id, (this.#revocations.get(id) ?? 0) + 1);
     for (const controller of this.#activeInvocations.get(id) ?? []) controller.abort();
-    return () => {
-      const remaining = (this.#revocations.get(id) ?? 1) - 1;
-      if (remaining > 0) this.#revocations.set(id, remaining);
-      else this.#revocations.delete(id);
+    return {
+      ready: this.#waitForSkillReservations(id),
+      finish: () => {
+        const remaining = (this.#revocations.get(id) ?? 1) - 1;
+        if (remaining > 0) this.#revocations.set(id, remaining);
+        else this.#revocations.delete(id);
+      },
     };
   }
 
@@ -610,6 +635,51 @@ export class RegistryRuntime {
     return false;
   }
 
+  isSkillAvailableSync(name: string): boolean {
+    for (const { manifest } of this.#catalog.values()) {
+      if (!manifest.skills.some((skill) => skill.name === name)) continue;
+      if (this.#isRevoking(manifest.id)) return false;
+      return (
+        this.#summaries
+          .get(manifest.id)
+          ?.skills.some((skill) => skill.name === name && skill.available) === true
+      );
+    }
+    return false;
+  }
+
+  reserveSkillsSync(names: ReadonlyArray<string>): IntegrationSkillReservation | null {
+    const integrationIds = new Set<string>();
+    for (const name of new Set(names)) {
+      const integration = [...this.#catalog.values()].find(({ manifest }) =>
+        manifest.skills.some((skill) => skill.name === name),
+      );
+      if (!integration || !this.isSkillAvailableSync(name)) return null;
+      integrationIds.add(integration.manifest.id);
+    }
+    for (const id of integrationIds) {
+      this.#activeSkillReservations.set(id, (this.#activeSkillReservations.get(id) ?? 0) + 1);
+    }
+    let released = false;
+    return {
+      release: () => {
+        if (released) return;
+        released = true;
+        for (const id of integrationIds) {
+          const remaining = (this.#activeSkillReservations.get(id) ?? 1) - 1;
+          if (remaining > 0) {
+            this.#activeSkillReservations.set(id, remaining);
+            continue;
+          }
+          this.#activeSkillReservations.delete(id);
+          const waiters = this.#skillReservationWaiters.get(id);
+          this.#skillReservationWaiters.delete(id);
+          for (const resolve of waiters ?? []) resolve();
+        }
+      },
+    };
+  }
+
   hasAvailableToolsSync(): boolean {
     return [...this.#availableTools].some((name) => this.isToolAvailableSync(name));
   }
@@ -672,7 +742,7 @@ export class RegistryRuntime {
             }
           }
         }
-        await NodeFSP.cp(source, NodePath.join(staging, skill.name), {
+        await NodeFSP.cp(source, NodePath.join(staging, skill.name, skill.name), {
           recursive: true,
           errorOnExist: true,
         });
@@ -689,7 +759,8 @@ export class RegistryRuntime {
       root: runtimeRoot,
       skills: skills.map((skill) => ({
         ...skill,
-        path: NodePath.join(runtimeRoot, skill.name, "SKILL.md"),
+        root: NodePath.join(runtimeRoot, skill.name),
+        path: NodePath.join(runtimeRoot, skill.name, skill.name, "SKILL.md"),
       })),
     };
   }
@@ -773,9 +844,10 @@ export class RegistryRuntime {
   }
 
   setEnabled(id: string, enabled: boolean): Promise<IntegrationsListResult> {
-    const finishRevocation = enabled ? null : this.#beginRevocation(id);
+    const revocation = enabled ? null : this.#beginRevocation(id);
     const operation = this.#serializeIntegration(id, async () => {
       await this.#ready;
+      await revocation?.ready;
       const integration = this.#package(id);
       const { manifest } = integration;
       const installed = this.#state.installed[id];
@@ -806,7 +878,7 @@ export class RegistryRuntime {
       }
     });
     const result = operation.then(() => this.#cachedList());
-    return finishRevocation ? result.finally(finishRevocation) : result;
+    return revocation ? result.finally(revocation.finish) : result;
   }
 
   connect(id: string, capabilities: ReadonlyArray<string>): Promise<IntegrationConnectResult> {
@@ -869,9 +941,10 @@ export class RegistryRuntime {
   }
 
   disconnect(id: string): Promise<IntegrationsListResult> {
-    const finishRevocation = this.#beginRevocation(id);
+    const revocation = this.#beginRevocation(id);
     const operation = this.#serializeIntegration(id, async () => {
       await this.#ready;
+      await revocation.ready;
       const integration = this.#package(id);
       const { manifest, provider } = integration;
       if (!this.#state.installed[id])
@@ -891,13 +964,14 @@ export class RegistryRuntime {
         );
       }
     });
-    return operation.then(() => this.#cachedList()).finally(finishRevocation);
+    return operation.then(() => this.#cachedList()).finally(revocation.finish);
   }
 
   remove(id: string): Promise<IntegrationsListResult> {
-    const finishRevocation = this.#beginRevocation(id);
+    const revocation = this.#beginRevocation(id);
     const operation = this.#serializeIntegration(id, async () => {
       await this.#ready;
+      await revocation.ready;
       const integration = this.#package(id);
       const { manifest, provider } = integration;
       const installed = this.#state.installed[id];
@@ -971,7 +1045,7 @@ export class RegistryRuntime {
       }
       await this.#summarize(integration);
     });
-    return operation.then(() => this.#cachedList()).finally(finishRevocation);
+    return operation.then(() => this.#cachedList()).finally(revocation.finish);
   }
 
   async invokeTool(name: string, input: unknown): Promise<unknown> {

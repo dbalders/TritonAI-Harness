@@ -1468,13 +1468,17 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
                 },
               }
             : {}),
-          ...(integrationSkillRuntime
+          ...(integrationRegistry && integrationSkillRuntime
             ? {
-                pluginSkillRoot: integrationSkillRuntime.root,
                 pluginSkills: integrationSkillRuntime.skills.map((skill) => ({
                   name: skill.name,
                   path: skill.path,
+                  root: skill.root,
                 })),
+                isPluginSkillAvailable: (name: string) =>
+                  integrationRegistry.isSkillAvailableSync(name),
+                reservePluginSkills: (names: ReadonlyArray<string>) =>
+                  integrationRegistry.reserveSkillsSync(names),
               }
             : {}),
           ...(mcpSession

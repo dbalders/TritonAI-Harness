@@ -947,13 +947,57 @@ describe("IntegrationRegistry lifecycle", () => {
       };
       const registry = new RegistryRuntime(root, [packaged(connectedManifest, delayedProvider)]);
       await registry.install(connectedManifest.id);
+      expect(registry.isSkillAvailableSync("test-records")).toBe(true);
       const invocation = registry.invokeTool("test.records.list", {});
       await toolStarted;
       const disabling = registry.setEnabled(connectedManifest.id, false);
       expect(registry.isToolAvailableSync("test.records.list")).toBe(false);
+      expect(registry.isSkillAvailableSync("test-records")).toBe(false);
       await expect(invocation).rejects.toThrow(/revoked/u);
       await disabling;
       expect((await registry.list()).integrations[0]?.enabled).toBe(false);
+    } finally {
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("admits skill turns atomically and waits for their submission before revoking", async () => {
+    const root = await NodeFSP.mkdtemp(
+      NodePath.join(NodeOS.tmpdir(), "tritonai-skill-reservation-"),
+    );
+    const state: ProviderState = {
+      status: {
+        state: "connected",
+        accountLabel: "Test User",
+        grantedCapabilities: ["records.read"],
+        message: null,
+      },
+      credential: "present",
+      disconnectFails: false,
+    };
+    try {
+      const registry = new RegistryRuntime(root, [
+        packaged(connectedManifest, provider("test-connected-provider", state)),
+      ]);
+      await registry.install(connectedManifest.id);
+      const reservation = registry.reserveSkillsSync(["test-records"]);
+      expect(reservation).not.toBeNull();
+
+      let disableCompleted = false;
+      const disabling = registry.setEnabled(connectedManifest.id, false);
+      void disabling.then(() => {
+        disableCompleted = true;
+      });
+
+      expect(registry.isSkillAvailableSync("test-records")).toBe(false);
+      expect(registry.reserveSkillsSync(["test-records"])).toBeNull();
+      await Promise.resolve();
+      expect(disableCompleted).toBe(false);
+
+      reservation!.release();
+      await disabling;
+      expect(disableCompleted).toBe(true);
+      reservation!.release();
     } finally {
       await NodeFSP.rm(root, { recursive: true, force: true });
     }

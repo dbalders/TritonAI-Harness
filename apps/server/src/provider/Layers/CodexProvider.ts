@@ -497,7 +497,7 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
   const [skillsResponse, models] = yield* Effect.gen(function* () {
     if (integrationSkillRuntime) {
       yield* client.request("skills/extraRoots/set", {
-        extraRoots: [integrationSkillRuntime.root],
+        extraRoots: integrationSkillRuntime.skills.map((skill) => skill.root),
       });
     }
     return yield* Effect.all(

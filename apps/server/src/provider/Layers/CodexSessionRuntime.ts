@@ -139,6 +139,11 @@ export interface CodexDynamicToolInvocation {
 export interface CodexPluginSkillDefinition {
   readonly name: string;
   readonly path: string;
+  readonly root: string;
+}
+
+export interface CodexPluginSkillLease {
+  readonly release: () => void;
 }
 
 export type CodexResumeCursor = typeof CodexResumeCursorSchema.Type;
@@ -161,8 +166,72 @@ export interface CodexSessionRuntimeOptions {
   readonly appServerArgs?: ReadonlyArray<string>;
   readonly dynamicTools?: ReadonlyArray<CodexDynamicToolDefinition>;
   readonly invokeDynamicTool?: (input: CodexDynamicToolInvocation) => Promise<unknown>;
-  readonly pluginSkillRoot?: string;
   readonly pluginSkills?: ReadonlyArray<CodexPluginSkillDefinition>;
+  readonly isPluginSkillAvailable?: (name: string) => boolean;
+  readonly reservePluginSkills?: (names: ReadonlyArray<string>) => CodexPluginSkillLease | null;
+}
+
+interface PluginSkillAvailabilityInput {
+  readonly pluginSkills?: ReadonlyArray<CodexPluginSkillDefinition>;
+  readonly isPluginSkillAvailable?: (name: string) => boolean;
+}
+
+export interface PluginSkillAvailability {
+  readonly skills: ReadonlyArray<CodexPluginSkillDefinition>;
+  readonly extraRoots: ReadonlyArray<string>;
+}
+
+export function resolvePluginSkillAvailability(
+  input: PluginSkillAvailabilityInput,
+): PluginSkillAvailability {
+  const configured = input.pluginSkills ?? [];
+  const skills = input.isPluginSkillAvailable
+    ? configured.filter((skill) => input.isPluginSkillAvailable!(skill.name))
+    : configured;
+  return {
+    skills,
+    extraRoots: skills.map((skill) => skill.root),
+  };
+}
+
+function samePluginSkillAvailability(
+  left: PluginSkillAvailability,
+  right: PluginSkillAvailability,
+): boolean {
+  return (
+    left.skills.length === right.skills.length &&
+    left.skills.every(
+      (skill, index) =>
+        skill.name === right.skills[index]?.name &&
+        skill.path === right.skills[index]?.path &&
+        skill.root === right.skills[index]?.root,
+    )
+  );
+}
+
+export function reconcilePluginSkillAvailability<E, R>(
+  input: PluginSkillAvailabilityInput,
+  setExtraRoots: (extraRoots: ReadonlyArray<string>) => Effect.Effect<unknown, E, R>,
+): Effect.Effect<PluginSkillAvailability, E, R> {
+  return Effect.gen(function* () {
+    if (!input.pluginSkills?.length) return resolvePluginSkillAvailability(input);
+    let candidate = resolvePluginSkillAvailability(input);
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      yield* setExtraRoots(candidate.extraRoots);
+      const current = resolvePluginSkillAvailability(input);
+      if (samePluginSkillAvailability(candidate, current)) return current;
+      candidate = current;
+    }
+    yield* setExtraRoots([]);
+    return { skills: [], extraRoots: [] };
+  });
+}
+
+export function withPluginSkillLease<A, E, R>(
+  lease: CodexPluginSkillLease | null,
+  effect: Effect.Effect<A, E, R>,
+): Effect.Effect<A, E, R> {
+  return lease ? effect.pipe(Effect.ensuring(Effect.sync(lease.release))) : effect;
 }
 
 export interface CodexSessionRuntimeSendTurnInput {
@@ -1445,11 +1514,9 @@ export const makeCodexSessionRuntime = (
       yield* emitSessionEvent("session/connecting", "Starting Codex App Server session.");
       yield* client.request("initialize", buildCodexInitializeParams());
       yield* client.notify("initialized", undefined);
-      if (options.pluginSkillRoot) {
-        yield* client.request("skills/extraRoots/set", {
-          extraRoots: [options.pluginSkillRoot],
-        });
-      }
+      yield* reconcilePluginSkillAvailability(options, (extraRoots) =>
+        client.request("skills/extraRoots/set", { extraRoots }),
+      );
 
       const requestedModel = normalizeCodexModelSlug(options.model);
 
@@ -1527,18 +1594,49 @@ export const makeCodexSessionRuntime = (
           const normalizedModel = normalizeCodexModelSlug(
             input.model ?? (yield* Ref.get(sessionRef)).model,
           );
-          const params = yield* buildTurnStartParams({
-            threadId: providerThreadId,
-            runtimeMode: options.runtimeMode,
-            ...(input.input ? { prompt: input.input } : {}),
-            ...(input.attachments ? { attachments: input.attachments } : {}),
-            ...(normalizedModel ? { model: normalizedModel } : {}),
-            ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
-            ...(input.effort ? { effort: input.effort } : {}),
-            ...(input.interactionMode ? { interactionMode: input.interactionMode } : {}),
-            ...(options.pluginSkills?.length ? { pluginSkills: options.pluginSkills } : {}),
-          });
-          const rawResponse = yield* client.raw.request("turn/start", params);
+          const makeTurnParams = (pluginSkills: ReadonlyArray<CodexPluginSkillDefinition>) =>
+            buildTurnStartParams({
+              threadId: providerThreadId,
+              runtimeMode: options.runtimeMode,
+              ...(input.input ? { prompt: input.input } : {}),
+              ...(input.attachments ? { attachments: input.attachments } : {}),
+              ...(normalizedModel ? { model: normalizedModel } : {}),
+              ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
+              ...(input.effort ? { effort: input.effort } : {}),
+              ...(input.interactionMode ? { interactionMode: input.interactionMode } : {}),
+              ...(pluginSkills.length ? { pluginSkills } : {}),
+            });
+          let params: CodexTurnStartParamsWithCollaborationMode | null = null;
+          let pluginSkillLease: CodexPluginSkillLease | null = null;
+          for (let attempt = 0; attempt < 3; attempt += 1) {
+            const availability = yield* reconcilePluginSkillAvailability(options, (extraRoots) =>
+              client.request("skills/extraRoots/set", { extraRoots }),
+            );
+            const candidateParams = yield* makeTurnParams(availability.skills);
+            const names = availability.skills.map((skill) => skill.name);
+            if (names.length === 0) {
+              params = candidateParams;
+              break;
+            }
+            if (!options.reservePluginSkills && !options.isPluginSkillAvailable) {
+              params = candidateParams;
+              break;
+            }
+            const reservation = options.reservePluginSkills?.(names) ?? null;
+            if (reservation) {
+              params = candidateParams;
+              pluginSkillLease = reservation;
+              break;
+            }
+          }
+          if (!params) {
+            yield* client.request("skills/extraRoots/set", { extraRoots: [] });
+            params = yield* makeTurnParams([]);
+          }
+          const rawResponse = yield* withPluginSkillLease(
+            pluginSkillLease,
+            client.raw.request("turn/start", params),
+          );
           const response = yield* decodeV2TurnStartResponse(rawResponse).pipe(
             Effect.mapError((error) =>
               CodexErrors.CodexAppServerProtocolParseError.fromSchemaError(
