@@ -60,9 +60,6 @@ const encodedDefaultServerSettings = encodeServerSettings(DEFAULT_SERVER_SETTING
 
 const enabledClaudeSettings: ClaudeSettings = Schema.decodeSync(ClaudeSettings)({ enabled: true });
 const defaultCodexSettings: CodexSettings = Schema.decodeSync(CodexSettings)({});
-const legacyDeepSeekCodexSettings: CodexSettings = Schema.decodeSync(CodexSettings)({
-  customModels: ["deepseek-v4-flash"],
-});
 const disabledCodexSettings: CodexSettings = Schema.decodeSync(CodexSettings)({
   enabled: false,
 });
@@ -336,17 +333,6 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               currentValue: "medium",
             },
           ]);
-        }),
-      );
-
-      it.effect("keeps a legacy DeepSeek custom model visible under its canonical slug", () =>
-        Effect.gen(function* () {
-          const status = yield* makePendingCodexProvider(legacyDeepSeekCodexSettings);
-
-          assert.deepStrictEqual(
-            status.models.map((model) => ({ slug: model.slug, name: model.name })),
-            [{ slug: DEFAULT_TRITONAI_CODEX_MODEL, name: "DeepSeek v4 Flash" }],
-          );
         }),
       );
 
@@ -643,7 +629,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           version: "1.0.0",
           models: [
             {
-              slug: "deepseek-v4-flash",
+              slug: DEFAULT_TRITONAI_CODEX_MODEL,
               name: "DeepSeek v4 Flash",
               isCustom: true,
               capabilities: createModelCapabilities({
@@ -667,7 +653,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           checkedAt: "2026-04-14T00:01:00.000Z",
           models: [
             {
-              slug: "deepseek-v4-flash",
+              slug: DEFAULT_TRITONAI_CODEX_MODEL,
               name: "DeepSeek v4 Flash",
               isCustom: true,
               capabilities: null,
@@ -677,7 +663,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
 
         assert.deepStrictEqual(mergeProviderSnapshot(previousProvider, refreshedProvider).models, [
           {
-            slug: "deepseek-v4-flash",
+            slug: DEFAULT_TRITONAI_CODEX_MODEL,
             name: "DeepSeek v4 Flash",
             isCustom: true,
             capabilities: null,

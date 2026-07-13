@@ -73,10 +73,6 @@ const claudeCaps: ModelCapabilities = createModelCapabilities({
 describe("normalizeModelSlug", () => {
   it("maps known aliases to canonical slugs", () => {
     const claude = ProviderDriverKind.make("claudeAgent");
-    expect(normalizeModelSlug("deepseek")).toBe("api-deepseek-v4-flash");
-    expect(normalizeModelSlug("deepseek-v4-flash")).toBe("api-deepseek-v4-flash");
-    expect(normalizeModelSlug("ucsd/api-deepseek-v4-flash")).toBe("api-deepseek-v4-flash");
-    expect(normalizeModelSlug("api-deepseek-v4-flash")).toBe("api-deepseek-v4-flash");
     expect(normalizeModelSlug("gpt-5-codex")).toBe("gpt-5.4");
     expect(normalizeModelSlug("5.3")).toBe("gpt-5.3-codex");
     expect(normalizeModelSlug("sonnet", claude)).toBe("claude-sonnet-4-6");

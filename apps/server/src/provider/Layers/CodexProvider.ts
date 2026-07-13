@@ -25,13 +25,12 @@ import type {
 import {
   DEFAULT_TRITONAI_CODEX_MODEL,
   DEFAULT_TRITONAI_CODEX_MODEL_DISPLAY_NAME,
-  ProviderDriverKind,
   ServerSettingsError,
   TRITONAI_APP_BASE_NAME,
   TRITONAI_VISIBLE_CODEX_MODELS,
 } from "@t3tools/contracts";
 
-import { createModelCapabilities, normalizeModelSlug } from "@t3tools/shared/model";
+import { createModelCapabilities } from "@t3tools/shared/model";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import {
   AUTH_PROBE_TIMEOUT_MS,
@@ -49,7 +48,6 @@ const CODEX_PRESENTATION = {
   displayName: "TritonAI",
   showInteractionModeToggle: true,
 } as const;
-const CODEX_DRIVER_KIND = ProviderDriverKind.make("codex");
 const VISIBLE_CODEX_MODEL_SLUGS = new Set<string>(TRITONAI_VISIBLE_CODEX_MODELS);
 
 function codexModelDisplayName(slug: string): string {
@@ -59,26 +57,18 @@ function codexModelDisplayName(slug: string): string {
 function curateVisibleCodexModels(
   models: ReadonlyArray<ServerProviderModel>,
 ): ReadonlyArray<ServerProviderModel> {
-  const visibleModels = new Map<string, ServerProviderModel>();
-  for (const model of models) {
-    const slug = normalizeModelSlug(model.slug, CODEX_DRIVER_KIND) ?? model.slug;
-    if (!VISIBLE_CODEX_MODEL_SLUGS.has(slug) || visibleModels.has(slug)) {
-      continue;
-    }
-    visibleModels.set(
-      slug,
-      slug === DEFAULT_TRITONAI_CODEX_MODEL
+  return models
+    .filter((model) => VISIBLE_CODEX_MODEL_SLUGS.has(model.slug))
+    .map((model) =>
+      model.slug === DEFAULT_TRITONAI_CODEX_MODEL
         ? {
             ...model,
-            slug,
             name: DEFAULT_TRITONAI_CODEX_MODEL_DISPLAY_NAME,
             shortName: "DeepSeek",
             capabilities: tritonAiCodexCapabilities(model.capabilities),
           }
-        : { ...model, slug },
+        : model,
     );
-  }
-  return Array.from(visibleModels.values());
 }
 
 export interface CodexAppServerProviderSnapshot {
