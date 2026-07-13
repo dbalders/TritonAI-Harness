@@ -8,6 +8,11 @@ import * as NodePath from "node:path";
 import { expandHomePath } from "../pathExpansion.ts";
 
 const MARKER = ".tritonai-integration-skill.json";
+const SWAP_UUID = "[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
+const STAGING_DIRECTORY = new RegExp(`^\\.(.+)\\.(${SWAP_UUID})\\.staging$`, "iu");
+const BACKUP_DIRECTORY = new RegExp(`^(.+)\\.(${SWAP_UUID})\\.backup$`, "iu");
+const DEFAULT_STALE_SWAP_AGE_MS = 60 * 60 * 1_000;
+const activeSwapDirectories = new Set<string>();
 
 export interface IntegrationSkillSync {
   readonly integrationId: string;
@@ -77,12 +82,23 @@ function declaredSkillName(content: string): string | null {
   return (quote === '"' || quote === "'") && value.at(-1) === quote ? value.slice(1, -1) : value;
 }
 
+function transientSwapSkill(name: string): string | null {
+  return STAGING_DIRECTORY.exec(name)?.[1] ?? BACKUP_DIRECTORY.exec(name)?.[1] ?? null;
+}
+
 export class CodexIntegrationSkillMaterializer implements IntegrationSkillMaterializer {
   #codexHomes: ReadonlyArray<string>;
   #mutation: Promise<void> = Promise.resolve();
+  readonly #now: () => number;
+  readonly #staleSwapAgeMs: number;
 
-  constructor(codexHomes: ReadonlyArray<string>) {
+  constructor(
+    codexHomes: ReadonlyArray<string>,
+    options: { readonly now?: () => number; readonly staleSwapAgeMs?: number } = {},
+  ) {
     this.#codexHomes = [...new Set(codexHomes.map((home) => NodePath.resolve(home)))];
+    this.#now = options.now ?? Date.now;
+    this.#staleSwapAgeMs = options.staleSwapAgeMs ?? DEFAULT_STALE_SWAP_AGE_MS;
   }
 
   #serialize<A>(operation: () => Promise<A>): Promise<A> {
@@ -152,6 +168,13 @@ export class CodexIntegrationSkillMaterializer implements IntegrationSkillMateri
     for (const entry of await NodeFSP.readdir(skillsRoot, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
       const target = NodePath.join(skillsRoot, entry.name);
+      const swapSkill = transientSwapSkill(entry.name);
+      if (swapSkill !== null) {
+        if (await this.#isStaleOwnedSwap(target, swapSkill)) {
+          await NodeFSP.rm(target, { recursive: true, force: true });
+        }
+        continue;
+      }
       const markerPath = NodePath.join(target, MARKER);
       let marker: SkillMarker | null = null;
       try {
@@ -203,14 +226,16 @@ export class CodexIntegrationSkillMaterializer implements IntegrationSkillMateri
         `.${NodePath.basename(target)}.${crypto.randomUUID()}.staging`,
       );
       const backup = `${target}.${crypto.randomUUID()}.backup`;
-      await NodeFSP.cp(source, staging, { recursive: true, errorOnExist: true });
-      await NodeFSP.writeFile(
-        NodePath.join(staging, MARKER),
-        `${JSON.stringify({ version: 1, integrationId: input.integrationId, skill }, null, 2)}\n`,
-        { mode: 0o600 },
-      );
+      activeSwapDirectories.add(staging);
+      activeSwapDirectories.add(backup);
       let backedUp = false;
       try {
+        await NodeFSP.cp(source, staging, { recursive: true, errorOnExist: true });
+        await NodeFSP.writeFile(
+          NodePath.join(staging, MARKER),
+          `${JSON.stringify({ version: 1, integrationId: input.integrationId, skill }, null, 2)}\n`,
+          { mode: 0o600 },
+        );
         if (await exists(target)) {
           await NodeFSP.rename(target, backup);
           backedUp = true;
@@ -221,7 +246,31 @@ export class CodexIntegrationSkillMaterializer implements IntegrationSkillMateri
         await NodeFSP.rm(staging, { recursive: true, force: true }).catch(() => undefined);
         if (backedUp && !(await exists(target))) await NodeFSP.rename(backup, target);
         throw error;
+      } finally {
+        activeSwapDirectories.delete(staging);
+        activeSwapDirectories.delete(backup);
       }
+    }
+  }
+
+  async #isStaleOwnedSwap(target: string, expectedSkill: string): Promise<boolean> {
+    if (activeSwapDirectories.has(target)) return false;
+    try {
+      const marker = JSON.parse(
+        await NodeFSP.readFile(NodePath.join(target, MARKER), "utf8"),
+      ) as SkillMarker;
+      if (
+        marker.version !== 1 ||
+        typeof marker.integrationId !== "string" ||
+        marker.skill !== expectedSkill
+      ) {
+        return false;
+      }
+      const metadata = await NodeFSP.stat(target);
+      const lastChangedAt = Math.max(metadata.mtimeMs, metadata.ctimeMs);
+      return this.#now() - lastChangedAt >= this.#staleSwapAgeMs;
+    } catch {
+      return false;
     }
   }
 }

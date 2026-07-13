@@ -160,6 +160,57 @@ describe("integration Codex skill homes", () => {
     }
   });
 
+  it("removes interrupted skill swap directories without touching normal directories", async () => {
+    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-skill-swap-"));
+    const packageRoot = NodePath.join(root, "package");
+    const home = NodePath.join(root, "home");
+    const skillsRoot = NodePath.join(home, "skills");
+    const swapId = "11111111-1111-4111-8111-111111111111";
+    const staging = NodePath.join(skillsRoot, `.fixture-reader.${swapId}.staging`);
+    const backup = NodePath.join(skillsRoot, `fixture-reader.${swapId}.backup`);
+    const normal = NodePath.join(skillsRoot, ".fixture-reader.not-a-uuid.staging");
+    const unownedLookalike = NodePath.join(skillsRoot, `manual-reader.${swapId}.backup`);
+    const marker = JSON.stringify({
+      version: 1,
+      integrationId: "fixture",
+      skill: "fixture-reader",
+    });
+    try {
+      await NodeFSP.mkdir(NodePath.join(packageRoot, "skills", "fixture-reader"), {
+        recursive: true,
+      });
+      await NodeFSP.writeFile(
+        NodePath.join(packageRoot, "skills", "fixture-reader", "SKILL.md"),
+        "---\nname: fixture-reader\ndescription: Managed fixture.\n---\n",
+      );
+      for (const directory of [staging, backup, normal]) {
+        await NodeFSP.mkdir(directory, { recursive: true });
+        await NodeFSP.writeFile(
+          NodePath.join(directory, ".tritonai-integration-skill.json"),
+          marker,
+        );
+      }
+      await NodeFSP.mkdir(unownedLookalike, { recursive: true });
+      await NodeFSP.writeFile(NodePath.join(unownedLookalike, "SKILL.md"), "manual skill\n");
+
+      await new CodexIntegrationSkillMaterializer([home], { staleSwapAgeMs: 0 }).sync({
+        integrationId: "fixture",
+        packageRoot,
+        activeSkills: ["fixture-reader"],
+      });
+
+      await expect(NodeFSP.access(staging)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(NodeFSP.access(backup)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(NodeFSP.access(normal)).resolves.toBeUndefined();
+      await expect(NodeFSP.access(unownedLookalike)).resolves.toBeUndefined();
+      await expect(
+        NodeFSP.access(NodePath.join(skillsRoot, "fixture-reader", "SKILL.md")),
+      ).resolves.toBeUndefined();
+    } finally {
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("does not create a configured Codex home for inactive integrations", async () => {
     const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-inactive-home-"));
     const missingHome = NodePath.join(root, "not-created");

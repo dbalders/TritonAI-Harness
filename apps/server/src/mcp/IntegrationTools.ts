@@ -94,7 +94,7 @@ function registerTool(
           fiber.context,
           McpInvocationContext.McpInvocationContext,
         );
-        return invocation.capabilities.has("integrations.read")
+        return invocation.capabilities.has("integrations.read") && isAvailable(definition.name)
           ? Effect.tryPromise({
               try: async () =>
                 normalizeIntegrationToolResult(
@@ -115,6 +115,11 @@ function registerTool(
               structuredContent: value,
               content: [{ type: "text", text: JSON.stringify(value) }],
             }),
+        ),
+        Effect.catchCause((cause) =>
+          Effect.logWarning("integration tool invocation failed", {
+            toolName: definition.name,
+          }).pipe(Effect.andThen(Effect.failCause(cause))),
         ),
         Effect.orElseSucceed(
           () =>
@@ -168,7 +173,9 @@ export const registrationLayer = (reservedToolNames: ReadonlySet<string> = new S
         if (registered.has(definition.name)) return;
         registered.add(definition.name);
         runFork(
-          registerTool(server, definition, activeToolAvailable, reservedToolNames).pipe(
+          Effect.suspend(() =>
+            registerTool(server, definition, activeToolAvailable, reservedToolNames),
+          ).pipe(
             Effect.catchCause((cause) =>
               Effect.logError("integration tool registration failed", {
                 toolName: definition.name,

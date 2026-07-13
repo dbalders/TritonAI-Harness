@@ -172,3 +172,39 @@ it.effect("shows active integration tools only to read-authorized MCP credential
     }).pipe(Effect.provide(testLayer)),
   ),
 );
+
+it.effect("hides and rejects an unavailable tool despite read authorization", () => {
+  let availabilityChecks = 0;
+  const unavailable = () => {
+    availabilityChecks += 1;
+    return false;
+  };
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const server = yield* McpServer.McpServer;
+      const enabledWhen = Context.getUnsafe(server.tools[0]!.annotations, McpSchema.EnabledWhen);
+      const authorized = invocation(new Set(["integrations.read"]));
+      const visible = yield* Effect.sync(() => enabledWhen({} as never)).pipe(
+        Effect.provideService(McpInvocationContext.McpInvocationContext, authorized),
+      );
+      expect(visible).toBe(false);
+      const result = yield* server
+        .callTool({ name: "fixture.read", arguments: {} })
+        .pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, authorized),
+          Effect.provideService(McpSchema.McpServerClient, {} as never),
+        );
+      expect(result).toMatchObject({
+        isError: true,
+        structuredContent: { error: "integration_tool_unavailable" },
+      });
+      expect(availabilityChecks).toBe(2);
+    }).pipe(
+      Effect.provide(
+        registrationLayerFor([fixtureTool], unavailable).pipe(
+          Layer.provideMerge(McpServer.McpServer.layer),
+        ),
+      ),
+    ),
+  );
+});
