@@ -141,6 +141,10 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:process-diagnostics",
       tag: WS_METHODS.serverGetProcessDiagnostics,
     }),
+    tritonAiUsage: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:tritonai-usage",
+      tag: WS_METHODS.serverGetTritonAiUsage,
+    }),
     processResourceHistory: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:process-resource-history",
       tag: WS_METHODS.serverGetProcessResourceHistory,
