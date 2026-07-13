@@ -60,6 +60,9 @@ const encodedDefaultServerSettings = encodeServerSettings(DEFAULT_SERVER_SETTING
 
 const enabledClaudeSettings: ClaudeSettings = Schema.decodeSync(ClaudeSettings)({ enabled: true });
 const defaultCodexSettings: CodexSettings = Schema.decodeSync(CodexSettings)({});
+const legacyDeepSeekCodexSettings: CodexSettings = Schema.decodeSync(CodexSettings)({
+  customModels: ["deepseek-v4-flash"],
+});
 const disabledCodexSettings: CodexSettings = Schema.decodeSync(CodexSettings)({
   enabled: false,
 });
@@ -333,6 +336,17 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               currentValue: "medium",
             },
           ]);
+        }),
+      );
+
+      it.effect("keeps a legacy DeepSeek custom model visible under its canonical slug", () =>
+        Effect.gen(function* () {
+          const status = yield* makePendingCodexProvider(legacyDeepSeekCodexSettings);
+
+          assert.deepStrictEqual(
+            status.models.map((model) => ({ slug: model.slug, name: model.name })),
+            [{ slug: DEFAULT_TRITONAI_CODEX_MODEL, name: "DeepSeek v4 Flash" }],
+          );
         }),
       );
 
