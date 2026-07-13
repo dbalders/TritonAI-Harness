@@ -1,6 +1,5 @@
 import {
   AlertTriangleIcon,
-  CheckCircle2Icon,
   Clock3Icon,
   GaugeIcon,
   RefreshCwIcon,
@@ -28,23 +27,6 @@ import {
 } from "./UsageSettings.logic";
 
 type UsageTone = "default" | "warning" | "danger";
-
-function statusBadge(usage: ServerTritonAiUsageSnapshot) {
-  if (usage.blocked === true) {
-    return { label: "Blocked", variant: "destructive" as const, icon: ShieldAlertIcon };
-  }
-  if (usage.softBudgetCooldown === true) {
-    return { label: "Budget cooldown", variant: "warning" as const, icon: Clock3Icon };
-  }
-  if (usage.blocked === null || usage.softBudgetCooldown === null) {
-    return {
-      label: "Restriction status not reported",
-      variant: "outline" as const,
-      icon: AlertTriangleIcon,
-    };
-  }
-  return { label: "No restriction reported", variant: "success" as const, icon: CheckCircle2Icon };
-}
 
 function UsageMetric({
   label,
@@ -310,8 +292,6 @@ export function UsageSettingsPanel() {
     hasError: error !== null,
     isPending,
   });
-  const badge = data ? statusBadge(data) : null;
-  const BadgeIcon = badge?.icon;
   const fetchedAt = data ? formatUsageDate(data.fetchedAt) : null;
 
   return (
@@ -366,12 +346,6 @@ export function UsageSettingsPanel() {
                 <span className="truncate text-xs font-medium text-foreground">
                   {data.keyAlias ?? data.keyName ?? "Configured server key"}
                 </span>
-                {badge && BadgeIcon ? (
-                  <Badge variant={badge.variant} size="sm">
-                    <BadgeIcon />
-                    {badge.label}
-                  </Badge>
-                ) : null}
               </div>
               <span className="text-[11px] text-muted-foreground">
                 {fetchedAt ? `Updated ${fetchedAt}` : "Update time unavailable"}
