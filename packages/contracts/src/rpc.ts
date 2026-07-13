@@ -154,6 +154,7 @@ import {
   ServerVoiceTranscribeResult,
   ServerVoiceTranscriptionError,
 } from "./voice.ts";
+import { ServerTritonAiUsageError, ServerTritonAiUsageSnapshot } from "./tritonaiUsage.ts";
 import {
   SourceControlCloneRepositoryInput,
   SourceControlCloneRepositoryResult,
@@ -241,6 +242,7 @@ export const WS_METHODS = {
   serverGetSettings: "server.getSettings",
   serverUpdateSettings: "server.updateSettings",
   serverTranscribeVoice: "server.transcribeVoice",
+  serverGetTritonAiUsage: "server.getTritonAiUsage",
   serverDiscoverSourceControl: "server.discoverSourceControl",
   serverGetTraceDiagnostics: "server.getTraceDiagnostics",
   serverGetProcessDiagnostics: "server.getProcessDiagnostics",
@@ -338,6 +340,12 @@ export const WsServerTranscribeVoiceRpc = Rpc.make(WS_METHODS.serverTranscribeVo
   payload: ServerVoiceTranscribeInput,
   success: ServerVoiceTranscribeResult,
   error: Schema.Union([ServerVoiceTranscriptionError, EnvironmentAuthorizationError]),
+});
+
+export const WsServerGetTritonAiUsageRpc = Rpc.make(WS_METHODS.serverGetTritonAiUsage, {
+  payload: Schema.Struct({}),
+  success: ServerTritonAiUsageSnapshot,
+  error: Schema.Union([ServerTritonAiUsageError, EnvironmentAuthorizationError]),
 });
 
 export const WsServerDiscoverSourceControlRpc = Rpc.make(WS_METHODS.serverDiscoverSourceControl, {
@@ -857,6 +865,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetSettingsRpc,
   WsServerUpdateSettingsRpc,
   WsServerTranscribeVoiceRpc,
+  WsServerGetTritonAiUsageRpc,
   WsServerDiscoverSourceControlRpc,
   WsServerGetTraceDiagnosticsRpc,
   WsServerGetProcessDiagnosticsRpc,

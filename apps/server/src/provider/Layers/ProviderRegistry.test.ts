@@ -629,7 +629,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           version: "1.0.0",
           models: [
             {
-              slug: "deepseek-v4-flash",
+              slug: DEFAULT_TRITONAI_CODEX_MODEL,
               name: "DeepSeek v4 Flash",
               isCustom: true,
               capabilities: createModelCapabilities({
@@ -653,7 +653,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           checkedAt: "2026-04-14T00:01:00.000Z",
           models: [
             {
-              slug: "deepseek-v4-flash",
+              slug: DEFAULT_TRITONAI_CODEX_MODEL,
               name: "DeepSeek v4 Flash",
               isCustom: true,
               capabilities: null,
@@ -663,7 +663,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
 
         assert.deepStrictEqual(mergeProviderSnapshot(previousProvider, refreshedProvider).models, [
           {
-            slug: "deepseek-v4-flash",
+            slug: DEFAULT_TRITONAI_CODEX_MODEL,
             name: "DeepSeek v4 Flash",
             isCustom: true,
             capabilities: null,
