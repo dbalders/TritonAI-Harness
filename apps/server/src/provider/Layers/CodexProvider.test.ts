@@ -1,6 +1,6 @@
 import { assert, it } from "@effect/vitest";
 
-import { DEFAULT_TRITONAI_CODEX_MODEL, TRITONAI_GLM_CODEX_MODEL } from "@t3tools/contracts";
+import { DEFAULT_TRITONAI_CODEX_MODEL } from "@t3tools/contracts";
 import { createModelCapabilities } from "@t3tools/shared/model";
 
 import {
@@ -9,22 +9,20 @@ import {
   tritonAiCodexCapabilities,
 } from "./CodexProvider.ts";
 
-it("exposes the configured TritonAI models", () => {
-  const models = curateVisibleCodexModels(
-    [],
-    [DEFAULT_TRITONAI_CODEX_MODEL, TRITONAI_GLM_CODEX_MODEL],
-  );
+it("applies configured model metadata without model-specific Harness constants", () => {
+  const configuredModel = "configured-model";
+  const capabilities = tritonAiCodexCapabilities(null);
+  const models = curateVisibleCodexModels([], [configuredModel], {
+    [configuredModel]: {
+      name: "Configured Model",
+      shortName: "Configured",
+      capabilities,
+    },
+  });
 
   assert.deepStrictEqual(
     models.map(({ slug, name, shortName }) => ({ slug, name, shortName })),
-    [
-      {
-        slug: DEFAULT_TRITONAI_CODEX_MODEL,
-        name: "DeepSeek v4 Flash",
-        shortName: "DeepSeek",
-      },
-      { slug: TRITONAI_GLM_CODEX_MODEL, name: "GLM 5.2", shortName: "GLM" },
-    ],
+    [{ slug: configuredModel, name: "Configured Model", shortName: "Configured" }],
   );
   assert.ok(models.every((model) => model.capabilities?.optionDescriptors?.length));
 });
@@ -41,6 +39,7 @@ it("uses configured model visibility without a Harness allowlist", () => {
       },
     ],
     [configuredModel],
+    { [configuredModel]: { name: "Configured model", shortName: "Configured" } },
   );
 
   assert.deepStrictEqual(
@@ -48,6 +47,8 @@ it("uses configured model visibility without a Harness allowlist", () => {
     [configuredModel],
   );
   assert.strictEqual(models[0]?.capabilities, null);
+  assert.strictEqual(models[0]?.name, "Configured model");
+  assert.strictEqual(models[0]?.shortName, "Configured");
 });
 
 it("falls back to DeepSeek when no models are configured", () => {
@@ -57,6 +58,29 @@ it("falls back to DeepSeek when no models are configured", () => {
     models.map((model) => model.slug),
     [DEFAULT_TRITONAI_CODEX_MODEL],
   );
+});
+
+it("preserves default capabilities when metadata only changes presentation", () => {
+  const models = curateVisibleCodexModels([], [DEFAULT_TRITONAI_CODEX_MODEL], {
+    [DEFAULT_TRITONAI_CODEX_MODEL]: { name: "Managed DeepSeek" },
+  });
+
+  assert.strictEqual(models[0]?.name, "Managed DeepSeek");
+  assert.strictEqual(models[0]?.shortName, "DeepSeek");
+  assert.ok(models[0]?.capabilities?.optionDescriptors?.length);
+});
+
+it("ignores inherited metadata properties", () => {
+  const models = curateVisibleCodexModels([], ["constructor"]);
+
+  assert.deepStrictEqual(models, [
+    {
+      slug: "constructor",
+      name: "constructor",
+      isCustom: true,
+      capabilities: null,
+    },
+  ]);
 });
 
 it("maps current Codex model capability fields", () => {

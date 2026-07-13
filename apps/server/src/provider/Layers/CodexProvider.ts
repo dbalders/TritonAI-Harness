@@ -27,8 +27,6 @@ import {
   DEFAULT_TRITONAI_CODEX_MODEL_DISPLAY_NAME,
   ServerSettingsError,
   TRITONAI_APP_BASE_NAME,
-  TRITONAI_GLM_CODEX_MODEL,
-  TRITONAI_GLM_CODEX_MODEL_DISPLAY_NAME,
 } from "@t3tools/contracts";
 
 import { createModelCapabilities } from "@t3tools/shared/model";
@@ -52,13 +50,22 @@ const CODEX_PRESENTATION = {
 
 function codexModelDisplayName(slug: string): string {
   if (slug === DEFAULT_TRITONAI_CODEX_MODEL) return DEFAULT_TRITONAI_CODEX_MODEL_DISPLAY_NAME;
-  if (slug === TRITONAI_GLM_CODEX_MODEL) return TRITONAI_GLM_CODEX_MODEL_DISPLAY_NAME;
   return slug;
+}
+
+type CustomModelMetadata = CodexSettings["customModelMetadata"];
+
+function metadataForModel(
+  customModelMetadata: CustomModelMetadata,
+  slug: string,
+): CustomModelMetadata[string] | undefined {
+  return Object.hasOwn(customModelMetadata, slug) ? customModelMetadata[slug] : undefined;
 }
 
 export function curateVisibleCodexModels(
   models: ReadonlyArray<ServerProviderModel>,
   configuredModels: ReadonlyArray<string>,
+  customModelMetadata: CustomModelMetadata = {},
 ): ReadonlyArray<ServerProviderModel> {
   const configuredModelSlugs = Array.from(
     new Set(configuredModels.map((model) => model.trim()).filter(Boolean)),
@@ -68,18 +75,27 @@ export function curateVisibleCodexModels(
     configuredModelSlugs.length > 0 ? configuredModelSlugs : [DEFAULT_TRITONAI_CODEX_MODEL];
   const visibleModelSlugSet = new Set(visibleModelSlugs);
 
-  return appendCustomCodexModels(models, visibleModelSlugs)
+  return appendCustomCodexModels(models, visibleModelSlugs, customModelMetadata)
     .filter((model) => visibleModelSlugSet.has(model.slug))
-    .map((model) =>
-      model.slug === DEFAULT_TRITONAI_CODEX_MODEL || model.slug === TRITONAI_GLM_CODEX_MODEL
-        ? {
-            ...model,
-            name: codexModelDisplayName(model.slug),
-            shortName: model.slug === DEFAULT_TRITONAI_CODEX_MODEL ? "DeepSeek" : "GLM",
-            capabilities: tritonAiCodexCapabilities(model.capabilities),
-          }
-        : model,
-    );
+    .map((model) => {
+      const defaultModel =
+        model.slug === DEFAULT_TRITONAI_CODEX_MODEL
+          ? {
+              ...model,
+              name: DEFAULT_TRITONAI_CODEX_MODEL_DISPLAY_NAME,
+              shortName: "DeepSeek",
+              capabilities: tritonAiCodexCapabilities(model.capabilities),
+            }
+          : model;
+      const metadata = metadataForModel(customModelMetadata, model.slug);
+      if (!metadata) return defaultModel;
+      return {
+        ...defaultModel,
+        name: metadata.name,
+        ...(metadata.shortName ? { shortName: metadata.shortName } : {}),
+        ...(metadata.capabilities !== undefined ? { capabilities: metadata.capabilities } : {}),
+      };
+    });
 }
 
 export interface CodexAppServerProviderSnapshot {
@@ -284,6 +300,7 @@ function parseCodexModelListResponse(
 function appendCustomCodexModels(
   models: ReadonlyArray<ServerProviderModel>,
   customModels: ReadonlyArray<string>,
+  customModelMetadata: CustomModelMetadata,
 ): ReadonlyArray<ServerProviderModel> {
   if (customModels.length === 0) {
     return models;
@@ -297,12 +314,13 @@ function appendCustomCodexModels(
       continue;
     }
     seen.add(slug);
+    const metadata = metadataForModel(customModelMetadata, slug);
     customEntries.push({
       slug,
-      name: codexModelDisplayName(slug),
-      ...(slug === DEFAULT_TRITONAI_CODEX_MODEL ? { shortName: "DeepSeek" } : {}),
+      name: metadata?.name ?? codexModelDisplayName(slug),
+      ...(metadata?.shortName ? { shortName: metadata.shortName } : {}),
       isCustom: true,
-      capabilities: null,
+      capabilities: metadata?.capabilities ?? null,
     });
   }
   return customEntries.length === 0 ? models : [...models, ...customEntries];
@@ -395,6 +413,7 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
   readonly homePath?: string;
   readonly cwd: string;
   readonly customModels?: ReadonlyArray<string>;
+  readonly customModelMetadata?: CustomModelMetadata;
   readonly environment?: NodeJS.ProcessEnv;
 }) {
   // `~` is not shell-expanded when env vars are set via `child_process.spawn`,
@@ -460,7 +479,11 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
     return {
       account: accountResponse,
       version,
-      models: curateVisibleCodexModels([], input.customModels ?? []),
+      models: curateVisibleCodexModels(
+        [],
+        input.customModels ?? [],
+        input.customModelMetadata ?? {},
+      ),
       skills: [],
     } satisfies CodexAppServerProviderSnapshot;
   }
@@ -478,13 +501,21 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
   return {
     account: accountResponse,
     version,
-    models: curateVisibleCodexModels(models, input.customModels ?? []),
+    models: curateVisibleCodexModels(
+      models,
+      input.customModels ?? [],
+      input.customModelMetadata ?? {},
+    ),
     skills: parseCodexSkillsListResponse(skillsResponse, input.cwd),
   } satisfies CodexAppServerProviderSnapshot;
 });
 
 const emptyCodexModelsFromSettings = (codexSettings: CodexSettings): ServerProvider["models"] => {
-  return curateVisibleCodexModels([], codexSettings.customModels);
+  return curateVisibleCodexModels(
+    [],
+    codexSettings.customModels,
+    codexSettings.customModelMetadata,
+  );
 };
 
 const makePendingCodexProvider = (
@@ -563,6 +594,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
     readonly homePath?: string;
     readonly cwd: string;
     readonly customModels: ReadonlyArray<string>;
+    readonly customModelMetadata: CustomModelMetadata;
     readonly environment?: NodeJS.ProcessEnv;
   }) => Effect.Effect<
     CodexAppServerProviderSnapshot,
@@ -601,6 +633,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
     homePath: codexSettings.homePath,
     cwd: process.cwd(),
     customModels: codexSettings.customModels,
+    customModelMetadata: codexSettings.customModelMetadata,
     environment: resolvedEnvironment,
   }).pipe(
     Effect.scoped,
