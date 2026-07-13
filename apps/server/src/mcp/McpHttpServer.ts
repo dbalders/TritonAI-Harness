@@ -22,6 +22,7 @@ import {
   PreviewSnapshotToolkit,
   PreviewStandardToolkit,
 } from "./toolkits/preview/tools.ts";
+import { registrationLayer as IntegrationToolsRegistrationLive } from "./IntegrationTools.ts";
 
 const unauthorized = HttpServerResponse.jsonUnsafe(
   {
@@ -214,4 +215,7 @@ const McpTransportLive = McpServer.layerHttp({
   path: "/mcp",
 }).pipe(Layer.provide(McpAuthMiddlewareLive));
 
-export const layer = PreviewToolkitRegistrationLive.pipe(Layer.provideMerge(McpTransportLive));
+export const layer = Layer.mergeAll(
+  PreviewToolkitRegistrationLive,
+  IntegrationToolsRegistrationLive,
+).pipe(Layer.provideMerge(McpTransportLive));

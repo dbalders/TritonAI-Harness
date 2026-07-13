@@ -165,6 +165,16 @@ import {
   SourceControlRepositoryLookupInput,
 } from "./sourceControl.ts";
 import { VcsError } from "./vcs.ts";
+import {
+  IntegrationConnectInput,
+  IntegrationConnectResult,
+  IntegrationIdInput,
+  IntegrationOperationError,
+  IntegrationPollInput,
+  IntegrationPollResult,
+  IntegrationsListResult,
+  IntegrationSetEnabledInput,
+} from "./integrations.ts";
 
 export const WS_METHODS = {
   // Project registry methods
@@ -246,6 +256,13 @@ export const WS_METHODS = {
   serverAddMarketplace: "server.addMarketplace",
   serverRemoveMarketplace: "server.removeMarketplace",
   serverUpgradeMarketplace: "server.upgradeMarketplace",
+  integrationsList: "integrations.list",
+  integrationsInstall: "integrations.install",
+  integrationsSetEnabled: "integrations.setEnabled",
+  integrationsConnect: "integrations.connect",
+  integrationsPoll: "integrations.poll",
+  integrationsDisconnect: "integrations.disconnect",
+  integrationsRemove: "integrations.remove",
 
   // Cloud environment methods
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
@@ -424,6 +441,47 @@ export const WsServerUpgradeMarketplaceRpc = Rpc.make(WS_METHODS.serverUpgradeMa
   payload: ServerMarketplaceUpgradeInput,
   success: ServerPluginsListResult,
   error: Schema.Union([ServerPluginOperationError, EnvironmentAuthorizationError]),
+});
+
+const IntegrationRpcError = Schema.Union([
+  IntegrationOperationError,
+  EnvironmentAuthorizationError,
+]);
+
+export const WsIntegrationsListRpc = Rpc.make(WS_METHODS.integrationsList, {
+  payload: Schema.Struct({}),
+  success: IntegrationsListResult,
+  error: IntegrationRpcError,
+});
+export const WsIntegrationsInstallRpc = Rpc.make(WS_METHODS.integrationsInstall, {
+  payload: IntegrationIdInput,
+  success: IntegrationsListResult,
+  error: IntegrationRpcError,
+});
+export const WsIntegrationsSetEnabledRpc = Rpc.make(WS_METHODS.integrationsSetEnabled, {
+  payload: IntegrationSetEnabledInput,
+  success: IntegrationsListResult,
+  error: IntegrationRpcError,
+});
+export const WsIntegrationsConnectRpc = Rpc.make(WS_METHODS.integrationsConnect, {
+  payload: IntegrationConnectInput,
+  success: IntegrationConnectResult,
+  error: IntegrationRpcError,
+});
+export const WsIntegrationsPollRpc = Rpc.make(WS_METHODS.integrationsPoll, {
+  payload: IntegrationPollInput,
+  success: IntegrationPollResult,
+  error: IntegrationRpcError,
+});
+export const WsIntegrationsDisconnectRpc = Rpc.make(WS_METHODS.integrationsDisconnect, {
+  payload: IntegrationIdInput,
+  success: IntegrationsListResult,
+  error: IntegrationRpcError,
+});
+export const WsIntegrationsRemoveRpc = Rpc.make(WS_METHODS.integrationsRemove, {
+  payload: IntegrationIdInput,
+  success: IntegrationsListResult,
+  error: IntegrationRpcError,
 });
 
 export const WsCloudGetRelayClientStatusRpc = Rpc.make(WS_METHODS.cloudGetRelayClientStatus, {
@@ -814,6 +872,13 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerAddMarketplaceRpc,
   WsServerRemoveMarketplaceRpc,
   WsServerUpgradeMarketplaceRpc,
+  WsIntegrationsListRpc,
+  WsIntegrationsInstallRpc,
+  WsIntegrationsSetEnabledRpc,
+  WsIntegrationsConnectRpc,
+  WsIntegrationsPollRpc,
+  WsIntegrationsDisconnectRpc,
+  WsIntegrationsRemoveRpc,
   WsCloudGetRelayClientStatusRpc,
   WsCloudInstallRelayClientRpc,
   WsSourceControlLookupRepositoryRpc,
