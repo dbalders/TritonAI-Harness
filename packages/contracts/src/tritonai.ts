@@ -17,7 +17,3 @@ export const DEFAULT_TRITONAI_CODEX_MODEL = "api-deepseek-v4-flash";
 export const DEFAULT_TRITONAI_CODEX_MODEL_DISPLAY_NAME = "DeepSeek v4 Flash";
 export const TRITONAI_GLM_CODEX_MODEL = "api-glm-5.2";
 export const TRITONAI_GLM_CODEX_MODEL_DISPLAY_NAME = "GLM 5.2";
-export const TRITONAI_VISIBLE_CODEX_MODELS = [
-  DEFAULT_TRITONAI_CODEX_MODEL,
-  TRITONAI_GLM_CODEX_MODEL,
-] as const;

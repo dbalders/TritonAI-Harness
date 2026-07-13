@@ -9,8 +9,11 @@ import {
   tritonAiCodexCapabilities,
 } from "./CodexProvider.ts";
 
-it("exposes DeepSeek and GLM as the TritonAI models", () => {
-  const models = curateVisibleCodexModels([]);
+it("exposes the configured TritonAI models", () => {
+  const models = curateVisibleCodexModels(
+    [],
+    [DEFAULT_TRITONAI_CODEX_MODEL, TRITONAI_GLM_CODEX_MODEL],
+  );
 
   assert.deepStrictEqual(
     models.map(({ slug, name, shortName }) => ({ slug, name, shortName })),
@@ -24,6 +27,36 @@ it("exposes DeepSeek and GLM as the TritonAI models", () => {
     ],
   );
   assert.ok(models.every((model) => model.capabilities?.optionDescriptors?.length));
+});
+
+it("uses configured model visibility without a Harness allowlist", () => {
+  const configuredModel = "configured-model";
+  const models = curateVisibleCodexModels(
+    [
+      {
+        slug: "unconfigured-model",
+        name: "Unconfigured",
+        isCustom: false,
+        capabilities: null,
+      },
+    ],
+    [configuredModel],
+  );
+
+  assert.deepStrictEqual(
+    models.map((model) => model.slug),
+    [configuredModel],
+  );
+  assert.strictEqual(models[0]?.capabilities, null);
+});
+
+it("falls back to DeepSeek when no models are configured", () => {
+  const models = curateVisibleCodexModels([], []);
+
+  assert.deepStrictEqual(
+    models.map((model) => model.slug),
+    [DEFAULT_TRITONAI_CODEX_MODEL],
+  );
 });
 
 it("maps current Codex model capability fields", () => {

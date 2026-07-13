@@ -29,7 +29,6 @@ import {
   TRITONAI_APP_BASE_NAME,
   TRITONAI_GLM_CODEX_MODEL,
   TRITONAI_GLM_CODEX_MODEL_DISPLAY_NAME,
-  TRITONAI_VISIBLE_CODEX_MODELS,
 } from "@t3tools/contracts";
 
 import { createModelCapabilities } from "@t3tools/shared/model";
@@ -50,7 +49,6 @@ const CODEX_PRESENTATION = {
   displayName: "TritonAI",
   showInteractionModeToggle: true,
 } as const;
-const VISIBLE_CODEX_MODEL_SLUGS = new Set<string>(TRITONAI_VISIBLE_CODEX_MODELS);
 
 function codexModelDisplayName(slug: string): string {
   if (slug === DEFAULT_TRITONAI_CODEX_MODEL) return DEFAULT_TRITONAI_CODEX_MODEL_DISPLAY_NAME;
@@ -60,9 +58,18 @@ function codexModelDisplayName(slug: string): string {
 
 export function curateVisibleCodexModels(
   models: ReadonlyArray<ServerProviderModel>,
+  configuredModels: ReadonlyArray<string>,
 ): ReadonlyArray<ServerProviderModel> {
-  return appendCustomCodexModels(models, TRITONAI_VISIBLE_CODEX_MODELS)
-    .filter((model) => VISIBLE_CODEX_MODEL_SLUGS.has(model.slug))
+  const configuredModelSlugs = Array.from(
+    new Set(configuredModels.map((model) => model.trim()).filter(Boolean)),
+  );
+  // Managed installs supply the key-scoped model list; this is only the unmanaged fallback.
+  const visibleModelSlugs =
+    configuredModelSlugs.length > 0 ? configuredModelSlugs : [DEFAULT_TRITONAI_CODEX_MODEL];
+  const visibleModelSlugSet = new Set(visibleModelSlugs);
+
+  return appendCustomCodexModels(models, visibleModelSlugs)
+    .filter((model) => visibleModelSlugSet.has(model.slug))
     .map((model) =>
       model.slug === DEFAULT_TRITONAI_CODEX_MODEL || model.slug === TRITONAI_GLM_CODEX_MODEL
         ? {
@@ -283,7 +290,6 @@ function appendCustomCodexModels(
   }
 
   const seen = new Set(models.map((model) => model.slug));
-  const fallbackCapabilities = models.find((model) => model.capabilities)?.capabilities ?? null;
   const customEntries: ServerProviderModel[] = [];
   for (const rawModel of customModels) {
     const slug = rawModel.trim();
@@ -296,7 +302,7 @@ function appendCustomCodexModels(
       name: codexModelDisplayName(slug),
       ...(slug === DEFAULT_TRITONAI_CODEX_MODEL ? { shortName: "DeepSeek" } : {}),
       isCustom: true,
-      capabilities: fallbackCapabilities,
+      capabilities: null,
     });
   }
   return customEntries.length === 0 ? models : [...models, ...customEntries];
@@ -454,7 +460,7 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
     return {
       account: accountResponse,
       version,
-      models: curateVisibleCodexModels(appendCustomCodexModels([], input.customModels ?? [])),
+      models: curateVisibleCodexModels([], input.customModels ?? []),
       skills: [],
     } satisfies CodexAppServerProviderSnapshot;
   }
@@ -472,28 +478,13 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
   return {
     account: accountResponse,
     version,
-    models: curateVisibleCodexModels(appendCustomCodexModels(models, input.customModels ?? [])),
+    models: curateVisibleCodexModels(models, input.customModels ?? []),
     skills: parseCodexSkillsListResponse(skillsResponse, input.cwd),
   } satisfies CodexAppServerProviderSnapshot;
 });
 
 const emptyCodexModelsFromSettings = (codexSettings: CodexSettings): ServerProvider["models"] => {
-  const models = new Set<string>();
-  for (const model of codexSettings.customModels) {
-    const trimmed = model.trim();
-    if (trimmed.length > 0) {
-      models.add(trimmed);
-    }
-  }
-  return curateVisibleCodexModels(
-    Array.from(models, (model) => ({
-      slug: model,
-      name: codexModelDisplayName(model),
-      ...(model === DEFAULT_TRITONAI_CODEX_MODEL ? { shortName: "DeepSeek" } : {}),
-      isCustom: true,
-      capabilities: null,
-    })),
-  );
+  return curateVisibleCodexModels([], codexSettings.customModels);
 };
 
 const makePendingCodexProvider = (
