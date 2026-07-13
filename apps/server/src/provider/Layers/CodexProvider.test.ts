@@ -1,8 +1,30 @@
 import { assert, it } from "@effect/vitest";
 
+import { DEFAULT_TRITONAI_CODEX_MODEL, TRITONAI_GLM_CODEX_MODEL } from "@t3tools/contracts";
 import { createModelCapabilities } from "@t3tools/shared/model";
 
-import { mapCodexModelCapabilities, tritonAiCodexCapabilities } from "./CodexProvider.ts";
+import {
+  curateVisibleCodexModels,
+  mapCodexModelCapabilities,
+  tritonAiCodexCapabilities,
+} from "./CodexProvider.ts";
+
+it("exposes DeepSeek and GLM as the TritonAI models", () => {
+  const models = curateVisibleCodexModels([]);
+
+  assert.deepStrictEqual(
+    models.map(({ slug, name, shortName }) => ({ slug, name, shortName })),
+    [
+      {
+        slug: DEFAULT_TRITONAI_CODEX_MODEL,
+        name: "DeepSeek v4 Flash",
+        shortName: "DeepSeek",
+      },
+      { slug: TRITONAI_GLM_CODEX_MODEL, name: "GLM 5.2", shortName: "GLM" },
+    ],
+  );
+  assert.ok(models.every((model) => model.capabilities?.optionDescriptors?.length));
+});
 
 it("maps current Codex model capability fields", () => {
   const capabilities = mapCodexModelCapabilities({

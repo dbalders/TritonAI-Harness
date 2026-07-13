@@ -27,6 +27,8 @@ import {
   DEFAULT_TRITONAI_CODEX_MODEL_DISPLAY_NAME,
   ServerSettingsError,
   TRITONAI_APP_BASE_NAME,
+  TRITONAI_GLM_CODEX_MODEL,
+  TRITONAI_GLM_CODEX_MODEL_DISPLAY_NAME,
   TRITONAI_VISIBLE_CODEX_MODELS,
 } from "@t3tools/contracts";
 
@@ -51,20 +53,22 @@ const CODEX_PRESENTATION = {
 const VISIBLE_CODEX_MODEL_SLUGS = new Set<string>(TRITONAI_VISIBLE_CODEX_MODELS);
 
 function codexModelDisplayName(slug: string): string {
-  return slug === DEFAULT_TRITONAI_CODEX_MODEL ? DEFAULT_TRITONAI_CODEX_MODEL_DISPLAY_NAME : slug;
+  if (slug === DEFAULT_TRITONAI_CODEX_MODEL) return DEFAULT_TRITONAI_CODEX_MODEL_DISPLAY_NAME;
+  if (slug === TRITONAI_GLM_CODEX_MODEL) return TRITONAI_GLM_CODEX_MODEL_DISPLAY_NAME;
+  return slug;
 }
 
-function curateVisibleCodexModels(
+export function curateVisibleCodexModels(
   models: ReadonlyArray<ServerProviderModel>,
 ): ReadonlyArray<ServerProviderModel> {
-  return models
+  return appendCustomCodexModels(models, TRITONAI_VISIBLE_CODEX_MODELS)
     .filter((model) => VISIBLE_CODEX_MODEL_SLUGS.has(model.slug))
     .map((model) =>
-      model.slug === DEFAULT_TRITONAI_CODEX_MODEL
+      model.slug === DEFAULT_TRITONAI_CODEX_MODEL || model.slug === TRITONAI_GLM_CODEX_MODEL
         ? {
             ...model,
-            name: DEFAULT_TRITONAI_CODEX_MODEL_DISPLAY_NAME,
-            shortName: "DeepSeek",
+            name: codexModelDisplayName(model.slug),
+            shortName: model.slug === DEFAULT_TRITONAI_CODEX_MODEL ? "DeepSeek" : "GLM",
             capabilities: tritonAiCodexCapabilities(model.capabilities),
           }
         : model,
