@@ -22,7 +22,6 @@ import {
   formatBudgetDuration,
   formatUsageCurrency,
   formatUsageDate,
-  formatUsageLimit,
   formatUsagePercent,
   getUsageViewState,
   usageErrorTitle,
@@ -82,6 +81,13 @@ function BudgetInstrument({ usage }: { usage: ServerTritonAiUsageSnapshot }) {
   const maxBudget = usage.budget.kind === "limited" ? usage.budget.maxBudget : null;
   const calculation = calculateBudgetUsage(usage.spend, maxBudget);
   const tone = budgetUtilizationTone(calculation.utilizationPercent, calculation.overBudget);
+  const budgetResetAt = formatUsageDate(usage.budgetResetAt);
+  const budgetResetLabel =
+    usage.budgetResetAt === null
+      ? "Reset date not specified"
+      : budgetResetAt === null
+        ? "Reset date unavailable"
+        : `Resets ${budgetResetAt}`;
   const utilizationLabel =
     calculation.overBudget && calculation.utilizationPercent === null
       ? "Over limit"
@@ -132,10 +138,14 @@ function BudgetInstrument({ usage }: { usage: ServerTritonAiUsageSnapshot }) {
                   ? "Not reported"
                   : utilizationLabel}
             </div>
-            <div className="mt-0.5 text-[11px] text-muted-foreground">
-              {calculation.overBudget && maxBudget !== null
-                ? `${formatUsageCurrency(usage.spend - maxBudget)} over limit`
-                : formatBudgetDuration(usage.budgetDuration)}
+            {calculation.overBudget && maxBudget !== null ? (
+              <div className="mt-0.5 text-[11px] text-destructive">
+                {formatUsageCurrency(usage.spend - maxBudget)} over limit
+              </div>
+            ) : null}
+            <div className="mt-1 flex items-center gap-1 text-[11px] text-muted-foreground sm:justify-end">
+              <Clock3Icon className="size-3 shrink-0" aria-hidden />
+              <span>{budgetResetLabel}</span>
             </div>
           </div>
         </div>
@@ -225,76 +235,6 @@ function BudgetInstrument({ usage }: { usage: ServerTritonAiUsageSnapshot }) {
         />
       </dl>
     </>
-  );
-}
-
-function DetailItem({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="min-w-0 border-t border-border/60 px-4 py-3 first:border-t-0 sm:px-5">
-      <dt className="text-[11px] font-medium text-muted-foreground/80">{label}</dt>
-      <dd className="mt-1 break-words text-xs font-medium text-foreground">{value}</dd>
-    </div>
-  );
-}
-
-function UsageDetails({ usage }: { usage: ServerTritonAiUsageSnapshot }) {
-  const resetAt =
-    usage.budgetResetAt === null
-      ? "Not specified"
-      : (formatUsageDate(usage.budgetResetAt) ?? "Unavailable");
-  const expiresAt =
-    usage.expiresAt === null
-      ? "Does not expire"
-      : (formatUsageDate(usage.expiresAt) ?? "Unavailable");
-  const lastActiveAt =
-    usage.lastActiveAt === null
-      ? "No activity reported"
-      : (formatUsageDate(usage.lastActiveAt) ?? "Unavailable");
-  const keyLabel = usage.keyAlias ?? usage.keyName ?? "Configured server key";
-
-  return (
-    <SettingsSection title="Key & quota details">
-      <div className="grid min-w-0 md:grid-cols-2 md:divide-x md:divide-border/60">
-        <dl className="min-w-0">
-          <DetailItem label="Key" value={keyLabel} />
-          {usage.keyAlias && usage.keyName ? (
-            <DetailItem label="Masked key name" value={usage.keyName} />
-          ) : null}
-          <DetailItem label="Budget period" value={formatBudgetDuration(usage.budgetDuration)} />
-          <DetailItem label="Budget resets" value={resetAt} />
-          <DetailItem label="Key expires" value={expiresAt} />
-          <DetailItem label="Last active" value={lastActiveAt} />
-        </dl>
-        <dl className="min-w-0 border-t border-border/60 md:border-t-0">
-          <DetailItem
-            label="Tokens per minute"
-            value={formatUsageLimit(usage.tpmLimit, "tokens/min")}
-          />
-          <DetailItem
-            label="Requests per minute"
-            value={formatUsageLimit(usage.rpmLimit, "requests/min")}
-          />
-          <DetailItem
-            label="Parallel requests"
-            value={formatUsageLimit(usage.maxParallelRequests, "concurrent")}
-          />
-          <div className="min-w-0 border-t border-border/60 px-4 py-3 sm:px-5">
-            <dt className="text-[11px] font-medium text-muted-foreground/80">Available models</dt>
-            <dd className="mt-2 flex flex-wrap gap-1.5">
-              {usage.models.length > 0 ? (
-                usage.models.map((model) => (
-                  <Badge key={model} variant="outline" size="sm" className="max-w-full">
-                    <span className="truncate">{model}</span>
-                  </Badge>
-                ))
-              ) : (
-                <span className="text-xs font-medium text-foreground">Not specified</span>
-              )}
-            </dd>
-          </div>
-        </dl>
-      </div>
-    </SettingsSection>
   );
 }
 
@@ -461,8 +401,6 @@ export function UsageSettingsPanel() {
           the server.
         </div>
       </SettingsSection>
-
-      {data ? <UsageDetails usage={data} /> : null}
     </SettingsPageContainer>
   );
 }
