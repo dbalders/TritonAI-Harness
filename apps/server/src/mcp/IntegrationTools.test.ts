@@ -1,5 +1,6 @@
 import { expect, it } from "@effect/vitest";
 import { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -32,6 +33,30 @@ const testLayer = registrationLayerFor([fixtureTool], () => true).pipe(
   Layer.provideMerge(McpServer.McpServer.layer),
 );
 
+const serverWithBuiltInFixture = Layer.effect(
+  McpServer.McpServer,
+  Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    yield* server.addTool({
+      tool: new McpSchema.Tool({
+        name: fixtureTool.name,
+        description: "Existing built-in fixture tool.",
+        inputSchema: fixtureTool.inputSchema,
+      }),
+      annotations: Context.empty(),
+      handle: () =>
+        Effect.succeed(
+          new McpSchema.CallToolResult({
+            isError: false,
+            structuredContent: { source: "built-in" },
+            content: [{ type: "text", text: "built-in" }],
+          }),
+        ),
+    });
+    return server;
+  }),
+).pipe(Layer.provide(McpServer.McpServer.layer));
+
 it.effect("registers provider-neutral tool definitions with MCP", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -51,6 +76,26 @@ it("rejects write-capable tools at the MCP registration boundary", () => {
     /write-capable MCP integration tools are not supported/u,
   );
 });
+
+it.effect("rejects integration tool names that collide with existing MCP tools", () =>
+  Effect.gen(function* () {
+    const exit = yield* Effect.exit(
+      Effect.void.pipe(
+        Effect.provide(
+          registrationLayerFor([fixtureTool], () => true).pipe(
+            Layer.provideMerge(serverWithBuiltInFixture),
+          ),
+        ),
+      ),
+    );
+    expect(exit._tag).toBe("Failure");
+    if (exit._tag === "Failure") {
+      expect(Cause.pretty(exit.cause)).toContain(
+        "Integration tool fixture.read conflicts with an existing MCP tool name.",
+      );
+    }
+  }).pipe(Effect.scoped),
+);
 
 it("normalizes arbitrary provider results into JSON object content", () => {
   expect(normalizeIntegrationToolResult("ready")).toEqual({ result: "ready" });

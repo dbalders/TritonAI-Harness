@@ -14,6 +14,15 @@ class IntegrationToolInvocationError extends Schema.TaggedErrorClass<Integration
   { cause: Schema.Defect() },
 ) {}
 
+class IntegrationToolRegistrationError extends Schema.TaggedErrorClass<IntegrationToolRegistrationError>()(
+  "IntegrationToolRegistrationError",
+  { toolName: Schema.String },
+) {
+  override get message(): string {
+    return `Integration tool ${this.toolName} conflicts with an existing MCP tool name.`;
+  }
+}
+
 const invocationCanReadIntegrations = (): boolean => {
   const fiber = Fiber.getCurrent();
   if (!fiber) return false;
@@ -61,7 +70,7 @@ function registerTool(
   isAvailable: (name: string) => boolean,
 ) {
   assertReadOnlyTool(definition);
-  return server.addTool({
+  const registration: Parameters<typeof server.addTool>[0] = {
     tool: new McpSchema.Tool({
       name: definition.name,
       description: definition.description,
@@ -115,6 +124,12 @@ function registerTool(
             }),
         ),
       ),
+  };
+  return Effect.suspend(() => {
+    if (server.tools.some(({ tool }) => tool.name === definition.name)) {
+      return Effect.fail(new IntegrationToolRegistrationError({ toolName: definition.name }));
+    }
+    return server.addTool(registration);
   });
 }
 
@@ -144,7 +159,16 @@ export const registrationLayer = Layer.effectDiscard(
     const register = (definition: IntegrationProviderTool) => {
       if (registered.has(definition.name)) return;
       registered.add(definition.name);
-      runFork(registerTool(server, definition, activeToolAvailable));
+      runFork(
+        registerTool(server, definition, activeToolAvailable).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logError("integration tool registration failed", {
+              toolName: definition.name,
+              cause,
+            }),
+          ),
+        ),
+      );
     };
     const unsubscribeRegistry = Integrations.observeIntegrationRegistry((registry) => {
       integrationSubscriptions.add(registry.observeToolDefinitions(register));
