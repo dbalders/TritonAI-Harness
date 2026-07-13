@@ -34,10 +34,16 @@ function memorySecrets() {
 }
 
 describe("built-in integration packages", () => {
+  it("keeps proof fixtures out of the default catalog", () => {
+    expect(makeBuiltinIntegrations(memorySecrets()).map(({ manifest }) => manifest.id)).toEqual([
+      "microsoft-365",
+    ]);
+  });
+
   it("runs Graph, skill-only, and API-key/MCP package shapes through one registry", async () => {
     const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-builtins-"));
     const codexHome = NodePath.join(root, "codex");
-    const builtins = makeBuiltinIntegrations(memorySecrets());
+    const builtins = makeBuiltinIntegrations(memorySecrets(), { includeFixtures: true });
     const registry = new RegistryRuntime(
       NodePath.join(root, "runtime"),
       builtins,

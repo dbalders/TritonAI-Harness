@@ -1132,7 +1132,9 @@ export const startupLayer = Layer.effectDiscard(
     );
     const registry = new RegistryRuntime(
       NodePath.join(config.stateDir, "integrations"),
-      makeBuiltinIntegrations(secrets),
+      makeBuiltinIntegrations(secrets, {
+        includeFixtures: process.env.TRITONAI_ENABLE_INTEGRATION_FIXTURES === "1",
+      }),
       skillMaterializer,
     );
     yield* Effect.promise(() => registry.list());

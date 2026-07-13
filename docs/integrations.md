@@ -2,7 +2,7 @@
 
 TritonAI Harness integration plugins are versioned packages that compose provider behavior,
 read-only tools, and Codex skills behind one lifecycle. The host is provider-neutral; Microsoft
-365 is the first real bundled plugin, and two clearly labeled fixtures continuously prove that the
+365 is the first real bundled plugin. Two development-only fixtures continuously prove that the
 same runtime also supports a zero-tool skill plugin and a secret-backed MCP-compatible tool plugin.
 
 ## Package contract
@@ -30,10 +30,14 @@ the host composition layer to supply the matching provider implementation. Bundl
 the same manifest, install cache, enablement, capability, tool, skill, and removal path as discovered
 packages.
 
-The bundled catalog currently contains:
+The production catalog currently contains:
 
 - **Microsoft 365**, which uses delegated Microsoft Graph OAuth and exposes separately selectable
   read-only mail and calendar capabilities.
+
+Set `TRITONAI_ENABLE_INTEGRATION_FIXTURES=1` when starting the server or desktop development
+runtime to add two deterministic proof packages to the catalog:
+
 - **Skill-only Fixture**, which has no provider tools or credentials and contributes only its own
   deterministic Codex skill.
 - **API Key MCP Fixture**, which persists a fake API key in the server secret store and exposes one

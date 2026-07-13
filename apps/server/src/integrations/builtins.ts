@@ -30,8 +30,9 @@ function packageRoot(id: string): string {
 
 export function makeBuiltinIntegrations(
   secrets: ServerSecretStore.ServerSecretStore["Service"],
+  options: { readonly includeFixtures?: boolean } = {},
 ): ReadonlyArray<IntegrationPackage> {
-  return [
+  const productionIntegrations: ReadonlyArray<IntegrationPackage> = [
     {
       manifest: validateIntegrationManifest(microsoftManifest),
       provider: new MicrosoftGraphProvider(secrets),
@@ -44,6 +45,11 @@ export function makeBuiltinIntegrations(
         "skills/microsoft-365-calendar/agents/openai.yaml": calendarInterface,
       },
     },
+  ];
+  if (!options.includeFixtures) return productionIntegrations;
+
+  return [
+    ...productionIntegrations,
     {
       manifest: validateIntegrationManifest(skillOnlyManifest),
       provider: new SkillOnlyFixtureProvider(),
