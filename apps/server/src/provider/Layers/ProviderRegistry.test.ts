@@ -318,7 +318,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           }
 
           assert.strictEqual(model.name, "DeepSeek v4 Flash");
-          assert.strictEqual(model.isCustom, true);
+          assert.strictEqual(model.isCustom, false);
           assert.deepStrictEqual(model.capabilities?.optionDescriptors, [
             {
               id: "reasoningEffort",

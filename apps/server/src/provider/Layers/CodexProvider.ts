@@ -84,6 +84,7 @@ export function curateVisibleCodexModels(
               ...model,
               name: DEFAULT_TRITONAI_CODEX_MODEL_DISPLAY_NAME,
               shortName: "DeepSeek",
+              isCustom: false,
               capabilities: tritonAiCodexCapabilities(model.capabilities),
             }
           : model;

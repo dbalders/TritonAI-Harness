@@ -58,6 +58,7 @@ it("falls back to DeepSeek when no models are configured", () => {
     models.map((model) => model.slug),
     [DEFAULT_TRITONAI_CODEX_MODEL],
   );
+  assert.strictEqual(models[0]?.isCustom, false);
 });
 
 it("preserves default capabilities when metadata only changes presentation", () => {
