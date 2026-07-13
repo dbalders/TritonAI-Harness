@@ -2,7 +2,48 @@ import { assert, it } from "@effect/vitest";
 
 import { createModelCapabilities } from "@t3tools/shared/model";
 
-import { mapCodexModelCapabilities, tritonAiCodexCapabilities } from "./CodexProvider.ts";
+import {
+  mapCodexModelCapabilities,
+  stabilizeIntegrationSkillPaths,
+  tritonAiCodexCapabilities,
+} from "./CodexProvider.ts";
+
+it("publishes stable installed paths for temporary integration skill probes", () => {
+  assert.deepStrictEqual(
+    stabilizeIntegrationSkillPaths(
+      [
+        {
+          name: "microsoft-365-mail",
+          path: "/tmp/runtime-skills/session/microsoft-365-mail/SKILL.md",
+          enabled: true,
+        },
+        { name: "ordinary-skill", path: "/home/codex/skills/ordinary/SKILL.md", enabled: true },
+      ],
+      [
+        {
+          name: "microsoft-365-mail",
+          description: "Read mail.",
+          path: "/tmp/runtime-skills/session/microsoft-365-mail/SKILL.md",
+        },
+      ],
+      [
+        {
+          name: "microsoft-365-mail",
+          description: "Read mail.",
+          path: "/state/integrations/microsoft-365/skills/microsoft-365-mail/SKILL.md",
+        },
+      ],
+    ),
+    [
+      {
+        name: "microsoft-365-mail",
+        path: "/state/integrations/microsoft-365/skills/microsoft-365-mail/SKILL.md",
+        enabled: true,
+      },
+      { name: "ordinary-skill", path: "/home/codex/skills/ordinary/SKILL.md", enabled: true },
+    ],
+  );
+});
 
 it("maps current Codex model capability fields", () => {
   const capabilities = mapCodexModelCapabilities({

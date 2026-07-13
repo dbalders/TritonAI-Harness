@@ -14,9 +14,11 @@ import {
 } from "../CodexDeveloperInstructions.ts";
 import {
   buildTurnStartParams,
+  computeDynamicToolFingerprint,
   hasConfiguredMcpServer,
   isRecoverableThreadResumeError,
   openCodexThread,
+  readCompatibleResumeThreadId,
 } from "./CodexSessionRuntime.ts";
 const isCodexAppServerRequestError = Schema.is(CodexErrors.CodexAppServerRequestError);
 
@@ -37,6 +39,63 @@ describe("CodexSessionRuntimeIdentifierGenerationError", () => {
   });
 });
 
+describe("Codex resume cursor compatibility", () => {
+  const mailTool = {
+    name: "microsoft365_mail_search",
+    description: "Read mail.",
+    inputSchema: { type: "object" },
+  } as const;
+  const calendarTool = {
+    name: "microsoft365_calendar_events",
+    description: "Read calendar events.",
+    inputSchema: { type: "object" },
+  } as const;
+
+  it("resumes only when the persisted and currently granted dynamic tool sets match", () => {
+    NodeAssert.equal(
+      readCompatibleResumeThreadId(
+        {
+          threadId: "provider-thread",
+          dynamicToolNames: [calendarTool.name, mailTool.name],
+          dynamicToolFingerprint: computeDynamicToolFingerprint([calendarTool, mailTool]),
+        },
+        [mailTool, calendarTool],
+      ),
+      "provider-thread",
+    );
+    NodeAssert.equal(
+      readCompatibleResumeThreadId(
+        {
+          threadId: "provider-thread",
+          dynamicToolNames: [mailTool.name],
+          dynamicToolFingerprint: computeDynamicToolFingerprint([mailTool]),
+        },
+        [mailTool, calendarTool],
+      ),
+      undefined,
+    );
+    NodeAssert.equal(
+      readCompatibleResumeThreadId(
+        {
+          threadId: "provider-thread",
+          dynamicToolNames: [mailTool.name],
+          dynamicToolFingerprint: computeDynamicToolFingerprint([mailTool]),
+        },
+        [{ ...mailTool, description: "Updated mail contract." }],
+      ),
+      undefined,
+    );
+    NodeAssert.equal(
+      readCompatibleResumeThreadId({ threadId: "legacy-thread" }, [mailTool]),
+      undefined,
+    );
+    NodeAssert.equal(
+      readCompatibleResumeThreadId({ threadId: "legacy-thread" }, undefined),
+      "legacy-thread",
+    );
+  });
+});
+
 function makeThreadOpenResponse(
   threadId: string,
 ): CodexRpc.ClientRequestResponsesByMethod["thread/start"] {
@@ -46,16 +105,20 @@ function makeThreadOpenResponse(
     modelProvider: "openai",
     approvalPolicy: "never",
     approvalsReviewer: "user",
-    sandbox: { type: "danger-full-access" },
+    sandbox: { type: "dangerFullAccess" },
     thread: {
+      cliVersion: "0.144.0",
+      cwd: "/tmp/project",
+      ephemeral: false,
       id: threadId,
-      createdAt: "2026-04-18T00:00:00.000Z",
-      source: { session: "cli" },
+      createdAt: 1_776_470_400,
+      modelProvider: "openai",
+      preview: "",
+      sessionId: "session-1",
+      source: "cli",
       turns: [],
-      status: {
-        state: "idle",
-        activeFlags: [],
-      },
+      status: { type: "idle" },
+      updatedAt: 1_776_470_400,
     },
   } as unknown as CodexRpc.ClientRequestResponsesByMethod["thread/start"];
 }
@@ -167,6 +230,38 @@ describe("buildTurnStartParams", () => {
         },
       },
     });
+  });
+
+  it("attaches an explicitly invoked integration-plugin skill", () => {
+    const params = Effect.runSync(
+      buildTurnStartParams({
+        threadId: "provider-thread-1",
+        runtimeMode: "full-access",
+        prompt: "$microsoft-365-mail summarize my newest message",
+        pluginSkills: [
+          {
+            name: "microsoft-365-mail",
+            path: "/tmp/plugin-skills/microsoft-365-mail/SKILL.md",
+          },
+          {
+            name: "microsoft-365-calendar",
+            path: "/tmp/plugin-skills/microsoft-365-calendar/SKILL.md",
+          },
+        ],
+      }),
+    );
+
+    NodeAssert.deepStrictEqual(params.input, [
+      {
+        type: "text",
+        text: "$microsoft-365-mail summarize my newest message",
+      },
+      {
+        type: "skill",
+        name: "microsoft-365-mail",
+        path: "/tmp/plugin-skills/microsoft-365-mail/SKILL.md",
+      },
+    ]);
   });
 
   it("omits collaboration mode when interaction mode is absent", () => {
@@ -318,6 +413,117 @@ describe("openCodexThread", () => {
       });
 
       NodeAssert.equal(startPayload?.model, DEFAULT_TRITONAI_CODEX_MODEL);
+    }),
+  );
+
+  it.effect("injects integration plugins as ordinary dynamic functions", () =>
+    Effect.gen(function* () {
+      let rawStartPayload: unknown;
+      const client = {
+        raw: {
+          request: (_method: string, payload: unknown) => {
+            rawStartPayload = payload;
+            return Effect.succeed(makeThreadOpenResponse("dynamic-thread"));
+          },
+        },
+        request: <M extends "thread/start" | "thread/resume">(
+          _method: M,
+          _payload: CodexRpc.ClientRequestParamsByMethod[M],
+        ) =>
+          Effect.succeed(
+            makeThreadOpenResponse("typed-thread") as CodexRpc.ClientRequestResponsesByMethod[M],
+          ),
+      };
+
+      const opened = yield* openCodexThread({
+        client,
+        threadId: ThreadId.make("thread-1"),
+        runtimeMode: "full-access",
+        cwd: "/tmp/project",
+        requestedModel: DEFAULT_TRITONAI_CODEX_MODEL,
+        serviceTier: undefined,
+        resumeThreadId: undefined,
+        dynamicTools: [
+          {
+            name: "microsoft365_mail_search",
+            description: "Read mail through the Microsoft 365 integration plugin.",
+            inputSchema: {
+              type: "object",
+              properties: { limit: { type: "integer" } },
+              additionalProperties: false,
+            },
+          },
+        ],
+      });
+
+      NodeAssert.equal(opened.thread.id, "dynamic-thread");
+      NodeAssert.deepStrictEqual(rawStartPayload, {
+        cwd: "/tmp/project",
+        approvalPolicy: "never",
+        sandbox: "danger-full-access",
+        model: DEFAULT_TRITONAI_CODEX_MODEL,
+        dynamicTools: [
+          {
+            name: "microsoft365_mail_search",
+            description: "Read mail through the Microsoft 365 integration plugin.",
+            inputSchema: {
+              type: "object",
+              properties: { limit: { type: "integer" } },
+              additionalProperties: false,
+            },
+            deferLoading: false,
+          },
+        ],
+      });
+    }),
+  );
+
+  it.effect("resumes the same thread and relies on its persisted dynamic tool definitions", () =>
+    Effect.gen(function* () {
+      let rawRequestCount = 0;
+      const typedCalls: Array<{ method: string; payload: unknown }> = [];
+      const client = {
+        raw: {
+          request: (_method: string, _payload: unknown) => {
+            rawRequestCount += 1;
+            return Effect.succeed(makeThreadOpenResponse("fresh-thread"));
+          },
+        },
+        request: <M extends "thread/start" | "thread/resume">(
+          method: M,
+          payload: CodexRpc.ClientRequestParamsByMethod[M],
+        ) => {
+          typedCalls.push({ method, payload });
+          return Effect.succeed(
+            makeThreadOpenResponse(
+              "existing-provider-thread",
+            ) as CodexRpc.ClientRequestResponsesByMethod[M],
+          );
+        },
+      };
+
+      const opened = yield* openCodexThread({
+        client,
+        threadId: ThreadId.make("thread-1"),
+        runtimeMode: "full-access",
+        cwd: "/tmp/project",
+        requestedModel: DEFAULT_TRITONAI_CODEX_MODEL,
+        serviceTier: undefined,
+        resumeThreadId: "existing-provider-thread",
+        dynamicTools: [
+          {
+            name: "microsoft365_mail_search",
+            description: "Read mail through the Microsoft 365 integration plugin.",
+            inputSchema: { type: "object", properties: {}, additionalProperties: false },
+          },
+        ],
+      });
+
+      NodeAssert.equal(opened.thread.id, "existing-provider-thread");
+      NodeAssert.equal(rawRequestCount, 0);
+      NodeAssert.equal(typedCalls.length, 1);
+      NodeAssert.equal(typedCalls[0]?.method, "thread/resume");
+      NodeAssert.equal("dynamicTools" in (typedCalls[0]!.payload as object), false);
     }),
   );
 

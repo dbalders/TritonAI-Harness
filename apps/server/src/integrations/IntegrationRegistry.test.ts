@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off globalDate:off cryptoRandomUUID:off
+// @effect-diagnostics nodeBuiltinImport:off globalDate:off globalTimers:off cryptoRandomUUID:off
 import { describe, expect, it } from "@effect/vitest";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
@@ -762,6 +762,154 @@ describe("IntegrationRegistry lifecycle", () => {
       expect(state.credential).toBeNull();
       expect((await registry.list()).integrations[0]?.installed).toBe(false);
     } finally {
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("allows unrelated lifecycle work while another provider status is pending", async () => {
+    const root = await NodeFSP.mkdtemp(
+      NodePath.join(NodeOS.tmpdir(), "tritonai-provider-concurrency-"),
+    );
+    const connectedState: ProviderState = {
+      status: {
+        state: "connected",
+        accountLabel: "Test User",
+        grantedCapabilities: ["records.read"],
+        message: null,
+      },
+      credential: "present",
+      disconnectFails: false,
+    };
+    const fixtureState: ProviderState = {
+      status: {
+        state: "not_connected",
+        accountLabel: null,
+        grantedCapabilities: [],
+        message: null,
+      },
+      credential: null,
+      disconnectFails: false,
+    };
+    let delayStatus = false;
+    let releaseStatus!: () => void;
+    let markStatusStarted!: () => void;
+    const statusGate = new Promise<void>((resolve) => {
+      releaseStatus = resolve;
+    });
+    const statusStarted = new Promise<void>((resolve) => {
+      markStatusStarted = resolve;
+    });
+    try {
+      const baseProvider = provider("test-connected-provider", connectedState);
+      const delayedProvider: IntegrationProvider = {
+        ...baseProvider,
+        status: async () => {
+          if (delayStatus) {
+            delayStatus = false;
+            markStatusStarted();
+            await statusGate;
+          }
+          return connectedState.status;
+        },
+      };
+      const registry = new RegistryRuntime(root, [
+        packaged(connectedManifest, delayedProvider),
+        packaged(fixtureManifest, provider("test-fixture-provider", fixtureState)),
+      ]);
+      await registry.install(connectedManifest.id);
+      await registry.install(fixtureManifest.id);
+      delayStatus = true;
+
+      const listing = registry.list();
+      await statusStarted;
+      const unrelatedEnablement = registry.setEnabled(fixtureManifest.id, false);
+      const completed = await Promise.race([
+        unrelatedEnablement.then((result) => ({
+          completed: true,
+          enabled: result.integrations.find(({ id }) => id === fixtureManifest.id)?.enabled,
+        })),
+        new Promise<{ readonly completed: false }>((resolve) =>
+          setTimeout(() => resolve({ completed: false }), 1_000),
+        ),
+      ]);
+
+      expect(completed).toEqual({ completed: true, enabled: false });
+      releaseStatus();
+      await listing;
+    } finally {
+      releaseStatus?.();
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("returns current state while another integration summary is still refreshing", async () => {
+    const root = await NodeFSP.mkdtemp(
+      NodePath.join(NodeOS.tmpdir(), "tritonai-summary-snapshot-"),
+    );
+    const connectedState: ProviderState = {
+      status: {
+        state: "connected",
+        accountLabel: "Test User",
+        grantedCapabilities: ["records.read"],
+        message: null,
+      },
+      credential: "present",
+      disconnectFails: false,
+    };
+    const fixtureState: ProviderState = {
+      status: {
+        state: "connected",
+        accountLabel: "Fixture User",
+        grantedCapabilities: ["fixture.read"],
+        message: null,
+      },
+      credential: "present",
+      disconnectFails: false,
+    };
+    let delayFixtureStatus = false;
+    let releaseFixtureStatus!: () => void;
+    let markFixtureStatusStarted!: () => void;
+    const fixtureStatusGate = new Promise<void>((resolve) => {
+      releaseFixtureStatus = resolve;
+    });
+    const fixtureStatusStarted = new Promise<void>((resolve) => {
+      markFixtureStatusStarted = resolve;
+    });
+    try {
+      const baseFixtureProvider = provider("test-fixture-provider", fixtureState);
+      const delayedFixtureProvider: IntegrationProvider = {
+        ...baseFixtureProvider,
+        status: async () => {
+          if (delayFixtureStatus) {
+            delayFixtureStatus = false;
+            markFixtureStatusStarted();
+            await fixtureStatusGate;
+          }
+          return fixtureState.status;
+        },
+      };
+      const registry = new RegistryRuntime(root, [
+        packaged(connectedManifest, provider("test-connected-provider", connectedState)),
+        packaged(fixtureManifest, delayedFixtureProvider),
+      ]);
+      await registry.install(connectedManifest.id);
+      await registry.install(fixtureManifest.id);
+      delayFixtureStatus = true;
+
+      const fixtureDisablement = registry.setEnabled(fixtureManifest.id, false);
+      await fixtureStatusStarted;
+      const unrelatedResult = await registry.setEnabled(connectedManifest.id, false);
+      const fixtureSummary = unrelatedResult.integrations.find(
+        ({ id }) => id === fixtureManifest.id,
+      );
+
+      expect(fixtureSummary).toMatchObject({ installed: true, enabled: false });
+      expect(fixtureSummary?.tools.every(({ available }) => !available)).toBe(true);
+      expect(fixtureSummary?.skills.every(({ available }) => !available)).toBe(true);
+      releaseFixtureStatus();
+      await fixtureDisablement;
+    } finally {
+      releaseFixtureStatus?.();
       await NodeFSP.rm(root, { recursive: true, force: true });
     }
   });

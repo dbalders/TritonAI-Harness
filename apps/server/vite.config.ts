@@ -34,6 +34,7 @@ export default mergeConfig(
       outDir: "dist",
       sourcemap: true,
       clean: true,
+      copy: ["src/integrations/packages"],
       deps: {
         alwaysBundle: shouldBundleCliDependency,
         onlyBundle: false,

@@ -14,8 +14,10 @@ import * as Stream from "effect/Stream";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 
+import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { makeBuiltinIntegrations } from "./builtins.ts";
 import {
   manifestCompatibility,
   type IntegrationManifest,
@@ -77,6 +79,17 @@ export interface IntegrationPackage {
   readonly bundledFiles?: Readonly<Record<string, string>>;
 }
 
+export interface IntegrationRuntimeSkill {
+  readonly name: string;
+  readonly description: string;
+  readonly path: string;
+}
+
+export interface IntegrationSkillRuntime {
+  readonly root: string;
+  readonly skills: ReadonlyArray<IntegrationRuntimeSkill>;
+}
+
 interface PersistedIntegrationState {
   readonly version: 1;
   readonly installed: Record<string, { readonly version: string; readonly enabled: boolean }>;
@@ -84,6 +97,10 @@ interface PersistedIntegrationState {
 }
 
 const EMPTY_STATE: PersistedIntegrationState = { version: 1, installed: {}, removing: {} };
+
+export function codexDynamicIntegrationToolName(name: string): string {
+  return name.replace(/[^a-zA-Z0-9_-]/gu, "_").slice(0, 128);
+}
 
 function operationError(
   code: ConstructorParameters<typeof IntegrationOperationError>[0]["code"],
@@ -187,7 +204,9 @@ export class RegistryRuntime {
   readonly #toolObservers = new Set<(definition: IntegrationProviderTool) => void>();
   #state: PersistedIntegrationState = EMPTY_STATE;
   #ready: Promise<void>;
-  #mutation: Promise<void> = Promise.resolve();
+  #stateMutation: Promise<void> = Promise.resolve();
+  readonly #integrationOperations = new Map<string, Promise<void>>();
+  readonly #summaries = new Map<string, IntegrationSummary>();
   #availableTools = new Set<string>();
   readonly #revocations = new Map<string, number>();
   readonly #activeInvocations = new Map<string, Set<AbortController>>();
@@ -218,6 +237,44 @@ export class RegistryRuntime {
       throw new Error(
         `Manifest provider ${manifest.provider} does not match ${integration.provider.id}.`,
       );
+    }
+    const componentNames = new Set([
+      ...manifest.tools.map(({ name }) => name),
+      ...manifest.skills.map(({ name }) => name),
+    ]);
+    const dynamicToolNames = new Map(
+      manifest.tools.map(({ name }) => [codexDynamicIntegrationToolName(name), name] as const),
+    );
+    if (dynamicToolNames.size !== manifest.tools.length) {
+      throw new Error("Integration " + manifest.id + " has colliding Codex function names.");
+    }
+    for (const registered of this.#catalog.values()) {
+      const collision = [
+        ...registered.manifest.tools.map(({ name }) => name),
+        ...registered.manifest.skills.map(({ name }) => name),
+      ].find((name) => componentNames.has(name));
+      if (collision) {
+        throw new Error(
+          "Integration component " +
+            collision +
+            " is already declared by " +
+            registered.manifest.id +
+            ".",
+        );
+      }
+      for (const registeredTool of registered.manifest.tools) {
+        const dynamicName = codexDynamicIntegrationToolName(registeredTool.name);
+        const incoming = dynamicToolNames.get(dynamicName);
+        if (incoming) {
+          throw new Error(
+            "Integration tools " +
+              registeredTool.name +
+              " and " +
+              incoming +
+              " map to the same Codex function name.",
+          );
+        }
+      }
     }
     const manifestToolNames = new Set(manifest.tools.map(({ name }) => name));
     const providerToolNames = new Set(integration.provider.tools.map(({ name }) => name));
@@ -271,6 +328,10 @@ export class RegistryRuntime {
   }
 
   async #load(): Promise<void> {
+    await NodeFSP.rm(NodePath.join(this.#root, "runtime-skills"), {
+      recursive: true,
+      force: true,
+    });
     try {
       const parsed = JSON.parse(
         await NodeFSP.readFile(this.#statePath, "utf8"),
@@ -332,12 +393,26 @@ export class RegistryRuntime {
     }
   }
 
-  #serialize<A>(operation: () => Promise<A>): Promise<A> {
-    const run = this.#mutation.then(operation, operation);
-    this.#mutation = run.then(
+  #serializeState<A>(operation: () => Promise<A>): Promise<A> {
+    const run = this.#stateMutation.then(operation, operation);
+    this.#stateMutation = run.then(
       () => undefined,
       () => undefined,
     );
+    return run;
+  }
+
+  #serializeIntegration<A>(id: string, operation: () => Promise<A>): Promise<A> {
+    const previous = this.#integrationOperations.get(id) ?? Promise.resolve();
+    const run = previous.then(operation, operation);
+    const tail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.#integrationOperations.set(id, tail);
+    void tail.then(() => {
+      if (this.#integrationOperations.get(id) === tail) this.#integrationOperations.delete(id);
+    });
     return run;
   }
 
@@ -361,113 +436,170 @@ export class RegistryRuntime {
     this.#state = normalized;
   }
 
+  #updateState(
+    update: (state: PersistedIntegrationState) => PersistedIntegrationState,
+  ): Promise<void> {
+    return this.#serializeState(() => this.#save(update(this.#state)));
+  }
+
   #package(id: string): IntegrationPackage {
     const integration = this.#catalog.get(id);
     if (!integration) throw operationError("not_found", `Integration ${id} was not found.`);
     return integration;
   }
 
-  async #list(strictSkillSync = false): Promise<IntegrationsListResult> {
-    await this.#ready;
-    const integrations = await Promise.all(
-      [...this.#catalog.values()].map(
-        async ({ manifest, provider }): Promise<IntegrationSummary> => {
-          const installed = this.#state.installed[manifest.id];
-          const enabled = installed?.enabled === true;
-          const compatibility = activationCompatibility(manifest, installed?.version);
-          let providerStatus: IntegrationProviderStatus = {
-            state: "not_connected",
-            accountLabel: null,
-            grantedCapabilities: [],
-            message: null,
-          };
-          if (installed && compatibility.compatible) {
-            try {
-              providerStatus = await provider.status();
-            } catch {
-              providerStatus = {
-                state: "error",
-                accountLabel: null,
-                grantedCapabilities: [],
-                message: "The integration provider could not report its status.",
-              };
-            }
-          }
-          const available = (capability: string) =>
-            Boolean(
-              installed &&
-              enabled &&
-              compatibility.compatible &&
-              providerStatus.state === "connected" &&
-              providerStatus.grantedCapabilities.includes(capability),
-            );
-          return {
-            id: manifest.id,
-            name: manifest.name,
-            description: manifest.description,
-            version: manifest.version,
-            apiVersion: manifest.apiVersion,
-            installed: Boolean(installed),
-            enabled,
-            compatible: compatibility.compatible,
-            compatibilityMessage: compatibility.message,
-            connectionState: providerStatus.state,
-            accountLabel: providerStatus.accountLabel,
-            statusMessage: providerStatus.message,
-            capabilities: manifest.capabilities.map((capability) => ({
-              ...capability,
-              granted: providerStatus.grantedCapabilities.includes(capability.id),
-            })),
-            tools: manifest.tools.map((tool) => ({
-              ...tool,
-              available: available(tool.capability),
-            })),
-            skills: manifest.skills.map((skill) => ({
-              ...skill,
-              available: available(skill.capability),
-            })),
-          };
-        },
-      ),
-    );
-    for (let index = 0; index < integrations.length; index += 1) {
-      const integration = integrations[index]!;
-      const installed = this.#state.installed[integration.id];
+  #createSummary(
+    manifest: IntegrationManifest,
+    providerStatus: IntegrationProviderStatus,
+    state: PersistedIntegrationState = this.#state,
+  ): IntegrationSummary {
+    const installed = state.installed[manifest.id];
+    const enabled = installed?.enabled === true;
+    const compatibility = activationCompatibility(manifest, installed?.version);
+    const available = (capability: string) =>
+      Boolean(
+        installed &&
+        enabled &&
+        compatibility.compatible &&
+        providerStatus.state === "connected" &&
+        providerStatus.grantedCapabilities.includes(capability),
+      );
+    return {
+      id: manifest.id,
+      name: manifest.name,
+      description: manifest.description,
+      version: manifest.version,
+      apiVersion: manifest.apiVersion,
+      installed: Boolean(installed),
+      enabled,
+      compatible: compatibility.compatible,
+      compatibilityMessage: compatibility.message,
+      connectionState: providerStatus.state,
+      accountLabel: providerStatus.accountLabel,
+      statusMessage: providerStatus.message,
+      capabilities: manifest.capabilities.map((capability) => ({
+        ...capability,
+        granted: providerStatus.grantedCapabilities.includes(capability.id),
+      })),
+      tools: manifest.tools.map((tool) => ({
+        ...tool,
+        available: available(tool.capability),
+      })),
+      skills: manifest.skills.map((skill) => ({
+        ...skill,
+        available: available(skill.capability),
+      })),
+    };
+  }
+
+  async #summarize(
+    { manifest, provider }: IntegrationPackage,
+    strictSkillSync = false,
+  ): Promise<IntegrationSummary> {
+    const installed = this.#state.installed[manifest.id];
+    const compatibility = activationCompatibility(manifest, installed?.version);
+    let providerStatus: IntegrationProviderStatus = {
+      state: "not_connected",
+      accountLabel: null,
+      grantedCapabilities: [],
+      message: null,
+    };
+    if (installed && compatibility.compatible) {
       try {
-        await this.#skills.sync({
-          integrationId: integration.id,
-          packageRoot: installed
-            ? NodePath.join(this.#root, "installed", integration.id, installed.version)
-            : null,
-          activeSkills: integration.skills
-            .filter(({ available }) => available)
-            .map(({ name }) => name),
-        });
-      } catch (error) {
-        if (strictSkillSync) throw error;
-        await this.#skills
-          .sync({ integrationId: integration.id, packageRoot: null, activeSkills: [] })
-          .catch(() => undefined);
-        const skillMessage = `Bundled skills could not be activated: ${safeMessage(error)}`;
-        integrations[index] = {
-          ...integration,
-          statusMessage: integration.statusMessage
-            ? `${integration.statusMessage} ${skillMessage}`
-            : skillMessage,
-          skills: integration.skills.map((skill) => ({ ...skill, available: false })),
+        providerStatus = await provider.status();
+      } catch {
+        providerStatus = {
+          state: "error",
+          accountLabel: null,
+          grantedCapabilities: [],
+          message: "The integration provider could not report its status.",
         };
       }
     }
+    let integration = this.#createSummary(manifest, providerStatus);
+    try {
+      await this.#skills.sync({
+        integrationId: integration.id,
+        packageRoot: installed
+          ? NodePath.join(this.#root, "installed", integration.id, installed.version)
+          : null,
+        activeSkills: integration.skills
+          .filter(({ available }) => available)
+          .map(({ name }) => name),
+      });
+    } catch (error) {
+      if (strictSkillSync) throw error;
+      await this.#skills
+        .sync({ integrationId: integration.id, packageRoot: null, activeSkills: [] })
+        .catch(() => undefined);
+      const skillMessage = `Bundled skills could not be activated: ${safeMessage(error)}`;
+      integration = {
+        ...integration,
+        statusMessage: integration.statusMessage
+          ? `${integration.statusMessage} ${skillMessage}`
+          : skillMessage,
+        skills: integration.skills.map((skill) => ({ ...skill, available: false })),
+      };
+    }
+    const integrationToolNames = new Set(manifest.tools.map(({ name }) => name));
     this.#availableTools = new Set(
-      integrations.flatMap((integration) =>
-        integration.tools.filter((tool) => tool.available).map((tool) => tool.name),
+      [...this.#availableTools].filter((name) => !integrationToolNames.has(name)),
+    );
+    for (const tool of integration.tools) {
+      if (tool.available) this.#availableTools.add(tool.name);
+    }
+    this.#summaries.set(manifest.id, integration);
+    return integration;
+  }
+
+  #cachedList(): IntegrationsListResult {
+    const state = this.#state;
+    const unavailable: IntegrationProviderStatus = {
+      state: "not_connected",
+      accountLabel: null,
+      grantedCapabilities: [],
+      message: null,
+    };
+    return {
+      integrations: [...this.#catalog.values()].map(({ manifest }) => {
+        const summary = this.#summaries.get(manifest.id);
+        if (!summary) return this.#createSummary(manifest, unavailable, state);
+        const installed = state.installed[manifest.id];
+        const enabled = installed?.enabled === true;
+        const compatibility = activationCompatibility(manifest, installed?.version);
+        if (
+          summary.installed === Boolean(installed) &&
+          summary.enabled === enabled &&
+          summary.compatible === compatibility.compatible
+        ) {
+          return summary;
+        }
+        if (!installed) return this.#createSummary(manifest, unavailable, state);
+        return {
+          ...summary,
+          installed: true,
+          enabled,
+          compatible: compatibility.compatible,
+          compatibilityMessage: compatibility.message,
+          tools: summary.tools.map((tool) => ({ ...tool, available: false })),
+          skills: summary.skills.map((skill) => ({ ...skill, available: false })),
+        };
+      }),
+    };
+  }
+
+  async #list(): Promise<IntegrationsListResult> {
+    await this.#ready;
+    const integrations = await Promise.all(
+      [...this.#catalog.values()].map((integration) =>
+        this.#serializeIntegration(integration.manifest.id, () => this.#summarize(integration)),
       ),
     );
     return { integrations };
   }
 
   list(): Promise<IntegrationsListResult> {
-    return this.#serialize(() => this.#list());
+    return this.#list();
   }
 
   isToolAvailableSync(name: string): boolean {
@@ -486,15 +618,101 @@ export class RegistryRuntime {
     return [...this.#catalog.values()].flatMap(({ provider }) => provider.tools);
   }
 
+  getAvailableToolDefinitionsSync(): ReadonlyArray<IntegrationProviderTool> {
+    return this.toolDefinitions().filter(({ name }) => this.isToolAvailableSync(name));
+  }
+
+  getAvailableSkillsSync(): ReadonlyArray<IntegrationRuntimeSkill> {
+    return [...this.#catalog.values()].flatMap(({ manifest }) => {
+      const installed = this.#state.installed[manifest.id];
+      const summary = this.#summaries.get(manifest.id);
+      if (!installed || !summary) return [];
+      return summary.skills
+        .filter(({ available }) => available)
+        .map(({ name, description }) => ({
+          name,
+          description,
+          path: NodePath.join(
+            this.#root,
+            "installed",
+            manifest.id,
+            installed.version,
+            "skills",
+            name,
+            "SKILL.md",
+          ),
+        }));
+    });
+  }
+
+  async prepareSkillRuntime(): Promise<IntegrationSkillRuntime | null> {
+    await this.list();
+    const skills = this.getAvailableSkillsSync();
+    if (skills.length === 0) return null;
+    const runtimeParent = NodePath.join(this.#root, "runtime-skills");
+    const runtimeRoot = NodePath.join(runtimeParent, crypto.randomUUID());
+    const staging = runtimeRoot + ".staging";
+    try {
+      await NodeFSP.mkdir(staging, { recursive: true, mode: 0o700 });
+      for (const skill of skills) {
+        const source = NodePath.dirname(skill.path);
+        const pending = [source];
+        while (pending.length > 0) {
+          const directory = pending.pop()!;
+          for (const entry of await NodeFSP.readdir(directory, { withFileTypes: true })) {
+            const path = NodePath.join(directory, entry.name);
+            if (entry.isSymbolicLink()) {
+              throw new Error("Integration skill " + skill.name + " contains a symbolic link.");
+            }
+            if (entry.isDirectory()) pending.push(path);
+            else if (!entry.isFile()) {
+              throw new Error(
+                "Integration skill " + skill.name + " contains an unsupported entry.",
+              );
+            }
+          }
+        }
+        await NodeFSP.cp(source, NodePath.join(staging, skill.name), {
+          recursive: true,
+          errorOnExist: true,
+        });
+      }
+      await NodeFSP.rename(staging, runtimeRoot);
+    } catch (error) {
+      await NodeFSP.rm(staging, { recursive: true, force: true }).catch(() => undefined);
+      throw operationError(
+        "operation_failed",
+        "Integration skills could not be prepared: " + safeMessage(error),
+      );
+    }
+    return {
+      root: runtimeRoot,
+      skills: skills.map((skill) => ({
+        ...skill,
+        path: NodePath.join(runtimeRoot, skill.name, "SKILL.md"),
+      })),
+    };
+  }
+
+  async releaseSkillRuntime(runtimeRoot: string): Promise<void> {
+    const parent = NodePath.resolve(this.#root, "runtime-skills");
+    const candidate = NodePath.resolve(runtimeRoot);
+    if (NodePath.dirname(candidate) !== parent) return;
+    await NodeFSP.rm(candidate, { recursive: true, force: true });
+  }
+
   install(id: string): Promise<IntegrationsListResult> {
-    return this.#serialize(async () => {
+    return this.#serializeIntegration(id, async () => {
       await this.#ready;
-      const { manifest, sourceRoot, bundledFiles } = this.#package(id);
+      const integration = this.#package(id);
+      const { manifest, sourceRoot, bundledFiles } = integration;
       const installed = this.#state.installed[id];
       const compatibility = activationCompatibility(manifest, installed?.version);
       if (!compatibility.compatible) throw operationError("incompatible", compatibility.message!);
-      if (installed) return this.#list();
-      const previous = this.#state;
+      if (installed) {
+        await this.#summarize(integration);
+        return;
+      }
       const versionRoot = NodePath.join(this.#root, "installed", id, manifest.version);
       const staging = `${versionRoot}.${crypto.randomUUID()}.staging`;
       try {
@@ -529,65 +747,70 @@ export class RegistryRuntime {
         await validateStagedPackage(staging, manifest);
         await NodeFSP.mkdir(NodePath.dirname(versionRoot), { recursive: true, mode: 0o700 });
         await NodeFSP.rename(staging, versionRoot);
-        await this.#save({
-          version: 1,
-          installed: {
-            ...this.#state.installed,
-            [id]: { version: manifest.version, enabled: true },
-          },
-        });
-        return await this.#list(true);
+        await this.#updateState((state) => ({
+          ...state,
+          installed: { ...state.installed, [id]: { version: manifest.version, enabled: true } },
+        }));
+        await this.#summarize(integration, true);
       } catch (error) {
-        await this.#save(previous).catch(() => undefined);
+        await this.#updateState((state) => {
+          const nextInstalled = { ...state.installed };
+          delete nextInstalled[id];
+          return { ...state, installed: nextInstalled };
+        }).catch(() => undefined);
         await this.#skills
           .sync({ integrationId: id, packageRoot: null, activeSkills: [] })
           .catch(() => undefined);
         await NodeFSP.rm(staging, { recursive: true, force: true }).catch(() => undefined);
         await NodeFSP.rm(versionRoot, { recursive: true, force: true }).catch(() => undefined);
-        await this.#list().catch(() => undefined);
+        await this.#summarize(integration).catch(() => undefined);
         throw operationError(
           "operation_failed",
           `Installation failed without changing active state: ${safeMessage(error)}`,
         );
       }
-    });
+    }).then(() => this.#cachedList());
   }
 
   setEnabled(id: string, enabled: boolean): Promise<IntegrationsListResult> {
     const finishRevocation = enabled ? null : this.#beginRevocation(id);
-    const operation = this.#serialize(async () => {
+    const operation = this.#serializeIntegration(id, async () => {
       await this.#ready;
-      const { manifest } = this.#package(id);
+      const integration = this.#package(id);
+      const { manifest } = integration;
       const installed = this.#state.installed[id];
       if (!installed) throw operationError("not_installed", `Integration ${id} is not installed.`);
       const compatibility = activationCompatibility(manifest, installed.version);
       if (enabled && !compatibility.compatible) {
         throw operationError("incompatible", compatibility.message!);
       }
-      const previous = this.#state;
       try {
         if (!enabled) {
           await this.#skills.sync({ integrationId: id, packageRoot: null, activeSkills: [] });
         }
-        await this.#save({
-          version: 1,
-          installed: { ...this.#state.installed, [id]: { ...installed, enabled } },
-        });
-        return await this.#list(enabled);
+        await this.#updateState((state) => ({
+          ...state,
+          installed: { ...state.installed, [id]: { ...installed, enabled } },
+        }));
+        await this.#summarize(integration, enabled);
       } catch (error) {
-        await this.#save(previous).catch(() => undefined);
-        await this.#list().catch(() => undefined);
+        await this.#updateState((state) => ({
+          ...state,
+          installed: { ...state.installed, [id]: installed },
+        })).catch(() => undefined);
+        await this.#summarize(integration).catch(() => undefined);
         throw operationError(
           "operation_failed",
           `Enablement change was rolled back: ${safeMessage(error)}`,
         );
       }
     });
-    return finishRevocation ? operation.finally(finishRevocation) : operation;
+    const result = operation.then(() => this.#cachedList());
+    return finishRevocation ? result.finally(finishRevocation) : result;
   }
 
   connect(id: string, capabilities: ReadonlyArray<string>): Promise<IntegrationConnectResult> {
-    return this.#serialize(async () => {
+    return this.#serializeIntegration(id, async () => {
       await this.#ready;
       const { manifest, provider } = this.#package(id);
       const installed = this.#state.installed[id];
@@ -618,7 +841,7 @@ export class RegistryRuntime {
   }
 
   poll(id: string, flowId: string): Promise<IntegrationPollResult> {
-    return this.#serialize(async () => {
+    return this.#serializeIntegration(id, async () => {
       await this.#ready;
       const { manifest, provider } = this.#package(id);
       const installed = this.#state.installed[id];
@@ -632,8 +855,7 @@ export class RegistryRuntime {
       }
       try {
         const result = await provider.poll(flowId);
-        const integration = (await this.#list()).integrations.find((item) => item.id === id)!;
-        return { ...result, integration };
+        return { ...result, integration: await this.#summarize(this.#package(id)) };
       } catch (error) {
         throw operationError(
           "operation_failed",
@@ -648,16 +870,18 @@ export class RegistryRuntime {
 
   disconnect(id: string): Promise<IntegrationsListResult> {
     const finishRevocation = this.#beginRevocation(id);
-    return this.#serialize(async () => {
+    const operation = this.#serializeIntegration(id, async () => {
       await this.#ready;
-      const { manifest, provider } = this.#package(id);
+      const integration = this.#package(id);
+      const { manifest, provider } = integration;
       if (!this.#state.installed[id])
         throw operationError("not_installed", `Integration ${id} is not installed.`);
       try {
         await this.#skills.sync({ integrationId: id, packageRoot: null, activeSkills: [] });
         await provider.disconnect();
+        await this.#summarize(integration);
       } catch (error) {
-        await this.#list().catch(() => undefined);
+        await this.#summarize(integration).catch(() => undefined);
         throw operationError(
           "operation_failed",
           providerPublicMessage(
@@ -666,22 +890,26 @@ export class RegistryRuntime {
           ),
         );
       }
-      return this.#list();
-    }).finally(finishRevocation);
+    });
+    return operation.then(() => this.#cachedList()).finally(finishRevocation);
   }
 
   remove(id: string): Promise<IntegrationsListResult> {
     const finishRevocation = this.#beginRevocation(id);
-    return this.#serialize(async () => {
+    const operation = this.#serializeIntegration(id, async () => {
       await this.#ready;
-      const { manifest, provider } = this.#package(id);
+      const integration = this.#package(id);
+      const { manifest, provider } = integration;
       const installed = this.#state.installed[id];
-      if (!installed) return this.#list();
+      if (!installed) {
+        await this.#summarize(integration);
+        return;
+      }
       try {
         await this.#skills.sync({ integrationId: id, packageRoot: null, activeSkills: [] });
         await provider.disconnect();
       } catch (error) {
-        await this.#list().catch(() => undefined);
+        await this.#summarize(integration).catch(() => undefined);
         throw operationError(
           "operation_failed",
           providerPublicMessage(
@@ -690,8 +918,7 @@ export class RegistryRuntime {
           ),
         );
       }
-      const previous = this.#state;
-      const { [id]: _, ...remaining } = this.#state.installed;
+      const previousRemoval = this.#state.removing?.[id];
       const installedRoot = NodePath.join(this.#root, "installed", id);
       const trashRoot = NodePath.join(this.#root, ".trash");
       const tombstoneName = `${id}.${crypto.randomUUID()}`;
@@ -699,21 +926,35 @@ export class RegistryRuntime {
       let moved = false;
       try {
         await NodeFSP.mkdir(trashRoot, { recursive: true, mode: 0o700 });
-        await this.#save({
-          ...this.#state,
+        await this.#updateState((state) => ({
+          ...state,
           removing: {
-            ...this.#state.removing,
+            ...state.removing,
             [id]: { version: installed.version, tombstone: tombstoneName },
           },
-        });
+        }));
         await NodeFSP.rename(installedRoot, tombstone);
         moved = true;
-        const { [id]: _removal, ...remainingRemovals } = this.#state.removing ?? {};
-        await this.#save({ version: 1, installed: remaining, removing: remainingRemovals });
+        await this.#updateState((state) => {
+          const nextInstalled = { ...state.installed };
+          const nextRemovals = { ...state.removing };
+          delete nextInstalled[id];
+          delete nextRemovals[id];
+          return { ...state, installed: nextInstalled, removing: nextRemovals };
+        });
       } catch (error) {
         if (moved) await NodeFSP.rename(tombstone, installedRoot).catch(() => undefined);
-        await this.#save(previous).catch(() => undefined);
-        await this.#list().catch(() => undefined);
+        await this.#updateState((state) => {
+          const nextRemovals = { ...state.removing };
+          if (previousRemoval) nextRemovals[id] = previousRemoval;
+          else delete nextRemovals[id];
+          return {
+            ...state,
+            installed: { ...state.installed, [id]: installed },
+            removing: nextRemovals,
+          };
+        }).catch(() => undefined);
+        await this.#summarize(integration).catch(() => undefined);
         throw operationError(
           "operation_failed",
           `Credentials were removed, but package removal was rolled back: ${safeMessage(error)}`,
@@ -722,14 +963,15 @@ export class RegistryRuntime {
       try {
         await this.#removeInstalledPackage(tombstone);
       } catch (error) {
-        await this.#list().catch(() => undefined);
+        await this.#summarize(integration).catch(() => undefined);
         throw operationError(
           "operation_failed",
           `${id} was removed, but staged package cleanup will be retried after restart: ${safeMessage(error)}`,
         );
       }
-      return this.#list();
-    }).finally(finishRevocation);
+      await this.#summarize(integration);
+    });
+    return operation.then(() => this.#cachedList()).finally(finishRevocation);
   }
 
   async invokeTool(name: string, input: unknown): Promise<unknown> {
@@ -808,6 +1050,7 @@ export function observeIntegrationRegistry(
 export const startupLayer = Layer.effectDiscard(
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
+    const secrets = yield* ServerSecretStore.ServerSecretStore;
     const settingsService = yield* ServerSettings.ServerSettingsService;
     const settings = yield* settingsService.getSettings;
     const skillMaterializer = new CodexIntegrationSkillMaterializer(
@@ -815,7 +1058,7 @@ export const startupLayer = Layer.effectDiscard(
     );
     const registry = new RegistryRuntime(
       NodePath.join(config.stateDir, "integrations"),
-      [],
+      makeBuiltinIntegrations(secrets),
       skillMaterializer,
     );
     yield* Effect.promise(() => registry.list());

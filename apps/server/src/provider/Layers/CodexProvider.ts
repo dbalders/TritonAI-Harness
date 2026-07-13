@@ -38,6 +38,7 @@ import {
   type ServerProviderDraft,
 } from "../providerSnapshot.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
+import * as Integrations from "../../integrations/IntegrationRegistry.ts";
 import { makeTritonAiCodexConfigArgs } from "../Drivers/TritonAiCodexConfig.ts";
 import packageJson from "../../../package.json" with { type: "json" };
 const isCodexAppServerSpawnError = Schema.is(CodexErrors.CodexAppServerSpawnError);
@@ -336,6 +337,24 @@ function parseCodexSkillsListResponse(
   );
 }
 
+export function stabilizeIntegrationSkillPaths(
+  skills: ReadonlyArray<ServerProviderSkill>,
+  temporarySkills: ReadonlyArray<Integrations.IntegrationRuntimeSkill>,
+  stableSkills: ReadonlyArray<Integrations.IntegrationRuntimeSkill>,
+): ReadonlyArray<ServerProviderSkill> {
+  const temporaryPathByName = new Map(
+    temporarySkills.map((skill) => [skill.name, skill.path] as const),
+  );
+  const stablePathByName = new Map(stableSkills.map((skill) => [skill.name, skill.path] as const));
+  return skills.map((skill) => {
+    const temporaryPath = temporaryPathByName.get(skill.name);
+    const stablePath = stablePathByName.get(skill.name);
+    return temporaryPath && stablePath && skill.path === temporaryPath
+      ? { ...skill, path: stablePath }
+      : skill;
+  });
+}
+
 function dedupeServerProviderSkills(
   skills: ReadonlyArray<ServerProviderSkill>,
 ): ReadonlyArray<ServerProviderSkill> {
@@ -455,21 +474,59 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
     } satisfies CodexAppServerProviderSnapshot;
   }
 
-  const [skillsResponse, models] = yield* Effect.all(
-    [
-      client.request("skills/list", {
-        cwds: [input.cwd],
-      }),
-      requestAllCodexModels(client),
-    ],
-    { concurrency: "unbounded" },
-  );
+  const integrationRegistry = Integrations.getIntegrationRegistryOptional();
+  const integrationSkillRuntime = integrationRegistry
+    ? yield* Effect.tryPromise(() => integrationRegistry.prepareSkillRuntime()).pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("Failed to prepare integration plugin skills for provider status.", {
+            cause,
+          }).pipe(Effect.as(null)),
+        ),
+      )
+    : null;
+  const releaseIntegrationSkills =
+    integrationRegistry && integrationSkillRuntime
+      ? Effect.tryPromise(() =>
+          integrationRegistry.releaseSkillRuntime(integrationSkillRuntime.root),
+        ).pipe(
+          Effect.catch((cause) =>
+            Effect.logWarning("Failed to release provider-status integration skills.", { cause }),
+          ),
+        )
+      : Effect.void;
+  const [skillsResponse, models] = yield* Effect.gen(function* () {
+    if (integrationSkillRuntime) {
+      yield* client.request("skills/extraRoots/set", {
+        extraRoots: [integrationSkillRuntime.root],
+      });
+    }
+    return yield* Effect.all(
+      [
+        client.request("skills/list", {
+          cwds: [input.cwd],
+          forceReload: integrationSkillRuntime !== null,
+        }),
+        requestAllCodexModels(client),
+      ],
+      { concurrency: "unbounded" },
+    );
+  }).pipe(Effect.ensuring(releaseIntegrationSkills));
+
+  const listedSkills = parseCodexSkillsListResponse(skillsResponse, input.cwd);
+  const skills =
+    integrationRegistry && integrationSkillRuntime
+      ? stabilizeIntegrationSkillPaths(
+          listedSkills,
+          integrationSkillRuntime.skills,
+          integrationRegistry.getAvailableSkillsSync(),
+        )
+      : listedSkills;
 
   return {
     account: accountResponse,
     version,
     models: curateVisibleCodexModels(appendCustomCodexModels(models, input.customModels ?? [])),
-    skills: parseCodexSkillsListResponse(skillsResponse, input.cwd),
+    skills,
   } satisfies CodexAppServerProviderSnapshot;
 });
 

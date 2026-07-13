@@ -46,7 +46,7 @@ describe("integration manifest semver", () => {
       validateIntegrationManifest({
         ...manifest,
         compatibility: {
-          harness: { min: "0.2.5+catalog.7", maxExclusive: "0.2.6-alpha.1" },
+          harness: { min: "0.2.5+catalog.7", maxExclusive: "0.3.0" },
         },
       }),
     );

@@ -1,0 +1,54 @@
+{
+  "apiVersion": "tritonai.harness/v1",
+  "kind": "IntegrationPlugin",
+  "manifestVersion": 1,
+  "id": "microsoft-365",
+  "name": "Microsoft 365",
+  "description": "Read mail and calendar data through dedicated, least-privilege Microsoft Graph tools.",
+  "version": "1.0.0",
+  "compatibility": {
+    "harness": {
+      "min": "0.2.0",
+      "maxExclusive": "0.3.0"
+    }
+  },
+  "provider": "microsoft-graph",
+  "capabilities": [
+    {
+      "id": "mail.read",
+      "displayName": "Read mail",
+      "description": "Read message metadata and search mail. No send, edit, or delete access."
+    },
+    {
+      "id": "calendar.read",
+      "displayName": "Read calendars",
+      "description": "Read calendar events. No create, edit, or delete access."
+    }
+  ],
+  "tools": [
+    {
+      "name": "microsoft365.mail.search",
+      "displayName": "Search mail",
+      "description": "Search recent Microsoft 365 mail with a bounded read-only query.",
+      "capability": "mail.read"
+    },
+    {
+      "name": "microsoft365.calendar.events",
+      "displayName": "Read calendar events",
+      "description": "Read Microsoft 365 calendar events in a bounded date range.",
+      "capability": "calendar.read"
+    }
+  ],
+  "skills": [
+    {
+      "name": "microsoft-365-mail",
+      "description": "Safely summarize and triage Microsoft 365 mail using the dedicated read-only tool.",
+      "capability": "mail.read"
+    },
+    {
+      "name": "microsoft-365-calendar",
+      "description": "Review Microsoft 365 calendar events using the dedicated read-only tool.",
+      "capability": "calendar.read"
+    }
+  ]
+}

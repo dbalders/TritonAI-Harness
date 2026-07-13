@@ -1,5 +1,7 @@
+import packageJson from "../../package.json" with { type: "json" };
+
 export const HARNESS_INTEGRATION_API_VERSION = "tritonai.harness/v1" as const;
-export const HARNESS_VERSION = "0.2.5";
+export const HARNESS_VERSION = packageJson.version;
 
 export interface IntegrationManifestCapability {
   readonly id: string;
@@ -42,6 +44,7 @@ export interface IntegrationManifest {
 
 const ID = /^[a-z][a-z0-9.-]*$/u;
 const TOOL = /^[a-z][a-z0-9_.-]*$/u;
+const SKILL = /^[a-z][a-z0-9-]{0,63}$/u;
 const VERSION =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
 
@@ -168,7 +171,8 @@ export function validateIntegrationManifest(value: unknown): IntegrationManifest
     for (const entry of entries) {
       if (!entry || typeof entry !== "object") throw new Error(`Invalid ${kind}.`);
       const item = entry as Record<string, unknown>;
-      if (!nonEmpty(item.name) || !TOOL.test(item.name) || !nonEmpty(item.description)) {
+      const namePattern = kind === "skill" ? SKILL : TOOL;
+      if (!nonEmpty(item.name) || !namePattern.test(item.name) || !nonEmpty(item.description)) {
         throw new Error(`Every ${kind} requires a stable name and description.`);
       }
       if (kind === "tool" && !nonEmpty(item.displayName)) {

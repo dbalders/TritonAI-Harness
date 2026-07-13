@@ -1,0 +1,6 @@
+interface:
+  display_name: "API Key MCP Fixture"
+  short_description: "Verify a secret-backed plugin tool"
+  default_prompt: "Use $authenticated-mcp-fixture to run the secret-backed tool check."
+policy:
+  allow_implicit_invocation: true

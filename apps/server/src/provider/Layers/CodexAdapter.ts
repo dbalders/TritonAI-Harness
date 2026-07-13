@@ -39,6 +39,7 @@ import * as EffectCodexSchema from "effect-codex-app-server/schema";
 
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import { getCodexServiceTierOptionValue } from "../../codexModelOptions.ts";
+import * as Integrations from "../../integrations/IntegrationRegistry.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 
 import {
@@ -89,6 +90,8 @@ interface CodexAdapterSessionContext {
   readonly scope: Scope.Closeable;
   readonly runtime: CodexSessionRuntimeShape;
   readonly eventFiber: Fiber.Fiber<void, never>;
+  readonly integrationRegistry?: Integrations.RegistryRuntime;
+  readonly integrationSkillRuntimeRoot?: string;
   stopped: boolean;
 }
 
@@ -239,6 +242,9 @@ function itemTitle(itemType: CanonicalItemType, item?: CodexLifecycleItem): stri
   if (itemType === "mcp_tool_call" && item?.type === "mcpToolCall") {
     return `${item.server} · ${item.tool}`;
   }
+  if (itemType === "dynamic_tool_call" && item && "tool" in item) {
+    return `Integration plugin · ${String(item.tool)}`;
+  }
   switch (itemType) {
     case "assistant_message":
       return "Assistant message";
@@ -275,6 +281,7 @@ function itemDetail(item: CodexLifecycleItem): string | undefined {
     "text" in item ? item.text : undefined,
     "path" in item ? item.path : undefined,
     "prompt" in item ? item.prompt : undefined,
+    "tool" in item ? item.tool : undefined,
   ];
   for (const candidate of candidates) {
     const trimmed = typeof candidate === "string" ? trimText(candidate) : undefined;
@@ -1387,6 +1394,49 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
             ? getCodexServiceTierOptionValue(input.modelSelection)
             : undefined;
         const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
+        const integrationRegistry = Integrations.getIntegrationRegistryOptional();
+        const integrationSkillRuntime = integrationRegistry
+          ? yield* Effect.tryPromise({
+              try: () => integrationRegistry.prepareSkillRuntime(),
+              catch: (cause) =>
+                new ProviderAdapterProcessError({
+                  provider: PROVIDER,
+                  threadId: input.threadId,
+                  detail: "Failed to prepare integration plugin skills.",
+                  cause,
+                }),
+            })
+          : null;
+        let integrationSkillRuntimeTransferred = false;
+        yield* Effect.addFinalizer(() =>
+          integrationSkillRuntime && !integrationSkillRuntimeTransferred && integrationRegistry
+            ? Effect.tryPromise(() =>
+                integrationRegistry.releaseSkillRuntime(integrationSkillRuntime.root),
+              ).pipe(Effect.ignore)
+            : Effect.void,
+        );
+        const dynamicToolBindings = integrationRegistry
+          ? integrationRegistry.getAvailableToolDefinitionsSync().map((definition) => ({
+              canonicalName: definition.name,
+              dynamicName: Integrations.codexDynamicIntegrationToolName(definition.name),
+              description: `${definition.description} Integration plugin tool: ${definition.name}.`,
+              inputSchema: definition.inputSchema,
+            }))
+          : [];
+        const dynamicToolNames = new Set<string>();
+        for (const binding of dynamicToolBindings) {
+          if (!binding.dynamicName || dynamicToolNames.has(binding.dynamicName)) {
+            return yield* new ProviderAdapterValidationError({
+              provider: PROVIDER,
+              operation: "startSession",
+              issue: `Integration plugin tool ${binding.canonicalName} cannot be exposed safely.`,
+            });
+          }
+          dynamicToolNames.add(binding.dynamicName);
+        }
+        const dynamicToolByName = new Map(
+          dynamicToolBindings.map((binding) => [binding.dynamicName, binding.canonicalName]),
+        );
         const runtimeInput: CodexSessionRuntimeOptions = {
           threadId: input.threadId,
           providerInstanceId: boundInstanceId,
@@ -1402,6 +1452,31 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
             ? { model: input.modelSelection.model }
             : {}),
           ...(serviceTier ? { serviceTier } : {}),
+          ...(integrationRegistry && dynamicToolBindings.length
+            ? {
+                dynamicTools: dynamicToolBindings.map((binding) => ({
+                  name: binding.dynamicName,
+                  description: binding.description,
+                  inputSchema: binding.inputSchema,
+                })),
+                invokeDynamicTool: async ({ name, arguments: toolArguments }) => {
+                  const canonicalName = dynamicToolByName.get(name);
+                  if (!canonicalName || !integrationRegistry.isToolAvailableSync(canonicalName)) {
+                    throw new Error("Integration plugin tool is unavailable.");
+                  }
+                  return integrationRegistry.invokeTool(canonicalName, toolArguments);
+                },
+              }
+            : {}),
+          ...(integrationSkillRuntime
+            ? {
+                pluginSkillRoot: integrationSkillRuntime.root,
+                pluginSkills: integrationSkillRuntime.skills.map((skill) => ({
+                  name: skill.name,
+                  path: skill.path,
+                })),
+              }
+            : {}),
           ...(mcpSession
             ? {
                 environment: {
@@ -1484,9 +1559,16 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           scope: sessionScope,
           runtime,
           eventFiber,
+          ...(integrationRegistry && integrationSkillRuntime
+            ? {
+                integrationRegistry,
+                integrationSkillRuntimeRoot: integrationSkillRuntime.root,
+              }
+            : {}),
           stopped: false,
         });
         sessionScopeTransferred = true;
+        integrationSkillRuntimeTransferred = true;
 
         return started;
       }),
@@ -1660,6 +1742,11 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     yield* session.runtime.close.pipe(Effect.ignore);
     yield* Effect.ignore(Scope.close(session.scope, Exit.void));
     yield* Fiber.interrupt(session.eventFiber).pipe(Effect.ignore);
+    if (session.integrationRegistry && session.integrationSkillRuntimeRoot) {
+      yield* Effect.tryPromise(() =>
+        session.integrationRegistry!.releaseSkillRuntime(session.integrationSkillRuntimeRoot!),
+      ).pipe(Effect.ignore);
+    }
   });
 
   const stopSession: CodexAdapterShape["stopSession"] = (threadId) =>

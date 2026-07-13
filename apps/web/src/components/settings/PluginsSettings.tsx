@@ -243,18 +243,27 @@ function IntegrationCard({
             <h4 className="flex items-center gap-1.5 text-xs font-semibold">
               <PuzzleIcon className="size-3.5" /> Tools
             </h4>
-            {integration.tools.map((tool) => (
-              <div key={tool.name} className="rounded-lg bg-muted/40 p-2.5 text-xs">
-                <span className="flex items-center gap-1.5 font-medium">
-                  <PuzzleIcon className="size-3" />
-                  {tool.displayName}
-                  {tool.available ? (
-                    <CheckCircle2Icon className="size-3 text-emerald-600" aria-label="Available" />
-                  ) : null}
-                </span>
-                <span className="text-muted-foreground">{tool.description}</span>
-              </div>
-            ))}
+            {integration.tools.length > 0 ? (
+              integration.tools.map((tool) => (
+                <div key={tool.name} className="rounded-lg bg-muted/40 p-2.5 text-xs">
+                  <span className="flex items-center gap-1.5 font-medium">
+                    <PuzzleIcon className="size-3" />
+                    {tool.displayName}
+                    {tool.available ? (
+                      <CheckCircle2Icon
+                        className="size-3 text-emerald-600"
+                        aria-label="Available"
+                      />
+                    ) : null}
+                  </span>
+                  <span className="text-muted-foreground">{tool.description}</span>
+                </div>
+              ))
+            ) : (
+              <p className="rounded-lg bg-muted/40 p-2.5 text-xs text-muted-foreground">
+                No tools. This plugin contributes instructions only.
+              </p>
+            )}
           </div>
           <div className="space-y-2">
             <h4 className="text-xs font-semibold">Bundled skills</h4>

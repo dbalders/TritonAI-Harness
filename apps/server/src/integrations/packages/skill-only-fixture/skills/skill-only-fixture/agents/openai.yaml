@@ -1,0 +1,6 @@
+interface:
+  display_name: "Skill-only Fixture"
+  short_description: "Verify a plugin-owned zero-tool skill"
+  default_prompt: "Use $skill-only-fixture to run the zero-tool plugin check."
+policy:
+  allow_implicit_invocation: true

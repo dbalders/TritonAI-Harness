@@ -18,6 +18,7 @@ import {
 } from "@t3tools/contracts";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import { normalizeModelSlug } from "@t3tools/shared/model";
+import * as NodeCrypto from "node:crypto";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -87,6 +88,8 @@ export function hasConfiguredMcpServer(appServerArgs: ReadonlyArray<string> | un
 
 export const CodexResumeCursorSchema = Schema.Struct({
   threadId: Schema.String,
+  dynamicToolNames: Schema.optionalKey(Schema.Array(Schema.String)),
+  dynamicToolFingerprint: Schema.optionalKey(Schema.String),
 });
 const CodexUserInputAnswerObject = Schema.Struct({
   answers: Schema.Array(Schema.String),
@@ -108,6 +111,36 @@ const decodeCodexTurnStartParamsWithCollaborationMode = Schema.decodeUnknownEffe
 export type CodexTurnStartParamsWithCollaborationMode =
   typeof CodexTurnStartParamsWithCollaborationMode.Type;
 
+const CodexThreadStartParamsWithDynamicTools = EffectCodexSchema.V2ThreadStartParams.pipe(
+  Schema.fieldsAssign({
+    dynamicTools: Schema.optionalKey(
+      Schema.Array(EffectCodexSchema.V2ThreadStartParams__DynamicToolSpec),
+    ),
+  }),
+);
+const decodeCodexThreadStartResponse = Schema.decodeUnknownEffect(
+  EffectCodexSchema.V2ThreadStartResponse,
+);
+
+export type CodexThreadStartParamsWithDynamicTools =
+  typeof CodexThreadStartParamsWithDynamicTools.Type;
+
+export interface CodexDynamicToolDefinition {
+  readonly name: string;
+  readonly description: string;
+  readonly inputSchema: Readonly<Record<string, unknown>>;
+}
+
+export interface CodexDynamicToolInvocation {
+  readonly name: string;
+  readonly arguments: unknown;
+}
+
+export interface CodexPluginSkillDefinition {
+  readonly name: string;
+  readonly path: string;
+}
+
 export type CodexResumeCursor = typeof CodexResumeCursorSchema.Type;
 type CodexServiceTier = NonNullable<EffectCodexSchema.V2ThreadStartParams["serviceTier"]>;
 type CodexThreadItem =
@@ -126,6 +159,10 @@ export interface CodexSessionRuntimeOptions {
   readonly serviceTier?: CodexServiceTier | undefined;
   readonly resumeCursor?: CodexResumeCursor;
   readonly appServerArgs?: ReadonlyArray<string>;
+  readonly dynamicTools?: ReadonlyArray<CodexDynamicToolDefinition>;
+  readonly invokeDynamicTool?: (input: CodexDynamicToolInvocation) => Promise<unknown>;
+  readonly pluginSkillRoot?: string;
+  readonly pluginSkills?: ReadonlyArray<CodexPluginSkillDefinition>;
 }
 
 export interface CodexSessionRuntimeSendTurnInput {
@@ -281,6 +318,52 @@ function readResumeCursorThreadId(
   return isCodexResumeCursorSchema(resumeCursor) ? resumeCursor.threadId : undefined;
 }
 
+function normalizeDynamicToolNames(
+  dynamicTools: ReadonlyArray<CodexDynamicToolDefinition> | undefined,
+): ReadonlyArray<string> {
+  return [...new Set((dynamicTools ?? []).map((tool) => tool.name))].sort();
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    const record = value as Readonly<Record<string, unknown>>;
+    return `{${Object.keys(record)
+      .filter((key) => record[key] !== undefined)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+export function computeDynamicToolFingerprint(
+  dynamicTools: ReadonlyArray<CodexDynamicToolDefinition> | undefined,
+): string {
+  const definitions = [...(dynamicTools ?? [])]
+    .sort((left, right) => left.name.localeCompare(right.name))
+    .map(({ name, description, inputSchema }) => ({ name, description, inputSchema }));
+  return NodeCrypto.createHash("sha256").update(canonicalJson(definitions), "utf8").digest("hex");
+}
+
+export function readCompatibleResumeThreadId(
+  resumeCursor: ProviderSession["resumeCursor"],
+  dynamicTools: ReadonlyArray<CodexDynamicToolDefinition> | undefined,
+): string | undefined {
+  if (!isCodexResumeCursorSchema(resumeCursor)) {
+    return undefined;
+  }
+  const currentNames = normalizeDynamicToolNames(dynamicTools);
+  if (!resumeCursor.dynamicToolNames || !resumeCursor.dynamicToolFingerprint) {
+    // Pre-integration cursors had no dynamic-tool field. They are safe to resume only while this
+    // session also exposes no dynamic tools; otherwise the historical tool set is unknowable.
+    return currentNames.length === 0 ? resumeCursor.threadId : undefined;
+  }
+  return computeDynamicToolFingerprint(dynamicTools) === resumeCursor.dynamicToolFingerprint
+    ? resumeCursor.threadId
+    : undefined;
+}
+
 function runtimeModeToThreadConfig(input: RuntimeMode): {
   readonly approvalPolicy: EffectCodexSchema.V2ThreadStartParams__AskForApproval;
   readonly sandbox: EffectCodexSchema.V2ThreadStartParams__SandboxMode;
@@ -310,7 +393,8 @@ function buildThreadStartParams(input: {
   readonly runtimeMode: RuntimeMode;
   readonly model: string | undefined;
   readonly serviceTier: CodexServiceTier | undefined;
-}): EffectCodexSchema.V2ThreadStartParams {
+  readonly dynamicTools?: ReadonlyArray<CodexDynamicToolDefinition>;
+}): CodexThreadStartParamsWithDynamicTools {
   const config = runtimeModeToThreadConfig(input.runtimeMode);
   return {
     cwd: input.cwd,
@@ -318,6 +402,16 @@ function buildThreadStartParams(input: {
     sandbox: config.sandbox,
     ...(input.model ? { model: input.model } : {}),
     ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
+    ...(input.dynamicTools?.length
+      ? {
+          dynamicTools: input.dynamicTools.map((tool) => ({
+            name: tool.name,
+            description: tool.description,
+            inputSchema: tool.inputSchema,
+            deferLoading: false,
+          })),
+        }
+      : {}),
   };
 }
 
@@ -375,6 +469,7 @@ export function buildTurnStartParams(input: {
   readonly serviceTier?: CodexServiceTier;
   readonly effort?: EffectCodexSchema.V2TurnStartParams__ReasoningEffort;
   readonly interactionMode?: ProviderInteractionMode;
+  readonly pluginSkills?: ReadonlyArray<CodexPluginSkillDefinition>;
 }): Effect.Effect<
   CodexTurnStartParamsWithCollaborationMode,
   CodexErrors.CodexAppServerProtocolParseError
@@ -385,6 +480,17 @@ export function buildTurnStartParams(input: {
       type: "text",
       text: input.prompt,
     });
+    const selectedNames = new Set(
+      [...input.prompt.matchAll(/(?:^|\s)\$([a-z][a-z0-9-]{0,63})\b/gu)].map((match) => match[1]),
+    );
+    for (const skill of input.pluginSkills ?? []) {
+      if (!selectedNames.has(skill.name)) continue;
+      turnInput.push({
+        type: "skill",
+        name: skill.name,
+        path: skill.path,
+      });
+    }
   }
   for (const attachment of input.attachments ?? []) {
     turnInput.push(attachment);
@@ -437,6 +543,24 @@ function classifyCodexStderrLine(rawLine: string): { readonly message: string } 
   return { message: line };
 }
 
+function dynamicToolResponse(
+  success: boolean,
+  text: string,
+): EffectCodexSchema.DynamicToolCallResponse {
+  return {
+    success,
+    contentItems: [{ type: "inputText", text }],
+  };
+}
+
+function serializeDynamicToolResult(value: unknown): string | undefined {
+  try {
+    return JSON.stringify(value ?? null);
+  } catch {
+    return undefined;
+  }
+}
+
 export function isRecoverableThreadResumeError(error: unknown): boolean {
   const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
   if (!message.includes("thread")) {
@@ -452,6 +576,12 @@ type CodexThreadOpenResponse =
 type CodexThreadOpenMethod = "thread/start" | "thread/resume";
 
 interface CodexThreadOpenClient {
+  readonly raw?: {
+    readonly request: (
+      method: string,
+      payload: unknown,
+    ) => Effect.Effect<unknown, CodexErrors.CodexAppServerError>;
+  };
   readonly request: <M extends CodexThreadOpenMethod>(
     method: M,
     payload: CodexRpc.ClientRequestParamsByMethod[M],
@@ -466,6 +596,7 @@ export const openCodexThread = (input: {
   readonly requestedModel: string | undefined;
   readonly serviceTier: CodexServiceTier | undefined;
   readonly resumeThreadId: string | undefined;
+  readonly dynamicTools?: ReadonlyArray<CodexDynamicToolDefinition>;
 }): Effect.Effect<CodexThreadOpenResponse, CodexErrors.CodexAppServerError> => {
   const resumeThreadId = input.resumeThreadId;
   const startParams = buildThreadStartParams({
@@ -473,16 +604,51 @@ export const openCodexThread = (input: {
     runtimeMode: input.runtimeMode,
     model: input.requestedModel,
     serviceTier: input.serviceTier,
+    ...(input.dynamicTools?.length ? { dynamicTools: input.dynamicTools } : {}),
+  });
+  const resumeParams = buildThreadStartParams({
+    cwd: input.cwd,
+    runtimeMode: input.runtimeMode,
+    model: input.requestedModel,
+    serviceTier: input.serviceTier,
   });
 
+  const startFreshThread = (): Effect.Effect<
+    CodexRpc.ClientRequestResponsesByMethod["thread/start"],
+    CodexErrors.CodexAppServerError
+  > => {
+    if (!input.dynamicTools?.length) {
+      return input.client.request("thread/start", startParams);
+    }
+    if (!input.client.raw) {
+      return Effect.fail(
+        CodexErrors.CodexAppServerRequestError.methodNotFound("thread/start.dynamicTools"),
+      );
+    }
+    return input.client.raw.request("thread/start", startParams).pipe(
+      Effect.flatMap(decodeCodexThreadStartResponse),
+      Effect.mapError((error) =>
+        Schema.isSchemaError(error)
+          ? CodexErrors.CodexAppServerProtocolParseError.fromSchemaError(
+              "decode-response-payload",
+              error,
+              { method: "thread/start" },
+            )
+          : error,
+      ),
+    );
+  };
+
   if (resumeThreadId === undefined) {
-    return input.client.request("thread/start", startParams);
+    return startFreshThread();
   }
 
+  // Codex persists dynamic tool definitions in rollout session metadata and restores them on
+  // thread/resume. The resume contract intentionally does not accept replacement definitions.
   return input.client
     .request("thread/resume", {
       threadId: resumeThreadId,
-      ...startParams,
+      ...resumeParams,
     })
     .pipe(
       Effect.catchIf(isRecoverableThreadResumeError, (error) =>
@@ -492,7 +658,7 @@ export const openCodexThread = (input: {
           resumeThreadId,
           recoverable: true,
           cause: error,
-        }).pipe(Effect.andThen(input.client.request("thread/start", startParams))),
+        }).pipe(Effect.andThen(startFreshThread())),
       ),
     );
 };
@@ -737,6 +903,9 @@ export const makeCodexSessionRuntime = (
     const pendingUserInputsRef = yield* Ref.make(new Map<ApprovalRequestId, PendingUserInput>());
     const collabReceiverTurnsRef = yield* Ref.make(new Map<string, TurnId>());
     const closedRef = yield* Ref.make(false);
+    const dynamicToolNames = normalizeDynamicToolNames(options.dynamicTools);
+    const dynamicToolFingerprint = computeDynamicToolFingerprint(options.dynamicTools);
+    const resumeThreadId = readCompatibleResumeThreadId(options.resumeCursor, options.dynamicTools);
 
     // `~` is not shell-expanded when env vars are set via
     // `child_process.spawn`; `expandHomePath` lets a configured
@@ -802,7 +971,7 @@ export const makeCodexSessionRuntime = (
       cwd: options.cwd,
       ...(options.model ? { model: options.model } : {}),
       threadId: options.threadId,
-      ...(options.resumeCursor !== undefined ? { resumeCursor: options.resumeCursor } : {}),
+      ...(resumeThreadId && options.resumeCursor ? { resumeCursor: options.resumeCursor } : {}),
       createdAt: sessionCreatedAt,
       updatedAt: sessionCreatedAt,
     } satisfies ProviderSession;
@@ -921,7 +1090,11 @@ export const makeCodexSessionRuntime = (
             return Effect.void;
           }
           return updateSession(sessionRef, {
-            resumeCursor: { threadId: payload.thread.id },
+            resumeCursor: {
+              threadId: payload.thread.id,
+              dynamicToolNames,
+              dynamicToolFingerprint,
+            },
           });
         }),
       ),
@@ -1146,6 +1319,44 @@ export const makeCodexSessionRuntime = (
       }),
     );
 
+    yield* client.handleServerRequest("item/tool/call", (payload) => {
+      const definition = options.dynamicTools?.find((tool) => tool.name === payload.tool);
+      if (payload.namespace || !definition || !options.invokeDynamicTool) {
+        return Effect.succeed(
+          dynamicToolResponse(false, "Integration plugin tool is unavailable."),
+        );
+      }
+      return Effect.tryPromise({
+        try: () =>
+          options.invokeDynamicTool!({
+            name: definition.name,
+            arguments: payload.arguments,
+          }),
+        catch: () => undefined,
+      }).pipe(
+        Effect.matchEffect({
+          onFailure: () =>
+            Effect.logWarning("integration plugin dynamic tool invocation failed", {
+              toolName: definition.name,
+            }).pipe(
+              Effect.as(dynamicToolResponse(false, "Integration plugin tool is unavailable.")),
+            ),
+          onSuccess: (value) => {
+            const serialized = serializeDynamicToolResult(value);
+            return serialized === undefined
+              ? Effect.logWarning("integration plugin dynamic tool returned invalid JSON", {
+                  toolName: definition.name,
+                }).pipe(
+                  Effect.as(
+                    dynamicToolResponse(false, "Integration plugin result was unavailable."),
+                  ),
+                )
+              : Effect.succeed(dynamicToolResponse(true, serialized));
+          },
+        }),
+      );
+    });
+
     yield* client.handleUnknownServerRequest((method) =>
       Effect.fail(CodexErrors.CodexAppServerRequestError.methodNotFound(method)),
     );
@@ -1234,6 +1445,11 @@ export const makeCodexSessionRuntime = (
       yield* emitSessionEvent("session/connecting", "Starting Codex App Server session.");
       yield* client.request("initialize", buildCodexInitializeParams());
       yield* client.notify("initialized", undefined);
+      if (options.pluginSkillRoot) {
+        yield* client.request("skills/extraRoots/set", {
+          extraRoots: [options.pluginSkillRoot],
+        });
+      }
 
       const requestedModel = normalizeCodexModelSlug(options.model);
 
@@ -1244,7 +1460,8 @@ export const makeCodexSessionRuntime = (
         cwd: options.cwd,
         requestedModel,
         serviceTier: options.serviceTier,
-        resumeThreadId: readResumeCursorThreadId(options.resumeCursor),
+        resumeThreadId,
+        ...(options.dynamicTools?.length ? { dynamicTools: options.dynamicTools } : {}),
       });
 
       const providerThreadId = opened.thread.id;
@@ -1253,7 +1470,7 @@ export const makeCodexSessionRuntime = (
         status: "ready",
         cwd: opened.cwd,
         model: opened.model,
-        resumeCursor: { threadId: providerThreadId },
+        resumeCursor: { threadId: providerThreadId, dynamicToolNames, dynamicToolFingerprint },
         updatedAt: yield* nowIso,
       } satisfies ProviderSession;
       yield* Ref.set(sessionRef, session);
@@ -1319,6 +1536,7 @@ export const makeCodexSessionRuntime = (
             ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
             ...(input.effort ? { effort: input.effort } : {}),
             ...(input.interactionMode ? { interactionMode: input.interactionMode } : {}),
+            ...(options.pluginSkills?.length ? { pluginSkills: options.pluginSkills } : {}),
           });
           const rawResponse = yield* client.raw.request("turn/start", params);
           const response = yield* decodeV2TurnStartResponse(rawResponse).pipe(
@@ -1341,7 +1559,13 @@ export const makeCodexSessionRuntime = (
             threadId: options.threadId,
             turnId,
             ...(resumedProviderThreadId
-              ? { resumeCursor: { threadId: resumedProviderThreadId } }
+              ? {
+                  resumeCursor: {
+                    threadId: resumedProviderThreadId,
+                    dynamicToolNames,
+                    dynamicToolFingerprint,
+                  },
+                }
               : {}),
           } satisfies ProviderTurnStartResult;
         }),
