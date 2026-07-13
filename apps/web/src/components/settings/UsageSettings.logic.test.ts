@@ -9,6 +9,7 @@ import {
   formatUsageLimit,
   formatUsagePercent,
   getUsageViewState,
+  usageErrorTitle,
 } from "./UsageSettings.logic";
 
 describe("getUsageViewState", () => {
@@ -81,7 +82,7 @@ describe("calculateBudgetUsage", () => {
     });
   });
 
-  it("represents an unlimited budget without inventing remaining or percent values", () => {
+  it("does not invent calculations without a numeric budget", () => {
     expect(calculateBudgetUsage(3.75, null)).toEqual({
       remaining: null,
       utilizationPercent: null,
@@ -146,5 +147,26 @@ describe("usage formatting", () => {
     expect(budgetUtilizationTone(80, false)).toBe("warning");
     expect(budgetUtilizationTone(100, false)).toBe("danger");
     expect(budgetUtilizationTone(null, true)).toBe("danger");
+  });
+});
+
+describe("usageErrorTitle", () => {
+  it("distinguishes missing and rejected API keys", () => {
+    expect(
+      usageErrorTitle(
+        "Usage is not configured. Set TRITONAI_API_KEY on the app server, restart it, and refresh this page.",
+      ),
+    ).toBe("API key not configured");
+    expect(
+      usageErrorTitle(
+        "The configured TritonAI API key was rejected. Verify TRITONAI_API_KEY on the app server, restart it, and try again.",
+      ),
+    ).toBe("API key rejected");
+  });
+
+  it("uses the general title for other upstream failures", () => {
+    expect(usageErrorTitle("TritonAI usage could not be reached.")).toBe(
+      "Usage could not be loaded",
+    );
   });
 });

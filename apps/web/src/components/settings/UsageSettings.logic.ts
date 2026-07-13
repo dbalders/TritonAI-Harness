@@ -87,6 +87,14 @@ export function formatUsageLimit(value: number | null, suffix: string): string {
     : "Not available";
 }
 
+export function usageErrorTitle(error: string): string {
+  if (error.startsWith("Usage is not configured.")) return "API key not configured";
+  if (error.startsWith("The configured TritonAI API key was rejected.")) {
+    return "API key rejected";
+  }
+  return "Usage could not be loaded";
+}
+
 export function formatBudgetDuration(value: string | null): string {
   if (!value) return "Not specified";
   const match = /^(\d+)\s*([dhm])$/iu.exec(value.trim());

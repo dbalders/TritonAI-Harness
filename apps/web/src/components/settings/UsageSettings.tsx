@@ -25,6 +25,7 @@ import {
   formatUsageLimit,
   formatUsagePercent,
   getUsageViewState,
+  usageErrorTitle,
 } from "./UsageSettings.logic";
 
 type UsageTone = "default" | "warning" | "danger";
@@ -35,6 +36,13 @@ function statusBadge(usage: ServerTritonAiUsageSnapshot) {
   }
   if (usage.softBudgetCooldown === true) {
     return { label: "Budget cooldown", variant: "warning" as const, icon: Clock3Icon };
+  }
+  if (usage.blocked === null || usage.softBudgetCooldown === null) {
+    return {
+      label: "Restriction status not reported",
+      variant: "outline" as const,
+      icon: AlertTriangleIcon,
+    };
   }
   return { label: "No restriction reported", variant: "success" as const, icon: CheckCircle2Icon };
 }
@@ -71,16 +79,23 @@ function UsageMetric({
 }
 
 function BudgetInstrument({ usage }: { usage: ServerTritonAiUsageSnapshot }) {
-  const calculation = calculateBudgetUsage(usage.spend, usage.maxBudget);
+  const maxBudget = usage.budget.kind === "limited" ? usage.budget.maxBudget : null;
+  const calculation = calculateBudgetUsage(usage.spend, maxBudget);
   const tone = budgetUtilizationTone(calculation.utilizationPercent, calculation.overBudget);
   const utilizationLabel =
     calculation.overBudget && calculation.utilizationPercent === null
       ? "Over limit"
       : formatUsagePercent(calculation.utilizationPercent);
+  const utilizationValue =
+    usage.budget.kind === "unlimited"
+      ? "Not applicable"
+      : usage.budget.kind === "unreported"
+        ? "Not reported"
+        : utilizationLabel;
   const meterLabel =
-    usage.maxBudget === null
+    maxBudget === null
       ? null
-      : `${formatUsageCurrency(usage.spend)} used of ${formatUsageCurrency(usage.maxBudget)}${
+      : `${formatUsageCurrency(usage.spend)} used of ${formatUsageCurrency(maxBudget)}${
           calculation.utilizationPercent === null ? "" : ` (${utilizationLabel})`
         }`;
 
@@ -100,7 +115,7 @@ function BudgetInstrument({ usage }: { usage: ServerTritonAiUsageSnapshot }) {
               ) : null}
             </div>
             <p className="mt-1 max-w-xl text-xs leading-relaxed text-muted-foreground/80">
-              Current spend against the budget limit reported for this key.
+              Current spend and any key-level budget reported by TritonAI.
             </p>
           </div>
           <div className="shrink-0 text-left sm:text-right">
@@ -111,24 +126,33 @@ function BudgetInstrument({ usage }: { usage: ServerTritonAiUsageSnapshot }) {
                 tone === "danger" && "text-destructive",
               )}
             >
-              {usage.maxBudget === null ? "Not reported" : utilizationLabel}
+              {usage.budget.kind === "unlimited"
+                ? "No key limit"
+                : usage.budget.kind === "unreported"
+                  ? "Not reported"
+                  : utilizationLabel}
             </div>
             <div className="mt-0.5 text-[11px] text-muted-foreground">
-              {calculation.overBudget && usage.maxBudget !== null
-                ? `${formatUsageCurrency(usage.spend - usage.maxBudget)} over limit`
+              {calculation.overBudget && maxBudget !== null
+                ? `${formatUsageCurrency(usage.spend - maxBudget)} over limit`
                 : formatBudgetDuration(usage.budgetDuration)}
             </div>
           </div>
         </div>
 
-        {usage.maxBudget === null ? (
+        {maxBudget === null ? (
           <div className="mt-5 flex items-start gap-3 rounded-lg border border-dashed border-border bg-muted/20 px-3.5 py-3">
             <GaugeIcon className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
             <div className="min-w-0">
-              <p className="text-xs font-medium text-foreground">No key budget reported</p>
+              <p className="text-xs font-medium text-foreground">
+                {usage.budget.kind === "unlimited"
+                  ? "No key-level budget limit"
+                  : "Key budget not reported"}
+              </p>
               <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground/80">
-                Spend is available, but TritonAI did not report a key-specific maximum. Effective
-                limits may still be inherited from another policy.
+                {usage.budget.kind === "unlimited"
+                  ? "This key has no direct maximum. Effective limits may still be inherited from another policy."
+                  : "TritonAI omitted the key-specific maximum. Effective limits may still be inherited from another policy."}
               </p>
             </div>
           </div>
@@ -154,7 +178,7 @@ function BudgetInstrument({ usage }: { usage: ServerTritonAiUsageSnapshot }) {
             </div>
             <div className="mt-2 flex items-center justify-between gap-4 font-mono text-[10px] tabular-nums text-muted-foreground/70">
               <span>{formatUsageCurrency(usage.spend)} used</span>
-              <span>{formatUsageCurrency(usage.maxBudget)} limit</span>
+              <span>{formatUsageCurrency(maxBudget)} limit</span>
             </div>
           </div>
         )}
@@ -164,14 +188,22 @@ function BudgetInstrument({ usage }: { usage: ServerTritonAiUsageSnapshot }) {
         <UsageMetric label="Used" value={formatUsageCurrency(usage.spend)} detail="USD" />
         <UsageMetric
           label="Budget limit"
-          value={usage.maxBudget === null ? "Not reported" : formatUsageCurrency(usage.maxBudget)}
+          value={
+            usage.budget.kind === "limited"
+              ? formatUsageCurrency(usage.budget.maxBudget)
+              : usage.budget.kind === "unlimited"
+                ? "No key limit"
+                : "Not reported"
+          }
           detail={formatBudgetDuration(usage.budgetDuration)}
         />
         <UsageMetric
           label="Remaining"
           value={
             calculation.remaining === null
-              ? "Not available"
+              ? usage.budget.kind === "unlimited"
+                ? "No key limit"
+                : "Not reported"
               : formatUsageCurrency(calculation.remaining)
           }
           detail={calculation.overBudget ? "Limit exceeded" : "USD"}
@@ -179,8 +211,16 @@ function BudgetInstrument({ usage }: { usage: ServerTritonAiUsageSnapshot }) {
         />
         <UsageMetric
           label="Utilization"
-          value={utilizationLabel}
-          detail={usage.maxBudget === 0 ? "Zero budget limit" : "Current snapshot"}
+          value={utilizationValue}
+          detail={
+            maxBudget === 0
+              ? "Zero budget limit"
+              : usage.budget.kind === "unlimited"
+                ? "No key-level limit"
+                : usage.budget.kind === "unreported"
+                  ? "Provider omitted limit"
+                  : "Current snapshot"
+          }
           tone={tone}
         />
       </dl>
@@ -330,7 +370,6 @@ export function UsageSettingsPanel() {
     hasError: error !== null,
     isPending,
   });
-  const missingKey = error?.includes("TRITONAI_API_KEY") ?? false;
   const badge = data ? statusBadge(data) : null;
   const BadgeIcon = badge?.icon;
   const fetchedAt = data ? formatUsageDate(data.fetchedAt) : null;
@@ -373,7 +412,7 @@ export function UsageSettingsPanel() {
         ) : null}
         {viewState === "error" && error ? (
           <UsageEmptyState
-            title={missingKey ? "API key not configured" : "Usage could not be loaded"}
+            title={usageErrorTitle(error)}
             message={error}
             canRefresh
             isPending={isPending}

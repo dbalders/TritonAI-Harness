@@ -5,6 +5,13 @@ import { IsoDateTime, TrimmedNonEmptyString } from "./baseSchemas.ts";
 const NonNegativeFinite = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0));
 const NonNegativeInt = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
 
+export const ServerTritonAiUsageBudget = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("limited"), maxBudget: NonNegativeFinite }),
+  Schema.Struct({ kind: Schema.Literal("unlimited") }),
+  Schema.Struct({ kind: Schema.Literal("unreported") }),
+]);
+export type ServerTritonAiUsageBudget = typeof ServerTritonAiUsageBudget.Type;
+
 /**
  * A server-sanitized snapshot of the currently configured TritonAI key.
  *
@@ -15,7 +22,7 @@ export const ServerTritonAiUsageSnapshot = Schema.Struct({
   keyName: Schema.NullOr(TrimmedNonEmptyString),
   keyAlias: Schema.NullOr(TrimmedNonEmptyString),
   spend: NonNegativeFinite,
-  maxBudget: Schema.NullOr(NonNegativeFinite),
+  budget: ServerTritonAiUsageBudget,
   budgetDuration: Schema.NullOr(TrimmedNonEmptyString),
   budgetResetAt: Schema.NullOr(IsoDateTime),
   models: Schema.Array(TrimmedNonEmptyString),

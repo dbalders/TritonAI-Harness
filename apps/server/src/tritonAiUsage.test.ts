@@ -53,7 +53,7 @@ describe("fetchTritonAiUsage", () => {
         keyName: "sk-...LjnA",
         keyAlias: "dbalderston-free",
         spend: 3.25,
-        maxBudget: 15,
+        budget: { kind: "limited", maxBudget: 15 },
         budgetDuration: "30d",
         budgetResetAt: "2026-08-01T00:00:00+00:00",
         models: ["all-team-models"],
@@ -74,7 +74,7 @@ describe("fetchTritonAiUsage", () => {
     }),
   );
 
-  it.effect("supports keys without a budget limit or optional metadata", () =>
+  it.effect("distinguishes an omitted budget from optional metadata", () =>
     Effect.gen(function* () {
       const fetchMock = vi.fn(async () => new Response(JSON.stringify({ info: { spend: 1.5 } })));
 
@@ -84,10 +84,25 @@ describe("fetchTritonAiUsage", () => {
       });
 
       assert.equal(result.spend, 1.5);
-      assert.equal(result.maxBudget, null);
+      assert.deepStrictEqual(result.budget, { kind: "unreported" });
       assert.deepStrictEqual(result.models, []);
       assert.equal(result.budgetResetAt, null);
       assert.equal(result.rpmLimit, null);
+    }),
+  );
+
+  it.effect("represents an explicit null budget as no key-level limit", () =>
+    Effect.gen(function* () {
+      const fetchMock = vi.fn(
+        async () => new Response(JSON.stringify({ info: { spend: 1.5, max_budget: null } })),
+      );
+
+      const result = yield* fetchTritonAiUsage({
+        env: { TRITONAI_API_KEY: "test-key" },
+        fetch: fetchMock as unknown as typeof fetch,
+      });
+
+      assert.deepStrictEqual(result.budget, { kind: "unlimited" });
     }),
   );
 

@@ -2,6 +2,7 @@ import {
   DEFAULT_TRITONAI_AI_BASE_URL,
   ServerTritonAiUsageError,
   type ServerTritonAiUsageErrorCode,
+  type ServerTritonAiUsageBudget,
   type ServerTritonAiUsageSnapshot,
   TRITONAI_API_KEY_ENV,
   UCSD_AI_BASE_URL_ENV,
@@ -153,6 +154,14 @@ function sanitizeModels(models: ReadonlyArray<string> | null | undefined): Reado
   return sanitized;
 }
 
+function sanitizeBudget(info: {
+  readonly max_budget?: number | null | undefined;
+}): ServerTritonAiUsageBudget {
+  if (!Object.hasOwn(info, "max_budget")) return { kind: "unreported" };
+  if (info.max_budget === null || info.max_budget === undefined) return { kind: "unlimited" };
+  return { kind: "limited", maxBudget: info.max_budget };
+}
+
 export const fetchTritonAiUsage = Effect.fn("fetchTritonAiUsage")(function* (options?: {
   readonly env?: TritonAiUsageEnv;
   readonly fetch?: FetchLike;
@@ -215,7 +224,7 @@ export const fetchTritonAiUsage = Effect.fn("fetchTritonAiUsage")(function* (opt
     keyName: optionalText(info.key_name),
     keyAlias: optionalText(info.key_alias),
     spend: info.spend,
-    maxBudget: info.max_budget ?? null,
+    budget: sanitizeBudget(info),
     budgetDuration: optionalText(info.budget_duration),
     budgetResetAt: optionalText(info.budget_reset_at),
     models: sanitizeModels(info.models),
