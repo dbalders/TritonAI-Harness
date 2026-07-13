@@ -103,7 +103,7 @@ export function SidebarUpdatePill() {
           ? "Installer update unavailable"
           : state.errorContext === "open"
             ? "Retry installer download"
-            : `Full installer${state.availableVersion ? ` ${state.availableVersion}` : ""}`;
+            : `Update Installer${state.availableVersion ? ` (${state.availableVersion})` : ""}`;
 
   return (
     <div
