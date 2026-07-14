@@ -26,6 +26,7 @@ import {
   type CanonicalItemType,
   type CanonicalRequestType,
   type ClaudeSettings,
+  DEFAULT_RUNTIME_MODE,
   EventId,
   type ProviderApprovalDecision,
   ProviderDriverKind,
@@ -3289,7 +3290,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           } satisfies PermissionResult;
         }
 
-        const runtimeMode = input.runtimeMode ?? "full-access";
+        const runtimeMode = input.runtimeMode ?? DEFAULT_RUNTIME_MODE;
         if (runtimeMode === "full-access") {
           return {
             behavior: "allow",

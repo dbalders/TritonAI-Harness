@@ -1,3 +1,4 @@
+import { DEFAULT_RUNTIME_MODE as CONTRACT_DEFAULT_RUNTIME_MODE } from "@t3tools/contracts";
 import type {
   ChatImageAttachment as ContractChatImageAttachment,
   OrchestrationCheckpointFile,
@@ -17,7 +18,7 @@ import type {
 } from "@t3tools/client-runtime/state/shell";
 
 export type SessionPhase = "disconnected" | "connecting" | "ready" | "running";
-export const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
+export const DEFAULT_RUNTIME_MODE: RuntimeMode = CONTRACT_DEFAULT_RUNTIME_MODE;
 
 export const DEFAULT_INTERACTION_MODE: ProviderInteractionMode = "default";
 export const DEFAULT_THREAD_TERMINAL_HEIGHT = 280;

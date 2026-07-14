@@ -120,7 +120,9 @@ export const RuntimeMode = Schema.Literals([
   "full-access",
 ]);
 export type RuntimeMode = typeof RuntimeMode.Type;
-export const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
+export const DEFAULT_RUNTIME_MODE: RuntimeMode = "auto-accept-edits";
+// Missing fields in historical commands/events must retain the behavior they had when written.
+const LEGACY_DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
 export const ProviderInteractionMode = Schema.Literals(["default", "plan"]);
 export type ProviderInteractionMode = typeof ProviderInteractionMode.Type;
 export const DEFAULT_PROVIDER_INTERACTION_MODE: ProviderInteractionMode = "default";
@@ -273,7 +275,9 @@ export const OrchestrationSession = Schema.Struct({
   status: OrchestrationSessionStatus,
   providerName: Schema.NullOr(TrimmedNonEmptyString),
   providerInstanceId: Schema.optional(ProviderInstanceId),
-  runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_RUNTIME_MODE))),
+  runtimeMode: RuntimeMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(LEGACY_DEFAULT_RUNTIME_MODE)),
+  ),
   activeTurnId: Schema.NullOr(TurnId),
   lastError: Schema.NullOr(TrimmedNonEmptyString),
   updatedAt: IsoDateTime,
@@ -588,7 +592,9 @@ export const ThreadTurnStartCommand = Schema.Struct({
   }),
   modelSelection: Schema.optional(ModelSelection),
   titleSeed: Schema.optional(TrimmedNonEmptyString),
-  runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_RUNTIME_MODE))),
+  runtimeMode: RuntimeMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(LEGACY_DEFAULT_RUNTIME_MODE)),
+  ),
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
@@ -841,7 +847,9 @@ export const ThreadCreatedPayload = Schema.Struct({
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
-  runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_RUNTIME_MODE))),
+  runtimeMode: RuntimeMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(LEGACY_DEFAULT_RUNTIME_MODE)),
+  ),
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
@@ -907,7 +915,9 @@ export const ThreadTurnStartRequestedPayload = Schema.Struct({
   messageId: MessageId,
   modelSelection: Schema.optional(ModelSelection),
   titleSeed: Schema.optional(TrimmedNonEmptyString),
-  runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_RUNTIME_MODE))),
+  runtimeMode: RuntimeMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(LEGACY_DEFAULT_RUNTIME_MODE)),
+  ),
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),

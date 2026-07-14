@@ -38,6 +38,9 @@ describe("createNewThreadDraft", () => {
     expect(useComposerDraftStore.getState().getComposerDraft(draftId)?.prompt).toBe(
       TRITONAI_FIRST_RUN_PROMPT,
     );
+    expect(useComposerDraftStore.getState().getDraftSession(draftId)).toMatchObject({
+      runtimeMode: "auto-accept-edits",
+    });
     expect(Object.keys(useComposerDraftStore.getState().draftThreadsByThreadKey)).toHaveLength(1);
   });
 

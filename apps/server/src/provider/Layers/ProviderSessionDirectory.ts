@@ -1,4 +1,9 @@
-import { defaultInstanceIdForDriver, ProviderDriverKind, type ThreadId } from "@t3tools/contracts";
+import {
+  DEFAULT_RUNTIME_MODE,
+  defaultInstanceIdForDriver,
+  ProviderDriverKind,
+  type ThreadId,
+} from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -133,7 +138,7 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
         adapterKey:
           binding.adapterKey ??
           (providerChanged ? binding.provider : (existingRuntime?.adapterKey ?? binding.provider)),
-        runtimeMode: binding.runtimeMode ?? existingRuntime?.runtimeMode ?? "full-access",
+        runtimeMode: binding.runtimeMode ?? existingRuntime?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
         status: binding.status ?? existingRuntime?.status ?? "running",
         lastSeenAt: now,
         resumeCursor:
