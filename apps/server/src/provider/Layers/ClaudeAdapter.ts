@@ -3091,6 +3091,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       const startedAt = yield* nowIso;
       const resumeState = readClaudeResumeState(input.resumeCursor);
       const threadId = input.threadId;
+      const effectiveRuntimeMode = input.runtimeMode ?? DEFAULT_RUNTIME_MODE;
       const existingResumeSessionId = resumeState?.resume;
       const newSessionId = existingResumeSessionId === undefined ? yield* randomUUIDv4 : undefined;
       const sessionId = existingResumeSessionId ?? newSessionId;
@@ -3290,8 +3291,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           } satisfies PermissionResult;
         }
 
-        const runtimeMode = input.runtimeMode ?? DEFAULT_RUNTIME_MODE;
-        if (runtimeMode === "full-access") {
+        if (effectiveRuntimeMode === "full-access") {
           return {
             behavior: "allow",
             updatedInput: toolInput,
@@ -3434,7 +3434,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         "auto-accept-edits": "acceptEdits",
         "full-access": "bypassPermissions",
       };
-      const permissionMode = runtimeModeToPermission[input.runtimeMode];
+      const permissionMode = runtimeModeToPermission[effectiveRuntimeMode];
       const settings = {
         ...(typeof thinking === "boolean" ? { alwaysThinkingEnabled: thinking } : {}),
         ...(fastMode ? { fastMode: true } : {}),
@@ -3484,7 +3484,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       yield* Effect.annotateCurrentSpan({
         "provider.kind": PROVIDER,
         "provider.thread_id": threadId,
-        "provider.runtime_mode": input.runtimeMode,
+        "provider.runtime_mode": effectiveRuntimeMode,
         "claude.resume.source":
           existingResumeSessionId !== undefined ? "resume-session" : "generated-session",
         "claude.resume.thread_id": resumeState?.threadId ?? "",
@@ -3526,7 +3526,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         provider: PROVIDER,
         providerInstanceId: boundInstanceId,
         status: "ready",
-        runtimeMode: input.runtimeMode,
+        runtimeMode: effectiveRuntimeMode,
         ...(input.cwd ? { cwd: input.cwd } : {}),
         ...(modelSelection?.model ? { model: modelSelection.model } : {}),
         ...(threadId ? { threadId } : {}),
