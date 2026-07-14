@@ -361,12 +361,10 @@ describe("ClaudeAdapterLive", () => {
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
       // Exercise the defensive fallback used by untyped and older callers.
-      const session = yield* adapter.startSession(
-        {
-          threadId: THREAD_ID,
-          provider: ProviderDriverKind.make("claudeAgent"),
-        } as Parameters<typeof adapter.startSession>[0],
-      );
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+      } as Parameters<typeof adapter.startSession>[0]);
 
       const createInput = harness.getLastCreateQueryInput();
       assert.equal(createInput?.options.permissionMode, "acceptEdits");
