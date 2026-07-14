@@ -19,6 +19,7 @@ import * as DesktopBackendManager from "./DesktopBackendManager.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopServerExposure from "./DesktopServerExposure.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
+import * as DesktopTritonAiApiKey from "../settings/DesktopTritonAiApiKey.ts";
 import * as DesktopWslEnvironment from "../wsl/DesktopWslEnvironment.ts";
 
 export class DesktopBackendObservabilitySettingsReadError extends Schema.TaggedErrorClass<DesktopBackendObservabilitySettingsReadError>()(
@@ -399,6 +400,7 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
     const serverExposure = yield* DesktopServerExposure.DesktopServerExposure;
     const backendExposure = yield* serverExposure.backendConfig;
     const ucsdEnvironment = yield* readUcsdEnvironmentFile;
+    const tritonAiApiKeyOverride = yield* DesktopTritonAiApiKey.readTritonAiApiKeyOverride;
 
     const bootstrap = {
       mode: "desktop" as const,
@@ -419,6 +421,10 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
       cwd: environment.backendCwd,
       env: {
         ...ucsdEnvironmentFallback(ucsdEnvironment),
+        ...Option.match(tritonAiApiKeyOverride, {
+          onNone: () => ({}),
+          onSome: (apiKey) => ({ TRITONAI_API_KEY: apiKey }),
+        }),
         ...backendChildEnvPatch(),
         ELECTRON_RUN_AS_NODE: "1",
       },
@@ -449,6 +455,7 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const wslEnvironment = yield* DesktopWslEnvironment.DesktopWslEnvironment;
   const ucsdEnvironment = yield* readUcsdEnvironmentFile;
+  const tritonAiApiKeyOverride = yield* DesktopTritonAiApiKey.readTritonAiApiKeyOverride;
 
   // Bind to 0.0.0.0 inside WSL so the backend is reachable both via
   // WSL2's automatic localhost forwarding (wslhost: Windows 127.0.0.1
@@ -531,7 +538,11 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
   const forwardedEnvNames: string[] = [];
   for (const name of WSL_FORWARDED_ENV_NAMES) {
     const value =
-      process.env[name] && process.env[name].length > 0 ? process.env[name] : ucsdEnvironment[name];
+      name === "TRITONAI_API_KEY" && Option.isSome(tritonAiApiKeyOverride)
+        ? tritonAiApiKeyOverride.value
+        : process.env[name] && process.env[name].length > 0
+          ? process.env[name]
+          : ucsdEnvironment[name];
     if (value !== undefined && value.length > 0) {
       forwardedEnv[name] = value;
       forwardedEnvNames.push(name);
