@@ -235,6 +235,7 @@ const PersistedComposerDraftStoreState = Schema.Struct({
     Schema.Record(ProviderInstanceId, ModelSelection),
   ),
   stickyActiveProvider: Schema.optionalKey(Schema.NullOr(ProviderInstanceId)),
+  stickyRuntimeMode: Schema.optionalKey(Schema.NullOr(RuntimeMode)),
 });
 type PersistedComposerDraftStoreState = typeof PersistedComposerDraftStoreState.Type;
 
@@ -330,6 +331,7 @@ interface ComposerDraftStoreState {
   logicalProjectDraftThreadKeyByLogicalProjectKey: Record<string, string>;
   stickyModelSelectionByProvider: Partial<Record<ProviderInstanceId, ModelSelection>>;
   stickyActiveProvider: ProviderInstanceId | null;
+  stickyRuntimeMode: RuntimeMode | null;
   /** Returns the editable composer content for a draft session or server thread. */
   getComposerDraft: (target: ComposerThreadTarget) => ComposerThreadDraftState | null;
   /** Looks up the active draft session for a logical project identity. */
@@ -549,6 +551,7 @@ const EMPTY_PERSISTED_DRAFT_STORE_STATE = Object.freeze<PersistedComposerDraftSt
   logicalProjectDraftThreadKeyByLogicalProjectKey: {},
   stickyModelSelectionByProvider: {},
   stickyActiveProvider: null,
+  stickyRuntimeMode: null,
 });
 
 const EMPTY_IMAGES: ComposerImageAttachment[] = [];
@@ -1313,6 +1316,7 @@ function createDraftThreadState(
   threadId: ThreadId,
   logicalProjectKey: string,
   existingThread: DraftThreadState | undefined,
+  defaultRuntimeMode: RuntimeMode,
   options?: {
     threadId?: ThreadId;
     branch?: string | null;
@@ -1352,7 +1356,7 @@ function createDraftThreadState(
     projectId: projectRef.projectId,
     logicalProjectKey,
     createdAt: options?.createdAt ?? existingThread?.createdAt ?? new Date().toISOString(),
-    runtimeMode: options?.runtimeMode ?? existingThread?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
+    runtimeMode: options?.runtimeMode ?? existingThread?.runtimeMode ?? defaultRuntimeMode,
     interactionMode:
       options?.interactionMode ?? existingThread?.interactionMode ?? DEFAULT_INTERACTION_MODE,
     branch: nextBranch,
@@ -1812,6 +1816,9 @@ function migratePersistedComposerDraftStoreState(
     logicalProjectDraftThreadKeyByLogicalProjectKey,
     stickyModelSelectionByProvider: compactModelSelectionByProvider(stickyModelSelectionByProvider),
     stickyActiveProvider,
+    stickyRuntimeMode: isRuntimeMode(candidate.stickyRuntimeMode)
+      ? candidate.stickyRuntimeMode
+      : null,
   };
 }
 
@@ -1907,6 +1914,7 @@ function partializeComposerDraftStoreState(
       state.stickyModelSelectionByProvider,
     ),
     stickyActiveProvider: state.stickyActiveProvider,
+    stickyRuntimeMode: state.stickyRuntimeMode,
   };
 }
 
@@ -1977,6 +1985,9 @@ function normalizeCurrentPersistedComposerDraftStoreState(
     logicalProjectDraftThreadKeyByLogicalProjectKey,
     stickyModelSelectionByProvider: compactModelSelectionByProvider(stickyModelSelectionByProvider),
     stickyActiveProvider,
+    stickyRuntimeMode: isRuntimeMode(normalizedPersistedState.stickyRuntimeMode)
+      ? normalizedPersistedState.stickyRuntimeMode
+      : null,
   };
 }
 
@@ -2177,6 +2188,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
         logicalProjectDraftThreadKeyByLogicalProjectKey: {},
         stickyModelSelectionByProvider: {},
         stickyActiveProvider: null,
+        stickyRuntimeMode: null,
         getComposerDraft: (target) => getComposerDraftState(get(), target),
         getDraftThreadByLogicalProjectKey: (logicalProjectKey) => {
           return get().getDraftSessionByLogicalProjectKey(logicalProjectKey);
@@ -2257,6 +2269,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               options?.threadId ?? existingThread?.threadId ?? ThreadId.make(draftId),
               normalizedLogicalProjectKey,
               existingThread,
+              state.stickyRuntimeMode ?? DEFAULT_RUNTIME_MODE,
               options,
             );
             const hasSameLogicalMapping = previousThreadKeyForLogicalProject === draftId;
@@ -2789,7 +2802,11 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               return state;
             }
             const base = existing ?? createEmptyThreadDraft();
-            if (base.runtimeMode === nextRuntimeMode) {
+            const stickyRuntimeMode = nextRuntimeMode ?? state.stickyRuntimeMode;
+            if (
+              base.runtimeMode === nextRuntimeMode &&
+              state.stickyRuntimeMode === stickyRuntimeMode
+            ) {
               return state;
             }
             const nextDraft: ComposerThreadDraftState = {
@@ -2802,7 +2819,10 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             } else {
               nextDraftsByThreadKey[threadKey] = nextDraft;
             }
-            return { draftsByThreadKey: nextDraftsByThreadKey };
+            return {
+              draftsByThreadKey: nextDraftsByThreadKey,
+              stickyRuntimeMode,
+            };
           });
         },
         setInteractionMode: (threadRef, interactionMode) => {
@@ -3366,6 +3386,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             normalizedPersisted.logicalProjectDraftThreadKeyByLogicalProjectKey,
           stickyModelSelectionByProvider: normalizedPersisted.stickyModelSelectionByProvider ?? {},
           stickyActiveProvider: normalizedPersisted.stickyActiveProvider ?? null,
+          stickyRuntimeMode: normalizedPersisted.stickyRuntimeMode ?? null,
         };
       },
     },

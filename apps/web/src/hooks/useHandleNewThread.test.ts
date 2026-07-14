@@ -1,5 +1,5 @@
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
-import { EnvironmentId, ProjectId } from "@t3tools/contracts";
+import { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
 
 import { useComposerDraftStore } from "../composerDraftStore";
@@ -18,6 +18,7 @@ function resetComposerDraftStore() {
     logicalProjectDraftThreadKeyByLogicalProjectKey: {},
     stickyModelSelectionByProvider: {},
     stickyActiveProvider: null,
+    stickyRuntimeMode: null,
   });
 }
 
@@ -55,5 +56,28 @@ describe("createNewThreadDraft", () => {
       envMode: "worktree",
       startFromOrigin: true,
     });
+  });
+
+  it("uses the last selected runtime mode for a fresh draft", () => {
+    useComposerDraftStore.getState().setRuntimeMode(
+      {
+        environmentId: PROJECT_REF.environmentId,
+        threadId: ThreadId.make("existing-thread"),
+      },
+      "full-access",
+    );
+
+    const draftId = createNewThreadDraft({
+      projectRef: PROJECT_REF,
+      logicalProjectKey: "tritonai-onboarding",
+      environmentSettings: {
+        defaultThreadEnvMode: "local",
+        newWorktreesStartFromOrigin: false,
+      },
+    });
+
+    expect(useComposerDraftStore.getState().getDraftSession(draftId)?.runtimeMode).toBe(
+      "full-access",
+    );
   });
 });

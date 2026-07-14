@@ -3,11 +3,7 @@ import {
   scopeProjectRef,
   scopeThreadRef,
 } from "@t3tools/client-runtime/environment";
-import {
-  DEFAULT_RUNTIME_MODE,
-  DEFAULT_SERVER_SETTINGS,
-  type ScopedProjectRef,
-} from "@t3tools/contracts";
+import { DEFAULT_SERVER_SETTINGS, type ScopedProjectRef } from "@t3tools/contracts";
 import { useParams, useRouter } from "@tanstack/react-router";
 import { useCallback, useMemo } from "react";
 import {
@@ -72,7 +68,6 @@ export function createNewThreadDraft(input: {
         envMode: initialEnvMode,
         newWorktreesStartFromOrigin: input.environmentSettings.newWorktreesStartFromOrigin,
       }),
-    runtimeMode: DEFAULT_RUNTIME_MODE,
   });
   applyStickyState(draftId);
   if (input.options?.newDraftPrompt !== undefined) {
