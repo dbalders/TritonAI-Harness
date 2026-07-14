@@ -39,7 +39,7 @@ function unwrap<A, E>(result: AtomCommandResult<A, E>): A {
 }
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : "The integration operation failed.";
+  return error instanceof Error ? error.message : "The plugin operation failed.";
 }
 
 function statusVariant(state: IntegrationSummary["connectionState"]) {
@@ -397,7 +397,7 @@ export function PluginsSettingsPanel() {
           if (result.state === "failed" || result.state === "expired") {
             setErrors((current) => ({
               ...current,
-              [id]: result.message ?? "Integration sign-in did not complete. Start again.",
+              [id]: result.message ?? "Plugin sign-in did not complete. Start again.",
             }));
           } else {
             setSelections((current) => {
@@ -541,7 +541,7 @@ export function PluginsSettingsPanel() {
         <IntegrationFlowPoller key={`${id}:${flow.flowId}`} id={id} flow={flow} poll={pollFlow} />
       ))}
       <div className="space-y-1">
-        <h1 className="text-lg font-semibold">Integrations</h1>
+        <h1 className="text-lg font-semibold">Plugins</h1>
         <p className="text-xs text-muted-foreground">
           Install and connect provider-neutral Harness plugins. Credentials remain on this server.
         </p>
@@ -563,7 +563,7 @@ export function PluginsSettingsPanel() {
           <Button
             size="icon-xs"
             variant="ghost"
-            aria-label="Refresh integrations"
+            aria-label="Refresh plugins"
             onClick={() => void load()}
             disabled={loading}
           >
@@ -574,9 +574,7 @@ export function PluginsSettingsPanel() {
         {installed.length ? (
           renderCards(installed)
         ) : (
-          <p className="p-6 text-center text-xs text-muted-foreground">
-            No integrations installed.
-          </p>
+          <p className="p-6 text-center text-xs text-muted-foreground">No plugins installed.</p>
         )}
       </SettingsSection>
       <SettingsSection
@@ -588,7 +586,7 @@ export function PluginsSettingsPanel() {
           renderCards(available)
         ) : (
           <p className="p-6 text-center text-xs text-muted-foreground">
-            All available integrations are installed.
+            All available plugins are installed.
           </p>
         )}
       </SettingsSection>
