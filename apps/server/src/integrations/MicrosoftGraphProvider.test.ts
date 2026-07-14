@@ -132,6 +132,39 @@ describe("MicrosoftGraphProvider", () => {
     expect(graphObservedPersistedRotation).toBe(true);
   });
 
+  it("disconnects credentials after terminal refresh-token failures", async () => {
+    for (const terminalError of ["invalid_grant", "interaction_required"]) {
+      const secrets = memorySecrets();
+      secrets.values.set(
+        MICROSOFT_GRAPH_SECRET_NAME,
+        new TextEncoder().encode(
+          JSON.stringify({
+            version: 1,
+            refreshToken: ["expired", "refresh"].join("-"),
+            grantedScopes: ["Mail.Read"],
+            accountLabel: "Test User",
+            updatedAt: new Date(0).toISOString(),
+          }),
+        ),
+      );
+      const fetchImplementation = (async (input: Parameters<typeof fetch>[0]) => {
+        const url = String(input);
+        if (url.endsWith("/token")) {
+          return jsonResponse(
+            { error: terminalError, error_description: `Terminal error: ${terminalError}` },
+            400,
+          );
+        }
+        throw new Error(`Unexpected URL ${url}`);
+      }) as typeof fetch;
+      const provider = new MicrosoftGraphProvider(secrets.service, fetchImplementation);
+
+      await expect(provider.invoke("microsoft365.mail.search", {})).rejects.toThrow(terminalError);
+      expect(secrets.values.has(MICROSOFT_GRAPH_SECRET_NAME)).toBe(false);
+      expect(await provider.status()).toMatchObject({ state: "not_connected" });
+    }
+  });
+
   it("keeps a redeemed credential when optional profile enrichment fails", async () => {
     const secrets = memorySecrets();
     let tokenRedemptions = 0;

@@ -80,6 +80,10 @@ function oauthMessage(value: Record<string, unknown>, status: number): string {
     : `Microsoft identity platform returned HTTP ${status}.`;
 }
 
+function isTerminalRefreshError(value: Record<string, unknown>): boolean {
+  return value.error === "invalid_grant" || value.error === "interaction_required";
+}
+
 function capabilityFromScope(scope: string): string | null {
   const target = scope.toLowerCase();
   return (
@@ -452,6 +456,10 @@ export class MicrosoftGraphProvider implements IntegrationProvider {
         invocationSignal,
       );
       if (!response.ok) {
+        if (isTerminalRefreshError(json)) {
+          this.#accessToken = null;
+          await Effect.runPromise(this.#secrets.remove(MICROSOFT_GRAPH_SECRET_NAME));
+        }
         throw new Error(
           `Microsoft access could not refresh: ${oauthMessage(json, response.status)}`,
         );

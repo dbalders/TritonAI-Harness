@@ -230,7 +230,11 @@ export class CodexIntegrationSkillMaterializer implements IntegrationSkillMateri
       activeSwapDirectories.add(backup);
       let backedUp = false;
       try {
-        await NodeFSP.cp(source, staging, { recursive: true, errorOnExist: true });
+        await NodeFSP.cp(source, staging, {
+          recursive: true,
+          force: false,
+          errorOnExist: true,
+        });
         await NodeFSP.writeFile(
           NodePath.join(staging, MARKER),
           `${JSON.stringify({ version: 1, integrationId: input.integrationId, skill }, null, 2)}\n`,
