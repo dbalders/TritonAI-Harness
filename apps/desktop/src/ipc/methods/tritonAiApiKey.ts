@@ -72,7 +72,7 @@ export const replaceTritonAiApiKey = makeIpcMethod({
     );
     if (result.status === "error") return result;
 
-    yield* lifecycle.relaunch("tritonai-api-key-replaced");
+    yield* lifecycle.relaunch("tritonai-api-key-replaced", { waitForIpcResponse: true });
     return result satisfies DesktopTritonAiApiKeyReplaceResult;
   }),
 });

@@ -43,6 +43,7 @@ export class DesktopLifecycle extends Context.Service<
   {
     readonly relaunch: (
       reason: string,
+      options?: { readonly waitForIpcResponse?: boolean },
     ) => Effect.Effect<void, never, DesktopLifecycleRuntimeServices>;
     readonly register: Effect.Effect<void, never, Scope.Scope | DesktopLifecycleRuntimeServices>;
   }
@@ -135,16 +136,18 @@ function quitFromSignal(
 }
 
 export const make = DesktopLifecycle.of({
-  relaunch: Effect.fn("desktop.lifecycle.relaunch")(function* (reason) {
+  relaunch: Effect.fn("desktop.lifecycle.relaunch")(function* (reason, options) {
     const electronApp = yield* ElectronApp.ElectronApp;
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
     const state = yield* DesktopState.DesktopState;
     yield* logLifecycleInfo("desktop relaunch requested", { reason });
     yield* Effect.gen(function* () {
-      // IPC-triggered settings changes need a brief grace period for their
-      // encoded success result to reach the renderer before shutdown closes
-      // the channel. Without it, a completed save can look like a failure.
-      yield* Effect.sleep("250 millis");
+      if (options?.waitForIpcResponse) {
+        // Let an encoded success result reach the renderer before shutdown
+        // closes the IPC channel. Without this, a completed save can look like
+        // a failure even though the new value was persisted.
+        yield* Effect.sleep("250 millis");
+      }
       yield* Effect.yieldNow;
       yield* Ref.set(state.quitting, true);
       yield* requestDesktopShutdownAndWait();

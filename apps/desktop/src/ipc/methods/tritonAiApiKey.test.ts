@@ -98,8 +98,15 @@ describe("replaceTritonAiApiKey IPC", () => {
       const homeDirectory = yield* fileSystem.makeTempDirectoryScoped({
         prefix: "tritonai-api-key-ipc-test-",
       });
-      const relaunchReasons: string[] = [];
-      const overridePath = `${homeDirectory}/userdata/secrets/tritonai-api-key`;
+      const relaunchRequests: Array<{
+        readonly reason: string;
+        readonly waitForIpcResponse: boolean;
+      }> = [];
+      const environmentLayer = makeEnvironmentLayer(homeDirectory);
+      const environment = yield* DesktopEnvironment.DesktopEnvironment.pipe(
+        Effect.provide(environmentLayer),
+      );
+      const overridePath = DesktopTritonAiApiKey.tritonAiApiKeyOverridePath(environment);
       const backendPoolLayer = makeBackendPoolLayer("https://configured.tritonai.example/v1");
       const validationLayer = makeHttpClientLayer((request) =>
         Effect.sync(() => {
@@ -111,13 +118,16 @@ describe("replaceTritonAiApiKey IPC", () => {
       const lifecycleLayer = Layer.succeed(
         DesktopLifecycle.DesktopLifecycle,
         DesktopLifecycle.DesktopLifecycle.of({
-          relaunch: (reason) =>
+          relaunch: (reason, options) =>
             fileSystem.readFileString(overridePath).pipe(
               Effect.orDie,
               Effect.tap((contents) =>
                 Effect.sync(() => {
                   assert.equal(contents, "replacement-key\n");
-                  relaunchReasons.push(reason);
+                  relaunchRequests.push({
+                    reason,
+                    waitForIpcResponse: options?.waitForIpcResponse ?? false,
+                  });
                 }),
               ),
               Effect.asVoid,
@@ -131,7 +141,7 @@ describe("replaceTritonAiApiKey IPC", () => {
         .pipe(
           Effect.provide(
             Layer.mergeAll(
-              makeEnvironmentLayer(homeDirectory),
+              environmentLayer,
               NodeServices.layer,
               backendPoolLayer,
               validationLayer,
@@ -142,7 +152,9 @@ describe("replaceTritonAiApiKey IPC", () => {
         );
 
       assert.deepEqual(result, { status: "saved" });
-      assert.deepEqual(relaunchReasons, ["tritonai-api-key-replaced"]);
+      assert.deepEqual(relaunchRequests, [
+        { reason: "tritonai-api-key-replaced", waitForIpcResponse: true },
+      ]);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
@@ -238,60 +250,58 @@ describe("replaceTritonAiApiKey IPC", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
-  it.effect(
-    "keeps the current key and app running when validation is temporarily unavailable",
-    () =>
-      Effect.gen(function* () {
-        const fileSystem = yield* FileSystem.FileSystem;
-        const homeDirectory = yield* fileSystem.makeTempDirectoryScoped({
-          prefix: "tritonai-api-key-ipc-test-",
-        });
-        const environmentLayer = makeEnvironmentLayer(homeDirectory);
-        const backendPoolLayer = makeBackendPoolLayer("https://configured.tritonai.example/v1");
-        const validationLayer = makeHttpClientLayer((request) =>
-          Effect.succeed(jsonResponse(request, { error: "Rate limited" }, 429)),
-        );
-        let didRelaunch = false;
-        const lifecycleLayer = Layer.succeed(
-          DesktopLifecycle.DesktopLifecycle,
-          DesktopLifecycle.DesktopLifecycle.of({
-            relaunch: () =>
-              Effect.sync(() => {
-                didRelaunch = true;
-              }),
-            register: Effect.void,
-          }),
-        );
+  it.effect("keeps the current key and app running when TritonAI rate-limits validation", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const homeDirectory = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "tritonai-api-key-ipc-test-",
+      });
+      const environmentLayer = makeEnvironmentLayer(homeDirectory);
+      const backendPoolLayer = makeBackendPoolLayer("https://configured.tritonai.example/v1");
+      const validationLayer = makeHttpClientLayer((request) =>
+        Effect.succeed(jsonResponse(request, { error: "Rate limited" }, 429)),
+      );
+      let didRelaunch = false;
+      const lifecycleLayer = Layer.succeed(
+        DesktopLifecycle.DesktopLifecycle,
+        DesktopLifecycle.DesktopLifecycle.of({
+          relaunch: () =>
+            Effect.sync(() => {
+              didRelaunch = true;
+            }),
+          register: Effect.void,
+        }),
+      );
 
-        yield* DesktopTritonAiApiKey.replaceTritonAiApiKey("current-key").pipe(
-          Effect.provide(environmentLayer),
-        );
-        const result = yield* replaceTritonAiApiKey
-          .handler("candidate-key")
-          .pipe(
-            Effect.provide(
-              Layer.mergeAll(
-                environmentLayer,
-                NodeServices.layer,
-                backendPoolLayer,
-                validationLayer,
-                lifecycleLayer,
-                unusedLifecycleRuntimeLayer,
-              ),
+      yield* DesktopTritonAiApiKey.replaceTritonAiApiKey("current-key").pipe(
+        Effect.provide(environmentLayer),
+      );
+      const result = yield* replaceTritonAiApiKey
+        .handler("candidate-key")
+        .pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              environmentLayer,
+              NodeServices.layer,
+              backendPoolLayer,
+              validationLayer,
+              lifecycleLayer,
+              unusedLifecycleRuntimeLayer,
             ),
-          );
-
-        assert.deepEqual(result, {
-          status: "error",
-          message:
-            "TritonAI could not verify the key because it is rate limiting requests (HTTP 429).",
-        });
-        assert.isFalse(didRelaunch);
-        const stored = yield* DesktopTritonAiApiKey.readTritonAiApiKeyOverride.pipe(
-          Effect.provide(environmentLayer),
+          ),
         );
-        assert.equal(stored._tag, "Some");
-        if (stored._tag === "Some") assert.equal(stored.value, "current-key");
-      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+
+      assert.deepEqual(result, {
+        status: "error",
+        message:
+          "TritonAI could not verify the key because it is rate limiting requests (HTTP 429).",
+      });
+      assert.isFalse(didRelaunch);
+      const stored = yield* DesktopTritonAiApiKey.readTritonAiApiKeyOverride.pipe(
+        Effect.provide(environmentLayer),
+      );
+      assert.equal(stored._tag, "Some");
+      if (stored._tag === "Some") assert.equal(stored.value, "current-key");
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 });

@@ -303,6 +303,12 @@ function TritonAiApiKeySetting() {
         return;
       }
       setApiKey("");
+      window.setTimeout(() => {
+        setIsSaving(false);
+        setSaveError(
+          "The key was saved, but TritonAI Harness did not restart. Restart the app manually to use the new key.",
+        );
+      }, 5_000);
     } catch (error) {
       setIsSaving(false);
       setSaveError(
