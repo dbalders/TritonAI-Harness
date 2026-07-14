@@ -141,6 +141,10 @@ export const make = DesktopLifecycle.of({
     const state = yield* DesktopState.DesktopState;
     yield* logLifecycleInfo("desktop relaunch requested", { reason });
     yield* Effect.gen(function* () {
+      // IPC-triggered settings changes need a brief grace period for their
+      // encoded success result to reach the renderer before shutdown closes
+      // the channel. Without it, a completed save can look like a failure.
+      yield* Effect.sleep("250 millis");
       yield* Effect.yieldNow;
       yield* Ref.set(state.quitting, true);
       yield* requestDesktopShutdownAndWait();

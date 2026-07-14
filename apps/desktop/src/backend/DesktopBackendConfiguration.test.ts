@@ -16,6 +16,7 @@ import * as DesktopBackendConfiguration from "./DesktopBackendConfiguration.ts";
 import * as DesktopConfig from "../app/DesktopConfig.ts";
 import * as DesktopServerExposure from "./DesktopServerExposure.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
+import * as DesktopTritonAiApiKey from "../settings/DesktopTritonAiApiKey.ts";
 import * as DesktopWslEnvironment from "../wsl/DesktopWslEnvironment.ts";
 
 const PersistedServerObservabilitySettingsDocument = Schema.Struct({
@@ -411,6 +412,41 @@ describe("DesktopBackendConfiguration", () => {
     }),
   );
 
+  it.effect("resolvePrimary prefers the persistent desktop key override", () =>
+    Effect.gen(function* () {
+      const previousTritonAiKey = process.env.TRITONAI_API_KEY;
+      try {
+        process.env.TRITONAI_API_KEY = "old-key";
+
+        yield* withHarness(
+          Effect.gen(function* () {
+            const fileSystem = yield* FileSystem.FileSystem;
+            const environment = yield* DesktopEnvironment.DesktopEnvironment;
+            const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+            const envFile = environment.path.join(
+              environment.homeDirectory,
+              ".agents",
+              "ucsd",
+              "env",
+            );
+            yield* fileSystem.makeDirectory(environment.path.dirname(envFile), {
+              recursive: true,
+            });
+            yield* fileSystem.writeFileString(envFile, "export TRITONAI_API_KEY='setup-key'\n");
+            yield* DesktopTritonAiApiKey.replaceTritonAiApiKey("new-key");
+
+            const first = yield* configuration.resolvePrimary;
+            const afterRelaunch = yield* configuration.resolvePrimary;
+            assert.equal(first.env.TRITONAI_API_KEY, "new-key");
+            assert.equal(afterRelaunch.env.TRITONAI_API_KEY, "new-key");
+          }),
+        );
+      } finally {
+        restoreEnv("TRITONAI_API_KEY", previousTritonAiKey);
+      }
+    }),
+  );
+
   it.effect("logs structured context when persisted observability settings cannot be read", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -570,7 +606,7 @@ describe("DesktopBackendConfiguration", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("resolveWsl forwards UCSD installer environment file secrets", () =>
+  it.effect("resolveWsl forwards UCSD environment and prefers the desktop key override", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -586,6 +622,9 @@ describe("DesktopBackendConfiguration", () => {
           "export UCSD_AI_BASE_URL=https://installer.example.edu/v1",
           "",
         ].join("\n"),
+      );
+      yield* DesktopTritonAiApiKey.replaceTritonAiApiKey("wsl-key").pipe(
+        Effect.provide(makeEnvironmentLayer(baseDir)),
       );
 
       const previousWslEnv = process.env.WSLENV;
@@ -604,7 +643,7 @@ describe("DesktopBackendConfiguration", () => {
           const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
           const config = yield* configuration.resolveWsl({ port: 5050, distro: null });
 
-          assert.equal(config.env.TRITONAI_API_KEY, "installer-triton-key");
+          assert.equal(config.env.TRITONAI_API_KEY, "wsl-key");
           assert.equal(config.env.UCSD_AI_BASE_URL, "https://installer.example.edu/v1");
           assert.equal(config.env.WSLENV, "GOPATH/p:TRITONAI_API_KEY:UCSD_AI_BASE_URL");
         }).pipe(

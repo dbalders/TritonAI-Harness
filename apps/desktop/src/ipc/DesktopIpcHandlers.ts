@@ -43,6 +43,7 @@ import {
   setTheme,
   showContextMenu,
 } from "./methods/window.ts";
+import { replaceTritonAiApiKey } from "./methods/tritonAiApiKey.ts";
 import * as PreviewIpc from "./methods/preview.ts";
 import { getWslState, setWslBackendEnabled, setWslDistro, setWslOnly } from "./methods/wsl.ts";
 
@@ -53,6 +54,7 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handleSync(getAppBranding);
   yield* ipc.handleSync(getLocalEnvironmentBootstraps);
   yield* ipc.handle(getLocalEnvironmentBearerToken);
+  yield* ipc.handle(replaceTritonAiApiKey);
 
   yield* ipc.handle(getClientSettings);
   yield* ipc.handle(setClientSettings);

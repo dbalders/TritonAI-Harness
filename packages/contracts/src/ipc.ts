@@ -204,6 +204,16 @@ export const DesktopAppBrandingSchema = Schema.Struct({
   displayName: Schema.String,
 });
 
+export const DesktopTritonAiApiKeyReplaceResultSchema = Schema.Union([
+  Schema.Struct({ status: Schema.Literal("saved") }),
+  Schema.Struct({
+    status: Schema.Literal("error"),
+    message: Schema.String,
+  }),
+]);
+export type DesktopTritonAiApiKeyReplaceResult =
+  typeof DesktopTritonAiApiKeyReplaceResultSchema.Type;
+
 export interface DesktopRuntimeInfo {
   hostArch: DesktopRuntimeArch;
   appArch: DesktopRuntimeArch;
@@ -1031,6 +1041,7 @@ export interface DesktopBridge {
   // The primary backend is identified by id === PRIMARY_LOCAL_ENVIRONMENT_ID.
   getLocalEnvironmentBootstraps: () => readonly DesktopEnvironmentBootstrap[];
   getLocalEnvironmentBearerToken: () => Promise<string>;
+  replaceTritonAiApiKey: (apiKey: string) => Promise<DesktopTritonAiApiKeyReplaceResult>;
   getClientSettings: () => Promise<ClientSettings | null>;
   setClientSettings: (settings: ClientSettings) => Promise<void>;
   getConnectionCatalog?: () => Promise<string | null>;

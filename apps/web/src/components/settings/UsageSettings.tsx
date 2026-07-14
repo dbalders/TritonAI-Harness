@@ -6,6 +6,7 @@ import {
   ShieldAlertIcon,
 } from "lucide-react";
 import type { ServerTritonAiUsageSnapshot } from "@t3tools/contracts";
+import { useState } from "react";
 
 import { cn } from "../../lib/utils";
 import { usePrimaryEnvironment } from "../../state/environments";
@@ -13,6 +14,7 @@ import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
+import { Input } from "../ui/input";
 import { Skeleton } from "../ui/skeleton";
 import { SettingsPageContainer, SettingsSection } from "./settingsLayout";
 import {
@@ -280,6 +282,88 @@ function UsageEmptyState({
   );
 }
 
+function TritonAiApiKeySetting() {
+  const desktopBridge = window.desktopBridge;
+  const [apiKey, setApiKey] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  if (!desktopBridge) return null;
+
+  const replacement = apiKey.trim();
+  const saveReplacement = async () => {
+    if (replacement.length === 0 || isSaving) return;
+    setIsSaving(true);
+    setSaveError(null);
+    try {
+      const result = await desktopBridge.replaceTritonAiApiKey(replacement);
+      if (result.status === "error") {
+        setIsSaving(false);
+        setSaveError(result.message);
+        return;
+      }
+      setApiKey("");
+    } catch (error) {
+      setIsSaving(false);
+      setSaveError(
+        error instanceof Error
+          ? `Desktop request failed: ${error.message}`
+          : "The desktop request failed with an unknown error.",
+      );
+    }
+  };
+
+  return (
+    <SettingsSection title="API key">
+      <form
+        className="space-y-4 px-4 py-5 sm:px-5"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void saveReplacement();
+        }}
+      >
+        <div>
+          <label
+            htmlFor="tritonai-api-key-replacement"
+            className="text-xs font-medium text-foreground"
+          >
+            Replace this desktop's TritonAI API key
+          </label>
+          <p className="mt-1 max-w-2xl text-xs leading-relaxed text-muted-foreground/80">
+            The existing key is never displayed. Saving securely replaces the desktop override and
+            restarts TritonAI Harness so future Codex, usage, and voice transcription requests all
+            use the new key. Installer updates will not overwrite this choice.
+          </p>
+        </div>
+        <div className="flex max-w-2xl flex-col gap-2 sm:flex-row">
+          <Input
+            id="tritonai-api-key-replacement"
+            type="password"
+            maxLength={8_192}
+            autoComplete="new-password"
+            spellCheck={false}
+            value={apiKey}
+            placeholder="Enter replacement API key"
+            disabled={isSaving}
+            onChange={(event) => {
+              setApiKey(event.target.value);
+              setSaveError(null);
+            }}
+          />
+          <Button type="submit" disabled={replacement.length === 0 || isSaving}>
+            {isSaving ? "Saving…" : "Save and Restart"}
+          </Button>
+        </div>
+        {saveError ? (
+          <p className="text-xs text-destructive" role="alert">
+            {saveError}
+          </p>
+        ) : null}
+      </form>
+    </SettingsSection>
+  );
+}
+
 export function UsageSettingsPanel() {
   const primaryEnvironment = usePrimaryEnvironment();
   const environmentId = primaryEnvironment?.environmentId ?? null;
@@ -296,6 +380,7 @@ export function UsageSettingsPanel() {
 
   return (
     <SettingsPageContainer>
+      <TritonAiApiKeySetting />
       <SettingsSection
         title="Usage snapshot"
         aria-busy={isPending}
