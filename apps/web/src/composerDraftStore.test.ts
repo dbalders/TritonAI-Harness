@@ -131,6 +131,7 @@ function resetComposerDraftStore() {
     logicalProjectDraftThreadKeyByLogicalProjectKey: {},
     stickyModelSelectionByProvider: {},
     stickyActiveProvider: null,
+    stickyRuntimeMode: null,
   });
 }
 
@@ -301,6 +302,7 @@ describe("composerDraftStore syncPersistedAttachments", () => {
       logicalProjectDraftThreadKeyByLogicalProjectKey: {},
       stickyModelSelectionByProvider: {},
       stickyActiveProvider: null,
+      stickyRuntimeMode: null,
     });
   });
 
@@ -356,6 +358,7 @@ describe("composerDraftStore terminal contexts", () => {
       logicalProjectDraftThreadKeyByLogicalProjectKey: {},
       stickyModelSelectionByProvider: {},
       stickyActiveProvider: null,
+      stickyRuntimeMode: null,
     });
   });
 
@@ -1625,6 +1628,44 @@ describe("composerDraftStore runtime and interaction settings", () => {
     store.setRuntimeMode(threadRef, "approval-required");
 
     expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.runtimeMode).toBe("approval-required");
+    expect(useComposerDraftStore.getState().stickyRuntimeMode).toBe("approval-required");
+  });
+
+  it("uses the sticky runtime mode only for future drafts", () => {
+    const store = useComposerDraftStore.getState();
+    const projectRef = scopeProjectRef(TEST_ENVIRONMENT_ID, ProjectId.make("project-settings"));
+    const existingDraftId = DraftId.make("draft-existing-runtime-mode");
+    const newDraftId = DraftId.make("draft-new-runtime-mode");
+
+    store.setLogicalProjectDraftThreadId("existing-project", projectRef, existingDraftId);
+    store.setRuntimeMode(threadRef, "full-access");
+    store.setLogicalProjectDraftThreadId("new-project", projectRef, newDraftId);
+
+    expect(store.getDraftSession(existingDraftId)?.runtimeMode).toBe("auto-accept-edits");
+    expect(useComposerDraftStore.getState().getDraftSession(newDraftId)?.runtimeMode).toBe(
+      "full-access",
+    );
+  });
+
+  it("persists and hydrates the sticky runtime mode", () => {
+    const store = useComposerDraftStore.getState();
+    store.setRuntimeMode(threadRef, "full-access");
+    const persistApi = useComposerDraftStore.persist as unknown as {
+      getOptions: () => {
+        partialize: (state: ReturnType<typeof useComposerDraftStore.getState>) => unknown;
+        merge: (
+          persistedState: unknown,
+          currentState: ReturnType<typeof useComposerDraftStore.getState>,
+        ) => ReturnType<typeof useComposerDraftStore.getState>;
+      };
+    };
+
+    const persistedState = persistApi.getOptions().partialize(useComposerDraftStore.getState());
+    const mergedState = persistApi
+      .getOptions()
+      .merge(persistedState, useComposerDraftStore.getInitialState());
+
+    expect(mergedState.stickyRuntimeMode).toBe("full-access");
   });
 
   it("stores interaction mode overrides in the composer draft", () => {
