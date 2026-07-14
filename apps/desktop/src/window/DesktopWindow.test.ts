@@ -401,7 +401,7 @@ describe("DesktopWindow", () => {
     }),
   );
 
-  it.effect("grants microphone permission only to the main app renderer", () =>
+  it.effect("grants clipboard writes and microphone access only to the main app renderer", () =>
     Effect.gen(function* () {
       const fakeWindow = makeFakeBrowserWindow();
       const createCount = yield* Ref.make(0);
@@ -419,6 +419,24 @@ describe("DesktopWindow", () => {
         assert.isNotNull(handler);
 
         const decisions: boolean[] = [];
+        handler?.(
+          fakeWindow.window.webContents,
+          "clipboard-sanitized-write",
+          (granted) => decisions.push(granted),
+          { requestingUrl: "t3code-dev://app/" },
+        );
+        handler?.(
+          fakeWindow.window.webContents,
+          "clipboard-sanitized-write",
+          (granted) => decisions.push(granted),
+          { requestingUrl: "https://example.com/" },
+        );
+        handler?.(
+          {} as Electron.WebContents,
+          "clipboard-sanitized-write",
+          (granted) => decisions.push(granted),
+          { requestingUrl: "t3code-dev://app/" },
+        );
         handler?.(fakeWindow.window.webContents, "media", (granted) => decisions.push(granted), {
           requestingUrl: "t3code-dev://app/",
           mediaTypes: ["audio"],
@@ -442,7 +460,7 @@ describe("DesktopWindow", () => {
           { requestingUrl: "t3code-dev://app/", mediaTypes: [] },
         );
 
-        assert.deepEqual(decisions, [true, false, false, false, false]);
+        assert.deepEqual(decisions, [true, false, false, true, false, false, false, false]);
       }).pipe(Effect.provide(layer));
     }),
   );
