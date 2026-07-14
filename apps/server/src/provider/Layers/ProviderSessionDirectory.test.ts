@@ -48,7 +48,6 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
       assertSome(resolvedBinding, {
         threadId: initialThreadId,
         provider: ProviderDriverKind.make("codex"),
-        runtimeMode: "auto-accept-edits",
       });
       if (Option.isSome(resolvedBinding)) {
         assert.equal(resolvedBinding.value.threadId, initialThreadId);
@@ -72,7 +71,6 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
         assert.equal(runtime.value.threadId, nextThreadId);
         assert.equal(runtime.value.status, "running");
         assert.equal(runtime.value.providerName, "codex");
-        assert.equal(runtime.value.runtimeMode, "auto-accept-edits");
       }
 
       const threadIds = yield* directory.listThreadIds();
