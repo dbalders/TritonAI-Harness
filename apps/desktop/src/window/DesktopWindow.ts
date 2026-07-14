@@ -394,14 +394,21 @@ export const make = Effect.gen(function* () {
       (requestingWebContents, permission, callback, details) => {
         const requestingUrl = details.requestingUrl || requestingWebContents.getURL();
         const mediaTypes = "mediaTypes" in details ? (details.mediaTypes ?? []) : [];
-        callback(
+        const isTrustedRenderer =
           requestingWebContents === window.webContents &&
-            permission === "media" &&
-            isTrustedRendererMicrophoneRequest({
-              applicationUrl,
-              requestingUrl,
-              mediaTypes,
-            }),
+          isSameOriginRendererNavigation({
+            applicationUrl,
+            navigationUrl: requestingUrl,
+          });
+        callback(
+          isTrustedRenderer &&
+            (permission === "clipboard-sanitized-write" ||
+              (permission === "media" &&
+                isTrustedRendererMicrophoneRequest({
+                  applicationUrl,
+                  requestingUrl,
+                  mediaTypes,
+                }))),
         );
       },
     );
