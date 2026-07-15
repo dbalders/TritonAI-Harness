@@ -7,6 +7,7 @@ import {
   type DesktopNotificationPermission,
 } from "../../desktopNotifications";
 import { usePrimarySettings, useUpdatePrimarySettings } from "../../hooks/useSettings";
+import { isMacPlatform } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
 import { stackedThreadToast, toastManager } from "../ui/toast";
@@ -30,6 +31,29 @@ export function DesktopNotificationsSettingsRow() {
     getDesktopNotificationPermission(),
   );
   const [requestingPermission, setRequestingPermission] = useState(false);
+  const isMac = isMacPlatform(navigator.platform);
+  const canOpenNotificationSettings = isMac && Boolean(window.desktopBridge);
+
+  const openNotificationSettings = async () => {
+    const bridge = window.desktopBridge;
+    if (bridge && (await bridge.openNotificationSettings())) {
+      return;
+    }
+    toastManager.add(
+      stackedThreadToast({
+        type: "error",
+        title: "Could not open notification settings",
+        description: "Open System Settings, then choose Notifications and TritonAI Harness.",
+      }),
+    );
+  };
+
+  const notificationSettingsAction = canOpenNotificationSettings
+    ? {
+        children: "Open Settings",
+        onClick: () => void openNotificationSettings(),
+      }
+    : undefined;
 
   useEffect(() => {
     const syncPermission = () => setPermission(getDesktopNotificationPermission());
@@ -79,6 +103,16 @@ export function DesktopNotificationsSettingsRow() {
 
   const sendTestNotification = () => {
     if (showTestDesktopNotification()) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "success",
+          title: "Test notification sent",
+          description: isMac
+            ? "If it does not appear, allow TritonAI Harness in macOS notification settings."
+            : "The desktop notification was sent.",
+          ...(notificationSettingsAction ? { actionProps: notificationSettingsAction } : {}),
+        }),
+      );
       return;
     }
     setPermission(getDesktopNotificationPermission());
@@ -87,6 +121,7 @@ export function DesktopNotificationsSettingsRow() {
         type: "warning",
         title: "Test notification was not sent",
         description: "Check the system notification permission for TritonAI Harness.",
+        ...(notificationSettingsAction ? { actionProps: notificationSettingsAction } : {}),
       }),
     );
   };
@@ -105,6 +140,17 @@ export function DesktopNotificationsSettingsRow() {
       }
       control={
         <>
+          {canOpenNotificationSettings &&
+          (settings.desktopNotificationsEnabled || permission === "denied") ? (
+            <Button
+              size="xs"
+              variant="ghost"
+              disabled={requestingPermission}
+              onClick={() => void openNotificationSettings()}
+            >
+              Open Settings
+            </Button>
+          ) : null}
           <Button
             size="xs"
             variant="outline"

@@ -258,3 +258,13 @@ export const openExternal = DesktopIpc.makeIpcMethod({
     return yield* shell.openExternal(url);
   }),
 });
+
+export const openNotificationSettings = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.OPEN_NOTIFICATION_SETTINGS_CHANNEL,
+  payload: Schema.Void,
+  result: Schema.Boolean,
+  handler: Effect.fn("desktop.ipc.window.openNotificationSettings")(function* () {
+    const shell = yield* ElectronShell.ElectronShell;
+    return yield* shell.openNotificationSettings();
+  }),
+});
