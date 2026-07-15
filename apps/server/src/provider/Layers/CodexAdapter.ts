@@ -23,6 +23,7 @@ import {
   ProviderApprovalDecision,
   ThreadId,
   ProviderSendTurnInput,
+  PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Crypto from "effect/Crypto";
@@ -37,9 +38,13 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import * as CodexErrors from "effect-codex-app-server/errors";
 import * as EffectCodexSchema from "effect-codex-app-server/schema";
 
-import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
+import {
+  getModelSelectionStringOptionValue,
+  modelCapabilitiesAreExplicitlyTextOnly,
+} from "@t3tools/shared/model";
 import { getCodexServiceTierOptionValue } from "../../codexModelOptions.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import { encodeCodexConfigString } from "../Drivers/TritonAiCodexConfig.ts";
 
 import {
   ProviderAdapterRequestError,
@@ -61,6 +66,11 @@ import {
   type CodexSessionRuntimeShape,
 } from "./CodexSessionRuntime.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
+import {
+  type CodexImageContextAnalyzer,
+  formatUntrustedImageContext,
+  makeCodexImageContextAnalyzer,
+} from "./CodexImageContext.ts";
 const isCodexAppServerProcessExitedError = Schema.is(CodexErrors.CodexAppServerProcessExitedError);
 const isCodexAppServerTransportError = Schema.is(CodexErrors.CodexAppServerTransportError);
 const isCodexSessionRuntimeThreadIdMissingError = Schema.is(
@@ -73,6 +83,7 @@ const PROVIDER = ProviderDriverKind.make("codex");
 export interface CodexAdapterLiveOptions {
   readonly instanceId?: ProviderInstanceId;
   readonly environment?: NodeJS.ProcessEnv;
+  readonly modelCatalogPath?: string;
   readonly makeRuntime?: (
     options: CodexSessionRuntimeOptions,
   ) => Effect.Effect<
@@ -82,6 +93,7 @@ export interface CodexAdapterLiveOptions {
   >;
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
+  readonly imageContextAnalyzer?: CodexImageContextAnalyzer;
 }
 
 interface CodexAdapterSessionContext {
@@ -89,7 +101,35 @@ interface CodexAdapterSessionContext {
   readonly scope: Scope.Closeable;
   readonly runtime: CodexSessionRuntimeShape;
   readonly eventFiber: Fiber.Fiber<void, never>;
+  textOnlyImageContextSafe: boolean;
   stopped: boolean;
+}
+
+// TritonAI Installer writes its key-scoped managed catalog into customModelMetadata.
+// Models without managed modality metadata intentionally retain upstream raw-image behavior.
+function managedModelIsExplicitlyTextOnly(
+  codexConfig: CodexSettings,
+  model: string | undefined,
+): boolean {
+  if (!model || !Object.hasOwn(codexConfig.customModelMetadata, model)) {
+    return false;
+  }
+  return modelCapabilitiesAreExplicitlyTextOnly(
+    codexConfig.customModelMetadata[model]?.capabilities,
+  );
+}
+
+function withTextOnlyImageContextResumeSafety<T extends { readonly resumeCursor?: unknown }>(
+  value: T,
+  safe: boolean,
+): T {
+  if (!isCodexResumeCursorSchema(value.resumeCursor)) return value;
+  return {
+    ...value,
+    resumeCursor: safe
+      ? { threadId: value.resumeCursor.threadId, textOnlyImageContextVersion: 1 }
+      : { threadId: value.resumeCursor.threadId },
+  };
 }
 
 function mapCodexRuntimeError(
@@ -1365,6 +1405,9 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     options?.nativeEventLogger === undefined ? nativeEventLogger : undefined;
   const runtimeEventQueue = yield* Queue.unbounded<ProviderRuntimeEvent>();
   const sessions = new Map<ThreadId, CodexAdapterSessionContext>();
+  const pendingImageContextAnalyses = new Map<ThreadId, AbortController>();
+  const imageContextAnalyzer =
+    options?.imageContextAnalyzer ?? (yield* makeCodexImageContextAnalyzer(options?.environment));
 
   const startSession: CodexAdapterShape["startSession"] = (input) =>
     Effect.scoped(
@@ -1386,7 +1429,48 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           input.modelSelection?.instanceId === boundInstanceId
             ? getCodexServiceTierOptionValue(input.modelSelection)
             : undefined;
+        const startsWithExplicitlyTextOnlyModel =
+          input.modelSelection?.instanceId === boundInstanceId &&
+          managedModelIsExplicitlyTextOnly(codexConfig, input.modelSelection.model);
+        const requestedResumeCursor = isCodexResumeCursorSchema(input.resumeCursor)
+          ? input.resumeCursor
+          : undefined;
+        const resumeCursor =
+          startsWithExplicitlyTextOnlyModel &&
+          requestedResumeCursor?.textOnlyImageContextVersion !== 1
+            ? undefined
+            : requestedResumeCursor;
+        const textOnlyImageContextSafe =
+          resumeCursor === undefined || resumeCursor.textOnlyImageContextVersion === 1;
+        if (requestedResumeCursor && !resumeCursor) {
+          yield* Effect.logInfo(
+            "starting a fresh Codex thread because legacy history may contain raw images",
+            {
+              threadId: input.threadId,
+              model: input.modelSelection?.model,
+              providerThreadId: requestedResumeCursor.threadId,
+            },
+          );
+        }
         const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
+        const appServerArgs = [
+          ...(options?.modelCatalogPath
+            ? ["-c", `model_catalog_json=${encodeCodexConfigString(options.modelCatalogPath)}`]
+            : []),
+          ...(mcpSession
+            ? [
+                "-c",
+                `mcp_servers.t3-code.url=${mcpSession.endpoint}`,
+                "-c",
+                'mcp_servers.t3-code.bearer_token_env_var="T3_MCP_BEARER_TOKEN"',
+                // TritonAI's current Responses bridge rejects Codex namespace tools.
+                // Keep the session wiring intact so this can be re-enabled centrally
+                // once the bridge expands namespace tools into ordinary functions.
+                "-c",
+                "mcp_servers.t3-code.enabled=false",
+              ]
+            : []),
+        ];
         const runtimeInput: CodexSessionRuntimeOptions = {
           threadId: input.threadId,
           providerInstanceId: boundInstanceId,
@@ -1394,31 +1478,19 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           binaryPath: codexConfig.binaryPath,
           ...(options?.environment ? { environment: options.environment } : {}),
           ...(codexConfig.homePath ? { homePath: codexConfig.homePath } : {}),
-          ...(isCodexResumeCursorSchema(input.resumeCursor)
-            ? { resumeCursor: input.resumeCursor }
-            : {}),
+          ...(resumeCursor ? { resumeCursor } : {}),
           runtimeMode: input.runtimeMode,
           ...(input.modelSelection?.instanceId === boundInstanceId
             ? { model: input.modelSelection.model }
             : {}),
           ...(serviceTier ? { serviceTier } : {}),
+          ...(appServerArgs.length > 0 ? { appServerArgs } : {}),
           ...(mcpSession
             ? {
                 environment: {
                   ...(options?.environment ?? process.env),
                   T3_MCP_BEARER_TOKEN: mcpSession.authorizationHeader.replace(/^Bearer\s+/, ""),
                 },
-                appServerArgs: [
-                  "-c",
-                  `mcp_servers.t3-code.url=${mcpSession.endpoint}`,
-                  "-c",
-                  'mcp_servers.t3-code.bearer_token_env_var="T3_MCP_BEARER_TOKEN"',
-                  // TritonAI's current Responses bridge rejects Codex namespace tools.
-                  // Keep the session wiring intact so this can be re-enabled centrally
-                  // once the bridge expands namespace tools into ordinary functions.
-                  "-c",
-                  "mcp_servers.t3-code.enabled=false",
-                ],
               }
             : {}),
         };
@@ -1484,11 +1556,12 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           scope: sessionScope,
           runtime,
           eventFiber,
+          textOnlyImageContextSafe,
           stopped: false,
         });
         sessionScopeTransferred = true;
 
-        return started;
+        return withTextOnlyImageContextResumeSafety(started, textOnlyImageContextSafe);
       }),
     );
 
@@ -1524,38 +1597,146 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     };
   });
 
-  const sendTurn: CodexAdapterShape["sendTurn"] = Effect.fn("sendTurn")(function* (input) {
-    const codexAttachments = yield* Effect.forEach(
-      input.attachments ?? [],
-      (attachment) => resolveAttachment(input, attachment),
-      { concurrency: 1 },
-    );
+  const resolveImageContextInput = Effect.fn("resolveImageContextInput")(function* (
+    attachment: NonNullable<ProviderSendTurnInput["attachments"]>[number],
+  ) {
+    const attachmentPath = resolveAttachmentPath({
+      attachmentsDir: serverConfig.attachmentsDir,
+      attachment,
+    });
+    if (!attachmentPath) {
+      return yield* new ProviderAdapterRequestError({
+        provider: PROVIDER,
+        method: "turn/start",
+        detail: `Invalid attachment id '${attachment.id}'.`,
+      });
+    }
+    return {
+      name: attachment.name,
+      path: attachmentPath,
+      mimeType: attachment.mimeType,
+    };
+  });
 
+  const sendTurn: CodexAdapterShape["sendTurn"] = Effect.fn("sendTurn")(function* (input) {
     const session = yield* requireSession(input.threadId);
-    const reasoningEffort =
-      input.modelSelection?.instanceId === boundInstanceId
-        ? getModelSelectionStringOptionValue(input.modelSelection, "reasoningEffort")
-        : undefined;
-    const serviceTier =
-      input.modelSelection?.instanceId === boundInstanceId
-        ? getCodexServiceTierOptionValue(input.modelSelection)
-        : undefined;
-    return yield* session.runtime
-      .sendTurn({
-        ...(input.input !== undefined ? { input: input.input } : {}),
-        ...(input.modelSelection?.instanceId === boundInstanceId
-          ? { model: input.modelSelection.model }
-          : {}),
-        ...(reasoningEffort
-          ? {
-              effort: reasoningEffort as EffectCodexSchema.V2TurnStartParams__ReasoningEffort,
-            }
-          : {}),
-        ...(serviceTier ? { serviceTier } : {}),
-        ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
-        ...(codexAttachments.length > 0 ? { attachments: codexAttachments } : {}),
-      })
-      .pipe(Effect.mapError((cause) => mapCodexRuntimeError(input.threadId, "turn/start", cause)));
+    const currentSession = yield* session.runtime.getSession;
+    const selectedModel =
+      input.modelSelection?.instanceId === boundInstanceId ? input.modelSelection.model : undefined;
+    const effectiveModel = selectedModel ?? currentSession.model;
+    const effectiveModelIsExplicitlyTextOnly = managedModelIsExplicitlyTextOnly(
+      codexConfig,
+      effectiveModel,
+    );
+    if (effectiveModelIsExplicitlyTextOnly && !session.textOnlyImageContextSafe) {
+      return yield* new ProviderAdapterRequestError({
+        provider: PROVIDER,
+        method: "turn/start",
+        detail:
+          "This Codex thread may contain raw image history that the selected text-only model cannot accept. Start a fresh thread before switching to this model.",
+      });
+    }
+    const attachments = input.attachments ?? [];
+    const turnModel = attachments.length > 0 ? effectiveModel : selectedModel;
+    const requiresImageContext = attachments.length > 0 && effectiveModelIsExplicitlyTextOnly;
+    const analysisAbortController = requiresImageContext ? new AbortController() : undefined;
+    pendingImageContextAnalyses.get(input.threadId)?.abort();
+    if (analysisAbortController) {
+      pendingImageContextAnalyses.set(input.threadId, analysisAbortController);
+    } else {
+      pendingImageContextAnalyses.delete(input.threadId);
+    }
+
+    return yield* Effect.gen(function* () {
+      let turnInput = input.input;
+      let codexAttachments: ReadonlyArray<{ readonly type: "image"; readonly url: string }> = [];
+
+      if (analysisAbortController) {
+        const imageContextInputs = yield* Effect.forEach(attachments, resolveImageContextInput, {
+          concurrency: 1,
+        });
+        const analyses = yield* imageContextAnalyzer({
+          images: imageContextInputs,
+          signal: analysisAbortController.signal,
+        }).pipe(
+          Effect.catch((cause) =>
+            analysisAbortController.signal.aborted
+              ? Effect.interrupt
+              : Effect.fail(
+                  new ProviderAdapterRequestError({
+                    provider: PROVIDER,
+                    method: "turn/start",
+                    detail: `${cause.message} The main turn was not sent.`,
+                    cause,
+                  }),
+                ),
+          ),
+        );
+        if (analysisAbortController.signal.aborted) {
+          return yield* Effect.interrupt;
+        }
+        const imageContext = formatUntrustedImageContext({
+          images: imageContextInputs,
+          analyses,
+        });
+        turnInput = input.input ? `${input.input}\n\n${imageContext}` : imageContext;
+        if (turnInput.length > PROVIDER_SEND_TURN_MAX_INPUT_CHARS) {
+          return yield* new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "turn/start",
+            detail:
+              "The user message plus generated image context exceeds the turn input limit. The main turn was not sent.",
+          });
+        }
+      } else {
+        codexAttachments = yield* Effect.forEach(
+          attachments,
+          (attachment) => resolveAttachment(input, attachment),
+          { concurrency: 1 },
+        );
+      }
+
+      const reasoningEffort =
+        input.modelSelection?.instanceId === boundInstanceId
+          ? getModelSelectionStringOptionValue(input.modelSelection, "reasoningEffort")
+          : undefined;
+      const serviceTier =
+        input.modelSelection?.instanceId === boundInstanceId
+          ? getCodexServiceTierOptionValue(input.modelSelection)
+          : undefined;
+      if (codexAttachments.length > 0) {
+        session.textOnlyImageContextSafe = false;
+      }
+      const result = yield* session.runtime
+        .sendTurn({
+          ...(turnInput !== undefined ? { input: turnInput } : {}),
+          ...(turnModel !== undefined ? { model: turnModel } : {}),
+          ...(reasoningEffort
+            ? {
+                effort: reasoningEffort as EffectCodexSchema.V2TurnStartParams__ReasoningEffort,
+              }
+            : {}),
+          ...(serviceTier ? { serviceTier } : {}),
+          ...(input.interactionMode !== undefined
+            ? { interactionMode: input.interactionMode }
+            : {}),
+          ...(codexAttachments.length > 0 ? { attachments: codexAttachments } : {}),
+        })
+        .pipe(
+          Effect.mapError((cause) => mapCodexRuntimeError(input.threadId, "turn/start", cause)),
+        );
+      return withTextOnlyImageContextResumeSafety(result, session.textOnlyImageContextSafe);
+    }).pipe(
+      Effect.ensuring(
+        analysisAbortController
+          ? Effect.sync(() => {
+              if (pendingImageContextAnalyses.get(input.threadId) === analysisAbortController) {
+                pendingImageContextAnalyses.delete(input.threadId);
+              }
+            })
+          : Effect.void,
+      ),
+    );
   });
 
   const requireSession = Effect.fn("requireSession")(function* (threadId: ThreadId) {
@@ -1571,6 +1752,11 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
 
   const interruptTurn: CodexAdapterShape["interruptTurn"] = (threadId, turnId) =>
     requireSession(threadId).pipe(
+      Effect.tap(() =>
+        Effect.sync(() => {
+          pendingImageContextAnalyses.get(threadId)?.abort();
+        }),
+      ),
       Effect.flatMap((session) => session.runtime.interruptTurn(turnId)),
       Effect.mapError((cause) =>
         cause._tag === "ProviderAdapterSessionNotFoundError"
@@ -1657,6 +1843,8 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     }
     session.stopped = true;
     sessions.delete(session.threadId);
+    pendingImageContextAnalyses.get(session.threadId)?.abort();
+    pendingImageContextAnalyses.delete(session.threadId);
     yield* session.runtime.close.pipe(Effect.ignore);
     yield* Effect.ignore(Scope.close(session.scope, Exit.void));
     yield* Fiber.interrupt(session.eventFiber).pipe(Effect.ignore);
@@ -1674,7 +1862,12 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
   const listSessions: CodexAdapterShape["listSessions"] = () =>
     Effect.forEach(
       Array.from(sessions.values()).filter((session) => !session.stopped),
-      (session) => session.runtime.getSession,
+      (session) =>
+        session.runtime.getSession.pipe(
+          Effect.map((runtimeSession) =>
+            withTextOnlyImageContextResumeSafety(runtimeSession, session.textOnlyImageContextSafe),
+          ),
+        ),
       { concurrency: 1 },
     );
 

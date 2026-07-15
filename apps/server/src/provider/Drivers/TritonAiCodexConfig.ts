@@ -9,7 +9,7 @@ import {
 
 const trimTrailingSlash = (value: string): string => value.replace(/\/+$/, "");
 
-const tomlString = (value: string): string => JSON.stringify(value);
+export const encodeCodexConfigString = (value: string): string => JSON.stringify(value);
 
 export function resolveTritonAiCodexBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
   const configured = env[UCSD_AI_BASE_URL_ENV]?.trim();
@@ -24,15 +24,15 @@ export function makeTritonAiCodexConfigArgs(env: NodeJS.ProcessEnv = process.env
 
   return [
     "--config",
-    `model_provider=${tomlString(TRITONAI_CODEX_MODEL_PROVIDER_ID)}`,
+    `model_provider=${encodeCodexConfigString(TRITONAI_CODEX_MODEL_PROVIDER_ID)}`,
     "--config",
-    `model=${tomlString(DEFAULT_TRITONAI_CODEX_MODEL)}`,
+    `model=${encodeCodexConfigString(DEFAULT_TRITONAI_CODEX_MODEL)}`,
     "--config",
-    `${providerKey}.name=${tomlString(TRITONAI_CODEX_MODEL_PROVIDER_NAME)}`,
+    `${providerKey}.name=${encodeCodexConfigString(TRITONAI_CODEX_MODEL_PROVIDER_NAME)}`,
     "--config",
-    `${providerKey}.base_url=${tomlString(baseUrl)}`,
+    `${providerKey}.base_url=${encodeCodexConfigString(baseUrl)}`,
     "--config",
-    `${providerKey}.env_key=${tomlString(TRITONAI_API_KEY_ENV)}`,
+    `${providerKey}.env_key=${encodeCodexConfigString(TRITONAI_API_KEY_ENV)}`,
     "--config",
     `${providerKey}.wire_api="responses"`,
     "--config",

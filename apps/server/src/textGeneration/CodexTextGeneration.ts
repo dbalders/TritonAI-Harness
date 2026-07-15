@@ -29,9 +29,15 @@ import {
   sanitizeThreadTitle,
   toJsonSchemaObject,
 } from "./TextGenerationUtils.ts";
-import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
+import {
+  getModelSelectionStringOptionValue,
+  modelCapabilitiesAreExplicitlyTextOnly,
+} from "@t3tools/shared/model";
 import { getCodexServiceTierOptionValue } from "../codexModelOptions.ts";
-import { makeTritonAiCodexConfigArgs } from "../provider/Drivers/TritonAiCodexConfig.ts";
+import {
+  encodeCodexConfigString,
+  makeTritonAiCodexConfigArgs,
+} from "../provider/Drivers/TritonAiCodexConfig.ts";
 
 const CODEX_GIT_TEXT_GENERATION_REASONING_EFFORT = "low";
 const CODEX_TIMEOUT_MS = 180_000;
@@ -43,6 +49,7 @@ const encodeJsonString = Schema.encodeEffect(Schema.UnknownFromJsonString);
 export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(function* (
   codexConfig: CodexSettings,
   environment?: NodeJS.ProcessEnv,
+  options?: { readonly modelCatalogPath?: string },
 ) {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -119,8 +126,15 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       | "generateBranchName"
       | "generateThreadTitle",
     attachments: TextGeneration.BranchNameGenerationInput["attachments"],
+    modelSelection: ModelSelection,
   ): Effect.fn.Return<MaterializedImageAttachments, TextGenerationError> {
     if (!attachments || attachments.length === 0) {
+      return { imagePaths: [] };
+    }
+    const modelMetadata = Object.hasOwn(codexConfig.customModelMetadata, modelSelection.model)
+      ? codexConfig.customModelMetadata[modelSelection.model]
+      : undefined;
+    if (modelCapabilitiesAreExplicitlyTextOnly(modelMetadata?.capabilities)) {
       return { imagePaths: [] };
     }
 
@@ -184,6 +198,12 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
         [
           "exec",
           ...makeTritonAiCodexConfigArgs(resolvedEnvironment),
+          ...(options?.modelCatalogPath
+            ? [
+                "--config",
+                `model_catalog_json=${encodeCodexConfigString(options.modelCatalogPath)}`,
+              ]
+            : []),
           "--ephemeral",
           "--skip-git-repo-check",
           "-s",
@@ -352,6 +372,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       const { imagePaths } = yield* materializeImageAttachments(
         "generateBranchName",
         input.attachments,
+        input.modelSelection,
       );
       const { prompt, outputSchema } = buildBranchNamePrompt({
         message: input.message,
@@ -377,6 +398,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       const { imagePaths } = yield* materializeImageAttachments(
         "generateThreadTitle",
         input.attachments,
+        input.modelSelection,
       );
       const { prompt, outputSchema } = buildThreadTitlePrompt({
         message: input.message,

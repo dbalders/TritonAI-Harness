@@ -15,3 +15,4 @@ export const TRITONAI_CODEX_MODEL_PROVIDER_ID = "ucsd";
 export const TRITONAI_CODEX_MODEL_PROVIDER_NAME = "UCSD TritonAI";
 export const DEFAULT_TRITONAI_CODEX_MODEL = "api-deepseek-v4-flash";
 export const DEFAULT_TRITONAI_CODEX_MODEL_DISPLAY_NAME = "DeepSeek v4 Flash";
+export const TRITONAI_IMAGE_CONTEXT_MODEL = "api-gemma-4-31b";

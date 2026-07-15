@@ -144,10 +144,6 @@ function makeTritonAiCodexFallbackCapabilities(): ModelCapabilities {
   });
 }
 
-function hasOptionDescriptors(capabilities: ModelCapabilities | null | undefined): boolean {
-  return (capabilities?.optionDescriptors?.length ?? 0) > 0;
-}
-
 function hasReasoningEffortDescriptor(capabilities: ModelCapabilities | null | undefined): boolean {
   return (
     capabilities?.optionDescriptors?.some((descriptor) => descriptor.id === "reasoningEffort") ??
@@ -161,8 +157,11 @@ export function tritonAiCodexCapabilities(
   if (capabilities && hasReasoningEffortDescriptor(capabilities)) {
     return capabilities;
   }
-  if (capabilities && hasOptionDescriptors(capabilities)) {
+  if (capabilities) {
     return createModelCapabilities({
+      ...(capabilities.inputModalities !== undefined
+        ? { inputModalities: capabilities.inputModalities }
+        : {}),
       optionDescriptors: [
         makeTritonAiReasoningEffortDescriptor(),
         ...(capabilities.optionDescriptors ?? []),
@@ -276,6 +275,7 @@ export function mapCodexModelCapabilities(
   }
 
   return createModelCapabilities({
+    ...(model.inputModalities !== undefined ? { inputModalities: model.inputModalities } : {}),
     optionDescriptors,
   });
 }
