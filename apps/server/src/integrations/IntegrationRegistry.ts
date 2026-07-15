@@ -1367,11 +1367,15 @@ export class RegistryRuntime {
     let rejectOperation: (error: Error) => void = () => undefined;
     let commitAdmission: Promise<AbortSignal> | null = null;
     let preAdmissionCancelled = false;
-    let timeout = setTimeout(() => {
-      timedOut = true;
-      if (!commitAdmission) this.#faultProvider(provider);
-      controller.abort();
-    }, this.#providerOperationTimeoutMs);
+    const operationDeadline = Date.now() + this.#providerOperationTimeoutMs;
+    let timeout = setTimeout(
+      () => {
+        timedOut = true;
+        if (!commitAdmission) this.#faultProvider(provider);
+        controller.abort();
+      },
+      Math.max(0, operationDeadline - Date.now()),
+    );
     let commitAbortTimeout: ReturnType<typeof setTimeout> | undefined;
     let removeAbortListener: () => void = () => undefined;
     const aborted = new Promise<never>((_resolve, reject) => {
@@ -1503,10 +1507,21 @@ export class RegistryRuntime {
       }
       return result;
     } catch (error) {
+      let commitAdmissionDrainTimedOut = false;
+      if (commitAdmission) {
+        try {
+          await this.#waitForClosePhase(
+            Promise.allSettled([commitAdmission, work]).then(() => undefined),
+            operationDeadline,
+          );
+        } catch {
+          commitAdmissionDrainTimedOut = true;
+        }
+      }
       // Success is the only generic proof that an admitted external commit settled. A provider
       // rejection may be ambiguous even when it returns promptly, so retain the durable journal
       // and require the verified disconnect/reset path to clear it.
-      if (commitAdmission && !preAdmissionCancelled) {
+      if (commitAdmission && (commitAdmissionDrainTimedOut || !preAdmissionCancelled)) {
         this.#faultProvider(provider);
       }
       throw error;

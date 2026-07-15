@@ -2812,6 +2812,80 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
+  it("does not fault a provider when cancellation wins during clean commit admission", async () => {
+    const root = await NodeFSP.mkdtemp(
+      NodePath.join(NodeOS.tmpdir(), "tritonai-cancelled-commit-admission-"),
+    );
+    const state: ProviderState = {
+      status: {
+        state: "not_connected",
+        accountLabel: null,
+        grantedCapabilities: [],
+        message: null,
+      },
+      credential: null,
+      disconnectFails: false,
+    };
+    const controller = new AbortController();
+    let connectCalls = 0;
+    let markCleanupStarted!: () => void;
+    const cleanupStarted = new Promise<void>((resolve) => {
+      markCleanupStarted = resolve;
+    });
+    let releaseCleanup!: () => void;
+    const cleanupGate = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
+    const baseProvider = provider("test-connected-provider", state);
+    const cancelledAdmissionProvider: IntegrationProvider = {
+      ...baseProvider,
+      connect: async (...args) => {
+        connectCalls += 1;
+        if (connectCalls > 1) return baseProvider.connect!(...args);
+        const context = args[1];
+        if (!context) throw new Error("Lifecycle context is required.");
+        const admission = context.beginCommit();
+        controller.abort(new Error("RPC caller cancelled."));
+        try {
+          await admission;
+          throw new Error("Cancelled commit admission unexpectedly succeeded.");
+        } finally {
+          markCleanupStarted();
+          await cleanupGate;
+        }
+      },
+    };
+    try {
+      const registry = new RegistryRuntime(root, [
+        packaged(connectedManifest, cancelledAdmissionProvider),
+      ]);
+      await registry.install(connectedManifest.id);
+      let connectionSettled = false;
+      const connecting = registry
+        .connect(connectedManifest.id, undefined, { signal: controller.signal })
+        .finally(() => {
+          connectionSettled = true;
+        });
+      await cleanupStarted;
+      await Promise.resolve();
+      expect(connectionSettled).toBe(false);
+      releaseCleanup();
+      await expect(connecting).rejects.toMatchObject({ code: "operation_failed" });
+      await expect(
+        NodeFSP.access(NodePath.join(root, "commit-journal", `${connectedManifest.id}.json`)),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+
+      await expect(registry.connect(connectedManifest.id)).resolves.toMatchObject({
+        kind: "device_code",
+      });
+      expect(connectCalls).toBe(2);
+      await registry.close();
+    } finally {
+      releaseCleanup?.();
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("does not publish a stale deferred cancellation refresh after disconnect", async () => {
     const root = await NodeFSP.mkdtemp(
       NodePath.join(NodeOS.tmpdir(), "tritonai-cancel-refresh-serialization-"),

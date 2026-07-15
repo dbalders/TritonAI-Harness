@@ -39,6 +39,26 @@ function decodeSkillMarker(value: unknown): SkillMarker | null {
     : null;
 }
 
+async function readSkillMarker(path: string): Promise<SkillMarker | null> {
+  let entry: NodeFS.Stats;
+  try {
+    entry = await NodeFSP.lstat(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+  if (entry.isSymbolicLink() || !entry.isFile()) {
+    throw new Error("Integration skill ownership marker must be a regular file.");
+  }
+  try {
+    return decodeSkillMarker(JSON.parse(await NodeFSP.readFile(path, "utf8")) as unknown);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT" || error instanceof SyntaxError)
+      return null;
+    throw error;
+  }
+}
+
 const decodeCodexSettings = Schema.decodeUnknownSync(CodexSettings);
 const decodeIntegrationSkillFrontmatter = Schema.decodeUnknownSync(
   fromYaml(
@@ -109,14 +129,22 @@ async function ensureRealSkillsRoot(path: string, create: boolean): Promise<bool
   return true;
 }
 
-async function directoryContentsMatch(source: string, target: string): Promise<boolean> {
-  const comparableEntries = (entries: ReadonlyArray<NodeFS.Dirent>) =>
+async function directoryContentsMatch(
+  source: string,
+  target: string,
+  ignoreTargetMarker = true,
+): Promise<boolean> {
+  const comparableEntries = (entries: ReadonlyArray<NodeFS.Dirent>, ignoreMarker: boolean) =>
     entries
-      .filter(({ name }) => name !== MARKER)
+      .filter(({ name }) => !ignoreMarker || name !== MARKER)
       .toSorted((left, right) => left.name.localeCompare(right.name));
   const [sourceEntries, targetEntries] = await Promise.all([
-    NodeFSP.readdir(source, { withFileTypes: true }).then(comparableEntries),
-    NodeFSP.readdir(target, { withFileTypes: true }).then(comparableEntries),
+    NodeFSP.readdir(source, { withFileTypes: true }).then((entries) =>
+      comparableEntries(entries, false),
+    ),
+    NodeFSP.readdir(target, { withFileTypes: true }).then((entries) =>
+      comparableEntries(entries, ignoreTargetMarker),
+    ),
   ]);
   if (sourceEntries.length !== targetEntries.length) return false;
   for (let index = 0; index < sourceEntries.length; index += 1) {
@@ -126,7 +154,7 @@ async function directoryContentsMatch(source: string, target: string): Promise<b
     const sourcePath = NodePath.join(source, sourceEntry.name);
     const targetPath = NodePath.join(target, targetEntry.name);
     if (sourceEntry.isDirectory() && targetEntry.isDirectory()) {
-      if (!(await directoryContentsMatch(sourcePath, targetPath))) return false;
+      if (!(await directoryContentsMatch(sourcePath, targetPath, false))) return false;
       continue;
     }
     if (!sourceEntry.isFile() || !targetEntry.isFile()) return false;
@@ -219,23 +247,15 @@ export class CodexIntegrationSkillMaterializer implements IntegrationSkillMateri
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
       const target = NodePath.join(skillsRoot, entry.name);
-      try {
-        const marker = decodeSkillMarker(
-          JSON.parse(await NodeFSP.readFile(NodePath.join(target, MARKER), "utf8")) as unknown,
-        );
-        if (
-          marker?.version === 1 &&
-          typeof marker.integrationId === "string" &&
-          typeof marker.skill === "string" &&
-          marker.skill === entry.name &&
-          shouldRemove(marker as Required<SkillMarker>)
-        ) {
-          await NodeFSP.rm(target, { recursive: true, force: true });
-        }
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT" || error instanceof SyntaxError)
-          continue;
-        throw error;
+      const marker = await readSkillMarker(NodePath.join(target, MARKER));
+      if (
+        marker?.version === 1 &&
+        typeof marker.integrationId === "string" &&
+        typeof marker.skill === "string" &&
+        marker.skill === entry.name &&
+        shouldRemove(marker as Required<SkillMarker>)
+      ) {
+        await NodeFSP.rm(target, { recursive: true, force: true });
       }
     }
   }
@@ -258,14 +278,7 @@ export class CodexIntegrationSkillMaterializer implements IntegrationSkillMateri
         continue;
       }
       const markerPath = NodePath.join(target, MARKER);
-      let marker: SkillMarker | null = null;
-      try {
-        marker = decodeSkillMarker(
-          JSON.parse(await NodeFSP.readFile(markerPath, "utf8")) as unknown,
-        );
-      } catch {
-        continue;
-      }
+      const marker = await readSkillMarker(markerPath);
       if (
         marker?.version === 1 &&
         marker?.integrationId === input.integrationId &&
@@ -287,6 +300,9 @@ export class CodexIntegrationSkillMaterializer implements IntegrationSkillMateri
       const sourceContent = await NodeFSP.readFile(sourceEntrypoint, "utf8");
       if (declaredIntegrationSkillName(sourceContent) !== skill) {
         throw new Error(`Integration skill ${skill} must declare matching SKILL.md frontmatter.`);
+      }
+      if (await exists(NodePath.join(source, MARKER))) {
+        throw new Error(`Integration skill ${skill} contains reserved file ${MARKER}.`);
       }
       if (await exists(target)) {
         const targetEntry = await NodeFSP.lstat(target);

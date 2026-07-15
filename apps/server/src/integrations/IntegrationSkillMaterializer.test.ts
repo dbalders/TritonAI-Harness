@@ -8,11 +8,17 @@ import { describe, expect, it } from "@effect/vitest";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+import { vi } from "vite-plus/test";
 
 import {
   CodexIntegrationSkillMaterializer,
   resolveIntegrationCodexHomes,
 } from "./IntegrationSkillMaterializer.ts";
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, readFile: vi.fn(actual.readFile) };
+});
 
 describe("integration Codex skill homes", () => {
   it("resolves the managed default and every configured Codex instance home", () => {
@@ -181,6 +187,157 @@ describe("integration Codex skill homes", () => {
       await NodeFSP.rm(NodePath.dirname(target), { recursive: true });
       await materializer.sync(active);
       expect(await NodeFSP.readFile(target, "utf8")).toContain("updated");
+    } finally {
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("tracks nested marker-named assets and rejects a package-owned root marker", async () => {
+    const root = await NodeFSP.mkdtemp(
+      NodePath.join(NodeOS.tmpdir(), "tritonai-skill-nested-marker-"),
+    );
+    const packageRoot = NodePath.join(root, "package");
+    const home = NodePath.join(root, "home");
+    const source = NodePath.join(packageRoot, "skills", "fixture-reader");
+    const nestedSourceMarker = NodePath.join(
+      source,
+      "references",
+      ".tritonai-integration-skill.json",
+    );
+    const nestedTargetMarker = NodePath.join(
+      home,
+      "skills",
+      "fixture-reader",
+      "references",
+      ".tritonai-integration-skill.json",
+    );
+    const active = {
+      integrationId: "fixture",
+      packageRoot,
+      activeSkills: ["fixture-reader"],
+    };
+    try {
+      await NodeFSP.mkdir(NodePath.dirname(nestedSourceMarker), { recursive: true });
+      await NodeFSP.writeFile(
+        NodePath.join(source, "SKILL.md"),
+        "---\nname: fixture-reader\ndescription: Managed fixture.\n---\n",
+      );
+      await NodeFSP.writeFile(nestedSourceMarker, "nested-v1\n");
+      const materializer = new CodexIntegrationSkillMaterializer([home]);
+      await materializer.sync(active);
+      expect(await NodeFSP.readFile(nestedTargetMarker, "utf8")).toBe("nested-v1\n");
+
+      await NodeFSP.writeFile(nestedSourceMarker, "nested-v2\n");
+      await materializer.sync(active);
+      expect(await NodeFSP.readFile(nestedTargetMarker, "utf8")).toBe("nested-v2\n");
+
+      await NodeFSP.writeFile(
+        NodePath.join(source, ".tritonai-integration-skill.json"),
+        "package-owned\n",
+      );
+      await expect(materializer.sync(active)).rejects.toThrow(/contains reserved file/u);
+    } finally {
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects non-file markers while pruning a disabled owned skill", async () => {
+    const root = await NodeFSP.mkdtemp(
+      NodePath.join(NodeOS.tmpdir(), "tritonai-skill-prune-io-error-"),
+    );
+    const packageRoot = NodePath.join(root, "package");
+    const home = NodePath.join(root, "home");
+    const source = NodePath.join(packageRoot, "skills", "fixture-reader");
+    const target = NodePath.join(home, "skills", "fixture-reader");
+    const marker = NodePath.join(target, ".tritonai-integration-skill.json");
+    try {
+      await NodeFSP.mkdir(source, { recursive: true });
+      await NodeFSP.writeFile(
+        NodePath.join(source, "SKILL.md"),
+        "---\nname: fixture-reader\ndescription: Managed fixture.\n---\n",
+      );
+      const materializer = new CodexIntegrationSkillMaterializer([home]);
+      await materializer.sync({
+        integrationId: "fixture",
+        packageRoot,
+        activeSkills: ["fixture-reader"],
+      });
+      await NodeFSP.rm(marker);
+      await NodeFSP.mkdir(marker);
+
+      await expect(
+        materializer.sync({ integrationId: "fixture", packageRoot: null, activeSkills: [] }),
+      ).rejects.toThrow(/ownership marker must be a regular file/u);
+      await expect(NodeFSP.access(target)).resolves.toBeUndefined();
+    } finally {
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("propagates marker read I/O failures while pruning a disabled owned skill", async () => {
+    const root = await NodeFSP.mkdtemp(
+      NodePath.join(NodeOS.tmpdir(), "tritonai-skill-prune-read-error-"),
+    );
+    const packageRoot = NodePath.join(root, "package");
+    const home = NodePath.join(root, "home");
+    const source = NodePath.join(packageRoot, "skills", "fixture-reader");
+    const target = NodePath.join(home, "skills", "fixture-reader");
+    try {
+      await NodeFSP.mkdir(source, { recursive: true });
+      await NodeFSP.writeFile(
+        NodePath.join(source, "SKILL.md"),
+        "---\nname: fixture-reader\ndescription: Managed fixture.\n---\n",
+      );
+      const materializer = new CodexIntegrationSkillMaterializer([home]);
+      await materializer.sync({
+        integrationId: "fixture",
+        packageRoot,
+        activeSkills: ["fixture-reader"],
+      });
+      const readFailure = Object.assign(new Error("marker read failed"), { code: "EIO" });
+      vi.mocked(NodeFSP.readFile).mockRejectedValueOnce(readFailure);
+
+      await expect(
+        materializer.sync({ integrationId: "fixture", packageRoot: null, activeSkills: [] }),
+      ).rejects.toThrow(/marker read failed/u);
+      await expect(NodeFSP.access(target)).resolves.toBeUndefined();
+    } finally {
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("treats a marker removed between inspection and read as absent", async () => {
+    const root = await NodeFSP.mkdtemp(
+      NodePath.join(NodeOS.tmpdir(), "tritonai-skill-marker-read-race-"),
+    );
+    const packageRoot = NodePath.join(root, "package");
+    const home = NodePath.join(root, "home");
+    const source = NodePath.join(packageRoot, "skills", "fixture-reader");
+    const target = NodePath.join(home, "skills", "fixture-reader");
+    const marker = NodePath.join(target, ".tritonai-integration-skill.json");
+    try {
+      await NodeFSP.mkdir(source, { recursive: true });
+      await NodeFSP.writeFile(
+        NodePath.join(source, "SKILL.md"),
+        "---\nname: fixture-reader\ndescription: Managed fixture.\n---\n",
+      );
+      const materializer = new CodexIntegrationSkillMaterializer([home]);
+      await materializer.sync({
+        integrationId: "fixture",
+        packageRoot,
+        activeSkills: ["fixture-reader"],
+      });
+      const missing = Object.assign(new Error("marker disappeared"), { code: "ENOENT" });
+      vi.mocked(NodeFSP.readFile).mockImplementationOnce(async () => {
+        await NodeFSP.rm(marker);
+        throw missing;
+      });
+
+      await expect(
+        materializer.sync({ integrationId: "fixture", packageRoot: null, activeSkills: [] }),
+      ).resolves.toBeUndefined();
+      await expect(NodeFSP.access(target)).resolves.toBeUndefined();
+      await expect(NodeFSP.access(marker)).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
       await NodeFSP.rm(root, { recursive: true, force: true });
     }
