@@ -18,6 +18,9 @@ const bundledCatalog = JSON.stringify({
       base_instructions: "You are GPT-5.2.",
       model_messages: { instructions_template: "Use GPT-5.2 instructions." },
       input_modalities: ["text", "image"],
+      context_window: 123_000,
+      max_context_window: 124_000,
+      truncation_policy: { mode: "tokens", limit: 12_345 },
       use_responses_lite: false,
     },
     {
@@ -67,6 +70,9 @@ describe("CodexModelCatalog", () => {
     NodeAssert.equal(glm?.apply_patch_tool_type, null);
     NodeAssert.equal(glm?.supports_parallel_tool_calls, false);
     NodeAssert.equal(glm?.model_messages, null);
+    NodeAssert.equal(glm?.context_window, 123_000);
+    NodeAssert.equal(glm?.max_context_window, 124_000);
+    NodeAssert.deepStrictEqual(glm?.truncation_policy, { mode: "tokens", limit: 12_345 });
 
     const gemma = result.models.find((model) => model.slug === "api-gemma-4-31b");
     NodeAssert.deepStrictEqual(gemma?.input_modalities, ["text", "image"]);

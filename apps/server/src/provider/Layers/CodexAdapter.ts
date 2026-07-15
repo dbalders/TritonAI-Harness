@@ -1598,7 +1598,6 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
   });
 
   const resolveImageContextInput = Effect.fn("resolveImageContextInput")(function* (
-    input: ProviderSendTurnInput,
     attachment: NonNullable<ProviderSendTurnInput["attachments"]>[number],
   ) {
     const attachmentPath = resolveAttachmentPath({
@@ -1641,9 +1640,11 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     const turnModel = attachments.length > 0 ? effectiveModel : selectedModel;
     const requiresImageContext = attachments.length > 0 && effectiveModelIsExplicitlyTextOnly;
     const analysisAbortController = requiresImageContext ? new AbortController() : undefined;
+    pendingImageContextAnalyses.get(input.threadId)?.abort();
     if (analysisAbortController) {
-      pendingImageContextAnalyses.get(input.threadId)?.abort();
       pendingImageContextAnalyses.set(input.threadId, analysisAbortController);
+    } else {
+      pendingImageContextAnalyses.delete(input.threadId);
     }
 
     return yield* Effect.gen(function* () {
@@ -1651,11 +1652,9 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       let codexAttachments: ReadonlyArray<{ readonly type: "image"; readonly url: string }> = [];
 
       if (analysisAbortController) {
-        const imageContextInputs = yield* Effect.forEach(
-          attachments,
-          (attachment) => resolveImageContextInput(input, attachment),
-          { concurrency: 1 },
-        );
+        const imageContextInputs = yield* Effect.forEach(attachments, resolveImageContextInput, {
+          concurrency: 1,
+        });
         const analyses = yield* imageContextAnalyzer({
           images: imageContextInputs,
           signal: analysisAbortController.signal,

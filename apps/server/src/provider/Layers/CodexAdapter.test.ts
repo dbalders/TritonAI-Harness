@@ -1841,6 +1841,66 @@ it.effect("cancels image analysis before sending the main turn when interrupted"
   );
 });
 
+it.effect("cancels pending image analysis before dispatching a newer turn", () => {
+  const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "codex-image-superseded-"));
+  const runtimeFactory = makeRuntimeFactory();
+  const analysisStarted = Promise.withResolvers<void>();
+  const analyzer: CodexImageContextAnalyzer = (input) => {
+    analysisStarted.resolve();
+    return Effect.tryPromise({
+      try: () =>
+        new Promise<ReadonlyArray<{ description: string; visibleText: string }>>(
+          (_resolve, reject) => {
+            input.signal?.addEventListener("abort", () => reject(new Error("superseded")), {
+              once: true,
+            });
+          },
+        ),
+      catch: (cause) =>
+        new CodexImageContextAnalysisError({
+          detail: "superseded",
+          cause,
+        }),
+    });
+  };
+  const layer = makeImageContextAdapterLayer({ baseDir, runtimeFactory, analyzer });
+
+  return Effect.gen(function* () {
+    const adapter = yield* CodexAdapter;
+    const { attachmentsDir } = yield* ServerConfig;
+    const threadId = asThreadId("thread-image-superseded");
+    const attachment = imageAttachment("thread-image-superseded-first");
+    NodeFS.writeFileSync(NodePath.join(attachmentsDir, `${attachment.id}.png`), "image");
+
+    yield* adapter.startSession({
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "text-only-model", []),
+      runtimeMode: "full-access",
+    });
+    const runtime = runtimeFactory.lastRuntime;
+    NodeAssert.ok(runtime);
+    runtime.sendTurnImpl.mockClear();
+
+    const firstTurnFiber = yield* adapter
+      .sendTurn({ threadId, input: "Older turn", attachments: [attachment] })
+      .pipe(Effect.forkChild);
+    yield* Effect.promise(() => analysisStarted.promise);
+    yield* adapter.sendTurn({ threadId, input: "Newer turn" });
+    const firstTurnExit = yield* Fiber.await(firstTurnFiber);
+
+    NodeAssert.equal(Exit.isFailure(firstTurnExit), true);
+    if (Exit.isFailure(firstTurnExit)) {
+      NodeAssert.equal(Cause.hasInterruptsOnly(firstTurnExit.cause), true);
+    }
+    NodeAssert.equal(runtime.sendTurnImpl.mock.calls.length, 1);
+    NodeAssert.deepStrictEqual(runtime.sendTurnImpl.mock.calls[0]?.[0], { input: "Newer turn" });
+  }).pipe(
+    Effect.provide(layer),
+    Effect.ensuring(Effect.sync(() => NodeFS.rmSync(baseDir, { recursive: true, force: true }))),
+  );
+});
+
 it.effect("does not send generated image context beyond the turn input limit", () => {
   const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "codex-image-limit-"));
   const runtimeFactory = makeRuntimeFactory();
