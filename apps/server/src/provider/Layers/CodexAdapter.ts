@@ -128,11 +128,11 @@ function withTextOnlyImageContextResumeSafety<T extends { readonly resumeCursor?
   safe: boolean,
 ): T {
   if (!isCodexResumeCursorSchema(value.resumeCursor)) return value;
+  const { textOnlyImageContextVersion: _textOnlyImageContextVersion, ...resumeCursor } =
+    value.resumeCursor;
   return {
     ...value,
-    resumeCursor: safe
-      ? { threadId: value.resumeCursor.threadId, textOnlyImageContextVersion: 1 }
-      : { threadId: value.resumeCursor.threadId },
+    resumeCursor: safe ? { ...resumeCursor, textOnlyImageContextVersion: 1 } : resumeCursor,
   };
 }
 

@@ -1491,6 +1491,8 @@ it.effect("restarts legacy image history before using a text-only model", () => 
 
     const safeCursor = {
       threadId: "safe-provider-thread",
+      dynamicToolNames: ["fixture_records_search"],
+      dynamicToolFingerprint: "fixture-tools-v1",
       textOnlyImageContextVersion: 1 as const,
     };
     const safeSession = yield* adapter.startSession({
@@ -1512,6 +1514,8 @@ it.effect("restarts legacy image history before using a text-only model", () => 
     });
     NodeAssert.deepStrictEqual(visionSession.resumeCursor, {
       threadId: "safe-provider-thread",
+      dynamicToolNames: ["fixture_records_search"],
+      dynamicToolFingerprint: "fixture-tools-v1",
       textOnlyImageContextVersion: 1,
     });
   }).pipe(
