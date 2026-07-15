@@ -90,6 +90,7 @@ export const CodexResumeCursorSchema = Schema.Struct({
   threadId: Schema.String,
   dynamicToolNames: Schema.optionalKey(Schema.Array(Schema.String)),
   dynamicToolFingerprint: Schema.optionalKey(Schema.String),
+  textOnlyImageContextVersion: Schema.optional(Schema.Literal(1)),
 });
 const CodexUserInputAnswerObject = Schema.Struct({
   answers: Schema.Array(Schema.String),

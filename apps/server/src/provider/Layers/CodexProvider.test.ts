@@ -130,6 +130,7 @@ it("maps current Codex model capability fields", () => {
     displayName: "GPT Test",
     hidden: false,
     id: "gpt-test",
+    inputModalities: ["text", "image"],
     isDefault: true,
     model: "gpt-test",
     defaultServiceTier: "flex",
@@ -152,6 +153,8 @@ it("maps current Codex model capability fields", () => {
       },
     ],
   });
+
+  assert.deepStrictEqual(capabilities.inputModalities, ["text", "image"]);
 
   assert.deepStrictEqual(capabilities.optionDescriptors, [
     {
@@ -223,6 +226,21 @@ it("uses standard routing when the catalog has no default service tier", () => {
   ]);
 });
 
+it("preserves unknown input modalities when Codex does not advertise them", () => {
+  const capabilities = mapCodexModelCapabilities({
+    defaultReasoningEffort: "medium",
+    description: "Test model",
+    displayName: "GPT Test",
+    hidden: false,
+    id: "gpt-test",
+    isDefault: true,
+    model: "gpt-test",
+    supportedReasoningEfforts: [],
+  });
+
+  assert.strictEqual(capabilities.inputModalities, undefined);
+});
+
 it("adds TritonAI reasoning controls to non-reasoning capabilities", () => {
   const capabilities = tritonAiCodexCapabilities(
     createModelCapabilities({
@@ -244,5 +262,20 @@ it("adds TritonAI reasoning controls to non-reasoning capabilities", () => {
   assert.deepStrictEqual(
     capabilities.optionDescriptors?.map((descriptor) => descriptor.id),
     ["reasoningEffort", "serviceTier"],
+  );
+});
+
+it("preserves input modalities while adding TritonAI reasoning controls", () => {
+  const capabilities = tritonAiCodexCapabilities(
+    createModelCapabilities({
+      inputModalities: ["text"],
+      optionDescriptors: [],
+    }),
+  );
+
+  assert.deepStrictEqual(capabilities.inputModalities, ["text"]);
+  assert.deepStrictEqual(
+    capabilities.optionDescriptors?.map((descriptor) => descriptor.id),
+    ["reasoningEffort"],
   );
 });

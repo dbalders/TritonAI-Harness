@@ -34,6 +34,7 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 
 import { makeCodexTextGeneration } from "../../textGeneration/CodexTextGeneration.ts";
 import { ServerConfig } from "../../config.ts";
+import * as ProcessRunner from "../../processRunner.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderDriverError } from "../Errors.ts";
 import { makeCodexAdapter } from "../Layers/CodexAdapter.ts";
@@ -58,6 +59,7 @@ import {
   materializeCodexShadowHome,
   resolveCodexHomeLayout,
 } from "./CodexHomeLayout.ts";
+import { materializeTritonAiCodexModelCatalog } from "./CodexModelCatalog.ts";
 const decodeCodexSettings = Schema.decodeSync(CodexSettings);
 
 const DRIVER_KIND = ProviderDriverKind.make("codex");
@@ -117,6 +119,7 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
   create: ({ instanceId, displayName, accentColor, environment, enabled, config }) =>
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const processRunner = yield* ProcessRunner.make();
       const httpClient = yield* HttpClient.HttpClient;
       const path = yield* Path.Path;
       const serverConfig = yield* ServerConfig;
@@ -156,6 +159,24 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
         enabled,
         homePath: homeLayout.effectiveHomePath ?? "",
       } satisfies CodexSettings;
+      const modelCatalogPath = yield* materializeTritonAiCodexModelCatalog({
+        binaryPath: effectiveConfig.binaryPath,
+        homePath: effectiveConfig.homePath || homeLayout.sharedHomePath,
+        catalogKey: instanceId,
+        environment: processEnv,
+        customModelMetadata: enabled ? effectiveConfig.customModelMetadata : {},
+      }).pipe(
+        Effect.provideService(ProcessRunner.ProcessRunner, processRunner),
+        Effect.mapError(
+          (cause) =>
+            new ProviderDriverError({
+              driver: DRIVER_KIND,
+              instanceId,
+              detail: cause.message,
+              cause,
+            }),
+        ),
+      );
       const maintenanceCapabilities = yield* resolveProviderMaintenanceCapabilitiesEffect(UPDATE, {
         binaryPath: effectiveConfig.binaryPath,
         env: processEnv,
@@ -170,9 +191,14 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
       const adapter = yield* makeCodexAdapter(effectiveConfig, {
         instanceId,
         environment: processEnv,
+        ...(modelCatalogPath ? { modelCatalogPath } : {}),
         ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
       });
-      const textGeneration = yield* makeCodexTextGeneration(effectiveConfig, processEnv);
+      const textGeneration = yield* makeCodexTextGeneration(
+        effectiveConfig,
+        processEnv,
+        modelCatalogPath ? { modelCatalogPath } : {},
+      );
 
       // Build a managed snapshot whose settings never change — mutations come
       // in as instance rebuilds from the registry rather than in-place

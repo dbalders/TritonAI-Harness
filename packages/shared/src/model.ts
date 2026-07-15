@@ -3,6 +3,7 @@ import {
   DEFAULT_MODEL_BY_PROVIDER,
   MODEL_SLUG_ALIASES_BY_PROVIDER,
   type ModelCapabilities,
+  type ModelInputModality,
   type ModelSelection,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -18,11 +19,20 @@ export interface SelectableModelOption {
 }
 
 export function createModelCapabilities(input: {
+  inputModalities?: ReadonlyArray<ModelInputModality>;
   optionDescriptors: ReadonlyArray<ProviderOptionDescriptor>;
 }): ModelCapabilities {
   return {
+    ...(input.inputModalities !== undefined ? { inputModalities: [...input.inputModalities] } : {}),
     optionDescriptors: input.optionDescriptors.map(cloneDescriptor),
   };
+}
+
+export function modelCapabilitiesAreExplicitlyTextOnly(
+  capabilities: ModelCapabilities | null | undefined,
+): boolean {
+  const modalities = capabilities?.inputModalities;
+  return modalities?.includes("text") === true && !modalities.includes("image");
 }
 
 function getRawSelectionValueById(

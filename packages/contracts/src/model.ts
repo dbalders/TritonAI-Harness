@@ -123,7 +123,11 @@ function canonicalSelectionsToLegacyObject(
   return out;
 }
 
+export const ModelInputModality = Schema.Literals(["text", "image"]);
+export type ModelInputModality = typeof ModelInputModality.Type;
+
 export const ModelCapabilities = Schema.Struct({
+  inputModalities: Schema.optional(Schema.Array(ModelInputModality)),
   optionDescriptors: Schema.optional(Schema.Array(ProviderOptionDescriptor)),
 });
 export type ModelCapabilities = typeof ModelCapabilities.Type;

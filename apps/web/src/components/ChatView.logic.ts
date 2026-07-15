@@ -454,6 +454,13 @@ export function hasServerAcknowledgedLocalDispatch(input: {
     return true;
   }
 
+  // Some adapters do provider-side preparation after the requested turn is
+  // projected but before they can emit turn.started. Keep the optimistic
+  // working timer alive through that interval instead of showing an idle gap.
+  if (latestTurnChanged && latestTurn?.startedAt === null && latestTurn.completedAt === null) {
+    return false;
+  }
+
   return (
     latestTurnChanged ||
     input.localDispatch.sessionStatus !== (session?.status ?? null) ||
