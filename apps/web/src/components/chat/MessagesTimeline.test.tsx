@@ -306,6 +306,26 @@ describe("MessagesTimeline", () => {
     expect(onAnchorSizeChanged).toHaveBeenCalledWith(secondEntry.message.id, 240);
   });
 
+  it("keeps the first sent message at the reachable scroll origin", () => {
+    const onAnchorReady = vi.fn();
+    const onAnchorSizeChanged = vi.fn();
+    const firstEntry = buildUserTimelineEntry("First prompt.");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        anchorMessageId={firstEntry.message.id}
+        onAnchorReady={onAnchorReady}
+        onAnchorSizeChanged={onAnchorSizeChanged}
+        timelineEntries={[firstEntry]}
+      />,
+    );
+
+    expect(markup).not.toContain("data-anchor-index=");
+    expect(markup).toContain('data-maintain-scroll-at-end="enabled"');
+    expect(onAnchorReady).not.toHaveBeenCalled();
+    expect(onAnchorSizeChanged).not.toHaveBeenCalled();
+  });
+
   it("renders collapse controls for long user messages", async () => {
     const markup = renderToStaticMarkup(
       <MessagesTimeline

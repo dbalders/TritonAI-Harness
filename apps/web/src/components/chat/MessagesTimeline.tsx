@@ -342,7 +342,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     const config = resolveChatListAnchoredEndSpace(rows, anchorMessageId, (row) =>
       row.kind === "message" ? row.message.id : null,
     );
-    return config
+    // On web, LegendList's reserved end space is not reachable above the
+    // scroll origin. The first row already sits at the natural top, so adding
+    // the spacer can hide it with no way to scroll back to it.
+    return config && config.anchorIndex > 0
       ? { ...config, onReady: handleAnchorReady, onSizeChanged: handleAnchorSizeChanged }
       : undefined;
   }, [anchorMessageId, handleAnchorReady, handleAnchorSizeChanged, rows]);
