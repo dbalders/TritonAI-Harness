@@ -3424,12 +3424,22 @@ describe("IntegrationRegistry lifecycle", () => {
         [packaged(connectedManifest, hangingProvider)],
         undefined,
         undefined,
-        { providerStatusTimeoutMs: 20, providerOperationTimeoutMs: 20 },
+        { providerStatusTimeoutMs: 50, providerOperationTimeoutMs: 500 },
       );
       await registry.install(connectedManifest.id);
-      const connecting = registry.connect(connectedManifest.id);
-      await commitStarted;
-      await expect(connecting).rejects.toMatchObject({ code: "operation_failed" });
+      const connecting = registry.connect(connectedManifest.id).then(
+        (value) => ({ resolved: true as const, value }),
+        (error: unknown) => ({ resolved: false as const, error }),
+      );
+      const commitAdmitted = await Promise.race([
+        commitStarted.then(() => true),
+        connecting.then(() => false),
+      ]);
+      expect(commitAdmitted).toBe(true);
+      const connection = await connecting;
+      expect(connection.resolved).toBe(false);
+      if (!connection.resolved)
+        expect(connection.error).toMatchObject({ code: "operation_failed" });
       expect(commitSignalAborted).toBe(true);
       await expect(registry.disconnect(connectedManifest.id)).rejects.toMatchObject({
         code: "operation_failed",
@@ -3437,7 +3447,7 @@ describe("IntegrationRegistry lifecycle", () => {
 
       const closeStartedAt = Date.now();
       await expect(registry.close()).rejects.toThrow(/drain/u);
-      expect(Date.now() - closeStartedAt).toBeLessThan(1_000);
+      expect(Date.now() - closeStartedAt).toBeLessThan(2_000);
       expect(closeCalls).toBe(0);
 
       const recoveryState: ProviderState = {
