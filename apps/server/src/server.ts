@@ -349,22 +349,27 @@ const RuntimeServicesLive = ServerRuntimeStartup.layer.pipe(
   Layer.provideMerge(RuntimeDependenciesLive),
 );
 
-export const makeRoutesLayer = Layer.mergeAll(
+export const makeRoutesLayerFor = (
+  loadIntegrationRegistry?: Parameters<typeof McpHttpServer.makeLayer>[0],
+) =>
   Layer.mergeAll(
-    HttpApiBuilder.layer(EnvironmentHttpApi).pipe(
-      Layer.provide(authHttpApiLayer),
-      Layer.provide(connectHttpApiLayer),
-      Layer.provide(orchestrationHttpApiLayer),
-      Layer.provide(serverEnvironmentHttpApiLayer),
-      Layer.provide(environmentAuthenticatedAuthLayer),
+    Layer.mergeAll(
+      HttpApiBuilder.layer(EnvironmentHttpApi).pipe(
+        Layer.provide(authHttpApiLayer),
+        Layer.provide(connectHttpApiLayer),
+        Layer.provide(orchestrationHttpApiLayer),
+        Layer.provide(serverEnvironmentHttpApiLayer),
+        Layer.provide(environmentAuthenticatedAuthLayer),
+      ),
+      otlpTracesProxyRouteLayer,
+      assetRouteLayer,
+      staticAndDevRouteLayer,
+      websocketRpcRouteLayer,
     ),
-    otlpTracesProxyRouteLayer,
-    assetRouteLayer,
-    staticAndDevRouteLayer,
-    websocketRpcRouteLayer,
-  ),
-  McpHttpServer.layer.pipe(Layer.provide(McpSessionRegistry.layer)),
-).pipe(Layer.provide(PreviewAutomationBroker.layer), Layer.provide(browserApiCorsLayer));
+    McpHttpServer.makeLayer(loadIntegrationRegistry).pipe(Layer.provide(McpSessionRegistry.layer)),
+  ).pipe(Layer.provide(PreviewAutomationBroker.layer), Layer.provide(browserApiCorsLayer));
+
+export const makeRoutesLayer = makeRoutesLayerFor();
 
 export const makeServerLayer = Layer.unwrap(
   Effect.gen(function* () {

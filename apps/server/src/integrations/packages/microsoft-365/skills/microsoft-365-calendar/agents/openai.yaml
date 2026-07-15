@@ -1,6 +1,0 @@
-interface:
-  display_name: "Microsoft 365 Calendar"
-  short_description: "Review Microsoft 365 calendar events"
-  default_prompt: "Use $microsoft-365-calendar to summarize my upcoming Microsoft 365 events."
-policy:
-  allow_implicit_invocation: true

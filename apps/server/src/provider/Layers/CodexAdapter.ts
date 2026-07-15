@@ -40,6 +40,7 @@ import * as EffectCodexSchema from "effect-codex-app-server/schema";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import { getCodexServiceTierOptionValue } from "../../codexModelOptions.ts";
 import * as Integrations from "../../integrations/IntegrationRegistry.ts";
+import { integrationToolJsonSchema } from "../../integrations/IntegrationTool.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 
 import {
@@ -1420,7 +1421,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
               canonicalName: definition.name,
               dynamicName: Integrations.codexDynamicIntegrationToolName(definition.name),
               description: `${definition.description} Integration plugin tool: ${definition.name}.`,
-              inputSchema: definition.inputSchema,
+              inputSchema: integrationToolJsonSchema(definition),
             }))
           : [];
         const dynamicToolNames = new Set<string>();
@@ -1459,12 +1460,12 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
                   description: binding.description,
                   inputSchema: binding.inputSchema,
                 })),
-                invokeDynamicTool: async ({ name, arguments: toolArguments }) => {
+                invokeDynamicTool: async ({ name, arguments: toolArguments, signal }) => {
                   const canonicalName = dynamicToolByName.get(name);
                   if (!canonicalName || !integrationRegistry.isToolAvailableSync(canonicalName)) {
                     throw new Error("Integration plugin tool is unavailable.");
                   }
-                  return integrationRegistry.invokeTool(canonicalName, toolArguments);
+                  return integrationRegistry.invokeTool(canonicalName, toolArguments, { signal });
                 },
               }
             : {}),

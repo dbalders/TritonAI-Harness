@@ -175,6 +175,7 @@ import {
   IntegrationPollResult,
   IntegrationsListResult,
   IntegrationSetEnabledInput,
+  IntegrationSetSkillEnabledInput,
 } from "./integrations.ts";
 
 export const WS_METHODS = {
@@ -261,10 +262,10 @@ export const WS_METHODS = {
   integrationsList: "integrations.list",
   integrationsInstall: "integrations.install",
   integrationsSetEnabled: "integrations.setEnabled",
+  integrationsSetSkillEnabled: "integrations.setSkillEnabled",
   integrationsConnect: "integrations.connect",
   integrationsPoll: "integrations.poll",
   integrationsDisconnect: "integrations.disconnect",
-  integrationsRemove: "integrations.remove",
 
   // Cloud environment methods
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
@@ -471,6 +472,11 @@ export const WsIntegrationsSetEnabledRpc = Rpc.make(WS_METHODS.integrationsSetEn
   success: IntegrationsListResult,
   error: IntegrationRpcError,
 });
+export const WsIntegrationsSetSkillEnabledRpc = Rpc.make(WS_METHODS.integrationsSetSkillEnabled, {
+  payload: IntegrationSetSkillEnabledInput,
+  success: IntegrationsListResult,
+  error: IntegrationRpcError,
+});
 export const WsIntegrationsConnectRpc = Rpc.make(WS_METHODS.integrationsConnect, {
   payload: IntegrationConnectInput,
   success: IntegrationConnectResult,
@@ -482,11 +488,6 @@ export const WsIntegrationsPollRpc = Rpc.make(WS_METHODS.integrationsPoll, {
   error: IntegrationRpcError,
 });
 export const WsIntegrationsDisconnectRpc = Rpc.make(WS_METHODS.integrationsDisconnect, {
-  payload: IntegrationIdInput,
-  success: IntegrationsListResult,
-  error: IntegrationRpcError,
-});
-export const WsIntegrationsRemoveRpc = Rpc.make(WS_METHODS.integrationsRemove, {
   payload: IntegrationIdInput,
   success: IntegrationsListResult,
   error: IntegrationRpcError,
@@ -884,10 +885,10 @@ export const WsRpcGroup = RpcGroup.make(
   WsIntegrationsListRpc,
   WsIntegrationsInstallRpc,
   WsIntegrationsSetEnabledRpc,
+  WsIntegrationsSetSkillEnabledRpc,
   WsIntegrationsConnectRpc,
   WsIntegrationsPollRpc,
   WsIntegrationsDisconnectRpc,
-  WsIntegrationsRemoveRpc,
   WsCloudGetRelayClientStatusRpc,
   WsCloudInstallRelayClientRpc,
   WsSourceControlLookupRepositoryRpc,

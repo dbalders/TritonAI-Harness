@@ -36,20 +36,49 @@ export interface IntegrationManifest {
       readonly maxExclusive: string;
     };
   };
-  readonly provider: string;
+  readonly provider?: string;
   readonly capabilities: ReadonlyArray<IntegrationManifestCapability>;
   readonly tools: ReadonlyArray<IntegrationManifestTool>;
   readonly skills: ReadonlyArray<IntegrationManifestSkill>;
 }
 
-const ID = /^[a-z][a-z0-9.-]*$/u;
+const ID = /^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$/u;
+const MAX_ID_LENGTH = 64;
 const TOOL = /^[a-z][a-z0-9_.-]*$/u;
+const MAX_TOOL_NAME_LENGTH = 128;
 const SKILL = /^[a-z][a-z0-9-]{0,63}$/u;
 const VERSION =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
+const MANIFEST_KEYS = new Set([
+  "apiVersion",
+  "kind",
+  "manifestVersion",
+  "id",
+  "name",
+  "description",
+  "version",
+  "compatibility",
+  "provider",
+  "capabilities",
+  "tools",
+  "skills",
+]);
+const COMPATIBILITY_KEYS = new Set(["harness"]);
+const HARNESS_COMPATIBILITY_KEYS = new Set(["min", "maxExclusive"]);
+const CAPABILITY_KEYS = new Set(["id", "displayName", "description"]);
+const TOOL_KEYS = new Set(["name", "displayName", "description", "capability"]);
+const SKILL_KEYS = new Set(["name", "description", "capability"]);
 
 function nonEmpty(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasOnlyKeys(value: Record<string, unknown>, allowed: ReadonlySet<string>): boolean {
+  return Object.keys(value).every((key) => allowed.has(key));
 }
 
 interface ParsedVersion {
@@ -72,6 +101,18 @@ function parsedVersion(value: string): ParsedVersion | null {
     patch: match[3]!,
     prerelease,
   };
+}
+
+export function isIntegrationId(value: unknown): value is string {
+  return typeof value === "string" && value.length <= MAX_ID_LENGTH && ID.test(value);
+}
+
+export function isIntegrationSkillName(value: unknown): value is string {
+  return typeof value === "string" && SKILL.test(value);
+}
+
+export function isIntegrationVersion(value: unknown): value is string {
+  return typeof value === "string" && parsedVersion(value) !== null;
 }
 
 function compareNumericIdentifier(left: string, right: string): number {
@@ -111,35 +152,52 @@ function compareVersion(left: string, right: string): number {
 }
 
 export function validateIntegrationManifest(value: unknown): IntegrationManifest {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     throw new Error("Integration manifest must be an object.");
   }
-  const input = value as Record<string, unknown>;
+  const input = value;
+  if (!hasOnlyKeys(input, MANIFEST_KEYS)) {
+    throw new Error("Integration manifest contains unsupported fields.");
+  }
   if (input.apiVersion !== HARNESS_INTEGRATION_API_VERSION) {
     throw new Error(`Unsupported integration apiVersion ${String(input.apiVersion)}.`);
   }
   if (input.kind !== "IntegrationPlugin" || input.manifestVersion !== 1) {
     throw new Error("Integration manifest kind or manifestVersion is unsupported.");
   }
-  for (const field of ["id", "name", "description", "version", "provider"] as const) {
+  for (const field of ["id", "name", "description", "version"] as const) {
     if (!nonEmpty(input[field])) throw new Error(`Integration manifest ${field} is required.`);
   }
-  if (!ID.test(input.id as string) || !ID.test(input.provider as string)) {
-    throw new Error("Integration and provider identifiers must use lowercase stable slugs.");
+  if (!isIntegrationId(input.id)) {
+    throw new Error("Integration identifiers must use lowercase stable slugs.");
   }
-  if (!parsedVersion(input.version as string))
-    throw new Error("Integration version must be semver.");
-  const compatibility = input.compatibility as IntegrationManifest["compatibility"] | undefined;
+  if (input.provider !== undefined && !isIntegrationId(input.provider)) {
+    throw new Error("Integration provider identifiers must use lowercase stable slugs.");
+  }
+  if (!isIntegrationVersion(input.version)) throw new Error("Integration version must be semver.");
+  const compatibility = input.compatibility;
+  if (!isRecord(compatibility)) {
+    throw new Error("Integration manifest must declare an explicit Harness version range.");
+  }
+  if (!hasOnlyKeys(compatibility, COMPATIBILITY_KEYS)) {
+    throw new Error("Integration compatibility contains unsupported fields.");
+  }
+  const harness = compatibility.harness;
+  if (!isRecord(harness)) {
+    throw new Error("Integration manifest must declare an explicit Harness version range.");
+  }
+  if (!hasOnlyKeys(harness, HARNESS_COMPATIBILITY_KEYS)) {
+    throw new Error("Integration Harness compatibility contains unsupported fields.");
+  }
   if (
-    !compatibility?.harness ||
-    !nonEmpty(compatibility.harness.min) ||
-    !nonEmpty(compatibility.harness.maxExclusive) ||
-    !parsedVersion(compatibility.harness.min) ||
-    !parsedVersion(compatibility.harness.maxExclusive)
+    !nonEmpty(harness.min) ||
+    !nonEmpty(harness.maxExclusive) ||
+    !isIntegrationVersion(harness.min) ||
+    !isIntegrationVersion(harness.maxExclusive)
   ) {
     throw new Error("Integration manifest must declare an explicit Harness version range.");
   }
-  if (compareVersion(compatibility.harness.min, compatibility.harness.maxExclusive) >= 0) {
+  if (compareVersion(harness.min, harness.maxExclusive) >= 0) {
     throw new Error("Integration Harness version range must have min < maxExclusive.");
   }
   const capabilities = input.capabilities;
@@ -148,13 +206,18 @@ export function validateIntegrationManifest(value: unknown): IntegrationManifest
   if (!Array.isArray(capabilities) || !Array.isArray(tools) || !Array.isArray(skills)) {
     throw new Error("Integration capabilities, tools, and skills must be arrays.");
   }
+  if (tools.length > 0 && input.provider === undefined) {
+    throw new Error("Integration plugins with tools must declare a provider.");
+  }
   const capabilityIds = new Set<string>();
   for (const capability of capabilities) {
-    if (!capability || typeof capability !== "object") throw new Error("Invalid capability.");
-    const item = capability as Record<string, unknown>;
+    if (!isRecord(capability) || !hasOnlyKeys(capability, CAPABILITY_KEYS)) {
+      throw new Error("Invalid or unsupported capability fields.");
+    }
+    const item = capability;
     if (
       !nonEmpty(item.id) ||
-      !ID.test(item.id) ||
+      !isIntegrationId(item.id) ||
       !nonEmpty(item.displayName) ||
       !nonEmpty(item.description)
     ) {
@@ -163,29 +226,38 @@ export function validateIntegrationManifest(value: unknown): IntegrationManifest
     if (capabilityIds.has(item.id)) throw new Error(`Duplicate capability ${item.id}.`);
     capabilityIds.add(item.id);
   }
-  const names = new Set<string>();
   for (const [kind, entries] of [
     ["tool", tools],
     ["skill", skills],
   ] as const) {
+    const names = new Set<string>();
     for (const entry of entries) {
-      if (!entry || typeof entry !== "object") throw new Error(`Invalid ${kind}.`);
-      const item = entry as Record<string, unknown>;
-      const namePattern = kind === "skill" ? SKILL : TOOL;
-      if (!nonEmpty(item.name) || !namePattern.test(item.name) || !nonEmpty(item.description)) {
+      const allowed = kind === "tool" ? TOOL_KEYS : SKILL_KEYS;
+      if (!isRecord(entry) || !hasOnlyKeys(entry, allowed)) {
+        throw new Error(`Invalid or unsupported ${kind} fields.`);
+      }
+      const item = entry;
+      if (
+        typeof item.name !== "string" ||
+        (kind === "skill"
+          ? !isIntegrationSkillName(item.name)
+          : item.name.length > MAX_TOOL_NAME_LENGTH || !TOOL.test(item.name)) ||
+        !nonEmpty(item.description)
+      ) {
         throw new Error(`Every ${kind} requires a stable name and description.`);
       }
+      const name = item.name;
       if (kind === "tool" && !nonEmpty(item.displayName)) {
         throw new Error("Every tool requires a displayName.");
       }
       if (!nonEmpty(item.capability) || !capabilityIds.has(item.capability)) {
         throw new Error(`${kind} ${item.name} references an unknown capability.`);
       }
-      if (names.has(item.name)) throw new Error(`Duplicate component name ${item.name}.`);
-      names.add(item.name);
+      if (names.has(name)) throw new Error(`Duplicate ${kind} name ${name}.`);
+      names.add(name);
     }
   }
-  return value as IntegrationManifest;
+  return input as unknown as IntegrationManifest;
 }
 
 export function manifestCompatibility(manifest: IntegrationManifest): {

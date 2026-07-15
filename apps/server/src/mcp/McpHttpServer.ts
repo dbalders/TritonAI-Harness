@@ -210,17 +210,21 @@ export const PreviewToolkitRegistrationLive = Layer.mergeAll(
   PreviewSnapshotRegistrationLive,
 );
 
-const IntegrationToolsRegistrationLive = integrationToolsRegistrationLayer(
-  new Set(Object.keys(PreviewToolkit.tools)),
-);
-
 const McpTransportLive = McpServer.layerHttp({
   name: "TritonAI Harness",
   version: packageJson.version,
   path: "/mcp",
 }).pipe(Layer.provide(McpAuthMiddlewareLive));
 
-export const layer = Layer.mergeAll(
-  PreviewToolkitRegistrationLive,
-  IntegrationToolsRegistrationLive,
-).pipe(Layer.provideMerge(McpTransportLive));
+export const makeLayer = (
+  loadRegistry?: Parameters<typeof integrationToolsRegistrationLayer>[1],
+) => {
+  const integrationToolsRegistration = loadRegistry
+    ? integrationToolsRegistrationLayer(new Set(Object.keys(PreviewToolkit.tools)), loadRegistry)
+    : integrationToolsRegistrationLayer(new Set(Object.keys(PreviewToolkit.tools)));
+  return Layer.mergeAll(PreviewToolkitRegistrationLive, integrationToolsRegistration).pipe(
+    Layer.provideMerge(McpTransportLive),
+  );
+};
+
+export const layer = makeLayer();

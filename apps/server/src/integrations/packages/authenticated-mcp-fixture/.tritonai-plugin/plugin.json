@@ -4,7 +4,7 @@
   "manifestVersion": 1,
   "id": "api-key-mcp-fixture",
   "name": "API Key MCP Fixture",
-  "description": "A test-only, secret-backed provider with one read-only MCP-compatible tool and its own skill.",
+  "description": "A test-only API-key provider with secure server-side storage, one read-only MCP-compatible tool, and its own skill.",
   "version": "1.0.0",
   "compatibility": {
     "harness": {
@@ -17,7 +17,7 @@
     {
       "id": "fixture.read",
       "displayName": "Read fixture data",
-      "description": "Use a fake server-side API key to read deterministic, sanitized fixture data."
+      "description": "Use a submitted server-side API key to read deterministic, sanitized fixture data."
     }
   ],
   "tools": [

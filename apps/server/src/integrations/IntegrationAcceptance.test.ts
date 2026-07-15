@@ -10,6 +10,7 @@ import {
   type IntegrationProviderStatus,
 } from "./IntegrationRegistry.ts";
 import { CodexIntegrationSkillMaterializer } from "./IntegrationSkillMaterializer.ts";
+import { EmptyIntegrationToolInput } from "./IntegrationTool.ts";
 import { manifestCompatibility, validateIntegrationManifest } from "./manifest.ts";
 
 const fixtureManifest = {
@@ -62,7 +63,7 @@ function fixtureProvider(state: FixtureState): IntegrationProvider {
       {
         name: "acceptance.fixture.read",
         description: "Read deterministic fixture data.",
-        inputSchema: { type: "object", properties: {}, additionalProperties: false },
+        input: EmptyIntegrationToolInput,
         readOnly: true,
         openWorld: false,
       },
@@ -77,6 +78,7 @@ function fixtureProvider(state: FixtureState): IntegrationProvider {
         message: "Waiting for fixture authorization.",
       };
       return {
+        kind: "device_code",
         flowId: "fixture-flow",
         verificationUri: "https://fixture.invalid/activate",
         verificationUriComplete: null,
@@ -86,9 +88,11 @@ function fixtureProvider(state: FixtureState): IntegrationProvider {
         intervalSeconds: 1,
       };
     },
-    poll: async (flowId) => {
+    poll: async (flowId, context) => {
       if (flowId !== "fixture-flow") throw new Error("Unknown authorization flow.");
-      state.credential = "server-only-fixture-credential";
+      if (!context) throw new Error("Lifecycle context is required.");
+      await context.beginCommit();
+      state.credential = "present";
       state.status = {
         state: "connected",
         accountLabel: "Fixture account",
@@ -97,7 +101,9 @@ function fixtureProvider(state: FixtureState): IntegrationProvider {
       };
       return { state: "connected", retryAfterSeconds: null, message: "Connected." };
     },
-    disconnect: async () => {
+    disconnect: async (context) => {
+      if (!context) throw new Error("Lifecycle context is required.");
+      await context.beginCommit();
       state.credential = null;
       state.status = {
         state: "not_connected",
@@ -110,6 +116,18 @@ function fixtureProvider(state: FixtureState): IntegrationProvider {
       if (!state.credential) throw new Error("Fixture is not connected.");
       return { source: "fixture", ok: true };
     },
+  };
+}
+
+async function packagedFromRoot(packageRoot: string, provider: IntegrationProvider) {
+  const raw = await NodeFSP.readFile(
+    NodePath.join(packageRoot, ".tritonai-plugin", "plugin.json"),
+    "utf8",
+  );
+  return {
+    manifest: validateIntegrationManifest(JSON.parse(raw)),
+    provider,
+    sourceRoot: packageRoot,
   };
 }
 
@@ -143,17 +161,16 @@ describe("integration plugin acceptance", () => {
 
       const registry = new RegistryRuntime(
         runtimeRoot,
-        [],
+        [await packagedFromRoot(packageRoot, fixtureProvider(state))],
         new CodexIntegrationSkillMaterializer([codexHome]),
       );
-      await registry.discoverPackage(packageRoot, fixtureProvider(state));
       expect((await registry.list()).integrations).toHaveLength(1);
 
       await registry.install(fixtureManifest.id);
       expect(registry.isToolAvailableSync("acceptance.fixture.read")).toBe(false);
-      const flow = await registry.connect(fixtureManifest.id, ["fixture.read"]);
+      const flow = await registry.connect(fixtureManifest.id);
       const connected = await registry.poll(fixtureManifest.id, flow.flowId);
-      expect(state.credential).toBe("server-only-fixture-credential");
+      expect(state.credential).toBe("present");
       expect(JSON.stringify({ flow, connected })).not.toContain(state.credential);
       expect(connected.integration.tools[0]?.available).toBe(true);
       expect(connected.integration.skills[0]?.available).toBe(true);
@@ -181,10 +198,9 @@ describe("integration plugin acceptance", () => {
 
       const restarted = new RegistryRuntime(
         runtimeRoot,
-        [],
+        [await packagedFromRoot(packageRoot, fixtureProvider(state))],
         new CodexIntegrationSkillMaterializer([codexHome]),
       );
-      await restarted.discoverPackage(packageRoot, fixtureProvider(state));
       expect(
         (await restarted.list()).integrations.find(({ id }) => id === fixtureManifest.id)?.enabled,
       ).toBe(false);

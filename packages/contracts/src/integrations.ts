@@ -32,6 +32,7 @@ export const IntegrationSkill = Schema.Struct({
   name: TrimmedNonEmptyString,
   description: TrimmedNonEmptyString,
   capability: IntegrationCapabilityId,
+  enabled: Schema.Boolean,
   available: Schema.Boolean,
 });
 
@@ -45,6 +46,7 @@ export const IntegrationSummary = Schema.Struct({
   enabled: Schema.Boolean,
   compatible: Schema.Boolean,
   compatibilityMessage: Schema.NullOr(TrimmedNonEmptyString),
+  requiresConnection: Schema.Boolean,
   connectionState: IntegrationConnectionState,
   accountLabel: Schema.NullOr(TrimmedNonEmptyString),
   statusMessage: Schema.NullOr(TrimmedNonEmptyString),
@@ -64,16 +66,32 @@ export const IntegrationSetEnabledInput = Schema.Struct({
   id: TrimmedNonEmptyString,
   enabled: Schema.Boolean,
 });
+export const IntegrationSetSkillEnabledInput = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  skill: TrimmedNonEmptyString,
+  enabled: Schema.Boolean,
+});
+export const IntegrationApiKeySubmission = Schema.Struct({
+  kind: Schema.Literal("api_key"),
+  flowId: TrimmedNonEmptyString,
+  value: Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(16_384)),
+});
+export type IntegrationApiKeySubmission = typeof IntegrationApiKeySubmission.Type;
+
+export const IntegrationConnectionSubmission = IntegrationApiKeySubmission;
+export type IntegrationConnectionSubmission = typeof IntegrationConnectionSubmission.Type;
+
 export const IntegrationConnectInput = Schema.Struct({
   id: TrimmedNonEmptyString,
-  capabilities: Schema.Array(IntegrationCapabilityId),
+  submission: Schema.optional(IntegrationConnectionSubmission),
 });
 export const IntegrationPollInput = Schema.Struct({
   id: TrimmedNonEmptyString,
   flowId: TrimmedNonEmptyString,
 });
 
-export const IntegrationConnectResult = Schema.Struct({
+export const IntegrationDeviceCodeConnectResult = Schema.Struct({
+  kind: Schema.Literal("device_code"),
   flowId: TrimmedNonEmptyString,
   verificationUri: TrimmedNonEmptyString,
   verificationUriComplete: Schema.NullOr(TrimmedNonEmptyString),
@@ -82,12 +100,43 @@ export const IntegrationConnectResult = Schema.Struct({
   expiresAt: IsoDateTime,
   intervalSeconds: PositiveInt,
 });
+export type IntegrationDeviceCodeConnectResult = typeof IntegrationDeviceCodeConnectResult.Type;
+
+export const IntegrationApiKeyConnectResult = Schema.Struct({
+  kind: Schema.Literal("api_key"),
+  flowId: TrimmedNonEmptyString,
+  label: TrimmedNonEmptyString,
+  placeholder: Schema.NullOr(TrimmedNonEmptyString),
+  message: TrimmedNonEmptyString,
+});
+export type IntegrationApiKeyConnectResult = typeof IntegrationApiKeyConnectResult.Type;
+
+export const IntegrationConnectedConnectResult = Schema.Struct({
+  kind: Schema.Literal("connected"),
+  flowId: TrimmedNonEmptyString,
+  message: TrimmedNonEmptyString,
+});
+export type IntegrationConnectedConnectResult = typeof IntegrationConnectedConnectResult.Type;
+
+// Keep connection UX discriminated from the first version so redirect, API-key,
+// and other authorization flows can extend this contract without optional-field
+// ambiguity in clients.
+export const IntegrationConnectResult = Schema.Union([
+  IntegrationDeviceCodeConnectResult,
+  IntegrationApiKeyConnectResult,
+  IntegrationConnectedConnectResult,
+]);
 export type IntegrationConnectResult = typeof IntegrationConnectResult.Type;
 
-export const IntegrationPollResult = Schema.Struct({
+export const IntegrationProviderPollResult = Schema.Struct({
   state: Schema.Literals(["pending", "connected", "expired", "failed"]),
   retryAfterSeconds: Schema.NullOr(PositiveInt),
   message: Schema.NullOr(TrimmedNonEmptyString),
+});
+export type IntegrationProviderPollResult = typeof IntegrationProviderPollResult.Type;
+
+export const IntegrationPollResult = Schema.Struct({
+  ...IntegrationProviderPollResult.fields,
   integration: IntegrationSummary,
 });
 export type IntegrationPollResult = typeof IntegrationPollResult.Type;
@@ -103,6 +152,7 @@ export class IntegrationOperationError extends Schema.TaggedErrorClass<Integrati
       "disabled",
       "not_connected",
       "capability_required",
+      "invalid_input",
       "operation_failed",
     ]),
     message: TrimmedNonEmptyString,

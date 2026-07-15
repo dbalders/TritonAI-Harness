@@ -6,7 +6,15 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { McpSchema, McpServer } from "effect/unstable/ai";
 
-import { normalizeIntegrationToolResult, registrationLayerFor } from "./IntegrationTools.ts";
+import {
+  EmptyIntegrationToolInput,
+  integrationToolJsonSchema,
+} from "../integrations/IntegrationTool.ts";
+import {
+  normalizeIntegrationToolResult,
+  registrationLayer,
+  registrationLayerFor,
+} from "./IntegrationTools.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 
 const invocation = (
@@ -24,10 +32,23 @@ const invocation = (
 const fixtureTool = {
   name: "fixture.read",
   description: "Read deterministic fixture data.",
-  inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  input: EmptyIntegrationToolInput,
   readOnly: true,
   openWorld: false,
 } as const;
+
+const writeFixtureTool = {
+  ...fixtureTool,
+  name: "fixture.write",
+  description: "Write deterministic fixture data.",
+  readOnly: false,
+  destructive: true,
+  idempotent: false,
+} as const;
+
+const registryWith = (definitions: ReadonlyArray<typeof fixtureTool>) => ({
+  toolDefinitions: () => definitions,
+});
 
 const testLayer = registrationLayerFor([fixtureTool], () => true).pipe(
   Layer.provideMerge(McpServer.McpServer.layer),
@@ -41,7 +62,7 @@ const serverWithBuiltInFixture = Layer.effect(
       tool: new McpSchema.Tool({
         name: fixtureTool.name,
         description: "Existing built-in fixture tool.",
-        inputSchema: fixtureTool.inputSchema,
+        inputSchema: integrationToolJsonSchema(fixtureTool),
       }),
       annotations: Context.empty(),
       handle: () =>
@@ -71,11 +92,59 @@ it.effect("registers provider-neutral tool definitions with MCP", () =>
   ),
 );
 
-it("rejects write-capable tools at the MCP registration boundary", () => {
-  expect(() => registrationLayerFor([{ ...fixtureTool, readOnly: false }], () => true)).toThrow(
-    /write-capable MCP integration tools are not supported/u,
-  );
-});
+it.effect("awaits the canonical registry catalog before the MCP layer becomes available", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const server = yield* McpServer.McpServer;
+      expect(server.tools.map(({ tool }) => tool.name)).toEqual([fixtureTool.name]);
+    }).pipe(
+      Effect.provide(
+        registrationLayer(new Set(), async () => registryWith([fixtureTool])).pipe(
+          Layer.provideMerge(McpServer.McpServer.layer),
+        ),
+      ),
+    ),
+  ),
+);
+
+it.effect("fails MCP startup when a catalog tool is reserved", () =>
+  Effect.gen(function* () {
+    const exit = yield* Effect.exit(
+      Effect.void.pipe(
+        Effect.provide(
+          registrationLayer(new Set([fixtureTool.name]), async () =>
+            registryWith([fixtureTool]),
+          ).pipe(Layer.provideMerge(McpServer.McpServer.layer)),
+        ),
+      ),
+    );
+    expect(exit._tag).toBe("Failure");
+    if (exit._tag === "Failure") {
+      expect(Cause.pretty(exit.cause)).toContain(
+        "Integration tool fixture.read conflicts with an existing MCP tool name.",
+      );
+    }
+  }).pipe(Effect.scoped),
+);
+
+it.effect("registers write-capable tools with conservative MCP annotations", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const server = yield* McpServer.McpServer;
+      expect(server.tools[0]?.tool.annotations).toMatchObject({
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+      });
+    }).pipe(
+      Effect.provide(
+        registrationLayerFor([writeFixtureTool], () => true).pipe(
+          Layer.provideMerge(McpServer.McpServer.layer),
+        ),
+      ),
+    ),
+  ),
+);
 
 it.effect("rejects integration tool names that collide with existing MCP tools", () =>
   Effect.gen(function* () {
@@ -128,7 +197,7 @@ it("normalizes arbitrary provider results into JSON object content", () => {
   expect(() => normalizeIntegrationToolResult(cyclic)).toThrow(/JSON-serializable/u);
 });
 
-it.effect("hides integration tools from MCP credentials without read access", () =>
+it.effect("hides integration tools from MCP credentials without integration access", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const server = yield* McpServer.McpServer;
@@ -157,7 +226,7 @@ it.effect("hides integration tools from MCP credentials without read access", ()
   ),
 );
 
-it.effect("shows active integration tools only to read-authorized MCP credentials", () =>
+it.effect("shows active integration tools to integration-authorized MCP credentials", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const server = yield* McpServer.McpServer;
@@ -165,11 +234,40 @@ it.effect("shows active integration tools only to read-authorized MCP credential
       const visible = yield* Effect.sync(() => enabledWhen({} as never)).pipe(
         Effect.provideService(
           McpInvocationContext.McpInvocationContext,
-          invocation(new Set(["integrations.read"])),
+          invocation(new Set(["integrations.invoke"])),
         ),
       );
       expect(visible).toBe(true);
     }).pipe(Effect.provide(testLayer)),
+  ),
+);
+
+it.effect("uses the same transport grant for active read and write integration tools", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const server = yield* McpServer.McpServer;
+      const enabledWhen = Context.getUnsafe(server.tools[0]!.annotations, McpSchema.EnabledWhen);
+      const previewVisible = yield* Effect.sync(() => enabledWhen({} as never)).pipe(
+        Effect.provideService(
+          McpInvocationContext.McpInvocationContext,
+          invocation(new Set(["preview"])),
+        ),
+      );
+      const integrationVisible = yield* Effect.sync(() => enabledWhen({} as never)).pipe(
+        Effect.provideService(
+          McpInvocationContext.McpInvocationContext,
+          invocation(new Set(["integrations.invoke"])),
+        ),
+      );
+      expect(previewVisible).toBe(false);
+      expect(integrationVisible).toBe(true);
+    }).pipe(
+      Effect.provide(
+        registrationLayerFor([writeFixtureTool], () => true).pipe(
+          Layer.provideMerge(McpServer.McpServer.layer),
+        ),
+      ),
+    ),
   ),
 );
 
@@ -183,7 +281,7 @@ it.effect("hides and rejects an unavailable tool despite read authorization", ()
     Effect.gen(function* () {
       const server = yield* McpServer.McpServer;
       const enabledWhen = Context.getUnsafe(server.tools[0]!.annotations, McpSchema.EnabledWhen);
-      const authorized = invocation(new Set(["integrations.read"]));
+      const authorized = invocation(new Set(["integrations.invoke"]));
       const visible = yield* Effect.sync(() => enabledWhen({} as never)).pipe(
         Effect.provideService(McpInvocationContext.McpInvocationContext, authorized),
       );

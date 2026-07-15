@@ -3,11 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
 import type * as ServerSecretStore from "../auth/ServerSecretStore.ts";
-import {
-  API_KEY_FIXTURE_SECRET_NAME,
-  ApiKeyMcpFixtureProvider,
-  SkillOnlyFixtureProvider,
-} from "./FixtureProviders.ts";
+import { API_KEY_FIXTURE_SECRET_NAME, ApiKeyMcpFixtureProvider } from "./FixtureProviders.ts";
 
 function memorySecrets() {
   const values = new Map<string, Uint8Array>();
@@ -25,30 +21,56 @@ function memorySecrets() {
 }
 
 describe("fixture integration providers", () => {
-  it("supports a connected skill-only provider with no tool surface", async () => {
-    const provider = new SkillOnlyFixtureProvider();
-    expect(provider.tools).toEqual([]);
-    expect(await provider.status()).toMatchObject({
-      state: "connected",
-      grantedCapabilities: ["workflow.use"],
-    });
-  });
-
-  it("keeps a fake API key server-side while exposing a sanitized tool result", async () => {
+  it("accepts an API key into server-side storage while exposing a sanitized result", async () => {
     const secrets = memorySecrets();
     const provider = new ApiKeyMcpFixtureProvider(secrets.service);
     const flow = await provider.connect(["fixture.read"]);
-    const connected = await provider.poll(flow.flowId);
-    expect(connected.state).toBe("connected");
-    expect(secrets.values.has(API_KEY_FIXTURE_SECRET_NAME)).toBe(true);
+    expect(flow.kind).toBe("api_key");
+    const connected = await provider.connect(["fixture.read"], undefined, {
+      kind: "api_key",
+      flowId: flow.flowId,
+      value: "fixture-user-supplied-key",
+    });
+    expect(connected.kind).toBe("connected");
+    expect(new TextDecoder().decode(secrets.values.get(API_KEY_FIXTURE_SECRET_NAME))).toBe(
+      "fixture-user-supplied-key",
+    );
 
     const result = await provider.invoke("fixture.api-key.read", {});
     expect(result).toMatchObject({ authenticated: true, value: "api-key-fixture-ok" });
-    expect(JSON.stringify({ flow, connected, result })).not.toContain(
-      "fixture-server-side-api-key",
-    );
+    expect(JSON.stringify({ flow, connected, result })).not.toContain("fixture-user-supplied-key");
 
     await provider.disconnect();
+    expect(secrets.values.has(API_KEY_FIXTURE_SECRET_NAME)).toBe(false);
+  });
+
+  it("uses the bounded commit-tail signal for credential mutation", async () => {
+    const secrets = memorySecrets();
+    const blockingSecrets = {
+      ...secrets.service,
+      set: () => Effect.never,
+    } as unknown as ServerSecretStore.ServerSecretStore["Service"];
+    const provider = new ApiKeyMcpFixtureProvider(blockingSecrets);
+    const flow = await provider.connect(["fixture.read"]);
+    const lifecycle = new AbortController();
+    const commit = new AbortController();
+
+    const connecting = provider
+      .connect(
+        ["fixture.read"],
+        {
+          signal: lifecycle.signal,
+          beginCommit: async () => commit.signal,
+        },
+        { kind: "api_key", flowId: flow.flowId, value: "fixture-key" },
+      )
+      .then(
+        () => "resolved" as const,
+        () => "rejected" as const,
+      );
+    commit.abort();
+
+    await expect(connecting).resolves.toBe("rejected");
     expect(secrets.values.has(API_KEY_FIXTURE_SECRET_NAME)).toBe(false);
   });
 });

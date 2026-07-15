@@ -12,7 +12,6 @@
       "maxExclusive": "0.3.0"
     }
   },
-  "provider": "skill-only-fixture-provider",
   "capabilities": [
     {
       "id": "workflow.use",

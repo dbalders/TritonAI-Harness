@@ -2,73 +2,83 @@
 import type * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as NodePath from "node:path";
 
-import type { IntegrationPackage } from "./IntegrationRegistry.ts";
-import { ApiKeyMcpFixtureProvider, SkillOnlyFixtureProvider } from "./FixtureProviders.ts";
-import { MicrosoftGraphProvider } from "./MicrosoftGraphProvider.ts";
+import type { IntegrationPackage, IntegrationProviderTool } from "./IntegrationRegistry.ts";
+import { API_KEY_FIXTURE_TOOLS, ApiKeyMcpFixtureProvider } from "./FixtureProviders.ts";
+import { scopeIntegrationSecretStore } from "./IntegrationSecretStore.ts";
 import apiKeyManifest from "./packages/authenticated-mcp-fixture/.tritonai-plugin/plugin.json" with { type: "json" };
-import {
-  apiKeyMcpFixtureInterface,
-  apiKeyMcpFixtureSkill,
-} from "./packages/authenticated-mcp-fixture/skillAssets.ts";
-import microsoftManifest from "./packages/microsoft-365/.tritonai-plugin/plugin.json" with { type: "json" };
-import {
-  calendarInterface,
-  calendarSkill,
-  mailInterface,
-  mailSkill,
-} from "./packages/microsoft-365/skillAssets.ts";
 import skillOnlyManifest from "./packages/skill-only-fixture/.tritonai-plugin/plugin.json" with { type: "json" };
-import {
-  skillOnlyFixtureInterface,
-  skillOnlyFixtureSkill,
-} from "./packages/skill-only-fixture/skillAssets.ts";
 import { validateIntegrationManifest } from "./manifest.ts";
 
 function packageRoot(id: string): string {
   return NodePath.join(import.meta.dirname, "packages", id);
 }
 
+type BuiltinDescriptor = {
+  readonly manifest: ReturnType<typeof validateIntegrationManifest>;
+  readonly sourceRoot: string;
+  readonly provider: {
+    readonly tools: ReadonlyArray<IntegrationProviderTool>;
+    readonly legacySecretNames?: Readonly<Record<string, string>>;
+    readonly create: (
+      scopedSecrets: ServerSecretStore.ServerSecretStore["Service"],
+    ) => NonNullable<IntegrationPackage["provider"]>;
+  } | null;
+};
+
+const skillOnlyIntegration = validateIntegrationManifest(skillOnlyManifest);
+const apiKeyIntegration = validateIntegrationManifest(apiKeyManifest);
+
+const SKILL_ONLY_DESCRIPTOR: BuiltinDescriptor = {
+  manifest: skillOnlyIntegration,
+  sourceRoot: packageRoot("skill-only-fixture"),
+  provider: null,
+};
+
+const API_KEY_DESCRIPTOR: BuiltinDescriptor = {
+  manifest: apiKeyIntegration,
+  sourceRoot: packageRoot("authenticated-mcp-fixture"),
+  provider: {
+    tools: API_KEY_FIXTURE_TOOLS,
+    create: (scopedSecrets) => new ApiKeyMcpFixtureProvider(scopedSecrets),
+  },
+};
+
+function builtinDescriptors(includeFixtures: boolean): ReadonlyArray<BuiltinDescriptor> {
+  return includeFixtures ? [SKILL_ONLY_DESCRIPTOR, API_KEY_DESCRIPTOR] : [];
+}
+
 export function makeBuiltinIntegrations(
   secrets: ServerSecretStore.ServerSecretStore["Service"],
   options: { readonly includeFixtures?: boolean } = {},
 ): ReadonlyArray<IntegrationPackage> {
-  const productionIntegrations: ReadonlyArray<IntegrationPackage> = [
-    {
-      manifest: validateIntegrationManifest(microsoftManifest),
-      provider: new MicrosoftGraphProvider(secrets),
-      sourceRoot: packageRoot("microsoft-365"),
-      bundledFiles: {
-        ".tritonai-plugin/plugin.json": `${JSON.stringify(microsoftManifest, null, 2)}\n`,
-        "skills/microsoft-365-mail/SKILL.md": mailSkill,
-        "skills/microsoft-365-mail/agents/openai.yaml": mailInterface,
-        "skills/microsoft-365-calendar/SKILL.md": calendarSkill,
-        "skills/microsoft-365-calendar/agents/openai.yaml": calendarInterface,
-      },
-    },
-  ];
-  if (!options.includeFixtures) return productionIntegrations;
+  const descriptors = builtinDescriptors(options.includeFixtures === true);
+  const legacySecretOwners = new Map<string, string>();
+  for (const { manifest, provider } of descriptors) {
+    for (const [suffix, legacyName] of Object.entries(provider?.legacySecretNames ?? {})) {
+      const owner = `${manifest.id}:${suffix}`;
+      const previousOwner = legacySecretOwners.get(legacyName);
+      if (previousOwner) {
+        throw new Error(
+          `Built-in integration legacy secret ${legacyName} is claimed by ${previousOwner} and ${owner}.`,
+        );
+      }
+      legacySecretOwners.set(legacyName, owner);
+    }
+  }
 
-  return [
-    ...productionIntegrations,
-    {
-      manifest: validateIntegrationManifest(skillOnlyManifest),
-      provider: new SkillOnlyFixtureProvider(),
-      sourceRoot: packageRoot("skill-only-fixture"),
-      bundledFiles: {
-        ".tritonai-plugin/plugin.json": `${JSON.stringify(skillOnlyManifest, null, 2)}\n`,
-        "skills/skill-only-fixture/SKILL.md": skillOnlyFixtureSkill,
-        "skills/skill-only-fixture/agents/openai.yaml": skillOnlyFixtureInterface,
-      },
-    },
-    {
-      manifest: validateIntegrationManifest(apiKeyManifest),
-      provider: new ApiKeyMcpFixtureProvider(secrets),
-      sourceRoot: packageRoot("authenticated-mcp-fixture"),
-      bundledFiles: {
-        ".tritonai-plugin/plugin.json": `${JSON.stringify(apiKeyManifest, null, 2)}\n`,
-        "skills/authenticated-mcp-fixture/SKILL.md": apiKeyMcpFixtureSkill,
-        "skills/authenticated-mcp-fixture/agents/openai.yaml": apiKeyMcpFixtureInterface,
-      },
-    },
-  ];
+  return descriptors.map(({ manifest, sourceRoot, provider }) => ({
+    manifest,
+    sourceRoot,
+    ...(provider
+      ? {
+          provider: provider.create(
+            scopeIntegrationSecretStore(
+              secrets,
+              manifest.id,
+              provider.legacySecretNames ? { legacyNames: provider.legacySecretNames } : undefined,
+            ),
+          ),
+        }
+      : {}),
+  }));
 }

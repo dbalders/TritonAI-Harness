@@ -125,9 +125,9 @@ class UnexpectedIntegrationRpcError extends Schema.TaggedErrorClass<UnexpectedIn
   { cause: Schema.Defect() },
 ) {}
 
-function integrationRpcEffect<A>(operation: () => Promise<A>) {
+function integrationRpcEffect<A>(operation: (signal: AbortSignal) => Promise<A>) {
   return Effect.tryPromise({
-    try: operation,
+    try: (signal) => operation(signal),
     catch: (error) =>
       isIntegrationOperationError(error)
         ? error
@@ -347,10 +347,10 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.integrationsList, AuthOrchestrationReadScope],
   [WS_METHODS.integrationsInstall, AuthOrchestrationOperateScope],
   [WS_METHODS.integrationsSetEnabled, AuthOrchestrationOperateScope],
+  [WS_METHODS.integrationsSetSkillEnabled, AuthOrchestrationOperateScope],
   [WS_METHODS.integrationsConnect, AuthOrchestrationOperateScope],
   [WS_METHODS.integrationsPoll, AuthOrchestrationOperateScope],
   [WS_METHODS.integrationsDisconnect, AuthOrchestrationOperateScope],
-  [WS_METHODS.integrationsRemove, AuthOrchestrationOperateScope],
   [WS_METHODS.cloudGetRelayClientStatus, AuthRelayWriteScope],
   [WS_METHODS.cloudInstallRelayClient, AuthRelayWriteScope],
   [WS_METHODS.sourceControlLookupRepository, AuthOrchestrationReadScope],
@@ -1424,30 +1424,36 @@ const makeWsRpcLayer = (
             ),
             { "rpc.aggregate": "integrations" },
           ),
-        [WS_METHODS.integrationsConnect]: ({ id, capabilities }) =>
+        [WS_METHODS.integrationsSetSkillEnabled]: ({ id, skill, enabled }) =>
+          observeRpcEffect(
+            WS_METHODS.integrationsSetSkillEnabled,
+            integrationRpcEffect(() =>
+              Integrations.getIntegrationRegistry().setSkillEnabled(id, skill, enabled),
+            ),
+            { "rpc.aggregate": "integrations" },
+          ),
+        [WS_METHODS.integrationsConnect]: ({ id, submission }) =>
           observeRpcEffect(
             WS_METHODS.integrationsConnect,
-            integrationRpcEffect(() =>
-              Integrations.getIntegrationRegistry().connect(id, capabilities),
+            integrationRpcEffect((signal) =>
+              Integrations.getIntegrationRegistry().connect(id, submission, { signal }),
             ),
             { "rpc.aggregate": "integrations" },
           ),
         [WS_METHODS.integrationsPoll]: ({ id, flowId }) =>
           observeRpcEffect(
             WS_METHODS.integrationsPoll,
-            integrationRpcEffect(() => Integrations.getIntegrationRegistry().poll(id, flowId)),
+            integrationRpcEffect((signal) =>
+              Integrations.getIntegrationRegistry().poll(id, flowId, { signal }),
+            ),
             { "rpc.aggregate": "integrations" },
           ),
         [WS_METHODS.integrationsDisconnect]: ({ id }) =>
           observeRpcEffect(
             WS_METHODS.integrationsDisconnect,
-            integrationRpcEffect(() => Integrations.getIntegrationRegistry().disconnect(id)),
-            { "rpc.aggregate": "integrations" },
-          ),
-        [WS_METHODS.integrationsRemove]: ({ id }) =>
-          observeRpcEffect(
-            WS_METHODS.integrationsRemove,
-            integrationRpcEffect(() => Integrations.getIntegrationRegistry().remove(id)),
+            integrationRpcEffect((signal) =>
+              Integrations.getIntegrationRegistry().disconnect(id, { signal }),
+            ),
             { "rpc.aggregate": "integrations" },
           ),
         [WS_METHODS.cloudGetRelayClientStatus]: (_input) =>

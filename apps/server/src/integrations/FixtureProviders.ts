@@ -1,52 +1,26 @@
 // @effect-diagnostics globalDate:off cryptoRandomUUID:off
-import type { IntegrationConnectResult } from "@t3tools/contracts";
+import type { IntegrationConnectionSubmission, IntegrationConnectResult } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
 import type * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import type {
+  IntegrationInvocationContext,
+  IntegrationLifecycleContext,
   IntegrationProvider,
   IntegrationProviderStatus,
   IntegrationProviderTool,
 } from "./IntegrationRegistry.ts";
+import { EmptyIntegrationToolInput } from "./IntegrationTool.ts";
 
-export const API_KEY_FIXTURE_SECRET_NAME = "integration-fixture-api-key";
-const API_KEY_FIXTURE_VALUE = new TextEncoder().encode("fixture-server-side-api-key");
-
-export class SkillOnlyFixtureProvider implements IntegrationProvider {
-  readonly id = "skill-only-fixture-provider";
-  readonly tools = [];
-
-  async status(): Promise<IntegrationProviderStatus> {
-    return {
-      state: "connected",
-      accountLabel: "Local instructions only",
-      grantedCapabilities: ["workflow.use"],
-      message: "No credentials or tools required.",
-    };
-  }
-
-  connect(): Promise<IntegrationConnectResult> {
-    return Promise.reject(new Error("The skill-only fixture does not require a connection."));
-  }
-
-  poll(): ReturnType<IntegrationProvider["poll"]> {
-    return Promise.reject(new Error("The skill-only fixture has no connection flow."));
-  }
-
-  async disconnect(): Promise<void> {}
-
-  invoke(): Promise<unknown> {
-    return Promise.reject(new Error("The skill-only fixture intentionally exposes no tools."));
-  }
-}
+export const API_KEY_FIXTURE_SECRET_NAME = "api-key";
 
 export const API_KEY_FIXTURE_TOOLS = [
   {
     name: "fixture.api-key.read",
     description:
       "Read deterministic fixture data through a secret-backed, MCP-compatible provider tool.",
-    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    input: EmptyIntegrationToolInput,
     readOnly: true,
     openWorld: false,
   },
@@ -62,58 +36,79 @@ export class ApiKeyMcpFixtureProvider implements IntegrationProvider {
     this.#secrets = secrets;
   }
 
-  async #hasCredential(): Promise<boolean> {
-    return Option.isSome(await Effect.runPromise(this.#secrets.get(API_KEY_FIXTURE_SECRET_NAME)));
+  async #hasCredential(signal?: AbortSignal): Promise<boolean> {
+    return Option.isSome(
+      await Effect.runPromise(this.#secrets.get(API_KEY_FIXTURE_SECRET_NAME), { signal }),
+    );
   }
 
-  async status(): Promise<IntegrationProviderStatus> {
-    const connected = await this.#hasCredential();
+  async status(context?: IntegrationInvocationContext): Promise<IntegrationProviderStatus> {
+    const connected = await this.#hasCredential(context?.signal);
     return {
       state: connected ? "connected" : this.#pending.size ? "connecting" : "not_connected",
       accountLabel: connected ? "Sanitized fixture account" : null,
       grantedCapabilities: connected ? ["fixture.read"] : [],
       message: connected
-        ? "Fake API key is stored server-side; the value is never exposed."
-        : "Test-only provider for the API-key/MCP plugin shape.",
+        ? "The submitted API key is stored server-side; the value is never exposed."
+        : "Test-only provider for the generic API-key plugin shape.",
     };
   }
 
-  async connect(capabilities: ReadonlyArray<string>): Promise<IntegrationConnectResult> {
+  async connect(
+    capabilities: ReadonlyArray<string>,
+    context?: IntegrationLifecycleContext,
+    submission?: IntegrationConnectionSubmission,
+  ): Promise<IntegrationConnectResult> {
+    if (context?.signal.aborted) throw new Error("Fixture connection was cancelled.");
     if (!capabilities.includes("fixture.read")) {
       throw new Error("The fixture read capability is required.");
     }
-    const flowId = crypto.randomUUID();
-    this.#pending.clear();
-    this.#pending.add(flowId);
+    if (!submission) {
+      const flowId = crypto.randomUUID();
+      this.#pending.clear();
+      this.#pending.add(flowId);
+      return {
+        kind: "api_key",
+        flowId,
+        label: "Fixture API key",
+        placeholder: "fixture_…",
+        message: "Enter any test-only API key. It will remain in the server secret store.",
+      };
+    }
+    if (!this.#pending.has(submission.flowId)) {
+      throw new Error("Fixture connection flow was not found.");
+    }
+    const commitSignal = await context?.beginCommit();
+    await Effect.runPromise(
+      this.#secrets.set(API_KEY_FIXTURE_SECRET_NAME, new TextEncoder().encode(submission.value)),
+      { signal: commitSignal ?? context?.signal },
+    );
+    this.#pending.delete(submission.flowId);
     return {
-      flowId,
-      verificationUri: "https://fixture.invalid/api-key",
-      verificationUriComplete: null,
-      userCode: "FAKE-KEY",
-      message: "Harness is simulating server-side API-key configuration for this fixture.",
-      expiresAt: new Date(Date.now() + 60_000).toISOString(),
-      intervalSeconds: 1,
+      kind: "connected",
+      flowId: submission.flowId,
+      message: "API-key MCP fixture connected.",
     };
   }
 
-  async poll(flowId: string) {
-    if (!this.#pending.delete(flowId)) throw new Error("Fixture connection flow was not found.");
-    await Effect.runPromise(this.#secrets.set(API_KEY_FIXTURE_SECRET_NAME, API_KEY_FIXTURE_VALUE));
-    return {
-      state: "connected" as const,
-      retryAfterSeconds: null,
-      message: "API-key/MCP fixture connected.",
-    };
-  }
-
-  async disconnect(): Promise<void> {
+  async disconnect(context?: IntegrationLifecycleContext): Promise<void> {
+    if (context?.signal.aborted) throw new Error("Fixture disconnection was cancelled.");
+    const commitSignal = await context?.beginCommit();
+    await Effect.runPromise(this.#secrets.remove(API_KEY_FIXTURE_SECRET_NAME), {
+      signal: commitSignal ?? context?.signal,
+    });
     this.#pending.clear();
-    await Effect.runPromise(this.#secrets.remove(API_KEY_FIXTURE_SECRET_NAME));
   }
 
-  async invoke(toolName: string, _input: unknown): Promise<unknown> {
+  async invoke(
+    toolName: string,
+    _input: unknown,
+    context?: IntegrationInvocationContext,
+  ): Promise<unknown> {
     if (toolName !== "fixture.api-key.read") throw new Error("Unsupported fixture tool.");
-    if (!(await this.#hasCredential())) throw new Error("The API-key fixture is not connected.");
+    if (!(await this.#hasCredential(context?.signal))) {
+      throw new Error("The API-key fixture is not connected.");
+    }
     return {
       source: "api-key-mcp-fixture",
       authenticated: true,

@@ -53,8 +53,8 @@ const decodeCodexSettings = Schema.decodeSync(CodexSettings);
 
 it("flattens plugin component names into provider-safe function names", () => {
   NodeAssert.equal(
-    codexDynamicIntegrationToolName("microsoft365.mail.search"),
-    "microsoft365_mail_search",
+    codexDynamicIntegrationToolName("fixture.records.search"),
+    "fixture_records_search",
   );
 });
 

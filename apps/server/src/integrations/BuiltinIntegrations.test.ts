@@ -11,7 +11,7 @@ import { makeBuiltinIntegrations } from "./builtins.ts";
 import { RegistryRuntime } from "./IntegrationRegistry.ts";
 import { CodexIntegrationSkillMaterializer } from "./IntegrationSkillMaterializer.ts";
 
-function memorySecrets() {
+function memorySecretState() {
   const values = new Map<string, Uint8Array>();
   const service = {
     get: (name: string) =>
@@ -30,20 +30,43 @@ function memorySecrets() {
         values.delete(name);
       }),
   } as unknown as ServerSecretStore.ServerSecretStore["Service"];
-  return service;
+  return { service, values };
+}
+
+function memorySecrets() {
+  return memorySecretState().service;
 }
 
 describe("built-in integration packages", () => {
   it("keeps proof fixtures out of the default catalog", () => {
-    expect(makeBuiltinIntegrations(memorySecrets()).map(({ manifest }) => manifest.id)).toEqual([
-      "microsoft-365",
-    ]);
+    expect(makeBuiltinIntegrations(memorySecrets())).toEqual([]);
   });
 
-  it("runs Graph, skill-only, and API-key/MCP package shapes through one registry", async () => {
+  it("injects package-scoped credentials into provider factories", async () => {
+    const secrets = memorySecretState();
+    const fixture = makeBuiltinIntegrations(secrets.service, { includeFixtures: true }).find(
+      ({ manifest }) => manifest.id === "api-key-mcp-fixture",
+    );
+    if (!fixture?.provider?.connect) {
+      throw new Error("API-key fixture provider was not assembled.");
+    }
+
+    const flow = await fixture.provider.connect(["fixture.read"]);
+    await fixture.provider.connect(["fixture.read"], undefined, {
+      kind: "api_key",
+      flowId: flow.flowId,
+      value: "fixture-submitted-key",
+    });
+
+    expect(secrets.values.has("api-key")).toBe(false);
+    expect(secrets.values.has("integration-api-key-mcp-fixture--api-key")).toBe(true);
+  });
+
+  it("runs skill-only and authenticated tool package shapes through one registry", async () => {
     const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-builtins-"));
     const codexHome = NodePath.join(root, "codex");
     const builtins = makeBuiltinIntegrations(memorySecrets(), { includeFixtures: true });
+    expect(builtins.every(({ bundledFiles }) => bundledFiles === undefined)).toBe(true);
     const registry = new RegistryRuntime(
       NodePath.join(root, "runtime"),
       builtins,
@@ -51,51 +74,36 @@ describe("built-in integration packages", () => {
     );
 
     try {
-      const graphPackage = builtins[0]!;
-      const mailSkillPath = "skills/microsoft-365-mail/SKILL.md";
-      const calendarSkillPath = "skills/microsoft-365-calendar/SKILL.md";
-      const mailSkill = await NodeFSP.readFile(
-        NodePath.join(graphPackage.sourceRoot!, mailSkillPath),
-        "utf8",
-      );
-      const calendarSkill = await NodeFSP.readFile(
-        NodePath.join(graphPackage.sourceRoot!, calendarSkillPath),
-        "utf8",
-      );
-      expect(mailSkill).toBe(graphPackage.bundledFiles![mailSkillPath]);
-      expect(calendarSkill).toBe(graphPackage.bundledFiles![calendarSkillPath]);
-      expect(mailSkill).toContain("microsoft365_mail_search");
-      expect(mailSkill).not.toContain("microsoft365.mail.search");
-      expect(calendarSkill).toContain("microsoft365_calendar_events");
-      expect(calendarSkill).not.toContain("microsoft365.calendar.events");
-
       const discovered = await registry.list();
       expect(discovered.integrations.map(({ id }) => id)).toEqual([
-        "microsoft-365",
         "skill-only-fixture",
         "api-key-mcp-fixture",
       ]);
-
-      const graphInstalled = await registry.install("microsoft-365");
-      expect(graphInstalled.integrations.find(({ id }) => id === "microsoft-365")).toMatchObject({
-        installed: true,
-        connectionState: "not_connected",
-      });
 
       const skillOnlyInstalled = await registry.install("skill-only-fixture");
       expect(
         skillOnlyInstalled.integrations.find(({ id }) => id === "skill-only-fixture"),
       ).toMatchObject({
         installed: true,
+        requiresConnection: false,
         connectionState: "connected",
         tools: [],
         skills: [{ name: "skill-only-fixture", available: true }],
       });
+      await expect(registry.connect("skill-only-fixture")).rejects.toMatchObject({
+        code: "operation_failed",
+        message: "Skill-only Fixture does not require a connection.",
+      });
 
       await registry.install("api-key-mcp-fixture");
-      const flow = await registry.connect("api-key-mcp-fixture", ["fixture.read"]);
-      const connected = await registry.poll("api-key-mcp-fixture", flow.flowId);
-      expect(connected.integration).toMatchObject({
+      const flow = await registry.connect("api-key-mcp-fixture");
+      const connected = await registry.connect("api-key-mcp-fixture", {
+        kind: "api_key",
+        flowId: flow.flowId,
+        value: "fixture-submitted-key",
+      });
+      expect(connected.kind).toBe("connected");
+      expect((await registry.list()).integrations[1]).toMatchObject({
         connectionState: "connected",
         tools: [{ name: "fixture.api-key.read", available: true }],
         skills: [{ name: "authenticated-mcp-fixture", available: true }],
@@ -130,6 +138,17 @@ describe("built-in integration packages", () => {
       ).toContain("API Key MCP Fixture");
       await registry.releaseSkillRuntime(runtime!.root);
       await expect(NodeFSP.access(runtime!.root)).rejects.toMatchObject({ code: "ENOENT" });
+
+      const skillOnlyDisabled = await registry.setEnabled("skill-only-fixture", false);
+      expect(
+        skillOnlyDisabled.integrations.find(({ id }) => id === "skill-only-fixture"),
+      ).toMatchObject({ enabled: false, skills: [{ available: false }] });
+      await registry.setEnabled("skill-only-fixture", true);
+      expect(registry.isSkillAvailableSync("skill-only-fixture")).toBe(true);
+      const skillOnlyRemoved = await registry.remove("skill-only-fixture");
+      expect(
+        skillOnlyRemoved.integrations.find(({ id }) => id === "skill-only-fixture")?.installed,
+      ).toBe(false);
     } finally {
       await NodeFSP.rm(root, { recursive: true, force: true });
     }

@@ -15,31 +15,31 @@ it("publishes stable installed paths for temporary integration skill probes", ()
     stabilizeIntegrationSkillPaths(
       [
         {
-          name: "microsoft-365-mail",
-          path: "/tmp/runtime-skills/session/microsoft-365-mail/SKILL.md",
+          name: "fixture-records",
+          path: "/tmp/runtime-skills/session/fixture-records/SKILL.md",
           enabled: true,
         },
         { name: "ordinary-skill", path: "/home/codex/skills/ordinary/SKILL.md", enabled: true },
       ],
       [
         {
-          name: "microsoft-365-mail",
-          description: "Read mail.",
-          path: "/tmp/runtime-skills/session/microsoft-365-mail/SKILL.md",
+          name: "fixture-records",
+          description: "Read fixture records.",
+          path: "/tmp/runtime-skills/session/fixture-records/SKILL.md",
         },
       ],
       [
         {
-          name: "microsoft-365-mail",
-          description: "Read mail.",
-          path: "/state/integrations/microsoft-365/skills/microsoft-365-mail/SKILL.md",
+          name: "fixture-records",
+          description: "Read fixture records.",
+          path: "/state/integrations/fixture-package/skills/fixture-records/SKILL.md",
         },
       ],
     ),
     [
       {
-        name: "microsoft-365-mail",
-        path: "/state/integrations/microsoft-365/skills/microsoft-365-mail/SKILL.md",
+        name: "fixture-records",
+        path: "/state/integrations/fixture-package/skills/fixture-records/SKILL.md",
         enabled: true,
       },
       { name: "ordinary-skill", path: "/home/codex/skills/ordinary/SKILL.md", enabled: true },

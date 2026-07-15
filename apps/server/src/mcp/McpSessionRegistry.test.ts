@@ -48,7 +48,7 @@ it.effect("stores only a token hash, resolves the bearer token, and revokes by t
 
     const resolved = yield* registry.resolve(token);
     expect(resolved?.threadId).toBe(threadId);
-    expect(resolved?.capabilities).toEqual(new Set(["preview", "integrations.read"]));
+    expect(resolved?.capabilities).toEqual(new Set(["preview", "integrations.invoke"]));
 
     yield* registry.revokeThread(threadId);
     expect(yield* registry.resolve(token)).toBeUndefined();
@@ -76,7 +76,7 @@ it.effect("builds MCP endpoints from the bound server host", () =>
       expect(issued.config.endpoint).toBe(expectedEndpoint);
       const token = issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
       expect((yield* registry.resolve(token))?.capabilities).toEqual(
-        new Set(["preview", "integrations.read"]),
+        new Set(["preview", "integrations.invoke"]),
       );
     }
   }),

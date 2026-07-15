@@ -1,6 +1,0 @@
-interface:
-  display_name: "Microsoft 365 Mail"
-  short_description: "Read and triage Microsoft 365 mail"
-  default_prompt: "Use $microsoft-365-mail to summarize my latest Microsoft 365 email."
-policy:
-  allow_implicit_invocation: true

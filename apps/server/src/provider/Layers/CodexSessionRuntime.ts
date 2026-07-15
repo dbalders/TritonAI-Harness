@@ -134,6 +134,7 @@ export interface CodexDynamicToolDefinition {
 export interface CodexDynamicToolInvocation {
   readonly name: string;
   readonly arguments: unknown;
+  readonly signal: AbortSignal;
 }
 
 export interface CodexPluginSkillDefinition {
@@ -1396,10 +1397,11 @@ export const makeCodexSessionRuntime = (
         );
       }
       return Effect.tryPromise({
-        try: () =>
+        try: (signal) =>
           options.invokeDynamicTool!({
             name: definition.name,
             arguments: payload.arguments,
+            signal,
           }),
         catch: () => undefined,
       }).pipe(

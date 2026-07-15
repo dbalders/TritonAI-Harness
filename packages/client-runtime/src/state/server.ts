@@ -260,6 +260,12 @@ export function createServerEnvironmentAtoms<R, E>(
       scheduler: configScheduler,
       concurrency: configConcurrency,
     }),
+    setIntegrationSkillEnabled: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:integrations:set-skill-enabled",
+      tag: WS_METHODS.integrationsSetSkillEnabled,
+      scheduler: configScheduler,
+      concurrency: configConcurrency,
+    }),
     connectIntegration: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:integrations:connect",
       tag: WS_METHODS.integrationsConnect,
@@ -271,12 +277,6 @@ export function createServerEnvironmentAtoms<R, E>(
     disconnectIntegration: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:integrations:disconnect",
       tag: WS_METHODS.integrationsDisconnect,
-      scheduler: configScheduler,
-      concurrency: configConcurrency,
-    }),
-    removeIntegration: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:integrations:remove",
-      tag: WS_METHODS.integrationsRemove,
       scheduler: configScheduler,
       concurrency: configConcurrency,
     }),

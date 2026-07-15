@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off cryptoRandomUUID:off
 import { CodexSettings, ProviderInstanceId, type ServerSettings } from "@t3tools/contracts";
+import { fromYaml } from "@t3tools/shared/schemaYaml";
 import * as Schema from "effect/Schema";
 import type * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
@@ -12,6 +13,7 @@ const SWAP_UUID = "[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 const STAGING_DIRECTORY = new RegExp(`^\\.(.+)\\.(${SWAP_UUID})\\.staging$`, "iu");
 const BACKUP_DIRECTORY = new RegExp(`^(.+)\\.(${SWAP_UUID})\\.backup$`, "iu");
 const DEFAULT_STALE_SWAP_AGE_MS = 60 * 60 * 1_000;
+const MAX_CODEX_SKILL_DESCRIPTION_LENGTH = 1_024;
 const activeSwapDirectories = new Set<string>();
 
 export interface IntegrationSkillSync {
@@ -22,6 +24,7 @@ export interface IntegrationSkillSync {
 
 export interface IntegrationSkillMaterializer {
   sync(input: IntegrationSkillSync): Promise<void>;
+  reconcileCatalog(integrationIds: ReadonlySet<string>): Promise<void>;
 }
 
 interface SkillMarker {
@@ -30,7 +33,21 @@ interface SkillMarker {
   readonly skill?: string;
 }
 
+function decodeSkillMarker(value: unknown): SkillMarker | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as SkillMarker)
+    : null;
+}
+
 const decodeCodexSettings = Schema.decodeUnknownSync(CodexSettings);
+const decodeIntegrationSkillFrontmatter = Schema.decodeUnknownSync(
+  fromYaml(
+    Schema.Struct({
+      name: Schema.String,
+      description: Schema.String,
+    }),
+  ),
+);
 const defaultCodexInstanceId = ProviderInstanceId.make("codex");
 
 export function resolveIntegrationCodexHomes(
@@ -63,23 +80,78 @@ export function resolveIntegrationCodexHomes(
 
 export const noIntegrationSkills: IntegrationSkillMaterializer = {
   sync: async () => undefined,
+  reconcileCatalog: async () => undefined,
 };
 
 async function exists(path: string): Promise<boolean> {
   try {
-    await NodeFSP.access(path);
+    await NodeFSP.lstat(path);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
   }
 }
 
-function declaredSkillName(content: string): string | null {
+async function ensureRealSkillsRoot(path: string, create: boolean): Promise<boolean> {
+  let entry: NodeFS.Stats;
+  try {
+    entry = await NodeFSP.lstat(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    if (!create) return false;
+    await NodeFSP.mkdir(path, { recursive: true, mode: 0o700 });
+    entry = await NodeFSP.lstat(path);
+  }
+  if (entry.isSymbolicLink() || !entry.isDirectory()) {
+    throw new Error("The configured Codex skills root must be a real directory.");
+  }
+  return true;
+}
+
+async function directoryContentsMatch(source: string, target: string): Promise<boolean> {
+  const comparableEntries = (entries: ReadonlyArray<NodeFS.Dirent>) =>
+    entries
+      .filter(({ name }) => name !== MARKER)
+      .toSorted((left, right) => left.name.localeCompare(right.name));
+  const [sourceEntries, targetEntries] = await Promise.all([
+    NodeFSP.readdir(source, { withFileTypes: true }).then(comparableEntries),
+    NodeFSP.readdir(target, { withFileTypes: true }).then(comparableEntries),
+  ]);
+  if (sourceEntries.length !== targetEntries.length) return false;
+  for (let index = 0; index < sourceEntries.length; index += 1) {
+    const sourceEntry = sourceEntries[index]!;
+    const targetEntry = targetEntries[index]!;
+    if (sourceEntry.name !== targetEntry.name) return false;
+    const sourcePath = NodePath.join(source, sourceEntry.name);
+    const targetPath = NodePath.join(target, targetEntry.name);
+    if (sourceEntry.isDirectory() && targetEntry.isDirectory()) {
+      if (!(await directoryContentsMatch(sourcePath, targetPath))) return false;
+      continue;
+    }
+    if (!sourceEntry.isFile() || !targetEntry.isFile()) return false;
+    const [sourceContent, targetContent] = await Promise.all([
+      NodeFSP.readFile(sourcePath),
+      NodeFSP.readFile(targetPath),
+    ]);
+    if (!sourceContent.equals(targetContent)) return false;
+  }
+  return true;
+}
+
+export function declaredIntegrationSkillName(content: string): string | null {
   const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/u.exec(content)?.[1];
-  const value = frontmatter ? /^name:\s*(.+?)\s*$/mu.exec(frontmatter)?.[1]?.trim() : undefined;
-  if (!value) return null;
-  const quote = value[0];
-  return (quote === '"' || quote === "'") && value.at(-1) === quote ? value.slice(1, -1) : value;
+  if (!frontmatter) return null;
+  try {
+    const parsed = decodeIntegrationSkillFrontmatter(frontmatter);
+    const name = parsed.name.trim();
+    const description = parsed.description.trim();
+    return name && description && description.length <= MAX_CODEX_SKILL_DESCRIPTION_LENGTH
+      ? name
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 function transientSwapSkill(name: string): string | null {
@@ -112,7 +184,9 @@ export class CodexIntegrationSkillMaterializer implements IntegrationSkillMateri
 
   sync(input: IntegrationSkillSync): Promise<void> {
     return this.#serialize(async () => {
-      for (const home of this.#codexHomes) await this.#syncHome(home, input);
+      for (const home of this.#codexHomes) {
+        await this.#syncHome(home, input);
+      }
     });
   }
 
@@ -120,31 +194,41 @@ export class CodexIntegrationSkillMaterializer implements IntegrationSkillMateri
     return this.#serialize(async () => {
       const next = [...new Set(codexHomes.map((home) => NodePath.resolve(home)))];
       const removed = this.#codexHomes.filter((home) => !next.includes(home));
-      for (const home of removed) await this.#removeOwnedSkills(home);
+      for (const home of removed) {
+        await this.#removeOwnedSkills(home, () => true);
+      }
       this.#codexHomes = next;
     });
   }
 
-  async #removeOwnedSkills(home: string): Promise<void> {
+  reconcileCatalog(integrationIds: ReadonlySet<string>): Promise<void> {
+    return this.#serialize(async () => {
+      for (const home of this.#codexHomes) {
+        await this.#removeOwnedSkills(home, (marker) => !integrationIds.has(marker.integrationId!));
+      }
+    });
+  }
+
+  async #removeOwnedSkills(
+    home: string,
+    shouldRemove: (marker: Required<SkillMarker>) => boolean,
+  ): Promise<void> {
     const skillsRoot = NodePath.join(home, "skills");
-    let entries: ReadonlyArray<NodeFS.Dirent>;
-    try {
-      entries = await NodeFSP.readdir(skillsRoot, { withFileTypes: true });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-      throw error;
-    }
+    if (!(await ensureRealSkillsRoot(skillsRoot, false))) return;
+    const entries = await NodeFSP.readdir(skillsRoot, { withFileTypes: true });
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
       const target = NodePath.join(skillsRoot, entry.name);
       try {
-        const marker = JSON.parse(
-          await NodeFSP.readFile(NodePath.join(target, MARKER), "utf8"),
-        ) as SkillMarker & { readonly version?: number };
+        const marker = decodeSkillMarker(
+          JSON.parse(await NodeFSP.readFile(NodePath.join(target, MARKER), "utf8")) as unknown,
+        );
         if (
-          marker.version === 1 &&
+          marker?.version === 1 &&
           typeof marker.integrationId === "string" &&
-          typeof marker.skill === "string"
+          typeof marker.skill === "string" &&
+          marker.skill === entry.name &&
+          shouldRemove(marker as Required<SkillMarker>)
         ) {
           await NodeFSP.rm(target, { recursive: true, force: true });
         }
@@ -161,9 +245,7 @@ export class CodexIntegrationSkillMaterializer implements IntegrationSkillMateri
     const expected = new Map(
       input.activeSkills.map((name) => [name, NodePath.join(skillsRoot, name)]),
     );
-    const skillsRootExists = await exists(skillsRoot);
-    if (!skillsRootExists && expected.size === 0) return;
-    if (!skillsRootExists) await NodeFSP.mkdir(skillsRoot, { recursive: true, mode: 0o700 });
+    if (!(await ensureRealSkillsRoot(skillsRoot, expected.size > 0))) return;
 
     for (const entry of await NodeFSP.readdir(skillsRoot, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
@@ -178,7 +260,9 @@ export class CodexIntegrationSkillMaterializer implements IntegrationSkillMateri
       const markerPath = NodePath.join(target, MARKER);
       let marker: SkillMarker | null = null;
       try {
-        marker = JSON.parse(await NodeFSP.readFile(markerPath, "utf8")) as SkillMarker;
+        marker = decodeSkillMarker(
+          JSON.parse(await NodeFSP.readFile(markerPath, "utf8")) as unknown,
+        );
       } catch {
         continue;
       }
@@ -186,6 +270,7 @@ export class CodexIntegrationSkillMaterializer implements IntegrationSkillMateri
         marker?.version === 1 &&
         marker?.integrationId === input.integrationId &&
         typeof marker.skill === "string" &&
+        marker.skill === entry.name &&
         !expected.has(marker.skill)
       ) {
         await NodeFSP.rm(target, { recursive: true, force: true });
@@ -200,10 +285,16 @@ export class CodexIntegrationSkillMaterializer implements IntegrationSkillMateri
         throw new Error(`Integration package is missing skills/${skill}/SKILL.md.`);
       }
       const sourceContent = await NodeFSP.readFile(sourceEntrypoint, "utf8");
-      if (declaredSkillName(sourceContent) !== skill) {
+      if (declaredIntegrationSkillName(sourceContent) !== skill) {
         throw new Error(`Integration skill ${skill} must declare matching SKILL.md frontmatter.`);
       }
       if (await exists(target)) {
+        const targetEntry = await NodeFSP.lstat(target);
+        if (targetEntry.isSymbolicLink() || !targetEntry.isDirectory()) {
+          throw new Error(
+            `Refusing to replace unmanaged Codex skill ${NodePath.basename(target)}.`,
+          );
+        }
         try {
           const marker = JSON.parse(
             await NodeFSP.readFile(NodePath.join(target, MARKER), "utf8"),
@@ -220,6 +311,7 @@ export class CodexIntegrationSkillMaterializer implements IntegrationSkillMateri
             `Refusing to replace unmanaged Codex skill ${NodePath.basename(target)}.`,
           );
         }
+        if (await directoryContentsMatch(source, target)) continue;
       }
       const staging = NodePath.join(
         skillsRoot,
@@ -260,11 +352,11 @@ export class CodexIntegrationSkillMaterializer implements IntegrationSkillMateri
   async #isStaleOwnedSwap(target: string, expectedSkill: string): Promise<boolean> {
     if (activeSwapDirectories.has(target)) return false;
     try {
-      const marker = JSON.parse(
-        await NodeFSP.readFile(NodePath.join(target, MARKER), "utf8"),
-      ) as SkillMarker;
+      const marker = decodeSkillMarker(
+        JSON.parse(await NodeFSP.readFile(NodePath.join(target, MARKER), "utf8")) as unknown,
+      );
       if (
-        marker.version !== 1 ||
+        marker?.version !== 1 ||
         typeof marker.integrationId !== "string" ||
         marker.skill !== expectedSkill
       ) {
@@ -272,7 +364,7 @@ export class CodexIntegrationSkillMaterializer implements IntegrationSkillMateri
       }
       const metadata = await NodeFSP.stat(target);
       const lastChangedAt = Math.max(metadata.mtimeMs, metadata.ctimeMs);
-      return this.#now() - lastChangedAt >= this.#staleSwapAgeMs;
+      return this.#staleSwapAgeMs === 0 || this.#now() - lastChangedAt >= this.#staleSwapAgeMs;
     } catch {
       return false;
     }

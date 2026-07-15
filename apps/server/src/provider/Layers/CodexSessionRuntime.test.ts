@@ -45,14 +45,14 @@ describe("CodexSessionRuntimeIdentifierGenerationError", () => {
 });
 
 describe("Codex resume cursor compatibility", () => {
-  const mailTool = {
-    name: "microsoft365_mail_search",
-    description: "Read mail.",
+  const recordsTool = {
+    name: "fixture_records_search",
+    description: "Read fixture records.",
     inputSchema: { type: "object" },
   } as const;
-  const calendarTool = {
-    name: "microsoft365_calendar_events",
-    description: "Read calendar events.",
+  const auditTool = {
+    name: "fixture_audit_recent",
+    description: "Read fixture audit events.",
     inputSchema: { type: "object" },
   } as const;
 
@@ -61,10 +61,10 @@ describe("Codex resume cursor compatibility", () => {
       readCompatibleResumeThreadId(
         {
           threadId: "provider-thread",
-          dynamicToolNames: [calendarTool.name, mailTool.name],
-          dynamicToolFingerprint: computeDynamicToolFingerprint([calendarTool, mailTool]),
+          dynamicToolNames: [auditTool.name, recordsTool.name],
+          dynamicToolFingerprint: computeDynamicToolFingerprint([auditTool, recordsTool]),
         },
-        [mailTool, calendarTool],
+        [recordsTool, auditTool],
       ),
       "provider-thread",
     );
@@ -72,10 +72,10 @@ describe("Codex resume cursor compatibility", () => {
       readCompatibleResumeThreadId(
         {
           threadId: "provider-thread",
-          dynamicToolNames: [mailTool.name],
-          dynamicToolFingerprint: computeDynamicToolFingerprint([mailTool]),
+          dynamicToolNames: [recordsTool.name],
+          dynamicToolFingerprint: computeDynamicToolFingerprint([recordsTool]),
         },
-        [mailTool, calendarTool],
+        [recordsTool, auditTool],
       ),
       undefined,
     );
@@ -83,15 +83,15 @@ describe("Codex resume cursor compatibility", () => {
       readCompatibleResumeThreadId(
         {
           threadId: "provider-thread",
-          dynamicToolNames: [mailTool.name],
-          dynamicToolFingerprint: computeDynamicToolFingerprint([mailTool]),
+          dynamicToolNames: [recordsTool.name],
+          dynamicToolFingerprint: computeDynamicToolFingerprint([recordsTool]),
         },
-        [{ ...mailTool, description: "Updated mail contract." }],
+        [{ ...recordsTool, description: "Updated fixture contract." }],
       ),
       undefined,
     );
     NodeAssert.equal(
-      readCompatibleResumeThreadId({ threadId: "legacy-thread" }, [mailTool]),
+      readCompatibleResumeThreadId({ threadId: "legacy-thread" }, [recordsTool]),
       undefined,
     );
     NodeAssert.equal(
@@ -242,17 +242,17 @@ describe("buildTurnStartParams", () => {
       buildTurnStartParams({
         threadId: "provider-thread-1",
         runtimeMode: "full-access",
-        prompt: "$microsoft-365-mail summarize my newest message",
+        prompt: "$fixture-records summarize the newest record",
         pluginSkills: [
           {
-            name: "microsoft-365-mail",
-            path: "/tmp/plugin-skills/microsoft-365-mail/SKILL.md",
-            root: "/tmp/plugin-skills/mail-root",
+            name: "fixture-records",
+            path: "/tmp/plugin-skills/fixture-records/SKILL.md",
+            root: "/tmp/plugin-skills/records-root",
           },
           {
-            name: "microsoft-365-calendar",
-            path: "/tmp/plugin-skills/microsoft-365-calendar/SKILL.md",
-            root: "/tmp/plugin-skills/calendar-root",
+            name: "fixture-audit",
+            path: "/tmp/plugin-skills/fixture-audit/SKILL.md",
+            root: "/tmp/plugin-skills/audit-root",
           },
         ],
       }),
@@ -261,12 +261,12 @@ describe("buildTurnStartParams", () => {
     NodeAssert.deepStrictEqual(params.input, [
       {
         type: "text",
-        text: "$microsoft-365-mail summarize my newest message",
+        text: "$fixture-records summarize the newest record",
       },
       {
         type: "skill",
-        name: "microsoft-365-mail",
-        path: "/tmp/plugin-skills/microsoft-365-mail/SKILL.md",
+        name: "fixture-records",
+        path: "/tmp/plugin-skills/fixture-records/SKILL.md",
       },
     ]);
   });
@@ -298,24 +298,24 @@ describe("buildTurnStartParams", () => {
 
 describe("integration plugin skill availability", () => {
   it("preserves independently rooted skills when another plugin is revoked", () => {
-    const available = new Set(["microsoft-365-mail"]);
-    const mail = {
-      name: "microsoft-365-mail",
-      path: "/tmp/plugin-skills/mail-root/microsoft-365-mail/SKILL.md",
-      root: "/tmp/plugin-skills/mail-root",
+    const available = new Set(["fixture-records"]);
+    const records = {
+      name: "fixture-records",
+      path: "/tmp/plugin-skills/records-root/fixture-records/SKILL.md",
+      root: "/tmp/plugin-skills/records-root",
     } as const;
-    const calendar = {
-      name: "microsoft-365-calendar",
-      path: "/tmp/plugin-skills/calendar-root/microsoft-365-calendar/SKILL.md",
-      root: "/tmp/plugin-skills/calendar-root",
+    const audit = {
+      name: "fixture-audit",
+      path: "/tmp/plugin-skills/audit-root/fixture-audit/SKILL.md",
+      root: "/tmp/plugin-skills/audit-root",
     } as const;
 
     NodeAssert.deepStrictEqual(
       resolvePluginSkillAvailability({
-        pluginSkills: [mail, calendar],
+        pluginSkills: [records, audit],
         isPluginSkillAvailable: (name) => available.has(name),
       }),
-      { skills: [mail], extraRoots: [mail.root] },
+      { skills: [records], extraRoots: [records.root] },
     );
   });
 
@@ -532,8 +532,8 @@ describe("openCodexThread", () => {
         resumeThreadId: undefined,
         dynamicTools: [
           {
-            name: "microsoft365_mail_search",
-            description: "Read mail through the Microsoft 365 integration plugin.",
+            name: "fixture_records_search",
+            description: "Read records through a fixture integration plugin.",
             inputSchema: {
               type: "object",
               properties: { limit: { type: "integer" } },
@@ -551,8 +551,8 @@ describe("openCodexThread", () => {
         model: DEFAULT_TRITONAI_CODEX_MODEL,
         dynamicTools: [
           {
-            name: "microsoft365_mail_search",
-            description: "Read mail through the Microsoft 365 integration plugin.",
+            name: "fixture_records_search",
+            description: "Read records through a fixture integration plugin.",
             inputSchema: {
               type: "object",
               properties: { limit: { type: "integer" } },
@@ -599,8 +599,8 @@ describe("openCodexThread", () => {
         resumeThreadId: "existing-provider-thread",
         dynamicTools: [
           {
-            name: "microsoft365_mail_search",
-            description: "Read mail through the Microsoft 365 integration plugin.",
+            name: "fixture_records_search",
+            description: "Read records through a fixture integration plugin.",
             inputSchema: { type: "object", properties: {}, additionalProperties: false },
           },
         ],

@@ -7,6 +7,7 @@ import { McpSchema, McpServer } from "effect/unstable/ai";
 
 import * as Integrations from "../integrations/IntegrationRegistry.ts";
 import type { IntegrationProviderTool } from "../integrations/IntegrationRegistry.ts";
+import { integrationToolJsonSchema } from "../integrations/IntegrationTool.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 
 class IntegrationToolInvocationError extends Schema.TaggedErrorClass<IntegrationToolInvocationError>()(
@@ -23,24 +24,18 @@ class IntegrationToolRegistrationError extends Schema.TaggedErrorClass<Integrati
   }
 }
 
-const invocationCanReadIntegrations = (): boolean => {
+const INTEGRATION_INVOCATION_CAPABILITY = "integrations.invoke" as const;
+
+const invocationCanUseIntegrations = (): boolean => {
   const fiber = Fiber.getCurrent();
   if (!fiber) return false;
   return (
     Context.getOrUndefined(
       fiber.context,
       McpInvocationContext.McpInvocationContext,
-    )?.capabilities.has("integrations.read") === true
+    )?.capabilities.has(INTEGRATION_INVOCATION_CAPABILITY) === true
   );
 };
-
-function assertReadOnlyTool(definition: IntegrationProviderTool): void {
-  if (!definition.readOnly) {
-    throw new Error(
-      `Integration tool ${definition.name} is not read-only; write-capable MCP integration tools are not supported.`,
-    );
-  }
-}
 
 export function normalizeIntegrationToolResult(value: unknown): Record<string, unknown> {
   if (typeof value === "bigint" || typeof value === "function" || typeof value === "symbol") {
@@ -70,23 +65,22 @@ function registerTool(
   isAvailable: (name: string) => boolean,
   reservedToolNames: ReadonlySet<string>,
 ) {
-  assertReadOnlyTool(definition);
   const registration: Parameters<typeof server.addTool>[0] = {
     tool: new McpSchema.Tool({
       name: definition.name,
       description: definition.description,
-      inputSchema: definition.inputSchema,
+      inputSchema: integrationToolJsonSchema(definition),
       annotations: {
         title: definition.name,
-        readOnlyHint: true,
-        destructiveHint: false,
-        idempotentHint: true,
+        readOnlyHint: definition.readOnly,
+        destructiveHint: definition.destructive ?? !definition.readOnly,
+        idempotentHint: definition.idempotent ?? definition.readOnly,
         openWorldHint: definition.openWorld,
       },
     }),
     annotations: Context.make(
       McpSchema.EnabledWhen,
-      () => invocationCanReadIntegrations() && isAvailable(definition.name),
+      () => invocationCanUseIntegrations() && isAvailable(definition.name),
     ),
     handle: (payload) =>
       Effect.withFiber((fiber) => {
@@ -94,17 +88,20 @@ function registerTool(
           fiber.context,
           McpInvocationContext.McpInvocationContext,
         );
-        return invocation.capabilities.has("integrations.read") && isAvailable(definition.name)
+        return invocation.capabilities.has(INTEGRATION_INVOCATION_CAPABILITY) &&
+          isAvailable(definition.name)
           ? Effect.tryPromise({
-              try: async () =>
+              try: async (signal) =>
                 normalizeIntegrationToolResult(
-                  await Integrations.getIntegrationRegistry().invokeTool(definition.name, payload),
+                  await Integrations.getIntegrationRegistry().invokeTool(definition.name, payload, {
+                    signal,
+                  }),
                 ),
               catch: (cause) => new IntegrationToolInvocationError({ cause }),
             })
           : Effect.fail(
               new IntegrationToolInvocationError({
-                cause: new Error("MCP credential does not grant read-only integration access."),
+                cause: new Error("MCP credential does not grant integration invocation access."),
               }),
             );
       }).pipe(
@@ -150,7 +147,6 @@ export const registrationLayerFor = (
   isAvailable: (name: string) => boolean = activeToolAvailable,
   reservedToolNames: ReadonlySet<string> = new Set(),
 ) => {
-  for (const definition of definitions) assertReadOnlyTool(definition);
   return Layer.effectDiscard(
     Effect.gen(function* () {
       const server = yield* McpServer.McpServer;
@@ -161,38 +157,18 @@ export const registrationLayerFor = (
   );
 };
 
-export const registrationLayer = (reservedToolNames: ReadonlySet<string> = new Set()) =>
+export const registrationLayer = (
+  reservedToolNames: ReadonlySet<string> = new Set(),
+  loadRegistry: () => Promise<
+    Pick<Integrations.RegistryRuntime, "toolDefinitions">
+  > = Integrations.awaitIntegrationRegistry,
+) =>
   Layer.effectDiscard(
     Effect.gen(function* () {
       const server = yield* McpServer.McpServer;
-      const context = yield* Effect.context<never>();
-      const runFork = Effect.runForkWith(context);
-      const registered = new Set<string>();
-      const integrationSubscriptions = new Set<() => void>();
-      const register = (definition: IntegrationProviderTool) => {
-        if (registered.has(definition.name)) return;
-        registered.add(definition.name);
-        runFork(
-          Effect.suspend(() =>
-            registerTool(server, definition, activeToolAvailable, reservedToolNames),
-          ).pipe(
-            Effect.catchCause((cause) =>
-              Effect.logError("integration tool registration failed", {
-                toolName: definition.name,
-                cause,
-              }),
-            ),
-          ),
-        );
-      };
-      const unsubscribeRegistry = Integrations.observeIntegrationRegistry((registry) => {
-        integrationSubscriptions.add(registry.observeToolDefinitions(register));
-      });
-      yield* Effect.addFinalizer(() =>
-        Effect.sync(() => {
-          unsubscribeRegistry();
-          for (const unsubscribe of integrationSubscriptions) unsubscribe();
-        }),
-      );
+      const registry = yield* Effect.promise(loadRegistry);
+      for (const definition of registry.toolDefinitions()) {
+        yield* registerTool(server, definition, activeToolAvailable, reservedToolNames);
+      }
     }),
   );
