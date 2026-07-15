@@ -37,6 +37,7 @@ function makeFakeCodexBinary(
     exitCode?: number;
     stderr?: string;
     requireImage?: boolean;
+    forbidImage?: boolean;
     requireServiceTier?: string;
     requireReasoningEffort?: string;
     requireTritonAiProviderConfig?: boolean;
@@ -128,6 +129,14 @@ function makeFakeCodexBinary(
               'if [ "$seen_image" != "1" ]; then',
               '  printf "%s\\n" "missing --image input" >&2',
               `  exit 2`,
+              "fi",
+            ]
+          : []),
+        ...(input.forbidImage
+          ? [
+              'if [ "$seen_image" = "1" ]; then',
+              '  printf "%s\\n" "unexpected --image input" >&2',
+              `  exit 13`,
               "fi",
             ]
           : []),
@@ -223,12 +232,14 @@ function withFakeCodexEnv<A, E, R>(
     exitCode?: number;
     stderr?: string;
     requireImage?: boolean;
+    forbidImage?: boolean;
     requireServiceTier?: string;
     requireReasoningEffort?: string;
     requireTritonAiProviderConfig?: boolean;
     forbidReasoningEffort?: boolean;
     stdinMustContain?: string;
     stdinMustNotContain?: string;
+    configOverrides?: Partial<CodexSettings>;
   },
   effectFn: (textGeneration: TextGeneration.TextGeneration["Service"]) => Effect.Effect<A, E, R>,
 ) {
@@ -236,7 +247,7 @@ function withFakeCodexEnv<A, E, R>(
     const fs = yield* FileSystem.FileSystem;
     const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3code-codex-text-" });
     const codexPath = yield* makeFakeCodexBinary(tempDir, input);
-    const config = decodeCodexSettings({ binaryPath: codexPath });
+    const config = decodeCodexSettings({ ...input.configOverrides, binaryPath: codexPath });
     const textGeneration = yield* makeCodexTextGeneration(config);
     return yield* effectFn(textGeneration);
   }).pipe(Effect.scoped);
@@ -511,6 +522,56 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGeneration", (it) => {
           });
 
           expect(generated.branch).toBe("fix/ui-regression");
+        }),
+    ),
+  );
+
+  it.effect("omits raw image inputs for an explicitly text-only model", () =>
+    withFakeCodexEnv(
+      {
+        output: JSON.stringify({
+          branch: "inspect-screenshot",
+        }),
+        forbidImage: true,
+        configOverrides: {
+          customModels: ["text-only-model"],
+          customModelMetadata: {
+            "text-only-model": {
+              name: "Text-only model",
+              capabilities: { inputModalities: ["text"] },
+            },
+          },
+        },
+      },
+      (textGeneration) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const { attachmentsDir } = yield* ServerConfig.ServerConfig;
+          const attachmentId = "thread-text-only-image-attachment";
+          const attachmentPath = path.join(attachmentsDir, `${attachmentId}.png`);
+          yield* fs.makeDirectory(attachmentsDir, { recursive: true });
+          yield* fs.writeFile(attachmentPath, Buffer.from("hello"));
+
+          const generated = yield* textGeneration.generateBranchName({
+            modelSelection: createModelSelection(
+              ProviderInstanceId.make("codex"),
+              "text-only-model",
+            ),
+            cwd: process.cwd(),
+            message: "Inspect this screenshot.",
+            attachments: [
+              {
+                type: "image",
+                id: attachmentId,
+                name: "screenshot.png",
+                mimeType: "image/png",
+                sizeBytes: 5,
+              },
+            ],
+          });
+
+          expect(generated.branch).toBe("inspect-screenshot");
         }),
     ),
   );

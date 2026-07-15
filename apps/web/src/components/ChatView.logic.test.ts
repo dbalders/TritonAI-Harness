@@ -392,6 +392,32 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
     ).toBe(true);
   });
 
+  it("keeps local working state while a requested turn is still preparing", () => {
+    const localDispatch = createLocalDispatchSnapshot(
+      makeThread({ latestTurn: completedTurn, session: readySession }),
+    );
+    const preparingTurn = {
+      ...completedTurn,
+      turnId: TurnId.make("turn-2"),
+      state: "running" as const,
+      requestedAt: "2026-03-29T00:01:00.000Z",
+      startedAt: null,
+      completedAt: null,
+    };
+
+    expect(
+      hasServerAcknowledgedLocalDispatch({
+        localDispatch,
+        phase: "ready",
+        latestTurn: preparingTurn,
+        session: readySession,
+        hasPendingApproval: false,
+        hasPendingUserInput: false,
+        threadError: null,
+      }),
+    ).toBe(false);
+  });
+
   it("waits for the matching running turn before acknowledging", () => {
     const localDispatch = createLocalDispatchSnapshot(
       makeThread({ latestTurn: completedTurn, session: readySession }),

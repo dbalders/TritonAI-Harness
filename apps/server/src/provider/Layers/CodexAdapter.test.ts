@@ -24,6 +24,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it, vi } from "@effect/vitest";
 
 import * as Context from "effect/Context";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -48,6 +49,10 @@ import {
   type CodexThreadSnapshot,
 } from "./CodexSessionRuntime.ts";
 import { makeCodexAdapter } from "./CodexAdapter.ts";
+import {
+  CodexImageContextAnalysisError,
+  type CodexImageContextAnalyzer,
+} from "./CodexImageContext.ts";
 const decodeCodexSettings = Schema.decodeSync(CodexSettings);
 
 // Test-local service tag so the rest of the file can keep using `yield* CodexAdapter`.
@@ -63,6 +68,7 @@ const asItemId = (value: string): ProviderItemId => ProviderItemId.make(value);
 class FakeCodexRuntime implements CodexSessionRuntimeShape {
   private readonly eventQueue = Effect.runSync(Queue.unbounded<ProviderEvent>());
   private readonly now = "2026-01-01T00:00:00.000Z";
+  private currentModel: string | undefined;
 
   public readonly startImpl = vi.fn(() =>
     Promise.resolve({
@@ -71,18 +77,24 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
       runtimeMode: this.options.runtimeMode,
       threadId: this.options.threadId,
       cwd: this.options.cwd,
-      ...(this.options.model ? { model: this.options.model } : {}),
+      ...(this.currentModel ? { model: this.currentModel } : {}),
+      resumeCursor: this.options.resumeCursor ?? { threadId: "provider-thread-1" },
       createdAt: this.now,
       updatedAt: this.now,
     } satisfies ProviderSession),
   );
 
   public readonly sendTurnImpl = vi.fn(
-    (_input: CodexSessionRuntimeSendTurnInput): Promise<ProviderTurnStartResult> =>
-      Promise.resolve({
+    (input: CodexSessionRuntimeSendTurnInput): Promise<ProviderTurnStartResult> => {
+      if (input.model) {
+        this.currentModel = input.model;
+      }
+      return Promise.resolve({
         threadId: this.options.threadId,
         turnId: asTurnId("turn-1"),
-      }),
+        resumeCursor: this.options.resumeCursor ?? { threadId: "provider-thread-1" },
+      });
+    },
   );
 
   public readonly interruptTurnImpl = vi.fn(
@@ -121,6 +133,7 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
 
   constructor(options: CodexSessionRuntimeOptions) {
     this.options = options;
+    this.currentModel = options.model;
   }
 
   start() {
@@ -459,6 +472,39 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
         serviceTier: "flex",
       });
     }).pipe(Effect.provide(customLayer));
+  });
+
+  it.effect("passes the managed model catalog to Codex app-server", () => {
+    const runtimeFactory = makeRuntimeFactory();
+    const layer = Layer.effect(
+      CodexAdapter,
+      Effect.gen(function* () {
+        const codexConfig = decodeCodexSettings({});
+        return yield* makeCodexAdapter(codexConfig, {
+          makeRuntime: runtimeFactory.factory,
+          modelCatalogPath: "/managed home/tritonai-model-catalog.json",
+        });
+      }),
+    ).pipe(
+      Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+      Layer.provideMerge(ServerSettingsService.layerTest()),
+      Layer.provideMerge(providerSessionDirectoryTestLayer),
+      Layer.provideMerge(NodeServices.layer),
+    );
+
+    return Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId: asThreadId("managed-model-catalog"),
+        runtimeMode: "full-access",
+      });
+
+      NodeAssert.deepStrictEqual(runtimeFactory.lastRuntime?.options.appServerArgs, [
+        "-c",
+        'model_catalog_json="/managed home/tritonai-model-catalog.json"',
+      ]);
+    }).pipe(Effect.provide(layer));
   });
 });
 
@@ -1355,3 +1401,433 @@ it.effect("flushes managed native logs when the adapter layer shuts down", () =>
     }
   }),
 );
+
+const imageContextCodexConfig = decodeCodexSettings({
+  customModels: ["text-only-model", "vision-model", "unknown-model"],
+  customModelMetadata: {
+    "text-only-model": {
+      name: "Text-only model",
+      capabilities: {
+        inputModalities: ["text"],
+        optionDescriptors: [],
+      },
+    },
+    "vision-model": {
+      name: "Vision model",
+      capabilities: {
+        inputModalities: ["text", "image"],
+        optionDescriptors: [],
+      },
+    },
+    "unknown-model": {
+      name: "Unknown model",
+    },
+  },
+});
+
+function makeImageContextAdapterLayer(input: {
+  readonly baseDir: string;
+  readonly runtimeFactory: ReturnType<typeof makeRuntimeFactory>;
+  readonly analyzer: CodexImageContextAnalyzer;
+}) {
+  return Layer.effect(
+    CodexAdapter,
+    makeCodexAdapter(imageContextCodexConfig, {
+      makeRuntime: input.runtimeFactory.factory,
+      imageContextAnalyzer: input.analyzer,
+    }),
+  ).pipe(
+    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), input.baseDir)),
+    Layer.provideMerge(ServerSettingsService.layerTest()),
+    Layer.provideMerge(providerSessionDirectoryTestLayer),
+    Layer.provideMerge(NodeServices.layer),
+  );
+}
+
+function imageAttachment(id: string) {
+  return {
+    type: "image" as const,
+    id,
+    name: `${id}.png`,
+    mimeType: "image/png",
+    sizeBytes: 5,
+  };
+}
+
+it.effect("restarts legacy image history before using a text-only model", () => {
+  const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "codex-image-resume-"));
+  const runtimeFactory = makeRuntimeFactory();
+  const analyzer: CodexImageContextAnalyzer = () => Effect.succeed([]);
+  const layer = makeImageContextAdapterLayer({ baseDir, runtimeFactory, analyzer });
+
+  return Effect.gen(function* () {
+    const adapter = yield* CodexAdapter;
+    const textOnlySelection = createModelSelection(
+      ProviderInstanceId.make("codex"),
+      "text-only-model",
+      [],
+    );
+
+    const legacySession = yield* adapter.startSession({
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-image-legacy-resume"),
+      modelSelection: textOnlySelection,
+      resumeCursor: { threadId: "legacy-provider-thread" },
+      runtimeMode: "full-access",
+    });
+    NodeAssert.equal(runtimeFactory.lastRuntime?.options.resumeCursor, undefined);
+    NodeAssert.deepStrictEqual(legacySession.resumeCursor, {
+      threadId: "provider-thread-1",
+      textOnlyImageContextVersion: 1,
+    });
+
+    const safeCursor = {
+      threadId: "safe-provider-thread",
+      textOnlyImageContextVersion: 1 as const,
+    };
+    const safeSession = yield* adapter.startSession({
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-image-safe-resume"),
+      modelSelection: textOnlySelection,
+      resumeCursor: safeCursor,
+      runtimeMode: "full-access",
+    });
+    NodeAssert.deepStrictEqual(runtimeFactory.lastRuntime?.options.resumeCursor, safeCursor);
+    NodeAssert.deepStrictEqual(safeSession.resumeCursor, safeCursor);
+
+    const visionSession = yield* adapter.startSession({
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-image-vision-resume"),
+      modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "vision-model", []),
+      resumeCursor: safeCursor,
+      runtimeMode: "full-access",
+    });
+    NodeAssert.deepStrictEqual(visionSession.resumeCursor, {
+      threadId: "safe-provider-thread",
+      textOnlyImageContextVersion: 1,
+    });
+  }).pipe(
+    Effect.provide(layer),
+    Effect.ensuring(Effect.sync(() => NodeFS.rmSync(baseDir, { recursive: true, force: true }))),
+  );
+});
+
+it.effect("marks a resumed thread unsafe after forwarding a raw image", () => {
+  const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "codex-image-raw-resume-"));
+  const runtimeFactory = makeRuntimeFactory();
+  const analyzer: CodexImageContextAnalyzer = () => Effect.succeed([]);
+  const layer = makeImageContextAdapterLayer({ baseDir, runtimeFactory, analyzer });
+
+  return Effect.gen(function* () {
+    const adapter = yield* CodexAdapter;
+    const { attachmentsDir } = yield* ServerConfig;
+    const threadId = asThreadId("thread-image-raw-resume");
+    const attachment = imageAttachment("thread-image-raw-resume-first");
+    NodeFS.writeFileSync(NodePath.join(attachmentsDir, `${attachment.id}.png`), "image");
+
+    yield* adapter.startSession({
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "text-only-model", []),
+      runtimeMode: "full-access",
+    });
+    const result = yield* adapter.sendTurn({
+      threadId,
+      attachments: [attachment],
+      modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "vision-model", []),
+    });
+
+    NodeAssert.deepStrictEqual(result.resumeCursor, { threadId: "provider-thread-1" });
+    NodeAssert.equal(
+      runtimeFactory.lastRuntime?.sendTurnImpl.mock.calls[0]?.[0].attachments?.length,
+      1,
+    );
+
+    const unsafeSwitch = yield* adapter
+      .sendTurn({
+        threadId,
+        input: "Now use the text-only model",
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("codex"),
+          "text-only-model",
+          [],
+        ),
+      })
+      .pipe(Effect.result);
+    NodeAssert.equal(unsafeSwitch._tag, "Failure");
+    NodeAssert.equal(unsafeSwitch.failure._tag, "ProviderAdapterRequestError");
+    NodeAssert.match(unsafeSwitch.failure.message, /raw image history/i);
+    NodeAssert.equal(runtimeFactory.lastRuntime?.sendTurnImpl.mock.calls.length, 1);
+  }).pipe(
+    Effect.provide(layer),
+    Effect.ensuring(Effect.sync(() => NodeFS.rmSync(baseDir, { recursive: true, force: true }))),
+  );
+});
+
+it.effect("converts images for a selected text-only model and preserves that model later", () => {
+  const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "codex-image-context-"));
+  const runtimeFactory = makeRuntimeFactory();
+  const analyzerInputs: Array<Parameters<CodexImageContextAnalyzer>[0]> = [];
+  const analyzer: CodexImageContextAnalyzer = (input) => {
+    analyzerInputs.push(input);
+    return Effect.succeed(
+      input.images.map(() => ({
+        description: "A red error banner above a disabled Save button.",
+        visibleText: "Permission denied",
+      })),
+    );
+  };
+  const layer = makeImageContextAdapterLayer({ baseDir, runtimeFactory, analyzer });
+
+  return Effect.gen(function* () {
+    const adapter = yield* CodexAdapter;
+    const { attachmentsDir } = yield* ServerConfig;
+    const threadId = asThreadId("thread-image-context");
+    const firstAttachment = imageAttachment("thread-image-context-first");
+    const secondAttachment = imageAttachment("thread-image-context-second");
+    NodeFS.writeFileSync(NodePath.join(attachmentsDir, `${firstAttachment.id}.png`), "image");
+    NodeFS.writeFileSync(NodePath.join(attachmentsDir, `${secondAttachment.id}.png`), "image");
+
+    yield* adapter.startSession({
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "vision-model", []),
+      runtimeMode: "full-access",
+    });
+    const runtime = runtimeFactory.lastRuntime;
+    NodeAssert.ok(runtime);
+    runtime.sendTurnImpl.mockClear();
+
+    yield* adapter.sendTurn({
+      threadId,
+      input: "What is wrong here?",
+      attachments: [firstAttachment],
+      modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "text-only-model", []),
+    });
+
+    const selectedModelTurn = runtime.sendTurnImpl.mock.calls[0]?.[0];
+    NodeAssert.equal(selectedModelTurn?.model, "text-only-model");
+    NodeAssert.match(selectedModelTurn?.input ?? "", /What is wrong here\?/);
+    NodeAssert.match(selectedModelTurn?.input ?? "", /UNTRUSTED USER-DERIVED DATA/);
+    NodeAssert.match(selectedModelTurn?.input ?? "", /Permission denied/);
+    NodeAssert.equal(Object.hasOwn(selectedModelTurn ?? {}, "attachments"), false);
+
+    yield* adapter.sendTurn({
+      threadId,
+      attachments: [secondAttachment],
+    });
+
+    const laterTurn = runtime.sendTurnImpl.mock.calls[1]?.[0];
+    NodeAssert.match(laterTurn?.input ?? "", /UNTRUSTED USER-DERIVED DATA/);
+    NodeAssert.equal(Object.hasOwn(laterTurn ?? {}, "attachments"), false);
+    NodeAssert.equal(analyzerInputs.length, 2);
+    NodeAssert.deepStrictEqual(
+      analyzerInputs.map((entry) => entry.images[0]?.path),
+      [
+        NodePath.join(attachmentsDir, `${firstAttachment.id}.png`),
+        NodePath.join(attachmentsDir, `${secondAttachment.id}.png`),
+      ],
+    );
+  }).pipe(
+    Effect.provide(layer),
+    Effect.ensuring(Effect.sync(() => NodeFS.rmSync(baseDir, { recursive: true, force: true }))),
+  );
+});
+
+it.effect("keeps raw images for native and unknown modality models", () => {
+  const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "codex-native-images-"));
+  const runtimeFactory = makeRuntimeFactory();
+  let analyzerCalls = 0;
+  const analyzer: CodexImageContextAnalyzer = () => {
+    analyzerCalls += 1;
+    return Effect.succeed([]);
+  };
+  const layer = makeImageContextAdapterLayer({ baseDir, runtimeFactory, analyzer });
+
+  return Effect.gen(function* () {
+    const adapter = yield* CodexAdapter;
+    const { attachmentsDir } = yield* ServerConfig;
+    const threadId = asThreadId("thread-native-images");
+    const attachment = imageAttachment("thread-native-images-first");
+    NodeFS.writeFileSync(NodePath.join(attachmentsDir, `${attachment.id}.png`), "image");
+
+    yield* adapter.startSession({
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "vision-model", []),
+      runtimeMode: "full-access",
+    });
+    const runtime = runtimeFactory.lastRuntime;
+    NodeAssert.ok(runtime);
+    runtime.sendTurnImpl.mockClear();
+
+    yield* adapter.sendTurn({ threadId, input: "Inspect", attachments: [attachment] });
+    yield* adapter.sendTurn({
+      threadId,
+      input: "Inspect again",
+      attachments: [attachment],
+      modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "unknown-model", []),
+    });
+
+    NodeAssert.equal(analyzerCalls, 0);
+    const [currentModelCall, selectedModelCall] = runtime.sendTurnImpl.mock.calls.map(
+      ([call]) => call,
+    );
+    NodeAssert.equal(currentModelCall?.model, "vision-model");
+    NodeAssert.equal(selectedModelCall?.model, "unknown-model");
+    for (const call of [currentModelCall, selectedModelCall]) {
+      NodeAssert.equal(call.attachments?.length, 1);
+      NodeAssert.match(call.attachments?.[0]?.url ?? "", /^data:image\/png;base64,/);
+    }
+  }).pipe(
+    Effect.provide(layer),
+    Effect.ensuring(Effect.sync(() => NodeFS.rmSync(baseDir, { recursive: true, force: true }))),
+  );
+});
+
+it.effect("does not send the main turn when image analysis fails", () => {
+  const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "codex-image-failure-"));
+  const runtimeFactory = makeRuntimeFactory();
+  const analyzer: CodexImageContextAnalyzer = () =>
+    Effect.fail(
+      new CodexImageContextAnalysisError({
+        detail: "helper unavailable",
+      }),
+    );
+  const layer = makeImageContextAdapterLayer({ baseDir, runtimeFactory, analyzer });
+
+  return Effect.gen(function* () {
+    const adapter = yield* CodexAdapter;
+    const { attachmentsDir } = yield* ServerConfig;
+    const threadId = asThreadId("thread-image-failure");
+    const attachment = imageAttachment("thread-image-failure-first");
+    NodeFS.writeFileSync(NodePath.join(attachmentsDir, `${attachment.id}.png`), "image");
+
+    yield* adapter.startSession({
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "text-only-model", []),
+      runtimeMode: "full-access",
+    });
+    const runtime = runtimeFactory.lastRuntime;
+    NodeAssert.ok(runtime);
+    runtime.sendTurnImpl.mockClear();
+
+    const result = yield* adapter
+      .sendTurn({ threadId, attachments: [attachment] })
+      .pipe(Effect.result);
+
+    NodeAssert.equal(result._tag, "Failure");
+    NodeAssert.equal(result.failure._tag, "ProviderAdapterRequestError");
+    NodeAssert.match(result.failure.message, /main turn was not sent/i);
+    NodeAssert.equal(runtime.sendTurnImpl.mock.calls.length, 0);
+  }).pipe(
+    Effect.provide(layer),
+    Effect.ensuring(Effect.sync(() => NodeFS.rmSync(baseDir, { recursive: true, force: true }))),
+  );
+});
+
+it.effect("cancels image analysis before sending the main turn when interrupted", () => {
+  const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "codex-image-cancel-"));
+  const runtimeFactory = makeRuntimeFactory();
+  const analysisStarted = Promise.withResolvers<void>();
+  const analyzer: CodexImageContextAnalyzer = (input) => {
+    analysisStarted.resolve();
+    return Effect.tryPromise({
+      try: () =>
+        new Promise<ReadonlyArray<{ description: string; visibleText: string }>>(
+          (_resolve, reject) => {
+            input.signal?.addEventListener("abort", () => reject(new Error("cancelled")), {
+              once: true,
+            });
+          },
+        ),
+      catch: (cause) =>
+        new CodexImageContextAnalysisError({
+          detail: "cancelled",
+          cause,
+        }),
+    });
+  };
+  const layer = makeImageContextAdapterLayer({ baseDir, runtimeFactory, analyzer });
+
+  return Effect.gen(function* () {
+    const adapter = yield* CodexAdapter;
+    const { attachmentsDir } = yield* ServerConfig;
+    const threadId = asThreadId("thread-image-cancel");
+    const attachment = imageAttachment("thread-image-cancel-first");
+    NodeFS.writeFileSync(NodePath.join(attachmentsDir, `${attachment.id}.png`), "image");
+
+    yield* adapter.startSession({
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "text-only-model", []),
+      runtimeMode: "full-access",
+    });
+    const runtime = runtimeFactory.lastRuntime;
+    NodeAssert.ok(runtime);
+    runtime.sendTurnImpl.mockClear();
+    runtime.interruptTurnImpl.mockClear();
+
+    const sendTurnFiber = yield* adapter
+      .sendTurn({ threadId, attachments: [attachment] })
+      .pipe(Effect.forkChild);
+    yield* Effect.promise(() => analysisStarted.promise);
+    yield* adapter.interruptTurn(threadId);
+    const exit = yield* Fiber.await(sendTurnFiber);
+
+    NodeAssert.equal(Exit.isFailure(exit), true);
+    if (Exit.isFailure(exit)) {
+      NodeAssert.equal(Cause.hasInterruptsOnly(exit.cause), true);
+    }
+    NodeAssert.equal(runtime.sendTurnImpl.mock.calls.length, 0);
+    NodeAssert.equal(runtime.interruptTurnImpl.mock.calls.length, 1);
+  }).pipe(
+    Effect.provide(layer),
+    Effect.ensuring(Effect.sync(() => NodeFS.rmSync(baseDir, { recursive: true, force: true }))),
+  );
+});
+
+it.effect("does not send generated image context beyond the turn input limit", () => {
+  const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "codex-image-limit-"));
+  const runtimeFactory = makeRuntimeFactory();
+  const analyzer: CodexImageContextAnalyzer = (input) =>
+    Effect.succeed(
+      input.images.map(() => ({
+        description: "x".repeat(16_000),
+        visibleText: "y".repeat(16_000),
+      })),
+    );
+  const layer = makeImageContextAdapterLayer({ baseDir, runtimeFactory, analyzer });
+
+  return Effect.gen(function* () {
+    const adapter = yield* CodexAdapter;
+    const { attachmentsDir } = yield* ServerConfig;
+    const threadId = asThreadId("thread-image-limit");
+    const attachments = Array.from({ length: 4 }, (_, index) =>
+      imageAttachment(`thread-image-limit-${index}`),
+    );
+    for (const attachment of attachments) {
+      NodeFS.writeFileSync(NodePath.join(attachmentsDir, `${attachment.id}.png`), "image");
+    }
+
+    yield* adapter.startSession({
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "text-only-model", []),
+      runtimeMode: "full-access",
+    });
+    const runtime = runtimeFactory.lastRuntime;
+    NodeAssert.ok(runtime);
+    runtime.sendTurnImpl.mockClear();
+
+    const error = yield* Effect.flip(adapter.sendTurn({ threadId, input: "Inspect", attachments }));
+
+    NodeAssert.equal(error._tag, "ProviderAdapterRequestError");
+    NodeAssert.match(error.message, /exceeds the turn input limit/i);
+    NodeAssert.equal(runtime.sendTurnImpl.mock.calls.length, 0);
+  }).pipe(
+    Effect.provide(layer),
+    Effect.ensuring(Effect.sync(() => NodeFS.rmSync(baseDir, { recursive: true, force: true }))),
+  );
+});

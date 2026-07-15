@@ -87,6 +87,7 @@ export function hasConfiguredMcpServer(appServerArgs: ReadonlyArray<string> | un
 
 export const CodexResumeCursorSchema = Schema.Struct({
   threadId: Schema.String,
+  textOnlyImageContextVersion: Schema.optional(Schema.Literal(1)),
 });
 const CodexUserInputAnswerObject = Schema.Struct({
   answers: Schema.Array(Schema.String),

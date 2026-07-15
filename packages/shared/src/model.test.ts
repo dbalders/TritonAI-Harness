@@ -17,6 +17,7 @@ import {
   getProviderOptionBooleanSelectionValue,
   getProviderOptionStringSelectionValue,
   isClaudeUltrathinkPrompt,
+  modelCapabilitiesAreExplicitlyTextOnly,
   normalizeModelSlug,
   resolveModelSlugForProvider,
   resolveSelectableModel,
@@ -86,6 +87,17 @@ describe("normalizeModelSlug", () => {
   });
 });
 
+describe("modelCapabilitiesAreExplicitlyTextOnly", () => {
+  it("requires explicit text support without image support", () => {
+    expect(modelCapabilitiesAreExplicitlyTextOnly({ inputModalities: ["text"] })).toBe(true);
+    expect(modelCapabilitiesAreExplicitlyTextOnly({ inputModalities: ["text", "image"] })).toBe(
+      false,
+    );
+    expect(modelCapabilitiesAreExplicitlyTextOnly({})).toBe(false);
+    expect(modelCapabilitiesAreExplicitlyTextOnly(null)).toBe(false);
+  });
+});
+
 describe("resolveModelSlugForProvider", () => {
   it("returns defaults when the model is missing", () => {
     expect(resolveModelSlugForProvider(ProviderDriverKind.make("codex"), undefined)).toBe(
@@ -147,6 +159,18 @@ describe("misc helpers", () => {
 });
 
 describe("descriptor helpers", () => {
+  it("preserves advertised input modalities", () => {
+    expect(
+      createModelCapabilities({
+        inputModalities: ["text", "image"],
+        optionDescriptors: [],
+      }),
+    ).toEqual({
+      inputModalities: ["text", "image"],
+      optionDescriptors: [],
+    });
+  });
+
   it("applies selection values to capability descriptors", () => {
     expect(
       getProviderOptionDescriptors({
