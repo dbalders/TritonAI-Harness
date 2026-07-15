@@ -215,15 +215,19 @@ function createDesktopNotification(
     return false;
   }
 
-  const notification = new Notification(title, { ...options, silent: true });
-  if (onClick) {
-    notification.addEventListener("click", () => {
-      notification.close();
-      window.focus();
-      onClick();
-    });
+  try {
+    const notification = new Notification(title, { ...options, silent: true });
+    if (onClick) {
+      notification.addEventListener("click", () => {
+        notification.close();
+        window.focus();
+        onClick();
+      });
+    }
+    return true;
+  } catch {
+    return false;
   }
-  return true;
 }
 
 export function showDesktopNotification(

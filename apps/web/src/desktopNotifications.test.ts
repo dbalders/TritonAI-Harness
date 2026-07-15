@@ -369,4 +369,50 @@ describe("showDesktopNotification", () => {
       ),
     ).toBe(false);
   });
+
+  it("contains notification provider failures", () => {
+    class ThrowingNotification {
+      static permission: NotificationPermission = "granted";
+
+      constructor() {
+        throw new Error("notification provider unavailable");
+      }
+    }
+    vi.stubGlobal("Notification", ThrowingNotification);
+
+    expect(
+      showDesktopNotification(
+        {
+          environmentId: ENVIRONMENT_A,
+          threadId: THREAD_A,
+          threadTitle: "Fix release workflow",
+          kind: "completed",
+        },
+        vi.fn(),
+      ),
+    ).toBe(false);
+  });
+
+  it("contains click listener setup failures", () => {
+    class ThrowingNotification extends EventTarget {
+      static permission: NotificationPermission = "granted";
+
+      override addEventListener(): void {
+        throw new Error("listener setup failed");
+      }
+    }
+    vi.stubGlobal("Notification", ThrowingNotification);
+
+    expect(
+      showDesktopNotification(
+        {
+          environmentId: ENVIRONMENT_A,
+          threadId: THREAD_A,
+          threadTitle: "Fix release workflow",
+          kind: "completed",
+        },
+        vi.fn(),
+      ),
+    ).toBe(false);
+  });
 });
