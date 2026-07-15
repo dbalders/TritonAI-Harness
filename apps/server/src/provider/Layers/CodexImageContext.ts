@@ -186,6 +186,18 @@ function requestFailure(cause: unknown): CodexImageContextAnalysisError {
   });
 }
 
+function interruptWhenAborted(signal: AbortSignal): Effect.Effect<never> {
+  return Effect.callback<never>((resume) => {
+    const onAbort = () => resume(Effect.interrupt);
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+    signal.addEventListener("abort", onAbort, { once: true });
+    return Effect.sync(() => signal.removeEventListener("abort", onAbort));
+  });
+}
+
 export const makeCodexImageContextAnalyzer = Effect.fn("makeCodexImageContextAnalyzer")(function* (
   environment?: NodeJS.ProcessEnv,
   requestFetch: FetchLike = globalThis.fetch,
@@ -193,8 +205,12 @@ export const makeCodexImageContextAnalyzer = Effect.fn("makeCodexImageContextAna
   const fileSystem = yield* FileSystem.FileSystem;
   const resolvedEnvironment = environment ?? process.env;
 
-  const analyze: CodexImageContextAnalyzer = (input) =>
-    Effect.gen(function* () {
+  const analyze: CodexImageContextAnalyzer = (input) => {
+    if (input.signal?.aborted) {
+      return Effect.interrupt;
+    }
+
+    const analysis = Effect.gen(function* () {
       if (input.images.length === 0) {
         return [];
       }
@@ -258,11 +274,6 @@ export const makeCodexImageContextAnalyzer = Effect.fn("makeCodexImageContextAna
 
       const response = yield* Effect.tryPromise({
         try: async (effectSignal) => {
-          const signal = AbortSignal.any([
-            effectSignal,
-            ...(input.signal ? [input.signal] : []),
-            AbortSignal.timeout(IMAGE_CONTEXT_TIMEOUT_MS),
-          ]);
           const result = await requestFetch(endpoint, {
             method: "POST",
             headers: {
@@ -271,7 +282,7 @@ export const makeCodexImageContextAnalyzer = Effect.fn("makeCodexImageContextAna
               "Content-Type": "application/json",
             },
             body: requestBody,
-            signal,
+            signal: effectSignal,
           });
           if (!result.ok) {
             void result.body?.cancel().catch(() => undefined);
@@ -321,6 +332,20 @@ export const makeCodexImageContextAnalyzer = Effect.fn("makeCodexImageContextAna
       }
       return decoded.images;
     });
+
+    const cancellableAnalysis = input.signal
+      ? analysis.pipe(Effect.raceFirst(interruptWhenAborted(input.signal)))
+      : analysis;
+    return cancellableAnalysis.pipe(
+      Effect.timeoutOrElse({
+        duration: IMAGE_CONTEXT_TIMEOUT_MS,
+        orElse: () =>
+          new CodexImageContextAnalysisError({
+            detail: `${TRITONAI_IMAGE_CONTEXT_MODEL} did not respond within two minutes.`,
+          }),
+      }),
+    );
+  };
 
   return analyze;
 });

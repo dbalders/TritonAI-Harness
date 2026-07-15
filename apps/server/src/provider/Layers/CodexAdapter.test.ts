@@ -1564,6 +1564,59 @@ it.effect("marks a resumed thread unsafe after forwarding a raw image", () => {
   );
 });
 
+it.effect("marks a resumed thread unsafe before a raw-image send fails", () => {
+  const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "codex-image-raw-failure-"));
+  const runtimeFactory = makeRuntimeFactory();
+  const analyzer: CodexImageContextAnalyzer = () => Effect.succeed([]);
+  const layer = makeImageContextAdapterLayer({ baseDir, runtimeFactory, analyzer });
+
+  return Effect.gen(function* () {
+    const adapter = yield* CodexAdapter;
+    const { attachmentsDir } = yield* ServerConfig;
+    const threadId = asThreadId("thread-image-raw-failure");
+    const attachment = imageAttachment("thread-image-raw-failure-first");
+    NodeFS.writeFileSync(NodePath.join(attachmentsDir, `${attachment.id}.png`), "image");
+
+    yield* adapter.startSession({
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "vision-model", []),
+      runtimeMode: "full-access",
+    });
+    const runtime = runtimeFactory.lastRuntime;
+    NodeAssert.ok(runtime);
+    runtime.sendTurnImpl.mockRejectedValueOnce(new Error("response stream disconnected"));
+
+    const rawImageSend = yield* Effect.exit(
+      adapter.sendTurn({
+        threadId,
+        attachments: [attachment],
+        modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "vision-model", []),
+      }),
+    );
+    NodeAssert.equal(rawImageSend._tag, "Failure");
+
+    const unsafeSwitch = yield* adapter
+      .sendTurn({
+        threadId,
+        input: "Now use the text-only model",
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("codex"),
+          "text-only-model",
+          [],
+        ),
+      })
+      .pipe(Effect.result);
+    NodeAssert.equal(unsafeSwitch._tag, "Failure");
+    NodeAssert.equal(unsafeSwitch.failure._tag, "ProviderAdapterRequestError");
+    NodeAssert.match(unsafeSwitch.failure.message, /raw image history/i);
+    NodeAssert.equal(runtime.sendTurnImpl.mock.calls.length, 1);
+  }).pipe(
+    Effect.provide(layer),
+    Effect.ensuring(Effect.sync(() => NodeFS.rmSync(baseDir, { recursive: true, force: true }))),
+  );
+});
+
 it.effect("converts images for a selected text-only model and preserves that model later", () => {
   const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "codex-image-context-"));
   const runtimeFactory = makeRuntimeFactory();

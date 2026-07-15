@@ -140,6 +140,30 @@ it.layer(testLayer)("CodexImageContext", (it) => {
     }),
   );
 
+  it.effect("does no file or network work when analysis is already cancelled", () =>
+    Effect.gen(function* () {
+      const readFile = vi.fn(() => Effect.succeed(new Uint8Array([1])));
+      const fetchMock = vi.fn();
+      const analyzer = yield* makeCodexImageContextAnalyzer(
+        { TRITONAI_API_KEY: "test-key" },
+        fetchMock as unknown as typeof fetch,
+      ).pipe(Effect.provide(FileSystem.layerNoop({ readFile })));
+      const abortController = new AbortController();
+      abortController.abort();
+
+      const exit = yield* Effect.exit(
+        analyzer({
+          images: [{ name: "one.png", path: "/unused", mimeType: "image/png" }],
+          signal: abortController.signal,
+        }),
+      );
+
+      expect(exit._tag).toBe("Failure");
+      expect(readFile).not.toHaveBeenCalled();
+      expect(fetchMock).not.toHaveBeenCalled();
+    }),
+  );
+
   it("delimits generated content as untrusted user-derived data", () => {
     const formatted = formatUntrustedImageContext({
       images: [

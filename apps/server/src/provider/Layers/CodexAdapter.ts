@@ -1705,6 +1705,9 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
         input.modelSelection?.instanceId === boundInstanceId
           ? getCodexServiceTierOptionValue(input.modelSelection)
           : undefined;
+      if (codexAttachments.length > 0) {
+        session.textOnlyImageContextSafe = false;
+      }
       const result = yield* session.runtime
         .sendTurn({
           ...(turnInput !== undefined ? { input: turnInput } : {}),
@@ -1723,9 +1726,6 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
         .pipe(
           Effect.mapError((cause) => mapCodexRuntimeError(input.threadId, "turn/start", cause)),
         );
-      if (codexAttachments.length > 0) {
-        session.textOnlyImageContextSafe = false;
-      }
       return withTextOnlyImageContextResumeSafety(result, session.textOnlyImageContextSafe);
     }).pipe(
       Effect.ensuring(
