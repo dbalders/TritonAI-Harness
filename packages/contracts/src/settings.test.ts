@@ -16,7 +16,7 @@ const decodeServerSettings = Schema.decodeUnknownSync(ServerSettings);
 const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 
-describe("ClientSettings word wrap", () => {
+describe("ClientSettings local preferences", () => {
   it("defaults first-run onboarding incomplete", () => {
     expect(decodeClientSettings({}).tritonAiFirstRunOnboardingCompleted).toBe(false);
     expect(
@@ -27,6 +27,13 @@ describe("ClientSettings word wrap", () => {
 
   it("defaults word wrap on", () => {
     expect(decodeClientSettings({}).wordWrap).toBe(true);
+  });
+
+  it("defaults desktop notifications off and accepts an opt-in patch", () => {
+    expect(decodeClientSettings({}).desktopNotificationsEnabled).toBe(false);
+    expect(
+      decodeClientSettingsPatch({ desktopNotificationsEnabled: true }).desktopNotificationsEnabled,
+    ).toBe(true);
   });
 
   it("ignores obsolete wrapping preferences", () => {

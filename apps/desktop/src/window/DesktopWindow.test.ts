@@ -401,7 +401,7 @@ describe("DesktopWindow", () => {
     }),
   );
 
-  it.effect("grants clipboard writes and microphone access only to the main app renderer", () =>
+  it.effect("grants trusted renderer permissions only", () =>
     Effect.gen(function* () {
       const fakeWindow = makeFakeBrowserWindow();
       const createCount = yield* Ref.make(0);
@@ -459,8 +459,31 @@ describe("DesktopWindow", () => {
           (granted) => decisions.push(granted),
           { requestingUrl: "t3code-dev://app/", mediaTypes: [] },
         );
+        handler?.(
+          fakeWindow.window.webContents,
+          "notifications",
+          (granted) => decisions.push(granted),
+          { requestingUrl: "https://example.com/", mediaTypes: [] },
+        );
+        handler?.(
+          {} as Electron.WebContents,
+          "notifications",
+          (granted) => decisions.push(granted),
+          { requestingUrl: "t3code-dev://app/", mediaTypes: [] },
+        );
 
-        assert.deepEqual(decisions, [true, false, false, true, false, false, false, false]);
+        assert.deepEqual(decisions, [
+          true,
+          false,
+          false,
+          true,
+          false,
+          false,
+          false,
+          true,
+          false,
+          false,
+        ]);
       }).pipe(Effect.provide(layer));
     }),
   );
