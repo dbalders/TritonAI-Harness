@@ -2243,25 +2243,21 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
 
   const stopSessionInternal = Effect.fn("stopSessionInternal")(
     (session: CodexAdapterSessionContext) =>
-      Effect.uninterruptibleMask((restore) =>
+      Effect.uninterruptibleMask(() =>
         Effect.sync(() => claimSessionStop(session)).pipe(
-          Effect.flatMap((claimed) =>
-            claimed ? restore(closeSessionResources(session)) : Effect.void,
-          ),
+          Effect.flatMap((claimed) => (claimed ? closeSessionResources(session) : Effect.void)),
         ),
       ),
   );
 
   const stopSession: CodexAdapterShape["stopSession"] = (threadId) =>
-    Effect.uninterruptibleMask((restore) =>
+    Effect.uninterruptibleMask(() =>
       Effect.sync(() => {
         retireThreadLifecycle(threadId);
         const session = sessions.get(threadId);
         return session && claimSessionStop(session) ? session : undefined;
       }).pipe(
-        Effect.flatMap((session) =>
-          session ? restore(closeSessionResources(session)) : Effect.void,
-        ),
+        Effect.flatMap((session) => (session ? closeSessionResources(session) : Effect.void)),
       ),
     );
 
@@ -2281,19 +2277,17 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     Effect.succeed(Boolean(sessions.get(threadId) && !sessions.get(threadId)?.stopped));
 
   const stopAll: CodexAdapterShape["stopAll"] = () =>
-    Effect.uninterruptibleMask((restore) =>
+    Effect.uninterruptibleMask(() =>
       Effect.sync(() => {
         for (const threadId of Array.from(threadLifecycleEpochs.keys()))
           retireThreadLifecycle(threadId);
         return Array.from(sessions.values()).filter(claimSessionStop);
       }).pipe(
         Effect.flatMap((claimedSessions) =>
-          restore(
-            Effect.forEach(claimedSessions, closeSessionResources, {
-              concurrency: 1,
-              discard: true,
-            }),
-          ),
+          Effect.forEach(claimedSessions, closeSessionResources, {
+            concurrency: 1,
+            discard: true,
+          }),
         ),
       ),
     );
