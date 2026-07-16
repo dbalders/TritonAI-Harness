@@ -347,7 +347,7 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.integrationsList, AuthOrchestrationReadScope],
   [WS_METHODS.integrationsInstall, AuthOrchestrationOperateScope],
   [WS_METHODS.integrationsSetEnabled, AuthOrchestrationOperateScope],
-  [WS_METHODS.integrationsSetSkillEnabled, AuthOrchestrationOperateScope],
+  [WS_METHODS.integrationsSetCapabilityEnabled, AuthOrchestrationOperateScope],
   [WS_METHODS.integrationsConnect, AuthOrchestrationOperateScope],
   [WS_METHODS.integrationsPoll, AuthOrchestrationOperateScope],
   [WS_METHODS.integrationsDisconnect, AuthOrchestrationOperateScope],
@@ -1424,11 +1424,11 @@ const makeWsRpcLayer = (
             ),
             { "rpc.aggregate": "integrations" },
           ),
-        [WS_METHODS.integrationsSetSkillEnabled]: ({ id, skill, enabled }) =>
+        [WS_METHODS.integrationsSetCapabilityEnabled]: ({ id, capability, enabled }) =>
           observeRpcEffect(
-            WS_METHODS.integrationsSetSkillEnabled,
+            WS_METHODS.integrationsSetCapabilityEnabled,
             integrationRpcEffect(() =>
-              Integrations.getIntegrationRegistry().setSkillEnabled(id, skill, enabled),
+              Integrations.getIntegrationRegistry().setCapabilityEnabled(id, capability, enabled),
             ),
             { "rpc.aggregate": "integrations" },
           ),

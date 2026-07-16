@@ -17,21 +17,26 @@ export const IntegrationCapability = Schema.Struct({
   id: IntegrationCapabilityId,
   displayName: TrimmedNonEmptyString,
   description: TrimmedNonEmptyString,
+  access: Schema.Literals(["default", "opt-in"]),
+  enabled: Schema.Boolean,
   granted: Schema.Boolean,
+  available: Schema.Boolean,
 });
 
 export const IntegrationTool = Schema.Struct({
   name: TrimmedNonEmptyString,
   displayName: TrimmedNonEmptyString,
   description: TrimmedNonEmptyString,
-  capability: IntegrationCapabilityId,
+  capabilities: Schema.Array(IntegrationCapabilityId),
+  effect: Schema.Literals(["read", "write"]),
   available: Schema.Boolean,
 });
 
 export const IntegrationSkill = Schema.Struct({
   name: TrimmedNonEmptyString,
   description: TrimmedNonEmptyString,
-  capability: IntegrationCapabilityId,
+  capabilities: Schema.Array(IntegrationCapabilityId),
+  /** Derived from enabled capability bundles; never an independent user switch. */
   enabled: Schema.Boolean,
   available: Schema.Boolean,
 });
@@ -66,9 +71,9 @@ export const IntegrationSetEnabledInput = Schema.Struct({
   id: TrimmedNonEmptyString,
   enabled: Schema.Boolean,
 });
-export const IntegrationSetSkillEnabledInput = Schema.Struct({
+export const IntegrationSetCapabilityEnabledInput = Schema.Struct({
   id: TrimmedNonEmptyString,
-  skill: TrimmedNonEmptyString,
+  capability: IntegrationCapabilityId,
   enabled: Schema.Boolean,
 });
 export const IntegrationApiKeySubmission = Schema.Struct({

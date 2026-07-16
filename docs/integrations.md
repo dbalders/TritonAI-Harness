@@ -3,7 +3,7 @@
 TritonAI Harness plugins are versioned, included packages that can bundle Codex skills and a
 host-supplied service backend. The Harness build defines the available catalog; users do not add a
 marketplace or install arbitrary packages. In Settings → Plugins, they can turn each included plugin
-and each of its bundled skills on or off.
+on or off and choose the user-facing abilities exposed by that plugin under **Access**.
 
 This architecture lane intentionally includes no production plugins. Development fixtures prove the
 same host supports both a skills-only package and a credential-backed package with tools; production
@@ -19,9 +19,16 @@ Every package contains `.tritonai-plugin/plugin.json` with:
 - an optional provider ID;
 - fixed capabilities and the tools and skills associated with each capability.
 
-Capabilities describe the package's fixed surface. They are not user-selectable permission
-checkboxes, and the manifest does not carry a package-level `access` field. A skills-only package
-omits `provider` and declares no tools.
+Capabilities are user-facing ability bundles and the single source of truth for skill and tool
+availability. Each capability declares `access: "default" | "opt-in"`; omitted legacy-v1 access
+normalizes to `default`. Tools and skills may reference one capability with legacy `capability` or
+multiple capabilities with `capabilities`. Multiple references use union semantics, so a shared
+dependency remains available while any enabled, granted capability requires it. A skills-only
+package omits `provider` and declares no tools.
+
+Every tool also declares `effect: "read" | "write"`; omitted legacy-v1 effect normalizes to the
+safe read contract and must agree with the provider's executable metadata. Write tools always pass
+through a Harness-owned confirmation gate, even in full-access task mode.
 
 The Harness-specific manifest name is intentional. These packages are curated, server-executed
 Harness components rather than user-installable Codex marketplace plugins. Their `skills/`
@@ -30,10 +37,10 @@ provider, capability, compatibility, and tool allowlist needed for host-side enf
 portable Codex plugin ingestion is added later, it should be an explicit adapter rather than
 treating arbitrary Codex MCP or app configuration as trusted Harness backend code.
 
-Manifest v1 deliberately permits at most one host provider per package while allowing many skills
-and tools. Distinct credential or authorization boundaries—such as read-only and full-access
-service applications—belong in separate plugins. That keeps enablement, secrets, revocation, and
-failure isolation aligned instead of hiding multiple security principals behind one switch.
+Manifest v1 deliberately permits at most one host provider per package while allowing many
+capabilities, skills, and narrow tools. Read and write abilities can share that connection while
+remaining separate capability and executable surfaces. A separate plugin remains appropriate when
+the provider genuinely requires a different security principal or credential boundary.
 
 The registry rejects malformed manifests, unsupported v1 fields, unknown capability references,
 duplicate names within the tool or skill namespace, duplicate provider tools, provider/manifest
@@ -46,7 +53,7 @@ than Codex's 1,024-character limit.
 
 The current Harness build is canonical for included package contents and versions. At startup, the
 registry transactionally reconciles installed included packages with their current build copies
-while preserving enablement and per-skill preferences. It repairs both version changes and
+while preserving enablement and capability selections. It repairs both version changes and
 same-version asset drift, and removes crash-orphaned package trees that were never committed to
 state. Packages no longer included by the build have no runtime surface and their managed Codex
 skills are pruned; their state and files are retained until an explicit, provider-aware retirement
@@ -87,11 +94,10 @@ real boundary is the combination of:
 - a specific, allowlisted provider tool implementation;
 - the server-side credential's scopes and the remote service's own enforcement.
 
-For a service that offers meaningfully different access levels, use separate included plugins and
-separate backend authorization surfaces. A read-only plugin should use its own service application,
-explicit read scopes, credential store, and read-only tools; a full-access plugin should use its own
-application, write scopes, credential store, and explicitly annotated read/write tools. A skill
-saying "read-only" is guidance, not a substitute for those controls.
+OAuth scope presence is necessary but not sufficient. The registry independently checks the user's
+selected Harness capabilities, so additive or previously consented provider scopes cannot widen the
+tool surface. A skill saying "read-only" is guidance, not a substitute for capability selection,
+narrow provider tools, invocation-time checks, and host approval.
 
 Credentials remain behind the server secret-store boundary. Each included provider receives a
 facade that accepts only local secret suffixes and constructs a collision-free namespace from the
@@ -114,14 +120,18 @@ is never included in a result. Redirect or other connection experiences must ext
 their own secure submission contract and rendering instead of pretending to use another flow's
 fields or adding ambiguous optional fields.
 
-Connecting requests the package's fixed manifest capabilities. Device-code polling and API-key
+Connecting requests only the plugin's enabled capabilities. Enabling an ability whose provider
+grant is missing starts the same explicit authorization flow; the ability remains unavailable until
+both selection persistence and provider authorization succeed. Device-code polling and API-key
 submission are keyed by plugin and flow ID and cannot overwrite another plugin's flow state;
 polling also honors provider retry delays and expiry.
 
 ## Lifecycle
 
 Installation stages a complete package, validates it, atomically publishes the versioned copy, and
-then persists enablement. Installed state, plugin enablement, and per-skill switches survive restart.
+then persists enablement. Installed state, plugin enablement, and capability selections survive
+restart. Existing v1 state without a capability selection migrates to only the manifest's default
+abilities; opt-in abilities never become active from provider scopes alone.
 
 Disable, disconnect, and internal removal immediately revoke new tool and skill admission, abort
 active tool work, and wait for its cleanup before their serialized lifecycle mutation runs. If tool
@@ -160,7 +170,7 @@ shutdown aborts outstanding non-committing provider work, boundedly drains admit
 and then invokes each safe provider's optional idempotent `close` hook.
 
 Bundled skills are materialized into each configured Codex home only while their plugin, connection,
-required capability, and individual skill switch are active. Ownership markers prevent a plugin
+and at least one referenced capability are active. Ownership markers prevent a plugin
 from replacing or deleting another plugin's or the user's skill. A Codex task also receives a
 temporary integration-only skill root; that root is removed when the provider session closes.
 Successful materializations are keyed by Codex home, package root, and active skill set, so routine
@@ -183,10 +193,10 @@ manifest names such as `fixture.records.search` map deterministically to Codex-s
 capability loss, or provider failure continues to fail closed. Resume cursors fingerprint the full
 dynamic-tool contract and start fresh when that contract changes. Tool input is decoded again at the
 Registry choke point; transport validation is not treated as the security boundary.
-Tool and skill additions are captured when a Codex task starts, so newly enabled or connected
-plugins appear in new tasks. Revocation is immediate in already-running tasks because every call
-still crosses the live registry. Dynamically rebinding an active task would require an intentional
-session-rebind protocol; advertising inactive tools up front would violate least privilege.
+Effective availability changes refresh every configured Codex provider snapshot immediately, with
+debouncing to avoid poll storms. Idle sessions are recreated at the next turn boundary with their
+resume cursor and model preserved; active turns are not interrupted. Revocation is immediate in
+already-running tasks because every call still crosses the live registry.
 
 ## Included development fixtures
 
@@ -202,10 +212,11 @@ marketplace.
 
 ## Plugins screen
 
-Settings → Plugins renders one collapsed row per included package, keeping a catalog of many plugins
-scannable. Expanding a row shows its connection, fixed tools, skill switches, status, and package
-information. The top-level switch installs/enables or disables the plugin; individual skill switches
-control only their named skill. No permission-selection checkboxes are rendered.
+Settings → Plugins renders one row per included package, keeping a catalog of many plugins
+scannable. The top-level switch remains the master control. Expanding a row shows its connection,
+one **Access** switch per user-facing capability, and read-only derived Tool and Skill status. Write
+abilities are marked as confirmation-gated. Enabled plugins with an unresolved connection expand
+automatically and keep a persistent, accessible Connect action visible.
 
 ## Deliberate follow-up work
 

@@ -37,7 +37,11 @@ import * as Stream from "effect/Stream";
 import * as CodexErrors from "effect-codex-app-server/errors";
 
 import { ServerConfig } from "../../config.ts";
-import { codexDynamicIntegrationToolName } from "../../integrations/IntegrationRegistry.ts";
+import {
+  codexDynamicIntegrationToolName,
+  type RegistryRuntime,
+} from "../../integrations/IntegrationRegistry.ts";
+import { EmptyIntegrationToolInput } from "../../integrations/IntegrationTool.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderAdapterValidationError } from "../Errors.ts";
@@ -77,11 +81,14 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
   private readonly eventQueue = Effect.runSync(Queue.unbounded<ProviderEvent>());
   private readonly now = "2026-01-01T00:00:00.000Z";
   private currentModel: string | undefined;
+  public sessionStatus: ProviderSession["status"] = "ready";
+  public activeTurnId: TurnId | undefined;
+  public onGetSession: (() => void) | undefined;
 
   public readonly startImpl = vi.fn(() =>
     Promise.resolve({
       provider: ProviderDriverKind.make("codex"),
-      status: "ready" as const,
+      status: this.sessionStatus,
       runtimeMode: this.options.runtimeMode,
       threadId: this.options.threadId,
       cwd: this.options.cwd,
@@ -89,6 +96,7 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
       resumeCursor: this.options.resumeCursor ?? { threadId: "provider-thread-1" },
       createdAt: this.now,
       updatedAt: this.now,
+      ...(this.activeTurnId ? { activeTurnId: this.activeTurnId } : {}),
     } satisfies ProviderSession),
   );
 
@@ -148,7 +156,10 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
     return Effect.promise(() => this.startImpl());
   }
 
-  getSession = Effect.promise(() => this.startImpl());
+  getSession = Effect.promise(() => {
+    this.onGetSession?.();
+    return this.startImpl();
+  });
 
   sendTurn(input: CodexSessionRuntimeSendTurnInput) {
     return Effect.promise(() => this.sendTurnImpl(input));
@@ -353,6 +364,191 @@ validationLayer("CodexAdapterLive validation", (it) => {
       } finally {
         McpProviderSession.clearMcpProviderSession(threadId);
       }
+    }),
+  );
+});
+
+const reconciliationRuntimeFactory = makeRuntimeFactory();
+const reconciliationAvailability = {
+  generation: 0,
+  available: false,
+  advancesDuringPrepare: 0,
+};
+const reconciliationToolName = "fixture.records.search";
+const reconciliationRegistry = {
+  get availabilityGeneration() {
+    return reconciliationAvailability.generation;
+  },
+  prepareSkillRuntime: () => {
+    if (reconciliationAvailability.advancesDuringPrepare > 0) {
+      reconciliationAvailability.advancesDuringPrepare -= 1;
+      reconciliationAvailability.generation += 1;
+    }
+    return Promise.resolve(null);
+  },
+  releaseSkillRuntime: () => Promise.resolve(),
+  toolDefinitions: () => [
+    {
+      name: reconciliationToolName,
+      description: "Search fixture records.",
+      input: EmptyIntegrationToolInput,
+      readOnly: true,
+      openWorld: false,
+    },
+  ],
+  isToolAvailableSync: () => reconciliationAvailability.available,
+  isSkillAvailableSync: () => false,
+  reserveSkillsSync: () => null,
+  invokeTool: () => Promise.resolve({ records: [] }),
+} as unknown as RegistryRuntime;
+
+const reconciliationLayer = it.layer(
+  Layer.effect(
+    CodexAdapter,
+    makeCodexAdapter(decodeCodexSettings({}), {
+      makeRuntime: reconciliationRuntimeFactory.factory,
+      integrationRegistry: reconciliationRegistry,
+    }),
+  ).pipe(
+    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+    Layer.provideMerge(ServerSettingsService.layerTest()),
+    Layer.provideMerge(providerSessionDirectoryTestLayer),
+    Layer.provideMerge(NodeServices.layer),
+  ),
+);
+
+reconciliationLayer("CodexAdapter integration availability reconciliation", (it) => {
+  it.effect("reconciles when availability changes while a session starts", () =>
+    Effect.gen(function* () {
+      reconciliationAvailability.generation = 10;
+      reconciliationAvailability.available = false;
+      reconciliationAvailability.advancesDuringPrepare = 1;
+      reconciliationRuntimeFactory.factory.mockClear();
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("thread-integration-start-race");
+      yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
+
+      yield* adapter.sendTurn({ threadId, input: "use current plugin access", attachments: [] });
+
+      NodeAssert.equal(reconciliationRuntimeFactory.factory.mock.calls.length, 2);
+    }),
+  );
+
+  it.effect("rechecks availability when it changes during session reconciliation", () =>
+    Effect.gen(function* () {
+      reconciliationAvailability.generation = 20;
+      reconciliationAvailability.available = false;
+      reconciliationAvailability.advancesDuringPrepare = 0;
+      reconciliationRuntimeFactory.factory.mockClear();
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("thread-integration-reconcile-race");
+      yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
+
+      reconciliationAvailability.generation = 21;
+      reconciliationAvailability.advancesDuringPrepare = 1;
+      yield* adapter.sendTurn({ threadId, input: "use current plugin access", attachments: [] });
+
+      NodeAssert.equal(reconciliationAvailability.generation, 22);
+      NodeAssert.equal(reconciliationRuntimeFactory.factory.mock.calls.length, 3);
+    }),
+  );
+
+  it.effect("rechecks availability immediately before dispatching an idle turn", () =>
+    Effect.gen(function* () {
+      reconciliationAvailability.generation = 30;
+      reconciliationAvailability.available = false;
+      reconciliationAvailability.advancesDuringPrepare = 0;
+      reconciliationRuntimeFactory.factory.mockClear();
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("thread-integration-dispatch-race");
+      yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
+      const initialRuntime = reconciliationRuntimeFactory.lastRuntime!;
+      initialRuntime.onGetSession = () => {
+        initialRuntime.onGetSession = undefined;
+        reconciliationAvailability.generation = 31;
+      };
+
+      yield* adapter.sendTurn({ threadId, input: "use current plugin access", attachments: [] });
+
+      NodeAssert.equal(reconciliationRuntimeFactory.factory.mock.calls.length, 2);
+    }),
+  );
+
+  it.effect("recreates an idle session at its next turn boundary and preserves its model", () =>
+    Effect.gen(function* () {
+      reconciliationAvailability.generation = 0;
+      reconciliationAvailability.available = false;
+      reconciliationAvailability.advancesDuringPrepare = 0;
+      reconciliationRuntimeFactory.factory.mockClear();
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("thread-integration-reconcile");
+      yield* adapter.startSession({
+        threadId,
+        runtimeMode: "full-access",
+        modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "gpt-start", [
+          { id: "reasoningEffort", value: "low" },
+        ]),
+      });
+      const latestModelSelection = createModelSelection(
+        ProviderInstanceId.make("codex"),
+        "gpt-current",
+        [
+          { id: "reasoningEffort", value: "high" },
+          { id: "serviceTier", value: "priority" },
+        ],
+      );
+      yield* adapter.sendTurn({
+        threadId,
+        input: "switch model",
+        attachments: [],
+        modelSelection: latestModelSelection,
+      });
+
+      reconciliationAvailability.available = true;
+      reconciliationAvailability.generation = 1;
+      yield* adapter.sendTurn({ threadId, input: "use the plugin", attachments: [] });
+
+      NodeAssert.equal(reconciliationRuntimeFactory.factory.mock.calls.length, 2);
+      const reconciledOptions = reconciliationRuntimeFactory.lastRuntime?.options;
+      NodeAssert.equal(reconciledOptions?.model, "gpt-current");
+      NodeAssert.equal(reconciledOptions?.serviceTier, "priority");
+      NodeAssert.equal(reconciledOptions?.resumeCursor?.threadId, "provider-thread-1");
+      NodeAssert.deepStrictEqual(
+        reconciledOptions?.dynamicTools?.map(({ name }) => name),
+        [codexDynamicIntegrationToolName(reconciliationToolName)],
+      );
+    }),
+  );
+
+  it.effect("does not interrupt an active turn and keeps revoked dynamic tools fail closed", () =>
+    Effect.gen(function* () {
+      reconciliationAvailability.generation = 2;
+      reconciliationAvailability.available = true;
+      reconciliationAvailability.advancesDuringPrepare = 0;
+      reconciliationRuntimeFactory.factory.mockClear();
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("thread-integration-active-revocation");
+      yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
+      const activeRuntime = reconciliationRuntimeFactory.lastRuntime!;
+      activeRuntime.sessionStatus = "running";
+      activeRuntime.activeTurnId = asTurnId("turn-active");
+
+      reconciliationAvailability.available = false;
+      reconciliationAvailability.generation = 3;
+      const binding = activeRuntime.options.dynamicTools?.[0];
+      yield* Effect.promise(() =>
+        NodeAssert.rejects(() =>
+          activeRuntime.options.invokeDynamicTool!({
+            name: binding!.name,
+            arguments: {},
+            signal: new AbortController().signal,
+          }),
+        ),
+      );
+      yield* adapter.sendTurn({ threadId, input: "active turn boundary", attachments: [] });
+
+      NodeAssert.equal(reconciliationRuntimeFactory.factory.mock.calls.length, 1);
+      NodeAssert.equal(activeRuntime.closeImpl.mock.calls.length, 0);
     }),
   );
 });

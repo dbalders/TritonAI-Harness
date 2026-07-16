@@ -23,6 +23,7 @@ import {
   ProviderApprovalDecision,
   ThreadId,
   ProviderSendTurnInput,
+  type ProviderSessionStartInput,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -96,6 +97,8 @@ export interface CodexAdapterLiveOptions {
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
   readonly imageContextAnalyzer?: CodexImageContextAnalyzer;
+  /** Test/embedding override; normal Harness instances resolve the active registry centrally. */
+  readonly integrationRegistry?: Integrations.RegistryRuntime | null;
 }
 
 interface CodexAdapterSessionContext {
@@ -105,6 +108,9 @@ interface CodexAdapterSessionContext {
   readonly eventFiber: Fiber.Fiber<void, never>;
   readonly integrationRegistry?: Integrations.RegistryRuntime;
   readonly integrationSkillRuntimeRoot?: string;
+  readonly startInput: ProviderSessionStartInput;
+  readonly integrationAvailabilityGeneration: number;
+  modelSelection?: ProviderSessionStartInput["modelSelection"];
   textOnlyImageContextSafe: boolean;
   stopped: boolean;
 }
@@ -1461,7 +1467,11 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           );
         }
         const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
-        const integrationRegistry = Integrations.getIntegrationRegistryOptional();
+        const integrationRegistry =
+          options && Object.hasOwn(options, "integrationRegistry")
+            ? (options.integrationRegistry ?? null)
+            : Integrations.getIntegrationRegistryOptional();
+        const integrationAvailabilityGeneration = integrationRegistry?.availabilityGeneration ?? 0;
         const integrationSkillRuntime = integrationRegistry
           ? yield* Effect.tryPromise({
               try: () => integrationRegistry.prepareSkillRuntime(),
@@ -1482,12 +1492,18 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
               ).pipe(Effect.ignore)
             : Effect.void,
         );
+        // Codex persists dynamic-tool definitions in thread metadata and does not accept a
+        // replacement catalog on resume. Declare the fixed manifest catalog once, then enforce
+        // live availability at invocation time. This preserves thread history across connection
+        // changes while disabled and revoked tools continue to fail closed.
         const dynamicToolBindings = integrationRegistry
-          ? integrationRegistry.getAvailableToolDefinitionsSync().map((definition) => ({
+          ? integrationRegistry.toolDefinitions().map((definition) => ({
               canonicalName: definition.name,
               dynamicName: Integrations.codexDynamicIntegrationToolName(definition.name),
               description: `${definition.description} Integration plugin tool: ${definition.name}.`,
               inputSchema: integrationToolJsonSchema(definition),
+              requiresApproval:
+                integrationRegistry.toolRequiresApprovalSync?.(definition.name) ?? false,
             }))
           : [];
         const dynamicToolNames = new Set<string>();
@@ -1541,13 +1557,22 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
                   name: binding.dynamicName,
                   description: binding.description,
                   inputSchema: binding.inputSchema,
+                  requiresApproval: binding.requiresApproval,
                 })),
-                invokeDynamicTool: async ({ name, arguments: toolArguments, signal }) => {
+                invokeDynamicTool: async ({
+                  name,
+                  arguments: toolArguments,
+                  signal,
+                  writeApproved,
+                }) => {
                   const canonicalName = dynamicToolByName.get(name);
                   if (!canonicalName || !integrationRegistry.isToolAvailableSync(canonicalName)) {
                     throw new Error("Integration plugin tool is unavailable.");
                   }
-                  return integrationRegistry.invokeTool(canonicalName, toolArguments, { signal });
+                  return integrationRegistry.invokeTool(canonicalName, toolArguments, {
+                    signal,
+                    ...(writeApproved ? { writeApproved: true } : {}),
+                  });
                 },
               }
             : {}),
@@ -1636,12 +1661,17 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           scope: sessionScope,
           runtime,
           eventFiber,
-          ...(integrationRegistry && integrationSkillRuntime
+          ...(integrationRegistry
             ? {
                 integrationRegistry,
-                integrationSkillRuntimeRoot: integrationSkillRuntime.root,
+                ...(integrationSkillRuntime
+                  ? { integrationSkillRuntimeRoot: integrationSkillRuntime.root }
+                  : {}),
               }
             : {}),
+          startInput: input,
+          integrationAvailabilityGeneration,
+          ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
           textOnlyImageContextSafe,
           stopped: false,
         });
@@ -1705,8 +1735,52 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     };
   });
 
+  const reconcileSessionForIntegrationAvailability = Effect.fn(
+    "reconcileSessionForIntegrationAvailability",
+  )(function* (session: CodexAdapterSessionContext) {
+    let candidate = session;
+    while (true) {
+      const integrationRegistry = candidate.integrationRegistry;
+      if (
+        !integrationRegistry ||
+        candidate.integrationAvailabilityGeneration === integrationRegistry.availabilityGeneration
+      ) {
+        return candidate;
+      }
+
+      const current = yield* candidate.runtime.getSession;
+      if (current.activeTurnId !== undefined || current.status === "running") {
+        // Never interrupt or replace an active turn. Revocation remains immediate through the
+        // registry's invocation and skill-reservation guards; recreation waits for an idle send.
+        return candidate;
+      }
+
+      const latestModelSelection = candidate.modelSelection;
+      const modelSelection = current.model
+        ? {
+            instanceId: boundInstanceId,
+            model: current.model,
+            ...(latestModelSelection?.instanceId === boundInstanceId &&
+            latestModelSelection.model === current.model &&
+            latestModelSelection.options
+              ? { options: latestModelSelection.options }
+              : {}),
+          }
+        : latestModelSelection;
+      yield* startSession({
+        ...candidate.startInput,
+        ...(current.cwd ? { cwd: current.cwd } : {}),
+        ...(current.resumeCursor !== undefined ? { resumeCursor: current.resumeCursor } : {}),
+        ...(modelSelection ? { modelSelection } : {}),
+      });
+      candidate = yield* requireSession(candidate.threadId);
+    }
+  });
+
   const sendTurn: CodexAdapterShape["sendTurn"] = Effect.fn("sendTurn")(function* (input) {
-    const session = yield* requireSession(input.threadId);
+    let session = yield* requireSession(input.threadId).pipe(
+      Effect.flatMap(reconcileSessionForIntegrationAvailability),
+    );
     const currentSession = yield* session.runtime.getSession;
     const selectedModel =
       input.modelSelection?.instanceId === boundInstanceId ? input.modelSelection.model : undefined;
@@ -1791,6 +1865,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
         input.modelSelection?.instanceId === boundInstanceId
           ? getCodexServiceTierOptionValue(input.modelSelection)
           : undefined;
+      session = yield* reconcileSessionForIntegrationAvailability(session);
       if (codexAttachments.length > 0) {
         session.textOnlyImageContextSafe = false;
       }
@@ -1812,6 +1887,9 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
         .pipe(
           Effect.mapError((cause) => mapCodexRuntimeError(input.threadId, "turn/start", cause)),
         );
+      if (input.modelSelection?.instanceId === boundInstanceId) {
+        session.modelSelection = input.modelSelection;
+      }
       return withTextOnlyImageContextResumeSafety(result, session.textOnlyImageContextSafe);
     }).pipe(
       Effect.ensuring(

@@ -11,6 +11,8 @@ import {
   CheckCircle2Icon,
   ChevronDownIcon,
   InfoIcon,
+  LockKeyholeIcon,
+  ShieldCheckIcon,
   PlugIcon,
   PuzzleIcon,
   RefreshCwIcon,
@@ -60,6 +62,80 @@ function connectionVariant(integration: IntegrationSummary) {
   if (integration.connectionState === "error") return "destructive" as const;
   if (integration.connectionState === "connecting") return "warning" as const;
   return "outline" as const;
+}
+
+export function integrationNeedsConnectionAction(integration: IntegrationSummary): boolean {
+  const needsAuthorization = integration.capabilities.some(
+    ({ enabled, granted }) => enabled && !granted,
+  );
+  return (
+    integration.installed &&
+    integration.enabled &&
+    integration.compatible &&
+    integration.requiresConnection &&
+    integration.capabilities.some(({ enabled }) => enabled) &&
+    (integration.connectionState === "not_connected" ||
+      integration.connectionState === "error" ||
+      needsAuthorization)
+  );
+}
+
+export function shouldExpandIntegrationCard(input: {
+  readonly needsConnectionAction: boolean;
+  readonly hasFlow: boolean;
+  readonly connectionAttentionRequest?: number;
+}): boolean {
+  return (
+    input.needsConnectionAction || input.hasFlow || input.connectionAttentionRequest !== undefined
+  );
+}
+
+export function shouldFocusConnectionAction(input: {
+  readonly expanded: boolean;
+  readonly connectionAttentionRequest?: number;
+  readonly handledAttentionRequest?: number;
+}): boolean {
+  return (
+    input.expanded &&
+    input.connectionAttentionRequest !== undefined &&
+    input.handledAttentionRequest !== input.connectionAttentionRequest
+  );
+}
+
+export function IntegrationConnectionActionCallout({
+  integrationName,
+}: {
+  readonly integrationName: string;
+}) {
+  return (
+    <p className="mt-1 text-xs font-semibold" role="status" aria-live="polite">
+      Action required: Connect {integrationName}
+    </p>
+  );
+}
+
+export function integrationConnectAriaLabel(integrationName: string): string {
+  return `Connect ${integrationName}`;
+}
+
+export function capabilityUsesWriteTool(
+  integration: IntegrationSummary,
+  capabilityId: string,
+): boolean {
+  return integration.tools.some(
+    (tool) => tool.effect === "write" && tool.capabilities.includes(capabilityId),
+  );
+}
+
+export function capabilityAccessStateLabel(
+  integration: IntegrationSummary,
+  capability: IntegrationSummary["capabilities"][number],
+): string {
+  if (capability.available) return "Active";
+  if (capability.enabled && !capability.granted && integration.requiresConnection) {
+    return "Authorization required";
+  }
+  return capability.enabled ? "Unavailable" : "Off";
 }
 
 type PollIntegrationFlow = (
@@ -223,7 +299,8 @@ function IntegrationCard({
   flow,
   onAction,
   onApiKeySubmit,
-  onSkillEnabled,
+  onCapabilityEnabled,
+  connectionAttentionRequest,
 }: {
   readonly integration: IntegrationSummary;
   readonly busy: boolean;
@@ -237,16 +314,17 @@ function IntegrationCard({
     flowId: string,
     value: string,
   ) => Promise<void>;
-  readonly onSkillEnabled: (
+  readonly onCapabilityEnabled: (
     integration: IntegrationSummary,
-    skill: string,
+    capability: string,
     enabled: boolean,
   ) => Promise<void>;
+  readonly connectionAttentionRequest?: number;
 }) {
   const connected = integration.connectionState === "connected";
-  const capabilities = integration.capabilities.map(({ displayName }) => displayName).join(", ");
   const hasUnavailableEnabledSkill =
-    integration.enabled && integration.skills.some((skill) => skill.enabled && !skill.available);
+    integration.enabled &&
+    integration.capabilities.some((capability) => capability.enabled && !capability.available);
   const visibleStatusMessage =
     integration.statusMessage &&
     (integration.requiresConnection ||
@@ -255,11 +333,40 @@ function IntegrationCard({
       ? integration.statusMessage
       : null;
   const statusIsError = integration.connectionState === "error" || hasUnavailableEnabledSkill;
-  const [expanded, setExpanded] = useState(false);
+  const needsConnectionAction = integrationNeedsConnectionAction(integration);
+  const [expanded, setExpanded] = useState(() =>
+    shouldExpandIntegrationCard({ needsConnectionAction, hasFlow: flow !== null }),
+  );
+  const connectButtonRef = useRef<HTMLButtonElement>(null);
+  const handledAttentionRequestRef = useRef<number | undefined>(undefined);
 
   useEffect(() => {
-    if (flow) setExpanded(true);
-  }, [flow]);
+    if (
+      shouldExpandIntegrationCard({
+        needsConnectionAction,
+        hasFlow: flow !== null,
+        ...(connectionAttentionRequest !== undefined ? { connectionAttentionRequest } : {}),
+      })
+    ) {
+      setExpanded(true);
+    }
+  }, [connectionAttentionRequest, flow, needsConnectionAction]);
+
+  useEffect(() => {
+    if (
+      !shouldFocusConnectionAction({
+        expanded,
+        ...(connectionAttentionRequest !== undefined ? { connectionAttentionRequest } : {}),
+        ...(handledAttentionRequestRef.current !== undefined
+          ? { handledAttentionRequest: handledAttentionRequestRef.current }
+          : {}),
+      })
+    ) {
+      return;
+    }
+    handledAttentionRequestRef.current = connectionAttentionRequest;
+    connectButtonRef.current?.focus();
+  }, [connectionAttentionRequest, expanded]);
 
   return (
     <Collapsible open={expanded} onOpenChange={setExpanded}>
@@ -333,22 +440,40 @@ function IntegrationCard({
                     <p className="truncate text-xs text-muted-foreground">
                       {integration.accountLabel ?? "Connect the service used by this plugin."}
                     </p>
+                    {needsConnectionAction ? (
+                      <IntegrationConnectionActionCallout integrationName={integration.name} />
+                    ) : null}
                   </div>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
                   {connected ? (
-                    <Menu>
-                      <MenuTrigger render={<Button size="sm" variant="outline" disabled={busy} />}>
-                        <span className="size-2 rounded-full bg-emerald-500" aria-hidden="true" />
-                        Connected
-                        <ChevronDownIcon />
-                      </MenuTrigger>
-                      <MenuPopup align="end">
-                        <MenuItem onClick={() => void onAction("disconnect", integration)}>
-                          <UnplugIcon /> Disconnect
-                        </MenuItem>
-                      </MenuPopup>
-                    </Menu>
+                    <>
+                      {needsConnectionAction ? (
+                        <Button
+                          ref={connectButtonRef}
+                          size="sm"
+                          disabled={busy || flow !== null}
+                          aria-label={integrationConnectAriaLabel(integration.name)}
+                          onClick={() => void onAction("connect", integration)}
+                        >
+                          <PlugIcon /> Connect
+                        </Button>
+                      ) : null}
+                      <Menu>
+                        <MenuTrigger
+                          render={<Button size="sm" variant="outline" disabled={busy} />}
+                        >
+                          <span className="size-2 rounded-full bg-emerald-500" aria-hidden="true" />
+                          Connected
+                          <ChevronDownIcon />
+                        </MenuTrigger>
+                        <MenuPopup align="end">
+                          <MenuItem onClick={() => void onAction("disconnect", integration)}>
+                            <UnplugIcon /> Disconnect
+                          </MenuItem>
+                        </MenuPopup>
+                      </Menu>
+                    </>
                   ) : integration.installed &&
                     (integration.connectionState === "error" || !integration.compatible) ? (
                     <>
@@ -362,18 +487,22 @@ function IntegrationCard({
                       </Button>
                       {integration.enabled && integration.compatible ? (
                         <Button
+                          ref={connectButtonRef}
                           size="sm"
                           disabled={busy || flow !== null}
+                          aria-label={integrationConnectAriaLabel(integration.name)}
                           onClick={() => void onAction("connect", integration)}
                         >
-                          <PlugIcon /> Try again
+                          <PlugIcon /> Connect
                         </Button>
                       ) : null}
                     </>
                   ) : integration.installed && integration.enabled && integration.compatible ? (
                     <Button
+                      ref={connectButtonRef}
                       size="sm"
                       disabled={busy || flow !== null}
+                      aria-label={integrationConnectAriaLabel(integration.name)}
                       onClick={() => void onAction("connect", integration)}
                     >
                       <PlugIcon /> Connect
@@ -398,6 +527,70 @@ function IntegrationCard({
           ) : null}
 
           <PluginDetailSection
+            title="Access"
+            count={integration.capabilities.length}
+            icon={<ShieldCheckIcon className="size-4 text-muted-foreground" />}
+          >
+            {integration.capabilities.length > 0 ? (
+              <div className="divide-y divide-border/50">
+                {integration.capabilities.map((capability) => {
+                  const writeAbility = capabilityUsesWriteTool(integration, capability.id);
+                  const stateLabel = capabilityAccessStateLabel(integration, capability);
+                  return (
+                    <div
+                      key={capability.id}
+                      className="grid gap-3 py-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
+                    >
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="text-sm font-medium">{capability.displayName}</p>
+                          <Badge size="sm" variant={capability.available ? "success" : "outline"}>
+                            {stateLabel}
+                          </Badge>
+                          {writeAbility ? (
+                            <Badge size="sm" variant="warning">
+                              <LockKeyholeIcon className="size-3" aria-hidden="true" />
+                              Write · confirmation required
+                            </Badge>
+                          ) : null}
+                          {capability.access === "opt-in" ? (
+                            <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                              Off by default
+                            </span>
+                          ) : null}
+                        </div>
+                        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                          {capability.description}
+                        </p>
+                      </div>
+                      <label className="inline-flex items-center justify-between gap-3 text-xs font-semibold sm:justify-end">
+                        <span>Access</span>
+                        <Switch
+                          checked={capability.enabled}
+                          disabled={
+                            busy ||
+                            !integration.installed ||
+                            !integration.enabled ||
+                            !integration.compatible
+                          }
+                          aria-label={`${capability.displayName} access enabled`}
+                          onCheckedChange={(enabled) =>
+                            void onCapabilityEnabled(integration, capability.id, enabled)
+                          }
+                        />
+                      </label>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="py-4 text-xs text-muted-foreground">
+                This plugin does not request service access.
+              </p>
+            )}
+          </PluginDetailSection>
+
+          <PluginDetailSection
             title="Tools"
             count={integration.tools.length}
             icon={<WrenchIcon className="size-4 text-muted-foreground" />}
@@ -410,6 +603,12 @@ function IntegrationCard({
                       <p className="flex items-center gap-2 text-sm font-medium">
                         <WrenchIcon className="size-3.5 text-muted-foreground" />
                         {tool.displayName}
+                        {tool.effect === "write" ? (
+                          <LockKeyholeIcon
+                            className="size-3.5 text-amber-600"
+                            aria-label="Write operation; confirmation required"
+                          />
+                        ) : null}
                       </p>
                       <p className="mt-0.5 text-xs text-muted-foreground">{tool.description}</p>
                     </div>
@@ -448,14 +647,9 @@ function IntegrationCard({
                       </p>
                       <p className="mt-0.5 text-xs text-muted-foreground">{skill.description}</p>
                     </div>
-                    <Switch
-                      checked={skill.enabled}
-                      disabled={busy || !integration.installed || !integration.compatible}
-                      aria-label={`${skill.name} skill enabled`}
-                      onCheckedChange={(enabled) =>
-                        void onSkillEnabled(integration, skill.name, enabled)
-                      }
-                    />
+                    <Badge size="sm" variant={skill.available ? "success" : "outline"}>
+                      {skill.available ? "Available" : "Inactive"}
+                    </Badge>
                   </div>
                 ))}
               </div>
@@ -471,8 +665,8 @@ function IntegrationCard({
             icon={<InfoIcon className="size-4 text-muted-foreground" />}
           >
             <dl className="grid grid-cols-[minmax(7rem,auto)_1fr] gap-x-6 gap-y-3 py-4 text-sm">
-              <dt className="text-muted-foreground">Capabilities</dt>
-              <dd>{capabilities || "Instructions only"}</dd>
+              <dt className="text-muted-foreground">Access model</dt>
+              <dd>Capability controlled</dd>
               <dt className="text-muted-foreground">Version</dt>
               <dd>{integration.version}</dd>
               <dt className="text-muted-foreground">Package API</dt>
@@ -498,9 +692,12 @@ export function PluginsSettingsPanel() {
   const enabledCommand = useAtomCommand(serverEnvironment.setIntegrationEnabled, {
     reportFailure: false,
   });
-  const skillEnabledCommand = useAtomCommand(serverEnvironment.setIntegrationSkillEnabled, {
-    reportFailure: false,
-  });
+  const capabilityEnabledCommand = useAtomCommand(
+    serverEnvironment.setIntegrationCapabilityEnabled,
+    {
+      reportFailure: false,
+    },
+  );
   const connectCommand = useAtomCommand(serverEnvironment.connectIntegration, {
     reportFailure: false,
   });
@@ -513,6 +710,12 @@ export function PluginsSettingsPanel() {
   const [busyIds, setBusyIds] = useState<ReadonlySet<string>>(() => new Set());
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [flows, setFlows] = useState<ReadonlyMap<string, ActiveIntegrationFlow>>(() => new Map());
+  const [connectionAttention, setConnectionAttention] = useState<{
+    readonly id: string;
+    readonly request: number;
+  } | null>(null);
+  const [connectionAnnouncement, setConnectionAnnouncement] = useState("");
+  const connectionAttentionSequenceRef = useRef(0);
   const activeFlowIdsRef = useRef(new Map<string, string>());
 
   useEffect(() => {
@@ -521,6 +724,9 @@ export function PluginsSettingsPanel() {
     activeFlowIdsRef.current = new Map();
     setBusyIds(new Set());
     setErrors({});
+    setConnectionAttention(null);
+    connectionAttentionSequenceRef.current = 0;
+    setConnectionAnnouncement("");
     setLoading(environmentId !== null);
   }, [environmentId]);
 
@@ -581,6 +787,10 @@ export function PluginsSettingsPanel() {
             item.id === id ? result.integration : item,
           ),
         }));
+        if (result.integration.connectionState === "connected") {
+          setConnectionAttention((current) => (current?.id === id ? null : current));
+          setConnectionAnnouncement("");
+        }
         setErrors((current) => {
           const { [id]: _, ...rest } = current;
           return rest;
@@ -651,6 +861,8 @@ export function PluginsSettingsPanel() {
           next.delete(integration.id);
           return next;
         });
+        setConnectionAttention((current) => (current?.id === integration.id ? null : current));
+        setConnectionAnnouncement("");
       }
       try {
         if (kind === "connect") {
@@ -669,6 +881,8 @@ export function PluginsSettingsPanel() {
               next.delete(integration.id);
               return next;
             });
+            setConnectionAttention((current) => (current?.id === integration.id ? null : current));
+            setConnectionAnnouncement("");
             await load();
           } else {
             setFlows((current) =>
@@ -697,6 +911,23 @@ export function PluginsSettingsPanel() {
           const result = unwrap(await command);
           if (environmentIdRef.current !== targetEnvironmentId) return;
           setData(result);
+          // First-time installation is also represented by the "enable" action kind above.
+          if (kind === "enable") {
+            const updated = result.integrations.find(({ id }) => id === integration.id);
+            if (updated && integrationNeedsConnectionAction(updated)) {
+              connectionAttentionSequenceRef.current += 1;
+              setConnectionAttention({
+                id: integration.id,
+                request: connectionAttentionSequenceRef.current,
+              });
+              setConnectionAnnouncement(`Action required: Connect ${updated.name}`);
+            } else {
+              setConnectionAttention((current) =>
+                current?.id === integration.id ? null : current,
+              );
+              setConnectionAnnouncement("");
+            }
+          }
         }
       } catch (cause) {
         if (environmentIdRef.current !== targetEnvironmentId) return;
@@ -744,6 +975,8 @@ export function PluginsSettingsPanel() {
           next.delete(integration.id);
           return next;
         });
+        setConnectionAttention((current) => (current?.id === integration.id ? null : current));
+        setConnectionAnnouncement("");
         await load();
       } catch (cause) {
         if (environmentIdRef.current !== targetEnvironmentId) return;
@@ -761,8 +994,8 @@ export function PluginsSettingsPanel() {
     [connectCommand, environmentId, load],
   );
 
-  const setSkillEnabled = useCallback(
-    async (integration: IntegrationSummary, skill: string, enabled: boolean) => {
+  const setCapabilityEnabled = useCallback(
+    async (integration: IntegrationSummary, capability: string, enabled: boolean) => {
       if (!environmentId) return;
       const targetEnvironmentId = environmentId;
       setBusyIds((current) => new Set(current).add(integration.id));
@@ -772,13 +1005,41 @@ export function PluginsSettingsPanel() {
       });
       try {
         const result = unwrap(
-          await skillEnabledCommand({
+          await capabilityEnabledCommand({
             environmentId: targetEnvironmentId,
-            input: { id: integration.id, skill, enabled },
+            input: { id: integration.id, capability, enabled },
           }),
         );
         if (environmentIdRef.current !== targetEnvironmentId) return;
         setData(result);
+        const updated = result.integrations.find(({ id }) => id === integration.id);
+        const updatedCapability = updated?.capabilities.find(({ id }) => id === capability);
+        if (
+          enabled &&
+          updated?.requiresConnection &&
+          updatedCapability?.enabled &&
+          !updatedCapability.granted
+        ) {
+          const flow = unwrap(
+            await connectCommand({
+              environmentId: targetEnvironmentId,
+              input: { id: integration.id },
+            }),
+          );
+          if (environmentIdRef.current !== targetEnvironmentId) return;
+          activeFlowIdsRef.current.set(integration.id, flow.flowId);
+          if (flow.kind === "connected") {
+            activeFlowIdsRef.current.delete(integration.id);
+            await load();
+          } else {
+            setFlows((current) =>
+              new Map(current).set(
+                integration.id,
+                flow.kind === "device_code" ? scheduleIntegrationFlow(flow) : flow,
+              ),
+            );
+          }
+        }
       } catch (cause) {
         if (environmentIdRef.current !== targetEnvironmentId) return;
         setErrors((current) => ({ ...current, [integration.id]: errorMessage(cause) }));
@@ -792,11 +1053,14 @@ export function PluginsSettingsPanel() {
         }
       }
     },
-    [environmentId, skillEnabledCommand],
+    [capabilityEnabledCommand, connectCommand, environmentId, load],
   );
 
   return (
     <SettingsPageContainer>
+      <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {connectionAnnouncement}
+      </p>
       {[...flows].map(([id, flow]) =>
         flow.kind === "device_code" ? (
           <IntegrationFlowPoller key={`${id}:${flow.flowId}`} id={id} flow={flow} poll={pollFlow} />
@@ -805,9 +1069,9 @@ export function PluginsSettingsPanel() {
       <div className="space-y-1">
         <h1 className="text-lg font-semibold">Plugins</h1>
         <p className="text-xs text-muted-foreground">
-          Turn included Harness plugins and their skills on or off. Connected-service credentials
-          remain on this server. Newly enabled tools and skills appear in new tasks; turning a
-          plugin off revokes access immediately.
+          Turn plugins on or off, then choose the abilities they can use under Access.
+          Connected-service credentials remain on this server. Changes reconcile before the next
+          idle turn; disabling access revokes its tools immediately.
         </p>
       </div>
       {Object.keys(errors).length > 0 ? (
@@ -844,7 +1108,10 @@ export function PluginsSettingsPanel() {
               flow={flows.get(integration.id) ?? null}
               onAction={action}
               onApiKeySubmit={submitApiKey}
-              onSkillEnabled={setSkillEnabled}
+              onCapabilityEnabled={setCapabilityEnabled}
+              {...(connectionAttention?.id === integration.id
+                ? { connectionAttentionRequest: connectionAttention.request }
+                : {})}
             />
           ))
         ) : (

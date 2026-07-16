@@ -7,19 +7,25 @@ export interface IntegrationManifestCapability {
   readonly id: string;
   readonly displayName: string;
   readonly description: string;
+  readonly access?: "default" | "opt-in";
 }
 
 export interface IntegrationManifestTool {
   readonly name: string;
   readonly displayName: string;
   readonly description: string;
-  readonly capability: string;
+  /** `capability` is the legacy single-dependency spelling accepted by manifest v1. */
+  readonly capability?: string;
+  readonly capabilities?: ReadonlyArray<string>;
+  readonly effect?: "read" | "write";
 }
 
 export interface IntegrationManifestSkill {
   readonly name: string;
   readonly description: string;
-  readonly capability: string;
+  /** `capability` is the legacy single-dependency spelling accepted by manifest v1. */
+  readonly capability?: string;
+  readonly capabilities?: ReadonlyArray<string>;
 }
 
 export interface IntegrationManifest {
@@ -65,9 +71,16 @@ const MANIFEST_KEYS = new Set([
 ]);
 const COMPATIBILITY_KEYS = new Set(["harness"]);
 const HARNESS_COMPATIBILITY_KEYS = new Set(["min", "maxExclusive"]);
-const CAPABILITY_KEYS = new Set(["id", "displayName", "description"]);
-const TOOL_KEYS = new Set(["name", "displayName", "description", "capability"]);
-const SKILL_KEYS = new Set(["name", "description", "capability"]);
+const CAPABILITY_KEYS = new Set(["id", "displayName", "description", "access"]);
+const TOOL_KEYS = new Set([
+  "name",
+  "displayName",
+  "description",
+  "capability",
+  "capabilities",
+  "effect",
+]);
+const SKILL_KEYS = new Set(["name", "description", "capability", "capabilities"]);
 
 function nonEmpty(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
@@ -219,7 +232,8 @@ export function validateIntegrationManifest(value: unknown): IntegrationManifest
       !nonEmpty(item.id) ||
       !isIntegrationId(item.id) ||
       !nonEmpty(item.displayName) ||
-      !nonEmpty(item.description)
+      !nonEmpty(item.description) ||
+      (item.access !== undefined && item.access !== "default" && item.access !== "opt-in")
     ) {
       throw new Error("Every capability requires a unique id, displayName, and description.");
     }
@@ -250,14 +264,56 @@ export function validateIntegrationManifest(value: unknown): IntegrationManifest
       if (kind === "tool" && !nonEmpty(item.displayName)) {
         throw new Error("Every tool requires a displayName.");
       }
-      if (!nonEmpty(item.capability) || !capabilityIds.has(item.capability)) {
+      const references = Array.isArray(item.capabilities)
+        ? item.capabilities
+        : nonEmpty(item.capability)
+          ? [item.capability]
+          : [];
+      if (
+        references.length === 0 ||
+        references.some((capability) => !nonEmpty(capability) || !capabilityIds.has(capability)) ||
+        new Set(references).size !== references.length ||
+        (item.capability !== undefined && item.capabilities !== undefined)
+      ) {
         throw new Error(`${kind} ${item.name} references an unknown capability.`);
+      }
+      if (
+        kind === "tool" &&
+        item.effect !== undefined &&
+        item.effect !== "read" &&
+        item.effect !== "write"
+      ) {
+        throw new Error(`Tool ${item.name} has an invalid effect.`);
       }
       if (names.has(name)) throw new Error(`Duplicate ${kind} name ${name}.`);
       names.add(name);
     }
   }
-  return input as unknown as IntegrationManifest;
+  return {
+    ...(input as unknown as Omit<IntegrationManifest, "capabilities" | "tools" | "skills">),
+    capabilities: capabilities.map((capability) => ({
+      id: capability.id as string,
+      displayName: capability.displayName as string,
+      description: capability.description as string,
+      access: capability.access === "opt-in" ? "opt-in" : "default",
+    })),
+    tools: tools.map((tool) => ({
+      name: tool.name as string,
+      displayName: tool.displayName as string,
+      description: tool.description as string,
+      capabilities: (Array.isArray(tool.capabilities)
+        ? tool.capabilities
+        : [tool.capability]) as ReadonlyArray<string>,
+      effect: tool.effect === "write" ? "write" : "read",
+    })),
+    skills: skills.map((skill) => ({
+      name: skill.name as string,
+      description: skill.description as string,
+      capabilities: (Array.isArray(skill.capabilities)
+        ? skill.capabilities
+        : [skill.capability]) as ReadonlyArray<string>,
+    })),
+  };
 }
 
 export function manifestCompatibility(manifest: IntegrationManifest): {

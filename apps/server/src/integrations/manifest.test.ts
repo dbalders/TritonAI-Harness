@@ -43,7 +43,17 @@ const skillOnlyManifest: IntegrationManifest = {
 
 describe("integration manifest semver", () => {
   it("allows skill-only bundles without a provider", () => {
-    expect(validateIntegrationManifest(skillOnlyManifest)).toEqual(skillOnlyManifest);
+    expect(validateIntegrationManifest(skillOnlyManifest)).toMatchObject({
+      ...skillOnlyManifest,
+      capabilities: [{ ...skillOnlyManifest.capabilities[0], access: "default" }],
+      skills: [
+        {
+          name: "skill-only-fixture",
+          description: "Local workflow.",
+          capabilities: ["workflow.use"],
+        },
+      ],
+    });
     expect(() =>
       validateIntegrationManifest({
         ...skillOnlyManifest,
