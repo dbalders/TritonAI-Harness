@@ -2,6 +2,8 @@ import * as NodeAssert from "node:assert/strict";
 
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import { describe } from "vite-plus/test";
 import { DEFAULT_TRITONAI_CODEX_MODEL, ThreadId } from "@t3tools/contracts";
@@ -14,9 +16,14 @@ import {
 } from "../CodexDeveloperInstructions.ts";
 import {
   buildTurnStartParams,
+  computeDynamicToolFingerprint,
   hasConfiguredMcpServer,
   isRecoverableThreadResumeError,
   openCodexThread,
+  readCompatibleResumeThreadId,
+  reconcilePluginSkillAvailability,
+  resolvePluginSkillAvailability,
+  withPluginSkillLease,
 } from "./CodexSessionRuntime.ts";
 const isCodexAppServerRequestError = Schema.is(CodexErrors.CodexAppServerRequestError);
 
@@ -37,6 +44,63 @@ describe("CodexSessionRuntimeIdentifierGenerationError", () => {
   });
 });
 
+describe("Codex resume cursor compatibility", () => {
+  const recordsTool = {
+    name: "fixture_records_search",
+    description: "Read fixture records.",
+    inputSchema: { type: "object" },
+  } as const;
+  const auditTool = {
+    name: "fixture_audit_recent",
+    description: "Read fixture audit events.",
+    inputSchema: { type: "object" },
+  } as const;
+
+  it("resumes only when the persisted and currently granted dynamic tool sets match", () => {
+    NodeAssert.equal(
+      readCompatibleResumeThreadId(
+        {
+          threadId: "provider-thread",
+          dynamicToolNames: [auditTool.name, recordsTool.name],
+          dynamicToolFingerprint: computeDynamicToolFingerprint([auditTool, recordsTool]),
+        },
+        [recordsTool, auditTool],
+      ),
+      "provider-thread",
+    );
+    NodeAssert.equal(
+      readCompatibleResumeThreadId(
+        {
+          threadId: "provider-thread",
+          dynamicToolNames: [recordsTool.name],
+          dynamicToolFingerprint: computeDynamicToolFingerprint([recordsTool]),
+        },
+        [recordsTool, auditTool],
+      ),
+      undefined,
+    );
+    NodeAssert.equal(
+      readCompatibleResumeThreadId(
+        {
+          threadId: "provider-thread",
+          dynamicToolNames: [recordsTool.name],
+          dynamicToolFingerprint: computeDynamicToolFingerprint([recordsTool]),
+        },
+        [{ ...recordsTool, description: "Updated fixture contract." }],
+      ),
+      undefined,
+    );
+    NodeAssert.equal(
+      readCompatibleResumeThreadId({ threadId: "legacy-thread" }, [recordsTool]),
+      undefined,
+    );
+    NodeAssert.equal(
+      readCompatibleResumeThreadId({ threadId: "legacy-thread" }, undefined),
+      "legacy-thread",
+    );
+  });
+});
+
 function makeThreadOpenResponse(
   threadId: string,
 ): CodexRpc.ClientRequestResponsesByMethod["thread/start"] {
@@ -46,16 +110,20 @@ function makeThreadOpenResponse(
     modelProvider: "openai",
     approvalPolicy: "never",
     approvalsReviewer: "user",
-    sandbox: { type: "danger-full-access" },
+    sandbox: { type: "dangerFullAccess" },
     thread: {
+      cliVersion: "0.144.0",
+      cwd: "/tmp/project",
+      ephemeral: false,
       id: threadId,
-      createdAt: "2026-04-18T00:00:00.000Z",
-      source: { session: "cli" },
+      createdAt: 1_776_470_400,
+      modelProvider: "openai",
+      preview: "",
+      sessionId: "session-1",
+      source: "cli",
       turns: [],
-      status: {
-        state: "idle",
-        activeFlags: [],
-      },
+      status: { type: "idle" },
+      updatedAt: 1_776_470_400,
     },
   } as unknown as CodexRpc.ClientRequestResponsesByMethod["thread/start"];
 }
@@ -169,6 +237,40 @@ describe("buildTurnStartParams", () => {
     });
   });
 
+  it("attaches an explicitly invoked integration-plugin skill", () => {
+    const params = Effect.runSync(
+      buildTurnStartParams({
+        threadId: "provider-thread-1",
+        runtimeMode: "full-access",
+        prompt: "$fixture-records summarize the newest record",
+        pluginSkills: [
+          {
+            name: "fixture-records",
+            path: "/tmp/plugin-skills/fixture-records/SKILL.md",
+            root: "/tmp/plugin-skills/records-root",
+          },
+          {
+            name: "fixture-audit",
+            path: "/tmp/plugin-skills/fixture-audit/SKILL.md",
+            root: "/tmp/plugin-skills/audit-root",
+          },
+        ],
+      }),
+    );
+
+    NodeAssert.deepStrictEqual(params.input, [
+      {
+        type: "text",
+        text: "$fixture-records summarize the newest record",
+      },
+      {
+        type: "skill",
+        name: "fixture-records",
+        path: "/tmp/plugin-skills/fixture-records/SKILL.md",
+      },
+    ]);
+  });
+
   it("omits collaboration mode when interaction mode is absent", () => {
     const params = Effect.runSync(
       buildTurnStartParams({
@@ -192,6 +294,86 @@ describe("buildTurnStartParams", () => {
       ],
     });
   });
+});
+
+describe("integration plugin skill availability", () => {
+  it("preserves independently rooted skills when another plugin is revoked", () => {
+    const available = new Set(["fixture-records"]);
+    const records = {
+      name: "fixture-records",
+      path: "/tmp/plugin-skills/records-root/fixture-records/SKILL.md",
+      root: "/tmp/plugin-skills/records-root",
+    } as const;
+    const audit = {
+      name: "fixture-audit",
+      path: "/tmp/plugin-skills/audit-root/fixture-audit/SKILL.md",
+      root: "/tmp/plugin-skills/audit-root",
+    } as const;
+
+    NodeAssert.deepStrictEqual(
+      resolvePluginSkillAvailability({
+        pluginSkills: [records, audit],
+        isPluginSkillAvailable: (name) => available.has(name),
+      }),
+      { skills: [records], extraRoots: [records.root] },
+    );
+  });
+
+  it.effect("reconciles revocation during root refresh and omits the skill from the turn", () =>
+    Effect.gen(function* () {
+      let available = true;
+      const rootUpdates: Array<ReadonlyArray<string>> = [];
+      const options = {
+        pluginSkills: [
+          {
+            name: "skill-only-fixture",
+            path: "/tmp/plugin-skills/fixture-root/skill-only-fixture/SKILL.md",
+            root: "/tmp/plugin-skills/fixture-root",
+          },
+        ],
+        isPluginSkillAvailable: () => available,
+      } as const;
+
+      const revoked = yield* reconcilePluginSkillAvailability(options, (extraRoots) =>
+        Effect.sync(() => {
+          rootUpdates.push([...extraRoots]);
+          available = false;
+        }),
+      );
+      NodeAssert.deepStrictEqual(rootUpdates, [[options.pluginSkills[0].root], []]);
+      NodeAssert.deepStrictEqual(revoked, { skills: [], extraRoots: [] });
+      const params = yield* buildTurnStartParams({
+        threadId: "provider-thread-1",
+        runtimeMode: "full-access",
+        prompt: "$skill-only-fixture run the check",
+        pluginSkills: revoked.skills,
+      });
+      NodeAssert.deepStrictEqual(params.input, [
+        { type: "text", text: "$skill-only-fixture run the check" },
+      ]);
+    }),
+  );
+
+  it.effect("holds a skill reservation until turn submission settles", () =>
+    Effect.gen(function* () {
+      const submission = yield* Deferred.make<void>();
+      let released = false;
+      const fiber = yield* withPluginSkillLease(
+        {
+          release: () => {
+            released = true;
+          },
+        },
+        Deferred.await(submission),
+      ).pipe(Effect.forkChild);
+
+      yield* Effect.yieldNow;
+      NodeAssert.equal(released, false);
+      yield* Deferred.succeed(submission, undefined);
+      yield* Fiber.join(fiber);
+      NodeAssert.equal(released, true);
+    }),
+  );
 });
 
 describe("T3 browser developer instructions", () => {
@@ -318,6 +500,117 @@ describe("openCodexThread", () => {
       });
 
       NodeAssert.equal(startPayload?.model, DEFAULT_TRITONAI_CODEX_MODEL);
+    }),
+  );
+
+  it.effect("injects integration plugins as ordinary dynamic functions", () =>
+    Effect.gen(function* () {
+      let rawStartPayload: unknown;
+      const client = {
+        raw: {
+          request: (_method: string, payload: unknown) => {
+            rawStartPayload = payload;
+            return Effect.succeed(makeThreadOpenResponse("dynamic-thread"));
+          },
+        },
+        request: <M extends "thread/start" | "thread/resume">(
+          _method: M,
+          _payload: CodexRpc.ClientRequestParamsByMethod[M],
+        ) =>
+          Effect.succeed(
+            makeThreadOpenResponse("typed-thread") as CodexRpc.ClientRequestResponsesByMethod[M],
+          ),
+      };
+
+      const opened = yield* openCodexThread({
+        client,
+        threadId: ThreadId.make("thread-1"),
+        runtimeMode: "full-access",
+        cwd: "/tmp/project",
+        requestedModel: DEFAULT_TRITONAI_CODEX_MODEL,
+        serviceTier: undefined,
+        resumeThreadId: undefined,
+        dynamicTools: [
+          {
+            name: "fixture_records_search",
+            description: "Read records through a fixture integration plugin.",
+            inputSchema: {
+              type: "object",
+              properties: { limit: { type: "integer" } },
+              additionalProperties: false,
+            },
+          },
+        ],
+      });
+
+      NodeAssert.equal(opened.thread.id, "dynamic-thread");
+      NodeAssert.deepStrictEqual(rawStartPayload, {
+        cwd: "/tmp/project",
+        approvalPolicy: "never",
+        sandbox: "danger-full-access",
+        model: DEFAULT_TRITONAI_CODEX_MODEL,
+        dynamicTools: [
+          {
+            name: "fixture_records_search",
+            description: "Read records through a fixture integration plugin.",
+            inputSchema: {
+              type: "object",
+              properties: { limit: { type: "integer" } },
+              additionalProperties: false,
+            },
+            deferLoading: false,
+          },
+        ],
+      });
+    }),
+  );
+
+  it.effect("resumes the same thread and relies on its persisted dynamic tool definitions", () =>
+    Effect.gen(function* () {
+      let rawRequestCount = 0;
+      const typedCalls: Array<{ method: string; payload: unknown }> = [];
+      const client = {
+        raw: {
+          request: (_method: string, _payload: unknown) => {
+            rawRequestCount += 1;
+            return Effect.succeed(makeThreadOpenResponse("fresh-thread"));
+          },
+        },
+        request: <M extends "thread/start" | "thread/resume">(
+          method: M,
+          payload: CodexRpc.ClientRequestParamsByMethod[M],
+        ) => {
+          typedCalls.push({ method, payload });
+          return Effect.succeed(
+            makeThreadOpenResponse(
+              "existing-provider-thread",
+            ) as CodexRpc.ClientRequestResponsesByMethod[M],
+          );
+        },
+      };
+
+      const opened = yield* openCodexThread({
+        client,
+        threadId: ThreadId.make("thread-1"),
+        runtimeMode: "full-access",
+        cwd: "/tmp/project",
+        requestedModel: DEFAULT_TRITONAI_CODEX_MODEL,
+        serviceTier: undefined,
+        resumeThreadId: "existing-provider-thread",
+        dynamicTools: [
+          {
+            name: "fixture_records_search",
+            description: "Read records through a fixture integration plugin.",
+            inputSchema: { type: "object", properties: {}, additionalProperties: false },
+          },
+        ],
+      });
+
+      NodeAssert.equal(opened.thread.id, "existing-provider-thread");
+      NodeAssert.equal(rawRequestCount, 0);
+      NodeAssert.equal(typedCalls.length, 1);
+      NodeAssert.equal(typedCalls[0]?.method, "thread/resume");
+      NodeAssert.equal("dynamicTools" in (typedCalls[0]!.payload as object), false);
     }),
   );
 

@@ -6,8 +6,46 @@ import { createModelCapabilities } from "@t3tools/shared/model";
 import {
   curateVisibleCodexModels,
   mapCodexModelCapabilities,
+  stabilizeIntegrationSkillPaths,
   tritonAiCodexCapabilities,
 } from "./CodexProvider.ts";
+
+it("publishes stable installed paths for temporary integration skill probes", () => {
+  assert.deepStrictEqual(
+    stabilizeIntegrationSkillPaths(
+      [
+        {
+          name: "fixture-records",
+          path: "/tmp/runtime-skills/session/fixture-records/SKILL.md",
+          enabled: true,
+        },
+        { name: "ordinary-skill", path: "/home/codex/skills/ordinary/SKILL.md", enabled: true },
+      ],
+      [
+        {
+          name: "fixture-records",
+          description: "Read fixture records.",
+          path: "/tmp/runtime-skills/session/fixture-records/SKILL.md",
+        },
+      ],
+      [
+        {
+          name: "fixture-records",
+          description: "Read fixture records.",
+          path: "/state/integrations/fixture-package/skills/fixture-records/SKILL.md",
+        },
+      ],
+    ),
+    [
+      {
+        name: "fixture-records",
+        path: "/state/integrations/fixture-package/skills/fixture-records/SKILL.md",
+        enabled: true,
+      },
+      { name: "ordinary-skill", path: "/home/codex/skills/ordinary/SKILL.md", enabled: true },
+    ],
+  );
+});
 
 it("applies configured model metadata without model-specific Harness constants", () => {
   const configuredModel = "configured-model";

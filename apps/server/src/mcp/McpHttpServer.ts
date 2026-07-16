@@ -21,7 +21,9 @@ import {
   PreviewSnapshotTool,
   PreviewSnapshotToolkit,
   PreviewStandardToolkit,
+  PreviewToolkit,
 } from "./toolkits/preview/tools.ts";
+import { registrationLayer as integrationToolsRegistrationLayer } from "./IntegrationTools.ts";
 
 const unauthorized = HttpServerResponse.jsonUnsafe(
   {
@@ -214,4 +216,15 @@ const McpTransportLive = McpServer.layerHttp({
   path: "/mcp",
 }).pipe(Layer.provide(McpAuthMiddlewareLive));
 
-export const layer = PreviewToolkitRegistrationLive.pipe(Layer.provideMerge(McpTransportLive));
+export const makeLayer = (
+  loadRegistry?: Parameters<typeof integrationToolsRegistrationLayer>[1],
+) => {
+  const integrationToolsRegistration = loadRegistry
+    ? integrationToolsRegistrationLayer(new Set(Object.keys(PreviewToolkit.tools)), loadRegistry)
+    : integrationToolsRegistrationLayer(new Set(Object.keys(PreviewToolkit.tools)));
+  return Layer.mergeAll(PreviewToolkitRegistrationLive, integrationToolsRegistration).pipe(
+    Layer.provideMerge(McpTransportLive),
+  );
+};
+
+export const layer = makeLayer();

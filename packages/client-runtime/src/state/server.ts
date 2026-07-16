@@ -244,5 +244,41 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:upgrade-marketplace",
       tag: WS_METHODS.serverUpgradeMarketplace,
     }),
+    listIntegrations: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:integrations:list",
+      tag: WS_METHODS.integrationsList,
+    }),
+    installIntegration: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:integrations:install",
+      tag: WS_METHODS.integrationsInstall,
+      scheduler: configScheduler,
+      concurrency: configConcurrency,
+    }),
+    setIntegrationEnabled: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:integrations:set-enabled",
+      tag: WS_METHODS.integrationsSetEnabled,
+      scheduler: configScheduler,
+      concurrency: configConcurrency,
+    }),
+    setIntegrationSkillEnabled: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:integrations:set-skill-enabled",
+      tag: WS_METHODS.integrationsSetSkillEnabled,
+      scheduler: configScheduler,
+      concurrency: configConcurrency,
+    }),
+    connectIntegration: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:integrations:connect",
+      tag: WS_METHODS.integrationsConnect,
+    }),
+    pollIntegration: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:integrations:poll",
+      tag: WS_METHODS.integrationsPoll,
+    }),
+    disconnectIntegration: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:integrations:disconnect",
+      tag: WS_METHODS.integrationsDisconnect,
+      scheduler: configScheduler,
+      concurrency: configConcurrency,
+    }),
   };
 }

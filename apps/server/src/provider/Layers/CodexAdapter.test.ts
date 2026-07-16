@@ -37,6 +37,7 @@ import * as Stream from "effect/Stream";
 import * as CodexErrors from "effect-codex-app-server/errors";
 
 import { ServerConfig } from "../../config.ts";
+import { codexDynamicIntegrationToolName } from "../../integrations/IntegrationRegistry.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderAdapterValidationError } from "../Errors.ts";
@@ -54,6 +55,13 @@ import {
   type CodexImageContextAnalyzer,
 } from "./CodexImageContext.ts";
 const decodeCodexSettings = Schema.decodeSync(CodexSettings);
+
+it("flattens plugin component names into provider-safe function names", () => {
+  NodeAssert.equal(
+    codexDynamicIntegrationToolName("fixture.records.search"),
+    "fixture_records_search",
+  );
+});
 
 // Test-local service tag so the rest of the file can keep using `yield* CodexAdapter`.
 class CodexAdapter extends Context.Service<CodexAdapter, CodexAdapterShape>()(
@@ -1483,6 +1491,8 @@ it.effect("restarts legacy image history before using a text-only model", () => 
 
     const safeCursor = {
       threadId: "safe-provider-thread",
+      dynamicToolNames: ["fixture_records_search"],
+      dynamicToolFingerprint: "fixture-tools-v1",
       textOnlyImageContextVersion: 1 as const,
     };
     const safeSession = yield* adapter.startSession({
@@ -1504,6 +1514,8 @@ it.effect("restarts legacy image history before using a text-only model", () => 
     });
     NodeAssert.deepStrictEqual(visionSession.resumeCursor, {
       threadId: "safe-provider-thread",
+      dynamicToolNames: ["fixture_records_search"],
+      dynamicToolFingerprint: "fixture-tools-v1",
       textOnlyImageContextVersion: 1,
     });
   }).pipe(

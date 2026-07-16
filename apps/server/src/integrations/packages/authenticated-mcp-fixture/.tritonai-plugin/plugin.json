@@ -1,0 +1,38 @@
+{
+  "apiVersion": "tritonai.harness/v1",
+  "kind": "IntegrationPlugin",
+  "manifestVersion": 1,
+  "id": "api-key-mcp-fixture",
+  "name": "API Key MCP Fixture",
+  "description": "A test-only API-key provider with secure server-side storage, one read-only MCP-compatible tool, and its own skill.",
+  "version": "1.0.0",
+  "compatibility": {
+    "harness": {
+      "min": "0.2.0",
+      "maxExclusive": "0.3.0"
+    }
+  },
+  "provider": "api-key-mcp-fixture-provider",
+  "capabilities": [
+    {
+      "id": "fixture.read",
+      "displayName": "Read fixture data",
+      "description": "Use a submitted server-side API key to read deterministic, sanitized fixture data."
+    }
+  ],
+  "tools": [
+    {
+      "name": "fixture.api-key.read",
+      "displayName": "Read API-key fixture",
+      "description": "Return deterministic data through a secret-backed read-only tool.",
+      "capability": "fixture.read"
+    }
+  ],
+  "skills": [
+    {
+      "name": "authenticated-mcp-fixture",
+      "description": "Verify a plugin-owned skill can call a secret-backed MCP-compatible tool.",
+      "capability": "fixture.read"
+    }
+  ]
+}
