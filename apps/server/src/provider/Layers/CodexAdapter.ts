@@ -1424,10 +1424,19 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
   const threadLocksRef = yield* SynchronizedRef.make(
     new Map<string, { readonly semaphore: Semaphore.Semaphore; readonly users: number }>(),
   );
-  const pendingImageContextAnalyses = new Map<ThreadId, AbortController>();
+  type ThreadLifecycleEpoch = object;
+  const pendingImageContextAnalyses = new Map<
+    ThreadId,
+    { controller: AbortController; lifecycleEpoch: ThreadLifecycleEpoch | undefined }
+  >();
+  const threadLifecycleEpochs = new Map<ThreadId, ThreadLifecycleEpoch>();
   const latestTurnPreparations = new Map<
     ThreadId,
-    { cancelImageAnalysis: boolean; controller: AbortController | null }
+    {
+      cancelImageAnalysis: boolean;
+      controller: AbortController | null;
+      lifecycleEpoch: ThreadLifecycleEpoch | undefined;
+    }
   >();
   const imageContextAnalyzer =
     options?.imageContextAnalyzer ?? (yield* makeCodexImageContextAnalyzer(options?.environment));
@@ -1466,20 +1475,54 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       (semaphore) => releaseThreadSemaphore(threadId, semaphore),
     );
 
-  const startSessionUnlocked: CodexAdapterShape["startSession"] = (input) =>
+  const currentThreadLifecycleEpoch = (threadId: ThreadId) => threadLifecycleEpochs.get(threadId);
+
+  const cancelPendingLifecycle = (
+    threadId: ThreadId,
+    lifecycleEpoch: ThreadLifecycleEpoch | undefined,
+  ) => {
+    if (!lifecycleEpoch) return;
+    const preparation = latestTurnPreparations.get(threadId);
+    if (preparation?.lifecycleEpoch === lifecycleEpoch) {
+      preparation.controller?.abort();
+      latestTurnPreparations.delete(threadId);
+    }
+    const analysis = pendingImageContextAnalyses.get(threadId);
+    if (analysis?.lifecycleEpoch === lifecycleEpoch) {
+      analysis.controller.abort();
+      pendingImageContextAnalyses.delete(threadId);
+    }
+  };
+
+  const beginThreadLifecycle = (threadId: ThreadId) => {
+    cancelPendingLifecycle(threadId, currentThreadLifecycleEpoch(threadId));
+    const lifecycleEpoch: ThreadLifecycleEpoch = {};
+    threadLifecycleEpochs.set(threadId, lifecycleEpoch);
+    return lifecycleEpoch;
+  };
+
+  const retireThreadLifecycle = (threadId: ThreadId) => {
+    const lifecycleEpoch = threadLifecycleEpochs.get(threadId);
+    threadLifecycleEpochs.delete(threadId);
+    cancelPendingLifecycle(threadId, lifecycleEpoch);
+  };
+
+  const startSessionUnlocked = (
+    input: Parameters<CodexAdapterShape["startSession"]>[0],
+    expectedLifecycleEpoch: ThreadLifecycleEpoch,
+  ) =>
     Effect.scoped(
       Effect.gen(function* () {
-        if (input.provider !== undefined && input.provider !== PROVIDER) {
-          return yield* new ProviderAdapterValidationError({
-            provider: PROVIDER,
-            operation: "startSession",
-            issue: `Expected provider '${PROVIDER}' but received '${input.provider}'.`,
-          });
+        if (currentThreadLifecycleEpoch(input.threadId) !== expectedLifecycleEpoch) {
+          return yield* Effect.interrupt;
         }
 
         const existing = sessions.get(input.threadId);
         if (existing && !existing.stopped) {
           yield* Effect.suspend(() => stopSessionInternal(existing));
+        }
+        if (currentThreadLifecycleEpoch(input.threadId) !== expectedLifecycleEpoch) {
+          return yield* Effect.interrupt;
         }
 
         const serviceTier =
@@ -1699,6 +1742,13 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           ),
         );
 
+        if (currentThreadLifecycleEpoch(input.threadId) !== expectedLifecycleEpoch) {
+          yield* runtime.close.pipe(Effect.ignore);
+          yield* Effect.ignore(Scope.close(sessionScope, Exit.void));
+          yield* Fiber.interrupt(eventFiber).pipe(Effect.ignore);
+          return yield* Effect.interrupt;
+        }
+
         sessions.set(input.threadId, {
           threadId: input.threadId,
           scope: sessionScope,
@@ -1723,10 +1773,51 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
 
         return withTextOnlyImageContextResumeSafety(started, textOnlyImageContextSafe);
       }),
+    ).pipe(
+      Effect.onExit(() =>
+        Effect.sync(() => {
+          if (
+            currentThreadLifecycleEpoch(input.threadId) === expectedLifecycleEpoch &&
+            !sessions.has(input.threadId)
+          ) {
+            threadLifecycleEpochs.delete(input.threadId);
+          }
+        }),
+      ),
     );
 
   const startSession: CodexAdapterShape["startSession"] = (input) =>
-    withThreadLock(input.threadId, startSessionUnlocked(input));
+    Effect.gen(function* () {
+      if (input.provider !== undefined && input.provider !== PROVIDER) {
+        return yield* new ProviderAdapterValidationError({
+          provider: PROVIDER,
+          operation: "startSession",
+          issue: `Expected provider '${PROVIDER}' but received '${input.provider}'.`,
+        });
+      }
+      return yield* withThreadLock(
+        input.threadId,
+        Effect.suspend(() => {
+          const previousEpoch = currentThreadLifecycleEpoch(input.threadId);
+          const previousSession = sessions.get(input.threadId);
+          const lifecycleEpoch = beginThreadLifecycle(input.threadId);
+          return startSessionUnlocked(input, lifecycleEpoch).pipe(
+            Effect.onExit((exit) =>
+              Exit.isFailure(exit) &&
+              currentThreadLifecycleEpoch(input.threadId) === lifecycleEpoch &&
+              previousSession !== undefined &&
+              !previousSession.stopped &&
+              sessions.get(input.threadId) === previousSession
+                ? Effect.sync(() => {
+                    if (previousEpoch) threadLifecycleEpochs.set(input.threadId, previousEpoch);
+                    else threadLifecycleEpochs.delete(input.threadId);
+                  })
+                : Effect.void,
+            ),
+          );
+        }),
+      );
+    });
 
   const resolveAttachment = Effect.fn("resolveAttachment")(function* (
     input: ProviderSendTurnInput,
@@ -1783,9 +1874,18 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
 
   const reconcileSessionForIntegrationAvailability = Effect.fn(
     "reconcileSessionForIntegrationAvailability",
-  )(function* (session: CodexAdapterSessionContext) {
+  )(function* (
+    session: CodexAdapterSessionContext,
+    expectedLifecycleEpoch: ThreadLifecycleEpoch,
+    isCancelled: () => boolean = () => false,
+  ) {
     let candidate = session;
     while (true) {
+      if (
+        isCancelled() ||
+        currentThreadLifecycleEpoch(candidate.threadId) !== expectedLifecycleEpoch
+      )
+        return yield* Effect.interrupt;
       const integrationRegistry = candidate.integrationRegistry;
       if (
         !integrationRegistry ||
@@ -1795,6 +1895,14 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       }
 
       const current = yield* candidate.runtime.getSession;
+      if (
+        isCancelled() ||
+        currentThreadLifecycleEpoch(candidate.threadId) !== expectedLifecycleEpoch ||
+        candidate.stopped ||
+        sessions.get(candidate.threadId) !== candidate
+      ) {
+        return yield* Effect.interrupt;
+      }
       if (current.activeTurnId !== undefined || current.status === "running") {
         // Never interrupt or replace an active turn. Revocation remains immediate through the
         // registry's invocation and skill-reservation guards; recreation waits for an idle send.
@@ -1813,24 +1921,47 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
               : {}),
           }
         : latestModelSelection;
-      yield* startSessionUnlocked({
-        ...candidate.startInput,
-        ...(current.cwd ? { cwd: current.cwd } : {}),
-        ...(current.resumeCursor !== undefined ? { resumeCursor: current.resumeCursor } : {}),
-        ...(modelSelection ? { modelSelection } : {}),
-      });
+      yield* startSessionUnlocked(
+        {
+          ...candidate.startInput,
+          ...(current.cwd ? { cwd: current.cwd } : {}),
+          ...(current.resumeCursor !== undefined ? { resumeCursor: current.resumeCursor } : {}),
+          ...(modelSelection ? { modelSelection } : {}),
+        },
+        expectedLifecycleEpoch,
+      );
+      if (
+        isCancelled() ||
+        currentThreadLifecycleEpoch(candidate.threadId) !== expectedLifecycleEpoch
+      )
+        return yield* Effect.interrupt;
       candidate = yield* requireSession(candidate.threadId);
     }
   });
 
   const sendTurnLocked = Effect.fn("sendTurnLocked")(function* (
     input: ProviderSendTurnInput,
-    preparation: { cancelImageAnalysis: boolean; controller: AbortController | null },
+    preparation: {
+      cancelImageAnalysis: boolean;
+      controller: AbortController | null;
+      lifecycleEpoch: ThreadLifecycleEpoch | undefined;
+    },
   ) {
+    const isCancelled = () =>
+      currentThreadLifecycleEpoch(input.threadId) !== preparation.lifecycleEpoch;
     let session = yield* requireSession(input.threadId).pipe(
-      Effect.flatMap(reconcileSessionForIntegrationAvailability),
+      Effect.flatMap((candidate) =>
+        reconcileSessionForIntegrationAvailability(
+          candidate,
+          preparation.lifecycleEpoch!,
+          isCancelled,
+        ),
+      ),
     );
     const currentSession = yield* session.runtime.getSession;
+    if (isCancelled() || session.stopped || sessions.get(input.threadId) !== session) {
+      return yield* Effect.interrupt;
+    }
     const selectedModel =
       input.modelSelection?.instanceId === boundInstanceId ? input.modelSelection.model : undefined;
     const effectiveModel = selectedModel ?? currentSession.model;
@@ -1853,7 +1984,10 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     if (analysisAbortController) {
       preparation.controller = analysisAbortController;
       if (preparation.cancelImageAnalysis) analysisAbortController.abort();
-      pendingImageContextAnalyses.set(input.threadId, analysisAbortController);
+      pendingImageContextAnalyses.set(input.threadId, {
+        controller: analysisAbortController,
+        lifecycleEpoch: preparation.lifecycleEpoch,
+      });
     } else {
       pendingImageContextAnalyses.delete(input.threadId);
     }
@@ -1918,7 +2052,14 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
         input.modelSelection?.instanceId === boundInstanceId
           ? getCodexServiceTierOptionValue(input.modelSelection)
           : undefined;
-      session = yield* reconcileSessionForIntegrationAvailability(session);
+      session = yield* reconcileSessionForIntegrationAvailability(
+        session,
+        preparation.lifecycleEpoch!,
+        isCancelled,
+      );
+      if (isCancelled() || session.stopped || sessions.get(input.threadId) !== session) {
+        return yield* Effect.interrupt;
+      }
       if (codexAttachments.length > 0) {
         session.textOnlyImageContextSafe = false;
       }
@@ -1948,7 +2089,10 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       Effect.ensuring(
         analysisAbortController
           ? Effect.sync(() => {
-              if (pendingImageContextAnalyses.get(input.threadId) === analysisAbortController) {
+              if (
+                pendingImageContextAnalyses.get(input.threadId)?.controller ===
+                analysisAbortController
+              ) {
                 pendingImageContextAnalyses.delete(input.threadId);
               }
             })
@@ -1957,26 +2101,29 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     );
   });
 
-  const sendTurn: CodexAdapterShape["sendTurn"] = (input) => {
-    const preparation = { cancelImageAnalysis: false, controller: null };
-    return Effect.sync(() => {
+  const sendTurn: CodexAdapterShape["sendTurn"] = (input) =>
+    Effect.suspend(() => {
+      const preparation = {
+        cancelImageAnalysis: false,
+        controller: null,
+        lifecycleEpoch: currentThreadLifecycleEpoch(input.threadId),
+      };
       const previous = latestTurnPreparations.get(input.threadId);
       if (previous) {
         previous.cancelImageAnalysis = true;
         previous.controller?.abort();
       }
       latestTurnPreparations.set(input.threadId, preparation);
-    }).pipe(
-      Effect.andThen(withThreadLock(input.threadId, sendTurnLocked(input, preparation))),
-      Effect.ensuring(
-        Effect.sync(() => {
-          if (latestTurnPreparations.get(input.threadId) === preparation) {
-            latestTurnPreparations.delete(input.threadId);
-          }
-        }),
-      ),
-    );
-  };
+      return withThreadLock(input.threadId, sendTurnLocked(input, preparation)).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (latestTurnPreparations.get(input.threadId) === preparation) {
+              latestTurnPreparations.delete(input.threadId);
+            }
+          }),
+        ),
+      );
+    });
 
   const requireSession = Effect.fn("requireSession")(function* (threadId: ThreadId) {
     const session = sessions.get(threadId);
@@ -1993,7 +2140,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     requireSession(threadId).pipe(
       Effect.tap(() =>
         Effect.sync(() => {
-          pendingImageContextAnalyses.get(threadId)?.abort();
+          pendingImageContextAnalyses.get(threadId)?.controller.abort();
         }),
       ),
       Effect.flatMap((session) => session.runtime.interruptTurn(turnId)),
@@ -2074,16 +2221,16 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     yield* nativeEventLogger.write(event, event.threadId);
   });
 
-  const stopSessionInternal = Effect.fn("stopSessionInternal")(function* (
+  const claimSessionStop = (session: CodexAdapterSessionContext) => {
+    if (session.stopped) return false;
+    session.stopped = true;
+    if (sessions.get(session.threadId) === session) sessions.delete(session.threadId);
+    return true;
+  };
+
+  const closeSessionResources = Effect.fn("closeSessionResources")(function* (
     session: CodexAdapterSessionContext,
   ) {
-    if (session.stopped) {
-      return;
-    }
-    session.stopped = true;
-    sessions.delete(session.threadId);
-    pendingImageContextAnalyses.get(session.threadId)?.abort();
-    pendingImageContextAnalyses.delete(session.threadId);
     yield* session.runtime.close.pipe(Effect.ignore);
     yield* Effect.ignore(Scope.close(session.scope, Exit.void));
     yield* Fiber.interrupt(session.eventFiber).pipe(Effect.ignore);
@@ -2094,14 +2241,29 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     }
   });
 
+  const stopSessionInternal = Effect.fn("stopSessionInternal")(
+    (session: CodexAdapterSessionContext) =>
+      Effect.uninterruptibleMask((restore) =>
+        Effect.sync(() => claimSessionStop(session)).pipe(
+          Effect.flatMap((claimed) =>
+            claimed ? restore(closeSessionResources(session)) : Effect.void,
+          ),
+        ),
+      ),
+  );
+
   const stopSession: CodexAdapterShape["stopSession"] = (threadId) =>
-    Effect.gen(function* () {
-      const session = sessions.get(threadId);
-      if (!session) {
-        return;
-      }
-      yield* stopSessionInternal(session);
-    });
+    Effect.uninterruptibleMask((restore) =>
+      Effect.sync(() => {
+        retireThreadLifecycle(threadId);
+        const session = sessions.get(threadId);
+        return session && claimSessionStop(session) ? session : undefined;
+      }).pipe(
+        Effect.flatMap((session) =>
+          session ? restore(closeSessionResources(session)) : Effect.void,
+        ),
+      ),
+    );
 
   const listSessions: CodexAdapterShape["listSessions"] = () =>
     Effect.forEach(
@@ -2119,10 +2281,22 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     Effect.succeed(Boolean(sessions.get(threadId) && !sessions.get(threadId)?.stopped));
 
   const stopAll: CodexAdapterShape["stopAll"] = () =>
-    Effect.forEach(Array.from(sessions.values()), stopSessionInternal, {
-      concurrency: 1,
-      discard: true,
-    }).pipe(Effect.asVoid);
+    Effect.uninterruptibleMask((restore) =>
+      Effect.sync(() => {
+        for (const threadId of Array.from(threadLifecycleEpochs.keys()))
+          retireThreadLifecycle(threadId);
+        return Array.from(sessions.values()).filter(claimSessionStop);
+      }).pipe(
+        Effect.flatMap((claimedSessions) =>
+          restore(
+            Effect.forEach(claimedSessions, closeSessionResources, {
+              concurrency: 1,
+              discard: true,
+            }),
+          ),
+        ),
+      ),
+    );
 
   yield* Effect.acquireRelease(Effect.void, () =>
     stopAll().pipe(

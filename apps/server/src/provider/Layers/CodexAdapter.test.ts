@@ -275,11 +275,15 @@ const validationLayer = it.layer(
 validationLayer("CodexAdapterLive validation", (it) => {
   it.effect("returns validation error for non-codex provider on startSession", () =>
     Effect.gen(function* () {
+      validationRuntimeFactory.factory.mockClear();
       const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("thread-invalid-restart");
+      yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
+      const runtime = validationRuntimeFactory.lastRuntime!;
       const result = yield* adapter
         .startSession({
           provider: ProviderDriverKind.make("claudeAgent"),
-          threadId: asThreadId("thread-1"),
+          threadId,
           runtimeMode: "full-access",
         })
         .pipe(Effect.result);
@@ -293,7 +297,9 @@ validationLayer("CodexAdapterLive validation", (it) => {
           issue: "Expected provider 'codex' but received 'claudeAgent'.",
         }),
       );
-      NodeAssert.equal(validationRuntimeFactory.factory.mock.calls.length, 0);
+      yield* adapter.sendTurn({ threadId, input: "still live", attachments: [] });
+      NodeAssert.equal(validationRuntimeFactory.factory.mock.calls.length, 1);
+      NodeAssert.equal(runtime.sendTurnImpl.mock.calls.length, 1);
     }),
   );
   it.effect("maps codex model options before starting a session", () =>
@@ -418,6 +424,61 @@ const reconciliationLayer = it.layer(
 );
 
 reconciliationLayer("CodexAdapter integration availability reconciliation", (it) => {
+  it.effect("captures the session lifecycle when a send effect begins", () =>
+    Effect.gen(function* () {
+      reconciliationAvailability.generation = 5;
+      reconciliationAvailability.available = false;
+      reconciliationAvailability.advancesDuringPrepare = 0;
+      reconciliationRuntimeFactory.factory.mockClear();
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("thread-lazy-send-lifecycle");
+      const send = adapter.sendTurn({ threadId, input: "after start", attachments: [] });
+
+      yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
+      yield* send;
+
+      NodeAssert.equal(reconciliationRuntimeFactory.lastRuntime?.sendTurnImpl.mock.calls.length, 1);
+    }),
+  );
+
+  it.effect("does not invalidate a live session when start validation fails", () =>
+    Effect.gen(function* () {
+      reconciliationAvailability.generation = 6;
+      reconciliationAvailability.available = false;
+      reconciliationAvailability.advancesDuringPrepare = 0;
+      reconciliationRuntimeFactory.factory.mockClear();
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("thread-invalid-start-keeps-session");
+      yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
+      const runtime = reconciliationRuntimeFactory.lastRuntime!;
+      const readStarted = Promise.withResolvers<void>();
+      const releaseRead = Promise.withResolvers<void>();
+      runtime.onGetSession = async () => {
+        runtime.onGetSession = undefined;
+        readStarted.resolve();
+        await releaseRead.promise;
+      };
+
+      const send = yield* adapter
+        .sendTurn({ threadId, input: "still valid", attachments: [] })
+        .pipe(Effect.forkChild);
+      yield* Effect.promise(() => readStarted.promise);
+      const invalidStart = yield* Effect.exit(
+        adapter.startSession({
+          provider: ProviderDriverKind.make("invalid"),
+          threadId,
+          runtimeMode: "full-access",
+        }),
+      );
+      NodeAssert.equal(Exit.isFailure(invalidStart), true);
+      releaseRead.resolve();
+      yield* Fiber.join(send);
+
+      NodeAssert.equal(runtime.sendTurnImpl.mock.calls.length, 1);
+      NodeAssert.equal(runtime.closeImpl.mock.calls.length, 0);
+    }),
+  );
+
   it.effect("reconciles when availability changes while a session starts", () =>
     Effect.gen(function* () {
       reconciliationAvailability.generation = 10;
@@ -513,6 +574,42 @@ reconciliationLayer("CodexAdapter integration availability reconciliation", (it)
     }),
   );
 
+  it.effect("does not invalidate a live turn when a queued restart is interrupted", () =>
+    Effect.gen(function* () {
+      reconciliationAvailability.generation = 45;
+      reconciliationAvailability.available = false;
+      reconciliationAvailability.advancesDuringPrepare = 0;
+      reconciliationRuntimeFactory.factory.mockClear();
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("thread-interrupted-queued-restart");
+      yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
+      const runtime = reconciliationRuntimeFactory.lastRuntime!;
+      const readStarted = Promise.withResolvers<void>();
+      const releaseRead = Promise.withResolvers<void>();
+      runtime.onGetSession = async () => {
+        runtime.onGetSession = undefined;
+        readStarted.resolve();
+        await releaseRead.promise;
+      };
+
+      const send = yield* adapter
+        .sendTurn({ threadId, input: "keep this turn", attachments: [] })
+        .pipe(Effect.forkChild);
+      yield* Effect.promise(() => readStarted.promise);
+      const restart = yield* adapter
+        .startSession({ threadId, runtimeMode: "full-access" })
+        .pipe(Effect.forkChild);
+      yield* Fiber.interrupt(restart);
+      releaseRead.resolve();
+      yield* Fiber.join(send);
+
+      NodeAssert.equal(runtime.sendTurnImpl.mock.calls.length, 1);
+      NodeAssert.equal(runtime.closeImpl.mock.calls.length, 0);
+      NodeAssert.equal(reconciliationRuntimeFactory.factory.mock.calls.length, 1);
+      NodeAssert.equal(yield* adapter.hasSession(threadId), true);
+    }),
+  );
+
   it.effect("does not make session teardown wait for a stalled send", () =>
     Effect.gen(function* () {
       reconciliationAvailability.generation = 50;
@@ -539,7 +636,87 @@ reconciliationLayer("CodexAdapter integration availability reconciliation", (it)
       NodeAssert.equal(runtime.closeImpl.mock.calls.length, 1);
 
       releaseRead.resolve();
-      yield* Fiber.await(send);
+      const sendExit = yield* Fiber.await(send);
+      NodeAssert.equal(Exit.isFailure(sendExit), true);
+      if (Exit.isFailure(sendExit)) {
+        NodeAssert.equal(Cause.hasInterruptsOnly(sendExit.cause), true);
+      }
+      NodeAssert.equal(runtime.sendTurnImpl.mock.calls.length, 0);
+      NodeAssert.equal(reconciliationRuntimeFactory.factory.mock.calls.length, 1);
+    }),
+  );
+
+  it.effect("does not recreate a session when teardown lands during reconciliation close", () =>
+    Effect.gen(function* () {
+      reconciliationAvailability.generation = 60;
+      reconciliationAvailability.available = false;
+      reconciliationAvailability.advancesDuringPrepare = 0;
+      reconciliationRuntimeFactory.factory.mockClear();
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("thread-stop-during-reconciliation-close");
+      yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
+      const runtime = reconciliationRuntimeFactory.lastRuntime!;
+      const closeStarted = Promise.withResolvers<void>();
+      const releaseClose = Promise.withResolvers<void>();
+      runtime.closeImpl.mockImplementationOnce(async () => {
+        closeStarted.resolve();
+        await releaseClose.promise;
+      });
+
+      reconciliationAvailability.generation = 61;
+      const send = yield* adapter
+        .sendTurn({ threadId, input: "stale", attachments: [] })
+        .pipe(Effect.forkChild);
+      yield* Effect.promise(() => closeStarted.promise);
+      yield* adapter.stopSession(threadId);
+      releaseClose.resolve();
+
+      const sendExit = yield* Fiber.await(send);
+      NodeAssert.equal(Exit.isFailure(sendExit), true);
+      if (Exit.isFailure(sendExit)) {
+        NodeAssert.equal(Cause.hasInterruptsOnly(sendExit.cause), true);
+      }
+      NodeAssert.equal(reconciliationRuntimeFactory.factory.mock.calls.length, 1);
+      NodeAssert.equal(yield* adapter.hasSession(threadId), false);
+    }),
+  );
+
+  it.effect("invalidates every queued send when a session is stopped", () =>
+    Effect.gen(function* () {
+      reconciliationAvailability.generation = 70;
+      reconciliationAvailability.available = false;
+      reconciliationAvailability.advancesDuringPrepare = 0;
+      reconciliationRuntimeFactory.factory.mockClear();
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("thread-stop-with-queued-sends");
+      yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
+      const runtime = reconciliationRuntimeFactory.lastRuntime!;
+      const readStarted = Promise.withResolvers<void>();
+      const releaseRead = Promise.withResolvers<void>();
+      runtime.onGetSession = async () => {
+        runtime.onGetSession = undefined;
+        readStarted.resolve();
+        await releaseRead.promise;
+      };
+
+      const sends = yield* Effect.forEach(
+        ["first", "second", "third"],
+        (input) => adapter.sendTurn({ threadId, input, attachments: [] }).pipe(Effect.forkChild),
+        { concurrency: 1 },
+      );
+      yield* Effect.promise(() => readStarted.promise);
+      yield* adapter.stopSession(threadId);
+      releaseRead.resolve();
+
+      const exits = yield* Effect.forEach(sends, Fiber.await, { concurrency: "unbounded" });
+      NodeAssert.equal(exits.every(Exit.isFailure), true);
+      NodeAssert.equal(runtime.sendTurnImpl.mock.calls.length, 0);
+
+      yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
+      const replacement = reconciliationRuntimeFactory.lastRuntime!;
+      yield* adapter.sendTurn({ threadId, input: "fresh", attachments: [] });
+      NodeAssert.equal(replacement.sendTurnImpl.mock.calls.length, 1);
+      NodeAssert.equal(replacement.closeImpl.mock.calls.length, 0);
     }),
   );
 
