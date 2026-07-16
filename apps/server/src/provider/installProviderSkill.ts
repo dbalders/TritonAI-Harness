@@ -59,6 +59,35 @@ function installError(message: string, cause?: unknown) {
   });
 }
 
+function assertNoSymlinkedExistingPath(
+  targetPath: string,
+): Effect.Effect<void, ServerProviderSkillInstallError, FileSystem.FileSystem | Path.Path> {
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const pathService = yield* Path.Path;
+    const resolvedPath = pathService.resolve(targetPath);
+    const parsed = pathService.parse(resolvedPath);
+    const relativeSegments = resolvedPath
+      .slice(parsed.root.length)
+      .split(pathService.sep)
+      .filter((segment) => segment.length > 0);
+    let currentPath = parsed.root;
+
+    for (const segment of relativeSegments) {
+      currentPath = pathService.join(currentPath, segment);
+      const isLink = yield* fs.readLink(currentPath).pipe(
+        Effect.as(true),
+        Effect.orElseSucceed(() => false),
+      );
+      if (isLink) {
+        return yield* installError(
+          `Refusing to install a skill through symlinked destination path ${currentPath}.`,
+        );
+      }
+    }
+  });
+}
+
 function parseUrl(rawUrl: string): URL | null {
   try {
     return new URL(rawUrl.trim());
@@ -806,6 +835,7 @@ export function installSkillBundle(input: {
     const frontmatter = yield* extractFrontmatter(entrypoint.content);
     const skillName = yield* sanitizeSkillName(frontmatter.name);
     const skillsDirectory = pathService.resolve(input.skillsDirectory);
+    yield* assertNoSymlinkedExistingPath(skillsDirectory);
     const skillDirectory = pathService.join(skillsDirectory, skillName);
     const skillPath = pathService.join(skillDirectory, "SKILL.md");
 
@@ -820,6 +850,8 @@ export function installSkillBundle(input: {
         `Skill '${skillName}' is managed by the TritonAI Installer and cannot be replaced here.`,
       );
     }
+
+    yield* assertNoSymlinkedExistingPath(skillDirectory);
 
     const skillDirectoryExists = yield* fs
       .exists(skillDirectory)

@@ -91,6 +91,23 @@ describe("managed skill install ownership", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
+  it.effect("refuses to install through a symlinked skills directory", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const skillsDirectory = path.resolve("apps/server/src/provider/__fixtures__/skills-link");
+      const externalTarget = path.resolve("apps/server/src/provider/__fixtures__/skills-target");
+
+      const error = yield* installSkillBundle({
+        bundle: bundle("escaped-skill", "payload"),
+        skillsDirectory,
+      }).pipe(Effect.flip);
+
+      expect(error.message).toContain("symlinked destination path");
+      expect(yield* fs.exists(path.join(externalTarget, "escaped-skill"))).toBe(false);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("refreshes an unmanaged same-name skill when ownership is known", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

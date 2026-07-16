@@ -20,6 +20,7 @@ import {
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
@@ -627,6 +628,7 @@ const ensureSkillBelongsToCodexHome = Effect.fn("ensureSkillBelongsToCodexHome")
   readonly skillPath: string;
   readonly sharedHomePath: string;
 }) {
+  const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   if (!input.provider) {
     return yield* skillInstallError("Provider was not found in the current provider inventory.");
@@ -638,6 +640,35 @@ const ensureSkillBelongsToCodexHome = Effect.fn("ensureSkillBelongsToCodexHome")
   const normalizedSharedSkills = path.resolve(path.join(input.sharedHomePath, "skills"));
   const normalizedSkillPath = path.resolve(input.skillPath);
   if (!normalizedSkillPath.startsWith(`${normalizedSharedSkills}${path.sep}`)) {
+    return yield* skillInstallError(
+      "Only skills installed into TritonAI's managed Codex skills folder can be removed.",
+    );
+  }
+
+  const realSharedSkills = yield* fileSystem
+    .realPath(normalizedSharedSkills)
+    .pipe(
+      Effect.mapError((cause) =>
+        skillInstallError(`Failed to verify Codex skills folder ${normalizedSharedSkills}.`, cause),
+      ),
+    );
+  if (realSharedSkills !== normalizedSharedSkills) {
+    return yield* skillInstallError(
+      "Only skills installed into TritonAI's managed Codex skills folder can be removed.",
+    );
+  }
+
+  const realSkillPath = yield* fileSystem
+    .realPath(normalizedSkillPath)
+    .pipe(
+      Effect.mapError((cause) =>
+        skillInstallError(`Failed to verify skill path ${normalizedSkillPath}.`, cause),
+      ),
+    );
+  if (
+    realSkillPath !== realSharedSkills &&
+    !realSkillPath.startsWith(`${realSharedSkills}${path.sep}`)
+  ) {
     return yield* skillInstallError(
       "Only skills installed into TritonAI's managed Codex skills folder can be removed.",
     );
