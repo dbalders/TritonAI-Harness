@@ -63,8 +63,8 @@ export function subscribeIntegrationAvailabilityRefresh(
       nextDelayMs = debounceMs;
     } catch (error) {
       options.onError?.(error);
+      if (!queued) nextDelayMs = currentRetryMs;
       queued = true;
-      nextDelayMs = currentRetryMs;
       currentRetryMs = Math.min(maxRetryMs, Math.max(retryMs, currentRetryMs * 2));
     } finally {
       refreshing = false;

@@ -380,6 +380,12 @@ describe("IntegrationRegistry lifecycle", () => {
         { enabled: true, available: true },
         { enabled: false, available: false },
       ]);
+      const missingSkill = registry.setSkillEnabled(manifest.id, "missing-skill", false);
+      expect(missingSkill).toBeInstanceOf(Promise);
+      await expect(missingSkill).rejects.toMatchObject({ code: "not_found" });
+      const multiCapabilitySkill = registry.setSkillEnabled(manifest.id, "fixture-records", false);
+      expect(multiCapabilitySkill).toBeInstanceOf(Promise);
+      await expect(multiCapabilitySkill).rejects.toMatchObject({ code: "operation_failed" });
       await expect(
         registry.invokeTool(
           "fixture.records.write",

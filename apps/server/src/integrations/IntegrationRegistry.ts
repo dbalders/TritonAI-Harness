@@ -2343,7 +2343,7 @@ export class RegistryRuntime {
   }
 
   /** Compatibility for pre-capability callers; the referenced Access bundle remains authoritative. */
-  setSkillEnabled(
+  async setSkillEnabled(
     id: string,
     skillName: string,
     enabled: boolean,

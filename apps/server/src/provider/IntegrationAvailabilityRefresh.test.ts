@@ -56,6 +56,55 @@ describe("IntegrationAvailabilityRefresh", () => {
     }
   });
 
+  it("honors a queued availability change before retry backoff after a failed refresh", async () => {
+    vi.useFakeTimers();
+    try {
+      let observer: (() => void) | undefined;
+      const integrations = {
+        subscribeAvailabilityChanges: (next: () => void) => {
+          observer = next;
+          return () => {
+            observer = undefined;
+          };
+        },
+      } as unknown as RegistryRuntime;
+      const firstRefresh = Promise.withResolvers<void>();
+      let attempts = 0;
+      const providers = {
+        getProviders: Effect.succeed([snapshot("codex", "codex")]),
+        refreshInstance: () =>
+          Effect.promise(async () => {
+            attempts += 1;
+            if (attempts === 1) await firstRefresh.promise;
+            return [];
+          }),
+        refresh: () => Effect.succeed([]),
+        getProviderMaintenanceCapabilitiesForInstance: () => Effect.die("unused"),
+        setProviderMaintenanceActionState: () => Effect.die("unused"),
+        streamChanges: Stream.empty,
+      } satisfies ProviderRegistryShape;
+
+      const unsubscribe = subscribeIntegrationAvailabilityRefresh(integrations, providers, {
+        debounceMs: 10,
+        retryMs: 100,
+      });
+      await vi.advanceTimersByTimeAsync(10);
+      expect(attempts).toBe(1);
+
+      observer?.();
+      firstRefresh.reject(new Error("temporary refresh failure"));
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(9);
+      expect(attempts).toBe(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(attempts).toBe(2);
+
+      unsubscribe();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("refreshes existing Codex snapshots when the registry is attached", async () => {
     vi.useFakeTimers();
     try {
