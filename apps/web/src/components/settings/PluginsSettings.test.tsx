@@ -6,6 +6,7 @@ import {
   IntegrationConnectionActionCallout,
   capabilityAccessStateLabel,
   capabilityUsesWriteTool,
+  clearOwnedConnectionAttention,
   integrationConnectAriaLabel,
   integrationNeedsConnectionAction,
   shouldExpandIntegrationCard,
@@ -116,6 +117,18 @@ describe("PluginsSettings connection action", () => {
     expect(markup).toContain('aria-live="polite"');
     expect(markup).toContain("Action required: Connect Microsoft 365 Read");
     expect(integrationConnectAriaLabel("Microsoft 365 Read")).toBe("Connect Microsoft 365 Read");
+  });
+
+  it("preserves another plugin's pending connection announcement", () => {
+    const current = {
+      attention: { id: "plugin-b", request: 2 },
+      announcement: "Action required: Connect Plugin B",
+    };
+    expect(clearOwnedConnectionAttention(current, "plugin-a")).toBe(current);
+    expect(clearOwnedConnectionAttention(current, "plugin-b")).toEqual({
+      attention: null,
+      announcement: "",
+    });
   });
 });
 

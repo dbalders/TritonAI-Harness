@@ -21,11 +21,13 @@ describe("IntegrationAvailabilityRefresh", () => {
         subscribeAvailabilityChanges: () => () => undefined,
       } as unknown as RegistryRuntime;
       let attempts = 0;
+      let failOnErrorRequested = false;
       const errors: Array<unknown> = [];
       const providers = {
         getProviders: Effect.succeed([snapshot("codex", "codex")]),
-        refreshInstance: () =>
+        refreshInstance: (_instanceId, options) =>
           Effect.sync(() => {
+            failOnErrorRequested = options?.failOnError === true;
             attempts += 1;
             if (attempts === 1) throw new Error("temporary refresh failure");
             return [];
@@ -44,6 +46,7 @@ describe("IntegrationAvailabilityRefresh", () => {
       });
       await vi.advanceTimersByTimeAsync(10);
       expect(attempts).toBe(1);
+      expect(failOnErrorRequested).toBe(true);
       expect(errors).toHaveLength(1);
 
       await vi.advanceTimersByTimeAsync(19);
@@ -98,6 +101,102 @@ describe("IntegrationAvailabilityRefresh", () => {
       expect(attempts).toBe(1);
       await vi.advanceTimersByTimeAsync(1);
       expect(attempts).toBe(2);
+
+      unsubscribe();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("interrupts an in-flight provider refresh when unsubscribed", async () => {
+    vi.useFakeTimers();
+    try {
+      const integrations = {
+        subscribeAvailabilityChanges: () => () => undefined,
+      } as unknown as RegistryRuntime;
+      let attempts = 0;
+      let interruptions = 0;
+      const providers = {
+        getProviders: Effect.succeed([snapshot("codex", "codex")]),
+        refreshInstance: () =>
+          Effect.sync(() => (attempts += 1)).pipe(
+            Effect.andThen(Effect.never),
+            Effect.onInterrupt(() => Effect.sync(() => (interruptions += 1))),
+          ),
+        refresh: () => Effect.succeed([]),
+        getProviderMaintenanceCapabilitiesForInstance: () => Effect.die("unused"),
+        setProviderMaintenanceActionState: () => Effect.die("unused"),
+        streamChanges: Stream.empty,
+      } satisfies ProviderRegistryShape;
+
+      const unsubscribe = subscribeIntegrationAvailabilityRefresh(integrations, providers, {
+        debounceMs: 10,
+      });
+      await vi.advanceTimersByTimeAsync(10);
+      expect(attempts).toBe(1);
+
+      unsubscribe();
+      await Promise.resolve();
+      expect(interruptions).toBe(1);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(attempts).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("lets healthy sibling instance refreshes settle when one instance fails", async () => {
+    vi.useFakeTimers();
+    try {
+      const integrations = {
+        subscribeAvailabilityChanges: () => () => undefined,
+      } as unknown as RegistryRuntime;
+      const siblingStarted = Promise.withResolvers<void>();
+      const releaseSibling = Promise.withResolvers<void>();
+      const siblingFinished = Promise.withResolvers<void>();
+      const errorObserved = Promise.withResolvers<void>();
+      let siblingCompleted = false;
+      const errors: Array<unknown> = [];
+      const providers = {
+        getProviders: Effect.succeed([
+          snapshot("codex-fails", "codex"),
+          snapshot("codex-hangs", "codex"),
+        ]),
+        refreshInstance: (instanceId: ProviderInstanceId) =>
+          instanceId === "codex-fails"
+            ? Effect.promise(async () => {
+                await siblingStarted.promise;
+                throw new Error("temporary refresh failure");
+              })
+            : Effect.promise(async () => {
+                siblingStarted.resolve();
+                await releaseSibling.promise;
+                siblingCompleted = true;
+                siblingFinished.resolve();
+                return [];
+              }),
+        refresh: () => Effect.succeed([]),
+        getProviderMaintenanceCapabilitiesForInstance: () => Effect.die("unused"),
+        setProviderMaintenanceActionState: () => Effect.die("unused"),
+        streamChanges: Stream.empty,
+      } satisfies ProviderRegistryShape;
+
+      const unsubscribe = subscribeIntegrationAvailabilityRefresh(integrations, providers, {
+        debounceMs: 10,
+        retryMs: 100,
+        onError: (error) => {
+          errors.push(error);
+          errorObserved.resolve();
+        },
+      });
+      await vi.advanceTimersByTimeAsync(10);
+      await siblingStarted.promise;
+      await errorObserved.promise;
+      expect(errors).toHaveLength(1);
+      expect(siblingCompleted).toBe(false);
+      releaseSibling.resolve();
+      await siblingFinished.promise;
+      expect(siblingCompleted).toBe(true);
 
       unsubscribe();
     } finally {

@@ -19,6 +19,11 @@ import type { ProviderMaintenanceCapabilities } from "../providerMaintenance.ts"
 
 export type ProviderMaintenanceActionKind = "update";
 
+export interface ProviderRefreshInstanceOptions {
+  /** Propagate probe failures so internal retry coordinators can observe them. */
+  readonly failOnError?: boolean;
+}
+
 export interface ProviderRegistryShape {
   /**
    * Read the latest provider snapshots for every configured instance.
@@ -46,6 +51,7 @@ export interface ProviderRegistryShape {
    */
   readonly refreshInstance: (
     instanceId: ProviderInstanceId,
+    options?: ProviderRefreshInstanceOptions,
   ) => Effect.Effect<ReadonlyArray<ServerProvider>>;
 
   /**

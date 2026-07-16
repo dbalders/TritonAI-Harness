@@ -83,7 +83,7 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
   private currentModel: string | undefined;
   public sessionStatus: ProviderSession["status"] = "ready";
   public activeTurnId: TurnId | undefined;
-  public onGetSession: (() => void) | undefined;
+  public onGetSession: (() => void | Promise<void>) | undefined;
 
   public readonly startImpl = vi.fn(() =>
     Promise.resolve({
@@ -156,8 +156,8 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
     return Effect.promise(() => this.startImpl());
   }
 
-  getSession = Effect.promise(() => {
-    this.onGetSession?.();
+  getSession = Effect.promise(async () => {
+    await this.onGetSession?.();
     return this.startImpl();
   });
 
@@ -471,6 +471,75 @@ reconciliationLayer("CodexAdapter integration availability reconciliation", (it)
       yield* adapter.sendTurn({ threadId, input: "use current plugin access", attachments: [] });
 
       NodeAssert.equal(reconciliationRuntimeFactory.factory.mock.calls.length, 2);
+    }),
+  );
+
+  it.effect("serializes concurrent reconciliation and dispatch for one thread", () =>
+    Effect.gen(function* () {
+      reconciliationAvailability.generation = 40;
+      reconciliationAvailability.available = false;
+      reconciliationAvailability.advancesDuringPrepare = 0;
+      reconciliationRuntimeFactory.factory.mockClear();
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("thread-integration-concurrent-reconcile");
+      yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
+      const initialRuntime = reconciliationRuntimeFactory.lastRuntime!;
+      const firstReadStarted = Promise.withResolvers<void>();
+      const releaseFirstRead = Promise.withResolvers<void>();
+      initialRuntime.onGetSession = async () => {
+        initialRuntime.onGetSession = undefined;
+        firstReadStarted.resolve();
+        await releaseFirstRead.promise;
+      };
+
+      reconciliationAvailability.generation = 41;
+      const firstSend = yield* adapter
+        .sendTurn({ threadId, input: "first", attachments: [] })
+        .pipe(Effect.forkChild);
+      yield* Effect.promise(() => firstReadStarted.promise);
+      const secondSend = yield* adapter
+        .sendTurn({ threadId, input: "second", attachments: [] })
+        .pipe(Effect.forkChild);
+      const thirdSend = yield* adapter
+        .sendTurn({ threadId, input: "third", attachments: [] })
+        .pipe(Effect.forkChild);
+      releaseFirstRead.resolve();
+      yield* Fiber.join(firstSend);
+      yield* Fiber.join(secondSend);
+      yield* Fiber.join(thirdSend);
+
+      NodeAssert.equal(reconciliationRuntimeFactory.factory.mock.calls.length, 2);
+      NodeAssert.equal(reconciliationRuntimeFactory.lastRuntime?.sendTurnImpl.mock.calls.length, 3);
+    }),
+  );
+
+  it.effect("does not make session teardown wait for a stalled send", () =>
+    Effect.gen(function* () {
+      reconciliationAvailability.generation = 50;
+      reconciliationAvailability.available = false;
+      reconciliationAvailability.advancesDuringPrepare = 0;
+      reconciliationRuntimeFactory.factory.mockClear();
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("thread-stop-during-stalled-send");
+      yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
+      const runtime = reconciliationRuntimeFactory.lastRuntime!;
+      const readStarted = Promise.withResolvers<void>();
+      const releaseRead = Promise.withResolvers<void>();
+      runtime.onGetSession = async () => {
+        runtime.onGetSession = undefined;
+        readStarted.resolve();
+        await releaseRead.promise;
+      };
+
+      const send = yield* adapter
+        .sendTurn({ threadId, input: "stalled", attachments: [] })
+        .pipe(Effect.forkChild);
+      yield* Effect.promise(() => readStarted.promise);
+      yield* adapter.stopSession(threadId);
+      NodeAssert.equal(runtime.closeImpl.mock.calls.length, 1);
+
+      releaseRead.resolve();
+      yield* Fiber.await(send);
     }),
   );
 
@@ -2103,6 +2172,76 @@ it.effect("cancels pending image analysis before dispatching a newer turn", () =
     }
     NodeAssert.equal(runtime.sendTurnImpl.mock.calls.length, 1);
     NodeAssert.deepStrictEqual(runtime.sendTurnImpl.mock.calls[0]?.[0], { input: "Newer turn" });
+  }).pipe(
+    Effect.provide(layer),
+    Effect.ensuring(Effect.sync(() => NodeFS.rmSync(baseDir, { recursive: true, force: true }))),
+  );
+});
+
+it.effect("cancels every superseded image turn before queued analysis starts", () => {
+  const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "codex-image-queued-cancel-"));
+  const runtimeFactory = makeRuntimeFactory();
+  let analyzerCalls = 0;
+  const analyzer: CodexImageContextAnalyzer = (input) => {
+    analyzerCalls += 1;
+    return Effect.succeed(
+      input.images.map(() => ({ description: "fixture", visibleText: "fixture" })),
+    );
+  };
+  const layer = makeImageContextAdapterLayer({ baseDir, runtimeFactory, analyzer });
+
+  return Effect.gen(function* () {
+    const adapter = yield* CodexAdapter;
+    const { attachmentsDir } = yield* ServerConfig;
+    const threadId = asThreadId("thread-image-queued-cancel");
+    const attachment = imageAttachment("thread-image-queued-cancel-first");
+    NodeFS.writeFileSync(NodePath.join(attachmentsDir, `${attachment.id}.png`), "image");
+
+    yield* adapter.startSession({
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "text-only-model", []),
+      runtimeMode: "full-access",
+    });
+    const runtime = runtimeFactory.lastRuntime;
+    NodeAssert.ok(runtime);
+    runtime.sendTurnImpl.mockClear();
+    const preparationStarted = Promise.withResolvers<void>();
+    const releasePreparation = Promise.withResolvers<void>();
+    runtime.onGetSession = async () => {
+      runtime.onGetSession = undefined;
+      preparationStarted.resolve();
+      await releasePreparation.promise;
+    };
+
+    const firstTurnFiber = yield* adapter
+      .sendTurn({ threadId, input: "Older turn", attachments: [attachment] })
+      .pipe(Effect.forkChild);
+    yield* Effect.promise(() => preparationStarted.promise);
+    const secondTurnFiber = yield* adapter
+      .sendTurn({ threadId, input: "Middle turn", attachments: [attachment] })
+      .pipe(Effect.forkChild);
+    yield* Effect.yieldNow;
+    const thirdTurnFiber = yield* adapter
+      .sendTurn({ threadId, input: "Newest turn" })
+      .pipe(Effect.forkChild);
+    yield* Effect.yieldNow;
+    releasePreparation.resolve();
+    const firstTurnExit = yield* Fiber.await(firstTurnFiber);
+    const secondTurnExit = yield* Fiber.await(secondTurnFiber);
+    yield* Fiber.join(thirdTurnFiber);
+
+    NodeAssert.equal(Exit.isFailure(firstTurnExit), true);
+    if (Exit.isFailure(firstTurnExit)) {
+      NodeAssert.equal(Cause.hasInterruptsOnly(firstTurnExit.cause), true);
+    }
+    NodeAssert.equal(Exit.isFailure(secondTurnExit), true);
+    if (Exit.isFailure(secondTurnExit)) {
+      NodeAssert.equal(Cause.hasInterruptsOnly(secondTurnExit.cause), true);
+    }
+    NodeAssert.equal(analyzerCalls, 0);
+    NodeAssert.equal(runtime.sendTurnImpl.mock.calls.length, 1);
+    NodeAssert.deepStrictEqual(runtime.sendTurnImpl.mock.calls[0]?.[0], { input: "Newest turn" });
   }).pipe(
     Effect.provide(layer),
     Effect.ensuring(Effect.sync(() => NodeFS.rmSync(baseDir, { recursive: true, force: true }))),

@@ -102,6 +102,19 @@ export function shouldFocusConnectionAction(input: {
   );
 }
 
+interface ConnectionAttentionState {
+  readonly attention: { readonly id: string; readonly request: number } | null;
+  readonly announcement: string;
+}
+
+export function clearOwnedConnectionAttention(
+  current: ConnectionAttentionState,
+  integrationId: string,
+): ConnectionAttentionState {
+  if (current.attention?.id !== integrationId) return current;
+  return { attention: null, announcement: "" };
+}
+
 export function IntegrationConnectionActionCallout({
   integrationName,
 }: {
@@ -710,11 +723,10 @@ export function PluginsSettingsPanel() {
   const [busyIds, setBusyIds] = useState<ReadonlySet<string>>(() => new Set());
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [flows, setFlows] = useState<ReadonlyMap<string, ActiveIntegrationFlow>>(() => new Map());
-  const [connectionAttention, setConnectionAttention] = useState<{
-    readonly id: string;
-    readonly request: number;
-  } | null>(null);
-  const [connectionAnnouncement, setConnectionAnnouncement] = useState("");
+  const [connectionAttentionState, setConnectionAttentionState] =
+    useState<ConnectionAttentionState>({ attention: null, announcement: "" });
+  const connectionAttention = connectionAttentionState.attention;
+  const connectionAnnouncement = connectionAttentionState.announcement;
   const connectionAttentionSequenceRef = useRef(0);
   const activeFlowIdsRef = useRef(new Map<string, string>());
 
@@ -724,9 +736,8 @@ export function PluginsSettingsPanel() {
     activeFlowIdsRef.current = new Map();
     setBusyIds(new Set());
     setErrors({});
-    setConnectionAttention(null);
+    setConnectionAttentionState({ attention: null, announcement: "" });
     connectionAttentionSequenceRef.current = 0;
-    setConnectionAnnouncement("");
     setLoading(environmentId !== null);
   }, [environmentId]);
 
@@ -788,8 +799,7 @@ export function PluginsSettingsPanel() {
           ),
         }));
         if (result.integration.connectionState === "connected") {
-          setConnectionAttention((current) => (current?.id === id ? null : current));
-          setConnectionAnnouncement("");
+          setConnectionAttentionState((current) => clearOwnedConnectionAttention(current, id));
         }
         setErrors((current) => {
           const { [id]: _, ...rest } = current;
@@ -861,8 +871,9 @@ export function PluginsSettingsPanel() {
           next.delete(integration.id);
           return next;
         });
-        setConnectionAttention((current) => (current?.id === integration.id ? null : current));
-        setConnectionAnnouncement("");
+        setConnectionAttentionState((current) =>
+          clearOwnedConnectionAttention(current, integration.id),
+        );
       }
       try {
         if (kind === "connect") {
@@ -881,8 +892,9 @@ export function PluginsSettingsPanel() {
               next.delete(integration.id);
               return next;
             });
-            setConnectionAttention((current) => (current?.id === integration.id ? null : current));
-            setConnectionAnnouncement("");
+            setConnectionAttentionState((current) =>
+              clearOwnedConnectionAttention(current, integration.id),
+            );
             await load();
           } else {
             setFlows((current) =>
@@ -916,16 +928,17 @@ export function PluginsSettingsPanel() {
             const updated = result.integrations.find(({ id }) => id === integration.id);
             if (updated && integrationNeedsConnectionAction(updated)) {
               connectionAttentionSequenceRef.current += 1;
-              setConnectionAttention({
-                id: integration.id,
-                request: connectionAttentionSequenceRef.current,
+              setConnectionAttentionState({
+                attention: {
+                  id: integration.id,
+                  request: connectionAttentionSequenceRef.current,
+                },
+                announcement: `Action required: Connect ${updated.name}`,
               });
-              setConnectionAnnouncement(`Action required: Connect ${updated.name}`);
             } else {
-              setConnectionAttention((current) =>
-                current?.id === integration.id ? null : current,
+              setConnectionAttentionState((current) =>
+                clearOwnedConnectionAttention(current, integration.id),
               );
-              setConnectionAnnouncement("");
             }
           }
         }
@@ -975,8 +988,9 @@ export function PluginsSettingsPanel() {
           next.delete(integration.id);
           return next;
         });
-        setConnectionAttention((current) => (current?.id === integration.id ? null : current));
-        setConnectionAnnouncement("");
+        setConnectionAttentionState((current) =>
+          clearOwnedConnectionAttention(current, integration.id),
+        );
         await load();
       } catch (cause) {
         if (environmentIdRef.current !== targetEnvironmentId) return;

@@ -32,6 +32,11 @@ export function subscribeIntegrationAvailabilityRefresh(
   let refreshing = false;
   let queued = false;
   let closed = false;
+  let activeSnapshotRefresh: AbortController | null = null;
+  const inFlightInstanceRefreshes = new Map<
+    string,
+    { readonly controller: AbortController; readonly promise: Promise<unknown> }
+  >();
   let nextDelayMs = debounceMs;
   let currentRetryMs = retryMs;
 
@@ -43,12 +48,35 @@ export function subscribeIntegrationAvailabilityRefresh(
     }, delayMs);
   };
 
+  const refreshInstance = (instanceId: Parameters<ProviderRegistryShape["refreshInstance"]>[0]) => {
+    const existing = inFlightInstanceRefreshes.get(instanceId);
+    if (existing) return existing.promise;
+    const controller = new AbortController();
+    const promise = Effect.runPromise(
+      providers.refreshInstance(instanceId, { failOnError: true }),
+      { signal: controller.signal },
+    );
+    const entry = { controller, promise };
+    inFlightInstanceRefreshes.set(instanceId, entry);
+    const remove = () => {
+      if (inFlightInstanceRefreshes.get(instanceId) === entry) {
+        inFlightInstanceRefreshes.delete(instanceId);
+      }
+    };
+    void promise.then(remove, remove);
+    return promise;
+  };
+
   const refresh = async () => {
     if (closed || refreshing) return;
     refreshing = true;
     queued = false;
+    const controller = new AbortController();
+    activeSnapshotRefresh = controller;
     try {
-      const snapshots = await Effect.runPromise(providers.getProviders);
+      const snapshots = await Effect.runPromise(providers.getProviders, {
+        signal: controller.signal,
+      });
       const instanceIds = [
         ...new Set(
           snapshots
@@ -56,17 +84,17 @@ export function subscribeIntegrationAvailabilityRefresh(
             .map(({ instanceId }) => instanceId),
         ),
       ];
-      await Promise.all(
-        instanceIds.map((instanceId) => Effect.runPromise(providers.refreshInstance(instanceId))),
-      );
+      await Promise.all(instanceIds.map(refreshInstance));
       currentRetryMs = retryMs;
       nextDelayMs = debounceMs;
     } catch (error) {
+      if (closed || controller.signal.aborted) return;
       options.onError?.(error);
       if (!queued) nextDelayMs = currentRetryMs;
       queued = true;
       currentRetryMs = Math.min(maxRetryMs, Math.max(retryMs, currentRetryMs * 2));
     } finally {
+      if (activeSnapshotRefresh === controller) activeSnapshotRefresh = null;
       refreshing = false;
       if (queued) schedule(nextDelayMs);
     }
@@ -84,6 +112,10 @@ export function subscribeIntegrationAvailabilityRefresh(
   return () => {
     closed = true;
     unsubscribe();
+    activeSnapshotRefresh?.abort();
+    activeSnapshotRefresh = null;
+    for (const { controller } of inFlightInstanceRefreshes.values()) controller.abort();
+    inFlightInstanceRefreshes.clear();
     if (timer !== null) clearTimeout(timer);
     timer = null;
   };

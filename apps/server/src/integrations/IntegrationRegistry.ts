@@ -1388,6 +1388,7 @@ export class RegistryRuntime {
           capabilities: summary.capabilities.map((capability) => ({
             ...capability,
             granted: false,
+            available: false,
           })),
           tools: summary.tools.map((tool) => ({ ...tool, available: false })),
           skills: summary.skills.map((skill) => ({ ...skill, available: false })),
@@ -2927,6 +2928,18 @@ let activeRegistry: RegistryRuntime | null = null;
 const registryObservers = new Set<(registry: RegistryRuntime) => void>();
 const registryLifecycleObservers = new Set<(registry: RegistryRuntime) => void>();
 
+function notifyRegistryLifecycleObserver(
+  observer: (registry: RegistryRuntime) => void,
+  registry: RegistryRuntime,
+): void {
+  try {
+    observer(registry);
+  } catch {
+    // Lifecycle notification is observational. One broken subscriber must not break the active
+    // registry or prevent other consumers from receiving startup and restart notifications.
+  }
+}
+
 export function getIntegrationRegistry(): RegistryRuntime {
   if (!activeRegistry) throw new Error("Integration registry has not started.");
   return activeRegistry;
@@ -2951,7 +2964,7 @@ export function observeIntegrationRegistry(
   observer: (registry: RegistryRuntime) => void,
 ): () => void {
   registryLifecycleObservers.add(observer);
-  if (activeRegistry) observer(activeRegistry);
+  if (activeRegistry) notifyRegistryLifecycleObserver(observer, activeRegistry);
   return () => registryLifecycleObservers.delete(observer);
 }
 
@@ -2986,7 +2999,9 @@ export const startupLayer = Layer.effectDiscard(
     yield* Effect.promise(() => registry.snapshot());
     activeRegistry = registry;
     for (const observer of registryObservers) observer(registry);
-    for (const observer of registryLifecycleObservers) observer(registry);
+    for (const observer of registryLifecycleObservers) {
+      notifyRegistryLifecycleObserver(observer, registry);
+    }
     yield* settingsService.streamChanges.pipe(
       Stream.runForEach((nextSettings) =>
         Effect.tryPromise({

@@ -701,6 +701,10 @@ describe("IntegrationRegistry lifecycle", () => {
         code: "operation_failed",
       });
       expect(registry.isToolAvailableSync("test.fixture.read")).toBe(false);
+      expect((await registry.snapshot()).integrations[0]?.capabilities[0]).toMatchObject({
+        granted: false,
+        available: false,
+      });
 
       releaseFirstInvocation();
       await invocationRejected;

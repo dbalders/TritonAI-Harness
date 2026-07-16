@@ -33,8 +33,10 @@ import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import * as SynchronizedRef from "effect/SynchronizedRef";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import * as CodexErrors from "effect-codex-app-server/errors";
 import * as EffectCodexSchema from "effect-codex-app-server/schema";
@@ -1419,11 +1421,52 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     options?.nativeEventLogger === undefined ? nativeEventLogger : undefined;
   const runtimeEventQueue = yield* Queue.unbounded<ProviderRuntimeEvent>();
   const sessions = new Map<ThreadId, CodexAdapterSessionContext>();
+  const threadLocksRef = yield* SynchronizedRef.make(
+    new Map<string, { readonly semaphore: Semaphore.Semaphore; readonly users: number }>(),
+  );
   const pendingImageContextAnalyses = new Map<ThreadId, AbortController>();
+  const latestTurnPreparations = new Map<
+    ThreadId,
+    { cancelImageAnalysis: boolean; controller: AbortController | null }
+  >();
   const imageContextAnalyzer =
     options?.imageContextAnalyzer ?? (yield* makeCodexImageContextAnalyzer(options?.environment));
 
-  const startSession: CodexAdapterShape["startSession"] = (input) =>
+  const getThreadSemaphore = (threadId: string) =>
+    SynchronizedRef.modifyEffect(threadLocksRef, (current) => {
+      const existing = current.get(threadId);
+      if (existing) {
+        const next = new Map(current);
+        next.set(threadId, { ...existing, users: existing.users + 1 });
+        return Effect.succeed([existing.semaphore, next] as const);
+      }
+      return Semaphore.make(1).pipe(
+        Effect.map((semaphore) => {
+          const next = new Map(current);
+          next.set(threadId, { semaphore, users: 1 });
+          return [semaphore, next] as const;
+        }),
+      );
+    });
+
+  const releaseThreadSemaphore = (threadId: string, semaphore: Semaphore.Semaphore) =>
+    SynchronizedRef.update(threadLocksRef, (current) => {
+      const existing = current.get(threadId);
+      if (!existing || existing.semaphore !== semaphore) return current;
+      const next = new Map(current);
+      if (existing.users === 1) next.delete(threadId);
+      else next.set(threadId, { ...existing, users: existing.users - 1 });
+      return next;
+    });
+
+  const withThreadLock = <A, E, R>(threadId: string, effect: Effect.Effect<A, E, R>) =>
+    Effect.acquireUseRelease(
+      getThreadSemaphore(threadId),
+      (semaphore) => semaphore.withPermit(effect),
+      (semaphore) => releaseThreadSemaphore(threadId, semaphore),
+    );
+
+  const startSessionUnlocked: CodexAdapterShape["startSession"] = (input) =>
     Effect.scoped(
       Effect.gen(function* () {
         if (input.provider !== undefined && input.provider !== PROVIDER) {
@@ -1682,6 +1725,9 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       }),
     );
 
+  const startSession: CodexAdapterShape["startSession"] = (input) =>
+    withThreadLock(input.threadId, startSessionUnlocked(input));
+
   const resolveAttachment = Effect.fn("resolveAttachment")(function* (
     input: ProviderSendTurnInput,
     attachment: NonNullable<ProviderSendTurnInput["attachments"]>[number],
@@ -1767,7 +1813,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
               : {}),
           }
         : latestModelSelection;
-      yield* startSession({
+      yield* startSessionUnlocked({
         ...candidate.startInput,
         ...(current.cwd ? { cwd: current.cwd } : {}),
         ...(current.resumeCursor !== undefined ? { resumeCursor: current.resumeCursor } : {}),
@@ -1777,7 +1823,10 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     }
   });
 
-  const sendTurn: CodexAdapterShape["sendTurn"] = Effect.fn("sendTurn")(function* (input) {
+  const sendTurnLocked = Effect.fn("sendTurnLocked")(function* (
+    input: ProviderSendTurnInput,
+    preparation: { cancelImageAnalysis: boolean; controller: AbortController | null },
+  ) {
     let session = yield* requireSession(input.threadId).pipe(
       Effect.flatMap(reconcileSessionForIntegrationAvailability),
     );
@@ -1801,8 +1850,9 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     const turnModel = attachments.length > 0 ? effectiveModel : selectedModel;
     const requiresImageContext = attachments.length > 0 && effectiveModelIsExplicitlyTextOnly;
     const analysisAbortController = requiresImageContext ? new AbortController() : undefined;
-    pendingImageContextAnalyses.get(input.threadId)?.abort();
     if (analysisAbortController) {
+      preparation.controller = analysisAbortController;
+      if (preparation.cancelImageAnalysis) analysisAbortController.abort();
       pendingImageContextAnalyses.set(input.threadId, analysisAbortController);
     } else {
       pendingImageContextAnalyses.delete(input.threadId);
@@ -1813,6 +1863,9 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       let codexAttachments: ReadonlyArray<{ readonly type: "image"; readonly url: string }> = [];
 
       if (analysisAbortController) {
+        if (analysisAbortController.signal.aborted) {
+          return yield* Effect.interrupt;
+        }
         const imageContextInputs = yield* Effect.forEach(attachments, resolveImageContextInput, {
           concurrency: 1,
         });
@@ -1903,6 +1956,27 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       ),
     );
   });
+
+  const sendTurn: CodexAdapterShape["sendTurn"] = (input) => {
+    const preparation = { cancelImageAnalysis: false, controller: null };
+    return Effect.sync(() => {
+      const previous = latestTurnPreparations.get(input.threadId);
+      if (previous) {
+        previous.cancelImageAnalysis = true;
+        previous.controller?.abort();
+      }
+      latestTurnPreparations.set(input.threadId, preparation);
+    }).pipe(
+      Effect.andThen(withThreadLock(input.threadId, sendTurnLocked(input, preparation))),
+      Effect.ensuring(
+        Effect.sync(() => {
+          if (latestTurnPreparations.get(input.threadId) === preparation) {
+            latestTurnPreparations.delete(input.threadId);
+          }
+        }),
+      ),
+    );
+  };
 
   const requireSession = Effect.fn("requireSession")(function* (threadId: ThreadId) {
     const session = sessions.get(threadId);
