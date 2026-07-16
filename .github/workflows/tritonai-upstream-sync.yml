@@ -76,6 +76,10 @@ jobs:
           TRITONAI_SYNC_GITHUB_REPO: ${{ github.repository }}
           GH_REPO: ${{ github.repository }}
           TRITONAI_SYNC_DOWNSTREAM_BRANCH: ${{ vars.TRITONAI_SYNC_DOWNSTREAM_BRANCH || 'main' }}
+          TRITONAI_SYNC_INPUT_DOWNSTREAM_BRANCH: ${{ github.event.inputs.downstream_branch }}
+          TRITONAI_SYNC_INPUT_CREATE_PR: ${{ github.event.inputs.create_pr }}
+          TRITONAI_SYNC_INPUT_AUTO_MERGE_PR: ${{ github.event.inputs.auto_merge_pr }}
+          TRITONAI_SYNC_INPUT_SKIP_CHECKS: ${{ github.event.inputs.skip_checks }}
           TRITONAI_SYNC_UPSTREAM_REMOTE: upstream
           TRITONAI_SYNC_UPSTREAM_URL: https://github.com/pingdotgg/t3code.git
           TRITONAI_SYNC_UPSTREAM_BRANCH: main
@@ -88,23 +92,27 @@ jobs:
           TRITONAI_API_KEY: ${{ secrets.TRITONAI_API_KEY }}
           TRITONAI_SYNC_PR_MERGE_METHOD: ${{ vars.TRITONAI_SYNC_PR_MERGE_METHOD || 'merge' }}
         run: |
-          downstream_branch="${{ github.event.inputs.downstream_branch }}"
+          downstream_branch="${TRITONAI_SYNC_INPUT_DOWNSTREAM_BRANCH:-}"
           if [[ -z "$downstream_branch" ]]; then
             downstream_branch="${TRITONAI_SYNC_DOWNSTREAM_BRANCH:-main}"
           fi
+          if [[ ! "$downstream_branch" =~ ^[A-Za-z0-9._/-]+$ ]] || ! git check-ref-format "refs/heads/$downstream_branch"; then
+            echo "Invalid downstream_branch: $downstream_branch" >&2
+            exit 1
+          fi
           export TRITONAI_SYNC_DOWNSTREAM_BRANCH="$downstream_branch"
 
-          create_pr="${{ github.event.inputs.create_pr }}"
+          create_pr="${TRITONAI_SYNC_INPUT_CREATE_PR:-}"
           if [[ -z "$create_pr" ]]; then
             create_pr="true"
           fi
 
-          auto_merge_pr="${{ github.event.inputs.auto_merge_pr }}"
+          auto_merge_pr="${TRITONAI_SYNC_INPUT_AUTO_MERGE_PR:-}"
           if [[ -z "$auto_merge_pr" ]]; then
             auto_merge_pr="false"
           fi
 
-          skip_checks="${{ github.event.inputs.skip_checks }}"
+          skip_checks="${TRITONAI_SYNC_INPUT_SKIP_CHECKS:-}"
           if [[ -z "$skip_checks" ]]; then
             skip_checks="false"
           fi
