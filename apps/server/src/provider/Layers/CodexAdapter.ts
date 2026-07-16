@@ -1518,12 +1518,6 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
         }
 
         const existing = sessions.get(input.threadId);
-        if (existing && !existing.stopped) {
-          yield* Effect.suspend(() => stopSessionInternal(existing));
-        }
-        if (currentThreadLifecycleEpoch(input.threadId) !== expectedLifecycleEpoch) {
-          return yield* Effect.interrupt;
-        }
 
         const serviceTier =
           input.modelSelection?.instanceId === boundInstanceId
@@ -1770,6 +1764,12 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
         });
         sessionScopeTransferred = true;
         integrationSkillRuntimeTransferred = true;
+
+        // Keep the prior runtime usable until its replacement is fully started and installed.
+        // A transient integration refresh failure must not destroy the user's live task.
+        if (existing && !existing.stopped) {
+          yield* Effect.suspend(() => stopSessionInternal(existing));
+        }
 
         return withTextOnlyImageContextResumeSafety(started, textOnlyImageContextSafe);
       }),
@@ -2243,21 +2243,33 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
 
   const stopSessionInternal = Effect.fn("stopSessionInternal")(
     (session: CodexAdapterSessionContext) =>
-      Effect.uninterruptibleMask(() =>
+      Effect.uninterruptibleMask((restore) =>
         Effect.sync(() => claimSessionStop(session)).pipe(
-          Effect.flatMap((claimed) => (claimed ? closeSessionResources(session) : Effect.void)),
+          Effect.flatMap((claimed) =>
+            claimed
+              ? Effect.forkDetach(closeSessionResources(session)).pipe(
+                  Effect.flatMap((fiber) => restore(Fiber.join(fiber))),
+                )
+              : Effect.void,
+          ),
         ),
       ),
   );
 
   const stopSession: CodexAdapterShape["stopSession"] = (threadId) =>
-    Effect.uninterruptibleMask(() =>
+    Effect.uninterruptibleMask((restore) =>
       Effect.sync(() => {
         retireThreadLifecycle(threadId);
         const session = sessions.get(threadId);
         return session && claimSessionStop(session) ? session : undefined;
       }).pipe(
-        Effect.flatMap((session) => (session ? closeSessionResources(session) : Effect.void)),
+        Effect.flatMap((session) =>
+          session
+            ? Effect.forkDetach(closeSessionResources(session)).pipe(
+                Effect.flatMap((fiber) => restore(Fiber.join(fiber))),
+              )
+            : Effect.void,
+        ),
       ),
     );
 
@@ -2277,7 +2289,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     Effect.succeed(Boolean(sessions.get(threadId) && !sessions.get(threadId)?.stopped));
 
   const stopAll: CodexAdapterShape["stopAll"] = () =>
-    Effect.uninterruptibleMask(() =>
+    Effect.uninterruptibleMask((restore) =>
       Effect.sync(() => {
         for (const threadId of Array.from(threadLifecycleEpochs.keys()))
           retireThreadLifecycle(threadId);
@@ -2286,8 +2298,11 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
         Effect.flatMap((claimedSessions) =>
           Effect.forEach(claimedSessions, closeSessionResources, {
             concurrency: 1,
-            discard: true,
-          }),
+          }).pipe(
+            Effect.forkDetach,
+            Effect.flatMap((fiber) => restore(Fiber.join(fiber))),
+            Effect.asVoid,
+          ),
         ),
       ),
     );

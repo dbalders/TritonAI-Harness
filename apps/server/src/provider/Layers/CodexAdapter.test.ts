@@ -196,11 +196,15 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
 
 function makeRuntimeFactory() {
   const runtimes: Array<FakeCodexRuntime> = [];
-  const factory = vi.fn((options: CodexSessionRuntimeOptions) => {
-    const runtime = new FakeCodexRuntime(options);
-    runtimes.push(runtime);
-    return Effect.succeed(runtime);
-  });
+  const factory = vi.fn(
+    (
+      options: CodexSessionRuntimeOptions,
+    ): Effect.Effect<FakeCodexRuntime, CodexErrors.CodexAppServerSpawnError> => {
+      const runtime = new FakeCodexRuntime(options);
+      runtimes.push(runtime);
+      return Effect.succeed(runtime);
+    },
+  );
 
   return {
     factory,
@@ -646,6 +650,32 @@ reconciliationLayer("CodexAdapter integration availability reconciliation", (it)
     }),
   );
 
+  it.effect("keeps a stalled provider close interruptible after claiming the session", () =>
+    Effect.gen(function* () {
+      reconciliationAvailability.generation = 55;
+      reconciliationAvailability.available = false;
+      reconciliationAvailability.advancesDuringPrepare = 0;
+      reconciliationRuntimeFactory.factory.mockClear();
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("thread-interrupt-stalled-close");
+      yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
+      const runtime = reconciliationRuntimeFactory.lastRuntime!;
+      const closeStarted = Promise.withResolvers<void>();
+      const releaseClose = Promise.withResolvers<void>();
+      runtime.closeImpl.mockImplementationOnce(async () => {
+        closeStarted.resolve();
+        await releaseClose.promise;
+      });
+
+      const stop = yield* adapter.stopSession(threadId).pipe(Effect.forkChild);
+      yield* Effect.promise(() => closeStarted.promise);
+      yield* Fiber.interrupt(stop);
+
+      NodeAssert.equal(yield* adapter.hasSession(threadId), false);
+      releaseClose.resolve();
+    }),
+  );
+
   it.effect("does not recreate a session when teardown lands during reconciliation close", () =>
     Effect.gen(function* () {
       reconciliationAvailability.generation = 60;
@@ -676,7 +706,8 @@ reconciliationLayer("CodexAdapter integration availability reconciliation", (it)
       if (Exit.isFailure(sendExit)) {
         NodeAssert.equal(Cause.hasInterruptsOnly(sendExit.cause), true);
       }
-      NodeAssert.equal(reconciliationRuntimeFactory.factory.mock.calls.length, 1);
+      NodeAssert.equal(reconciliationRuntimeFactory.factory.mock.calls.length, 2);
+      NodeAssert.equal(reconciliationRuntimeFactory.lastRuntime?.closeImpl.mock.calls.length, 1);
       NodeAssert.equal(yield* adapter.hasSession(threadId), false);
     }),
   );
@@ -717,6 +748,40 @@ reconciliationLayer("CodexAdapter integration availability reconciliation", (it)
       yield* adapter.sendTurn({ threadId, input: "fresh", attachments: [] });
       NodeAssert.equal(replacement.sendTurnImpl.mock.calls.length, 1);
       NodeAssert.equal(replacement.closeImpl.mock.calls.length, 0);
+    }),
+  );
+
+  it.effect("preserves the live session when automatic reconciliation cannot start", () =>
+    Effect.gen(function* () {
+      reconciliationAvailability.generation = 80;
+      reconciliationAvailability.available = false;
+      reconciliationAvailability.advancesDuringPrepare = 0;
+      reconciliationRuntimeFactory.factory.mockClear();
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("thread-failed-integration-reconcile");
+      yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
+      const initialRuntime = reconciliationRuntimeFactory.lastRuntime!;
+
+      reconciliationRuntimeFactory.factory.mockImplementationOnce((options) =>
+        Effect.fail(
+          new CodexErrors.CodexAppServerSpawnError({
+            command: `${options.binaryPath} app-server`,
+            cause: new Error("replacement construction failed"),
+          }),
+        ),
+      );
+      reconciliationAvailability.generation = 81;
+      const failedSend = yield* adapter
+        .sendTurn({ threadId, input: "retry plugin access", attachments: [] })
+        .pipe(Effect.result);
+
+      NodeAssert.equal(failedSend._tag, "Failure");
+      NodeAssert.equal(yield* adapter.hasSession(threadId), true);
+      NodeAssert.equal(initialRuntime.closeImpl.mock.calls.length, 0);
+
+      yield* adapter.sendTurn({ threadId, input: "retry again", attachments: [] });
+      NodeAssert.equal(initialRuntime.closeImpl.mock.calls.length, 1);
+      NodeAssert.equal(reconciliationRuntimeFactory.lastRuntime?.sendTurnImpl.mock.calls.length, 1);
     }),
   );
 
