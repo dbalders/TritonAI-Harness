@@ -96,25 +96,28 @@ jobs:
           if [[ -z "$downstream_branch" ]]; then
             downstream_branch="${TRITONAI_SYNC_DOWNSTREAM_BRANCH:-main}"
           fi
-          if [[ ! "$downstream_branch" =~ ^[A-Za-z0-9._/-]+$ ]] || ! git check-ref-format "refs/heads/$downstream_branch"; then
-            echo "Invalid downstream_branch: $downstream_branch" >&2
+          if ! git check-ref-format "refs/heads/$downstream_branch"; then
+            echo "Invalid downstream_branch." >&2
             exit 1
           fi
           export TRITONAI_SYNC_DOWNSTREAM_BRANCH="$downstream_branch"
 
-          create_pr="${TRITONAI_SYNC_INPUT_CREATE_PR:-}"
-          if [[ -z "$create_pr" ]]; then
-            create_pr="true"
+          create_pr="${TRITONAI_SYNC_INPUT_CREATE_PR:-true}"
+          if [[ "$create_pr" != "true" && "$create_pr" != "false" ]]; then
+            echo "Invalid create_pr: expected true or false." >&2
+            exit 1
           fi
 
-          auto_merge_pr="${TRITONAI_SYNC_INPUT_AUTO_MERGE_PR:-}"
-          if [[ -z "$auto_merge_pr" ]]; then
-            auto_merge_pr="false"
+          auto_merge_pr="${TRITONAI_SYNC_INPUT_AUTO_MERGE_PR:-false}"
+          if [[ "$auto_merge_pr" != "true" && "$auto_merge_pr" != "false" ]]; then
+            echo "Invalid auto_merge_pr: expected true or false." >&2
+            exit 1
           fi
 
-          skip_checks="${TRITONAI_SYNC_INPUT_SKIP_CHECKS:-}"
-          if [[ -z "$skip_checks" ]]; then
-            skip_checks="false"
+          skip_checks="${TRITONAI_SYNC_INPUT_SKIP_CHECKS:-false}"
+          if [[ "$skip_checks" != "true" && "$skip_checks" != "false" ]]; then
+            echo "Invalid skip_checks: expected true or false." >&2
+            exit 1
           fi
 
           args=(--push)
