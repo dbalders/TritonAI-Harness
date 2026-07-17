@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { mergeProviderInstanceEnvironment } from "./ProviderInstanceEnvironment.ts";
+import {
+  mergeProviderInstanceEnvironment,
+  withoutInheritedCodexNetworkSandboxMarker,
+} from "./ProviderInstanceEnvironment.ts";
 
 describe("mergeProviderInstanceEnvironment", () => {
   it("overrides inherited environment values and preserves empty strings", () => {
@@ -43,5 +46,59 @@ describe("mergeProviderInstanceEnvironment", () => {
         "darwin",
       ),
     ).toEqual({ Path: "/inherited/bin", PATH: "/custom/bin" });
+  });
+});
+
+describe("withoutInheritedCodexNetworkSandboxMarker", () => {
+  it("removes the inherited network marker without mutating the source environment", () => {
+    const environment = {
+      CODEX_SANDBOX: "seatbelt",
+      CODEX_SANDBOX_NETWORK_DISABLED: "1",
+      PATH: "/bin",
+    };
+
+    expect(withoutInheritedCodexNetworkSandboxMarker(environment, "darwin")).toEqual({
+      CODEX_SANDBOX: "seatbelt",
+      PATH: "/bin",
+    });
+    expect(environment).toEqual({
+      CODEX_SANDBOX: "seatbelt",
+      CODEX_SANDBOX_NETWORK_DISABLED: "1",
+      PATH: "/bin",
+    });
+  });
+
+  it("removes the network marker case-insensitively on Windows", () => {
+    expect(
+      withoutInheritedCodexNetworkSandboxMarker(
+        {
+          Codex_Sandbox: "windows",
+          codex_sandbox_network_disabled: "1",
+          PATH: "C:\\Windows\\System32",
+        },
+        "win32",
+      ),
+    ).toEqual({ Codex_Sandbox: "windows", PATH: "C:\\Windows\\System32" });
+  });
+
+  it("preserves a network marker explicitly configured for the provider", () => {
+    const inheritedEnvironment = withoutInheritedCodexNetworkSandboxMarker(
+      { CODEX_SANDBOX_NETWORK_DISABLED: "1", PATH: "/bin" },
+      "darwin",
+    );
+
+    expect(
+      mergeProviderInstanceEnvironment(
+        [
+          {
+            name: "CODEX_SANDBOX_NETWORK_DISABLED",
+            value: "configured",
+            sensitive: false,
+          },
+        ],
+        inheritedEnvironment,
+        "darwin",
+      ),
+    ).toEqual({ CODEX_SANDBOX_NETWORK_DISABLED: "configured", PATH: "/bin" });
   });
 });

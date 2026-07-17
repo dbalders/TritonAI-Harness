@@ -43,7 +43,10 @@ import { ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
 import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
 import type { ProviderDriver, ProviderInstance } from "../ProviderDriver.ts";
 import type { ServerProviderDraft } from "../providerSnapshot.ts";
-import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
+import {
+  mergeProviderInstanceEnvironment,
+  withoutInheritedCodexNetworkSandboxMarker,
+} from "../ProviderInstanceEnvironment.ts";
 import {
   enrichProviderSnapshotWithVersionAdvisory,
   makePackageManagedProviderMaintenanceResolver,
@@ -126,7 +129,11 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
       const serverSettings = yield* ServerSettingsService;
       const eventLoggers = yield* ProviderEventLoggers;
       const hostPlatform = yield* HostProcessPlatform;
-      const processEnv = mergeProviderInstanceEnvironment(environment, process.env, hostPlatform);
+      const processEnv = mergeProviderInstanceEnvironment(
+        environment,
+        withoutInheritedCodexNetworkSandboxMarker(process.env, hostPlatform),
+        hostPlatform,
+      );
       const configuredHomePath = config.homePath.trim();
       const managedConfig = {
         ...config,
