@@ -2482,26 +2482,16 @@ it.effect("cancels image analysis before sending the main turn when interrupted"
   );
 });
 
-it.effect("cancels pending image analysis before dispatching a newer turn", () => {
+it.effect("serializes a newer turn without cancelling active image analysis", () => {
   const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "codex-image-superseded-"));
   const runtimeFactory = makeRuntimeFactory();
   const analysisStarted = Promise.withResolvers<void>();
+  const releaseAnalysis = Promise.withResolvers<void>();
   const analyzer: CodexImageContextAnalyzer = (input) => {
     analysisStarted.resolve();
-    return Effect.tryPromise({
-      try: () =>
-        new Promise<ReadonlyArray<{ description: string; visibleText: string }>>(
-          (_resolve, reject) => {
-            input.signal?.addEventListener("abort", () => reject(new Error("superseded")), {
-              once: true,
-            });
-          },
-        ),
-      catch: (cause) =>
-        new CodexImageContextAnalysisError({
-          detail: "superseded",
-          cause,
-        }),
+    return Effect.promise(async () => {
+      await releaseAnalysis.promise;
+      return input.images.map(() => ({ description: "fixture", visibleText: "fixture" }));
     });
   };
   const layer = makeImageContextAdapterLayer({ baseDir, runtimeFactory, analyzer });
@@ -2527,22 +2517,25 @@ it.effect("cancels pending image analysis before dispatching a newer turn", () =
       .sendTurn({ threadId, input: "Older turn", attachments: [attachment] })
       .pipe(Effect.forkChild);
     yield* Effect.promise(() => analysisStarted.promise);
-    yield* adapter.sendTurn({ threadId, input: "Newer turn" });
-    const firstTurnExit = yield* Fiber.await(firstTurnFiber);
+    const secondTurnFiber = yield* adapter
+      .sendTurn({ threadId, input: "Newer turn" })
+      .pipe(Effect.forkChild);
+    yield* Effect.yieldNow;
+    NodeAssert.equal(runtime.sendTurnImpl.mock.calls.length, 0);
+    releaseAnalysis.resolve();
+    yield* Fiber.join(firstTurnFiber);
+    yield* Fiber.join(secondTurnFiber);
 
-    NodeAssert.equal(Exit.isFailure(firstTurnExit), true);
-    if (Exit.isFailure(firstTurnExit)) {
-      NodeAssert.equal(Cause.hasInterruptsOnly(firstTurnExit.cause), true);
-    }
-    NodeAssert.equal(runtime.sendTurnImpl.mock.calls.length, 1);
-    NodeAssert.deepStrictEqual(runtime.sendTurnImpl.mock.calls[0]?.[0], { input: "Newer turn" });
+    NodeAssert.equal(runtime.sendTurnImpl.mock.calls.length, 2);
+    NodeAssert.match(runtime.sendTurnImpl.mock.calls[0]?.[0].input ?? "", /^Older turn/u);
+    NodeAssert.deepStrictEqual(runtime.sendTurnImpl.mock.calls[1]?.[0], { input: "Newer turn" });
   }).pipe(
     Effect.provide(layer),
     Effect.ensuring(Effect.sync(() => NodeFS.rmSync(baseDir, { recursive: true, force: true }))),
   );
 });
 
-it.effect("cancels every superseded image turn before queued analysis starts", () => {
+it.effect("serializes every queued image turn without superseding it", () => {
   const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "codex-image-queued-cancel-"));
   const runtimeFactory = makeRuntimeFactory();
   let analyzerCalls = 0;
@@ -2591,21 +2584,15 @@ it.effect("cancels every superseded image turn before queued analysis starts", (
       .pipe(Effect.forkChild);
     yield* Effect.yieldNow;
     releasePreparation.resolve();
-    const firstTurnExit = yield* Fiber.await(firstTurnFiber);
-    const secondTurnExit = yield* Fiber.await(secondTurnFiber);
+    yield* Fiber.join(firstTurnFiber);
+    yield* Fiber.join(secondTurnFiber);
     yield* Fiber.join(thirdTurnFiber);
 
-    NodeAssert.equal(Exit.isFailure(firstTurnExit), true);
-    if (Exit.isFailure(firstTurnExit)) {
-      NodeAssert.equal(Cause.hasInterruptsOnly(firstTurnExit.cause), true);
-    }
-    NodeAssert.equal(Exit.isFailure(secondTurnExit), true);
-    if (Exit.isFailure(secondTurnExit)) {
-      NodeAssert.equal(Cause.hasInterruptsOnly(secondTurnExit.cause), true);
-    }
-    NodeAssert.equal(analyzerCalls, 0);
-    NodeAssert.equal(runtime.sendTurnImpl.mock.calls.length, 1);
-    NodeAssert.deepStrictEqual(runtime.sendTurnImpl.mock.calls[0]?.[0], { input: "Newest turn" });
+    NodeAssert.equal(analyzerCalls, 2);
+    NodeAssert.equal(runtime.sendTurnImpl.mock.calls.length, 3);
+    NodeAssert.match(runtime.sendTurnImpl.mock.calls[0]?.[0].input ?? "", /^Older turn/u);
+    NodeAssert.match(runtime.sendTurnImpl.mock.calls[1]?.[0].input ?? "", /^Middle turn/u);
+    NodeAssert.deepStrictEqual(runtime.sendTurnImpl.mock.calls[2]?.[0], { input: "Newest turn" });
   }).pipe(
     Effect.provide(layer),
     Effect.ensuring(Effect.sync(() => NodeFS.rmSync(baseDir, { recursive: true, force: true }))),

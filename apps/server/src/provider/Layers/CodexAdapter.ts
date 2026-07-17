@@ -1431,13 +1431,12 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
   >();
   const threadLifecycleEpochs = new Map<ThreadId, ThreadLifecycleEpoch>();
   const pendingSessionStarts = new Map<ThreadId, Set<object>>();
-  const latestTurnPreparations = new Map<
+  const turnPreparations = new Map<
     ThreadId,
-    {
-      cancelImageAnalysis: boolean;
+    Set<{
       controller: AbortController | null;
       lifecycleEpoch: ThreadLifecycleEpoch | undefined;
-    }
+    }>
   >();
   const imageContextAnalyzer =
     options?.imageContextAnalyzer ?? (yield* makeCodexImageContextAnalyzer(options?.environment));
@@ -1483,11 +1482,13 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     lifecycleEpoch: ThreadLifecycleEpoch | undefined,
   ) => {
     if (!lifecycleEpoch) return;
-    const preparation = latestTurnPreparations.get(threadId);
-    if (preparation?.lifecycleEpoch === lifecycleEpoch) {
+    const preparations = turnPreparations.get(threadId);
+    for (const preparation of Array.from(preparations ?? [])) {
+      if (preparation.lifecycleEpoch !== lifecycleEpoch) continue;
       preparation.controller?.abort();
-      latestTurnPreparations.delete(threadId);
+      preparations?.delete(preparation);
     }
+    if (preparations?.size === 0) turnPreparations.delete(threadId);
     const analysis = pendingImageContextAnalyses.get(threadId);
     if (analysis?.lifecycleEpoch === lifecycleEpoch) {
       analysis.controller.abort();
@@ -1981,7 +1982,6 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
   const sendTurnLocked = Effect.fn("sendTurnLocked")(function* (
     input: ProviderSendTurnInput,
     preparation: {
-      cancelImageAnalysis: boolean;
       controller: AbortController | null;
       lifecycleEpoch: ThreadLifecycleEpoch | undefined;
     },
@@ -2022,7 +2022,6 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     const analysisAbortController = requiresImageContext ? new AbortController() : undefined;
     if (analysisAbortController) {
       preparation.controller = analysisAbortController;
-      if (preparation.cancelImageAnalysis) analysisAbortController.abort();
       pendingImageContextAnalyses.set(input.threadId, {
         controller: analysisAbortController,
         lifecycleEpoch: preparation.lifecycleEpoch,
@@ -2143,21 +2142,18 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
   const sendTurn: CodexAdapterShape["sendTurn"] = (input) =>
     Effect.suspend(() => {
       const preparation = {
-        cancelImageAnalysis: false,
         controller: null,
         lifecycleEpoch: currentThreadLifecycleEpoch(input.threadId),
       };
-      const previous = latestTurnPreparations.get(input.threadId);
-      if (previous) {
-        previous.cancelImageAnalysis = true;
-        previous.controller?.abort();
-      }
-      latestTurnPreparations.set(input.threadId, preparation);
+      const preparations = turnPreparations.get(input.threadId) ?? new Set();
+      preparations.add(preparation);
+      turnPreparations.set(input.threadId, preparations);
       return withThreadLock(input.threadId, sendTurnLocked(input, preparation)).pipe(
         Effect.ensuring(
           Effect.sync(() => {
-            if (latestTurnPreparations.get(input.threadId) === preparation) {
-              latestTurnPreparations.delete(input.threadId);
+            preparations.delete(preparation);
+            if (preparations.size === 0 && turnPreparations.get(input.threadId) === preparations) {
+              turnPreparations.delete(input.threadId);
             }
           }),
         ),
