@@ -712,6 +712,48 @@ reconciliationLayer("CodexAdapter integration availability reconciliation", (it)
     }),
   );
 
+  it.effect("removes a published replacement when its restart is interrupted", () =>
+    Effect.gen(function* () {
+      reconciliationAvailability.generation = 65;
+      reconciliationAvailability.available = false;
+      reconciliationAvailability.advancesDuringPrepare = 0;
+      reconciliationRuntimeFactory.factory.mockClear();
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("thread-interrupt-replacement-close");
+      yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
+      const initialRuntime = reconciliationRuntimeFactory.lastRuntime!;
+      const closeStarted = Promise.withResolvers<void>();
+      const releaseClose = Promise.withResolvers<void>();
+      const initialRuntimeClosed = Promise.withResolvers<void>();
+      initialRuntime.closeImpl.mockImplementationOnce(async () => {
+        closeStarted.resolve();
+        await releaseClose.promise;
+        initialRuntimeClosed.resolve();
+      });
+
+      const restart = yield* adapter
+        .startSession({ threadId, runtimeMode: "full-access" })
+        .pipe(Effect.forkChild);
+      yield* Effect.promise(() => closeStarted.promise);
+      const replacement = reconciliationRuntimeFactory.lastRuntime!;
+      const replacementClosed = Promise.withResolvers<void>();
+      replacement.closeImpl.mockImplementationOnce(async () => {
+        replacementClosed.resolve();
+        return undefined;
+      });
+      NodeAssert.equal(yield* adapter.hasSession(threadId), true);
+
+      yield* Fiber.interrupt(restart);
+      NodeAssert.equal(yield* adapter.hasSession(threadId), false);
+      yield* Effect.promise(() => replacementClosed.promise);
+      NodeAssert.equal(replacement.closeImpl.mock.calls.length, 1);
+      releaseClose.resolve();
+      yield* Effect.promise(() => initialRuntimeClosed.promise);
+      NodeAssert.equal(yield* adapter.hasSession(threadId), false);
+      NodeAssert.equal(replacement.closeImpl.mock.calls.length, 1);
+    }),
+  );
+
   it.effect("invalidates every queued send when a session is stopped", () =>
     Effect.gen(function* () {
       reconciliationAvailability.generation = 70;

@@ -249,7 +249,7 @@ describe("IntegrationAvailabilityRefresh", () => {
 
       const unsubscribe = subscribeIntegrationAvailabilityRefresh(integrations, providers, {
         debounceMs: 10,
-        retryMs: 10,
+        retryMs: 100,
         onError: () => errorObserved.resolve(),
       });
       await vi.advanceTimersByTimeAsync(10);

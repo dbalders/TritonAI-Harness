@@ -1749,7 +1749,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           return yield* Effect.interrupt;
         }
 
-        sessions.set(input.threadId, {
+        const replacement = {
           threadId: input.threadId,
           scope: sessionScope,
           runtime,
@@ -1767,14 +1767,27 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
           textOnlyImageContextSafe,
           stopped: false,
-        });
+        } satisfies CodexAdapterSessionContext;
+        sessions.set(input.threadId, replacement);
         sessionScopeTransferred = true;
         integrationSkillRuntimeTransferred = true;
 
         // Keep the prior runtime usable until its replacement is fully started and installed.
         // A transient integration refresh failure must not destroy the user's live task.
         if (existing && !existing.stopped) {
-          yield* Effect.suspend(() => stopSessionInternal(existing));
+          yield* Effect.suspend(() => stopSessionInternal(existing)).pipe(
+            Effect.onExit((exit) =>
+              Exit.isFailure(exit)
+                ? Effect.sync(() => claimSessionStop(replacement)).pipe(
+                    Effect.flatMap((claimed) =>
+                      claimed
+                        ? Effect.forkDetach(closeSessionResources(replacement)).pipe(Effect.asVoid)
+                        : Effect.void,
+                    ),
+                  )
+                : Effect.void,
+            ),
+          );
         }
 
         return withTextOnlyImageContextResumeSafety(started, textOnlyImageContextSafe);
@@ -2230,6 +2243,8 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
   const claimSessionStop = (session: CodexAdapterSessionContext) => {
     if (session.stopped) return false;
     session.stopped = true;
+    // A detached prior-session close may overlap replacement cleanup. Only the exact session
+    // currently published for this thread is allowed to remove that map entry.
     if (sessions.get(session.threadId) === session) sessions.delete(session.threadId);
     return true;
   };

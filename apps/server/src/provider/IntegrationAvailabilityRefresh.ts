@@ -122,6 +122,10 @@ export function subscribeIntegrationAvailabilityRefresh(
     requestedGeneration += 1;
     queued = true;
     nextDelayMs = debounceMs;
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+    }
     schedule();
   });
   queued = true;
