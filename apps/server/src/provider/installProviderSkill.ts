@@ -59,34 +59,16 @@ function installError(message: string, cause?: unknown) {
   });
 }
 
-function assertNoSymlinkedExistingPath(
+const assertNotSymbolicLinkPath = Effect.fn("assertNotSymbolicLinkPath")(function* (
   targetPath: string,
-): Effect.Effect<void, ServerProviderSkillInstallError, FileSystem.FileSystem | Path.Path> {
-  return Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const pathService = yield* Path.Path;
-    const resolvedPath = pathService.resolve(targetPath);
-    const parsed = pathService.parse(resolvedPath);
-    const relativeSegments = resolvedPath
-      .slice(parsed.root.length)
-      .split(pathService.sep)
-      .filter((segment) => segment.length > 0);
-    let currentPath = parsed.root;
-
-    for (const segment of relativeSegments) {
-      currentPath = pathService.join(currentPath, segment);
-      const isLink = yield* fs.readLink(currentPath).pipe(
-        Effect.as(true),
-        Effect.orElseSucceed(() => false),
-      );
-      if (isLink) {
-        return yield* installError(
-          `Refusing to install a skill through symlinked destination path ${currentPath}.`,
-        );
-      }
-    }
-  });
-}
+) {
+  const fs = yield* FileSystem.FileSystem;
+  if (yield* isSymbolicLinkPath(fs, targetPath)) {
+    return yield* installError(
+      `Refusing to install a skill through symlinked destination path ${targetPath}.`,
+    );
+  }
+});
 
 function parseUrl(rawUrl: string): URL | null {
   try {
@@ -835,7 +817,7 @@ export function installSkillBundle(input: {
     const frontmatter = yield* extractFrontmatter(entrypoint.content);
     const skillName = yield* sanitizeSkillName(frontmatter.name);
     const skillsDirectory = pathService.resolve(input.skillsDirectory);
-    yield* assertNoSymlinkedExistingPath(skillsDirectory);
+    yield* assertNotSymbolicLinkPath(skillsDirectory);
     const skillDirectory = pathService.join(skillsDirectory, skillName);
     const skillPath = pathService.join(skillDirectory, "SKILL.md");
 
@@ -851,7 +833,7 @@ export function installSkillBundle(input: {
       );
     }
 
-    yield* assertNoSymlinkedExistingPath(skillDirectory);
+    yield* assertNotSymbolicLinkPath(skillDirectory);
 
     const skillDirectoryExists = yield* fs
       .exists(skillDirectory)

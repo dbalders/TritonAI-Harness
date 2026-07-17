@@ -95,8 +95,11 @@ describe("managed skill install ownership", () => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const skillsDirectory = path.resolve("apps/server/src/provider/__fixtures__/skills-link");
-      const externalTarget = path.resolve("apps/server/src/provider/__fixtures__/skills-target");
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "symlinked-skill-install-test-" });
+      const skillsDirectory = path.join(root, "skills-link");
+      const externalTarget = path.join(root, "skills-target");
+      yield* fs.makeDirectory(externalTarget, { recursive: true });
+      yield* fs.symlink(externalTarget, skillsDirectory);
 
       const error = yield* installSkillBundle({
         bundle: bundle("escaped-skill", "payload"),
@@ -105,6 +108,51 @@ describe("managed skill install ownership", () => {
 
       expect(error.message).toContain("symlinked destination path");
       expect(yield* fs.exists(path.join(externalTarget, "escaped-skill"))).toBe(false);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("refuses to refresh through a symlinked skill directory", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "symlinked-skill-refresh-test-" });
+      const skillsDirectory = path.join(root, "skills");
+      const skillDirectory = path.join(skillsDirectory, "escaped-skill");
+      const externalTarget = path.join(root, "external-target");
+      yield* fs.makeDirectory(skillsDirectory, { recursive: true });
+      yield* fs.makeDirectory(externalTarget, { recursive: true });
+      yield* fs.symlink(externalTarget, skillDirectory);
+
+      const error = yield* installSkillBundle({
+        bundle: bundle("escaped-skill", "payload"),
+        skillsDirectory,
+      }).pipe(Effect.flip);
+
+      expect(error.message).toContain("symlinked destination path");
+      expect(yield* fs.exists(path.join(externalTarget, "SKILL.md"))).toBe(false);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("allows a real skills directory under a symlinked parent", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "linked-skill-parent-test-" });
+      const actualHome = path.join(root, "actual-home");
+      const linkedHome = path.join(root, "linked-home");
+      const skillsDirectory = path.join(linkedHome, "skills");
+      yield* fs.makeDirectory(path.join(actualHome, "skills"), { recursive: true });
+      yield* fs.symlink(actualHome, linkedHome);
+
+      const result = yield* installSkillBundle({
+        bundle: bundle("local-skill", "payload"),
+        skillsDirectory,
+      });
+
+      expect(yield* fs.exists(path.join(actualHome, "skills", "local-skill", "SKILL.md"))).toBe(
+        true,
+      );
+      yield* discardProviderSkillInstallRollback(result.rollback);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
