@@ -1430,6 +1430,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     { controller: AbortController; lifecycleEpoch: ThreadLifecycleEpoch | undefined }
   >();
   const threadLifecycleEpochs = new Map<ThreadId, ThreadLifecycleEpoch>();
+  const pendingSessionStarts = new Map<ThreadId, Set<object>>();
   const latestTurnPreparations = new Map<
     ThreadId,
     {
@@ -1814,28 +1815,47 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           issue: `Expected provider '${PROVIDER}' but received '${input.provider}'.`,
         });
       }
-      return yield* withThreadLock(
-        input.threadId,
-        Effect.suspend(() => {
-          const previousEpoch = currentThreadLifecycleEpoch(input.threadId);
-          const previousSession = sessions.get(input.threadId);
-          const lifecycleEpoch = beginThreadLifecycle(input.threadId);
-          return startSessionUnlocked(input, lifecycleEpoch).pipe(
-            Effect.onExit((exit) =>
-              Exit.isFailure(exit) &&
-              currentThreadLifecycleEpoch(input.threadId) === lifecycleEpoch &&
-              previousSession !== undefined &&
-              !previousSession.stopped &&
-              sessions.get(input.threadId) === previousSession
-                ? Effect.sync(() => {
-                    if (previousEpoch) threadLifecycleEpochs.set(input.threadId, previousEpoch);
-                    else threadLifecycleEpochs.delete(input.threadId);
-                  })
-                : Effect.void,
-            ),
-          );
-        }),
-      );
+      return yield* Effect.suspend(() => {
+        const pendingStart = {};
+        const pendingStarts = pendingSessionStarts.get(input.threadId) ?? new Set<object>();
+        pendingStarts.add(pendingStart);
+        pendingSessionStarts.set(input.threadId, pendingStarts);
+        const retirePendingStart = () => {
+          pendingStarts.delete(pendingStart);
+          if (
+            pendingStarts.size === 0 &&
+            pendingSessionStarts.get(input.threadId) === pendingStarts
+          ) {
+            pendingSessionStarts.delete(input.threadId);
+          }
+        };
+        return withThreadLock(
+          input.threadId,
+          Effect.suspend(() => {
+            if (!pendingSessionStarts.get(input.threadId)?.has(pendingStart)) {
+              return Effect.interrupt;
+            }
+            retirePendingStart();
+            const previousEpoch = currentThreadLifecycleEpoch(input.threadId);
+            const previousSession = sessions.get(input.threadId);
+            const lifecycleEpoch = beginThreadLifecycle(input.threadId);
+            return startSessionUnlocked(input, lifecycleEpoch).pipe(
+              Effect.onExit((exit) =>
+                Exit.isFailure(exit) &&
+                currentThreadLifecycleEpoch(input.threadId) === lifecycleEpoch &&
+                previousSession !== undefined &&
+                !previousSession.stopped &&
+                sessions.get(input.threadId) === previousSession
+                  ? Effect.sync(() => {
+                      if (previousEpoch) threadLifecycleEpochs.set(input.threadId, previousEpoch);
+                      else threadLifecycleEpochs.delete(input.threadId);
+                    })
+                  : Effect.void,
+              ),
+            );
+          }),
+        ).pipe(Effect.ensuring(Effect.sync(retirePendingStart)));
+      });
     });
 
   const resolveAttachment = Effect.fn("resolveAttachment")(function* (
@@ -2280,6 +2300,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
   const stopSession: CodexAdapterShape["stopSession"] = (threadId) =>
     Effect.uninterruptibleMask((restore) =>
       Effect.sync(() => {
+        pendingSessionStarts.delete(threadId);
         retireThreadLifecycle(threadId);
         const session = sessions.get(threadId);
         return session && claimSessionStop(session) ? session : undefined;
@@ -2312,6 +2333,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
   const stopAll: CodexAdapterShape["stopAll"] = () =>
     Effect.uninterruptibleMask((restore) =>
       Effect.sync(() => {
+        pendingSessionStarts.clear();
         for (const threadId of Array.from(threadLifecycleEpochs.keys()))
           retireThreadLifecycle(threadId);
         return Array.from(sessions.values()).filter(claimSessionStop);

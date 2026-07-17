@@ -614,6 +614,47 @@ reconciliationLayer("CodexAdapter integration availability reconciliation", (it)
     }),
   );
 
+  it.effect("keeps an earlier queued start when a later start is interrupted", () =>
+    Effect.gen(function* () {
+      reconciliationAvailability.generation = 47;
+      reconciliationAvailability.available = false;
+      reconciliationAvailability.advancesDuringPrepare = 0;
+      reconciliationRuntimeFactory.factory.mockClear();
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("thread-independent-queued-starts");
+      yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
+      const runtime = reconciliationRuntimeFactory.lastRuntime!;
+      const readStarted = Promise.withResolvers<void>();
+      const releaseRead = Promise.withResolvers<void>();
+      runtime.onGetSession = async () => {
+        runtime.onGetSession = undefined;
+        readStarted.resolve();
+        await releaseRead.promise;
+      };
+
+      const send = yield* adapter
+        .sendTurn({ threadId, input: "hold the thread lock", attachments: [] })
+        .pipe(Effect.forkChild);
+      yield* Effect.promise(() => readStarted.promise);
+      const earlierStart = yield* adapter
+        .startSession({ threadId, runtimeMode: "full-access" })
+        .pipe(Effect.forkChild);
+      yield* Effect.yieldNow;
+      const laterStart = yield* adapter
+        .startSession({ threadId, runtimeMode: "full-access" })
+        .pipe(Effect.forkChild);
+      yield* Effect.yieldNow;
+      yield* Fiber.interrupt(laterStart);
+
+      releaseRead.resolve();
+      yield* Fiber.await(send);
+      yield* Fiber.join(earlierStart);
+
+      NodeAssert.equal(reconciliationRuntimeFactory.factory.mock.calls.length, 2);
+      NodeAssert.equal(yield* adapter.hasSession(threadId), true);
+    }),
+  );
+
   it.effect("does not make session teardown wait for a stalled send", () =>
     Effect.gen(function* () {
       reconciliationAvailability.generation = 50;
@@ -647,6 +688,44 @@ reconciliationLayer("CodexAdapter integration availability reconciliation", (it)
       }
       NodeAssert.equal(runtime.sendTurnImpl.mock.calls.length, 0);
       NodeAssert.equal(reconciliationRuntimeFactory.factory.mock.calls.length, 1);
+    }),
+  );
+
+  it.effect("does not let teardown resurrect a queued session start", () =>
+    Effect.gen(function* () {
+      reconciliationAvailability.generation = 52;
+      reconciliationAvailability.available = false;
+      reconciliationAvailability.advancesDuringPrepare = 0;
+      reconciliationRuntimeFactory.factory.mockClear();
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("thread-stop-with-queued-start");
+      yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
+      const runtime = reconciliationRuntimeFactory.lastRuntime!;
+      const readStarted = Promise.withResolvers<void>();
+      const releaseRead = Promise.withResolvers<void>();
+      runtime.onGetSession = async () => {
+        runtime.onGetSession = undefined;
+        readStarted.resolve();
+        await releaseRead.promise;
+      };
+
+      const send = yield* adapter
+        .sendTurn({ threadId, input: "hold the thread lock", attachments: [] })
+        .pipe(Effect.forkChild);
+      yield* Effect.promise(() => readStarted.promise);
+      const restart = yield* adapter
+        .startSession({ threadId, runtimeMode: "full-access" })
+        .pipe(Effect.forkChild);
+      yield* Effect.yieldNow;
+
+      yield* adapter.stopSession(threadId);
+      releaseRead.resolve();
+      yield* Fiber.await(send);
+      const restartExit = yield* Fiber.await(restart);
+
+      NodeAssert.equal(Exit.isFailure(restartExit), true);
+      NodeAssert.equal(reconciliationRuntimeFactory.factory.mock.calls.length, 1);
+      NodeAssert.equal(yield* adapter.hasSession(threadId), false);
     }),
   );
 
