@@ -9,6 +9,7 @@ import {
   clearOwnedConnectionAttention,
   integrationConnectAriaLabel,
   integrationNeedsConnectionAction,
+  reconcileConnectionAttentionForIntegration,
   shouldExpandIntegrationCard,
   shouldFocusConnectionAction,
 } from "./PluginsSettings.tsx";
@@ -129,6 +130,26 @@ describe("PluginsSettings connection action", () => {
       attention: null,
       announcement: "",
     });
+  });
+
+  it("clears owned connection attention when a capability update resolves it", () => {
+    const integration = summary();
+    const current = {
+      attention: { id: integration.id, request: 2 },
+      announcement: `Action required: Connect ${integration.name}`,
+    };
+    expect(
+      reconcileConnectionAttentionForIntegration(current, integration.id, {
+        ...integration,
+        capabilities: integration.capabilities.map((capability) => ({
+          ...capability,
+          enabled: false,
+        })),
+      }),
+    ).toEqual({ attention: null, announcement: "" });
+    expect(reconcileConnectionAttentionForIntegration(current, integration.id, integration)).toBe(
+      current,
+    );
   });
 });
 

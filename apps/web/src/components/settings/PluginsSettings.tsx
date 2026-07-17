@@ -115,6 +115,16 @@ export function clearOwnedConnectionAttention(
   return { attention: null, announcement: "" };
 }
 
+export function reconcileConnectionAttentionForIntegration(
+  current: ConnectionAttentionState,
+  integrationId: string,
+  integration: IntegrationSummary | undefined,
+): ConnectionAttentionState {
+  return integration && integrationNeedsConnectionAction(integration)
+    ? current
+    : clearOwnedConnectionAttention(current, integrationId);
+}
+
 export function IntegrationConnectionActionCallout({
   integrationName,
 }: {
@@ -1028,6 +1038,9 @@ export function PluginsSettingsPanel() {
         setData(result);
         const updated = result.integrations.find(({ id }) => id === integration.id);
         const updatedCapability = updated?.capabilities.find(({ id }) => id === capability);
+        setConnectionAttentionState((current) =>
+          reconcileConnectionAttentionForIntegration(current, integration.id, updated),
+        );
         if (
           enabled &&
           updated?.requiresConnection &&
@@ -1044,6 +1057,9 @@ export function PluginsSettingsPanel() {
           activeFlowIdsRef.current.set(integration.id, flow.flowId);
           if (flow.kind === "connected") {
             activeFlowIdsRef.current.delete(integration.id);
+            setConnectionAttentionState((current) =>
+              clearOwnedConnectionAttention(current, integration.id),
+            );
             await load();
           } else {
             setFlows((current) =>
