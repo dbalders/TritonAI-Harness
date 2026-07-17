@@ -9,6 +9,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Schema from "effect/Schema";
 
 import { toJsonSchemaObject } from "../../textGeneration/TextGenerationUtils.ts";
+import { makeTritonAiClientHeaders } from "../../tritonAiClientHeaders.ts";
 
 const IMAGE_CONTEXT_TIMEOUT_MS = 2 * 60 * 1_000;
 const IMAGE_CONTEXT_MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
@@ -277,6 +278,7 @@ export const makeCodexImageContextAnalyzer = Effect.fn("makeCodexImageContextAna
           const result = await requestFetch(endpoint, {
             method: "POST",
             headers: {
+              ...makeTritonAiClientHeaders(),
               Accept: "application/json",
               Authorization: `Bearer ${apiKey}`,
               "Content-Type": "application/json",

@@ -7,6 +7,7 @@ import * as Layer from "effect/Layer";
 import { expect, vi } from "vite-plus/test";
 
 import { formatUntrustedImageContext, makeCodexImageContextAnalyzer } from "./CodexImageContext.ts";
+import { TRITONAI_CLIENT_VERSION } from "../../tritonAiClientHeaders.ts";
 
 const testLayer = Layer.empty.pipe(Layer.provideMerge(NodeServices.layer));
 const validOutput =
@@ -40,6 +41,8 @@ it.layer(testLayer)("CodexImageContext", (it) => {
             Accept: "application/json",
             Authorization: "Bearer test-key",
             "Content-Type": "application/json",
+            "X-TritonAI-Client": "harness",
+            "X-TritonAI-Client-Version": TRITONAI_CLIENT_VERSION,
           });
           const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
           expect(body.model).toBe(TRITONAI_IMAGE_CONTEXT_MODEL);

@@ -7,6 +7,7 @@ import {
   DEFAULT_TRITONAI_CODEX_MODEL,
   TRITONAI_API_KEY_ENV,
 } from "@t3tools/contracts";
+import { TRITONAI_CLIENT_VERSION } from "../../tritonAiClientHeaders.ts";
 import { makeTritonAiCodexConfigArgs, resolveTritonAiCodexBaseUrl } from "./TritonAiCodexConfig.ts";
 
 function configValues(args: ReadonlyArray<string>): ReadonlyArray<string> {
@@ -35,6 +36,7 @@ describe("TritonAiCodexConfig", () => {
       'model_providers.ucsd.base_url="https://tritonai.example.test/v1"',
       `model_providers.ucsd.env_key="${TRITONAI_API_KEY_ENV}"`,
       'model_providers.ucsd.wire_api="responses"',
+      `model_providers.ucsd.http_headers={"X-TritonAI-Client"="harness","X-TritonAI-Client-Version"="${TRITONAI_CLIENT_VERSION}"}`,
       "model_providers.ucsd.requires_openai_auth=false",
       "model_providers.ucsd.stream_idle_timeout_ms=300000",
       "features.multi_agent=false",

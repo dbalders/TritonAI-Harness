@@ -6,6 +6,12 @@ import {
   TRITONAI_CODEX_MODEL_PROVIDER_NAME,
   UCSD_AI_BASE_URL_ENV,
 } from "@t3tools/contracts";
+import {
+  TRITONAI_CLIENT_HEADER,
+  TRITONAI_CLIENT_NAME,
+  TRITONAI_CLIENT_VERSION,
+  TRITONAI_CLIENT_VERSION_HEADER,
+} from "../../tritonAiClientHeaders.ts";
 
 const trimTrailingSlash = (value: string): string => value.replace(/\/+$/, "");
 
@@ -35,6 +41,8 @@ export function makeTritonAiCodexConfigArgs(env: NodeJS.ProcessEnv = process.env
     `${providerKey}.env_key=${encodeCodexConfigString(TRITONAI_API_KEY_ENV)}`,
     "--config",
     `${providerKey}.wire_api="responses"`,
+    "--config",
+    `${providerKey}.http_headers={${encodeCodexConfigString(TRITONAI_CLIENT_HEADER)}=${encodeCodexConfigString(TRITONAI_CLIENT_NAME)},${encodeCodexConfigString(TRITONAI_CLIENT_VERSION_HEADER)}=${encodeCodexConfigString(TRITONAI_CLIENT_VERSION)}}`,
     "--config",
     `${providerKey}.requires_openai_auth=false`,
     "--config",
