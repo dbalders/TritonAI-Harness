@@ -69,7 +69,11 @@ step prevents a modified envelope header from bypassing authenticated decryption
 replacement or deletion is durable, Harness atomically removes the fingerprint from the external
 keyring. Successful operations therefore cannot replay the old plaintext after a restart, while a
 failed replacement retains its recovery authorization. The service account must have write access
-to the keyring; failure to persist retirement stops the operation.
+to the keyring and permission to create and remove mode-`0600` lock and temporary files in its
+parent directory. Harness serializes fingerprint retirement across server processes; failure to
+acquire the lock or persist retirement stops the operation. If a process is forcibly terminated
+during retirement, first confirm that no Harness process is using the keyring, then remove the
+adjacent `.lock` file before restarting.
 
 To rotate a headless key, stop Harness, replace the file atomically with a new `active` key while
 retaining the old key in `previous`, and restart Harness immediately. The keyring is loaded at server

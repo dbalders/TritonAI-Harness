@@ -7,6 +7,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
@@ -128,6 +129,30 @@ const RenameFailureFileSystemLayer = Layer.effect(
             pathOrDescriptor: `${String(from)} -> ${String(to)}`,
             description: "Permission denied while persisting secret file.",
           }),
+        ),
+    } satisfies FileSystem.FileSystem;
+  }),
+).pipe(Layer.provide(NodeServices.layer));
+
+const FailureAfterPublishFileSystemLayer = Layer.effect(
+  FileSystem.FileSystem,
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    return {
+      ...fileSystem,
+      link: (from, to) =>
+        fileSystem.link(from, to).pipe(
+          Effect.andThen(
+            Effect.fail(
+              PlatformError.systemError({
+                _tag: "PermissionDenied",
+                module: "FileSystem",
+                method: "link",
+                pathOrDescriptor: `${String(from)} -> ${String(to)}`,
+                description: "Injected failure after publishing the secret file.",
+              }),
+            ),
+          ),
         ),
     } satisfies FileSystem.FileSystem;
   }),
@@ -288,6 +313,194 @@ it.layer(NodeServices.layer)("ServerSecretStore.layer", (it) => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect("serializes migration authorization retirement across store instances", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-concurrent-migration-",
+      });
+      const firstName = "legacy-first";
+      const secondName = "legacy-second";
+      const firstValue = new TextEncoder().encode("first-legacy-value");
+      const secondValue = new TextEncoder().encode("second-legacy-value");
+      const fingerprints = {
+        [firstName]: legacyFingerprint(firstName, firstValue),
+        [secondName]: legacyFingerprint(secondName, secondValue),
+      };
+
+      const locations = yield* Effect.gen(function* () {
+        const config = yield* ServerConfig.ServerConfig;
+        yield* ServerSecretStore.ServerSecretStore;
+        yield* fileSystem.writeFile(secretPath(config, firstName), firstValue);
+        yield* fileSystem.writeFile(secretPath(config, secondName), secondValue);
+        return { keyFilePath: config.secretStoreKeyFilePath! };
+      }).pipe(
+        Effect.provide(
+          makeServerSecretStoreLayer({
+            baseDir,
+            legacySecretFingerprints: fingerprints,
+          }),
+        ),
+      );
+
+      let lockAcquisitions = 0;
+      const delayedLockLayer = Layer.effect(
+        FileSystem.FileSystem,
+        Effect.gen(function* () {
+          const underlying = yield* FileSystem.FileSystem;
+          return {
+            ...underlying,
+            open: (filePath, options) => {
+              const open = underlying.open(filePath, options);
+              if (filePath !== `${locations.keyFilePath}.lock` || options?.flag !== "wx") {
+                return open;
+              }
+              return open.pipe(
+                Effect.tap(() =>
+                  Effect.sync(() => {
+                    lockAcquisitions += 1;
+                  }),
+                ),
+                Effect.tap(() => Effect.sleep("100 millis")),
+              );
+            },
+          } satisfies FileSystem.FileSystem;
+        }),
+      ).pipe(Layer.provide(NodeServices.layer));
+      const initializeStore = () =>
+        Effect.service(ServerSecretStore.ServerSecretStore).pipe(
+          Effect.provide(
+            Layer.fresh(
+              makeServerSecretStoreLayer({
+                baseDir,
+                legacySecretFingerprints: fingerprints,
+                secretStoreKeyFilePath: locations.keyFilePath,
+                fileSystemLayer: delayedLockLayer,
+              }),
+            ),
+          ),
+        );
+      const [firstStore, secondStore, thirdStore] = yield* Effect.all(
+        [initializeStore(), initializeStore(), initializeStore()],
+        { concurrency: "unbounded" },
+      );
+
+      const migrated = yield* Effect.all(
+        [firstStore.get(firstName), secondStore.get(firstName), thirdStore.get(secondName)],
+        { concurrency: "unbounded" },
+      );
+      assert.isTrue(migrated.every(Option.isSome));
+
+      const consumedKeyring = yield* fileSystem
+        .readFileString(locations.keyFilePath)
+        .pipe(Effect.flatMap(decodeTestSecretStoreKeyring));
+      assert.equal(lockAcquisitions, 3);
+      assert.isUndefined(consumedKeyring.legacySecretFingerprints[firstName]);
+      assert.isUndefined(consumedKeyring.legacySecretFingerprints[secondName]);
+      assert.isFalse(yield* fileSystem.exists(`${locations.keyFilePath}.lock`));
+    }).pipe(Effect.scoped, TestClock.withLive),
+  );
+
+  it.effect("removes an owned lock when lock initialization fails", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-lock-initialization-failure-",
+      });
+      const name = "legacy-oauth";
+      const value = new TextEncoder().encode("recoverable-legacy-value");
+      const fingerprint = legacyFingerprint(name, value);
+      const locations = yield* Effect.gen(function* () {
+        const config = yield* ServerConfig.ServerConfig;
+        yield* ServerSecretStore.ServerSecretStore;
+        yield* fileSystem.writeFile(secretPath(config, name), value);
+        return { keyFilePath: config.secretStoreKeyFilePath! };
+      }).pipe(
+        Effect.provide(
+          makeServerSecretStoreLayer({
+            baseDir,
+            legacySecretFingerprints: { [name]: fingerprint },
+          }),
+        ),
+      );
+      let injectedFailure = false;
+      const failedLockInitializationLayer = Layer.effect(
+        FileSystem.FileSystem,
+        Effect.gen(function* () {
+          const underlying = yield* FileSystem.FileSystem;
+          return {
+            ...underlying,
+            open: (filePath, options) =>
+              underlying.open(filePath, options).pipe(
+                Effect.map((file) => {
+                  if (
+                    injectedFailure ||
+                    filePath !== `${locations.keyFilePath}.lock` ||
+                    options?.flag !== "wx"
+                  ) {
+                    return file;
+                  }
+                  injectedFailure = true;
+                  return {
+                    ...file,
+                    writeAll: () =>
+                      Effect.fail(
+                        PlatformError.systemError({
+                          _tag: "WriteZero",
+                          module: "FileSystem",
+                          method: "writeAll",
+                          pathOrDescriptor: filePath,
+                          description: "Injected lock owner write failure.",
+                        }),
+                      ),
+                  } satisfies FileSystem.File;
+                }),
+              ),
+          } satisfies FileSystem.FileSystem;
+        }),
+      ).pipe(Layer.provide(NodeServices.layer));
+
+      const migrationError = yield* Effect.gen(function* () {
+        const secretStore = yield* ServerSecretStore.ServerSecretStore;
+        return yield* Effect.flip(secretStore.get(name));
+      }).pipe(
+        Effect.provide(
+          Layer.fresh(
+            makeServerSecretStoreLayer({
+              baseDir,
+              legacySecretFingerprints: { [name]: fingerprint },
+              secretStoreKeyFilePath: locations.keyFilePath,
+              fileSystemLayer: failedLockInitializationLayer,
+            }),
+          ),
+        ),
+      );
+      assert.instanceOf(migrationError, ServerSecretStore.SecretStorePersistError);
+      assert.isFalse(yield* fileSystem.exists(`${locations.keyFilePath}.lock`));
+      const retainedKeyring = yield* fileSystem
+        .readFileString(locations.keyFilePath)
+        .pipe(Effect.flatMap(decodeTestSecretStoreKeyring));
+      assert.equal(retainedKeyring.legacySecretFingerprints[name], fingerprint);
+
+      const recovered = yield* Effect.gen(function* () {
+        const secretStore = yield* ServerSecretStore.ServerSecretStore;
+        return yield* secretStore.get(name);
+      }).pipe(
+        Effect.provide(
+          Layer.fresh(
+            makeServerSecretStoreLayer({
+              baseDir,
+              legacySecretFingerprints: { [name]: fingerprint },
+              secretStoreKeyFilePath: locations.keyFilePath,
+            }),
+          ),
+        ),
+      );
+      assert.isTrue(Option.isSome(recovered));
+      assert.isFalse(yield* fileSystem.exists(`${locations.keyFilePath}.lock`));
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("fails closed when ciphertext is tampered", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -418,6 +631,7 @@ it.layer(NodeServices.layer)("ServerSecretStore.layer", (it) => {
         Effect.flip,
       );
       assert.instanceOf(error, ServerSecretStore.SecretStoreKeyError);
+      assert.equal(error.reason, "missing-provider");
     }),
   );
 
@@ -456,13 +670,37 @@ it.layer(NodeServices.layer)("ServerSecretStore.layer", (it) => {
       });
       const [first, second] = yield* Effect.all(
         [
-          initialize.pipe(Effect.provide(makeServerSecretStoreLayer({ baseDir }))),
-          initialize.pipe(Effect.provide(makeServerSecretStoreLayer({ baseDir }))),
+          initialize.pipe(Effect.provide(Layer.fresh(makeServerSecretStoreLayer({ baseDir })))),
+          initialize.pipe(Effect.provide(Layer.fresh(makeServerSecretStoreLayer({ baseDir })))),
         ],
         { concurrency: "unbounded" },
       );
       assert.deepEqual(Array.from(second), Array.from(first));
     }).pipe(Effect.scoped),
+  );
+
+  it.effect("never deletes a canonical secret after a failed publish", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const config = yield* ServerConfig.ServerConfig;
+      const secretStore = yield* ServerSecretStore.ServerSecretStore;
+      const value = new TextEncoder().encode("published-before-injected-failure");
+
+      const error = yield* Effect.flip(secretStore.create("oauth", value));
+      assert.instanceOf(error, ServerSecretStore.SecretStorePersistError);
+      assert.equal((error.cause as PlatformError.PlatformError).reason._tag, "PermissionDenied");
+
+      const persisted = Option.getOrThrow(yield* secretStore.get("oauth"));
+      assert.deepEqual(Array.from(persisted), Array.from(value));
+      const entries = yield* fileSystem.readDirectory(config.secretsDir);
+      assert.isFalse(
+        entries.some((entry) => entry.startsWith("oauth.bin.") && entry.endsWith(".tmp")),
+      );
+    }).pipe(
+      Effect.provide(
+        makeServerSecretStoreLayer({ fileSystemLayer: FailureAfterPublishFileSystemLayer }),
+      ),
+    ),
   );
 
   it.effect("uses restrictive permissions for the secret directory and files", () => {

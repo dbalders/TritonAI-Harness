@@ -18,6 +18,8 @@ import * as Semaphore from "effect/Semaphore";
 import * as ServerConfig from "../config.ts";
 
 const DATA_KEY_BYTES = 32;
+const EXTERNAL_KEYRING_LOCK_RETRY_COUNT = 200;
+const EXTERNAL_KEYRING_LOCK_RETRY_DELAY = "25 millis";
 
 const secretStoreErrorContext = {
   resource: Schema.String,
@@ -126,11 +128,33 @@ export class SecretStoreEncodeError extends Schema.TaggedErrorClass<SecretStoreE
 export class SecretStoreKeyError extends Schema.TaggedErrorClass<SecretStoreKeyError>()(
   "SecretStoreKeyError",
   {
-    ...secretStoreErrorContext,
+    resource: Schema.String,
+    reason: Schema.Literals([
+      "missing-provider",
+      "invalid-key-encoding",
+      "invalid-key-length",
+      "invalid-fingerprint-encoding",
+      "invalid-fingerprint-length",
+      "missing-migration-keyring",
+    ]),
   },
 ) {
   override get message(): string {
     return `Failed to unlock ${this.resource}.`;
+  }
+}
+
+export class SecretStoreLockError extends Schema.TaggedErrorClass<SecretStoreLockError>()(
+  "SecretStoreLockError",
+  {
+    resource: Schema.String,
+    reason: Schema.Literals(["timeout", "ownership-changed"]),
+  },
+) {
+  override get message(): string {
+    return this.reason === "timeout"
+      ? `Timed out waiting to lock ${this.resource}.`
+      : `Lost ownership of the lock for ${this.resource}.`;
   }
 }
 
@@ -145,6 +169,7 @@ export const SecretStoreError = Schema.Union([
   SecretStoreDecodeError,
   SecretStoreEncodeError,
   SecretStoreKeyError,
+  SecretStoreLockError,
 ]);
 export type SecretStoreError = typeof SecretStoreError.Type;
 export const isSecretStoreError = Schema.is(SecretStoreError);
@@ -152,8 +177,11 @@ export const isSecretStoreError = Schema.is(SecretStoreError);
 const isPlatformError = (value: unknown): value is PlatformError.PlatformError =>
   Predicate.isTagged(value, "PlatformError");
 
+const isAlreadyExistsPlatformError = (value: unknown): value is PlatformError.PlatformError =>
+  isPlatformError(value) && value.reason._tag === "AlreadyExists";
+
 export const isSecretAlreadyExistsError = (error: SecretStoreError): boolean =>
-  "cause" in error && isPlatformError(error.cause) && error.cause.reason._tag === "AlreadyExists";
+  "cause" in error && isAlreadyExistsPlatformError(error.cause);
 
 export class ServerSecretStore extends Context.Service<
   ServerSecretStore,
@@ -175,7 +203,7 @@ const decodeConfiguredKeys = Effect.fn("ServerSecretStore.decodeConfiguredKeys")
   if (encodedKeys === undefined || encodedKeys.length === 0) {
     return yield* new SecretStoreKeyError({
       resource: "server secret encryption key",
-      cause: new Error("No secure secret-store key provider was configured."),
+      reason: "missing-provider",
     });
   }
 
@@ -186,14 +214,14 @@ const decodeConfiguredKeys = Effect.fn("ServerSecretStore.decodeConfiguredKeys")
         () =>
           new SecretStoreKeyError({
             resource: "server secret encryption key",
-            cause: new Error("Configured encryption key is not valid base64."),
+            reason: "invalid-key-encoding",
           }),
       ),
     );
     if (decoded.byteLength !== DATA_KEY_BYTES) {
       return yield* new SecretStoreKeyError({
         resource: "server secret encryption key",
-        cause: new Error(`Expected a ${DATA_KEY_BYTES}-byte encryption key.`),
+        reason: "invalid-key-length",
       });
     }
     keys.push(Buffer.from(decoded));
@@ -211,14 +239,14 @@ const decodeLegacyFingerprints = Effect.fn("ServerSecretStore.decodeLegacyFinger
         () =>
           new SecretStoreKeyError({
             resource: "legacy secret migration fingerprint",
-            cause: new Error("Configured migration fingerprint is not valid base64."),
+            reason: "invalid-fingerprint-encoding",
           }),
       ),
     );
     if (decoded.byteLength !== 32) {
       return yield* new SecretStoreKeyError({
         resource: "legacy secret migration fingerprint",
-        cause: new Error("Expected a 32-byte migration fingerprint."),
+        reason: "invalid-fingerprint-length",
       });
     }
     fingerprints.set(name, Buffer.from(decoded));
@@ -295,7 +323,7 @@ export const make = Effect.gen(function* () {
   if (legacyFingerprints.size > 0 && serverConfig.secretStoreKeyFilePath === undefined) {
     return yield* new SecretStoreKeyError({
       resource: "legacy secret migration authorization",
-      cause: new Error("Migration fingerprints require an authoritative external keyring."),
+      reason: "missing-migration-keyring",
     });
   }
   const mutex = yield* Semaphore.make(1);
@@ -319,6 +347,84 @@ export const make = Effect.gen(function* () {
           fileSystem.open(directoryPath, { flag: "r" }).pipe(Effect.flatMap((file) => file.sync)),
         );
 
+  interface ExternalKeyringLock {
+    readonly lockPath: string;
+    readonly owner: string;
+  }
+
+  const acquireExternalKeyringLock = (
+    keyFilePath: string,
+  ): Effect.Effect<
+    ExternalKeyringLock,
+    PlatformError.PlatformError | SecretStoreLockError | SecretStoreTemporaryPathError
+  > =>
+    Effect.gen(function* () {
+      const lockPath = `${keyFilePath}.lock`;
+      const owner = yield* crypto.randomUUIDv4.pipe(
+        Effect.mapError(
+          (cause) =>
+            new SecretStoreTemporaryPathError({
+              resource: "external secret-store keyring lock",
+              cause,
+            }),
+        ),
+      );
+
+      for (let attempt = 0; attempt < EXTERNAL_KEYRING_LOCK_RETRY_COUNT; attempt += 1) {
+        let created = false;
+        const acquired = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const file = yield* fileSystem.open(lockPath, { flag: "wx", mode: 0o600 });
+            created = true;
+            yield* file.writeAll(new TextEncoder().encode(owner));
+            yield* file.sync;
+          }),
+        ).pipe(
+          Effect.as(true),
+          Effect.catch((cause) =>
+            isAlreadyExistsPlatformError(cause)
+              ? Effect.succeed(false)
+              : created
+                ? fileSystem
+                    .remove(lockPath, { force: true })
+                    .pipe(Effect.andThen(Effect.fail(cause)))
+                : Effect.fail(cause),
+          ),
+        );
+        if (acquired) return { lockPath, owner } as const;
+        yield* Effect.sleep(EXTERNAL_KEYRING_LOCK_RETRY_DELAY);
+      }
+
+      return yield* new SecretStoreLockError({
+        resource: "external secret-store keyring",
+        reason: "timeout",
+      });
+    });
+
+  const releaseExternalKeyringLock = (
+    lock: ExternalKeyringLock,
+  ): Effect.Effect<void, PlatformError.PlatformError | SecretStoreLockError> =>
+    Effect.gen(function* () {
+      const currentOwner = yield* fileSystem.readFileString(lock.lockPath).pipe(
+        Effect.mapError((cause): PlatformError.PlatformError | SecretStoreLockError => {
+          if (cause.reason._tag === "NotFound") {
+            return new SecretStoreLockError({
+              resource: "external secret-store keyring",
+              reason: "ownership-changed",
+            });
+          }
+          return cause;
+        }),
+      );
+      if (currentOwner !== lock.owner) {
+        return yield* new SecretStoreLockError({
+          resource: "external secret-store keyring",
+          reason: "ownership-changed",
+        });
+      }
+      yield* fileSystem.remove(lock.lockPath);
+    });
+
   const retireLegacyAuthorization = (name: string): Effect.Effect<void, SecretStoreError> => {
     const expected = legacyFingerprints.get(name);
     if (expected === undefined) return Effect.void;
@@ -326,90 +432,107 @@ export const make = Effect.gen(function* () {
     return Effect.gen(function* () {
       const keyFilePath = serverConfig.secretStoreKeyFilePath;
       if (keyFilePath !== undefined) {
-        const raw = yield* fileSystem.readFileString(keyFilePath);
-        const keyring = yield* decodeExternalSecretStoreKeyring(raw).pipe(
-          Effect.mapError(
-            () =>
-              new SecretStorePersistError({
-                resource: "legacy migration authorization",
-                cause: new Error("The external secret-store keyring is invalid."),
-              }),
-          ),
-        );
-        if (keyring.legacySecretFingerprints?.[name] !== Encoding.encodeBase64(expected)) {
-          return yield* new SecretStorePersistError({
-            resource: `legacy migration authorization for secret ${name}`,
-            cause: new Error("The external secret-store keyring changed during migration."),
-          });
-        }
+        yield* Effect.acquireUseRelease(
+          acquireExternalKeyringLock(keyFilePath),
+          () =>
+            Effect.gen(function* () {
+              const raw = yield* fileSystem.readFileString(keyFilePath);
+              const keyring = yield* decodeExternalSecretStoreKeyring(raw).pipe(
+                Effect.mapError(
+                  () =>
+                    new SecretStorePersistError({
+                      resource: "legacy migration authorization",
+                      cause: new Error("The external secret-store keyring is invalid."),
+                    }),
+                ),
+              );
+              const currentFingerprint = keyring.legacySecretFingerprints?.[name];
+              if (currentFingerprint === undefined) {
+                // Another process can migrate the same authorized bytes and
+                // durably retire the fingerprint while this process waits for
+                // the lock. The absent entry is already the required final
+                // state; a different entry remains a hard failure below.
+                return;
+              }
+              if (currentFingerprint !== Encoding.encodeBase64(expected)) {
+                return yield* new SecretStorePersistError({
+                  resource: `legacy migration authorization for secret ${name}`,
+                  cause: new Error("The external secret-store keyring changed during migration."),
+                });
+              }
 
-        const remaining = { ...keyring.legacySecretFingerprints };
-        delete remaining[name];
-        const updated = `${yield* encodeExternalSecretStoreKeyring({
-          version: 1,
-          active: keyring.active,
-          ...(keyring.previous === undefined ? {} : { previous: keyring.previous }),
-          legacySecretFingerprints: remaining,
-        }).pipe(
-          Effect.mapError(
-            () =>
-              new SecretStorePersistError({
-                resource: "legacy migration authorization",
-                cause: new Error("External keyring encoding failed."),
-              }),
-          ),
-        )}\n`;
-        const uuid = yield* crypto.randomUUIDv4.pipe(
-          Effect.mapError(
-            (cause) =>
-              new SecretStoreTemporaryPathError({
-                resource: "external secret-store keyring",
-                cause,
-              }),
-          ),
-        );
-        const tempPath = `${keyFilePath}.${uuid}.tmp`;
-        yield* Effect.scoped(
-          Effect.gen(function* () {
-            const file = yield* fileSystem.open(tempPath, { flag: "wx", mode: 0o600 });
-            yield* file.writeAll(new TextEncoder().encode(updated));
-            yield* fileSystem.chmod(tempPath, 0o600);
-            yield* file.sync;
-            const verifiedRaw = yield* fileSystem.readFileString(tempPath);
-            const verified = yield* decodeExternalSecretStoreKeyring(verifiedRaw).pipe(
-              Effect.mapError(
-                () =>
-                  new SecretStorePersistError({
-                    resource: "legacy migration authorization",
-                    cause: new Error("External keyring verification failed."),
-                  }),
-              ),
-            );
-            const verifiedPrevious = verified.previous ?? [];
-            const expectedPrevious = keyring.previous ?? [];
-            if (
-              verified.active !== keyring.active ||
-              verifiedPrevious.length !== expectedPrevious.length ||
-              verifiedPrevious.some((key, index) => key !== expectedPrevious[index]) ||
-              Object.entries(remaining).some(
-                ([secretName, fingerprint]) =>
-                  verified.legacySecretFingerprints?.[secretName] !== fingerprint,
-              ) ||
-              verified.legacySecretFingerprints?.[name] !== undefined
-            ) {
-              return yield* new SecretStorePersistError({
-                resource: "legacy migration authorization",
-                cause: new Error("External keyring verification failed."),
-              });
-            }
-            yield* fileSystem.rename(tempPath, keyFilePath);
-            yield* fileSystem.chmod(keyFilePath, 0o600);
-            yield* syncDirectory(path.dirname(keyFilePath));
-          }),
-        ).pipe(
-          Effect.catch((cause) =>
-            fileSystem.remove(tempPath).pipe(Effect.ignore, Effect.andThen(Effect.fail(cause))),
-          ),
+              const remaining = { ...keyring.legacySecretFingerprints };
+              delete remaining[name];
+              const updated = `${yield* encodeExternalSecretStoreKeyring({
+                version: 1,
+                active: keyring.active,
+                ...(keyring.previous === undefined ? {} : { previous: keyring.previous }),
+                legacySecretFingerprints: remaining,
+              }).pipe(
+                Effect.mapError(
+                  () =>
+                    new SecretStorePersistError({
+                      resource: "legacy migration authorization",
+                      cause: new Error("External keyring encoding failed."),
+                    }),
+                ),
+              )}\n`;
+              const uuid = yield* crypto.randomUUIDv4.pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new SecretStoreTemporaryPathError({
+                      resource: "external secret-store keyring",
+                      cause,
+                    }),
+                ),
+              );
+              const tempPath = `${keyFilePath}.${uuid}.tmp`;
+              yield* Effect.scoped(
+                Effect.gen(function* () {
+                  const file = yield* fileSystem.open(tempPath, { flag: "wx", mode: 0o600 });
+                  yield* file.writeAll(new TextEncoder().encode(updated));
+                  yield* fileSystem.chmod(tempPath, 0o600);
+                  yield* file.sync;
+                  const verifiedRaw = yield* fileSystem.readFileString(tempPath);
+                  const verified = yield* decodeExternalSecretStoreKeyring(verifiedRaw).pipe(
+                    Effect.mapError(
+                      () =>
+                        new SecretStorePersistError({
+                          resource: "legacy migration authorization",
+                          cause: new Error("External keyring verification failed."),
+                        }),
+                    ),
+                  );
+                  const verifiedPrevious = verified.previous ?? [];
+                  const expectedPrevious = keyring.previous ?? [];
+                  if (
+                    verified.active !== keyring.active ||
+                    verifiedPrevious.length !== expectedPrevious.length ||
+                    verifiedPrevious.some((key, index) => key !== expectedPrevious[index]) ||
+                    Object.entries(remaining).some(
+                      ([secretName, fingerprint]) =>
+                        verified.legacySecretFingerprints?.[secretName] !== fingerprint,
+                    ) ||
+                    verified.legacySecretFingerprints?.[name] !== undefined
+                  ) {
+                    return yield* new SecretStorePersistError({
+                      resource: "legacy migration authorization",
+                      cause: new Error("External keyring verification failed."),
+                    });
+                  }
+                  yield* fileSystem.rename(tempPath, keyFilePath);
+                  yield* fileSystem.chmod(keyFilePath, 0o600);
+                  yield* syncDirectory(path.dirname(keyFilePath));
+                }),
+              ).pipe(
+                Effect.catch((cause) =>
+                  fileSystem
+                    .remove(tempPath)
+                    .pipe(Effect.ignore, Effect.andThen(Effect.fail(cause))),
+                ),
+              );
+            }),
+          releaseExternalKeyringLock,
         );
       }
       legacyFingerprints.delete(name);
@@ -534,45 +657,56 @@ export const make = Effect.gen(function* () {
 
   const createUnlocked: ServerSecretStore["Service"]["create"] = (name, value) => {
     const secretPath = resolveSecretPath(name);
-    return encodeEnvelope(name, value, keys[0]).pipe(
-      Effect.flatMap((envelope) => {
-        let created = false;
-        return Effect.scoped(
+    return Effect.gen(function* () {
+      const envelope = yield* encodeEnvelope(name, value, keys[0]);
+      const uuid = yield* crypto.randomUUIDv4.pipe(
+        Effect.mapError(
+          (cause) =>
+            new SecretStoreTemporaryPathError({
+              resource: `secret ${name}`,
+              cause,
+            }),
+        ),
+      );
+      const tempPath = `${secretPath}.${uuid}.tmp`;
+
+      yield* Effect.gen(function* () {
+        yield* Effect.scoped(
           Effect.gen(function* () {
-            const file = yield* fileSystem.open(secretPath, { flag: "wx", mode: 0o600 });
-            created = true;
+            const file = yield* fileSystem.open(tempPath, { flag: "wx", mode: 0o600 });
             yield* file.writeAll(envelope);
-            yield* fileSystem.chmod(secretPath, 0o600);
+            yield* fileSystem.chmod(tempPath, 0o600);
             yield* file.sync;
-            const persisted = yield* fileSystem.readFile(secretPath);
-            const verified = yield* decodeEnvelope(name, persisted, keys);
-            if (
-              verified.value.byteLength !== value.byteLength ||
-              !NodeCrypto.timingSafeEqual(Buffer.from(verified.value), Buffer.from(value))
-            ) {
-              return yield* new SecretStorePersistError({
-                resource: `secret ${name}`,
-                cause: new Error("Encrypted secret verification failed."),
-              });
-            }
-            yield* syncDirectory(serverConfig.secretsDir);
           }),
-        ).pipe(
-          Effect.mapError((cause) =>
-            isSecretStoreError(cause)
-              ? cause
-              : new SecretStorePersistError({ resource: `secret ${name}`, cause }),
-          ),
-          Effect.catch((error) =>
-            created
-              ? fileSystem
-                  .remove(secretPath)
-                  .pipe(Effect.ignore, Effect.andThen(Effect.fail(error)))
-              : Effect.fail(error),
-          ),
         );
-      }),
-    );
+
+        const persisted = yield* fileSystem.readFile(tempPath);
+        const verified = yield* decodeEnvelope(name, persisted, keys);
+        if (
+          verified.keyIndex !== 0 ||
+          verified.value.byteLength !== value.byteLength ||
+          !NodeCrypto.timingSafeEqual(Buffer.from(verified.value), Buffer.from(value))
+        ) {
+          return yield* new SecretStorePersistError({
+            resource: `secret ${name}`,
+            cause: new Error("Encrypted secret verification failed."),
+          });
+        }
+
+        // Hard-linking publishes the verified inode only if the canonical path
+        // is still absent. Cleanup owns only tempPath, so it can never delete a
+        // value concurrently published by another store instance.
+        yield* fileSystem.link(tempPath, secretPath);
+        yield* syncDirectory(serverConfig.secretsDir);
+      }).pipe(
+        Effect.mapError((cause) =>
+          isSecretStoreError(cause)
+            ? cause
+            : new SecretStorePersistError({ resource: `secret ${name}`, cause }),
+        ),
+        Effect.ensuring(fileSystem.remove(tempPath, { force: true }).pipe(Effect.ignore)),
+      );
+    });
   };
 
   const create: ServerSecretStore["Service"]["create"] = (name, value) =>
