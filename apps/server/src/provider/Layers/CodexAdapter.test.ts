@@ -382,9 +382,11 @@ const reconciliationRuntimeFactory = makeRuntimeFactory();
 const reconciliationAvailability = {
   generation: 0,
   available: false,
+  writeAvailable: false,
   advancesDuringPrepare: 0,
 };
 const reconciliationToolName = "fixture.records.search";
+const reconciliationWriteToolName = "fixture.records.write";
 const reconciliationRegistry = {
   get availabilityGeneration() {
     return reconciliationAvailability.generation;
@@ -405,8 +407,20 @@ const reconciliationRegistry = {
       readOnly: true,
       openWorld: false,
     },
+    {
+      name: reconciliationWriteToolName,
+      description: "Change fixture records.",
+      input: EmptyIntegrationToolInput,
+      readOnly: false,
+      openWorld: false,
+    },
   ],
-  isToolAvailableSync: () => reconciliationAvailability.available,
+  isToolAvailableSync: (name: string) =>
+    name === reconciliationWriteToolName
+      ? reconciliationAvailability.writeAvailable
+      : reconciliationAvailability.available,
+  // Approval policy is deliberately independent from the provider's write classification.
+  toolRequiresApprovalSync: () => false,
   isSkillAvailableSync: () => false,
   reserveSkillsSync: () => null,
   invokeTool: () => Promise.resolve({ records: [] }),
@@ -448,6 +462,47 @@ const reconciliationLayer = it.layer(
 );
 
 reconciliationLayer("CodexAdapter integration availability reconciliation", (it) => {
+  it.effect("does not disclose disabled write tools to Codex", () =>
+    Effect.gen(function* () {
+      reconciliationAvailability.generation = 1;
+      reconciliationAvailability.available = true;
+      reconciliationAvailability.writeAvailable = false;
+      reconciliationAvailability.advancesDuringPrepare = 0;
+      reconciliationRuntimeFactory.factory.mockClear();
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("thread-disabled-integration-write-tool");
+
+      try {
+        yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
+        NodeAssert.deepStrictEqual(
+          reconciliationRuntimeFactory.lastRuntime?.options.dynamicTools?.map(({ name }) => name),
+          [codexDynamicIntegrationToolName(reconciliationToolName)],
+        );
+
+        reconciliationAvailability.writeAvailable = true;
+        reconciliationAvailability.generation = 2;
+        yield* adapter.sendTurn({ threadId, input: "enable write access", attachments: [] });
+        NodeAssert.deepStrictEqual(
+          reconciliationRuntimeFactory.lastRuntime?.options.dynamicTools?.map(({ name }) => name),
+          [
+            codexDynamicIntegrationToolName(reconciliationToolName),
+            codexDynamicIntegrationToolName(reconciliationWriteToolName),
+          ],
+        );
+
+        reconciliationAvailability.writeAvailable = false;
+        reconciliationAvailability.generation = 3;
+        yield* adapter.sendTurn({ threadId, input: "disable write access", attachments: [] });
+        NodeAssert.deepStrictEqual(
+          reconciliationRuntimeFactory.lastRuntime?.options.dynamicTools?.map(({ name }) => name),
+          [codexDynamicIntegrationToolName(reconciliationToolName)],
+        );
+      } finally {
+        reconciliationAvailability.writeAvailable = false;
+      }
+    }),
+  );
+
   it.effect("reconciles a live session when the integration registry is replaced", () =>
     Effect.gen(function* () {
       reconciliationAvailability.generation = 4;

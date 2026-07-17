@@ -1592,19 +1592,29 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
               ).pipe(Effect.ignore)
             : Effect.void,
         );
-        // Codex persists dynamic-tool definitions in thread metadata and does not accept a
-        // replacement catalog on resume. Declare the fixed manifest catalog once, then enforce
-        // live availability at invocation time. This preserves thread history across connection
-        // changes while disabled and revoked tools continue to fail closed.
+        // Keep read tools stable across routine connection changes, but never disclose an
+        // unavailable write tool to Codex. CodexSessionRuntime fingerprints this catalog and
+        // starts fresh instead of resuming when an opt-in write tool is enabled or disabled.
         const dynamicToolBindings = integrationRegistry
-          ? integrationRegistry.toolDefinitions().map((definition) => ({
-              canonicalName: definition.name,
-              dynamicName: Integrations.codexDynamicIntegrationToolName(definition.name),
-              description: `${definition.description} Integration plugin tool: ${definition.name}.`,
-              inputSchema: integrationToolJsonSchema(definition),
-              requiresApproval:
-                integrationRegistry.toolRequiresApprovalSync?.(definition.name) ?? false,
-            }))
+          ? integrationRegistry.toolDefinitions().flatMap((definition) => {
+              const requiresApproval =
+                integrationRegistry.toolRequiresApprovalSync?.(definition.name) ?? false;
+              if (
+                !definition.readOnly &&
+                !integrationRegistry.isToolAvailableSync(definition.name)
+              ) {
+                return [];
+              }
+              return [
+                {
+                  canonicalName: definition.name,
+                  dynamicName: Integrations.codexDynamicIntegrationToolName(definition.name),
+                  description: `${definition.description} Integration plugin tool: ${definition.name}.`,
+                  inputSchema: integrationToolJsonSchema(definition),
+                  requiresApproval,
+                },
+              ];
+            })
           : [];
         const dynamicToolNames = new Set<string>();
         for (const binding of dynamicToolBindings) {
