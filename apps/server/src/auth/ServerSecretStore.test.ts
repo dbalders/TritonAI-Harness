@@ -433,17 +433,36 @@ it.layer(NodeServices.layer)("ServerSecretStore.layer", (it) => {
   it.effect("returns one persisted value when concurrent creators race", () =>
     Effect.gen(function* () {
       const secretStore = yield* ServerSecretStore.ServerSecretStore;
-      const [first, second] = yield* Effect.all(
-        [
-          secretStore.getOrCreateRandom("session-signing-key", 32),
-          secretStore.getOrCreateRandom("session-signing-key", 32),
-        ],
+      const values = yield* Effect.all(
+        Array.from({ length: 32 }, () => secretStore.getOrCreateRandom("session-signing-key", 32)),
         { concurrency: "unbounded" },
       );
       const persisted = Option.getOrThrow(yield* secretStore.get("session-signing-key"));
-      assert.deepEqual(Array.from(first), Array.from(persisted));
-      assert.deepEqual(Array.from(second), Array.from(persisted));
+      for (const value of values) {
+        assert.deepEqual(Array.from(value), Array.from(persisted));
+      }
     }).pipe(Effect.provide(makeServerSecretStoreLayer())),
+  );
+
+  it.effect("returns the persisted winner when independent store instances race", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-independent-secret-race-",
+      });
+      const initialize = Effect.gen(function* () {
+        const secretStore = yield* ServerSecretStore.ServerSecretStore;
+        return yield* secretStore.getOrCreateRandom("session-signing-key", 32);
+      });
+      const [first, second] = yield* Effect.all(
+        [
+          initialize.pipe(Effect.provide(makeServerSecretStoreLayer({ baseDir }))),
+          initialize.pipe(Effect.provide(makeServerSecretStoreLayer({ baseDir }))),
+        ],
+        { concurrency: "unbounded" },
+      );
+      assert.deepEqual(Array.from(second), Array.from(first));
+    }).pipe(Effect.scoped),
   );
 
   it.effect("uses restrictive permissions for the secret directory and files", () => {

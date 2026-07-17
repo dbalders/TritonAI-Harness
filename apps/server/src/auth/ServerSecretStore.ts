@@ -584,46 +584,52 @@ export const make = Effect.gen(function* () {
     );
 
   const getOrCreateRandom: ServerSecretStore["Service"]["getOrCreateRandom"] = (name, bytes) =>
-    get(name).pipe(
-      Effect.flatMap(
-        Option.match({
-          onSome: Effect.succeed,
-          onNone: () =>
-            crypto.randomBytes(bytes).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new SecretStoreRandomGenerationError({
-                    resource: `secret ${name}`,
-                    cause,
-                  }),
-              ),
-              Effect.flatMap((generated) =>
-                create(name, generated).pipe(
-                  Effect.as(Uint8Array.from(generated)),
-                  Effect.catchIf(isSecretStoreError, (error) =>
-                    isSecretAlreadyExistsError(error)
-                      ? get(name).pipe(
-                          Effect.flatMap(
-                            Option.match({
-                              onSome: Effect.succeed,
-                              onNone: () =>
-                                Effect.fail(
-                                  new SecretStoreConcurrentReadError({
-                                    resource: `secret ${name}`,
-                                  }),
-                                ),
-                            }),
-                          ),
-                        )
-                      : Effect.fail(error),
+    mutex
+      .withPermits(1)(
+        getUnlocked(name).pipe(
+          Effect.flatMap(
+            Option.match({
+              onSome: Effect.succeed,
+              onNone: () =>
+                crypto.randomBytes(bytes).pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new SecretStoreRandomGenerationError({
+                        resource: `secret ${name}`,
+                        cause,
+                      }),
+                  ),
+                  Effect.flatMap((generated) =>
+                    Effect.gen(function* () {
+                      yield* createUnlocked(name, generated);
+                      yield* retireLegacyAuthorization(name);
+                      return Uint8Array.from(generated);
+                    }).pipe(
+                      Effect.catchIf(isSecretStoreError, (error) =>
+                        isSecretAlreadyExistsError(error)
+                          ? getUnlocked(name).pipe(
+                              Effect.flatMap(
+                                Option.match({
+                                  onSome: Effect.succeed,
+                                  onNone: () =>
+                                    Effect.fail(
+                                      new SecretStoreConcurrentReadError({
+                                        resource: `secret ${name}`,
+                                      }),
+                                    ),
+                                }),
+                              ),
+                            )
+                          : Effect.fail(error),
+                      ),
+                    ),
                   ),
                 ),
-              ),
-            ),
-        }),
-      ),
-      Effect.withSpan("ServerSecretStore.getOrCreateRandom"),
-    );
+            }),
+          ),
+        ),
+      )
+      .pipe(Effect.withSpan("ServerSecretStore.getOrCreateRandom"));
 
   const removeUnlocked: ServerSecretStore["Service"]["remove"] = (name) => {
     const secretPath = resolveSecretPath(name);
