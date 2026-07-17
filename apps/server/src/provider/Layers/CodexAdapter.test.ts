@@ -411,13 +411,33 @@ const reconciliationRegistry = {
   reserveSkillsSync: () => null,
   invokeTool: () => Promise.resolve({ records: [] }),
 } as unknown as RegistryRuntime;
+let resolvedReconciliationRegistry: RegistryRuntime = reconciliationRegistry;
+
+const replacementReconciliationRegistry = {
+  availabilityGeneration: 0,
+  prepareSkillRuntime: () => Promise.resolve(null),
+  releaseSkillRuntime: () => Promise.resolve(),
+  toolDefinitions: () => [
+    {
+      name: reconciliationToolName,
+      description: "Search fixture records.",
+      input: EmptyIntegrationToolInput,
+      readOnly: true,
+      openWorld: false,
+    },
+  ],
+  isToolAvailableSync: () => true,
+  isSkillAvailableSync: () => false,
+  reserveSkillsSync: () => null,
+  invokeTool: () => Promise.resolve({ records: [] }),
+} as unknown as RegistryRuntime;
 
 const reconciliationLayer = it.layer(
   Layer.effect(
     CodexAdapter,
     makeCodexAdapter(decodeCodexSettings({}), {
       makeRuntime: reconciliationRuntimeFactory.factory,
-      integrationRegistry: reconciliationRegistry,
+      resolveIntegrationRegistry: () => resolvedReconciliationRegistry,
     }),
   ).pipe(
     Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
@@ -428,6 +448,32 @@ const reconciliationLayer = it.layer(
 );
 
 reconciliationLayer("CodexAdapter integration availability reconciliation", (it) => {
+  it.effect("reconciles a live session when the integration registry is replaced", () =>
+    Effect.gen(function* () {
+      reconciliationAvailability.generation = 4;
+      reconciliationAvailability.available = false;
+      reconciliationAvailability.advancesDuringPrepare = 0;
+      resolvedReconciliationRegistry = reconciliationRegistry;
+      reconciliationRuntimeFactory.factory.mockClear();
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("thread-integration-registry-replacement");
+
+      try {
+        yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
+        const initialRuntime = reconciliationRuntimeFactory.lastRuntime!;
+        resolvedReconciliationRegistry = replacementReconciliationRegistry;
+
+        yield* adapter.sendTurn({ threadId, input: "use the replacement registry", attachments: [] });
+
+        NodeAssert.equal(reconciliationRuntimeFactory.factory.mock.calls.length, 2);
+        NodeAssert.equal(initialRuntime.closeImpl.mock.calls.length, 1);
+        NodeAssert.equal(reconciliationRuntimeFactory.lastRuntime?.sendTurnImpl.mock.calls.length, 1);
+      } finally {
+        resolvedReconciliationRegistry = reconciliationRegistry;
+      }
+    }),
+  );
+
   it.effect("captures the session lifecycle when a send effect begins", () =>
     Effect.gen(function* () {
       reconciliationAvailability.generation = 5;

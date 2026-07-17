@@ -101,6 +101,8 @@ export interface CodexAdapterLiveOptions {
   readonly imageContextAnalyzer?: CodexImageContextAnalyzer;
   /** Test/embedding override; normal Harness instances resolve the active registry centrally. */
   readonly integrationRegistry?: Integrations.RegistryRuntime | null;
+  /** Test/embedding resolver for exercising integration-registry replacement. */
+  readonly resolveIntegrationRegistry?: () => Integrations.RegistryRuntime | null;
 }
 
 interface CodexAdapterSessionContext {
@@ -1440,6 +1442,11 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
   >();
   const imageContextAnalyzer =
     options?.imageContextAnalyzer ?? (yield* makeCodexImageContextAnalyzer(options?.environment));
+  const resolveIntegrationRegistry =
+    options?.resolveIntegrationRegistry ??
+    (options && Object.hasOwn(options, "integrationRegistry")
+      ? () => options.integrationRegistry ?? null
+      : Integrations.getIntegrationRegistryOptional);
 
   const getThreadSemaphore = (threadId: string) =>
     SynchronizedRef.modifyEffect(threadLocksRef, (current) => {
@@ -1563,10 +1570,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           );
         }
         const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
-        const integrationRegistry =
-          options && Object.hasOwn(options, "integrationRegistry")
-            ? (options.integrationRegistry ?? null)
-            : Integrations.getIntegrationRegistryOptional();
+        const integrationRegistry = resolveIntegrationRegistry();
         const integrationAvailabilityGeneration = integrationRegistry?.availabilityGeneration ?? 0;
         const integrationSkillRuntime = integrationRegistry
           ? yield* Effect.tryPromise({
@@ -1948,10 +1952,12 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
         currentThreadLifecycleEpoch(candidate.threadId) !== expectedLifecycleEpoch
       )
         return yield* Effect.interrupt;
-      const integrationRegistry = candidate.integrationRegistry;
+      const integrationRegistry = candidate.integrationRegistry ?? null;
+      const currentIntegrationRegistry = resolveIntegrationRegistry();
       if (
-        !integrationRegistry ||
-        candidate.integrationAvailabilityGeneration === integrationRegistry.availabilityGeneration
+        integrationRegistry === currentIntegrationRegistry &&
+        (!integrationRegistry ||
+          candidate.integrationAvailabilityGeneration === integrationRegistry.availabilityGeneration)
       ) {
         return candidate;
       }
