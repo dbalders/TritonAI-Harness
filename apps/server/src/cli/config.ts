@@ -1,4 +1,5 @@
 import * as NetService from "@t3tools/shared/Net";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serverSettings";
 import {
   DesktopBackendBootstrap,
@@ -13,6 +14,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as LogLevel from "effect/LogLevel";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
 import * as SchemaTransformation from "effect/SchemaTransformation";
@@ -116,6 +118,7 @@ const EnvServerConfig = Config.all({
   port: Config.port("T3CODE_PORT").pipe(Config.option, Config.map(Option.getOrUndefined)),
   host: Config.string("T3CODE_HOST").pipe(Config.option, Config.map(Option.getOrUndefined)),
   t3Home: homeConfig,
+  secretStoreKeyFile: optionalStringConfig("TRITONAI_SECRET_STORE_KEY_FILE"),
   devUrl: Config.url("VITE_DEV_SERVER_URL").pipe(Config.option, Config.map(Option.getOrUndefined)),
   noBrowser: Config.boolean("T3CODE_NO_BROWSER").pipe(
     Config.option,
@@ -209,6 +212,51 @@ const loadPersistedObservabilitySettings = Effect.fn(function* (settingsPath: st
   return parsePersistedServerObservabilitySettings(raw);
 });
 
+const ExternalSecretStoreKeyring = Schema.Struct({
+  version: Schema.Literal(1),
+  active: Schema.String,
+  previous: Schema.optionalKey(Schema.Array(Schema.String)),
+  legacySecretFingerprints: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+});
+
+const decodeExternalSecretStoreKeyring = Schema.decodeEffect(
+  Schema.fromJsonString(ExternalSecretStoreKeyring),
+);
+
+const loadExternalSecretStoreKeys = Effect.fn(function* (keyFilePath: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const hostPlatform = yield* HostProcessPlatform;
+  const info = yield* fs.stat(keyFilePath);
+  if (hostPlatform !== "win32" && (info.mode & 0o077) !== 0) {
+    return yield* PlatformError.systemError({
+      _tag: "PermissionDenied",
+      module: "SecretStoreKeyFile",
+      method: "read",
+      pathOrDescriptor: keyFilePath,
+      description: "Secret-store key files must not be accessible by group or other users.",
+    });
+  }
+  const raw = yield* fs.readFileString(keyFilePath);
+  const keyring = yield* decodeExternalSecretStoreKeyring(raw).pipe(
+    // Schema parse errors retain their input. Avoid carrying a raw keyring in
+    // the startup error if the file is malformed.
+    Effect.mapError(() =>
+      PlatformError.systemError({
+        _tag: "InvalidData",
+        module: "SecretStoreKeyFile",
+        method: "decode",
+        pathOrDescriptor: keyFilePath,
+        description: "Secret-store keyring JSON is invalid.",
+      }),
+    ),
+  );
+  return {
+    path: keyFilePath,
+    keys: [keyring.active, ...(keyring.previous ?? [])],
+    legacySecretFingerprints: keyring.legacySecretFingerprints ?? {},
+  };
+});
+
 export const resolveServerConfig = (
   flags: CliServerFlags,
   cliLogLevel: Option.Option<LogLevel.LogLevel>,
@@ -281,6 +329,12 @@ export const resolveServerConfig = (
         ),
       ),
     );
+    const externalSecretStore =
+      bootstrap !== undefined || env.secretStoreKeyFile === undefined
+        ? undefined
+        : yield* loadExternalSecretStoreKeys(
+            path.resolve(yield* expandHomePath(env.secretStoreKeyFile.trim())),
+          );
     const rawCwd = Option.getOrElse(normalizedFlags.cwd, () => process.cwd());
     const cwd = path.resolve(yield* expandHomePath(rawCwd.trim()));
     yield* fs.makeDirectory(cwd, { recursive: true });
@@ -375,6 +429,12 @@ export const resolveServerConfig = (
       noBrowser,
       startupPresentation,
       desktopBootstrapToken,
+      secretStoreKeys: bootstrap?.secretStoreKeys ?? externalSecretStore?.keys,
+      legacySecretFingerprints:
+        bootstrap?.legacySecretFingerprints ?? externalSecretStore?.legacySecretFingerprints ?? {},
+      ...(externalSecretStore === undefined
+        ? {}
+        : { secretStoreKeyFilePath: externalSecretStore.path }),
       autoBootstrapProjectFromCwd,
       logWebSocketEvents,
       tailscaleServeEnabled,

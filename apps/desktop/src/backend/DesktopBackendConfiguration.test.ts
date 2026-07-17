@@ -12,6 +12,8 @@ import * as Schema from "effect/Schema";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
+import * as ElectronDialog from "../electron/ElectronDialog.ts";
+import * as ElectronSafeStorage from "../electron/ElectronSafeStorage.ts";
 import * as DesktopBackendConfiguration from "./DesktopBackendConfiguration.ts";
 import * as DesktopConfig from "../app/DesktopConfig.ts";
 import * as DesktopServerExposure from "./DesktopServerExposure.ts";
@@ -48,6 +50,24 @@ const serverExposureLayer = Layer.succeed(DesktopServerExposure.DesktopServerExp
   setTailscaleServeEnabled: () => Effect.die("unexpected setTailscaleServeEnabled"),
   getAdvertisedEndpoints: Effect.succeed([]),
 } satisfies DesktopServerExposure.DesktopServerExposure["Service"]);
+
+const safeStorageLayer = Layer.succeed(ElectronSafeStorage.ElectronSafeStorage, {
+  isEncryptionAvailable: Effect.succeed(true),
+  selectedStorageBackend: Effect.succeed("gnome_libsecret"),
+  encryptString: (value) =>
+    Effect.succeed(new TextEncoder().encode(Array.from(value).toReversed().join(""))),
+  decryptString: (value) =>
+    Effect.succeed(Array.from(new TextDecoder().decode(value)).toReversed().join("")),
+} satisfies ElectronSafeStorage.ElectronSafeStorage["Service"]);
+
+const dialogLayer = Layer.succeed(ElectronDialog.ElectronDialog, {
+  pickFolder: () => Effect.succeed(Option.none()),
+  confirm: () => Effect.succeed(false),
+  showMessageBox: () => Effect.succeed({ response: 0, checkboxChecked: false }),
+  showErrorBox: () => Effect.void,
+} satisfies ElectronDialog.ElectronDialog["Service"]);
+
+const desktopTestServicesLayer = Layer.mergeAll(serverExposureLayer, safeStorageLayer, dialogLayer);
 
 function makeEnvironmentLayer(
   baseDir: string,
@@ -112,7 +132,7 @@ const withHarness = <A, E, R>(
     return yield* effect.pipe(
       Effect.provide(
         DesktopBackendConfiguration.layer.pipe(
-          Layer.provideMerge(serverExposureLayer),
+          Layer.provideMerge(desktopTestServicesLayer),
           Layer.provideMerge(DesktopAppSettings.layerTest()),
           Layer.provideMerge(DesktopWslEnvironment.layerTest()),
           Layer.provideMerge(makeEnvironmentLayer(baseDir)),
@@ -184,7 +204,7 @@ describe("DesktopBackendConfiguration", () => {
       }).pipe(
         Effect.provide(
           DesktopBackendConfiguration.layer.pipe(
-            Layer.provideMerge(serverExposureLayer),
+            Layer.provideMerge(desktopTestServicesLayer),
             Layer.provideMerge(DesktopAppSettings.layerTest()),
             Layer.provideMerge(
               DesktopWslEnvironment.layerTest({
@@ -248,7 +268,7 @@ describe("DesktopBackendConfiguration", () => {
         }).pipe(
           Effect.provide(
             DesktopBackendConfiguration.layer.pipe(
-              Layer.provideMerge(serverExposureLayer),
+              Layer.provideMerge(desktopTestServicesLayer),
               Layer.provideMerge(DesktopAppSettings.layerTest()),
               Layer.provideMerge(
                 DesktopWslEnvironment.layerTest({
@@ -465,12 +485,19 @@ describe("DesktopBackendConfiguration", () => {
       const logger = Logger.make(({ message }) => {
         messages.push(message);
       });
-      const failingFileSystemLayer = Layer.succeed(
+      const failingFileSystemLayer = Layer.effect(
         FileSystem.FileSystem,
-        FileSystem.makeNoop({
-          readFileString: () => Effect.fail(cause),
+        Effect.gen(function* () {
+          const liveFileSystem = yield* FileSystem.FileSystem;
+          return {
+            ...liveFileSystem,
+            readFileString: (target, encoding) =>
+              String(target) === settingsPath
+                ? Effect.fail(cause)
+                : liveFileSystem.readFileString(target, encoding),
+          } satisfies FileSystem.FileSystem;
         }),
-      );
+      ).pipe(Layer.provide(NodeServices.layer));
 
       const config = yield* Effect.gen(function* () {
         const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
@@ -479,7 +506,7 @@ describe("DesktopBackendConfiguration", () => {
         Effect.provide(
           Layer.mergeAll(
             DesktopBackendConfiguration.layer.pipe(
-              Layer.provideMerge(serverExposureLayer),
+              Layer.provideMerge(desktopTestServicesLayer),
               Layer.provideMerge(DesktopAppSettings.layerTest()),
               Layer.provideMerge(DesktopWslEnvironment.layerTest()),
               Layer.provideMerge(makeEnvironmentLayer(baseDir)),
@@ -520,7 +547,7 @@ describe("DesktopBackendConfiguration", () => {
       }).pipe(
         Effect.provide(
           DesktopBackendConfiguration.layer.pipe(
-            Layer.provideMerge(serverExposureLayer),
+            Layer.provideMerge(desktopTestServicesLayer),
             Layer.provideMerge(DesktopAppSettings.layerTest()),
             Layer.provideMerge(DesktopWslEnvironment.layerTest()),
             Layer.provideMerge(
@@ -583,7 +610,7 @@ describe("DesktopBackendConfiguration", () => {
         }).pipe(
           Effect.provide(
             DesktopBackendConfiguration.layer.pipe(
-              Layer.provideMerge(serverExposureLayer),
+              Layer.provideMerge(desktopTestServicesLayer),
               Layer.provideMerge(DesktopAppSettings.layerTest()),
               Layer.provideMerge(
                 DesktopWslEnvironment.layerTest({
@@ -649,7 +676,7 @@ describe("DesktopBackendConfiguration", () => {
         }).pipe(
           Effect.provide(
             DesktopBackendConfiguration.layer.pipe(
-              Layer.provideMerge(serverExposureLayer),
+              Layer.provideMerge(desktopTestServicesLayer),
               Layer.provideMerge(DesktopAppSettings.layerTest()),
               Layer.provideMerge(
                 DesktopWslEnvironment.layerTest({
@@ -695,7 +722,7 @@ describe("DesktopBackendConfiguration", () => {
         }).pipe(
           Effect.provide(
             DesktopBackendConfiguration.layer.pipe(
-              Layer.provideMerge(serverExposureLayer),
+              Layer.provideMerge(desktopTestServicesLayer),
               Layer.provideMerge(
                 DesktopAppSettings.layerTest({
                   ...DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS,
@@ -731,7 +758,7 @@ describe("DesktopBackendConfiguration", () => {
         }).pipe(
           Effect.provide(
             DesktopBackendConfiguration.layer.pipe(
-              Layer.provideMerge(serverExposureLayer),
+              Layer.provideMerge(desktopTestServicesLayer),
               Layer.provideMerge(
                 DesktopAppSettings.layerTest({
                   ...DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS,
@@ -771,7 +798,7 @@ describe("DesktopBackendConfiguration", () => {
       }).pipe(
         Effect.provide(
           DesktopBackendConfiguration.layer.pipe(
-            Layer.provideMerge(serverExposureLayer),
+            Layer.provideMerge(desktopTestServicesLayer),
             Layer.provideMerge(DesktopAppSettings.layerTest()),
             Layer.provideMerge(
               DesktopWslEnvironment.layerTest({
@@ -805,7 +832,7 @@ describe("DesktopBackendConfiguration", () => {
       }).pipe(
         Effect.provide(
           DesktopBackendConfiguration.layer.pipe(
-            Layer.provideMerge(serverExposureLayer),
+            Layer.provideMerge(desktopTestServicesLayer),
             Layer.provideMerge(DesktopAppSettings.layerTest()),
             Layer.provideMerge(
               DesktopWslEnvironment.layerTest({
@@ -837,7 +864,7 @@ describe("DesktopBackendConfiguration", () => {
       }).pipe(
         Effect.provide(
           DesktopBackendConfiguration.layer.pipe(
-            Layer.provideMerge(serverExposureLayer),
+            Layer.provideMerge(desktopTestServicesLayer),
             Layer.provideMerge(DesktopAppSettings.layerTest()),
             Layer.provideMerge(
               DesktopWslEnvironment.layerTest({
@@ -866,7 +893,7 @@ describe("DesktopBackendConfiguration", () => {
       }).pipe(
         Effect.provide(
           DesktopBackendConfiguration.layer.pipe(
-            Layer.provideMerge(serverExposureLayer),
+            Layer.provideMerge(desktopTestServicesLayer),
             Layer.provideMerge(
               DesktopAppSettings.layerTest({
                 ...DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS,
@@ -910,7 +937,7 @@ describe("DesktopBackendConfiguration", () => {
       }).pipe(
         Effect.provide(
           DesktopBackendConfiguration.layer.pipe(
-            Layer.provideMerge(serverExposureLayer),
+            Layer.provideMerge(desktopTestServicesLayer),
             Layer.provideMerge(
               DesktopAppSettings.layerTest({
                 ...DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS,
@@ -938,7 +965,7 @@ describe("DesktopBackendConfiguration", () => {
     // oxlint-disable-next-line t3code/no-manual-effect-runtime-in-tests -- This test intentionally replicates the sync IPC handler's runSync path to catch a regression to async-only resolution; it.effect would mask it.
     const runtime = ManagedRuntime.make(
       DesktopBackendConfiguration.layer.pipe(
-        Layer.provideMerge(serverExposureLayer),
+        Layer.provideMerge(desktopTestServicesLayer),
         Layer.provideMerge(DesktopAppSettings.layerTest()),
         Layer.provideMerge(DesktopWslEnvironment.layer),
         // isAvailable on win32 only touches the filesystem, never the spawner,

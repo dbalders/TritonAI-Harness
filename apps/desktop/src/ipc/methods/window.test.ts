@@ -14,6 +14,8 @@ const readyWslConfig: DesktopBackendManager.DesktopBackendStartConfig = {
   env: {},
   extendEnv: false,
   bootstrap: {
+    secretStoreKeys: ["WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo="],
+    legacySecretFingerprints: {},
     mode: "desktop",
     noBrowser: true,
     port: 3774,

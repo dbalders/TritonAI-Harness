@@ -39,6 +39,8 @@ const baseConfig: DesktopBackendManager.DesktopBackendStartConfig = {
     t3Home: "/tmp/t3",
     host: "127.0.0.1",
     desktopBootstrapToken: "token",
+    secretStoreKeys: ["WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo="],
+    legacySecretFingerprints: {},
     tailscaleServeEnabled: false,
     tailscaleServePort: 443,
   },

@@ -16,7 +16,10 @@ import * as SynchronizedRef from "effect/SynchronizedRef";
 import serverPackageJson from "../../../server/package.json" with { type: "json" };
 
 import * as DesktopBackendManager from "./DesktopBackendManager.ts";
+import * as DesktopSecretStoreKey from "./DesktopSecretStoreKey.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
+import * as ElectronDialog from "../electron/ElectronDialog.ts";
+import * as ElectronSafeStorage from "../electron/ElectronSafeStorage.ts";
 import * as DesktopServerExposure from "./DesktopServerExposure.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopTritonAiApiKey from "../settings/DesktopTritonAiApiKey.ts";
@@ -230,6 +233,8 @@ const readPersistedBackendObservabilitySettings = Effect.gen(function* () {
 
 interface SharedBootstrapInput {
   readonly bootstrapToken: string;
+  readonly secretStoreKeys: readonly [string, ...string[]];
+  readonly legacySecretFingerprints: Readonly<Record<string, string>>;
   readonly observabilitySettings: BackendObservabilitySettings;
 }
 
@@ -409,6 +414,8 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
       t3Home: environment.baseDir,
       host: backendExposure.bindHost,
       desktopBootstrapToken: input.bootstrapToken,
+      secretStoreKeys: input.secretStoreKeys,
+      legacySecretFingerprints: input.legacySecretFingerprints,
       tailscaleServeEnabled: backendExposure.tailscaleServeEnabled,
       tailscaleServePort: backendExposure.tailscaleServePort,
       ...buildObservabilityFragment(input.observabilitySettings),
@@ -479,6 +486,8 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
     // the SQLite file with the primary).
     host: wslBindHost,
     desktopBootstrapToken: input.bootstrapToken,
+    secretStoreKeys: input.secretStoreKeys,
+    legacySecretFingerprints: input.legacySecretFingerprints,
     // PortSchema rejects 0, so when tailscale serve is disabled we still
     // need a valid number in this slot. The backend reads tailscaleServePort
     // only when tailscaleServeEnabled is true, so the actual value here is
@@ -642,6 +651,8 @@ export const make = Effect.gen(function* () {
   const wslEnvironment = yield* DesktopWslEnvironment.DesktopWslEnvironment;
   const settings = yield* DesktopAppSettings.DesktopAppSettings;
   const crypto = yield* Crypto.Crypto;
+  const dialog = yield* ElectronDialog.ElectronDialog;
+  const safeStorage = yield* ElectronSafeStorage.ElectronSafeStorage;
   // SynchronizedRef (not a plain Ref) so the read-generate-write is atomic.
   // crypto.randomBytes is a yield point, and resolvePrimary + resolveWsl can
   // resolve concurrently; with a plain Ref both could observe None, generate
@@ -662,6 +673,23 @@ export const make = Effect.gen(function* () {
         ),
     }),
   );
+  const secretStoreKeysRef = yield* SynchronizedRef.make(
+    Option.none<DesktopSecretStoreKey.DesktopSecretStoreKeyMaterial>(),
+  );
+  const getOrCreateSecretStoreKeys = SynchronizedRef.modifyEffect(secretStoreKeysRef, (current) =>
+    Option.match(current, {
+      onSome: (keys) => Effect.succeed([keys, current] as const),
+      onNone: () =>
+        DesktopSecretStoreKey.resolve().pipe(
+          Effect.provideService(Crypto.Crypto, crypto),
+          Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
+          Effect.provideService(ElectronDialog.ElectronDialog, dialog),
+          Effect.provideService(ElectronSafeStorage.ElectronSafeStorage, safeStorage),
+          Effect.provideService(FileSystem.FileSystem, fileSystem),
+          Effect.map((keys) => [keys, Option.some(keys)] as const),
+        ),
+    }),
+  );
 
   // Both resolvers share the same bootstrap token: the renderer holds a
   // single token and uses it against whichever backend it's currently
@@ -670,11 +698,17 @@ export const make = Effect.gen(function* () {
   // restart cycle without having to bounce the desktop process.
   const sharedInputs = Effect.gen(function* () {
     const bootstrapToken = yield* getOrCreateBootstrapToken;
+    const secretStoreKeyMaterial = yield* getOrCreateSecretStoreKeys;
     const observabilitySettings = yield* readPersistedBackendObservabilitySettings.pipe(
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
     );
-    return { bootstrapToken, observabilitySettings } satisfies SharedBootstrapInput;
+    return {
+      bootstrapToken,
+      secretStoreKeys: secretStoreKeyMaterial.keys,
+      legacySecretFingerprints: secretStoreKeyMaterial.legacySecretFingerprints,
+      observabilitySettings,
+    } satisfies SharedBootstrapInput;
   });
 
   const buildWslPrimaryConfig = Effect.gen(function* () {

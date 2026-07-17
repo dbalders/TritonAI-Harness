@@ -26,6 +26,7 @@ There is no public docs site yet. Use the markdown files in [docs](./docs).
 - [TritonAI downstream notes](./docs/tritonai-downstream.md)
 - [TritonAI sync automation](./docs/tritonai-sync-automation.md)
 - [Operations](./docs/operations/ci.md)
+  - [Secret storage](./docs/operations/secret-storage.md)
 - [Reference](./docs/reference/encyclopedia.md)
 
 ## Local development
