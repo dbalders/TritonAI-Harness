@@ -101,4 +101,15 @@ describe("withoutInheritedCodexNetworkSandboxMarker", () => {
       ),
     ).toEqual({ CODEX_SANDBOX_NETWORK_DISABLED: "configured", PATH: "/bin" });
   });
+
+  it("keeps the marker removed when the provider has no environment overrides", () => {
+    const inheritedEnvironment = withoutInheritedCodexNetworkSandboxMarker(
+      { CODEX_SANDBOX_NETWORK_DISABLED: "1", PATH: "/bin" },
+      "darwin",
+    );
+
+    expect(mergeProviderInstanceEnvironment(undefined, inheritedEnvironment, "darwin")).toEqual({
+      PATH: "/bin",
+    });
+  });
 });
