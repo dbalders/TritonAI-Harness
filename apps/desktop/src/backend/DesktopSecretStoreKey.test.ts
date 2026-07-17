@@ -165,7 +165,7 @@ describe("DesktopSecretStoreKey", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("migrates legacy plaintext that begins with the envelope magic", () =>
+  it.effect("rejects ambiguous legacy plaintext that begins with the envelope magic", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const baseDir = yield* fileSystem.makeTempDirectoryScoped({
@@ -177,6 +177,28 @@ describe("DesktopSecretStoreKey", () => {
       yield* fileSystem.makeDirectory(`${baseDir}/userdata/secrets`, { recursive: true });
       yield* fileSystem.writeFile(legacyPath, legacyValue);
 
+      const error = yield* DesktopSecretStoreKey.resolve().pipe(
+        provideDependencies(baseDir, "darwin", makeSafeStorageLayer(), makeDialogLayer(1)),
+        Effect.flip,
+      );
+      assert.instanceOf(error, PlatformError.PlatformError);
+      assert.deepEqual(Array.from(yield* fileSystem.readFile(legacyPath)), Array.from(legacyValue));
+      assert.isFalse(yield* fileSystem.exists(`${baseDir}/userdata/secret-store-key.v1.bin`));
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("migrates a legacy filename that matches an inherited object property", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-desktop-prototype-fingerprint-",
+      });
+      const name = "__proto__";
+      const value = new TextEncoder().encode("legacy-prototype-value");
+      const legacyPath = `${baseDir}/userdata/secrets/${name}.bin`;
+      yield* fileSystem.makeDirectory(`${baseDir}/userdata/secrets`, { recursive: true });
+      yield* fileSystem.writeFile(legacyPath, value);
+
       const material = yield* DesktopSecretStoreKey.resolve().pipe(
         provideDependencies(baseDir, "darwin", makeSafeStorageLayer(), makeDialogLayer(1)),
       );
@@ -185,7 +207,7 @@ describe("DesktopSecretStoreKey", () => {
         yield* fileSystem.readFile(legacyPath),
         [Buffer.from(material.keys[0], "base64")],
       );
-      assert.deepEqual(Array.from(decoded.value), Array.from(legacyValue));
+      assert.deepEqual(Array.from(decoded.value), Array.from(value));
       assert.deepEqual(material.legacySecretFingerprints, {});
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
@@ -277,10 +299,10 @@ describe("DesktopSecretStoreKey", () => {
       }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("rejects truncated and unsupported envelope versions during legacy detection", () =>
+  it.effect("rejects truncated and modified envelope versions during legacy detection", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
-      for (const variant of ["truncated", "unsupported"] as const) {
+      for (const variant of ["truncated", "unsupported", "printable"] as const) {
         const baseDir = yield* fileSystem.makeTempDirectoryScoped({
           prefix: `t3-desktop-${variant}-secret-envelope-`,
         });
@@ -298,6 +320,8 @@ describe("DesktopSecretStoreKey", () => {
             : Uint8Array.from(envelope);
         if (variant === "unsupported") {
           damaged[SecretEnvelope.SERVER_SECRET_ENVELOPE_MAGIC.byteLength] = 2;
+        } else if (variant === "printable") {
+          damaged[SecretEnvelope.SERVER_SECRET_ENVELOPE_MAGIC.byteLength] = 0x20;
         }
         const secretPath = `${baseDir}/userdata/secrets/oauth.bin`;
         yield* fileSystem.makeDirectory(`${baseDir}/userdata/secrets`, { recursive: true });

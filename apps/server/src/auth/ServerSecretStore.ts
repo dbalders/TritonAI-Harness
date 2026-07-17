@@ -18,8 +18,8 @@ import * as Semaphore from "effect/Semaphore";
 import * as ServerConfig from "../config.ts";
 
 const DATA_KEY_BYTES = 32;
-const EXTERNAL_KEYRING_LOCK_RETRY_COUNT = 200;
-const EXTERNAL_KEYRING_LOCK_RETRY_DELAY = "25 millis";
+const SECRET_STORE_LOCK_RETRY_COUNT = 200;
+const SECRET_STORE_LOCK_RETRY_DELAY = "25 millis";
 
 const secretStoreErrorContext = {
   resource: Schema.String,
@@ -294,6 +294,9 @@ const isTrustedLegacyValue = (
   );
 };
 
+const hasOwnProperty = (record: Readonly<Record<string, string>>, name: string): boolean =>
+  Object.prototype.hasOwnProperty.call(record, name);
+
 const encodeEnvelope = (
   name: string,
   value: Uint8Array,
@@ -361,30 +364,31 @@ export const make = Effect.gen(function* () {
           fileSystem.open(directoryPath, { flag: "r" }).pipe(Effect.flatMap((file) => file.sync)),
         );
 
-  interface ExternalKeyringLock {
+  interface SecretStoreLock {
     readonly lockPath: string;
     readonly owner: string;
+    readonly resource: string;
   }
 
-  const acquireExternalKeyringLock = (
-    keyFilePath: string,
+  const acquireSecretStoreLock = (
+    lockPath: string,
+    resource: string,
   ): Effect.Effect<
-    ExternalKeyringLock,
+    SecretStoreLock,
     PlatformError.PlatformError | SecretStoreLockTimeoutError | SecretStoreTemporaryPathError
   > =>
     Effect.gen(function* () {
-      const lockPath = `${keyFilePath}.lock`;
       const owner = yield* crypto.randomUUIDv4.pipe(
         Effect.mapError(
           (cause) =>
             new SecretStoreTemporaryPathError({
-              resource: "external secret-store keyring lock",
+              resource: `${resource} lock`,
               cause,
             }),
         ),
       );
 
-      for (let attempt = 0; attempt < EXTERNAL_KEYRING_LOCK_RETRY_COUNT; attempt += 1) {
+      for (let attempt = 0; attempt < SECRET_STORE_LOCK_RETRY_COUNT; attempt += 1) {
         let created = false;
         const acquired = yield* Effect.scoped(
           Effect.gen(function* () {
@@ -405,24 +409,24 @@ export const make = Effect.gen(function* () {
                 : Effect.fail(cause),
           ),
         );
-        if (acquired) return { lockPath, owner } as const;
-        yield* Effect.sleep(EXTERNAL_KEYRING_LOCK_RETRY_DELAY);
+        if (acquired) return { lockPath, owner, resource } as const;
+        yield* Effect.sleep(SECRET_STORE_LOCK_RETRY_DELAY);
       }
 
       return yield* new SecretStoreLockTimeoutError({
-        resource: "external secret-store keyring",
+        resource,
       });
     });
 
-  const releaseExternalKeyringLock = (
-    lock: ExternalKeyringLock,
+  const releaseSecretStoreLock = (
+    lock: SecretStoreLock,
   ): Effect.Effect<void, PlatformError.PlatformError | SecretStoreLockOwnershipError> =>
     Effect.gen(function* () {
       const currentOwner = yield* fileSystem.readFileString(lock.lockPath).pipe(
         Effect.mapError((cause): PlatformError.PlatformError | SecretStoreLockOwnershipError => {
           if (cause.reason._tag === "NotFound") {
             return new SecretStoreLockOwnershipError({
-              resource: "external secret-store keyring",
+              resource: lock.resource,
             });
           }
           return cause;
@@ -430,7 +434,7 @@ export const make = Effect.gen(function* () {
       );
       if (currentOwner !== lock.owner) {
         return yield* new SecretStoreLockOwnershipError({
-          resource: "external secret-store keyring",
+          resource: lock.resource,
         });
       }
       yield* fileSystem.remove(lock.lockPath);
@@ -444,7 +448,7 @@ export const make = Effect.gen(function* () {
       const keyFilePath = serverConfig.secretStoreKeyFilePath;
       if (keyFilePath !== undefined) {
         yield* Effect.acquireUseRelease(
-          acquireExternalKeyringLock(keyFilePath),
+          acquireSecretStoreLock(`${keyFilePath}.lock`, "external secret-store keyring"),
           () =>
             Effect.gen(function* () {
               const raw = yield* fileSystem.readFileString(keyFilePath);
@@ -456,7 +460,10 @@ export const make = Effect.gen(function* () {
                     }),
                 ),
               );
-              const currentFingerprint = keyring.legacySecretFingerprints?.[name];
+              const keyringFingerprints = keyring.legacySecretFingerprints ?? {};
+              const currentFingerprint = hasOwnProperty(keyringFingerprints, name)
+                ? keyringFingerprints[name]
+                : undefined;
               if (currentFingerprint === undefined) {
                 // Another process can migrate the same authorized bytes and
                 // durably retire the fingerprint while this process waits for
@@ -470,7 +477,10 @@ export const make = Effect.gen(function* () {
                 });
               }
 
-              const remaining = { ...keyring.legacySecretFingerprints };
+              const remaining = Object.assign(
+                Object.create(null) as Record<string, string>,
+                keyringFingerprints,
+              );
               delete remaining[name];
               const updated = `${yield* encodeExternalSecretStoreKeyring({
                 version: 1,
@@ -522,7 +532,7 @@ export const make = Effect.gen(function* () {
                       ([secretName, fingerprint]) =>
                         verified.legacySecretFingerprints?.[secretName] !== fingerprint,
                     ) ||
-                    verified.legacySecretFingerprints?.[name] !== undefined
+                    hasOwnProperty(verified.legacySecretFingerprints ?? {}, name)
                   ) {
                     return yield* new SecretStorePersistError({
                       resource: "legacy migration authorization",
@@ -553,7 +563,7 @@ export const make = Effect.gen(function* () {
                 ),
               );
             }),
-          releaseExternalKeyringLock,
+          releaseSecretStoreLock,
         );
       }
       legacyFingerprints.delete(name);
@@ -662,16 +672,40 @@ export const make = Effect.gen(function* () {
       return Option.some(decoded.value);
     });
 
+  const withSecretLock = <A, R>(
+    name: string,
+    operation: Effect.Effect<A, SecretStoreError, R>,
+  ): Effect.Effect<A, SecretStoreError, R> =>
+    Effect.acquireUseRelease(
+      acquireSecretStoreLock(`${resolveSecretPath(name)}.lock`, `secret ${name}`),
+      () => operation,
+      releaseSecretStoreLock,
+    ).pipe(
+      Effect.mapError((cause) =>
+        isSecretStoreError(cause)
+          ? cause
+          : new SecretStorePersistError({
+              resource: `lock for secret ${name}`,
+              cause,
+            }),
+      ),
+    );
+
   const get: ServerSecretStore["Service"]["get"] = (name) =>
-    mutex.withPermits(1)(getUnlocked(name)).pipe(Effect.withSpan("ServerSecretStore.get"));
+    mutex
+      .withPermits(1)(withSecretLock(name, getUnlocked(name)))
+      .pipe(Effect.withSpan("ServerSecretStore.get"));
 
   const set: ServerSecretStore["Service"]["set"] = (name, value) =>
     mutex
       .withPermits(1)(
-        Effect.gen(function* () {
-          yield* persistReplacing(name, Uint8Array.from(value));
-          yield* retireLegacyAuthorization(name);
-        }),
+        withSecretLock(
+          name,
+          Effect.gen(function* () {
+            yield* persistReplacing(name, Uint8Array.from(value));
+            yield* retireLegacyAuthorization(name);
+          }),
+        ),
       )
       .pipe(Effect.withSpan("ServerSecretStore.set"));
 
@@ -730,55 +764,61 @@ export const make = Effect.gen(function* () {
 
   const create: ServerSecretStore["Service"]["create"] = (name, value) =>
     mutex.withPermits(1)(
-      Effect.gen(function* () {
-        yield* createUnlocked(name, Uint8Array.from(value));
-        yield* retireLegacyAuthorization(name);
-      }),
+      withSecretLock(
+        name,
+        Effect.gen(function* () {
+          yield* createUnlocked(name, Uint8Array.from(value));
+          yield* retireLegacyAuthorization(name);
+        }),
+      ),
     );
 
   const getOrCreateRandom: ServerSecretStore["Service"]["getOrCreateRandom"] = (name, bytes) =>
     mutex
       .withPermits(1)(
-        getUnlocked(name).pipe(
-          Effect.flatMap(
-            Option.match({
-              onSome: Effect.succeed,
-              onNone: () =>
-                crypto.randomBytes(bytes).pipe(
-                  Effect.mapError(
-                    (cause) =>
-                      new SecretStoreRandomGenerationError({
-                        resource: `secret ${name}`,
-                        cause,
-                      }),
-                  ),
-                  Effect.flatMap((generated) =>
-                    Effect.gen(function* () {
-                      yield* createUnlocked(name, generated);
-                      yield* retireLegacyAuthorization(name);
-                      return Uint8Array.from(generated);
-                    }).pipe(
-                      Effect.catchIf(isSecretStoreError, (error) =>
-                        isSecretAlreadyExistsError(error)
-                          ? getUnlocked(name).pipe(
-                              Effect.flatMap(
-                                Option.match({
-                                  onSome: Effect.succeed,
-                                  onNone: () =>
-                                    Effect.fail(
-                                      new SecretStoreConcurrentReadError({
-                                        resource: `secret ${name}`,
-                                      }),
-                                    ),
-                                }),
-                              ),
-                            )
-                          : Effect.fail(error),
+        withSecretLock(
+          name,
+          getUnlocked(name).pipe(
+            Effect.flatMap(
+              Option.match({
+                onSome: Effect.succeed,
+                onNone: () =>
+                  crypto.randomBytes(bytes).pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new SecretStoreRandomGenerationError({
+                          resource: `secret ${name}`,
+                          cause,
+                        }),
+                    ),
+                    Effect.flatMap((generated) =>
+                      Effect.gen(function* () {
+                        yield* createUnlocked(name, generated);
+                        yield* retireLegacyAuthorization(name);
+                        return Uint8Array.from(generated);
+                      }).pipe(
+                        Effect.catchIf(isSecretStoreError, (error) =>
+                          isSecretAlreadyExistsError(error)
+                            ? getUnlocked(name).pipe(
+                                Effect.flatMap(
+                                  Option.match({
+                                    onSome: Effect.succeed,
+                                    onNone: () =>
+                                      Effect.fail(
+                                        new SecretStoreConcurrentReadError({
+                                          resource: `secret ${name}`,
+                                        }),
+                                      ),
+                                  }),
+                                ),
+                              )
+                            : Effect.fail(error),
+                        ),
                       ),
                     ),
                   ),
-                ),
-            }),
+              }),
+            ),
           ),
         ),
       )
@@ -809,10 +849,13 @@ export const make = Effect.gen(function* () {
   const remove: ServerSecretStore["Service"]["remove"] = (name) =>
     mutex
       .withPermits(1)(
-        Effect.gen(function* () {
-          yield* removeUnlocked(name);
-          yield* retireLegacyAuthorization(name);
-        }),
+        withSecretLock(
+          name,
+          Effect.gen(function* () {
+            yield* removeUnlocked(name);
+            yield* retireLegacyAuthorization(name);
+          }),
+        ),
       )
       .pipe(Effect.withSpan("ServerSecretStore.remove"));
 

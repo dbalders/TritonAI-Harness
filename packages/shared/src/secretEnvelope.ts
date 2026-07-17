@@ -17,18 +17,6 @@ export const hasServerSecretEnvelopeMagic = (bytes: Uint8Array): boolean =>
   bytes.byteLength >= SERVER_SECRET_ENVELOPE_MAGIC.byteLength &&
   SERVER_SECRET_ENVELOPE_MAGIC.every((byte, index) => bytes[index] === byte);
 
-/**
- * Identifies the binary version marker used by encrypted envelopes. Treat all
- * control-byte versions as envelope-like so truncated and future-version
- * envelopes fail closed, while ordinary legacy text such as
- * `T3SECRET legacy-value` can still migrate after explicit approval.
- */
-export const hasServerSecretEnvelopeVersionMarker = (bytes: Uint8Array): boolean => {
-  if (!hasServerSecretEnvelopeMagic(bytes)) return false;
-  const version = bytes[SERVER_SECRET_ENVELOPE_MAGIC.byteLength];
-  return version !== undefined && version < 0x20;
-};
-
 export interface DecodedServerSecretEnvelope {
   readonly value: Uint8Array;
   readonly keyIndex: number;

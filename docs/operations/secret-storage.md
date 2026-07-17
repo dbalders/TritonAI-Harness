@@ -44,11 +44,11 @@ a restart requires another explicit desktop approval.
 
 Before replacing any plaintext, Harness durably writes store-initialization metadata. That marker,
 not the unauthenticated envelope prefix, normally distinguishes a first upgrade from an initialized
-store whose key is missing. If both metadata files are absent but a credential still has a complete
-binary envelope version marker, Harness also refuses migration instead of generating a new key and
-double-encrypting it. That includes truncated and unsupported numeric envelope versions. A legacy
-text value beginning with `T3SECRET ` can still migrate after approval; a value that uses the magic
-plus a binary control-byte version is intentionally treated as an envelope and must authenticate.
+store whose key is missing. If both metadata files are absent but a credential begins with the
+reserved `T3SECRET` envelope magic, Harness also refuses migration instead of generating a new key
+and double-encrypting it. That includes truncated, unsupported, and modified version bytes. Legacy
+plaintext using that reserved prefix is intentionally rejected because it cannot be safely
+distinguished from a damaged encrypted envelope.
 If an initialized store's wrapped key is missing, Harness does not offer migration or generate a
 replacement key. Restore the OS-protected key state or reset and reconnect the affected integrations.
 
@@ -85,6 +85,12 @@ parent directory. Harness serializes fingerprint retirement across server proces
 acquire the lock or persist retirement stops the operation. If a process is forcibly terminated
 during retirement, first confirm that no Harness process is using the keyring, then remove the
 adjacent `.lock` file before restarting.
+
+Harness also serializes reads and writes for each canonical secret across server processes. This
+holds the same mode-`0600` lock from the initial read through migration, replacement, and migration
+authorization retirement, preventing a stale legacy read from overwriting a newer value. If a
+process is forcibly terminated during a secret operation, first confirm that no Harness process is
+using the store, then remove the affected `<name>.bin.lock` file before restarting.
 
 Generate a legacy fingerprint while Harness is stopped. The canonical algorithm is HMAC-SHA-256
 with the decoded 32-byte `active` key over, in order: UTF-8 `T3SECRET-LEGACY` followed by a NUL byte,

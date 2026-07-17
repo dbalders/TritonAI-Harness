@@ -81,7 +81,7 @@ const validateKeyring = Effect.fn("desktop.secretStoreKey.validate")(function* (
       seen.add(canonical);
     }
   }
-  const legacySecretFingerprints: Record<string, string> = {};
+  const legacySecretFingerprints = Object.create(null) as Record<string, string>;
   for (const [name, encoded] of Object.entries(record.legacySecretFingerprints)) {
     const decoded = yield* Effect.fromResult(Encoding.decodeBase64(encoded)).pipe(
       Effect.mapError(() =>
@@ -128,7 +128,10 @@ const fingerprintsEqual = (
   const leftEntries = Object.entries(left);
   return (
     leftEntries.length === Object.keys(right).length &&
-    leftEntries.every(([name, fingerprint]) => right[name] === fingerprint)
+    leftEntries.every(
+      ([name, fingerprint]) =>
+        Object.prototype.hasOwnProperty.call(right, name) && right[name] === fingerprint,
+    )
   );
 };
 
@@ -156,10 +159,13 @@ export const authorizeLegacySecretValues = Effect.fn(
   location: string,
 ) {
   const dialog = yield* ElectronDialog.ElectronDialog;
-  const fingerprints: Record<string, string> = {};
+  const fingerprints = Object.create(null) as Record<string, string>;
   const legacyValues: LegacySecretValue[] = [];
   for (const { name, value } of values) {
-    if (SecretEnvelope.hasServerSecretEnvelopeVersionMarker(value)) {
+    // The magic prefix is reserved. Treat every matching value as an envelope
+    // so a modified version byte cannot turn damaged ciphertext into approved
+    // legacy plaintext.
+    if (SecretEnvelope.hasServerSecretEnvelopeMagic(value)) {
       yield* Effect.try({
         try: () => SecretEnvelope.decodeServerSecretEnvelope(name, value, keys),
         catch: (cause) =>
