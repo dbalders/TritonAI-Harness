@@ -680,7 +680,6 @@ reconciliationLayer("CodexAdapter integration availability reconciliation", (it)
       yield* adapter.stopSession(threadId);
       NodeAssert.equal(runtime.closeImpl.mock.calls.length, 1);
 
-      releaseRead.resolve();
       const sendExit = yield* Fiber.await(send);
       NodeAssert.equal(Exit.isFailure(sendExit), true);
       if (Exit.isFailure(sendExit)) {
@@ -688,6 +687,7 @@ reconciliationLayer("CodexAdapter integration availability reconciliation", (it)
       }
       NodeAssert.equal(runtime.sendTurnImpl.mock.calls.length, 0);
       NodeAssert.equal(reconciliationRuntimeFactory.factory.mock.calls.length, 1);
+      releaseRead.resolve();
     }),
   );
 
@@ -719,13 +719,13 @@ reconciliationLayer("CodexAdapter integration availability reconciliation", (it)
       yield* Effect.yieldNow;
 
       yield* adapter.stopSession(threadId);
-      releaseRead.resolve();
       yield* Fiber.await(send);
       const restartExit = yield* Fiber.await(restart);
 
       NodeAssert.equal(Exit.isFailure(restartExit), true);
       NodeAssert.equal(reconciliationRuntimeFactory.factory.mock.calls.length, 1);
       NodeAssert.equal(yield* adapter.hasSession(threadId), false);
+      releaseRead.resolve();
     }),
   );
 
@@ -786,6 +786,14 @@ reconciliationLayer("CodexAdapter integration availability reconciliation", (it)
         NodeAssert.equal(Cause.hasInterruptsOnly(sendExit.cause), true);
       }
       NodeAssert.equal(reconciliationRuntimeFactory.factory.mock.calls.length, 2);
+      yield* Effect.promise(() =>
+        vi.waitFor(() =>
+          NodeAssert.equal(
+            reconciliationRuntimeFactory.lastRuntime?.closeImpl.mock.calls.length,
+            1,
+          ),
+        ),
+      );
       NodeAssert.equal(reconciliationRuntimeFactory.lastRuntime?.closeImpl.mock.calls.length, 1);
       NodeAssert.equal(yield* adapter.hasSession(threadId), false);
     }),

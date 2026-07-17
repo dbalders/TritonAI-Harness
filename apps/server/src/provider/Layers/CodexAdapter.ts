@@ -1424,13 +1424,13 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
   const threadLocksRef = yield* SynchronizedRef.make(
     new Map<string, { readonly semaphore: Semaphore.Semaphore; readonly users: number }>(),
   );
-  type ThreadLifecycleEpoch = object;
+  type ThreadLifecycleEpoch = { readonly controller: AbortController };
   const pendingImageContextAnalyses = new Map<
     ThreadId,
     { controller: AbortController; lifecycleEpoch: ThreadLifecycleEpoch | undefined }
   >();
   const threadLifecycleEpochs = new Map<ThreadId, ThreadLifecycleEpoch>();
-  const pendingSessionStarts = new Map<ThreadId, Set<object>>();
+  const pendingSessionStarts = new Map<ThreadId, Set<AbortController>>();
   const turnPreparations = new Map<
     ThreadId,
     Set<{
@@ -1477,6 +1477,17 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
 
   const currentThreadLifecycleEpoch = (threadId: ThreadId) => threadLifecycleEpochs.get(threadId);
 
+  const interruptWhenAborted = (signal: AbortSignal): Effect.Effect<never> =>
+    Effect.callback<never>((resume) => {
+      const onAbort = () => resume(Effect.interrupt);
+      if (signal.aborted) {
+        onAbort();
+        return;
+      }
+      signal.addEventListener("abort", onAbort, { once: true });
+      return Effect.sync(() => signal.removeEventListener("abort", onAbort));
+    });
+
   const cancelPendingLifecycle = (
     threadId: ThreadId,
     lifecycleEpoch: ThreadLifecycleEpoch | undefined,
@@ -1497,8 +1508,10 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
   };
 
   const beginThreadLifecycle = (threadId: ThreadId) => {
-    cancelPendingLifecycle(threadId, currentThreadLifecycleEpoch(threadId));
-    const lifecycleEpoch: ThreadLifecycleEpoch = {};
+    const previousEpoch = currentThreadLifecycleEpoch(threadId);
+    previousEpoch?.controller.abort();
+    cancelPendingLifecycle(threadId, previousEpoch);
+    const lifecycleEpoch: ThreadLifecycleEpoch = { controller: new AbortController() };
     threadLifecycleEpochs.set(threadId, lifecycleEpoch);
     return lifecycleEpoch;
   };
@@ -1506,6 +1519,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
   const retireThreadLifecycle = (threadId: ThreadId) => {
     const lifecycleEpoch = threadLifecycleEpochs.get(threadId);
     threadLifecycleEpochs.delete(threadId);
+    lifecycleEpoch?.controller.abort();
     cancelPendingLifecycle(threadId, lifecycleEpoch);
   };
 
@@ -1723,7 +1737,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
             }
             yield* Queue.offerAll(runtimeEventQueue, runtimeEvents);
           }),
-        ).pipe(Effect.forkChild);
+        ).pipe(Effect.forkIn(sessionScope));
 
         const started = yield* runtime.start().pipe(
           Effect.mapError(
@@ -1817,8 +1831,9 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
         });
       }
       return yield* Effect.suspend(() => {
-        const pendingStart = {};
-        const pendingStarts = pendingSessionStarts.get(input.threadId) ?? new Set<object>();
+        const pendingStart = new AbortController();
+        const pendingStarts =
+          pendingSessionStarts.get(input.threadId) ?? new Set<AbortController>();
         pendingStarts.add(pendingStart);
         pendingSessionStarts.set(input.threadId, pendingStarts);
         const retirePendingStart = () => {
@@ -1841,6 +1856,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
             const previousSession = sessions.get(input.threadId);
             const lifecycleEpoch = beginThreadLifecycle(input.threadId);
             return startSessionUnlocked(input, lifecycleEpoch).pipe(
+              Effect.raceFirst(interruptWhenAborted(lifecycleEpoch.controller.signal)),
               Effect.onExit((exit) =>
                 Exit.isFailure(exit) &&
                 currentThreadLifecycleEpoch(input.threadId) === lifecycleEpoch &&
@@ -1848,14 +1864,20 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
                 !previousSession.stopped &&
                 sessions.get(input.threadId) === previousSession
                   ? Effect.sync(() => {
-                      if (previousEpoch) threadLifecycleEpochs.set(input.threadId, previousEpoch);
-                      else threadLifecycleEpochs.delete(input.threadId);
+                      if (previousEpoch) {
+                        threadLifecycleEpochs.set(input.threadId, {
+                          controller: new AbortController(),
+                        });
+                      } else threadLifecycleEpochs.delete(input.threadId);
                     })
                   : Effect.void,
               ),
             );
           }),
-        ).pipe(Effect.ensuring(Effect.sync(retirePendingStart)));
+        ).pipe(
+          Effect.raceFirst(interruptWhenAborted(pendingStart.signal)),
+          Effect.ensuring(Effect.sync(retirePendingStart)),
+        );
       });
     });
 
@@ -2148,7 +2170,13 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       const preparations = turnPreparations.get(input.threadId) ?? new Set();
       preparations.add(preparation);
       turnPreparations.set(input.threadId, preparations);
-      return withThreadLock(input.threadId, sendTurnLocked(input, preparation)).pipe(
+      const send = withThreadLock(input.threadId, sendTurnLocked(input, preparation));
+      const cancellableSend = preparation.lifecycleEpoch
+        ? send.pipe(
+            Effect.raceFirst(interruptWhenAborted(preparation.lifecycleEpoch.controller.signal)),
+          )
+        : send;
+      return cancellableSend.pipe(
         Effect.ensuring(
           Effect.sync(() => {
             preparations.delete(preparation);
@@ -2296,6 +2324,9 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
   const stopSession: CodexAdapterShape["stopSession"] = (threadId) =>
     Effect.uninterruptibleMask((restore) =>
       Effect.sync(() => {
+        for (const pendingStart of pendingSessionStarts.get(threadId) ?? []) {
+          pendingStart.abort();
+        }
         pendingSessionStarts.delete(threadId);
         retireThreadLifecycle(threadId);
         const session = sessions.get(threadId);
@@ -2329,6 +2360,9 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
   const stopAll: CodexAdapterShape["stopAll"] = () =>
     Effect.uninterruptibleMask((restore) =>
       Effect.sync(() => {
+        for (const pendingStarts of pendingSessionStarts.values()) {
+          for (const pendingStart of pendingStarts) pendingStart.abort();
+        }
         pendingSessionStarts.clear();
         for (const threadId of Array.from(threadLifecycleEpochs.keys()))
           retireThreadLifecycle(threadId);
