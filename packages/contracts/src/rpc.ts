@@ -175,7 +175,7 @@ import {
   IntegrationPollResult,
   IntegrationsListResult,
   IntegrationSetEnabledInput,
-  IntegrationSetSkillEnabledInput,
+  IntegrationSetCapabilityEnabledInput,
 } from "./integrations.ts";
 
 export const WS_METHODS = {
@@ -262,7 +262,7 @@ export const WS_METHODS = {
   integrationsList: "integrations.list",
   integrationsInstall: "integrations.install",
   integrationsSetEnabled: "integrations.setEnabled",
-  integrationsSetSkillEnabled: "integrations.setSkillEnabled",
+  integrationsSetCapabilityEnabled: "integrations.setCapabilityEnabled",
   integrationsConnect: "integrations.connect",
   integrationsPoll: "integrations.poll",
   integrationsDisconnect: "integrations.disconnect",
@@ -472,11 +472,14 @@ export const WsIntegrationsSetEnabledRpc = Rpc.make(WS_METHODS.integrationsSetEn
   success: IntegrationsListResult,
   error: IntegrationRpcError,
 });
-export const WsIntegrationsSetSkillEnabledRpc = Rpc.make(WS_METHODS.integrationsSetSkillEnabled, {
-  payload: IntegrationSetSkillEnabledInput,
-  success: IntegrationsListResult,
-  error: IntegrationRpcError,
-});
+export const WsIntegrationsSetCapabilityEnabledRpc = Rpc.make(
+  WS_METHODS.integrationsSetCapabilityEnabled,
+  {
+    payload: IntegrationSetCapabilityEnabledInput,
+    success: IntegrationsListResult,
+    error: IntegrationRpcError,
+  },
+);
 export const WsIntegrationsConnectRpc = Rpc.make(WS_METHODS.integrationsConnect, {
   payload: IntegrationConnectInput,
   success: IntegrationConnectResult,
@@ -885,7 +888,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsIntegrationsListRpc,
   WsIntegrationsInstallRpc,
   WsIntegrationsSetEnabledRpc,
-  WsIntegrationsSetSkillEnabledRpc,
+  WsIntegrationsSetCapabilityEnabledRpc,
   WsIntegrationsConnectRpc,
   WsIntegrationsPollRpc,
   WsIntegrationsDisconnectRpc,

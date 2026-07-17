@@ -23,6 +23,7 @@ import {
   ProviderApprovalDecision,
   ThreadId,
   ProviderSendTurnInput,
+  type ProviderSessionStartInput,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -32,8 +33,10 @@ import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import * as SynchronizedRef from "effect/SynchronizedRef";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import * as CodexErrors from "effect-codex-app-server/errors";
 import * as EffectCodexSchema from "effect-codex-app-server/schema";
@@ -96,6 +99,10 @@ export interface CodexAdapterLiveOptions {
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
   readonly imageContextAnalyzer?: CodexImageContextAnalyzer;
+  /** Test/embedding override; normal Harness instances resolve the active registry centrally. */
+  readonly integrationRegistry?: Integrations.RegistryRuntime | null;
+  /** Test/embedding resolver for exercising integration-registry replacement. */
+  readonly resolveIntegrationRegistry?: () => Integrations.RegistryRuntime | null;
 }
 
 interface CodexAdapterSessionContext {
@@ -105,6 +112,9 @@ interface CodexAdapterSessionContext {
   readonly eventFiber: Fiber.Fiber<void, never>;
   readonly integrationRegistry?: Integrations.RegistryRuntime;
   readonly integrationSkillRuntimeRoot?: string;
+  readonly startInput: ProviderSessionStartInput;
+  readonly integrationAvailabilityGeneration: number;
+  modelSelection?: ProviderSessionStartInput["modelSelection"];
   textOnlyImageContextSafe: boolean;
   stopped: boolean;
 }
@@ -1413,25 +1423,124 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     options?.nativeEventLogger === undefined ? nativeEventLogger : undefined;
   const runtimeEventQueue = yield* Queue.unbounded<ProviderRuntimeEvent>();
   const sessions = new Map<ThreadId, CodexAdapterSessionContext>();
-  const pendingImageContextAnalyses = new Map<ThreadId, AbortController>();
+  const threadLocksRef = yield* SynchronizedRef.make(
+    new Map<string, { readonly semaphore: Semaphore.Semaphore; readonly users: number }>(),
+  );
+  type ThreadLifecycleEpoch = { readonly controller: AbortController };
+  const pendingImageContextAnalyses = new Map<
+    ThreadId,
+    { controller: AbortController; lifecycleEpoch: ThreadLifecycleEpoch | undefined }
+  >();
+  const threadLifecycleEpochs = new Map<ThreadId, ThreadLifecycleEpoch>();
+  const pendingSessionStarts = new Map<ThreadId, Set<AbortController>>();
+  const turnPreparations = new Map<
+    ThreadId,
+    Set<{
+      controller: AbortController | null;
+      lifecycleEpoch: ThreadLifecycleEpoch | undefined;
+    }>
+  >();
   const imageContextAnalyzer =
     options?.imageContextAnalyzer ?? (yield* makeCodexImageContextAnalyzer(options?.environment));
+  const resolveIntegrationRegistry =
+    options?.resolveIntegrationRegistry ??
+    (options && Object.hasOwn(options, "integrationRegistry")
+      ? () => options.integrationRegistry ?? null
+      : Integrations.getIntegrationRegistryOptional);
 
-  const startSession: CodexAdapterShape["startSession"] = (input) =>
+  const getThreadSemaphore = (threadId: string) =>
+    SynchronizedRef.modifyEffect(threadLocksRef, (current) => {
+      const existing = current.get(threadId);
+      if (existing) {
+        const next = new Map(current);
+        next.set(threadId, { ...existing, users: existing.users + 1 });
+        return Effect.succeed([existing.semaphore, next] as const);
+      }
+      return Semaphore.make(1).pipe(
+        Effect.map((semaphore) => {
+          const next = new Map(current);
+          next.set(threadId, { semaphore, users: 1 });
+          return [semaphore, next] as const;
+        }),
+      );
+    });
+
+  const releaseThreadSemaphore = (threadId: string, semaphore: Semaphore.Semaphore) =>
+    SynchronizedRef.update(threadLocksRef, (current) => {
+      const existing = current.get(threadId);
+      if (!existing || existing.semaphore !== semaphore) return current;
+      const next = new Map(current);
+      if (existing.users === 1) next.delete(threadId);
+      else next.set(threadId, { ...existing, users: existing.users - 1 });
+      return next;
+    });
+
+  const withThreadLock = <A, E, R>(threadId: string, effect: Effect.Effect<A, E, R>) =>
+    Effect.acquireUseRelease(
+      getThreadSemaphore(threadId),
+      (semaphore) => semaphore.withPermit(effect),
+      (semaphore) => releaseThreadSemaphore(threadId, semaphore),
+    );
+
+  const currentThreadLifecycleEpoch = (threadId: ThreadId) => threadLifecycleEpochs.get(threadId);
+
+  const interruptWhenAborted = (signal: AbortSignal): Effect.Effect<never> =>
+    Effect.callback<never>((resume) => {
+      const onAbort = () => resume(Effect.interrupt);
+      if (signal.aborted) {
+        onAbort();
+        return;
+      }
+      signal.addEventListener("abort", onAbort, { once: true });
+      return Effect.sync(() => signal.removeEventListener("abort", onAbort));
+    });
+
+  const cancelPendingLifecycle = (
+    threadId: ThreadId,
+    lifecycleEpoch: ThreadLifecycleEpoch | undefined,
+  ) => {
+    if (!lifecycleEpoch) return;
+    const preparations = turnPreparations.get(threadId);
+    for (const preparation of Array.from(preparations ?? [])) {
+      if (preparation.lifecycleEpoch !== lifecycleEpoch) continue;
+      preparation.controller?.abort();
+      preparations?.delete(preparation);
+    }
+    if (preparations?.size === 0) turnPreparations.delete(threadId);
+    const analysis = pendingImageContextAnalyses.get(threadId);
+    if (analysis?.lifecycleEpoch === lifecycleEpoch) {
+      analysis.controller.abort();
+      pendingImageContextAnalyses.delete(threadId);
+    }
+  };
+
+  const beginThreadLifecycle = (threadId: ThreadId) => {
+    const previousEpoch = currentThreadLifecycleEpoch(threadId);
+    previousEpoch?.controller.abort();
+    cancelPendingLifecycle(threadId, previousEpoch);
+    const lifecycleEpoch: ThreadLifecycleEpoch = { controller: new AbortController() };
+    threadLifecycleEpochs.set(threadId, lifecycleEpoch);
+    return lifecycleEpoch;
+  };
+
+  const retireThreadLifecycle = (threadId: ThreadId) => {
+    const lifecycleEpoch = threadLifecycleEpochs.get(threadId);
+    threadLifecycleEpochs.delete(threadId);
+    lifecycleEpoch?.controller.abort();
+    cancelPendingLifecycle(threadId, lifecycleEpoch);
+  };
+
+  const startSessionUnlocked = (
+    input: Parameters<CodexAdapterShape["startSession"]>[0],
+    expectedLifecycleEpoch: ThreadLifecycleEpoch,
+  ) =>
     Effect.scoped(
       Effect.gen(function* () {
-        if (input.provider !== undefined && input.provider !== PROVIDER) {
-          return yield* new ProviderAdapterValidationError({
-            provider: PROVIDER,
-            operation: "startSession",
-            issue: `Expected provider '${PROVIDER}' but received '${input.provider}'.`,
-          });
+        if (currentThreadLifecycleEpoch(input.threadId) !== expectedLifecycleEpoch) {
+          return yield* Effect.interrupt;
         }
 
         const existing = sessions.get(input.threadId);
-        if (existing && !existing.stopped) {
-          yield* Effect.suspend(() => stopSessionInternal(existing));
-        }
 
         const serviceTier =
           input.modelSelection?.instanceId === boundInstanceId
@@ -1461,7 +1570,8 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           );
         }
         const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
-        const integrationRegistry = Integrations.getIntegrationRegistryOptional();
+        const integrationRegistry = resolveIntegrationRegistry();
+        const integrationAvailabilityGeneration = integrationRegistry?.availabilityGeneration ?? 0;
         const integrationSkillRuntime = integrationRegistry
           ? yield* Effect.tryPromise({
               try: () => integrationRegistry.prepareSkillRuntime(),
@@ -1482,13 +1592,29 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
               ).pipe(Effect.ignore)
             : Effect.void,
         );
+        // Keep read tools stable across routine connection changes, but never disclose an
+        // unavailable write tool to Codex. CodexSessionRuntime fingerprints this catalog and
+        // starts fresh instead of resuming when an opt-in write tool is enabled or disabled.
         const dynamicToolBindings = integrationRegistry
-          ? integrationRegistry.getAvailableToolDefinitionsSync().map((definition) => ({
-              canonicalName: definition.name,
-              dynamicName: Integrations.codexDynamicIntegrationToolName(definition.name),
-              description: `${definition.description} Integration plugin tool: ${definition.name}.`,
-              inputSchema: integrationToolJsonSchema(definition),
-            }))
+          ? integrationRegistry.toolDefinitions().flatMap((definition) => {
+              const requiresApproval =
+                integrationRegistry.toolRequiresApprovalSync?.(definition.name) ?? false;
+              if (
+                !definition.readOnly &&
+                !integrationRegistry.isToolAvailableSync(definition.name)
+              ) {
+                return [];
+              }
+              return [
+                {
+                  canonicalName: definition.name,
+                  dynamicName: Integrations.codexDynamicIntegrationToolName(definition.name),
+                  description: `${definition.description} Integration plugin tool: ${definition.name}.`,
+                  inputSchema: integrationToolJsonSchema(definition),
+                  requiresApproval,
+                },
+              ];
+            })
           : [];
         const dynamicToolNames = new Set<string>();
         for (const binding of dynamicToolBindings) {
@@ -1541,13 +1667,28 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
                   name: binding.dynamicName,
                   description: binding.description,
                   inputSchema: binding.inputSchema,
+                  requiresApproval: binding.requiresApproval,
                 })),
-                invokeDynamicTool: async ({ name, arguments: toolArguments, signal }) => {
+                isDynamicToolAvailable: (name: string) => {
+                  const canonicalName = dynamicToolByName.get(name);
+                  return Boolean(
+                    canonicalName && integrationRegistry.isToolAvailableSync(canonicalName),
+                  );
+                },
+                invokeDynamicTool: async ({
+                  name,
+                  arguments: toolArguments,
+                  signal,
+                  writeApproved,
+                }) => {
                   const canonicalName = dynamicToolByName.get(name);
                   if (!canonicalName || !integrationRegistry.isToolAvailableSync(canonicalName)) {
                     throw new Error("Integration plugin tool is unavailable.");
                   }
-                  return integrationRegistry.invokeTool(canonicalName, toolArguments, { signal });
+                  return integrationRegistry.invokeTool(canonicalName, toolArguments, {
+                    signal,
+                    ...(writeApproved ? { writeApproved: true } : {}),
+                  });
                 },
               }
             : {}),
@@ -1610,7 +1751,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
             }
             yield* Queue.offerAll(runtimeEventQueue, runtimeEvents);
           }),
-        ).pipe(Effect.forkChild);
+        ).pipe(Effect.forkIn(sessionScope));
 
         const started = yield* runtime.start().pipe(
           Effect.mapError(
@@ -1631,26 +1772,128 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           ),
         );
 
-        sessions.set(input.threadId, {
+        if (currentThreadLifecycleEpoch(input.threadId) !== expectedLifecycleEpoch) {
+          yield* runtime.close.pipe(Effect.ignore);
+          yield* Effect.ignore(Scope.close(sessionScope, Exit.void));
+          yield* Fiber.interrupt(eventFiber).pipe(Effect.ignore);
+          return yield* Effect.interrupt;
+        }
+
+        const replacement = {
           threadId: input.threadId,
           scope: sessionScope,
           runtime,
           eventFiber,
-          ...(integrationRegistry && integrationSkillRuntime
+          ...(integrationRegistry
             ? {
                 integrationRegistry,
-                integrationSkillRuntimeRoot: integrationSkillRuntime.root,
+                ...(integrationSkillRuntime
+                  ? { integrationSkillRuntimeRoot: integrationSkillRuntime.root }
+                  : {}),
               }
             : {}),
+          startInput: input,
+          integrationAvailabilityGeneration,
+          ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
           textOnlyImageContextSafe,
           stopped: false,
-        });
+        } satisfies CodexAdapterSessionContext;
+        sessions.set(input.threadId, replacement);
         sessionScopeTransferred = true;
         integrationSkillRuntimeTransferred = true;
 
+        // Keep the prior runtime usable until its replacement is fully started and installed.
+        // A transient integration refresh failure must not destroy the user's live task.
+        if (existing && !existing.stopped) {
+          yield* Effect.suspend(() => stopSessionInternal(existing)).pipe(
+            Effect.onExit((exit) =>
+              Exit.isFailure(exit)
+                ? Effect.sync(() => claimSessionStop(replacement)).pipe(
+                    Effect.flatMap((claimed) =>
+                      claimed
+                        ? Effect.forkDetach(closeSessionResources(replacement)).pipe(Effect.asVoid)
+                        : Effect.void,
+                    ),
+                  )
+                : Effect.void,
+            ),
+          );
+        }
+
         return withTextOnlyImageContextResumeSafety(started, textOnlyImageContextSafe);
       }),
+    ).pipe(
+      Effect.onExit(() =>
+        Effect.sync(() => {
+          if (
+            currentThreadLifecycleEpoch(input.threadId) === expectedLifecycleEpoch &&
+            !sessions.has(input.threadId)
+          ) {
+            threadLifecycleEpochs.delete(input.threadId);
+          }
+        }),
+      ),
     );
+
+  const startSession: CodexAdapterShape["startSession"] = (input) =>
+    Effect.gen(function* () {
+      if (input.provider !== undefined && input.provider !== PROVIDER) {
+        return yield* new ProviderAdapterValidationError({
+          provider: PROVIDER,
+          operation: "startSession",
+          issue: `Expected provider '${PROVIDER}' but received '${input.provider}'.`,
+        });
+      }
+      return yield* Effect.suspend(() => {
+        const pendingStart = new AbortController();
+        const pendingStarts =
+          pendingSessionStarts.get(input.threadId) ?? new Set<AbortController>();
+        pendingStarts.add(pendingStart);
+        pendingSessionStarts.set(input.threadId, pendingStarts);
+        const retirePendingStart = () => {
+          pendingStarts.delete(pendingStart);
+          if (
+            pendingStarts.size === 0 &&
+            pendingSessionStarts.get(input.threadId) === pendingStarts
+          ) {
+            pendingSessionStarts.delete(input.threadId);
+          }
+        };
+        return withThreadLock(
+          input.threadId,
+          Effect.suspend(() => {
+            if (!pendingSessionStarts.get(input.threadId)?.has(pendingStart)) {
+              return Effect.interrupt;
+            }
+            retirePendingStart();
+            const previousEpoch = currentThreadLifecycleEpoch(input.threadId);
+            const previousSession = sessions.get(input.threadId);
+            const lifecycleEpoch = beginThreadLifecycle(input.threadId);
+            return startSessionUnlocked(input, lifecycleEpoch).pipe(
+              Effect.raceFirst(interruptWhenAborted(lifecycleEpoch.controller.signal)),
+              Effect.onExit((exit) =>
+                Exit.isFailure(exit) &&
+                currentThreadLifecycleEpoch(input.threadId) === lifecycleEpoch &&
+                previousSession !== undefined &&
+                !previousSession.stopped &&
+                sessions.get(input.threadId) === previousSession
+                  ? Effect.sync(() => {
+                      if (previousEpoch) {
+                        threadLifecycleEpochs.set(input.threadId, {
+                          controller: new AbortController(),
+                        });
+                      } else threadLifecycleEpochs.delete(input.threadId);
+                    })
+                  : Effect.void,
+              ),
+            );
+          }),
+        ).pipe(
+          Effect.raceFirst(interruptWhenAborted(pendingStart.signal)),
+          Effect.ensuring(Effect.sync(retirePendingStart)),
+        );
+      });
+    });
 
   const resolveAttachment = Effect.fn("resolveAttachment")(function* (
     input: ProviderSendTurnInput,
@@ -1705,9 +1948,98 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     };
   });
 
-  const sendTurn: CodexAdapterShape["sendTurn"] = Effect.fn("sendTurn")(function* (input) {
-    const session = yield* requireSession(input.threadId);
+  const reconcileSessionForIntegrationAvailability = Effect.fn(
+    "reconcileSessionForIntegrationAvailability",
+  )(function* (
+    session: CodexAdapterSessionContext,
+    expectedLifecycleEpoch: ThreadLifecycleEpoch,
+    isCancelled: () => boolean = () => false,
+  ) {
+    let candidate = session;
+    while (true) {
+      if (
+        isCancelled() ||
+        currentThreadLifecycleEpoch(candidate.threadId) !== expectedLifecycleEpoch
+      )
+        return yield* Effect.interrupt;
+      const integrationRegistry = candidate.integrationRegistry ?? null;
+      const currentIntegrationRegistry = resolveIntegrationRegistry();
+      if (
+        integrationRegistry === currentIntegrationRegistry &&
+        (!integrationRegistry ||
+          candidate.integrationAvailabilityGeneration ===
+            integrationRegistry.availabilityGeneration)
+      ) {
+        return candidate;
+      }
+
+      const current = yield* candidate.runtime.getSession;
+      if (
+        isCancelled() ||
+        currentThreadLifecycleEpoch(candidate.threadId) !== expectedLifecycleEpoch ||
+        candidate.stopped ||
+        sessions.get(candidate.threadId) !== candidate
+      ) {
+        return yield* Effect.interrupt;
+      }
+      if (current.activeTurnId !== undefined || current.status === "running") {
+        // Never interrupt or replace an active turn. Revocation remains immediate through the
+        // registry's invocation and skill-reservation guards; recreation waits for an idle send.
+        return candidate;
+      }
+
+      const latestModelSelection = candidate.modelSelection;
+      const modelSelection = current.model
+        ? {
+            instanceId: boundInstanceId,
+            model: current.model,
+            ...(latestModelSelection?.instanceId === boundInstanceId &&
+            latestModelSelection.model === current.model &&
+            latestModelSelection.options
+              ? { options: latestModelSelection.options }
+              : {}),
+          }
+        : latestModelSelection;
+      yield* startSessionUnlocked(
+        {
+          ...candidate.startInput,
+          ...(current.cwd ? { cwd: current.cwd } : {}),
+          ...(current.resumeCursor !== undefined ? { resumeCursor: current.resumeCursor } : {}),
+          ...(modelSelection ? { modelSelection } : {}),
+        },
+        expectedLifecycleEpoch,
+      );
+      if (
+        isCancelled() ||
+        currentThreadLifecycleEpoch(candidate.threadId) !== expectedLifecycleEpoch
+      )
+        return yield* Effect.interrupt;
+      candidate = yield* requireSession(candidate.threadId);
+    }
+  });
+
+  const sendTurnLocked = Effect.fn("sendTurnLocked")(function* (
+    input: ProviderSendTurnInput,
+    preparation: {
+      controller: AbortController | null;
+      lifecycleEpoch: ThreadLifecycleEpoch | undefined;
+    },
+  ) {
+    const isCancelled = () =>
+      currentThreadLifecycleEpoch(input.threadId) !== preparation.lifecycleEpoch;
+    let session = yield* requireSession(input.threadId).pipe(
+      Effect.flatMap((candidate) =>
+        reconcileSessionForIntegrationAvailability(
+          candidate,
+          preparation.lifecycleEpoch!,
+          isCancelled,
+        ),
+      ),
+    );
     const currentSession = yield* session.runtime.getSession;
+    if (isCancelled() || session.stopped || sessions.get(input.threadId) !== session) {
+      return yield* Effect.interrupt;
+    }
     const selectedModel =
       input.modelSelection?.instanceId === boundInstanceId ? input.modelSelection.model : undefined;
     const effectiveModel = selectedModel ?? currentSession.model;
@@ -1727,9 +2059,12 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     const turnModel = attachments.length > 0 ? effectiveModel : selectedModel;
     const requiresImageContext = attachments.length > 0 && effectiveModelIsExplicitlyTextOnly;
     const analysisAbortController = requiresImageContext ? new AbortController() : undefined;
-    pendingImageContextAnalyses.get(input.threadId)?.abort();
     if (analysisAbortController) {
-      pendingImageContextAnalyses.set(input.threadId, analysisAbortController);
+      preparation.controller = analysisAbortController;
+      pendingImageContextAnalyses.set(input.threadId, {
+        controller: analysisAbortController,
+        lifecycleEpoch: preparation.lifecycleEpoch,
+      });
     } else {
       pendingImageContextAnalyses.delete(input.threadId);
     }
@@ -1739,6 +2074,9 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       let codexAttachments: ReadonlyArray<{ readonly type: "image"; readonly url: string }> = [];
 
       if (analysisAbortController) {
+        if (analysisAbortController.signal.aborted) {
+          return yield* Effect.interrupt;
+        }
         const imageContextInputs = yield* Effect.forEach(attachments, resolveImageContextInput, {
           concurrency: 1,
         });
@@ -1791,6 +2129,14 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
         input.modelSelection?.instanceId === boundInstanceId
           ? getCodexServiceTierOptionValue(input.modelSelection)
           : undefined;
+      session = yield* reconcileSessionForIntegrationAvailability(
+        session,
+        preparation.lifecycleEpoch!,
+        isCancelled,
+      );
+      if (isCancelled() || session.stopped || sessions.get(input.threadId) !== session) {
+        return yield* Effect.interrupt;
+      }
       if (codexAttachments.length > 0) {
         session.textOnlyImageContextSafe = false;
       }
@@ -1812,12 +2158,18 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
         .pipe(
           Effect.mapError((cause) => mapCodexRuntimeError(input.threadId, "turn/start", cause)),
         );
+      if (input.modelSelection?.instanceId === boundInstanceId) {
+        session.modelSelection = input.modelSelection;
+      }
       return withTextOnlyImageContextResumeSafety(result, session.textOnlyImageContextSafe);
     }).pipe(
       Effect.ensuring(
         analysisAbortController
           ? Effect.sync(() => {
-              if (pendingImageContextAnalyses.get(input.threadId) === analysisAbortController) {
+              if (
+                pendingImageContextAnalyses.get(input.threadId)?.controller ===
+                analysisAbortController
+              ) {
                 pendingImageContextAnalyses.delete(input.threadId);
               }
             })
@@ -1825,6 +2177,33 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       ),
     );
   });
+
+  const sendTurn: CodexAdapterShape["sendTurn"] = (input) =>
+    Effect.suspend(() => {
+      const preparation = {
+        controller: null,
+        lifecycleEpoch: currentThreadLifecycleEpoch(input.threadId),
+      };
+      const preparations = turnPreparations.get(input.threadId) ?? new Set();
+      preparations.add(preparation);
+      turnPreparations.set(input.threadId, preparations);
+      const send = withThreadLock(input.threadId, sendTurnLocked(input, preparation));
+      const cancellableSend = preparation.lifecycleEpoch
+        ? send.pipe(
+            Effect.raceFirst(interruptWhenAborted(preparation.lifecycleEpoch.controller.signal)),
+          )
+        : send;
+      return cancellableSend.pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            preparations.delete(preparation);
+            if (preparations.size === 0 && turnPreparations.get(input.threadId) === preparations) {
+              turnPreparations.delete(input.threadId);
+            }
+          }),
+        ),
+      );
+    });
 
   const requireSession = Effect.fn("requireSession")(function* (threadId: ThreadId) {
     const session = sessions.get(threadId);
@@ -1841,7 +2220,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     requireSession(threadId).pipe(
       Effect.tap(() =>
         Effect.sync(() => {
-          pendingImageContextAnalyses.get(threadId)?.abort();
+          pendingImageContextAnalyses.get(threadId)?.controller.abort();
         }),
       ),
       Effect.flatMap((session) => session.runtime.interruptTurn(turnId)),
@@ -1922,16 +2301,18 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     yield* nativeEventLogger.write(event, event.threadId);
   });
 
-  const stopSessionInternal = Effect.fn("stopSessionInternal")(function* (
+  const claimSessionStop = (session: CodexAdapterSessionContext) => {
+    if (session.stopped) return false;
+    session.stopped = true;
+    // A detached prior-session close may overlap replacement cleanup. Only the exact session
+    // currently published for this thread is allowed to remove that map entry.
+    if (sessions.get(session.threadId) === session) sessions.delete(session.threadId);
+    return true;
+  };
+
+  const closeSessionResources = Effect.fn("closeSessionResources")(function* (
     session: CodexAdapterSessionContext,
   ) {
-    if (session.stopped) {
-      return;
-    }
-    session.stopped = true;
-    sessions.delete(session.threadId);
-    pendingImageContextAnalyses.get(session.threadId)?.abort();
-    pendingImageContextAnalyses.delete(session.threadId);
     yield* session.runtime.close.pipe(Effect.ignore);
     yield* Effect.ignore(Scope.close(session.scope, Exit.void));
     yield* Fiber.interrupt(session.eventFiber).pipe(Effect.ignore);
@@ -1942,14 +2323,41 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     }
   });
 
+  const stopSessionInternal = Effect.fn("stopSessionInternal")(
+    (session: CodexAdapterSessionContext) =>
+      Effect.uninterruptibleMask((restore) =>
+        Effect.sync(() => claimSessionStop(session)).pipe(
+          Effect.flatMap((claimed) =>
+            claimed
+              ? Effect.forkDetach(closeSessionResources(session)).pipe(
+                  Effect.flatMap((fiber) => restore(Fiber.join(fiber))),
+                )
+              : Effect.void,
+          ),
+        ),
+      ),
+  );
+
   const stopSession: CodexAdapterShape["stopSession"] = (threadId) =>
-    Effect.gen(function* () {
-      const session = sessions.get(threadId);
-      if (!session) {
-        return;
-      }
-      yield* stopSessionInternal(session);
-    });
+    Effect.uninterruptibleMask((restore) =>
+      Effect.sync(() => {
+        for (const pendingStart of pendingSessionStarts.get(threadId) ?? []) {
+          pendingStart.abort();
+        }
+        pendingSessionStarts.delete(threadId);
+        retireThreadLifecycle(threadId);
+        const session = sessions.get(threadId);
+        return session && claimSessionStop(session) ? session : undefined;
+      }).pipe(
+        Effect.flatMap((session) =>
+          session
+            ? Effect.forkDetach(closeSessionResources(session)).pipe(
+                Effect.flatMap((fiber) => restore(Fiber.join(fiber))),
+              )
+            : Effect.void,
+        ),
+      ),
+    );
 
   const listSessions: CodexAdapterShape["listSessions"] = () =>
     Effect.forEach(
@@ -1967,10 +2375,27 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     Effect.succeed(Boolean(sessions.get(threadId) && !sessions.get(threadId)?.stopped));
 
   const stopAll: CodexAdapterShape["stopAll"] = () =>
-    Effect.forEach(Array.from(sessions.values()), stopSessionInternal, {
-      concurrency: 1,
-      discard: true,
-    }).pipe(Effect.asVoid);
+    Effect.uninterruptibleMask((restore) =>
+      Effect.sync(() => {
+        for (const pendingStarts of pendingSessionStarts.values()) {
+          for (const pendingStart of pendingStarts) pendingStart.abort();
+        }
+        pendingSessionStarts.clear();
+        for (const threadId of Array.from(threadLifecycleEpochs.keys()))
+          retireThreadLifecycle(threadId);
+        return Array.from(sessions.values()).filter(claimSessionStop);
+      }).pipe(
+        Effect.flatMap((claimedSessions) =>
+          Effect.forEach(claimedSessions, closeSessionResources, {
+            concurrency: 1,
+          }).pipe(
+            Effect.forkDetach,
+            Effect.flatMap((fiber) => restore(Fiber.join(fiber))),
+            Effect.asVoid,
+          ),
+        ),
+      ),
+    );
 
   yield* Effect.acquireRelease(Effect.void, () =>
     stopAll().pipe(

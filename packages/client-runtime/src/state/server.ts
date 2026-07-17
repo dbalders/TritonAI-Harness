@@ -260,9 +260,9 @@ export function createServerEnvironmentAtoms<R, E>(
       scheduler: configScheduler,
       concurrency: configConcurrency,
     }),
-    setIntegrationSkillEnabled: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:integrations:set-skill-enabled",
-      tag: WS_METHODS.integrationsSetSkillEnabled,
+    setIntegrationCapabilityEnabled: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:integrations:set-capability-enabled",
+      tag: WS_METHODS.integrationsSetCapabilityEnabled,
       scheduler: configScheduler,
       concurrency: configConcurrency,
     }),

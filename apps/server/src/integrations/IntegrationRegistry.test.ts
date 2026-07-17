@@ -171,6 +171,382 @@ async function packagedFromRoot(packageRoot: string, implementation: Integration
 }
 
 describe("IntegrationRegistry lifecycle", () => {
+  it("publishes only stable effective availability changes across the full lifecycle", async () => {
+    const root = await NodeFSP.mkdtemp(
+      NodePath.join(NodeOS.tmpdir(), "tritonai-availability-generation-"),
+    );
+    const state: ProviderState = {
+      status: {
+        state: "not_connected",
+        accountLabel: null,
+        grantedCapabilities: [],
+        message: null,
+      },
+      credential: null,
+      disconnectFails: false,
+    };
+    const implementation = provider("test-fixture-provider", state);
+    implementation.poll = async () => ({
+      state: "pending",
+      retryAfterSeconds: 1,
+      message: "Still waiting.",
+    });
+    const registry = new RegistryRuntime(root, [packaged(fixtureManifest, implementation)]);
+    const changes: Array<{
+      generation: number;
+      skills: ReadonlyArray<string>;
+      tools: ReadonlyArray<string>;
+    }> = [];
+    const unsubscribe = registry.subscribeAvailabilityChanges((change) => changes.push(change));
+    registry.subscribeAvailabilityChanges(() => {
+      throw new Error("broken observer");
+    });
+    try {
+      await registry.install(fixtureManifest.id);
+      expect(changes).toEqual([]);
+
+      await registry.poll(fixtureManifest.id, "flow-1");
+      await registry.poll(fixtureManifest.id, "flow-1");
+      expect(changes).toEqual([]);
+
+      state.status = {
+        state: "connected",
+        accountLabel: "Fixture User",
+        grantedCapabilities: ["fixture.read"],
+        message: null,
+      };
+      await registry.list();
+      expect(changes.at(-1)).toMatchObject({
+        generation: 1,
+        skills: ["fixture-reader"],
+        tools: ["test.fixture.read"],
+      });
+
+      await registry.list();
+      expect(changes).toHaveLength(1);
+      await registry.setSkillEnabled(fixtureManifest.id, "fixture-reader", false);
+      expect(changes.at(-1)).toMatchObject({
+        generation: 2,
+        skills: [],
+        tools: [],
+      });
+      await registry.setEnabled(fixtureManifest.id, false);
+      expect(changes.at(-1)).toMatchObject({ generation: 2, skills: [], tools: [] });
+      await registry.setEnabled(fixtureManifest.id, true);
+      expect(changes.at(-1)).toMatchObject({
+        generation: 2,
+        skills: [],
+        tools: [],
+      });
+      await registry.disconnect(fixtureManifest.id);
+      expect(changes.at(-1)).toMatchObject({ generation: 2, skills: [], tools: [] });
+      expect(registry.availabilityGeneration).toBe(2);
+    } finally {
+      unsubscribe();
+      await registry.close();
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("uses capability defaults as the only skill/tool authorization source", async () => {
+    const root = await NodeFSP.mkdtemp(
+      NodePath.join(NodeOS.tmpdir(), "tritonai-capability-access-"),
+    );
+    const manifest: IntegrationManifest = {
+      ...fixtureManifest,
+      id: "capability-access-fixture",
+      provider: "capability-access-provider",
+      capabilities: [
+        {
+          id: "records.read",
+          displayName: "Read records",
+          description: "Read records.",
+          access: "default",
+        },
+        {
+          id: "records.write",
+          displayName: "Change records",
+          description: "Change records.",
+          access: "opt-in",
+        },
+        {
+          id: "chat.read",
+          displayName: "Read chat",
+          description: "Read sensitive chats.",
+          access: "opt-in",
+        },
+      ],
+      tools: [
+        {
+          name: "fixture.records.shared",
+          displayName: "Use records",
+          description: "Shared read surface.",
+          capabilities: ["records.read", "records.write"],
+          effect: "read",
+        },
+        {
+          name: "fixture.records.write",
+          displayName: "Change records",
+          description: "Write surface.",
+          capabilities: ["records.write"],
+          effect: "write",
+        },
+      ],
+      skills: [
+        {
+          name: "fixture-records",
+          description: "Shared records workflow.",
+          capabilities: ["records.read", "records.write"],
+        },
+        {
+          name: "fixture-chat",
+          description: "Sensitive chat workflow.",
+          capabilities: ["chat.read"],
+        },
+      ],
+    };
+    let grantedCapabilities = ["records.read", "records.write", "chat.read"];
+    let sharedInvocationSignal: AbortSignal | undefined;
+    let markSharedInvocationStarted: () => void = () => undefined;
+    const nextSharedInvocationStarted = () =>
+      new Promise<void>((resolve) => {
+        markSharedInvocationStarted = resolve;
+      });
+    let releaseSharedInvocation!: () => void;
+    let holdWriteInvocation = false;
+    let writeInvocationSignal: AbortSignal | undefined;
+    let markWriteInvocationStarted!: () => void;
+    const writeInvocationStarted = new Promise<void>((resolve) => {
+      markWriteInvocationStarted = resolve;
+    });
+    const implementation: IntegrationProvider = {
+      id: "capability-access-provider",
+      tools: [
+        {
+          name: "fixture.records.shared",
+          description: "Shared read surface.",
+          input: EmptyIntegrationToolInput,
+          readOnly: true,
+          openWorld: false,
+        },
+        {
+          name: "fixture.records.write",
+          description: "Write surface.",
+          input: EmptyIntegrationToolInput,
+          readOnly: false,
+          openWorld: false,
+        },
+      ],
+      status: async () => ({
+        state: "connected",
+        accountLabel: "Fixture user",
+        // Previously granted additive scopes must not activate Harness access.
+        grantedCapabilities,
+        message: null,
+      }),
+      invoke: async (toolName, _input, context) => {
+        if (!context) throw new Error("expected invocation context");
+        if (toolName === "fixture.records.write" && holdWriteInvocation) {
+          writeInvocationSignal = context.signal;
+          markWriteInvocationStarted();
+          return new Promise((_resolve, reject) => {
+            context.signal.addEventListener("abort", () => reject(new Error("write aborted")), {
+              once: true,
+            });
+          });
+        }
+        if (toolName !== "fixture.records.shared") return { toolName };
+        sharedInvocationSignal = context.signal;
+        markSharedInvocationStarted();
+        return new Promise((resolve, reject) => {
+          releaseSharedInvocation = () => resolve({ toolName });
+          context.signal.addEventListener("abort", () => reject(new Error("shared aborted")), {
+            once: true,
+          });
+        });
+      },
+    };
+    const registry = new RegistryRuntime(root, [packaged(manifest, implementation)]);
+    try {
+      const installed = await registry.install(manifest.id);
+      const initial = installed.integrations[0]!;
+      expect(initial.capabilities).toMatchObject([
+        { id: "records.read", access: "default", enabled: true, available: true },
+        { id: "records.write", access: "opt-in", enabled: false, available: false },
+        { id: "chat.read", access: "opt-in", enabled: false, available: false },
+      ]);
+      expect(initial.tools.map(({ available }) => available)).toEqual([true, false]);
+      expect(initial.skills.map(({ enabled, available }) => ({ enabled, available }))).toEqual([
+        { enabled: true, available: true },
+        { enabled: false, available: false },
+      ]);
+      const missingSkill = registry.setSkillEnabled(manifest.id, "missing-skill", false);
+      expect(missingSkill).toBeInstanceOf(Promise);
+      await expect(missingSkill).rejects.toMatchObject({ code: "not_found" });
+      const multiCapabilitySkill = registry.setSkillEnabled(manifest.id, "fixture-records", false);
+      expect(multiCapabilitySkill).toBeInstanceOf(Promise);
+      await expect(multiCapabilitySkill).rejects.toMatchObject({ code: "operation_failed" });
+      await expect(
+        registry.invokeTool(
+          "fixture.records.write",
+          {},
+          {
+            signal: new AbortController().signal,
+            writeApproved: true,
+          },
+        ),
+      ).rejects.toMatchObject({ code: "capability_required" });
+
+      await registry.setCapabilityEnabled(manifest.id, "records.write", true);
+      expect(registry.isToolAvailableSync("fixture.records.write")).toBe(true);
+      expect(registry.toolRequiresApprovalSync("fixture.records.write")).toBe(true);
+      await expect(registry.invokeTool("fixture.records.write", {})).rejects.toMatchObject({
+        code: "operation_failed",
+      });
+      await expect(
+        registry.invokeTool(
+          "fixture.records.write",
+          {},
+          {
+            signal: new AbortController().signal,
+            writeApproved: true,
+          },
+        ),
+      ).resolves.toMatchObject({ toolName: "fixture.records.write" });
+
+      await registry.setCapabilityEnabled(manifest.id, "chat.read", true);
+      const chatReservation = registry.reserveSkillsSync(["fixture-chat"]);
+      expect(chatReservation).not.toBeNull();
+      const disableChat = registry.setCapabilityEnabled(manifest.id, "chat.read", false);
+      const disableIntegration = registry.setEnabled(manifest.id, false);
+      const overlappingRevocations = await registry.snapshot();
+      expect(
+        overlappingRevocations.integrations[0]?.capabilities.every(({ available }) => !available),
+      ).toBe(true);
+      expect(
+        overlappingRevocations.integrations[0]?.tools.every(({ available }) => !available),
+      ).toBe(true);
+      expect(
+        overlappingRevocations.integrations[0]?.skills.every(({ available }) => !available),
+      ).toBe(true);
+      chatReservation?.release();
+      await Promise.all([disableChat, disableIntegration]);
+      await registry.setEnabled(manifest.id, true);
+
+      await registry.setCapabilityEnabled(manifest.id, "chat.read", true);
+      await registry.setEnabled(manifest.id, false);
+      const disableChatWhileDisabled = registry.setCapabilityEnabled(
+        manifest.id,
+        "chat.read",
+        false,
+      );
+      const disabledCapabilityRevocation = await registry.snapshot();
+      expect(
+        disabledCapabilityRevocation.integrations[0]?.tools.every(({ available }) => !available),
+      ).toBe(true);
+      expect(
+        disabledCapabilityRevocation.integrations[0]?.skills.every(({ available }) => !available),
+      ).toBe(true);
+      await disableChatWhileDisabled;
+      await registry.setEnabled(manifest.id, true);
+
+      let sharedInvocationStarted = nextSharedInvocationStarted();
+      const sharedInvocation = registry.invokeTool("fixture.records.shared", {});
+      await sharedInvocationStarted;
+      await expect(
+        registry.setCapabilityEnabled(manifest.id, "missing.capability", false),
+      ).rejects.toMatchObject({ code: "not_found" });
+      expect(sharedInvocationSignal?.aborted).toBe(false);
+      await registry.setCapabilityEnabled(manifest.id, "records.write", false);
+      expect(sharedInvocationSignal?.aborted).toBe(false);
+      expect(registry.isToolAvailableSync("fixture.records.shared")).toBe(true);
+      expect(registry.isToolAvailableSync("fixture.records.write")).toBe(false);
+      await registry.setCapabilityEnabled(manifest.id, "records.write", true);
+      releaseSharedInvocation();
+      await expect(sharedInvocation).resolves.toMatchObject({
+        toolName: "fixture.records.shared",
+      });
+
+      grantedCapabilities = ["records.read", "chat.read"];
+      await registry.list();
+      sharedInvocationStarted = nextSharedInvocationStarted();
+      const lastEffectiveInvocation = registry.invokeTool("fixture.records.shared", {});
+      await sharedInvocationStarted;
+      const disableRead = registry.setCapabilityEnabled(manifest.id, "records.read", false);
+      await expect(lastEffectiveInvocation).rejects.toThrow(/revoked/u);
+      expect(sharedInvocationSignal?.aborted).toBe(true);
+      await disableRead;
+      expect(registry.isToolAvailableSync("fixture.records.shared")).toBe(false);
+
+      grantedCapabilities = ["records.read", "records.write", "chat.read"];
+      await registry.list();
+      holdWriteInvocation = true;
+      const writeInvocation = registry.invokeTool(
+        "fixture.records.write",
+        {},
+        {
+          signal: new AbortController().signal,
+          writeApproved: true,
+        },
+      );
+      await writeInvocationStarted;
+      const disableWrite = registry.setCapabilityEnabled(manifest.id, "records.write", false);
+      await expect(writeInvocation).rejects.toThrow(/revoked/u);
+      expect(writeInvocationSignal?.aborted).toBe(true);
+      await disableWrite;
+      expect(registry.isToolAvailableSync("fixture.records.shared")).toBe(false);
+      expect(registry.isSkillAvailableSync("fixture-records")).toBe(false);
+      await expect(
+        registry.invokeTool(
+          "fixture.records.write",
+          {},
+          {
+            signal: new AbortController().signal,
+            writeApproved: true,
+          },
+        ),
+      ).rejects.toMatchObject({ code: "capability_required" });
+    } finally {
+      await registry.close();
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps capability revocation active when disable queues behind installation", async () => {
+    const root = await NodeFSP.mkdtemp(
+      NodePath.join(NodeOS.tmpdir(), "tritonai-install-capability-disable-"),
+    );
+    const state: ProviderState = {
+      status: {
+        state: "connected",
+        accountLabel: "Fixture",
+        grantedCapabilities: ["fixture.read"],
+        message: null,
+      },
+      credential: "present",
+      disconnectFails: false,
+    };
+    const registry = new RegistryRuntime(root, [
+      packaged(fixtureManifest, provider("test-fixture-provider", state)),
+    ]);
+    try {
+      const installing = registry.install(fixtureManifest.id);
+      const disabling = registry.setCapabilityEnabled(fixtureManifest.id, "fixture.read", false);
+
+      await installing;
+      const result = await disabling;
+      expect(result.integrations[0]?.capabilities[0]).toMatchObject({
+        enabled: false,
+        available: false,
+      });
+      expect(registry.isToolAvailableSync("test.fixture.read")).toBe(false);
+      expect(registry.isSkillAvailableSync("fixture-reader")).toBe(false);
+    } finally {
+      await registry.close();
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("rejects incompatible manifests and provider contracts before activation", async () => {
     const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-compatibility-"));
     const state: ProviderState = {
@@ -244,7 +620,7 @@ describe("IntegrationRegistry lifecycle", () => {
           { id: "records.write", displayName: "Write records", description: "Write records." },
         ],
         tools: connectedManifest.tools.map((tool, index) =>
-          index === 0 ? { ...tool, capability: "records.write" } : tool,
+          index === 0 ? { ...tool, capability: "records.write", effect: "write" as const } : tool,
         ),
       };
       state.status = {
@@ -257,9 +633,16 @@ describe("IntegrationRegistry lifecycle", () => {
         packaged(writeManifest, writableProvider),
       ]);
       await writeRegistry.install(writeManifest.id);
-      await expect(writeRegistry.invokeTool("test.records.list", {})).resolves.toMatchObject({
-        toolName: "test.records.list",
-      });
+      await expect(
+        writeRegistry.invokeTool(
+          "test.records.list",
+          {},
+          {
+            signal: new AbortController().signal,
+            writeApproved: true,
+          },
+        ),
+      ).resolves.toMatchObject({ toolName: "test.records.list" });
     } finally {
       await NodeFSP.rm(root, { recursive: true, force: true });
     }
@@ -354,6 +737,10 @@ describe("IntegrationRegistry lifecycle", () => {
         code: "operation_failed",
       });
       expect(registry.isToolAvailableSync("test.fixture.read")).toBe(false);
+      expect((await registry.snapshot()).integrations[0]?.capabilities[0]).toMatchObject({
+        granted: false,
+        available: false,
+      });
 
       releaseFirstInvocation();
       await invocationRejected;
@@ -870,7 +1257,7 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
-  it("persists per-skill switches and revokes only the selected skill", async () => {
+  it("maps legacy skill switches to their authoritative capability bundle", async () => {
     const root = await NodeFSP.mkdtemp(
       NodePath.join(NodeOS.tmpdir(), "tritonai-skill-enablement-"),
     );
@@ -908,8 +1295,12 @@ describe("IntegrationRegistry lifecycle", () => {
         disableCompleted = true;
       });
       expect(registry.isSkillAvailableSync("fixture-reader")).toBe(false);
-      expect(registry.isToolAvailableSync("test.fixture.read")).toBe(true);
+      expect(registry.isToolAvailableSync("test.fixture.read")).toBe(false);
       expect(registry.reserveSkillsSync(["fixture-reader"])).toBeNull();
+      const revoking = await registry.snapshot();
+      expect(revoking.integrations[0]?.capabilities[0]).toMatchObject({ available: false });
+      expect(revoking.integrations[0]?.tools[0]).toMatchObject({ available: false });
+      expect(revoking.integrations[0]?.skills[0]).toMatchObject({ available: false });
       await Promise.resolve();
       expect(disableCompleted).toBe(false);
       reservation?.release();
@@ -933,6 +1324,58 @@ describe("IntegrationRegistry lifecycle", () => {
       await restarted.setSkillEnabled(fixtureManifest.id, "fixture-reader", true);
       expect(await NodeFSP.readFile(materializedSkill, "utf8")).toContain("fixture-reader");
       expect(restarted.isToolAvailableSync("test.fixture.read")).toBe(true);
+    } finally {
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("migrates legacy disabled skills to fail-closed capability access", async () => {
+    const root = await NodeFSP.mkdtemp(
+      NodePath.join(NodeOS.tmpdir(), "tritonai-capability-migration-"),
+    );
+    const state: ProviderState = {
+      status: {
+        state: "connected",
+        accountLabel: "Fixture",
+        grantedCapabilities: ["fixture.read"],
+        message: null,
+      },
+      credential: "present",
+      disconnectFails: false,
+    };
+    const integration = packaged(fixtureManifest, provider("test-fixture-provider", state));
+    try {
+      await NodeFSP.writeFile(
+        NodePath.join(root, "state.json"),
+        `${JSON.stringify({
+          version: 1,
+          installed: {
+            [fixtureManifest.id]: {
+              version: fixtureManifest.version,
+              enabled: true,
+              disabledSkills: ["fixture-reader"],
+            },
+          },
+          removing: {},
+        })}\n`,
+      );
+
+      const registry = new RegistryRuntime(root, [integration]);
+      const summary = (await registry.list()).integrations[0];
+      expect(summary?.capabilities).toEqual([
+        expect.objectContaining({ id: "fixture.read", enabled: false, available: false }),
+      ]);
+      expect(summary?.skills[0]).toMatchObject({ enabled: false, available: false });
+      expect(summary?.tools[0]).toMatchObject({ available: false });
+
+      const persisted = JSON.parse(
+        await NodeFSP.readFile(NodePath.join(root, "state.json"), "utf8"),
+      );
+      expect(persisted.installed[fixtureManifest.id]).toEqual({
+        version: fixtureManifest.version,
+        enabled: true,
+        enabledCapabilities: [],
+      });
     } finally {
       await NodeFSP.rm(root, { recursive: true, force: true });
     }
@@ -2090,7 +2533,7 @@ describe("IntegrationRegistry lifecycle", () => {
       expect(persisted.installed[fixtureManifest.id]).toEqual({
         version: "2.0.0",
         enabled: false,
-        disabledSkills: ["fixture-reader"],
+        enabledCapabilities: [],
       });
     } finally {
       await NodeFSP.rm(root, { recursive: true, force: true });

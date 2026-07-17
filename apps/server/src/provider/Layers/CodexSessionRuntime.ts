@@ -130,12 +130,41 @@ export interface CodexDynamicToolDefinition {
   readonly name: string;
   readonly description: string;
   readonly inputSchema: Readonly<Record<string, unknown>>;
+  /** Harness-enforced confirmation; runtime mode never bypasses this boundary. */
+  readonly requiresApproval?: boolean;
 }
 
 export interface CodexDynamicToolInvocation {
   readonly name: string;
   readonly arguments: unknown;
   readonly signal: AbortSignal;
+  readonly writeApproved?: boolean;
+}
+
+export function dynamicToolInvocationAllowed(
+  requiresApproval: boolean | undefined,
+  decision: ProviderApprovalDecision | undefined,
+): boolean {
+  return requiresApproval !== true || decision === "accept" || decision === "acceptForSession";
+}
+
+export function dynamicToolApprovalRequired(
+  requiresApproval: boolean | undefined,
+  approvedForSession: boolean,
+): boolean {
+  return requiresApproval === true && !approvedForSession;
+}
+
+export function dynamicToolInvocationAvailable(
+  name: string,
+  isAvailable: ((name: string) => boolean) | undefined,
+): boolean {
+  if (!isAvailable) return true;
+  try {
+    return isAvailable(name);
+  } catch {
+    return false;
+  }
 }
 
 export interface CodexPluginSkillDefinition {
@@ -167,6 +196,7 @@ export interface CodexSessionRuntimeOptions {
   readonly resumeCursor?: CodexResumeCursor;
   readonly appServerArgs?: ReadonlyArray<string>;
   readonly dynamicTools?: ReadonlyArray<CodexDynamicToolDefinition>;
+  readonly isDynamicToolAvailable?: (name: string) => boolean;
   readonly invokeDynamicTool?: (input: CodexDynamicToolInvocation) => Promise<unknown>;
   readonly pluginSkills?: ReadonlyArray<CodexPluginSkillDefinition>;
   readonly isPluginSkillAvailable?: (name: string) => boolean;
@@ -413,7 +443,12 @@ export function computeDynamicToolFingerprint(
 ): string {
   const definitions = [...(dynamicTools ?? [])]
     .sort((left, right) => left.name.localeCompare(right.name))
-    .map(({ name, description, inputSchema }) => ({ name, description, inputSchema }));
+    .map(({ name, description, inputSchema, requiresApproval }) => ({
+      name,
+      description,
+      inputSchema,
+      ...(requiresApproval === true ? { requiresApproval: true } : {}),
+    }));
   return NodeCrypto.createHash("sha256").update(canonicalJson(definitions), "utf8").digest("hex");
 }
 
@@ -970,6 +1005,7 @@ export const makeCodexSessionRuntime = (
     const crypto = yield* Crypto.Crypto;
     const events = yield* Queue.unbounded<ProviderEvent>();
     const pendingApprovalsRef = yield* Ref.make(new Map<ApprovalRequestId, PendingApproval>());
+    const sessionApprovedDynamicToolsRef = yield* Ref.make(new Set<string>());
     const approvalCorrelationsRef = yield* Ref.make(new Map<string, ApprovalCorrelation>());
     const pendingUserInputsRef = yield* Ref.make(new Map<ApprovalRequestId, PendingUserInput>());
     const collabReceiverTurnsRef = yield* Ref.make(new Map<string, TurnId>());
@@ -1390,44 +1426,100 @@ export const makeCodexSessionRuntime = (
       }),
     );
 
-    yield* client.handleServerRequest("item/tool/call", (payload) => {
-      const definition = options.dynamicTools?.find((tool) => tool.name === payload.tool);
-      if (payload.namespace || !definition || !options.invokeDynamicTool) {
-        return Effect.succeed(
-          dynamicToolResponse(false, "Integration plugin tool is unavailable."),
+    yield* client.handleServerRequest("item/tool/call", (payload) =>
+      Effect.gen(function* () {
+        const definition = options.dynamicTools?.find((tool) => tool.name === payload.tool);
+        if (payload.namespace || !definition || !options.invokeDynamicTool) {
+          return dynamicToolResponse(false, "Integration plugin tool is unavailable.");
+        }
+        if (!dynamicToolInvocationAvailable(definition.name, options.isDynamicToolAvailable)) {
+          return dynamicToolResponse(false, "Integration plugin tool is unavailable.");
+        }
+        let writeApproved = false;
+        const approvedForSession = (yield* Ref.get(sessionApprovedDynamicToolsRef)).has(
+          definition.name,
         );
-      }
-      return Effect.tryPromise({
-        try: (signal) =>
-          options.invokeDynamicTool!({
-            name: definition.name,
-            arguments: payload.arguments,
-            signal,
-          }),
-        catch: () => undefined,
-      }).pipe(
-        Effect.matchEffect({
-          onFailure: () =>
-            Effect.logWarning("integration plugin dynamic tool invocation failed", {
-              toolName: definition.name,
-            }).pipe(
-              Effect.as(dynamicToolResponse(false, "Integration plugin tool is unavailable.")),
+        if (dynamicToolApprovalRequired(definition.requiresApproval, approvedForSession)) {
+          const requestId = ApprovalRequestId.make(yield* randomUUIDv4("command-approval-request"));
+          const turnId = TurnId.make(payload.turnId);
+          const decision = yield* Deferred.make<ProviderApprovalDecision>();
+          yield* Ref.update(pendingApprovalsRef, (current) => {
+            const next = new Map(current);
+            next.set(requestId, {
+              requestId,
+              jsonRpcId: payload.callId,
+              requestKind: "command",
+              turnId,
+              itemId: undefined,
+              decision,
+            });
+            return next;
+          });
+          yield* emitEvent({
+            kind: "request",
+            threadId: options.threadId,
+            method: "item/tool/call",
+            requestId,
+            requestKind: "command",
+            turnId,
+            payload,
+          });
+          const resolved = yield* Deferred.await(decision).pipe(
+            Effect.ensuring(
+              Ref.update(pendingApprovalsRef, (current) => {
+                const next = new Map(current);
+                next.delete(requestId);
+                return next;
+              }),
             ),
-          onSuccess: (value) => {
-            const serialized = serializeDynamicToolResult(value);
-            return serialized === undefined
-              ? Effect.logWarning("integration plugin dynamic tool returned invalid JSON", {
-                  toolName: definition.name,
-                }).pipe(
-                  Effect.as(
-                    dynamicToolResponse(false, "Integration plugin result was unavailable."),
-                  ),
-                )
-              : Effect.succeed(dynamicToolResponse(true, serialized));
-          },
-        }),
-      );
-    });
+          );
+          if (!dynamicToolInvocationAllowed(true, resolved)) {
+            return dynamicToolResponse(false, "The write operation was not approved.");
+          }
+          if (resolved === "acceptForSession") {
+            yield* Ref.update(sessionApprovedDynamicToolsRef, (current) => {
+              const next = new Set(current);
+              next.add(definition.name);
+              return next;
+            });
+          }
+          writeApproved = true;
+        } else if (definition.requiresApproval) {
+          writeApproved = true;
+        }
+        return yield* Effect.tryPromise({
+          try: (signal) =>
+            options.invokeDynamicTool!({
+              name: definition.name,
+              arguments: payload.arguments,
+              signal,
+              ...(writeApproved ? { writeApproved: true } : {}),
+            }),
+          catch: () => undefined,
+        }).pipe(
+          Effect.matchEffect({
+            onFailure: () =>
+              Effect.logWarning("integration plugin dynamic tool invocation failed", {
+                toolName: definition.name,
+              }).pipe(
+                Effect.as(dynamicToolResponse(false, "Integration plugin tool is unavailable.")),
+              ),
+            onSuccess: (value) => {
+              const serialized = serializeDynamicToolResult(value);
+              return serialized === undefined
+                ? Effect.logWarning("integration plugin dynamic tool returned invalid JSON", {
+                    toolName: definition.name,
+                  }).pipe(
+                    Effect.as(
+                      dynamicToolResponse(false, "Integration plugin result was unavailable."),
+                    ),
+                  )
+                : Effect.succeed(dynamicToolResponse(true, serialized));
+            },
+          }),
+        );
+      }),
+    );
 
     yield* client.handleUnknownServerRequest((method) =>
       Effect.fail(CodexErrors.CodexAppServerRequestError.methodNotFound(method)),

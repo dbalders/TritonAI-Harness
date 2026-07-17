@@ -17,6 +17,9 @@ import {
 import {
   buildTurnStartParams,
   computeDynamicToolFingerprint,
+  dynamicToolApprovalRequired,
+  dynamicToolInvocationAvailable,
+  dynamicToolInvocationAllowed,
   hasConfiguredMcpServer,
   isRecoverableThreadResumeError,
   openCodexThread,
@@ -97,6 +100,50 @@ describe("Codex resume cursor compatibility", () => {
     NodeAssert.equal(
       readCompatibleResumeThreadId({ threadId: "legacy-thread" }, undefined),
       "legacy-thread",
+    );
+  });
+});
+
+describe("integration write-tool approval", () => {
+  it("never lets runtime mode bypass a required host decision", () => {
+    NodeAssert.equal(dynamicToolInvocationAllowed(false, undefined), true);
+    NodeAssert.equal(dynamicToolInvocationAllowed(true, undefined), false);
+    NodeAssert.equal(dynamicToolInvocationAllowed(true, "cancel"), false);
+    NodeAssert.equal(dynamicToolInvocationAllowed(true, "decline"), false);
+    NodeAssert.equal(dynamicToolInvocationAllowed(true, "accept"), true);
+    NodeAssert.equal(dynamicToolInvocationAllowed(true, "acceptForSession"), true);
+    NodeAssert.equal(dynamicToolApprovalRequired(true, false), true);
+    NodeAssert.equal(dynamicToolApprovalRequired(true, true), false);
+    NodeAssert.equal(dynamicToolApprovalRequired(false, false), false);
+  });
+
+  it("fails closed before write approval when live availability is revoked", () => {
+    NodeAssert.equal(dynamicToolInvocationAvailable("fixture_records_write", undefined), true);
+    NodeAssert.equal(
+      dynamicToolInvocationAvailable("fixture_records_write", () => false),
+      false,
+    );
+    NodeAssert.equal(
+      dynamicToolInvocationAvailable("fixture_records_write", () => {
+        throw new Error("availability lookup failed");
+      }),
+      false,
+    );
+  });
+
+  it("binds write-approval metadata into resume compatibility", () => {
+    const tool = {
+      name: "fixture_records_write",
+      description: "Change a record.",
+      inputSchema: { type: "object" },
+    } as const;
+    NodeAssert.notEqual(
+      computeDynamicToolFingerprint([tool]),
+      computeDynamicToolFingerprint([{ ...tool, requiresApproval: true }]),
+    );
+    NodeAssert.equal(
+      computeDynamicToolFingerprint([tool]),
+      computeDynamicToolFingerprint([{ ...tool, requiresApproval: false }]),
     );
   });
 });

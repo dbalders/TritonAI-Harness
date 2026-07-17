@@ -56,6 +56,8 @@ export interface IntegrationProviderStatus {
 
 export interface IntegrationInvocationContext {
   readonly signal: AbortSignal;
+  /** Set only by a Harness host after resolving the write-tool approval UI. */
+  readonly writeApproved?: boolean;
 }
 
 export interface IntegrationLifecycleContext extends IntegrationInvocationContext {
@@ -149,6 +151,12 @@ export interface IntegrationSkillReservation {
   readonly release: () => void;
 }
 
+export interface IntegrationAvailabilityChange {
+  readonly generation: number;
+  readonly skills: ReadonlyArray<string>;
+  readonly tools: ReadonlyArray<string>;
+}
+
 interface PersistedIntegrationState {
   readonly version: 1;
   readonly installed: Record<
@@ -156,6 +164,8 @@ interface PersistedIntegrationState {
     {
       readonly version: string;
       readonly enabled: boolean;
+      readonly enabledCapabilities?: ReadonlyArray<string>;
+      /** Legacy v1 state accepted only for migration; capability access now owns availability. */
       readonly disabledSkills?: ReadonlyArray<string>;
     }
   >;
@@ -232,10 +242,18 @@ function decodePersistedState(value: unknown): PersistedIntegrationState {
     }
     const entry = raw as Record<string, unknown>;
     const disabledSkills = entry.disabledSkills;
+    const enabledCapabilities = entry.enabledCapabilities;
     if (
-      !hasOnlyKeys(entry, new Set(["version", "enabled", "disabledSkills"])) ||
+      !hasOnlyKeys(
+        entry,
+        new Set(["version", "enabled", "enabledCapabilities", "disabledSkills"]),
+      ) ||
       !isIntegrationVersion(entry.version) ||
       typeof entry.enabled !== "boolean" ||
+      (enabledCapabilities !== undefined &&
+        (!Array.isArray(enabledCapabilities) ||
+          enabledCapabilities.some((capability) => !isIntegrationId(capability)) ||
+          new Set(enabledCapabilities).size !== enabledCapabilities.length)) ||
       (disabledSkills !== undefined &&
         (!Array.isArray(disabledSkills) ||
           disabledSkills.some((skill) => !isIntegrationSkillName(skill)) ||
@@ -246,6 +264,11 @@ function decodePersistedState(value: unknown): PersistedIntegrationState {
     installed[id] = {
       version: entry.version,
       enabled: entry.enabled,
+      ...(enabledCapabilities
+        ? {
+            enabledCapabilities: [...(enabledCapabilities as ReadonlyArray<string>)].toSorted(),
+          }
+        : {}),
       ...(disabledSkills
         ? { disabledSkills: [...(disabledSkills as ReadonlyArray<string>)].toSorted() }
         : {}),
@@ -269,6 +292,34 @@ function decodePersistedState(value: unknown): PersistedIntegrationState {
     removing[id] = { version: entry.version, tombstone: entry.tombstone };
   }
   return { version: 1, installed, removing };
+}
+
+function dependencyCapabilityIds(input: {
+  readonly capability?: string;
+  readonly capabilities?: ReadonlyArray<string>;
+}): ReadonlyArray<string> {
+  return input.capabilities ?? (input.capability ? [input.capability] : []);
+}
+
+function selectedCapabilityIds(
+  manifest: IntegrationManifest,
+  installed: InstalledIntegrationState | undefined,
+): ReadonlySet<string> {
+  const known = new Set(manifest.capabilities.map(({ id }) => id));
+  if (installed?.enabledCapabilities) {
+    return new Set(installed.enabledCapabilities.filter((capability) => known.has(capability)));
+  }
+
+  const disabledCapabilities = new Set(
+    manifest.skills
+      .filter(({ name }) => installed?.disabledSkills?.includes(name))
+      .flatMap(dependencyCapabilityIds),
+  );
+  return new Set(
+    manifest.capabilities
+      .filter(({ id, access }) => access !== "opt-in" && !disabledCapabilities.has(id))
+      .map(({ id }) => id),
+  );
 }
 
 const EMPTY_STATE: PersistedIntegrationState = {
@@ -567,11 +618,17 @@ export class RegistryRuntime {
   readonly #summaries = new Map<string, IntegrationSummary>();
   readonly #summaryGenerations = new Map<string, number>();
   #availableTools = new Set<string>();
+  #availabilityGeneration = 0;
+  #availabilitySignature = JSON.stringify({ skills: [], tools: [] });
+  readonly #availabilityObservers = new Set<(change: IntegrationAvailabilityChange) => void>();
   readonly #revocations = new Map<string, number>();
+  readonly #capabilityRevocations = new Map<string, Map<string, number>>();
   readonly #activeInvocations = new Map<string, Set<AbortController>>();
+  readonly #activeInvocationToolNames = new Map<AbortController, string>();
+  readonly #activeInvocationGrantedCapabilities = new Map<AbortController, ReadonlySet<string>>();
+  readonly #activeInvocationCompletionsByController = new Map<AbortController, Promise<void>>();
   readonly #activeSkillReservations = new Map<string, number>();
   readonly #skillReservationWaiters = new Map<string, Set<() => void>>();
-  readonly #skillRevocations = new Map<string, number>();
   readonly #skills: IntegrationSkillMaterializer;
   readonly #removeInstalledPackage: (path: string) => Promise<void>;
   readonly #providerStatusTimeoutMs: number;
@@ -717,6 +774,7 @@ export class RegistryRuntime {
     }
     for (const definition of providerTools) {
       const inputSchema = integrationToolJsonSchema(definition);
+      const manifestTool = manifest.tools.find(({ name }) => name === definition.name)!;
       if (
         typeof definition.description !== "string" ||
         !definition.description.trim() ||
@@ -727,6 +785,11 @@ export class RegistryRuntime {
         inputSchema.type !== "object"
       ) {
         throw new Error(`Integration tool ${definition.name} has an invalid provider contract.`);
+      }
+      if ((manifestTool.effect !== "write") !== definition.readOnly) {
+        throw new Error(
+          `Integration tool ${definition.name} effect does not match its provider safety contract.`,
+        );
       }
       for (const existing of this.#catalog.values()) {
         if (existing.provider?.tools.some(({ name }) => name === definition.name)) {
@@ -890,6 +953,21 @@ export class RegistryRuntime {
       );
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    let capabilityMigrationRequired = false;
+    const migratedInstalled = copyOwnRecord(this.#state.installed);
+    for (const { manifest } of this.#catalog.values()) {
+      const installed = ownRecordValue(migratedInstalled, manifest.id);
+      if (!installed || installed.enabledCapabilities !== undefined) continue;
+      migratedInstalled[manifest.id] = {
+        version: installed.version,
+        enabled: installed.enabled,
+        enabledCapabilities: [...selectedCapabilityIds(manifest, installed)].toSorted(),
+      };
+      capabilityMigrationRequired = true;
+    }
+    if (capabilityMigrationRequired) {
+      await this.#save({ ...this.#state, installed: migratedInstalled });
     }
     await this.#reconcileRemovals();
     await this.#pruneOrphanedInstalledPackages();
@@ -1116,6 +1194,7 @@ export class RegistryRuntime {
       this.#summaryGenerations.set(id, (this.#summaryGenerations.get(id) ?? 0) + 1);
     }
     this.#revocations.set(id, (this.#revocations.get(id) ?? 0) + 1);
+    this.#publishAvailabilityChangeIfNeeded();
     for (const controller of this.#activeInvocations.get(id) ?? []) controller.abort();
     const invocationCompletions = [
       ...(this.#activeInvocationCompletionsByIntegration.get(id) ?? []),
@@ -1148,6 +1227,101 @@ export class RegistryRuntime {
         const remaining = (this.#revocations.get(id) ?? 1) - 1;
         if (remaining > 0) this.#revocations.set(id, remaining);
         else this.#revocations.delete(id);
+        this.#publishAvailabilityChangeIfNeeded();
+      },
+    };
+  }
+
+  #beginCapabilityRevocation(
+    manifest: IntegrationManifest,
+    installed: InstalledIntegrationState | undefined,
+    capability: string,
+  ): {
+    readonly ready: Promise<void>;
+    readonly finish: () => void;
+  } {
+    const remainingCapabilities = new Set(selectedCapabilityIds(manifest, installed));
+    remainingCapabilities.delete(capability);
+    const alreadyRevoking = this.#capabilityRevocations.get(manifest.id);
+    for (const revokingCapability of alreadyRevoking?.keys() ?? []) {
+      remainingCapabilities.delete(revokingCapability);
+    }
+    const effectivelyAvailableCapabilities = new Set(
+      this.#summaries
+        .get(manifest.id)
+        ?.capabilities.filter(({ id, available }) => available && remainingCapabilities.has(id))
+        .map(({ id }) => id) ?? [],
+    );
+    const affectedSkills = manifest.skills
+      .filter((skill) => {
+        const dependencies = dependencyCapabilityIds(skill);
+        return (
+          dependencies.includes(capability) &&
+          !dependencies.some((dependency) => effectivelyAvailableCapabilities.has(dependency))
+        );
+      })
+      .map(({ name }) => name);
+
+    this.#summaryGenerations.set(manifest.id, (this.#summaryGenerations.get(manifest.id) ?? 0) + 1);
+    const revoking = this.#capabilityRevocations.get(manifest.id) ?? new Map<string, number>();
+    revoking.set(capability, (revoking.get(capability) ?? 0) + 1);
+    this.#capabilityRevocations.set(manifest.id, revoking);
+    this.#publishAvailabilityChangeIfNeeded();
+
+    const abortedControllers = new Set<AbortController>();
+    for (const controller of this.#activeInvocations.get(manifest.id) ?? []) {
+      const toolName = this.#activeInvocationToolNames.get(controller);
+      const tool = manifest.tools.find(({ name }) => name === toolName);
+      if (!tool) continue;
+      const dependencies = dependencyCapabilityIds(tool);
+      if (!dependencies.includes(capability)) continue;
+      const grantedCapabilities = this.#activeInvocationGrantedCapabilities.get(controller);
+      const hasEffectiveAlternative = dependencies.some(
+        (dependency) =>
+          remainingCapabilities.has(dependency) &&
+          (grantedCapabilities
+            ? grantedCapabilities.has(dependency)
+            : effectivelyAvailableCapabilities.has(dependency)),
+      );
+      if (hasEffectiveAlternative) continue;
+      abortedControllers.add(controller);
+      controller.abort();
+    }
+    const invocationCompletions = [...abortedControllers]
+      .map((controller) => this.#activeInvocationCompletionsByController.get(controller))
+      .filter((completion): completion is Promise<void> => completion !== undefined);
+    const invocationsReady =
+      invocationCompletions.length === 0
+        ? Promise.resolve()
+        : new Promise<void>((resolve, reject) => {
+            const timeout = setTimeout(() => {
+              const provider = this.#catalog.get(manifest.id)?.provider;
+              if (provider) this.#faultProvider(provider);
+              reject(
+                operationError(
+                  "operation_failed",
+                  `${manifest.name} did not stop affected tool work before the revocation timeout.`,
+                ),
+              );
+            }, this.#providerOperationTimeoutMs);
+            void Promise.allSettled(invocationCompletions).then(() => {
+              clearTimeout(timeout);
+              resolve();
+            });
+          });
+
+    return {
+      ready: Promise.all([
+        ...affectedSkills.map((skill) => this.#waitForSkillReservations(manifest.id, skill)),
+        invocationsReady,
+      ]).then(() => undefined),
+      finish: () => {
+        const current = this.#capabilityRevocations.get(manifest.id);
+        const remaining = (current?.get(capability) ?? 1) - 1;
+        if (remaining > 0) current?.set(capability, remaining);
+        else current?.delete(capability);
+        if (current?.size === 0) this.#capabilityRevocations.delete(manifest.id);
+        this.#publishAvailabilityChangeIfNeeded();
       },
     };
   }
@@ -1156,27 +1330,17 @@ export class RegistryRuntime {
     return this.#revocations.has(id);
   }
 
-  #beginSkillRevocation(
-    id: string,
-    skill: string,
-  ): {
-    readonly ready: Promise<void>;
-    readonly finish: () => void;
-  } {
-    const key = this.#skillKey(id, skill);
-    this.#skillRevocations.set(key, (this.#skillRevocations.get(key) ?? 0) + 1);
-    return {
-      ready: this.#waitForSkillReservations(id, skill),
-      finish: () => {
-        const remaining = (this.#skillRevocations.get(key) ?? 1) - 1;
-        if (remaining > 0) this.#skillRevocations.set(key, remaining);
-        else this.#skillRevocations.delete(key);
-      },
-    };
-  }
-
-  #isSkillRevoking(id: string, skill: string): boolean {
-    return this.#skillRevocations.has(this.#skillKey(id, skill));
+  #isSurfaceRevoking(manifest: IntegrationManifest, dependencies: ReadonlyArray<string>): boolean {
+    if (this.#isRevoking(manifest.id)) return true;
+    const revoking = this.#capabilityRevocations.get(manifest.id);
+    if (!revoking || revoking.size === 0) return false;
+    return !dependencies.some(
+      (capability) =>
+        !revoking.has(capability) &&
+        this.#summaries
+          .get(manifest.id)
+          ?.capabilities.some(({ id, available }) => id === capability && available) === true,
+    );
   }
 
   async #save(state: PersistedIntegrationState): Promise<void> {
@@ -1224,11 +1388,13 @@ export class RegistryRuntime {
           capabilities: summary.capabilities.map((capability) => ({
             ...capability,
             granted: false,
+            available: false,
           })),
           tools: summary.tools.map((tool) => ({ ...tool, available: false })),
           skills: summary.skills.map((skill) => ({ ...skill, available: false })),
         });
       }
+      this.#publishAvailabilityChangeIfNeeded();
       const cleanup = this.#syncSkills({
         integrationId: manifest.id,
         packageRoot: null,
@@ -1552,7 +1718,7 @@ export class RegistryRuntime {
   ): IntegrationSummary {
     const installed = ownRecordValue(state.installed, manifest.id);
     const enabled = installed?.enabled === true;
-    const disabledSkills = new Set(installed?.disabledSkills ?? []);
+    const selectedCapabilities = selectedCapabilityIds(manifest, installed);
     const compatibility = activationCompatibility(manifest, installed?.version);
     const provider = this.#catalog.get(manifest.id)?.provider;
     const providerSettling = provider ? this.#activeProviderLifecycleWork.has(provider) : false;
@@ -1560,6 +1726,7 @@ export class RegistryRuntime {
       Boolean(
         installed &&
         enabled &&
+        selectedCapabilities.has(capability) &&
         compatibility.compatible &&
         !providerSettling &&
         providerStatus.state === "connected" &&
@@ -1580,17 +1747,30 @@ export class RegistryRuntime {
       accountLabel: providerStatus.accountLabel,
       statusMessage: providerStatus.message,
       capabilities: manifest.capabilities.map((capability) => ({
-        ...capability,
+        id: capability.id,
+        displayName: capability.displayName,
+        description: capability.description,
+        access: capability.access ?? "default",
+        enabled: selectedCapabilities.has(capability.id),
         granted: providerStatus.grantedCapabilities.includes(capability.id),
+        available: available(capability.id),
       })),
       tools: manifest.tools.map((tool) => ({
-        ...tool,
-        available: available(tool.capability),
+        name: tool.name,
+        displayName: tool.displayName,
+        description: tool.description,
+        capabilities: dependencyCapabilityIds(tool),
+        effect: tool.effect ?? "read",
+        available: dependencyCapabilityIds(tool).some(available),
       })),
       skills: manifest.skills.map((skill) => ({
-        ...skill,
-        enabled: !disabledSkills.has(skill.name),
-        available: !disabledSkills.has(skill.name) && available(skill.capability),
+        name: skill.name,
+        description: skill.description,
+        capabilities: dependencyCapabilityIds(skill),
+        enabled: dependencyCapabilityIds(skill).some((capability) =>
+          selectedCapabilities.has(capability),
+        ),
+        available: dependencyCapabilityIds(skill).some(available),
       })),
     };
   }
@@ -1685,7 +1865,33 @@ export class RegistryRuntime {
       if (tool.available) this.#availableTools.add(tool.name);
     }
     this.#summaries.set(manifest.id, integration);
+    this.#publishAvailabilityChangeIfNeeded();
     return integration;
+  }
+
+  #publishAvailabilityChangeIfNeeded(): void {
+    if (this.#closing) return;
+    const availability = {
+      skills: this.getAvailableSkillsSync()
+        .map(({ name }) => name)
+        .toSorted(),
+      tools: this.getAvailableToolDefinitionsSync()
+        .map(({ name }) => name)
+        .toSorted(),
+    };
+    const signature = JSON.stringify(availability);
+    if (signature === this.#availabilitySignature) return;
+    this.#availabilitySignature = signature;
+    this.#availabilityGeneration += 1;
+    const change = { generation: this.#availabilityGeneration, ...availability };
+    for (const observer of this.#availabilityObservers) {
+      try {
+        observer(change);
+      } catch {
+        // Availability notification is observational. A broken Harness consumer must never roll
+        // back a completed integration mutation or weaken the registry's fail-closed checks.
+      }
+    }
   }
 
   #cachedList(): IntegrationsListResult {
@@ -1703,23 +1909,73 @@ export class RegistryRuntime {
         const installed = ownRecordValue(state.installed, manifest.id);
         const enabled = installed?.enabled === true;
         const compatibility = activationCompatibility(manifest, installed?.version);
-        if (
-          summary.installed === Boolean(installed) &&
+        if (!installed) return this.#createSummary(manifest, unavailable, state);
+        const current =
+          summary.installed === true &&
           summary.enabled === enabled &&
           summary.compatible === compatibility.compatible
+            ? summary
+            : {
+                ...summary,
+                installed: true,
+                enabled,
+                compatible: compatibility.compatible,
+                compatibilityMessage: compatibility.message,
+                tools: summary.tools.map((tool) => ({ ...tool, available: false })),
+                skills: summary.skills.map((skill) => ({ ...skill, available: false })),
+              };
+        const provider = this.#catalog.get(manifest.id)?.provider;
+        if (
+          this.#isRevoking(manifest.id) ||
+          (provider &&
+            (this.#faultedProviders.has(provider) ||
+              this.#activeProviderLifecycleWork.has(provider)))
         ) {
-          return summary;
+          return {
+            ...current,
+            capabilities: current.capabilities.map((capability) => ({
+              ...capability,
+              available: false,
+            })),
+            tools: current.tools.map((tool) => ({ ...tool, available: false })),
+            skills: current.skills.map((skill) => ({ ...skill, available: false })),
+          };
         }
-        if (!installed) return this.#createSummary(manifest, unavailable, state);
-        return {
-          ...summary,
-          installed: true,
-          enabled,
-          compatible: compatibility.compatible,
-          compatibilityMessage: compatibility.message,
-          tools: summary.tools.map((tool) => ({ ...tool, available: false })),
-          skills: summary.skills.map((skill) => ({ ...skill, available: false })),
-        };
+        const capabilityRevocations = this.#capabilityRevocations.get(manifest.id);
+        if (capabilityRevocations?.size) {
+          const integrationAvailable = current.enabled && current.compatible;
+          const capabilityAvailable = (capability: string) =>
+            !capabilityRevocations?.has(capability) &&
+            current.capabilities.some(({ id, available }) => id === capability && available);
+          return {
+            ...current,
+            capabilities: current.capabilities.map((capability) => ({
+              ...capability,
+              available: capabilityAvailable(capability.id),
+            })),
+            tools: current.tools.map((tool) => {
+              const declared = manifest.tools.find(({ name }) => name === tool.name);
+              return {
+                ...tool,
+                available:
+                  integrationAvailable &&
+                  tool.available &&
+                  Boolean(declared && dependencyCapabilityIds(declared).some(capabilityAvailable)),
+              };
+            }),
+            skills: current.skills.map((skill) => {
+              const declared = manifest.skills.find(({ name }) => name === skill.name);
+              return {
+                ...skill,
+                available:
+                  integrationAvailable &&
+                  skill.available &&
+                  Boolean(declared && dependencyCapabilityIds(declared).some(capabilityAvailable)),
+              };
+            }),
+          };
+        }
+        return current;
       }),
     };
   }
@@ -1747,13 +2003,26 @@ export class RegistryRuntime {
     return this.#cachedList();
   }
 
+  get availabilityGeneration(): number {
+    return this.#availabilityGeneration;
+  }
+
+  subscribeAvailabilityChanges(
+    observer: (change: IntegrationAvailabilityChange) => void,
+  ): () => void {
+    if (this.#closing) return () => undefined;
+    this.#availabilityObservers.add(observer);
+    return () => this.#availabilityObservers.delete(observer);
+  }
+
   isToolAvailableSync(name: string): boolean {
     if (this.#closing) return false;
     if (!this.#availableTools.has(name)) return false;
     for (const { manifest, provider } of this.#catalog.values()) {
-      if (manifest.tools.some((tool) => tool.name === name)) {
+      const tool = manifest.tools.find((candidate) => candidate.name === name);
+      if (tool) {
         return (
-          !this.#isRevoking(manifest.id) &&
+          !this.#isSurfaceRevoking(manifest, dependencyCapabilityIds(tool)) &&
           !(
             provider &&
             (this.#faultedProviders.has(provider) ||
@@ -1768,13 +2037,14 @@ export class RegistryRuntime {
   isSkillAvailableSync(name: string): boolean {
     if (this.#closing) return false;
     for (const { manifest, provider } of this.#catalog.values()) {
-      if (!manifest.skills.some((skill) => skill.name === name)) continue;
+      const declaredSkill = manifest.skills.find((skill) => skill.name === name);
+      if (!declaredSkill) continue;
       if (
         provider &&
         (this.#faultedProviders.has(provider) || this.#activeProviderLifecycleWork.has(provider))
       )
         return false;
-      if (this.#isRevoking(manifest.id) || this.#isSkillRevoking(manifest.id, name)) return false;
+      if (this.#isSurfaceRevoking(manifest, dependencyCapabilityIds(declaredSkill))) return false;
       return (
         this.#summaries
           .get(manifest.id)
@@ -1822,6 +2092,12 @@ export class RegistryRuntime {
 
   getAvailableToolDefinitionsSync(): ReadonlyArray<IntegrationProviderTool> {
     return this.toolDefinitions().filter(({ name }) => this.isToolAvailableSync(name));
+  }
+
+  toolRequiresApprovalSync(name: string): boolean {
+    return [...this.#catalog.values()].some(({ manifest }) =>
+      manifest.tools.some((tool) => tool.name === name && tool.effect === "write"),
+    );
   }
 
   getAvailableSkillsSync(): ReadonlyArray<IntegrationRuntimeSkill> {
@@ -1928,7 +2204,14 @@ export class RegistryRuntime {
         await NodeFSP.rename(staging, versionRoot);
         await this.#updateState((state) => ({
           ...state,
-          installed: { ...state.installed, [id]: { version: manifest.version, enabled: true } },
+          installed: {
+            ...state.installed,
+            [id]: {
+              version: manifest.version,
+              enabled: true,
+              enabledCapabilities: [...selectedCapabilityIds(manifest, undefined)].toSorted(),
+            },
+          },
         }));
         await this.#summarize(integration, true);
       } catch (error) {
@@ -2003,26 +2286,49 @@ export class RegistryRuntime {
     return revocation ? result.finally(revocation.finish) : result;
   }
 
-  setSkillEnabled(id: string, skill: string, enabled: boolean): Promise<IntegrationsListResult> {
-    const revocation = enabled ? null : this.#beginSkillRevocation(id, skill);
+  setCapabilityEnabled(
+    id: string,
+    capability: string,
+    enabled: boolean,
+  ): Promise<IntegrationsListResult> {
+    const registered = this.#catalog.get(id);
+    if (!registered) {
+      return Promise.reject(operationError("not_found", `Integration ${id} was not found.`));
+    }
+    if (!registered.manifest.capabilities.some(({ id }) => id === capability)) {
+      return Promise.reject(
+        operationError("not_found", `Integration capability ${capability} was not found in ${id}.`),
+      );
+    }
+    const installedForRevocation = ownRecordValue(this.#state.installed, id);
+    const revocation = !enabled
+      ? this.#beginCapabilityRevocation(registered.manifest, installedForRevocation, capability)
+      : null;
     const operation = this.#serializeIntegration(id, async () => {
       await this.#ready;
-      await revocation?.ready;
       const integration = this.#package(id);
       const { manifest } = integration;
       const installed = ownRecordValue(this.#state.installed, id);
       if (!installed) throw operationError("not_installed", `Integration ${id} is not installed.`);
-      if (!manifest.skills.some(({ name }) => name === skill)) {
-        throw operationError("not_found", `Integration skill ${skill} was not found in ${id}.`);
+      if (!manifest.capabilities.some(({ id }) => id === capability)) {
+        throw operationError(
+          "not_found",
+          `Integration capability ${capability} was not found in ${id}.`,
+        );
       }
       const compatibility = activationCompatibility(manifest, installed.version);
       if (enabled && !compatibility.compatible) {
         throw operationError("incompatible", compatibility.message!);
       }
-      const disabledSkills = new Set(installed.disabledSkills ?? []);
-      if (enabled) disabledSkills.delete(skill);
-      else disabledSkills.add(skill);
-      const next = { ...installed, disabledSkills: [...disabledSkills].toSorted() };
+      await revocation?.ready;
+      const enabledCapabilities = new Set(selectedCapabilityIds(manifest, installed));
+      if (enabled) enabledCapabilities.add(capability);
+      else enabledCapabilities.delete(capability);
+      const next: InstalledIntegrationState = {
+        version: installed.version,
+        enabled: installed.enabled,
+        enabledCapabilities: [...enabledCapabilities].toSorted(),
+      };
       try {
         await this.#updateState((state) => ({
           ...state,
@@ -2043,17 +2349,38 @@ export class RegistryRuntime {
         if (rollbackFailure !== undefined) {
           throw operationError(
             "operation_failed",
-            `Skill enablement change failed and its rollback could not be persisted: ${safeMessage(error)} Rollback failure: ${safeMessage(rollbackFailure)}`,
+            `Capability access change failed and its rollback could not be persisted: ${safeMessage(error)} Rollback failure: ${safeMessage(rollbackFailure)}`,
           );
         }
         throw operationError(
           "operation_failed",
-          `Skill enablement change was rolled back: ${safeMessage(error)}`,
+          `Capability access change was rolled back: ${safeMessage(error)}`,
         );
       }
     });
     const result = operation.then(() => this.#cachedList());
     return revocation ? result.finally(revocation.finish) : result;
+  }
+
+  /** Compatibility for pre-capability callers; the referenced Access bundle remains authoritative. */
+  async setSkillEnabled(
+    id: string,
+    skillName: string,
+    enabled: boolean,
+  ): Promise<IntegrationsListResult> {
+    const { manifest } = this.#package(id);
+    const skill = manifest.skills.find(({ name }) => name === skillName);
+    if (!skill) {
+      throw operationError("not_found", `Integration skill ${skillName} was not found in ${id}.`);
+    }
+    const capabilities = dependencyCapabilityIds(skill);
+    if (capabilities.length !== 1) {
+      throw operationError(
+        "operation_failed",
+        `Integration skill ${skillName} is controlled by multiple Access abilities.`,
+      );
+    }
+    return this.setCapabilityEnabled(id, capabilities[0]!, enabled);
   }
 
   connect(
@@ -2078,10 +2405,12 @@ export class RegistryRuntime {
       if (!hasConnectionLifecycle(provider)) {
         throw operationError("operation_failed", `${manifest.name} does not require a connection.`);
       }
-      // Enabling a curated plugin approves its fixed manifest surface. A materially different
-      // privilege boundary belongs in a separate package, provider, and credential—not a selector
-      // that recombines authority inside this lifecycle.
-      const capabilities = manifest.capabilities.map(({ id: capability }) => capability);
+      // Provider authorization follows the user's selected Harness abilities. Additive scopes in
+      // an existing token remain inert unless their capability is selected here.
+      const selectedCapabilities = selectedCapabilityIds(manifest, installed);
+      const capabilities = manifest.capabilities
+        .map(({ id: capability }) => capability)
+        .filter((capability) => selectedCapabilities.has(capability));
       try {
         const result = await this.#providerOperation<IntegrationConnectResult>(
           provider,
@@ -2474,12 +2803,19 @@ export class RegistryRuntime {
           `${manifest.name} is unavailable while its connection is changing.`,
         );
       }
-      if (this.#isRevoking(manifest.id)) {
+      const toolCapabilities = dependencyCapabilityIds(tool);
+      if (this.#isSurfaceRevoking(manifest, toolCapabilities)) {
         throw operationError("disabled", `${manifest.name} access is being revoked.`);
       }
       const installed = ownRecordValue(this.#state.installed, manifest.id);
       if (!installed?.enabled) {
         throw operationError("disabled", `${manifest.name} is not enabled.`);
+      }
+      if (tool.effect === "write" && context?.writeApproved !== true) {
+        throw operationError(
+          "operation_failed",
+          `${tool.displayName} requires Harness confirmation before it can run.`,
+        );
       }
       const compatibility = activationCompatibility(manifest, installed.version);
       if (!compatibility.compatible) {
@@ -2494,26 +2830,43 @@ export class RegistryRuntime {
         finishInvocation = resolve;
       });
       this.#activeInvocationCompletions.add(invocationCompletion);
+      this.#activeInvocationCompletionsByController.set(controller, invocationCompletion);
       const integrationCompletions =
         this.#activeInvocationCompletionsByIntegration.get(manifest.id) ?? new Set<Promise<void>>();
       integrationCompletions.add(invocationCompletion);
       this.#activeInvocationCompletionsByIntegration.set(manifest.id, integrationCompletions);
       const active = this.#activeInvocations.get(manifest.id) ?? new Set<AbortController>();
       active.add(controller);
+      this.#activeInvocationToolNames.set(controller, name);
       this.#activeInvocations.set(manifest.id, active);
       try {
         const status = await this.#providerStatus(provider, signal);
-        if (controller.signal.aborted || this.#isRevoking(manifest.id)) {
+        this.#activeInvocationGrantedCapabilities.set(
+          controller,
+          new Set(status.grantedCapabilities),
+        );
+        if (controller.signal.aborted || this.#isSurfaceRevoking(manifest, toolCapabilities)) {
           throw operationError("disabled", `${manifest.name} access is being revoked.`);
         }
         if (context?.signal.aborted) throw cancellationError(context.signal);
         if (status.state !== "connected") {
           throw operationError("not_connected", `${manifest.name} is not connected.`);
         }
-        if (!status.grantedCapabilities.includes(tool.capability)) {
+        const currentInstalled = ownRecordValue(this.#state.installed, manifest.id);
+        if (!currentInstalled?.enabled) {
+          throw operationError("disabled", `${manifest.name} is not enabled.`);
+        }
+        const selectedCapabilities = selectedCapabilityIds(manifest, currentInstalled);
+        const authorizedCapability = toolCapabilities.find(
+          (capability) =>
+            selectedCapabilities.has(capability) &&
+            !this.#capabilityRevocations.get(manifest.id)?.has(capability) &&
+            status.grantedCapabilities.includes(capability),
+        );
+        if (!authorizedCapability) {
           throw operationError(
             "capability_required",
-            `${tool.displayName} requires ${tool.capability}.`,
+            `${tool.displayName} requires enabled access to ${toolCapabilities.join(" or ")}.`,
           );
         }
         const definition = provider.tools.find((candidate) => candidate.name === name);
@@ -2531,7 +2884,11 @@ export class RegistryRuntime {
         }
         const invocationWork = Promise.resolve().then(() => {
           if (this.#faultedProviders.has(provider)) throw new ProviderFaultedError();
-          if (signal.aborted || this.#closing || this.#isRevoking(manifest.id)) {
+          if (
+            signal.aborted ||
+            this.#closing ||
+            this.#isSurfaceRevoking(manifest, toolCapabilities)
+          ) {
             if (context?.signal.aborted) throw cancellationError(context.signal);
             throw operationError("disabled", `${manifest.name} access is being revoked.`);
           }
@@ -2570,6 +2927,9 @@ export class RegistryRuntime {
         throw error;
       } finally {
         active.delete(controller);
+        this.#activeInvocationToolNames.delete(controller);
+        this.#activeInvocationGrantedCapabilities.delete(controller);
+        this.#activeInvocationCompletionsByController.delete(controller);
         if (active.size === 0) this.#activeInvocations.delete(manifest.id);
         finishInvocation();
         this.#activeInvocationCompletions.delete(invocationCompletion);
@@ -2585,6 +2945,19 @@ export class RegistryRuntime {
 
 let activeRegistry: RegistryRuntime | null = null;
 const registryObservers = new Set<(registry: RegistryRuntime) => void>();
+const registryLifecycleObservers = new Set<(registry: RegistryRuntime) => void>();
+
+function notifyRegistryLifecycleObserver(
+  observer: (registry: RegistryRuntime) => void,
+  registry: RegistryRuntime,
+): void {
+  try {
+    observer(registry);
+  } catch {
+    // Lifecycle notification is observational. One broken subscriber must not break the active
+    // registry or prevent other consumers from receiving startup and restart notifications.
+  }
+}
 
 export function getIntegrationRegistry(): RegistryRuntime {
   if (!activeRegistry) throw new Error("Integration registry has not started.");
@@ -2604,6 +2977,14 @@ export function awaitIntegrationRegistry(): Promise<RegistryRuntime> {
     };
     registryObservers.add(observer);
   });
+}
+
+export function observeIntegrationRegistry(
+  observer: (registry: RegistryRuntime) => void,
+): () => void {
+  registryLifecycleObservers.add(observer);
+  if (activeRegistry) notifyRegistryLifecycleObserver(observer, activeRegistry);
+  return () => registryLifecycleObservers.delete(observer);
 }
 
 export const startupLayer = Layer.effectDiscard(
@@ -2637,6 +3018,9 @@ export const startupLayer = Layer.effectDiscard(
     yield* Effect.promise(() => registry.snapshot());
     activeRegistry = registry;
     for (const observer of registryObservers) observer(registry);
+    for (const observer of registryLifecycleObservers) {
+      notifyRegistryLifecycleObserver(observer, registry);
+    }
     yield* settingsService.streamChanges.pipe(
       Stream.runForEach((nextSettings) =>
         Effect.tryPromise({

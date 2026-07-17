@@ -41,6 +41,8 @@ import * as Stream from "effect/Stream";
 import * as Semaphore from "effect/Semaphore";
 
 import { ServerConfig } from "../../config.ts";
+import * as Integrations from "../../integrations/IntegrationRegistry.ts";
+import { subscribeIntegrationAvailabilityRefresh } from "../IntegrationAvailabilityRefresh.ts";
 import { ProviderInstanceRegistry } from "../Services/ProviderInstanceRegistry.ts";
 import { ProviderRegistry, type ProviderRegistryShape } from "../Services/ProviderRegistry.ts";
 import {
@@ -693,17 +695,39 @@ export const ProviderRegistryLive = Layer.effect(
       return yield* Ref.get(providersRef);
     });
 
-    return {
+    const registry = {
       getProviders: Ref.get(providersRef),
       refresh: (provider?: ProviderDriverKind) =>
         refresh(provider).pipe(Effect.catchCause(recoverRefreshFailure)),
-      refreshInstance: (instanceId: ProviderInstanceId) =>
-        refreshInstance(instanceId).pipe(Effect.catchCause(recoverRefreshFailure)),
+      refreshInstance: (
+        instanceId: ProviderInstanceId,
+        options?: { readonly failOnError?: boolean },
+      ) =>
+        options?.failOnError
+          ? refreshInstance(instanceId)
+          : refreshInstance(instanceId).pipe(Effect.catchCause(recoverRefreshFailure)),
       getProviderMaintenanceCapabilitiesForInstance,
       setProviderMaintenanceActionState,
       get streamChanges() {
         return Stream.fromPubSub(changesPubSub);
       },
     } satisfies ProviderRegistryShape;
+
+    yield* Effect.acquireRelease(
+      Effect.sync(() => {
+        let unsubscribeAvailability: () => void = () => undefined;
+        const unsubscribeRegistry = Integrations.observeIntegrationRegistry((integrations) => {
+          unsubscribeAvailability();
+          unsubscribeAvailability = subscribeIntegrationAvailabilityRefresh(integrations, registry);
+        });
+        return () => {
+          unsubscribeRegistry();
+          unsubscribeAvailability();
+        };
+      }),
+      (unsubscribe) => Effect.sync(unsubscribe),
+    );
+
+    return registry;
   }),
 );
