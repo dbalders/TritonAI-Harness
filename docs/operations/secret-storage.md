@@ -45,11 +45,12 @@ a restart requires another explicit desktop approval.
 Before replacing any plaintext, Harness durably writes store-initialization metadata. That marker,
 not the unauthenticated envelope prefix, normally distinguishes a first upgrade from an initialized
 store whose key is missing. If both metadata files are absent but a credential still has a complete
-supported envelope header, Harness also refuses migration instead of generating a new key and
-double-encrypting it. A legacy value that merely begins with `T3SECRET` can still migrate after
-approval. If an initialized store's wrapped key is missing, Harness does not offer migration or
-generate a replacement key. Restore the OS-protected key state or reset and reconnect the affected
-integrations.
+binary envelope version marker, Harness also refuses migration instead of generating a new key and
+double-encrypting it. That includes truncated and unsupported numeric envelope versions. A legacy
+text value beginning with `T3SECRET ` can still migrate after approval; a value that uses the magic
+plus a binary control-byte version is intentionally treated as an envelope and must authenticate.
+If an initialized store's wrapped key is missing, Harness does not offer migration or generate a
+replacement key. Restore the OS-protected key state or reset and reconnect the affected integrations.
 
 ## Headless and web server protection
 

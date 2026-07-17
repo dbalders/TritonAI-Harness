@@ -159,7 +159,7 @@ export const authorizeLegacySecretValues = Effect.fn(
   const fingerprints: Record<string, string> = {};
   const legacyValues: LegacySecretValue[] = [];
   for (const { name, value } of values) {
-    if (SecretEnvelope.hasServerSecretEnvelopeStructure(value)) {
+    if (SecretEnvelope.hasServerSecretEnvelopeVersionMarker(value)) {
       yield* Effect.try({
         try: () => SecretEnvelope.decodeServerSecretEnvelope(name, value, keys),
         catch: (cause) =>

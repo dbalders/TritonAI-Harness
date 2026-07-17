@@ -277,6 +277,45 @@ describe("DesktopSecretStoreKey", () => {
       }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
+  it.effect("rejects truncated and unsupported envelope versions during legacy detection", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      for (const variant of ["truncated", "unsupported"] as const) {
+        const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: `t3-desktop-${variant}-secret-envelope-`,
+        });
+        const material = yield* DesktopSecretStoreKey.resolve().pipe(
+          provideDependencies(baseDir, "darwin"),
+        );
+        const envelope = SecretEnvelope.encodeServerSecretEnvelope(
+          "oauth",
+          new TextEncoder().encode("refresh-token"),
+          Buffer.from(material.keys[0], "base64"),
+        );
+        const damaged =
+          variant === "truncated"
+            ? envelope.slice(0, SecretEnvelope.SERVER_SECRET_ENVELOPE_MAGIC.byteLength + 2)
+            : Uint8Array.from(envelope);
+        if (variant === "unsupported") {
+          damaged[SecretEnvelope.SERVER_SECRET_ENVELOPE_MAGIC.byteLength] = 2;
+        }
+        const secretPath = `${baseDir}/userdata/secrets/oauth.bin`;
+        yield* fileSystem.makeDirectory(`${baseDir}/userdata/secrets`, { recursive: true });
+        yield* fileSystem.writeFile(secretPath, damaged);
+        yield* fileSystem.remove(`${baseDir}/userdata/secret-store-key.v1.bin`);
+        yield* fileSystem.remove(`${baseDir}/userdata/secret-store.v1.initialized`);
+
+        const error = yield* DesktopSecretStoreKey.resolve().pipe(
+          provideDependencies(baseDir, "darwin", makeSafeStorageLayer(), makeDialogLayer(1)),
+          Effect.flip,
+        );
+        assert.instanceOf(error, PlatformError.PlatformError);
+        assert.deepEqual(Array.from(yield* fileSystem.readFile(secretPath)), Array.from(damaged));
+        assert.isFalse(yield* fileSystem.exists(`${baseDir}/userdata/secret-store-key.v1.bin`));
+      }
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("rejects Linux basic_text storage", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;

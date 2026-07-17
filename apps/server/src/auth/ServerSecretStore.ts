@@ -786,7 +786,6 @@ export const make = Effect.gen(function* () {
 
   const removeUnlocked: ServerSecretStore["Service"]["remove"] = (name) => {
     const secretPath = resolveSecretPath(name);
-    const tempPrefix = `${path.basename(secretPath)}.`;
     return Effect.gen(function* () {
       yield* fileSystem
         .remove(secretPath)
@@ -795,12 +794,6 @@ export const make = Effect.gen(function* () {
             cause.reason._tag === "NotFound" ? Effect.void : Effect.fail(cause),
           ),
         );
-      const entries = yield* fileSystem.readDirectory(serverConfig.secretsDir);
-      yield* Effect.forEach(
-        entries.filter((entry) => entry.startsWith(tempPrefix) && entry.endsWith(".tmp")),
-        (entry) => fileSystem.remove(path.join(serverConfig.secretsDir, entry)),
-        { discard: true },
-      );
       yield* syncDirectory(serverConfig.secretsDir);
     }).pipe(
       Effect.mapError(

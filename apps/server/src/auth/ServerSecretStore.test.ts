@@ -1,8 +1,10 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as SecretEnvelope from "@t3tools/shared/secretEnvelope";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
@@ -796,6 +798,68 @@ it.layer(NodeServices.layer)("ServerSecretStore.layer", (it) => {
         { concurrency: "unbounded" },
       );
       assert.deepEqual(Array.from(second), Array.from(first));
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("does not delete another store instance's active temporary file", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-independent-secret-remove-race-",
+      });
+      const tempOpened = yield* Deferred.make<void>();
+      const continueCreate = yield* Deferred.make<void>();
+      let delayed = false;
+      const delayedTemporaryOpenLayer = Layer.effect(
+        FileSystem.FileSystem,
+        Effect.gen(function* () {
+          const underlying = yield* FileSystem.FileSystem;
+          return {
+            ...underlying,
+            open: (filePath, options) => {
+              const opened = underlying.open(filePath, options);
+              if (
+                delayed ||
+                options?.flag !== "wx" ||
+                !String(filePath).includes("oauth.bin.") ||
+                !String(filePath).endsWith(".tmp")
+              ) {
+                return opened;
+              }
+              delayed = true;
+              return opened.pipe(
+                Effect.tap(() => Deferred.succeed(tempOpened, undefined)),
+                Effect.tap(() => Deferred.await(continueCreate)),
+              );
+            },
+          } satisfies FileSystem.FileSystem;
+        }),
+      ).pipe(Layer.provide(NodeServices.layer));
+      const initializeStore = () =>
+        Effect.service(ServerSecretStore.ServerSecretStore).pipe(
+          Effect.provide(
+            Layer.fresh(
+              makeServerSecretStoreLayer({
+                baseDir,
+                fileSystemLayer: delayedTemporaryOpenLayer,
+              }),
+            ),
+          ),
+        );
+      const [creatingStore, removingStore] = yield* Effect.all(
+        [initializeStore(), initializeStore()],
+        { concurrency: "unbounded" },
+      );
+      const value = new TextEncoder().encode("concurrently-created-value");
+      const createFiber = yield* creatingStore.create("oauth", value).pipe(Effect.forkScoped);
+      yield* Deferred.await(tempOpened);
+
+      yield* removingStore.remove("oauth");
+      yield* Deferred.succeed(continueCreate, undefined);
+      yield* Fiber.join(createFiber);
+
+      const persisted = Option.getOrThrow(yield* creatingStore.get("oauth"));
+      assert.deepEqual(Array.from(persisted), Array.from(value));
     }).pipe(Effect.scoped),
   );
 
