@@ -17,14 +17,13 @@ type AnalyticsInput =
   | { readonly source: "domain"; readonly event: TrackedDomainEvent }
   | { readonly source: "provider"; readonly event: TrackedProviderEvent };
 
-export interface AnalyticsReactorShape {
-  readonly start: () => Effect.Effect<void, never, Scope.Scope>;
-  readonly drain: Effect.Effect<void>;
-}
-
-export class AnalyticsReactor extends Context.Service<AnalyticsReactor, AnalyticsReactorShape>()(
-  "t3/telemetry/AnalyticsReactor",
-) {}
+export class AnalyticsReactor extends Context.Service<
+  AnalyticsReactor,
+  {
+    readonly start: () => Effect.Effect<void, never, Scope.Scope>;
+    readonly drain: Effect.Effect<void>;
+  }
+>()("t3/telemetry/AnalyticsReactor") {}
 
 export const makeAnalyticsReactor = Effect.gen(function* () {
   const analytics = yield* AnalyticsService;
@@ -50,23 +49,25 @@ export const makeAnalyticsReactor = Effect.gen(function* () {
 
   const worker = yield* makeDrainableWorker(processInput);
 
-  const start: AnalyticsReactorShape["start"] = Effect.fn("AnalyticsReactor.start")(function* () {
-    yield* Effect.addFinalizer(() => worker.drain.pipe(Effect.andThen(analytics.flush)));
-    yield* Effect.forkScoped(
-      Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
-        if (event.type !== "thread.created") return Effect.void;
-        return worker.enqueue({ source: "domain", event });
-      }),
-      { startImmediately: true },
-    );
-    yield* Effect.forkScoped(
-      Stream.runForEach(providerService.streamEvents, (event) => {
-        if (event.type !== "turn.completed") return Effect.void;
-        return worker.enqueue({ source: "provider", event });
-      }),
-      { startImmediately: true },
-    );
-  });
+  const start: AnalyticsReactor["Service"]["start"] = Effect.fn("AnalyticsReactor.start")(
+    function* () {
+      yield* Effect.addFinalizer(() => worker.drain.pipe(Effect.andThen(analytics.flush)));
+      yield* Effect.forkScoped(
+        Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
+          if (event.type !== "thread.created") return Effect.void;
+          return worker.enqueue({ source: "domain", event });
+        }),
+        { startImmediately: true },
+      );
+      yield* Effect.forkScoped(
+        Stream.runForEach(providerService.streamEvents, (event) => {
+          if (event.type !== "turn.completed") return Effect.void;
+          return worker.enqueue({ source: "provider", event });
+        }),
+        { startImmediately: true },
+      );
+    },
+  );
 
   return AnalyticsReactor.of({
     start,

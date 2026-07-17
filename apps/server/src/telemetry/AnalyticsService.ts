@@ -22,12 +22,25 @@ import * as ServerConfig from "../config.ts";
 
 interface BufferedAnalyticsEvent {
   readonly event: string;
-  readonly properties?: Readonly<Record<string, unknown>>;
+  readonly properties: Readonly<Record<string, PlausiblePropertyValue>>;
 }
 
 const PLAUSIBLE_EVENTS_ENDPOINT = "https://tritonai-analytics.ucsd.edu/api/event";
 const PLAUSIBLE_SITE_ID = "tritonai-harness";
-const MAX_EVENT_PROPERTIES = 25;
+
+const PLAUSIBLE_EVENT_PROPERTIES = {
+  "server.boot.heartbeat": ["threadCount", "projectCount"],
+  "thread.created": ["runtimeMode", "interactionMode"],
+  "provider.turn.completed": ["provider", "outcome"],
+  "provider.session.recovered": ["provider", "strategy"],
+  "provider.session.stopped": ["provider"],
+  "provider.session.started": ["provider", "runtimeMode", "hasResumeCursor", "hasCwd"],
+  "provider.turn.sent": ["provider", "interactionMode", "attachmentCount"],
+  "provider.turn.interrupted": ["provider"],
+  "provider.request.responded": ["provider", "decision"],
+  "provider.conversation.rolled_back": ["provider", "turns"],
+  "provider.sessions.stopped_all": ["sessionCount"],
+} as const satisfies Readonly<Record<string, ReadonlyArray<string>>>;
 
 const TelemetryEnvConfig = Config.all({
   plausibleEventsEndpoint: Config.string("TRITONAI_PLAUSIBLE_EVENTS_ENDPOINT").pipe(
@@ -47,20 +60,21 @@ const TelemetryEnvConfig = Config.all({
 type PlausiblePropertyValue = string | number | boolean;
 
 function toPlausibleProperties(
+  event: string,
   properties: Readonly<Record<string, unknown>> | undefined,
-): Record<string, PlausiblePropertyValue> {
+): Record<string, PlausiblePropertyValue> | null {
+  if (!Object.hasOwn(PLAUSIBLE_EVENT_PROPERTIES, event)) return null;
+  const allowedKeys = PLAUSIBLE_EVENT_PROPERTIES[event as keyof typeof PLAUSIBLE_EVENT_PROPERTIES];
   if (!properties) return {};
 
   const sanitized: Record<string, PlausiblePropertyValue> = {};
-  let propertyCount = 0;
-  for (const [key, value] of Object.entries(properties)) {
-    if (propertyCount >= MAX_EVENT_PROPERTIES) break;
+  for (const key of allowedKeys) {
+    if (!Object.hasOwn(properties, key)) continue;
+    const value = properties[key];
     if (typeof value === "string" || typeof value === "boolean") {
       sanitized[key] = value;
-      propertyCount += 1;
     } else if (typeof value === "number" && Number.isFinite(value)) {
       sanitized[key] = value;
-      propertyCount += 1;
     }
   }
   return sanitized;
@@ -100,13 +114,16 @@ export const make = Effect.gen(function* () {
   const userAgent = `TritonAI-Harness/${packageJson.version}`;
   const eventUrl = `https://${telemetryConfig.plausibleSiteId}/`;
 
-  const enqueueBufferedEvent = (event: string, properties?: Readonly<Record<string, unknown>>) =>
+  const enqueueBufferedEvent = (
+    event: string,
+    properties: Readonly<Record<string, PlausiblePropertyValue>>,
+  ) =>
     Ref.modify(bufferRef, (current) => {
       const appended = [
         ...current,
         {
           event,
-          ...(properties ? { properties } : {}),
+          properties,
         } satisfies BufferedAnalyticsEvent,
       ];
 
@@ -134,7 +151,7 @@ export const make = Effect.gen(function* () {
       name: event.event,
       url: eventUrl,
       props: {
-        ...toPlausibleProperties(event.properties),
+        ...event.properties,
         platform: hostPlatform,
         wsl: Option.isSome(telemetryConfig.wslDistroName),
         arch: hostArchitecture,
@@ -178,7 +195,10 @@ export const make = Effect.gen(function* () {
     function* (event, properties) {
       if (!telemetryConfig.enabled) return;
 
-      const enqueueResult = yield* enqueueBufferedEvent(event, properties);
+      const plausibleProperties = toPlausibleProperties(event, properties);
+      if (plausibleProperties === null) return;
+
+      const enqueueResult = yield* enqueueBufferedEvent(event, plausibleProperties);
       if (enqueueResult.dropped) {
         yield* Effect.logDebug("analytics buffer full; dropping oldest event", {
           size: enqueueResult.size,

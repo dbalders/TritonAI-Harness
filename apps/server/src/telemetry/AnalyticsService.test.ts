@@ -70,8 +70,9 @@ it.layer(NodeServices.layer)("AnalyticsService test", (it) => {
         const analytics = yield* AnalyticsService.AnalyticsService;
 
         for (let index = 0; index < 45; index += 1) {
-          yield* analytics.record("test.flush.drain", {
-            index,
+          yield* analytics.record("server.boot.heartbeat", {
+            threadCount: index,
+            projectCount: index + 1,
             ...(index === 0
               ? {
                   nestedValueIsDropped: { private: "value" },
@@ -80,11 +81,28 @@ it.layer(NodeServices.layer)("AnalyticsService test", (it) => {
               : {}),
           });
         }
+        const inheritedProperties = Object.assign(
+          Object.create({ provider: "private-inherited-provider" }) as Record<string, unknown>,
+          { interactionMode: "full" },
+        );
+        yield* analytics.record("provider.turn.sent", inheritedProperties);
+        yield* analytics.record("provider.turn.sent", {
+          provider: "codex",
+          model: "private-model-name",
+          interactionMode: "plan",
+          attachmentCount: 2,
+        });
+        yield* analytics.record("private.unknown.event", {
+          privateValue: "must not be sent",
+        });
+        yield* analytics.record("constructor", {
+          privateValue: "must not be sent",
+        });
 
         yield* analytics.flush;
       }).pipe(Effect.provide(runtimeLayer));
 
-      assert.equal(capturedRequests.length, 45);
+      assert.equal(capturedRequests.length, 47);
       assert.equal(
         capturedRequests.every((request) => request.path === "/api/event"),
         true,
@@ -96,12 +114,12 @@ it.layer(NodeServices.layer)("AnalyticsService test", (it) => {
         true,
       );
 
-      const deliveredIndexes = capturedRequests
-        .filter((request) => request.body?.name === "test.flush.drain")
-        .map((request) => request.body?.props?.index)
+      const deliveredThreadCounts = capturedRequests
+        .filter((request) => request.body?.name === "server.boot.heartbeat")
+        .map((request) => request.body?.props?.threadCount)
         .filter((index): index is number => typeof index === "number");
       assert.deepEqual(
-        deliveredIndexes,
+        deliveredThreadCounts,
         Array.from({ length: 45 }, (_, index) => index),
       );
 
@@ -116,6 +134,18 @@ it.layer(NodeServices.layer)("AnalyticsService test", (it) => {
       assert.equal(firstRequest?.body?.props?.wsl, false);
       assert.notProperty(firstRequest?.body?.props ?? {}, "nestedValueIsDropped");
       assert.notProperty(firstRequest?.body?.props ?? {}, "nonFiniteValueIsDropped");
+
+      const inheritedPropertyRequest = capturedRequests.at(-2);
+      assert.equal(inheritedPropertyRequest?.body?.name, "provider.turn.sent");
+      assert.equal(inheritedPropertyRequest?.body?.props?.interactionMode, "full");
+      assert.notProperty(inheritedPropertyRequest?.body?.props ?? {}, "provider");
+
+      const turnSentRequest = capturedRequests.at(-1);
+      assert.equal(turnSentRequest?.body?.name, "provider.turn.sent");
+      assert.equal(turnSentRequest?.body?.props?.provider, "codex");
+      assert.equal(turnSentRequest?.body?.props?.interactionMode, "plan");
+      assert.equal(turnSentRequest?.body?.props?.attachmentCount, 2);
+      assert.notProperty(turnSentRequest?.body?.props ?? {}, "model");
     }),
   );
 });

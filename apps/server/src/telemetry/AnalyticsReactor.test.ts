@@ -24,7 +24,7 @@ import {
   ProviderService,
   type ProviderServiceShape,
 } from "../provider/Services/ProviderService.ts";
-import { AnalyticsReactor, layer as analyticsReactorLayer } from "./AnalyticsReactor.ts";
+import * as AnalyticsReactor from "./AnalyticsReactor.ts";
 import { AnalyticsService } from "./AnalyticsService.ts";
 
 it.effect("records canonical thread creation and turn completion without identifiers", () =>
@@ -37,7 +37,7 @@ it.effect("records canonical thread creation and turn completion without identif
     const domainEvents = yield* PubSub.unbounded<OrchestrationEvent>();
     const providerEvents = yield* PubSub.unbounded<ProviderRuntimeEvent>();
 
-    const layer = analyticsReactorLayer.pipe(
+    const layer = AnalyticsReactor.layer.pipe(
       Layer.provideMerge(
         Layer.succeed(
           AnalyticsService,
@@ -73,7 +73,7 @@ it.effect("records canonical thread creation and turn completion without identif
     const services = yield* Layer.build(layer).pipe(Scope.provide(scope));
 
     yield* Effect.gen(function* () {
-      const reactor = yield* AnalyticsReactor;
+      const reactor = yield* AnalyticsReactor.AnalyticsReactor;
       yield* reactor.start().pipe(Scope.provide(scope));
 
       yield* PubSub.publish(domainEvents, {
