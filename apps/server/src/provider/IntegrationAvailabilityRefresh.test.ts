@@ -204,6 +204,72 @@ describe("IntegrationAvailabilityRefresh", () => {
     }
   });
 
+  it("restarts an older sibling refresh for a newer availability generation", async () => {
+    vi.useFakeTimers();
+    try {
+      let observer: (() => void) | undefined;
+      const integrations = {
+        subscribeAvailabilityChanges: (next: () => void) => {
+          observer = next;
+          return () => {
+            observer = undefined;
+          };
+        },
+      } as unknown as RegistryRuntime;
+      const siblingStarted = Promise.withResolvers<void>();
+      const releaseSibling = Promise.withResolvers<void>();
+      const errorObserved = Promise.withResolvers<void>();
+      let failingAttempts = 0;
+      let siblingAttempts = 0;
+      const providers = {
+        getProviders: Effect.succeed([
+          snapshot("codex-fails", "codex"),
+          snapshot("codex-sibling", "codex"),
+        ]),
+        refreshInstance: (instanceId: ProviderInstanceId) =>
+          instanceId === "codex-fails"
+            ? Effect.sync(() => {
+                failingAttempts += 1;
+                if (failingAttempts === 1) throw new Error("temporary refresh failure");
+                return [];
+              })
+            : Effect.promise(async () => {
+                siblingAttempts += 1;
+                if (siblingAttempts === 1) {
+                  siblingStarted.resolve();
+                  await releaseSibling.promise;
+                }
+                return [];
+              }),
+        refresh: () => Effect.succeed([]),
+        getProviderMaintenanceCapabilitiesForInstance: () => Effect.die("unused"),
+        setProviderMaintenanceActionState: () => Effect.die("unused"),
+        streamChanges: Stream.empty,
+      } satisfies ProviderRegistryShape;
+
+      const unsubscribe = subscribeIntegrationAvailabilityRefresh(integrations, providers, {
+        debounceMs: 10,
+        retryMs: 10,
+        onError: () => errorObserved.resolve(),
+      });
+      await vi.advanceTimersByTimeAsync(10);
+      await siblingStarted.promise;
+      await errorObserved.promise;
+
+      observer?.();
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(failingAttempts).toBe(2);
+      expect(siblingAttempts).toBe(1);
+
+      releaseSibling.resolve();
+      await vi.waitFor(() => expect(siblingAttempts).toBe(2));
+      unsubscribe();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("refreshes existing Codex snapshots when the registry is attached", async () => {
     vi.useFakeTimers();
     try {

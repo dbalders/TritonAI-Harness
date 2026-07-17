@@ -35,8 +35,13 @@ export function subscribeIntegrationAvailabilityRefresh(
   let activeSnapshotRefresh: AbortController | null = null;
   const inFlightInstanceRefreshes = new Map<
     string,
-    { readonly controller: AbortController; readonly promise: Promise<unknown> }
+    {
+      readonly controller: AbortController;
+      readonly generation: number;
+      readonly promise: Promise<unknown>;
+    }
   >();
+  let requestedGeneration = 1;
   let nextDelayMs = debounceMs;
   let currentRetryMs = retryMs;
 
@@ -48,15 +53,24 @@ export function subscribeIntegrationAvailabilityRefresh(
     }, delayMs);
   };
 
-  const refreshInstance = (instanceId: Parameters<ProviderRegistryShape["refreshInstance"]>[0]) => {
+  const refreshInstance = (
+    instanceId: Parameters<ProviderRegistryShape["refreshInstance"]>[0],
+    generation: number,
+  ): Promise<unknown> => {
     const existing = inFlightInstanceRefreshes.get(instanceId);
-    if (existing) return existing.promise;
+    if (existing) {
+      if (existing.generation >= generation) return existing.promise;
+      return existing.promise.then(
+        () => (closed ? undefined : refreshInstance(instanceId, generation)),
+        () => (closed ? undefined : refreshInstance(instanceId, generation)),
+      );
+    }
     const controller = new AbortController();
     const promise = Effect.runPromise(
       providers.refreshInstance(instanceId, { failOnError: true }),
       { signal: controller.signal },
     );
-    const entry = { controller, promise };
+    const entry = { controller, generation, promise };
     inFlightInstanceRefreshes.set(instanceId, entry);
     const remove = () => {
       if (inFlightInstanceRefreshes.get(instanceId) === entry) {
@@ -71,6 +85,7 @@ export function subscribeIntegrationAvailabilityRefresh(
     if (closed || refreshing) return;
     refreshing = true;
     queued = false;
+    const refreshGeneration = requestedGeneration;
     const controller = new AbortController();
     activeSnapshotRefresh = controller;
     try {
@@ -84,7 +99,9 @@ export function subscribeIntegrationAvailabilityRefresh(
             .map(({ instanceId }) => instanceId),
         ),
       ];
-      await Promise.all(instanceIds.map(refreshInstance));
+      await Promise.all(
+        instanceIds.map((instanceId) => refreshInstance(instanceId, refreshGeneration)),
+      );
       currentRetryMs = retryMs;
       nextDelayMs = debounceMs;
     } catch (error) {
@@ -102,6 +119,7 @@ export function subscribeIntegrationAvailabilityRefresh(
 
   const unsubscribe = integrations.subscribeAvailabilityChanges(() => {
     if (closed) return;
+    requestedGeneration += 1;
     queued = true;
     nextDelayMs = debounceMs;
     schedule();

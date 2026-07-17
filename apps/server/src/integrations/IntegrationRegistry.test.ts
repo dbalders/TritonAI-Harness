@@ -414,6 +414,42 @@ describe("IntegrationRegistry lifecycle", () => {
         ),
       ).resolves.toMatchObject({ toolName: "fixture.records.write" });
 
+      await registry.setCapabilityEnabled(manifest.id, "chat.read", true);
+      const chatReservation = registry.reserveSkillsSync(["fixture-chat"]);
+      expect(chatReservation).not.toBeNull();
+      const disableChat = registry.setCapabilityEnabled(manifest.id, "chat.read", false);
+      const disableIntegration = registry.setEnabled(manifest.id, false);
+      const overlappingRevocations = await registry.snapshot();
+      expect(
+        overlappingRevocations.integrations[0]?.capabilities.every(({ available }) => !available),
+      ).toBe(true);
+      expect(
+        overlappingRevocations.integrations[0]?.tools.every(({ available }) => !available),
+      ).toBe(true);
+      expect(
+        overlappingRevocations.integrations[0]?.skills.every(({ available }) => !available),
+      ).toBe(true);
+      chatReservation?.release();
+      await Promise.all([disableChat, disableIntegration]);
+      await registry.setEnabled(manifest.id, true);
+
+      await registry.setCapabilityEnabled(manifest.id, "chat.read", true);
+      await registry.setEnabled(manifest.id, false);
+      const disableChatWhileDisabled = registry.setCapabilityEnabled(
+        manifest.id,
+        "chat.read",
+        false,
+      );
+      const disabledCapabilityRevocation = await registry.snapshot();
+      expect(
+        disabledCapabilityRevocation.integrations[0]?.tools.every(({ available }) => !available),
+      ).toBe(true);
+      expect(
+        disabledCapabilityRevocation.integrations[0]?.skills.every(({ available }) => !available),
+      ).toBe(true);
+      await disableChatWhileDisabled;
+      await registry.setEnabled(manifest.id, true);
+
       let sharedInvocationStarted = nextSharedInvocationStarted();
       const sharedInvocation = registry.invokeTool("fixture.records.shared", {});
       await sharedInvocationStarted;

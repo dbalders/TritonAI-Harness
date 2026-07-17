@@ -1639,6 +1639,12 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
                   inputSchema: binding.inputSchema,
                   requiresApproval: binding.requiresApproval,
                 })),
+                isDynamicToolAvailable: (name: string) => {
+                  const canonicalName = dynamicToolByName.get(name);
+                  return Boolean(
+                    canonicalName && integrationRegistry.isToolAvailableSync(canonicalName),
+                  );
+                },
                 invokeDynamicTool: async ({
                   name,
                   arguments: toolArguments,

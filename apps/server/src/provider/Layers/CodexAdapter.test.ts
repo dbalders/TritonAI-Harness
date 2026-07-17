@@ -847,6 +847,7 @@ reconciliationLayer("CodexAdapter integration availability reconciliation", (it)
       reconciliationAvailability.available = false;
       reconciliationAvailability.generation = 3;
       const binding = activeRuntime.options.dynamicTools?.[0];
+      NodeAssert.equal(activeRuntime.options.isDynamicToolAvailable?.(binding!.name), false);
       yield* Effect.promise(() =>
         NodeAssert.rejects(() =>
           activeRuntime.options.invokeDynamicTool!({

@@ -18,6 +18,7 @@ import {
   buildTurnStartParams,
   computeDynamicToolFingerprint,
   dynamicToolApprovalRequired,
+  dynamicToolInvocationAvailable,
   dynamicToolInvocationAllowed,
   hasConfiguredMcpServer,
   isRecoverableThreadResumeError,
@@ -114,6 +115,20 @@ describe("integration write-tool approval", () => {
     NodeAssert.equal(dynamicToolApprovalRequired(true, false), true);
     NodeAssert.equal(dynamicToolApprovalRequired(true, true), false);
     NodeAssert.equal(dynamicToolApprovalRequired(false, false), false);
+  });
+
+  it("fails closed before write approval when live availability is revoked", () => {
+    NodeAssert.equal(dynamicToolInvocationAvailable("fixture_records_write", undefined), true);
+    NodeAssert.equal(
+      dynamicToolInvocationAvailable("fixture_records_write", () => false),
+      false,
+    );
+    NodeAssert.equal(
+      dynamicToolInvocationAvailable("fixture_records_write", () => {
+        throw new Error("availability lookup failed");
+      }),
+      false,
+    );
   });
 
   it("binds write-approval metadata into resume compatibility", () => {

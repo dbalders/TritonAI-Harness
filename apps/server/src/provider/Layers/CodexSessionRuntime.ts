@@ -155,6 +155,18 @@ export function dynamicToolApprovalRequired(
   return requiresApproval === true && !approvedForSession;
 }
 
+export function dynamicToolInvocationAvailable(
+  name: string,
+  isAvailable: ((name: string) => boolean) | undefined,
+): boolean {
+  if (!isAvailable) return true;
+  try {
+    return isAvailable(name);
+  } catch {
+    return false;
+  }
+}
+
 export interface CodexPluginSkillDefinition {
   readonly name: string;
   readonly path: string;
@@ -184,6 +196,7 @@ export interface CodexSessionRuntimeOptions {
   readonly resumeCursor?: CodexResumeCursor;
   readonly appServerArgs?: ReadonlyArray<string>;
   readonly dynamicTools?: ReadonlyArray<CodexDynamicToolDefinition>;
+  readonly isDynamicToolAvailable?: (name: string) => boolean;
   readonly invokeDynamicTool?: (input: CodexDynamicToolInvocation) => Promise<unknown>;
   readonly pluginSkills?: ReadonlyArray<CodexPluginSkillDefinition>;
   readonly isPluginSkillAvailable?: (name: string) => boolean;
@@ -1417,6 +1430,9 @@ export const makeCodexSessionRuntime = (
       Effect.gen(function* () {
         const definition = options.dynamicTools?.find((tool) => tool.name === payload.tool);
         if (payload.namespace || !definition || !options.invokeDynamicTool) {
+          return dynamicToolResponse(false, "Integration plugin tool is unavailable.");
+        }
+        if (!dynamicToolInvocationAvailable(definition.name, options.isDynamicToolAvailable)) {
           return dynamicToolResponse(false, "Integration plugin tool is unavailable.");
         }
         let writeApproved = false;

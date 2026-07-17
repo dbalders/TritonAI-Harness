@@ -1906,57 +1906,76 @@ export class RegistryRuntime {
       integrations: [...this.#catalog.values()].map(({ manifest }) => {
         const summary = this.#summaries.get(manifest.id);
         if (!summary) return this.#createSummary(manifest, unavailable, state);
+        const installed = ownRecordValue(state.installed, manifest.id);
+        const enabled = installed?.enabled === true;
+        const compatibility = activationCompatibility(manifest, installed?.version);
+        if (!installed) return this.#createSummary(manifest, unavailable, state);
+        const current =
+          summary.installed === true &&
+          summary.enabled === enabled &&
+          summary.compatible === compatibility.compatible
+            ? summary
+            : {
+                ...summary,
+                installed: true,
+                enabled,
+                compatible: compatibility.compatible,
+                compatibilityMessage: compatibility.message,
+                tools: summary.tools.map((tool) => ({ ...tool, available: false })),
+                skills: summary.skills.map((skill) => ({ ...skill, available: false })),
+              };
+        const provider = this.#catalog.get(manifest.id)?.provider;
+        if (
+          this.#isRevoking(manifest.id) ||
+          (provider &&
+            (this.#faultedProviders.has(provider) ||
+              this.#activeProviderLifecycleWork.has(provider)))
+        ) {
+          return {
+            ...current,
+            capabilities: current.capabilities.map((capability) => ({
+              ...capability,
+              available: false,
+            })),
+            tools: current.tools.map((tool) => ({ ...tool, available: false })),
+            skills: current.skills.map((skill) => ({ ...skill, available: false })),
+          };
+        }
         const capabilityRevocations = this.#capabilityRevocations.get(manifest.id);
         if (capabilityRevocations?.size) {
+          const integrationAvailable = current.enabled && current.compatible;
           const capabilityAvailable = (capability: string) =>
             !capabilityRevocations?.has(capability) &&
-            summary.capabilities.some(({ id, available }) => id === capability && available);
+            current.capabilities.some(({ id, available }) => id === capability && available);
           return {
-            ...summary,
-            capabilities: summary.capabilities.map((capability) => ({
+            ...current,
+            capabilities: current.capabilities.map((capability) => ({
               ...capability,
               available: capabilityAvailable(capability.id),
             })),
-            tools: summary.tools.map((tool) => {
+            tools: current.tools.map((tool) => {
               const declared = manifest.tools.find(({ name }) => name === tool.name);
               return {
                 ...tool,
                 available:
+                  integrationAvailable &&
                   tool.available &&
                   Boolean(declared && dependencyCapabilityIds(declared).some(capabilityAvailable)),
               };
             }),
-            skills: summary.skills.map((skill) => {
+            skills: current.skills.map((skill) => {
               const declared = manifest.skills.find(({ name }) => name === skill.name);
               return {
                 ...skill,
                 available:
+                  integrationAvailable &&
                   skill.available &&
                   Boolean(declared && dependencyCapabilityIds(declared).some(capabilityAvailable)),
               };
             }),
           };
         }
-        const installed = ownRecordValue(state.installed, manifest.id);
-        const enabled = installed?.enabled === true;
-        const compatibility = activationCompatibility(manifest, installed?.version);
-        if (
-          summary.installed === Boolean(installed) &&
-          summary.enabled === enabled &&
-          summary.compatible === compatibility.compatible
-        ) {
-          return summary;
-        }
-        if (!installed) return this.#createSummary(manifest, unavailable, state);
-        return {
-          ...summary,
-          installed: true,
-          enabled,
-          compatible: compatibility.compatible,
-          compatibilityMessage: compatibility.message,
-          tools: summary.tools.map((tool) => ({ ...tool, available: false })),
-          skills: summary.skills.map((skill) => ({ ...skill, available: false })),
-        };
+        return current;
       }),
     };
   }
