@@ -762,15 +762,12 @@ const getUserHomeImpl = (
     Effect.orElseSucceed(() => Option.none<string>()),
   );
 
-const readWslSecretFilesImpl = (
-  distro: string | null,
-  development: boolean,
-): Effect.Effect<ReadWslSecretFilesResult, never, ChildProcessSpawner.ChildProcessSpawner> => {
+export const buildWslSecretFileInventoryScript = (development: boolean): string => {
   const stateDirectory = development ? "dev" : "userdata";
-  const script = `set -o pipefail
+  return `set -o pipefail
 secret_dir="$HOME/.tritonai-harness/${stateDirectory}/secrets"
 if [ ! -d "$secret_dir" ]; then exit 0; fi
-find "$secret_dir" -maxdepth 1 -type f -name '*.bin' -print0 |
+find "$secret_dir" -maxdepth 1 -name '*.bin' -print0 |
 while IFS= read -r -d '' secret_file; do
   if [ ! -f "$secret_file" ] || [ -L "$secret_file" ]; then exit 20; fi
   filename=\${secret_file##*/}
@@ -780,7 +777,17 @@ while IFS= read -r -d '' secret_file; do
   printf '%s\\t%s\\n' "$encoded_name" "$encoded_value" || exit 23
 done
 `;
-  return runWslShell(distro, script, SECRET_FILE_READ_TIMEOUT).pipe(
+};
+
+const readWslSecretFilesImpl = (
+  distro: string | null,
+  development: boolean,
+): Effect.Effect<ReadWslSecretFilesResult, never, ChildProcessSpawner.ChildProcessSpawner> =>
+  runWslShell(
+    distro,
+    buildWslSecretFileInventoryScript(development),
+    SECRET_FILE_READ_TIMEOUT,
+  ).pipe(
     Effect.map((result): ReadWslSecretFilesResult => {
       if (result.transportFailure !== null) {
         return {
@@ -798,7 +805,6 @@ done
       return parseWslSecretFileInventory(result.stdout);
     }),
   );
-};
 
 const makeIsAvailable = (
   platform: NodeJS.Platform,

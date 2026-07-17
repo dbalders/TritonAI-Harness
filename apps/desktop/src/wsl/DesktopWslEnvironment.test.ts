@@ -10,6 +10,7 @@ import * as TestClock from "effect/testing/TestClock";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import {
+  buildWslSecretFileInventoryScript,
   buildWslNodeEnvPreamble,
   DesktopWslDistroListError,
   formatMissingToolsReason,
@@ -126,6 +127,14 @@ describe("buildWslNodeEnvPreamble", () => {
 });
 
 describe("parseWslSecretFileInventory", () => {
+  it("includes symlinked .bin entries so the fail-closed type check can reject them", () => {
+    const script = buildWslSecretFileInventoryScript(false);
+
+    expect(script).toContain(`find "$secret_dir" -maxdepth 1 -name '*.bin' -print0`);
+    expect(script).not.toContain("-type f");
+    expect(script).toContain(`[ ! -f "$secret_file" ] || [ -L "$secret_file" ]`);
+  });
+
   it("decodes opaque credential bytes without putting them in filenames", () => {
     const name = Buffer.from("integration-microsoft-365--oauth").toString("base64");
     const value = Buffer.from([0, 1, 2, 255]).toString("base64");
