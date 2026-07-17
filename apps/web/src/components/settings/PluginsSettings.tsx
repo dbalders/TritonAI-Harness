@@ -576,11 +576,6 @@ function IntegrationCard({
                               Write · confirmation required
                             </Badge>
                           ) : null}
-                          {capability.access === "opt-in" ? (
-                            <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                              Off by default
-                            </span>
-                          ) : null}
                         </div>
                         <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
                           {capability.description}
