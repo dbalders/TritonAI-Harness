@@ -29,9 +29,6 @@ interface BufferedAnalyticsEvent {
 }
 
 const TelemetryEnvConfig = Config.all({
-  posthogKey: Config.string("T3CODE_POSTHOG_KEY").pipe(
-    Config.withDefault("removed"),
-  ),
   posthogHost: Config.string("T3CODE_POSTHOG_HOST").pipe(
     Config.withDefault("https://us.i.posthog.com"),
   ),
@@ -109,7 +106,6 @@ export const make = Effect.gen(function* () {
     if (!telemetryConfig.enabled || !identifier) return;
 
     const payload = {
-      api_key: telemetryConfig.posthogKey,
       batch: events.map((event) => ({
         event: event.event,
         distinct_id: identifier,
