@@ -81,6 +81,32 @@ const provideDependencies = (
   );
 
 describe("DesktopSecretStoreKey", () => {
+  it.effect("recognizes an authenticated WSL envelope without offering legacy migration", () =>
+    Effect.gen(function* () {
+      const key = Uint8Array.from({ length: 32 }, () => 0x5a);
+      const name = "oauth";
+      const envelope = SecretEnvelope.encodeServerSecretEnvelope(
+        name,
+        new TextEncoder().encode("refresh-token"),
+        key,
+      );
+      const dialog = Layer.succeed(ElectronDialog.ElectronDialog, {
+        pickFolder: () => Effect.die("unexpected dialog"),
+        confirm: () => Effect.die("unexpected dialog"),
+        showMessageBox: () => Effect.die("authenticated envelopes must not prompt"),
+        showErrorBox: () => Effect.die("unexpected dialog"),
+      } satisfies ElectronDialog.ElectronDialog["Service"]);
+
+      const fingerprints = yield* DesktopSecretStoreKey.authorizeLegacySecretValues(
+        [{ name, value: envelope }],
+        [key],
+        "WSL distribution Ubuntu",
+      ).pipe(Effect.provide(dialog));
+
+      assert.deepEqual(fingerprints, {});
+    }),
+  );
+
   it.effect("persists a stable key only as OS-protected ciphertext", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -215,6 +241,40 @@ describe("DesktopSecretStoreKey", () => {
         Array.from(damagedEnvelope),
       );
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect(
+    "does not double-encrypt an initialized store when both metadata files are missing",
+    () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "t3-desktop-missing-secret-metadata-",
+        });
+        const material = yield* DesktopSecretStoreKey.resolve().pipe(
+          provideDependencies(baseDir, "darwin"),
+        );
+        const envelope = SecretEnvelope.encodeServerSecretEnvelope(
+          "oauth",
+          new TextEncoder().encode("refresh-token"),
+          Buffer.from(material.keys[0], "base64"),
+        );
+        const secretPath = `${baseDir}/userdata/secrets/oauth.bin`;
+        yield* fileSystem.makeDirectory(`${baseDir}/userdata/secrets`, { recursive: true });
+        yield* fileSystem.writeFile(secretPath, envelope);
+        yield* fileSystem.remove(`${baseDir}/userdata/secret-store-key.v1.bin`);
+        yield* fileSystem.remove(`${baseDir}/userdata/secret-store.v1.initialized`);
+
+        const error = yield* DesktopSecretStoreKey.resolve().pipe(
+          provideDependencies(baseDir, "darwin", makeSafeStorageLayer(), makeDialogLayer(1)),
+          Effect.flip,
+        );
+        assert.instanceOf(error, PlatformError.PlatformError);
+        assert.equal(error.reason._tag, "InvalidData");
+        assert.deepEqual(Array.from(yield* fileSystem.readFile(secretPath)), Array.from(envelope));
+        assert.isFalse(yield* fileSystem.exists(`${baseDir}/userdata/secret-store-key.v1.bin`));
+        assert.isFalse(yield* fileSystem.exists(`${baseDir}/userdata/secret-store.v1.initialized`));
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
   it.effect("rejects Linux basic_text storage", () =>

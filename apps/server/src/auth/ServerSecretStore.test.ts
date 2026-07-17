@@ -29,9 +29,10 @@ const decodeTestSecretStoreKeyring = Schema.decodeEffect(
 
 interface TestLayerOptions {
   readonly baseDir?: string;
+  readonly mode?: ServerConfig.RuntimeMode;
   readonly secretStoreKeys?: ReadonlyArray<string> | null;
   readonly legacySecretFingerprints?: Readonly<Record<string, string>>;
-  readonly secretStoreKeyFilePath?: string;
+  readonly secretStoreKeyFilePath?: string | null;
   readonly fileSystemLayer?: Layer.Layer<FileSystem.FileSystem>;
 }
 
@@ -50,10 +51,12 @@ const makeServerConfigLayer = (options: TestLayerOptions = {}) => {
           const fileSystem = yield* FileSystem.FileSystem;
           const fingerprints = options.legacySecretFingerprints ?? {};
           const keyFilePath =
-            options.secretStoreKeyFilePath ??
-            (Object.keys(fingerprints).length === 0
+            options.secretStoreKeyFilePath === null
               ? undefined
-              : `${config.stateDir}/test-secret-keyring.json`);
+              : (options.secretStoreKeyFilePath ??
+                (Object.keys(fingerprints).length === 0
+                  ? undefined
+                  : `${config.stateDir}/test-secret-keyring.json`));
           if (keyFilePath !== undefined && !(yield* fileSystem.exists(keyFilePath))) {
             const encoded = yield* encodeTestSecretStoreKeyring({
               version: 1,
@@ -66,6 +69,7 @@ const makeServerConfigLayer = (options: TestLayerOptions = {}) => {
           }
           return ServerConfig.make({
             ...config,
+            mode: options.mode ?? config.mode,
             secretStoreKeys,
             legacySecretFingerprints: fingerprints,
             ...(keyFilePath === undefined ? {} : { secretStoreKeyFilePath: keyFilePath }),
@@ -236,6 +240,31 @@ it.layer(NodeServices.layer)("ServerSecretStore.layer", (it) => {
       ),
     ),
   );
+
+  it.effect("accepts one-process migration authorization from the desktop WSL bootstrap", () => {
+    const name = "integration-microsoft-365--oauth";
+    const value = new TextEncoder().encode("wsl-legacy-refresh-token");
+    return Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const config = yield* ServerConfig.ServerConfig;
+      const secretStore = yield* ServerSecretStore.ServerSecretStore;
+      const path = secretPath(config, name);
+      yield* fileSystem.writeFile(path, value);
+
+      const migrated = Option.getOrThrow(yield* secretStore.get(name));
+      assert.deepEqual(Array.from(migrated), Array.from(value));
+      assert.isUndefined(config.secretStoreKeyFilePath);
+      assert.isTrue(SecretEnvelope.hasServerSecretEnvelopeMagic(yield* fileSystem.readFile(path)));
+    }).pipe(
+      Effect.provide(
+        makeServerSecretStoreLayer({
+          mode: "desktop",
+          secretStoreKeyFilePath: null,
+          legacySecretFingerprints: { [name]: legacyFingerprint(name, value) },
+        }),
+      ),
+    );
+  });
 
   it.effect("preserves legacy plaintext when migration persistence fails", () =>
     Effect.gen(function* () {
@@ -498,6 +527,97 @@ it.layer(NodeServices.layer)("ServerSecretStore.layer", (it) => {
       );
       assert.isTrue(Option.isSome(recovered));
       assert.isFalse(yield* fileSystem.exists(`${locations.keyFilePath}.lock`));
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("surfaces a failure to remove a raw-key retirement temporary file", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-keyring-temp-cleanup-failure-",
+      });
+      const name = "legacy-oauth";
+      const value = new TextEncoder().encode("legacy-value");
+      const fingerprint = legacyFingerprint(name, value);
+      const locations = yield* Effect.gen(function* () {
+        const config = yield* ServerConfig.ServerConfig;
+        yield* ServerSecretStore.ServerSecretStore;
+        yield* fileSystem.writeFile(secretPath(config, name), value);
+        return { keyFilePath: config.secretStoreKeyFilePath! };
+      }).pipe(
+        Effect.provide(
+          makeServerSecretStoreLayer({
+            baseDir,
+            legacySecretFingerprints: { [name]: fingerprint },
+          }),
+        ),
+      );
+
+      const failedCleanupLayer = Layer.effect(
+        FileSystem.FileSystem,
+        Effect.gen(function* () {
+          const underlying = yield* FileSystem.FileSystem;
+          const isKeyringTemp = (filePath: string) =>
+            filePath.startsWith(`${locations.keyFilePath}.`) && filePath.endsWith(".tmp");
+          return {
+            ...underlying,
+            rename: (from, to) =>
+              isKeyringTemp(String(from)) && String(to) === locations.keyFilePath
+                ? Effect.fail(
+                    PlatformError.systemError({
+                      _tag: "PermissionDenied",
+                      module: "FileSystem",
+                      method: "rename",
+                      pathOrDescriptor: `${String(from)} -> ${String(to)}`,
+                      description: "Injected keyring rename failure.",
+                    }),
+                  )
+                : underlying.rename(from, to),
+            remove: (filePath, options) =>
+              isKeyringTemp(String(filePath))
+                ? Effect.fail(
+                    PlatformError.systemError({
+                      _tag: "PermissionDenied",
+                      module: "FileSystem",
+                      method: "remove",
+                      pathOrDescriptor: String(filePath),
+                      description: "Injected raw-key temporary file cleanup failure.",
+                    }),
+                  )
+                : underlying.remove(filePath, options),
+          } satisfies FileSystem.FileSystem;
+        }),
+      ).pipe(Layer.provide(NodeServices.layer));
+
+      const error = yield* Effect.gen(function* () {
+        const secretStore = yield* ServerSecretStore.ServerSecretStore;
+        return yield* Effect.flip(secretStore.get(name));
+      }).pipe(
+        Effect.provide(
+          Layer.fresh(
+            makeServerSecretStoreLayer({
+              baseDir,
+              legacySecretFingerprints: { [name]: fingerprint },
+              secretStoreKeyFilePath: locations.keyFilePath,
+              fileSystemLayer: failedCleanupLayer,
+            }),
+          ),
+        ),
+      );
+      assert.instanceOf(error, ServerSecretStore.SecretStorePersistError);
+      assert.equal(error.resource, "external secret-store keyring temporary file cleanup");
+      assert.instanceOf(error.cause, AggregateError);
+      assert.isFalse(yield* fileSystem.exists(`${locations.keyFilePath}.lock`));
+      const keyringDirectory = locations.keyFilePath.slice(
+        0,
+        locations.keyFilePath.lastIndexOf("/"),
+      );
+      const entries = yield* fileSystem.readDirectory(keyringDirectory);
+      assert.isTrue(
+        entries.some(
+          (entry) => entry.startsWith("test-secret-keyring.json.") && entry.endsWith(".tmp"),
+        ),
+      );
     }).pipe(Effect.scoped),
   );
 

@@ -724,4 +724,57 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
       assert.equal(error.reason._tag, "PermissionDenied");
     }).pipe(Effect.scoped),
   );
+
+  it.effect("rejects a symbolic link to a headless keyring on POSIX", () =>
+    Effect.gen(function* () {
+      if ((yield* HostProcessPlatform) === "win32") return;
+      const fs = yield* FileSystem.FileSystem;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-keyring-symlink-" });
+      const targetPath = `${directory}/keyring.json`;
+      const linkPath = `${directory}/keyring-link.json`;
+      yield* fs.writeFileString(
+        targetPath,
+        yield* encodeSecretStoreKeyring({
+          version: 1,
+          active: "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo=",
+          previous: [],
+        }),
+      );
+      yield* fs.chmod(targetPath, 0o600);
+      yield* fs.symlink(targetPath, linkPath);
+
+      const error = yield* resolveServerConfig(
+        {
+          mode: Option.some("web"),
+          port: Option.some(3773),
+          host: Option.none(),
+          baseDir: Option.some(NodeOS.tmpdir()),
+          cwd: Option.none(),
+          devUrl: Option.none(),
+          noBrowser: Option.some(true),
+          bootstrapFd: Option.none(),
+          autoBootstrapProjectFromCwd: Option.none(),
+          logWebSocketEvents: Option.none(),
+          tailscaleServeEnabled: Option.none(),
+          tailscaleServePort: Option.none(),
+        },
+        Option.none(),
+      ).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            ConfigProvider.layer(
+              ConfigProvider.fromEnv({
+                env: { TRITONAI_SECRET_STORE_KEY_FILE: linkPath },
+              }),
+            ),
+            NetService.layer,
+          ),
+        ),
+        Effect.flip,
+      );
+
+      assert.instanceOf(error, PlatformError.PlatformError);
+      assert.equal(error.reason._tag, "PermissionDenied");
+    }).pipe(Effect.scoped),
+  );
 });

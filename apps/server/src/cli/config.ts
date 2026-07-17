@@ -1,3 +1,7 @@
+// @effect-diagnostics nodeBuiltinImport:off - O_NOFOLLOW plus one Node file descriptor closes keyring path races that the portable FileSystem API cannot express.
+import * as NodeFS from "node:fs";
+import * as NodeFSP from "node:fs/promises";
+
 import * as NetService from "@t3tools/shared/Net";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serverSettings";
@@ -223,20 +227,141 @@ const decodeExternalSecretStoreKeyring = Schema.decodeEffect(
   Schema.fromJsonString(ExternalSecretStoreKeyring),
 );
 
+const secretStoreKeyFileError = (
+  tag: "InvalidData" | "PermissionDenied" | "Unknown",
+  method: string,
+  keyFilePath: string,
+  description: string,
+  cause?: unknown,
+): PlatformError.PlatformError =>
+  PlatformError.systemError({
+    _tag: tag,
+    module: "SecretStoreKeyFile",
+    method,
+    pathOrDescriptor: keyFilePath,
+    description,
+    ...(cause === undefined ? {} : { cause }),
+  });
+
 const loadExternalSecretStoreKeys = Effect.fn(function* (keyFilePath: string) {
-  const fs = yield* FileSystem.FileSystem;
   const hostPlatform = yield* HostProcessPlatform;
-  const info = yield* fs.stat(keyFilePath);
-  if (hostPlatform !== "win32" && (info.mode & 0o077) !== 0) {
-    return yield* PlatformError.systemError({
-      _tag: "PermissionDenied",
-      module: "SecretStoreKeyFile",
-      method: "read",
-      pathOrDescriptor: keyFilePath,
-      description: "Secret-store key files must not be accessible by group or other users.",
+  const inspectPath = () =>
+    Effect.tryPromise({
+      try: () => NodeFSP.lstat(keyFilePath),
+      catch: (cause) =>
+        secretStoreKeyFileError(
+          "PermissionDenied",
+          "lstat",
+          keyFilePath,
+          "Unable to inspect the secret-store key path safely.",
+          cause,
+        ),
     });
+  const pathInfoBeforeOpen = yield* inspectPath();
+  if (pathInfoBeforeOpen.isSymbolicLink()) {
+    return yield* secretStoreKeyFileError(
+      "PermissionDenied",
+      "lstat",
+      keyFilePath,
+      "Symbolic links are not allowed for secret-store key files.",
+    );
   }
-  const raw = yield* fs.readFileString(keyFilePath);
+  const openFlags =
+    hostPlatform === "win32"
+      ? NodeFS.constants.O_RDONLY
+      : NodeFS.constants.O_RDONLY | NodeFS.constants.O_NOFOLLOW;
+  const raw = yield* Effect.acquireUseRelease(
+    Effect.tryPromise({
+      try: () => NodeFSP.open(keyFilePath, openFlags),
+      catch: (cause) =>
+        secretStoreKeyFileError(
+          "PermissionDenied",
+          "open",
+          keyFilePath,
+          "Secret-store key files must be regular files and symbolic links are not allowed.",
+          cause,
+        ),
+    }),
+    (file) =>
+      Effect.gen(function* () {
+        const info = yield* Effect.tryPromise({
+          try: () => file.stat(),
+          catch: (cause) =>
+            secretStoreKeyFileError(
+              "Unknown",
+              "stat",
+              keyFilePath,
+              "Unable to inspect the opened secret-store key file.",
+              cause,
+            ),
+        });
+        if (!info.isFile()) {
+          return yield* secretStoreKeyFileError(
+            "InvalidData",
+            "stat",
+            keyFilePath,
+            "The secret-store key path must identify a regular file.",
+          );
+        }
+        const pathInfoAfterOpen = yield* inspectPath();
+        if (
+          pathInfoAfterOpen.isSymbolicLink() ||
+          pathInfoBeforeOpen.dev !== info.dev ||
+          pathInfoBeforeOpen.ino !== info.ino ||
+          pathInfoAfterOpen.dev !== info.dev ||
+          pathInfoAfterOpen.ino !== info.ino
+        ) {
+          return yield* secretStoreKeyFileError(
+            "PermissionDenied",
+            "stat",
+            keyFilePath,
+            "The secret-store key path changed while it was being opened.",
+          );
+        }
+        if (hostPlatform !== "win32") {
+          const currentUid = process.getuid?.();
+          if (currentUid !== undefined && info.uid !== currentUid && info.uid !== 0) {
+            return yield* secretStoreKeyFileError(
+              "PermissionDenied",
+              "stat",
+              keyFilePath,
+              "The secret-store key file must be owned by the service account or root.",
+            );
+          }
+          if ((info.mode & 0o077) !== 0) {
+            return yield* secretStoreKeyFileError(
+              "PermissionDenied",
+              "stat",
+              keyFilePath,
+              "Secret-store key files must not be accessible by group or other users.",
+            );
+          }
+        }
+        return yield* Effect.tryPromise({
+          try: () => file.readFile({ encoding: "utf8" }),
+          catch: (cause) =>
+            secretStoreKeyFileError(
+              "Unknown",
+              "read",
+              keyFilePath,
+              "Unable to read the opened secret-store key file.",
+              cause,
+            ),
+        });
+      }),
+    (file) =>
+      Effect.tryPromise({
+        try: () => file.close(),
+        catch: (cause) =>
+          secretStoreKeyFileError(
+            "Unknown",
+            "close",
+            keyFilePath,
+            "Unable to close the secret-store key file.",
+            cause,
+          ),
+      }),
+  );
   const keyring = yield* decodeExternalSecretStoreKeyring(raw).pipe(
     // Schema parse errors retain their input. Avoid carrying a raw keyring in
     // the startup error if the file is malformed.

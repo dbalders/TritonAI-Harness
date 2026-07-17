@@ -34,10 +34,20 @@ never receives a reusable desktop migration authorization. Arbitrary plaintext a
 headers fail closed; failed encryption, writes, or verification leave the legacy file and its
 pending authorization in place and report an error.
 
+Windows WSL backends keep their credential files inside the selected Linux distribution, separate
+from the Windows-native store. Harness inventories that distro-local store through WSL after
+preflight. Already-encrypted envelopes must authenticate with the protected desktop key. Any legacy
+plaintext requires the same default-cancel upgrade prompt, and only keyed fingerprints for the
+selected distro are sent through that backend's one-time bootstrap pipe. Those authorizations live
+only for that server process and are consumed after durable migration; replaying old plaintext after
+a restart requires another explicit desktop approval.
+
 Before replacing any plaintext, Harness durably writes store-initialization metadata. That marker,
-not the unauthenticated envelope prefix, distinguishes a first upgrade from an initialized store
-whose key is missing. This lets arbitrary legacy bytes migrate while damaged envelope headers still
-fail closed. If an initialized store's wrapped key is missing, Harness does not offer migration or
+not the unauthenticated envelope prefix, normally distinguishes a first upgrade from an initialized
+store whose key is missing. If both metadata files are absent but a credential still has a complete
+supported envelope header, Harness also refuses migration instead of generating a new key and
+double-encrypting it. A legacy value that merely begins with `T3SECRET` can still migrate after
+approval. If an initialized store's wrapped key is missing, Harness does not offer migration or
 generate a replacement key. Restore the OS-protected key state or reset and reconnect the affected
 integrations.
 
@@ -74,6 +84,13 @@ parent directory. Harness serializes fingerprint retirement across server proces
 acquire the lock or persist retirement stops the operation. If a process is forcibly terminated
 during retirement, first confirm that no Harness process is using the keyring, then remove the
 adjacent `.lock` file before restarting.
+
+Generate a legacy fingerprint while Harness is stopped. The canonical algorithm is HMAC-SHA-256
+with the decoded 32-byte `active` key over, in order: UTF-8 `T3SECRET-LEGACY` followed by a NUL byte,
+the UTF-8 canonical secret name, one NUL byte, and the exact legacy file bytes. Base64-encode the
+32-byte digest and add it under the matching canonical-name key in `legacySecretFingerprints`. Keep
+the keyring mode `0600`, then start Harness. Confirm the entry was removed automatically after the
+credential migrated successfully.
 
 To rotate a headless key, stop Harness, replace the file atomically with a new `active` key while
 retaining the old key in `previous`, and restart Harness immediately. The keyring is loaded at server

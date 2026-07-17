@@ -143,28 +143,35 @@ const syncDirectory = Effect.fn("desktop.secretStoreKey.syncDirectory")(function
   );
 });
 
-const captureLegacySecretFingerprints = Effect.fn(
-  "desktop.secretStoreKey.captureLegacyFingerprints",
-)(function* (secretsDir: string, activeKey: Uint8Array) {
-  const environment = yield* DesktopEnvironment.DesktopEnvironment;
+export interface LegacySecretValue {
+  readonly name: string;
+  readonly value: Uint8Array;
+}
+
+export const authorizeLegacySecretValues = Effect.fn(
+  "desktop.secretStoreKey.authorizeLegacyValues",
+)(function* (
+  values: ReadonlyArray<LegacySecretValue>,
+  keys: readonly [Uint8Array, ...Uint8Array[]],
+  location: string,
+) {
   const dialog = yield* ElectronDialog.ElectronDialog;
-  const fileSystem = yield* FileSystem.FileSystem;
-  const entries = yield* fileSystem
-    .readDirectory(secretsDir)
-    .pipe(
-      Effect.catch((cause) =>
-        cause.reason._tag === "NotFound"
-          ? Effect.succeed([] as ReadonlyArray<string>)
-          : Effect.fail(cause),
-      ),
-    );
   const fingerprints: Record<string, string> = {};
-  const legacyValues: Array<{ readonly name: string; readonly value: Uint8Array }> = [];
-  for (const entry of entries) {
-    if (!entry.endsWith(".bin")) continue;
-    const name = entry.slice(0, -".bin".length);
-    const value = yield* fileSystem.readFile(environment.path.join(secretsDir, entry));
-    legacyValues.push({ name, value: Uint8Array.from(value) });
+  const legacyValues: LegacySecretValue[] = [];
+  for (const { name, value } of values) {
+    if (SecretEnvelope.hasServerSecretEnvelopeStructure(value)) {
+      yield* Effect.try({
+        try: () => SecretEnvelope.decodeServerSecretEnvelope(name, value, keys),
+        catch: (cause) =>
+          keyError(
+            "migration",
+            `Encrypted credential ${name} in ${location} could not be authenticated. Restore the protected key state or reconnect the integration.`,
+            cause,
+          ),
+      });
+      continue;
+    }
+    legacyValues.push({ name, value });
   }
   if (legacyValues.length === 0) return fingerprints;
 
@@ -172,7 +179,7 @@ const captureLegacySecretFingerprints = Effect.fn(
     .showMessageBox({
       type: "warning",
       title: "Migrate existing credentials?",
-      message: "TritonAI found legacy credential files but no protected encryption key.",
+      message: `TritonAI found legacy credential files in ${location}.`,
       detail:
         "Choose Migrate only if you just upgraded from an earlier Harness release. If you did not expect this prompt, cancel: the protected key may have been removed or damaged.",
       buttons: ["Cancel", "Migrate"],
@@ -191,10 +198,34 @@ const captureLegacySecretFingerprints = Effect.fn(
 
   for (const { name, value } of legacyValues) {
     fingerprints[name] = Encoding.encodeBase64(
-      SecretEnvelope.fingerprintLegacyServerSecret(name, value, activeKey),
+      SecretEnvelope.fingerprintLegacyServerSecret(name, value, keys[0]),
     );
   }
   return fingerprints;
+});
+
+const captureLegacySecretFingerprints = Effect.fn(
+  "desktop.secretStoreKey.captureLegacyFingerprints",
+)(function* (secretsDir: string, activeKey: Uint8Array) {
+  const environment = yield* DesktopEnvironment.DesktopEnvironment;
+  const fileSystem = yield* FileSystem.FileSystem;
+  const entries = yield* fileSystem
+    .readDirectory(secretsDir)
+    .pipe(
+      Effect.catch((cause) =>
+        cause.reason._tag === "NotFound"
+          ? Effect.succeed([] as ReadonlyArray<string>)
+          : Effect.fail(cause),
+      ),
+    );
+  const values: LegacySecretValue[] = [];
+  for (const entry of entries) {
+    if (!entry.endsWith(".bin")) continue;
+    const name = entry.slice(0, -".bin".length);
+    const value = yield* fileSystem.readFile(environment.path.join(secretsDir, entry));
+    values.push({ name, value: Uint8Array.from(value) });
+  }
+  return yield* authorizeLegacySecretValues(values, [activeKey], "the desktop credential store");
 });
 
 const ensureSecureBackend = Effect.fn("desktop.secretStoreKey.ensureSecureBackend")(function* () {

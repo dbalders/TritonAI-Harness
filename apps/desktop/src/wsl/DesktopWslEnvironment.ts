@@ -1,10 +1,12 @@
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Encoding from "effect/Encoding";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
@@ -23,6 +25,7 @@ const PROBE_TIMEOUT = Duration.seconds(10);
 const TOOLCHAIN_TIMEOUT = Duration.seconds(10);
 const BUILD_TIMEOUT = Duration.minutes(5);
 const USER_HOME_TIMEOUT = Duration.seconds(5);
+const SECRET_FILE_READ_TIMEOUT = Duration.seconds(10);
 const TOOLCHAIN_TRANSPORT_RETRY_LIMIT = 12;
 const BUILD_TRANSPORT_RETRY_LIMIT = 2;
 
@@ -39,6 +42,44 @@ export type EnsureWslNodePtyResult =
       readonly fatal: boolean;
       readonly retryLimit?: number;
     };
+
+export interface WslSecretFile {
+  readonly name: string;
+  readonly value: Uint8Array;
+}
+
+export type ReadWslSecretFilesResult =
+  | { readonly ok: true; readonly files: ReadonlyArray<WslSecretFile> }
+  | { readonly ok: false; readonly reason: string };
+
+export const parseWslSecretFileInventory = (stdout: string): ReadWslSecretFilesResult => {
+  const files: WslSecretFile[] = [];
+  const seen = new Set<string>();
+  for (const line of stdout.split("\n")) {
+    if (line.length === 0) continue;
+    const fields = line.split("\t");
+    if (fields.length !== 2) {
+      return { ok: false, reason: "The WSL credential inventory was malformed." };
+    }
+    const nameBytes = Encoding.decodeBase64(fields[0]!);
+    const valueBytes = Encoding.decodeBase64(fields[1]!);
+    if (Result.isFailure(nameBytes) || Result.isFailure(valueBytes)) {
+      return { ok: false, reason: "The WSL credential inventory was malformed." };
+    }
+    let name: string;
+    try {
+      name = new TextDecoder("utf-8", { fatal: true }).decode(nameBytes.success);
+    } catch {
+      return { ok: false, reason: "The WSL credential inventory was malformed." };
+    }
+    if (name.length === 0 || name.includes("/") || name.includes("\\") || seen.has(name)) {
+      return { ok: false, reason: "The WSL credential inventory was malformed." };
+    }
+    seen.add(name);
+    files.push({ name, value: Uint8Array.from(valueBytes.success) });
+  }
+  return { ok: true, files };
+};
 
 export class DesktopWslDistroListError extends Schema.TaggedErrorClass<DesktopWslDistroListError>()(
   "DesktopWslDistroListError",
@@ -75,6 +116,10 @@ export class DesktopWslEnvironment extends Context.Service<
     // (the backend can be listening for 30+ seconds before wslhost starts
     // forwarding 127.0.0.1:port to WSL-side localhost).
     readonly getDistroIp: (distro: string | null) => Effect.Effect<Option.Option<string>>;
+    readonly readSecretFiles: (
+      distro: string | null,
+      development: boolean,
+    ) => Effect.Effect<ReadWslSecretFilesResult>;
     readonly ensureNodePty: (
       distro: string | null,
       windowsRepoRoot: string,
@@ -717,6 +762,44 @@ const getUserHomeImpl = (
     Effect.orElseSucceed(() => Option.none<string>()),
   );
 
+const readWslSecretFilesImpl = (
+  distro: string | null,
+  development: boolean,
+): Effect.Effect<ReadWslSecretFilesResult, never, ChildProcessSpawner.ChildProcessSpawner> => {
+  const stateDirectory = development ? "dev" : "userdata";
+  const script = `set -o pipefail
+secret_dir="$HOME/.tritonai-harness/${stateDirectory}/secrets"
+if [ ! -d "$secret_dir" ]; then exit 0; fi
+find "$secret_dir" -maxdepth 1 -type f -name '*.bin' -print0 |
+while IFS= read -r -d '' secret_file; do
+  if [ ! -f "$secret_file" ] || [ -L "$secret_file" ]; then exit 20; fi
+  filename=\${secret_file##*/}
+  name=\${filename%.bin}
+  encoded_name=$(printf '%s' "$name" | base64 | tr -d '\\n') || exit 21
+  encoded_value=$(base64 < "$secret_file" | tr -d '\\n') || exit 22
+  printf '%s\\t%s\\n' "$encoded_name" "$encoded_value" || exit 23
+done
+`;
+  return runWslShell(distro, script, SECRET_FILE_READ_TIMEOUT).pipe(
+    Effect.map((result): ReadWslSecretFilesResult => {
+      if (result.transportFailure !== null) {
+        return {
+          ok: false,
+          reason: "TritonAI could not inspect the selected WSL credential store safely.",
+        };
+      }
+      if (result.exitCode !== 0) {
+        return {
+          ok: false,
+          reason: `TritonAI could not inspect the selected WSL credential store (exit ${result.exitCode}).`,
+        };
+      }
+
+      return parseWslSecretFileInventory(result.stdout);
+    }),
+  );
+};
+
 const makeIsAvailable = (
   platform: NodeJS.Platform,
   windir: string,
@@ -736,6 +819,10 @@ export interface DesktopWslEnvironmentTestStub {
   readonly windowsToWslPath?: (distro: string | null, windowsPath: string) => Option.Option<string>;
   readonly getUserHome?: (distro: string | null) => Option.Option<string>;
   readonly getDistroIp?: (distro: string | null) => Option.Option<string>;
+  readonly readSecretFiles?: (
+    distro: string | null,
+    development: boolean,
+  ) => ReadWslSecretFilesResult;
   readonly ensureNodePty?: (
     distro: string | null,
     windowsRepoRoot: string,
@@ -758,6 +845,8 @@ export const layerTest = (stub: DesktopWslEnvironmentTestStub = {}) => {
         Effect.succeed(stub.windowsToWslPath?.(distro, windowsPath) ?? Option.none()),
       getUserHome: (distro) => Effect.succeed(stub.getUserHome?.(distro) ?? Option.none<string>()),
       getDistroIp: (distro) => Effect.succeed(stub.getDistroIp?.(distro) ?? Option.none<string>()),
+      readSecretFiles: (distro, development) =>
+        Effect.succeed(stub.readSecretFiles?.(distro, development) ?? { ok: true, files: [] }),
       ensureNodePty: (distro, windowsRepoRoot, options) =>
         Effect.succeed(
           stub.ensureNodePty?.(distro, windowsRepoRoot, options) ?? {
@@ -824,6 +913,11 @@ export const layer = Layer.effect(
     const getDistroIp = (distro: string | null) =>
       provideSpawner(getDistroIpImpl(distro)).pipe(Effect.withSpan("desktop.wsl.getDistroIp"));
 
+    const readSecretFiles = (distro: string | null, development: boolean) =>
+      provideSpawner(readWslSecretFilesImpl(distro, development)).pipe(
+        Effect.withSpan("desktop.wsl.readSecretFiles"),
+      );
+
     const probeDistros = provideSpawner(probeWslDistros).pipe(
       Effect.withSpan("desktop.wsl.probeDistros"),
     );
@@ -840,6 +934,7 @@ export const layer = Layer.effect(
       windowsToWslPath,
       getUserHome,
       getDistroIp,
+      readSecretFiles,
       ensureNodePty: (distro, windowsRepoRoot, options) =>
         provideSpawner(ensureNodePtyImpl(distro, windowsRepoRoot, windowsToWslPath, options)).pipe(
           Effect.withSpan("desktop.wsl.ensureNodePty"),

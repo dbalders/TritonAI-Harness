@@ -320,7 +320,11 @@ export const make = Effect.gen(function* () {
   const serverConfig = yield* ServerConfig.ServerConfig;
   const keys = yield* decodeConfiguredKeys(serverConfig.secretStoreKeys);
   const legacyFingerprints = yield* decodeLegacyFingerprints(serverConfig.legacySecretFingerprints);
-  if (legacyFingerprints.size > 0 && serverConfig.secretStoreKeyFilePath === undefined) {
+  if (
+    legacyFingerprints.size > 0 &&
+    serverConfig.secretStoreKeyFilePath === undefined &&
+    serverConfig.mode !== "desktop"
+  ) {
     return yield* new SecretStoreKeyError({
       resource: "legacy secret migration authorization",
       reason: "missing-migration-keyring",
@@ -509,6 +513,8 @@ export const make = Effect.gen(function* () {
                     verified.active !== keyring.active ||
                     verifiedPrevious.length !== expectedPrevious.length ||
                     verifiedPrevious.some((key, index) => key !== expectedPrevious[index]) ||
+                    Object.keys(verified.legacySecretFingerprints ?? {}).length !==
+                      Object.keys(remaining).length ||
                     Object.entries(remaining).some(
                       ([secretName, fingerprint]) =>
                         verified.legacySecretFingerprints?.[secretName] !== fingerprint,
@@ -525,10 +531,23 @@ export const make = Effect.gen(function* () {
                   yield* syncDirectory(path.dirname(keyFilePath));
                 }),
               ).pipe(
-                Effect.catch((cause) =>
-                  fileSystem
-                    .remove(tempPath)
-                    .pipe(Effect.ignore, Effect.andThen(Effect.fail(cause))),
+                Effect.catch((operationCause) =>
+                  fileSystem.remove(tempPath, { force: true }).pipe(
+                    Effect.andThen(syncDirectory(path.dirname(tempPath))),
+                    Effect.matchEffect({
+                      onFailure: (cleanupCause) =>
+                        Effect.fail(
+                          new SecretStorePersistError({
+                            resource: "external secret-store keyring temporary file cleanup",
+                            cause: new AggregateError(
+                              [operationCause, cleanupCause],
+                              "The keyring update failed and its raw-key temporary file could not be removed durably.",
+                            ),
+                          }),
+                        ),
+                      onSuccess: () => Effect.fail(operationCause),
+                    }),
+                  ),
                 ),
               );
             }),

@@ -454,9 +454,10 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
   },
 ): Effect.fn.Return<
   DesktopBackendManager.DesktopBackendStartConfig,
-  never,
+  PlatformError.PlatformError,
   | DesktopEnvironment.DesktopEnvironment
   | DesktopWslEnvironment.DesktopWslEnvironment
+  | ElectronDialog.ElectronDialog
   | FileSystem.FileSystem
 > {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
@@ -476,26 +477,6 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
   // the network it exposes on is the WSL-vEthernet network, not the
   // LAN; the primary owns LAN exposure when the user opts in.
   const wslBindHost = "0.0.0.0";
-
-  const bootstrap = {
-    mode: "desktop" as const,
-    noBrowser: true,
-    port: input.port,
-    // Omit t3Home so the Linux backend uses its own home dir instead of
-    // the Windows-side baseDir (which would be a /mnt/c path and share
-    // the SQLite file with the primary).
-    host: wslBindHost,
-    desktopBootstrapToken: input.bootstrapToken,
-    secretStoreKeys: input.secretStoreKeys,
-    legacySecretFingerprints: input.legacySecretFingerprints,
-    // PortSchema rejects 0, so when tailscale serve is disabled we still
-    // need a valid number in this slot. The backend reads tailscaleServePort
-    // only when tailscaleServeEnabled is true, so the actual value here is
-    // inert.
-    tailscaleServeEnabled: false,
-    tailscaleServePort: 443,
-    ...buildObservabilityFragment(input.observabilitySettings),
-  };
 
   // In packaged builds environment.appRoot is .../resources/app.asar — an
   // archive FILE. The Windows primary reads its entry through
@@ -528,6 +509,63 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
   // changes between probing and spawning the backend.
   const runningDistro = preflight._tag === "Ready" ? preflight.runningDistro : null;
   const distroForConfig = runningDistro ?? input.distro;
+
+  let legacySecretFingerprints: Readonly<Record<string, string>> = {};
+  if (preflight._tag === "Ready") {
+    const inventory = yield* wslEnvironment.readSecretFiles(
+      distroForConfig,
+      Option.isSome(environment.devServerUrl),
+    );
+    if (!inventory.ok) {
+      return yield* PlatformError.systemError({
+        _tag: "InvalidData",
+        module: "DesktopBackendConfiguration",
+        method: "resolveWslSecretStore",
+        description: inventory.reason,
+      });
+    }
+    const decodedKeys = yield* Effect.forEach(input.secretStoreKeys, (encoded) =>
+      Effect.fromResult(Encoding.decodeBase64(encoded)).pipe(
+        Effect.mapError(() =>
+          PlatformError.systemError({
+            _tag: "InvalidData",
+            module: "DesktopBackendConfiguration",
+            method: "resolveWslSecretStore",
+            description: "The protected desktop secret-store key is invalid.",
+          }),
+        ),
+      ),
+    );
+    legacySecretFingerprints = yield* DesktopSecretStoreKey.authorizeLegacySecretValues(
+      inventory.files,
+      decodedKeys as [Uint8Array, ...Uint8Array[]],
+      distroForConfig === null
+        ? "the default WSL distribution"
+        : `WSL distribution ${distroForConfig}`,
+    );
+  }
+
+  const bootstrap = {
+    mode: "desktop" as const,
+    noBrowser: true,
+    port: input.port,
+    // Omit t3Home so the Linux backend uses its own home dir instead of
+    // the Windows-side baseDir (which would be a /mnt/c path and share
+    // the SQLite file with the primary).
+    host: wslBindHost,
+    desktopBootstrapToken: input.bootstrapToken,
+    secretStoreKeys: input.secretStoreKeys,
+    // A WSL backend has a distro-local credential store. Authorizations
+    // captured for the Windows-native store must never be reused here.
+    legacySecretFingerprints,
+    // PortSchema rejects 0, so when tailscale serve is disabled we still
+    // need a valid number in this slot. The backend reads tailscaleServePort
+    // only when tailscaleServeEnabled is true, so the actual value here is
+    // inert.
+    tailscaleServeEnabled: false,
+    tailscaleServePort: 443,
+    ...buildObservabilityFragment(input.observabilitySettings),
+  };
 
   // Resolve the selected distro's IPv4 address. In mirrored mode the distro
   // reports a host interface, so use loopback instead; a failed probe also
@@ -728,6 +766,7 @@ export const make = Effect.gen(function* () {
     }).pipe(
       Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
       Effect.provideService(DesktopWslEnvironment.DesktopWslEnvironment, wslEnvironment),
+      Effect.provideService(ElectronDialog.ElectronDialog, dialog),
       Effect.provideService(FileSystem.FileSystem, fileSystem),
     );
   });
@@ -787,6 +826,7 @@ export const make = Effect.gen(function* () {
         return yield* resolveWslStartConfig({ ...shared, ...input }).pipe(
           Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
           Effect.provideService(DesktopWslEnvironment.DesktopWslEnvironment, wslEnvironment),
+          Effect.provideService(ElectronDialog.ElectronDialog, dialog),
           Effect.provideService(FileSystem.FileSystem, fileSystem),
         );
       }).pipe(

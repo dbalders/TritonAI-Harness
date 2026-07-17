@@ -7,9 +7,25 @@ const SERVER_SECRET_AUTH_TAG_BYTES = 16;
 
 export const SERVER_SECRET_ENVELOPE_MAGIC = Uint8Array.from(new TextEncoder().encode("T3SECRET"));
 
+const SERVER_SECRET_ENVELOPE_HEADER_BYTES =
+  SERVER_SECRET_ENVELOPE_MAGIC.byteLength +
+  1 +
+  SERVER_SECRET_NONCE_BYTES +
+  SERVER_SECRET_AUTH_TAG_BYTES;
+
 export const hasServerSecretEnvelopeMagic = (bytes: Uint8Array): boolean =>
   bytes.byteLength >= SERVER_SECRET_ENVELOPE_MAGIC.byteLength &&
   SERVER_SECRET_ENVELOPE_MAGIC.every((byte, index) => bytes[index] === byte);
+
+/**
+ * Identifies bytes that contain a complete supported envelope header without
+ * attempting authentication. This is deliberately stronger than a magic-only
+ * check so legacy plaintext beginning with `T3SECRET` can still migrate.
+ */
+export const hasServerSecretEnvelopeStructure = (bytes: Uint8Array): boolean =>
+  bytes.byteLength >= SERVER_SECRET_ENVELOPE_HEADER_BYTES &&
+  hasServerSecretEnvelopeMagic(bytes) &&
+  bytes[SERVER_SECRET_ENVELOPE_MAGIC.byteLength] === SERVER_SECRET_ENVELOPE_VERSION;
 
 export interface DecodedServerSecretEnvelope {
   readonly value: Uint8Array;
@@ -41,15 +57,10 @@ export const decodeServerSecretEnvelope = (
   envelope: Uint8Array,
   keys: ReadonlyArray<Uint8Array>,
 ): DecodedServerSecretEnvelope => {
-  const headerBytes =
-    SERVER_SECRET_ENVELOPE_MAGIC.byteLength +
-    1 +
-    SERVER_SECRET_NONCE_BYTES +
-    SERVER_SECRET_AUTH_TAG_BYTES;
   if (!hasServerSecretEnvelopeMagic(envelope)) {
     throw new Error("The secret is not an encrypted envelope.");
   }
-  if (envelope.byteLength < headerBytes) {
+  if (envelope.byteLength < SERVER_SECRET_ENVELOPE_HEADER_BYTES) {
     throw new Error("The encrypted secret envelope is truncated.");
   }
   if (envelope[SERVER_SECRET_ENVELOPE_MAGIC.byteLength] !== SERVER_SECRET_ENVELOPE_VERSION) {
