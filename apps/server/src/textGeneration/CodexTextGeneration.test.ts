@@ -19,6 +19,7 @@ import {
 import * as ServerConfig from "../config.ts";
 import * as TextGeneration from "./TextGeneration.ts";
 import { makeCodexTextGeneration } from "./CodexTextGeneration.ts";
+import { TRITONAI_CLIENT_VERSION } from "../tritonAiClientHeaders.ts";
 const decodeCodexSettings = Schema.decodeSync(CodexSettings);
 
 const DEFAULT_TEST_MODEL_SELECTION = createModelSelection(
@@ -66,6 +67,7 @@ function makeFakeCodexBinary(
         'seen_provider_name=""',
         'seen_provider_env_key=""',
         'seen_provider_wire=""',
+        'seen_provider_headers=""',
         "while [ $# -gt 0 ]; do",
         '  if [ "$1" = "--image" ]; then',
         "    shift",
@@ -100,6 +102,11 @@ function makeFakeCodexBinary(
         '    case "$1" in',
         "      model_providers.ucsd.wire_api=*)",
         '        seen_provider_wire="$1"',
+        "        ;;",
+        "    esac",
+        '    case "$1" in',
+        "      model_providers.ucsd.http_headers=*)",
+        '        seen_provider_headers="$1"',
         "        ;;",
         "    esac",
         '    case "$1" in',
@@ -185,6 +192,10 @@ function makeFakeCodexBinary(
               'if [ "$seen_provider_wire" != "model_providers.ucsd.wire_api=\\"responses\\"" ]; then',
               '  printf "%s\\n" "missing TritonAI provider wire config: $seen_provider_wire" >&2',
               `  exit 12`,
+              "fi",
+              `if [ "$seen_provider_headers" != 'model_providers.ucsd.http_headers={"X-TritonAI-Client"="harness","X-TritonAI-Client-Version"="${TRITONAI_CLIENT_VERSION}"}' ]; then`,
+              '  printf "%s\\n" "missing TritonAI client header config: $seen_provider_headers" >&2',
+              `  exit 14`,
               "fi",
             ]
           : []),

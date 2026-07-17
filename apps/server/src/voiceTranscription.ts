@@ -9,6 +9,7 @@ import {
   type ServerVoiceTranscribeInput,
   type ServerVoiceTranscribeResult,
 } from "@t3tools/contracts";
+import { makeTritonAiClientHeaders } from "./tritonAiClientHeaders.ts";
 
 const MAX_VOICE_AUDIO_BYTES = 25 * 1024 * 1024;
 const MAX_VOICE_AUDIO_BASE64_CHARS = Math.ceil(MAX_VOICE_AUDIO_BYTES / 3) * 4;
@@ -267,6 +268,7 @@ export function transcribeVoice(
         const response = await fetchImpl(transcriptionEndpoint(config.baseUrl), {
           method: "POST",
           headers: {
+            ...makeTritonAiClientHeaders(),
             Authorization: `Bearer ${config.apiKey}`,
           },
           body: form,

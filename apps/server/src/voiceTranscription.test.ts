@@ -3,6 +3,7 @@ import { DEFAULT_VOICE_TRANSCRIPTION_BASE_URL } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 
 import { transcribeVoice } from "./voiceTranscription.ts";
+import { TRITONAI_CLIENT_VERSION } from "./tritonAiClientHeaders.ts";
 
 const audioBase64 = Buffer.from("voice bytes").toString("base64");
 
@@ -21,7 +22,11 @@ describe("transcribeVoice", () => {
         async (_url: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
           expect(_url).toBe("https://tritonai-api.ucsd.edu/v1/audio/transcriptions");
           expect(init?.method).toBe("POST");
-          expect(init?.headers).toEqual({ Authorization: "Bearer test-key" });
+          expect(init?.headers).toEqual({
+            Authorization: "Bearer test-key",
+            "X-TritonAI-Client": "harness",
+            "X-TritonAI-Client-Version": TRITONAI_CLIENT_VERSION,
+          });
           expect(init?.body).toBeInstanceOf(FormData);
           const form = init?.body as FormData;
           expect(form.get("model")).toBe("api-cohere-transcribe");
