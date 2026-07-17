@@ -62,7 +62,8 @@ export class SecretStoreTemporaryPathError extends Schema.TaggedErrorClass<Secre
 export class SecretStorePersistError extends Schema.TaggedErrorClass<SecretStorePersistError>()(
   "SecretStorePersistError",
   {
-    ...secretStoreErrorContext,
+    resource: Schema.String,
+    cause: Schema.optionalKey(Schema.Defect()),
   },
 ) {
   override get message(): string {
@@ -144,17 +145,25 @@ export class SecretStoreKeyError extends Schema.TaggedErrorClass<SecretStoreKeyE
   }
 }
 
-export class SecretStoreLockError extends Schema.TaggedErrorClass<SecretStoreLockError>()(
-  "SecretStoreLockError",
+export class SecretStoreLockTimeoutError extends Schema.TaggedErrorClass<SecretStoreLockTimeoutError>()(
+  "SecretStoreLockTimeoutError",
   {
     resource: Schema.String,
-    reason: Schema.Literals(["timeout", "ownership-changed"]),
   },
 ) {
   override get message(): string {
-    return this.reason === "timeout"
-      ? `Timed out waiting to lock ${this.resource}.`
-      : `Lost ownership of the lock for ${this.resource}.`;
+    return `Timed out waiting to lock ${this.resource}.`;
+  }
+}
+
+export class SecretStoreLockOwnershipError extends Schema.TaggedErrorClass<SecretStoreLockOwnershipError>()(
+  "SecretStoreLockOwnershipError",
+  {
+    resource: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Lost ownership of the lock for ${this.resource}.`;
   }
 }
 
@@ -169,7 +178,8 @@ export const SecretStoreError = Schema.Union([
   SecretStoreDecodeError,
   SecretStoreEncodeError,
   SecretStoreKeyError,
-  SecretStoreLockError,
+  SecretStoreLockTimeoutError,
+  SecretStoreLockOwnershipError,
 ]);
 export type SecretStoreError = typeof SecretStoreError.Type;
 export const isSecretStoreError = Schema.is(SecretStoreError);
@@ -360,7 +370,7 @@ export const make = Effect.gen(function* () {
     keyFilePath: string,
   ): Effect.Effect<
     ExternalKeyringLock,
-    PlatformError.PlatformError | SecretStoreLockError | SecretStoreTemporaryPathError
+    PlatformError.PlatformError | SecretStoreLockTimeoutError | SecretStoreTemporaryPathError
   > =>
     Effect.gen(function* () {
       const lockPath = `${keyFilePath}.lock`;
@@ -399,31 +409,28 @@ export const make = Effect.gen(function* () {
         yield* Effect.sleep(EXTERNAL_KEYRING_LOCK_RETRY_DELAY);
       }
 
-      return yield* new SecretStoreLockError({
+      return yield* new SecretStoreLockTimeoutError({
         resource: "external secret-store keyring",
-        reason: "timeout",
       });
     });
 
   const releaseExternalKeyringLock = (
     lock: ExternalKeyringLock,
-  ): Effect.Effect<void, PlatformError.PlatformError | SecretStoreLockError> =>
+  ): Effect.Effect<void, PlatformError.PlatformError | SecretStoreLockOwnershipError> =>
     Effect.gen(function* () {
       const currentOwner = yield* fileSystem.readFileString(lock.lockPath).pipe(
-        Effect.mapError((cause): PlatformError.PlatformError | SecretStoreLockError => {
+        Effect.mapError((cause): PlatformError.PlatformError | SecretStoreLockOwnershipError => {
           if (cause.reason._tag === "NotFound") {
-            return new SecretStoreLockError({
+            return new SecretStoreLockOwnershipError({
               resource: "external secret-store keyring",
-              reason: "ownership-changed",
             });
           }
           return cause;
         }),
       );
       if (currentOwner !== lock.owner) {
-        return yield* new SecretStoreLockError({
+        return yield* new SecretStoreLockOwnershipError({
           resource: "external secret-store keyring",
-          reason: "ownership-changed",
         });
       }
       yield* fileSystem.remove(lock.lockPath);
@@ -446,7 +453,6 @@ export const make = Effect.gen(function* () {
                   () =>
                     new SecretStorePersistError({
                       resource: "legacy migration authorization",
-                      cause: new Error("The external secret-store keyring is invalid."),
                     }),
                 ),
               );
@@ -461,7 +467,6 @@ export const make = Effect.gen(function* () {
               if (currentFingerprint !== Encoding.encodeBase64(expected)) {
                 return yield* new SecretStorePersistError({
                   resource: `legacy migration authorization for secret ${name}`,
-                  cause: new Error("The external secret-store keyring changed during migration."),
                 });
               }
 
@@ -477,7 +482,6 @@ export const make = Effect.gen(function* () {
                   () =>
                     new SecretStorePersistError({
                       resource: "legacy migration authorization",
-                      cause: new Error("External keyring encoding failed."),
                     }),
                 ),
               )}\n`;
@@ -503,7 +507,6 @@ export const make = Effect.gen(function* () {
                       () =>
                         new SecretStorePersistError({
                           resource: "legacy migration authorization",
-                          cause: new Error("External keyring verification failed."),
                         }),
                     ),
                   );
@@ -523,7 +526,6 @@ export const make = Effect.gen(function* () {
                   ) {
                     return yield* new SecretStorePersistError({
                       resource: "legacy migration authorization",
-                      cause: new Error("External keyring verification failed."),
                     });
                   }
                   yield* fileSystem.rename(tempPath, keyFilePath);
@@ -598,7 +600,6 @@ export const make = Effect.gen(function* () {
           ) {
             return yield* new SecretStorePersistError({
               resource: `secret ${name}`,
-              cause: new Error("Encrypted secret verification failed."),
             });
           }
 
@@ -708,7 +709,6 @@ export const make = Effect.gen(function* () {
         ) {
           return yield* new SecretStorePersistError({
             resource: `secret ${name}`,
-            cause: new Error("Encrypted secret verification failed."),
           });
         }
 
