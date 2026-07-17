@@ -11,7 +11,6 @@ import {
   ServerPluginOperationError,
   type ServerPluginsListResult,
   ServerPluginUninstallInput,
-  type ServerProvider,
   ServerProviderSkillConfigError,
   ServerProviderSkillInstallError,
   ServerRemoveProviderSkillInput,
@@ -47,6 +46,7 @@ import {
 } from "./managedSkillManifest.ts";
 import { discoverPublicSkillCatalog } from "./publicSkillRepository.ts";
 import {
+  ensureProviderSkillRemovalPathIsSafe,
   removeProviderSkillFolder,
   resolveProviderSkillRemovalTarget,
 } from "./removeProviderSkill.ts";
@@ -594,11 +594,10 @@ export const removeCodexProviderSkill = Effect.fn("removeCodexProviderSkill")(fu
   const removalTarget = yield* resolveProviderSkillRemovalTarget({ providers, request }).pipe(
     Effect.mapError((cause) => skillInstallError(cause.message, cause)),
   );
-  yield* ensureSkillBelongsToCodexHome({
-    provider: providers.find((candidate) => candidate.instanceId === request.instanceId),
-    skillPath: request.skillPath,
-    sharedHomePath: target.sharedHomePath,
-  });
+  yield* ensureProviderSkillRemovalPathIsSafe({
+    sharedSkillsDirectory: path.join(target.sharedHomePath, "skills"),
+    skillDirectoryPath: removalTarget.skillDirectoryPath,
+  }).pipe(Effect.mapError((cause) => skillInstallError(cause.message, cause)));
   yield* withCodexClient(target, "skills/config/write", (client) =>
     client.request("skills/config/write", {
       enabled: false,
@@ -620,26 +619,4 @@ export const removeCodexProviderSkill = Effect.fn("removeCodexProviderSkill")(fu
     ),
   );
   return yield* refreshProvidersAfterCodexMutation(target.instanceId);
-});
-
-const ensureSkillBelongsToCodexHome = Effect.fn("ensureSkillBelongsToCodexHome")(function* (input: {
-  readonly provider: ServerProvider | undefined;
-  readonly skillPath: string;
-  readonly sharedHomePath: string;
-}) {
-  const path = yield* Path.Path;
-  if (!input.provider) {
-    return yield* skillInstallError("Provider was not found in the current provider inventory.");
-  }
-  const skill = input.provider.skills.find((candidate) => candidate.path === input.skillPath);
-  if (!skill) {
-    return yield* skillInstallError("Skill was not found in the current provider inventory.");
-  }
-  const normalizedSharedSkills = path.resolve(path.join(input.sharedHomePath, "skills"));
-  const normalizedSkillPath = path.resolve(input.skillPath);
-  if (!normalizedSkillPath.startsWith(`${normalizedSharedSkills}${path.sep}`)) {
-    return yield* skillInstallError(
-      "Only skills installed into TritonAI's managed Codex skills folder can be removed.",
-    );
-  }
 });

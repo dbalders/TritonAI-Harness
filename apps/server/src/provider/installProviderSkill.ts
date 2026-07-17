@@ -59,6 +59,17 @@ function installError(message: string, cause?: unknown) {
   });
 }
 
+const assertNotSymbolicLinkPath = Effect.fn("assertNotSymbolicLinkPath")(function* (
+  targetPath: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  if (yield* isSymbolicLinkPath(fs, targetPath)) {
+    return yield* installError(
+      `Refusing to install a skill through symlinked destination path ${targetPath}.`,
+    );
+  }
+});
+
 function parseUrl(rawUrl: string): URL | null {
   try {
     return new URL(rawUrl.trim());
@@ -806,6 +817,7 @@ export function installSkillBundle(input: {
     const frontmatter = yield* extractFrontmatter(entrypoint.content);
     const skillName = yield* sanitizeSkillName(frontmatter.name);
     const skillsDirectory = pathService.resolve(input.skillsDirectory);
+    yield* assertNotSymbolicLinkPath(skillsDirectory);
     const skillDirectory = pathService.join(skillsDirectory, skillName);
     const skillPath = pathService.join(skillDirectory, "SKILL.md");
 
@@ -820,6 +832,8 @@ export function installSkillBundle(input: {
         `Skill '${skillName}' is managed by the TritonAI Installer and cannot be replaced here.`,
       );
     }
+
+    yield* assertNotSymbolicLinkPath(skillDirectory);
 
     const skillDirectoryExists = yield* fs
       .exists(skillDirectory)

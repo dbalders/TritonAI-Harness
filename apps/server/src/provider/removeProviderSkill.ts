@@ -18,6 +18,62 @@ function removalError(message: string, cause?: unknown) {
   });
 }
 
+function isSymbolicLinkPath(
+  fileSystem: FileSystem.FileSystem,
+  targetPath: string,
+): Effect.Effect<boolean> {
+  return fileSystem.readLink(targetPath).pipe(
+    Effect.as(true),
+    Effect.orElseSucceed(() => false),
+  );
+}
+
+export const ensureProviderSkillRemovalPathIsSafe = Effect.fn(
+  "ensureProviderSkillRemovalPathIsSafe",
+)(function* (input: {
+  readonly sharedSkillsDirectory: string;
+  readonly skillDirectoryPath: string;
+}) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const sharedSkillsDirectory = path.resolve(input.sharedSkillsDirectory);
+  const skillDirectoryPath = path.resolve(input.skillDirectoryPath);
+  const outsideManagedSkillsError = () =>
+    removalError(
+      "Only skills installed into TritonAI's managed Codex skills folder can be removed.",
+    );
+
+  if (path.dirname(skillDirectoryPath) !== sharedSkillsDirectory) {
+    return yield* outsideManagedSkillsError();
+  }
+  if (
+    (yield* isSymbolicLinkPath(fileSystem, sharedSkillsDirectory)) ||
+    (yield* isSymbolicLinkPath(fileSystem, skillDirectoryPath))
+  ) {
+    return yield* outsideManagedSkillsError();
+  }
+
+  const realSharedSkills = yield* fileSystem
+    .realPath(sharedSkillsDirectory)
+    .pipe(
+      Effect.mapError((cause) =>
+        removalError(`Failed to verify Codex skills folder ${sharedSkillsDirectory}.`, cause),
+      ),
+    );
+  const realSkillDirectory = yield* fileSystem.realPath(skillDirectoryPath).pipe(
+    Effect.catchIf(
+      (cause) => cause.reason._tag === "NotFound",
+      () => Effect.succeed(null),
+    ),
+    Effect.mapError((cause) =>
+      removalError(`Failed to verify skill folder ${skillDirectoryPath}.`, cause),
+    ),
+  );
+  if (realSkillDirectory !== null && path.dirname(realSkillDirectory) !== realSharedSkills) {
+    return yield* outsideManagedSkillsError();
+  }
+});
+
 export function resolveProviderSkillRemovalTarget(input: {
   readonly providers: ReadonlyArray<ServerProvider>;
   readonly request: ServerRemoveProviderSkillInput;
@@ -62,7 +118,7 @@ export function removeProviderSkillFolder(
   return Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     yield* fileSystem
-      .remove(target.skillDirectoryPath, { recursive: true })
+      .remove(target.skillDirectoryPath, { recursive: true, force: true })
       .pipe(
         Effect.mapError((cause) =>
           removalError(`Failed to remove skill folder '${target.skillDirectoryPath}'.`, cause),
