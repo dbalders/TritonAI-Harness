@@ -463,11 +463,18 @@ reconciliationLayer("CodexAdapter integration availability reconciliation", (it)
         const initialRuntime = reconciliationRuntimeFactory.lastRuntime!;
         resolvedReconciliationRegistry = replacementReconciliationRegistry;
 
-        yield* adapter.sendTurn({ threadId, input: "use the replacement registry", attachments: [] });
+        yield* adapter.sendTurn({
+          threadId,
+          input: "use the replacement registry",
+          attachments: [],
+        });
 
         NodeAssert.equal(reconciliationRuntimeFactory.factory.mock.calls.length, 2);
         NodeAssert.equal(initialRuntime.closeImpl.mock.calls.length, 1);
-        NodeAssert.equal(reconciliationRuntimeFactory.lastRuntime?.sendTurnImpl.mock.calls.length, 1);
+        NodeAssert.equal(
+          reconciliationRuntimeFactory.lastRuntime?.sendTurnImpl.mock.calls.length,
+          1,
+        );
       } finally {
         resolvedReconciliationRegistry = reconciliationRegistry;
       }

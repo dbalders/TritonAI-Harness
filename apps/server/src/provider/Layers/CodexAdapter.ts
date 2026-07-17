@@ -1957,7 +1957,8 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       if (
         integrationRegistry === currentIntegrationRegistry &&
         (!integrationRegistry ||
-          candidate.integrationAvailabilityGeneration === integrationRegistry.availabilityGeneration)
+          candidate.integrationAvailabilityGeneration ===
+            integrationRegistry.availabilityGeneration)
       ) {
         return candidate;
       }
