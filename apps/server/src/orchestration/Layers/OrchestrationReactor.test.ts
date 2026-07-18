@@ -12,6 +12,7 @@ import { ThreadDeletionReactor } from "../Services/ThreadDeletionReactor.ts";
 import { OrchestrationReactor } from "../Services/OrchestrationReactor.ts";
 import { makeOrchestrationReactor } from "./OrchestrationReactor.ts";
 import * as AgentAwarenessRelay from "../../relay/AgentAwarenessRelay.ts";
+import { AnalyticsReactor } from "../../telemetry/AnalyticsReactor.ts";
 
 describe("OrchestrationReactor", () => {
   let runtime: ManagedRuntime.ManagedRuntime<OrchestrationReactor, never> | null = null;
@@ -28,6 +29,15 @@ describe("OrchestrationReactor", () => {
 
     runtime = ManagedRuntime.make(
       Layer.effect(OrchestrationReactor, makeOrchestrationReactor).pipe(
+        Layer.provideMerge(
+          Layer.succeed(AnalyticsReactor, {
+            start: () => {
+              started.push("analytics-reactor");
+              return Effect.void;
+            },
+            drain: Effect.void,
+          }),
+        ),
         Layer.provideMerge(
           Layer.succeed(ProviderRuntimeIngestionService, {
             start: () => {
@@ -81,6 +91,7 @@ describe("OrchestrationReactor", () => {
     await Effect.runPromise(reactor.start().pipe(Scope.provide(scope)));
 
     expect(started).toEqual([
+      "analytics-reactor",
       "provider-runtime-ingestion",
       "provider-command-reactor",
       "checkpoint-reactor",
