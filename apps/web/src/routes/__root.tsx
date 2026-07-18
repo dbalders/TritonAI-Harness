@@ -82,7 +82,7 @@ export const Route = createRootRoute({
   }),
 });
 
-function RootRouteView() {
+export function RootRouteView() {
   const pathname = useLocation({ select: (location) => location.pathname });
   const { authGateState } = Route.useRouteContext();
   const primaryEnvironmentAuthenticated = authGateState.status === "authenticated";
