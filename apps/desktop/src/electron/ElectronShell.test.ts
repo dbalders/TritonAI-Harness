@@ -56,4 +56,32 @@ describe("ElectronShell", () => {
       assert.equal(result, false);
     }).pipe(Effect.provide(ElectronShell.layer)),
   );
+
+  it.effect("opens the macOS notification settings pane", () =>
+    Effect.gen(function* () {
+      openExternalMock.mockResolvedValue(undefined);
+
+      const electronShell = yield* ElectronShell.ElectronShell;
+      const result = yield* electronShell.openNotificationSettings();
+
+      assert.equal(result, true);
+      assert.deepEqual(openExternalMock.mock.calls, [
+        [ElectronShell.MACOS_NOTIFICATION_SETTINGS_URL],
+      ]);
+    }).pipe(Effect.provide(ElectronShell.layer)),
+  );
+
+  it.effect("returns false when notification settings cannot be opened", () =>
+    Effect.gen(function* () {
+      openExternalMock.mockRejectedValue(new Error("open failed"));
+
+      const electronShell = yield* ElectronShell.ElectronShell;
+      const result = yield* electronShell.openNotificationSettings();
+
+      assert.equal(result, false);
+      assert.deepEqual(openExternalMock.mock.calls, [
+        [ElectronShell.MACOS_NOTIFICATION_SETTINGS_URL],
+      ]);
+    }).pipe(Effect.provide(ElectronShell.layer)),
+  );
 });

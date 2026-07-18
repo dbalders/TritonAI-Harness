@@ -54,6 +54,7 @@ import { Switch } from "../ui/switch";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { AddProviderInstanceDialog } from "./AddProviderInstanceDialog";
+import { DesktopNotificationsSettingsRow } from "./DesktopNotificationsSettingsRow";
 import {
   canOneClickUpdateProviderCandidate,
   collectProviderUpdateCandidates,
@@ -319,11 +320,16 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.confirmThreadDelete !== DEFAULT_UNIFIED_SETTINGS.confirmThreadDelete
         ? ["Delete confirmation"]
         : []),
+      ...(settings.desktopNotificationsEnabled !==
+      DEFAULT_UNIFIED_SETTINGS.desktopNotificationsEnabled
+        ? ["Desktop notifications"]
+        : []),
     ],
     [
       settings.autoOpenPlanSidebar,
       settings.confirmThreadArchive,
       settings.confirmThreadDelete,
+      settings.desktopNotificationsEnabled,
       settings.addProjectBaseDirectory,
       settings.defaultThreadEnvMode,
       settings.newWorktreesStartFromOrigin,
@@ -361,6 +367,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       addProjectBaseDirectory: DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory,
       confirmThreadArchive: DEFAULT_UNIFIED_SETTINGS.confirmThreadArchive,
       confirmThreadDelete: DEFAULT_UNIFIED_SETTINGS.confirmThreadDelete,
+      desktopNotificationsEnabled: DEFAULT_UNIFIED_SETTINGS.desktopNotificationsEnabled,
       textGenerationModelSelection: DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection,
     });
     onRestored?.();
@@ -722,6 +729,12 @@ export function GeneralSettingsPanel() {
           }
         />
       </SettingsSection>
+
+      {isElectron ? (
+        <SettingsSection title="Notifications">
+          <DesktopNotificationsSettingsRow />
+        </SettingsSection>
+      ) : null}
 
       <SettingsSection title="About">
         {isElectron ? (

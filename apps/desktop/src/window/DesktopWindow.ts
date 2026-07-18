@@ -403,6 +403,7 @@ export const make = Effect.gen(function* () {
         callback(
           isTrustedRenderer &&
             (permission === "clipboard-sanitized-write" ||
+              permission === "notifications" ||
               (permission === "media" &&
                 isTrustedRendererMicrophoneRequest({
                   applicationUrl,

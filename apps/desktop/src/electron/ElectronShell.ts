@@ -6,6 +6,8 @@ import * as Option from "effect/Option";
 import * as Electron from "electron";
 
 const SAFE_EXTERNAL_PROTOCOLS = new Set(["http:", "https:"]);
+export const MACOS_NOTIFICATION_SETTINGS_URL =
+  "x-apple.systempreferences:com.apple.Notifications-Settings.extension";
 
 export function parseSafeExternalUrl(rawUrl: unknown): Option.Option<string> {
   if (typeof rawUrl !== "string") {
@@ -24,6 +26,7 @@ export class ElectronShell extends Context.Service<
   ElectronShell,
   {
     readonly openExternal: (rawUrl: unknown) => Effect.Effect<boolean>;
+    readonly openNotificationSettings: () => Effect.Effect<boolean>;
     readonly copyText: (text: string) => Effect.Effect<void>;
   }
 >()("@t3tools/desktop/electron/ElectronShell") {}
@@ -40,6 +43,13 @@ export const make = ElectronShell.of({
           ),
         ),
     }),
+  openNotificationSettings: () =>
+    Effect.promise(() =>
+      Electron.shell.openExternal(MACOS_NOTIFICATION_SETTINGS_URL).then(
+        () => true,
+        () => false,
+      ),
+    ),
   copyText: (text) =>
     Effect.sync(() => {
       Electron.clipboard.writeText(text);
