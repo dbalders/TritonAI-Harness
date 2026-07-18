@@ -16,6 +16,8 @@ const config = {
   cwd: "/server",
   env: {},
   bootstrap: {
+    secretStoreKeys: ["WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo="],
+    legacySecretFingerprints: {},
     mode: "desktop",
     noBrowser: true,
     port: 3773,

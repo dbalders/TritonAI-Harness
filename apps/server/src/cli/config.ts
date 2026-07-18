@@ -1,4 +1,9 @@
+// @effect-diagnostics nodeBuiltinImport:off - O_NOFOLLOW plus one Node file descriptor closes keyring path races that the portable FileSystem API cannot express.
+import * as NodeFS from "node:fs";
+import * as NodeFSP from "node:fs/promises";
+
 import * as NetService from "@t3tools/shared/Net";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serverSettings";
 import {
   DesktopBackendBootstrap,
@@ -13,6 +18,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as LogLevel from "effect/LogLevel";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
 import * as SchemaTransformation from "effect/SchemaTransformation";
@@ -116,6 +122,7 @@ const EnvServerConfig = Config.all({
   port: Config.port("T3CODE_PORT").pipe(Config.option, Config.map(Option.getOrUndefined)),
   host: Config.string("T3CODE_HOST").pipe(Config.option, Config.map(Option.getOrUndefined)),
   t3Home: homeConfig,
+  secretStoreKeyFile: optionalStringConfig("TRITONAI_SECRET_STORE_KEY_FILE"),
   devUrl: Config.url("VITE_DEV_SERVER_URL").pipe(Config.option, Config.map(Option.getOrUndefined)),
   noBrowser: Config.boolean("T3CODE_NO_BROWSER").pipe(
     Config.option,
@@ -209,6 +216,172 @@ const loadPersistedObservabilitySettings = Effect.fn(function* (settingsPath: st
   return parsePersistedServerObservabilitySettings(raw);
 });
 
+const ExternalSecretStoreKeyring = Schema.Struct({
+  version: Schema.Literal(1),
+  active: Schema.String,
+  previous: Schema.optionalKey(Schema.Array(Schema.String)),
+  legacySecretFingerprints: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+});
+
+const decodeExternalSecretStoreKeyring = Schema.decodeEffect(
+  Schema.fromJsonString(ExternalSecretStoreKeyring),
+);
+
+const secretStoreKeyFileError = (
+  tag: "InvalidData" | "PermissionDenied" | "Unknown",
+  method: string,
+  keyFilePath: string,
+  description: string,
+  cause?: unknown,
+): PlatformError.PlatformError =>
+  PlatformError.systemError({
+    _tag: tag,
+    module: "SecretStoreKeyFile",
+    method,
+    pathOrDescriptor: keyFilePath,
+    description,
+    ...(cause === undefined ? {} : { cause }),
+  });
+
+const loadExternalSecretStoreKeys = Effect.fn(function* (keyFilePath: string) {
+  const hostPlatform = yield* HostProcessPlatform;
+  const inspectPath = () =>
+    Effect.tryPromise({
+      try: () => NodeFSP.lstat(keyFilePath),
+      catch: (cause) =>
+        secretStoreKeyFileError(
+          "PermissionDenied",
+          "lstat",
+          keyFilePath,
+          "Unable to inspect the secret-store key path safely.",
+          cause,
+        ),
+    });
+  const pathInfoBeforeOpen = yield* inspectPath();
+  if (pathInfoBeforeOpen.isSymbolicLink()) {
+    return yield* secretStoreKeyFileError(
+      "PermissionDenied",
+      "lstat",
+      keyFilePath,
+      "Symbolic links are not allowed for secret-store key files.",
+    );
+  }
+  const openFlags =
+    hostPlatform === "win32"
+      ? NodeFS.constants.O_RDONLY
+      : NodeFS.constants.O_RDONLY | NodeFS.constants.O_NOFOLLOW;
+  const raw = yield* Effect.acquireUseRelease(
+    Effect.tryPromise({
+      try: () => NodeFSP.open(keyFilePath, openFlags),
+      catch: (cause) =>
+        secretStoreKeyFileError(
+          "PermissionDenied",
+          "open",
+          keyFilePath,
+          "Secret-store key files must be regular files and symbolic links are not allowed.",
+          cause,
+        ),
+    }),
+    (file) =>
+      Effect.gen(function* () {
+        const info = yield* Effect.tryPromise({
+          try: () => file.stat(),
+          catch: (cause) =>
+            secretStoreKeyFileError(
+              "Unknown",
+              "stat",
+              keyFilePath,
+              "Unable to inspect the opened secret-store key file.",
+              cause,
+            ),
+        });
+        if (!info.isFile()) {
+          return yield* secretStoreKeyFileError(
+            "InvalidData",
+            "stat",
+            keyFilePath,
+            "The secret-store key path must identify a regular file.",
+          );
+        }
+        const pathInfoAfterOpen = yield* inspectPath();
+        if (
+          pathInfoAfterOpen.isSymbolicLink() ||
+          pathInfoBeforeOpen.dev !== info.dev ||
+          pathInfoBeforeOpen.ino !== info.ino ||
+          pathInfoAfterOpen.dev !== info.dev ||
+          pathInfoAfterOpen.ino !== info.ino
+        ) {
+          return yield* secretStoreKeyFileError(
+            "PermissionDenied",
+            "stat",
+            keyFilePath,
+            "The secret-store key path changed while it was being opened.",
+          );
+        }
+        if (hostPlatform !== "win32") {
+          const currentUid = process.getuid?.();
+          if (currentUid !== undefined && info.uid !== currentUid && info.uid !== 0) {
+            return yield* secretStoreKeyFileError(
+              "PermissionDenied",
+              "stat",
+              keyFilePath,
+              "The secret-store key file must be owned by the service account or root.",
+            );
+          }
+          if ((info.mode & 0o077) !== 0) {
+            return yield* secretStoreKeyFileError(
+              "PermissionDenied",
+              "stat",
+              keyFilePath,
+              "Secret-store key files must not be accessible by group or other users.",
+            );
+          }
+        }
+        return yield* Effect.tryPromise({
+          try: () => file.readFile({ encoding: "utf8" }),
+          catch: (cause) =>
+            secretStoreKeyFileError(
+              "Unknown",
+              "read",
+              keyFilePath,
+              "Unable to read the opened secret-store key file.",
+              cause,
+            ),
+        });
+      }),
+    (file) =>
+      Effect.tryPromise({
+        try: () => file.close(),
+        catch: (cause) =>
+          secretStoreKeyFileError(
+            "Unknown",
+            "close",
+            keyFilePath,
+            "Unable to close the secret-store key file.",
+            cause,
+          ),
+      }),
+  );
+  const keyring = yield* decodeExternalSecretStoreKeyring(raw).pipe(
+    // Schema parse errors retain their input. Avoid carrying a raw keyring in
+    // the startup error if the file is malformed.
+    Effect.mapError(() =>
+      PlatformError.systemError({
+        _tag: "InvalidData",
+        module: "SecretStoreKeyFile",
+        method: "decode",
+        pathOrDescriptor: keyFilePath,
+        description: "Secret-store keyring JSON is invalid.",
+      }),
+    ),
+  );
+  return {
+    path: keyFilePath,
+    keys: [keyring.active, ...(keyring.previous ?? [])],
+    legacySecretFingerprints: keyring.legacySecretFingerprints ?? {},
+  };
+});
+
 export const resolveServerConfig = (
   flags: CliServerFlags,
   cliLogLevel: Option.Option<LogLevel.LogLevel>,
@@ -281,6 +454,12 @@ export const resolveServerConfig = (
         ),
       ),
     );
+    const externalSecretStore =
+      bootstrap !== undefined || env.secretStoreKeyFile === undefined
+        ? undefined
+        : yield* loadExternalSecretStoreKeys(
+            path.resolve(yield* expandHomePath(env.secretStoreKeyFile.trim())),
+          );
     const rawCwd = Option.getOrElse(normalizedFlags.cwd, () => process.cwd());
     const cwd = path.resolve(yield* expandHomePath(rawCwd.trim()));
     yield* fs.makeDirectory(cwd, { recursive: true });
@@ -375,6 +554,12 @@ export const resolveServerConfig = (
       noBrowser,
       startupPresentation,
       desktopBootstrapToken,
+      secretStoreKeys: bootstrap?.secretStoreKeys ?? externalSecretStore?.keys,
+      legacySecretFingerprints:
+        bootstrap?.legacySecretFingerprints ?? externalSecretStore?.legacySecretFingerprints ?? {},
+      ...(externalSecretStore === undefined
+        ? {}
+        : { secretStoreKeyFilePath: externalSecretStore.path }),
       autoBootstrapProjectFromCwd,
       logWebSocketEvents,
       tailscaleServeEnabled,

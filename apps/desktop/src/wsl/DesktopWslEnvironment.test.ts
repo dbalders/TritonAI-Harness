@@ -10,11 +10,13 @@ import * as TestClock from "effect/testing/TestClock";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import {
+  buildWslSecretFileInventoryScript,
   buildWslNodeEnvPreamble,
   DesktopWslDistroListError,
   formatMissingToolsReason,
   formatNodePtyProbeFailureReason,
   formatWslShellTransportFailureReason,
+  parseWslSecretFileInventory,
   parseNodePath,
   parseResolvedPath,
   parseToolchainReport,
@@ -121,6 +123,40 @@ describe("buildWslNodeEnvPreamble", () => {
 
   it("keeps the shared resolver permissive when no Node engine range is provided", () => {
     expect(buildWslNodeEnvPreamble()).toContain("T3_NODE_ENGINE_RANGE=''");
+  });
+});
+
+describe("parseWslSecretFileInventory", () => {
+  it("includes symlinked .bin entries so the fail-closed type check can reject them", () => {
+    const script = buildWslSecretFileInventoryScript(false);
+
+    expect(script).toContain(`find "$secret_dir" -maxdepth 1 -name '*.bin' -print0`);
+    expect(script).not.toContain("-type f");
+    expect(script).toContain(`[ ! -f "$secret_file" ] || [ -L "$secret_file" ]`);
+  });
+
+  it("decodes opaque credential bytes without putting them in filenames", () => {
+    const name = Buffer.from("integration-microsoft-365--oauth").toString("base64");
+    const value = Buffer.from([0, 1, 2, 255]).toString("base64");
+
+    const result = parseWslSecretFileInventory(`${name}\t${value}\n`);
+
+    expect(result).toEqual({
+      ok: true,
+      files: [
+        {
+          name: "integration-microsoft-365--oauth",
+          value: Uint8Array.from([0, 1, 2, 255]),
+        },
+      ],
+    });
+  });
+
+  it("rejects duplicate or path-like credential names", () => {
+    const name = Buffer.from("../oauth").toString("base64");
+    const value = Buffer.from("token").toString("base64");
+
+    expect(parseWslSecretFileInventory(`${name}\t${value}\n`).ok).toBe(false);
   });
 });
 

@@ -1,15 +1,25 @@
+import * as NodeCrypto from "node:crypto";
+
+import * as SecretEnvelope from "@t3tools/shared/secretEnvelope";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
+import * as Encoding from "effect/Encoding";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
-import * as Predicate from "effect/Predicate";
 import * as PlatformError from "effect/PlatformError";
+import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 
 import * as ServerConfig from "../config.ts";
+
+const DATA_KEY_BYTES = 32;
+const SECRET_STORE_LOCK_RETRY_COUNT = 200;
+const SECRET_STORE_LOCK_RETRY_DELAY = "25 millis";
 
 const secretStoreErrorContext = {
   resource: Schema.String,
@@ -52,7 +62,8 @@ export class SecretStoreTemporaryPathError extends Schema.TaggedErrorClass<Secre
 export class SecretStorePersistError extends Schema.TaggedErrorClass<SecretStorePersistError>()(
   "SecretStorePersistError",
   {
-    ...secretStoreErrorContext,
+    resource: Schema.String,
+    cause: Schema.optionalKey(Schema.Defect()),
   },
 ) {
   override get message(): string {
@@ -115,6 +126,47 @@ export class SecretStoreEncodeError extends Schema.TaggedErrorClass<SecretStoreE
   }
 }
 
+export class SecretStoreKeyError extends Schema.TaggedErrorClass<SecretStoreKeyError>()(
+  "SecretStoreKeyError",
+  {
+    resource: Schema.String,
+    reason: Schema.Literals([
+      "missing-provider",
+      "invalid-key-encoding",
+      "invalid-key-length",
+      "invalid-fingerprint-encoding",
+      "invalid-fingerprint-length",
+      "missing-migration-keyring",
+    ]),
+  },
+) {
+  override get message(): string {
+    return `Failed to unlock ${this.resource}.`;
+  }
+}
+
+export class SecretStoreLockTimeoutError extends Schema.TaggedErrorClass<SecretStoreLockTimeoutError>()(
+  "SecretStoreLockTimeoutError",
+  {
+    resource: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Timed out waiting to lock ${this.resource}.`;
+  }
+}
+
+export class SecretStoreLockOwnershipError extends Schema.TaggedErrorClass<SecretStoreLockOwnershipError>()(
+  "SecretStoreLockOwnershipError",
+  {
+    resource: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Lost ownership of the lock for ${this.resource}.`;
+  }
+}
+
 export const SecretStoreError = Schema.Union([
   SecretStoreSecureError,
   SecretStoreReadError,
@@ -125,6 +177,9 @@ export const SecretStoreError = Schema.Union([
   SecretStoreRemoveError,
   SecretStoreDecodeError,
   SecretStoreEncodeError,
+  SecretStoreKeyError,
+  SecretStoreLockTimeoutError,
+  SecretStoreLockOwnershipError,
 ]);
 export type SecretStoreError = typeof SecretStoreError.Type;
 export const isSecretStoreError = Schema.is(SecretStoreError);
@@ -132,8 +187,11 @@ export const isSecretStoreError = Schema.is(SecretStoreError);
 const isPlatformError = (value: unknown): value is PlatformError.PlatformError =>
   Predicate.isTagged(value, "PlatformError");
 
+const isAlreadyExistsPlatformError = (value: unknown): value is PlatformError.PlatformError =>
+  isPlatformError(value) && value.reason._tag === "AlreadyExists";
+
 export const isSecretAlreadyExistsError = (error: SecretStoreError): boolean =>
-  "cause" in error && isPlatformError(error.cause) && error.cause.reason._tag === "AlreadyExists";
+  "cause" in error && isAlreadyExistsPlatformError(error.cause);
 
 export class ServerSecretStore extends Context.Service<
   ServerSecretStore,
@@ -149,11 +207,143 @@ export class ServerSecretStore extends Context.Service<
   }
 >()("t3/auth/ServerSecretStore") {}
 
+const decodeConfiguredKeys = Effect.fn("ServerSecretStore.decodeConfiguredKeys")(function* (
+  encodedKeys: ReadonlyArray<string> | undefined,
+) {
+  if (encodedKeys === undefined || encodedKeys.length === 0) {
+    return yield* new SecretStoreKeyError({
+      resource: "server secret encryption key",
+      reason: "missing-provider",
+    });
+  }
+
+  const keys: Buffer[] = [];
+  for (const encoded of encodedKeys) {
+    const decoded = yield* Effect.fromResult(Encoding.decodeBase64(encoded)).pipe(
+      Effect.mapError(
+        () =>
+          new SecretStoreKeyError({
+            resource: "server secret encryption key",
+            reason: "invalid-key-encoding",
+          }),
+      ),
+    );
+    if (decoded.byteLength !== DATA_KEY_BYTES) {
+      return yield* new SecretStoreKeyError({
+        resource: "server secret encryption key",
+        reason: "invalid-key-length",
+      });
+    }
+    keys.push(Buffer.from(decoded));
+  }
+  return [keys[0]!, ...keys.slice(1)] as const;
+});
+
+const decodeLegacyFingerprints = Effect.fn("ServerSecretStore.decodeLegacyFingerprints")(function* (
+  configured: Readonly<Record<string, string>> | undefined,
+) {
+  const fingerprints = new Map<string, Buffer>();
+  for (const [name, encoded] of Object.entries(configured ?? {})) {
+    const decoded = yield* Effect.fromResult(Encoding.decodeBase64(encoded)).pipe(
+      Effect.mapError(
+        () =>
+          new SecretStoreKeyError({
+            resource: "legacy secret migration fingerprint",
+            reason: "invalid-fingerprint-encoding",
+          }),
+      ),
+    );
+    if (decoded.byteLength !== 32) {
+      return yield* new SecretStoreKeyError({
+        resource: "legacy secret migration fingerprint",
+        reason: "invalid-fingerprint-length",
+      });
+    }
+    fingerprints.set(name, Buffer.from(decoded));
+  }
+  return fingerprints;
+});
+
+const ExternalSecretStoreKeyring = Schema.Struct({
+  version: Schema.Literal(1),
+  active: Schema.String,
+  previous: Schema.optionalKey(Schema.Array(Schema.String)),
+  legacySecretFingerprints: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+});
+
+const decodeExternalSecretStoreKeyring = Schema.decodeEffect(
+  Schema.fromJsonString(ExternalSecretStoreKeyring),
+);
+const encodeExternalSecretStoreKeyring = Schema.encodeEffect(
+  Schema.fromJsonString(ExternalSecretStoreKeyring),
+);
+
+const isTrustedLegacyValue = (
+  name: string,
+  value: Uint8Array,
+  keys: readonly [Buffer, ...Buffer[]],
+  fingerprints: ReadonlyMap<string, Buffer>,
+): boolean => {
+  const expected = fingerprints.get(name);
+  if (expected === undefined) return false;
+  return keys.some((key) =>
+    NodeCrypto.timingSafeEqual(
+      Buffer.from(SecretEnvelope.fingerprintLegacyServerSecret(name, value, key)),
+      expected,
+    ),
+  );
+};
+
+const hasOwnProperty = (record: Readonly<Record<string, string>>, name: string): boolean =>
+  Object.prototype.hasOwnProperty.call(record, name);
+
+const encodeEnvelope = (
+  name: string,
+  value: Uint8Array,
+  key: Buffer,
+): Effect.Effect<Uint8Array, SecretStoreEncodeError> =>
+  Effect.try({
+    try: () => SecretEnvelope.encodeServerSecretEnvelope(name, value, key),
+    catch: (cause) =>
+      new SecretStoreEncodeError({
+        resource: `secret ${name}`,
+        cause,
+      }),
+  });
+
+const decodeEnvelope = (
+  name: string,
+  envelope: Uint8Array,
+  keys: readonly [Buffer, ...Buffer[]],
+): Effect.Effect<SecretEnvelope.DecodedServerSecretEnvelope, SecretStoreDecodeError> =>
+  Effect.try({
+    try: () => SecretEnvelope.decodeServerSecretEnvelope(name, envelope, keys),
+    catch: (cause) =>
+      new SecretStoreDecodeError({
+        resource: `secret ${name}`,
+        cause,
+      }),
+  });
+
 export const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const fileSystem = yield* FileSystem.FileSystem;
+  const hostPlatform = yield* HostProcessPlatform;
   const path = yield* Path.Path;
   const serverConfig = yield* ServerConfig.ServerConfig;
+  const keys = yield* decodeConfiguredKeys(serverConfig.secretStoreKeys);
+  const legacyFingerprints = yield* decodeLegacyFingerprints(serverConfig.legacySecretFingerprints);
+  if (
+    legacyFingerprints.size > 0 &&
+    serverConfig.secretStoreKeyFilePath === undefined &&
+    serverConfig.mode !== "desktop"
+  ) {
+    return yield* new SecretStoreKeyError({
+      resource: "legacy secret migration authorization",
+      reason: "missing-migration-keyring",
+    });
+  }
+  const mutex = yield* Semaphore.make(1);
 
   yield* fileSystem.makeDirectory(serverConfig.secretsDir, { recursive: true });
   yield* fileSystem.chmod(serverConfig.secretsDir, 0o700).pipe(
@@ -167,76 +357,488 @@ export const make = Effect.gen(function* () {
   );
 
   const resolveSecretPath = (name: string) => path.join(serverConfig.secretsDir, `${name}.bin`);
+  const syncDirectory = (directoryPath: string) =>
+    hostPlatform === "win32"
+      ? Effect.void
+      : Effect.scoped(
+          fileSystem.open(directoryPath, { flag: "r" }).pipe(Effect.flatMap((file) => file.sync)),
+        );
 
-  const get: ServerSecretStore["Service"]["get"] = (name) =>
-    fileSystem.readFile(resolveSecretPath(name)).pipe(
-      Effect.map((bytes) => Option.some(Uint8Array.from(bytes))),
-      Effect.catch((cause) =>
-        cause.reason._tag === "NotFound"
-          ? Effect.succeed(Option.none())
-          : Effect.fail(
+  interface SecretStoreLock {
+    readonly lockPath: string;
+    readonly owner: string;
+    readonly resource: string;
+  }
+
+  const acquireSecretStoreLock = (
+    lockPath: string,
+    resource: string,
+  ): Effect.Effect<
+    SecretStoreLock,
+    PlatformError.PlatformError | SecretStoreLockTimeoutError | SecretStoreTemporaryPathError
+  > =>
+    Effect.gen(function* () {
+      const owner = yield* crypto.randomUUIDv4.pipe(
+        Effect.mapError(
+          (cause) =>
+            new SecretStoreTemporaryPathError({
+              resource: `${resource} lock`,
+              cause,
+            }),
+        ),
+      );
+
+      for (let attempt = 0; attempt < SECRET_STORE_LOCK_RETRY_COUNT; attempt += 1) {
+        let created = false;
+        const acquired = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const file = yield* fileSystem.open(lockPath, { flag: "wx", mode: 0o600 });
+            created = true;
+            yield* file.writeAll(new TextEncoder().encode(owner));
+            yield* file.sync;
+          }),
+        ).pipe(
+          Effect.as(true),
+          Effect.catch((cause) =>
+            isAlreadyExistsPlatformError(cause)
+              ? Effect.succeed(false)
+              : created
+                ? fileSystem
+                    .remove(lockPath, { force: true })
+                    .pipe(Effect.andThen(Effect.fail(cause)))
+                : Effect.fail(cause),
+          ),
+        );
+        if (acquired) return { lockPath, owner, resource } as const;
+        yield* Effect.sleep(SECRET_STORE_LOCK_RETRY_DELAY);
+      }
+
+      return yield* new SecretStoreLockTimeoutError({
+        resource,
+      });
+    });
+
+  const releaseSecretStoreLock = (
+    lock: SecretStoreLock,
+  ): Effect.Effect<void, PlatformError.PlatformError | SecretStoreLockOwnershipError> =>
+    Effect.gen(function* () {
+      const currentOwner = yield* fileSystem.readFileString(lock.lockPath).pipe(
+        Effect.mapError((cause): PlatformError.PlatformError | SecretStoreLockOwnershipError => {
+          if (cause.reason._tag === "NotFound") {
+            return new SecretStoreLockOwnershipError({
+              resource: lock.resource,
+            });
+          }
+          return cause;
+        }),
+      );
+      if (currentOwner !== lock.owner) {
+        return yield* new SecretStoreLockOwnershipError({
+          resource: lock.resource,
+        });
+      }
+      yield* fileSystem.remove(lock.lockPath);
+    });
+
+  const retireLegacyAuthorization = (name: string): Effect.Effect<void, SecretStoreError> => {
+    const expected = legacyFingerprints.get(name);
+    if (expected === undefined) return Effect.void;
+
+    return Effect.gen(function* () {
+      const keyFilePath = serverConfig.secretStoreKeyFilePath;
+      if (keyFilePath !== undefined) {
+        yield* Effect.acquireUseRelease(
+          acquireSecretStoreLock(`${keyFilePath}.lock`, "external secret-store keyring"),
+          () =>
+            Effect.gen(function* () {
+              const raw = yield* fileSystem.readFileString(keyFilePath);
+              const keyring = yield* decodeExternalSecretStoreKeyring(raw).pipe(
+                Effect.mapError(
+                  () =>
+                    new SecretStorePersistError({
+                      resource: "legacy migration authorization",
+                    }),
+                ),
+              );
+              const keyringFingerprints = keyring.legacySecretFingerprints ?? {};
+              const currentFingerprint = hasOwnProperty(keyringFingerprints, name)
+                ? keyringFingerprints[name]
+                : undefined;
+              if (currentFingerprint === undefined) {
+                // Another process can migrate the same authorized bytes and
+                // durably retire the fingerprint while this process waits for
+                // the lock. The absent entry is already the required final
+                // state; a different entry remains a hard failure below.
+                return;
+              }
+              if (currentFingerprint !== Encoding.encodeBase64(expected)) {
+                return yield* new SecretStorePersistError({
+                  resource: `legacy migration authorization for secret ${name}`,
+                });
+              }
+
+              const remaining = Object.assign(
+                Object.create(null) as Record<string, string>,
+                keyringFingerprints,
+              );
+              delete remaining[name];
+              const updated = `${yield* encodeExternalSecretStoreKeyring({
+                version: 1,
+                active: keyring.active,
+                ...(keyring.previous === undefined ? {} : { previous: keyring.previous }),
+                legacySecretFingerprints: remaining,
+              }).pipe(
+                Effect.mapError(
+                  () =>
+                    new SecretStorePersistError({
+                      resource: "legacy migration authorization",
+                    }),
+                ),
+              )}\n`;
+              const uuid = yield* crypto.randomUUIDv4.pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new SecretStoreTemporaryPathError({
+                      resource: "external secret-store keyring",
+                      cause,
+                    }),
+                ),
+              );
+              const tempPath = `${keyFilePath}.${uuid}.tmp`;
+              yield* Effect.scoped(
+                Effect.gen(function* () {
+                  const file = yield* fileSystem.open(tempPath, { flag: "wx", mode: 0o600 });
+                  yield* file.writeAll(new TextEncoder().encode(updated));
+                  yield* fileSystem.chmod(tempPath, 0o600);
+                  yield* file.sync;
+                  const verifiedRaw = yield* fileSystem.readFileString(tempPath);
+                  const verified = yield* decodeExternalSecretStoreKeyring(verifiedRaw).pipe(
+                    Effect.mapError(
+                      () =>
+                        new SecretStorePersistError({
+                          resource: "legacy migration authorization",
+                        }),
+                    ),
+                  );
+                  const verifiedPrevious = verified.previous ?? [];
+                  const expectedPrevious = keyring.previous ?? [];
+                  if (
+                    verified.active !== keyring.active ||
+                    verifiedPrevious.length !== expectedPrevious.length ||
+                    verifiedPrevious.some((key, index) => key !== expectedPrevious[index]) ||
+                    Object.keys(verified.legacySecretFingerprints ?? {}).length !==
+                      Object.keys(remaining).length ||
+                    Object.entries(remaining).some(
+                      ([secretName, fingerprint]) =>
+                        verified.legacySecretFingerprints?.[secretName] !== fingerprint,
+                    ) ||
+                    hasOwnProperty(verified.legacySecretFingerprints ?? {}, name)
+                  ) {
+                    return yield* new SecretStorePersistError({
+                      resource: "legacy migration authorization",
+                    });
+                  }
+                  yield* fileSystem.rename(tempPath, keyFilePath);
+                  yield* fileSystem.chmod(keyFilePath, 0o600);
+                  yield* syncDirectory(path.dirname(keyFilePath));
+                }),
+              ).pipe(
+                Effect.catch((operationCause) =>
+                  fileSystem.remove(tempPath, { force: true }).pipe(
+                    Effect.andThen(syncDirectory(path.dirname(tempPath))),
+                    Effect.matchEffect({
+                      onFailure: (cleanupCause) =>
+                        Effect.fail(
+                          new SecretStorePersistError({
+                            resource: "external secret-store keyring temporary file cleanup",
+                            cause: new AggregateError(
+                              [operationCause, cleanupCause],
+                              "The keyring update failed and its raw-key temporary file could not be removed durably.",
+                            ),
+                          }),
+                        ),
+                      onSuccess: () => Effect.fail(operationCause),
+                    }),
+                  ),
+                ),
+              );
+            }),
+          releaseSecretStoreLock,
+        );
+      }
+      legacyFingerprints.delete(name);
+    }).pipe(
+      Effect.mapError((cause) =>
+        isSecretStoreError(cause)
+          ? cause
+          : new SecretStorePersistError({
+              resource: `legacy migration authorization for secret ${name}`,
+              cause,
+            }),
+      ),
+    );
+  };
+
+  const persistReplacing = (name: string, value: Uint8Array) => {
+    const secretPath = resolveSecretPath(name);
+    return Effect.gen(function* () {
+      const envelope = yield* encodeEnvelope(name, value, keys[0]);
+      const uuid = yield* crypto.randomUUIDv4.pipe(
+        Effect.mapError(
+          (cause) =>
+            new SecretStoreTemporaryPathError({
+              resource: `secret ${name}`,
+              cause,
+            }),
+        ),
+      );
+      const tempPath = `${secretPath}.${uuid}.tmp`;
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const file = yield* fileSystem.open(tempPath, { flag: "wx", mode: 0o600 });
+          yield* file.writeAll(envelope);
+          yield* fileSystem.chmod(tempPath, 0o600);
+          yield* file.sync;
+
+          const persisted = yield* fileSystem.readFile(tempPath);
+          const verified = yield* decodeEnvelope(name, persisted, keys);
+          if (
+            verified.keyIndex !== 0 ||
+            verified.value.byteLength !== value.byteLength ||
+            !NodeCrypto.timingSafeEqual(Buffer.from(verified.value), Buffer.from(value))
+          ) {
+            return yield* new SecretStorePersistError({
+              resource: `secret ${name}`,
+            });
+          }
+
+          yield* fileSystem.rename(tempPath, secretPath);
+          yield* fileSystem.chmod(secretPath, 0o600);
+          yield* syncDirectory(serverConfig.secretsDir);
+        }),
+      ).pipe(
+        Effect.mapError((cause) =>
+          isSecretStoreError(cause)
+            ? cause
+            : new SecretStorePersistError({ resource: `secret ${name}`, cause }),
+        ),
+        Effect.catch((cause) =>
+          fileSystem.remove(tempPath).pipe(Effect.ignore, Effect.andThen(Effect.fail(cause))),
+        ),
+      );
+    });
+  };
+
+  const getUnlocked: ServerSecretStore["Service"]["get"] = (name) =>
+    Effect.gen(function* () {
+      const storedOption: Option.Option<Uint8Array> = yield* fileSystem
+        .readFile(resolveSecretPath(name))
+        .pipe(
+          Effect.map((bytes): Option.Option<Uint8Array> => Option.some(Uint8Array.from(bytes))),
+          Effect.mapError(
+            (cause) =>
               new SecretStoreReadError({
                 resource: `secret ${name}`,
                 cause,
               }),
-            ),
-      ),
-      Effect.withSpan("ServerSecretStore.get"),
-    );
-
-  const set: ServerSecretStore["Service"]["set"] = (name, value) => {
-    const secretPath = resolveSecretPath(name);
-    return crypto.randomUUIDv4.pipe(
-      Effect.mapError(
-        (cause) =>
-          new SecretStoreTemporaryPathError({
-            resource: `secret ${name}`,
-            cause,
-          }),
-      ),
-      Effect.flatMap((uuid) => {
-        const tempPath = `${secretPath}.${uuid}.tmp`;
-        return Effect.gen(function* () {
-          yield* fileSystem.writeFile(tempPath, value);
-          yield* fileSystem.chmod(tempPath, 0o600);
-          yield* fileSystem.rename(tempPath, secretPath);
-          yield* fileSystem.chmod(secretPath, 0o600);
-        }).pipe(
-          Effect.catch((cause) =>
-            fileSystem.remove(tempPath).pipe(
-              Effect.ignore,
-              Effect.flatMap(() =>
-                Effect.fail(
-                  new SecretStorePersistError({
-                    resource: `secret ${name}`,
-                    cause,
-                  }),
-                ),
-              ),
-            ),
+          ),
+          Effect.catch((error) =>
+            isPlatformError(error.cause) && error.cause.reason._tag === "NotFound"
+              ? Effect.succeed(Option.none<Uint8Array>())
+              : Effect.fail(error),
           ),
         );
-      }),
-      Effect.withSpan("ServerSecretStore.set"),
+      if (Option.isNone(storedOption)) {
+        yield* retireLegacyAuthorization(name);
+        return Option.none<Uint8Array>();
+      }
+
+      const stored = storedOption.value;
+      if (isTrustedLegacyValue(name, stored, keys, legacyFingerprints)) {
+        // Only bytes fingerprinted while the OS-protected data key was first
+        // created are eligible for migration. This prevents damaged envelope
+        // headers from being reclassified as unauthenticated plaintext.
+        yield* persistReplacing(name, stored);
+        yield* retireLegacyAuthorization(name);
+        return Option.some(Uint8Array.from(stored));
+      }
+
+      const decoded = yield* decodeEnvelope(name, stored, keys);
+      if (decoded.keyIndex !== 0) {
+        yield* persistReplacing(name, decoded.value);
+      }
+      yield* retireLegacyAuthorization(name);
+      return Option.some(decoded.value);
+    });
+
+  const withSecretLock = <A, R>(
+    name: string,
+    operation: Effect.Effect<A, SecretStoreError, R>,
+  ): Effect.Effect<A, SecretStoreError, R> =>
+    Effect.acquireUseRelease(
+      acquireSecretStoreLock(`${resolveSecretPath(name)}.lock`, `secret ${name}`),
+      () => operation,
+      releaseSecretStoreLock,
+    ).pipe(
+      Effect.mapError((cause) =>
+        isSecretStoreError(cause)
+          ? cause
+          : new SecretStorePersistError({
+              resource: `lock for secret ${name}`,
+              cause,
+            }),
+      ),
     );
+
+  const get: ServerSecretStore["Service"]["get"] = (name) =>
+    mutex
+      .withPermits(1)(withSecretLock(name, getUnlocked(name)))
+      .pipe(Effect.withSpan("ServerSecretStore.get"));
+
+  const set: ServerSecretStore["Service"]["set"] = (name, value) =>
+    mutex
+      .withPermits(1)(
+        withSecretLock(
+          name,
+          Effect.gen(function* () {
+            yield* persistReplacing(name, Uint8Array.from(value));
+            yield* retireLegacyAuthorization(name);
+          }),
+        ),
+      )
+      .pipe(Effect.withSpan("ServerSecretStore.set"));
+
+  const createUnlocked: ServerSecretStore["Service"]["create"] = (name, value) => {
+    const secretPath = resolveSecretPath(name);
+    return Effect.gen(function* () {
+      const envelope = yield* encodeEnvelope(name, value, keys[0]);
+      const uuid = yield* crypto.randomUUIDv4.pipe(
+        Effect.mapError(
+          (cause) =>
+            new SecretStoreTemporaryPathError({
+              resource: `secret ${name}`,
+              cause,
+            }),
+        ),
+      );
+      const tempPath = `${secretPath}.${uuid}.tmp`;
+
+      yield* Effect.gen(function* () {
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const file = yield* fileSystem.open(tempPath, { flag: "wx", mode: 0o600 });
+            yield* file.writeAll(envelope);
+            yield* fileSystem.chmod(tempPath, 0o600);
+            yield* file.sync;
+          }),
+        );
+
+        const persisted = yield* fileSystem.readFile(tempPath);
+        const verified = yield* decodeEnvelope(name, persisted, keys);
+        if (
+          verified.keyIndex !== 0 ||
+          verified.value.byteLength !== value.byteLength ||
+          !NodeCrypto.timingSafeEqual(Buffer.from(verified.value), Buffer.from(value))
+        ) {
+          return yield* new SecretStorePersistError({
+            resource: `secret ${name}`,
+          });
+        }
+
+        // Hard-linking publishes the verified inode only if the canonical path
+        // is still absent. Cleanup owns only tempPath, so it can never delete a
+        // value concurrently published by another store instance.
+        yield* fileSystem.link(tempPath, secretPath);
+        yield* syncDirectory(serverConfig.secretsDir);
+      }).pipe(
+        Effect.mapError((cause) =>
+          isSecretStoreError(cause)
+            ? cause
+            : new SecretStorePersistError({ resource: `secret ${name}`, cause }),
+        ),
+        Effect.ensuring(fileSystem.remove(tempPath, { force: true }).pipe(Effect.ignore)),
+      );
+    });
   };
 
-  const create: ServerSecretStore["Service"]["create"] = (name, value) => {
+  const create: ServerSecretStore["Service"]["create"] = (name, value) =>
+    mutex.withPermits(1)(
+      withSecretLock(
+        name,
+        Effect.gen(function* () {
+          yield* createUnlocked(name, Uint8Array.from(value));
+          yield* retireLegacyAuthorization(name);
+        }),
+      ),
+    );
+
+  const getOrCreateRandom: ServerSecretStore["Service"]["getOrCreateRandom"] = (name, bytes) =>
+    mutex
+      .withPermits(1)(
+        withSecretLock(
+          name,
+          getUnlocked(name).pipe(
+            Effect.flatMap(
+              Option.match({
+                onSome: Effect.succeed,
+                onNone: () =>
+                  crypto.randomBytes(bytes).pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new SecretStoreRandomGenerationError({
+                          resource: `secret ${name}`,
+                          cause,
+                        }),
+                    ),
+                    Effect.flatMap((generated) =>
+                      Effect.gen(function* () {
+                        yield* createUnlocked(name, generated);
+                        yield* retireLegacyAuthorization(name);
+                        return Uint8Array.from(generated);
+                      }).pipe(
+                        Effect.catchIf(isSecretStoreError, (error) =>
+                          isSecretAlreadyExistsError(error)
+                            ? getUnlocked(name).pipe(
+                                Effect.flatMap(
+                                  Option.match({
+                                    onSome: Effect.succeed,
+                                    onNone: () =>
+                                      Effect.fail(
+                                        new SecretStoreConcurrentReadError({
+                                          resource: `secret ${name}`,
+                                        }),
+                                      ),
+                                  }),
+                                ),
+                              )
+                            : Effect.fail(error),
+                        ),
+                      ),
+                    ),
+                  ),
+              }),
+            ),
+          ),
+        ),
+      )
+      .pipe(Effect.withSpan("ServerSecretStore.getOrCreateRandom"));
+
+  const removeUnlocked: ServerSecretStore["Service"]["remove"] = (name) => {
     const secretPath = resolveSecretPath(name);
-    return Effect.scoped(
-      Effect.gen(function* () {
-        const file = yield* fileSystem.open(secretPath, {
-          flag: "wx",
-          mode: 0o600,
-        });
-        yield* file.writeAll(value);
-        yield* file.sync;
-        yield* fileSystem.chmod(secretPath, 0o600);
-      }),
-    ).pipe(
+    return Effect.gen(function* () {
+      yield* fileSystem
+        .remove(secretPath)
+        .pipe(
+          Effect.catch((cause) =>
+            cause.reason._tag === "NotFound" ? Effect.void : Effect.fail(cause),
+          ),
+        );
+      yield* syncDirectory(serverConfig.secretsDir);
+    }).pipe(
       Effect.mapError(
         (cause) =>
-          new SecretStorePersistError({
+          new SecretStoreRemoveError({
             resource: `secret ${name}`,
             cause,
           }),
@@ -244,62 +846,18 @@ export const make = Effect.gen(function* () {
     );
   };
 
-  const getOrCreateRandom: ServerSecretStore["Service"]["getOrCreateRandom"] = (name, bytes) =>
-    get(name).pipe(
-      Effect.flatMap(
-        Option.match({
-          onSome: Effect.succeed,
-          onNone: () =>
-            crypto.randomBytes(bytes).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new SecretStoreRandomGenerationError({
-                    resource: `secret ${name}`,
-                    cause,
-                  }),
-              ),
-              Effect.flatMap((generated) =>
-                create(name, generated).pipe(
-                  Effect.as(Uint8Array.from(generated)),
-                  Effect.catchIf(isSecretStoreError, (error) =>
-                    isSecretAlreadyExistsError(error)
-                      ? get(name).pipe(
-                          Effect.flatMap(
-                            Option.match({
-                              onSome: Effect.succeed,
-                              onNone: () =>
-                                Effect.fail(
-                                  new SecretStoreConcurrentReadError({
-                                    resource: `secret ${name}`,
-                                  }),
-                                ),
-                            }),
-                          ),
-                        )
-                      : Effect.fail(error),
-                  ),
-                ),
-              ),
-            ),
-        }),
-      ),
-      Effect.withSpan("ServerSecretStore.getOrCreateRandom"),
-    );
-
   const remove: ServerSecretStore["Service"]["remove"] = (name) =>
-    fileSystem.remove(resolveSecretPath(name)).pipe(
-      Effect.catch((cause) =>
-        cause.reason._tag === "NotFound"
-          ? Effect.void
-          : Effect.fail(
-              new SecretStoreRemoveError({
-                resource: `secret ${name}`,
-                cause,
-              }),
-            ),
-      ),
-      Effect.withSpan("ServerSecretStore.remove"),
-    );
+    mutex
+      .withPermits(1)(
+        withSecretLock(
+          name,
+          Effect.gen(function* () {
+            yield* removeUnlocked(name);
+            yield* retireLegacyAuthorization(name);
+          }),
+        ),
+      )
+      .pipe(Effect.withSpan("ServerSecretStore.remove"));
 
   return ServerSecretStore.of({
     get,

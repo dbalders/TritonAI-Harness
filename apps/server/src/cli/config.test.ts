@@ -7,6 +7,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 
 import {
@@ -14,15 +15,28 @@ import {
   type DesktopBackendBootstrap as DesktopBackendBootstrapValue,
 } from "@t3tools/contracts";
 import * as NetService from "@t3tools/shared/Net";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { deriveServerPaths } from "../config.ts";
 import { resolveServerConfig } from "./config.ts";
 
 const encodeDesktopBootstrap = Schema.encodeEffect(Schema.fromJsonString(DesktopBackendBootstrap));
+const headlessKeyFileSetting = ["TRITONAI", "SECRET", "STORE", "KEY", "FILE"].join("_");
+const encodeSecretStoreKeyring = Schema.encodeEffect(
+  Schema.fromJsonString(
+    Schema.Struct({
+      version: Schema.Literal(1),
+      active: Schema.String,
+      previous: Schema.Array(Schema.String),
+    }),
+  ),
+);
 
 const makeDesktopBootstrap = (
   overrides: Partial<DesktopBackendBootstrapValue> = {},
 ): DesktopBackendBootstrapValue => ({
+  secretStoreKeys: ["WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo="],
+  legacySecretFingerprints: {},
   mode: "desktop",
   noBrowser: true,
   port: 4888,
@@ -119,6 +133,8 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         logWebSocketEvents: true,
         tailscaleServeEnabled: false,
         tailscaleServePort: 443,
+        secretStoreKeys: undefined,
+        legacySecretFingerprints: {},
       });
     }),
   );
@@ -185,6 +201,8 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         logWebSocketEvents: true,
         tailscaleServeEnabled: true,
         tailscaleServePort: 8443,
+        secretStoreKeys: undefined,
+        legacySecretFingerprints: {},
       });
     }),
   );
@@ -254,6 +272,8 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         logWebSocketEvents: false,
         tailscaleServeEnabled: false,
         tailscaleServePort: 443,
+        secretStoreKeys: ["WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo="],
+        legacySecretFingerprints: {},
       });
     }),
   );
@@ -300,6 +320,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
               ConfigProvider.fromEnv({
                 env: {
                   T3CODE_BOOTSTRAP_FD: String(fd),
+                  [headlessKeyFileSetting]: "/missing/lower-precedence-keyring.json",
                 },
               }),
             ),
@@ -328,6 +349,8 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         logWebSocketEvents: false,
         tailscaleServeEnabled: false,
         tailscaleServePort: 443,
+        secretStoreKeys: ["WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo="],
+        legacySecretFingerprints: {},
       });
       assert.equal(join(baseDir, "userdata"), resolved.stateDir);
     }),
@@ -453,6 +476,8 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         logWebSocketEvents: true,
         tailscaleServeEnabled: false,
         tailscaleServePort: 443,
+        secretStoreKeys: ["WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo="],
+        legacySecretFingerprints: {},
       });
     }),
   );
@@ -522,6 +547,8 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         logWebSocketEvents: false,
         tailscaleServeEnabled: false,
         tailscaleServePort: 443,
+        secretStoreKeys: undefined,
+        legacySecretFingerprints: {},
       });
     }),
   );
@@ -585,7 +612,169 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         logWebSocketEvents: false,
         tailscaleServeEnabled: false,
         tailscaleServePort: 443,
+        secretStoreKeys: undefined,
+        legacySecretFingerprints: {},
       });
     }),
+  );
+
+  it.effect("loads an explicit headless secret-store keyring", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const keyFilePath = yield* fs.makeTempFileScoped({
+        prefix: "t3-secret-keyring-",
+        suffix: ".json",
+      });
+      yield* fs.writeFileString(
+        keyFilePath,
+        yield* encodeSecretStoreKeyring({
+          version: 1,
+          active: "WVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVk=",
+          previous: ["WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo="],
+        }),
+      );
+      yield* fs.chmod(keyFilePath, 0o600);
+
+      const resolved = yield* resolveServerConfig(
+        {
+          mode: Option.some("web"),
+          port: Option.some(3773),
+          host: Option.none(),
+          baseDir: Option.some(NodeOS.tmpdir()),
+          cwd: Option.none(),
+          devUrl: Option.none(),
+          noBrowser: Option.some(true),
+          bootstrapFd: Option.none(),
+          autoBootstrapProjectFromCwd: Option.none(),
+          logWebSocketEvents: Option.none(),
+          tailscaleServeEnabled: Option.none(),
+          tailscaleServePort: Option.none(),
+        },
+        Option.none(),
+      ).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            ConfigProvider.layer(
+              ConfigProvider.fromEnv({
+                env: { TRITONAI_SECRET_STORE_KEY_FILE: keyFilePath },
+              }),
+            ),
+            NetService.layer,
+          ),
+        ),
+      );
+
+      expect(resolved.secretStoreKeys).toEqual([
+        "WVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVk=",
+        "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo=",
+      ]);
+      expect(resolved.secretStoreKeyFilePath).toBe(keyFilePath);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("rejects a headless keyring readable by other POSIX users", () =>
+    Effect.gen(function* () {
+      if ((yield* HostProcessPlatform) === "win32") return;
+      const fs = yield* FileSystem.FileSystem;
+      const keyFilePath = yield* fs.makeTempFileScoped({
+        prefix: "t3-insecure-keyring-",
+        suffix: ".json",
+      });
+      yield* fs.writeFileString(
+        keyFilePath,
+        yield* encodeSecretStoreKeyring({
+          version: 1,
+          active: "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo=",
+          previous: [],
+        }),
+      );
+      yield* fs.chmod(keyFilePath, 0o644);
+
+      const error = yield* resolveServerConfig(
+        {
+          mode: Option.some("web"),
+          port: Option.some(3773),
+          host: Option.none(),
+          baseDir: Option.some(NodeOS.tmpdir()),
+          cwd: Option.none(),
+          devUrl: Option.none(),
+          noBrowser: Option.some(true),
+          bootstrapFd: Option.none(),
+          autoBootstrapProjectFromCwd: Option.none(),
+          logWebSocketEvents: Option.none(),
+          tailscaleServeEnabled: Option.none(),
+          tailscaleServePort: Option.none(),
+        },
+        Option.none(),
+      ).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            ConfigProvider.layer(
+              ConfigProvider.fromEnv({
+                env: { TRITONAI_SECRET_STORE_KEY_FILE: keyFilePath },
+              }),
+            ),
+            NetService.layer,
+          ),
+        ),
+        Effect.flip,
+      );
+
+      assert.instanceOf(error, PlatformError.PlatformError);
+      assert.equal(error.reason._tag, "PermissionDenied");
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("rejects a symbolic link to a headless keyring on POSIX", () =>
+    Effect.gen(function* () {
+      if ((yield* HostProcessPlatform) === "win32") return;
+      const fs = yield* FileSystem.FileSystem;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-keyring-symlink-" });
+      const targetPath = `${directory}/keyring.json`;
+      const linkPath = `${directory}/keyring-link.json`;
+      yield* fs.writeFileString(
+        targetPath,
+        yield* encodeSecretStoreKeyring({
+          version: 1,
+          active: "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo=",
+          previous: [],
+        }),
+      );
+      yield* fs.chmod(targetPath, 0o600);
+      yield* fs.symlink(targetPath, linkPath);
+
+      const error = yield* resolveServerConfig(
+        {
+          mode: Option.some("web"),
+          port: Option.some(3773),
+          host: Option.none(),
+          baseDir: Option.some(NodeOS.tmpdir()),
+          cwd: Option.none(),
+          devUrl: Option.none(),
+          noBrowser: Option.some(true),
+          bootstrapFd: Option.none(),
+          autoBootstrapProjectFromCwd: Option.none(),
+          logWebSocketEvents: Option.none(),
+          tailscaleServeEnabled: Option.none(),
+          tailscaleServePort: Option.none(),
+        },
+        Option.none(),
+      ).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            ConfigProvider.layer(
+              ConfigProvider.fromEnv({
+                env: { TRITONAI_SECRET_STORE_KEY_FILE: linkPath },
+              }),
+            ),
+            NetService.layer,
+          ),
+        ),
+        Effect.flip,
+      );
+
+      assert.instanceOf(error, PlatformError.PlatformError);
+      assert.equal(error.reason._tag, "PermissionDenied");
+    }).pipe(Effect.scoped),
   );
 });

@@ -8,9 +8,13 @@ import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { EnvironmentOrchestrationHttpApi } from "@t3tools/contracts";
 import * as NetService from "@t3tools/shared/Net";
+import * as SecretEnvelope from "@t3tools/shared/secretEnvelope";
 import { assert, it } from "@effect/vitest";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpServer from "effect/unstable/http/HttpServer";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
@@ -40,8 +44,82 @@ class ProjectCliHttpApi extends HttpApi.make("environment").add(EnvironmentOrche
 
 const connectCli = makeCli({ cloudEnabled: true });
 const noConnectCli = makeCli({ cloudEnabled: false });
+const TEST_SECRET_STORE_KEY = "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo=";
+const encodeTestSecretStoreKeyring = Schema.encodeEffect(
+  Schema.fromJsonString(
+    Schema.Struct({
+      version: Schema.Literal(1),
+      active: Schema.String,
+      previous: Schema.Array(Schema.String),
+      legacySecretFingerprints: Schema.Record(Schema.String, Schema.String),
+    }),
+  ),
+);
+const withTestSecretStoreKeyFile = <A, E, R>(
+  args: ReadonlyArray<string>,
+  effect: Effect.Effect<A, E, R>,
+) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const legacySecretFingerprints: Record<string, string> = {};
+      const baseDirFlagIndex = args.indexOf("--base-dir");
+      const baseDir = baseDirFlagIndex >= 0 ? args[baseDirFlagIndex + 1] : undefined;
+      if (baseDir !== undefined) {
+        const secretsDir = NodePath.join(baseDir, "userdata", "secrets");
+        const entries = yield* fileSystem
+          .readDirectory(secretsDir)
+          .pipe(
+            Effect.catch((cause) =>
+              cause.reason._tag === "NotFound"
+                ? Effect.succeed([] as ReadonlyArray<string>)
+                : Effect.fail(cause),
+            ),
+          );
+        for (const entry of entries) {
+          if (!entry.endsWith(".bin")) continue;
+          const name = entry.slice(0, -".bin".length);
+          const value = yield* fileSystem.readFile(NodePath.join(secretsDir, entry));
+          if (SecretEnvelope.hasServerSecretEnvelopeMagic(value)) continue;
+          legacySecretFingerprints[name] = Buffer.from(
+            SecretEnvelope.fingerprintLegacyServerSecret(
+              name,
+              value,
+              Buffer.from(TEST_SECRET_STORE_KEY, "base64"),
+            ),
+          ).toString("base64");
+        }
+      }
+      const keyFilePath = yield* fileSystem.makeTempFileScoped({
+        prefix: "t3-cli-secret-store-key-",
+        suffix: ".json",
+      });
+      yield* fileSystem.writeFileString(
+        keyFilePath,
+        yield* encodeTestSecretStoreKeyring({
+          version: 1,
+          active: TEST_SECRET_STORE_KEY,
+          previous: [],
+          legacySecretFingerprints,
+        }),
+      );
+      yield* fileSystem.chmod(keyFilePath, 0o600);
+      return yield* effect.pipe(
+        Effect.provide(
+          ConfigProvider.layer(
+            ConfigProvider.fromEnv({
+              env: {
+                ...process.env,
+                TRITONAI_SECRET_STORE_KEY_FILE: keyFilePath,
+              },
+            }),
+          ),
+        ),
+      );
+    }),
+  );
 const runCli = (args: ReadonlyArray<string>, command = cli) =>
-  Command.runWith(command, { version: "0.0.0" })(args);
+  withTestSecretStoreKeyFile(args, Command.runWith(command, { version: "0.0.0" })(args));
 const runConnectCli = (args: ReadonlyArray<string>) => runCli(args, connectCli);
 const runCliWithRuntime = (args: ReadonlyArray<string>) =>
   runCli(args).pipe(Effect.provide(CliRuntimeLayer));
@@ -80,6 +158,8 @@ const makeCliTestServerConfig = (baseDir: string) =>
       noBrowser: true,
       startupPresentation: "browser",
       desktopBootstrapToken: undefined,
+      secretStoreKeys: ["WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo="],
+      legacySecretFingerprints: {},
       autoBootstrapProjectFromCwd: false,
       logWebSocketEvents: false,
       tailscaleServeEnabled: false,

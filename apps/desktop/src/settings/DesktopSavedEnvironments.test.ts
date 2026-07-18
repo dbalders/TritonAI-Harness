@@ -59,6 +59,7 @@ function makeSafeStorageLayer(input: {
               cause: input.availabilityError,
             }),
           ),
+    selectedStorageBackend: Effect.succeed("gnome_libsecret"),
     encryptString: (value) =>
       input.encryptError === undefined
         ? Effect.succeed(textEncoder.encode(`enc:${value}`))

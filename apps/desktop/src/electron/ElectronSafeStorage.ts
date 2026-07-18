@@ -50,10 +50,22 @@ export const ElectronSafeStorageError = Schema.Union([
 export type ElectronSafeStorageError = typeof ElectronSafeStorageError.Type;
 export const isElectronSafeStorageError = Schema.is(ElectronSafeStorageError);
 
+export type ElectronSafeStorageBackend =
+  | "basic_text"
+  | "gnome_libsecret"
+  | "kwallet"
+  | "kwallet5"
+  | "kwallet6"
+  | "unknown";
+
 export class ElectronSafeStorage extends Context.Service<
   ElectronSafeStorage,
   {
     readonly isEncryptionAvailable: Effect.Effect<boolean, ElectronSafeStorageAvailabilityError>;
+    readonly selectedStorageBackend: Effect.Effect<
+      ElectronSafeStorageBackend,
+      ElectronSafeStorageAvailabilityError
+    >;
     readonly encryptString: (
       value: string,
     ) => Effect.Effect<Uint8Array, ElectronSafeStorageEncryptError>;
@@ -66,6 +78,10 @@ export class ElectronSafeStorage extends Context.Service<
 export const make = ElectronSafeStorage.of({
   isEncryptionAvailable: Effect.try({
     try: () => Electron.safeStorage.isEncryptionAvailable(),
+    catch: (cause) => new ElectronSafeStorageAvailabilityError({ cause }),
+  }),
+  selectedStorageBackend: Effect.try({
+    try: () => Electron.safeStorage.getSelectedStorageBackend(),
     catch: (cause) => new ElectronSafeStorageAvailabilityError({ cause }),
   }),
   encryptString: (value) =>

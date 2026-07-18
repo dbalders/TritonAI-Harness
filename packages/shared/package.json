@@ -182,6 +182,10 @@
     "./httpReadiness": {
       "types": "./src/httpReadiness.ts",
       "import": "./src/httpReadiness.ts"
+    },
+    "./secretEnvelope": {
+      "types": "./src/secretEnvelope.ts",
+      "import": "./src/secretEnvelope.ts"
     }
   },
   "scripts": {
