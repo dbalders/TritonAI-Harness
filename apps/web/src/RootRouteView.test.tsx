@@ -4,7 +4,7 @@ import { expect, it, vi } from "vite-plus/test";
 vi.mock("@tanstack/react-router", () => ({
   Outlet: () => null,
   createRootRoute: (options: object) => ({
-    ...options,
+    options,
     useRouteContext: () => ({ authGateState: { status: "authenticated" } }),
   }),
   useLocation: ({ select }: { select: (location: { pathname: string }) => unknown }) =>
@@ -16,69 +16,74 @@ vi.mock("@effect/atom-react", () => ({
   useAtomValue: () => null,
 }));
 
-vi.mock("../components/AppSidebarLayout", () => ({
+vi.mock("./components/AppSidebarLayout", () => ({
   AppSidebarLayout: ({ children }: { children: React.ReactNode }) => children,
 }));
 
-vi.mock("../components/CommandPalette", () => ({
+vi.mock("./components/CommandPalette", () => ({
   CommandPalette: ({ children }: { children: React.ReactNode }) => children,
 }));
 
-vi.mock("../components/cloud/RelayClientInstallDialog", () => ({
+vi.mock("./components/cloud/RelayClientInstallDialog", () => ({
   RelayClientInstallDialog: () => null,
 }));
 
-vi.mock("../components/desktop/SshPasswordPromptDialog", () => ({
+vi.mock("./components/desktop/SshPasswordPromptDialog", () => ({
   SshPasswordPromptDialog: () => null,
 }));
 
-vi.mock("../components/SlowRpcRequestToastCoordinator", () => ({
+vi.mock("./components/SlowRpcRequestToastCoordinator", () => ({
   SlowRpcRequestToastCoordinator: () => null,
 }));
 
-vi.mock("../components/ui/toast", () => ({
+vi.mock("./components/ui/toast", () => ({
   AnchoredToastProvider: ({ children }: { children: React.ReactNode }) => children,
   ToastProvider: ({ children }: { children: React.ReactNode }) => children,
   stackedThreadToast: vi.fn(),
   toastManager: { add: vi.fn() },
 }));
 
-vi.mock("../firstRunOnboarding", () => ({
+vi.mock("./firstRunOnboarding", () => ({
   TritonAiFirstRunOnboardingBootstrap: () => null,
 }));
 
-vi.mock("../hooks/useSettings", () => ({
+vi.mock("./hooks/useSettings", () => ({
   useClientSettings: () => ({}),
 }));
 
-vi.mock("../state/entities", () => ({
+vi.mock("./state/entities", () => ({
   readProject: () => null,
   setActiveEnvironmentId: vi.fn(),
   useActiveEnvironmentId: () => null,
 }));
 
-vi.mock("../state/environments", () => ({
+vi.mock("./state/environments", () => ({
   useEnvironments: () => ({ environments: [] }),
   usePrimaryEnvironment: () => null,
 }));
 
-vi.mock("../state/server", () => ({
+vi.mock("./state/server", () => ({
   primaryServerConfigAtom: Symbol("primaryServerConfigAtom"),
   primaryServerConfigEventAtom: Symbol("primaryServerConfigEventAtom"),
   primaryServerWelcomeAtom: Symbol("primaryServerWelcomeAtom"),
 }));
 
-vi.mock("../state/use-atom-command", () => ({
+vi.mock("./state/use-atom-command", () => ({
   useAtomCommand: () => vi.fn(),
 }));
 
-vi.mock("../components/ProviderUpdateLaunchNotification", () => ({
+vi.mock("./components/ProviderUpdateLaunchNotification", () => ({
   ProviderUpdateLaunchNotification: () => <div data-provider-update-launch-notification />,
 }));
 
-import { RootRouteView } from "./__root";
+import { Route } from "./routes/__root";
 
 it("does not render provider update launch notifications for an authenticated root", () => {
+  const RootRouteView = Route.options.component;
+  if (!RootRouteView) {
+    throw new Error("Root route component is missing");
+  }
+
   const markup = renderToStaticMarkup(<RootRouteView />);
 
   expect(markup).not.toContain("data-provider-update-launch-notification");
