@@ -1,11 +1,16 @@
 import { expect, it } from "vite-plus/test";
 import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@t3tools/contracts";
 
+import rootRouteSource from "../routes/__root.tsx?raw";
 import {
   collectProviderUpdateCandidates,
   isProviderUpdateCandidate,
 } from "./ProviderUpdateLaunchNotification.logic";
 import { getProviderVersionAdvisoryPresentation } from "./settings/providerStatus";
+
+it("does not mount provider update launch notifications in TritonAI", () => {
+  expect(rootRouteSource).not.toContain("ProviderUpdateLaunchNotification");
+});
 
 it("does not surface provider update UI for disabled-check advisory snapshots", () => {
   const provider: ServerProvider = {
