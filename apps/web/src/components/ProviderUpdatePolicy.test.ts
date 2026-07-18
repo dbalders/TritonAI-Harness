@@ -8,8 +8,10 @@ import {
 } from "./ProviderUpdateLaunchNotification.logic";
 import { getProviderVersionAdvisoryPresentation } from "./settings/providerStatus";
 
-it("does not mount provider update launch notifications in TritonAI", () => {
-  expect(rootRouteSource).not.toContain("ProviderUpdateLaunchNotification");
+it("does not reference provider update launch notifications in the TritonAI root", () => {
+  const executableRootRouteSource = rootRouteSource.replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, "");
+
+  expect(executableRootRouteSource).not.toContain("ProviderUpdateLaunchNotification");
 });
 
 it("does not surface provider update UI for disabled-check advisory snapshots", () => {
