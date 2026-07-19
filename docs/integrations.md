@@ -13,27 +13,25 @@ connectors live in their own plugin repositories and consume this contract.
 
 Every package contains `.tritonai-plugin/plugin.json` with:
 
-- `apiVersion: tritonai.harness/v1`, `kind: IntegrationPlugin`, and `manifestVersion: 1`;
+- `apiVersion: tritonai.harness/v2`, `kind: IntegrationPlugin`, and `manifestVersion: 2`;
 - a stable package ID and semantic version;
-- an explicit compatible Harness version range;
 - an optional provider ID;
 - fixed capabilities and the tools and skills associated with each capability.
 
 Capabilities are user-facing ability bundles and the single source of truth for skill and tool
-availability. Each capability declares `access: "default" | "opt-in"`; omitted legacy-v1 access
-normalizes to `default`. Tools and skills may reference one capability with legacy `capability` or
-multiple capabilities with `capabilities`. Multiple references use union semantics, so a shared
+availability. Each capability declares `access: "default" | "opt-in"`. Tools and skills declare
+their dependencies with `capabilities`. Multiple references use union semantics, so a shared
 dependency remains available while any enabled, granted capability requires it. A skills-only
 package omits `provider` and declares no tools.
 
-Every tool also declares `effect: "read" | "write"`; omitted legacy-v1 effect normalizes to the
-safe read contract and must agree with the provider's executable metadata. Write tools always pass
+Every tool also declares `effect: "read" | "write"`, which must agree with the provider's executable
+metadata. Write tools always pass
 through a Harness-owned confirmation gate, even in full-access task mode.
 
 The Harness-specific manifest name is intentional. These packages are curated, server-executed
 Harness components rather than user-installable Codex marketplace plugins. Their `skills/`
 directories use the normal Codex `SKILL.md` contract, while the Harness manifest adds the
-provider, capability, compatibility, and tool allowlist needed for host-side enforcement. If
+provider, capability, and tool allowlist needed for host-side enforcement. If
 portable Codex plugin ingestion is added later, it should be an explicit adapter rather than
 treating arbitrary Codex MCP or app configuration as trusted Harness backend code.
 
@@ -44,7 +42,7 @@ the provider genuinely requires a different security principal or credential bou
 
 The registry rejects malformed manifests, unsupported v1 fields, unknown capability references,
 duplicate names within the tool or skill namespace, duplicate provider tools, provider/manifest
-mismatches, partial connection lifecycles, competing package sources, incompatible Harness ranges,
+mismatches, partial connection lifecycles, competing package sources,
 unsafe package paths, symlinks, special files, malformed skill frontmatter, and staged manifests
 that differ from discovery.
 Bundled `SKILL.md` frontmatter is parsed as YAML through the same schema path used by Codex skill
@@ -143,8 +141,11 @@ package to a tombstone, commits removed state, and then cleans the tombstone. St
 interrupted removals deterministically.
 
 Provider status checks have a host timeout and receive an abort signal, so one unhealthy provider
-cannot block startup, listing, or task creation indefinitely. MCP and Codex task cancellation is
-propagated through Registry to provider work. Connection lifecycle work is bounded and abortable.
+cannot block startup, listing, or task creation indefinitely. Providers may implement `prepare` to
+restore ephemeral invocation state, such as an OAuth access token, from persisted credentials. The
+Harness coalesces concurrent preparation, journals any admitted credential commit, and runs it before
+tool status and invocation checks. MCP and Codex task cancellation is propagated through Registry to
+provider work. Connection lifecycle work is bounded and abortable.
 Immediately before its final external commit, a provider must await `beginCommit()`. The host first
 writes a durable commit journal and rechecks cancellation, then admits only the provider's narrow,
 internally bounded commit tail under a fresh watchdog. Admission returns a commit-tail signal that

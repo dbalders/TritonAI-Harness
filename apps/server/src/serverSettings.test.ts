@@ -19,6 +19,8 @@ import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as ServerConfig from "./config.ts";
 import * as ServerSettingsModule from "./serverSettings.ts";
 
+const encodeUnknownJson = Schema.encodeUnknownSync(Schema.UnknownFromJsonString);
+
 const decodeSettingsPatch = Schema.decodeUnknownEffect(ServerSettingsPatch);
 const decodeServerSettings = Schema.decodeUnknownEffect(ServerSettings);
 
@@ -90,6 +92,59 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       assert.notInclude(error.message, cause.message);
     }).pipe(Effect.provide(settingsLayer));
   });
+
+  it.effect("migrates installer-written provider secrets when settings are first loaded", () =>
+    Effect.gen(function* () {
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      const instanceId = ProviderInstanceId.make("codex");
+      const plaintext = "installer-provisioned-api-key";
+      yield* fileSystem.writeFileString(
+        serverConfig.settingsPath,
+        encodeUnknownJson({
+          providerInstances: {
+            [instanceId]: {
+              driver: "codex",
+              environment: [
+                { name: "TRITONAI_API_KEY", value: plaintext, sensitive: true },
+                { name: "UCSD_AI_BASE_URL", value: "https://example.invalid/v1" },
+              ],
+              config: {},
+            },
+          },
+        }),
+        { mode: 0o600 },
+      );
+
+      yield* serverSettings.start;
+
+      const persistedRaw = yield* fileSystem.readFileString(serverConfig.settingsPath);
+      assert.notInclude(persistedRaw, plaintext);
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      assert.deepEqual(JSON.parse(persistedRaw).providerInstances.codex.environment, [
+        {
+          name: "TRITONAI_API_KEY",
+          value: "",
+          sensitive: true,
+          valueRedacted: true,
+        },
+        {
+          name: "UCSD_AI_BASE_URL",
+          value: "https://example.invalid/v1",
+          sensitive: false,
+        },
+      ]);
+      const persistedInfo = yield* fileSystem.stat(serverConfig.settingsPath);
+      assert.strictEqual(persistedInfo.mode & 0o777, 0o600);
+
+      const materialized = yield* serverSettings.getSettings;
+      assert.strictEqual(
+        materialized.providerInstances[instanceId]?.environment?.[0]?.value,
+        plaintext,
+      );
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
 
   it.effect("decodes nested settings patches", () =>
     Effect.gen(function* () {

@@ -1,59 +1,61 @@
 import { describe, expect, it } from "@effect/vitest";
 
-import {
-  manifestCompatibility,
-  type IntegrationManifest,
-  validateIntegrationManifest,
-} from "./manifest.ts";
+import { type IntegrationManifest, validateIntegrationManifest } from "./manifest.ts";
 
 const manifest: IntegrationManifest = {
-  apiVersion: "tritonai.harness/v1",
+  apiVersion: "tritonai.harness/v2",
   kind: "IntegrationPlugin",
-  manifestVersion: 1,
-  id: "semver-fixture",
-  name: "Semver Fixture",
-  description: "Test integration compatibility ranges.",
+  manifestVersion: 2,
+  id: "manifest-fixture",
+  name: "Manifest Fixture",
+  description: "Test the current integration manifest contract.",
   version: "1.0.0",
-  compatibility: { harness: { min: "0.2.0", maxExclusive: "0.3.0" } },
-  provider: "semver-fixture-provider",
+  provider: "manifest-fixture-provider",
   capabilities: [
-    { id: "fixture.read", displayName: "Read fixture", description: "Read fixture data." },
+    {
+      id: "fixture.read",
+      displayName: "Read fixture",
+      description: "Read fixture data.",
+      access: "default",
+    },
   ],
   tools: [],
   skills: [],
 };
 
 const skillOnlyManifest: IntegrationManifest = {
-  apiVersion: "tritonai.harness/v1",
+  apiVersion: "tritonai.harness/v2",
   kind: "IntegrationPlugin",
-  manifestVersion: 1,
+  manifestVersion: 2,
   id: "skill-only-fixture",
   name: "Skill-only Fixture",
   description: "Test a bundled workflow without a provider.",
   version: "1.0.0",
-  compatibility: { harness: { min: "0.2.0", maxExclusive: "0.3.0" } },
   capabilities: [
-    { id: "workflow.use", displayName: "Use workflow", description: "Use local instructions." },
+    {
+      id: "workflow.use",
+      displayName: "Use workflow",
+      description: "Use local instructions.",
+      access: "default",
+    },
   ],
   tools: [],
   skills: [
-    { name: "skill-only-fixture", description: "Local workflow.", capability: "workflow.use" },
+    {
+      name: "skill-only-fixture",
+      description: "Local workflow.",
+      capabilities: ["workflow.use"],
+    },
   ],
 };
 
-describe("integration manifest semver", () => {
-  it("allows skill-only bundles without a provider", () => {
-    expect(validateIntegrationManifest(skillOnlyManifest)).toMatchObject({
-      ...skillOnlyManifest,
-      capabilities: [{ ...skillOnlyManifest.capabilities[0], access: "default" }],
-      skills: [
-        {
-          name: "skill-only-fixture",
-          description: "Local workflow.",
-          capabilities: ["workflow.use"],
-        },
-      ],
-    });
+describe("integration manifest v2", () => {
+  it("accepts the one current contract and skill-only bundles", () => {
+    expect(validateIntegrationManifest(manifest)).toEqual(manifest);
+    expect(validateIntegrationManifest(skillOnlyManifest)).toEqual(skillOnlyManifest);
+  });
+
+  it("requires a provider for tool bundles", () => {
     expect(() =>
       validateIntegrationManifest({
         ...skillOnlyManifest,
@@ -62,14 +64,15 @@ describe("integration manifest semver", () => {
             name: "fixture.write",
             displayName: "Write fixture",
             description: "Write fixture data.",
-            capability: "workflow.use",
+            capabilities: ["workflow.use"],
+            effect: "write",
           },
         ],
       }),
     ).toThrow(/with tools must declare a provider/u);
   });
 
-  it("keeps tool and skill names in their independent runtime namespaces", () => {
+  it("keeps tool and skill names in independent runtime namespaces", () => {
     expect(() =>
       validateIntegrationManifest({
         ...manifest,
@@ -78,53 +81,59 @@ describe("integration manifest semver", () => {
             name: "shared-component",
             displayName: "Shared component tool",
             description: "Tool namespace fixture.",
-            capability: "fixture.read",
+            capabilities: ["fixture.read"],
+            effect: "read",
           },
         ],
         skills: [
           {
             name: "shared-component",
             description: "Skill namespace fixture.",
-            capability: "fixture.read",
+            capabilities: ["fixture.read"],
           },
         ],
       }),
     ).not.toThrow();
   });
 
-  it("uses SemVer prerelease precedence for compatibility ranges", () => {
-    expect(() =>
-      validateIntegrationManifest({
-        ...manifest,
-        compatibility: {
-          harness: { min: "0.2.6-alpha.2", maxExclusive: "0.2.6-alpha.10" },
-        },
-      }),
-    ).not.toThrow();
-    expect(() =>
-      validateIntegrationManifest({
-        ...manifest,
-        compatibility: { harness: { min: "0.2.6-beta.1", maxExclusive: "0.2.6" } },
-      }),
-    ).not.toThrow();
-  });
-
-  it("ignores build metadata when comparing Harness versions", () => {
-    const result = manifestCompatibility(
-      validateIntegrationManifest({
-        ...manifest,
-        compatibility: {
-          harness: { min: "0.2.5+catalog.7", maxExclusive: "0.3.0" },
-        },
-      }),
-    );
-    expect(result).toEqual({ compatible: true, message: null });
-  });
-
   it("rejects numeric prerelease identifiers with leading zeroes", () => {
     expect(() => validateIntegrationManifest({ ...manifest, version: "1.0.0-alpha.01" })).toThrow(
       /semver/u,
     );
+  });
+
+  it("rejects identifiers, names, and versions with trailing line terminators", () => {
+    expect(() => validateIntegrationManifest({ ...manifest, id: `${manifest.id}\n` })).toThrow(
+      /identifiers/u,
+    );
+    expect(() =>
+      validateIntegrationManifest({
+        ...manifest,
+        tools: [
+          {
+            name: "fixture.read\n",
+            displayName: "Read fixture",
+            description: "Read fixture data.",
+            capabilities: ["fixture.read"],
+            effect: "read",
+          },
+        ],
+      }),
+    ).toThrow(/stable name/u);
+    expect(() =>
+      validateIntegrationManifest({
+        ...skillOnlyManifest,
+        skills: [
+          {
+            ...skillOnlyManifest.skills[0]!,
+            name: `${skillOnlyManifest.skills[0]!.name}\n`,
+          },
+        ],
+      }),
+    ).toThrow(/stable name/u);
+    expect(() =>
+      validateIntegrationManifest({ ...manifest, version: `${manifest.version}\n` }),
+    ).toThrow(/semver/u);
   });
 
   it("rejects ids that cannot form an isolated secret namespace", () => {
@@ -142,11 +151,42 @@ describe("integration manifest semver", () => {
             name: `t${"x".repeat(128)}`,
             displayName: "Oversized tool",
             description: "Tool name exceeds the runtime contract.",
-            capability: "fixture.read",
+            capabilities: ["fixture.read"],
+            effect: "read",
           },
         ],
       }),
     ).toThrow(/stable name/u);
+  });
+
+  it("rejects removed compatibility aliases and missing current fields", () => {
+    const tool = {
+      name: "fixture.read",
+      displayName: "Read fixture",
+      description: "Read fixture data.",
+      capabilities: ["fixture.read"],
+      effect: "read",
+    };
+    const skill = {
+      name: "fixture-reader",
+      description: "Read fixture data.",
+      capabilities: ["fixture.read"],
+    };
+    const candidates = [
+      { ...manifest, apiVersion: "tritonai.harness/v1", manifestVersion: 1 },
+      { ...manifest, compatibility: { harness: { min: "0.2.0", maxExclusive: "0.3.0" } } },
+      {
+        ...manifest,
+        capabilities: [{ id: "fixture.read", displayName: "Read", description: "Read data." }],
+      },
+      { ...manifest, tools: [{ ...tool, capabilities: undefined, capability: "fixture.read" }] },
+      { ...manifest, tools: [{ ...tool, effect: undefined }] },
+      { ...manifest, skills: [{ ...skill, capabilities: undefined, capability: "fixture.read" }] },
+    ];
+
+    for (const candidate of candidates) {
+      expect(() => validateIntegrationManifest(candidate)).toThrow();
+    }
   });
 
   it("rejects unsupported fields at every versioned manifest boundary", () => {
@@ -154,22 +194,16 @@ describe("integration manifest semver", () => {
       name: "fixture.read",
       displayName: "Read fixture",
       description: "Read fixture data.",
-      capability: "fixture.read",
+      capabilities: ["fixture.read"],
+      effect: "read" as const,
     };
     const skill = {
       name: "fixture-reader",
       description: "Read fixture data.",
-      capability: "fixture.read",
+      capabilities: ["fixture.read"],
     };
     const candidates = [
       { ...manifest, access: "read" },
-      { ...manifest, compatibility: { ...manifest.compatibility, channel: "stable" } },
-      {
-        ...manifest,
-        compatibility: {
-          harness: { ...manifest.compatibility.harness, inclusiveMaximum: false },
-        },
-      },
       {
         ...manifest,
         capabilities: [{ ...manifest.capabilities[0]!, readOnly: true }],

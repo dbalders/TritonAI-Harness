@@ -403,30 +403,6 @@ it.layer(NodeServices.layer)("ServerSecretStore.layer", (it) => {
         ),
       );
 
-      let lockAcquisitions = 0;
-      const delayedLockLayer = Layer.effect(
-        FileSystem.FileSystem,
-        Effect.gen(function* () {
-          const underlying = yield* FileSystem.FileSystem;
-          return {
-            ...underlying,
-            open: (filePath, options) => {
-              const open = underlying.open(filePath, options);
-              if (filePath !== `${locations.keyFilePath}.lock` || options?.flag !== "wx") {
-                return open;
-              }
-              return open.pipe(
-                Effect.tap(() =>
-                  Effect.sync(() => {
-                    lockAcquisitions += 1;
-                  }),
-                ),
-                Effect.tap(() => Effect.sleep("100 millis")),
-              );
-            },
-          } satisfies FileSystem.FileSystem;
-        }),
-      ).pipe(Layer.provide(NodeServices.layer));
       const initializeStore = () =>
         Effect.service(ServerSecretStore.ServerSecretStore).pipe(
           Effect.provide(
@@ -435,7 +411,6 @@ it.layer(NodeServices.layer)("ServerSecretStore.layer", (it) => {
                 baseDir,
                 legacySecretFingerprints: fingerprints,
                 secretStoreKeyFilePath: locations.keyFilePath,
-                fileSystemLayer: delayedLockLayer,
               }),
             ),
           ),
@@ -454,10 +429,9 @@ it.layer(NodeServices.layer)("ServerSecretStore.layer", (it) => {
       const consumedKeyring = yield* fileSystem
         .readFileString(locations.keyFilePath)
         .pipe(Effect.flatMap(decodeTestSecretStoreKeyring));
-      assert.equal(lockAcquisitions, 3);
       assert.isUndefined(consumedKeyring.legacySecretFingerprints[firstName]);
       assert.isUndefined(consumedKeyring.legacySecretFingerprints[secondName]);
-      assert.isFalse(yield* fileSystem.exists(`${locations.keyFilePath}.lock`));
+      assert.isTrue(yield* fileSystem.exists(`${locations.keyFilePath}.lock`));
     }).pipe(Effect.scoped, TestClock.withLive),
   );
 
@@ -493,7 +467,6 @@ it.layer(NodeServices.layer)("ServerSecretStore.layer", (it) => {
 
       const migrationReady = yield* Deferred.make<void>();
       const allowMigrationPublish = yield* Deferred.make<void>();
-      const writerObservedLock = yield* Deferred.make<void>();
       const pausedMigrationLayer = Layer.effect(
         FileSystem.FileSystem,
         Effect.gen(function* () {
@@ -515,25 +488,7 @@ it.layer(NodeServices.layer)("ServerSecretStore.layer", (it) => {
           } satisfies FileSystem.FileSystem;
         }),
       ).pipe(Layer.provide(NodeServices.layer));
-      const blockedWriterLayer = Layer.effect(
-        FileSystem.FileSystem,
-        Effect.gen(function* () {
-          const underlying = yield* FileSystem.FileSystem;
-          return {
-            ...underlying,
-            open: (filePath, options) => {
-              const opened = underlying.open(filePath, options);
-              if (String(filePath) !== locations.lockPath || options?.flag !== "wx") {
-                return opened;
-              }
-              return opened.pipe(
-                Effect.tapError(() => Deferred.succeed(writerObservedLock, undefined)),
-              );
-            },
-          } satisfies FileSystem.FileSystem;
-        }),
-      ).pipe(Layer.provide(NodeServices.layer));
-      const initializeStore = (fileSystemLayer: Layer.Layer<FileSystem.FileSystem>) =>
+      const initializeStore = (fileSystemLayer?: Layer.Layer<FileSystem.FileSystem>) =>
         Effect.service(ServerSecretStore.ServerSecretStore).pipe(
           Effect.provide(
             Layer.fresh(
@@ -541,20 +496,20 @@ it.layer(NodeServices.layer)("ServerSecretStore.layer", (it) => {
                 baseDir,
                 legacySecretFingerprints: { [name]: fingerprint },
                 secretStoreKeyFilePath: locations.keyFilePath,
-                fileSystemLayer,
+                ...(fileSystemLayer === undefined ? {} : { fileSystemLayer }),
               }),
             ),
           ),
         );
       const [migratingStore, writingStore] = yield* Effect.all(
-        [initializeStore(pausedMigrationLayer), initializeStore(blockedWriterLayer)],
+        [initializeStore(pausedMigrationLayer), initializeStore()],
         { concurrency: "unbounded" },
       );
 
       const migrationFiber = yield* migratingStore.get(name).pipe(Effect.forkScoped);
       yield* Deferred.await(migrationReady);
       const writerFiber = yield* writingStore.set(name, newerValue).pipe(Effect.forkScoped);
-      yield* Deferred.await(writerObservedLock);
+      yield* Effect.sleep("50 millis");
       yield* Deferred.succeed(allowMigrationPublish, undefined);
 
       const migrated = Option.getOrThrow(yield* Fiber.join(migrationFiber));
@@ -562,11 +517,11 @@ it.layer(NodeServices.layer)("ServerSecretStore.layer", (it) => {
       const finalValue = Option.getOrThrow(yield* writingStore.get(name));
       assert.deepEqual(Array.from(migrated), Array.from(legacyValue));
       assert.deepEqual(Array.from(finalValue), Array.from(newerValue));
-      assert.isFalse(yield* fileSystem.exists(locations.lockPath));
+      assert.isTrue(yield* fileSystem.exists(locations.lockPath));
     }).pipe(Effect.scoped, TestClock.withLive),
   );
 
-  it.effect("removes an owned lock when lock initialization fails", () =>
+  it.effect("fails closed when a process lock database cannot be secured", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const baseDir = yield* fileSystem.makeTempDirectoryScoped({
@@ -588,42 +543,8 @@ it.layer(NodeServices.layer)("ServerSecretStore.layer", (it) => {
           }),
         ),
       );
-      let injectedFailure = false;
-      const failedLockInitializationLayer = Layer.effect(
-        FileSystem.FileSystem,
-        Effect.gen(function* () {
-          const underlying = yield* FileSystem.FileSystem;
-          return {
-            ...underlying,
-            open: (filePath, options) =>
-              underlying.open(filePath, options).pipe(
-                Effect.map((file) => {
-                  if (
-                    injectedFailure ||
-                    filePath !== `${locations.keyFilePath}.lock` ||
-                    options?.flag !== "wx"
-                  ) {
-                    return file;
-                  }
-                  injectedFailure = true;
-                  return {
-                    ...file,
-                    writeAll: () =>
-                      Effect.fail(
-                        PlatformError.systemError({
-                          _tag: "WriteZero",
-                          module: "FileSystem",
-                          method: "writeAll",
-                          pathOrDescriptor: filePath,
-                          description: "Injected lock owner write failure.",
-                        }),
-                      ),
-                  } satisfies FileSystem.File;
-                }),
-              ),
-          } satisfies FileSystem.FileSystem;
-        }),
-      ).pipe(Layer.provide(NodeServices.layer));
+      const lockPath = `${locations.keyFilePath}.lock`;
+      yield* fileSystem.symlink(locations.keyFilePath, lockPath);
 
       const migrationError = yield* Effect.gen(function* () {
         const secretStore = yield* ServerSecretStore.ServerSecretStore;
@@ -635,17 +556,17 @@ it.layer(NodeServices.layer)("ServerSecretStore.layer", (it) => {
               baseDir,
               legacySecretFingerprints: { [name]: fingerprint },
               secretStoreKeyFilePath: locations.keyFilePath,
-              fileSystemLayer: failedLockInitializationLayer,
             }),
           ),
         ),
       );
-      assert.instanceOf(migrationError, ServerSecretStore.SecretStorePersistError);
-      assert.isFalse(yield* fileSystem.exists(`${locations.keyFilePath}.lock`));
+      assert.instanceOf(migrationError, ServerSecretStore.SecretStoreTemporaryPathError);
+      assert.isTrue(yield* fileSystem.exists(lockPath));
       const retainedKeyring = yield* fileSystem
         .readFileString(locations.keyFilePath)
         .pipe(Effect.flatMap(decodeTestSecretStoreKeyring));
       assert.equal(retainedKeyring.legacySecretFingerprints[name], fingerprint);
+      yield* fileSystem.remove(lockPath);
 
       const recovered = yield* Effect.gen(function* () {
         const secretStore = yield* ServerSecretStore.ServerSecretStore;
@@ -662,7 +583,7 @@ it.layer(NodeServices.layer)("ServerSecretStore.layer", (it) => {
         ),
       );
       assert.isTrue(Option.isSome(recovered));
-      assert.isFalse(yield* fileSystem.exists(`${locations.keyFilePath}.lock`));
+      assert.isTrue(yield* fileSystem.exists(lockPath));
     }).pipe(Effect.scoped),
   );
 
@@ -743,7 +664,7 @@ it.layer(NodeServices.layer)("ServerSecretStore.layer", (it) => {
       assert.instanceOf(error, ServerSecretStore.SecretStorePersistError);
       assert.equal(error.resource, "external secret-store keyring temporary file cleanup");
       assert.instanceOf(error.cause, AggregateError);
-      assert.isFalse(yield* fileSystem.exists(`${locations.keyFilePath}.lock`));
+      assert.isTrue(yield* fileSystem.exists(`${locations.keyFilePath}.lock`));
       const keyringDirectory = locations.keyFilePath.slice(
         0,
         locations.keyFilePath.lastIndexOf("/"),
@@ -943,7 +864,6 @@ it.layer(NodeServices.layer)("ServerSecretStore.layer", (it) => {
       });
       const tempOpened = yield* Deferred.make<void>();
       const continueCreate = yield* Deferred.make<void>();
-      const removeObservedLock = yield* Deferred.make<void>();
       let delayed = false;
       const delayedTemporaryOpenLayer = Layer.effect(
         FileSystem.FileSystem,
@@ -953,11 +873,6 @@ it.layer(NodeServices.layer)("ServerSecretStore.layer", (it) => {
             ...underlying,
             open: (filePath, options) => {
               const opened = underlying.open(filePath, options);
-              if (options?.flag === "wx" && String(filePath).endsWith("oauth.bin.lock")) {
-                return opened.pipe(
-                  Effect.tapError(() => Deferred.succeed(removeObservedLock, undefined)),
-                );
-              }
               if (
                 delayed ||
                 options?.flag !== "wx" ||
@@ -995,7 +910,7 @@ it.layer(NodeServices.layer)("ServerSecretStore.layer", (it) => {
       yield* Deferred.await(tempOpened);
 
       const removeFiber = yield* removingStore.remove("oauth").pipe(Effect.forkScoped);
-      yield* Deferred.await(removeObservedLock);
+      yield* Effect.sleep("50 millis");
       yield* Deferred.succeed(continueCreate, undefined);
       yield* Fiber.join(createFiber);
       yield* Fiber.join(removeFiber);

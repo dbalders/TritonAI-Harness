@@ -1,22 +1,17 @@
 {
-  "apiVersion": "tritonai.harness/v1",
+  "apiVersion": "tritonai.harness/v2",
   "kind": "IntegrationPlugin",
-  "manifestVersion": 1,
+  "manifestVersion": 2,
   "id": "skill-only-fixture",
   "name": "Skill-only Fixture",
   "description": "A test-only plugin proving Harness can install and run a plugin-owned skill with zero tools or credentials.",
   "version": "1.0.0",
-  "compatibility": {
-    "harness": {
-      "min": "0.2.0",
-      "maxExclusive": "0.3.0"
-    }
-  },
   "capabilities": [
     {
       "id": "workflow.use",
       "displayName": "Use local workflow",
-      "description": "Load the plugin-owned instructions. No service or data access is granted."
+      "description": "Load the plugin-owned instructions. No service or data access is granted.",
+      "access": "default"
     }
   ],
   "tools": [],
@@ -24,7 +19,7 @@
     {
       "name": "skill-only-fixture",
       "description": "Prove a plugin-owned skill can run without any provider tool.",
-      "capability": "workflow.use"
+      "capabilities": ["workflow.use"]
     }
   ]
 }

@@ -19,56 +19,61 @@ import {
 import { EmptyIntegrationToolInput } from "./IntegrationTool.ts";
 
 const connectedManifest: IntegrationManifest = {
-  apiVersion: "tritonai.harness/v1",
+  apiVersion: "tritonai.harness/v2",
   kind: "IntegrationPlugin",
-  manifestVersion: 1,
+  manifestVersion: 2,
   id: "test-cloud-records",
   name: "Test Cloud Records",
   description: "Connected test package.",
   version: "1.0.0",
-  compatibility: { harness: { min: "0.2.0", maxExclusive: "0.3.0" } },
   provider: "test-connected-provider",
   capabilities: [
-    { id: "records.read", displayName: "Records", description: "Read records." },
-    { id: "events.read", displayName: "Events", description: "Read events." },
+    { id: "records.read", displayName: "Records", description: "Read records.", access: "default" },
+    { id: "events.read", displayName: "Events", description: "Read events.", access: "default" },
   ],
   tools: [
     {
       name: "test.records.list",
       displayName: "List records",
       description: "List records.",
-      capability: "records.read",
+      capabilities: ["records.read"],
+      effect: "read",
     },
     {
       name: "test.events.list",
       displayName: "List events",
       description: "List events.",
-      capability: "events.read",
+      capabilities: ["events.read"],
+      effect: "read",
     },
   ],
-  skills: [{ name: "test-records", description: "Records skill.", capability: "records.read" }],
+  skills: [{ name: "test-records", description: "Records skill.", capabilities: ["records.read"] }],
 };
 
 const fixtureManifest: IntegrationManifest = {
-  apiVersion: "tritonai.harness/v1",
+  apiVersion: "tritonai.harness/v2",
   kind: "IntegrationPlugin",
-  manifestVersion: 1,
+  manifestVersion: 2,
   id: "test-fixture",
   name: "Test Fixture",
   description: "Independent test package.",
   version: "1.0.0",
-  compatibility: { harness: { min: "0.2.0", maxExclusive: "0.3.0" } },
   provider: "test-fixture-provider",
-  capabilities: [{ id: "fixture.read", displayName: "Fixture", description: "Read fixture." }],
+  capabilities: [
+    { id: "fixture.read", displayName: "Fixture", description: "Read fixture.", access: "default" },
+  ],
   tools: [
     {
       name: "test.fixture.read",
       displayName: "Read fixture",
       description: "Read fixture.",
-      capability: "fixture.read",
+      capabilities: ["fixture.read"],
+      effect: "read",
     },
   ],
-  skills: [{ name: "fixture-reader", description: "Fixture skill.", capability: "fixture.read" }],
+  skills: [
+    { name: "fixture-reader", description: "Fixture skill.", capabilities: ["fixture.read"] },
+  ],
 };
 
 interface ProviderState {
@@ -547,8 +552,8 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
-  it("rejects incompatible manifests and provider contracts before activation", async () => {
-    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-compatibility-"));
+  it("rejects removed manifest fields and provider contract drift before activation", async () => {
+    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-contract-"));
     const state: ProviderState = {
       status: {
         state: "not_connected",
@@ -566,21 +571,9 @@ describe("IntegrationRegistry lifecycle", () => {
       expect(() =>
         validateIntegrationManifest({
           ...connectedManifest,
-          compatibility: { harness: { min: "0.3.0", maxExclusive: "0.3.0" } },
+          compatibility: { harness: { min: "0.2.0", maxExclusive: "0.3.0" } },
         }),
-      ).toThrow(/min < maxExclusive/u);
-      const incompatible: IntegrationManifest = {
-        ...connectedManifest,
-        id: "future-integration",
-        compatibility: { harness: { min: "99.0.0", maxExclusive: "100.0.0" } },
-      };
-      const runtime = new RegistryRuntime(root, [
-        packaged(incompatible, provider("test-connected-provider", state)),
-      ]);
-      await expect(runtime.install(incompatible.id)).rejects.toMatchObject({
-        code: "incompatible",
-      });
-      expect((await runtime.list()).integrations[0]?.installed).toBe(false);
+      ).toThrow(/unsupported/u);
 
       const completeProvider = provider("test-connected-provider", state);
       const mismatchedProvider: IntegrationProvider = {
@@ -617,10 +610,17 @@ describe("IntegrationRegistry lifecycle", () => {
         name: "Test Cloud Records Write",
         capabilities: [
           ...connectedManifest.capabilities,
-          { id: "records.write", displayName: "Write records", description: "Write records." },
+          {
+            id: "records.write",
+            displayName: "Write records",
+            description: "Write records.",
+            access: "opt-in",
+          },
         ],
         tools: connectedManifest.tools.map((tool, index) =>
-          index === 0 ? { ...tool, capability: "records.write", effect: "write" as const } : tool,
+          index === 0
+            ? { ...tool, capabilities: ["records.write"], effect: "write" as const }
+            : tool,
         ),
       };
       state.status = {
@@ -633,6 +633,7 @@ describe("IntegrationRegistry lifecycle", () => {
         packaged(writeManifest, writableProvider),
       ]);
       await writeRegistry.install(writeManifest.id);
+      await writeRegistry.setCapabilityEnabled(writeManifest.id, "records.write", true);
       await expect(
         writeRegistry.invokeTool(
           "test.records.list",
@@ -679,6 +680,128 @@ describe("IntegrationRegistry lifecycle", () => {
         toolName: "test.fixture.read",
       });
     } finally {
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("prepares restart-only provider state once before concurrent tool invocations", async () => {
+    const root = await NodeFSP.mkdtemp(
+      NodePath.join(NodeOS.tmpdir(), "tritonai-provider-prepare-"),
+    );
+    const state: ProviderState = {
+      status: {
+        state: "connected",
+        accountLabel: "Fixture",
+        grantedCapabilities: ["fixture.read"],
+        message: null,
+      },
+      credential: "test-credential",
+      disconnectFails: false,
+    };
+    let prepared = false;
+    let prepareCalls = 0;
+    let markPrepareStarted!: () => void;
+    const prepareStarted = new Promise<void>((resolve) => {
+      markPrepareStarted = resolve;
+    });
+    let releasePrepare!: () => void;
+    const prepareCanFinish = new Promise<void>((resolve) => {
+      releasePrepare = resolve;
+    });
+    const implementation: IntegrationProvider = {
+      ...provider("test-fixture-provider", state),
+      prepare: async (context) => {
+        prepareCalls += 1;
+        const commitSignal = await context.beginCommit();
+        markPrepareStarted();
+        await prepareCanFinish;
+        if (commitSignal.aborted) throw new Error("Provider preparation was cancelled.");
+        prepared = true;
+      },
+      invoke: async () => {
+        if (!prepared) throw new Error("Ephemeral provider state was not prepared.");
+        return { prepared: true };
+      },
+    };
+    const registry = new RegistryRuntime(root, [packaged(fixtureManifest, implementation)]);
+    try {
+      await registry.install(fixtureManifest.id);
+      const firstController = new AbortController();
+      const first = registry.invokeTool(
+        "test.fixture.read",
+        {},
+        { signal: firstController.signal },
+      );
+      await prepareStarted;
+      const second = registry.invokeTool("test.fixture.read", {});
+      firstController.abort();
+      await expect(first).rejects.toThrow(/aborted|cancel/iu);
+      releasePrepare();
+
+      await expect(second).resolves.toEqual({ prepared: true });
+      expect(prepareCalls).toBe(1);
+    } finally {
+      releasePrepare();
+      await registry.close();
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not prepare a provider while its connection lifecycle is active", async () => {
+    const root = await NodeFSP.mkdtemp(
+      NodePath.join(NodeOS.tmpdir(), "tritonai-provider-lifecycle-prepare-"),
+    );
+    const state: ProviderState = {
+      status: {
+        state: "connected",
+        accountLabel: "Fixture",
+        grantedCapabilities: ["fixture.read"],
+        message: null,
+      },
+      credential: "test-credential",
+      disconnectFails: false,
+    };
+    let prepareCalls = 0;
+    let markConnectStarted!: () => void;
+    const connectStarted = new Promise<void>((resolve) => {
+      markConnectStarted = resolve;
+    });
+    let releaseConnect!: () => void;
+    const connectCanFinish = new Promise<void>((resolve) => {
+      releaseConnect = resolve;
+    });
+    const baseProvider = provider("test-fixture-provider", state);
+    const implementation: IntegrationProvider = {
+      ...baseProvider,
+      prepare: async () => {
+        prepareCalls += 1;
+      },
+      connect: async (capabilities, context, submission) => {
+        markConnectStarted();
+        await connectCanFinish;
+        return baseProvider.connect!(capabilities, context, submission);
+      },
+    };
+    const registry = new RegistryRuntime(root, [packaged(fixtureManifest, implementation)]);
+    try {
+      await registry.install(fixtureManifest.id);
+      const controller = new AbortController();
+      const connect = registry.connect(fixtureManifest.id, undefined, {
+        signal: controller.signal,
+      });
+      await connectStarted;
+      controller.abort();
+      await expect(connect).rejects.toMatchObject({ code: "operation_failed" });
+
+      await expect(registry.invokeTool("test.fixture.read", {})).rejects.toThrow(
+        /connection is changing/iu,
+      );
+      expect(prepareCalls).toBe(0);
+
+      releaseConnect();
+    } finally {
+      releaseConnect();
+      await registry.close();
       await NodeFSP.rm(root, { recursive: true, force: true });
     }
   });
@@ -910,10 +1033,7 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
-  it("deactivates incompatible packages and reconciles catalog version drift", async () => {
-    const incompatibleRoot = await NodeFSP.mkdtemp(
-      NodePath.join(NodeOS.tmpdir(), "tritonai-incompatible-restart-"),
-    );
+  it("reconciles catalog version drift without a second compatibility contract", async () => {
     const mismatchRoot = await NodeFSP.mkdtemp(
       NodePath.join(NodeOS.tmpdir(), "tritonai-version-mismatch-"),
     );
@@ -928,33 +1048,6 @@ describe("IntegrationRegistry lifecycle", () => {
       disconnectFails: false,
     });
     try {
-      const compatibilityState = connectedState();
-      const compatible = packaged(
-        connectedManifest,
-        provider("test-connected-provider", compatibilityState),
-      );
-      const initialCompatibilityRegistry = new RegistryRuntime(incompatibleRoot, [compatible]);
-      await initialCompatibilityRegistry.install(connectedManifest.id);
-      expect(initialCompatibilityRegistry.isToolAvailableSync("test.records.list")).toBe(true);
-
-      const incompatibleManifest: IntegrationManifest = {
-        ...connectedManifest,
-        compatibility: { harness: { min: "99.0.0", maxExclusive: "100.0.0" } },
-      };
-      const incompatibleRegistry = new RegistryRuntime(incompatibleRoot, [
-        packaged(incompatibleManifest, provider("test-connected-provider", compatibilityState)),
-      ]);
-      const incompatibleSummary = (await incompatibleRegistry.list()).integrations[0]!;
-      expect(incompatibleSummary).toMatchObject({ compatible: false, installed: true });
-      expect(incompatibleSummary.tools[0]?.available).toBe(false);
-      expect(incompatibleSummary.skills[0]?.available).toBe(false);
-      await expect(incompatibleRegistry.invokeTool("test.records.list", {})).rejects.toMatchObject({
-        code: "incompatible",
-      });
-      await expect(incompatibleRegistry.connect(connectedManifest.id)).rejects.toMatchObject({
-        code: "incompatible",
-      });
-
       const mismatchState = connectedState();
       const initialMismatchRegistry = new RegistryRuntime(mismatchRoot, [
         packaged(connectedManifest, provider("test-connected-provider", mismatchState)),
@@ -965,15 +1058,13 @@ describe("IntegrationRegistry lifecycle", () => {
         packaged(nextManifest, provider("test-connected-provider", mismatchState)),
       ]);
       const mismatchSummary = (await mismatchRegistry.list()).integrations[0]!;
-      expect(mismatchSummary).toMatchObject({ compatible: true, installed: true });
-      expect(mismatchSummary.compatibilityMessage).toBeNull();
+      expect(mismatchSummary).toMatchObject({ installed: true, version: "2.0.0" });
       expect(mismatchSummary.tools[0]?.available).toBe(true);
       await expect(mismatchRegistry.install(connectedManifest.id)).resolves.toBeDefined();
       await expect(mismatchRegistry.invokeTool("test.records.list", {})).resolves.toBeDefined();
       await mismatchRegistry.setEnabled(connectedManifest.id, false);
       await expect(mismatchRegistry.setEnabled(connectedManifest.id, true)).resolves.toBeDefined();
     } finally {
-      await NodeFSP.rm(incompatibleRoot, { recursive: true, force: true });
       await NodeFSP.rm(mismatchRoot, { recursive: true, force: true });
     }
   });
@@ -1524,7 +1615,7 @@ describe("IntegrationRegistry lifecycle", () => {
         {
           name: "fixture-reader-second",
           description: "Second fixture skill.",
-          capability: "fixture.read",
+          capabilities: ["fixture.read"],
         },
       ],
     };

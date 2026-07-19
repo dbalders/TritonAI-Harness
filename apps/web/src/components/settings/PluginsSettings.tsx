@@ -71,7 +71,6 @@ export function integrationNeedsConnectionAction(integration: IntegrationSummary
   return (
     integration.installed &&
     integration.enabled &&
-    integration.compatible &&
     integration.requiresConnection &&
     integration.capabilities.some(({ enabled }) => enabled) &&
     (integration.connectionState === "not_connected" ||
@@ -409,9 +408,6 @@ function IntegrationCard({
               <p className="mt-1 max-w-2xl text-sm leading-relaxed text-muted-foreground">
                 {integration.description}
               </p>
-              {integration.compatibilityMessage ? (
-                <p className="mt-2 text-xs text-destructive">{integration.compatibilityMessage}</p>
-              ) : null}
               {visibleStatusMessage ? (
                 <p
                   className={
@@ -436,7 +432,7 @@ function IntegrationCard({
           <label className="inline-flex shrink-0 items-center gap-2 pt-0.5 text-xs font-medium">
             <Switch
               checked={integration.enabled}
-              disabled={busy || (!integration.enabled && !integration.compatible)}
+              disabled={busy}
               aria-label={`${integration.name} enabled`}
               onCheckedChange={(checked) =>
                 void onAction(checked ? "enable" : "disable", integration)
@@ -497,8 +493,7 @@ function IntegrationCard({
                         </MenuPopup>
                       </Menu>
                     </>
-                  ) : integration.installed &&
-                    (integration.connectionState === "error" || !integration.compatible) ? (
+                  ) : integration.installed && integration.connectionState === "error" ? (
                     <>
                       <Button
                         size="sm"
@@ -508,7 +503,7 @@ function IntegrationCard({
                       >
                         <UnplugIcon /> Reset connection
                       </Button>
-                      {integration.enabled && integration.compatible ? (
+                      {integration.enabled ? (
                         <Button
                           ref={connectButtonRef}
                           size="sm"
@@ -520,7 +515,7 @@ function IntegrationCard({
                         </Button>
                       ) : null}
                     </>
-                  ) : integration.installed && integration.enabled && integration.compatible ? (
+                  ) : integration.installed && integration.enabled ? (
                     <Button
                       ref={connectButtonRef}
                       size="sm"
@@ -585,12 +580,7 @@ function IntegrationCard({
                         <span>Access</span>
                         <Switch
                           checked={capability.enabled}
-                          disabled={
-                            busy ||
-                            !integration.installed ||
-                            !integration.enabled ||
-                            !integration.compatible
-                          }
+                          disabled={busy || !integration.installed || !integration.enabled}
                           aria-label={`${capability.displayName} access enabled`}
                           onCheckedChange={(enabled) =>
                             void onCapabilityEnabled(integration, capability.id, enabled)

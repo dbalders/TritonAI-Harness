@@ -16,10 +16,9 @@ import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 
 import * as ServerConfig from "../config.ts";
+import { acquireSqliteProcessLock, releaseSqliteProcessLock } from "./SqliteProcessLock.ts";
 
 const DATA_KEY_BYTES = 32;
-const SECRET_STORE_LOCK_RETRY_COUNT = 200;
-const SECRET_STORE_LOCK_RETRY_DELAY = "25 millis";
 
 const secretStoreErrorContext = {
   resource: Schema.String,
@@ -156,17 +155,6 @@ export class SecretStoreLockTimeoutError extends Schema.TaggedErrorClass<SecretS
   }
 }
 
-export class SecretStoreLockOwnershipError extends Schema.TaggedErrorClass<SecretStoreLockOwnershipError>()(
-  "SecretStoreLockOwnershipError",
-  {
-    resource: Schema.String,
-  },
-) {
-  override get message(): string {
-    return `Lost ownership of the lock for ${this.resource}.`;
-  }
-}
-
 export const SecretStoreError = Schema.Union([
   SecretStoreSecureError,
   SecretStoreReadError,
@@ -179,7 +167,6 @@ export const SecretStoreError = Schema.Union([
   SecretStoreEncodeError,
   SecretStoreKeyError,
   SecretStoreLockTimeoutError,
-  SecretStoreLockOwnershipError,
 ]);
 export type SecretStoreError = typeof SecretStoreError.Type;
 export const isSecretStoreError = Schema.is(SecretStoreError);
@@ -364,81 +351,15 @@ export const make = Effect.gen(function* () {
           fileSystem.open(directoryPath, { flag: "r" }).pipe(Effect.flatMap((file) => file.sync)),
         );
 
-  interface SecretStoreLock {
-    readonly lockPath: string;
-    readonly owner: string;
-    readonly resource: string;
-  }
-
-  const acquireSecretStoreLock = (
-    lockPath: string,
-    resource: string,
-  ): Effect.Effect<
-    SecretStoreLock,
-    PlatformError.PlatformError | SecretStoreLockTimeoutError | SecretStoreTemporaryPathError
-  > =>
-    Effect.gen(function* () {
-      const owner = yield* crypto.randomUUIDv4.pipe(
-        Effect.mapError(
-          (cause) =>
-            new SecretStoreTemporaryPathError({
-              resource: `${resource} lock`,
-              cause,
-            }),
-        ),
-      );
-
-      for (let attempt = 0; attempt < SECRET_STORE_LOCK_RETRY_COUNT; attempt += 1) {
-        let created = false;
-        const acquired = yield* Effect.scoped(
-          Effect.gen(function* () {
-            const file = yield* fileSystem.open(lockPath, { flag: "wx", mode: 0o600 });
-            created = true;
-            yield* file.writeAll(new TextEncoder().encode(owner));
-            yield* file.sync;
-          }),
-        ).pipe(
-          Effect.as(true),
-          Effect.catch((cause) =>
-            isAlreadyExistsPlatformError(cause)
-              ? Effect.succeed(false)
-              : created
-                ? fileSystem
-                    .remove(lockPath, { force: true })
-                    .pipe(Effect.andThen(Effect.fail(cause)))
-                : Effect.fail(cause),
-          ),
-        );
-        if (acquired) return { lockPath, owner, resource } as const;
-        yield* Effect.sleep(SECRET_STORE_LOCK_RETRY_DELAY);
-      }
-
-      return yield* new SecretStoreLockTimeoutError({
-        resource,
-      });
-    });
-
-  const releaseSecretStoreLock = (
-    lock: SecretStoreLock,
-  ): Effect.Effect<void, PlatformError.PlatformError | SecretStoreLockOwnershipError> =>
-    Effect.gen(function* () {
-      const currentOwner = yield* fileSystem.readFileString(lock.lockPath).pipe(
-        Effect.mapError((cause): PlatformError.PlatformError | SecretStoreLockOwnershipError => {
-          if (cause.reason._tag === "NotFound") {
-            return new SecretStoreLockOwnershipError({
-              resource: lock.resource,
-            });
-          }
-          return cause;
-        }),
-      );
-      if (currentOwner !== lock.owner) {
-        return yield* new SecretStoreLockOwnershipError({
-          resource: lock.resource,
-        });
-      }
-      yield* fileSystem.remove(lock.lockPath);
-    });
+  const acquireSecretStoreLock = (lockPath: string, resource: string) =>
+    acquireSqliteProcessLock(lockPath, resource).pipe(
+      Effect.mapError((cause) =>
+        cause._tag === "SqliteProcessLockTimeoutError"
+          ? new SecretStoreLockTimeoutError({ resource })
+          : new SecretStoreTemporaryPathError({ resource: `${resource} lock`, cause }),
+      ),
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+    );
 
   const retireLegacyAuthorization = (name: string): Effect.Effect<void, SecretStoreError> => {
     const expected = legacyFingerprints.get(name);
@@ -563,7 +484,7 @@ export const make = Effect.gen(function* () {
                 ),
               );
             }),
-          releaseSecretStoreLock,
+          releaseSqliteProcessLock,
         );
       }
       legacyFingerprints.delete(name);
@@ -679,7 +600,7 @@ export const make = Effect.gen(function* () {
     Effect.acquireUseRelease(
       acquireSecretStoreLock(`${resolveSecretPath(name)}.lock`, `secret ${name}`),
       () => operation,
-      releaseSecretStoreLock,
+      releaseSqliteProcessLock,
     ).pipe(
       Effect.mapError((cause) =>
         isSecretStoreError(cause)

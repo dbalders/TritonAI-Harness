@@ -293,31 +293,6 @@ const make = Effect.gen(function* () {
     ),
   );
 
-  const loadSettingsFromDisk = Effect.gen(function* () {
-    if (!(yield* readConfigExists)) {
-      return DEFAULT_SERVER_SETTINGS;
-    }
-
-    const raw = yield* readRawConfig;
-    const decoded = decodeServerSettingsJsonExit(raw);
-    if (decoded._tag === "Failure") {
-      yield* Effect.logWarning("failed to parse settings.json, using defaults", {
-        path: settingsPath,
-        issues: Cause.pretty(decoded.cause),
-        cause: decoded.cause,
-      });
-      return DEFAULT_SERVER_SETTINGS;
-    }
-    return decoded.value;
-  });
-
-  const settingsCache = yield* Cache.make<typeof cacheKey, ServerSettings, ServerSettingsError>({
-    capacity: 1,
-    lookup: () => loadSettingsFromDisk,
-  });
-
-  const getSettingsFromCache = Cache.get(settingsCache, cacheKey);
-
   const materializeProviderEnvironmentSecrets = (
     settings: ServerSettings,
   ): Effect.Effect<ServerSettings, ServerSettingsError> =>
@@ -473,6 +448,7 @@ const make = Effect.gen(function* () {
       return yield* writeFileStringAtomically({
         filePath: settingsPath,
         contents: `${sparseSettingsJson}\n`,
+        mode: 0o600,
       }).pipe(
         Effect.provideService(FileSystem.FileSystem, fs),
         Effect.provideService(Path.Path, pathService),
@@ -487,6 +463,46 @@ const make = Effect.gen(function* () {
         }),
     ),
   );
+
+  const hasPlaintextProviderEnvironmentSecret = (settings: ServerSettings): boolean =>
+    Object.values(settings.providerInstances).some((instance) =>
+      instance.environment?.some(
+        (variable) => variable.sensitive && !variable.valueRedacted && variable.value.length > 0,
+      ),
+    );
+
+  const loadSettingsFromDisk = Effect.gen(function* () {
+    if (!(yield* readConfigExists)) {
+      return DEFAULT_SERVER_SETTINGS;
+    }
+
+    const raw = yield* readRawConfig;
+    const decoded = decodeServerSettingsJsonExit(raw);
+    if (decoded._tag === "Failure") {
+      yield* Effect.logWarning("failed to parse settings.json, using defaults", {
+        path: settingsPath,
+        issues: Cause.pretty(decoded.cause),
+        cause: decoded.cause,
+      });
+      return DEFAULT_SERVER_SETTINGS;
+    }
+    if (!hasPlaintextProviderEnvironmentSecret(decoded.value)) {
+      return decoded.value;
+    }
+
+    const migrated = yield* persistProviderEnvironmentSecrets(decoded.value, decoded.value).pipe(
+      Effect.flatMap(normalizeServerSettings),
+    );
+    yield* writeSettingsAtomically(migrated);
+    return migrated;
+  });
+
+  const settingsCache = yield* Cache.make<typeof cacheKey, ServerSettings, ServerSettingsError>({
+    capacity: 1,
+    lookup: () => loadSettingsFromDisk,
+  });
+
+  const getSettingsFromCache = Cache.get(settingsCache, cacheKey);
 
   const revalidateAndEmit = writeSemaphore.withPermits(1)(
     Effect.gen(function* () {

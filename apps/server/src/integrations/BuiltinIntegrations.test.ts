@@ -7,7 +7,8 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import type * as ServerSecretStore from "../auth/ServerSecretStore.ts";
-import { makeBuiltinIntegrations } from "./builtins.ts";
+import { loadBuiltinIntegrations } from "./builtins.ts";
+import { makeFixtureIntegrations } from "./fixtureBuiltins.ts";
 import { RegistryRuntime } from "./IntegrationRegistry.ts";
 import { CodexIntegrationSkillMaterializer } from "./IntegrationSkillMaterializer.ts";
 
@@ -38,13 +39,13 @@ function memorySecrets() {
 }
 
 describe("built-in integration packages", () => {
-  it("keeps proof fixtures out of the default catalog", () => {
-    expect(makeBuiltinIntegrations(memorySecrets())).toEqual([]);
+  it("keeps proof fixtures out of the default catalog", async () => {
+    expect(await loadBuiltinIntegrations(memorySecrets())).toEqual([]);
   });
 
   it("injects package-scoped credentials into provider factories", async () => {
     const secrets = memorySecretState();
-    const fixture = makeBuiltinIntegrations(secrets.service, { includeFixtures: true }).find(
+    const fixture = makeFixtureIntegrations(secrets.service).find(
       ({ manifest }) => manifest.id === "api-key-mcp-fixture",
     );
     if (!fixture?.provider?.connect) {
@@ -65,7 +66,7 @@ describe("built-in integration packages", () => {
   it("runs skill-only and authenticated tool package shapes through one registry", async () => {
     const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-builtins-"));
     const codexHome = NodePath.join(root, "codex");
-    const builtins = makeBuiltinIntegrations(memorySecrets(), { includeFixtures: true });
+    const builtins = makeFixtureIntegrations(memorySecrets());
     expect(builtins.every(({ bundledFiles }) => bundledFiles === undefined)).toBe(true);
     const registry = new RegistryRuntime(
       NodePath.join(root, "runtime"),
