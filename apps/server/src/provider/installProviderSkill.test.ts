@@ -265,7 +265,11 @@ describe("managed skill install ownership", () => {
       const swappingFileSystem = {
         ...fs,
         readLink: (targetPath: string) => {
-          if (swapped || !targetPath.includes(".backup.") || path.basename(targetPath) !== "skill") {
+          if (
+            swapped ||
+            !targetPath.includes(".backup.") ||
+            path.basename(targetPath) !== "skill"
+          ) {
             return fs.readLink(targetPath);
           }
           swapped = true;

@@ -1187,17 +1187,16 @@ function refreshExistingSkillBundleFiles(input: {
               Effect.flatMap((destinationExists) =>
                 destinationExists
                   ? Effect.void
-                  // This catches stale or accidental replacement before recovery. A malicious
-                  // process running as the same OS user can rewrite both paths after any Node check.
-                  : verifySkillDirectoryIdentity(
+                  : // This catches stale or accidental replacement before recovery. A malicious
+                    // process running as the same OS user can rewrite both paths after any Node check.
+                    verifySkillDirectoryIdentity(
                       backupDirectory,
                       input.expectedSkillDirectoryIdentity,
-                    )
-                      .pipe(
-                        Effect.andThen(fs.rename(backupDirectory, input.skillDirectory)),
-                        Effect.andThen(fs.remove(backupRoot, { recursive: true, force: true })),
-                        Effect.ignore,
-                      ),
+                    ).pipe(
+                      Effect.andThen(fs.rename(backupDirectory, input.skillDirectory)),
+                      Effect.andThen(fs.remove(backupRoot, { recursive: true, force: true })),
+                      Effect.ignore,
+                    ),
               ),
               Effect.andThen(Effect.fail(error)),
             )
