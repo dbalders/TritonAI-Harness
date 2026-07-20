@@ -208,13 +208,13 @@ export function validateIntegrationManifest(value: unknown): IntegrationManifest
       name: tool.name as string,
       displayName: tool.displayName as string,
       description: tool.description as string,
-      capabilities: tool.capabilities as ReadonlyArray<string>,
+      capabilities: [...(tool.capabilities as ReadonlyArray<string>)],
       effect: tool.effect as "read" | "write",
     })),
     skills: skills.map((skill) => ({
       name: skill.name as string,
       description: skill.description as string,
-      capabilities: skill.capabilities as ReadonlyArray<string>,
+      capabilities: [...(skill.capabilities as ReadonlyArray<string>)],
     })),
   };
 }

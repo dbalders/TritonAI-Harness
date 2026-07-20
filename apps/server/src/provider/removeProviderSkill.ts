@@ -23,8 +23,8 @@ export interface ProviderSkillRemovalIdentity {
 }
 
 interface PathIdentity {
-  readonly dev: number;
-  readonly ino: number;
+  readonly dev: bigint;
+  readonly ino: bigint;
 }
 
 function removalError(message: string, cause?: unknown) {
@@ -57,7 +57,7 @@ function isSymbolicLinkPath(
   );
 }
 
-const pathIdentity = ({ dev, ino }: NodeFS.Stats): PathIdentity => ({ dev, ino });
+const pathIdentity = ({ dev, ino }: NodeFS.BigIntStats): PathIdentity => ({ dev, ino });
 
 const samePathIdentity = (left: PathIdentity, right: PathIdentity): boolean =>
   left.dev === right.dev && left.ino === right.ino;
@@ -92,9 +92,9 @@ const inspectProviderSkillRemovalIdentity = (
 ): Effect.Effect<ProviderSkillRemovalIdentity, ServerProviderSkillRemovalError> =>
   Effect.try({
     try: () => {
-      const sharedBefore = NodeFS.lstatSync(sharedSkillsDirectory);
-      const skill = NodeFS.lstatSync(skillDirectoryPath);
-      const sharedAfter = NodeFS.lstatSync(sharedSkillsDirectory);
+      const sharedBefore = NodeFS.lstatSync(sharedSkillsDirectory, { bigint: true });
+      const skill = NodeFS.lstatSync(skillDirectoryPath, { bigint: true });
+      const sharedAfter = NodeFS.lstatSync(sharedSkillsDirectory, { bigint: true });
       if (
         !sharedBefore.isDirectory() ||
         !skill.isDirectory() ||

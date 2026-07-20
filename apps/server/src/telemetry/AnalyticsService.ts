@@ -285,7 +285,7 @@ export const makeWithOptions = (options: AnalyticsServiceOptions = {}) =>
         if (enqueueResult.dropped) {
           yield* Effect.logDebug("analytics buffer full; dropping oldest event", {
             size: enqueueResult.size,
-            event,
+            incomingEvent: event,
           });
         }
       },

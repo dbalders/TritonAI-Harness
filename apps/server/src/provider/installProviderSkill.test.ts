@@ -289,6 +289,44 @@ describe("managed skill install ownership", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
+  it.effect("cleans refresh staging when the original skill cannot be moved", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "skill-refresh-rename-test-" });
+      const skillsDirectory = path.join(root, "skills");
+      const skillDirectory = path.join(skillsDirectory, "local-skill");
+      yield* fs.makeDirectory(skillDirectory, { recursive: true });
+      yield* fs.writeFileString(
+        path.join(skillDirectory, "SKILL.md"),
+        skillMarkdown("local-skill", "original"),
+      );
+      const failingFileSystem = {
+        ...fs,
+        rename: (from: string, to: string) =>
+          from === skillDirectory && to.includes(".backup.")
+            ? Effect.fail(
+                PlatformError.systemError({
+                  _tag: "PermissionDenied",
+                  module: "FileSystem",
+                  method: "rename",
+                  pathOrDescriptor: from,
+                  description: "Injected refresh rename failure.",
+                }),
+              )
+            : fs.rename(from, to),
+      } satisfies FileSystem.FileSystem;
+
+      const error = yield* installSkillBundle({
+        bundle: bundle("local-skill", "replacement"),
+        skillsDirectory,
+      }).pipe(Effect.provideService(FileSystem.FileSystem, failingFileSystem), Effect.flip);
+
+      expect(error.message).toContain("Failed to move");
+      expect(yield* fs.readDirectory(skillsDirectory)).toEqual(["local-skill"]);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("allows a real skills directory under a symlinked parent", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
