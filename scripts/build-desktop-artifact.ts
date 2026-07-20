@@ -13,6 +13,14 @@ import serverPackageJson from "../apps/server/package.json" with { type: "json" 
 
 import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
 import { getDefaultBuildArch } from "./lib/build-target-arch.ts";
+import {
+  PRODUCTION_PLUGIN_SOURCE_ENV,
+  assertManagedPluginBuildConfiguration,
+  managedPluginProofFileName,
+  managedPluginProofInputFileName,
+  snapshotManagedPluginComposition,
+  type ManagedPluginComposition,
+} from "./lib/managed-plugin-composition.ts";
 import { loadRepoEnv } from "./lib/public-config.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
 
@@ -174,6 +182,44 @@ export class UnsupportedHostBuildPlatformError extends Schema.TaggedErrorClass<U
 ) {
   override get message(): string {
     return `Unsupported host platform '${this.hostPlatform}'.`;
+  }
+}
+
+export class MissingAzureTrustedSigningConfigurationError extends Schema.TaggedErrorClass<MissingAzureTrustedSigningConfigurationError>()(
+  "MissingAzureTrustedSigningConfigurationError",
+  {
+    missingVariables: Schema.Array(Schema.String),
+  },
+) {
+  override get message(): string {
+    return `Signed Windows builds require Azure Trusted Signing configuration: ${this.missingVariables.join(", ")}.`;
+  }
+}
+
+export class InvalidAzureTrustedSigningEndpointError extends Schema.TaggedErrorClass<InvalidAzureTrustedSigningEndpointError>()(
+  "InvalidAzureTrustedSigningEndpointError",
+  {},
+) {
+  override get message(): string {
+    return "AZURE_TRUSTED_SIGNING_ENDPOINT must be a valid HTTPS URL.";
+  }
+}
+
+const ManagedPluginCompositionBuildFailure = Schema.Literals([
+  "invalid-composition",
+  "skip-build",
+  "unsupported-platform",
+]);
+
+export class ManagedPluginCompositionBuildError extends Schema.TaggedErrorClass<ManagedPluginCompositionBuildError>()(
+  "ManagedPluginCompositionBuildError",
+  {
+    failure: ManagedPluginCompositionBuildFailure,
+    cause: Schema.Defect(),
+  },
+) {
+  override get message(): string {
+    return `Failed to prepare managed plugin build input: ${this.failure}.`;
   }
 }
 
@@ -927,11 +973,16 @@ function getPatchedDependencyPackageName(patchKey: string): string {
   return versionSeparator > 0 ? patchKey.slice(0, versionSeparator) : patchKey;
 }
 
-const AzureTrustedSigningOptionsConfig = Config.all({
-  publisherName: Config.string("AZURE_TRUSTED_SIGNING_PUBLISHER_NAME"),
-  endpoint: Config.string("AZURE_TRUSTED_SIGNING_ENDPOINT"),
-  certificateProfileName: Config.string("AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME"),
-  codeSigningAccountName: Config.string("AZURE_TRUSTED_SIGNING_ACCOUNT_NAME"),
+const AzureTrustedSigningEnvironmentConfig = Config.all({
+  tenantId: Config.string("AZURE_TENANT_ID").pipe(Config.option),
+  clientId: Config.string("AZURE_CLIENT_ID").pipe(Config.option),
+  clientAuthenticationValue: Config.string("AZURE_CLIENT_SECRET").pipe(Config.option),
+  publisherName: Config.string("AZURE_TRUSTED_SIGNING_PUBLISHER_NAME").pipe(Config.option),
+  endpoint: Config.string("AZURE_TRUSTED_SIGNING_ENDPOINT").pipe(Config.option),
+  certificateProfileName: Config.string("AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME").pipe(
+    Config.option,
+  ),
+  codeSigningAccountName: Config.string("AZURE_TRUSTED_SIGNING_ACCOUNT_NAME").pipe(Config.option),
   fileDigest: Config.string("AZURE_TRUSTED_SIGNING_FILE_DIGEST").pipe(Config.withDefault("SHA256")),
   timestampDigest: Config.string("AZURE_TRUSTED_SIGNING_TIMESTAMP_DIGEST").pipe(
     Config.withDefault("SHA256"),
@@ -939,6 +990,42 @@ const AzureTrustedSigningOptionsConfig = Config.all({
   timestampRfc3161: Config.string("AZURE_TRUSTED_SIGNING_TIMESTAMP_RFC3161").pipe(
     Config.withDefault("http://timestamp.acs.microsoft.com"),
   ),
+});
+
+export const resolveAzureTrustedSigningConfiguration = Effect.fn(
+  "resolveAzureTrustedSigningConfiguration",
+)(function* () {
+  const environment = yield* AzureTrustedSigningEnvironmentConfig;
+  const required = [
+    ["AZURE_TENANT_ID", environment.tenantId],
+    ["AZURE_CLIENT_ID", environment.clientId],
+    ["AZURE_CLIENT_SECRET", environment.clientAuthenticationValue],
+    ["AZURE_TRUSTED_SIGNING_ENDPOINT", environment.endpoint],
+    ["AZURE_TRUSTED_SIGNING_ACCOUNT_NAME", environment.codeSigningAccountName],
+    ["AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME", environment.certificateProfileName],
+    ["AZURE_TRUSTED_SIGNING_PUBLISHER_NAME", environment.publisherName],
+  ] as const;
+  const missingVariables = required
+    .filter(([, value]) => !Option.getOrUndefined(value)?.trim())
+    .map(([name]) => name);
+  if (missingVariables.length > 0) {
+    return yield* new MissingAzureTrustedSigningConfigurationError({ missingVariables });
+  }
+
+  const endpoint = Option.getOrThrow(environment.endpoint).trim();
+  if (!URL.canParse(endpoint) || new URL(endpoint).protocol !== "https:") {
+    return yield* new InvalidAzureTrustedSigningEndpointError();
+  }
+
+  return {
+    publisherName: Option.getOrThrow(environment.publisherName).trim(),
+    endpoint,
+    certificateProfileName: Option.getOrThrow(environment.certificateProfileName).trim(),
+    codeSigningAccountName: Option.getOrThrow(environment.codeSigningAccountName).trim(),
+    fileDigest: environment.fileDigest,
+    timestampDigest: environment.timestampDigest,
+    timestampRfc3161: environment.timestampRfc3161,
+  };
 });
 
 const BuildEnvConfig = Config.all({
@@ -1440,7 +1527,8 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       signAndEditExecutable: true,
     };
     if (signed) {
-      winConfig.azureSignOptions = yield* AzureTrustedSigningOptionsConfig;
+      buildConfig.forceCodeSigning = true;
+      winConfig.azureSignOptions = yield* resolveAzureTrustedSigningConfiguration();
     }
     buildConfig.win = winConfig;
   }
@@ -1558,6 +1646,11 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     });
   }
 
+  const windowsSigning =
+    options.platform === "win" && options.signed
+      ? yield* resolveAzureTrustedSigningConfiguration()
+      : undefined;
+
   const electronVersion = desktopPackageJson.dependencies.electron;
 
   const serverDependencies = serverPackageJson.dependencies;
@@ -1604,6 +1697,36 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     prefix: `t3code-desktop-${options.platform}-stage-`,
   });
 
+  const repoEnv = loadRepoEnv({ repoRoot });
+  const configuredPluginSource = repoEnv[PRODUCTION_PLUGIN_SOURCE_ENV]?.trim();
+  if (configuredPluginSource && options.skipBuild) {
+    return yield* new ManagedPluginCompositionBuildError({
+      failure: "skip-build",
+      cause: "Managed production plugins cannot be composed with --skip-build.",
+    });
+  }
+  if (configuredPluginSource && options.platform !== "mac" && options.platform !== "win") {
+    return yield* new ManagedPluginCompositionBuildError({
+      failure: "unsupported-platform",
+      cause: `Managed production plugins are unsupported for ${options.platform}.`,
+    });
+  }
+  const pluginSnapshotRoot = path.join(stageRoot, "plugin-composition-input");
+  const pluginComposition: ManagedPluginComposition | null = configuredPluginSource
+    ? yield* Effect.try({
+        try: () => {
+          const composition = snapshotManagedPluginComposition(
+            path.resolve(repoRoot, configuredPluginSource),
+            pluginSnapshotRoot,
+          );
+          assertManagedPluginBuildConfiguration(composition, repoEnv);
+          return composition;
+        },
+        catch: (cause) =>
+          new ManagedPluginCompositionBuildError({ failure: "invalid-composition", cause }),
+      })
+    : null;
+
   const stageAppDir = path.join(stageRoot, "app");
   const stageResourcesDir = path.join(stageAppDir, "apps/desktop/resources");
   const distDirs = {
@@ -1619,6 +1742,9 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     yield* runCommand(
       ChildProcess.make(spawnCommand.command, spawnCommand.args, {
         cwd: repoRoot,
+        env: pluginComposition
+          ? { ...process.env, [PRODUCTION_PLUGIN_SOURCE_ENV]: pluginSnapshotRoot }
+          : process.env,
         shell: spawnCommand.shell,
       }),
       { label: "vp run build:desktop", verbose: options.verbose },
@@ -1648,6 +1774,19 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   }
 
   yield* validateBundledClientAssets(path.dirname(bundledClientEntry));
+
+  const productionIntegrationsRoot = path.join(distDirs.serverDist, "production-integrations");
+  yield* fs.remove(productionIntegrationsRoot, { recursive: true, force: true });
+  if (pluginComposition) {
+    const productionPackagesRoot = path.join(productionIntegrationsRoot, "packages");
+    yield* fs.makeDirectory(productionPackagesRoot, { recursive: true });
+    for (const plugin of pluginComposition.packages) {
+      yield* fs.copy(
+        path.join(pluginSnapshotRoot, "packages", plugin.id),
+        path.join(productionPackagesRoot, plugin.id),
+      );
+    }
+  }
 
   yield* fs.makeDirectory(path.join(stageAppDir, "apps/desktop"), { recursive: true });
   yield* fs.makeDirectory(path.join(stageAppDir, "apps/server"), { recursive: true });
@@ -1862,6 +2001,16 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
 
   const stageEntries = yield* fs.readDirectory(stageDistDir);
   yield* fs.makeDirectory(options.outputDir, { recursive: true });
+  const proofPlatform =
+    options.platform === "mac" || options.platform === "win" ? options.platform : null;
+  const compositionOutputPath = proofPlatform
+    ? path.join(options.outputDir, managedPluginProofFileName(proofPlatform, options.arch))
+    : null;
+  const compositionInputPath = proofPlatform
+    ? path.join(options.outputDir, managedPluginProofInputFileName(proofPlatform, options.arch))
+    : null;
+  if (compositionOutputPath) yield* fs.remove(compositionOutputPath, { force: true });
+  if (compositionInputPath) yield* fs.remove(compositionInputPath, { force: true });
 
   const copiedArtifacts: string[] = [];
   for (const entry of stageEntries) {
@@ -1880,6 +2029,45 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       platform: options.platform,
       arch: options.arch,
     });
+  }
+
+  if (windowsSigning) {
+    const executableArtifacts = copiedArtifacts.filter(
+      (artifactPath) => path.extname(artifactPath).toLowerCase() === ".exe",
+    );
+    executableArtifacts.push(
+      path.join(stageDistDir, "win-unpacked", `${resolveDesktopProductName(appVersion)}.exe`),
+    );
+    const executablePathsJson = yield* encodeJsonString(executableArtifacts);
+    const encodedExecutablePaths = Buffer.from(executablePathsJson, "utf8").toString("base64");
+    const verificationScript = path.join(repoRoot, "scripts/verify-windows-authenticode.ps1");
+    const powershell = yield* resolveSpawnCommand("powershell.exe", [
+      "-NoProfile",
+      "-NonInteractive",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      verificationScript,
+      "-ExpectedPublisherName",
+      windowsSigning.publisherName,
+      "-EncodedPaths",
+      encodedExecutablePaths,
+    ]);
+    yield* runCommand(
+      ChildProcess.make(powershell.command, powershell.args, {
+        cwd: repoRoot,
+        shell: powershell.shell,
+      }),
+      { label: "Verify Windows Authenticode signatures", verbose: options.verbose },
+    );
+  }
+
+  if (pluginComposition) {
+    if (!compositionInputPath) {
+      throw new Error("Managed plugin composition has no supported platform proof target.");
+    }
+    const compositionJson = yield* encodeJsonString(pluginComposition);
+    yield* fs.writeFileString(compositionInputPath, `${compositionJson}\n`);
   }
 
   yield* Effect.log("[desktop-artifact] Done. Artifacts:").pipe(

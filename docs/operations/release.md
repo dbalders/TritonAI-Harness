@@ -84,9 +84,10 @@ Checklist:
    - run `npm publish --access public --tag latest`
 5. Nightly runs from the same workflow file publish with `npm publish --access public --tag nightly`.
 
-## 1) Dry-run release without signing
+## 1) Local unsigned packaging check
 
-Use this first to validate the release pipeline.
+Use local packaging commands without `--signed` only for development checks. Stable release
+automation never accepts unsigned Windows artifacts.
 
 1. Confirm no signing secrets are required for this test.
 2. Create a test tag:
@@ -168,7 +169,7 @@ Checklist:
 4. Grant service principal permissions required by Trusted Signing.
 5. Create a client secret for the service principal.
 6. Add Azure secrets listed above in GitHub Actions secrets.
-7. Re-run a tag release and confirm Windows installer is signed.
+7. Re-run a tag release and confirm the Windows build and Authenticode verification gates pass.
 
 ## 4) Ongoing release checklist
 
@@ -191,5 +192,5 @@ Checklist:
 - Windows build unsigned when expected signed:
   - Check all Azure ATS and auth secrets are populated and non-empty.
 - Build fails with signing error:
-  - Retry with secrets removed to confirm unsigned path still works.
   - Re-check certificate/profile names and tenant/client credentials.
+  - Confirm `AZURE_TRUSTED_SIGNING_PUBLISHER_NAME` exactly matches the certificate Common Name.
