@@ -2,6 +2,7 @@ import "vite-plus/test/config";
 import { defineConfig, mergeConfig } from "vite-plus";
 
 import baseConfig from "../../vite.config.ts";
+import { loadManagedPluginCompositionFromEnvironment } from "../../scripts/lib/managed-plugin-composition.ts";
 import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
 
 const bundledPackagePrefixes = [
@@ -16,6 +17,8 @@ export function shouldBundleCliDependency(id: string): boolean {
 }
 
 const repoEnv = loadRepoEnv();
+const managedPluginComposition =
+  loadManagedPluginCompositionFromEnvironment(repoEnv)?.composition ?? null;
 
 export default mergeConfig(
   baseConfig,
@@ -34,7 +37,6 @@ export default mergeConfig(
       outDir: "dist",
       sourcemap: true,
       clean: true,
-      copy: ["src/integrations/packages"],
       deps: {
         alwaysBundle: shouldBundleCliDependency,
         onlyBundle: false,
@@ -43,6 +45,14 @@ export default mergeConfig(
         js: "#!/usr/bin/env node\n",
       },
       define: {
+        __TRITONAI_BUILD_SUPPORTS_INTEGRATION_FIXTURES__: "false",
+        __TRITONAI_BUILD_PLUGIN_COMPOSITION__: JSON.stringify(managedPluginComposition),
+        __TRITONAI_BUILD_MICROSOFT_GRAPH_CLIENT_ID__: JSON.stringify(
+          repoEnv.TRITONAI_MICROSOFT_GRAPH_CLIENT_ID?.trim() ?? "",
+        ),
+        __TRITONAI_BUILD_MICROSOFT_GRAPH_TENANT_ID__: JSON.stringify(
+          repoEnv.TRITONAI_MICROSOFT_GRAPH_TENANT_ID?.trim() ?? "",
+        ),
         __T3CODE_BUILD_RELAY_URL__: JSON.stringify(repoEnv.T3CODE_RELAY_URL?.trim() ?? ""),
         __T3CODE_BUILD_CLERK_PUBLISHABLE_KEY__: JSON.stringify(
           repoEnv.T3CODE_CLERK_PUBLISHABLE_KEY?.trim() ?? "",

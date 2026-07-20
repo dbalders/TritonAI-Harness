@@ -192,12 +192,53 @@ jobs:
           ref: ${{ needs.preflight.outputs.ref }}
           fetch-depth: 0
 
+      - name: Validate managed plugin release pins
+        shell: bash
+        env:
+          INSTALLER_COMMIT: ${{ vars.TRITONAI_INSTALLER_COMPOSITION_COMMIT }}
+          PLUGINS_REF: ${{ vars.TRITONAI_PLUGINS_REF }}
+          PLUGINS_COMMIT: ${{ vars.TRITONAI_PLUGINS_COMMIT }}
+        run: |
+          set -euo pipefail
+          [[ "$INSTALLER_COMMIT" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$PLUGINS_COMMIT" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$PLUGINS_REF" =~ ^refs/(heads|tags)/[A-Za-z0-9][A-Za-z0-9._/-]{0,180}$ ]]
+
+      - name: Checkout pinned composition producer
+        uses: actions/checkout@v6
+        with:
+          repository: dbalders/TritonAI-Installer
+          ref: ${{ vars.TRITONAI_INSTALLER_COMPOSITION_COMMIT }}
+          fetch-depth: 1
+          path: .release-input/installer
+
+      - name: Checkout pinned plugin source
+        uses: actions/checkout@v6
+        with:
+          repository: dbalders/TritonAI-Plugins
+          ref: ${{ vars.TRITONAI_PLUGINS_COMMIT }}
+          fetch-depth: 1
+          path: .release-input/plugins
+
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@v1
         with:
           node-version-file: package.json
           cache: true
           run-install: true
+
+      - name: Prepare pinned managed plugin composition
+        shell: bash
+        env:
+          TRITONAI_PLUGINS_REF: ${{ vars.TRITONAI_PLUGINS_REF }}
+          TRITONAI_PLUGINS_COMMIT: ${{ vars.TRITONAI_PLUGINS_COMMIT }}
+          TRITONAI_PLUGIN_IDS: microsoft-365
+          TRITONAI_PLUGINS_SOURCE: ${{ github.workspace }}/.release-input/plugins
+        run: |
+          set -euo pipefail
+          npm --prefix .release-input/installer ci --ignore-scripts
+          npm --prefix .release-input/installer run build
+          node .release-input/installer/dist/scripts/prepare-plugins-vendor.js
 
       - name: Align package versions to release version
         run: node scripts/update-release-package-versions.ts "${{ needs.preflight.outputs.version }}"
@@ -250,8 +291,8 @@ jobs:
             $env:AZURE_TRUSTED_SIGNING_PUBLISHER_NAME
           )
           if ($requiredSecrets | Where-Object { [string]::IsNullOrWhiteSpace($_) }) {
-            Write-Host "Azure Trusted Signing disabled; skipping TrustedSigning module preparation."
-            exit 0
+            Write-Error "Stable Windows releases require every Azure Trusted Signing secret."
+            exit 1
           }
 
           try {
@@ -291,6 +332,9 @@ jobs:
       - name: Build desktop artifact
         shell: bash
         env:
+          TRITONAI_PLUGIN_COMPOSITION_SOURCE: ${{ github.workspace }}/.release-input/installer/vendor/plugins
+          TRITONAI_MICROSOFT_GRAPH_CLIENT_ID: ${{ vars.TRITONAI_MICROSOFT_GRAPH_CLIENT_ID }}
+          TRITONAI_MICROSOFT_GRAPH_TENANT_ID: ${{ vars.TRITONAI_MICROSOFT_GRAPH_TENANT_ID }}
           T3CODE_CLERK_PASSKEY_RP_DOMAINS: ${{ vars.CLERK_PASSKEY_RP_DOMAINS }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
@@ -308,34 +352,47 @@ jobs:
             --verbose
           )
 
-          has_all() {
-            for value in "$@"; do
-              if [[ -z "$value" ]]; then
-                return 1
-              fi
-            done
-            return 0
-          }
-
-          # Bundle the Linux node-pty binary built by the build_wsl_node_pty job
-          # so the packaged WSL backend ships a ready binary (no first-launch
-          # compile). Required for a working WSL backend on Windows.
-          args+=(--wsl-prebuild "$GITHUB_WORKSPACE/wsl-prebuild/pty.node")
-          if has_all \
-            "$AZURE_TENANT_ID" \
-            "$AZURE_CLIENT_ID" \
-            "$AZURE_CLIENT_SECRET" \
-            "$AZURE_TRUSTED_SIGNING_ENDPOINT" \
-            "$AZURE_TRUSTED_SIGNING_ACCOUNT_NAME" \
-            "$AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME" \
-            "$AZURE_TRUSTED_SIGNING_PUBLISHER_NAME"; then
-            echo "Windows signing enabled (Azure Trusted Signing)."
+          if [[ "${{ matrix.platform }}" == "win" ]]; then
+            # Bundle the Linux node-pty binary built by the build_wsl_node_pty job
+            # so the packaged WSL backend ships a ready binary (no first-launch
+            # compile). Required for a working WSL backend on Windows.
+            args+=(--wsl-prebuild "$GITHUB_WORKSPACE/wsl-prebuild/pty.node")
+            echo "Windows signing required (Azure Trusted Signing)."
             args+=(--signed)
-          else
-            echo "Windows signing disabled (missing one or more Azure Trusted Signing secrets)."
           fi
 
           vp run dist:desktop:artifact "${args[@]}"
+
+      - name: Verify Windows Authenticode signatures
+        if: matrix.platform == 'win'
+        shell: powershell
+        env:
+          AZURE_TRUSTED_SIGNING_PUBLISHER_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_PUBLISHER_NAME }}
+        run: |
+          $artifacts = @(Get-ChildItem -Path release -Filter *.exe -File | ForEach-Object FullName)
+          $encodedArtifacts = [Convert]::ToBase64String(
+            [Text.Encoding]::UTF8.GetBytes(($artifacts | ConvertTo-Json -Compress))
+          )
+          ./scripts/verify-windows-authenticode.ps1 `
+            -ExpectedPublisherName $env:AZURE_TRUSTED_SIGNING_PUBLISHER_NAME `
+            -EncodedPaths $encodedArtifacts
+
+      - name: Finalize managed plugin proof
+        if: ${{ matrix.platform == 'win' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          proof_input="release/.tritonai-plugin-composition-${{ matrix.platform }}-${{ matrix.arch }}.json.input"
+          if [[ ! -f "$proof_input" ]]; then
+            echo "Missing managed plugin proof input: $proof_input" >&2
+            exit 1
+          fi
+          artifact="release/TritonAI-Harness-${{ needs.preflight.outputs.version }}-${{ matrix.arch }}.exe"
+          node scripts/finalize-managed-plugin-proof.ts \
+            --platform "${{ matrix.platform }}" \
+            --arch "${{ matrix.arch }}" \
+            --artifact "$artifact" \
+            --output-dir release
 
       - name: Collect release assets
         shell: bash
@@ -347,7 +404,8 @@ jobs:
           for pattern in \
             "release/*.exe" \
             "release/*.blockmap" \
-            "release/*.yml"; do
+            "release/*.yml" \
+            "release/tritonai-plugin-composition-*.json"; do
             for file in $pattern; do
               cp "$file" release-publish/
             done
@@ -483,6 +541,7 @@ jobs:
             release-assets/*.exe
             release-assets/*.blockmap
             release-assets/*.yml
+            release-assets/tritonai-plugin-composition-*.json
           fail_on_unmatched_files: true
           token: ${{ steps.app_token.outputs.token }}
 
