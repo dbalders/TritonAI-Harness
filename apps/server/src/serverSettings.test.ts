@@ -13,6 +13,7 @@ import * as Effect from "effect/Effect";
 import * as Duration from "effect/Duration";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
@@ -241,6 +242,43 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         storedPassword,
       );
       assert.notInclude(yield* fileSystem.readFileString(serverConfig.settingsPath), providerValue);
+    }).pipe(Effect.provide(makeInspectableServerSettingsLayer())),
+  );
+
+  it.effect("honors an explicit empty OpenCode password in settings.json", () =>
+    Effect.gen(function* () {
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const secretStore = yield* ServerSecretStore.ServerSecretStore;
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      const storedPassword = "test-stored-password";
+      yield* secretStore.set(
+        "provider-legacy-opencode-server-credential",
+        new TextEncoder().encode(storedPassword),
+      );
+      yield* fileSystem.writeFileString(
+        serverConfig.settingsPath,
+        encodeUnknownJson({
+          providers: {
+            opencode: {
+              serverUrl: "http://127.0.0.1:4096",
+              serverPassword: "",
+            },
+          },
+        }),
+        { mode: 0o600 },
+      );
+
+      yield* serverSettings.start;
+
+      assert.strictEqual((yield* serverSettings.getSettings).providers.opencode.serverPassword, "");
+      assert.isTrue(
+        (yield* secretStore.get("provider-legacy-opencode-server-credential")).pipe(Option.isNone),
+      );
+      assert.notInclude(
+        yield* fileSystem.readFileString(serverConfig.settingsPath),
+        "serverPassword",
+      );
     }).pipe(Effect.provide(makeInspectableServerSettingsLayer())),
   );
 

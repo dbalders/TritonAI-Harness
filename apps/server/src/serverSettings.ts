@@ -166,6 +166,31 @@ export const layerTest = (overrides: DeepPartial<ServerSettings> = {}) =>
 
 const ServerSettingsJson = fromLenientJson(ServerSettings);
 const decodeServerSettingsJsonExit = Schema.decodeUnknownExit(ServerSettingsJson);
+const LegacyOpenCodePasswordJson = fromLenientJson(
+  Schema.Struct({
+    providers: Schema.optionalKey(
+      Schema.Struct({
+        opencode: Schema.optionalKey(
+          Schema.Struct({
+            serverPassword: Schema.optionalKey(Schema.String),
+          }),
+        ),
+      }),
+    ),
+  }),
+);
+const decodeLegacyOpenCodePasswordJsonExit = Schema.decodeUnknownExit(LegacyOpenCodePasswordJson);
+
+function hasExplicitLegacyOpenCodePasswordClear(raw: string): boolean {
+  const decoded = decodeLegacyOpenCodePasswordJsonExit(raw);
+  if (decoded._tag === "Failure") return false;
+  const opencode = decoded.value.providers?.opencode;
+  return (
+    opencode !== undefined &&
+    Object.hasOwn(opencode, "serverPassword") &&
+    opencode.serverPassword?.trim().length === 0
+  );
+}
 
 type LegacyProviderSettings = ServerSettings["providers"][keyof ServerSettings["providers"]];
 
@@ -376,6 +401,21 @@ const make = Effect.gen(function* () {
     ),
   );
 
+  const removeLegacyOpenCodeStoredValue = secretStore
+    .remove(LEGACY_OPENCODE_SERVER_CREDENTIAL_KEY)
+    .pipe(
+      Effect.mapError(
+        (cause) =>
+          new ServerSettingsError({
+            settingsPath,
+            operation: "remove-secret",
+            providerInstanceId: "opencode",
+            environmentVariable: "serverPassword",
+            cause,
+          }),
+      ),
+    );
+
   const restoreLegacyOpenCodeStoredValue = (previousValue: Option.Option<Uint8Array>) =>
     Option.match(previousValue, {
       onNone: () => secretStore.remove(LEGACY_OPENCODE_SERVER_CREDENTIAL_KEY),
@@ -516,18 +556,7 @@ const make = Effect.gen(function* () {
             ),
           );
       } else if (current.providers.opencode.serverPassword.length > 0) {
-        yield* secretStore.remove(LEGACY_OPENCODE_SERVER_CREDENTIAL_KEY).pipe(
-          Effect.mapError(
-            (cause) =>
-              new ServerSettingsError({
-                settingsPath,
-                operation: "remove-secret",
-                providerInstanceId: "opencode",
-                environmentVariable: "serverPassword",
-                cause,
-              }),
-          ),
-        );
+        yield* removeLegacyOpenCodeStoredValue;
       }
 
       return {
@@ -590,6 +619,15 @@ const make = Effect.gen(function* () {
         cause: decoded.cause,
       });
       return DEFAULT_SERVER_SETTINGS;
+    }
+    if (hasExplicitLegacyOpenCodePasswordClear(raw)) {
+      return yield* runWithLegacyOpenCodeRollback(
+        removeLegacyOpenCodeStoredValue.pipe(
+          Effect.andThen(persistProviderSecrets(decoded.value, decoded.value)),
+          Effect.flatMap(normalizeServerSettings),
+          Effect.tap(writeSettingsAtomically),
+        ),
+      );
     }
     if (!hasPlaintextProviderSecret(decoded.value)) {
       return decoded.value;
