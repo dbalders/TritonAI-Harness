@@ -245,6 +245,55 @@ describe("managed skill install ownership", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
+  it.effect("does not restore a backup entry swapped during refresh recovery", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "skill-recovery-swap-test-" });
+      const skillsDirectory = path.join(root, "skills");
+      const skillDirectory = path.join(skillsDirectory, "local-skill");
+      const externalTarget = path.join(root, "external-target");
+      const markerPath = path.join(externalTarget, "marker.txt");
+      yield* fs.makeDirectory(skillDirectory, { recursive: true });
+      yield* fs.writeFileString(
+        path.join(skillDirectory, "SKILL.md"),
+        skillMarkdown("local-skill", "original"),
+      );
+      yield* fs.makeDirectory(externalTarget, { recursive: true });
+      yield* fs.writeFileString(markerPath, "keep");
+      let swapped = false;
+      const swappingFileSystem = {
+        ...fs,
+        readLink: (targetPath: string) => {
+          if (swapped || !targetPath.includes(".backup.") || path.basename(targetPath) !== "skill") {
+            return fs.readLink(targetPath);
+          }
+          swapped = true;
+          return fs
+            .remove(targetPath, { recursive: true })
+            .pipe(
+              Effect.andThen(fs.symlink(externalTarget, targetPath)),
+              Effect.andThen(fs.readLink(targetPath)),
+            );
+        },
+      } satisfies FileSystem.FileSystem;
+
+      const error = yield* installSkillBundle({
+        bundle: bundle("local-skill", "replacement"),
+        skillsDirectory,
+      }).pipe(Effect.provideService(FileSystem.FileSystem, swappingFileSystem), Effect.flip);
+
+      expect(error.message).toContain("symlinked destination path");
+      expect(yield* fs.exists(skillDirectory)).toBe(false);
+      expect(yield* fs.readFileString(markerPath)).toBe("keep");
+      const [backupRootName] = yield* fs.readDirectory(skillsDirectory);
+      expect(backupRootName).toMatch(/^local-skill\.backup\./);
+      expect(yield* fs.readLink(path.join(skillsDirectory, backupRootName!, "skill"))).toBe(
+        externalTarget,
+      );
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("does not replace an existing skill swapped to another real directory", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -284,8 +333,12 @@ describe("managed skill install ownership", () => {
       }).pipe(Effect.provideService(FileSystem.FileSystem, swappingFileSystem), Effect.flip);
 
       expect(error.message).toContain("identity changed");
-      expect(yield* fs.readFileString(path.join(skillDirectory, "marker.txt"))).toBe("keep");
-      expect(yield* fs.exists(path.join(skillDirectory, "SKILL.md"))).toBe(false);
+      expect(yield* fs.exists(skillDirectory)).toBe(false);
+      const [backupRootName] = yield* fs.readDirectory(skillsDirectory);
+      expect(backupRootName).toMatch(/^local-skill\.backup\./);
+      const retainedBackup = path.join(skillsDirectory, backupRootName!, "skill");
+      expect(yield* fs.readFileString(path.join(retainedBackup, "marker.txt"))).toBe("keep");
+      expect(yield* fs.exists(path.join(retainedBackup, "SKILL.md"))).toBe(false);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
