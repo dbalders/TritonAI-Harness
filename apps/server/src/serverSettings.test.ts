@@ -314,9 +314,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
           providerInstances: {
             [instanceId]: {
               driver: ProviderDriverKind.make("codex"),
-              environment: [
-                { name: variableName, value: "fake-provider-value", sensitive: true },
-              ],
+              environment: [{ name: variableName, value: "fake-provider-value", sensitive: true }],
               config: {},
             },
           },
