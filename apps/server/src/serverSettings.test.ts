@@ -25,6 +25,9 @@ const encodeUnknownJson = Schema.encodeUnknownSync(Schema.UnknownFromJsonString)
 const decodeSettingsPatch = Schema.decodeUnknownEffect(ServerSettingsPatch);
 const decodeServerSettings = Schema.decodeUnknownEffect(ServerSettings);
 
+const providerEnvironmentSecretName = (instanceId: string, name: string): string =>
+  `provider-env-${Buffer.from(instanceId, "utf8").toString("base64url")}-${Buffer.from(name, "utf8").toString("base64url")}`;
+
 const makeServerSettingsLayer = () =>
   ServerSettingsModule.layer.pipe(
     Layer.provide(ServerSecretStore.layer),
@@ -278,6 +281,62 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       assert.notInclude(
         yield* fileSystem.readFileString(serverConfig.settingsPath),
         "serverPassword",
+      );
+    }).pipe(Effect.provide(makeInspectableServerSettingsLayer())),
+  );
+
+  it.effect("restores every provider secret when a settings write fails", () =>
+    Effect.gen(function* () {
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const secretStore = yield* ServerSecretStore.ServerSecretStore;
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      const instanceId = ProviderInstanceId.make("codex");
+      const variableName = "TRITONAI_API_KEY";
+      const secretName = providerEnvironmentSecretName(instanceId, variableName);
+
+      yield* serverSettings.updateSettings({
+        providers: { opencode: { serverPassword: "test-server-password" } },
+        providerInstances: {
+          [instanceId]: {
+            driver: ProviderDriverKind.make("codex"),
+            environment: [{ name: variableName, value: "test-provider-value", sensitive: true }],
+            config: {},
+          },
+        },
+      });
+      yield* fileSystem.remove(serverConfig.settingsPath);
+      yield* fileSystem.makeDirectory(serverConfig.settingsPath);
+
+      const error = yield* serverSettings
+        .updateSettings({
+          providers: { opencode: { serverPassword: "fake-server-password" } },
+          providerInstances: {
+            [instanceId]: {
+              driver: ProviderDriverKind.make("codex"),
+              environment: [
+                { name: variableName, value: "fake-provider-value", sensitive: true },
+              ],
+              config: {},
+            },
+          },
+        })
+        .pipe(Effect.flip);
+
+      assert.strictEqual(error.operation, "write-file");
+      const settings = yield* serverSettings.getSettings;
+      assert.strictEqual(settings.providers.opencode.serverPassword, "test-server-password");
+      assert.strictEqual(
+        settings.providerInstances[instanceId]?.environment?.[0]?.value,
+        "test-provider-value",
+      );
+      const storedProviderSecret = yield* secretStore.get(secretName);
+      assert.strictEqual(
+        Option.match(storedProviderSecret, {
+          onNone: () => undefined,
+          onSome: (value) => new TextDecoder().decode(value),
+        }),
+        "test-provider-value",
       );
     }).pipe(Effect.provide(makeInspectableServerSettingsLayer())),
   );

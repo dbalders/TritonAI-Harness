@@ -388,19 +388,6 @@ const make = Effect.gen(function* () {
       };
     });
 
-  const readLegacyOpenCodeStoredValue = secretStore.get(LEGACY_OPENCODE_SERVER_CREDENTIAL_KEY).pipe(
-    Effect.mapError(
-      (cause) =>
-        new ServerSettingsError({
-          settingsPath,
-          operation: "read-secret",
-          providerInstanceId: "opencode",
-          environmentVariable: "serverPassword",
-          cause,
-        }),
-    ),
-  );
-
   const removeLegacyOpenCodeStoredValue = secretStore
     .remove(LEGACY_OPENCODE_SERVER_CREDENTIAL_KEY)
     .pipe(
@@ -416,28 +403,93 @@ const make = Effect.gen(function* () {
       ),
     );
 
-  const restoreLegacyOpenCodeStoredValue = (previousValue: Option.Option<Uint8Array>) =>
-    Option.match(previousValue, {
-      onNone: () => secretStore.remove(LEGACY_OPENCODE_SERVER_CREDENTIAL_KEY),
-      onSome: (value) => secretStore.set(LEGACY_OPENCODE_SERVER_CREDENTIAL_KEY, value),
-    });
+  interface SecretDescriptor {
+    readonly name: string;
+    readonly providerInstanceId: string;
+    readonly environmentVariable: string;
+  }
 
-  const runWithLegacyOpenCodeRollback = <A>(
+  const secretDescriptorsForUpdate = (
+    current: ServerSettings,
+    next: ServerSettings,
+  ): ReadonlyArray<SecretDescriptor> => {
+    const descriptors = new Map<string, SecretDescriptor>();
+    descriptors.set(LEGACY_OPENCODE_SERVER_CREDENTIAL_KEY, {
+      name: LEGACY_OPENCODE_SERVER_CREDENTIAL_KEY,
+      providerInstanceId: "opencode",
+      environmentVariable: "serverPassword",
+    });
+    for (const settings of [current, next]) {
+      for (const [instanceId, instance] of Object.entries(settings.providerInstances)) {
+        for (const variable of instance.environment ?? []) {
+          const name = providerEnvironmentSecretName({ instanceId, name: variable.name });
+          if (descriptors.has(name)) continue;
+          descriptors.set(name, {
+            name,
+            providerInstanceId: instanceId,
+            environmentVariable: variable.name,
+          });
+        }
+      }
+    }
+    return Array.from(descriptors.values());
+  };
+
+  const snapshotProviderSecrets = (
+    current: ServerSettings,
+    next: ServerSettings,
+  ): Effect.Effect<
+    ReadonlyArray<readonly [SecretDescriptor, Option.Option<Uint8Array>]>,
+    ServerSettingsError
+  > =>
+    Effect.forEach(secretDescriptorsForUpdate(current, next), (descriptor) =>
+      secretStore.get(descriptor.name).pipe(
+        Effect.map((value) => [descriptor, value] as const),
+        Effect.mapError(
+          (cause) =>
+            new ServerSettingsError({
+              settingsPath,
+              operation: "read-secret",
+              providerInstanceId: descriptor.providerInstanceId,
+              environmentVariable: descriptor.environmentVariable,
+              cause,
+            }),
+        ),
+      ),
+    );
+
+  const restoreProviderSecrets = (
+    snapshot: ReadonlyArray<readonly [SecretDescriptor, Option.Option<Uint8Array>]>,
+  ): Effect.Effect<void> =>
+    Effect.forEach(
+      snapshot,
+      ([descriptor, previousValue]) =>
+        Option.match(previousValue, {
+          onNone: () => secretStore.remove(descriptor.name),
+          onSome: (value) => secretStore.set(descriptor.name, value),
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logError("failed to restore provider credential", {
+              settingsPath,
+              providerInstanceId: descriptor.providerInstanceId,
+              environmentVariable: descriptor.environmentVariable,
+              cause,
+            }),
+          ),
+        ),
+      { discard: true },
+    );
+
+  const runWithProviderSecretRollback = <A>(
+    current: ServerSettings,
+    next: ServerSettings,
     effect: Effect.Effect<A, ServerSettingsError>,
   ): Effect.Effect<A, ServerSettingsError> =>
     Effect.gen(function* () {
-      const previousValue = yield* readLegacyOpenCodeStoredValue;
+      const snapshot = yield* snapshotProviderSecrets(current, next);
       return yield* effect.pipe(
         Effect.catchCause((cause) =>
-          restoreLegacyOpenCodeStoredValue(previousValue).pipe(
-            Effect.catchCause((rollbackCause) =>
-              Effect.logError("failed to restore OpenCode server credential", {
-                settingsPath,
-                cause: rollbackCause,
-              }),
-            ),
-            Effect.andThen(Effect.failCause(cause)),
-          ),
+          restoreProviderSecrets(snapshot).pipe(Effect.andThen(Effect.failCause(cause))),
         ),
       );
     });
@@ -621,7 +673,9 @@ const make = Effect.gen(function* () {
       return DEFAULT_SERVER_SETTINGS;
     }
     if (hasExplicitLegacyOpenCodePasswordClear(raw)) {
-      return yield* runWithLegacyOpenCodeRollback(
+      return yield* runWithProviderSecretRollback(
+        decoded.value,
+        decoded.value,
         removeLegacyOpenCodeStoredValue.pipe(
           Effect.andThen(persistProviderSecrets(decoded.value, decoded.value)),
           Effect.flatMap(normalizeServerSettings),
@@ -633,7 +687,9 @@ const make = Effect.gen(function* () {
       return decoded.value;
     }
 
-    const migrated = yield* runWithLegacyOpenCodeRollback(
+    const migrated = yield* runWithProviderSecretRollback(
+      decoded.value,
+      decoded.value,
       persistProviderSecrets(decoded.value, decoded.value).pipe(
         Effect.flatMap(normalizeServerSettings),
         Effect.tap(writeSettingsAtomically),
@@ -730,8 +786,11 @@ const make = Effect.gen(function* () {
           const current = yield* getSettingsFromCache.pipe(
             Effect.flatMap(materializeProviderSecrets),
           );
-          const next = yield* runWithLegacyOpenCodeRollback(
-            persistProviderSecrets(current, applyServerSettingsPatch(current, patch)).pipe(
+          const proposed = applyServerSettingsPatch(current, patch);
+          const next = yield* runWithProviderSecretRollback(
+            current,
+            proposed,
+            persistProviderSecrets(current, proposed).pipe(
               Effect.flatMap(normalizeServerSettings),
               Effect.tap(writeSettingsAtomically),
             ),
