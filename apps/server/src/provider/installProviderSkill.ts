@@ -53,8 +53,8 @@ const SkillFrontmatter = Schema.Struct({
 const decodeSkillFrontmatter = Schema.decodeUnknownEffect(fromYaml(SkillFrontmatter));
 
 interface SkillDirectoryIdentity {
-  readonly dev: number;
-  readonly ino: number;
+  readonly dev: bigint;
+  readonly ino: bigint;
 }
 
 const isMissingPathError = (cause: unknown): boolean =>
@@ -65,9 +65,9 @@ const inspectSkillDirectoryIdentity = (
 ): Effect.Effect<SkillDirectoryIdentity | null, ServerProviderSkillInstallError> =>
   Effect.try({
     try: () => {
-      let stats: NodeFS.Stats;
+      let stats: NodeFS.BigIntStats;
       try {
-        stats = NodeFS.lstatSync(skillDirectory);
+        stats = NodeFS.lstatSync(skillDirectory, { bigint: true });
       } catch (cause) {
         if (isMissingPathError(cause)) return null;
         throw cause;
@@ -1197,7 +1197,9 @@ function refreshExistingSkillBundleFiles(input: {
               ),
               Effect.andThen(Effect.fail(error)),
             )
-          : Effect.fail(error),
+          : fs
+              .remove(backupRoot, { recursive: true, force: true })
+              .pipe(Effect.ignore, Effect.andThen(Effect.fail(error))),
       ),
     );
 

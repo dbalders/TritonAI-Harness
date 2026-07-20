@@ -358,7 +358,6 @@ export const make = Effect.gen(function* () {
           ? new SecretStoreLockTimeoutError({ resource })
           : new SecretStoreTemporaryPathError({ resource: `${resource} lock`, cause }),
       ),
-      Effect.provideService(FileSystem.FileSystem, fileSystem),
     );
 
   const retireLegacyAuthorization = (name: string): Effect.Effect<void, SecretStoreError> => {
