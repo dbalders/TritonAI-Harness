@@ -5,7 +5,11 @@ import * as NodePath from "node:path";
 
 import { assert, describe, it } from "vite-plus/test";
 
-import { makeDevelopmentLauncherScript } from "./electron-launcher.mjs";
+import {
+  APP_BUNDLE_ID,
+  APP_DISPLAY_NAME,
+  makeDevelopmentLauncherScript,
+} from "./electron-launcher.mjs";
 
 function executeLauncher({ capturedEnvironment, runtimeEnvironment }) {
   const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "tritonai-launcher-test-"));
@@ -37,6 +41,11 @@ function executeLauncher({ capturedEnvironment, runtimeEnvironment }) {
 }
 
 describe("electron development launcher", () => {
+  it("keeps the downstream desktop identity", () => {
+    assert.equal(APP_DISPLAY_NAME, "TritonAI Harness");
+    assert.match(APP_BUNDLE_ID, /^edu\.ucsd\.tritonai\.harness(?:\.dev\.[a-z0-9]+)?$/u);
+  });
+
   it("uses captured values only as fallbacks for a live runner environment", () => {
     const script = makeDevelopmentLauncherScript({
       electronBinaryPath: "/repo/node_modules/electron/Electron",
