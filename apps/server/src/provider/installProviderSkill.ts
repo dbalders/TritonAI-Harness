@@ -1141,21 +1141,20 @@ function refreshExistingSkillBundleFiles(input: {
       );
     const backupDirectory = pathService.join(backupRoot, "skill");
     const replacementDirectory = pathService.join(backupRoot, "replacement");
-    yield* fs
-      .makeDirectory(replacementDirectory)
-      .pipe(
-        Effect.mapError((cause) =>
-          installError(`Failed to prepare replacement for ${input.skillDirectory}.`, cause),
-        ),
-      );
-    yield* writeSkillBundleFiles({
-      files: input.files,
-      skillDirectory: replacementDirectory,
-    });
-
     let originalMoved = false;
     let replacementPublished = false;
     yield* Effect.gen(function* () {
+      yield* fs
+        .makeDirectory(replacementDirectory)
+        .pipe(
+          Effect.mapError((cause) =>
+            installError(`Failed to prepare replacement for ${input.skillDirectory}.`, cause),
+          ),
+        );
+      yield* writeSkillBundleFiles({
+        files: input.files,
+        skillDirectory: replacementDirectory,
+      });
       yield* verifySkillDirectoryIdentity(
         input.skillDirectory,
         input.expectedSkillDirectoryIdentity,
