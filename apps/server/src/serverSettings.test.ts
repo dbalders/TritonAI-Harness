@@ -13,14 +13,20 @@ import * as Effect from "effect/Effect";
 import * as Duration from "effect/Duration";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as ServerConfig from "./config.ts";
 import * as ServerSettingsModule from "./serverSettings.ts";
 
+const encodeUnknownJson = Schema.encodeUnknownSync(Schema.UnknownFromJsonString);
+
 const decodeSettingsPatch = Schema.decodeUnknownEffect(ServerSettingsPatch);
 const decodeServerSettings = Schema.decodeUnknownEffect(ServerSettings);
+
+const providerEnvironmentSecretName = (instanceId: string, name: string): string =>
+  `provider-env-${Buffer.from(instanceId, "utf8").toString("base64url")}-${Buffer.from(name, "utf8").toString("base64url")}`;
 
 const makeServerSettingsLayer = () =>
   ServerSettingsModule.layer.pipe(
@@ -29,6 +35,18 @@ const makeServerSettingsLayer = () =>
       Layer.fresh(
         ServerConfig.layerTest(process.cwd(), {
           prefix: "t3code-server-settings-test-",
+        }),
+      ),
+    ),
+  );
+
+const makeInspectableServerSettingsLayer = () =>
+  ServerSettingsModule.layer.pipe(
+    Layer.provideMerge(ServerSecretStore.layer),
+    Layer.provideMerge(
+      Layer.fresh(
+        ServerConfig.layerTest(process.cwd(), {
+          prefix: "t3code-server-settings-inspectable-test-",
         }),
       ),
     ),
@@ -90,6 +108,236 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       assert.notInclude(error.message, cause.message);
     }).pipe(Effect.provide(settingsLayer));
   });
+
+  it.effect("migrates installer-written provider secrets when settings are first loaded", () =>
+    Effect.gen(function* () {
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      const instanceId = ProviderInstanceId.make("codex");
+      const plaintext = "installer-provisioned-api-key";
+      yield* fileSystem.writeFileString(
+        serverConfig.settingsPath,
+        encodeUnknownJson({
+          providerInstances: {
+            [instanceId]: {
+              driver: "codex",
+              environment: [
+                { name: "TRITONAI_API_KEY", value: plaintext, sensitive: true },
+                { name: "UCSD_AI_BASE_URL", value: "https://example.invalid/v1" },
+              ],
+              config: {},
+            },
+          },
+        }),
+        { mode: 0o600 },
+      );
+
+      yield* serverSettings.start;
+
+      const persistedRaw = yield* fileSystem.readFileString(serverConfig.settingsPath);
+      assert.notInclude(persistedRaw, plaintext);
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      assert.deepEqual(JSON.parse(persistedRaw).providerInstances.codex.environment, [
+        {
+          name: "TRITONAI_API_KEY",
+          value: "",
+          sensitive: true,
+          valueRedacted: true,
+        },
+        {
+          name: "UCSD_AI_BASE_URL",
+          value: "https://example.invalid/v1",
+          sensitive: false,
+        },
+      ]);
+      const persistedInfo = yield* fileSystem.stat(serverConfig.settingsPath);
+      assert.strictEqual(persistedInfo.mode & 0o777, 0o600);
+
+      const materialized = yield* serverSettings.getSettings;
+      assert.strictEqual(
+        materialized.providerInstances[instanceId]?.environment?.[0]?.value,
+        plaintext,
+      );
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
+  it.effect("migrates legacy OpenCode server passwords out of settings.json", () =>
+    Effect.gen(function* () {
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      const normalizedPassword = "test-normalized-password";
+      const serverPassword = [" ", normalizedPassword, " "].join("");
+      yield* fileSystem.writeFileString(
+        serverConfig.settingsPath,
+        encodeUnknownJson({
+          providers: {
+            opencode: {
+              serverUrl: "http://127.0.0.1:4096",
+              serverPassword,
+            },
+          },
+        }),
+        { mode: 0o600 },
+      );
+
+      yield* serverSettings.start;
+
+      const persistedRaw = yield* fileSystem.readFileString(serverConfig.settingsPath);
+      assert.notInclude(persistedRaw, serverPassword);
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      assert.deepEqual(JSON.parse(persistedRaw).providers.opencode, {
+        serverUrl: "http://127.0.0.1:4096",
+      });
+      assert.strictEqual(
+        (yield* serverSettings.getSettings).providers.opencode.serverPassword,
+        normalizedPassword,
+      );
+
+      const updated = yield* serverSettings.updateSettings({
+        addProjectBaseDirectory: "~/Development",
+      });
+      assert.strictEqual(updated.providers.opencode.serverPassword, normalizedPassword);
+      assert.notInclude(
+        yield* fileSystem.readFileString(serverConfig.settingsPath),
+        serverPassword,
+      );
+
+      const cleared = yield* serverSettings.updateSettings({
+        providers: { opencode: { serverPassword: "" } },
+      });
+      assert.strictEqual(cleared.providers.opencode.serverPassword, "");
+      assert.strictEqual((yield* serverSettings.getSettings).providers.opencode.serverPassword, "");
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
+  it.effect("preserves a migrated OpenCode password during another provider migration", () =>
+    Effect.gen(function* () {
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const secretStore = yield* ServerSecretStore.ServerSecretStore;
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      const storedPassword = "test-stored-password";
+      const providerValue = "installer-provisioned-api-key";
+      yield* secretStore.set(
+        "provider-legacy-opencode-server-credential",
+        new TextEncoder().encode(storedPassword),
+      );
+      yield* fileSystem.writeFileString(
+        serverConfig.settingsPath,
+        encodeUnknownJson({
+          providerInstances: {
+            codex: {
+              driver: "codex",
+              environment: [{ name: "TRITONAI_API_KEY", value: providerValue, sensitive: true }],
+              config: {},
+            },
+          },
+        }),
+        { mode: 0o600 },
+      );
+
+      yield* serverSettings.start;
+
+      assert.strictEqual(
+        (yield* serverSettings.getSettings).providers.opencode.serverPassword,
+        storedPassword,
+      );
+      assert.notInclude(yield* fileSystem.readFileString(serverConfig.settingsPath), providerValue);
+    }).pipe(Effect.provide(makeInspectableServerSettingsLayer())),
+  );
+
+  it.effect("honors an explicit empty OpenCode password in settings.json", () =>
+    Effect.gen(function* () {
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const secretStore = yield* ServerSecretStore.ServerSecretStore;
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      const storedPassword = "test-stored-password";
+      yield* secretStore.set(
+        "provider-legacy-opencode-server-credential",
+        new TextEncoder().encode(storedPassword),
+      );
+      yield* fileSystem.writeFileString(
+        serverConfig.settingsPath,
+        encodeUnknownJson({
+          providers: {
+            opencode: {
+              serverUrl: "http://127.0.0.1:4096",
+              serverPassword: "",
+            },
+          },
+        }),
+        { mode: 0o600 },
+      );
+
+      yield* serverSettings.start;
+
+      assert.strictEqual((yield* serverSettings.getSettings).providers.opencode.serverPassword, "");
+      assert.isTrue(
+        (yield* secretStore.get("provider-legacy-opencode-server-credential")).pipe(Option.isNone),
+      );
+      assert.notInclude(
+        yield* fileSystem.readFileString(serverConfig.settingsPath),
+        "serverPassword",
+      );
+    }).pipe(Effect.provide(makeInspectableServerSettingsLayer())),
+  );
+
+  it.effect("restores every provider secret when a settings write fails", () =>
+    Effect.gen(function* () {
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const secretStore = yield* ServerSecretStore.ServerSecretStore;
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      const instanceId = ProviderInstanceId.make("codex");
+      const variableName = "TRITONAI_API_KEY";
+      const secretName = providerEnvironmentSecretName(instanceId, variableName);
+
+      yield* serverSettings.updateSettings({
+        providers: { opencode: { serverPassword: "test-server-password" } },
+        providerInstances: {
+          [instanceId]: {
+            driver: ProviderDriverKind.make("codex"),
+            environment: [{ name: variableName, value: "test-provider-value", sensitive: true }],
+            config: {},
+          },
+        },
+      });
+      yield* fileSystem.remove(serverConfig.settingsPath);
+      yield* fileSystem.makeDirectory(serverConfig.settingsPath);
+
+      const error = yield* serverSettings
+        .updateSettings({
+          providers: { opencode: { serverPassword: "fake-server-password" } },
+          providerInstances: {
+            [instanceId]: {
+              driver: ProviderDriverKind.make("codex"),
+              environment: [{ name: variableName, value: "fake-provider-value", sensitive: true }],
+              config: {},
+            },
+          },
+        })
+        .pipe(Effect.flip);
+
+      assert.strictEqual(error.operation, "write-file");
+      const settings = yield* serverSettings.getSettings;
+      assert.strictEqual(settings.providers.opencode.serverPassword, "test-server-password");
+      assert.strictEqual(
+        settings.providerInstances[instanceId]?.environment?.[0]?.value,
+        "test-provider-value",
+      );
+      const storedProviderSecret = yield* secretStore.get(secretName);
+      assert.strictEqual(
+        Option.match(storedProviderSecret, {
+          onNone: () => undefined,
+          onSome: (value) => new TextDecoder().decode(value),
+        }),
+        "test-provider-value",
+      );
+    }).pipe(Effect.provide(makeInspectableServerSettingsLayer())),
+  );
 
   it.effect("decodes nested settings patches", () =>
     Effect.gen(function* () {
@@ -509,7 +757,14 @@ it.layer(NodeServices.layer)("server settings", (it) => {
 
       const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
       // @effect-diagnostics-next-line preferSchemaOverJson:off
-      assert.deepEqual(JSON.parse(raw), {
+      const persisted = JSON.parse(raw);
+      assert.isUndefined(persisted.providers.opencode.serverPassword);
+      // Rehydrate the runtime-only secret so the existing sparse-settings comparison stays intact.
+      Object.assign(persisted.providers.opencode, next.providers.opencode);
+      delete persisted.providers.opencode.enabled;
+      delete persisted.providers.opencode.binaryPath;
+      delete persisted.providers.opencode.customModels;
+      assert.deepEqual(persisted, {
         addProjectBaseDirectory: "~/Development",
         observability: {
           otlpTracesUrl: "http://localhost:4318/v1/traces",

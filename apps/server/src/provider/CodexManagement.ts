@@ -47,6 +47,7 @@ import {
 import { discoverPublicSkillCatalog } from "./publicSkillRepository.ts";
 import {
   ensureProviderSkillRemovalPathIsSafe,
+  providerSkillRemovalIdentityMatches,
   removeProviderSkillFolder,
   resolveProviderSkillRemovalTarget,
 } from "./removeProviderSkill.ts";
@@ -594,8 +595,9 @@ export const removeCodexProviderSkill = Effect.fn("removeCodexProviderSkill")(fu
   const removalTarget = yield* resolveProviderSkillRemovalTarget({ providers, request }).pipe(
     Effect.mapError((cause) => skillInstallError(cause.message, cause)),
   );
-  yield* ensureProviderSkillRemovalPathIsSafe({
-    sharedSkillsDirectory: path.join(target.sharedHomePath, "skills"),
+  const sharedSkillsDirectory = path.join(target.sharedHomePath, "skills");
+  const removalIdentity = yield* ensureProviderSkillRemovalPathIsSafe({
+    sharedSkillsDirectory,
     skillDirectoryPath: removalTarget.skillDirectoryPath,
   }).pipe(Effect.mapError((cause) => skillInstallError(cause.message, cause)));
   yield* withCodexClient(target, "skills/config/write", (client) =>
@@ -607,15 +609,33 @@ export const removeCodexProviderSkill = Effect.fn("removeCodexProviderSkill")(fu
     Effect.scoped,
     Effect.mapError((cause) => skillInstallError(cause.message, cause)),
   );
-  yield* removeProviderSkillFolder(removalTarget).pipe(
+  yield* removeProviderSkillFolder({
+    ...removalTarget,
+    sharedSkillsDirectory,
+    expectedIdentity: removalIdentity,
+  }).pipe(
     Effect.mapError((cause) => skillInstallError(cause.message, cause)),
     Effect.catch((error) =>
-      withCodexClient(target, "skills/config/write", (client) =>
-        client.request("skills/config/write", {
-          enabled: true,
-          path: request.skillPath,
-        }),
-      ).pipe(Effect.scoped, Effect.ignore, Effect.andThen(Effect.fail(error))),
+      (removalIdentity === null
+        ? Effect.succeed(false)
+        : providerSkillRemovalIdentityMatches(
+            sharedSkillsDirectory,
+            removalTarget.skillDirectoryPath,
+            removalIdentity,
+          )
+      ).pipe(
+        Effect.flatMap((originalSkillIsIntact) =>
+          originalSkillIsIntact
+            ? withCodexClient(target, "skills/config/write", (client) =>
+                client.request("skills/config/write", {
+                  enabled: true,
+                  path: request.skillPath,
+                }),
+              ).pipe(Effect.scoped, Effect.ignore)
+            : Effect.void,
+        ),
+        Effect.andThen(Effect.fail(error)),
+      ),
     ),
   );
   return yield* refreshProvidersAfterCodexMutation(target.instanceId);

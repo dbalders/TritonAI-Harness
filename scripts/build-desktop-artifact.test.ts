@@ -18,10 +18,12 @@ import {
   DESKTOP_ASAR_UNPACK,
   InvalidMacPasskeyRpDomainError,
   InvalidMacPasskeyPublishableKeyError,
+  InvalidAzureTrustedSigningEndpointError,
   InvalidMockUpdateServerPortError,
   isMacPasskeySigningConfigurationError,
   LinuxIconResizeError,
   MacPasskeySigningConfigurationResolutionError,
+  MissingAzureTrustedSigningConfigurationError,
   MissingMacPasskeyProvisioningProfileError,
   renderMacPasskeyEntitlements,
   resolveClerkPasskeyNativeArtifacts,
@@ -35,6 +37,7 @@ import {
   resolveGitHubPublishConfig,
   resolveMockUpdateServerPort,
   resolveMockUpdateServerUrl,
+  resolveAzureTrustedSigningConfiguration,
   stageLinuxIconSize,
   STAGE_INSTALL_ARGS,
 } from "./build-desktop-artifact.ts";
@@ -435,6 +438,104 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.notProperty(win, "azureSignOptions");
       assert.equal(nsis.include, "apps/desktop/resources/installer.nsh");
     }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
+  );
+
+  it.effect("fails closed when a signed Windows build is missing Azure configuration", () =>
+    Effect.gen(function* () {
+      const error = yield* resolveAzureTrustedSigningConfiguration().pipe(Effect.flip);
+
+      assert.instanceOf(error, MissingAzureTrustedSigningConfigurationError);
+      assert.deepStrictEqual(error.missingVariables, [
+        "AZURE_TENANT_ID",
+        "AZURE_CLIENT_ID",
+        "AZURE_CLIENT_SECRET",
+        "AZURE_TRUSTED_SIGNING_ENDPOINT",
+        "AZURE_TRUSTED_SIGNING_ACCOUNT_NAME",
+        "AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME",
+        "AZURE_TRUSTED_SIGNING_PUBLISHER_NAME",
+      ]);
+    }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
+  );
+
+  it.effect("forces Azure signing for signed Windows builds", () =>
+    Effect.gen(function* () {
+      const config = yield* createBuildConfig(
+        "win",
+        "nsis",
+        "0.3.0",
+        true,
+        false,
+        undefined,
+        undefined,
+      );
+
+      const win = config.win as Record<string, unknown>;
+      assert.equal(config.forceCodeSigning, true);
+      assert.deepStrictEqual(win.azureSignOptions, {
+        publisherName: "University of California San Diego",
+        endpoint: "https://eus.codesigning.azure.net",
+        certificateProfileName: "tritonai-release",
+        codeSigningAccountName: "ucsd-tritonai",
+        fileDigest: "SHA256",
+        timestampDigest: "SHA256",
+        timestampRfc3161: "http://timestamp.acs.microsoft.com",
+      });
+    }).pipe(
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromEnv({
+            env: {
+              AZURE_TENANT_ID: "tenant",
+              AZURE_CLIENT_ID: "client",
+              AZURE_CLIENT_SECRET: "secret",
+              AZURE_TRUSTED_SIGNING_ENDPOINT: "https://eus.codesigning.azure.net",
+              AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: "ucsd-tritonai",
+              AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME: "tritonai-release",
+              AZURE_TRUSTED_SIGNING_PUBLISHER_NAME: "University of California San Diego",
+            },
+          }),
+        ),
+      ),
+    ),
+  );
+
+  it.effect("rejects non-HTTPS Azure Trusted Signing endpoints", () =>
+    Effect.gen(function* () {
+      const error = yield* resolveAzureTrustedSigningConfiguration().pipe(Effect.flip);
+      assert.instanceOf(error, InvalidAzureTrustedSigningEndpointError);
+    }).pipe(
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromEnv({
+            env: {
+              AZURE_TENANT_ID: "tenant",
+              AZURE_CLIENT_ID: "client",
+              AZURE_CLIENT_SECRET: "secret",
+              AZURE_TRUSTED_SIGNING_ENDPOINT: "http://insecure.example",
+              AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: "ucsd-tritonai",
+              AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME: "tritonai-release",
+              AZURE_TRUSTED_SIGNING_PUBLISHER_NAME: "University of California San Diego",
+            },
+          }),
+        ),
+      ),
+    ),
+  );
+
+  it.effect("keeps Authenticode verification strict and publisher-bound", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const repoRoot = yield* path.fromFileUrl(new URL("..", import.meta.url));
+      const source = yield* fs.readFileString(
+        path.join(repoRoot, "scripts/verify-windows-authenticode.ps1"),
+      );
+
+      assert.include(source, "Get-AuthenticodeSignature -LiteralPath");
+      assert.include(source, "SignatureStatus]::Valid");
+      assert.include(source, "$PublisherName -cne $ExpectedPublisherName");
+      assert.include(source, "FromBase64String($EncodedPaths)");
+    }),
   );
 
   it.effect("keeps the Windows process check exact, case-insensitive, and injection-safe", () =>

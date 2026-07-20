@@ -11,31 +11,40 @@ import {
 } from "./IntegrationRegistry.ts";
 import { CodexIntegrationSkillMaterializer } from "./IntegrationSkillMaterializer.ts";
 import { EmptyIntegrationToolInput } from "./IntegrationTool.ts";
-import { manifestCompatibility, validateIntegrationManifest } from "./manifest.ts";
+import { validateIntegrationManifest } from "./manifest.ts";
 
 const fixtureManifest = {
-  apiVersion: "tritonai.harness/v1",
+  apiVersion: "tritonai.harness/v2",
   kind: "IntegrationPlugin",
-  manifestVersion: 1,
+  manifestVersion: 2,
   id: "acceptance-fixture",
   name: "Acceptance Fixture",
   description: "Test-only package for the generic integration runtime.",
   version: "1.0.0",
-  compatibility: { harness: { min: "0.2.0", maxExclusive: "0.3.0" } },
   provider: "acceptance-fixture-provider",
   capabilities: [
-    { id: "fixture.read", displayName: "Read fixture", description: "Read fixture data." },
+    {
+      id: "fixture.read",
+      displayName: "Read fixture",
+      description: "Read fixture data.",
+      access: "default",
+    },
   ],
   tools: [
     {
       name: "acceptance.fixture.read",
       displayName: "Read fixture",
       description: "Read deterministic fixture data.",
-      capability: "fixture.read",
+      capabilities: ["fixture.read"],
+      effect: "read",
     },
   ],
   skills: [
-    { name: "acceptance-fixture", description: "Fixture skill.", capability: "fixture.read" },
+    {
+      name: "acceptance-fixture",
+      description: "Fixture skill.",
+      capabilities: ["fixture.read"],
+    },
   ],
 } as const;
 
@@ -142,10 +151,7 @@ describe("integration plugin acceptance", () => {
     const state = disconnectedState();
 
     try {
-      expect(manifestCompatibility(validateIntegrationManifest(fixtureManifest))).toEqual({
-        compatible: true,
-        message: null,
-      });
+      expect(validateIntegrationManifest(fixtureManifest)).toEqual(fixtureManifest);
       await NodeFSP.mkdir(NodePath.join(packageRoot, ".tritonai-plugin"), { recursive: true });
       await NodeFSP.mkdir(NodePath.join(packageRoot, "skills", "acceptance-fixture"), {
         recursive: true,

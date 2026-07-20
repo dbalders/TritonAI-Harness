@@ -29,4 +29,5 @@ export * from "./review.ts";
 export * from "./preview.ts";
 export * from "./previewAutomation.ts";
 export * from "./integrations.ts";
+export * from "./integrationManifest.ts";
 export * from "./rpc.ts";

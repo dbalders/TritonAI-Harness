@@ -13,7 +13,7 @@ import {
   TRITONAI_APP_ID_BASE,
 } from "@t3tools/contracts";
 import type * as ServerSecretStore from "../auth/ServerSecretStore.ts";
-import { makeBuiltinIntegrations } from "../integrations/builtins.ts";
+import { loadBuiltinIntegrations } from "../integrations/builtins.ts";
 import { type IntegrationManifest, validateIntegrationManifest } from "../integrations/manifest.ts";
 import { materializeCodexShadowHome, resolveCodexHomeLayout } from "./Drivers/CodexHomeLayout.ts";
 import {
@@ -23,19 +23,18 @@ import {
 import { tritonAiCodexCapabilities } from "./Layers/CodexProvider.ts";
 
 describe("downstream provider and integration policy", () => {
-  it("keeps the default integration catalog fixed and capability access explicit", () => {
+  it("keeps the default integration catalog fixed and capability access explicit", async () => {
     const unusedSecrets = {} as ServerSecretStore.ServerSecretStore["Service"];
-    expect(makeBuiltinIntegrations(unusedSecrets)).toEqual([]);
+    await expect(loadBuiltinIntegrations(unusedSecrets)).resolves.toEqual([]);
 
     const manifest = validateIntegrationManifest({
-      apiVersion: "tritonai.harness/v1",
+      apiVersion: "tritonai.harness/v2",
       kind: "IntegrationPlugin",
-      manifestVersion: 1,
+      manifestVersion: 2,
       id: "upstream-safety-fixture",
       name: "Upstream Safety Fixture",
       description: "Verify downstream capability policy.",
       version: "1.0.0",
-      compatibility: { harness: { min: "0.2.0", maxExclusive: "0.3.0" } },
       capabilities: [
         {
           id: "records.write",
@@ -49,7 +48,7 @@ describe("downstream provider and integration policy", () => {
         {
           name: "upstream-safety-fixture",
           description: "Change protected records.",
-          capability: "records.write",
+          capabilities: ["records.write"],
         },
       ],
     } satisfies IntegrationManifest);

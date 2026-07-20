@@ -80,17 +80,17 @@ step prevents a modified envelope header from bypassing authenticated decryption
 replacement or deletion is durable, Harness atomically removes the fingerprint from the external
 keyring. Successful operations therefore cannot replay the old plaintext after a restart, while a
 failed replacement retains its recovery authorization. The service account must have write access
-to the keyring and permission to create and remove mode-`0600` lock and temporary files in its
-parent directory. Harness serializes fingerprint retirement across server processes; failure to
-acquire the lock or persist retirement stops the operation. If a process is forcibly terminated
-during retirement, first confirm that no Harness process is using the keyring, then remove the
-adjacent `.lock` file before restarting.
+to the keyring and permission to create mode-`0600` lock-database and temporary files in its parent
+directory. Harness serializes fingerprint retirement across server processes with an OS-managed
+SQLite transaction; failure to acquire the lock or persist retirement stops the operation. The
+adjacent `.lock` database remains after use, but it does not remain locked when a process exits or
+is forcibly terminated.
 
 Harness also serializes reads and writes for each canonical secret across server processes. This
-holds the same mode-`0600` lock from the initial read through migration, replacement, and migration
-authorization retirement, preventing a stale legacy read from overwriting a newer value. If a
-process is forcibly terminated during a secret operation, first confirm that no Harness process is
-using the store, then remove the affected `<name>.bin.lock` file before restarting.
+holds the same mode-`0600` SQLite transaction from the initial read through migration, replacement,
+and migration authorization retirement, preventing a stale legacy read from overwriting a newer
+value. The operating system releases the transaction on process termination, so lock recovery does
+not depend on file age, PID reuse, or manual deletion.
 
 Generate a legacy fingerprint while Harness is stopped. The canonical algorithm is HMAC-SHA-256
 with the decoded 32-byte `active` key over, in order: UTF-8 `T3SECRET-LEGACY` followed by a NUL byte,

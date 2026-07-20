@@ -3,6 +3,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
 
 import { discardProviderSkillInstallRollback, installSkillBundle } from "./installProviderSkill.ts";
 
@@ -130,6 +131,298 @@ describe("managed skill install ownership", () => {
 
       expect(error.message).toContain("symlinked destination path");
       expect(yield* fs.exists(path.join(externalTarget, "SKILL.md"))).toBe(false);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("fails closed when a destination symlink check cannot be completed", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "skill-inspection-failure-test-" });
+      const skillsDirectory = path.join(root, "skills");
+      yield* fs.makeDirectory(skillsDirectory, { recursive: true });
+      const guardedFileSystem = {
+        ...fs,
+        readLink: (targetPath: string) =>
+          targetPath === skillsDirectory
+            ? Effect.fail(
+                PlatformError.systemError({
+                  _tag: "PermissionDenied",
+                  module: "FileSystem",
+                  method: "readLink",
+                  pathOrDescriptor: targetPath,
+                  description: "Injected destination inspection failure.",
+                }),
+              )
+            : fs.readLink(targetPath),
+      } satisfies FileSystem.FileSystem;
+
+      const error = yield* installSkillBundle({
+        bundle: bundle("local-skill", "payload"),
+        skillsDirectory,
+      }).pipe(Effect.provideService(FileSystem.FileSystem, guardedFileSystem), Effect.flip);
+
+      expect(error.message).toContain("Failed to inspect skill destination path");
+      expect(yield* fs.exists(path.join(skillsDirectory, "local-skill"))).toBe(false);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("does not replace a destination created while the new path is claimed", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "skill-publish-swap-test-" });
+      const skillsDirectory = path.join(root, "skills");
+      const skillDirectory = path.join(skillsDirectory, "local-skill");
+      yield* fs.makeDirectory(skillsDirectory, { recursive: true });
+      let swapped = false;
+      const swappingFileSystem = {
+        ...fs,
+        makeDirectory: (
+          target: string,
+          options?: Parameters<FileSystem.FileSystem["makeDirectory"]>[1],
+        ) => {
+          if (swapped || target !== skillDirectory) return fs.makeDirectory(target, options);
+          swapped = true;
+          return fs
+            .makeDirectory(skillDirectory)
+            .pipe(Effect.andThen(fs.makeDirectory(target, options)));
+        },
+      } satisfies FileSystem.FileSystem;
+
+      const error = yield* installSkillBundle({
+        bundle: bundle("local-skill", "payload"),
+        skillsDirectory,
+      }).pipe(Effect.provideService(FileSystem.FileSystem, swappingFileSystem), Effect.flip);
+
+      expect(error.message).toContain("Failed to claim new skill destination");
+      expect(yield* fs.exists(skillDirectory)).toBe(true);
+      expect(yield* fs.exists(path.join(skillDirectory, "SKILL.md"))).toBe(false);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("does not follow an existing skill swapped to a symlink during refresh", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "skill-refresh-swap-test-" });
+      const skillsDirectory = path.join(root, "skills");
+      const skillDirectory = path.join(skillsDirectory, "local-skill");
+      const externalTarget = path.join(root, "external-target");
+      const markerPath = path.join(externalTarget, "marker.txt");
+      yield* fs.makeDirectory(skillDirectory, { recursive: true });
+      yield* fs.writeFileString(
+        path.join(skillDirectory, "SKILL.md"),
+        skillMarkdown("local-skill", "original"),
+      );
+      yield* fs.makeDirectory(externalTarget, { recursive: true });
+      yield* fs.writeFileString(markerPath, "keep");
+      let swapped = false;
+      const swappingFileSystem = {
+        ...fs,
+        rename: (from: string, to: string) => {
+          if (swapped || from !== skillDirectory || !to.includes(".backup.")) {
+            return fs.rename(from, to);
+          }
+          swapped = true;
+          return fs
+            .remove(skillDirectory, { recursive: true })
+            .pipe(
+              Effect.andThen(fs.symlink(externalTarget, skillDirectory)),
+              Effect.andThen(fs.rename(from, to)),
+            );
+        },
+      } satisfies FileSystem.FileSystem;
+
+      const error = yield* installSkillBundle({
+        bundle: bundle("local-skill", "replacement"),
+        skillsDirectory,
+      }).pipe(Effect.provideService(FileSystem.FileSystem, swappingFileSystem), Effect.flip);
+
+      expect(error.message).toContain("symlinked destination path");
+      expect(yield* fs.readFileString(markerPath)).toBe("keep");
+      expect(yield* fs.exists(path.join(externalTarget, "SKILL.md"))).toBe(false);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("does not restore a backup entry swapped during refresh recovery", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "skill-recovery-swap-test-" });
+      const skillsDirectory = path.join(root, "skills");
+      const skillDirectory = path.join(skillsDirectory, "local-skill");
+      const externalTarget = path.join(root, "external-target");
+      const markerPath = path.join(externalTarget, "marker.txt");
+      yield* fs.makeDirectory(skillDirectory, { recursive: true });
+      yield* fs.writeFileString(
+        path.join(skillDirectory, "SKILL.md"),
+        skillMarkdown("local-skill", "original"),
+      );
+      yield* fs.makeDirectory(externalTarget, { recursive: true });
+      yield* fs.writeFileString(markerPath, "keep");
+      let swapped = false;
+      const swappingFileSystem = {
+        ...fs,
+        readLink: (targetPath: string) => {
+          if (
+            swapped ||
+            !targetPath.includes(".backup.") ||
+            path.basename(targetPath) !== "skill"
+          ) {
+            return fs.readLink(targetPath);
+          }
+          swapped = true;
+          return fs
+            .remove(targetPath, { recursive: true })
+            .pipe(
+              Effect.andThen(fs.symlink(externalTarget, targetPath)),
+              Effect.andThen(fs.readLink(targetPath)),
+            );
+        },
+      } satisfies FileSystem.FileSystem;
+
+      const error = yield* installSkillBundle({
+        bundle: bundle("local-skill", "replacement"),
+        skillsDirectory,
+      }).pipe(Effect.provideService(FileSystem.FileSystem, swappingFileSystem), Effect.flip);
+
+      expect(error.message).toContain("symlinked destination path");
+      expect(yield* fs.exists(skillDirectory)).toBe(false);
+      expect(yield* fs.readFileString(markerPath)).toBe("keep");
+      const [backupRootName] = yield* fs.readDirectory(skillsDirectory);
+      expect(backupRootName).toMatch(/^local-skill\.backup\./);
+      expect(yield* fs.readLink(path.join(skillsDirectory, backupRootName!, "skill"))).toBe(
+        externalTarget,
+      );
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("does not replace an existing skill swapped to another real directory", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "skill-refresh-identity-test-" });
+      const skillsDirectory = path.join(root, "skills");
+      const skillDirectory = path.join(skillsDirectory, "local-skill");
+      const substitutedDirectory = path.join(root, "substituted-skill");
+      const markerPath = path.join(substitutedDirectory, "marker.txt");
+      yield* fs.makeDirectory(skillDirectory, { recursive: true });
+      yield* fs.writeFileString(
+        path.join(skillDirectory, "SKILL.md"),
+        skillMarkdown("local-skill", "original"),
+      );
+      yield* fs.makeDirectory(substitutedDirectory, { recursive: true });
+      yield* fs.writeFileString(markerPath, "keep");
+      let swapped = false;
+      const swappingFileSystem = {
+        ...fs,
+        rename: (from: string, to: string) => {
+          if (swapped || from !== skillDirectory || !to.includes(".backup.")) {
+            return fs.rename(from, to);
+          }
+          swapped = true;
+          return fs
+            .remove(skillDirectory, { recursive: true })
+            .pipe(
+              Effect.andThen(fs.rename(substitutedDirectory, skillDirectory)),
+              Effect.andThen(fs.rename(from, to)),
+            );
+        },
+      } satisfies FileSystem.FileSystem;
+
+      const error = yield* installSkillBundle({
+        bundle: bundle("local-skill", "replacement"),
+        skillsDirectory,
+      }).pipe(Effect.provideService(FileSystem.FileSystem, swappingFileSystem), Effect.flip);
+
+      expect(error.message).toContain("identity changed");
+      expect(yield* fs.exists(skillDirectory)).toBe(false);
+      const [backupRootName] = yield* fs.readDirectory(skillsDirectory);
+      expect(backupRootName).toMatch(/^local-skill\.backup\./);
+      const retainedBackup = path.join(skillsDirectory, backupRootName!, "skill");
+      expect(yield* fs.readFileString(path.join(retainedBackup, "marker.txt"))).toBe("keep");
+      expect(yield* fs.exists(path.join(retainedBackup, "SKILL.md"))).toBe(false);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("cleans refresh staging when replacement preparation fails", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "skill-refresh-write-test-" });
+      const skillsDirectory = path.join(root, "skills");
+      const skillDirectory = path.join(skillsDirectory, "local-skill");
+      yield* fs.makeDirectory(skillDirectory, { recursive: true });
+      yield* fs.writeFileString(
+        path.join(skillDirectory, "SKILL.md"),
+        skillMarkdown("local-skill", "original"),
+      );
+      const failingFileSystem = {
+        ...fs,
+        writeFileString: (
+          target: string,
+          contents: string,
+          options?: Parameters<FileSystem.FileSystem["writeFileString"]>[2],
+        ) =>
+          target.includes(".backup.")
+            ? Effect.fail(
+                PlatformError.systemError({
+                  _tag: "PermissionDenied",
+                  module: "FileSystem",
+                  method: "writeFileString",
+                  pathOrDescriptor: target,
+                  description: "Injected replacement write failure.",
+                }),
+              )
+            : fs.writeFileString(target, contents, options),
+      } satisfies FileSystem.FileSystem;
+
+      const error = yield* installSkillBundle({
+        bundle: bundle("local-skill", "replacement"),
+        skillsDirectory,
+      }).pipe(Effect.provideService(FileSystem.FileSystem, failingFileSystem), Effect.flip);
+
+      expect(error.message).toContain("Failed to write");
+      expect(yield* fs.readDirectory(skillsDirectory)).toEqual(["local-skill"]);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("cleans refresh staging when the original skill cannot be moved", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "skill-refresh-rename-test-" });
+      const skillsDirectory = path.join(root, "skills");
+      const skillDirectory = path.join(skillsDirectory, "local-skill");
+      yield* fs.makeDirectory(skillDirectory, { recursive: true });
+      yield* fs.writeFileString(
+        path.join(skillDirectory, "SKILL.md"),
+        skillMarkdown("local-skill", "original"),
+      );
+      const failingFileSystem = {
+        ...fs,
+        rename: (from: string, to: string) =>
+          from === skillDirectory && to.includes(".backup.")
+            ? Effect.fail(
+                PlatformError.systemError({
+                  _tag: "PermissionDenied",
+                  module: "FileSystem",
+                  method: "rename",
+                  pathOrDescriptor: from,
+                  description: "Injected refresh rename failure.",
+                }),
+              )
+            : fs.rename(from, to),
+      } satisfies FileSystem.FileSystem;
+
+      const error = yield* installSkillBundle({
+        bundle: bundle("local-skill", "replacement"),
+        skillsDirectory,
+      }).pipe(Effect.provideService(FileSystem.FileSystem, failingFileSystem), Effect.flip);
+
+      expect(error.message).toContain("Failed to move");
+      expect(yield* fs.readDirectory(skillsDirectory)).toEqual(["local-skill"]);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 

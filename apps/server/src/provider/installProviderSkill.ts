@@ -1,3 +1,6 @@
+// @effect-diagnostics nodeBuiltinImport:off - lstat device/inode checks bind skill refreshes to the inspected directory.
+import * as NodeFS from "node:fs";
+
 import {
   type ProviderInstanceId,
   ServerInstallProviderSkillInput,
@@ -13,6 +16,7 @@ import { fromYaml } from "@t3tools/shared/schemaYaml";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
 import * as Stream from "effect/Stream";
@@ -48,6 +52,52 @@ const SkillFrontmatter = Schema.Struct({
 });
 const decodeSkillFrontmatter = Schema.decodeUnknownEffect(fromYaml(SkillFrontmatter));
 
+interface SkillDirectoryIdentity {
+  readonly dev: bigint;
+  readonly ino: bigint;
+}
+
+const isMissingPathError = (cause: unknown): boolean =>
+  typeof cause === "object" && cause !== null && "code" in cause && cause.code === "ENOENT";
+
+const inspectSkillDirectoryIdentity = (
+  skillDirectory: string,
+): Effect.Effect<SkillDirectoryIdentity | null, ServerProviderSkillInstallError> =>
+  Effect.try({
+    try: () => {
+      let stats: NodeFS.BigIntStats;
+      try {
+        stats = NodeFS.lstatSync(skillDirectory, { bigint: true });
+      } catch (cause) {
+        if (isMissingPathError(cause)) return null;
+        throw cause;
+      }
+      if (!stats.isDirectory()) {
+        throw new Error("The skill destination must remain a real directory.");
+      }
+      return { dev: stats.dev, ino: stats.ino };
+    },
+    catch: (cause) =>
+      installError(`Failed to capture directory identity for ${skillDirectory}.`, cause),
+  });
+
+const verifySkillDirectoryIdentity = (
+  skillDirectory: string,
+  expected: SkillDirectoryIdentity,
+): Effect.Effect<void, ServerProviderSkillInstallError> =>
+  inspectSkillDirectoryIdentity(skillDirectory).pipe(
+    Effect.flatMap((current) =>
+      current !== null && current.dev === expected.dev && current.ino === expected.ino
+        ? Effect.void
+        : installError(`Refusing to refresh ${skillDirectory} after its identity changed.`),
+    ),
+    Effect.mapError((cause) =>
+      cause.message.includes("identity changed")
+        ? cause
+        : installError(`Refusing to refresh ${skillDirectory} after its identity changed.`, cause),
+    ),
+  );
+
 function schemaIssue(error: Schema.SchemaError): string {
   return SchemaIssue.makeFormatterDefault()(error.issue);
 }
@@ -63,7 +113,12 @@ const assertNotSymbolicLinkPath = Effect.fn("assertNotSymbolicLinkPath")(functio
   targetPath: string,
 ) {
   const fs = yield* FileSystem.FileSystem;
-  if (yield* isSymbolicLinkPath(fs, targetPath)) {
+  const isSymbolicLink = yield* isSymbolicLinkPath(fs, targetPath).pipe(
+    Effect.mapError((cause) =>
+      installError(`Failed to inspect skill destination path ${targetPath}.`, cause),
+    ),
+  );
+  if (isSymbolicLink) {
     return yield* installError(
       `Refusing to install a skill through symlinked destination path ${targetPath}.`,
     );
@@ -596,10 +651,23 @@ function checkoutGitSkillPath(input: {
 function isSymbolicLinkPath(
   fs: FileSystem.FileSystem,
   absolutePath: string,
-): Effect.Effect<boolean> {
+): Effect.Effect<boolean, PlatformError.PlatformError> {
   return fs.readLink(absolutePath).pipe(
     Effect.as(true),
-    Effect.orElseSucceed(() => false),
+    Effect.catchTags({
+      PlatformError: (cause) => {
+        const nodeCause = cause.reason.cause;
+        const isRegularPath =
+          cause.reason._tag === "Unknown" &&
+          typeof nodeCause === "object" &&
+          nodeCause !== null &&
+          "code" in nodeCause &&
+          nodeCause.code === "EINVAL";
+        return cause.reason._tag === "NotFound" || isRegularPath
+          ? Effect.succeed(false)
+          : Effect.fail(cause);
+      },
+    }),
   );
 }
 
@@ -617,7 +685,13 @@ function readSkillDirectoryBundle(
     let totalBytes = 0n;
     const maxBundleBytes = BigInt(MAX_BUNDLE_BYTES);
 
-    if (yield* isSymbolicLinkPath(fs, skillDirectory)) {
+    if (
+      yield* isSymbolicLinkPath(fs, skillDirectory).pipe(
+        Effect.mapError((cause) =>
+          installError(`Failed to inspect GitHub skill path '${skillDirectory}'.`, cause),
+        ),
+      )
+    ) {
       return yield* installError("GitHub skill path must point to a real directory.");
     }
     const rootInfo = yield* fs
@@ -642,7 +716,14 @@ function readSkillDirectoryBundle(
         if (entry.startsWith(".") || entry === "node_modules") continue;
         const absolutePath = pathService.join(currentDirectory, entry);
         const relativePath = relativePrefix ? `${relativePrefix}/${entry}` : entry;
-        if (yield* isSymbolicLinkPath(fs, absolutePath)) continue;
+        if (
+          yield* isSymbolicLinkPath(fs, absolutePath).pipe(
+            Effect.mapError((cause) =>
+              installError(`Failed to inspect GitHub skill path '${absolutePath}'.`, cause),
+            ),
+          )
+        )
+          continue;
         const info = yield* fs
           .stat(absolutePath)
           .pipe(
@@ -835,12 +916,8 @@ export function installSkillBundle(input: {
 
     yield* assertNotSymbolicLinkPath(skillDirectory);
 
-    const skillDirectoryExists = yield* fs
-      .exists(skillDirectory)
-      .pipe(
-        Effect.mapError((cause) => installError(`Failed to inspect ${skillDirectory}.`, cause)),
-      );
-    if (skillDirectoryExists) {
+    const existingSkillDirectoryIdentity = yield* inspectSkillDirectoryIdentity(skillDirectory);
+    if (existingSkillDirectoryIdentity !== null) {
       const existingEntrypoint = yield* fs
         .exists(skillPath)
         .pipe(Effect.mapError((cause) => installError(`Failed to inspect ${skillPath}.`, cause)));
@@ -860,31 +937,88 @@ export function installSkillBundle(input: {
         );
       }
 
+      yield* verifySkillDirectoryIdentity(skillDirectory, existingSkillDirectoryIdentity);
       const rollback = yield* refreshExistingSkillBundleFiles({
+        expectedSkillDirectoryIdentity: existingSkillDirectoryIdentity,
         files: bundle.files,
-        skillName,
         skillDirectory,
       });
       return { skillName, skillPath, rollback };
     }
 
     yield* fs
-      .makeDirectory(skillDirectory, { recursive: true })
-      .pipe(Effect.mapError((cause) => installError(`Failed to create ${skillDirectory}.`, cause)));
-
+      .makeDirectory(skillsDirectory, { recursive: true })
+      .pipe(
+        Effect.mapError((cause) => installError(`Failed to create ${skillsDirectory}.`, cause)),
+      );
+    yield* assertNotSymbolicLinkPath(skillsDirectory);
+    const stagingRoot = yield* prepareSkillBundleDirectory({
+      files: bundle.files,
+      parentDirectory: skillsDirectory,
+      prefix: `.${skillName}.install.`,
+    });
+    let claimedIdentity: SkillDirectoryIdentity | null = null;
     yield* Effect.gen(function* () {
-      yield* writeSkillBundleFiles({
-        files: bundle.files,
-        skillDirectory,
+      yield* assertNotSymbolicLinkPath(skillsDirectory);
+      yield* fs
+        .makeDirectory(skillDirectory, { mode: 0o700 })
+        .pipe(
+          Effect.mapError((cause) =>
+            installError(`Failed to claim new skill destination ${skillDirectory}.`, cause),
+          ),
+        );
+      claimedIdentity = yield* inspectSkillDirectoryIdentity(skillDirectory);
+      if (claimedIdentity === null) {
+        return yield* installError(`Failed to claim new skill destination ${skillDirectory}.`);
+      }
+
+      const stagedEntries = yield* fs
+        .readDirectory(stagingRoot.skillDirectory)
+        .pipe(
+          Effect.mapError((cause) =>
+            installError(`Failed to inspect staged skill ${stagingRoot.skillDirectory}.`, cause),
+          ),
+        );
+      stagedEntries.sort((left, right) => {
+        if (left === "SKILL.md") return 1;
+        if (right === "SKILL.md") return -1;
+        return left < right ? -1 : left > right ? 1 : 0;
       });
-      yield* registerInstalledSkillDirectory({ skillName, skillDirectory });
+      for (const entry of stagedEntries) {
+        yield* verifySkillDirectoryIdentity(skillDirectory, claimedIdentity);
+        yield* fs
+          .rename(
+            pathService.join(stagingRoot.skillDirectory, entry),
+            pathService.join(skillDirectory, entry),
+          )
+          .pipe(
+            Effect.mapError((cause) => installError(`Failed to publish ${skillDirectory}.`, cause)),
+          );
+      }
+      yield* verifySkillDirectoryIdentity(skillDirectory, claimedIdentity);
     }).pipe(
       Effect.catch((error) =>
-        fs
-          .remove(skillDirectory, { recursive: true })
-          .pipe(Effect.ignore, Effect.andThen(Effect.fail(error))),
+        claimedIdentity === null
+          ? Effect.fail(error)
+          : inspectSkillDirectoryIdentity(skillDirectory).pipe(
+              Effect.flatMap((current) =>
+                current !== null &&
+                current.dev === claimedIdentity?.dev &&
+                current.ino === claimedIdentity.ino
+                  ? fs.remove(skillDirectory, { recursive: true, force: true })
+                  : Effect.void,
+              ),
+              Effect.catch(() => Effect.void),
+              Effect.andThen(Effect.fail(error)),
+            ),
+      ),
+      Effect.ensuring(
+        fs.remove(stagingRoot.root, { recursive: true, force: true }).pipe(Effect.ignore),
       ),
     );
+    if (claimedIdentity === null) {
+      return yield* installError(`Failed to retain new skill destination ${skillDirectory}.`);
+    }
 
     return {
       skillName,
@@ -892,6 +1026,7 @@ export function installSkillBundle(input: {
       rollback: {
         _tag: "remove",
         skillDirectoryPath: skillDirectory,
+        expectedSkillDirectoryIdentity: claimedIdentity,
       },
     };
   });
@@ -901,6 +1036,7 @@ export type ProviderSkillInstallRollback =
   | {
       readonly _tag: "remove";
       readonly skillDirectoryPath: string;
+      readonly expectedSkillDirectoryIdentity: SkillDirectoryIdentity;
     }
   | {
       readonly _tag: "restore";
@@ -934,9 +1070,55 @@ function writeSkillBundleFiles(input: {
   });
 }
 
-function refreshExistingSkillBundleFiles(input: {
+function prepareSkillBundleDirectory(input: {
   readonly files: ReadonlyArray<ServerProviderSkillBundleFile>;
-  readonly skillName: string;
+  readonly parentDirectory: string;
+  readonly prefix: string;
+}): Effect.Effect<
+  { readonly root: string; readonly skillDirectory: string },
+  ServerProviderSkillInstallError,
+  FileSystem.FileSystem | Path.Path
+> {
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const pathService = yield* Path.Path;
+    const root = yield* fs
+      .makeTempDirectory({
+        directory: input.parentDirectory,
+        prefix: input.prefix,
+      })
+      .pipe(
+        Effect.mapError((cause) =>
+          installError(
+            `Failed to prepare a skill staging directory in ${input.parentDirectory}.`,
+            cause,
+          ),
+        ),
+      );
+    const skillDirectory = pathService.join(root, "skill");
+    return yield* Effect.gen(function* () {
+      yield* fs
+        .makeDirectory(skillDirectory)
+        .pipe(
+          Effect.mapError((cause) =>
+            installError(`Failed to create skill staging directory ${skillDirectory}.`, cause),
+          ),
+        );
+      yield* writeSkillBundleFiles({ files: input.files, skillDirectory });
+      return { root, skillDirectory } as const;
+    }).pipe(
+      Effect.catch((error) =>
+        fs
+          .remove(root, { recursive: true, force: true })
+          .pipe(Effect.ignore, Effect.andThen(Effect.fail(error))),
+      ),
+    );
+  });
+}
+
+function refreshExistingSkillBundleFiles(input: {
+  readonly expectedSkillDirectoryIdentity: SkillDirectoryIdentity;
+  readonly files: ReadonlyArray<ServerProviderSkillBundleFile>;
   readonly skillDirectory: string;
 }): Effect.Effect<
   ProviderSkillInstallRollback,
@@ -958,42 +1140,69 @@ function refreshExistingSkillBundleFiles(input: {
         ),
       );
     const backupDirectory = pathService.join(backupRoot, "skill");
-    yield* fs
-      .copy(input.skillDirectory, backupDirectory)
-      .pipe(
-        Effect.mapError((cause) =>
-          installError(`Failed to back up ${input.skillDirectory}.`, cause),
-        ),
-      );
-
+    const replacementDirectory = pathService.join(backupRoot, "replacement");
+    let originalMoved = false;
+    let replacementPublished = false;
     yield* Effect.gen(function* () {
       yield* fs
-        .remove(input.skillDirectory, { recursive: true, force: true })
+        .makeDirectory(replacementDirectory)
         .pipe(
           Effect.mapError((cause) =>
-            installError(`Failed to clear ${input.skillDirectory}.`, cause),
+            installError(`Failed to prepare replacement for ${input.skillDirectory}.`, cause),
           ),
         );
       yield* writeSkillBundleFiles({
         files: input.files,
-        skillDirectory: input.skillDirectory,
+        skillDirectory: replacementDirectory,
       });
-      yield* registerInstalledSkillDirectory({
-        skillName: input.skillName,
-        skillDirectory: input.skillDirectory,
-      });
+      yield* verifySkillDirectoryIdentity(
+        input.skillDirectory,
+        input.expectedSkillDirectoryIdentity,
+      );
+      yield* fs
+        .rename(input.skillDirectory, backupDirectory)
+        .pipe(
+          Effect.mapError((cause) =>
+            installError(`Failed to move ${input.skillDirectory} into its backup.`, cause),
+          ),
+        );
+      originalMoved = true;
+      yield* assertNotSymbolicLinkPath(backupDirectory);
+      yield* verifySkillDirectoryIdentity(backupDirectory, input.expectedSkillDirectoryIdentity);
+      yield* fs
+        .rename(replacementDirectory, input.skillDirectory)
+        .pipe(
+          Effect.mapError((cause) =>
+            installError(`Failed to publish replacement for ${input.skillDirectory}.`, cause),
+          ),
+        );
+      replacementPublished = true;
     }).pipe(
       Effect.catch((error) =>
-        fs
-          .remove(input.skillDirectory, { recursive: true, force: true })
-          .pipe(
-            Effect.ignore,
-            Effect.andThen(fs.copy(backupDirectory, input.skillDirectory, { overwrite: true })),
-            Effect.ignore,
-            Effect.andThen(fs.remove(backupRoot, { recursive: true, force: true })),
-            Effect.ignore,
-            Effect.andThen(Effect.fail(error)),
-          ),
+        originalMoved && !replacementPublished
+          ? fs.exists(input.skillDirectory).pipe(
+              Effect.mapError((cause) =>
+                installError(`Failed to inspect ${input.skillDirectory} during recovery.`, cause),
+              ),
+              Effect.flatMap((destinationExists) =>
+                destinationExists
+                  ? Effect.void
+                  : // This catches stale or accidental replacement before recovery. A malicious
+                    // process running as the same OS user can rewrite both paths after any Node check.
+                    verifySkillDirectoryIdentity(
+                      backupDirectory,
+                      input.expectedSkillDirectoryIdentity,
+                    ).pipe(
+                      Effect.andThen(fs.rename(backupDirectory, input.skillDirectory)),
+                      Effect.andThen(fs.remove(backupRoot, { recursive: true, force: true })),
+                      Effect.ignore,
+                    ),
+              ),
+              Effect.andThen(Effect.fail(error)),
+            )
+          : fs
+              .remove(backupRoot, { recursive: true, force: true })
+              .pipe(Effect.ignore, Effect.andThen(Effect.fail(error))),
       ),
     );
 
@@ -1012,6 +1221,10 @@ export function rollbackProviderSkillInstall(
   return Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     if (rollback._tag === "remove") {
+      yield* verifySkillDirectoryIdentity(
+        rollback.skillDirectoryPath,
+        rollback.expectedSkillDirectoryIdentity,
+      );
       yield* fs
         .remove(rollback.skillDirectoryPath, { recursive: true, force: true })
         .pipe(
@@ -1056,13 +1269,6 @@ export function discardProviderSkillInstallRollback(
         ),
       );
   });
-}
-
-function registerInstalledSkillDirectory(_input: {
-  readonly skillName: string;
-  readonly skillDirectory: string;
-}): Effect.Effect<void, ServerProviderSkillInstallError, FileSystem.FileSystem | Path.Path> {
-  return Effect.void;
 }
 
 export function mergeInstalledProviderSkill(input: {

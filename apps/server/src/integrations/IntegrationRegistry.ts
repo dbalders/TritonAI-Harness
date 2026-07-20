@@ -22,12 +22,11 @@ import * as NodePath from "node:path";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { makeBuiltinIntegrations } from "./builtins.ts";
+import { loadBuiltinIntegrations } from "./builtins.ts";
 import {
   isIntegrationId,
   isIntegrationSkillName,
   isIntegrationVersion,
-  manifestCompatibility,
   type IntegrationManifest,
   validateIntegrationManifest,
 } from "./manifest.ts";
@@ -86,6 +85,11 @@ export interface IntegrationProvider {
   readonly tools: ReadonlyArray<IntegrationProviderTool>;
   /** Status is observational only. Provider work must settle promptly after its signal aborts. */
   status(context?: IntegrationInvocationContext): Promise<IntegrationProviderStatus>;
+  /**
+   * Prepare ephemeral provider state needed for invocation, such as refreshing an access token.
+   * Credential mutations must use beginCommit so the host can journal and bound the commit tail.
+   */
+  prepare?(context: IntegrationLifecycleContext): Promise<void>;
   connect?(
     capabilities: ReadonlyArray<string>,
     context?: IntegrationLifecycleContext,
@@ -129,7 +133,7 @@ export interface IntegrationPackage {
   readonly manifest: IntegrationManifest;
   readonly provider?: IntegrationProvider;
   readonly sourceRoot?: string;
-  readonly bundledFiles?: Readonly<Record<string, string>>;
+  readonly bundledFiles?: Readonly<Record<string, string | Uint8Array>>;
 }
 
 export interface IntegrationRuntimeSkill {
@@ -295,10 +299,9 @@ function decodePersistedState(value: unknown): PersistedIntegrationState {
 }
 
 function dependencyCapabilityIds(input: {
-  readonly capability?: string;
-  readonly capabilities?: ReadonlyArray<string>;
+  readonly capabilities: ReadonlyArray<string>;
 }): ReadonlyArray<string> {
-  return input.capabilities ?? (input.capability ? [input.capability] : []);
+  return input.capabilities;
 }
 
 function selectedCapabilityIds(
@@ -432,17 +435,31 @@ function providerPublicMessage(error: unknown, fallback: string): string {
     : fallback;
 }
 
-function activationCompatibility(
+function assertCurrentPackageVersion(
   manifest: IntegrationManifest,
-  installedVersion?: string,
-): { readonly compatible: boolean; readonly message: string | null } {
-  if (installedVersion && installedVersion !== manifest.version) {
-    return {
-      compatible: false,
-      message: `Installed plugin version ${installedVersion} does not match included version ${manifest.version}. Restart Harness to reconcile it before activation.`,
-    };
+  installedVersion: string,
+): void {
+  if (installedVersion !== manifest.version) {
+    throw operationError(
+      "operation_failed",
+      `Installed plugin version ${installedVersion} does not match included version ${manifest.version}. Restart Harness to reconcile it before activation.`,
+    );
   }
-  return manifestCompatibility(manifest);
+}
+
+async function awaitWithSignal<A>(work: Promise<A>, signal: AbortSignal): Promise<A> {
+  if (signal.aborted) throw cancellationError(signal);
+  let removeAbortListener: () => void = () => undefined;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    const onAbort = () => reject(cancellationError(signal));
+    signal.addEventListener("abort", onAbort, { once: true });
+    removeAbortListener = () => signal.removeEventListener("abort", onAbort);
+  });
+  try {
+    return await Promise.race([work, aborted]);
+  } finally {
+    removeAbortListener();
+  }
 }
 
 async function atomicJson(path: string, value: unknown): Promise<void> {
@@ -543,7 +560,6 @@ async function validateStagedPackage(root: string, expected: IntegrationManifest
     installed.description !== expected.description ||
     installed.version !== expected.version ||
     installed.provider !== expected.provider ||
-    JSON.stringify(installed.compatibility) !== JSON.stringify(expected.compatibility) ||
     JSON.stringify(installed.capabilities) !== JSON.stringify(expected.capabilities) ||
     JSON.stringify(installed.tools) !== JSON.stringify(expected.tools) ||
     JSON.stringify(installed.skills) !== JSON.stringify(expected.skills)
@@ -647,6 +663,7 @@ export class RegistryRuntime {
   readonly #activeLifecycleWork = new Set<Promise<unknown>>();
   readonly #activeProviderLifecycleWork = new Map<IntegrationProvider, Set<Promise<unknown>>>();
   readonly #activeProviderCommitWork = new Map<IntegrationProvider, Set<Promise<unknown>>>();
+  readonly #providerPreparationWork = new Map<IntegrationProvider, Promise<void>>();
   readonly #activeSummaryRefreshWork = new Set<Promise<void>>();
   readonly #skillSyncOperations = new Map<string, Promise<void>>();
   #closing = false;
@@ -844,7 +861,7 @@ export class RegistryRuntime {
     for (const integration of this.#catalog.values()) {
       const { manifest } = integration;
       const installed = ownRecordValue(this.#state.installed, manifest.id);
-      if (!installed || !manifestCompatibility(manifest).compatible) continue;
+      if (!installed) continue;
 
       const staging = NodePath.join(stagingRoot, `${manifest.id}.${crypto.randomUUID()}`);
       const installedRoot = NodePath.join(this.#root, "installed", manifest.id);
@@ -1697,6 +1714,27 @@ export class RegistryRuntime {
     }
   }
 
+  async #prepareProvider(provider: IntegrationProvider, signal: AbortSignal): Promise<void> {
+    if (!provider.prepare) return;
+    const existing = this.#providerPreparationWork.get(provider);
+    if (existing) {
+      await awaitWithSignal(existing, signal);
+      return;
+    }
+    // Preparation is shared by concurrent invocations. One caller cancelling must not abort the
+    // refresh needed by another caller; registry shutdown and capability revocation still abort
+    // the tracked lifecycle operation itself.
+    const work = this.#providerOperation(provider, (context) => provider.prepare!(context));
+    this.#providerPreparationWork.set(provider, work);
+    const remove = () => {
+      if (this.#providerPreparationWork.get(provider) === work) {
+        this.#providerPreparationWork.delete(provider);
+      }
+    };
+    void work.then(remove, remove);
+    await awaitWithSignal(work, signal);
+  }
+
   #refreshSummaryAfterProviderSettlement(
     integration: IntegrationPackage,
     provider: IntegrationProvider,
@@ -1719,15 +1757,15 @@ export class RegistryRuntime {
     const installed = ownRecordValue(state.installed, manifest.id);
     const enabled = installed?.enabled === true;
     const selectedCapabilities = selectedCapabilityIds(manifest, installed);
-    const compatibility = activationCompatibility(manifest, installed?.version);
+    const catalogCurrent = installed?.version === manifest.version;
     const provider = this.#catalog.get(manifest.id)?.provider;
     const providerSettling = provider ? this.#activeProviderLifecycleWork.has(provider) : false;
     const available = (capability: string) =>
       Boolean(
         installed &&
+        catalogCurrent &&
         enabled &&
         selectedCapabilities.has(capability) &&
-        compatibility.compatible &&
         !providerSettling &&
         providerStatus.state === "connected" &&
         providerStatus.grantedCapabilities.includes(capability),
@@ -1740,8 +1778,6 @@ export class RegistryRuntime {
       apiVersion: manifest.apiVersion,
       installed: Boolean(installed),
       enabled,
-      compatible: compatibility.compatible,
-      compatibilityMessage: compatibility.message,
       requiresConnection: hasConnectionLifecycle(this.#catalog.get(manifest.id)?.provider),
       connectionState: providerStatus.state,
       accountLabel: providerStatus.accountLabel,
@@ -1750,7 +1786,7 @@ export class RegistryRuntime {
         id: capability.id,
         displayName: capability.displayName,
         description: capability.description,
-        access: capability.access ?? "default",
+        access: capability.access,
         enabled: selectedCapabilities.has(capability.id),
         granted: providerStatus.grantedCapabilities.includes(capability.id),
         available: available(capability.id),
@@ -1760,7 +1796,7 @@ export class RegistryRuntime {
         displayName: tool.displayName,
         description: tool.description,
         capabilities: dependencyCapabilityIds(tool),
-        effect: tool.effect ?? "read",
+        effect: tool.effect,
         available: dependencyCapabilityIds(tool).some(available),
       })),
       skills: manifest.skills.map((skill) => ({
@@ -1790,14 +1826,13 @@ export class RegistryRuntime {
         message: null,
       });
     const installed = ownRecordValue(this.#state.installed, manifest.id);
-    const compatibility = activationCompatibility(manifest, installed?.version);
     let providerStatus: IntegrationProviderStatus = {
       state: "not_connected",
       accountLabel: null,
       grantedCapabilities: [],
       message: null,
     };
-    if (installed && compatibility.compatible) {
+    if (installed && installed.version === manifest.version) {
       if (provider) {
         try {
           providerStatus = await this.#providerStatus(provider);
@@ -1908,19 +1943,14 @@ export class RegistryRuntime {
         if (!summary) return this.#createSummary(manifest, unavailable, state);
         const installed = ownRecordValue(state.installed, manifest.id);
         const enabled = installed?.enabled === true;
-        const compatibility = activationCompatibility(manifest, installed?.version);
         if (!installed) return this.#createSummary(manifest, unavailable, state);
         const current =
-          summary.installed === true &&
-          summary.enabled === enabled &&
-          summary.compatible === compatibility.compatible
+          summary.installed === true && summary.enabled === enabled
             ? summary
             : {
                 ...summary,
                 installed: true,
                 enabled,
-                compatible: compatibility.compatible,
-                compatibilityMessage: compatibility.message,
                 tools: summary.tools.map((tool) => ({ ...tool, available: false })),
                 skills: summary.skills.map((skill) => ({ ...skill, available: false })),
               };
@@ -1943,7 +1973,7 @@ export class RegistryRuntime {
         }
         const capabilityRevocations = this.#capabilityRevocations.get(manifest.id);
         if (capabilityRevocations?.size) {
-          const integrationAvailable = current.enabled && current.compatible;
+          const integrationAvailable = current.enabled;
           const capabilityAvailable = (capability: string) =>
             !capabilityRevocations?.has(capability) &&
             current.capabilities.some(({ id, available }) => id === capability && available);
@@ -2190,9 +2220,8 @@ export class RegistryRuntime {
       const integration = this.#package(id);
       const { manifest } = integration;
       const installed = ownRecordValue(this.#state.installed, id);
-      const compatibility = activationCompatibility(manifest, installed?.version);
-      if (!compatibility.compatible) throw operationError("incompatible", compatibility.message!);
       if (installed) {
+        assertCurrentPackageVersion(manifest, installed.version);
         await this.#summarize(integration);
         return;
       }
@@ -2243,10 +2272,7 @@ export class RegistryRuntime {
       const { manifest, provider } = integration;
       const installed = ownRecordValue(this.#state.installed, id);
       if (!installed) throw operationError("not_installed", `Integration ${id} is not installed.`);
-      const compatibility = activationCompatibility(manifest, installed.version);
-      if (enabled && !compatibility.compatible) {
-        throw operationError("incompatible", compatibility.message!);
-      }
+      assertCurrentPackageVersion(manifest, installed.version);
       try {
         if (!enabled) {
           await this.#syncSkills({ integrationId: id, packageRoot: null, activeSkills: [] });
@@ -2316,10 +2342,7 @@ export class RegistryRuntime {
           `Integration capability ${capability} was not found in ${id}.`,
         );
       }
-      const compatibility = activationCompatibility(manifest, installed.version);
-      if (enabled && !compatibility.compatible) {
-        throw operationError("incompatible", compatibility.message!);
-      }
+      assertCurrentPackageVersion(manifest, installed.version);
       await revocation?.ready;
       const enabledCapabilities = new Set(selectedCapabilityIds(manifest, installed));
       if (enabled) enabledCapabilities.add(capability);
@@ -2395,10 +2418,7 @@ export class RegistryRuntime {
       const { manifest, provider } = this.#package(id);
       const installed = ownRecordValue(this.#state.installed, id);
       if (!installed) throw operationError("not_installed", `Integration ${id} is not installed.`);
-      const compatibility = activationCompatibility(manifest, installed.version);
-      if (!compatibility.compatible) {
-        throw operationError("incompatible", compatibility.message!);
-      }
+      assertCurrentPackageVersion(manifest, installed.version);
       if (!installed.enabled) {
         throw operationError("disabled", `Enable ${manifest.name} before connecting.`);
       }
@@ -2462,10 +2482,7 @@ export class RegistryRuntime {
       const { manifest, provider } = this.#package(id);
       const installed = ownRecordValue(this.#state.installed, id);
       if (!installed) throw operationError("not_installed", `Integration ${id} is not installed.`);
-      const compatibility = activationCompatibility(manifest, installed.version);
-      if (!compatibility.compatible) {
-        throw operationError("incompatible", compatibility.message!);
-      }
+      assertCurrentPackageVersion(manifest, installed.version);
       if (!installed.enabled) {
         throw operationError("disabled", `${manifest.name} is disabled.`);
       }
@@ -2797,12 +2814,6 @@ export class RegistryRuntime {
           `${manifest.name} is unavailable until its connection is reset.`,
         );
       }
-      if (this.#activeProviderLifecycleWork.has(provider)) {
-        throw operationError(
-          "operation_failed",
-          `${manifest.name} is unavailable while its connection is changing.`,
-        );
-      }
       const toolCapabilities = dependencyCapabilityIds(tool);
       if (this.#isSurfaceRevoking(manifest, toolCapabilities)) {
         throw operationError("disabled", `${manifest.name} access is being revoked.`);
@@ -2817,9 +2828,22 @@ export class RegistryRuntime {
           `${tool.displayName} requires Harness confirmation before it can run.`,
         );
       }
-      const compatibility = activationCompatibility(manifest, installed.version);
-      if (!compatibility.compatible) {
-        throw operationError("incompatible", compatibility.message!);
+      assertCurrentPackageVersion(manifest, installed.version);
+      const selectedBeforePreparation = selectedCapabilityIds(manifest, installed);
+      if (!toolCapabilities.some((capability) => selectedBeforePreparation.has(capability))) {
+        throw operationError(
+          "capability_required",
+          `${tool.displayName} requires enabled access to ${toolCapabilities.join(" or ")}.`,
+        );
+      }
+      if (
+        this.#activeProviderLifecycleWork.has(provider) &&
+        !this.#providerPreparationWork.has(provider)
+      ) {
+        throw operationError(
+          "operation_failed",
+          `${manifest.name} is unavailable while its connection is changing.`,
+        );
       }
       const controller = new AbortController();
       const signal = context
@@ -2840,6 +2864,13 @@ export class RegistryRuntime {
       this.#activeInvocationToolNames.set(controller, name);
       this.#activeInvocations.set(manifest.id, active);
       try {
+        await this.#prepareProvider(provider, signal);
+        if (this.#activeProviderLifecycleWork.has(provider)) {
+          throw operationError(
+            "operation_failed",
+            `${manifest.name} is unavailable while its connection is changing.`,
+          );
+        }
         const status = await this.#providerStatus(provider, signal);
         this.#activeInvocationGrantedCapabilities.set(
           controller,
@@ -2996,11 +3027,14 @@ export const startupLayer = Layer.effectDiscard(
     const skillMaterializer = new CodexIntegrationSkillMaterializer(
       resolveIntegrationCodexHomes(config.baseDir, settings),
     );
-    const registry = new RegistryRuntime(
-      NodePath.join(config.stateDir, "integrations"),
-      makeBuiltinIntegrations(secrets, {
+    const builtinIntegrations = yield* Effect.promise(() =>
+      loadBuiltinIntegrations(secrets, {
         includeFixtures: process.env.TRITONAI_ENABLE_INTEGRATION_FIXTURES === "1",
       }),
+    );
+    const registry = new RegistryRuntime(
+      NodePath.join(config.stateDir, "integrations"),
+      builtinIntegrations,
       skillMaterializer,
     );
     yield* Effect.addFinalizer(() =>
