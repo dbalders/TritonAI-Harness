@@ -36,6 +36,18 @@ const makeServerSettingsLayer = () =>
     ),
   );
 
+const makeInspectableServerSettingsLayer = () =>
+  ServerSettingsModule.layer.pipe(
+    Layer.provideMerge(ServerSecretStore.layer),
+    Layer.provideMerge(
+      Layer.fresh(
+        ServerConfig.layerTest(process.cwd(), {
+          prefix: "t3code-server-settings-inspectable-test-",
+        }),
+      ),
+    ),
+  );
+
 const makeFailingSecretStoreLayer = (cause: ServerSecretStore.SecretStoreError) =>
   Layer.succeed(
     ServerSecretStore.ServerSecretStore,
@@ -144,6 +156,92 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         plaintext,
       );
     }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
+  it.effect("migrates legacy OpenCode server passwords out of settings.json", () =>
+    Effect.gen(function* () {
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      const normalizedPassword = "test-normalized-password";
+      const serverPassword = [" ", normalizedPassword, " "].join("");
+      yield* fileSystem.writeFileString(
+        serverConfig.settingsPath,
+        encodeUnknownJson({
+          providers: {
+            opencode: {
+              serverUrl: "http://127.0.0.1:4096",
+              serverPassword,
+            },
+          },
+        }),
+        { mode: 0o600 },
+      );
+
+      yield* serverSettings.start;
+
+      const persistedRaw = yield* fileSystem.readFileString(serverConfig.settingsPath);
+      assert.notInclude(persistedRaw, serverPassword);
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      assert.deepEqual(JSON.parse(persistedRaw).providers.opencode, {
+        serverUrl: "http://127.0.0.1:4096",
+      });
+      assert.strictEqual(
+        (yield* serverSettings.getSettings).providers.opencode.serverPassword,
+        normalizedPassword,
+      );
+
+      const updated = yield* serverSettings.updateSettings({
+        addProjectBaseDirectory: "~/Development",
+      });
+      assert.strictEqual(updated.providers.opencode.serverPassword, normalizedPassword);
+      assert.notInclude(
+        yield* fileSystem.readFileString(serverConfig.settingsPath),
+        serverPassword,
+      );
+
+      const cleared = yield* serverSettings.updateSettings({
+        providers: { opencode: { serverPassword: "" } },
+      });
+      assert.strictEqual(cleared.providers.opencode.serverPassword, "");
+      assert.strictEqual((yield* serverSettings.getSettings).providers.opencode.serverPassword, "");
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
+  it.effect("preserves a migrated OpenCode password during another provider migration", () =>
+    Effect.gen(function* () {
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const secretStore = yield* ServerSecretStore.ServerSecretStore;
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      const storedPassword = "test-stored-password";
+      const providerValue = "installer-provisioned-api-key";
+      yield* secretStore.set(
+        "provider-legacy-opencode-server-credential",
+        new TextEncoder().encode(storedPassword),
+      );
+      yield* fileSystem.writeFileString(
+        serverConfig.settingsPath,
+        encodeUnknownJson({
+          providerInstances: {
+            codex: {
+              driver: "codex",
+              environment: [{ name: "TRITONAI_API_KEY", value: providerValue, sensitive: true }],
+              config: {},
+            },
+          },
+        }),
+        { mode: 0o600 },
+      );
+
+      yield* serverSettings.start;
+
+      assert.strictEqual(
+        (yield* serverSettings.getSettings).providers.opencode.serverPassword,
+        storedPassword,
+      );
+      assert.notInclude(yield* fileSystem.readFileString(serverConfig.settingsPath), providerValue);
+    }).pipe(Effect.provide(makeInspectableServerSettingsLayer())),
   );
 
   it.effect("decodes nested settings patches", () =>
@@ -564,7 +662,14 @@ it.layer(NodeServices.layer)("server settings", (it) => {
 
       const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
       // @effect-diagnostics-next-line preferSchemaOverJson:off
-      assert.deepEqual(JSON.parse(raw), {
+      const persisted = JSON.parse(raw);
+      assert.isUndefined(persisted.providers.opencode.serverPassword);
+      // Rehydrate the runtime-only secret so the existing sparse-settings comparison stays intact.
+      Object.assign(persisted.providers.opencode, next.providers.opencode);
+      delete persisted.providers.opencode.enabled;
+      delete persisted.providers.opencode.binaryPath;
+      delete persisted.providers.opencode.customModels;
+      assert.deepEqual(persisted, {
         addProjectBaseDirectory: "~/Development",
         observability: {
           otlpTracesUrl: "http://localhost:4318/v1/traces",

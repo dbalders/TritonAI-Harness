@@ -79,6 +79,8 @@ function providerEnvironmentSecretName(input: {
   return `provider-env-${Buffer.from(input.instanceId, "utf8").toString("base64url")}-${Buffer.from(input.name, "utf8").toString("base64url")}`;
 }
 
+const LEGACY_OPENCODE_SERVER_CREDENTIAL_KEY = "provider-legacy-opencode-server-credential";
+
 function redactProviderEnvironmentVariable(
   variable: ProviderInstanceEnvironmentVariable,
 ): ProviderInstanceEnvironmentVariable {
@@ -293,7 +295,7 @@ const make = Effect.gen(function* () {
     ),
   );
 
-  const materializeProviderEnvironmentSecrets = (
+  const materializeProviderSecrets = (
     settings: ServerSettings,
   ): Effect.Effect<ServerSettings, ServerSettingsError> =>
     Effect.gen(function* () {
@@ -332,13 +334,75 @@ const make = Effect.gen(function* () {
           environment,
         } satisfies ProviderInstanceConfig;
       }
+
+      const storedValue = yield* secretStore.get(LEGACY_OPENCODE_SERVER_CREDENTIAL_KEY).pipe(
+        Effect.mapError(
+          (cause) =>
+            new ServerSettingsError({
+              settingsPath,
+              operation: "read-secret",
+              providerInstanceId: "opencode",
+              environmentVariable: "serverPassword",
+              cause,
+            }),
+        ),
+      );
+      const currentPassword = Option.isSome(storedValue)
+        ? textDecoder.decode(storedValue.value)
+        : settings.providers.opencode.serverPassword;
       return {
         ...settings,
+        providers: {
+          ...settings.providers,
+          opencode: {
+            ...settings.providers.opencode,
+            serverPassword: currentPassword,
+          },
+        },
         providerInstances: providerInstances as ServerSettings["providerInstances"],
       };
     });
 
-  const persistProviderEnvironmentSecrets = (
+  const readLegacyOpenCodeStoredValue = secretStore.get(LEGACY_OPENCODE_SERVER_CREDENTIAL_KEY).pipe(
+    Effect.mapError(
+      (cause) =>
+        new ServerSettingsError({
+          settingsPath,
+          operation: "read-secret",
+          providerInstanceId: "opencode",
+          environmentVariable: "serverPassword",
+          cause,
+        }),
+    ),
+  );
+
+  const restoreLegacyOpenCodeStoredValue = (previousValue: Option.Option<Uint8Array>) =>
+    Option.match(previousValue, {
+      onNone: () => secretStore.remove(LEGACY_OPENCODE_SERVER_CREDENTIAL_KEY),
+      onSome: (value) => secretStore.set(LEGACY_OPENCODE_SERVER_CREDENTIAL_KEY, value),
+    });
+
+  const runWithLegacyOpenCodeRollback = <A>(
+    effect: Effect.Effect<A, ServerSettingsError>,
+  ): Effect.Effect<A, ServerSettingsError> =>
+    Effect.gen(function* () {
+      const previousValue = yield* readLegacyOpenCodeStoredValue;
+      return yield* effect.pipe(
+        Effect.catchCause((cause) =>
+          restoreLegacyOpenCodeStoredValue(previousValue).pipe(
+            Effect.catchCause((rollbackCause) =>
+              Effect.logError("failed to restore OpenCode server credential", {
+                settingsPath,
+                cause: rollbackCause,
+              }),
+            ),
+            Effect.andThen(Effect.failCause(cause)),
+          ),
+        ),
+      );
+    });
+
+  const persistProviderSecrets = (
     current: ServerSettings,
     next: ServerSettings,
   ): Effect.Effect<ServerSettings, ServerSettingsError> =>
@@ -433,8 +497,48 @@ const make = Effect.gen(function* () {
         }
       }
 
+      // OpenCodeSettings defines this field as TrimmedString, and persistence runs before
+      // normalizeServerSettings, so normalize it before writing the secret-store value.
+      const storedValue = next.providers.opencode.serverPassword.trim();
+      if (storedValue.length > 0) {
+        yield* secretStore
+          .set(LEGACY_OPENCODE_SERVER_CREDENTIAL_KEY, textEncoder.encode(storedValue))
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new ServerSettingsError({
+                  settingsPath,
+                  operation: "write-secret",
+                  providerInstanceId: "opencode",
+                  environmentVariable: "serverPassword",
+                  cause,
+                }),
+            ),
+          );
+      } else if (current.providers.opencode.serverPassword.length > 0) {
+        yield* secretStore.remove(LEGACY_OPENCODE_SERVER_CREDENTIAL_KEY).pipe(
+          Effect.mapError(
+            (cause) =>
+              new ServerSettingsError({
+                settingsPath,
+                operation: "remove-secret",
+                providerInstanceId: "opencode",
+                environmentVariable: "serverPassword",
+                cause,
+              }),
+          ),
+        );
+      }
+
       return {
         ...next,
+        providers: {
+          ...next.providers,
+          opencode: {
+            ...next.providers.opencode,
+            serverPassword: "",
+          },
+        },
         providerInstances: providerInstances as ServerSettings["providerInstances"],
       };
     });
@@ -464,7 +568,8 @@ const make = Effect.gen(function* () {
     ),
   );
 
-  const hasPlaintextProviderEnvironmentSecret = (settings: ServerSettings): boolean =>
+  const hasPlaintextProviderSecret = (settings: ServerSettings): boolean =>
+    settings.providers.opencode.serverPassword.length > 0 ||
     Object.values(settings.providerInstances).some((instance) =>
       instance.environment?.some(
         (variable) => variable.sensitive && !variable.valueRedacted && variable.value.length > 0,
@@ -486,14 +591,16 @@ const make = Effect.gen(function* () {
       });
       return DEFAULT_SERVER_SETTINGS;
     }
-    if (!hasPlaintextProviderEnvironmentSecret(decoded.value)) {
+    if (!hasPlaintextProviderSecret(decoded.value)) {
       return decoded.value;
     }
 
-    const migrated = yield* persistProviderEnvironmentSecrets(decoded.value, decoded.value).pipe(
-      Effect.flatMap(normalizeServerSettings),
+    const migrated = yield* runWithLegacyOpenCodeRollback(
+      persistProviderSecrets(decoded.value, decoded.value).pipe(
+        Effect.flatMap(normalizeServerSettings),
+        Effect.tap(writeSettingsAtomically),
+      ),
     );
-    yield* writeSettingsAtomically(migrated);
     return migrated;
   });
 
@@ -576,29 +683,31 @@ const make = Effect.gen(function* () {
     start,
     ready: Deferred.await(startedDeferred),
     getSettings: getSettingsFromCache.pipe(
-      Effect.flatMap(materializeProviderEnvironmentSecrets),
+      Effect.flatMap(materializeProviderSecrets),
       Effect.map(resolveTextGenerationProvider),
     ),
     updateSettings: (patch) =>
       writeSemaphore.withPermits(1)(
         Effect.gen(function* () {
-          const current = yield* getSettingsFromCache;
-          const nextPersisted = yield* persistProviderEnvironmentSecrets(
-            current,
-            applyServerSettingsPatch(current, patch),
+          const current = yield* getSettingsFromCache.pipe(
+            Effect.flatMap(materializeProviderSecrets),
           );
-          const next = yield* normalizeServerSettings(nextPersisted);
-          yield* writeSettingsAtomically(next);
+          const next = yield* runWithLegacyOpenCodeRollback(
+            persistProviderSecrets(current, applyServerSettingsPatch(current, patch)).pipe(
+              Effect.flatMap(normalizeServerSettings),
+              Effect.tap(writeSettingsAtomically),
+            ),
+          );
           yield* Cache.set(settingsCache, cacheKey, next);
           yield* emitChange(next);
-          const materialized = yield* materializeProviderEnvironmentSecrets(next);
+          const materialized = yield* materializeProviderSecrets(next);
           return resolveTextGenerationProvider(materialized);
         }),
       ),
     get streamChanges() {
       return Stream.fromPubSub(changesPubSub).pipe(
         Stream.mapEffect((settings) =>
-          materializeProviderEnvironmentSecrets(settings).pipe(
+          materializeProviderSecrets(settings).pipe(
             Effect.catch((error: ServerSettingsError) =>
               Effect.logWarning("failed to materialize provider environment secrets", {
                 operation: error.operation,

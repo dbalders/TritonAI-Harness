@@ -61,6 +61,15 @@ describe("managed plugin release composition", () => {
     expect(() => readManagedPluginComposition(sourceRoot)).toThrow(/unlisted entries/iu);
   });
 
+  it("rejects deeply nested package directories without recursive traversal", () => {
+    const sourceRoot = makeCompositionFixture();
+    const packageRoot = NodePath.join(sourceRoot, "packages", "microsoft-365");
+    const nestedDirectories = Array.from({ length: 257 }, () => "d");
+    NodeFS.mkdirSync(NodePath.join(packageRoot, ...nestedDirectories), { recursive: true });
+
+    expect(() => readManagedPluginComposition(sourceRoot)).toThrow(/directory limit/iu);
+  });
+
   it("finalizes distinct macOS and Windows proofs from final artifact bytes", async () => {
     const sourceRoot = makeCompositionFixture();
     const composition = readManagedPluginComposition(sourceRoot);

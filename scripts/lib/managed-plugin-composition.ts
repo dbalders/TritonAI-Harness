@@ -6,18 +6,19 @@ import * as NodeUtil from "node:util";
 
 import { validateIntegrationManifest } from "@t3tools/contracts";
 
-export const MANAGED_PLUGIN_COMPOSITION_FILE = "tritonai-plugin-composition.json";
 export const MANAGED_PLUGIN_COMPOSITION_KIND = "tritonai-harness-plugin-composition";
 export const MANAGED_PLUGIN_COMPOSITION_VERSION = 1;
 export const PRODUCTION_PLUGIN_SOURCE_ENV = "TRITONAI_PLUGIN_COMPOSITION_SOURCE";
 
 const CANONICAL_PLUGIN_REPOSITORY = "https://github.com/dbalders/TritonAI-Plugins.git";
+const MANAGED_PLUGIN_SOURCE_MANIFEST_FILE = "manifest.json";
 const SUPPORTED_PRODUCTION_PLUGIN_IDS = new Set(["microsoft-365"]);
 const COMMIT = /^[a-f0-9]{40}$/u;
 const SHA256 = /^[a-f0-9]{64}$/u;
 const SAFE_REF = /^refs\/(?:heads|tags)\/[A-Za-z0-9][A-Za-z0-9._/-]{0,180}$/u;
 const STABLE_SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
 const MAX_PLUGIN_FILES = 512;
+const MAX_PLUGIN_DIRECTORIES = 256;
 const MAX_PLUGIN_FILE_BYTES = 8 * 1024 * 1024;
 const MAX_PLUGIN_PACKAGE_BYTES = 64 * 1024 * 1024;
 
@@ -135,7 +136,11 @@ function digestFileSet(packageRoot: string, files: ReadonlyArray<ManagedPluginFi
 
 function describeFiles(root: string): ReadonlyArray<ManagedPluginFile> {
   const result: Array<ManagedPluginFile> = [];
-  const walk = (relative: string): void => {
+  const pendingDirectories = [""];
+  let directoryCount = 0;
+
+  while (pendingDirectories.length > 0) {
+    const relative = pendingDirectories.pop()!;
     for (const entry of NodeFS.readdirSync(NodePath.join(root, relative), {
       withFileTypes: true,
     })) {
@@ -145,8 +150,18 @@ function describeFiles(root: string): ReadonlyArray<ManagedPluginFile> {
       if (stat.isSymbolicLink()) {
         throw new Error(`Managed plugin package cannot contain symbolic links: ${childRelative}.`);
       }
-      if (stat.isDirectory()) walk(childRelative);
-      else if (stat.isFile()) {
+      if (stat.isDirectory()) {
+        directoryCount += 1;
+        if (directoryCount > MAX_PLUGIN_DIRECTORIES) {
+          throw new Error(
+            `Managed plugin package exceeds the ${MAX_PLUGIN_DIRECTORIES}-directory limit.`,
+          );
+        }
+        pendingDirectories.push(childRelative);
+      } else if (stat.isFile()) {
+        if (result.length >= MAX_PLUGIN_FILES) {
+          throw new Error(`Managed plugin package exceeds the ${MAX_PLUGIN_FILES}-file limit.`);
+        }
         if (stat.size > MAX_PLUGIN_FILE_BYTES) {
           throw new Error(
             `Managed plugin file exceeds the ${MAX_PLUGIN_FILE_BYTES}-byte limit: ${childRelative}.`,
@@ -158,8 +173,7 @@ function describeFiles(root: string): ReadonlyArray<ManagedPluginFile> {
         throw new Error(`Managed plugin package contains a special file: ${childRelative}.`);
       }
     }
-  };
-  walk("");
+  }
   return result.toSorted((left, right) => compareText(left.path, right.path));
 }
 
@@ -251,10 +265,10 @@ export function readManagedPluginComposition(sourceRoot: string): ManagedPluginC
     throw new Error("Managed plugin composition source must be a real directory.");
   }
   const rootEntries = NodeFS.readdirSync(absoluteRoot).toSorted();
-  if (!NodeUtil.isDeepStrictEqual(rootEntries, ["manifest.json", "packages"])) {
+  if (!NodeUtil.isDeepStrictEqual(rootEntries, [MANAGED_PLUGIN_SOURCE_MANIFEST_FILE, "packages"])) {
     throw new Error("Managed plugin composition source contains unsupported root entries.");
   }
-  const manifestPath = NodePath.join(absoluteRoot, "manifest.json");
+  const manifestPath = NodePath.join(absoluteRoot, MANAGED_PLUGIN_SOURCE_MANIFEST_FILE);
   const packagesRoot = NodePath.join(absoluteRoot, "packages");
   assertRegularFile(manifestPath, "Managed plugin composition manifest");
   assertRealDirectory(packagesRoot, "Managed plugin composition packages root");

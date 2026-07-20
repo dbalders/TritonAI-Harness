@@ -210,15 +210,31 @@ jobs:
           repository: dbalders/TritonAI-Installer
           ref: ${{ vars.TRITONAI_INSTALLER_COMPOSITION_COMMIT }}
           fetch-depth: 1
+          persist-credentials: false
           path: .release-input/installer
 
       - name: Checkout pinned plugin source
         uses: actions/checkout@v6
         with:
           repository: dbalders/TritonAI-Plugins
-          ref: ${{ vars.TRITONAI_PLUGINS_COMMIT }}
-          fetch-depth: 1
+          ref: ${{ vars.TRITONAI_PLUGINS_REF }}
+          fetch-depth: 0
+          persist-credentials: false
           path: .release-input/plugins
+
+      - name: Verify and detach pinned plugin source
+        shell: bash
+        working-directory: .release-input/plugins
+        env:
+          PLUGINS_REF: ${{ vars.TRITONAI_PLUGINS_REF }}
+          PLUGINS_COMMIT: ${{ vars.TRITONAI_PLUGINS_COMMIT }}
+        run: |
+          set -euo pipefail
+          actual_commit="$(git rev-parse HEAD)"
+          resolved_commit="$(git rev-parse "${PLUGINS_REF}^{commit}")"
+          [[ "$actual_commit" == "$PLUGINS_COMMIT" ]]
+          [[ "$resolved_commit" == "$PLUGINS_COMMIT" ]]
+          git checkout --detach "$PLUGINS_COMMIT"
 
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@v1

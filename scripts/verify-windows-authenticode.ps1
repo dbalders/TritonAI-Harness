@@ -23,7 +23,7 @@ foreach ($ArtifactPath in $Paths) {
 
   $Signature = Get-AuthenticodeSignature -LiteralPath $ArtifactPath
   if ($Signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
-    throw "Invalid Authenticode signature for $ArtifactPath: $($Signature.Status) $($Signature.StatusMessage)"
+    throw "Invalid Authenticode signature for ${ArtifactPath}: $($Signature.Status) $($Signature.StatusMessage)"
   }
   if ($null -eq $Signature.SignerCertificate) {
     throw "Authenticode signature for $ArtifactPath has no signer certificate."

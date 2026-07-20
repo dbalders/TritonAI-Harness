@@ -292,6 +292,8 @@ export const makeWithOptions = (options: AnalyticsServiceOptions = {}) =>
     );
 
     if (telemetryConfig.enabled) {
+      yield* Effect.addFinalizer(() => flush);
+
       yield* Effect.gen(function* () {
         let consecutiveFailures = 0;
         while (true) {
@@ -303,8 +305,6 @@ export const makeWithOptions = (options: AnalyticsServiceOptions = {}) =>
           consecutiveFailures = succeeded ? 0 : consecutiveFailures + 1;
         }
       }).pipe(Effect.forkScoped);
-
-      yield* Effect.addFinalizer(() => flush);
     }
 
     return AnalyticsService.of({ record, flush });
