@@ -217,7 +217,7 @@ jobs:
         with:
           repository: dbalders/TritonAI-Plugins
           ref: ${{ vars.TRITONAI_PLUGINS_COMMIT }}
-          fetch-depth: 0
+          fetch-depth: 1
           path: .release-input/plugins
 
       - name: Setup Vite+
@@ -383,14 +383,16 @@ jobs:
         run: |
           set -euo pipefail
           proof_input="release/.tritonai-plugin-composition-${{ matrix.platform }}-${{ matrix.arch }}.json.input"
-          if [[ -f "$proof_input" ]]; then
-            artifact="release/TritonAI-Harness-${{ needs.preflight.outputs.version }}-${{ matrix.arch }}.exe"
-            node scripts/finalize-managed-plugin-proof.ts \
-              --platform "${{ matrix.platform }}" \
-              --arch "${{ matrix.arch }}" \
-              --artifact "$artifact" \
-              --output-dir release
+          if [[ ! -f "$proof_input" ]]; then
+            echo "Missing managed plugin proof input: $proof_input" >&2
+            exit 1
           fi
+          artifact="release/TritonAI-Harness-${{ needs.preflight.outputs.version }}-${{ matrix.arch }}.exe"
+          node scripts/finalize-managed-plugin-proof.ts \
+            --platform "${{ matrix.platform }}" \
+            --arch "${{ matrix.arch }}" \
+            --artifact "$artifact" \
+            --output-dir release
 
       - name: Collect release assets
         shell: bash
