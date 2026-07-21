@@ -64,7 +64,8 @@ function managedModelFromTemplate(input: {
     effective_context_window_percent: 95,
     experimental_supported_tools: [],
     input_modalities: [...input.inputModalities],
-    supports_search_tool: false,
+    // Codex uses this for local `tool_search` discovery, not provider-hosted web search.
+    supports_search_tool: input.template.supports_search_tool === true,
     use_responses_lite: false,
     auto_review_model_override: null,
     tool_mode: null,

@@ -21,6 +21,8 @@ const bundledCatalog = JSON.stringify({
       context_window: 123_000,
       max_context_window: 124_000,
       truncation_policy: { mode: "tokens", limit: 12_345 },
+      web_search_tool_type: "text",
+      supports_search_tool: true,
       use_responses_lite: false,
     },
     {
@@ -69,6 +71,8 @@ describe("CodexModelCatalog", () => {
     NodeAssert.equal(glm?.support_verbosity, false);
     NodeAssert.equal(glm?.apply_patch_tool_type, null);
     NodeAssert.equal(glm?.supports_parallel_tool_calls, false);
+    NodeAssert.equal(glm?.web_search_tool_type, "text");
+    NodeAssert.equal(glm?.supports_search_tool, true);
     NodeAssert.equal(glm?.model_messages, null);
     NodeAssert.equal(glm?.context_window, 123_000);
     NodeAssert.equal(glm?.max_context_window, 124_000);
@@ -91,6 +95,29 @@ describe("CodexModelCatalog", () => {
     const model = result.models.find((entry) => entry.slug === "gpt-5.5");
     NodeAssert.equal(model?.display_name, "Managed GPT-5.5");
     NodeAssert.deepStrictEqual(model?.input_modalities, ["text"]);
+  });
+
+  it("inherits the template tool-search capability for custom models", () => {
+    for (const supportsSearchTool of [false, true]) {
+      const catalog = JSON.parse(bundledCatalog) as {
+        models: Array<Record<string, unknown>>;
+      };
+      const template = catalog.models.find((model) => model.slug === "gpt-5.2");
+      NodeAssert.ok(template);
+      template.supports_search_tool = supportsSearchTool;
+
+      const result = JSON.parse(
+        buildTritonAiCodexModelCatalog(JSON.stringify(catalog), {
+          "api-deepseek-v4-flash": {
+            name: "DeepSeek v4 Flash",
+            capabilities: { inputModalities: ["text"] },
+          },
+        }),
+      ) as { models: Array<Record<string, unknown>> };
+      const managedModel = result.models.find((model) => model.slug === "api-deepseek-v4-flash");
+
+      NodeAssert.equal(managedModel?.supports_search_tool, supportsSearchTool);
+    }
   });
 
   it("rejects malformed bundled catalog output", () => {
