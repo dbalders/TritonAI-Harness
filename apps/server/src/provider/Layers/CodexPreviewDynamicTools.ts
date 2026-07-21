@@ -1,4 +1,4 @@
-import { PreviewAutomationSnapshot } from "@t3tools/contracts";
+import { PreviewAutomationSnapshot, PreviewAutomationUnavailableError } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -8,7 +8,6 @@ import { Tool } from "effect/unstable/ai";
 
 import * as McpInvocationContext from "../../mcp/McpInvocationContext.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
-import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "../../mcp/PreviewAutomationBroker.ts";
 import { PreviewToolkitHandlersLive } from "../../mcp/toolkits/preview/handlers.ts";
 import { PreviewToolkit } from "../../mcp/toolkits/preview/tools.ts";
@@ -20,12 +19,21 @@ export interface CodexPreviewDynamicToolDefinition {
   readonly requiresApproval: boolean;
 }
 
-export class CodexPreviewDynamicToolError extends Schema.TaggedErrorClass<CodexPreviewDynamicToolError>()(
-  "CodexPreviewDynamicToolError",
-  { detail: Schema.String },
+export class CodexPreviewDynamicToolNotFoundError extends Schema.TaggedErrorClass<CodexPreviewDynamicToolNotFoundError>()(
+  "CodexPreviewDynamicToolNotFoundError",
+  { toolName: Schema.String },
 ) {
   override get message(): string {
-    return this.detail;
+    return `Unknown preview tool: ${this.toolName}`;
+  }
+}
+
+export class CodexPreviewDynamicToolInvocationError extends Schema.TaggedErrorClass<CodexPreviewDynamicToolInvocationError>()(
+  "CodexPreviewDynamicToolInvocationError",
+  { toolName: Schema.String, cause: Schema.Defect() },
+) {
+  override get message(): string {
+    return `Preview tool ${this.toolName} invocation failed.`;
   }
 }
 
@@ -89,14 +97,16 @@ export const invokeAuthorizedCodexPreviewDynamicTool = Effect.fn(
   readonly broker: PreviewAutomationBroker.PreviewAutomationBroker["Service"];
 }) {
   if (!isCodexPreviewDynamicTool(input.name)) {
-    return yield* new CodexPreviewDynamicToolError({
-      detail: `Unknown preview tool: ${input.name}`,
-    });
+    return yield* new CodexPreviewDynamicToolNotFoundError({ toolName: input.name });
   }
 
   if (!input.invocationScope.capabilities.has("preview")) {
-    return yield* new CodexPreviewDynamicToolError({
-      detail: "Preview tool authorization is unavailable.",
+    return yield* new PreviewAutomationUnavailableError({
+      capability: "preview",
+      environmentId: input.invocationScope.environmentId,
+      threadId: input.invocationScope.threadId,
+      providerSessionId: input.invocationScope.providerSessionId,
+      providerInstanceId: input.invocationScope.providerInstanceId,
     });
   }
 
@@ -111,10 +121,16 @@ export const invokeAuthorizedCodexPreviewDynamicTool = Effect.fn(
     Effect.provide(PreviewToolkitHandlersLive),
     Effect.provideService(PreviewAutomationBroker.PreviewAutomationBroker, input.broker),
     Effect.provideService(McpInvocationContext.McpInvocationContext, input.invocationScope),
+    Effect.mapError(
+      (cause) => new CodexPreviewDynamicToolInvocationError({ toolName: input.name, cause }),
+    ),
   );
 
   if (handled.isFailure) {
-    return yield* new CodexPreviewDynamicToolError({ detail: "Preview tool invocation failed." });
+    return yield* new CodexPreviewDynamicToolInvocationError({
+      toolName: input.name,
+      cause: handled.result,
+    });
   }
   return sanitizePreviewToolResult(handled.encodedResult);
 });
@@ -123,22 +139,36 @@ export const invokeCodexPreviewDynamicTool = Effect.fn("invokeCodexPreviewDynami
   function* (input: {
     readonly name: string;
     readonly arguments: unknown;
-    readonly mcpSession: McpProviderSession.McpProviderSessionConfig;
+    readonly sessionIdentity: Pick<
+      McpProviderSession.McpProviderSessionConfig,
+      "environmentId" | "threadId" | "providerSessionId" | "providerInstanceId"
+    >;
     readonly broker: PreviewAutomationBroker.PreviewAutomationBroker["Service"];
   }) {
-    const invocationScope = yield* McpSessionRegistry.resolveActiveMcpAuthorization(
-      input.mcpSession.authorizationHeader,
-    );
+    const mcpSession = McpProviderSession.readMcpProviderSession(input.sessionIdentity.threadId);
     if (
-      !invocationScope ||
-      invocationScope.threadId !== input.mcpSession.threadId ||
-      invocationScope.providerSessionId !== input.mcpSession.providerSessionId ||
-      invocationScope.providerInstanceId !== input.mcpSession.providerInstanceId
+      !mcpSession ||
+      mcpSession.environmentId !== input.sessionIdentity.environmentId ||
+      mcpSession.providerSessionId !== input.sessionIdentity.providerSessionId ||
+      mcpSession.providerInstanceId !== input.sessionIdentity.providerInstanceId
     ) {
-      return yield* new CodexPreviewDynamicToolError({
-        detail: "Preview tool authorization is unavailable.",
+      return yield* new PreviewAutomationUnavailableError({
+        capability: "preview",
+        environmentId: input.sessionIdentity.environmentId,
+        threadId: input.sessionIdentity.threadId,
+        providerSessionId: input.sessionIdentity.providerSessionId,
+        providerInstanceId: input.sessionIdentity.providerInstanceId,
       });
     }
+    const invocationScope: McpInvocationContext.McpInvocationScope = {
+      environmentId: mcpSession.environmentId,
+      threadId: mcpSession.threadId,
+      providerSessionId: mcpSession.providerSessionId,
+      providerInstanceId: mcpSession.providerInstanceId,
+      capabilities: new Set(["preview"]),
+      issuedAt: 0,
+      expiresAt: Number.MAX_SAFE_INTEGER,
+    };
 
     return yield* invokeAuthorizedCodexPreviewDynamicTool({
       name: input.name,

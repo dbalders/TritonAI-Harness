@@ -14,10 +14,14 @@ import {
   type PreviewAutomationRequest,
   type PreviewAutomationStreamEvent,
 } from "@t3tools/contracts";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
+import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
@@ -39,6 +43,30 @@ const makeHost = (overrides: Partial<PreviewAutomationHost> = {}): PreviewAutoma
   environmentId: scope.environmentId,
   ...overrides,
 });
+
+it.effect("restores the previous active broker when an overlapping scope closes", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const brokerLayer = PreviewAutomationBroker.layer.pipe(Layer.provide(NodeServices.layer));
+      const firstContext = yield* Layer.build(brokerLayer);
+      const firstBroker = Context.get(
+        firstContext,
+        PreviewAutomationBroker.PreviewAutomationBroker,
+      );
+      const secondScope = yield* Scope.make("sequential");
+      yield* Effect.addFinalizer(() => Scope.close(secondScope, Exit.void));
+      const secondContext = yield* Layer.buildWithScope(brokerLayer, secondScope);
+      const secondBroker = Context.get(
+        secondContext,
+        PreviewAutomationBroker.PreviewAutomationBroker,
+      );
+
+      expect(PreviewAutomationBroker.readActivePreviewAutomationBroker()).toBe(secondBroker);
+      yield* Scope.close(secondScope, Exit.void);
+      expect(PreviewAutomationBroker.readActivePreviewAutomationBroker()).toBe(firstBroker);
+    }),
+  ),
+);
 
 type RoutedRequest = PreviewAutomationRequest & {
   readonly connectionId: PreviewAutomationStreamEvent["connectionId"];

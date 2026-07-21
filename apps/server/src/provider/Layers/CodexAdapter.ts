@@ -1734,7 +1734,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
                       invokeCodexPreviewDynamicTool({
                         name,
                         arguments: toolArguments,
-                        mcpSession,
+                        sessionIdentity: mcpSession,
                         broker: previewAutomationBroker,
                       }),
                       { signal },

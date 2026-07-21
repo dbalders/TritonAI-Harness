@@ -582,20 +582,21 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
   return PreviewAutomationBroker.of({ connect, focusHost, respond, invoke });
 }).pipe(Effect.withSpan("PreviewAutomationBroker.make"));
 
-let activePreviewAutomationBroker: PreviewAutomationBroker["Service"] | undefined;
+const activePreviewAutomationBrokers: Array<PreviewAutomationBroker["Service"]> = [];
 
 const active = Effect.acquireRelease(
   make.pipe(
     Effect.tap((broker) =>
       Effect.sync(() => {
-        activePreviewAutomationBroker = broker;
+        activePreviewAutomationBrokers.push(broker);
       }),
     ),
   ),
   (broker) =>
     Effect.sync(() => {
-      if (activePreviewAutomationBroker === broker) {
-        activePreviewAutomationBroker = undefined;
+      const index = activePreviewAutomationBrokers.lastIndexOf(broker);
+      if (index >= 0) {
+        activePreviewAutomationBrokers.splice(index, 1);
       }
     }),
 );
@@ -603,7 +604,7 @@ const active = Effect.acquireRelease(
 export function readActivePreviewAutomationBroker():
   | PreviewAutomationBroker["Service"]
   | undefined {
-  return activePreviewAutomationBroker;
+  return activePreviewAutomationBrokers.at(-1);
 }
 
 export const layer = Layer.effect(PreviewAutomationBroker, active);
