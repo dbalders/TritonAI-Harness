@@ -434,6 +434,25 @@ validationLayer("CodexAdapterLive validation", (it) => {
       }
     }),
   );
+  it.effect("keeps managed transport settings when preview tools are unavailable", () =>
+    Effect.gen(function* () {
+      validationRuntimeFactory.factory.mockClear();
+      const adapter = yield* CodexAdapter;
+
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId: asThreadId("thread-managed-browser-unavailable"),
+        modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "managed-model", []),
+        runtimeMode: "full-access",
+      });
+
+      const runtimeOptions = validationRuntimeFactory.factory.mock.calls[0]?.[0];
+      NodeAssert.ok(runtimeOptions);
+      NodeAssert.deepStrictEqual(runtimeOptions.appServerArgs, ["-c", 'web_search="disabled"']);
+      NodeAssert.equal(runtimeOptions.dynamicTools, undefined);
+      NodeAssert.equal(runtimeOptions.environment, undefined);
+    }),
+  );
 });
 
 const reconciliationRuntimeFactory = makeRuntimeFactory();

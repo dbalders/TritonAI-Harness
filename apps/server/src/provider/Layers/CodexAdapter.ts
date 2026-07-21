@@ -1677,8 +1677,8 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           ...(options?.modelCatalogPath
             ? ["-c", `model_catalog_json=${encodeCodexConfigString(options.modelCatalogPath)}`]
             : []),
-          ...(useFlatPreviewTools ? ["-c", 'web_search="disabled"'] : []),
-          ...(mcpSession && !useFlatPreviewTools
+          ...(usesCustomModel ? ["-c", 'web_search="disabled"'] : []),
+          ...(mcpSession && !usesCustomModel
             ? [
                 "-c",
                 `mcp_servers.t3-code.url=${mcpSession.endpoint}`,
@@ -1687,12 +1687,19 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
               ]
             : []),
         ];
+        const runtimeEnvironment =
+          mcpSession && !usesCustomModel
+            ? {
+                ...(options?.environment ?? process.env),
+                T3_MCP_BEARER_TOKEN: mcpSession.authorizationHeader.replace(/^Bearer\s+/, ""),
+              }
+            : options?.environment;
         const runtimeInput: CodexSessionRuntimeOptions = {
           threadId: input.threadId,
           providerInstanceId: boundInstanceId,
           cwd: input.cwd ?? process.cwd(),
           binaryPath: codexConfig.binaryPath,
-          ...(options?.environment ? { environment: options.environment } : {}),
+          ...(runtimeEnvironment ? { environment: runtimeEnvironment } : {}),
           ...(codexConfig.homePath ? { homePath: codexConfig.homePath } : {}),
           ...(resumeCursor ? { resumeCursor } : {}),
           runtimeMode: input.runtimeMode,
@@ -1770,14 +1777,6 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
               }
             : {}),
           ...(appServerArgs.length > 0 ? { appServerArgs } : {}),
-          ...(mcpSession && !useFlatPreviewTools
-            ? {
-                environment: {
-                  ...(options?.environment ?? process.env),
-                  T3_MCP_BEARER_TOKEN: mcpSession.authorizationHeader.replace(/^Bearer\s+/, ""),
-                },
-              }
-            : {}),
         };
         const sessionScope = yield* Scope.make("sequential");
         let sessionScopeTransferred = false;
