@@ -105,16 +105,18 @@ describe("Codex resume cursor compatibility", () => {
 });
 
 describe("integration write-tool approval", () => {
-  it("never lets runtime mode bypass a required host decision", () => {
+  it("uses the selected runtime mode as the write-tool approval contract", () => {
     NodeAssert.equal(dynamicToolInvocationAllowed(false, undefined), true);
     NodeAssert.equal(dynamicToolInvocationAllowed(true, undefined), false);
     NodeAssert.equal(dynamicToolInvocationAllowed(true, "cancel"), false);
     NodeAssert.equal(dynamicToolInvocationAllowed(true, "decline"), false);
     NodeAssert.equal(dynamicToolInvocationAllowed(true, "accept"), true);
     NodeAssert.equal(dynamicToolInvocationAllowed(true, "acceptForSession"), true);
-    NodeAssert.equal(dynamicToolApprovalRequired(true, false), true);
-    NodeAssert.equal(dynamicToolApprovalRequired(true, true), false);
-    NodeAssert.equal(dynamicToolApprovalRequired(false, false), false);
+    NodeAssert.equal(dynamicToolApprovalRequired(true, false, "approval-required"), true);
+    NodeAssert.equal(dynamicToolApprovalRequired(true, false, "auto-accept-edits"), true);
+    NodeAssert.equal(dynamicToolApprovalRequired(true, false, "full-access"), false);
+    NodeAssert.equal(dynamicToolApprovalRequired(true, true, "approval-required"), false);
+    NodeAssert.equal(dynamicToolApprovalRequired(false, false, "approval-required"), false);
   });
 
   it("fails closed before write approval when live availability is revoked", () => {

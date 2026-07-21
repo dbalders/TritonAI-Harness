@@ -55,7 +55,7 @@ export interface IntegrationProviderStatus {
 
 export interface IntegrationInvocationContext {
   readonly signal: AbortSignal;
-  /** Set only by a Harness host after resolving the write-tool approval UI. */
+  /** Set only by a trusted Harness adapter after crossing its task-approval boundary. */
   readonly writeApproved?: boolean;
 }
 
@@ -2825,7 +2825,7 @@ export class RegistryRuntime {
       if (tool.effect === "write" && context?.writeApproved !== true) {
         throw operationError(
           "operation_failed",
-          `${tool.displayName} requires Harness confirmation before it can run.`,
+          `${tool.displayName} requires task access approval before it can run.`,
         );
       }
       assertCurrentPackageVersion(manifest, installed.version);

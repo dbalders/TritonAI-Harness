@@ -25,8 +25,8 @@ dependency remains available while any enabled, granted capability requires it. 
 package omits `provider` and declares no tools.
 
 Every tool also declares `effect: "read" | "write"`, which must agree with the provider's executable
-metadata. Write tools always pass
-through a Harness-owned confirmation gate, even in full-access task mode.
+metadata. Write tools follow the task's selected runtime mode: supervised modes request approval,
+while Full access preauthorizes them.
 
 The Harness-specific manifest name is intentional. These packages are curated, server-executed
 Harness components rather than user-installable Codex marketplace plugins. Their `skills/`
@@ -77,7 +77,11 @@ supported; they are not rejected merely because they can modify data.
 An authenticated MCP provider session receives one coarse `integrations.invoke` transport scope.
 It lets the session enter the integration subsystem, and its credential does not need to be reissued
 when an included plugin is toggled. It is not a user permission, package access level, approval
-boundary, or read/write policy. Preview-only or future limited MCP credentials can omit it entirely.
+boundary, or read/write policy. The managed provider runtime is the approval host: Harness selects
+its task mode, publishes truthful tool annotations, and treats an authenticated call reaching the
+MCP handler as having crossed that runtime's approval boundary. The bearer remains host-managed and
+is not exposed in model input or tool results. Preview-only or future limited MCP credentials can
+omit the transport scope entirely.
 
 A tool declares one executable Effect input schema. Harness derives the MCP and Codex JSON Schema
 from it, requires an object-shaped contract, and decodes with exact-property checking before calling
@@ -90,12 +94,13 @@ real boundary is the combination of:
 - the provider reporting the capability required by the manifest tool, after connection when that
   provider has an authorization lifecycle;
 - a specific, allowlisted provider tool implementation;
+- the task's selected runtime mode;
 - the server-side credential's scopes and the remote service's own enforcement.
 
 OAuth scope presence is necessary but not sufficient. The registry independently checks the user's
 selected Harness capabilities, so additive or previously consented provider scopes cannot widen the
 tool surface. A skill saying "read-only" is guidance, not a substitute for capability selection,
-narrow provider tools, invocation-time checks, and host approval.
+narrow provider tools, invocation-time checks, and runtime approval.
 
 Credentials remain behind the server secret-store boundary. Each included provider receives a
 facade that accepts only local secret suffixes and constructs a collision-free namespace from the
@@ -183,7 +188,9 @@ MCP session credentials carry the stable coarse integration invocation scope so 
 provider session does not need a new credential when an included plugin is toggled. That transport
 scope does not grant access to any provider by itself. MCP tool visibility and invocation still check
 the live registry, plugin enablement, connection state, required manifest capability, tool
-allowlisting, and provider enforcement.
+allowlisting, and provider enforcement. A provider runtime that can read and misuse its host bearer
+is outside the current in-process trust boundary; isolating untrusted providers requires the planned
+provider process-isolation boundary.
 Initial fixed-catalog MCP tools are registered on the awaited startup path. A collision or
 registration failure therefore fails startup instead of leaving the Plugins UI advertising a tool
 that MCP silently omitted. The catalog is immutable for the process lifetime.
@@ -216,7 +223,7 @@ marketplace.
 Settings → Plugins renders one row per included package, keeping a catalog of many plugins
 scannable. The top-level switch remains the master control. Expanding a row shows its connection,
 one **Access** switch per user-facing capability, and read-only derived Tool and Skill status. Write
-abilities are marked as confirmation-gated. Enabled plugins with an unresolved connection expand
+abilities are marked as following task access. Enabled plugins with an unresolved connection expand
 automatically and keep a persistent, accessible Connect action visible.
 
 ## Deliberate follow-up work

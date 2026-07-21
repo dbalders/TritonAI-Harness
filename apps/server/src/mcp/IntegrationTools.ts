@@ -26,6 +26,20 @@ class IntegrationToolRegistrationError extends Schema.TaggedErrorClass<Integrati
 
 const INTEGRATION_INVOCATION_CAPABILITY = "integrations.invoke" as const;
 
+export function integrationToolInvocationContext(
+  definition: IntegrationProviderTool,
+  signal: AbortSignal,
+): Integrations.IntegrationInvocationContext {
+  return {
+    signal,
+    // Harness gives this bearer only to its managed provider runtime, which enforces
+    // the selected task mode before issuing an MCP write call. Mark that trusted
+    // adapter boundary explicitly so Registry retains its write gate without adding
+    // a second, contradictory approval layer.
+    ...(definition.readOnly ? {} : { writeApproved: true }),
+  };
+}
+
 const invocationCanUseIntegrations = (): boolean => {
   const fiber = Fiber.getCurrent();
   if (!fiber) return false;
@@ -93,9 +107,11 @@ function registerTool(
           ? Effect.tryPromise({
               try: async (signal) =>
                 normalizeIntegrationToolResult(
-                  await Integrations.getIntegrationRegistry().invokeTool(definition.name, payload, {
-                    signal,
-                  }),
+                  await Integrations.getIntegrationRegistry().invokeTool(
+                    definition.name,
+                    payload,
+                    integrationToolInvocationContext(definition, signal),
+                  ),
                 ),
               catch: (cause) => new IntegrationToolInvocationError({ cause }),
             })
