@@ -47,6 +47,11 @@ const CODEX_APP_SERVER_PROBE_FORCE_KILL_AFTER = "2 seconds" as const;
 const CODEX_PRESENTATION = {
   displayName: "TritonAI",
   showInteractionModeToggle: true,
+  // TritonAI's managed catalog spans Responses API backends with different
+  // continuation formats. In particular, hosted models cannot consume the
+  // encrypted reasoning items returned by OpenAI models. Keep the existing
+  // thread on its original model instead of sending incompatible history.
+  requiresNewThreadForModelChange: true,
 } as const;
 
 function codexModelDisplayName(slug: string): string {
