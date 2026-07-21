@@ -1,0 +1,89 @@
+name: Windows test artifact
+
+on:
+  push:
+    branches:
+      - release/harness-v0.3.0-20260720
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build unsigned Windows x64 Harness
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - name: Checkout Harness
+        uses: actions/checkout@v6
+
+      - name: Checkout composition producer
+        uses: actions/checkout@v6
+        with:
+          repository: dbalders/TritonAI-Installer
+          ref: main
+          persist-credentials: false
+          path: .release-input/installer
+
+      - name: Checkout pinned plugin source
+        uses: actions/checkout@v6
+        with:
+          repository: dbalders/TritonAI-Plugins
+          ref: refs/tags/v0.1.0
+          fetch-depth: 0
+          persist-credentials: false
+          path: .release-input/plugins
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Prepare pinned managed plugin composition
+        shell: bash
+        env:
+          TRITONAI_PLUGINS_REF: refs/tags/v0.1.0
+          TRITONAI_PLUGINS_COMMIT: 81ad5b1cc225146461a04ae8259e4286c5f0b2f2
+          TRITONAI_PLUGIN_IDS: microsoft-365
+          TRITONAI_PLUGINS_SOURCE: ${{ github.workspace }}/.release-input/plugins
+        run: |
+          set -euo pipefail
+          npm --prefix .release-input/installer ci --ignore-scripts
+          npm --prefix .release-input/installer run build
+          node .release-input/installer/dist/scripts/prepare-plugins-vendor.js
+
+      - name: Build unsigned Windows test Harness
+        shell: bash
+        env:
+          TRITONAI_PLUGIN_COMPOSITION_SOURCE: ${{ github.workspace }}/.release-input/installer/vendor/plugins
+          TRITONAI_MICROSOFT_GRAPH_CLIENT_ID: fcfe0e23-a675-4851-99a7-704dfd153b9c
+          TRITONAI_MICROSOFT_GRAPH_TENANT_ID: 8a198873-4fec-4e76-8182-ca479edbbd60
+        run: |
+          vp run dist:desktop:artifact -- \
+            --platform win \
+            --target nsis \
+            --arch x64 \
+            --build-version 0.3.0 \
+            --verbose
+
+      - name: Finalize managed plugin proof
+        shell: bash
+        run: |
+          node scripts/finalize-managed-plugin-proof.ts \
+            --platform win \
+            --arch x64 \
+            --artifact release/TritonAI-Harness-0.3.0-x64.exe \
+            --output-dir release
+
+      - name: Upload test artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: tritonai-harness-0.3.0-windows-x64-test
+          path: |
+            release/TritonAI-Harness-0.3.0-x64.exe
+            release/TritonAI-Harness-0.3.0-x64.exe.blockmap
+            release/latest.yml
+            release/tritonai-plugin-composition-win-x64.json
+          if-no-files-found: error

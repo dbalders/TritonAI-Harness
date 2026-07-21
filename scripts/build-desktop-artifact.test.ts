@@ -16,6 +16,7 @@ import {
   createStagePnpmConfig,
   createBuildConfig,
   DESKTOP_ASAR_UNPACK,
+  DESKTOP_MANAGED_PLUGIN_FILE_SET,
   InvalidMacPasskeyRpDomainError,
   InvalidMacPasskeyPublishableKeyError,
   InvalidAzureTrustedSigningEndpointError,
@@ -245,6 +246,27 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
   it("unpacks the fff shared library for filesystem and FFI access", () => {
     assert.deepStrictEqual(DESKTOP_ASAR_UNPACK, ["node_modules/@ff-labs/fff-bin-*/**/*"]);
   });
+
+  it.effect("preserves the complete managed plugin package during desktop packaging", () =>
+    Effect.gen(function* () {
+      const config = yield* createBuildConfig(
+        "mac",
+        "dmg",
+        "0.3.0",
+        false,
+        false,
+        undefined,
+        undefined,
+      );
+
+      assert.deepStrictEqual(config.files, ["**/*", DESKTOP_MANAGED_PLUGIN_FILE_SET]);
+      assert.deepStrictEqual(DESKTOP_MANAGED_PLUGIN_FILE_SET, {
+        from: "apps/server/dist/production-integrations",
+        to: "apps/server/dist/production-integrations",
+        filter: ["**/*"],
+      });
+    }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
+  );
 
   it.effect("preserves both Linux icon resize failures with structural context", () => {
     const commands: Array<{ readonly command: string; readonly args: ReadonlyArray<string> }> = [];
