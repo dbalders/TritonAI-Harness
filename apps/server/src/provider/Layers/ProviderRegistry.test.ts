@@ -319,6 +319,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
 
           assert.strictEqual(model.name, "DeepSeek v4 Flash");
           assert.strictEqual(model.isCustom, false);
+          assert.strictEqual(status.requiresNewThreadForModelChange, true);
           assert.deepStrictEqual(model.capabilities?.optionDescriptors, [
             {
               id: "reasoningEffort",
@@ -360,6 +361,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           assert.strictEqual(status.auth.type, "chatgpt");
           assert.strictEqual(status.auth.label, "ChatGPT Pro 20x Subscription");
           assert.strictEqual(status.auth.email, "test@example.com");
+          assert.strictEqual(status.requiresNewThreadForModelChange, true);
           assert.deepStrictEqual(status.models, [
             {
               slug: "gpt-live-codex",
