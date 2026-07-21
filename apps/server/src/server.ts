@@ -369,7 +369,7 @@ export const makeRoutesLayerFor = (
       websocketRpcRouteLayer,
     ),
     McpHttpServer.makeLayer(loadIntegrationRegistry).pipe(Layer.provide(McpSessionRegistry.layer)),
-  ).pipe(Layer.provide(PreviewAutomationBroker.layer), Layer.provide(browserApiCorsLayer));
+  ).pipe(Layer.provide(browserApiCorsLayer));
 
 export const makeRoutesLayer = makeRoutesLayerFor();
 
@@ -492,6 +492,7 @@ export const makeServerLayer = Layer.unwrap(
 
     return serverApplicationLayer.pipe(
       Layer.provideMerge(RuntimeServicesLive),
+      Layer.provideMerge(PreviewAutomationBroker.layer),
       Layer.provideMerge(serverRelayBrokerTracingLayer),
       Layer.provideMerge(HttpServerLive),
       Layer.provide(ObservabilityLive),

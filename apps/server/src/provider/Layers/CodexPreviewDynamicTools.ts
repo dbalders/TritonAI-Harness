@@ -37,6 +37,31 @@ export class CodexPreviewDynamicToolInvocationError extends Schema.TaggedErrorCl
   }
 }
 
+const isInvocationError = Schema.is(CodexPreviewDynamicToolInvocationError);
+
+export function makeCodexPreviewDynamicToolFailureResult(cause: unknown): {
+  readonly success: false;
+  readonly error: { readonly type: string; readonly message: string };
+} {
+  const underlying = isInvocationError(cause) ? cause.cause : cause;
+  const type =
+    typeof underlying === "object" &&
+    underlying !== null &&
+    "_tag" in underlying &&
+    typeof underlying._tag === "string"
+      ? underlying._tag
+      : underlying instanceof Error
+        ? underlying.name
+        : "PreviewToolError";
+  const message =
+    underlying instanceof Error
+      ? underlying.message
+      : typeof underlying === "string"
+        ? underlying
+        : "The collaborative browser request failed.";
+  return { success: false, error: { type, message } };
+}
+
 const codexWebResearchToolNames = new Set([
   "preview_status",
   "preview_open",

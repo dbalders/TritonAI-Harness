@@ -81,6 +81,7 @@ import {
   codexPreviewDynamicToolDefinitions,
   invokeCodexPreviewDynamicTool,
   isCodexPreviewDynamicTool,
+  makeCodexPreviewDynamicToolFailureResult,
 } from "./CodexPreviewDynamicTools.ts";
 const isCodexAppServerProcessExitedError = Schema.is(CodexErrors.CodexAppServerProcessExitedError);
 const isCodexAppServerTransportError = Schema.is(CodexErrors.CodexAppServerTransportError);
@@ -1450,8 +1451,6 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
   const imageContextAnalyzer =
     options?.imageContextAnalyzer ?? (yield* makeCodexImageContextAnalyzer(options?.environment));
   const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
-  const resolvePreviewAutomationBroker = () =>
-    options?.previewAutomationBroker ?? PreviewAutomationBroker.readActivePreviewAutomationBroker();
   const resolveIntegrationRegistry =
     options?.resolveIntegrationRegistry ??
     (options && Object.hasOwn(options, "integrationRegistry")
@@ -1580,7 +1579,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           );
         }
         const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
-        const previewAutomationBroker = resolvePreviewAutomationBroker();
+        const previewAutomationBroker = options?.previewAutomationBroker;
         const selectedModel =
           input.modelSelection?.instanceId === boundInstanceId
             ? input.modelSelection.model
@@ -1730,16 +1729,20 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
                     mcpSession &&
                     previewAutomationBroker
                   ) {
-                    const result = await runPromise(
+                    return runPromise(
                       invokeCodexPreviewDynamicTool({
                         name,
                         arguments: toolArguments,
                         sessionIdentity: mcpSession,
                         broker: previewAutomationBroker,
-                      }),
+                      }).pipe(
+                        Effect.match({
+                          onFailure: makeCodexPreviewDynamicToolFailureResult,
+                          onSuccess: (result) => result,
+                        }),
+                      ),
                       { signal },
                     );
-                    return result;
                   }
                   const canonicalName = dynamicToolByName.get(name);
                   if (!canonicalName || !integrationRegistry?.isToolAvailableSync(canonicalName)) {

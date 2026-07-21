@@ -265,8 +265,10 @@ const validationLayer = it.layer(
     CodexAdapter,
     Effect.gen(function* () {
       const codexConfig = decodeCodexSettings({ customModels: ["managed-model"] });
+      const previewAutomationBroker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
       return yield* makeCodexAdapter(codexConfig, {
         makeRuntime: validationRuntimeFactory.factory,
+        previewAutomationBroker,
       });
     }),
   ).pipe(

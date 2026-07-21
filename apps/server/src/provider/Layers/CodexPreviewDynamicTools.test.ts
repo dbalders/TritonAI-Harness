@@ -18,6 +18,7 @@ import {
   codexPreviewDynamicToolDefinitions,
   invokeAuthorizedCodexPreviewDynamicTool,
   invokeCodexPreviewDynamicTool,
+  makeCodexPreviewDynamicToolFailureResult,
 } from "./CodexPreviewDynamicTools.ts";
 
 const encodeUnknownJson = Schema.encodeEffect(Schema.UnknownFromJsonString);
@@ -184,6 +185,13 @@ it.effect("models preview failures with structured errors and preserves the caus
     if (isInvocationError(failed)) {
       expect(failed.cause).toBe(cause);
     }
+    expect(makeCodexPreviewDynamicToolFailureResult(failed)).toEqual({
+      success: false,
+      error: {
+        type: "PreviewAutomationNoAvailableHostError",
+        message: cause.message,
+      },
+    });
   });
 });
 
