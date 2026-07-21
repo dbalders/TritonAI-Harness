@@ -64,8 +64,9 @@ function managedModelFromTemplate(input: {
     effective_context_window_percent: 95,
     experimental_supported_tools: [],
     input_modalities: [...input.inputModalities],
-    // Codex uses this for local `tool_search` discovery, not provider-hosted web search.
-    supports_search_tool: input.template.supports_search_tool === true,
+    // TritonAI's Responses gateway accepts ordinary function tools but does not
+    // preserve Codex's proprietary namespace / tool_search call shapes.
+    supports_search_tool: false,
     use_responses_lite: false,
     auto_review_model_override: null,
     tool_mode: null,
@@ -108,6 +109,7 @@ export function buildTritonAiCodexModelCatalog(
           ...model,
           display_name: metadata.name,
           input_modalities: [...inputModalities],
+          supports_search_tool: false,
         }
       : model;
   });

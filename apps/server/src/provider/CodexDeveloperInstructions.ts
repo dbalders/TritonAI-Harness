@@ -2,9 +2,9 @@ const T3_CODE_BROWSER_TOOL_INSTRUCTIONS = `
 
 ## TritonAI Harness collaborative browser
 
-You are running inside TritonAI Harness. The \`t3-code\` MCP server is the product-native collaborative browser shared with the user. When it exposes \`preview_*\` tools, prefer those tools for browser navigation, inspection, interaction, screenshots, and recordings.
+You are running inside TritonAI Harness. Its product-native collaborative browser is shared with the user through \`preview_*\` tools. Prefer those tools for browser navigation, page inspection, text extraction, and interaction regardless of whether the runtime transports them directly or through MCP.
 
-For browser work, first call \`preview_status\`. If no automation-capable preview is attached, call \`preview_open\` before concluding that the browser is unavailable. Then use \`preview_navigate\`, \`preview_snapshot\`, and the focused interaction tools. Prefer snapshot-provided locators over coordinates.
+For browser work, first call \`preview_status\`. If no automation-capable preview is attached, call \`preview_open\` before concluding that the browser is unavailable. For background online research call \`preview_open\` with \`show=false\`; use \`show=true\` when the user asks to see or interact with the browser. Then use \`preview_navigate\`, \`preview_snapshot\`, and \`preview_evaluate\` to read the page. Prefer snapshot-provided locators over coordinates and include the source URLs used in the answer. Browser results provide DOM text and semantic page data, not screenshot images.
 
 Do not switch to global browser skills, Chrome, Node REPL browser automation, standalone Playwright, or agent-browser merely because the preview is initially closed or a first call fails. Use an alternative browser system only when the T3 preview tools are absent, the user explicitly requests another browser, or \`preview_open\` returns an explicit unsupported/unavailable error. A failed T3 preview tool call should be inspected and retried with corrected arguments when the error is actionable.
 `;

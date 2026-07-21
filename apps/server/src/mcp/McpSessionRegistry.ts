@@ -202,6 +202,16 @@ const make = Effect.acquireRelease(
 
 export const layer = Layer.effect(McpSessionRegistry, make);
 
+export const resolveActiveMcpAuthorization = (
+  header: string,
+): Effect.Effect<McpInvocationContext.McpInvocationScope | undefined> => {
+  const match = /^Bearer\s+(.+)$/i.exec(header.trim());
+  const rawValue = match?.[1];
+  return activeMcpSessionRegistry && rawValue
+    ? activeMcpSessionRegistry.resolve(rawValue)
+    : Effect.sync((): McpInvocationContext.McpInvocationScope | undefined => undefined);
+};
+
 export const issueActiveMcpCredential = (
   request: McpCredentialRequest,
 ): Effect.Effect<McpIssuedCredential | undefined> =>

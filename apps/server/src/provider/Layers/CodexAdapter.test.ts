@@ -43,6 +43,7 @@ import {
 } from "../../integrations/IntegrationRegistry.ts";
 import { EmptyIntegrationToolInput } from "../../integrations/IntegrationTool.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import * as PreviewAutomationBroker from "../../mcp/PreviewAutomationBroker.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderAdapterValidationError } from "../Errors.ts";
 import type { CodexAdapterShape } from "../Services/CodexAdapter.ts";
@@ -263,7 +264,7 @@ const validationLayer = it.layer(
   Layer.effect(
     CodexAdapter,
     Effect.gen(function* () {
-      const codexConfig = decodeCodexSettings({});
+      const codexConfig = decodeCodexSettings({ customModels: ["managed-model"] });
       return yield* makeCodexAdapter(codexConfig, {
         makeRuntime: validationRuntimeFactory.factory,
       });
@@ -272,6 +273,7 @@ const validationLayer = it.layer(
     Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
     Layer.provideMerge(ServerSettingsService.layerTest()),
     Layer.provideMerge(providerSessionDirectoryTestLayer),
+    Layer.provideMerge(PreviewAutomationBroker.layer),
     Layer.provideMerge(NodeServices.layer),
   ),
 );
@@ -369,6 +371,62 @@ validationLayer("CodexAdapterLive validation", (it) => {
           threadId,
           runtimeMode: "full-access",
         });
+      } finally {
+        McpProviderSession.clearMcpProviderSession(threadId);
+      }
+    }),
+  );
+  it.effect("exposes collaborative browser tools as flat functions for managed models", () =>
+    Effect.gen(function* () {
+      validationRuntimeFactory.factory.mockClear();
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("thread-managed-browser-tools");
+      McpProviderSession.setMcpProviderSession({
+        environmentId: EnvironmentId.make("environment-managed-browser"),
+        threadId,
+        providerSessionId: "provider-session-managed-browser",
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        endpoint: "http://127.0.0.1:43123/mcp",
+        authorizationHeader: ["Bearer", "test-token"].join(" "),
+      });
+      try {
+        yield* adapter.startSession({
+          provider: ProviderDriverKind.make("codex"),
+          threadId,
+          modelSelection: createModelSelection(
+            ProviderInstanceId.make("codex"),
+            "managed-model",
+            [],
+          ),
+          runtimeMode: "full-access",
+        });
+
+        const runtimeOptions = validationRuntimeFactory.factory.mock.calls[0]?.[0];
+        NodeAssert.ok(runtimeOptions);
+        NodeAssert.equal(runtimeOptions.appServerArgs, undefined);
+        NodeAssert.deepStrictEqual(
+          runtimeOptions.dynamicTools?.map(({ name }) => name),
+          [
+            "preview_status",
+            "preview_open",
+            "preview_navigate",
+            "preview_snapshot",
+            "preview_click",
+            "preview_type",
+            "preview_press",
+            "preview_scroll",
+            "preview_evaluate",
+            "preview_wait_for",
+          ],
+        );
+        NodeAssert.equal(runtimeOptions.dynamicTools?.[0]?.requiresApproval, false);
+        NodeAssert.equal(
+          runtimeOptions.dynamicTools?.find(({ name }) => name === "preview_click")
+            ?.requiresApproval,
+          true,
+        );
+        NodeAssert.equal(runtimeOptions.isDynamicToolAvailable?.("preview_status"), true);
+        NodeAssert.equal(runtimeOptions.environment, undefined);
       } finally {
         McpProviderSession.clearMcpProviderSession(threadId);
       }

@@ -1,7 +1,9 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import { HttpServer } from "effect/unstable/http";
 
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
@@ -95,4 +97,30 @@ it.effect("expires credentials after inactivity", () =>
     timestamp += 101;
     expect(yield* registry.resolve(token)).toBeUndefined();
   }),
+);
+
+it.effect("resolves bearer authorization through the active registry", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const context = yield* McpSessionRegistry.layer.pipe(
+        Layer.provide(Layer.succeed(HttpServer.HttpServer, fakeHttpServer)),
+        Layer.provide(Layer.succeed(ServerEnvironment.ServerEnvironment, fakeEnvironment)),
+        Layer.provide(NodeServices.layer),
+        Layer.build,
+      );
+      const registry = Context.get(context, McpSessionRegistry.McpSessionRegistry);
+      const threadId = ThreadId.make("thread-active");
+      const issued = yield* registry.issue({
+        threadId,
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        capabilities: McpSessionRegistry.providerSessionCapabilities(),
+      });
+
+      expect(
+        (yield* McpSessionRegistry.resolveActiveMcpAuthorization(issued.config.authorizationHeader))
+          ?.threadId,
+      ).toBe(threadId);
+      expect(yield* McpSessionRegistry.resolveActiveMcpAuthorization("invalid")).toBeUndefined();
+    }),
+  ),
 );

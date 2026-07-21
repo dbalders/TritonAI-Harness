@@ -14,6 +14,7 @@ import { browserViewportSettingKey } from "./browserViewportLayout";
 import { BrowserDeviceToolbar } from "./BrowserDeviceToolbar";
 import { BrowserViewportResizeHandles } from "./BrowserViewportResizeHandles";
 import { acquireDesktopTab, type AcquiredDesktopTab } from "./desktopTabLifetime";
+import { syncHostedBrowserWebviewAudio } from "./hostedBrowserWebviewAudio";
 import { resolveHostedBrowserWebviewWrapperStyle } from "./hostedBrowserWebviewStyle";
 import { usePreviewWebviewConfig } from "./previewWebviewConfigState";
 import { useBrowserViewportResize } from "./useBrowserViewportResize";
@@ -25,6 +26,7 @@ interface ElectronWebview extends HTMLElement {
   webpreferences?: string;
   getWebContentsId: () => number;
   executeJavaScript: (code: string, userGesture?: boolean) => Promise<unknown>;
+  setAudioMuted: (muted: boolean) => void;
 }
 
 declare global {
@@ -114,6 +116,27 @@ export function HostedBrowserWebview(props: {
 
   const active = presentation.visible && presentation.rect !== null;
   const lastRect = presentation.rect;
+
+  useEffect(() => {
+    const webview = webviewRef.current;
+    if (!webview) return;
+    const syncAudio = () => {
+      if (webviewRef.current !== webview) return;
+      try {
+        syncHostedBrowserWebviewAudio(webview, active);
+      } catch {
+        // A newly mounted webview can reject guest commands until did-attach.
+      }
+    };
+    webview.addEventListener("did-attach", syncAudio);
+    webview.addEventListener("dom-ready", syncAudio);
+    syncAudio();
+    return () => {
+      webview.removeEventListener("did-attach", syncAudio);
+      webview.removeEventListener("dom-ready", syncAudio);
+    };
+  }, [active]);
+
   const normalizedZoomFactor = Number.isFinite(zoomFactor) && zoomFactor > 0 ? zoomFactor : 1;
   const viewportWidth = viewport._tag === "fill" ? null : viewport.width;
   const viewportHeight = viewport._tag === "fill" ? null : viewport.height;

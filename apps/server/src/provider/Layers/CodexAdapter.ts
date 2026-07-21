@@ -49,6 +49,7 @@ import { getCodexServiceTierOptionValue } from "../../codexModelOptions.ts";
 import * as Integrations from "../../integrations/IntegrationRegistry.ts";
 import { integrationToolJsonSchema } from "../../integrations/IntegrationTool.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import * as PreviewAutomationBroker from "../../mcp/PreviewAutomationBroker.ts";
 import { encodeCodexConfigString } from "../Drivers/TritonAiCodexConfig.ts";
 
 import {
@@ -76,6 +77,11 @@ import {
   formatUntrustedImageContext,
   makeCodexImageContextAnalyzer,
 } from "./CodexImageContext.ts";
+import {
+  codexPreviewDynamicToolDefinitions,
+  invokeCodexPreviewDynamicTool,
+  isCodexPreviewDynamicTool,
+} from "./CodexPreviewDynamicTools.ts";
 const isCodexAppServerProcessExitedError = Schema.is(CodexErrors.CodexAppServerProcessExitedError);
 const isCodexAppServerTransportError = Schema.is(CodexErrors.CodexAppServerTransportError);
 const isCodexSessionRuntimeThreadIdMissingError = Schema.is(
@@ -99,6 +105,7 @@ export interface CodexAdapterLiveOptions {
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
   readonly imageContextAnalyzer?: CodexImageContextAnalyzer;
+  readonly previewAutomationBroker?: PreviewAutomationBroker.PreviewAutomationBroker["Service"];
   /** Test/embedding override; normal Harness instances resolve the active registry centrally. */
   readonly integrationRegistry?: Integrations.RegistryRuntime | null;
   /** Test/embedding resolver for exercising integration-registry replacement. */
@@ -1442,6 +1449,9 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
   >();
   const imageContextAnalyzer =
     options?.imageContextAnalyzer ?? (yield* makeCodexImageContextAnalyzer(options?.environment));
+  const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
+  const resolvePreviewAutomationBroker = () =>
+    options?.previewAutomationBroker ?? PreviewAutomationBroker.readActivePreviewAutomationBroker();
   const resolveIntegrationRegistry =
     options?.resolveIntegrationRegistry ??
     (options && Object.hasOwn(options, "integrationRegistry")
@@ -1570,6 +1580,21 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           );
         }
         const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
+        const previewAutomationBroker = resolvePreviewAutomationBroker();
+        const selectedModel =
+          input.modelSelection?.instanceId === boundInstanceId
+            ? input.modelSelection.model
+            : undefined;
+        const usesCustomModel =
+          selectedModel !== undefined &&
+          (codexConfig.customModels.includes(selectedModel) ||
+            Object.hasOwn(codexConfig.customModelMetadata, selectedModel));
+        const useFlatPreviewTools =
+          usesCustomModel && mcpSession !== undefined && previewAutomationBroker !== undefined;
+        const previewDynamicToolBindings = useFlatPreviewTools
+          ? codexPreviewDynamicToolDefinitions
+          : [];
+        const previewDynamicToolNames = new Set(previewDynamicToolBindings.map(({ name }) => name));
         const integrationRegistry = resolveIntegrationRegistry();
         const integrationAvailabilityGeneration = integrationRegistry?.availabilityGeneration ?? 0;
         const integrationSkillRuntime = integrationRegistry
@@ -1617,6 +1642,16 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
             })
           : [];
         const dynamicToolNames = new Set<string>();
+        for (const binding of previewDynamicToolBindings) {
+          if (!binding.name || dynamicToolNames.has(binding.name)) {
+            return yield* new ProviderAdapterValidationError({
+              provider: PROVIDER,
+              operation: "startSession",
+              issue: `Preview tool ${binding.name || "<unnamed>"} cannot be exposed safely.`,
+            });
+          }
+          dynamicToolNames.add(binding.name);
+        }
         for (const binding of dynamicToolBindings) {
           if (!binding.dynamicName || dynamicToolNames.has(binding.dynamicName)) {
             return yield* new ProviderAdapterValidationError({
@@ -1630,11 +1665,20 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
         const dynamicToolByName = new Map(
           dynamicToolBindings.map((binding) => [binding.dynamicName, binding.canonicalName]),
         );
+        const allDynamicToolDefinitions = [
+          ...previewDynamicToolBindings,
+          ...dynamicToolBindings.map((binding) => ({
+            name: binding.dynamicName,
+            description: binding.description,
+            inputSchema: binding.inputSchema,
+            requiresApproval: binding.requiresApproval,
+          })),
+        ];
         const appServerArgs = [
           ...(options?.modelCatalogPath
             ? ["-c", `model_catalog_json=${encodeCodexConfigString(options.modelCatalogPath)}`]
             : []),
-          ...(mcpSession
+          ...(mcpSession && !useFlatPreviewTools
             ? [
                 "-c",
                 `mcp_servers.t3-code.url=${mcpSession.endpoint}`,
@@ -1656,18 +1700,22 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
             ? { model: input.modelSelection.model }
             : {}),
           ...(serviceTier ? { serviceTier } : {}),
-          ...(integrationRegistry && dynamicToolBindings.length
+          ...(allDynamicToolDefinitions.length
             ? {
-                dynamicTools: dynamicToolBindings.map((binding) => ({
-                  name: binding.dynamicName,
-                  description: binding.description,
-                  inputSchema: binding.inputSchema,
-                  requiresApproval: binding.requiresApproval,
-                })),
+                dynamicTools: allDynamicToolDefinitions,
                 isDynamicToolAvailable: (name: string) => {
+                  if (previewDynamicToolNames.has(name)) {
+                    const activeMcpSession = McpProviderSession.readMcpProviderSession(
+                      input.threadId,
+                    );
+                    return (
+                      activeMcpSession?.providerSessionId === mcpSession?.providerSessionId &&
+                      previewAutomationBroker !== undefined
+                    );
+                  }
                   const canonicalName = dynamicToolByName.get(name);
                   return Boolean(
-                    canonicalName && integrationRegistry.isToolAvailableSync(canonicalName),
+                    canonicalName && integrationRegistry?.isToolAvailableSync(canonicalName),
                   );
                 },
                 invokeDynamicTool: async ({
@@ -1676,9 +1724,26 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
                   signal,
                   writeApproved,
                 }) => {
+                  if (
+                    previewDynamicToolNames.has(name) &&
+                    isCodexPreviewDynamicTool(name) &&
+                    mcpSession &&
+                    previewAutomationBroker
+                  ) {
+                    const result = await runPromise(
+                      invokeCodexPreviewDynamicTool({
+                        name,
+                        arguments: toolArguments,
+                        mcpSession,
+                        broker: previewAutomationBroker,
+                      }),
+                      { signal },
+                    );
+                    return result;
+                  }
                   const canonicalName = dynamicToolByName.get(name);
-                  if (!canonicalName || !integrationRegistry.isToolAvailableSync(canonicalName)) {
-                    throw new Error("Integration plugin tool is unavailable.");
+                  if (!canonicalName || !integrationRegistry?.isToolAvailableSync(canonicalName)) {
+                    throw new Error("Dynamic tool is unavailable.");
                   }
                   return integrationRegistry.invokeTool(canonicalName, toolArguments, {
                     signal,
@@ -1701,7 +1766,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
               }
             : {}),
           ...(appServerArgs.length > 0 ? { appServerArgs } : {}),
-          ...(mcpSession
+          ...(mcpSession && !useFlatPreviewTools
             ? {
                 environment: {
                   ...(options?.environment ?? process.env),

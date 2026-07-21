@@ -72,7 +72,7 @@ describe("CodexModelCatalog", () => {
     NodeAssert.equal(glm?.apply_patch_tool_type, null);
     NodeAssert.equal(glm?.supports_parallel_tool_calls, false);
     NodeAssert.equal(glm?.web_search_tool_type, "text");
-    NodeAssert.equal(glm?.supports_search_tool, true);
+    NodeAssert.equal(glm?.supports_search_tool, false);
     NodeAssert.equal(glm?.model_messages, null);
     NodeAssert.equal(glm?.context_window, 123_000);
     NodeAssert.equal(glm?.max_context_window, 124_000);
@@ -97,7 +97,7 @@ describe("CodexModelCatalog", () => {
     NodeAssert.deepStrictEqual(model?.input_modalities, ["text"]);
   });
 
-  it("inherits the template tool-search capability for custom models", () => {
+  it("disables proprietary tool-search discovery for custom models", () => {
     for (const supportsSearchTool of [false, true]) {
       const catalog = JSON.parse(bundledCatalog) as {
         models: Array<Record<string, unknown>>;
@@ -116,8 +116,22 @@ describe("CodexModelCatalog", () => {
       ) as { models: Array<Record<string, unknown>> };
       const managedModel = result.models.find((model) => model.slug === "api-deepseek-v4-flash");
 
-      NodeAssert.equal(managedModel?.supports_search_tool, supportsSearchTool);
+      NodeAssert.equal(managedModel?.supports_search_tool, false);
     }
+  });
+
+  it("disables proprietary tool-search discovery for managed bundled models", () => {
+    const result = JSON.parse(
+      buildTritonAiCodexModelCatalog(bundledCatalog, {
+        "gpt-5.5": {
+          name: "Managed GPT-5.5",
+          capabilities: { inputModalities: ["text", "image"] },
+        },
+      }),
+    ) as { models: Array<Record<string, unknown>> };
+
+    const managedModel = result.models.find((model) => model.slug === "gpt-5.5");
+    NodeAssert.equal(managedModel?.supports_search_tool, false);
   });
 
   it("rejects malformed bundled catalog output", () => {
