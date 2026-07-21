@@ -405,7 +405,7 @@ validationLayer("CodexAdapterLive validation", (it) => {
 
         const runtimeOptions = validationRuntimeFactory.factory.mock.calls[0]?.[0];
         NodeAssert.ok(runtimeOptions);
-        NodeAssert.equal(runtimeOptions.appServerArgs, undefined);
+        NodeAssert.deepStrictEqual(runtimeOptions.appServerArgs, ["-c", 'web_search="disabled"']);
         NodeAssert.deepStrictEqual(
           runtimeOptions.dynamicTools?.map(({ name }) => name),
           [

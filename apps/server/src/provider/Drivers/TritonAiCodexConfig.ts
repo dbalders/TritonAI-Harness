@@ -48,8 +48,6 @@ export function makeTritonAiCodexConfigArgs(env: NodeJS.ProcessEnv = process.env
     "--config",
     `${providerKey}.stream_idle_timeout_ms=300000`,
     "--config",
-    'web_search="disabled"',
-    "--config",
     "features.multi_agent=false",
   ];
 }

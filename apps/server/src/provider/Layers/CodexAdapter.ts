@@ -1677,6 +1677,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           ...(options?.modelCatalogPath
             ? ["-c", `model_catalog_json=${encodeCodexConfigString(options.modelCatalogPath)}`]
             : []),
+          ...(useFlatPreviewTools ? ["-c", 'web_search="disabled"'] : []),
           ...(mcpSession && !useFlatPreviewTools
             ? [
                 "-c",
