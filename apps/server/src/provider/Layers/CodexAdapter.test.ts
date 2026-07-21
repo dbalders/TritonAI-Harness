@@ -331,11 +331,11 @@ validationLayer("CodexAdapterLive validation", (it) => {
       });
     }),
   );
-  it.effect("disables the TritonAI MCP namespace while preserving session wiring", () =>
+  it.effect("enables the collaborative browser MCP namespace by default", () =>
     Effect.gen(function* () {
       validationRuntimeFactory.factory.mockClear();
       const adapter = yield* CodexAdapter;
-      const threadId = asThreadId("thread-mcp-namespace-disabled");
+      const threadId = asThreadId("thread-mcp-namespace-enabled");
       McpProviderSession.setMcpProviderSession({
         environmentId: EnvironmentId.make("environment-1"),
         threadId,
@@ -358,8 +358,6 @@ validationLayer("CodexAdapterLive validation", (it) => {
             "mcp_servers.t3-code.url=http://127.0.0.1:43123/mcp",
             "-c",
             'mcp_servers.t3-code.bearer_token_env_var="T3_MCP_BEARER_TOKEN"',
-            "-c",
-            "mcp_servers.t3-code.enabled=false",
           ],
           binaryPath: "codex",
           cwd: process.cwd(),
