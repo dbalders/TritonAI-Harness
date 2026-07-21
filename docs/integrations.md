@@ -77,7 +77,11 @@ supported; they are not rejected merely because they can modify data.
 An authenticated MCP provider session receives one coarse `integrations.invoke` transport scope.
 It lets the session enter the integration subsystem, and its credential does not need to be reissued
 when an included plugin is toggled. It is not a user permission, package access level, approval
-boundary, or read/write policy. Preview-only or future limited MCP credentials can omit it entirely.
+boundary, or read/write policy. The managed provider runtime is the approval host: Harness selects
+its task mode, publishes truthful tool annotations, and treats an authenticated call reaching the
+MCP handler as having crossed that runtime's approval boundary. The bearer remains host-managed and
+is not exposed in model input or tool results. Preview-only or future limited MCP credentials can
+omit the transport scope entirely.
 
 A tool declares one executable Effect input schema. Harness derives the MCP and Codex JSON Schema
 from it, requires an object-shaped contract, and decodes with exact-property checking before calling
@@ -184,7 +188,9 @@ MCP session credentials carry the stable coarse integration invocation scope so 
 provider session does not need a new credential when an included plugin is toggled. That transport
 scope does not grant access to any provider by itself. MCP tool visibility and invocation still check
 the live registry, plugin enablement, connection state, required manifest capability, tool
-allowlisting, and provider enforcement.
+allowlisting, and provider enforcement. A provider runtime that can read and misuse its host bearer
+is outside the current in-process trust boundary; isolating untrusted providers requires the planned
+provider process-isolation boundary.
 Initial fixed-catalog MCP tools are registered on the awaited startup path. A collision or
 registration failure therefore fails startup instead of leaving the Plugins UI advertising a tool
 that MCP silently omitted. The catalog is immutable for the process lifetime.

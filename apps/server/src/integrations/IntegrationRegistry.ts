@@ -55,7 +55,7 @@ export interface IntegrationProviderStatus {
 
 export interface IntegrationInvocationContext {
   readonly signal: AbortSignal;
-  /** Set only by a Harness host after resolving the write-tool approval UI. */
+  /** Set only by a trusted Harness adapter after crossing its task-approval boundary. */
   readonly writeApproved?: boolean;
 }
 

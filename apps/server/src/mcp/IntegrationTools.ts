@@ -32,9 +32,10 @@ export function integrationToolInvocationContext(
 ): Integrations.IntegrationInvocationContext {
   return {
     signal,
-    // MCP clients enforce the selected task runtime mode before issuing a write call.
-    // Mark the authenticated provider call as approved so Registry can retain its
-    // explicit write gate without adding a second, contradictory approval layer.
+    // Harness gives this bearer only to its managed provider runtime, which enforces
+    // the selected task mode before issuing an MCP write call. Mark that trusted
+    // adapter boundary explicitly so Registry retains its write gate without adding
+    // a second, contradictory approval layer.
     ...(definition.readOnly ? {} : { writeApproved: true }),
   };
 }
