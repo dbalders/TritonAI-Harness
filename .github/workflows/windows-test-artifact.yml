@@ -25,15 +25,6 @@ jobs:
           persist-credentials: false
           path: .release-input/installer
 
-      - name: Checkout pinned plugin source
-        uses: actions/checkout@v6
-        with:
-          repository: dbalders/TritonAI-Plugins
-          ref: refs/tags/v0.1.0
-          fetch-depth: 0
-          persist-credentials: false
-          path: .release-input/plugins
-
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@v1
         with:
@@ -47,7 +38,6 @@ jobs:
           TRITONAI_PLUGINS_REF: refs/tags/v0.1.0
           TRITONAI_PLUGINS_COMMIT: 81ad5b1cc225146461a04ae8259e4286c5f0b2f2
           TRITONAI_PLUGIN_IDS: microsoft-365
-          TRITONAI_PLUGINS_SOURCE: ${{ github.workspace }}/.release-input/plugins
         run: |
           set -euo pipefail
           npm --prefix .release-input/installer ci --ignore-scripts
