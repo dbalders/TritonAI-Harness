@@ -1431,10 +1431,10 @@ export const makeCodexSessionRuntime = (
       Effect.gen(function* () {
         const definition = options.dynamicTools?.find((tool) => tool.name === payload.tool);
         if (payload.namespace || !definition || !options.invokeDynamicTool) {
-          return dynamicToolResponse(false, "Integration plugin tool is unavailable.");
+          return dynamicToolResponse(false, "Dynamic tool is unavailable.");
         }
         if (!dynamicToolInvocationAvailable(definition.name, options.isDynamicToolAvailable)) {
-          return dynamicToolResponse(false, "Integration plugin tool is unavailable.");
+          return dynamicToolResponse(false, "Dynamic tool is unavailable.");
         }
         let writeApproved = false;
         const approvedForSession = (yield* Ref.get(sessionApprovedDynamicToolsRef)).has(
@@ -1506,15 +1506,13 @@ export const makeCodexSessionRuntime = (
         }).pipe(
           Effect.matchEffect({
             onFailure: () =>
-              Effect.logWarning("integration plugin dynamic tool invocation failed", {
+              Effect.logWarning("dynamic tool invocation failed", {
                 toolName: definition.name,
-              }).pipe(
-                Effect.as(dynamicToolResponse(false, "Integration plugin tool is unavailable.")),
-              ),
+              }).pipe(Effect.as(dynamicToolResponse(false, "Dynamic tool is unavailable."))),
             onSuccess: (value) => {
               const serialized = serializeDynamicToolResult(value);
               return serialized === undefined
-                ? Effect.logWarning("integration plugin dynamic tool returned invalid JSON", {
+                ? Effect.logWarning("dynamic tool returned invalid JSON", {
                     toolName: definition.name,
                   }).pipe(
                     Effect.as(
