@@ -11,6 +11,7 @@ import {
   integrationToolJsonSchema,
 } from "../integrations/IntegrationTool.ts";
 import {
+  integrationToolInvocationContext,
   normalizeIntegrationToolResult,
   registrationLayer,
   registrationLayerFor,
@@ -145,6 +146,17 @@ it.effect("registers write-capable tools with conservative MCP annotations", () 
     ),
   ),
 );
+
+it("treats the provider runtime as the MCP write approval boundary", () => {
+  const controller = new AbortController();
+  expect(integrationToolInvocationContext(fixtureTool, controller.signal)).toEqual({
+    signal: controller.signal,
+  });
+  expect(integrationToolInvocationContext(writeFixtureTool, controller.signal)).toEqual({
+    signal: controller.signal,
+    writeApproved: true,
+  });
+});
 
 it.effect("rejects integration tool names that collide with existing MCP tools", () =>
   Effect.gen(function* () {

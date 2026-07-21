@@ -2825,7 +2825,7 @@ export class RegistryRuntime {
       if (tool.effect === "write" && context?.writeApproved !== true) {
         throw operationError(
           "operation_failed",
-          `${tool.displayName} requires Harness confirmation before it can run.`,
+          `${tool.displayName} requires task access approval before it can run.`,
         );
       }
       assertCurrentPackageVersion(manifest, installed.version);

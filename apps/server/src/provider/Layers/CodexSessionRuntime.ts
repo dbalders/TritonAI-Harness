@@ -130,7 +130,7 @@ export interface CodexDynamicToolDefinition {
   readonly name: string;
   readonly description: string;
   readonly inputSchema: Readonly<Record<string, unknown>>;
-  /** Harness-enforced confirmation; runtime mode never bypasses this boundary. */
+  /** Marks a write tool whose confirmation follows the task runtime mode. */
   readonly requiresApproval?: boolean;
 }
 
@@ -151,8 +151,9 @@ export function dynamicToolInvocationAllowed(
 export function dynamicToolApprovalRequired(
   requiresApproval: boolean | undefined,
   approvedForSession: boolean,
+  runtimeMode: RuntimeMode,
 ): boolean {
-  return requiresApproval === true && !approvedForSession;
+  return requiresApproval === true && runtimeMode !== "full-access" && !approvedForSession;
 }
 
 export function dynamicToolInvocationAvailable(
@@ -1439,7 +1440,13 @@ export const makeCodexSessionRuntime = (
         const approvedForSession = (yield* Ref.get(sessionApprovedDynamicToolsRef)).has(
           definition.name,
         );
-        if (dynamicToolApprovalRequired(definition.requiresApproval, approvedForSession)) {
+        if (
+          dynamicToolApprovalRequired(
+            definition.requiresApproval,
+            approvedForSession,
+            options.runtimeMode,
+          )
+        ) {
           const requestId = ApprovalRequestId.make(yield* randomUUIDv4("command-approval-request"));
           const turnId = TurnId.make(payload.turnId);
           const decision = yield* Deferred.make<ProviderApprovalDecision>();

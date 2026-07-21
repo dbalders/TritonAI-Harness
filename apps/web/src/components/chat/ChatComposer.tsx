@@ -149,17 +149,17 @@ const runtimeModeConfig: Record<
 > = {
   "approval-required": {
     label: "Supervised",
-    description: "Ask before commands and file changes.",
+    description: "Ask before commands, file changes, and write tools.",
     icon: LockIcon,
   },
   "auto-accept-edits": {
     label: "Auto-accept edits",
-    description: "Auto-approve edits, ask before other actions.",
+    description: "Auto-approve edits; ask before other actions and write tools.",
     icon: PenLineIcon,
   },
   "full-access": {
     label: "Full access",
-    description: "Allow commands and edits without prompts.",
+    description: "Allow commands, edits, and tools without prompts.",
     icon: LockOpenIcon,
   },
 };

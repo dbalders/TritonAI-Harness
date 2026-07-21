@@ -4,6 +4,8 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   IntegrationConnectionActionCallout,
+  WRITE_TOOL_ACCESS_ARIA_LABEL,
+  WRITE_TOOL_ACCESS_LABEL,
   capabilityAccessStateLabel,
   capabilityUsesWriteTool,
   clearOwnedConnectionAttention,
@@ -179,6 +181,8 @@ describe("PluginsSettings capability access", () => {
   it("shows opt-in write access as off until the capability is selected", () => {
     expect(capabilityAccessStateLabel(integration, capability)).toBe("Off");
     expect(capabilityUsesWriteTool(integration, capability.id)).toBe(true);
+    expect(WRITE_TOOL_ACCESS_LABEL).toBe("Write · follows task access");
+    expect(WRITE_TOOL_ACCESS_ARIA_LABEL).toBe("Write operation; follows task access mode");
   });
 
   it("distinguishes selected access that still needs provider authorization", () => {

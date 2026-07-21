@@ -149,6 +149,9 @@ export function capabilityUsesWriteTool(
   );
 }
 
+export const WRITE_TOOL_ACCESS_LABEL = "Write · follows task access";
+export const WRITE_TOOL_ACCESS_ARIA_LABEL = "Write operation; follows task access mode";
+
 export function capabilityAccessStateLabel(
   integration: IntegrationSummary,
   capability: IntegrationSummary["capabilities"][number],
@@ -568,7 +571,7 @@ function IntegrationCard({
                           {writeAbility ? (
                             <Badge size="sm" variant="warning">
                               <LockKeyholeIcon className="size-3" aria-hidden="true" />
-                              Write · confirmation required
+                              {WRITE_TOOL_ACCESS_LABEL}
                             </Badge>
                           ) : null}
                         </div>
@@ -614,7 +617,7 @@ function IntegrationCard({
                         {tool.effect === "write" ? (
                           <LockKeyholeIcon
                             className="size-3.5 text-amber-600"
-                            aria-label="Write operation; confirmation required"
+                            aria-label={WRITE_TOOL_ACCESS_ARIA_LABEL}
                           />
                         ) : null}
                       </p>

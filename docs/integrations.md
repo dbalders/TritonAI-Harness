@@ -25,8 +25,8 @@ dependency remains available while any enabled, granted capability requires it. 
 package omits `provider` and declares no tools.
 
 Every tool also declares `effect: "read" | "write"`, which must agree with the provider's executable
-metadata. Write tools always pass
-through a Harness-owned confirmation gate, even in full-access task mode.
+metadata. Write tools follow the task's selected runtime mode: supervised modes request approval,
+while Full access preauthorizes them.
 
 The Harness-specific manifest name is intentional. These packages are curated, server-executed
 Harness components rather than user-installable Codex marketplace plugins. Their `skills/`
@@ -90,12 +90,13 @@ real boundary is the combination of:
 - the provider reporting the capability required by the manifest tool, after connection when that
   provider has an authorization lifecycle;
 - a specific, allowlisted provider tool implementation;
+- the task's selected runtime mode;
 - the server-side credential's scopes and the remote service's own enforcement.
 
 OAuth scope presence is necessary but not sufficient. The registry independently checks the user's
 selected Harness capabilities, so additive or previously consented provider scopes cannot widen the
 tool surface. A skill saying "read-only" is guidance, not a substitute for capability selection,
-narrow provider tools, invocation-time checks, and host approval.
+narrow provider tools, invocation-time checks, and runtime approval.
 
 Credentials remain behind the server secret-store boundary. Each included provider receives a
 facade that accepts only local secret suffixes and constructs a collision-free namespace from the
@@ -216,7 +217,7 @@ marketplace.
 Settings → Plugins renders one row per included package, keeping a catalog of many plugins
 scannable. The top-level switch remains the master control. Expanding a row shows its connection,
 one **Access** switch per user-facing capability, and read-only derived Tool and Skill status. Write
-abilities are marked as confirmation-gated. Enabled plugins with an unresolved connection expand
+abilities are marked as following task access. Enabled plugins with an unresolved connection expand
 automatically and keep a persistent, accessible Connect action visible.
 
 ## Deliberate follow-up work
