@@ -618,6 +618,11 @@ interface StagePackageJson {
 
 export const STAGE_INSTALL_ARGS = ["install", "--prod"] as const;
 export const DESKTOP_ASAR_UNPACK = ["node_modules/@ff-labs/fff-bin-*/**/*"] as const;
+export const DESKTOP_MANAGED_PLUGIN_FILE_SET = {
+  from: "apps/server/dist/production-integrations",
+  to: "apps/server/dist/production-integrations",
+  filter: ["**/*"],
+} as const;
 
 export interface MacPasskeySigningConfiguration {
   readonly appId: string;
@@ -1447,6 +1452,11 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     directories: {
       buildResources: "apps/desktop/resources",
     },
+    // electron-builder's default app matcher excludes several package file types,
+    // including `*.d.ts`. Managed plugin integrity describes the complete staged
+    // package, so copy that directory as an independent file set to preserve the
+    // exact inventory that the runtime verifies.
+    files: ["**/*", DESKTOP_MANAGED_PLUGIN_FILE_SET],
     // The Windows primary backend runs the server bundle through
     // ELECTRON_RUN_AS_NODE (asar-aware), so it reads bin.mjs straight out of
     // app.asar. The WSL backend instead launches plain `wsl.exe -- node`, which

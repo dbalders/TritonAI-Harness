@@ -4,6 +4,7 @@ import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+import * as NodeURL from "node:url";
 
 import {
   verifyProductionPackageForTest,
@@ -44,8 +45,14 @@ async function fixture() {
   const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-production-plugin-"));
   const entries = [
     [".tritonai-plugin/plugin.json", '{"id":"microsoft-365"}'],
-    ["dist/index.js", "export const value = true;"],
-    ["package.json", '{"name":"@tritonai/microsoft-365"}'],
+    [
+      "dist/index.js",
+      'import * as Effect from "effect/Effect"; export const value = Effect.succeed(true);',
+    ],
+    [
+      "package.json",
+      '{"name":"@tritonai/microsoft-365","type":"module","dependencies":{"effect":"4.0.0-beta.78"}}',
+    ],
   ] as const;
   const files: Array<TestFile> = [];
   for (const [relative, value] of entries) {
@@ -77,7 +84,15 @@ describe("production built-in package verification", () => {
         await NodeFSP.writeFile(NodePath.join(root, "dist", "index.js"), "tampered");
         expect(
           await NodeFSP.readFile(NodePath.join(snapshotRoot, "dist", "index.js"), "utf8"),
-        ).toBe("export const value = true;");
+        ).toContain('from "effect/Effect"');
+        await expect(
+          import(NodeURL.pathToFileURL(NodePath.join(snapshotRoot, "dist", "index.js")).href),
+        ).resolves.toHaveProperty("value");
+        expect(
+          (
+            await NodeFSP.lstat(NodePath.join(snapshotParent, "node_modules", "effect"))
+          ).isSymbolicLink(),
+        ).toBe(true);
       });
       await expect(NodeFSP.access(snapshotParent)).rejects.toMatchObject({ code: "ENOENT" });
     } finally {

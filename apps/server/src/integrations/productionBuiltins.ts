@@ -53,6 +53,13 @@ interface Microsoft365Module {
   readonly manifest: unknown;
 }
 
+interface RuntimeDependency {
+  readonly name: string;
+  readonly version: string;
+}
+
+const supportedRuntimeDependencies = new Set(["effect"]);
+
 const buildComposition =
   typeof __TRITONAI_BUILD_PLUGIN_COMPOSITION__ === "undefined"
     ? null
@@ -214,6 +221,91 @@ async function sealSnapshotDirectory(directory: string): Promise<void> {
   await NodeFSP.chmod(directory, 0o500);
 }
 
+function runtimeDependencies(
+  plugin: CompositionPackage,
+  verifiedFiles: ReadonlyArray<DescribedCompositionFile>,
+): ReadonlyArray<RuntimeDependency> {
+  const packageJsonFile = verifiedFiles.find(({ path }) => path === "package.json");
+  if (!packageJsonFile) {
+    throw new Error(`Built-in plugin ${plugin.id} package.json is missing.`);
+  }
+  const packageJson = JSON.parse(Buffer.from(packageJsonFile.contents).toString("utf8")) as {
+    readonly dependencies?: unknown;
+  };
+  if (packageJson.dependencies === undefined) return [];
+  if (
+    !packageJson.dependencies ||
+    typeof packageJson.dependencies !== "object" ||
+    Array.isArray(packageJson.dependencies)
+  ) {
+    throw new Error(`Built-in plugin ${plugin.id} dependencies are invalid.`);
+  }
+  return Object.entries(packageJson.dependencies)
+    .map(([name, version]): RuntimeDependency => {
+      if (
+        !supportedRuntimeDependencies.has(name) ||
+        typeof version !== "string" ||
+        !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u.test(version)
+      ) {
+        throw new Error(`Built-in plugin ${plugin.id} dependency is unsupported: ${name}.`);
+      }
+      return { name, version };
+    })
+    .toSorted((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
+}
+
+async function resolveRuntimeDependencyRoot(dependency: RuntimeDependency): Promise<string> {
+  const resolvedManifest = NodeURL.fileURLToPath(
+    import.meta.resolve(`${dependency.name}/package.json`),
+  );
+  const asarSegment = `${NodePath.sep}app.asar${NodePath.sep}`;
+  const unpackedManifest = resolvedManifest.includes(asarSegment)
+    ? resolvedManifest.replace(asarSegment, `${NodePath.sep}app.asar.unpacked${NodePath.sep}`)
+    : resolvedManifest;
+  const manifestPath = await NodeFSP.access(unpackedManifest)
+    .then(() => unpackedManifest)
+    .catch(() => resolvedManifest);
+  const packageRoot = await NodeFSP.realpath(NodePath.dirname(manifestPath));
+  const stat = await NodeFSP.lstat(packageRoot);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) {
+    throw new Error(
+      `Built-in plugin runtime dependency is not a real directory: ${dependency.name}.`,
+    );
+  }
+  const packageJson = JSON.parse(await NodeFSP.readFile(manifestPath, "utf8")) as {
+    readonly name?: unknown;
+    readonly version?: unknown;
+  };
+  if (packageJson.name !== dependency.name || packageJson.version !== dependency.version) {
+    throw new Error(
+      `Built-in plugin runtime dependency version does not match: ${dependency.name}.`,
+    );
+  }
+  return packageRoot;
+}
+
+async function linkSnapshotRuntimeDependencies(
+  snapshotParent: string,
+  plugin: CompositionPackage,
+  verifiedFiles: ReadonlyArray<DescribedCompositionFile>,
+): Promise<void> {
+  const dependencies = runtimeDependencies(plugin, verifiedFiles);
+  if (dependencies.length === 0) return;
+  const nodeModulesRoot = NodePath.join(snapshotParent, "node_modules");
+  await NodeFSP.mkdir(nodeModulesRoot, { mode: 0o700 });
+  const createdDirectories = new Set([nodeModulesRoot]);
+  for (const dependency of dependencies) {
+    const linkPath = NodePath.join(nodeModulesRoot, ...dependency.name.split("/"));
+    const linkParent = NodePath.dirname(linkPath);
+    await NodeFSP.mkdir(linkParent, { recursive: true, mode: 0o700 });
+    createdDirectories.add(linkParent);
+    await NodeFSP.symlink(await resolveRuntimeDependencyRoot(dependency), linkPath, "junction");
+  }
+  for (const directory of [...createdDirectories].toSorted().toReversed()) {
+    await NodeFSP.chmod(directory, 0o500);
+  }
+}
+
 async function makeSnapshotDirectoriesWritable(directory: string): Promise<void> {
   await NodeFSP.chmod(directory, 0o700);
   const entries = await NodeFSP.readdir(directory, { withFileTypes: true });
@@ -249,6 +341,7 @@ async function materializeProductionPackageSnapshot(
     const snapshotFiles = await describePackageFiles(snapshotRoot);
     verifyDescribedPackage(plugin, snapshotFiles);
     await sealSnapshotDirectory(snapshotRoot);
+    await linkSnapshotRuntimeDependencies(snapshotParent, plugin, verifiedFiles);
     await NodeFSP.chmod(snapshotParent, 0o500);
     return snapshotRoot;
   } catch (error) {
