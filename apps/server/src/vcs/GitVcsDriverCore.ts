@@ -1187,7 +1187,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     const branchResult = yield* executeGit(
       "GitVcsDriver.statusDetailsRemote.branch",
       cwd,
-      ["rev-parse", "--abbrev-ref", "HEAD"],
+      ["symbolic-ref", "--quiet", "--short", "HEAD"],
       { allowNonZeroExit: true },
     ).pipe(
       Effect.catchTags({
@@ -1199,7 +1199,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     if (branchResult === null) {
       return NON_REPOSITORY_REMOTE_STATUS_DETAILS;
     }
-    if (branchResult.exitCode !== 0) {
+    if (branchResult.exitCode !== 0 && branchResult.exitCode !== 1) {
       if (isNonRepositoryGitStderr(branchResult.stderr)) {
         return NON_REPOSITORY_REMOTE_STATUS_DETAILS;
       }
@@ -1207,7 +1207,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         ...gitCommandContext({
           operation: "GitVcsDriver.statusDetailsRemote.branch",
           cwd,
-          args: ["rev-parse", "--abbrev-ref", "HEAD"],
+          args: ["symbolic-ref", "--quiet", "--short", "HEAD"],
         }),
         detail: "Git branch lookup failed.",
         exitCode: branchResult.exitCode,
