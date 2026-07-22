@@ -3391,67 +3391,68 @@ export default function Sidebar() {
       ),
     [sidebarThreads],
   );
-  const ensureChatsProjectRefInFlight = useRef<Promise<ReturnType<typeof scopeProjectRef>> | null>(
-    null,
+  const ensureChatsProjectRefInFlight = useRef(
+    new Map<string, Promise<ReturnType<typeof scopeProjectRef>>>(),
   );
-  const ensuredChatsProjectRef = useRef<ReturnType<typeof scopeProjectRef> | null>(null);
-  const ensuredChatsProjectObserved = useRef(false);
+  const ensuredChatsProjectByEnvironment = useRef(
+    new Map<string, { projectRef: ReturnType<typeof scopeProjectRef>; observed: boolean }>(),
+  );
   useEffect(() => {
-    const cachedProjectRef = ensuredChatsProjectRef.current;
-    if (!cachedProjectRef) {
-      return;
+    for (const [environmentId, cachedProject] of ensuredChatsProjectByEnvironment.current) {
+      const isPresent = projects.some(
+        (project) =>
+          project.environmentId === cachedProject.projectRef.environmentId &&
+          project.id === cachedProject.projectRef.projectId,
+      );
+      if (isPresent) {
+        ensuredChatsProjectByEnvironment.current.set(environmentId, {
+          ...cachedProject,
+          observed: true,
+        });
+      } else if (cachedProject.observed) {
+        ensuredChatsProjectByEnvironment.current.delete(environmentId);
+      }
     }
-    if (cachedProjectRef.environmentId !== primaryEnvironmentId) {
-      ensuredChatsProjectRef.current = null;
-      ensuredChatsProjectObserved.current = false;
-      return;
-    }
-    const isPresent = projects.some(
-      (project) =>
-        project.environmentId === cachedProjectRef.environmentId &&
-        project.id === cachedProjectRef.projectId,
-    );
-    if (isPresent) {
-      ensuredChatsProjectObserved.current = true;
-    } else if (ensuredChatsProjectObserved.current) {
-      ensuredChatsProjectRef.current = null;
-      ensuredChatsProjectObserved.current = false;
-    }
-  }, [primaryEnvironmentId, projects]);
+  }, [projects]);
   const ensureChatsProjectRef = useCallback((): Promise<ReturnType<typeof scopeProjectRef>> => {
-    const inFlight = ensureChatsProjectRefInFlight.current;
+    if (primaryEnvironmentId === null) {
+      return Promise.reject(new Error("Primary environment is not ready."));
+    }
+
+    const environmentId = primaryEnvironmentId;
+    const inFlight = ensureChatsProjectRefInFlight.current.get(environmentId);
     if (inFlight) {
       return inFlight;
     }
 
+    const existingPrimaryProject = primaryChatsProjects[0] ?? null;
+    if (existingPrimaryProject) {
+      const projectRef = scopeProjectRef(
+        existingPrimaryProject.environmentId,
+        existingPrimaryProject.id,
+      );
+      ensuredChatsProjectByEnvironment.current.set(existingPrimaryProject.environmentId, {
+        projectRef,
+        observed: true,
+      });
+      return Promise.resolve(projectRef);
+    }
+
     const promise = (async (): Promise<ReturnType<typeof scopeProjectRef>> => {
-      const existingPrimaryProject = primaryChatsProjects[0] ?? null;
-      if (existingPrimaryProject) {
-        const projectRef = scopeProjectRef(
-          existingPrimaryProject.environmentId,
-          existingPrimaryProject.id,
-        );
-        ensuredChatsProjectRef.current = projectRef;
-        ensuredChatsProjectObserved.current = true;
-        return projectRef;
-      }
-
-      if (primaryEnvironmentId === null) {
-        throw new Error("Primary environment is not ready.");
-      }
-
-      const cachedProjectRef = ensuredChatsProjectRef.current;
-      if (cachedProjectRef?.environmentId === primaryEnvironmentId) {
-        return cachedProjectRef;
+      const cachedProject = ensuredChatsProjectByEnvironment.current.get(environmentId);
+      if (cachedProject) {
+        return cachedProject.projectRef;
       }
 
       const projectId = newProjectId();
-      const projectRef = scopeProjectRef(primaryEnvironmentId, projectId);
-      ensuredChatsProjectRef.current = projectRef;
-      ensuredChatsProjectObserved.current = false;
+      const projectRef = scopeProjectRef(environmentId, projectId);
+      ensuredChatsProjectByEnvironment.current.set(environmentId, {
+        projectRef,
+        observed: false,
+      });
       try {
         const result = await createProject({
-          environmentId: primaryEnvironmentId,
+          environmentId,
           input: {
             projectId,
             title: TRITONAI_CHATS_PROJECT_TITLE,
@@ -3469,16 +3470,21 @@ export default function Sidebar() {
         }
         return projectRef;
       } catch (error) {
-        ensuredChatsProjectRef.current = null;
-        ensuredChatsProjectObserved.current = false;
+        const cachedProject = ensuredChatsProjectByEnvironment.current.get(environmentId);
+        if (
+          cachedProject?.projectRef.environmentId === projectRef.environmentId &&
+          cachedProject.projectRef.projectId === projectRef.projectId
+        ) {
+          ensuredChatsProjectByEnvironment.current.delete(environmentId);
+        }
         throw error;
       }
     })();
 
-    ensureChatsProjectRefInFlight.current = promise;
+    ensureChatsProjectRefInFlight.current.set(environmentId, promise);
     const clearInFlight = () => {
-      if (ensureChatsProjectRefInFlight.current === promise) {
-        ensureChatsProjectRefInFlight.current = null;
+      if (ensureChatsProjectRefInFlight.current.get(environmentId) === promise) {
+        ensureChatsProjectRefInFlight.current.delete(environmentId);
       }
     };
     void promise.then(clearInFlight, clearInFlight);
@@ -3509,29 +3515,46 @@ export default function Sidebar() {
   }, [ensureChatsProjectRef, handleNewThread, isMobile, setOpenMobile]);
   // Resolve the active route's project key to a logical key so it matches the
   // sidebar's grouped project entries.
+  const chatsProjectRefKeys = useMemo(
+    () => new Set(chatsProject?.memberProjectRefs.map(scopedProjectKey) ?? []),
+    [chatsProject],
+  );
   const activeRouteProjectKey = useMemo(() => {
     if (!routeThreadKey) {
       return null;
     }
     const activeThread = sidebarThreadByKey.get(routeThreadKey);
     if (!activeThread) return null;
+    const activeProjectRef = scopeProjectRef(activeThread.environmentId, activeThread.projectId);
+    const activeProjectRefKey = scopedProjectKey(activeProjectRef);
+    if (chatsProject && chatsProjectRefKeys.has(activeProjectRefKey)) {
+      return chatsProject.projectKey;
+    }
     const physicalKey =
-      projectPhysicalKeyByScopedRef.get(
-        scopedProjectKey(scopeProjectRef(activeThread.environmentId, activeThread.projectId)),
-      ) ?? scopedProjectKey(scopeProjectRef(activeThread.environmentId, activeThread.projectId));
+      projectPhysicalKeyByScopedRef.get(activeProjectRefKey) ?? activeProjectRefKey;
     return physicalToLogicalKey.get(physicalKey) ?? physicalKey;
-  }, [routeThreadKey, sidebarThreadByKey, physicalToLogicalKey, projectPhysicalKeyByScopedRef]);
+  }, [
+    chatsProject,
+    chatsProjectRefKeys,
+    routeThreadKey,
+    sidebarThreadByKey,
+    physicalToLogicalKey,
+    projectPhysicalKeyByScopedRef,
+  ]);
 
   // Group threads by logical project key so all threads from grouped projects
   // are displayed together.
   const threadsByProjectKey = useMemo(() => {
     const next = new Map<string, SidebarThreadSummary[]>();
     for (const thread of sidebarThreads) {
-      const physicalKey =
-        projectPhysicalKeyByScopedRef.get(
-          scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId)),
-        ) ?? scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId));
-      const logicalKey = physicalToLogicalKey.get(physicalKey) ?? physicalKey;
+      const projectRefKey = scopedProjectKey(
+        scopeProjectRef(thread.environmentId, thread.projectId),
+      );
+      const physicalKey = projectPhysicalKeyByScopedRef.get(projectRefKey) ?? projectRefKey;
+      const logicalKey =
+        chatsProject && chatsProjectRefKeys.has(projectRefKey)
+          ? chatsProject.projectKey
+          : (physicalToLogicalKey.get(physicalKey) ?? physicalKey);
       const existing = next.get(logicalKey);
       if (existing) {
         existing.push(thread);
@@ -3540,7 +3563,13 @@ export default function Sidebar() {
       }
     }
     return next;
-  }, [sidebarThreads, physicalToLogicalKey, projectPhysicalKeyByScopedRef]);
+  }, [
+    chatsProject,
+    chatsProjectRefKeys,
+    sidebarThreads,
+    physicalToLogicalKey,
+    projectPhysicalKeyByScopedRef,
+  ]);
   const getCurrentSidebarShortcutContext = useCallback(
     () => ({
       terminalFocus: isTerminalFocused(),
