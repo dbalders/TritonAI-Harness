@@ -25,6 +25,7 @@ const clientSettings: ClientSettings = {
   tritonAiFirstRunOnboardingCompleted: false,
   favorites: [],
   providerModelPreferences: {},
+  sidebarAutoSettleAfterDays: 3,
   sidebarProjectGroupingMode: "repository_path",
   sidebarProjectGroupingOverrides: {
     "environment-1:/tmp/project-a": "separate",
@@ -32,6 +33,7 @@ const clientSettings: ClientSettings = {
   sidebarProjectSortOrder: "manual",
   sidebarThreadSortOrder: "created_at",
   sidebarThreadPreviewCount: 6,
+  sidebarV2Enabled: false,
   timestampFormat: "24-hour",
   voiceInput: DEFAULT_VOICE_INPUT_SETTINGS,
   wordWrap: true,

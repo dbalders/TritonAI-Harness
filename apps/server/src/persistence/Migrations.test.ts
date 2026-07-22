@@ -6,7 +6,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { migrationEntries, runMigrations } from "./Migrations.ts";
 import * as NodeSqliteClient from "./NodeSqliteClient.ts";
 
-it("keeps the migration registry unique, ordered, and anchored by downstream migration 033", () => {
+it("keeps the migration registry unique and preserves downstream migration 033", () => {
   const identities = migrationEntries.map(([id, name]) => [id, name] as const);
   const ids = identities.map(([id]) => id);
 
@@ -18,6 +18,10 @@ it("keeps the migration registry unique, ordered, and anchored by downstream mig
   assert.deepStrictEqual(
     identities.find(([id]) => id === 33),
     [33, "BackfillProjectionThreadSessionInstanceId"],
+  );
+  assert.deepStrictEqual(
+    identities.find(([id]) => id === 34),
+    [34, "ProjectionThreadsSettled"],
   );
 });
 
@@ -46,6 +50,13 @@ it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()))("migration imports", (i
         {
           migration_id: 33,
           name: "BackfillProjectionThreadSessionInstanceId",
+        },
+      );
+      assert.deepStrictEqual(
+        recorded.find(({ migration_id }) => migration_id === 34),
+        {
+          migration_id: 34,
+          name: "ProjectionThreadsSettled",
         },
       );
     }),

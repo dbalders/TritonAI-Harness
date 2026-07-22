@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
+  DEFAULT_MODEL,
   EnvironmentId,
   ProjectId,
   CommandId,
-  DEFAULT_MODEL,
   SourceControlDiscoveryResult,
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";

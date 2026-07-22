@@ -64,6 +64,7 @@ export const ServerProviderModel = Schema.Struct({
   shortName: Schema.optional(TrimmedNonEmptyString),
   subProvider: Schema.optional(TrimmedNonEmptyString),
   isCustom: Schema.Boolean,
+  isDefault: Schema.optional(Schema.Boolean),
   capabilities: Schema.NullOr(ModelCapabilities),
 });
 export type ServerProviderModel = typeof ServerProviderModel.Type;
@@ -216,6 +217,12 @@ const ServerPluginSource = Schema.Union([
     path: Schema.optionalKey(TrimmedNonEmptyString),
     refName: Schema.optionalKey(TrimmedNonEmptyString),
     sha: Schema.optionalKey(TrimmedNonEmptyString),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("npm"),
+    package: TrimmedNonEmptyString,
+    registry: Schema.optionalKey(TrimmedNonEmptyString),
+    version: Schema.optionalKey(TrimmedNonEmptyString),
   }),
   Schema.Struct({
     type: Schema.Literal("remote"),
@@ -641,6 +648,10 @@ export const ServerConfig = Schema.Struct({
   availableEditors: Schema.Array(EditorId),
   observability: ServerObservability,
   settings: ServerSettings,
+  /** Whether shell subscriptions can emit an opt-in catch-up completion marker. */
+  shellResumeCompletionMarker: Schema.optionalKey(Schema.Boolean),
+  /** Whether thread subscriptions can emit an opt-in catch-up completion marker. */
+  threadResumeCompletionMarker: Schema.optionalKey(Schema.Boolean),
 });
 export type ServerConfig = typeof ServerConfig.Type;
 

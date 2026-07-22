@@ -20,6 +20,7 @@ import { useMemo } from "react";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentProjects } from "./projects";
 import { environmentServerConfigsAtom } from "./server";
+import { allEnvironmentShellsBootstrappedAtom } from "./shell";
 import { environmentThreadDetails, environmentThreadShells } from "./threads";
 
 const EMPTY_PROJECT_REFS: ReadonlyArray<ScopedProjectRef> = Object.freeze([]);
@@ -113,6 +114,10 @@ export function useThreadShells(): ReadonlyArray<EnvironmentThreadShell> {
   return useAtomValue(environmentThreadShells.threadShellsAtom);
 }
 
+export function useAllEnvironmentShellsBootstrapped(): boolean {
+  return useAtomValue(allEnvironmentShellsBootstrappedAtom);
+}
+
 export function useThreadShellsForProjectRefs(
   refs: ReadonlyArray<ScopedProjectRef>,
 ): ReadonlyArray<EnvironmentThreadShell> {
@@ -178,6 +183,16 @@ export function readProject(ref: ScopedProjectRef): EnvironmentProject | null {
 
 export function readThreadShell(ref: ScopedThreadRef): EnvironmentThreadShell | null {
   return appAtomRegistry.get(environmentThreadShells.threadShellAtom(ref));
+}
+
+/** Whether the environment's server understands thread.settle/unsettle.
+    False for pre-settlement servers (capability defaults false on decode),
+    so clients under version skew fall back instead of erroring. */
+export function readEnvironmentSupportsSettlement(environmentId: EnvironmentId): boolean {
+  return (
+    appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
+      .threadSettlement === true
+  );
 }
 
 export function readThreadDetail(ref: ScopedThreadRef): EnvironmentThread | null {

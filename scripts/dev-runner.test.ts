@@ -1,5 +1,6 @@
-import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeOS from "node:os";
+
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NetService from "@t3tools/shared/Net";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { assert, describe, it } from "@effect/vitest";
@@ -52,7 +53,7 @@ function mockProcess(exit: number | PlatformError.PlatformError) {
 const devServerInput = {
   mode: "dev:server",
   t3Home: "/tmp/t3code-dev-runner",
-  noBrowser: undefined,
+  browser: undefined,
   autoBootstrapProjectFromCwd: undefined,
   logWebSocketEvents: undefined,
   host: undefined,
@@ -127,7 +128,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
   });
 
   describe("createDevRunnerEnv", () => {
-    it.effect("defaults only TRITONAI_HOME to ~/.tritonai-harness", () =>
+    it.effect("defaults TRITONAI_HOME and disables browser auto-open", () =>
       Effect.gen(function* () {
         const path = yield* Path.Path;
         const env = yield* createDevRunnerEnv({
@@ -136,7 +137,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           serverOffset: 0,
           webOffset: 0,
           t3Home: undefined,
-          noBrowser: undefined,
+          browser: undefined,
           autoBootstrapProjectFromCwd: undefined,
           logWebSocketEvents: undefined,
           host: undefined,
@@ -147,6 +148,47 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         const defaultHome = path.resolve(NodeOS.homedir(), ".tritonai-harness");
         assert.equal(env.TRITONAI_HOME, defaultHome);
         assert.isUndefined(env.T3CODE_HOME);
+        assert.equal(env.T3CODE_NO_BROWSER, "1");
+      }),
+    );
+
+    it.effect("allows browser auto-open to be explicitly enabled", () =>
+      Effect.gen(function* () {
+        const env = yield* createDevRunnerEnv({
+          mode: "dev",
+          baseEnv: {},
+          serverOffset: 0,
+          webOffset: 0,
+          t3Home: undefined,
+          browser: true,
+          autoBootstrapProjectFromCwd: undefined,
+          logWebSocketEvents: undefined,
+          host: undefined,
+          port: undefined,
+          devUrl: undefined,
+        });
+
+        assert.equal(env.T3CODE_NO_BROWSER, "0");
+      }),
+    );
+
+    it.effect("requires the browser flag even when the environment enables auto-open", () =>
+      Effect.gen(function* () {
+        const env = yield* createDevRunnerEnv({
+          mode: "dev",
+          baseEnv: { T3CODE_NO_BROWSER: "0" },
+          serverOffset: 0,
+          webOffset: 0,
+          t3Home: undefined,
+          browser: false,
+          autoBootstrapProjectFromCwd: undefined,
+          logWebSocketEvents: undefined,
+          host: undefined,
+          port: undefined,
+          devUrl: undefined,
+        });
+
+        assert.equal(env.T3CODE_NO_BROWSER, "1");
       }),
     );
 
@@ -159,7 +201,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           serverOffset: 0,
           webOffset: 0,
           t3Home: "/tmp/custom-t3",
-          noBrowser: true,
+          browser: false,
           autoBootstrapProjectFromCwd: false,
           logWebSocketEvents: true,
           host: "0.0.0.0",
@@ -190,7 +232,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           serverOffset: 0,
           webOffset: 0,
           t3Home: undefined,
-          noBrowser: undefined,
+          browser: undefined,
           autoBootstrapProjectFromCwd: undefined,
           logWebSocketEvents: undefined,
           host: undefined,
@@ -213,7 +255,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           serverOffset: 0,
           webOffset: 0,
           t3Home: undefined,
-          noBrowser: undefined,
+          browser: undefined,
           autoBootstrapProjectFromCwd: undefined,
           logWebSocketEvents: false,
           host: undefined,
@@ -234,7 +276,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           serverOffset: 0,
           webOffset: 0,
           t3Home: "/tmp/my-t3",
-          noBrowser: undefined,
+          browser: undefined,
           autoBootstrapProjectFromCwd: undefined,
           logWebSocketEvents: undefined,
           host: undefined,
@@ -263,7 +305,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           serverOffset: 0,
           webOffset: 0,
           t3Home: "/tmp/my-t3",
-          noBrowser: true,
+          browser: true,
           autoBootstrapProjectFromCwd: undefined,
           logWebSocketEvents: undefined,
           host: "127.0.0.1",
@@ -293,7 +335,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           serverOffset: 0,
           webOffset: 0,
           t3Home: undefined,
-          noBrowser: undefined,
+          browser: undefined,
           autoBootstrapProjectFromCwd: undefined,
           logWebSocketEvents: undefined,
           host: undefined,

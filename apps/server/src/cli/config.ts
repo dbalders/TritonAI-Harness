@@ -42,7 +42,9 @@ export const hostFlag = Flag.string("host").pipe(
   Flag.optional,
 );
 export const baseDirFlag = Flag.string("base-dir").pipe(
-  Flag.withDescription("Base directory path (equivalent to TRITONAI_HOME)."),
+  Flag.withDescription(
+    "Explicit TritonAI Harness data directory; runtime state is stored under userdata (equivalent to TRITONAI_HOME).",
+  ),
   Flag.optional,
 );
 export const devUrlFlag = Flag.string("dev-url").pipe(
@@ -445,13 +447,13 @@ export const resolveServerConfig = (
       resolveOptionPrecedence(normalizedFlags.devUrl, Option.fromUndefinedOr(env.devUrl)),
       () => undefined,
     );
+    const explicitBaseDir = resolveOptionPrecedence(
+      normalizedFlags.baseDir,
+      Option.fromUndefinedOr(env.t3Home),
+    ).pipe(Option.filter((value) => value.trim().length > 0));
     const baseDir = yield* resolveBaseDir(
       Option.getOrUndefined(
-        resolveOptionPrecedence(
-          normalizedFlags.baseDir,
-          Option.fromUndefinedOr(env.t3Home),
-          Option.fromUndefinedOr(bootstrap?.t3Home),
-        ),
+        resolveOptionPrecedence(explicitBaseDir, Option.fromUndefinedOr(bootstrap?.t3Home)),
       ),
     );
     const externalSecretStore =
@@ -463,7 +465,9 @@ export const resolveServerConfig = (
     const rawCwd = Option.getOrElse(normalizedFlags.cwd, () => process.cwd());
     const cwd = path.resolve(yield* expandHomePath(rawCwd.trim()));
     yield* fs.makeDirectory(cwd, { recursive: true });
-    const derivedPaths = yield* ServerConfig.deriveServerPaths(baseDir, devUrl);
+    const derivedPaths = yield* ServerConfig.deriveServerPaths(baseDir, devUrl, {
+      baseDirIsExplicit: Option.isSome(explicitBaseDir),
+    });
     yield* ServerConfig.ensureServerDirectories(derivedPaths);
     const persistedObservabilitySettings = yield* loadPersistedObservabilitySettings(
       derivedPaths.settingsPath,

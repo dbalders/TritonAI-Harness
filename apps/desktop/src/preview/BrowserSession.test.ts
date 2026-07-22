@@ -15,6 +15,7 @@ const { fromPartition, sessions } = vi.hoisted(() => ({
       readonly clearStorageData: ReturnType<typeof vi.fn>;
       readonly getUserAgent: ReturnType<typeof vi.fn>;
       readonly setPermissionRequestHandler: ReturnType<typeof vi.fn>;
+      readonly setPermissionCheckHandler: ReturnType<typeof vi.fn>;
       readonly setUserAgent: ReturnType<typeof vi.fn>;
     }
   >(),
@@ -40,6 +41,7 @@ describe("BrowserSession", () => {
         clearStorageData: vi.fn(() => Promise.resolve()),
         getUserAgent: vi.fn(() => "Mozilla/5.0 Electron/41.5.0 t3code/0.0.27"),
         setPermissionRequestHandler: vi.fn(),
+        setPermissionCheckHandler: vi.fn(),
         setUserAgent: vi.fn(),
       };
       sessions.set(partition, browserSession);
@@ -58,6 +60,46 @@ describe("BrowserSession", () => {
       assert.strictEqual(partition, "persist:t3code-preview-f051bb2c68cb7b2fe969");
       assert.strictEqual(first, second);
       assert.strictEqual(fromPartition.mock.calls.length, 1);
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("denies persistent permissions to project-controlled preview content", () =>
+    Effect.gen(function* () {
+      const browserSessions = yield* BrowserSession.BrowserSession;
+      const partition = yield* browserSessions.getPartition("scope-a");
+      yield* browserSessions.getSession("scope-a");
+
+      const browserSession = sessions.get(partition);
+      assert.isDefined(browserSession);
+
+      const requestHandler = browserSession.setPermissionRequestHandler.mock.calls[0]?.[0];
+      const checkHandler = browserSession.setPermissionCheckHandler.mock.calls[0]?.[0];
+      assert.isFunction(requestHandler);
+      assert.isFunction(checkHandler);
+
+      const requestAllows = (permission: string): boolean => {
+        let granted: boolean | undefined;
+        requestHandler(null, permission, (value: boolean) => {
+          granted = value;
+        });
+        assert.isDefined(granted);
+        return granted;
+      };
+
+      for (const permission of [
+        "clipboard-sanitized-write",
+        "clipboard-read",
+        "clipboard-write",
+        "geolocation",
+        "midi",
+        "notifications",
+      ]) {
+        assert.isFalse(requestAllows(permission), `request handler should deny ${permission}`);
+        assert.isFalse(
+          checkHandler(null, permission) as boolean,
+          `check handler should deny ${permission}`,
+        );
+      }
     }).pipe(Effect.provide(layer)),
   );
 

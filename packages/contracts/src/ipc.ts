@@ -236,12 +236,23 @@ export interface DesktopUpdateState {
   runningUnderArm64Translation: boolean;
   availableVersion: string | null;
   downloadedVersion: string | null;
+  releaseNotes: ReadonlyArray<DesktopUpdateReleaseNote>;
   downloadPercent: number | null;
   checkedAt: string | null;
   message: string | null;
   errorContext: "check" | "download" | "install" | null;
   canRetry: boolean;
 }
+
+export interface DesktopUpdateReleaseNote {
+  version: string;
+  items: ReadonlyArray<string>;
+}
+
+export const DesktopUpdateReleaseNoteSchema = Schema.Struct({
+  version: Schema.String,
+  items: Schema.Array(Schema.String),
+});
 
 export const DesktopUpdateStateSchema = Schema.Struct({
   enabled: Schema.Boolean,
@@ -253,6 +264,7 @@ export const DesktopUpdateStateSchema = Schema.Struct({
   runningUnderArm64Translation: Schema.Boolean,
   availableVersion: Schema.NullOr(Schema.String),
   downloadedVersion: Schema.NullOr(Schema.String),
+  releaseNotes: Schema.Array(DesktopUpdateReleaseNoteSchema),
   downloadPercent: Schema.NullOr(Schema.Number),
   checkedAt: Schema.NullOr(Schema.String),
   message: Schema.NullOr(Schema.String),
@@ -1085,6 +1097,8 @@ export interface DesktopBridge {
   ) => Promise<T | null>;
   openExternal: (url: string) => Promise<boolean>;
   onMenuAction: (listener: (action: string) => void) => () => void;
+  getWindowFullscreenState: () => boolean;
+  onWindowFullscreenStateChange: (listener: (fullscreen: boolean) => void) => () => void;
   getUpdateState: () => Promise<DesktopUpdateState>;
   setUpdateChannel: (channel: DesktopUpdateChannel) => Promise<DesktopUpdateState>;
   checkForUpdate: () => Promise<DesktopUpdateCheckResult>;

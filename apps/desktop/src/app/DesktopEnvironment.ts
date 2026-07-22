@@ -155,7 +155,8 @@ const make = Effect.fn("desktop.environment.make")(function* (
       : input.platform === "darwin"
         ? path.join(homeDirectory, "Library", "Application Support")
         : Option.getOrElse(config.xdgConfigHome, () => path.join(homeDirectory, ".config"));
-  const baseDir = Option.getOrElse(config.t3Home, () =>
+  const configuredBaseDir = config.t3Home;
+  const baseDir = Option.getOrElse(configuredBaseDir, () =>
     path.join(homeDirectory, DEFAULT_TRITONAI_HOME_DIRNAME),
   );
   const rootDir = path.resolve(input.dirname, "../../..");
@@ -165,7 +166,10 @@ const make = Effect.fn("desktop.environment.make")(function* (
     appVersion: input.appVersion,
   });
   const displayName = branding.displayName;
-  const stateDir = path.join(baseDir, isDevelopment ? "dev" : "userdata");
+  const stateDir = path.join(
+    baseDir,
+    isDevelopment && Option.isNone(configuredBaseDir) ? "dev" : "userdata",
+  );
   const userDataDirName = isDevelopment ? "tritonai-harness-dev" : "tritonai-harness";
   const legacyUserDataDirName = isDevelopment ? "T3 Code (Dev)" : "T3 Code (Alpha)";
   const resourcesPath = input.resourcesPath;

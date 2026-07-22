@@ -145,6 +145,7 @@ it.layer(NodeServices.layer)("managed Codex home policy", (it) => {
         binaryPath: "",
         homePath: sharedHome,
         shadowHomePath: shadowHome,
+        launchArgs: "",
         customModels: [DEFAULT_TRITONAI_CODEX_MODEL],
         customModelMetadata: {},
       });

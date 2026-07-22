@@ -428,6 +428,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         binaryPath: "/opt/homebrew/bin/codex",
         homePath: "/Users/julius/.codex",
         shadowHomePath: "",
+        launchArgs: "",
         customModels: [DEFAULT_TRITONAI_CODEX_MODEL],
         customModelMetadata: {},
       });
@@ -670,6 +671,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         binaryPath: "/opt/homebrew/bin/codex",
         homePath: "",
         shadowHomePath: "",
+        launchArgs: "",
         customModels: [DEFAULT_TRITONAI_CODEX_MODEL],
         customModelMetadata: {},
       });

@@ -139,11 +139,21 @@ const GROK_DRIVER_KIND = ProviderDriverKind.make("grok");
 const OPENCODE_DRIVER_KIND = ProviderDriverKind.make("opencode");
 
 export const DEFAULT_MODEL = DEFAULT_TRITONAI_CODEX_MODEL;
+
+/**
+ * Codex default-model preference, most preferred first. The provider snapshot
+ * marks the first of these present in the live `model/list` response as
+ * default; when none are available, Codex's own `isDefault` flag wins.
+ */
+export const PREFERRED_DEFAULT_CODEX_MODELS: ReadonlyArray<string> = [
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+];
 export const DEFAULT_GIT_TEXT_GENERATION_MODEL = DEFAULT_TRITONAI_CODEX_MODEL;
 
 export const DEFAULT_MODEL_BY_PROVIDER: Partial<Record<ProviderDriverKind, string>> = {
   [CODEX_DRIVER_KIND]: DEFAULT_MODEL,
-  [CLAUDE_DRIVER_KIND]: "claude-sonnet-4-6",
+  [CLAUDE_DRIVER_KIND]: "claude-sonnet-5",
   [CURSOR_DRIVER_KIND]: "auto",
   [GROK_DRIVER_KIND]: "grok-build",
   [OPENCODE_DRIVER_KIND]: "openai/gpt-5",
@@ -179,7 +189,10 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Partial<
     "opus-4.6": "claude-opus-4-6",
     "claude-opus-4.6": "claude-opus-4-6",
     "claude-opus-4-6-20251117": "claude-opus-4-6",
-    sonnet: "claude-sonnet-4-6",
+    sonnet: "claude-sonnet-5",
+    "sonnet-5": "claude-sonnet-5",
+    "claude-sonnet-5.0": "claude-sonnet-5",
+    "claude-sonnet-5-0": "claude-sonnet-5",
     "sonnet-4.6": "claude-sonnet-4-6",
     "claude-sonnet-4.6": "claude-sonnet-4-6",
     "claude-sonnet-4-6-20251117": "claude-sonnet-4-6",

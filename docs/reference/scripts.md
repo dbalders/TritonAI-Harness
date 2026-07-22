@@ -1,57 +1,41 @@
 # Scripts
 
-- `bun run dev` — Starts contracts, server, and web in `turbo watch` mode.
-- `bun run dev:server` — Starts just the WebSocket server (uses Bun TypeScript execution).
-- `bun run dev:web` — Starts just the Vite dev server for the web app.
-- Dev commands default `T3CODE_STATE_DIR` to `~/.t3/dev` to keep dev state isolated from desktop/prod state.
-- Override server CLI-equivalent flags from root dev commands with `--`, for example:
-  `bun run dev -- --base-dir ~/.t3-2`
-- `bun run start` — Runs the production server (serves built web app as static files).
-- `bun run build` — Builds contracts, web app, and server through Turbo.
-- `bun run typecheck` — Strict TypeScript checks for all packages.
-- `bun run test` — Runs workspace tests.
-- `bun run dist:desktop:artifact -- --platform <mac|linux|win> --target <target> --arch <arch>` — Builds a desktop artifact for a specific platform/target/arch.
-- `bun run dist:desktop:dmg` — Builds a shareable macOS `.dmg` into `./release`.
-- `bun run dist:desktop:dmg:x64` — Builds an Intel macOS `.dmg`.
-- `bun run dist:desktop:linux` — Builds a Linux AppImage into `./release`.
-- `bun run dist:desktop:win` — Builds a Windows NSIS installer into `./release`.
-- `bun run dist:desktop:plugins:finalize -- --platform <mac|win> --arch <arch> --artifact <path> --output-dir release` — Binds a staged managed-plugin composition to final signed artifact bytes.
+- `vp run dev` — Starts contracts, server, and web in watch mode.
+- `vp run dev:server` — Starts just the WebSocket server. The server process runs on Bun (`@effect/platform-bun` + `BunPtyAdapter`), but task running uses `vp run`.
+- `vp run dev:web` — Starts just the Vite dev server for the web app.
+- Dev commands implicitly use `~/.t3/dev`, keeping development state separate from `~/.t3/userdata`. An explicit `--home-dir <path>` stores state under `<path>/userdata`; the base directory remains available for caches, worktrees, and other shared data.
+- Web dev commands do not auto-open a browser. Open the one-time pairing URL printed by the server so the first browser navigation is authenticated. Set `T3CODE_NO_BROWSER=0` only when interactive auto-open is intentional.
+- Pass dev-runner flags directly after the root task name, for example:
+  `vp run dev --home-dir /tmp/t3code-dev`
+- `vp run start` — Runs the production server (serves built web app as static files).
+- `vp run build` — Builds contracts, web app, and server.
+- `vp run typecheck` — Strict TypeScript checks for all packages.
+- `vp run test` — Runs workspace tests.
+- `node apps/server/scripts/t3-sqlite-state.ts <query|exec> --base-dir <path> ...` — Inspects or seeds an isolated T3 SQLite database; writes create a private backup first.
+- `vp run dist:desktop:artifact -- --platform <mac|linux|win> --target <target> --arch <arch>` — Builds a desktop artifact for a specific platform/target/arch.
+- `vp run dist:desktop:dmg` — Builds a shareable macOS `.dmg` into `./release`.
+- `vp run dist:desktop:dmg:x64` — Builds an Intel macOS `.dmg`.
+- `vp run dist:desktop:linux` — Builds a Linux AppImage into `./release`.
+- `vp run dist:desktop:win` — Builds a Windows NSIS installer into `./release`.
+- `vp run dist:desktop:plugins:finalize -- --platform <mac|win> --arch <arch> --artifact <path> --output-dir release` — Binds a staged managed-plugin composition to final signed artifact bytes.
 
 ## Managed plugin release proofs
 
-When `TRITONAI_PLUGIN_COMPOSITION_SOURCE` selects a production composition, the artifact build writes
-an internal proof input but does not hash the distributable yet. Complete every operation that can
-mutate the DMG or EXE, including external signing, notarization, and stapling, before finalizing:
-
-```sh
-bun run dist:desktop:plugins:finalize -- \
-  --platform mac --arch arm64 \
-  --artifact release/TritonAI-Harness-<version>-arm64.dmg \
-  --output-dir release
-
-bun run dist:desktop:plugins:finalize -- \
-  --platform win --arch x64 \
-  --artifact release/TritonAI-Harness-<version>-x64.exe \
-  --output-dir release
-```
-
-The two commands publish distinct `tritonai-plugin-composition-mac-arm64.json` and
-`tritonai-plugin-composition-win-x64.json` assets on the same release. The GitHub Windows workflow
-runs its finalizer after electron-builder and Azure Trusted Signing return. The controlled local
-macOS path must run its finalizer after any final DMG notarization or stapling step. Never mutate an
-artifact after its proof is emitted; Installer verification rejects stale bytes.
+When `TRITONAI_PLUGIN_COMPOSITION_SOURCE` selects a production composition, complete every operation
+that can mutate the DMG or EXE—including external signing, notarization, and stapling—before running
+the finalizer. It emits distinct platform/architecture proof assets that the Installer verifies
+against the final distributable bytes. Never mutate an artifact after its proof is emitted.
 
 ## Desktop `.dmg` packaging notes
 
 - Default build is unsigned/not notarized for local sharing.
-- The DMG build uses `assets/macos-icon-1024.png` as the production app icon source.
+- The DMG build uses `assets/prod/black-macos-1024.png` as the production app icon source.
 - Desktop production windows load the bundled UI from `t3code://app/index.html` (not a `127.0.0.1` document URL).
 - Desktop packaging includes `apps/server/dist` (the `t3` backend) and starts it on loopback with an auth token for WebSocket/API traffic.
 - Your tester can still open it on macOS by right-clicking the app and choosing **Open** on first launch.
-- To keep staging files for debugging package contents, run: `bun run dist:desktop:dmg -- --keep-stage`
-- To require code-signing/notarization, add `--signed`. Windows signed builds fail before
-  packaging unless every Azure Trusted Signing input is present, set Electron Builder's
-  `forceCodeSigning`, and verify each output EXE with Authenticode before returning success.
+- To keep staging files for debugging package contents, run: `vp run dist:desktop:dmg -- --keep-stage`
+- To require code-signing/notarization, add `--signed`. Windows signed builds must have every Azure
+  Trusted Signing input and must pass Authenticode verification before the build returns success.
 - Signed macOS builds also require `T3CODE_APPLE_TEAM_ID` and
   `T3CODE_MACOS_PROVISIONING_PROFILE`. The passkey RP domain is derived from
   `T3CODE_CLERK_PUBLISHABLE_KEY` unless `T3CODE_CLERK_PASSKEY_RP_DOMAINS` overrides it.
@@ -65,8 +49,8 @@ artifact after its proof is emitted; Installer verification rejects stale bytes.
 
 Set `T3CODE_DEV_INSTANCE` to any value to deterministically shift all dev ports together.
 
-- Default ports: server `3773`, web `5733`
+- Default ports: server `13773`, web `5733`
 - Shifted ports: `base + offset` (offset is hashed from `T3CODE_DEV_INSTANCE`)
-- Example: `T3CODE_DEV_INSTANCE=branch-a bun run dev:desktop`
+- Example: `T3CODE_DEV_INSTANCE=branch-a vp run dev:desktop`
 
 If you want full control instead of hashing, set `T3CODE_PORT_OFFSET` to a numeric offset.
