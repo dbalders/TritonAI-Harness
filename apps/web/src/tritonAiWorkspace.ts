@@ -40,6 +40,55 @@ export function isTritonAiChatsWorkspacePath(path: string): boolean {
   );
 }
 
+function isCanonicalTritonAiChatsWorkspacePath(path: string): boolean {
+  return isHomeRelativePath(normalizeWorkspacePath(path), ".tritonai-harness/chats");
+}
+
+export function partitionTritonAiChatsProjects<T extends { readonly workspaceRoot: string }>(
+  projects: ReadonlyArray<T>,
+): { chatsProjects: T[]; regularProjects: T[] } {
+  const chatsProjects: T[] = [];
+  const regularProjects: T[] = [];
+
+  for (const project of projects) {
+    if (isTritonAiChatsWorkspacePath(project.workspaceRoot)) {
+      chatsProjects.push(project);
+    } else {
+      regularProjects.push(project);
+    }
+  }
+
+  return { chatsProjects, regularProjects };
+}
+
+export function findPrimaryTritonAiChatsProject<
+  T extends { readonly environmentId: string; readonly workspaceRoot: string },
+>(projects: ReadonlyArray<T>, primaryEnvironmentId: string | null): T | null {
+  return findPrimaryTritonAiChatsProjects(projects, primaryEnvironmentId)[0] ?? null;
+}
+
+export function findPrimaryTritonAiChatsProjects<
+  T extends { readonly environmentId: string; readonly workspaceRoot: string },
+>(projects: ReadonlyArray<T>, primaryEnvironmentId: string | null): T[] {
+  if (primaryEnvironmentId === null) {
+    return [];
+  }
+
+  const primaryChatsProjects = projects.filter(
+    (project) =>
+      project.environmentId === primaryEnvironmentId &&
+      isTritonAiChatsWorkspacePath(project.workspaceRoot),
+  );
+  return [
+    ...primaryChatsProjects.filter((project) =>
+      isCanonicalTritonAiChatsWorkspacePath(project.workspaceRoot),
+    ),
+    ...primaryChatsProjects.filter(
+      (project) => !isCanonicalTritonAiChatsWorkspacePath(project.workspaceRoot),
+    ),
+  ];
+}
+
 export function resolveTritonAiFirstRunWorkspacePath(): string {
   return TRITONAI_FIRST_RUN_WORKSPACE;
 }

@@ -213,7 +213,8 @@ import {
 import type { SidebarThreadSummary } from "../types";
 import {
   TRITONAI_CHATS_PROJECT_TITLE,
-  isTritonAiChatsWorkspacePath,
+  findPrimaryTritonAiChatsProjects,
+  partitionTritonAiChatsProjects,
   resolveTritonAiChatsWorkspacePath,
 } from "../tritonAiWorkspace";
 import {
@@ -3300,6 +3301,10 @@ export default function Sidebar() {
       ],
     });
   }, [projectOrder, projects]);
+  const { chatsProjects, regularProjects: orderedRegularProjects } = useMemo(
+    () => partitionTritonAiChatsProjects(orderedProjects),
+    [orderedProjects],
+  );
 
   // Build a mapping from physical project key → logical project key for
   // cross-environment grouping.  Projects that share a repositoryIdentity
@@ -3323,7 +3328,7 @@ export default function Sidebar() {
 
   const sidebarProjects = useMemo<SidebarProjectSnapshot[]>(() => {
     return buildSidebarProjectSnapshots({
-      projects: orderedProjects,
+      projects: orderedRegularProjects,
       settings: projectGroupingSettings,
       primaryEnvironmentId,
       resolveEnvironmentLabel: (environmentId) => environmentLabelById.get(environmentId) ?? null,
@@ -3332,27 +3337,45 @@ export default function Sidebar() {
   }, [
     environmentLabelById,
     desktopLocalEnvironmentIds,
-    orderedProjects,
+    orderedRegularProjects,
     projectGroupingSettings,
     primaryEnvironmentId,
   ]);
 
-  const chatsProject = useMemo<SidebarProjectSnapshot | null>(() => {
-    const project =
-      sidebarProjects.find((candidate) =>
-        candidate.memberProjects.some((member) =>
-          isTritonAiChatsWorkspacePath(member.workspaceRoot),
-        ),
-      ) ?? null;
-    return project ? { ...project, displayName: TRITONAI_CHATS_PROJECT_TITLE } : null;
-  }, [sidebarProjects]);
-  const regularSidebarProjects = useMemo(
-    () =>
-      chatsProject
-        ? sidebarProjects.filter((project) => project.projectKey !== chatsProject.projectKey)
-        : sidebarProjects,
-    [chatsProject, sidebarProjects],
+  const primaryChatsProjects = useMemo(
+    () => findPrimaryTritonAiChatsProjects(chatsProjects, primaryEnvironmentId),
+    [chatsProjects, primaryEnvironmentId],
   );
+  const chatsProject = useMemo<SidebarProjectSnapshot | null>(() => {
+    const snapshots = buildSidebarProjectSnapshots({
+      projects: primaryChatsProjects,
+      settings: projectGroupingSettings,
+      primaryEnvironmentId,
+      resolveEnvironmentLabel: (environmentId) => environmentLabelById.get(environmentId) ?? null,
+      isDesktopLocalEnvironment: (environmentId) => desktopLocalEnvironmentIds.has(environmentId),
+    });
+    const project = snapshots[0] ?? null;
+    if (!project) {
+      return null;
+    }
+    const memberProjects = snapshots.flatMap((snapshot) => snapshot.memberProjects);
+    return {
+      ...project,
+      displayName: TRITONAI_CHATS_PROJECT_TITLE,
+      groupedProjectCount: memberProjects.length,
+      memberProjects,
+      memberProjectRefs: memberProjects.map((member) =>
+        scopeProjectRef(member.environmentId, member.id),
+      ),
+    };
+  }, [
+    desktopLocalEnvironmentIds,
+    environmentLabelById,
+    primaryEnvironmentId,
+    primaryChatsProjects,
+    projectGroupingSettings,
+  ]);
+  const regularSidebarProjects = sidebarProjects;
 
   const sidebarProjectByKey = useMemo(
     () => new Map(regularSidebarProjects.map((project) => [project.projectKey, project] as const)),
@@ -3371,6 +3394,30 @@ export default function Sidebar() {
   const ensureChatsProjectRefInFlight = useRef<Promise<ReturnType<typeof scopeProjectRef>> | null>(
     null,
   );
+  const ensuredChatsProjectRef = useRef<ReturnType<typeof scopeProjectRef> | null>(null);
+  const ensuredChatsProjectObserved = useRef(false);
+  useEffect(() => {
+    const cachedProjectRef = ensuredChatsProjectRef.current;
+    if (!cachedProjectRef) {
+      return;
+    }
+    if (cachedProjectRef.environmentId !== primaryEnvironmentId) {
+      ensuredChatsProjectRef.current = null;
+      ensuredChatsProjectObserved.current = false;
+      return;
+    }
+    const isPresent = projects.some(
+      (project) =>
+        project.environmentId === cachedProjectRef.environmentId &&
+        project.id === cachedProjectRef.projectId,
+    );
+    if (isPresent) {
+      ensuredChatsProjectObserved.current = true;
+    } else if (ensuredChatsProjectObserved.current) {
+      ensuredChatsProjectRef.current = null;
+      ensuredChatsProjectObserved.current = false;
+    }
+  }, [primaryEnvironmentId, projects]);
   const ensureChatsProjectRef = useCallback((): Promise<ReturnType<typeof scopeProjectRef>> => {
     const inFlight = ensureChatsProjectRefInFlight.current;
     if (inFlight) {
@@ -3378,55 +3425,65 @@ export default function Sidebar() {
     }
 
     const promise = (async (): Promise<ReturnType<typeof scopeProjectRef>> => {
-      const existingPrimaryProject =
-        primaryEnvironmentId === null
-          ? null
-          : (projects.find(
-              (project) =>
-                project.environmentId === primaryEnvironmentId &&
-                isTritonAiChatsWorkspacePath(project.workspaceRoot),
-            ) ?? null);
-      const existingProject =
-        existingPrimaryProject ??
-        projects.find((project) => isTritonAiChatsWorkspacePath(project.workspaceRoot)) ??
-        null;
-      if (existingProject) {
-        return scopeProjectRef(existingProject.environmentId, existingProject.id);
+      const existingPrimaryProject = primaryChatsProjects[0] ?? null;
+      if (existingPrimaryProject) {
+        const projectRef = scopeProjectRef(
+          existingPrimaryProject.environmentId,
+          existingPrimaryProject.id,
+        );
+        ensuredChatsProjectRef.current = projectRef;
+        ensuredChatsProjectObserved.current = true;
+        return projectRef;
       }
 
       if (primaryEnvironmentId === null) {
         throw new Error("Primary environment is not ready.");
       }
 
-      const projectId = newProjectId();
-      const result = await createProject({
-        environmentId: primaryEnvironmentId,
-        input: {
-          projectId,
-          title: TRITONAI_CHATS_PROJECT_TITLE,
-          workspaceRoot: resolveTritonAiChatsWorkspacePath(),
-          createWorkspaceRootIfMissing: true,
-          defaultModelSelection: textGenerationModelSelection,
-        },
-      });
-      if (result._tag === "Failure") {
-        if (isAtomCommandInterrupted(result)) {
-          throw new Error("Chat creation was interrupted.");
-        }
-        const error = squashAtomCommandFailure(result);
-        throw error instanceof Error ? error : new Error("Could not create Chats project.");
+      const cachedProjectRef = ensuredChatsProjectRef.current;
+      if (cachedProjectRef?.environmentId === primaryEnvironmentId) {
+        return cachedProjectRef;
       }
-      return scopeProjectRef(primaryEnvironmentId, projectId);
+
+      const projectId = newProjectId();
+      const projectRef = scopeProjectRef(primaryEnvironmentId, projectId);
+      ensuredChatsProjectRef.current = projectRef;
+      ensuredChatsProjectObserved.current = false;
+      try {
+        const result = await createProject({
+          environmentId: primaryEnvironmentId,
+          input: {
+            projectId,
+            title: TRITONAI_CHATS_PROJECT_TITLE,
+            workspaceRoot: resolveTritonAiChatsWorkspacePath(),
+            createWorkspaceRootIfMissing: true,
+            defaultModelSelection: textGenerationModelSelection,
+          },
+        });
+        if (result._tag === "Failure") {
+          if (isAtomCommandInterrupted(result)) {
+            throw new Error("Chat creation was interrupted.");
+          }
+          const error = squashAtomCommandFailure(result);
+          throw error instanceof Error ? error : new Error("Could not create Chats project.");
+        }
+        return projectRef;
+      } catch (error) {
+        ensuredChatsProjectRef.current = null;
+        ensuredChatsProjectObserved.current = false;
+        throw error;
+      }
     })();
 
     ensureChatsProjectRefInFlight.current = promise;
-    void promise.finally(() => {
+    const clearInFlight = () => {
       if (ensureChatsProjectRefInFlight.current === promise) {
         ensureChatsProjectRefInFlight.current = null;
       }
-    });
+    };
+    void promise.then(clearInFlight, clearInFlight);
     return promise;
-  }, [createProject, primaryEnvironmentId, projects, textGenerationModelSelection]);
+  }, [createProject, primaryChatsProjects, primaryEnvironmentId, textGenerationModelSelection]);
   const handleNewChat = useCallback(() => {
     void (async () => {
       try {
