@@ -359,7 +359,40 @@ interface TerminalLaunchContext {
 
 type PersistentTerminalLaunchContext = Pick<TerminalLaunchContext, "cwd" | "worktreePath">;
 
+const LOCAL_DISPATCH_HANDOFF_TTL_MS = 10 * 60 * 1000;
+let localDispatchHandoff: {
+  threadKey: string;
+  dispatch: LocalDispatchSnapshot;
+  expiresAt: number;
+} | null = null;
+
+function readLocalDispatchHandoff(threadKey: string): LocalDispatchSnapshot | null {
+  if (!localDispatchHandoff || localDispatchHandoff.threadKey !== threadKey) return null;
+  if (localDispatchHandoff.expiresAt <= Date.now()) {
+    localDispatchHandoff = null;
+    return null;
+  }
+  return localDispatchHandoff.dispatch;
+}
+
+function writeLocalDispatchHandoff(threadKey: string, dispatch: LocalDispatchSnapshot): void {
+  localDispatchHandoff = {
+    threadKey,
+    dispatch,
+    expiresAt: Date.now() + LOCAL_DISPATCH_HANDOFF_TTL_MS,
+  };
+}
+
+function clearLocalDispatchHandoff(threadKey: string, dispatch?: LocalDispatchSnapshot): void {
+  if (!localDispatchHandoff || localDispatchHandoff.threadKey !== threadKey) return;
+  if (dispatch && localDispatchHandoff.dispatch !== dispatch) {
+    return;
+  }
+  localDispatchHandoff = null;
+}
+
 function useLocalDispatchState(input: {
+  threadKey: string;
   activeThread: Thread | undefined;
   activeLatestTurn: Thread["latestTurn"] | null;
   phase: SessionPhase;
@@ -367,11 +400,14 @@ function useLocalDispatchState(input: {
   activePendingUserInput: ApprovalRequestId | null;
   threadError: string | null | undefined;
 }) {
-  const [localDispatch, setLocalDispatch] = useState<LocalDispatchSnapshot | null>(null);
+  const [localDispatch, setLocalDispatch] = useState<LocalDispatchSnapshot | null>(() =>
+    readLocalDispatchHandoff(input.threadKey),
+  );
 
   const resetLocalDispatch = useCallback(() => {
+    clearLocalDispatchHandoff(input.threadKey);
     setLocalDispatch(null);
-  }, []);
+  }, [input.threadKey]);
 
   const serverAcknowledgedLocalDispatch = useMemo(
     () =>
@@ -395,20 +431,26 @@ function useLocalDispatchState(input: {
     ],
   );
   const activeLocalDispatch = serverAcknowledgedLocalDispatch ? null : localDispatch;
+  useEffect(() => {
+    if (!serverAcknowledgedLocalDispatch || !localDispatch) return;
+    clearLocalDispatchHandoff(input.threadKey, localDispatch);
+    setLocalDispatch((current) => (current === localDispatch ? null : current));
+  }, [input.threadKey, localDispatch, serverAcknowledgedLocalDispatch]);
   const beginLocalDispatch = useCallback(
     (options?: { preparingWorktree?: boolean }) => {
       const preparingWorktree = Boolean(options?.preparingWorktree);
       setLocalDispatch((current) => {
         const active = serverAcknowledgedLocalDispatch ? null : current;
-        if (active) {
-          return active.preparingWorktree === preparingWorktree
+        const next = active
+          ? active.preparingWorktree === preparingWorktree
             ? active
-            : { ...active, preparingWorktree };
-        }
-        return createLocalDispatchSnapshot(input.activeThread, options);
+            : { ...active, preparingWorktree }
+          : createLocalDispatchSnapshot(input.activeThread, options);
+        writeLocalDispatchHandoff(input.threadKey, next);
+        return next;
       });
     },
-    [input.activeThread, serverAcknowledgedLocalDispatch],
+    [input.activeThread, input.threadKey, serverAcknowledgedLocalDispatch],
   );
 
   return {
@@ -1804,6 +1846,7 @@ function ChatViewContent(props: ChatViewProps) {
     isPreparingWorktree,
     isSendBusy,
   } = useLocalDispatchState({
+    threadKey: routeThreadKey,
     activeThread,
     activeLatestTurn,
     phase,
@@ -3553,9 +3596,8 @@ function ChatViewContent(props: ChatViewProps) {
       }
       return [];
     });
-    resetLocalDispatch();
     setExpandedImage(null);
-  }, [draftId, resetLocalDispatch, threadId]);
+  }, [draftId, threadId]);
 
   const closeExpandedImage = useCallback(() => {
     setExpandedImage(null);
@@ -5362,9 +5404,10 @@ function ChatViewContent(props: ChatViewProps) {
 }
 
 export default function ChatView(props: ChatViewProps) {
+  const chatViewKey = scopedThreadKey(scopeThreadRef(props.environmentId, props.threadId));
   return (
     <DiffWorkerPoolProvider>
-      <ChatViewContent {...props} />
+      <ChatViewContent key={chatViewKey} {...props} />
     </DiffWorkerPoolProvider>
   );
 }
