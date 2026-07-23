@@ -88,6 +88,24 @@ describe("resolveCodexAppServerCommand", () => {
     }),
   );
 
+  effectIt("resolves the native payload behind a project-local npm shim", () =>
+    Effect.gen(function* () {
+      const shim = "C:\\project\\node_modules\\.bin\\codex.cmd";
+      const native =
+        "C:\\project\\node_modules\\@openai\\codex-win32-x64\\vendor\\x86_64-pc-windows-msvc\\bin\\codex.exe";
+
+      const resolved = yield* resolveCodexAppServerCommand(shim, ["app-server"], {
+        env: windowsEnvironment,
+      }).pipe(windowsRuntime(shim, "x64", (candidate) => candidate === native));
+
+      expect(resolved.command).toBe(native);
+      expect(resolved.shell).toBe(false);
+      expect(resolved.environment.CODEX_MANAGED_PACKAGE_ROOT).toBe(
+        "C:\\project\\node_modules\\@openai\\codex",
+      );
+    }),
+  );
+
   effectIt("falls back to the Windows command shim when the native payload is missing", () =>
     Effect.gen(function* () {
       const shim = "C:\\Program Files\\Codex\\codex.cmd";

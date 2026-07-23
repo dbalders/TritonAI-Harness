@@ -86,9 +86,14 @@ function inferCodexPackageRoots(command: string, env: NodeJS.ProcessEnv): Readon
   const baseName = path.basename(command).toLowerCase();
   if (baseName === "codex.cmd" || baseName === "codex.bat") {
     const shimDirectory = path.dirname(command);
+    const projectLocalPackageRoot =
+      path.basename(shimDirectory).toLowerCase() === ".bin"
+        ? path.join(path.dirname(shimDirectory), "@openai", "codex")
+        : undefined;
     return [
       path.join(shimDirectory, "lib", "node_modules", "@openai", "codex"),
       path.join(shimDirectory, "node_modules", "@openai", "codex"),
+      ...(projectLocalPackageRoot ? [projectLocalPackageRoot] : []),
       ...(configuredPackageRoot ? [configuredPackageRoot] : []),
     ];
   }
