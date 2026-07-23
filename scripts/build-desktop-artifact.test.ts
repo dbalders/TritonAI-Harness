@@ -593,6 +593,50 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }),
   );
 
+  it.effect("swaps the Windows install directory atomically and keeps rollback recovery", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const repoRoot = yield* path.fromFileUrl(new URL("..", import.meta.url));
+      const source = yield* fs.readFileString(
+        path.join(repoRoot, "apps/desktop/resources/installer.nsh"),
+      );
+
+      assert.include(source, "!macro customRemoveFiles");
+      assert.include(source, "!macro customInit");
+      assert.include(source, "!macro customInstall");
+      assert.include(source, "Function .onInstFailed");
+      assert.include(source, 'Rename "$INSTDIR" "$INSTDIR.old"');
+      assert.include(source, 'Rename "$INSTDIR.old" "$INSTDIR"');
+      assert.include(source, 'RMDir /r /REBOOTOK "$INSTDIR.old"');
+      assert.include(source, '!define TRITONAI_APP_EXECUTABLE_FILENAME "${PRODUCT_FILENAME}.exe"');
+      assert.include(
+        source,
+        '!define TRITONAI_INSTALL_COMPLETE_MARKER ".tritonai-install-complete"',
+      );
+      assert.include(source, 'FileOpen $0 "$INSTDIR\\${TRITONAI_INSTALL_COMPLETE_MARKER}" w');
+      assert.include(
+        source,
+        'File /oname=$PLUGINSDIR\\tritonai-upgrade-uninstaller.exe "${UNINSTALLER_OUT_FILE}"',
+      );
+      assert.include(
+        source,
+        'CopyFiles /SILENT "$PLUGINSDIR\\tritonai-upgrade-uninstaller.exe" "$INSTDIR\\${UNINSTALL_FILENAME}"',
+      );
+      assert.include(
+        source,
+        'IfFileExists "$INSTDIR\\${TRITONAI_INSTALL_COMPLETE_MARKER}" restoreComplete 0',
+      );
+      assert.include(
+        source,
+        'IfFileExists "$INSTDIR.old\\${TRITONAI_APP_EXECUTABLE_FILENAME}" 0 restoreComplete',
+      );
+      assert.include(source, "${if} ${isUpdated}");
+      assert.include(source, 'RMDir /r "$INSTDIR"');
+      assert.notInclude(source, "$PLUGINSDIR\\old-install");
+    }),
+  );
+
   it("promotes target fff binaries to direct staged dependencies", () => {
     assert.deepStrictEqual(resolveFffNativeDependencies("mac", "arm64", "0.9.4"), {
       "@ff-labs/fff-bin-darwin-arm64": "0.9.4",
