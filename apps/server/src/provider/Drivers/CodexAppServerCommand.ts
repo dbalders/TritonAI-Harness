@@ -37,6 +37,7 @@ export interface ResolvedCodexAppServerCommand extends ResolvedSpawnCommand {
 }
 
 export type CodexNativeExecutableProbe = (filePath: string) => boolean;
+export type CodexPnpmOwnershipProbe = (packageRoot: string, entrypoint: string) => boolean;
 
 function isFile(filePath: string): boolean {
   try {
@@ -49,6 +50,50 @@ function isFile(filePath: string): boolean {
 export const CodexNativeExecutableAvailability = Context.Reference<CodexNativeExecutableProbe>(
   "@t3tools/server/CodexNativeExecutableAvailability",
   { defaultValue: () => isFile },
+);
+
+function isPnpmOwnedCodexInstall(packageRoot: string, entrypoint: string): boolean {
+  let canonicalPackageRoot: string;
+  try {
+    canonicalPackageRoot = NodeFS.realpathSync(packageRoot);
+  } catch {
+    return false;
+  }
+
+  const path = NodePath.win32;
+  const entrypointDirectory = path.dirname(path.resolve(entrypoint));
+  const isOwnedBy = (nodeModulesDirectory: string) => {
+    if (!NodeFS.existsSync(path.join(nodeModulesDirectory, ".modules.yaml"))) return false;
+    try {
+      return (
+        NodeFS.realpathSync(path.join(nodeModulesDirectory, "@openai", "codex")) ===
+        canonicalPackageRoot
+      );
+    } catch {
+      return false;
+    }
+  };
+
+  for (const startDirectory of new Set([canonicalPackageRoot, entrypointDirectory])) {
+    const filesystemRoot = path.parse(startDirectory).root;
+    for (
+      let currentDirectory = startDirectory;
+      currentDirectory !== filesystemRoot;
+      currentDirectory = path.dirname(currentDirectory)
+    ) {
+      if (isOwnedBy(currentDirectory)) return true;
+      const nodeModulesDirectory = path.join(currentDirectory, "node_modules");
+      if (isOwnedBy(nodeModulesDirectory)) return true;
+    }
+    if (isOwnedBy(filesystemRoot)) return true;
+    if (isOwnedBy(path.join(filesystemRoot, "node_modules"))) return true;
+  }
+  return false;
+}
+
+export const CodexPnpmOwnershipDetection = Context.Reference<CodexPnpmOwnershipProbe>(
+  "@t3tools/server/CodexPnpmOwnershipDetection",
+  { defaultValue: () => isPnpmOwnedCodexInstall },
 );
 
 function windowsCodexTarget(architecture: NodeJS.Architecture): WindowsCodexTarget | undefined {
@@ -148,24 +193,16 @@ export function resolveNativeWindowsCodex(
   return undefined;
 }
 
-function managedPackageMarker(
-  env: NodeJS.ProcessEnv,
-  command: string,
-  packageRoot: string,
-): string {
-  const userAgent = env.npm_config_user_agent ?? "";
-  const execPath = env.npm_execpath ?? "";
+function managedPackageMarker(env: NodeJS.ProcessEnv, command: string, pnpmOwned: boolean): string {
+  if (pnpmOwned) return CODEX_MANAGED_BY_PNPM;
+
+  const userAgent = readEnvironmentValueCaseInsensitive(env, "npm_config_user_agent") ?? "";
+  const execPath = readEnvironmentValueCaseInsensitive(env, "npm_execpath") ?? "";
   if (/\bbun\//.test(userAgent) || execPath.toLowerCase().includes("bun")) {
     return CODEX_MANAGED_BY_BUN;
   }
-  if (/\bpnpm\//.test(userAgent)) {
-    return CODEX_MANAGED_BY_PNPM;
-  }
   if (command.toLowerCase().includes(".bun\\install\\global")) {
     return CODEX_MANAGED_BY_BUN;
-  }
-  if (packageRoot.toLowerCase().includes("\\.pnpm\\")) {
-    return CODEX_MANAGED_BY_PNPM;
   }
   return CODEX_MANAGED_BY_NPM;
 }
@@ -174,6 +211,7 @@ function withManagedCodexEnvironment(
   env: NodeJS.ProcessEnv,
   packageRoot: string,
   command: string,
+  pnpmOwned: boolean,
 ): NodeJS.ProcessEnv {
   const environment = { ...env };
   for (const key of Object.keys(environment)) {
@@ -182,7 +220,7 @@ function withManagedCodexEnvironment(
     }
   }
   environment[CODEX_MANAGED_PACKAGE_ROOT] = packageRoot;
-  environment[managedPackageMarker(env, command, packageRoot)] = "1";
+  environment[managedPackageMarker(env, command, pnpmOwned)] = "1";
   return environment;
 }
 
@@ -201,6 +239,7 @@ export const resolveCodexAppServerCommand = Effect.fn("resolveCodexAppServerComm
     const resolvedCommand = resolveExecutable(command, platform, effectiveEnvironment) ?? command;
     const architecture = yield* HostProcessArchitecture;
     const available = yield* CodexNativeExecutableAvailability;
+    const detectPnpmOwnership = yield* CodexPnpmOwnershipDetection;
     const native = resolveNativeWindowsCodex(
       resolvedCommand,
       architecture,
@@ -217,6 +256,10 @@ export const resolveCodexAppServerCommand = Effect.fn("resolveCodexAppServerComm
           effectiveEnvironment,
           native.packageRoot,
           resolvedCommand,
+          detectPnpmOwnership(
+            native.packageRoot,
+            NodePath.win32.join(native.packageRoot, "bin", "codex.js"),
+          ),
         ),
         extendEnv: false,
       };

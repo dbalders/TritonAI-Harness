@@ -10,6 +10,7 @@ import { describe, expect } from "vite-plus/test";
 
 import {
   CodexNativeExecutableAvailability,
+  CodexPnpmOwnershipDetection,
   resolveCodexAppServerCommand,
 } from "./CodexAppServerCommand.ts";
 
@@ -24,6 +25,7 @@ function windowsRuntime(
   architecture: NodeJS.Architecture,
   available: (path: string) => boolean,
   hostEnvironment: NodeJS.ProcessEnv = windowsEnvironment,
+  pnpmOwned: (packageRoot: string, entrypoint: string) => boolean = () => false,
 ) {
   return <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     effect.pipe(
@@ -32,6 +34,7 @@ function windowsRuntime(
       Effect.provideService(HostProcessEnvironment, hostEnvironment),
       Effect.provideService(SpawnExecutableResolution, () => command),
       Effect.provideService(CodexNativeExecutableAvailability, available),
+      Effect.provideService(CodexPnpmOwnershipDetection, pnpmOwned),
     );
 }
 
@@ -77,15 +80,26 @@ describe("resolveCodexAppServerCommand", () => {
         shim,
         ["app-server", "--enable", "foo"],
         {
-          env: { npm_config_user_agent: "pnpm/10.0.0 node/v22.22.2 win32 arm64" },
+          env: {},
         },
-      ).pipe(windowsRuntime(shim, "arm64", (candidate) => candidate === native));
+      ).pipe(
+        windowsRuntime(
+          shim,
+          "arm64",
+          (candidate) => candidate === native,
+          windowsEnvironment,
+          (packageRoot, entrypoint) => {
+            expect(packageRoot).toBe("C:\\Tools\\node_modules\\@openai\\codex");
+            expect(entrypoint).toBe("C:\\Tools\\node_modules\\@openai\\codex\\bin\\codex.js");
+            return true;
+          },
+        ),
+      );
 
       expect(resolved.command).toBe(native);
       expect(resolved.args).toEqual(["app-server", "--enable", "foo"]);
       expect(resolved.shell).toBe(false);
       expect(resolved.environment).toEqual({
-        npm_config_user_agent: "pnpm/10.0.0 node/v22.22.2 win32 arm64",
         CODEX_MANAGED_PACKAGE_ROOT: "C:\\Tools\\node_modules\\@openai\\codex",
         CODEX_MANAGED_BY_PNPM: "1",
       });
@@ -100,7 +114,7 @@ describe("resolveCodexAppServerCommand", () => {
         "C:\\Tools\\node_modules\\@openai\\codex\\node_modules\\@openai\\codex-win32-x64\\vendor\\x86_64-pc-windows-msvc\\bin\\codex.exe";
       const hostEnvironment = {
         ...windowsEnvironment,
-        npm_config_user_agent: "pnpm/10.0.0 node/v22.22.2 win32 x64",
+        NPM_CONFIG_USER_AGENT: "bun/1.2.0 node/v22.22.2 win32 x64",
         codex_managed_by_npm: "1",
       };
 
@@ -116,9 +130,9 @@ describe("resolveCodexAppServerCommand", () => {
         PATH: "C:\\Users\\tester\\.agents\\ucsd\\runtime\\codex",
         PATHEXT: ".COM;.EXE;.BAT;.CMD",
         CODEX_HOME: "C:\\Users\\tester\\.codex",
-        npm_config_user_agent: "pnpm/10.0.0 node/v22.22.2 win32 x64",
+        NPM_CONFIG_USER_AGENT: "bun/1.2.0 node/v22.22.2 win32 x64",
         CODEX_MANAGED_PACKAGE_ROOT: "C:\\Tools\\node_modules\\@openai\\codex",
-        CODEX_MANAGED_BY_PNPM: "1",
+        CODEX_MANAGED_BY_BUN: "1",
       });
       expect(resolved.extendEnv).toBe(false);
     }),
