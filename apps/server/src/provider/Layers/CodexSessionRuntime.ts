@@ -1034,7 +1034,7 @@ export const makeCodexSessionRuntime = (
         ChildProcess.make(spawnCommand.command, spawnCommand.args, {
           cwd: options.cwd,
           env: spawnCommand.environment,
-          extendEnv,
+          extendEnv: spawnCommand.extendEnv,
           forceKillAfter: CODEX_APP_SERVER_FORCE_KILL_AFTER,
           shell: spawnCommand.shell,
         }),

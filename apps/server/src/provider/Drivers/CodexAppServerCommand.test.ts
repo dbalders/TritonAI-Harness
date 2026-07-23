@@ -23,12 +23,13 @@ function windowsRuntime(
   command: string,
   architecture: NodeJS.Architecture,
   available: (path: string) => boolean,
+  hostEnvironment: NodeJS.ProcessEnv = windowsEnvironment,
 ) {
   return <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     effect.pipe(
       Effect.provideService(HostProcessPlatform, "win32"),
       Effect.provideService(HostProcessArchitecture, architecture),
-      Effect.provideService(HostProcessEnvironment, windowsEnvironment),
+      Effect.provideService(HostProcessEnvironment, hostEnvironment),
       Effect.provideService(SpawnExecutableResolution, () => command),
       Effect.provideService(CodexNativeExecutableAvailability, available),
     );
@@ -55,11 +56,14 @@ describe("resolveCodexAppServerCommand", () => {
         args: ["app-server"],
         shell: false,
         environment: {
+          PATH: "C:\\Users\\tester\\.agents\\ucsd\\runtime\\codex",
+          PATHEXT: ".COM;.EXE;.BAT;.CMD",
           CODEX_HOME: "C:\\Users\\tester\\.codex",
           CODEX_MANAGED_PACKAGE_ROOT:
             "C:\\Users\\tester\\.agents\\ucsd\\runtime\\codex\\openai-codex-0.144.3\\lib\\node_modules\\@openai\\codex",
           CODEX_MANAGED_BY_NPM: "1",
         },
+        extendEnv: false,
       });
     }),
   );
@@ -85,6 +89,38 @@ describe("resolveCodexAppServerCommand", () => {
         CODEX_MANAGED_PACKAGE_ROOT: "C:\\Tools\\node_modules\\@openai\\codex",
         CODEX_MANAGED_BY_PNPM: "1",
       });
+      expect(resolved.extendEnv).toBe(false);
+    }),
+  );
+
+  effectIt("uses inherited package-manager metadata and removes conflicting markers", () =>
+    Effect.gen(function* () {
+      const shim = "C:\\Tools\\codex.cmd";
+      const native =
+        "C:\\Tools\\node_modules\\@openai\\codex\\node_modules\\@openai\\codex-win32-x64\\vendor\\x86_64-pc-windows-msvc\\bin\\codex.exe";
+      const hostEnvironment = {
+        ...windowsEnvironment,
+        npm_config_user_agent: "pnpm/10.0.0 node/v22.22.2 win32 x64",
+        codex_managed_by_npm: "1",
+      };
+
+      const resolved = yield* resolveCodexAppServerCommand(shim, ["app-server"], {
+        env: {
+          CODEX_HOME: "C:\\Users\\tester\\.codex",
+          CODEX_MANAGED_BY_BUN: "1",
+        },
+        extendEnv: true,
+      }).pipe(windowsRuntime(shim, "x64", (candidate) => candidate === native, hostEnvironment));
+
+      expect(resolved.environment).toEqual({
+        PATH: "C:\\Users\\tester\\.agents\\ucsd\\runtime\\codex",
+        PATHEXT: ".COM;.EXE;.BAT;.CMD",
+        CODEX_HOME: "C:\\Users\\tester\\.codex",
+        npm_config_user_agent: "pnpm/10.0.0 node/v22.22.2 win32 x64",
+        CODEX_MANAGED_PACKAGE_ROOT: "C:\\Tools\\node_modules\\@openai\\codex",
+        CODEX_MANAGED_BY_PNPM: "1",
+      });
+      expect(resolved.extendEnv).toBe(false);
     }),
   );
 
@@ -103,6 +139,7 @@ describe("resolveCodexAppServerCommand", () => {
       expect(resolved.environment.CODEX_MANAGED_PACKAGE_ROOT).toBe(
         "C:\\project\\node_modules\\@openai\\codex",
       );
+      expect(resolved.extendEnv).toBe(false);
     }),
   );
 
@@ -117,6 +154,7 @@ describe("resolveCodexAppServerCommand", () => {
       expect(resolved.command).toContain("codex.cmd");
       expect(resolved.args).toEqual(['^"app-server^"', '^"value^ ^&^ calc^"']);
       expect(resolved.environment).toBe(windowsEnvironment);
+      expect(resolved.extendEnv).toBe(false);
     }),
   );
 
@@ -132,6 +170,7 @@ describe("resolveCodexAppServerCommand", () => {
         args: ["app-server"],
         shell: false,
         environment: windowsEnvironment,
+        extendEnv: false,
       });
     }),
   );
@@ -148,6 +187,7 @@ describe("resolveCodexAppServerCommand", () => {
         args: ["app-server"],
         shell: false,
         environment,
+        extendEnv: false,
       });
     }),
   );

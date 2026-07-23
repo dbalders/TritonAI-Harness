@@ -306,7 +306,7 @@ function withCodexClient<A>(
         ChildProcess.make(spawnCommand.command, spawnCommand.args, {
           cwd: target.cwd,
           env: spawnCommand.environment,
-          extendEnv: true,
+          extendEnv: spawnCommand.extendEnv,
           forceKillAfter: CODEX_APP_SERVER_MANAGEMENT_FORCE_KILL_AFTER,
           shell: spawnCommand.shell,
         }),

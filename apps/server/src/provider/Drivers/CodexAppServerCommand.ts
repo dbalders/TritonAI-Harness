@@ -33,6 +33,7 @@ interface WindowsCodexTarget {
 
 export interface ResolvedCodexAppServerCommand extends ResolvedSpawnCommand {
   readonly environment: NodeJS.ProcessEnv;
+  readonly extendEnv: boolean;
 }
 
 export type CodexNativeExecutableProbe = (filePath: string) => boolean;
@@ -212,11 +213,16 @@ export const resolveCodexAppServerCommand = Effect.fn("resolveCodexAppServerComm
         command: native.command,
         args: [...args],
         shell: false,
-        environment: withManagedCodexEnvironment(options.env, native.packageRoot, resolvedCommand),
+        environment: withManagedCodexEnvironment(
+          effectiveEnvironment,
+          native.packageRoot,
+          resolvedCommand,
+        ),
+        extendEnv: false,
       };
     }
   }
 
   const resolved = yield* resolveSpawnCommand(command, args, options);
-  return { ...resolved, environment: options.env };
+  return { ...resolved, environment: options.env, extendEnv: options.extendEnv ?? false };
 });
