@@ -360,35 +360,48 @@ interface TerminalLaunchContext {
 type PersistentTerminalLaunchContext = Pick<TerminalLaunchContext, "cwd" | "worktreePath">;
 
 const LOCAL_DISPATCH_HANDOFF_TTL_MS = 10 * 60 * 1000;
-let localDispatchHandoff: {
-  threadKey: string;
+const MAX_LOCAL_DISPATCH_HANDOFFS = 32;
+interface LocalDispatchHandoff {
   dispatch: LocalDispatchSnapshot;
   expiresAt: number;
-} | null = null;
+}
+const localDispatchHandoffs = new Map<string, LocalDispatchHandoff>();
 
 function readLocalDispatchHandoff(threadKey: string): LocalDispatchSnapshot | null {
-  if (!localDispatchHandoff || localDispatchHandoff.threadKey !== threadKey) return null;
-  if (localDispatchHandoff.expiresAt <= Date.now()) {
-    localDispatchHandoff = null;
+  const handoff = localDispatchHandoffs.get(threadKey);
+  if (!handoff) return null;
+  if (handoff.expiresAt <= Date.now()) {
+    localDispatchHandoffs.delete(threadKey);
     return null;
   }
-  return localDispatchHandoff.dispatch;
+  return handoff.dispatch;
 }
 
 function writeLocalDispatchHandoff(threadKey: string, dispatch: LocalDispatchSnapshot): void {
-  localDispatchHandoff = {
-    threadKey,
+  const now = Date.now();
+  for (const [key, handoff] of localDispatchHandoffs) {
+    if (handoff.expiresAt <= now) {
+      localDispatchHandoffs.delete(key);
+    }
+  }
+  localDispatchHandoffs.delete(threadKey);
+  localDispatchHandoffs.set(threadKey, {
     dispatch,
-    expiresAt: Date.now() + LOCAL_DISPATCH_HANDOFF_TTL_MS,
-  };
+    expiresAt: now + LOCAL_DISPATCH_HANDOFF_TTL_MS,
+  });
+  while (localDispatchHandoffs.size > MAX_LOCAL_DISPATCH_HANDOFFS) {
+    const oldestKey = localDispatchHandoffs.keys().next().value;
+    if (oldestKey === undefined) break;
+    localDispatchHandoffs.delete(oldestKey);
+  }
 }
 
 function clearLocalDispatchHandoff(threadKey: string, dispatch?: LocalDispatchSnapshot): void {
-  if (!localDispatchHandoff || localDispatchHandoff.threadKey !== threadKey) return;
-  if (dispatch && localDispatchHandoff.dispatch !== dispatch) {
+  const handoff = localDispatchHandoffs.get(threadKey);
+  if (!handoff || (dispatch && handoff.dispatch !== dispatch)) {
     return;
   }
-  localDispatchHandoff = null;
+  localDispatchHandoffs.delete(threadKey);
 }
 
 function useLocalDispatchState(input: {
@@ -436,6 +449,23 @@ function useLocalDispatchState(input: {
     clearLocalDispatchHandoff(input.threadKey, localDispatch);
     setLocalDispatch((current) => (current === localDispatch ? null : current));
   }, [input.threadKey, localDispatch, serverAcknowledgedLocalDispatch]);
+  useEffect(() => {
+    if (!localDispatch) return;
+    const parsedStartedAt = Date.parse(localDispatch.startedAt);
+    const expiresAt =
+      (Number.isNaN(parsedStartedAt) ? Date.now() : parsedStartedAt) +
+      LOCAL_DISPATCH_HANDOFF_TTL_MS;
+    const timeoutId = window.setTimeout(
+      () => {
+        clearLocalDispatchHandoff(input.threadKey, localDispatch);
+        setLocalDispatch((current) => (current === localDispatch ? null : current));
+      },
+      Math.max(0, expiresAt - Date.now()),
+    );
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [input.threadKey, localDispatch]);
   const beginLocalDispatch = useCallback(
     (options?: { preparingWorktree?: boolean }) => {
       const preparingWorktree = Boolean(options?.preparingWorktree);
