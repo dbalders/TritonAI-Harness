@@ -106,16 +106,20 @@
 !ifndef BUILD_UNINSTALLER
 Function .onInstFailed
   SetOutPath "$TEMP"
-  ${if} ${FileExists} "$INSTDIR.old\${APP_EXECUTABLE_FILENAME}"
-    DetailPrint "The ${PRODUCT_NAME} install failed; restoring the previous installation..."
-    RMDir /r "$INSTDIR"
-    ClearErrors
-    Rename "$INSTDIR.old" "$INSTDIR"
-    ${if} ${Errors}
-      DetailPrint "Could not restore the previous installation automatically. Its backup remains at $INSTDIR.old."
-    ${else}
-      DetailPrint "The previous ${PRODUCT_NAME} installation was restored."
-    ${endif}
-  ${endif}
+  # This callback is parsed before electron-builder includes LogicLib.nsh, so
+  # use native NSIS branching instead of ${If}/${FileExists} here.
+  IfFileExists "$INSTDIR.old\${PRODUCT_FILENAME}.exe" 0 restoreComplete
+  DetailPrint "The ${PRODUCT_NAME} install failed; restoring the previous installation..."
+  RMDir /r "$INSTDIR"
+  ClearErrors
+  Rename "$INSTDIR.old" "$INSTDIR"
+  IfErrors 0 restoreSucceeded
+  DetailPrint "Could not restore the previous installation automatically. Its backup remains at $INSTDIR.old."
+  Goto restoreComplete
+
+  restoreSucceeded:
+  DetailPrint "The previous ${PRODUCT_NAME} installation was restored."
+
+  restoreComplete:
 FunctionEnd
 !endif

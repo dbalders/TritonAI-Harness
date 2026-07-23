@@ -609,7 +609,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.include(source, 'Rename "$INSTDIR" "$INSTDIR.old"');
       assert.include(source, 'Rename "$INSTDIR.old" "$INSTDIR"');
       assert.include(source, 'RMDir /r /REBOOTOK "$INSTDIR.old"');
-      assert.include(source, '${FileExists} "$INSTDIR.old\\${APP_EXECUTABLE_FILENAME}"');
+      assert.include(source, 'IfFileExists "$INSTDIR.old\\${PRODUCT_FILENAME}.exe"');
       assert.include(source, "${if} ${isUpdated}");
       assert.include(source, 'RMDir /r "$INSTDIR"');
       assert.notInclude(source, "$PLUGINSDIR\\old-install");
