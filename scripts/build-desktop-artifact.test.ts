@@ -609,7 +609,28 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.include(source, 'Rename "$INSTDIR" "$INSTDIR.old"');
       assert.include(source, 'Rename "$INSTDIR.old" "$INSTDIR"');
       assert.include(source, 'RMDir /r /REBOOTOK "$INSTDIR.old"');
-      assert.include(source, 'IfFileExists "$INSTDIR.old\\${PRODUCT_FILENAME}.exe"');
+      assert.include(source, '!define TRITONAI_APP_EXECUTABLE_FILENAME "${PRODUCT_FILENAME}.exe"');
+      assert.include(
+        source,
+        '!define TRITONAI_INSTALL_COMPLETE_MARKER ".tritonai-install-complete"',
+      );
+      assert.include(source, 'FileOpen $0 "$INSTDIR\\${TRITONAI_INSTALL_COMPLETE_MARKER}" w');
+      assert.include(
+        source,
+        'File /oname=$PLUGINSDIR\\tritonai-upgrade-uninstaller.exe "${UNINSTALLER_OUT_FILE}"',
+      );
+      assert.include(
+        source,
+        'CopyFiles /SILENT "$PLUGINSDIR\\tritonai-upgrade-uninstaller.exe" "$INSTDIR\\${UNINSTALL_FILENAME}"',
+      );
+      assert.include(
+        source,
+        'IfFileExists "$INSTDIR\\${TRITONAI_INSTALL_COMPLETE_MARKER}" restoreComplete 0',
+      );
+      assert.include(
+        source,
+        'IfFileExists "$INSTDIR.old\\${TRITONAI_APP_EXECUTABLE_FILENAME}" 0 restoreComplete',
+      );
       assert.include(source, "${if} ${isUpdated}");
       assert.include(source, 'RMDir /r "$INSTDIR"');
       assert.notInclude(source, "$PLUGINSDIR\\old-install");
