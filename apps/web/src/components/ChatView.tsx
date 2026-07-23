@@ -359,7 +359,53 @@ interface TerminalLaunchContext {
 
 type PersistentTerminalLaunchContext = Pick<TerminalLaunchContext, "cwd" | "worktreePath">;
 
+const LOCAL_DISPATCH_HANDOFF_TTL_MS = 10 * 60 * 1000;
+const MAX_LOCAL_DISPATCH_HANDOFFS = 32;
+interface LocalDispatchHandoff {
+  dispatch: LocalDispatchSnapshot;
+  expiresAt: number;
+}
+const localDispatchHandoffs = new Map<string, LocalDispatchHandoff>();
+
+function readLocalDispatchHandoff(threadKey: string): LocalDispatchSnapshot | null {
+  const handoff = localDispatchHandoffs.get(threadKey);
+  if (!handoff) return null;
+  if (handoff.expiresAt <= Date.now()) {
+    localDispatchHandoffs.delete(threadKey);
+    return null;
+  }
+  return handoff.dispatch;
+}
+
+function writeLocalDispatchHandoff(threadKey: string, dispatch: LocalDispatchSnapshot): void {
+  const now = Date.now();
+  for (const [key, handoff] of localDispatchHandoffs) {
+    if (handoff.expiresAt <= now) {
+      localDispatchHandoffs.delete(key);
+    }
+  }
+  localDispatchHandoffs.delete(threadKey);
+  localDispatchHandoffs.set(threadKey, {
+    dispatch,
+    expiresAt: now + LOCAL_DISPATCH_HANDOFF_TTL_MS,
+  });
+  while (localDispatchHandoffs.size > MAX_LOCAL_DISPATCH_HANDOFFS) {
+    const oldestKey = localDispatchHandoffs.keys().next().value;
+    if (oldestKey === undefined) break;
+    localDispatchHandoffs.delete(oldestKey);
+  }
+}
+
+function clearLocalDispatchHandoff(threadKey: string, dispatch?: LocalDispatchSnapshot): void {
+  const handoff = localDispatchHandoffs.get(threadKey);
+  if (!handoff || (dispatch && handoff.dispatch !== dispatch)) {
+    return;
+  }
+  localDispatchHandoffs.delete(threadKey);
+}
+
 function useLocalDispatchState(input: {
+  threadKey: string;
   activeThread: Thread | undefined;
   activeLatestTurn: Thread["latestTurn"] | null;
   phase: SessionPhase;
@@ -367,11 +413,14 @@ function useLocalDispatchState(input: {
   activePendingUserInput: ApprovalRequestId | null;
   threadError: string | null | undefined;
 }) {
-  const [localDispatch, setLocalDispatch] = useState<LocalDispatchSnapshot | null>(null);
+  const [localDispatch, setLocalDispatch] = useState<LocalDispatchSnapshot | null>(() =>
+    readLocalDispatchHandoff(input.threadKey),
+  );
 
   const resetLocalDispatch = useCallback(() => {
+    clearLocalDispatchHandoff(input.threadKey);
     setLocalDispatch(null);
-  }, []);
+  }, [input.threadKey]);
 
   const serverAcknowledgedLocalDispatch = useMemo(
     () =>
@@ -395,20 +444,43 @@ function useLocalDispatchState(input: {
     ],
   );
   const activeLocalDispatch = serverAcknowledgedLocalDispatch ? null : localDispatch;
+  useEffect(() => {
+    if (!serverAcknowledgedLocalDispatch || !localDispatch) return;
+    clearLocalDispatchHandoff(input.threadKey, localDispatch);
+    setLocalDispatch((current) => (current === localDispatch ? null : current));
+  }, [input.threadKey, localDispatch, serverAcknowledgedLocalDispatch]);
+  useEffect(() => {
+    if (!localDispatch) return;
+    const parsedStartedAt = Date.parse(localDispatch.startedAt);
+    const expiresAt =
+      (Number.isNaN(parsedStartedAt) ? Date.now() : parsedStartedAt) +
+      LOCAL_DISPATCH_HANDOFF_TTL_MS;
+    const timeoutId = window.setTimeout(
+      () => {
+        clearLocalDispatchHandoff(input.threadKey, localDispatch);
+        setLocalDispatch((current) => (current === localDispatch ? null : current));
+      },
+      Math.max(0, expiresAt - Date.now()),
+    );
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [input.threadKey, localDispatch]);
   const beginLocalDispatch = useCallback(
     (options?: { preparingWorktree?: boolean }) => {
       const preparingWorktree = Boolean(options?.preparingWorktree);
       setLocalDispatch((current) => {
         const active = serverAcknowledgedLocalDispatch ? null : current;
-        if (active) {
-          return active.preparingWorktree === preparingWorktree
+        const next = active
+          ? active.preparingWorktree === preparingWorktree
             ? active
-            : { ...active, preparingWorktree };
-        }
-        return createLocalDispatchSnapshot(input.activeThread, options);
+            : { ...active, preparingWorktree }
+          : createLocalDispatchSnapshot(input.activeThread, options);
+        writeLocalDispatchHandoff(input.threadKey, next);
+        return next;
       });
     },
-    [input.activeThread, serverAcknowledgedLocalDispatch],
+    [input.activeThread, input.threadKey, serverAcknowledgedLocalDispatch],
   );
 
   return {
@@ -1804,6 +1876,7 @@ function ChatViewContent(props: ChatViewProps) {
     isPreparingWorktree,
     isSendBusy,
   } = useLocalDispatchState({
+    threadKey: routeThreadKey,
     activeThread,
     activeLatestTurn,
     phase,
@@ -3553,9 +3626,8 @@ function ChatViewContent(props: ChatViewProps) {
       }
       return [];
     });
-    resetLocalDispatch();
     setExpandedImage(null);
-  }, [draftId, resetLocalDispatch, threadId]);
+  }, [draftId, threadId]);
 
   const closeExpandedImage = useCallback(() => {
     setExpandedImage(null);
@@ -5362,9 +5434,10 @@ function ChatViewContent(props: ChatViewProps) {
 }
 
 export default function ChatView(props: ChatViewProps) {
+  const chatViewKey = scopedThreadKey(scopeThreadRef(props.environmentId, props.threadId));
   return (
     <DiffWorkerPoolProvider>
-      <ChatViewContent {...props} />
+      <ChatViewContent key={chatViewKey} {...props} />
     </DiffWorkerPoolProvider>
   );
 }

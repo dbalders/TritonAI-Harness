@@ -461,6 +461,24 @@ export function hasServerAcknowledgedLocalDispatch(input: {
     return false;
   }
 
+  // A new or reconnected provider session can become ready while it is still
+  // preparing the submitted turn. Session lifecycle churn alone must not
+  // clear the optimistic working timer before that turn is projected.
+  const sessionIsTerminal =
+    session?.status === "interrupted" ||
+    session?.status === "stopped" ||
+    session?.status === "error";
+  if (
+    !latestTurnChanged &&
+    !sessionIsTerminal &&
+    !input.hasPendingApproval &&
+    !input.hasPendingUserInput &&
+    !input.threadError &&
+    (input.phase === "connecting" || input.phase === "ready")
+  ) {
+    return false;
+  }
+
   return (
     latestTurnChanged ||
     input.localDispatch.sessionStatus !== (session?.status ?? null) ||
