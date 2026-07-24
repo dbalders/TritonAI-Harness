@@ -17,7 +17,6 @@ import {
   ServerSetProviderSkillEnabledInput,
 } from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
-import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
@@ -34,6 +33,7 @@ import { buildCodexInitializeParams } from "./Layers/CodexProvider.ts";
 import { expandHomePath } from "../pathExpansion.ts";
 import { materializeCodexShadowHome, resolveCodexHomeLayout } from "./Drivers/CodexHomeLayout.ts";
 import { makeTritonAiCodexConfigArgs } from "./Drivers/TritonAiCodexConfig.ts";
+import { resolveCodexAppServerCommand } from "./Drivers/CodexAppServerCommand.ts";
 import { mergeProviderInstanceEnvironment } from "./ProviderInstanceEnvironment.ts";
 import {
   discardProviderSkillInstallRollback,
@@ -293,7 +293,7 @@ function withCodexClient<A>(
       ...target.environment,
       CODEX_HOME: resolvedHomePath,
     };
-    const spawnCommand = yield* resolveSpawnCommand(
+    const spawnCommand = yield* resolveCodexAppServerCommand(
       target.binaryPath,
       ["app-server", ...makeTritonAiCodexConfigArgs(environment)],
       {
@@ -305,8 +305,8 @@ function withCodexClient<A>(
       .spawn(
         ChildProcess.make(spawnCommand.command, spawnCommand.args, {
           cwd: target.cwd,
-          env: environment,
-          extendEnv: true,
+          env: spawnCommand.environment,
+          extendEnv: spawnCommand.extendEnv,
           forceKillAfter: CODEX_APP_SERVER_MANAGEMENT_FORCE_KILL_AFTER,
           shell: spawnCommand.shell,
         }),
