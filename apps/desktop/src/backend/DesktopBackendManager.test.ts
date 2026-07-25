@@ -281,6 +281,52 @@ describe("DesktopBackendManager", () => {
     ),
   );
 
+  it.effect("allows an 82-second Windows cold start before reporting readiness", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        let requestCount = 0;
+        let readyCount = 0;
+        const firstRequest = yield* Deferred.make<void>();
+        const ready = yield* Deferred.make<void>();
+
+        const spawnerLayer = Layer.succeed(
+          ChildProcessSpawner.ChildProcessSpawner,
+          ChildProcessSpawner.make(() =>
+            Effect.succeed(
+              makeProcess({
+                exitCode: Deferred.await(ready).pipe(Effect.as(ChildProcessSpawner.ExitCode(0))),
+              }),
+            ),
+          ),
+        );
+
+        const instance = yield* makeTestInstance({
+          spawnerLayer,
+          httpClientLayer: httpClientLayer((request) =>
+            Effect.gen(function* () {
+              requestCount += 1;
+              yield* Deferred.succeed(firstRequest, void 0);
+              return responseForRequest(request, requestCount > 820 ? 200 : 503);
+            }),
+          ),
+          onReady: Effect.sync(() => {
+            readyCount += 1;
+          }).pipe(Effect.andThen(Deferred.succeed(ready, void 0)), Effect.asVoid),
+        });
+
+        yield* instance.start;
+        yield* Deferred.await(firstRequest);
+
+        assert.equal(readyCount, 0);
+        yield* TestClock.adjust(Duration.seconds(82));
+        yield* Effect.yieldNow;
+
+        assert.equal(readyCount, 1);
+        assert.equal(requestCount, 821);
+      }).pipe(Effect.provide(TestClock.layer())),
+    ),
+  );
+
   it.effect("starts the configured backend and closes the scoped process on stop", () =>
     Effect.scoped(
       Effect.gen(function* () {
