@@ -36,6 +36,10 @@ vi.mock("./components/SlowRpcRequestToastCoordinator", () => ({
   SlowRpcRequestToastCoordinator: () => null,
 }));
 
+vi.mock("./components/TritonAiUsageWarning", () => ({
+  TritonAiUsageWarning: () => null,
+}));
+
 vi.mock("./components/ui/toast", () => ({
   AnchoredToastProvider: ({ children }: { children: React.ReactNode }) => children,
   ToastProvider: ({ children }: { children: React.ReactNode }) => children,
