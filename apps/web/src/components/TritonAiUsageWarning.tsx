@@ -5,13 +5,15 @@ import { usePrimaryEnvironment } from "../state/environments";
 import { useEnvironmentQuery } from "../state/query";
 import { serverEnvironment } from "../state/server";
 import { stackedThreadToast, toastManager } from "./ui/toast";
-import { observeUsageWarning, type UsageWarningState } from "./TritonAiUsageWarning.logic";
+import { UsageWarningTracker } from "./TritonAiUsageWarning.logic";
 
 const REMAINING_PERCENT_FORMAT = new Intl.NumberFormat(undefined, {
   maximumFractionDigits: 1,
 });
 
 type ToastId = ReturnType<typeof toastManager.add>;
+
+const usageWarningTracker = new UsageWarningTracker();
 
 export function TritonAiUsageWarning() {
   const navigate = useNavigate();
@@ -20,7 +22,6 @@ export function TritonAiUsageWarning() {
   const { data } = useEnvironmentQuery(
     environmentId === null ? null : serverEnvironment.tritonAiUsage({ environmentId, input: {} }),
   );
-  const stateRef = useRef<UsageWarningState | null>(null);
   const activeToastRef = useRef<ToastId | null>(null);
 
   useEffect(() => {
@@ -37,8 +38,7 @@ export function TritonAiUsageWarning() {
       return;
     }
 
-    const observation = observeUsageWarning(stateRef.current, environmentId, data);
-    stateRef.current = observation.state;
+    const observation = usageWarningTracker.observe(environmentId, data);
     if (observation.warning === null) {
       if (observation.activeThreshold === null && activeToastRef.current !== null) {
         toastManager.close(activeToastRef.current);

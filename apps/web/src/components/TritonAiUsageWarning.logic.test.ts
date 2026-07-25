@@ -1,7 +1,11 @@
 import type { ServerTritonAiUsageSnapshot } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 
-import { observeUsageWarning, type UsageWarningState } from "./TritonAiUsageWarning.logic";
+import {
+  observeUsageWarning,
+  UsageWarningTracker,
+  type UsageWarningState,
+} from "./TritonAiUsageWarning.logic";
 
 function usage(
   spend: number,
@@ -93,6 +97,13 @@ describe("observeUsageWarning", () => {
 
     const secondEnvironment = observeUsageWarning(firstEnvironment.state, "wsl", usage(85));
     expect(secondEnvironment.warning?.threshold).toBe(20);
+  });
+
+  it("retains threshold history when the observer remounts", () => {
+    const tracker = new UsageWarningTracker();
+
+    expect(tracker.observe("primary", usage(85)).warning?.threshold).toBe(20);
+    expect(tracker.observe("primary", usage(85)).warning).toBeNull();
   });
 
   it("ignores budgets without a meaningful percentage", () => {

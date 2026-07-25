@@ -20,6 +20,26 @@ export interface UsageWarningObservation {
   readonly warning: UsageWarning | null;
 }
 
+export class UsageWarningTracker {
+  readonly #stateByEnvironment = new Map<string, UsageWarningState>();
+
+  observe(environmentId: string, usage: ServerTritonAiUsageSnapshot): UsageWarningObservation {
+    const observation = observeUsageWarning(
+      this.#stateByEnvironment.get(environmentId) ?? null,
+      environmentId,
+      usage,
+    );
+
+    if (observation.state === null) {
+      this.#stateByEnvironment.delete(environmentId);
+    } else {
+      this.#stateByEnvironment.set(environmentId, observation.state);
+    }
+
+    return observation;
+  }
+}
+
 function usageCycleKey(
   environmentId: string,
   usage: ServerTritonAiUsageSnapshot,
