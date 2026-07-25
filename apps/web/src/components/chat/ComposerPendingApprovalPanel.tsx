@@ -39,6 +39,7 @@ export const ComposerPendingApprovalPanel = memo(function ComposerPendingApprova
             aria-label={detailLabel}
             className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words font-mono text-xs leading-relaxed text-foreground"
             data-approval-detail="complete"
+            tabIndex={0}
           >
             {approval.detail}
           </pre>
