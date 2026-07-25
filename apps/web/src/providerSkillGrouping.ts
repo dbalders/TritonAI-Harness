@@ -20,6 +20,19 @@ export interface ProviderCatalogSkillItem {
   readonly managed: boolean;
 }
 
+export function dedupeProviderSkillRows(
+  rows: ReadonlyArray<ProviderSkillRow>,
+): ReadonlyArray<ProviderSkillRow> {
+  const rowByPath = new Map<string, ProviderSkillRow>();
+  for (const row of rows) {
+    const existing = rowByPath.get(row.skill.path);
+    if (!existing || (!existing.skill.enabled && row.skill.enabled)) {
+      rowByPath.set(row.skill.path, row);
+    }
+  }
+  return [...rowByPath.values()];
+}
+
 export function groupProviderSkills(input: {
   readonly entries: ReadonlyArray<ServerProviderSkillCatalogEntry>;
   readonly rows: ReadonlyArray<ProviderSkillRow>;
