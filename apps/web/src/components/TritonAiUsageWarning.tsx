@@ -40,6 +40,10 @@ export function TritonAiUsageWarning() {
     const observation = observeUsageWarning(stateRef.current, environmentId, data);
     stateRef.current = observation.state;
     if (observation.warning === null) {
+      if (observation.activeThreshold === null && activeToastRef.current !== null) {
+        toastManager.close(activeToastRef.current);
+        activeToastRef.current = null;
+      }
       return;
     }
 

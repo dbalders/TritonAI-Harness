@@ -16,6 +16,7 @@ export interface UsageWarning {
 
 export interface UsageWarningObservation {
   readonly state: UsageWarningState | null;
+  readonly activeThreshold: UsageWarningThreshold | null;
   readonly warning: UsageWarning | null;
 }
 
@@ -40,7 +41,7 @@ export function observeUsageWarning(
   usage: ServerTritonAiUsageSnapshot,
 ): UsageWarningObservation {
   if (usage.budget.kind !== "limited" || usage.budget.maxBudget <= 0) {
-    return { state: null, warning: null };
+    return { state: null, activeThreshold: null, warning: null };
   }
 
   const maxBudget = usage.budget.maxBudget;
@@ -50,6 +51,8 @@ export function observeUsageWarning(
   let warnedAt20Percent = sameCycle ? previous.warnedAt20Percent : false;
   let warnedAt10Percent = sameCycle ? previous.warnedAt10Percent : false;
   const remainingPercent = Math.max(0, 100 - (usage.spend / maxBudget) * 100);
+  const activeThreshold: UsageWarningThreshold | null =
+    remainingPercent <= 10 ? 10 : remainingPercent <= 20 ? 20 : null;
   let threshold: UsageWarningThreshold | null = null;
 
   if (remainingPercent <= 10 && !warnedAt10Percent) {
@@ -68,6 +71,7 @@ export function observeUsageWarning(
       warnedAt20Percent,
       warnedAt10Percent,
     },
+    activeThreshold,
     warning: threshold === null ? null : { threshold, remainingPercent },
   };
 }
