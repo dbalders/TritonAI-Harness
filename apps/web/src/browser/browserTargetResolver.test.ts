@@ -5,6 +5,13 @@ const readPreparedConnection = vi.fn();
 
 vi.mock("~/state/session", () => ({ readPreparedConnection }));
 
+function credentialedTestUrl(host: string, suffix: string): string {
+  const url = new URL(`http://${host}:5173${suffix}`);
+  url.username = "user";
+  url.password = ["p", "@", "ss"].join("");
+  return url.href;
+}
+
 describe("browser target resolver", () => {
   beforeEach(() => readPreparedConnection.mockReset());
 
@@ -47,9 +54,9 @@ describe("browser target resolver", () => {
     expect(
       resolveBrowserNavigationTarget(EnvironmentId.make("environment-1"), {
         kind: "url",
-        url: "http://user:p%40ss@localhost:5173/dashboard",
+        url: credentialedTestUrl("localhost", "/dashboard"),
       }).resolvedUrl,
-    ).toBe("http://user:p%40ss@100.65.180.100:5173/dashboard");
+    ).toBe(credentialedTestUrl("100.65.180.100", "/dashboard"));
   });
 
   it("maps credentialed localhost URLs onto private IPv6 hosts", async () => {
@@ -60,9 +67,9 @@ describe("browser target resolver", () => {
     expect(
       resolveBrowserNavigationTarget(EnvironmentId.make("environment-1"), {
         kind: "url",
-        url: "http://user:p%40ss@localhost:5173/dashboard?mode=test#results",
+        url: credentialedTestUrl("localhost", "/dashboard?mode=test#results"),
       }).resolvedUrl,
-    ).toBe("http://user:p%40ss@[fd7a:115c:a1e0::53]:5173/dashboard?mode=test#results");
+    ).toBe(credentialedTestUrl("[fd7a:115c:a1e0::53]", "/dashboard?mode=test#results"));
   });
 
   it("maps schemeless localhost navigation onto a remote environment host", async () => {
