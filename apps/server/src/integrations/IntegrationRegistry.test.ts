@@ -517,6 +517,92 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
+  it("forwards write approval and preserves an admitted write receipt through cancellation", async () => {
+    const root = await NodeFSP.mkdtemp(
+      NodePath.join(NodeOS.tmpdir(), "tritonai-write-commit-admission-"),
+    );
+    const manifest: IntegrationManifest = {
+      ...fixtureManifest,
+      id: "test-write-commit",
+      name: "Test Write Commit",
+      provider: "test-write-commit-provider",
+      capabilities: [
+        {
+          id: "fixture.write",
+          displayName: "Write fixture",
+          description: "Write fixture records.",
+          access: "default",
+        },
+      ],
+      tools: [
+        {
+          name: "test.fixture.write",
+          displayName: "Write fixture",
+          description: "Write one fixture record.",
+          capabilities: ["fixture.write"],
+          effect: "write",
+        },
+      ],
+      skills: [],
+    };
+    let markCommitAdmitted!: () => void;
+    const commitAdmitted = new Promise<void>((resolve) => {
+      markCommitAdmitted = resolve;
+    });
+    let finishWrite!: () => void;
+    const writeCanFinish = new Promise<void>((resolve) => {
+      finishWrite = resolve;
+    });
+    const implementation: IntegrationProvider = {
+      id: "test-write-commit-provider",
+      tools: [
+        {
+          name: "test.fixture.write",
+          description: "Write one fixture record.",
+          input: EmptyIntegrationToolInput,
+          readOnly: false,
+          openWorld: false,
+        },
+      ],
+      status: async () => ({
+        state: "connected",
+        accountLabel: "Fixture user",
+        grantedCapabilities: ["fixture.write"],
+        message: null,
+      }),
+      invoke: async (_toolName, _input, context) => {
+        expect(context?.writeApproved).toBe(true);
+        expect(context?.beginCommit).toBeTypeOf("function");
+        const commitSignal = await context!.beginCommit!();
+        markCommitAdmitted();
+        await writeCanFinish;
+        expect(commitSignal.aborted).toBe(false);
+        return { status: "written", id: "receipt-1" };
+      },
+    };
+    const registry = new RegistryRuntime(root, [packaged(manifest, implementation)]);
+    const controller = new AbortController();
+    try {
+      await registry.install(manifest.id);
+      const invocation = registry.invokeTool(
+        "test.fixture.write",
+        {},
+        {
+          signal: controller.signal,
+          writeApproved: true,
+        },
+      );
+      await commitAdmitted;
+      controller.abort();
+      finishWrite();
+      await expect(invocation).resolves.toEqual({ status: "written", id: "receipt-1" });
+    } finally {
+      finishWrite();
+      await registry.close();
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps capability revocation active when disable queues behind installation", async () => {
     const root = await NodeFSP.mkdtemp(
       NodePath.join(NodeOS.tmpdir(), "tritonai-install-capability-disable-"),
@@ -908,6 +994,26 @@ describe("IntegrationRegistry lifecycle", () => {
       ]);
       await noPollRegistry.install(fixtureManifest.id);
       await expect(noPollRegistry.connect(fixtureManifest.id)).rejects.toMatchObject({
+        code: "operation_failed",
+        message: expect.stringContaining("authorization could not start"),
+      });
+
+      const browserWithoutPoll: IntegrationProvider = {
+        ...deviceWithoutPoll,
+        connect: async () => ({
+          kind: "authorization_url",
+          flowId: "browser-flow",
+          authorizationUrl: "https://fixture.invalid/authorize",
+          message: "Continue in the system browser.",
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+          intervalSeconds: 1,
+        }),
+      };
+      const browserNoPollRegistry = new RegistryRuntime(NodePath.join(root, "browser-no-poll"), [
+        packaged(fixtureManifest, browserWithoutPoll),
+      ]);
+      await browserNoPollRegistry.install(fixtureManifest.id);
+      await expect(browserNoPollRegistry.connect(fixtureManifest.id)).rejects.toMatchObject({
         code: "operation_failed",
         message: expect.stringContaining("authorization could not start"),
       });

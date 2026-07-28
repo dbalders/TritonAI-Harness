@@ -34,6 +34,8 @@ import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Switch } from "../ui/switch";
 import { SettingsPageContainer, SettingsSection } from "./settingsLayout";
 import {
+  integrationConnectResultNeedsPolling,
+  integrationFlowCanRetryAfterPollError,
   integrationFlowIsActive,
   scheduleIntegrationFlow,
   type ScheduledIntegrationFlow,
@@ -171,7 +173,7 @@ type PollIntegrationFlow = (
 
 type ActiveIntegrationFlow =
   | ScheduledIntegrationFlow
-  | Exclude<IntegrationConnectResult, { readonly kind: "device_code" }>;
+  | Exclude<IntegrationConnectResult, { readonly kind: "device_code" | "authorization_url" }>;
 
 const PANEL_ERROR = "__panel";
 
@@ -227,7 +229,7 @@ function assertNever(value: never): never {
   throw new Error(`Unsupported integration authorization flow: ${String(value)}`);
 }
 
-function IntegrationAuthorizationFlow({
+export function IntegrationAuthorizationFlow({
   integrationName,
   flow,
   busy,
@@ -271,6 +273,24 @@ function IntegrationAuthorizationFlow({
               Open sign-in
             </Button>
           </div>
+        </div>
+      );
+    case "authorization_url":
+      return (
+        <div
+          className="mt-2 rounded-xl border border-primary/30 bg-primary/5 p-4"
+          role="status"
+          aria-live="polite"
+        >
+          <p className="text-sm font-semibold">Finish signing in to {integrationName}</p>
+          <p className="mt-1 text-xs text-muted-foreground">{flow.message}</p>
+          <Button
+            className="mt-3"
+            size="sm"
+            render={<a href={flow.authorizationUrl} target="_blank" rel="noreferrer" />}
+          >
+            Open sign-in
+          </Button>
         </div>
       );
     case "api_key":
@@ -837,7 +857,7 @@ export function PluginsSettingsPanel() {
         )
           return;
         setErrors((current) => ({ ...current, [id]: errorMessage(cause) }));
-        if (integrationFlowIsActive(flow, Date.now())) {
+        if (integrationFlowCanRetryAfterPollError(flow, Date.now())) {
           setFlows((current) =>
             updateIntegrationFlowIfCurrent(current, id, flow.flowId, scheduleIntegrationFlow(flow)),
           );
@@ -898,7 +918,7 @@ export function PluginsSettingsPanel() {
             setFlows((current) =>
               new Map(current).set(
                 integration.id,
-                flow.kind === "device_code" ? scheduleIntegrationFlow(flow) : flow,
+                integrationConnectResultNeedsPolling(flow) ? scheduleIntegrationFlow(flow) : flow,
               ),
             );
           }
@@ -1053,7 +1073,7 @@ export function PluginsSettingsPanel() {
             setFlows((current) =>
               new Map(current).set(
                 integration.id,
-                flow.kind === "device_code" ? scheduleIntegrationFlow(flow) : flow,
+                integrationConnectResultNeedsPolling(flow) ? scheduleIntegrationFlow(flow) : flow,
               ),
             );
           }
@@ -1080,7 +1100,7 @@ export function PluginsSettingsPanel() {
         {connectionAnnouncement}
       </p>
       {[...flows].map(([id, flow]) =>
-        flow.kind === "device_code" ? (
+        flow.kind === "device_code" || flow.kind === "authorization_url" ? (
           <IntegrationFlowPoller key={`${id}:${flow.flowId}`} id={id} flow={flow} poll={pollFlow} />
         ) : null,
       )}

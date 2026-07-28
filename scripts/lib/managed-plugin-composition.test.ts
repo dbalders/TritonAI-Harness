@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { finalizeManagedPluginProof } from "./finalize-managed-plugin-proof.ts";
 import {
+  assertManagedPluginBuildConfiguration,
   managedPluginProofFileName,
   managedPluginProofInputFileName,
   readManagedPluginComposition,
@@ -22,6 +23,60 @@ afterEach(() => {
 });
 
 describe("managed plugin release composition", () => {
+  it("accepts Google Workspace only as a statically named, strict provider package", () => {
+    const google = readManagedPluginComposition(makeCompositionFixture("google-workspace"));
+    expect(google.packages).toMatchObject([
+      {
+        id: "google-workspace",
+        name: "@tritonai/plugin-google-workspace",
+        version: "1.0.1",
+      },
+    ]);
+  });
+
+  it("requires only the public provider identifiers for each selected production package", () => {
+    const base = readManagedPluginComposition(makeCompositionFixture());
+    expect(() =>
+      assertManagedPluginBuildConfiguration(base, {
+        TRITONAI_MICROSOFT_GRAPH_CLIENT_ID: "11111111-1111-4111-8111-111111111111",
+        TRITONAI_MICROSOFT_GRAPH_TENANT_ID: "22222222-2222-4222-8222-222222222222",
+      }),
+    ).not.toThrow();
+    expect(() => assertManagedPluginBuildConfiguration(base, {})).toThrow(
+      /TRITONAI_MICROSOFT_GRAPH_CLIENT_ID/u,
+    );
+
+    const google = {
+      ...base,
+      packages: [
+        {
+          ...base.packages[0]!,
+          id: "google-workspace",
+          name: "@tritonai/plugin-google-workspace",
+        },
+      ],
+    };
+    expect(() =>
+      assertManagedPluginBuildConfiguration(google, {
+        TRITONAI_GOOGLE_WORKSPACE_CLIENT_ID:
+          "123456789012-syntheticdesktopclient1234567890.apps.googleusercontent.com",
+        TRITONAI_GOOGLE_WORKSPACE_CLIENT_SECRET: "fixture-desktop-client-credential",
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertManagedPluginBuildConfiguration(google, {
+        TRITONAI_GOOGLE_WORKSPACE_CLIENT_ID: "not-a-client",
+      }),
+    ).toThrow(/TRITONAI_GOOGLE_WORKSPACE_CLIENT_ID/u);
+    expect(() =>
+      assertManagedPluginBuildConfiguration(google, {
+        TRITONAI_GOOGLE_WORKSPACE_CLIENT_ID:
+          "123456789012-syntheticdesktopclient1234567890.apps.googleusercontent.com",
+        TRITONAI_GOOGLE_WORKSPACE_CLIENT_SECRET: "invalid secret",
+      }),
+    ).toThrow(/TRITONAI_GOOGLE_WORKSPACE_CLIENT_SECRET/u);
+  });
+
   it("snapshots one strict current contract and rejects compatibility ranges", () => {
     const sourceRoot = makeCompositionFixture();
     const composition = readManagedPluginComposition(sourceRoot);
@@ -135,9 +190,12 @@ function makeTemporaryDirectory(): string {
   return directory;
 }
 
-function makeCompositionFixture(): string {
+function makeCompositionFixture(
+  pluginId: "microsoft-365" | "google-workspace" = "microsoft-365",
+): string {
   const sourceRoot = makeTemporaryDirectory();
-  const packageRoot = NodePath.join(sourceRoot, "packages", "microsoft-365");
+  const packageRoot = NodePath.join(sourceRoot, "packages", pluginId);
+  const google = pluginId === "google-workspace";
   const files = new Map<string, string>([
     [
       ".tritonai-plugin/plugin.json",
@@ -145,11 +203,13 @@ function makeCompositionFixture(): string {
         apiVersion: "tritonai.harness/v2",
         kind: "IntegrationPlugin",
         manifestVersion: 2,
-        id: "microsoft-365",
-        name: "Microsoft 365",
-        description: "Use reviewed Microsoft 365 tools.",
+        id: pluginId,
+        name: google ? "Google Workspace" : "Microsoft 365",
+        description: google
+          ? "Use reviewed Google Workspace tools."
+          : "Use reviewed Microsoft 365 tools.",
         version: "1.0.1",
-        provider: "microsoft-graph",
+        provider: google ? "google-workspace" : "microsoft-graph",
         capabilities: [
           {
             id: "mail.read",
@@ -160,7 +220,7 @@ function makeCompositionFixture(): string {
         ],
         tools: [
           {
-            name: "microsoft365.mail.search",
+            name: google ? "googleworkspace.mail.search" : "microsoft365.mail.search",
             displayName: "Search mail",
             description: "Search mail metadata.",
             capabilities: ["mail.read"],
@@ -169,17 +229,24 @@ function makeCompositionFixture(): string {
         ],
         skills: [
           {
-            name: "outlook-mail",
-            description: "Search Outlook mail.",
+            name: google ? "gmail" : "outlook-mail",
+            description: google ? "Search Gmail." : "Search Outlook mail.",
             capabilities: ["mail.read"],
           },
         ],
       }),
     ],
-    ["dist/index.js", "export const provider = 'microsoft-graph';\n"],
+    [
+      "dist/index.js",
+      `export const provider = '${google ? "google-workspace" : "microsoft-graph"}';\n`,
+    ],
     [
       "package.json",
-      JSON.stringify({ name: "@tritonai/plugin-microsoft-365", version: "1.0.1", type: "module" }),
+      JSON.stringify({
+        name: `@tritonai/plugin-${pluginId}`,
+        version: "1.0.1",
+        type: "module",
+      }),
     ],
   ]);
   for (const [relativePath, contents] of files) {
@@ -214,8 +281,8 @@ function makeCompositionFixture(): string {
       },
       packages: [
         {
-          id: "microsoft-365",
-          name: "@tritonai/plugin-microsoft-365",
+          id: pluginId,
+          name: `@tritonai/plugin-${pluginId}`,
           version: "1.0.1",
           digest: digest.digest("hex"),
           files: described,

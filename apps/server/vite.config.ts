@@ -53,6 +53,12 @@ export default mergeConfig(
         __TRITONAI_BUILD_MICROSOFT_GRAPH_TENANT_ID__: JSON.stringify(
           repoEnv.TRITONAI_MICROSOFT_GRAPH_TENANT_ID?.trim() ?? "",
         ),
+        __TRITONAI_BUILD_GOOGLE_WORKSPACE_CLIENT_ID__: JSON.stringify(
+          repoEnv.TRITONAI_GOOGLE_WORKSPACE_CLIENT_ID?.trim() ?? "",
+        ),
+        __TRITONAI_BUILD_GOOGLE_WORKSPACE_CLIENT_SECRET__: JSON.stringify(
+          repoEnv.TRITONAI_GOOGLE_WORKSPACE_CLIENT_SECRET?.trim() ?? "",
+        ),
         __T3CODE_BUILD_RELAY_URL__: JSON.stringify(repoEnv.T3CODE_RELAY_URL?.trim() ?? ""),
         __T3CODE_BUILD_CLERK_PUBLISHABLE_KEY__: JSON.stringify(
           repoEnv.T3CODE_CLERK_PUBLISHABLE_KEY?.trim() ?? "",

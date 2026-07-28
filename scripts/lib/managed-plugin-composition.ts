@@ -12,7 +12,7 @@ export const PRODUCTION_PLUGIN_SOURCE_ENV = "TRITONAI_PLUGIN_COMPOSITION_SOURCE"
 
 const CANONICAL_PLUGIN_REPOSITORY = "https://github.com/dbalders/TritonAI-Plugins.git";
 const MANAGED_PLUGIN_SOURCE_MANIFEST_FILE = "manifest.json";
-const SUPPORTED_PRODUCTION_PLUGIN_IDS = new Set(["microsoft-365"]);
+const SUPPORTED_PRODUCTION_PLUGIN_IDS = new Set(["google-workspace", "microsoft-365"]);
 const COMMIT = /^[a-f0-9]{40}$/u;
 const SHA256 = /^[a-f0-9]{64}$/u;
 const SAFE_REF = /^refs\/(?:heads|tags)\/[A-Za-z0-9][A-Za-z0-9._/-]{0,180}$/u;
@@ -356,16 +356,31 @@ export function assertManagedPluginBuildConfiguration(
   composition: ManagedPluginComposition,
   env: Readonly<Record<string, string | undefined>>,
 ): void {
-  if (!composition.packages.some(({ id }) => id === "microsoft-365")) return;
-  const entraIdentifier =
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
-  for (const name of [
-    "TRITONAI_MICROSOFT_GRAPH_CLIENT_ID",
-    "TRITONAI_MICROSOFT_GRAPH_TENANT_ID",
-  ] as const) {
-    if (!entraIdentifier.test(env[name]?.trim() ?? "")) {
+  if (composition.packages.some(({ id }) => id === "microsoft-365")) {
+    const entraIdentifier =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+    for (const name of [
+      "TRITONAI_MICROSOFT_GRAPH_CLIENT_ID",
+      "TRITONAI_MICROSOFT_GRAPH_TENANT_ID",
+    ] as const) {
+      if (!entraIdentifier.test(env[name]?.trim() ?? "")) {
+        throw new Error(
+          `${name} must be a valid Entra identifier for a Microsoft 365 production composition.`,
+        );
+      }
+    }
+  }
+  if (composition.packages.some(({ id }) => id === "google-workspace")) {
+    const clientId = env.TRITONAI_GOOGLE_WORKSPACE_CLIENT_ID?.trim() ?? "";
+    if (!/^\d{6,30}-[a-z0-9]{8,128}\.apps\.googleusercontent\.com$/u.test(clientId)) {
       throw new Error(
-        `${name} must be a valid Entra identifier for a Microsoft 365 production composition.`,
+        "TRITONAI_GOOGLE_WORKSPACE_CLIENT_ID must be a valid public desktop client ID for a Google Workspace production composition.",
+      );
+    }
+    const clientSecret = env.TRITONAI_GOOGLE_WORKSPACE_CLIENT_SECRET?.trim() ?? "";
+    if (!/^[A-Za-z0-9_-]{16,256}$/u.test(clientSecret)) {
+      throw new Error(
+        "TRITONAI_GOOGLE_WORKSPACE_CLIENT_SECRET must be a valid managed desktop client credential for a Google Workspace production composition.",
       );
     }
   }

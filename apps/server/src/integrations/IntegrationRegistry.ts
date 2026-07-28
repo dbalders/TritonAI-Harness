@@ -57,6 +57,11 @@ export interface IntegrationInvocationContext {
   readonly signal: AbortSignal;
   /** Set only by a trusted Harness adapter after crossing its task-approval boundary. */
   readonly writeApproved?: boolean;
+  /**
+   * Present only for a write invocation. Providers must await this immediately before their
+   * narrow external mutation and use the returned signal for every fallible commit-tail step.
+   */
+  beginCommit?(): Promise<AbortSignal>;
 }
 
 export interface IntegrationLifecycleContext extends IntegrationInvocationContext {
@@ -2441,9 +2446,12 @@ export class RegistryRuntime {
                 onExcessProperty: "error",
               },
             );
-            if (decoded.kind === "device_code" && !hasPollingLifecycle(provider)) {
+            if (
+              (decoded.kind === "device_code" || decoded.kind === "authorization_url") &&
+              !hasPollingLifecycle(provider)
+            ) {
               throw new Error(
-                `Provider ${provider.id} returned a device-code flow without implementing poll.`,
+                `Provider ${provider.id} returned a polling authorization flow without implementing poll.`,
               );
             }
             return decoded;
@@ -2863,6 +2871,7 @@ export class RegistryRuntime {
       active.add(controller);
       this.#activeInvocationToolNames.set(controller, name);
       this.#activeInvocations.set(manifest.id, active);
+      let writeCommitAdmitted = false;
       try {
         await this.#prepareProvider(provider, signal);
         if (this.#activeProviderLifecycleWork.has(provider)) {
@@ -2913,7 +2922,7 @@ export class RegistryRuntime {
             `Input for integration tool ${name} did not match its declared schema.`,
           );
         }
-        const invocationWork = Promise.resolve().then(() => {
+        const invokeProvider = (providerContext?: IntegrationLifecycleContext) => {
           if (this.#faultedProviders.has(provider)) throw new ProviderFaultedError();
           if (
             signal.aborted ||
@@ -2923,36 +2932,61 @@ export class RegistryRuntime {
             if (context?.signal.aborted) throw cancellationError(context.signal);
             throw operationError("disabled", `${manifest.name} access is being revoked.`);
           }
-          return provider.invoke(name, decodedInput, { signal });
-        });
+          return provider.invoke(
+            name,
+            decodedInput,
+            tool.effect === "write" && providerContext
+              ? {
+                  signal: providerContext.signal,
+                  writeApproved: true,
+                  beginCommit: async () => {
+                    const commitSignal = await providerContext.beginCommit();
+                    writeCommitAdmitted = true;
+                    return commitSignal;
+                  },
+                }
+              : { signal },
+          );
+        };
+        const invocationWork = Promise.resolve().then(() =>
+          tool.effect === "write"
+            ? this.#providerOperation(provider, invokeProvider, { signal })
+            : invokeProvider(),
+        );
         this.#activeInvocationWork.add(invocationWork);
         void invocationWork.then(
           () => this.#activeInvocationWork.delete(invocationWork),
           () => this.#activeInvocationWork.delete(invocationWork),
         );
         const result = await invocationWork;
-        if (controller.signal.aborted) {
+        if (controller.signal.aborted && !writeCommitAdmitted) {
           throw operationError("disabled", `${manifest.name} access was revoked.`);
         }
-        if (context?.signal.aborted) throw cancellationError(context.signal);
+        if (context?.signal.aborted && !writeCommitAdmitted)
+          throw cancellationError(context.signal);
         return result;
       } catch (error) {
-        if (controller.signal.aborted) {
+        if (controller.signal.aborted && !writeCommitAdmitted) {
           throw operationError("disabled", `${manifest.name} access was revoked.`);
         }
-        if (context?.signal.aborted) throw cancellationError(context.signal);
+        if (context?.signal.aborted && !writeCommitAdmitted)
+          throw cancellationError(context.signal);
         if (error instanceof ProviderStatusTimeoutError) {
           throw operationError(
             "operation_failed",
             `${manifest.name} did not become ready before the status timeout.`,
           );
         }
-        if (error instanceof ProviderStatusContractError || error instanceof ProviderFaultedError) {
+        if (
+          error instanceof ProviderStatusContractError ||
+          error instanceof ProviderFaultedError ||
+          this.#faultedProviders.has(provider)
+        ) {
           throw operationError(
             "operation_failed",
-            error instanceof ProviderFaultedError
-              ? `${manifest.name} is unavailable until its connection is reset.`
-              : `${manifest.name} returned an invalid provider status.`,
+            error instanceof ProviderStatusContractError
+              ? `${manifest.name} returned an invalid provider status.`
+              : `${manifest.name} is unavailable until its connection is reset.`,
           );
         }
         throw error;

@@ -14,6 +14,8 @@ import { validateIntegrationManifest } from "./manifest.ts";
 declare const __TRITONAI_BUILD_PLUGIN_COMPOSITION__: unknown;
 declare const __TRITONAI_BUILD_MICROSOFT_GRAPH_CLIENT_ID__: string | undefined;
 declare const __TRITONAI_BUILD_MICROSOFT_GRAPH_TENANT_ID__: string | undefined;
+declare const __TRITONAI_BUILD_GOOGLE_WORKSPACE_CLIENT_ID__: string | undefined;
+declare const __TRITONAI_BUILD_GOOGLE_WORKSPACE_CLIENT_SECRET__: string | undefined;
 
 interface CompositionFile {
   readonly path: string;
@@ -53,6 +55,15 @@ interface Microsoft365Module {
   readonly manifest: unknown;
 }
 
+interface GoogleWorkspaceModule {
+  readonly GOOGLE_WORKSPACE_PROVIDER_ID: string;
+  readonly GoogleWorkspaceProvider: new (
+    secrets: Parameters<typeof scopeIntegrationSecretStore>[0],
+    configuration: { readonly clientId: string; readonly clientSecret: string },
+  ) => IntegrationProvider;
+  readonly manifest: unknown;
+}
+
 interface RuntimeDependency {
   readonly name: string;
   readonly version: string;
@@ -79,6 +90,19 @@ const microsoftGraphConfiguration = {
     typeof __TRITONAI_BUILD_MICROSOFT_GRAPH_TENANT_ID__ === "undefined"
       ? undefined
       : __TRITONAI_BUILD_MICROSOFT_GRAPH_TENANT_ID__,
+  ),
+};
+
+const googleWorkspaceConfiguration = {
+  clientId: buildIdentifier(
+    typeof __TRITONAI_BUILD_GOOGLE_WORKSPACE_CLIENT_ID__ === "undefined"
+      ? undefined
+      : __TRITONAI_BUILD_GOOGLE_WORKSPACE_CLIENT_ID__,
+  ),
+  clientSecret: buildIdentifier(
+    typeof __TRITONAI_BUILD_GOOGLE_WORKSPACE_CLIENT_SECRET__ === "undefined"
+      ? undefined
+      : __TRITONAI_BUILD_GOOGLE_WORKSPACE_CLIENT_SECRET__,
   ),
 };
 
@@ -420,6 +444,53 @@ async function loadMicrosoft365(
   );
 }
 
+async function loadGoogleWorkspace(
+  plugin: CompositionPackage,
+  secrets: ServerSecretStore.ServerSecretStore["Service"],
+): Promise<IntegrationPackage> {
+  const composedPackageRoot = NodePath.join(
+    import.meta.dirname,
+    "production-integrations",
+    "packages",
+    plugin.id,
+  );
+  return withProductionPackageSnapshot(
+    composedPackageRoot,
+    plugin,
+    async (packageRoot, verifiedFiles) => {
+      const packageManifest = validateIntegrationManifest(
+        JSON.parse(
+          await NodeFSP.readFile(
+            NodePath.join(packageRoot, ".tritonai-plugin", "plugin.json"),
+            "utf8",
+          ),
+        ),
+      );
+      const moduleUrl = NodeURL.pathToFileURL(NodePath.join(packageRoot, "dist", "index.js")).href;
+      const loaded = (await import(moduleUrl)) as GoogleWorkspaceModule;
+      const exportedManifest = validateIntegrationManifest(loaded.manifest);
+      if (
+        !NodeUtil.isDeepStrictEqual(exportedManifest, packageManifest) ||
+        packageManifest.id !== plugin.id ||
+        packageManifest.version !== plugin.version ||
+        loaded.GOOGLE_WORKSPACE_PROVIDER_ID !== packageManifest.provider
+      ) {
+        throw new Error(
+          "Built-in Google Workspace provider exports do not match the composed manifest.",
+        );
+      }
+      const provider = new loaded.GoogleWorkspaceProvider(
+        scopeIntegrationSecretStore(secrets, packageManifest.id),
+        googleWorkspaceConfiguration,
+      );
+      const bundledFiles = Object.fromEntries(
+        verifiedFiles.map((file) => [file.path, Uint8Array.from(file.contents)]),
+      );
+      return { manifest: packageManifest, bundledFiles, provider };
+    },
+  );
+}
+
 export async function loadProductionIntegrations(
   secrets: ServerSecretStore.ServerSecretStore["Service"],
 ): Promise<ReadonlyArray<IntegrationPackage>> {
@@ -433,10 +504,15 @@ export async function loadProductionIntegrations(
   }
   const result: Array<IntegrationPackage> = [];
   for (const plugin of buildComposition.packages) {
-    if (plugin.id !== "microsoft-365") {
-      throw new Error(`Built-in plugin is not statically supported: ${plugin.id}.`);
+    if (plugin.id === "microsoft-365") {
+      result.push(await loadMicrosoft365(plugin, secrets));
+      continue;
     }
-    result.push(await loadMicrosoft365(plugin, secrets));
+    if (plugin.id === "google-workspace") {
+      result.push(await loadGoogleWorkspace(plugin, secrets));
+      continue;
+    }
+    throw new Error(`Built-in plugin is not statically supported: ${plugin.id}.`);
   }
   return result;
 }

@@ -1,9 +1,10 @@
-import type { IntegrationSummary } from "@t3tools/contracts";
+import type { IntegrationConnectResult, IntegrationSummary } from "@t3tools/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
   IntegrationConnectionActionCallout,
+  IntegrationAuthorizationFlow,
   WRITE_TOOL_ACCESS_ARIA_LABEL,
   WRITE_TOOL_ACCESS_LABEL,
   capabilityAccessStateLabel,
@@ -45,6 +46,30 @@ const summary = (overrides: Partial<IntegrationSummary> = {}): IntegrationSummar
 });
 
 describe("PluginsSettings connection action", () => {
+  it("renders a native-browser flow as a system-browser sign-in link without a code field", () => {
+    const flow = {
+      kind: "authorization_url",
+      flowId: "flow-1",
+      authorizationUrl: "https://accounts.example.test/authorize?state=opaque",
+      message: "Continue in your system browser.",
+      expiresAt: "2030-01-01T00:00:00.000Z",
+      intervalSeconds: 2,
+    } satisfies IntegrationConnectResult;
+    const markup = renderToStaticMarkup(
+      <IntegrationAuthorizationFlow
+        integrationName="Google Workspace"
+        flow={flow}
+        busy={false}
+        onApiKeySubmit={async () => undefined}
+      />,
+    );
+    expect(markup).toContain("Finish signing in to Google Workspace");
+    expect(markup).toContain('href="https://accounts.example.test/authorize?state=opaque"');
+    expect(markup).toContain('target="_blank"');
+    expect(markup).toContain("Open sign-in");
+    expect(markup).not.toContain("userCode");
+  });
+
   it("persists and expands the enabled-but-unconnected action state", () => {
     expect(integrationNeedsConnectionAction(summary())).toBe(true);
     expect(integrationNeedsConnectionAction(summary({ connectionState: "error" }))).toBe(true);

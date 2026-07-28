@@ -105,6 +105,20 @@ export const IntegrationDeviceCodeConnectResult = Schema.Struct({
 });
 export type IntegrationDeviceCodeConnectResult = typeof IntegrationDeviceCodeConnectResult.Type;
 
+export const IntegrationAuthorizationUrlConnectResult = Schema.Struct({
+  kind: Schema.Literal("authorization_url"),
+  flowId: TrimmedNonEmptyString,
+  authorizationUrl: TrimmedNonEmptyString.check(
+    Schema.isMaxLength(8_192),
+    Schema.isPattern(/^https:\/\/[^\s]+$/),
+  ),
+  message: TrimmedNonEmptyString,
+  expiresAt: IsoDateTime,
+  intervalSeconds: PositiveInt,
+});
+export type IntegrationAuthorizationUrlConnectResult =
+  typeof IntegrationAuthorizationUrlConnectResult.Type;
+
 export const IntegrationApiKeyConnectResult = Schema.Struct({
   kind: Schema.Literal("api_key"),
   flowId: TrimmedNonEmptyString,
@@ -126,6 +140,7 @@ export type IntegrationConnectedConnectResult = typeof IntegrationConnectedConne
 // ambiguity in clients.
 export const IntegrationConnectResult = Schema.Union([
   IntegrationDeviceCodeConnectResult,
+  IntegrationAuthorizationUrlConnectResult,
   IntegrationApiKeyConnectResult,
   IntegrationConnectedConnectResult,
 ]);
