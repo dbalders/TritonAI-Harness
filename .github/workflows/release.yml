@@ -551,7 +551,7 @@ jobs:
             assets+=("${matches[@]}")
           done
 
-          gh release upload "$RELEASE_TAG" "${assets[@]}" --repo "$GITHUB_REPOSITORY"
+          gh release upload "$RELEASE_TAG" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --clobber
 
       - name: Publish controlled release
         shell: bash

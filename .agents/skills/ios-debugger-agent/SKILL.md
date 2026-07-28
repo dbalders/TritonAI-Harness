@@ -51,13 +51,13 @@ Use `gesture` or scoped swipe actions when needed. If a gesture is unreliable, r
 
 ## Capture logs and debug
 
-- Use `start_sim_log_cap` and `stop_sim_log_cap` with the exact bundle identifier for focused runtime logs.
+- Use `build_run_sim` or `launch_app_sim`; both capture runtime logs automatically. Read `data.artifacts.runtimeLogPath` (and `data.artifacts.osLogPath` when present) from the execution result, keeping the selected simulator and bundle identifier explicit.
 - Use debugger tools only when the task requires runtime diagnosis; attach to the selected simulator and app rather than an ambiguous process.
 - Summarize relevant errors instead of returning unbounded logs.
 
 ## Clean up
 
-Stop only log captures, debugger sessions, apps, or simulators started for the current test. Leave pre-existing simulators and unrelated sessions alone.
+Stop only debugger sessions, apps, or simulators started for the current test. When stopping an app launched by the test, call `stop_app_sim` with the same simulator and bundle identifier; it cleans up the corresponding automatic log session. Leave pre-existing simulators and unrelated sessions alone.
 
 ## Upstream
 

@@ -89,6 +89,17 @@
 <h1>Seamless <code>npx t3 connect</code> for remote boxes</h1>
 <p class="sub">Design principle: <strong>the smallest diff that ships the UX.</strong> No relay/infra changes, no new backend surface, no new auth primitives &mdash; every step reuses code that already exists. One PR, built as four phases with clear commit boundaries &mdash; each phase compiles, passes tests, and leaves the product working, so the PR reviews commit-by-commit. (Phase 4, web-triggered update, is an optional follow-up PR.)</p>
 
+<div class="card">
+<h3>Downstream status: upstream reference only</h3>
+<p><strong>This is an upstream T3 Code planning artifact retained for synchronization and history. It is not an operational or implementation plan for TritonAI Harness.</strong></p>
+<ul>
+  <li>Read T3 Code and T3 Connect product names below as upstream references; downstream product surfaces use <strong>TritonAI Harness</strong> and <strong>TritonAI Connect</strong>.</li>
+  <li>Downstream state belongs under <code>TRITONAI_HOME</code>, which defaults to <code>~/.tritonai-harness</code>, not the upstream <code>~/.t3</code> paths shown here.</li>
+  <li>Public <code>npx t3</code>, boot-service, and self-update paths are unsupported or dormant downstream. Remote/headless lifecycle must use the approved managed process.</li>
+  <li>Desktop installation, lifecycle, and product updates remain TritonAI Installer-owned. Hosted URLs below are retained as upstream implementation references, not update or installation guidance.</li>
+</ul>
+</div>
+
 <div class="terminal">
 $ npx t3 connect<br><br>
 To set up T3 Connect, open this URL and sign in:<br>
@@ -216,8 +227,8 @@ Run T3 Code in the background whenever this machine boots? (y/n): y<br><br>
 
 <h3>Runtime layout (phase 3)</h3>
 <pre><code>~/.t3/runtime/
-├── versions/0.0.27/        &larr; npm install --prefix (gets native deps right: node-pty etc.)
-└── current -> versions/0.0.27
+├── versions/&lt;version&gt;/    &larr; npm install --prefix (gets native deps right: node-pty etc.)
+└── current -&gt; versions/&lt;version&gt;
 
 ~/.config/systemd/user/t3code.service   &larr; ExecStart=/abs/path/node .../current/.../t3 serve
 loginctl enable-linger $USER            &larr; survives SSH logout / reboot</code></pre>
