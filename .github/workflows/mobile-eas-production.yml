@@ -97,7 +97,9 @@ jobs:
         working-directory: apps/mobile
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-        run: eas build --platform ${{ inputs.platform }} --profile production --auto-submit --non-interactive --no-wait
+        # Keep CI attached through EAS Build and auto-submit. EAS logs both
+        # dashboard URLs and exits nonzero on terminal build/submission failures.
+        run: eas build --platform ${{ inputs.platform }} --profile production --auto-submit --non-interactive --wait
 
       - name: Publish OTA update
         if: steps.expo-token.outputs.present == 'true' && inputs.mode == 'update'

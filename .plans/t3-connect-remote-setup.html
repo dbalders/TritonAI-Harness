@@ -207,7 +207,7 @@ Run T3 Code in the background whenever this machine boots? (y/n): y<br><br>
   </tr>
   <tr>
     <td><span class="pill core">2</span></td>
-    <td><strong>CLI out-of-band OAuth flow + single command.</strong> Add an out-of-band OAuth login path to <code>CliTokenManager</code> (print URL, <code>Prompt.text</code> for the code, reuse <code>exchangeToken</code>). Make bare <code>t3 connect</code> a handler = login + link (subcommands untouched). Auto-pick headless mode inside SSH sessions (<code>SSH_CONNECTION</code>/<code>SSH_TTY</code> &mdash; nothing else); <code>--headless</code> flag as manual override. Loopback stays the default on desktop &mdash; no regression.</td>
+    <td><strong>CLI out-of-band OAuth flow + single command.</strong> Add an out-of-band OAuth login path to <code>CliTokenManager</code> (print URL, <code>Prompt.text</code> for the code, reuse <code>exchangeToken</code>). Make bare <code>t3 connect</code> a handler = login + link (subcommands untouched). Auto-pick headless mode inside SSH sessions (<code>SSH_CONNECTION</code>/<code>SSH_TTY</code> &mdash; nothing else); <code>--headless</code> flag as manual override. Loopback stays the default on desktop &mdash; no regression.<br><em>Historical status (v0.0.29): this phase is already implemented in <code>CliTokenManager.ts</code> and <code>cli/connect.ts</code>; the future-tense wording above is retained from the original upstream plan.</em></td>
     <td><code>cloud/CliTokenManager.ts</code> (+60)<br><code>cloud/publicConfig.ts</code> (+10)<br><code>cli/connect.ts</code> (+60)</td>
     <td>~150</td>
   </tr>
