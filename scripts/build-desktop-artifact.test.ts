@@ -688,6 +688,10 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         source,
         'File /oname=$PLUGINSDIR\\tritonai-upgrade-uninstaller.exe "${UNINSTALLER_OUT_FILE}"',
       );
+      assert.match(
+        source,
+        /!ifndef BUILD_UNINSTALLER[\s\S]*?File \/oname=\$PLUGINSDIR\\tritonai-upgrade-uninstaller\.exe "\$\{UNINSTALLER_OUT_FILE\}"[\s\S]*?!endif/u,
+      );
       assert.include(
         source,
         'CopyFiles /SILENT "$PLUGINSDIR\\tritonai-upgrade-uninstaller.exe" "$INSTDIR\\${UNINSTALL_FILENAME}"',

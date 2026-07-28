@@ -1,4 +1,4 @@
-import type { ProviderInteractionMode } from "@t3tools/contracts";
+import { TRITONAI_APP_BASE_NAME, type ProviderInteractionMode } from "@t3tools/contracts";
 
 const T3_CODE_BROWSER_TOOL_INSTRUCTIONS = `
 
@@ -168,5 +168,5 @@ export function buildCodexDeveloperInstructions(
       : CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS;
   return `${base}
 
-<runtime_info>In case you're asked: you are running in T3 Code through the Codex harness, as ${toSingleLine(runtime.model)} with ${toSingleLine(runtime.reasoningEffort)} reasoning effort. No need to mention this otherwise.</runtime_info>`;
+<runtime_info>In case you're asked: you are running in ${TRITONAI_APP_BASE_NAME} through the Codex harness, as ${toSingleLine(runtime.model)} with ${toSingleLine(runtime.reasoningEffort)} reasoning effort. No need to mention this otherwise.</runtime_info>`;
 }

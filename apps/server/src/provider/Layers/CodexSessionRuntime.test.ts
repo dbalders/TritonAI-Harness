@@ -221,6 +221,7 @@ describe("buildTurnStartParams", () => {
     NodeAssert.deepStrictEqual(params, {
       threadId: "provider-thread-1",
       approvalPolicy: "never",
+      approvalsReviewer: "user",
       sandboxPolicy: {
         type: "dangerFullAccess",
       },
@@ -266,6 +267,7 @@ describe("buildTurnStartParams", () => {
     NodeAssert.deepStrictEqual(params, {
       threadId: "provider-thread-1",
       approvalPolicy: "on-request",
+      approvalsReviewer: "user",
       sandboxPolicy: {
         type: "workspaceWrite",
       },
@@ -309,6 +311,31 @@ describe("buildTurnStartParams", () => {
     NodeAssert.equal(settings?.reasoning_effort, "medium");
     NodeAssert.ok(settings?.developer_instructions?.includes(`as ${DEFAULT_MODEL} with medium`));
   });
+
+  it.effect("routes approvals to the auto reviewer in auto mode", () =>
+    Effect.gen(function* () {
+      const params = yield* buildTurnStartParams({
+        threadId: "provider-thread-1",
+        runtimeMode: "auto",
+        prompt: "Ship it",
+      });
+
+      NodeAssert.deepStrictEqual(params, {
+        threadId: "provider-thread-1",
+        approvalPolicy: "on-request",
+        approvalsReviewer: "auto_review",
+        sandboxPolicy: {
+          type: "workspaceWrite",
+        },
+        input: [
+          {
+            type: "text",
+            text: "Ship it",
+          },
+        ],
+      });
+    }),
+  );
 
   it("attaches an explicitly invoked integration-plugin skill", () => {
     const params = Effect.runSync(
@@ -355,6 +382,7 @@ describe("buildTurnStartParams", () => {
       NodeAssert.deepStrictEqual(params, {
         threadId: "provider-thread-1",
         approvalPolicy: "untrusted",
+        approvalsReviewer: "user",
         sandboxPolicy: {
           type: "readOnly",
         },
@@ -377,7 +405,8 @@ describe("buildCodexDeveloperInstructions", () => {
     });
 
     NodeAssert.ok(instructions.startsWith(CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS));
-    NodeAssert.match(instructions, /T3 Code/);
+    NodeAssert.match(instructions, /TritonAI Harness/);
+    NodeAssert.doesNotMatch(instructions, /running in T3 Code/);
     NodeAssert.match(instructions, /Codex harness/);
     NodeAssert.match(instructions, /as gpt-5\.3-codex with high reasoning effort/);
   });
@@ -695,6 +724,7 @@ describe("openCodexThread", () => {
       NodeAssert.deepStrictEqual(rawStartPayload, {
         cwd: "/tmp/project",
         approvalPolicy: "never",
+        approvalsReviewer: "user",
         sandbox: "danger-full-access",
         model: DEFAULT_TRITONAI_CODEX_MODEL,
         dynamicTools: [

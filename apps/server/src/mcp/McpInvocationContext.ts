@@ -16,7 +16,12 @@ export interface McpInvocationScope {
   readonly providerInstanceId: ProviderInstanceId;
   readonly capabilities: ReadonlySet<McpCapability>;
   readonly issuedAt: number;
-  readonly expiresAt: number;
+  /**
+   * Immutable absolute expiry for registry-issued bearer credentials.
+   * Synthetic in-process invocation contexts may omit it because they are not
+   * resolved from a bearer token.
+   */
+  readonly expiresAt?: number;
 }
 
 export class McpInvocationContext extends Context.Service<

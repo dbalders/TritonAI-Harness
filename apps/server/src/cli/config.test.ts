@@ -62,6 +62,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     otlpMetricsUrl: undefined,
     otlpExportIntervalMs: 10_000,
     otlpServiceName: "t3-server",
+    devAllowedOrigins: [],
   } as const;
 
   const openBootstrapFd = Effect.fn(function* (payload: DesktopBackendBootstrapValue) {
@@ -110,6 +111,8 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
                   TRITONAI_HOME: baseDir,
                   T3CODE_HOME: join(NodeOS.tmpdir(), "ignored-legacy-base"),
                   VITE_DEV_SERVER_URL: "http://127.0.0.1:5173",
+                  T3CODE_DEV_ALLOWED_ORIGINS:
+                    "https://host.example.ts.net, https://phone.example.ts.net ",
                   T3CODE_NO_BROWSER: "true",
                   T3CODE_AUTO_BOOTSTRAP_PROJECT_FROM_CWD: "false",
                   T3CODE_LOG_WS_EVENTS: "true",
@@ -132,6 +135,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         host: "0.0.0.0",
         staticDir: undefined,
         devUrl: new URL("http://127.0.0.1:5173"),
+        devAllowedOrigins: ["https://host.example.ts.net", "https://phone.example.ts.net"],
         noBrowser: true,
         startupPresentation: "browser",
         desktopBootstrapToken: undefined,

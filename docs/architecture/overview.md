@@ -37,6 +37,8 @@ T3 Code runs as a **Node.js WebSocket server** that wraps `codex app-server` (JS
 
 - **Runtime signals**: The server emits lightweight typed receipts when important async milestones finish, such as checkpoint capture, diff finalization, or a turn becoming fully quiescent. Tests and orchestration code wait on these signals instead of polling internal state.
 
+- **Server updates**: The protocol retains upstream update capabilities, but TritonAI Harness only presents desktop-owned update guidance and suppresses public-package remote replacement. See [Server Update Architecture](./server-updates.md).
+
 ## Event Lifecycle
 
 ### Startup and client connect

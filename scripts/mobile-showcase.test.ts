@@ -274,6 +274,9 @@ it("seeds a playful multi-environment project spectrum", () => {
   );
   assert.equal(SHOWCASE_THREADS.length, 6);
   assert.equal(new Set(SHOWCASE_THREADS.map((thread) => thread.projectId)).size, 3);
+  assert.match(SHOWCASE_THREADS[0]?.request ?? "", /TritonAI Harness/u);
+  assert.match(SHOWCASE_THREADS[0]?.response ?? "", /TritonAI Harness/u);
+  assert.equal((SHOWCASE_THREADS[0]?.request ?? "").includes("Give T3 Code"), false);
   assert.equal(
     SHOWCASE_PROJECTS.every((project) => project.favicon.includes("<svg")),
     true,

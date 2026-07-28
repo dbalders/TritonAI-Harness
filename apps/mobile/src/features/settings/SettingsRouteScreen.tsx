@@ -19,6 +19,7 @@ import {
   settlePromise,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
+import { TRITONAI_CONNECT_NAME } from "@t3tools/contracts";
 import { AndroidScreenHeader } from "../../components/AndroidScreenHeader";
 import { AppText as Text } from "../../components/AppText";
 import { supportsAgentAwarenessPush } from "../agent-awareness/capabilities";
@@ -118,6 +119,8 @@ function LocalSettingsRouteScreen() {
             target="SettingsEnvironments"
           />
         </SettingsSection>
+
+        <GeneralSettingsSection />
 
         <SettingsSection title="Appearance">
           <SettingsRow icon="paintbrush" label="Appearance" target="SettingsAppearance" />
@@ -231,7 +234,7 @@ function ConfiguredSettingsRouteScreen() {
       } else {
         Alert.alert(
           "Couldn't finish enabling notifications",
-          "Notification access was granted, but this device could not be registered with T3 Connect. Notifications will start once registration succeeds.",
+          `Notification access was granted, but this device could not be registered with ${TRITONAI_CONNECT_NAME}. Notifications will start once registration succeeds.`,
         );
       }
       return;
@@ -334,7 +337,7 @@ function ConfiguredSettingsRouteScreen() {
     } else {
       Alert.alert(
         "Couldn't finish enabling Live Activities",
-        "This device could not be registered with T3 Connect, so Live Activities won't appear yet. They'll start once registration succeeds.",
+        `This device could not be registered with ${TRITONAI_CONNECT_NAME}, so Live Activities won't appear yet. They'll start once registration succeeds.`,
       );
     }
   }, [
@@ -504,6 +507,8 @@ function ConfiguredSettingsRouteScreen() {
           />
         </SettingsSection>
 
+        <GeneralSettingsSection />
+
         <SettingsSection title="Appearance">
           <SettingsRow icon="paintbrush" label="Appearance" target="SettingsAppearance" />
         </SettingsSection>
@@ -515,6 +520,25 @@ function ConfiguredSettingsRouteScreen() {
         <AppSettingsSection />
       </ScrollView>
     </View>
+  );
+}
+
+function GeneralSettingsSection() {
+  const preferencesResult = useAtomValue(mobilePreferencesAtom);
+  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
+  const projectGroupingEnabled = AsyncResult.isSuccess(preferencesResult)
+    ? preferencesResult.value.projectGroupingEnabled !== false
+    : true;
+
+  return (
+    <SettingsSection title="General">
+      <SettingsSwitchRow
+        icon="folder"
+        label="Project Grouping"
+        value={projectGroupingEnabled}
+        onValueChange={(value) => savePreferences({ projectGroupingEnabled: value })}
+      />
+    </SettingsSection>
   );
 }
 

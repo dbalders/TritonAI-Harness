@@ -162,6 +162,7 @@ const makeCliTestServerConfig = (baseDir: string) =>
       ...derivedPaths,
       staticDir: undefined,
       devUrl: undefined,
+      devAllowedOrigins: [],
       noBrowser: true,
       startupPresentation: "browser",
       desktopBootstrapToken: undefined,
@@ -274,12 +275,24 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
         assert.fail(`Expected ShowHelp, got ${error._tag}`);
       }
       assert.deepEqual(error.commandPath, ["t3", "connect"]);
-      assert.include(error.errors[0]?.message ?? "", "missing T3 Connect public configuration");
+      assert.include(
+        error.errors[0]?.message ?? "",
+        "missing TritonAI Connect public configuration",
+      );
 
       const output = (yield* TestConsole.errorLines).join("\n");
       assert.include(output, "ERROR");
-      assert.include(output, "missing T3 Connect public configuration");
+      assert.include(output, "missing TritonAI Connect public configuration");
     }).pipe(Effect.provide(Layer.mergeAll(CliRuntimeLayer, TestConsole.layer))),
+  );
+
+  it.effect("does not expose upstream public-package service commands", () =>
+    Effect.gen(function* () {
+      const { output } = yield* captureStdout(runCli(["--help"], noConnectCli));
+
+      assert.notInclude(output, "Manage the TritonAI Harness background service.");
+      assert.notInclude(output, "service  ");
+    }),
   );
 
   it.effect("reports fresh headless connect state without requiring local configuration", () =>
@@ -316,10 +329,13 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
         runConnectCli(["connect", "status", "--base-dir", baseDir]),
       );
 
-      assert.include(output, "T3 Connect\n  Exposure: disabled");
+      assert.include(output, "TritonAI Connect\n  Exposure: disabled");
       assert.include(output, "  Authorization: missing");
       assert.include(output, "  Environment link: not provisioned");
-      assert.include(output, "Next: Run `t3 connect link` to authorize and enable T3 Connect.");
+      assert.include(
+        output,
+        "Next: Run `t3 connect link` to authorize and enable TritonAI Connect.",
+      );
     }),
   );
 
@@ -367,7 +383,7 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
         runConnectCli(["connect", "unlink", "--base-dir", baseDir]),
       );
 
-      assert.equal(output, "T3 Connect is disabled locally.");
+      assert.equal(output, "TritonAI Connect is disabled locally.");
     }),
   );
 
@@ -385,7 +401,7 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
         runConnectCli(["connect", "logout", "--base-dir", baseDir]),
       );
 
-      assert.equal(output, "Signed out of T3 Connect locally.");
+      assert.equal(output, "Signed out of TritonAI Connect locally.");
       assert.isFalse(NodeFS.existsSync(tokenPath));
     }),
   );

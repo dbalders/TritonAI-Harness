@@ -2,7 +2,7 @@ import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { Command } from "effect/unstable/cli";
+import { Argument, Command } from "effect/unstable/cli";
 import * as CliError from "effect/unstable/cli/CliError";
 
 import * as NetService from "@t3tools/shared/Net";
@@ -17,7 +17,7 @@ import { runServerCommand, serveCommand, startCommand } from "./cli/server.ts";
 const CliRuntimeLayer = Layer.mergeAll(NodeServices.layer, NetService.layer);
 
 const connectPublicConfigMissingMessage =
-  "T3 Connect commands are unavailable: this build is missing T3 Connect public configuration.";
+  "TritonAI Connect commands are unavailable: this build is missing TritonAI Connect public configuration.";
 
 class ConnectPublicConfigMissingError extends CliError.UserError {
   override get message() {
@@ -25,8 +25,12 @@ class ConnectPublicConfigMissingError extends CliError.UserError {
   }
 }
 
-const connectUnavailableCommand = Command.make("connect").pipe(
-  Command.withDescription("T3 Connect is unavailable in builds without public configuration."),
+const connectUnavailableCommand = Command.make("connect", {
+  command: Argument.string("command").pipe(Argument.variadic),
+}).pipe(
+  Command.withDescription(
+    "TritonAI Connect is unavailable in builds without public configuration.",
+  ),
   Command.withHidden,
   Command.withHandler(() =>
     Effect.fail(

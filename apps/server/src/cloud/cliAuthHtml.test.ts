@@ -9,7 +9,8 @@ it("renders the branded loopback authorization completion page", () => {
   const html = renderLoopbackAuthorizationCompleteHtml();
 
   expect(resolveLoopbackAuthorizationStage()).toBe("dev");
-  expect(html).toContain("T3 Code (Dev)");
+  expect(html).toContain("TritonAI Harness (Dev)");
+  expect(html).toContain("TritonAI Connect authorization complete");
   expect(html).toContain('class="stage stage-dev"');
   expect(html).not.toContain("Secure terminal handoff");
   expect(html).toContain("You're connected");
@@ -23,9 +24,9 @@ it("renders the matching header treatment for each release channel", () => {
   const nightly = renderLoopbackAuthorizationCompleteHtml("nightly");
   const latest = renderLoopbackAuthorizationCompleteHtml("latest");
 
-  expect(nightly).toContain("T3 Code (Nightly)");
+  expect(nightly).toContain("TritonAI Harness (Nightly)");
   expect(nightly).toContain('class="stage stage-nightly"');
-  expect(latest).toContain('<p class="brand">T3 Code</p>');
+  expect(latest).toContain('<p class="brand">TritonAI Harness</p>');
   expect(latest).not.toContain("(Latest)");
   expect(latest).toContain('class="stage stage-latest"');
 });

@@ -1,5 +1,6 @@
 export const TRITONAI_APP_BASE_NAME = "TritonAI Harness";
 export const TRITONAI_APP_ID_BASE = "edu.ucsd.tritonai.harness";
+export const TRITONAI_CONNECT_NAME = "TritonAI Connect";
 
 export const TRITONAI_HOME_ENV = "TRITONAI_HOME";
 export const LEGACY_T3CODE_HOME_ENV = "T3CODE_HOME";

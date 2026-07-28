@@ -4,6 +4,7 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
+import effectPackageJson from "effect/package.json" with { type: "json" };
 
 import { finalizeManagedPluginProof } from "./finalize-managed-plugin-proof.ts";
 import {
@@ -68,6 +69,14 @@ describe("managed plugin release composition", () => {
     NodeFS.mkdirSync(NodePath.join(packageRoot, ...nestedDirectories), { recursive: true });
 
     expect(() => readManagedPluginComposition(sourceRoot)).toThrow(/directory limit/iu);
+  });
+
+  it("rejects a plugin built for a different Effect runtime", () => {
+    const sourceRoot = makeCompositionFixture("4.0.0-beta.78");
+
+    expect(() => readManagedPluginComposition(sourceRoot)).toThrow(
+      new RegExp(`exactly match the Harness runtime: effect ${effectPackageJson.version}`, "u"),
+    );
   });
 
   it("finalizes distinct macOS and Windows proofs from final artifact bytes", async () => {
@@ -135,7 +144,7 @@ function makeTemporaryDirectory(): string {
   return directory;
 }
 
-function makeCompositionFixture(): string {
+function makeCompositionFixture(effectVersion = effectPackageJson.version): string {
   const sourceRoot = makeTemporaryDirectory();
   const packageRoot = NodePath.join(sourceRoot, "packages", "microsoft-365");
   const files = new Map<string, string>([
@@ -179,7 +188,12 @@ function makeCompositionFixture(): string {
     ["dist/index.js", "export const provider = 'microsoft-graph';\n"],
     [
       "package.json",
-      JSON.stringify({ name: "@tritonai/plugin-microsoft-365", version: "1.0.1", type: "module" }),
+      JSON.stringify({
+        name: "@tritonai/plugin-microsoft-365",
+        version: "1.0.1",
+        type: "module",
+        dependencies: { effect: effectVersion },
+      }),
     ],
   ]);
   for (const [relativePath, contents] of files) {

@@ -163,6 +163,50 @@ describe("effectiveSettled", () => {
     ).toBe(true);
   });
 
+  it("does not re-settle a warm thread on the merge signal: a message sent in a settled thread keeps it active until idle", () => {
+    // The merge signal never clears, so without the idle guard a follow-up
+    // message would un-settle the row only until its turn completed, then
+    // snap straight back into the settled tail.
+    const justActive = makeShell({ activityAt: "2026-04-09T23:30:00.000Z" });
+    // The idle gate is strict: activity exactly one hour old is still warm.
+    const boundary = makeShell({ activityAt: "2026-04-09T23:00:00.000Z" });
+    const idle = makeShell({ activityAt: "2026-04-09T22:59:59.999Z" });
+
+    for (const changeRequestState of ["merged", "closed"] as const) {
+      expect(
+        effectiveSettled(justActive, {
+          now: NOW,
+          autoSettleAfterDays: null,
+          changeRequestState,
+        }),
+      ).toBe(false);
+      expect(
+        effectiveSettled(boundary, {
+          now: NOW,
+          autoSettleAfterDays: null,
+          changeRequestState,
+        }),
+      ).toBe(false);
+      expect(
+        effectiveSettled(idle, {
+          now: NOW,
+          autoSettleAfterDays: null,
+          changeRequestState,
+        }),
+      ).toBe(true);
+    }
+  });
+
+  it("re-settles a merged-PR thread once the follow-up burst goes idle", () => {
+    // Same shell, advancing clock: active while warm, settled again after
+    // the idle window passes — the burst cools and the merge signal wins.
+    const shell = makeShell({ activityAt: "2026-04-09T23:30:00.000Z" });
+    const options = { autoSettleAfterDays: null, changeRequestState: "merged" as const };
+
+    expect(effectiveSettled(shell, { ...options, now: NOW })).toBe(false);
+    expect(effectiveSettled(shell, { ...options, now: "2026-04-10T00:30:00.001Z" })).toBe(true);
+  });
+
   it("never settles a starting session, even with a settled override", () => {
     const shell = makeShell({
       settledOverride: "settled",
@@ -176,6 +220,51 @@ describe("effectiveSettled", () => {
         changeRequestState: "merged",
       }),
     ).toBe(false);
+  });
+
+  it("keeps a new turn active from queued through starting and running", () => {
+    const requestedAt = "2026-04-09T12:00:00.000Z";
+    const transitionNow = "2026-04-09T12:00:30.000Z";
+    const base = makeShell({
+      settledOverride: null,
+      activityAt: STALE,
+    });
+    const queued: OrchestrationThreadShell = {
+      ...base,
+      latestUserMessageAt: requestedAt,
+      latestTurn: null,
+      session: null,
+    };
+    const starting: OrchestrationThreadShell = {
+      ...queued,
+      session: {
+        threadId: queued.id,
+        status: "starting",
+        providerName: "Codex",
+        runtimeMode: "full-access",
+        activeTurnId: null,
+        lastError: null,
+        updatedAt: requestedAt,
+      },
+    };
+    const running: OrchestrationThreadShell = {
+      ...starting,
+      session: {
+        ...starting.session!,
+        status: "running",
+        activeTurnId: TurnId.make("turn-new"),
+      },
+    };
+
+    for (const shell of [queued, starting, running]) {
+      expect(
+        effectiveSettled(shell, {
+          now: transitionNow,
+          autoSettleAfterDays: 3,
+          changeRequestState: "merged",
+        }),
+      ).toBe(false);
+    }
   });
 
   it("uses a strict inactivity boundary and honors a null threshold", () => {

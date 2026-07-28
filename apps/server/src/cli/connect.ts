@@ -6,7 +6,6 @@ import {
 } from "@t3tools/contracts";
 import { RelayOkResponse } from "@t3tools/contracts/relay";
 import * as RelayClient from "@t3tools/shared/relayClient";
-import * as Terminal from "effect/Terminal";
 import { withRelayClientTracing } from "@t3tools/shared/relayTracing";
 import * as Cause from "effect/Cause";
 import * as Config from "effect/Config";
@@ -20,6 +19,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as References from "effect/References";
 import * as Schema from "effect/Schema";
+import * as Terminal from "effect/Terminal";
 import { Command, Flag, GlobalFlag, Prompt } from "effect/unstable/cli";
 import {
   FetchHttpClient,
@@ -29,10 +29,8 @@ import {
 } from "effect/unstable/http";
 import * as HttpApiClient from "effect/unstable/httpapi/HttpApiClient";
 
-import packageJson from "../../package.json" with { type: "json" };
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
-import * as BootService from "../cloud/bootService.ts";
 import * as CliState from "../cloud/CliState.ts";
 import * as CliTokenManager from "../cloud/CliTokenManager.ts";
 import {
@@ -45,7 +43,6 @@ import { headlessRelayClientTracingLayer } from "../cloud/relayTracing.ts";
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ExternalLauncher from "../process/externalLauncher.ts";
-import * as ProcessRunner from "../processRunner.ts";
 import { readPersistedServerRuntimeState } from "../serverRuntimeState.ts";
 import { projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
 
@@ -107,7 +104,7 @@ const authorizeCli = Effect.fn("cloud.cli.authorize")(function* (options: {
   const existing = yield* tokens.getExisting.pipe(
     Effect.catchTag("CloudCliCredentialRefreshError", () =>
       Console.log(
-        "The stored T3 Connect credential could not be refreshed; signing in again.",
+        "The stored TritonAI Connect credential could not be refreshed; signing in again.",
       ).pipe(Effect.as(Option.none())),
     ),
   );
@@ -187,15 +184,15 @@ function formatCloudStatus(status: CloudCliStatus, options?: { readonly json?: b
       ? "pending server startup"
       : "not provisioned";
   const nextStep = !status.authenticated
-    ? "Run `t3 connect link` to authorize and enable T3 Connect."
+    ? "Run `t3 connect link` to authorize and enable TritonAI Connect."
     : !status.desired
-      ? "Run `t3 connect link` to enable T3 Connect."
+      ? "Run `t3 connect link` to enable TritonAI Connect."
       : !status.linked
         ? "Start T3 to provision the environment link and launch its managed tunnel."
         : undefined;
 
   return [
-    "T3 Connect",
+    "TritonAI Connect",
     `  Exposure: ${status.desired ? "enabled" : "disabled"}`,
     `  Authorization: ${status.authenticated ? "stored credential" : "missing"}`,
     `  Environment link: ${provisioned}`,
@@ -211,7 +208,7 @@ const CLOUD_CLI_LIVE_SERVER_TIMEOUT = Duration.seconds(5);
 const confirmRelayClientInstall = (version: string) =>
   Prompt.run(
     Prompt.confirm({
-      message: `The T3 relay client is required for T3 Connect. Download and install version ${version}?`,
+      message: `The relay client is required for TritonAI Connect. Download and install version ${version}?`,
       initial: false,
     }),
   );
@@ -316,7 +313,7 @@ const logCloudDisconnectFailure = (
   clearAuthorization: boolean,
   cause: Cause.Cause<unknown>,
 ) =>
-  Effect.logWarning("T3 Connect disconnect operation failed.").pipe(
+  Effect.logWarning("TritonAI Connect disconnect operation failed.").pipe(
     Effect.annotateLogs({
       operation,
       clearAuthorization,
@@ -362,10 +359,10 @@ export const reportCloudDisconnectResults = Effect.fn("cloud.cli.report_disconne
         input.liveResult.cause,
       );
       yield* Console.warn(
-        "T3 Connect is disabled, but the running server could not stop its tunnel.\nRestart that server to stop the connector.",
+        "TritonAI Connect is disabled, but the running server could not stop its tunnel.\nRestart that server to stop the connector.",
       );
     } else {
-      yield* Console.log("T3 Connect is disabled locally.");
+      yield* Console.log("TritonAI Connect is disabled locally.");
     }
 
     if (Exit.isFailure(input.relayResult)) {
@@ -396,21 +393,6 @@ const disconnectCloud = Effect.fn("cloud.cli.disconnect")(function* (options: {
   if (options.clearAuthorization) {
     const tokens = yield* CliTokenManager.CloudCliTokenManager;
     yield* tokens.clear;
-
-    // uninstall itself no-ops when nothing is installed (and on non-Linux),
-    // so no status pre-check that could mask a real removal failure.
-    const bootService = yield* BootService.BootService;
-    yield* bootService.uninstall.pipe(
-      Effect.tap((removed) =>
-        removed ? Console.log("Removed the T3 Code background service.") : Effect.void,
-      ),
-      Effect.catchTag("BootServiceUnsupportedError", () => Effect.succeed(false)),
-      Effect.catch((error) =>
-        Console.warn(`Could not remove the background service: ${error.message}`).pipe(
-          Effect.as(false),
-        ),
-      ),
-    );
   }
 
   yield* reportCloudDisconnectResults({
@@ -420,7 +402,7 @@ const disconnectCloud = Effect.fn("cloud.cli.disconnect")(function* (options: {
   });
 
   if (options.clearAuthorization) {
-    yield* Console.log("Signed out of T3 Connect locally.");
+    yield* Console.log("Signed out of TritonAI Connect locally.");
   }
 });
 
@@ -433,7 +415,6 @@ const runCloudCommand = Effect.fn("cloud.cli.run_cloud_command")(function* <A, E
     | CliTokenManager.CloudCliTokenManager
     | RelayClient.RelayClient
     | EnvironmentAuth.EnvironmentAuth
-    | BootService.BootService
     | Crypto.Crypto
     | FileSystem.FileSystem
     | HttpClient.HttpClient
@@ -457,11 +438,6 @@ const runCloudCommand = Effect.fn("cloud.cli.run_cloud_command")(function* <A, E
     RelayClient.layerCloudflared({ baseDir: config.baseDir }),
     EnvironmentAuth.runtimeLayer,
     ServerEnvironment.layer,
-    BootService.layer({
-      baseDir: config.baseDir,
-      logsDir: config.logsDir,
-      cliVersion: packageJson.version,
-    }).pipe(Layer.provide(ProcessRunner.layer)),
     headlessRelayClientTracingLayer,
   ).pipe(
     Layer.provideMerge(FetchHttpClient.layer),
@@ -490,7 +466,7 @@ const linkEnvironmentForConnect = Effect.fn("cloud.cli.link_environment")(functi
       reportRelayClientInstallProgress,
     );
     if (Option.isNone(installed)) {
-      yield* Console.log("T3 Connect setup cancelled. The relay client was not installed.");
+      yield* Console.log("TritonAI Connect setup cancelled. The relay client was not installed.");
       return null;
     }
     yield* Console.log(formatRelayClientReady(installed.value.version));
@@ -509,12 +485,12 @@ const connectLoginCommand = Command.make("login", {
   ...projectLocationFlags,
   headless: headlessFlag,
 }).pipe(
-  Command.withDescription("Authorize the T3 Connect CLI without enabling remote access."),
+  Command.withDescription("Authorize the TritonAI Connect CLI without enabling remote access."),
   Command.withHandler((flags) =>
     runCloudCommand(
       flags,
       Effect.gen(function* () {
-        yield* Console.log("T3 Connect\n");
+        yield* Console.log("TritonAI Connect\n");
         const identity = yield* authorizeCli(flags);
         yield* Console.log(`✓ Signed in${connectedAs(identity)}`);
       }),
@@ -532,12 +508,12 @@ const connectLinkCommand = Command.make("link", {
     Flag.withDefault(false),
   ),
 }).pipe(
-  Command.withDescription("Authorize this environment for T3 Connect on next start."),
+  Command.withDescription("Authorize this environment for TritonAI Connect on next start."),
   Command.withHandler((flags) =>
     runCloudCommand(
       flags,
       Effect.gen(function* () {
-        yield* Console.log("T3 Connect\n");
+        yield* Console.log("TritonAI Connect\n");
         const linked = yield* linkEnvironmentForConnect(flags);
         if (linked) {
           yield* Console.log(
@@ -555,7 +531,7 @@ const connectStatusCommand = Command.make("status", {
   ...projectLocationFlags,
   json: jsonFlag,
 }).pipe(
-  Command.withDescription("Show persisted T3 Connect and relay client state."),
+  Command.withDescription("Show persisted TritonAI Connect and relay client state."),
   Command.withHandler((flags) =>
     runCloudCommand(
       flags,
@@ -624,7 +600,7 @@ const connectPublishCommand = Command.make("publish", {
           const linkedNow = Option.isSome(yield* secrets.get(CLOUD_LINKED_USER_ID));
           if (!linkedNow && (yield* CliState.readCliDesiredLinkMode) === "publish_only") {
             yield* CliState.setCliDesiredCloudLink(false);
-            yield* Console.log("Cancelled the pending publish-only T3 Connect link.");
+            yield* Console.log("Cancelled the pending publish-only TritonAI Connect link.");
           }
           yield* Console.log("Publishing agent activity disabled.");
           return;
@@ -639,7 +615,7 @@ const connectPublishCommand = Command.make("publish", {
         // Publishing needs the relay to know this environment belongs to you.
         // Establish a tunnel-free publish-only link automatically so signing in
         // is all it takes — the mobile client can still reach the environment
-        // out of band without T3 Connect.
+        // out of band without TritonAI Connect.
         if (!(yield* tokens.hasCredential)) {
           yield* Console.log(
             "Run `t3 connect login` first so this environment can be authorized to publish.",
@@ -652,7 +628,7 @@ const connectPublishCommand = Command.make("publish", {
         // link is pending at all.
         if (yield* CliState.readCliDesiredCloudLink) {
           yield* Console.log(
-            "A T3 Connect link is already pending. Start T3 to finish provisioning it; publishing starts once it links.",
+            "A TritonAI Connect link is already pending. Start TritonAI Harness to finish provisioning it; publishing starts once it links.",
           );
           return;
         }
@@ -668,7 +644,7 @@ const connectPublishCommand = Command.make("publish", {
 const connectUnlinkCommand = Command.make("unlink", {
   ...projectLocationFlags,
 }).pipe(
-  Command.withDescription("Disable T3 Connect while retaining the stored authorization."),
+  Command.withDescription("Disable TritonAI Connect while retaining the stored authorization."),
   Command.withHandler((flags) =>
     runCloudCommand(flags, disconnectCloud({ clearAuthorization: false })),
   ),
@@ -677,66 +653,22 @@ const connectUnlinkCommand = Command.make("unlink", {
 const connectLogoutCommand = Command.make("logout", {
   ...projectLocationFlags,
 }).pipe(
-  Command.withDescription("Disable T3 Connect and clear the stored CLI authorization."),
+  Command.withDescription("Disable TritonAI Connect and clear the stored CLI authorization."),
   Command.withHandler((flags) =>
     runCloudCommand(flags, disconnectCloud({ clearAuthorization: true })),
   ),
 );
 
-const offerBootService = Effect.gen(function* () {
-  const bootService = yield* BootService.BootService;
-  const { supported, installed, current } = yield* bootService.status;
-  if (!supported) {
-    // Don't prompt for something that can only fail; background setup is
-    // Linux/systemd-only for now.
-    return false;
-  }
-  if (installed && current) {
-    yield* Console.log("T3 Code is already set up to run in the background on this machine.");
-    return true;
-  }
-  const wanted = yield* Prompt.run(
-    Prompt.confirm({
-      message: installed
-        ? "The installed T3 Code background service is from an older setup. Update it now?"
-        : "Run T3 Code in the background whenever this machine boots? " +
-          "It stays reachable through T3 Connect even after you log out.",
-      initial: true,
-    }),
-  );
-  if (!wanted) {
-    return false;
-  }
-  const plan = yield* bootService.install;
-  yield* Console.log(`Background service installed. Logs: ${plan.logPath}`);
-  return true;
-});
-
-export const recoverBootServiceOffer = <R>(
-  offer: Effect.Effect<boolean, BootService.BootServiceError | Terminal.QuitError, R>,
-) =>
-  offer.pipe(
-    Effect.catchTags({
-      QuitError: () => Effect.succeed(false),
-      BootServiceUnsupportedError: (error) =>
-        Console.log(`Skipping background setup: ${error.message}`).pipe(Effect.as(false)),
-      BootServiceCommandError: (error) =>
-        Console.warn(`Background setup did not finish: ${error.message}`).pipe(Effect.as(false)),
-      BootServiceInstallError: (error) =>
-        Console.warn(`Background setup did not finish: ${error.message}`).pipe(Effect.as(false)),
-    }),
-  );
-
 export const connectCommand = Command.make("connect", {
   ...projectLocationFlags,
   headless: headlessFlag,
 }).pipe(
-  Command.withDescription("Set up T3 Connect for this machine."),
+  Command.withDescription("Set up TritonAI Connect for this machine."),
   Command.withHandler((flags) =>
     runCloudCommand(
       flags,
       Effect.gen(function* () {
-        yield* Console.log("T3 Connect\n");
+        yield* Console.log("TritonAI Connect\n");
         const linked = yield* linkEnvironmentForConnect(flags);
         if (!linked) {
           return;
@@ -746,13 +678,8 @@ export const connectCommand = Command.make("connect", {
         // machine is brought online.
         yield* Console.log(`✓ Connected${connectedAs(linked.identity)}`);
 
-        // Connect itself already succeeded; a boot-service failure must not
-        // fail the command, just tell the user what happened and move on.
-        const background = yield* recoverBootServiceOffer(offerBootService);
         yield* Console.log(
-          background
-            ? "\n✓ Background service ready\n\nT3 Code will stay reachable after you log out."
-            : "\nNext\n  Start the server with `t3 serve` to make this machine reachable.",
+          "\nNext\n  Start the TritonAI Harness server through its approved managed installation to make this machine reachable.",
         );
       }),
     ),

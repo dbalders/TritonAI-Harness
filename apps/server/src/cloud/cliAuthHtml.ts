@@ -1,3 +1,5 @@
+import { TRITONAI_APP_BASE_NAME, TRITONAI_CONNECT_NAME } from "@t3tools/contracts";
+
 export type LoopbackAuthorizationStage = "dev" | "nightly" | "latest";
 
 declare const __T3CODE_BUILD_CHANNEL__: "nightly" | "latest" | undefined;
@@ -7,9 +9,9 @@ export function resolveLoopbackAuthorizationStage(): LoopbackAuthorizationStage 
 }
 
 const stageBrands = {
-  dev: "T3 Code (Dev)",
-  nightly: "T3 Code (Nightly)",
-  latest: "T3 Code",
+  dev: `${TRITONAI_APP_BASE_NAME} (Dev)`,
+  nightly: `${TRITONAI_APP_BASE_NAME} (Nightly)`,
+  latest: TRITONAI_APP_BASE_NAME,
 } as const satisfies Record<LoopbackAuthorizationStage, string>;
 
 export function renderLoopbackAuthorizationCompleteHtml(
@@ -23,7 +25,7 @@ export function renderLoopbackAuthorizationCompleteHtml(
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
-    <title>T3 Connect authorization complete</title>
+    <title>${TRITONAI_CONNECT_NAME} authorization complete</title>
     <style>
       :root {
         color-scheme: light dark;
@@ -147,7 +149,7 @@ export function renderLoopbackAuthorizationCompleteHtml(
       <section class="content">
         <p class="eyebrow">Browser authorization complete</p>
         <h1>You're connected</h1>
-        <p class="description">Return to your terminal to finish setting up T3 Connect. You can close this window.</p>
+        <p class="description">Return to your terminal to finish setting up ${TRITONAI_CONNECT_NAME}. You can close this window.</p>
       </section>
     </main>
   </body>

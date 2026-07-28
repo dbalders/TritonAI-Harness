@@ -55,6 +55,7 @@ import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
 import { ProviderRegistryLive } from "./provider/Layers/ProviderRegistry.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
+import * as T3ProjectFileLoader from "./project/T3ProjectFileLoader.ts";
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
 import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
 import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
@@ -76,11 +77,16 @@ import { authHttpApiLayer, environmentAuthenticatedAuthLayer } from "./auth/http
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as IntegrationRegistry from "./integrations/IntegrationRegistry.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
-import { connectHttpApiLayer, reconcileDesiredCloudLink } from "./cloud/http.ts";
+import {
+  connectHttpApiLayer,
+  reconcileDesiredCloudLink,
+  releaseManagedTunnelOnShutdown,
+} from "./cloud/http.ts";
 import { serverRelayBrokerTracingLayer } from "./cloud/relayTracing.ts";
 import * as CloudManagedEndpointRuntime from "./cloud/ManagedEndpointRuntime.ts";
 import * as CloudCliTokenManager from "./cloud/CliTokenManager.ts";
 import * as CloudCliState from "./cloud/CliState.ts";
+import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
@@ -267,6 +273,7 @@ const WorkspaceLayerLive = Layer.mergeAll(
 
 const ProjectFaviconResolverLayerLive = ProjectFaviconResolver.layer.pipe(
   Layer.provide(WorkspacePaths.layer),
+  Layer.provide(T3ProjectFileLoader.layer),
 );
 
 const AuthLayerLive = EnvironmentAuth.layer.pipe(
@@ -372,7 +379,11 @@ export const makeRoutesLayerFor = (
       websocketRpcRouteLayer,
     ),
     McpHttpServer.makeLayer(loadIntegrationRegistry).pipe(Layer.provide(McpSessionRegistry.layer)),
-  ).pipe(Layer.provide(browserApiCorsLayer));
+  ).pipe(
+    Layer.provide(PreviewAutomationBroker.layer),
+    Layer.provide(ServerSelfUpdate.layer),
+    Layer.provide(browserApiCorsLayer),
+  );
 
 export const makeRoutesLayer = makeRoutesLayerFor();
 
@@ -464,6 +475,26 @@ export const makeServerLayer = Layer.unwrap(
     const cloudDesiredLinkReconcileLayer = Layer.effectDiscard(
       Effect.gen(function* () {
         if (!hasCloudPublicConfig) return;
+        // Idle Cloudflare tunnels are billed, so a stopping server releases its
+        // tunnel; the persisted desired link brings one back — same hostname,
+        // fresh tunnel — when the environment starts again. Registered even
+        // when no link is desired yet: a client can link a running server, and
+        // that tunnel needs the same disposal on shutdown.
+        yield* Effect.addFinalizer(() =>
+          releaseManagedTunnelOnShutdown().pipe(
+            Effect.timeout("10 seconds"),
+            Effect.tap((released) =>
+              released ? Effect.logInfo("Released the managed tunnel on shutdown") : Effect.void,
+            ),
+            Effect.catchCause((cause) =>
+              Effect.logWarning(
+                "Failed to release the managed tunnel on shutdown; the next link reuses it",
+                { cause },
+              ),
+            ),
+            Effect.asVoid,
+          ),
+        );
         if (!(yield* CloudCliState.readCliDesiredCloudLink)) return;
         const server = yield* HttpServer.HttpServer;
         const address = server.address;
@@ -472,9 +503,9 @@ export const makeServerLayer = Layer.unwrap(
           Effect.sleep("250 millis").pipe(
             Effect.andThen(reconcileDesiredCloudLink(`http://127.0.0.1:${address.port}`)),
             Effect.retry({ times: 4 }),
-            Effect.tap(() => Effect.logInfo("T3 Connect desired link reconciled on startup")),
+            Effect.tap(() => Effect.logInfo("TritonAI Connect desired link reconciled on startup")),
             Effect.catch((cause) =>
-              Effect.logWarning("Failed to reconcile T3 Connect desired link on startup", {
+              Effect.logWarning("Failed to reconcile TritonAI Connect desired link on startup", {
                 cause,
               }),
             ),

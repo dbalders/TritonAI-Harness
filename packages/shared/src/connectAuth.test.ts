@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   buildConnectAuthorizeRequestUrl,
   buildConnectClerkAuthorizeUrl,
+  checkConnectAuthCode,
   connectCallbackUrl,
   encodeConnectAuthCode,
   parseConnectAuthCode,
@@ -74,5 +75,11 @@ describe("connectAuth", () => {
     expect(parseConnectAuthCode("no-separator")).toBeNull();
     expect(parseConnectAuthCode(".leading")).toBeNull();
     expect(parseConnectAuthCode("trailing.")).toBeNull();
+  });
+
+  it("uses the downstream product name in malformed-code guidance", () => {
+    expect(checkConnectAuthCode("not-a-code", "expected-state")).toBe(
+      "That does not look like a TritonAI Connect code. Copy the full code.",
+    );
   });
 });

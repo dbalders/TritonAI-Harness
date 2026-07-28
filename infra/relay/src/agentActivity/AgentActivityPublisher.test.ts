@@ -719,6 +719,7 @@ describe("makeAggregateState", () => {
     });
 
     expect(aggregate?.activeCount).toBe(1);
+    expect(aggregate?.title).toBe("TritonAI Harness");
     expect(aggregate?.subtitle).toBe("Agent work in progress");
     expect(aggregate?.activities).toMatchObject([
       { threadId: "thread-active", phase: "running" },
@@ -793,6 +794,7 @@ describe("makeAggregateState", () => {
     // keep Done content on it, and once they age out the aggregate becomes
     // null and the delivery layer ends the card.
     expect(aggregate).toMatchObject({
+      title: "TritonAI Harness",
       activeCount: 0,
       subtitle: "Agent work completed",
       activities: [{ phase: "completed", status: "Done" }],

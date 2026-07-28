@@ -24,6 +24,7 @@ const clientSettings: ClientSettings = {
   diffIgnoreWhitespace: true,
   tritonAiFirstRunOnboardingCompleted: false,
   favorites: [],
+  glassOpacity: 80,
   providerModelPreferences: {},
   sidebarAutoSettleAfterDays: 3,
   sidebarProjectGroupingMode: "repository_path",

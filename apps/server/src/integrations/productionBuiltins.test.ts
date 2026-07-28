@@ -5,6 +5,7 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
+import effectPackageJson from "effect/package.json" with { type: "json" };
 
 import {
   verifyProductionPackageForTest,
@@ -41,7 +42,7 @@ function composition(files: ReadonlyArray<TestFile>) {
   };
 }
 
-async function fixture() {
+async function fixture(effectVersion = effectPackageJson.version) {
   const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-production-plugin-"));
   const entries = [
     [".tritonai-plugin/plugin.json", '{"id":"microsoft-365"}'],
@@ -51,7 +52,11 @@ async function fixture() {
     ],
     [
       "package.json",
-      '{"name":"@tritonai/microsoft-365","type":"module","dependencies":{"effect":"4.0.0-beta.78"}}',
+      JSON.stringify({
+        name: "@tritonai/microsoft-365",
+        type: "module",
+        dependencies: { effect: effectVersion },
+      }),
     ],
   ] as const;
   const files: Array<TestFile> = [];
@@ -115,6 +120,17 @@ describe("production built-in package verification", () => {
     } finally {
       await NodeFSP.rm(root, { recursive: true, force: true });
       if (snapshotParent) await NodeFSP.rm(snapshotParent, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a package built for a different Effect runtime", async () => {
+    const { root, plugin } = await fixture("4.0.0-beta.78");
+    try {
+      await expect(
+        withProductionPackageSnapshotForTest(root, plugin, async () => undefined),
+      ).rejects.toThrow("runtime dependency version does not match: effect");
+    } finally {
+      await NodeFSP.rm(root, { recursive: true, force: true });
     }
   });
 

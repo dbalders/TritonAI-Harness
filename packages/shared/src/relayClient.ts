@@ -1,7 +1,8 @@
 import * as Clock from "effect/Clock";
-import type {
-  RelayClientInstallProgressEvent,
-  RelayClientInstallProgressStage,
+import {
+  TRITONAI_APP_BASE_NAME,
+  type RelayClientInstallProgressEvent,
+  type RelayClientInstallProgressStage,
 } from "@t3tools/contracts";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
@@ -368,7 +369,7 @@ export const makeCloudflaredRelayClient = Effect.fn("cloudflared.make")(function
     if (!releaseAsset) {
       return yield* new RelayClientInstallError({
         reason: "unsupported_platform",
-        message: `T3 Code does not provide a managed relay client binary for ${platform}-${arch}.`,
+        message: `${TRITONAI_APP_BASE_NAME} does not provide a managed relay client binary for ${platform}-${arch}.`,
       });
     }
 

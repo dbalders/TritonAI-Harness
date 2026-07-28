@@ -1,10 +1,9 @@
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { LinkIcon, PlusIcon, RotateCcwIcon } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { useOpenAddProjectCommandPalette } from "../commandPaletteContext";
-import { sortScopedProjectsForSidebar } from "../components/Sidebar.logic";
+import { openCommandPalette } from "../commandPaletteBus";
 import { Button } from "../components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../components/ui/empty";
 import { SidebarInset } from "../components/ui/sidebar";
@@ -15,6 +14,7 @@ import {
   useThreadShells,
 } from "../state/entities";
 import { useEnvironments } from "../state/environments";
+import { sortRegularScopedProjectsForSidebar } from "../tritonAiProjectSurfaces";
 import { APP_DISPLAY_NAME } from "~/branding";
 import { hasCloudPublicConfig } from "~/cloud/publicConfig";
 import { cn } from "~/lib/utils";
@@ -47,7 +47,7 @@ function IndexDraftLanding() {
   const mostRecentProject = useMemo(
     () =>
       bootstrapped
-        ? (sortScopedProjectsForSidebar(projects, threads, "updated_at")[0] ?? null)
+        ? (sortRegularScopedProjectsForSidebar(projects, threads, "updated_at")[0] ?? null)
         : null,
     [bootstrapped, projects, threads],
   );
@@ -105,7 +105,7 @@ function DraftStartError({ onRetry }: { readonly onRetry: () => void }) {
 }
 
 function NoProjectsHero() {
-  const openAddProject = useOpenAddProjectCommandPalette();
+  const openAddProject = useCallback(() => openCommandPalette({ open: "add-project" }), []);
 
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
