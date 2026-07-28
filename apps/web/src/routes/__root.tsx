@@ -18,6 +18,7 @@ import { ConnectOnboardingDialog } from "../components/cloud/ConnectOnboardingDi
 import { RelayClientInstallDialog } from "../components/cloud/RelayClientInstallDialog";
 import { SshPasswordPromptDialog } from "../components/desktop/SshPasswordPromptDialog";
 import { SlowRpcRequestToastCoordinator } from "../components/SlowRpcRequestToastCoordinator";
+import { TritonAiUsageWarning } from "../components/TritonAiUsageWarning";
 import { Button } from "../components/ui/button";
 import {
   AnchoredToastProvider,
@@ -134,6 +135,7 @@ function RootRouteView() {
         <SlowRpcRequestToastCoordinator />
         <HostedStaticEnvironmentBootstrap />
         {primaryEnvironmentAuthenticated ? <EventRouter /> : null}
+        {primaryEnvironmentAuthenticated ? <TritonAiUsageWarning /> : null}
         {/* Provider updates stay available in Settings and the sidebar; TritonAI has no launch popup. */}
         {primaryEnvironmentAuthenticated ? (
           <TritonAiFirstRunOnboardingBootstrap pathname={pathname} />

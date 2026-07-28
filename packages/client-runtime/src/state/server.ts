@@ -27,6 +27,8 @@ import { EnvironmentCacheStore } from "../platform/persistence.ts";
 import { subscribe, type EnvironmentRpcInput } from "../rpc/client.ts";
 import { followStreamInEnvironment } from "./runtime.ts";
 
+const TRITONAI_USAGE_REFRESH_INTERVAL_MS = 5 * 60_000;
+
 export interface ServerConfigProjection {
   readonly config: ServerConfig;
   readonly latestEvent: ServerConfigStreamEvent;
@@ -297,6 +299,7 @@ export function createServerEnvironmentAtoms<R, E>(
     tritonAiUsage: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:tritonai-usage",
       tag: WS_METHODS.serverGetTritonAiUsage,
+      refreshIntervalMs: TRITONAI_USAGE_REFRESH_INTERVAL_MS,
     }),
     processResourceHistory: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:process-resource-history",

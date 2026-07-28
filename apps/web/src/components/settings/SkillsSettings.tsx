@@ -29,6 +29,7 @@ import {
   formatProviderSkillInstallSource,
 } from "../../providerSkillPresentation";
 import {
+  dedupeProviderSkillRows,
   groupProviderSkills,
   isProviderSkillMutationBlocked,
   type ProviderCatalogSkillItem as CatalogSkillItem,
@@ -102,7 +103,7 @@ function SkillSettingsRow({
   const status = skillStatusLabel(row);
   const sourceLabel = managed ? "Managed by TritonAI" : formatProviderSkillInstallSource(row.skill);
   const details = [
-    providerLabel(row.provider),
+    managed ? null : providerLabel(row.provider),
     sourceLabel,
     row.skill.scope ? `${row.skill.scope} scope` : null,
   ].filter(Boolean);
@@ -416,19 +417,19 @@ export function SkillsSettingsPanel() {
   const installProvider = codexProviders[0] ?? null;
   const rows = useMemo<ReadonlyArray<CodexSkillRow>>(
     () =>
-      codexProviders
-        .flatMap((provider) =>
+      dedupeProviderSkillRows(
+        codexProviders.flatMap((provider) =>
           provider.skills.map((skill) => ({ provider, skill }) satisfies CodexSkillRow),
-        )
-        .toSorted((left, right) => {
-          const leftName = formatProviderSkillDisplayName(left.skill).toLowerCase();
-          const rightName = formatProviderSkillDisplayName(right.skill).toLowerCase();
-          return (
-            providerLabel(left.provider).localeCompare(providerLabel(right.provider)) ||
-            leftName.localeCompare(rightName) ||
-            left.skill.path.localeCompare(right.skill.path)
-          );
-        }),
+        ),
+      ).toSorted((left, right) => {
+        const leftName = formatProviderSkillDisplayName(left.skill).toLowerCase();
+        const rightName = formatProviderSkillDisplayName(right.skill).toLowerCase();
+        return (
+          providerLabel(left.provider).localeCompare(providerLabel(right.provider)) ||
+          leftName.localeCompare(rightName) ||
+          left.skill.path.localeCompare(right.skill.path)
+        );
+      }),
     [codexProviders],
   );
   const catalogEntries = catalog?.entries ?? [];

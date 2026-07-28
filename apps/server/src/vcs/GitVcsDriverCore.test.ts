@@ -128,7 +128,7 @@ it.effect("uses stable diagnostics for every parsed non-repository command", () 
 
     assert.deepStrictEqual(commands, [
       { args: ["status", "--porcelain=2", "--branch"], lcAll: "C" },
-      { args: ["rev-parse", "--abbrev-ref", "HEAD"], lcAll: "C" },
+      { args: ["symbolic-ref", "--quiet", "--short", "HEAD"], lcAll: "C" },
       { args: ["branch", "--no-color", "--no-column"], lcAll: "C" },
     ]);
   }).pipe(Effect.provide(layer));
@@ -327,6 +327,39 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         const refs = yield* driver.listRefs({ cwd });
         assert.equal(refs.isRepo, false);
         assert.deepStrictEqual(refs.refs, []);
+      }),
+    );
+
+    it.effect("reports remote status before the first commit", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        yield* driver.initRepo({ cwd });
+        const initialBranch = yield* git(cwd, ["symbolic-ref", "--short", "HEAD"]);
+
+        const status = yield* driver.statusDetailsRemote(cwd, { refreshUpstream: false });
+
+        assert.equal(status.isRepo, true);
+        assert.equal(status.branch, initialBranch);
+        assert.equal(status.hasUpstream, false);
+        assert.equal(status.aheadCount, 0);
+        assert.equal(status.behindCount, 0);
+        assert.equal(status.aheadOfDefaultCount, 0);
+      }),
+    );
+
+    it.effect("reports remote status for a detached HEAD", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        yield* git(cwd, ["checkout", "--detach"]);
+
+        const status = yield* (yield* GitVcsDriver.GitVcsDriver).statusDetailsRemote(cwd, {
+          refreshUpstream: false,
+        });
+
+        assert.equal(status.isRepo, true);
+        assert.equal(status.branch, null);
       }),
     );
 
