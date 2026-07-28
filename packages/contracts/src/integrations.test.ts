@@ -58,6 +58,9 @@ describe("IntegrationConnectResult", () => {
         authorizationUrl: `https://example.test/${"x".repeat(8_193)}`,
       }),
     ).toThrow();
+    expect(() =>
+      decodeConnectResult({ ...authorizationUrlFlow, expiresAt: "not-a-timestamp" }),
+    ).toThrow();
   });
 
   it("rejects connection flows without a supported discriminator", () => {

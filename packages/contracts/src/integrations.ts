@@ -105,6 +105,15 @@ export const IntegrationDeviceCodeConnectResult = Schema.Struct({
 });
 export type IntegrationDeviceCodeConnectResult = typeof IntegrationDeviceCodeConnectResult.Type;
 
+const AuthorizationExpiresAt = IsoDateTime.check(
+  Schema.makeFilter(
+    (value) =>
+      (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/u.test(value) &&
+        Number.isFinite(Date.parse(value))) ||
+      "Authorization expiry must be an RFC 3339 timestamp.",
+  ),
+);
+
 export const IntegrationAuthorizationUrlConnectResult = Schema.Struct({
   kind: Schema.Literal("authorization_url"),
   flowId: TrimmedNonEmptyString,
@@ -113,7 +122,7 @@ export const IntegrationAuthorizationUrlConnectResult = Schema.Struct({
     Schema.isPattern(/^https:\/\/[^\s]+$/),
   ),
   message: TrimmedNonEmptyString,
-  expiresAt: IsoDateTime,
+  expiresAt: AuthorizationExpiresAt,
   intervalSeconds: PositiveInt,
 });
 export type IntegrationAuthorizationUrlConnectResult =
