@@ -18,7 +18,11 @@ import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../termina
 import { isPreviewSupportedInRuntime } from "../previewStateStore";
 import { selectActiveRightPanel, useRightPanelStore } from "../rightPanelStore";
 import { useThreadSelectionStore } from "../threadSelectionStore";
-import { buildRegularSidebarProjectSnapshots } from "../tritonAiProjectSurfaces";
+import {
+  buildRegularSidebarProjectSnapshots,
+  isRegularProjectThreadContext,
+  resolveGenericNewThreadShortcutAction,
+} from "../tritonAiProjectSurfaces";
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
 import { primaryServerKeybindingsAtom } from "~/state/server";
 
@@ -77,32 +81,31 @@ function ChatRouteGlobalShortcuts() {
         return;
       }
 
-      if (command === "chat.newLocal") {
+      if (command === "chat.newLocal" || command === "chat.new") {
         event.preventDefault();
         event.stopPropagation();
-        void startNewThreadFromContext({
-          activeDraftThread,
-          activeThread: activeThread ?? undefined,
-          defaultProjectRef,
-          handleNewThread,
+        const action = resolveGenericNewThreadShortcutAction({
+          command,
+          projectGroupCount,
+          sidebarV2Enabled,
         });
-        return;
-      }
-
-      if (command === "chat.new") {
-        event.preventDefault();
-        event.stopPropagation();
-        // Sidebar v2 routes creation through the command palette whenever
-        // there is a real choice to make; v1 (and single-project setups)
-        // keep the immediate contextual create.
-        if (sidebarV2Enabled && projectGroupCount > 1) {
+        if (action === "none") {
+          return;
+        }
+        if (action === "choose") {
           openCommandPalette({ open: "new-thread-in" });
           return;
         }
         void startNewThreadFromContext({
-          activeDraftThread,
-          activeThread: activeThread ?? undefined,
-          defaultProjectRef,
+          activeDraftThread: isRegularProjectThreadContext(projects, activeDraftThread)
+            ? activeDraftThread
+            : null,
+          activeThread: isRegularProjectThreadContext(projects, activeThread)
+            ? (activeThread ?? undefined)
+            : undefined,
+          defaultProjectRef: isRegularProjectThreadContext(projects, defaultProjectRef)
+            ? defaultProjectRef
+            : null,
           handleNewThread,
         });
         return;
@@ -165,6 +168,7 @@ function ChatRouteGlobalShortcuts() {
     defaultProjectRef,
     previewOpen,
     projectGroupCount,
+    projects,
     routeThreadRef,
     selectedThreadKeysSize,
     sidebarV2Enabled,

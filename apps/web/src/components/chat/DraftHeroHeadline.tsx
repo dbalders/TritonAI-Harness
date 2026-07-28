@@ -10,7 +10,10 @@ import { selectProjectGroupingSettings } from "~/logicalProject";
 import { buildSidebarProjectPickerEntries } from "~/sidebarProjectGrouping";
 import { useProjects, useThreadShells } from "~/state/entities";
 import { useEnvironments, usePrimaryEnvironmentId } from "~/state/environments";
-import { buildRegularSidebarProjectSnapshots } from "~/tritonAiProjectSurfaces";
+import {
+  buildRegularSidebarProjectSnapshots,
+  isRegularProjectThreadContext,
+} from "~/tritonAiProjectSurfaces";
 import { sortLogicalProjectsForSidebar } from "../Sidebar.logic";
 import {
   Menu,
@@ -90,12 +93,19 @@ export function DraftHeroHeadline({
           ),
         ) ?? null);
   const activeProjectKey = activeProjectGroup?.projectKey ?? "";
-  const activeProjectDisplayName = activeProjectGroup?.displayName ?? activeProjectTitle;
+  const hasExcludedActiveProject =
+    activeProjectRef !== null &&
+    activeProjectTitle !== null &&
+    !isRegularProjectThreadContext(projects, activeProjectRef);
+  const activeProjectDisplayName =
+    activeProjectGroup?.displayName ?? (activeProjectRef === null ? activeProjectTitle : null);
   const hasResolvedProject = activeProjectTitle !== null;
   const canChooseProject = projectPickerEntries.length > 0;
-  const shouldShowProjectMenu = canChooseProject;
+  const shouldShowProjectMenu = canChooseProject && !hasExcludedActiveProject;
 
-  const projectSelector = shouldShowProjectMenu ? (
+  const projectSelector = hasExcludedActiveProject ? (
+    <span className="text-foreground">{activeProjectTitle}</span>
+  ) : shouldShowProjectMenu ? (
     <Menu>
       <MenuTrigger
         aria-label={hasResolvedProject ? "Change project" : "Choose a project"}
