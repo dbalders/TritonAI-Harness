@@ -9,6 +9,8 @@ import {
   APP_BUNDLE_ID,
   APP_DISPLAY_NAME,
   makeDevelopmentLauncherScript,
+  resolveElectronBinaryPath,
+  resolveMacLauncherPaths,
 } from "./electron-launcher.mjs";
 
 function executeLauncher({ capturedEnvironment, runtimeEnvironment }) {
@@ -121,5 +123,54 @@ describe("electron development launcher", () => {
     });
 
     assert.equal(output, "TRITONAI_HOME=/tmp/runtime-legacy\nT3CODE_HOME=\n");
+  });
+
+  it("repairs Electron before loading the package entrypoint", () => {
+    const calls = [];
+    const electronPath = resolveElectronBinaryPath({
+      ensureRuntime: () => {
+        calls.push("ensure");
+      },
+      createRequire: () => (specifier) => {
+        calls.push(`require:${specifier}`);
+        return "/repo/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron";
+      },
+      moduleUrl: import.meta.url,
+    });
+
+    assert.equal(
+      electronPath,
+      "/repo/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron",
+    );
+    assert.deepEqual(calls, ["ensure", "require:electron"]);
+  });
+
+  it("keeps the native Electron executable name inside the branded macOS bundle", () => {
+    const paths = resolveMacLauncherPaths(
+      "/repo/apps/desktop/.electron-runtime/T3 Code (Dev).app",
+      "T3 Code (Dev)",
+    );
+
+    assert.equal(paths.launcherExecutableName, "T3 Code (Dev) Launcher");
+    assert.equal(
+      paths.launcherBinaryPath,
+      "/repo/apps/desktop/.electron-runtime/T3 Code (Dev).app/Contents/MacOS/T3 Code (Dev) Launcher",
+    );
+    assert.equal(
+      paths.runtimeElectronBinaryPath,
+      "/repo/apps/desktop/.electron-runtime/T3 Code (Dev).app/Contents/MacOS/Electron",
+    );
+
+    const script = makeDevelopmentLauncherScript({
+      electronBinaryPath: paths.runtimeElectronBinaryPath,
+      mainEntryPath: "/repo/apps/desktop/dist-electron/main.cjs",
+      desktopRoot: "/repo/apps/desktop",
+      environment: {},
+    });
+    assert.include(
+      script,
+      "exec '/repo/apps/desktop/.electron-runtime/T3 Code (Dev).app/Contents/MacOS/Electron'",
+    );
+    assert.notInclude(script, "node_modules/electron");
   });
 });

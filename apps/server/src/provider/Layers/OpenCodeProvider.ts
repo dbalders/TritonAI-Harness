@@ -1,5 +1,4 @@
 import {
-  ProviderDriverKind,
   type ModelCapabilities,
   type OpenCodeSettings,
   type ServerProviderModel,
@@ -25,7 +24,6 @@ import {
 } from "../opencodeRuntime.ts";
 import type { Agent, ProviderListResponse } from "@opencode-ai/sdk/v2";
 
-const PROVIDER = ProviderDriverKind.make("opencode");
 const OPENCODE_PRESENTATION = {
   displayName: "OpenCode",
   showInteractionModeToggle: false,
@@ -259,7 +257,6 @@ export const makePendingOpenCodeProvider = (
     const checkedAt = yield* Effect.map(DateTime.now, DateTime.formatIso);
     const models = providerModelsFromSettings(
       [],
-      PROVIDER,
       openCodeSettings.customModels,
       DEFAULT_OPENCODE_MODEL_CAPABILITIES,
     );
@@ -277,8 +274,8 @@ export const makePendingOpenCodeProvider = (
           auth: { status: "unknown" },
           message:
             openCodeSettings.serverUrl.trim().length > 0
-              ? "OpenCode is disabled in T3 Code settings. A server URL is configured."
-              : "OpenCode is disabled in T3 Code settings.",
+              ? "OpenCode is disabled in TritonAI Harness settings. A server URL is configured."
+              : "OpenCode is disabled in TritonAI Harness settings.",
         },
       });
     }
@@ -319,12 +316,7 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
       presentation: OPENCODE_PRESENTATION,
       enabled: openCodeSettings.enabled,
       checkedAt,
-      models: providerModelsFromSettings(
-        [],
-        PROVIDER,
-        customModels,
-        DEFAULT_OPENCODE_MODEL_CAPABILITIES,
-      ),
+      models: providerModelsFromSettings([], customModels, DEFAULT_OPENCODE_MODEL_CAPABILITIES),
       probe: {
         installed: failure.installed,
         version,
@@ -340,20 +332,15 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
       presentation: OPENCODE_PRESENTATION,
       enabled: false,
       checkedAt,
-      models: providerModelsFromSettings(
-        [],
-        PROVIDER,
-        customModels,
-        DEFAULT_OPENCODE_MODEL_CAPABILITIES,
-      ),
+      models: providerModelsFromSettings([], customModels, DEFAULT_OPENCODE_MODEL_CAPABILITIES),
       probe: {
         installed: false,
         version: null,
         status: "warning",
         auth: { status: "unknown" },
         message: isExternalServer
-          ? "OpenCode is disabled in T3 Code settings. A server URL is configured."
-          : "OpenCode is disabled in T3 Code settings.",
+          ? "OpenCode is disabled in TritonAI Harness settings. A server URL is configured."
+          : "OpenCode is disabled in TritonAI Harness settings.",
       },
     });
   }
@@ -381,7 +368,7 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
     if (!version) {
       return fallback(
         new Error(
-          `Unable to determine OpenCode version from \`opencode --version\` output. T3 Code requires OpenCode v${MINIMUM_OPENCODE_VERSION} or newer.`,
+          `Unable to determine OpenCode version from \`opencode --version\` output. TritonAI Harness requires OpenCode v${MINIMUM_OPENCODE_VERSION} or newer.`,
         ),
         null,
       );
@@ -391,12 +378,7 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
         presentation: OPENCODE_PRESENTATION,
         enabled: openCodeSettings.enabled,
         checkedAt,
-        models: providerModelsFromSettings(
-          [],
-          PROVIDER,
-          customModels,
-          DEFAULT_OPENCODE_MODEL_CAPABILITIES,
-        ),
+        models: providerModelsFromSettings([], customModels, DEFAULT_OPENCODE_MODEL_CAPABILITIES),
         probe: {
           installed: true,
           version,
@@ -409,26 +391,32 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
   }
 
   const inventoryExit = yield* Effect.exit(
-    Effect.scoped(
-      Effect.gen(function* () {
-        const server = yield* openCodeRuntime.connectToOpenCodeServer({
-          binaryPath: openCodeSettings.binaryPath,
-          serverUrl: openCodeSettings.serverUrl,
-          environment: resolvedEnvironment,
-        });
-        return yield* openCodeRuntime.loadOpenCodeInventory(
-          openCodeRuntime.createOpenCodeSdkClient({
-            baseUrl: server.url,
-            directory: cwd,
-            ...(isExternalServer && openCodeSettings.serverPassword
-              ? { serverPassword: openCodeSettings.serverPassword }
-              : {}),
+    (isExternalServer
+      ? Effect.scoped(
+          Effect.gen(function* () {
+            const server = yield* openCodeRuntime.connectToOpenCodeServer({
+              binaryPath: openCodeSettings.binaryPath,
+              serverUrl: openCodeSettings.serverUrl,
+              environment: resolvedEnvironment,
+            });
+            return yield* openCodeRuntime.loadOpenCodeInventory(
+              openCodeRuntime.createOpenCodeSdkClient({
+                baseUrl: server.url,
+                directory: cwd,
+                ...(openCodeSettings.serverPassword
+                  ? { serverPassword: openCodeSettings.serverPassword }
+                  : {}),
+              }),
+            );
           }),
-        );
-      }).pipe(
-        Effect.mapError(
-          (cause) => new OpenCodeProbeError({ cause, detail: openCodeRuntimeErrorDetail(cause) }),
-        ),
+        )
+      : openCodeRuntime.loadInventoryFromCli({
+          binaryPath: openCodeSettings.binaryPath,
+          environment: resolvedEnvironment,
+        })
+    ).pipe(
+      Effect.mapError(
+        (cause) => new OpenCodeProbeError({ cause, detail: openCodeRuntimeErrorDetail(cause) }),
       ),
     ),
   );
@@ -438,7 +426,6 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
 
   const models = providerModelsFromSettings(
     flattenOpenCodeModels(inventoryExit.value),
-    PROVIDER,
     customModels,
     DEFAULT_OPENCODE_MODEL_CAPABILITIES,
   );

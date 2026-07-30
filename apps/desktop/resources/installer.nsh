@@ -101,6 +101,7 @@
   # electron-builder normally runs the uninstaller from the version that is
   # already installed. Replace it with this installer's signed uninstaller so
   # the first upgrade from a legacy release also uses the directory-swap path.
+  !ifndef BUILD_UNINSTALLER
   ${if} ${FileExists} "$INSTDIR\${UNINSTALL_FILENAME}"
     InitPluginsDir
     File /oname=$PLUGINSDIR\tritonai-upgrade-uninstaller.exe "${UNINSTALLER_OUT_FILE}"
@@ -110,6 +111,7 @@
       Abort "Cannot prepare the existing ${PRODUCT_NAME} installation for upgrade."
     ${endif}
   ${endif}
+  !endif
 !macroend
 
 # At this point the new application and uninstaller have both been written.

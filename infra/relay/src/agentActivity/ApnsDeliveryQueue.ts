@@ -46,7 +46,9 @@ export type ApnsDeliveryQueueError = ApnsDeliveryQueueSendError;
 export class ApnsDeliveryQueueSender extends Context.Service<
   ApnsDeliveryQueueSender,
   {
-    readonly send: (body: SignedApnsDeliveryJob) => Effect.Effect<void, Cloudflare.QueueSendError>;
+    readonly send: (
+      body: SignedApnsDeliveryJob,
+    ) => Effect.Effect<void, Cloudflare.Queues.SendError>;
   }
 >()("t3code-relay/agentActivity/ApnsDeliveryQueue/ApnsDeliveryQueueSender") {}
 
@@ -58,12 +60,17 @@ export class ApnsDeliveryQueue extends Context.Service<
       readonly userId: string;
       readonly deviceId: string;
       readonly token: string;
+      readonly bundleId?: string | null;
+      readonly apsEnvironment?: "sandbox" | "production" | null;
       readonly aggregate: ApnsDeliveryJobPayload["aggregate"];
+      readonly alert?: ApnsDeliveryJobPayload["alert"];
     }) => Effect.Effect<RelayDeliveryResult, ApnsDeliveryQueueError>;
     readonly enqueuePushNotification: (input: {
       readonly userId: string;
       readonly deviceId: string;
       readonly token: string;
+      readonly bundleId?: string | null;
+      readonly apsEnvironment?: "sandbox" | "production" | null;
       readonly notification: NonNullable<ApnsDeliveryJobPayload["notification"]>;
     }) => Effect.Effect<RelayDeliveryResult, ApnsDeliveryQueueError>;
   }
@@ -160,6 +167,8 @@ export const make = Effect.gen(function* () {
           userId: input.userId,
           deviceId: input.deviceId,
           token: input.token,
+          bundleId: input.bundleId,
+          apsEnvironment: input.apsEnvironment,
           aggregate: null,
           notification: sanitizeApnsNotificationPayload(input.notification),
           jobId,
@@ -200,7 +209,7 @@ export const make = Effect.gen(function* () {
 export const layer = Layer.effect(ApnsDeliveryQueue, make);
 
 export const layerCloudflareQueues = (
-  sender: Cloudflare.QueueSender,
+  sender: Cloudflare.Queues.WriteQueueClient,
   alchemyRuntimeContext: Alchemy.BaseRuntimeContext,
 ) =>
   layer.pipe(

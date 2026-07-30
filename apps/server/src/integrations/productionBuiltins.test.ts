@@ -5,6 +5,10 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
+import { EFFECT_HOST_PEER_RANGE } from "@t3tools/shared/pluginHostRuntime";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import effectPackageJson from "effect/package.json" with { type: "json" };
 
 import {
   verifyProductionPackageForTest,
@@ -41,17 +45,36 @@ function composition(files: ReadonlyArray<TestFile>) {
   };
 }
 
-async function fixture() {
+async function fixture(
+  effectVersion: string | null = effectPackageJson.version,
+  packageRuntime: Readonly<Record<string, unknown>> = {},
+) {
   const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-production-plugin-"));
   const entries = [
     [".tritonai-plugin/plugin.json", '{"id":"microsoft-365"}'],
     [
       "dist/index.js",
-      'import * as Effect from "effect/Effect"; export const value = Effect.succeed(true);',
+      [
+        'import * as Effect from "effect/Effect";',
+        'import * as Option from "effect/Option";',
+        "export const value = Effect.succeed(true);",
+        "export class FixtureProvider {",
+        "  constructor(secrets) { this.secrets = secrets; }",
+        "  async credential() {",
+        '    const value = await Effect.runPromise(this.secrets.get("oauth"));',
+        "    return Option.isSome(value) ? new TextDecoder().decode(value.value) : null;",
+        "  }",
+        "}",
+      ].join("\n"),
     ],
     [
       "package.json",
-      '{"name":"@tritonai/microsoft-365","type":"module","dependencies":{"effect":"4.0.0-beta.78"}}',
+      JSON.stringify({
+        name: "@tritonai/microsoft-365",
+        type: "module",
+        ...(effectVersion === null ? {} : { dependencies: { effect: effectVersion } }),
+        ...packageRuntime,
+      }),
     ],
   ] as const;
   const files: Array<TestFile> = [];
@@ -115,6 +138,59 @@ describe("production built-in package verification", () => {
     } finally {
       await NodeFSP.rm(root, { recursive: true, force: true });
       if (snapshotParent) await NodeFSP.rm(snapshotParent, { recursive: true, force: true });
+    }
+  });
+
+  it("runs the released beta.78 provider with a host-created beta.102 secret-store Effect", async () => {
+    const { root, plugin } = await fixture("4.0.0-beta.78");
+    try {
+      await withProductionPackageSnapshotForTest(root, plugin, async (snapshotRoot) => {
+        const loaded = (await import(
+          NodeURL.pathToFileURL(NodePath.join(snapshotRoot, "dist", "index.js")).href
+        )) as {
+          readonly FixtureProvider: new (secrets: {
+            readonly get: (name: string) => Effect.Effect<Option.Option<Uint8Array>>;
+          }) => { readonly credential: () => Promise<string | null> };
+        };
+        const provider = new loaded.FixtureProvider({
+          get: () => Effect.succeed(Option.some(new TextEncoder().encode("host-secret"))),
+        });
+        await expect(provider.credential()).resolves.toBe("host-secret");
+      });
+    } finally {
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("runs a peer-contract provider against the Harness-owned Effect runtime", async () => {
+    const { root, plugin } = await fixture(null, {
+      peerDependencies: { effect: EFFECT_HOST_PEER_RANGE },
+    });
+    try {
+      await withProductionPackageSnapshotForTest(root, plugin, async (snapshotRoot) => {
+        await expect(
+          import(NodeURL.pathToFileURL(NodePath.join(snapshotRoot, "dist", "index.js")).href),
+        ).resolves.toHaveProperty("FixtureProvider");
+      });
+    } finally {
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects runtime declarations outside the narrow Effect 4 beta contract", async () => {
+    for (const packageRuntime of [
+      { dependencies: { effect: "4.0.0-beta.999" } },
+      { dependencies: { effect: "4.0.0-beta.78", unexpected: "1.0.0" } },
+      { peerDependencies: { effect: ">=4.0.0-beta.1 <5.0.0" } },
+    ]) {
+      const { root, plugin } = await fixture(null, packageRuntime);
+      try {
+        await expect(
+          withProductionPackageSnapshotForTest(root, plugin, async () => undefined),
+        ).rejects.toThrow("host runtime contract is invalid");
+      } finally {
+        await NodeFSP.rm(root, { recursive: true, force: true });
+      }
     }
   });
 

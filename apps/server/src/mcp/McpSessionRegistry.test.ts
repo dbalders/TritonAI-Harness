@@ -23,7 +23,7 @@ const makeRegistry = (now: () => number, httpServer = fakeHttpServer) =>
   McpSessionRegistry.__testing
     .make({
       now,
-      idleTimeoutMs: 100,
+      livenessWindowMs: 100,
       maximumLifetimeMs: 1_000,
     })
     .pipe(
@@ -49,6 +49,8 @@ it.effect("stores only a token hash, resolves the bearer token, and revokes by t
     const resolved = yield* registry.resolve(token);
     expect(resolved?.threadId).toBe(threadId);
     expect(resolved?.capabilities).toEqual(new Set(["preview", "integrations.invoke"]));
+    expect(issued.expiresAt).toBe(2_000);
+    expect(resolved?.expiresAt).toBe(issued.expiresAt);
 
     yield* registry.revokeThread(threadId);
     expect(yield* registry.resolve(token)).toBeUndefined();
@@ -82,7 +84,7 @@ it.effect("builds MCP endpoints from the bound server host", () =>
   }),
 );
 
-it.effect("expires credentials after inactivity", () =>
+it.effect("expires credentials once their session stops showing signs of life", () =>
   Effect.gen(function* () {
     let timestamp = 1_000;
     const registry = yield* makeRegistry(() => timestamp);
@@ -94,5 +96,124 @@ it.effect("expires credentials after inactivity", () =>
     const token = issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
     timestamp += 101;
     expect(yield* registry.resolve(token)).toBeUndefined();
+  }),
+);
+
+it.effect("keeps a credential alive across turns that never touch an MCP tool", () =>
+  Effect.gen(function* () {
+    let timestamp = 1_000;
+    const registry = yield* makeRegistry(() => timestamp);
+    const threadId = ThreadId.make("thread-3");
+    const issued = yield* registry.issue({
+      threadId,
+      providerInstanceId: ProviderInstanceId.make("claude"),
+      capabilities: McpSessionRegistry.providerSessionCapabilities(),
+    });
+    const token = issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
+
+    // Well past the liveness window in total, but each turn reports in before
+    // it lapses — this is the long-session case that used to lose the toolkit.
+    for (let turn = 0; turn < 10; turn += 1) {
+      timestamp += 99;
+      yield* registry.touch(threadId);
+    }
+
+    expect((yield* registry.resolve(token))?.threadId).toBe(threadId);
+  }),
+);
+
+it.effect("does not keep credentials of other threads alive", () =>
+  Effect.gen(function* () {
+    let timestamp = 1_000;
+    const registry = yield* makeRegistry(() => timestamp);
+    const issued = yield* registry.issue({
+      threadId: ThreadId.make("thread-4"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      capabilities: McpSessionRegistry.providerSessionCapabilities(),
+    });
+    const token = issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
+
+    timestamp += 99;
+    yield* registry.touch(ThreadId.make("thread-unrelated"));
+    timestamp += 2;
+
+    expect(yield* registry.resolve(token)).toBeUndefined();
+  }),
+);
+
+it.effect("touch cannot extend the absolute expiry and an expired bearer is revoked", () =>
+  Effect.gen(function* () {
+    let timestamp = 1_000;
+    const registry = yield* makeRegistry(() => timestamp);
+    const threadId = ThreadId.make("thread-hard-expiry");
+    const issued = yield* registry.issue({
+      threadId,
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      capabilities: McpSessionRegistry.providerSessionCapabilities(),
+    });
+    const token = issued.config.authorizationHeader.replace(/^Bearer\s+/, "");
+
+    expect(issued.expiresAt).toBe(2_000);
+    for (let turn = 0; turn < 10; turn += 1) {
+      timestamp += 99;
+      yield* registry.touch(threadId);
+    }
+    const beforeExpiry = yield* registry.resolve(token);
+    expect(beforeExpiry?.threadId).toBe(threadId);
+    expect(beforeExpiry?.expiresAt).toBe(2_000);
+
+    timestamp = 2_000;
+    yield* registry.touch(threadId);
+    expect(yield* registry.resolve(token)).toBeUndefined();
+
+    // Rewind the test clock only to prove the expired lookup removed the
+    // record, rather than merely hiding a still-stored credential by time.
+    timestamp = 1_999;
+    expect(yield* registry.resolve(token)).toBeUndefined();
+  }),
+);
+
+it.effect("defaults to a 30-minute liveness window and eight-hour absolute lifetime", () =>
+  Effect.gen(function* () {
+    let timestamp = 0;
+    const makeDefaultRegistry = () =>
+      McpSessionRegistry.__testing
+        .make({ now: () => timestamp })
+        .pipe(
+          Effect.provideService(HttpServer.HttpServer, fakeHttpServer),
+          Effect.provideService(ServerEnvironment.ServerEnvironment, fakeEnvironment),
+          Effect.provide(NodeServices.layer),
+        );
+
+    const idleRegistry = yield* makeDefaultRegistry();
+    const idleCredential = yield* idleRegistry.issue({
+      threadId: ThreadId.make("thread-default-idle"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      capabilities: McpSessionRegistry.providerSessionCapabilities(),
+    });
+    const idleToken = idleCredential.config.authorizationHeader.replace(/^Bearer\s+/, "");
+    timestamp = 30 * 60 * 1_000 + 1;
+    expect(yield* idleRegistry.resolve(idleToken)).toBeUndefined();
+
+    timestamp = 0;
+    const activeRegistry = yield* makeDefaultRegistry();
+    const activeThreadId = ThreadId.make("thread-default-hard-expiry");
+    const activeCredential = yield* activeRegistry.issue({
+      threadId: activeThreadId,
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      capabilities: McpSessionRegistry.providerSessionCapabilities(),
+    });
+    const activeToken = activeCredential.config.authorizationHeader.replace(/^Bearer\s+/, "");
+    expect(activeCredential.expiresAt).toBe(8 * 60 * 60 * 1_000);
+
+    for (let halfHour = 1; halfHour < 16; halfHour += 1) {
+      timestamp = halfHour * 30 * 60 * 1_000;
+      yield* activeRegistry.touch(activeThreadId);
+    }
+    expect((yield* activeRegistry.resolve(activeToken))?.threadId).toBe(activeThreadId);
+
+    timestamp = 8 * 60 * 60 * 1_000;
+    yield* activeRegistry.touch(activeThreadId);
+    expect(yield* activeRegistry.resolve(activeToken)).toBeUndefined();
   }),
 );

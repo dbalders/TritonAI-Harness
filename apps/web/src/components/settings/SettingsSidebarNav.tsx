@@ -4,10 +4,12 @@ import {
   ArrowLeftIcon,
   BookOpenIcon,
   BotIcon,
+  FlaskConicalIcon,
   GitBranchIcon,
   GaugeIcon,
   KeyboardIcon,
   Link2Icon,
+  PaletteIcon,
   PuzzleIcon,
   Settings2Icon,
 } from "lucide-react";
@@ -20,13 +22,13 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
-  SidebarSeparator,
   useSidebar,
 } from "../ui/sidebar";
 import { T3ConnectSidebarAvatar, T3ConnectSidebarSignIn } from "../clerk/T3ConnectSidebarSignIn";
 
 export type SettingsSectionPath =
   | "/settings/general"
+  | "/settings/appearance"
   | "/settings/keybindings"
   | "/settings/providers"
   | "/settings/usage"
@@ -34,6 +36,7 @@ export type SettingsSectionPath =
   | "/settings/plugins"
   | "/settings/source-control"
   | "/settings/connections"
+  | "/settings/beta"
   | "/settings/archived";
 
 export const SETTINGS_NAV_ITEMS: ReadonlyArray<{
@@ -42,6 +45,7 @@ export const SETTINGS_NAV_ITEMS: ReadonlyArray<{
   icon: ComponentType<{ className?: string }>;
 }> = [
   { label: "General", to: "/settings/general", icon: Settings2Icon },
+  { label: "Appearance", to: "/settings/appearance", icon: PaletteIcon },
   { label: "Keybindings", to: "/settings/keybindings", icon: KeyboardIcon },
   { label: "Runtime", to: "/settings/providers", icon: BotIcon },
   { label: "Usage", to: "/settings/usage", icon: GaugeIcon },
@@ -49,6 +53,7 @@ export const SETTINGS_NAV_ITEMS: ReadonlyArray<{
   { label: "Plugins", to: "/settings/plugins", icon: PuzzleIcon },
   { label: "Source Control", to: "/settings/source-control", icon: GitBranchIcon },
   { label: "Connections", to: "/settings/connections", icon: Link2Icon },
+  { label: "Beta", to: "/settings/beta", icon: FlaskConicalIcon },
   { label: "Archive", to: "/settings/archived", icon: ArchiveIcon },
 ];
 
@@ -79,7 +84,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
   return (
     <>
       <SidebarContent className="overflow-x-hidden">
-        <SidebarGroup className="px-2 py-3">
+        <SidebarGroup className="p-2">
           <SidebarMenu>
             {SETTINGS_NAV_ITEMS.map((item) => {
               const Icon = item.icon;
@@ -87,22 +92,10 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
               return (
                 <SidebarMenuItem key={item.to}>
                   <SidebarMenuButton
-                    size="sm"
                     isActive={isActive}
-                    className={
-                      isActive
-                        ? "gap-2.5 px-2.5 py-2 text-left text-[13px] font-medium text-foreground"
-                        : "gap-2.5 px-2.5 py-2 text-left text-[13px] text-muted-foreground/70 hover:text-foreground/80"
-                    }
                     onClick={() => handleSectionClick(item.to)}
                   >
-                    <Icon
-                      className={
-                        isActive
-                          ? "size-4 shrink-0 text-foreground"
-                          : "size-4 shrink-0 text-muted-foreground/60"
-                      }
-                    />
+                    <Icon />
                     <span className="truncate">{item.label}</span>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
@@ -111,19 +104,13 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
           </SidebarMenu>
         </SidebarGroup>
       </SidebarContent>
-
-      <SidebarSeparator />
       <SidebarFooter className="p-2">
         <T3ConnectSidebarSignIn />
-        <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-1">
-          <SidebarMenu className="min-w-0">
+        <div className="flex items-center gap-1">
+          <SidebarMenu className="min-w-0 flex-1">
             <SidebarMenuItem>
-              <SidebarMenuButton
-                size="sm"
-                className="gap-2 px-2 py-2 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
-                onClick={handleBackClick}
-              >
-                <ArrowLeftIcon className="size-4" />
+              <SidebarMenuButton onClick={handleBackClick}>
+                <ArrowLeftIcon />
                 <span>Back</span>
               </SidebarMenuButton>
             </SidebarMenuItem>

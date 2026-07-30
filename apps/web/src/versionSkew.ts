@@ -1,4 +1,4 @@
-import type { EnvironmentId, ServerConfig } from "@t3tools/contracts";
+import type { EnvironmentId, ServerConfig, ServerSelfUpdateCapability } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
 import { APP_VERSION } from "./branding";
@@ -47,6 +47,32 @@ export function resolveServerConfigVersionMismatch(
   serverConfig: Pick<ServerConfig, "environment"> | null | undefined,
 ): VersionMismatch | null {
   return resolveVersionMismatch(serverConfig?.environment.serverVersion);
+}
+
+/**
+ * TritonAI Harness only accepts the desktop-owned informational capability.
+ *
+ * An upstream server may advertise `boot-service` or `respawn`, but those
+ * paths install the public `t3` npm package at the TritonAI client version.
+ * TritonAI versions are not published through that distribution, so treating
+ * those capabilities as actionable would install the wrong product or fail.
+ */
+export function resolveServerSelfUpdateCapability(
+  serverConfig: Pick<ServerConfig, "environment"> | null | undefined,
+): ServerSelfUpdateCapability | null {
+  const advertised = serverConfig?.environment.capabilities.serverSelfUpdate;
+  return advertised === "desktop-managed" ? advertised : null;
+}
+
+/** One sentence explaining the safe downstream response to version skew. */
+export function serverUpdateGuidance(
+  capability: ServerSelfUpdateCapability | null,
+  serverLabel: string,
+): string {
+  if (capability === "desktop-managed") {
+    return `The ${serverLabel} is run by the TritonAI Harness desktop app on its machine — update the desktop app there to sync them.`;
+  }
+  return `Automatic updates are unavailable for the ${serverLabel}; update it through its approved TritonAI Harness distribution.`;
 }
 
 export function buildVersionMismatchDismissalKey(

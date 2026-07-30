@@ -182,6 +182,13 @@ temporary integration-only skill root; that root is removed when the provider se
 Successful materializations are keyed by Codex home, package root, and active skill set, so routine
 status refreshes do not recopy unchanged skill trees.
 
+Production providers use one Harness-owned Effect runtime. The released Microsoft 365 package's
+exact Effect 4 beta build dependency is treated as its minimum tested baseline, while new packages
+declare the reviewed `>=4.0.0-beta.78 <4.0.0` peer contract. Composition and startup reject older
+hosts, newer plugin build baselines, extra runtime dependencies, broader peers, and stable or
+next-major Effect versions. Package provenance, file inventory, digests, and immutable snapshots
+remain exact; only the already-verified runtime link is supplied by the host.
+
 ## Runtime exposure
 
 MCP session credentials carry the stable coarse integration invocation scope so an already-running

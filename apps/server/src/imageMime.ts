@@ -29,17 +29,47 @@ export const SAFE_IMAGE_FILE_EXTENSIONS = new Set([
   ".webp",
 ]);
 
+// Whether `code` is a character the base64 payload may contain, aside from
+// the whitespace handled separately below.
+function isBase64Char(code: number): boolean {
+  return (
+    (code >= 0x61 && code <= 0x7a) || // a-z
+    (code >= 0x41 && code <= 0x5a) || // A-Z
+    (code >= 0x30 && code <= 0x39) || // 0-9
+    code === 0x2b || // +
+    code === 0x2f || // /
+    code === 0x3d // =
+  );
+}
+
+function isBase64Whitespace(code: number): boolean {
+  return code === 0x0d || code === 0x0a || code === 0x20; // \r \n space
+}
+
+const MAX_BASE64_DATA_URL_CHARS = 15_000_000;
+const BASE64_COMPACTION_CHUNK_CHARS = 8_192;
+
+// Data URLs carry the full image payload, so this parser must never run a
+// regex across the payload: V8's regex engine borrows the JS call stack, and
+// matching a multi-megabyte string from a deep call stack (e.g. inside fiber
+// execution) throws "Maximum call stack size exceeded".
 export function parseBase64DataUrl(
   dataUrl: string,
 ): { readonly mimeType: string; readonly base64: string } | null {
-  const match = /^data:([^,]+),([a-z0-9+/=\r\n ]+)$/i.exec(dataUrl.trim());
-  if (!match) return null;
+  if (dataUrl.length > MAX_BASE64_DATA_URL_CHARS) return null;
+  const trimmed = dataUrl.trim();
+  if (trimmed.slice(0, 5).toLowerCase() !== "data:") return null;
+
+  const commaIndex = trimmed.indexOf(",");
+  if (commaIndex === -1) return null;
+  const header = trimmed.slice(5, commaIndex);
+  if (header.length === 0) return null;
 
   const headerParts: Array<string> = [];
-  for (const part of (match[1] ?? "").split(";")) {
-    const trimmed = part.trim();
-    if (trimmed.length > 0) {
-      headerParts.push(trimmed);
+  for (const part of header.split(";")) {
+    const partTrimmed = part.trim();
+    if (partTrimmed.length > 0) {
+      headerParts.push(partTrimmed);
     }
   }
   if (headerParts.length < 2) {
@@ -51,8 +81,35 @@ export function parseBase64DataUrl(
   }
 
   const mimeType = headerParts[0]?.toLowerCase();
-  const base64 = match[2]?.replace(/\s+/g, "");
-  if (!mimeType || !base64) return null;
+  if (!mimeType) return null;
+
+  const payload = trimmed.slice(commaIndex + 1);
+  const chunks: Array<string> = [];
+  let chunk = "";
+  for (let index = 0; index < payload.length; index += 1) {
+    const code = payload.charCodeAt(index);
+    if (isBase64Char(code)) {
+      chunk += payload[index];
+      if (chunk.length === BASE64_COMPACTION_CHUNK_CHARS) {
+        chunks.push(chunk);
+        chunk = "";
+      }
+      continue;
+    }
+    if (!isBase64Whitespace(code)) return null;
+  }
+  if (chunk.length > 0) chunks.push(chunk);
+  const base64 = chunks.join("");
+  if (base64.length === 0 || base64.length % 4 !== 0) return null;
+  const firstPad = base64.indexOf("=");
+  if (firstPad !== -1) {
+    // '=' is only valid as one or two trailing padding characters; Node's
+    // decoder would otherwise silently truncate at the first '='.
+    if (base64.length - firstPad > 2) return null;
+    for (let index = firstPad; index < base64.length; index += 1) {
+      if (base64.charCodeAt(index) !== 0x3d) return null;
+    }
+  }
 
   return { mimeType, base64 };
 }

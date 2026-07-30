@@ -83,6 +83,7 @@ function createManager(
     registerDevice: () => Effect.die("unused"),
     unregisterDevice: () => Effect.die("unused"),
     registerLiveActivity: () => Effect.die("unused"),
+    getAgentActivitySnapshot: () => Effect.die("unused"),
     resetTokenCache: Effect.void,
     ...overrides,
   });
@@ -108,6 +109,18 @@ function clerkToken(expiresAtSeconds: number): string {
 
 describe("createManagedRelayQueryManager", () => {
   afterEach(resetRegistry);
+
+  it.effect("uses the downstream product name in session-token failures", () =>
+    Effect.gen(function* () {
+      const session = createManagedRelaySession({
+        accountId: "account-1",
+        readClerkToken: () => Promise.reject(new Error("token read failed")),
+      });
+
+      const error = yield* session.readClerkToken().pipe(Effect.flip);
+      expect(error.message).toBe("Could not obtain the TritonAI Connect session token.");
+    }),
+  );
 
   it.effect("waits for the current cloud session before reading its token", () =>
     Effect.gen(function* () {

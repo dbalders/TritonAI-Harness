@@ -23,24 +23,20 @@ it.layer(NodeServices.layer)("runtime branding", (it) => {
     }),
   );
 
-  it.effect(
-    "uses regular branding inside mobile while retaining the development launcher icon",
-    () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        const repoRoot = yield* path.fromFileUrl(new URL("..", import.meta.url));
-        const appConfig = yield* fs.readFileString(
-          path.join(repoRoot, "apps/mobile/app.config.ts"),
-        );
-        const brandMark = yield* fs.readFileString(
-          path.join(repoRoot, "apps/mobile/src/components/BrandMark.tsx"),
-        );
+  it.effect("uses stage-aware TritonAI branding in the mobile app and launcher", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const repoRoot = yield* path.fromFileUrl(new URL("..", import.meta.url));
+      const appConfig = yield* fs.readFileString(path.join(repoRoot, "apps/mobile/app.config.ts"));
+      const brandMark = yield* fs.readFileString(
+        path.join(repoRoot, "apps/mobile/src/components/BrandMark.tsx"),
+      );
 
-        assert.include(appConfig, 'appIcon: "./assets/dev-icon.png"');
-        assert.notInclude(appConfig, 'splashIcon: "./assets/dev-splash-icon.png"');
-        assert.include(brandMark, "assets/prod/tritonai-logo.png");
-        assert.notInclude(brandMark, "assets/dev/tritonai-harness-dev-1024.png");
-      }),
+      assert.include(appConfig, "BRAND_ASSET_PATHS.developmentIosIconPng");
+      assert.include(appConfig, "BRAND_ASSET_PATHS.productionIosIconPng");
+      assert.include(brandMark, "assets/dev/tritonai-harness-dev-1024.png");
+      assert.include(brandMark, "assets/prod/tritonai-harness-1024.png");
+    }),
   );
 });

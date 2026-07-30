@@ -4,6 +4,8 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
+import { EFFECT_HOST_PEER_RANGE } from "@t3tools/shared/pluginHostRuntime";
+import effectPackageJson from "effect/package.json" with { type: "json" };
 
 import { finalizeManagedPluginProof } from "./finalize-managed-plugin-proof.ts";
 import {
@@ -22,7 +24,7 @@ afterEach(() => {
 });
 
 describe("managed plugin release composition", () => {
-  it("snapshots one strict current contract and rejects compatibility ranges", () => {
+  it("snapshots one strict current composition contract and rejects manifest compatibility ranges", () => {
     const sourceRoot = makeCompositionFixture();
     const composition = readManagedPluginComposition(sourceRoot);
     const snapshotRoot = NodePath.join(makeTemporaryDirectory(), "snapshot");
@@ -36,6 +38,39 @@ describe("managed plugin release composition", () => {
     plugin.compatibility = { harness: { min: "0.3.0", maxExclusive: "0.4.0" } };
     NodeFS.writeFileSync(manifestPath, JSON.stringify(legacy));
     expect(() => readManagedPluginComposition(sourceRoot)).toThrow(/unsupported fields/iu);
+  });
+
+  it("accepts the released Effect build pin and the canonical forward-compatible peer contract", () => {
+    expect(() =>
+      readManagedPluginComposition(makeCompositionFixture("4.0.0-beta.78")),
+    ).not.toThrow();
+    expect(() =>
+      readManagedPluginComposition(
+        makeCompositionFixture(null, {
+          peerDependencies: { effect: EFFECT_HOST_PEER_RANGE },
+        }),
+      ),
+    ).not.toThrow();
+  });
+
+  it("rejects newer build pins, broad peers, and additional runtime dependencies", () => {
+    expect(() => readManagedPluginComposition(makeCompositionFixture("4.0.0-beta.999"))).toThrow(
+      /incompatible host runtime contract/iu,
+    );
+    expect(() =>
+      readManagedPluginComposition(
+        makeCompositionFixture(null, {
+          peerDependencies: { effect: ">=4.0.0-beta.1 <5.0.0" },
+        }),
+      ),
+    ).toThrow(/incompatible host runtime contract/iu);
+    expect(() =>
+      readManagedPluginComposition(
+        makeCompositionFixture("4.0.0-beta.78", {
+          dependencies: { effect: "4.0.0-beta.78", unexpected: "1.0.0" },
+        }),
+      ),
+    ).toThrow(/incompatible host runtime contract/iu);
   });
 
   it("rejects symbolic links at both managed package directory boundaries", () => {
@@ -135,7 +170,10 @@ function makeTemporaryDirectory(): string {
   return directory;
 }
 
-function makeCompositionFixture(): string {
+function makeCompositionFixture(
+  effectVersion: string | null = effectPackageJson.version,
+  packageRuntime: Readonly<Record<string, unknown>> = {},
+): string {
   const sourceRoot = makeTemporaryDirectory();
   const packageRoot = NodePath.join(sourceRoot, "packages", "microsoft-365");
   const files = new Map<string, string>([
@@ -179,7 +217,13 @@ function makeCompositionFixture(): string {
     ["dist/index.js", "export const provider = 'microsoft-graph';\n"],
     [
       "package.json",
-      JSON.stringify({ name: "@tritonai/plugin-microsoft-365", version: "1.0.1", type: "module" }),
+      JSON.stringify({
+        name: "@tritonai/plugin-microsoft-365",
+        version: "1.0.1",
+        type: "module",
+        ...(effectVersion === null ? {} : { dependencies: { effect: effectVersion } }),
+        ...packageRuntime,
+      }),
     ],
   ]);
   for (const [relativePath, contents] of files) {

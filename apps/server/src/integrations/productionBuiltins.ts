@@ -6,6 +6,9 @@ import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 import * as NodeUtil from "node:util";
 
+import { resolvePluginHostRuntimeDependencies } from "@t3tools/shared/pluginHostRuntime";
+import effectPackageJson from "effect/package.json" with { type: "json" };
+
 import type * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import type { IntegrationPackage, IntegrationProvider } from "./IntegrationRegistry.ts";
 import { scopeIntegrationSecretStore } from "./IntegrationSecretStore.ts";
@@ -52,13 +55,6 @@ interface Microsoft365Module {
   ) => IntegrationProvider;
   readonly manifest: unknown;
 }
-
-interface RuntimeDependency {
-  readonly name: string;
-  readonly version: string;
-}
-
-const supportedRuntimeDependencies = new Set(["effect"]);
 
 const buildComposition =
   typeof __TRITONAI_BUILD_PLUGIN_COMPOSITION__ === "undefined"
@@ -224,37 +220,29 @@ async function sealSnapshotDirectory(directory: string): Promise<void> {
 function runtimeDependencies(
   plugin: CompositionPackage,
   verifiedFiles: ReadonlyArray<DescribedCompositionFile>,
-): ReadonlyArray<RuntimeDependency> {
+): ReturnType<typeof resolvePluginHostRuntimeDependencies> {
   const packageJsonFile = verifiedFiles.find(({ path }) => path === "package.json");
   if (!packageJsonFile) {
     throw new Error(`Built-in plugin ${plugin.id} package.json is missing.`);
   }
   const packageJson = JSON.parse(Buffer.from(packageJsonFile.contents).toString("utf8")) as {
     readonly dependencies?: unknown;
+    readonly peerDependencies?: unknown;
+    readonly optionalDependencies?: unknown;
+    readonly bundledDependencies?: unknown;
   };
-  if (packageJson.dependencies === undefined) return [];
-  if (
-    !packageJson.dependencies ||
-    typeof packageJson.dependencies !== "object" ||
-    Array.isArray(packageJson.dependencies)
-  ) {
-    throw new Error(`Built-in plugin ${plugin.id} dependencies are invalid.`);
+  try {
+    return resolvePluginHostRuntimeDependencies(packageJson, effectPackageJson.version);
+  } catch (error) {
+    throw new Error(`Built-in plugin ${plugin.id} host runtime contract is invalid.`, {
+      cause: error,
+    });
   }
-  return Object.entries(packageJson.dependencies)
-    .map(([name, version]): RuntimeDependency => {
-      if (
-        !supportedRuntimeDependencies.has(name) ||
-        typeof version !== "string" ||
-        !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u.test(version)
-      ) {
-        throw new Error(`Built-in plugin ${plugin.id} dependency is unsupported: ${name}.`);
-      }
-      return { name, version };
-    })
-    .toSorted((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
 }
 
-async function resolveRuntimeDependencyRoot(dependency: RuntimeDependency): Promise<string> {
+async function resolveRuntimeDependencyRoot(
+  dependency: ReturnType<typeof resolvePluginHostRuntimeDependencies>[number],
+): Promise<string> {
   const resolvedManifest = NodeURL.fileURLToPath(
     import.meta.resolve(`${dependency.name}/package.json`),
   );

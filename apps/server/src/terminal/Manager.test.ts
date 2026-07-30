@@ -1334,6 +1334,63 @@ it.layer(
     }),
   );
 
+  it.effect("strips AppImage runtime env from terminal sessions", () =>
+    Effect.gen(function* () {
+      const appDir = "/tmp/.mount_T3Codeabc123";
+      const { manager, ptyAdapter } = yield* createManager(5, {
+        env: {
+          APPIMAGE: "/home/user/T3-Code.AppImage",
+          APPDIR: appDir,
+          ARGV0: "/home/user/T3-Code.AppImage",
+          OWD: "/home/user/project",
+          PATH: `${appDir}/usr/bin:${appDir}::/usr/local/bin:/usr/bin:/bin:`,
+          LD_LIBRARY_PATH: `${appDir}/usr/lib::/home/user/.local/lib:`,
+          TEST_TERMINAL_KEEP: "keep-me",
+        },
+      });
+      yield* manager.open(openInput());
+      const spawnInput = ptyAdapter.spawnInputs[0];
+      expect(spawnInput).toBeDefined();
+      if (!spawnInput) return;
+
+      // AppImage runtime markers must never reach the PTY — tools inside the
+      // terminal otherwise resolve against the AppImage mount (e.g. PHP_BINARY
+      // reporting the AppImage path instead of the real binary).
+      expect(spawnInput.env.APPIMAGE).toBeUndefined();
+      expect(spawnInput.env.APPDIR).toBeUndefined();
+      expect(spawnInput.env.ARGV0).toBeUndefined();
+      expect(spawnInput.env.OWD).toBeUndefined();
+      // PATH/LD_LIBRARY_PATH keep the user's real entries but drop the AppImage
+      // mount segments that the runtime prepended.
+      expect(spawnInput.env.PATH).toBe(":/usr/local/bin:/usr/bin:/bin:");
+      expect(spawnInput.env.LD_LIBRARY_PATH).toBe(":/home/user/.local/lib:");
+      // Unrelated host vars still pass through untouched.
+      expect(spawnInput.env.TEST_TERMINAL_KEEP).toBe("keep-me");
+    }),
+  );
+
+  it.effect("leaves the environment untouched when not launched from an AppImage", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter } = yield* createManager(5, {
+        env: {
+          PATH: "/usr/local/bin:/usr/bin:/bin",
+          LD_LIBRARY_PATH: "/home/user/.local/lib",
+          // Without APPIMAGE/APPDIR set, OWD is an ordinary variable and must
+          // not be stripped — only an AppImage launch gives it special meaning.
+          OWD: "/home/user/keep-this",
+        },
+      });
+      yield* manager.open(openInput());
+      const spawnInput = ptyAdapter.spawnInputs[0];
+      expect(spawnInput).toBeDefined();
+      if (!spawnInput) return;
+
+      expect(spawnInput.env.PATH).toBe("/usr/local/bin:/usr/bin:/bin");
+      expect(spawnInput.env.LD_LIBRARY_PATH).toBe("/home/user/.local/lib");
+      expect(spawnInput.env.OWD).toBe("/home/user/keep-this");
+    }),
+  );
+
   it.effect("injects runtime env overrides into spawned terminals", () =>
     Effect.gen(function* () {
       const { manager, ptyAdapter } = yield* createManager();
@@ -1353,6 +1410,31 @@ it.layer(
       assert.equal(spawnInput.env.T3CODE_PROJECT_ROOT, "/repo");
       assert.equal(spawnInput.env.T3CODE_WORKTREE_PATH, "/repo/worktree-a");
       assert.equal(spawnInput.env.CUSTOM_FLAG, "1");
+    }),
+  );
+
+  it.effect("applies explicit runtime overrides after scrubbing inherited AppImage state", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter } = yield* createManager(5, {
+        env: {
+          APPIMAGE: "/home/user/T3-Code.AppImage",
+          APPDIR: "/tmp/.mount_T3Codeabc123",
+          OWD: "/inherited",
+          PATH: "/tmp/.mount_T3Codeabc123/usr/bin:/usr/bin",
+        },
+      });
+      yield* manager.open(
+        openInput({
+          env: { OWD: "/repo", PATH: "/repo/bin:/usr/bin", APPIMAGE: "explicit" },
+        }),
+      );
+      const spawnInput = ptyAdapter.spawnInputs[0];
+      expect(spawnInput).toBeDefined();
+      if (!spawnInput) return;
+
+      expect(spawnInput.env.OWD).toBe("/repo");
+      expect(spawnInput.env.PATH).toBe("/repo/bin:/usr/bin");
+      expect(spawnInput.env.APPIMAGE).toBe("explicit");
     }),
   );
 

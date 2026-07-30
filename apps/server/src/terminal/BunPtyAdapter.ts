@@ -14,7 +14,7 @@ export class BunPtyUnsupportedPlatformError extends Schema.TaggedErrorClass<BunP
   },
 ) {
   override get message(): string {
-    return `Bun PTY terminal support is unavailable on ${this.platform}. Please use Node.js (e.g. by running \`npx t3\`) instead.`;
+    return `Bun PTY terminal support is unavailable on ${this.platform}. Run TritonAI Harness with Node.js through the approved managed installation instead.`;
   }
 }
 

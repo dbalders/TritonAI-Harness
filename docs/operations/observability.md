@@ -1,6 +1,6 @@
 # Observability
 
-T3 Code has one server-side observability model:
+TritonAI Harness has one server-side observability model:
 
 - pretty logs go to stdout for humans
 - completed spans go to a local NDJSON trace file
@@ -65,10 +65,6 @@ You do not need any extra env vars. Just run the app normally and inspect `serve
 Examples:
 
 ```bash
-npx t3
-```
-
-```bash
 node --run dev
 ```
 
@@ -113,12 +109,6 @@ export T3CODE_TRACE_TIMING_ENABLED=true
 
 #### 3. Launch the app from that same shell
 
-CLI:
-
-```bash
-npx t3
-```
-
 Monorepo web/server dev:
 
 ```bash
@@ -140,8 +130,8 @@ macOS app bundle example:
 ```bash
 T3CODE_OTLP_TRACES_URL=http://localhost:4318/v1/traces \
 T3CODE_OTLP_METRICS_URL=http://localhost:4318/v1/metrics \
-T3CODE_OTLP_SERVICE_NAME=t3-desktop \
-"/Applications/T3 Code.app/Contents/MacOS/T3 Code"
+T3CODE_OTLP_SERVICE_NAME=tritonai-harness-desktop \
+"/Applications/TritonAI Harness.app/Contents/MacOS/TritonAI Harness"
 ```
 
 Direct binary example:
@@ -149,7 +139,7 @@ Direct binary example:
 ```bash
 T3CODE_OTLP_TRACES_URL=http://localhost:4318/v1/traces \
 T3CODE_OTLP_METRICS_URL=http://localhost:4318/v1/metrics \
-T3CODE_OTLP_SERVICE_NAME=t3-desktop \
+T3CODE_OTLP_SERVICE_NAME=tritonai-harness-desktop \
 ./path/to/your/desktop-app-binary
 ```
 
@@ -165,16 +155,24 @@ The backend reads observability config at process start. If you change OTLP env 
 
 The trace file is the fastest way to inspect raw span data.
 
+Resolve the production or explicitly configured trace file once. Runtime state lives under the
+base directory's `userdata` folder:
+
+```bash
+TRACE_FILE="${TRITONAI_HOME:-$HOME/.tritonai-harness}/userdata/logs/server.trace.ndjson"
+```
+
 Tail it:
 
 ```bash
-tail -f "$TRITONAI_HOME/userdata/logs/server.trace.ndjson"
+tail -f "$TRACE_FILE"
 ```
 
-In monorepo dev, use:
+For an implicit monorepo dev server, use:
 
 ```bash
-tail -f ./dev/logs/server.trace.ndjson
+TRACE_FILE="$HOME/.t3/dev/logs/server.trace.ndjson"
+tail -f "$TRACE_FILE"
 ```
 
 Show failed spans:
@@ -185,7 +183,7 @@ jq -c 'select(.exit._tag != "Success") | {
   durationMs,
   exit,
   attributes
-}' "$TRITONAI_HOME/userdata/logs/server.trace.ndjson"
+}' "$TRACE_FILE"
 ```
 
 Show slow spans:
@@ -196,7 +194,7 @@ jq -c 'select(.durationMs > 1000) | {
   durationMs,
   traceId,
   spanId
-}' "$TRITONAI_HOME/userdata/logs/server.trace.ndjson"
+}' "$TRACE_FILE"
 ```
 
 Inspect embedded log events:
@@ -213,7 +211,7 @@ jq -c 'select(any(.events[]?; .attributes["effect.logLevel"] != null)) | {
         level: .attributes["effect.logLevel"]
       }
   ]
-}' "$TRITONAI_HOME/userdata/logs/server.trace.ndjson"
+}' "$TRACE_FILE"
 ```
 
 Follow one trace:
@@ -224,7 +222,7 @@ jq -r 'select(.traceId == "TRACE_ID_HERE") | [
   .spanId,
   (.parentSpanId // "-"),
   .durationMs
-] | @tsv' "$TRITONAI_HOME/userdata/logs/server.trace.ndjson"
+] | @tsv' "$TRACE_FILE"
 ```
 
 Filter orchestration commands:
@@ -235,7 +233,7 @@ jq -c 'select(.attributes["orchestration.command_type"] != null) | {
   durationMs,
   commandType: .attributes["orchestration.command_type"],
   aggregateKind: .attributes["orchestration.aggregate_kind"]
-}' "$TRITONAI_HOME/userdata/logs/server.trace.ndjson"
+}' "$TRACE_FILE"
 ```
 
 Filter git activity:
@@ -250,7 +248,7 @@ jq -c 'select(.attributes["git.operation"] != null) | {
     .events[]
     | select(.name == "git.hook.started" or .name == "git.hook.finished")
   ]
-}' "$TRITONAI_HOME/userdata/logs/server.trace.ndjson"
+}' "$TRACE_FILE"
 ```
 
 ### Use Tempo When You Need A Real Trace Viewer
