@@ -16,7 +16,6 @@ import {
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
-import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import { normalizeModelSlug } from "@t3tools/shared/model";
 import * as NodeCrypto from "node:crypto";
 import * as Crypto from "effect/Crypto";
@@ -40,6 +39,7 @@ import { buildCodexInitializeParams } from "./CodexProvider.ts";
 import { codexSessionAppServerArgs } from "./codexLaunchArgs.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
 import { buildCodexDeveloperInstructions } from "../CodexDeveloperInstructions.ts";
+import { resolveCodexAppServerCommand } from "../Drivers/CodexAppServerCommand.ts";
 import { makeTritonAiCodexConfigArgs } from "../Drivers/TritonAiCodexConfig.ts";
 const decodeV2TurnStartResponse = Schema.decodeUnknownEffect(EffectCodexSchema.V2TurnStartResponse);
 
@@ -1041,7 +1041,7 @@ export const makeCodexSessionRuntime = (
     };
     const extendEnv = options.environment === undefined;
     const appServerArgs = [...codexSessionAppServerArgs(options.appServerArgs, options.launchArgs)];
-    const spawnCommand = yield* resolveSpawnCommand(
+    const spawnCommand = yield* resolveCodexAppServerCommand(
       options.binaryPath,
       [...appServerArgs, ...makeTritonAiCodexConfigArgs(env)],
       { env, extendEnv },
@@ -1050,8 +1050,8 @@ export const makeCodexSessionRuntime = (
       .spawn(
         ChildProcess.make(spawnCommand.command, spawnCommand.args, {
           cwd: options.cwd,
-          env,
-          extendEnv,
+          env: spawnCommand.environment,
+          extendEnv: spawnCommand.extendEnv,
           forceKillAfter: CODEX_APP_SERVER_FORCE_KILL_AFTER,
           shell: spawnCommand.shell,
         }),
