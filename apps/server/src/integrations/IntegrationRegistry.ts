@@ -366,8 +366,11 @@ class ProviderFaultedError extends Error {
 }
 
 class ProviderWriteAdmissionError extends Error {
-  constructor() {
-    super("The integration provider returned a write result without commit admission.");
+  constructor(cause?: unknown) {
+    super(
+      "The integration provider returned a write result without commit admission.",
+      cause === undefined ? undefined : { cause },
+    );
     this.name = "ProviderWriteAdmissionError";
   }
 }
@@ -2979,8 +2982,14 @@ export class RegistryRuntime {
         );
         const result = await invocationWork;
         if (tool.effect === "write" && !writeCommitAdmitted) {
+          let journalFailure: unknown;
+          try {
+            await this.#writeProviderCommitJournal(manifest.id, provider.id);
+          } catch (error) {
+            journalFailure = error;
+          }
           this.#faultProvider(provider);
-          throw new ProviderWriteAdmissionError();
+          throw new ProviderWriteAdmissionError(journalFailure);
         }
         if (controller.signal.aborted && !writeCommitAdmitted) {
           throw operationError("disabled", `${manifest.name} access was revoked.`);
@@ -3034,6 +3043,26 @@ export class RegistryRuntime {
       }
     }
     throw operationError("not_found", `Integration tool ${name} was not found.`);
+  }
+}
+
+export async function createRegistryRuntime(
+  root: string,
+  packages: ReadonlyArray<IntegrationPackage>,
+  skills: IntegrationSkillMaterializer = noIntegrationSkills,
+): Promise<RegistryRuntime> {
+  try {
+    return new RegistryRuntime(root, packages, skills);
+  } catch (error) {
+    for (const { provider } of packages.toReversed()) {
+      try {
+        await provider?.close?.();
+      } catch {
+        // Constructor validation owns the startup failure. Provider cleanup is best-effort and
+        // must neither mask that failure nor prevent the remaining snapshots from being closed.
+      }
+    }
+    throw error;
   }
 }
 
@@ -3095,10 +3124,12 @@ export const startupLayer = Layer.effectDiscard(
         includeFixtures: process.env.TRITONAI_ENABLE_INTEGRATION_FIXTURES === "1",
       }),
     );
-    const registry = new RegistryRuntime(
-      NodePath.join(config.stateDir, "integrations"),
-      builtinIntegrations,
-      skillMaterializer,
+    const registry = yield* Effect.promise(() =>
+      createRegistryRuntime(
+        NodePath.join(config.stateDir, "integrations"),
+        builtinIntegrations,
+        skillMaterializer,
+      ),
     );
     yield* Effect.addFinalizer(() =>
       Effect.promise(() => registry.close()).pipe(

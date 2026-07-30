@@ -7,6 +7,7 @@ import * as NodePath from "node:path";
 
 import { type IntegrationManifest, validateIntegrationManifest } from "./manifest.ts";
 import {
+  createRegistryRuntime,
   IntegrationProviderPublicError,
   RegistryRuntime,
   type IntegrationProvider,
@@ -645,6 +646,7 @@ describe("IntegrationRegistry lifecycle", () => {
       skills: [],
     };
     let invocations = 0;
+    let connected = true;
     const implementation: IntegrationProvider = {
       id: "test-write-missing-admission-provider",
       tools: [
@@ -656,19 +658,31 @@ describe("IntegrationRegistry lifecycle", () => {
           openWorld: false,
         },
       ],
-      status: async () => ({
-        state: "connected",
-        accountLabel: "Fixture user",
-        grantedCapabilities: ["fixture.write"],
-        message: null,
-      }),
-      connect: async () => ({
-        kind: "connected",
-        flowId: "fixture-flow",
-        message: "Connected.",
-      }),
+      status: async () =>
+        connected
+          ? {
+              state: "connected",
+              accountLabel: "Fixture user",
+              grantedCapabilities: ["fixture.write"],
+              message: null,
+            }
+          : {
+              state: "not_connected",
+              accountLabel: null,
+              grantedCapabilities: [],
+              message: null,
+            },
+      connect: async () => {
+        connected = true;
+        return {
+          kind: "connected",
+          flowId: "fixture-flow",
+          message: "Connected.",
+        };
+      },
       disconnect: async (context) => {
         await context?.beginCommit();
+        connected = false;
       },
       invoke: async (_toolName, _input, context) => {
         invocations += 1;
@@ -677,7 +691,11 @@ describe("IntegrationRegistry lifecycle", () => {
         return { status: "unverified-write" };
       },
     };
-    const registry = new RegistryRuntime(root, [packaged(manifest, implementation)]);
+    const journalPath = NodePath.join(root, "commit-journal", `${manifest.id}.json`);
+    let registry: RegistryRuntime | undefined = new RegistryRuntime(root, [
+      packaged(manifest, implementation),
+    ]);
+    let restarted: RegistryRuntime | undefined;
     try {
       await registry.install(manifest.id);
       await expect(
@@ -690,6 +708,11 @@ describe("IntegrationRegistry lifecycle", () => {
           },
         ),
       ).rejects.toMatchObject({ code: "operation_failed" });
+      expect(JSON.parse(await NodeFSP.readFile(journalPath, "utf8"))).toEqual({
+        version: 1,
+        integrationId: manifest.id,
+        providerId: implementation.id,
+      });
       await expect(
         registry.invokeTool(
           "test.fixture.write",
@@ -701,9 +724,35 @@ describe("IntegrationRegistry lifecycle", () => {
         ),
       ).rejects.toMatchObject({ code: "operation_failed" });
       expect(invocations).toBe(1);
-      await expect(registry.disconnect(manifest.id)).resolves.toBeDefined();
-    } finally {
+
       await registry.close();
+      registry = undefined;
+
+      restarted = new RegistryRuntime(root, [packaged(manifest, implementation)]);
+      expect((await restarted.list()).integrations[0]).toMatchObject({
+        connectionState: "error",
+      });
+      expect(restarted.isToolAvailableSync("test.fixture.write")).toBe(false);
+      await expect(
+        restarted.invokeTool(
+          "test.fixture.write",
+          {},
+          {
+            signal: new AbortController().signal,
+            writeApproved: true,
+          },
+        ),
+      ).rejects.toMatchObject({ code: "operation_failed" });
+      expect(invocations).toBe(1);
+
+      await expect(restarted.disconnect(manifest.id)).resolves.toBeDefined();
+      await expect(NodeFSP.access(journalPath)).rejects.toMatchObject({ code: "ENOENT" });
+      expect((await restarted.list()).integrations[0]).toMatchObject({
+        connectionState: "not_connected",
+      });
+    } finally {
+      await registry?.close();
+      await restarted?.close();
       await NodeFSP.rm(root, { recursive: true, force: true });
     }
   });
@@ -839,6 +888,60 @@ describe("IntegrationRegistry lifecycle", () => {
           },
         ),
       ).resolves.toMatchObject({ toolName: "test.records.list" });
+    } finally {
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("closes loaded providers in reverse order when registry construction rejects a collision", async () => {
+    const root = await NodeFSP.mkdtemp(
+      NodePath.join(NodeOS.tmpdir(), "tritonai-constructor-cleanup-"),
+    );
+    const state: ProviderState = {
+      status: {
+        state: "not_connected",
+        accountLabel: null,
+        grantedCapabilities: [],
+        message: null,
+      },
+      credential: null,
+      disconnectFails: false,
+    };
+    const closeOrder: Array<string> = [];
+    const firstProvider: IntegrationProvider = {
+      ...provider("test-fixture-provider", state),
+      close: async () => {
+        closeOrder.push("first");
+      },
+    };
+    const secondManifest: IntegrationManifest = {
+      ...fixtureManifest,
+      id: "test-fixture-collision",
+      name: "Test Fixture Collision",
+      provider: "test-fixture-collision-provider",
+      skills: [
+        {
+          name: "fixture-collision-reader",
+          description: "Fixture collision skill.",
+          capabilities: ["fixture.read"],
+        },
+      ],
+    };
+    const secondProvider: IntegrationProvider = {
+      ...provider("test-fixture-collision-provider", state),
+      close: async () => {
+        closeOrder.push("second");
+        throw new Error("second provider cleanup failed");
+      },
+    };
+    try {
+      await expect(
+        createRegistryRuntime(root, [
+          packaged(fixtureManifest, firstProvider),
+          packaged(secondManifest, secondProvider),
+        ]),
+      ).rejects.toThrow("Integration tool test.fixture.read is already declared by test-fixture");
+      expect(closeOrder).toEqual(["second", "first"]);
     } finally {
       await NodeFSP.rm(root, { recursive: true, force: true });
     }

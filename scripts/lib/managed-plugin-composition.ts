@@ -99,6 +99,35 @@ function assertOnlyKeys(
   }
 }
 
+function assertProviderlessRuntimeMetadata(
+  packageJson: Record<string, unknown>,
+  pluginId: string,
+): void {
+  const dependencyMetadata = [
+    packageJson.dependencies,
+    packageJson.peerDependencies,
+    packageJson.optionalDependencies,
+  ];
+  const bundledMetadata = [packageJson.bundledDependencies, packageJson.bundleDependencies];
+  if (
+    dependencyMetadata.some(
+      (value) =>
+        value !== undefined &&
+        (!value ||
+          typeof value !== "object" ||
+          Array.isArray(value) ||
+          Object.keys(value).length > 0),
+    ) ||
+    bundledMetadata.some(
+      (value) => value !== undefined && (!Array.isArray(value) || value.length > 0),
+    )
+  ) {
+    throw new Error(
+      `Managed plugin ${pluginId} cannot declare runtime metadata without a provider.`,
+    );
+  }
+}
+
 function isSafeRelativePath(value: unknown): value is string {
   if (typeof value !== "string" || !value || !/^[\x20-\x7e]+$/u.test(value)) return false;
   if (
@@ -109,7 +138,12 @@ function isSafeRelativePath(value: unknown): value is string {
   ) {
     return false;
   }
-  return value.split("/").every((segment) => segment && segment !== "." && segment !== "..");
+  return value
+    .split("/")
+    .every(
+      (segment) =>
+        segment && segment !== "." && segment !== ".." && segment.toLowerCase() !== "node_modules",
+    );
 }
 
 function sha256(contents: NodeJS.ArrayBufferView): string {
@@ -256,13 +290,6 @@ function validatePackage(
   if (packageJson.name !== name || packageJson.version !== version) {
     throw new Error(`Managed plugin ${id} package.json does not match its composition proof.`);
   }
-  try {
-    resolvePluginHostRuntimeDependencies(packageJson, effectPackageJson.version);
-  } catch (error) {
-    throw new Error(`Managed plugin ${id} has an incompatible host runtime contract.`, {
-      cause: error,
-    });
-  }
   const manifest = validateIntegrationManifest(
     JSON.parse(
       NodeFS.readFileSync(NodePath.join(packageRoot, ".tritonai-plugin", "plugin.json"), "utf8"),
@@ -270,6 +297,17 @@ function validatePackage(
   );
   if (manifest.id !== id || manifest.version !== version) {
     throw new Error(`Managed plugin ${id} manifest does not match its composition proof.`);
+  }
+  if (manifest.provider === undefined) {
+    assertProviderlessRuntimeMetadata(packageJson, id);
+  } else {
+    try {
+      resolvePluginHostRuntimeDependencies(packageJson, effectPackageJson.version);
+    } catch (error) {
+      throw new Error(`Managed plugin ${id} has an incompatible host runtime contract.`, {
+        cause: error,
+      });
+    }
   }
   return { id, name, version, digest, files: normalizedFiles };
 }

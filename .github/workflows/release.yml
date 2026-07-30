@@ -257,13 +257,12 @@ jobs:
         env:
           TRITONAI_PLUGINS_REF: ${{ vars.TRITONAI_PLUGINS_REF }}
           TRITONAI_PLUGINS_COMMIT: ${{ vars.TRITONAI_PLUGINS_COMMIT }}
-          TRITONAI_PLUGIN_IDS: microsoft-365
           TRITONAI_PLUGINS_SOURCE: ${{ github.workspace }}/.release-input/plugins
         run: |
           set -euo pipefail
           npm --prefix .release-input/installer ci --ignore-scripts
           npm --prefix .release-input/installer run build
-          node .release-input/installer/dist/scripts/prepare-plugins-vendor.js
+          node .release-input/installer/dist/scripts/prepare-plugins-vendor.js --production
 
       - name: Align package versions to release version
         run: node scripts/update-release-package-versions.ts "${{ needs.preflight.outputs.version }}"

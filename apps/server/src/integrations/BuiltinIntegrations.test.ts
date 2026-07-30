@@ -7,7 +7,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import type * as ServerSecretStore from "../auth/ServerSecretStore.ts";
-import { loadBuiltinIntegrations } from "./builtins.ts";
+import { loadBuiltinIntegrationPackagesForTest, loadBuiltinIntegrations } from "./builtins.ts";
 import { makeFixtureIntegrations } from "./fixtureBuiltins.ts";
 import { RegistryRuntime } from "./IntegrationRegistry.ts";
 import { CodexIntegrationSkillMaterializer } from "./IntegrationSkillMaterializer.ts";
@@ -41,6 +41,53 @@ function memorySecrets() {
 describe("built-in integration packages", () => {
   it("keeps proof fixtures out of the default catalog", async () => {
     expect(await loadBuiltinIntegrations(memorySecrets())).toEqual([]);
+  });
+
+  it("constructs fixtures before starting production provider loading", async () => {
+    const fixtureFailure = new Error("fixture construction failed");
+    let productionLoads = 0;
+
+    await expect(
+      loadBuiltinIntegrationPackagesForTest(
+        async () => {
+          throw fixtureFailure;
+        },
+        async () => {
+          productionLoads += 1;
+          return [];
+        },
+      ),
+    ).rejects.toBe(fixtureFailure);
+    expect(productionLoads).toBe(0);
+  });
+
+  it("closes constructed fixture providers without masking a production loading failure", async () => {
+    const productionFailure = new Error("production loading failed");
+    let closeCalls = 0;
+    const fixtures = makeFixtureIntegrations(memorySecrets()).map((integration) =>
+      integration.provider
+        ? {
+            ...integration,
+            provider: {
+              ...integration.provider,
+              close: async () => {
+                closeCalls += 1;
+                throw new Error("fixture cleanup failed");
+              },
+            },
+          }
+        : integration,
+    );
+
+    await expect(
+      loadBuiltinIntegrationPackagesForTest(
+        async () => fixtures,
+        async () => {
+          throw productionFailure;
+        },
+      ),
+    ).rejects.toBe(productionFailure);
+    expect(closeCalls).toBe(1);
   });
 
   it("injects package-scoped credentials into provider factories", async () => {

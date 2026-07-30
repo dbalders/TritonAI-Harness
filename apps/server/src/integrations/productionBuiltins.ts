@@ -6,7 +6,10 @@ import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 import * as NodeUtil from "node:util";
 
-import { resolvePluginHostRuntimeDependencies } from "@t3tools/shared/pluginHostRuntime";
+import {
+  type PluginPackageRuntimeMetadata,
+  resolvePluginHostRuntimeDependencies,
+} from "@t3tools/shared/pluginHostRuntime";
 import effectPackageJson from "effect/package.json" with { type: "json" };
 
 import type * as ServerSecretStore from "../auth/ServerSecretStore.ts";
@@ -207,22 +210,53 @@ function runtimeDependencies(
   plugin: CompositionPackage,
   verifiedFiles: ReadonlyArray<DescribedCompositionFile>,
 ): ReturnType<typeof resolvePluginHostRuntimeDependencies> {
-  const packageJsonFile = verifiedFiles.find(({ path }) => path === "package.json");
-  if (!packageJsonFile) {
-    throw new Error(`Built-in plugin ${plugin.id} package.json is missing.`);
-  }
-  const packageJson = JSON.parse(Buffer.from(packageJsonFile.contents).toString("utf8")) as {
-    readonly dependencies?: unknown;
-    readonly peerDependencies?: unknown;
-    readonly optionalDependencies?: unknown;
-    readonly bundledDependencies?: unknown;
-  };
+  const packageJson = verifiedPackageRuntimeMetadata(plugin, verifiedFiles);
   try {
     return resolvePluginHostRuntimeDependencies(packageJson, effectPackageJson.version);
   } catch (error) {
     throw new Error(`Built-in plugin ${plugin.id} host runtime contract is invalid.`, {
       cause: error,
     });
+  }
+}
+
+function verifiedPackageRuntimeMetadata(
+  plugin: CompositionPackage,
+  verifiedFiles: ReadonlyArray<DescribedCompositionFile>,
+): PluginPackageRuntimeMetadata {
+  const packageJsonFile = verifiedFiles.find(({ path }) => path === "package.json");
+  if (!packageJsonFile) {
+    throw new Error(`Built-in plugin ${plugin.id} package.json is missing.`);
+  }
+  const packageJson = JSON.parse(Buffer.from(packageJsonFile.contents).toString("utf8")) as unknown;
+  if (!isRecord(packageJson)) {
+    throw new Error(`Built-in plugin ${plugin.id} package.json must be an object.`);
+  }
+  return packageJson;
+}
+
+function validateProviderlessRuntimeMetadata(
+  plugin: CompositionPackage,
+  verifiedFiles: ReadonlyArray<DescribedCompositionFile>,
+): void {
+  const packageJson = verifiedPackageRuntimeMetadata(plugin, verifiedFiles);
+  const dependencyMetadata = [
+    packageJson.dependencies,
+    packageJson.peerDependencies,
+    packageJson.optionalDependencies,
+  ];
+  const bundledMetadata = [packageJson.bundledDependencies, packageJson.bundleDependencies];
+  if (
+    dependencyMetadata.some(
+      (value) => value !== undefined && (!isRecord(value) || Object.keys(value).length > 0),
+    ) ||
+    bundledMetadata.some(
+      (value) => value !== undefined && (!Array.isArray(value) || value.length > 0),
+    )
+  ) {
+    throw new Error(
+      `Built-in plugin ${plugin.id} cannot declare runtime metadata without a provider.`,
+    );
   }
 }
 
@@ -359,6 +393,64 @@ function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
   );
 }
 
+function retainSnapshotUntilProviderClose(
+  provider: IntegrationProvider,
+  snapshotRoot: string,
+): IntegrationProvider {
+  const originalClose =
+    typeof provider.close === "function" ? provider.close.bind(provider) : undefined;
+  let closePromise: Promise<void> | undefined;
+  const boundMethods = new Map<PropertyKey, (...args: ReadonlyArray<unknown>) => unknown>();
+
+  const close = (): Promise<void> => {
+    closePromise ??= (async () => {
+      let providerCloseFailed = false;
+      let providerCloseError: unknown;
+      try {
+        await originalClose?.();
+      } catch (error) {
+        providerCloseFailed = true;
+        providerCloseError = error;
+      }
+
+      let snapshotCleanupFailed = false;
+      let snapshotCleanupError: unknown;
+      try {
+        await removeProductionPackageSnapshot(snapshotRoot);
+      } catch (error) {
+        snapshotCleanupFailed = true;
+        snapshotCleanupError = error;
+      }
+
+      if (providerCloseFailed && snapshotCleanupFailed) {
+        throw new AggregateError(
+          [providerCloseError, snapshotCleanupError],
+          "Provider close and built-in plugin snapshot cleanup both failed.",
+        );
+      }
+      if (providerCloseFailed) throw providerCloseError;
+      if (snapshotCleanupFailed) throw snapshotCleanupError;
+    })();
+    return closePromise;
+  };
+
+  return new Proxy({} as IntegrationProvider, {
+    get(_target, property) {
+      if (property === "close") return close;
+      const value = Reflect.get(provider, property, provider) as unknown;
+      if (typeof value !== "function") return value;
+      const existing = boundMethods.get(property);
+      if (existing) return existing;
+      const bound = value.bind(provider) as (...args: ReadonlyArray<unknown>) => unknown;
+      boundMethods.set(property, bound);
+      return bound;
+    },
+    has(_target, property) {
+      return property === "close" || property in provider;
+    },
+  });
+}
+
 function validateBuildConfiguration(
   composition: ProductionComposition,
   value: unknown,
@@ -385,59 +477,70 @@ async function loadProductionPackage(
   secrets: ServerSecretStore.ServerSecretStore["Service"],
   configuration: Readonly<Record<string, unknown>>,
 ): Promise<IntegrationPackage> {
-  return withProductionPackageSnapshot(
-    composedPackageRoot,
-    plugin,
-    async (packageRoot, verifiedFiles) => {
-      const packageManifest = validateIntegrationManifest(
-        JSON.parse(
-          await NodeFSP.readFile(
-            NodePath.join(packageRoot, ".tritonai-plugin", "plugin.json"),
-            "utf8",
-          ),
-        ),
-      );
-      const moduleUrl = NodeURL.pathToFileURL(NodePath.join(packageRoot, "dist", "index.js")).href;
-      const loaded = (await import(moduleUrl)) as IntegrationPluginModule;
-      const exportedManifest = validateIntegrationManifest(loaded.manifest);
-      if (
-        !NodeUtil.isDeepStrictEqual(exportedManifest, packageManifest) ||
-        packageManifest.id !== plugin.id ||
-        packageManifest.version !== plugin.version
-      ) {
-        throw new Error(`Built-in plugin ${plugin.id} exports do not match its composed manifest.`);
-      }
-      let provider: IntegrationProvider | undefined;
-      if (packageManifest.provider) {
-        if (typeof loaded.createIntegrationProvider !== "function") {
-          throw new Error(`Built-in plugin ${plugin.id} does not export its provider factory.`);
-        }
-        const created = loaded.createIntegrationProvider({
-          secrets: scopeIntegrationSecretStore(secrets, packageManifest.id),
-          configuration,
-        });
-        if (isPromiseLike(created)) {
-          throw new Error(`Built-in plugin ${plugin.id} provider factory must be synchronous.`);
-        }
-        if (!isRecord(created) || created.id !== packageManifest.provider) {
-          throw new Error(
-            `Built-in plugin ${plugin.id} provider does not match its composed manifest.`,
-          );
-        }
-        provider = created as unknown as IntegrationProvider;
-      } else if (loaded.createIntegrationProvider !== undefined) {
-        throw new Error(
-          `Built-in plugin ${plugin.id} exports a provider factory without declaring a provider.`,
-        );
-      }
-      const bundledFiles = Object.fromEntries(
-        verifiedFiles.map((file) => [file.path, Uint8Array.from(file.contents)]),
-      );
-      return provider
-        ? { manifest: packageManifest, bundledFiles, provider }
-        : { manifest: packageManifest, bundledFiles };
-    },
+  const verifiedFiles = await verifiedPackageFiles(composedPackageRoot, plugin);
+  const packageManifestFile = verifiedFiles.find(
+    ({ path }) => path === ".tritonai-plugin/plugin.json",
   );
+  if (!packageManifestFile) {
+    throw new Error(`Built-in plugin ${plugin.id} manifest is missing.`);
+  }
+  const packageManifest = validateIntegrationManifest(
+    JSON.parse(Buffer.from(packageManifestFile.contents).toString("utf8")),
+  );
+  if (packageManifest.id !== plugin.id || packageManifest.version !== plugin.version) {
+    throw new Error(`Built-in plugin ${plugin.id} manifest does not match its composition.`);
+  }
+  const bundledFiles = Object.fromEntries(
+    verifiedFiles.map((file) => [file.path, Uint8Array.from(file.contents)]),
+  );
+
+  if (!packageManifest.provider) {
+    if (verifiedFiles.some(({ path }) => path.startsWith("dist/"))) {
+      throw new Error(
+        `Built-in plugin ${plugin.id} includes provider distribution files without declaring a provider.`,
+      );
+    }
+    validateProviderlessRuntimeMetadata(plugin, verifiedFiles);
+    return { manifest: packageManifest, bundledFiles };
+  }
+
+  const packageRoot = await materializeProductionPackageSnapshot(plugin, verifiedFiles);
+  let retainSnapshot = false;
+  try {
+    const moduleUrl = NodeURL.pathToFileURL(NodePath.join(packageRoot, "dist", "index.js")).href;
+    const loaded = (await import(moduleUrl)) as IntegrationPluginModule;
+    const exportedManifest = validateIntegrationManifest(loaded.manifest);
+    if (!NodeUtil.isDeepStrictEqual(exportedManifest, packageManifest)) {
+      throw new Error(`Built-in plugin ${plugin.id} exports do not match its composed manifest.`);
+    }
+    if (typeof loaded.createIntegrationProvider !== "function") {
+      throw new Error(`Built-in plugin ${plugin.id} does not export its provider factory.`);
+    }
+    const created = loaded.createIntegrationProvider({
+      secrets: scopeIntegrationSecretStore(secrets, packageManifest.id),
+      configuration,
+    });
+    if (isPromiseLike(created)) {
+      // The factory contract is synchronous, but an async function has already started by the time
+      // its thenable result is observable. Consume a late rejection so a malformed plugin cannot
+      // turn this deterministic startup validation error into an unhandled process rejection.
+      void Promise.resolve(created).catch(() => undefined);
+      throw new Error(`Built-in plugin ${plugin.id} provider factory must be synchronous.`);
+    }
+    if (!isRecord(created) || created.id !== packageManifest.provider) {
+      throw new Error(
+        `Built-in plugin ${plugin.id} provider does not match its composed manifest.`,
+      );
+    }
+    const provider = retainSnapshotUntilProviderClose(
+      created as unknown as IntegrationProvider,
+      packageRoot,
+    );
+    retainSnapshot = true;
+    return { manifest: packageManifest, bundledFiles, provider };
+  } finally {
+    if (!retainSnapshot) await removeProductionPackageSnapshot(packageRoot);
+  }
 }
 
 export async function loadProductionPackageForTest(
@@ -447,6 +550,27 @@ export async function loadProductionPackageForTest(
   configuration: Readonly<Record<string, unknown>>,
 ): Promise<IntegrationPackage> {
   return loadProductionPackage(composedPackageRoot, plugin, secrets, configuration);
+}
+
+async function loadProductionPackages(
+  loaders: ReadonlyArray<() => Promise<IntegrationPackage>>,
+): Promise<ReadonlyArray<IntegrationPackage>> {
+  const loaded: Array<IntegrationPackage> = [];
+  try {
+    for (const load of loaders) loaded.push(await load());
+    return loaded;
+  } catch (error) {
+    await Promise.allSettled(
+      loaded.map(({ provider }) => Promise.resolve().then(() => provider?.close?.())),
+    );
+    throw error;
+  }
+}
+
+export async function loadProductionPackagesForTest(
+  loaders: ReadonlyArray<() => Promise<IntegrationPackage>>,
+): Promise<ReadonlyArray<IntegrationPackage>> {
+  return loadProductionPackages(loaders);
 }
 
 export async function loadProductionIntegrations(
@@ -461,19 +585,18 @@ export async function loadProductionIntegrations(
     throw new Error("Built-in plugin composition has an unsupported contract or provenance.");
   }
   const configuration = validateBuildConfiguration(buildComposition, buildConfiguration);
-  const result: Array<IntegrationPackage> = [];
-  for (const plugin of buildComposition.packages) {
-    const composedPackageRoot = NodePath.join(
-      import.meta.dirname,
-      "production-integrations",
-      "packages",
-      plugin.id,
-    );
-    result.push(
-      await loadProductionPackage(composedPackageRoot, plugin, secrets, configuration[plugin.id]!),
-    );
-  }
-  return result;
+  return loadProductionPackages(
+    buildComposition.packages.map((plugin) => {
+      const composedPackageRoot = NodePath.join(
+        import.meta.dirname,
+        "production-integrations",
+        "packages",
+        plugin.id,
+      );
+      return () =>
+        loadProductionPackage(composedPackageRoot, plugin, secrets, configuration[plugin.id]!);
+    }),
+  );
 }
 
 export function productionIntegrationCompositionForTest(): ProductionComposition | null {

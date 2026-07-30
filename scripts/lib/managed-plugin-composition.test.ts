@@ -27,7 +27,11 @@ afterEach(() => {
 describe("managed plugin release composition", () => {
   it("accepts a novel plugin only when the exact release composition selects it", () => {
     const composition = readManagedPluginComposition(
-      makeCompositionFixture(effectPackageJson.version, {}, "future-provider"),
+      makeCompositionFixture(
+        null,
+        { peerDependencies: { effect: EFFECT_HOST_PEER_RANGE } },
+        "future-provider",
+      ),
     );
     expect(composition.packages).toMatchObject([
       {
@@ -104,10 +108,42 @@ describe("managed plugin release composition", () => {
     ).not.toThrow();
   });
 
+  it("accepts providerless packages without runtime metadata and rejects nonempty runtime metadata", () => {
+    expect(() =>
+      readManagedPluginComposition(
+        makeCompositionFixture(null, {}, "skills-only", {}, { providerless: true }),
+      ),
+    ).not.toThrow();
+
+    for (const packageRuntime of [
+      { dependencies: { effect: "4.0.0-beta.78" } },
+      { peerDependencies: { effect: EFFECT_HOST_PEER_RANGE } },
+      { optionalDependencies: { effect: "4.0.0-beta.78" } },
+      { bundledDependencies: ["effect"] },
+      { bundleDependencies: ["effect"] },
+    ]) {
+      expect(() =>
+        readManagedPluginComposition(
+          makeCompositionFixture(
+            null,
+            packageRuntime,
+            "skills-only",
+            {},
+            {
+              providerless: true,
+            },
+          ),
+        ),
+      ).toThrow(/cannot declare runtime metadata without a provider/iu);
+    }
+  });
+
   it("rejects newer build pins, broad peers, and additional runtime dependencies", () => {
-    expect(() => readManagedPluginComposition(makeCompositionFixture("4.0.0-beta.999"))).toThrow(
-      /incompatible host runtime contract/iu,
-    );
+    for (const version of ["4.0.0-beta.79", effectPackageJson.version, "4.0.0-beta.999"]) {
+      expect(() => readManagedPluginComposition(makeCompositionFixture(version))).toThrow(
+        /incompatible host runtime contract/iu,
+      );
+    }
     expect(() =>
       readManagedPluginComposition(
         makeCompositionFixture(null, {
@@ -145,6 +181,23 @@ describe("managed plugin release composition", () => {
     NodeFS.writeFileSync(NodePath.join(unlistedRoot, "index.js"), "throw new Error('unproved');\n");
 
     expect(() => readManagedPluginComposition(sourceRoot)).toThrow(/unlisted entries/iu);
+  });
+
+  it("rejects composed inventory paths containing a node_modules segment before snapshotting", () => {
+    for (const nodeModulesSegment of ["node_modules", "Node_Modules", "NODE_MODULES"]) {
+      const sourceRoot = makeCompositionFixture("4.0.0-beta.78", {}, "microsoft-365", {
+        [`dist/${nodeModulesSegment}/unproved-code/index.js`]: "throw new Error('unproved');\n",
+      });
+      const snapshotRoot = NodePath.join(makeTemporaryDirectory(), "snapshot");
+      const markerPath = NodePath.join(snapshotRoot, "marker");
+      NodeFS.mkdirSync(snapshotRoot);
+      NodeFS.writeFileSync(markerPath, "untouched");
+
+      expect(() => snapshotManagedPluginComposition(sourceRoot, snapshotRoot)).toThrow(
+        /file paths must be safe/iu,
+      );
+      expect(NodeFS.readFileSync(markerPath, "utf8")).toBe("untouched");
+    }
   });
 
   it("rejects deeply nested package directories without recursive traversal", () => {
@@ -222,13 +275,16 @@ function makeTemporaryDirectory(): string {
 }
 
 function makeCompositionFixture(
-  effectVersion: string | null = effectPackageJson.version,
+  effectVersion: string | null = "4.0.0-beta.78",
   packageRuntime: Readonly<Record<string, unknown>> = {},
   pluginId = "microsoft-365",
+  extraFiles: Readonly<Record<string, string>> = {},
+  options: { readonly providerless?: boolean } = {},
 ): string {
   const sourceRoot = makeTemporaryDirectory();
   const packageRoot = NodePath.join(sourceRoot, "packages", pluginId);
   const google = pluginId === "google-workspace";
+  const providerless = options.providerless === true;
   const files = new Map<string, string>([
     [
       ".tritonai-plugin/plugin.json",
@@ -242,7 +298,7 @@ function makeCompositionFixture(
           ? "Use reviewed Google Workspace tools."
           : "Use reviewed Microsoft 365 tools.",
         version: "1.0.1",
-        provider: google ? "google-workspace" : "microsoft-graph",
+        ...(providerless ? {} : { provider: google ? "google-workspace" : "microsoft-graph" }),
         capabilities: [
           {
             id: "mail.read",
@@ -251,15 +307,17 @@ function makeCompositionFixture(
             access: "default",
           },
         ],
-        tools: [
-          {
-            name: google ? "googleworkspace.mail.search" : "microsoft365.mail.search",
-            displayName: "Search mail",
-            description: "Search mail metadata.",
-            capabilities: ["mail.read"],
-            effect: "read",
-          },
-        ],
+        tools: providerless
+          ? []
+          : [
+              {
+                name: google ? "googleworkspace.mail.search" : "microsoft365.mail.search",
+                displayName: "Search mail",
+                description: "Search mail metadata.",
+                capabilities: ["mail.read"],
+                effect: "read",
+              },
+            ],
         skills: [
           {
             name: google ? "gmail" : "outlook-mail",
@@ -268,10 +326,6 @@ function makeCompositionFixture(
           },
         ],
       }),
-    ],
-    [
-      "dist/index.js",
-      `export const provider = '${google ? "google-workspace" : "microsoft-graph"}';\n`,
     ],
     [
       "package.json",
@@ -284,6 +338,15 @@ function makeCompositionFixture(
       }),
     ],
   ]);
+  if (!providerless) {
+    files.set(
+      "dist/index.js",
+      `export const provider = '${google ? "google-workspace" : "microsoft-graph"}';\n`,
+    );
+  }
+  for (const [relativePath, contents] of Object.entries(extraFiles)) {
+    files.set(relativePath, contents);
+  }
   for (const [relativePath, contents] of files) {
     const target = NodePath.join(packageRoot, relativePath);
     NodeFS.mkdirSync(NodePath.dirname(target), { recursive: true });

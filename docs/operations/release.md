@@ -34,7 +34,7 @@ The workflow:
 3. runs `vp check`, typecheck, and the full test suite;
 4. builds a Linux `node-pty` binary for the packaged Windows WSL backend;
 5. validates the pinned Installer composition commit and managed-plugin ref/commit;
-6. prepares the pinned managed-plugin composition;
+6. asks the pinned Installer commit to prepare its reviewed production managed-plugin composition;
 7. aligns package versions in the isolated build checkout;
 8. builds the Windows x64 NSIS Harness artifact;
 9. requires and verifies Azure Trusted Signing signatures;
