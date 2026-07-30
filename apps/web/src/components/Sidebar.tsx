@@ -77,7 +77,7 @@ import { useDesktopLocalBootstraps } from "../connection/useDesktopLocalBootstra
 import { isElectron } from "../env";
 import { useOpenPrLink } from "../lib/openPullRequestLink";
 import { isTerminalFocused } from "../lib/terminalFocus";
-import { isMacPlatform, newProjectId } from "../lib/utils";
+import { isMacPlatform } from "../lib/utils";
 import {
   readThreadShell,
   useProject,
@@ -183,11 +183,7 @@ import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrom
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { useIsMobile } from "~/hooks/useMediaQuery";
 import { CommandDialogTrigger } from "./ui/command";
-import {
-  useClientSettings,
-  usePrimarySettings,
-  useUpdateClientSettings,
-} from "~/hooks/useSettings";
+import { useClientSettings, useUpdateClientSettings } from "~/hooks/useSettings";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import {
   derivePhysicalProjectKey,
@@ -196,12 +192,6 @@ import {
   selectProjectGroupingSettings,
 } from "../logicalProject";
 import type { SidebarThreadSummary } from "../types";
-import {
-  TRITONAI_CHATS_PROJECT_TITLE,
-  findPrimaryTritonAiChatsProjects,
-  partitionTritonAiChatsProjects,
-  resolveTritonAiChatsWorkspacePath,
-} from "../tritonAiWorkspace";
 import {
   buildPhysicalToLogicalProjectKeyMap,
   buildSidebarProjectSnapshots,
@@ -2804,10 +2794,8 @@ interface SidebarProjectsContentProps {
   handleProjectDragEnd: (event: DragEndEvent) => void;
   handleProjectDragCancel: (event: DragCancelEvent) => void;
   handleNewThread: ReturnType<typeof useNewThreadHandler>;
-  handleNewChat: () => void;
   archiveThread: ReturnType<typeof useThreadActions>["archiveThread"];
   deleteThread: ReturnType<typeof useThreadActions>["deleteThread"];
-  chatsProject: SidebarProjectSnapshot | null;
   pinnedProjects: readonly SidebarProjectSnapshot[];
   regularProjects: readonly SidebarProjectSnapshot[];
   expandedThreadListsByProject: ReadonlySet<string>;
@@ -2844,10 +2832,8 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     handleProjectDragEnd,
     handleProjectDragCancel,
     handleNewThread,
-    handleNewChat,
     archiveThread,
     deleteThread,
-    chatsProject,
     pinnedProjects,
     regularProjects,
     expandedThreadListsByProject,
@@ -3057,63 +3043,6 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
           </div>
         )}
       </SidebarGroup>
-      <SidebarGroup className="px-2 pt-1 pb-2">
-        <div className="mb-1 flex items-center justify-between pl-2 pr-1.5">
-          <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">
-            Chats
-          </span>
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <button
-                  type="button"
-                  aria-label="New chat"
-                  data-testid="sidebar-new-chat-trigger"
-                  className="inline-flex h-6 min-w-6 cursor-pointer items-center justify-center rounded-md px-[calc(--spacing(1)-1px)] text-muted-foreground/60 transition-colors hover:bg-accent hover:text-foreground"
-                  onClick={handleNewChat}
-                />
-              }
-            >
-              <SquarePenIcon className="size-3.5" />
-            </TooltipTrigger>
-            <TooltipPopup side="right">New chat</TooltipPopup>
-          </Tooltip>
-        </div>
-        <SidebarMenu>
-          {chatsProject ? (
-            <SidebarProjectItem
-              project={chatsProject}
-              hideProjectHeader
-              forceThreadPanelOpen
-              emptyThreadLabel="No chats"
-              isThreadListExpanded={expandedThreadListsByProject.has(chatsProject.projectKey)}
-              activeRouteThreadKey={
-                activeRouteProjectKey === chatsProject.projectKey ? routeThreadKey : null
-              }
-              newThreadShortcutLabel={newThreadShortcutLabel}
-              handleNewThread={handleNewThread}
-              archiveThread={archiveThread}
-              deleteThread={deleteThread}
-              threadJumpLabelByKey={threadJumpLabelByKey}
-              attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}
-              expandThreadListForProject={expandThreadListForProject}
-              collapseThreadListForProject={collapseThreadListForProject}
-              dragInProgressRef={dragInProgressRef}
-              suppressProjectClickAfterDragRef={suppressProjectClickAfterDragRef}
-              suppressProjectClickForContextMenuRef={suppressProjectClickForContextMenuRef}
-              isManualProjectSorting={false}
-              isProjectPinned={false}
-              dragHandleProps={null}
-            />
-          ) : (
-            <SidebarMenuItem className="rounded-md">
-              <div className="flex h-6 w-full items-center px-2 text-left text-[10px] text-muted-foreground/60">
-                <span>No chats</span>
-              </div>
-            </SidebarMenuItem>
-          )}
-        </SidebarMenu>
-      </SidebarGroup>
     </SidebarContent>
   );
 });
@@ -3133,12 +3062,8 @@ export default function Sidebar() {
   const sidebarProjectSortOrder = useClientSettings((s) => s.sidebarProjectSortOrder);
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const sidebarThreadPreviewCount = useClientSettings((s) => s.sidebarThreadPreviewCount);
-  const textGenerationModelSelection = usePrimarySettings((s) => s.textGenerationModelSelection);
   const updateSettings = useUpdateClientSettings();
   const handleNewThread = useNewThreadHandler();
-  const createProject = useAtomCommand(projectEnvironment.create, {
-    reportFailure: false,
-  });
   const { archiveThread, deleteThread } = useThreadActions();
   const { isMobile, setOpenMobile } = useSidebar();
   const routeTarget = useParams({
@@ -3204,11 +3129,6 @@ export default function Sidebar() {
       ],
     });
   }, [projectOrder, projects]);
-  const { chatsProjects, regularProjects: orderedRegularProjects } = useMemo(
-    () => partitionTritonAiChatsProjects(orderedProjects),
-    [orderedProjects],
-  );
-
   // Build a mapping from physical project key → logical project key for
   // cross-environment grouping.  Projects that share a repositoryIdentity
   // canonicalKey are treated as one logical project in the sidebar.
@@ -3232,7 +3152,7 @@ export default function Sidebar() {
 
   const sidebarProjects = useMemo<SidebarProjectSnapshot[]>(() => {
     return buildSidebarProjectSnapshots({
-      projects: orderedRegularProjects,
+      projects: orderedProjects,
       settings: projectGroupingSettings,
       primaryEnvironmentId,
       resolveEnvironmentLabel: (environmentId) => environmentLabelById.get(environmentId) ?? null,
@@ -3241,49 +3161,14 @@ export default function Sidebar() {
   }, [
     environmentLabelById,
     desktopLocalEnvironmentIds,
-    orderedRegularProjects,
+    orderedProjects,
     projectGroupingSettings,
     primaryEnvironmentId,
   ]);
-
-  const primaryChatsProjects = useMemo(
-    () => findPrimaryTritonAiChatsProjects(chatsProjects, primaryEnvironmentId),
-    [chatsProjects, primaryEnvironmentId],
-  );
-  const chatsProject = useMemo<SidebarProjectSnapshot | null>(() => {
-    const snapshots = buildSidebarProjectSnapshots({
-      projects: primaryChatsProjects,
-      settings: projectGroupingSettings,
-      primaryEnvironmentId,
-      resolveEnvironmentLabel: (environmentId) => environmentLabelById.get(environmentId) ?? null,
-      isDesktopLocalEnvironment: (environmentId) => desktopLocalEnvironmentIds.has(environmentId),
-    });
-    const project = snapshots[0] ?? null;
-    if (!project) {
-      return null;
-    }
-    const memberProjects = snapshots.flatMap((snapshot) => snapshot.memberProjects);
-    return {
-      ...project,
-      displayName: TRITONAI_CHATS_PROJECT_TITLE,
-      groupedProjectCount: memberProjects.length,
-      memberProjects,
-      memberProjectRefs: memberProjects.map((member) =>
-        scopeProjectRef(member.environmentId, member.id),
-      ),
-    };
-  }, [
-    desktopLocalEnvironmentIds,
-    environmentLabelById,
-    primaryEnvironmentId,
-    primaryChatsProjects,
-    projectGroupingSettings,
-  ]);
-  const regularSidebarProjects = sidebarProjects;
 
   const sidebarProjectByKey = useMemo(
-    () => new Map(regularSidebarProjects.map((project) => [project.projectKey, project] as const)),
-    [regularSidebarProjects],
+    () => new Map(sidebarProjects.map((project) => [project.projectKey, project] as const)),
+    [sidebarProjects],
   );
   const sidebarThreadByKey = useMemo(
     () =>
@@ -3295,156 +3180,21 @@ export default function Sidebar() {
       ),
     [sidebarThreads],
   );
-  const ensureChatsProjectRefInFlight = useRef(
-    new Map<string, Promise<ReturnType<typeof scopeProjectRef>>>(),
-  );
-  const ensuredChatsProjectByEnvironment = useRef(
-    new Map<string, { projectRef: ReturnType<typeof scopeProjectRef>; observed: boolean }>(),
-  );
-  useEffect(() => {
-    for (const [environmentId, cachedProject] of ensuredChatsProjectByEnvironment.current) {
-      const isPresent = projects.some(
-        (project) =>
-          project.environmentId === cachedProject.projectRef.environmentId &&
-          project.id === cachedProject.projectRef.projectId,
-      );
-      if (isPresent) {
-        ensuredChatsProjectByEnvironment.current.set(environmentId, {
-          ...cachedProject,
-          observed: true,
-        });
-      } else if (cachedProject.observed) {
-        ensuredChatsProjectByEnvironment.current.delete(environmentId);
-      }
-    }
-  }, [projects]);
-  const ensureChatsProjectRef = useCallback((): Promise<ReturnType<typeof scopeProjectRef>> => {
-    if (primaryEnvironmentId === null) {
-      return Promise.reject(new Error("Primary environment is not ready."));
-    }
-
-    const environmentId = primaryEnvironmentId;
-    const inFlight = ensureChatsProjectRefInFlight.current.get(environmentId);
-    if (inFlight) {
-      return inFlight;
-    }
-
-    const existingPrimaryProject = primaryChatsProjects[0] ?? null;
-    if (existingPrimaryProject) {
-      const projectRef = scopeProjectRef(
-        existingPrimaryProject.environmentId,
-        existingPrimaryProject.id,
-      );
-      ensuredChatsProjectByEnvironment.current.set(existingPrimaryProject.environmentId, {
-        projectRef,
-        observed: true,
-      });
-      return Promise.resolve(projectRef);
-    }
-
-    const promise = (async (): Promise<ReturnType<typeof scopeProjectRef>> => {
-      const cachedProject = ensuredChatsProjectByEnvironment.current.get(environmentId);
-      if (cachedProject) {
-        return cachedProject.projectRef;
-      }
-
-      const projectId = newProjectId();
-      const projectRef = scopeProjectRef(environmentId, projectId);
-      ensuredChatsProjectByEnvironment.current.set(environmentId, {
-        projectRef,
-        observed: false,
-      });
-      try {
-        const result = await createProject({
-          environmentId,
-          input: {
-            projectId,
-            title: TRITONAI_CHATS_PROJECT_TITLE,
-            workspaceRoot: resolveTritonAiChatsWorkspacePath(),
-            createWorkspaceRootIfMissing: true,
-            defaultModelSelection: textGenerationModelSelection,
-          },
-        });
-        if (result._tag === "Failure") {
-          if (isAtomCommandInterrupted(result)) {
-            throw new Error("Chat creation was interrupted.");
-          }
-          const error = squashAtomCommandFailure(result);
-          throw error instanceof Error ? error : new Error("Could not create Chats project.");
-        }
-        return projectRef;
-      } catch (error) {
-        const cachedProject = ensuredChatsProjectByEnvironment.current.get(environmentId);
-        if (
-          cachedProject?.projectRef.environmentId === projectRef.environmentId &&
-          cachedProject.projectRef.projectId === projectRef.projectId
-        ) {
-          ensuredChatsProjectByEnvironment.current.delete(environmentId);
-        }
-        throw error;
-      }
-    })();
-
-    ensureChatsProjectRefInFlight.current.set(environmentId, promise);
-    const clearInFlight = () => {
-      if (ensureChatsProjectRefInFlight.current.get(environmentId) === promise) {
-        ensureChatsProjectRefInFlight.current.delete(environmentId);
-      }
-    };
-    void promise.then(clearInFlight, clearInFlight);
-    return promise;
-  }, [createProject, primaryChatsProjects, primaryEnvironmentId, textGenerationModelSelection]);
-  const handleNewChat = useCallback(() => {
-    void (async () => {
-      try {
-        const projectRef = await ensureChatsProjectRef();
-        if (isMobile) {
-          setOpenMobile(false);
-        }
-        await handleNewThread(projectRef, {
-          branch: null,
-          worktreePath: null,
-          envMode: "local",
-        });
-      } catch (error) {
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Could not start chat",
-            description: error instanceof Error ? error.message : "An unexpected error occurred.",
-          }),
-        );
-      }
-    })();
-  }, [ensureChatsProjectRef, handleNewThread, isMobile, setOpenMobile]);
   // Resolve the active route's project key to a logical key so it matches the
   // sidebar's grouped project entries.
-  const chatsProjectRefKeys = useMemo(
-    () => new Set(chatsProject?.memberProjectRefs.map(scopedProjectKey) ?? []),
-    [chatsProject],
-  );
   const activeRouteProjectKey = useMemo(() => {
     if (!routeThreadKey) {
       return null;
     }
     const activeThread = sidebarThreadByKey.get(routeThreadKey);
     if (!activeThread) return null;
-    const activeProjectRef = scopeProjectRef(activeThread.environmentId, activeThread.projectId);
-    const activeProjectRefKey = scopedProjectKey(activeProjectRef);
-    if (chatsProject && chatsProjectRefKeys.has(activeProjectRefKey)) {
-      return chatsProject.projectKey;
-    }
+    const activeProjectRefKey = scopedProjectKey(
+      scopeProjectRef(activeThread.environmentId, activeThread.projectId),
+    );
     const physicalKey =
       projectPhysicalKeyByScopedRef.get(activeProjectRefKey) ?? activeProjectRefKey;
     return physicalToLogicalKey.get(physicalKey) ?? physicalKey;
-  }, [
-    chatsProject,
-    chatsProjectRefKeys,
-    routeThreadKey,
-    sidebarThreadByKey,
-    physicalToLogicalKey,
-    projectPhysicalKeyByScopedRef,
-  ]);
+  }, [routeThreadKey, sidebarThreadByKey, physicalToLogicalKey, projectPhysicalKeyByScopedRef]);
 
   // Group threads by logical project key so all threads from grouped projects
   // are displayed together.
@@ -3455,10 +3205,7 @@ export default function Sidebar() {
         scopeProjectRef(thread.environmentId, thread.projectId),
       );
       const physicalKey = projectPhysicalKeyByScopedRef.get(projectRefKey) ?? projectRefKey;
-      const logicalKey =
-        chatsProject && chatsProjectRefKeys.has(projectRefKey)
-          ? chatsProject.projectKey
-          : (physicalToLogicalKey.get(physicalKey) ?? physicalKey);
+      const logicalKey = physicalToLogicalKey.get(physicalKey) ?? physicalKey;
       const existing = next.get(logicalKey);
       if (existing) {
         existing.push(thread);
@@ -3467,13 +3214,7 @@ export default function Sidebar() {
       }
     }
     return next;
-  }, [
-    chatsProject,
-    chatsProjectRefKeys,
-    sidebarThreads,
-    physicalToLogicalKey,
-    projectPhysicalKeyByScopedRef,
-  ]);
+  }, [sidebarThreads, physicalToLogicalKey, projectPhysicalKeyByScopedRef]);
   const getCurrentSidebarShortcutContext = useCallback(
     () => ({
       terminalFocus: isTerminalFocused(),
@@ -3501,7 +3242,7 @@ export default function Sidebar() {
     [sidebarThreads],
   );
   const sortedProjects = useMemo(() => {
-    const sortableProjects = regularSidebarProjects.map((project) => ({
+    const sortableProjects = sidebarProjects.map((project) => ({
       ...project,
       id: project.projectKey,
     }));
@@ -3528,7 +3269,7 @@ export default function Sidebar() {
     physicalToLogicalKey,
     projectPhysicalKeyByScopedRef,
     sidebarProjectByKey,
-    regularSidebarProjects,
+    sidebarProjects,
     visibleThreads,
   ]);
 
@@ -3670,8 +3411,8 @@ export default function Sidebar() {
     [pinnedProjectKeySet, sortedProjects],
   );
   const sidebarProjectsForThreadNavigation = useMemo(
-    () => [...pinnedProjects, ...regularProjects, ...(chatsProject ? [chatsProject] : [])],
-    [chatsProject, pinnedProjects, regularProjects],
+    () => [...pinnedProjects, ...regularProjects],
+    [pinnedProjects, regularProjects],
   );
 
   const visibleSidebarThreadKeys = useMemo(
@@ -3919,10 +3660,8 @@ export default function Sidebar() {
             handleProjectDragEnd={handleProjectDragEnd}
             handleProjectDragCancel={handleProjectDragCancel}
             handleNewThread={handleNewThread}
-            handleNewChat={handleNewChat}
             archiveThread={archiveThread}
             deleteThread={deleteThread}
-            chatsProject={chatsProject}
             pinnedProjects={pinnedProjects}
             regularProjects={regularProjects}
             expandedThreadListsByProject={expandedThreadListsByProject}

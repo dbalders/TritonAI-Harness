@@ -30,13 +30,10 @@ import { projectEnvironment } from "./state/projects";
 import { environmentShell } from "./state/shell";
 import { useAtomCommand } from "./state/use-atom-command";
 import {
-  TRITONAI_CHATS_WORKSPACE,
   TRITONAI_FIRST_RUN_PROMPT,
   TRITONAI_FIRST_RUN_WORKSPACE,
-  isTritonAiChatsWorkspacePath,
   isTritonAiCodeBrand,
   isTritonAiWorkspacePath,
-  resolveTritonAiChatsWorkspacePath,
   resolveTritonAiFirstRunWorkspacePath,
 } from "./tritonAiWorkspace";
 
@@ -51,13 +48,10 @@ const EMPTY_SHELL_STATE: EnvironmentShellState = {
 const EMPTY_SHELL_STATE_ATOM = Atom.make(EMPTY_SHELL_STATE);
 
 export {
-  TRITONAI_CHATS_WORKSPACE,
   TRITONAI_FIRST_RUN_PROMPT,
   TRITONAI_FIRST_RUN_WORKSPACE,
-  isTritonAiChatsWorkspacePath,
   isTritonAiCodeBrand,
   isTritonAiWorkspacePath,
-  resolveTritonAiChatsWorkspacePath,
   resolveTritonAiFirstRunWorkspacePath,
 };
 

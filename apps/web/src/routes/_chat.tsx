@@ -8,6 +8,7 @@ import { openCommandPalette } from "../commandPaletteBus";
 import { useProjects } from "../state/entities";
 import { usePrimaryEnvironmentId } from "../state/environments";
 import { selectProjectGroupingSettings } from "../logicalProject";
+import { buildSidebarProjectSnapshots } from "../sidebarProjectGrouping";
 import { dispatchPreviewAction } from "../components/preview/previewActionBus";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { startNewThreadFromContext } from "../lib/chatThreadActions";
@@ -18,11 +19,6 @@ import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../termina
 import { isPreviewSupportedInRuntime } from "../previewStateStore";
 import { selectActiveRightPanel, useRightPanelStore } from "../rightPanelStore";
 import { useThreadSelectionStore } from "../threadSelectionStore";
-import {
-  buildRegularSidebarProjectSnapshots,
-  isRegularProjectThreadContext,
-  resolveGenericNewThreadShortcutAction,
-} from "../tritonAiProjectSurfaces";
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
 import { primaryServerKeybindingsAtom } from "~/state/server";
 
@@ -38,7 +34,7 @@ function ChatRouteGlobalShortcuts() {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const projectGroupCount = useMemo(
     () =>
-      buildRegularSidebarProjectSnapshots({
+      buildSidebarProjectSnapshots({
         projects,
         settings: projectGroupingSettings,
         primaryEnvironmentId,
@@ -81,31 +77,29 @@ function ChatRouteGlobalShortcuts() {
         return;
       }
 
-      if (command === "chat.newLocal" || command === "chat.new") {
+      if (command === "chat.newLocal") {
         event.preventDefault();
         event.stopPropagation();
-        const action = resolveGenericNewThreadShortcutAction({
-          command,
-          projectGroupCount,
-          sidebarV2Enabled,
+        void startNewThreadFromContext({
+          activeDraftThread,
+          activeThread: activeThread ?? undefined,
+          defaultProjectRef,
+          handleNewThread,
         });
-        if (action === "none") {
-          return;
-        }
-        if (action === "choose") {
+        return;
+      }
+
+      if (command === "chat.new") {
+        event.preventDefault();
+        event.stopPropagation();
+        if (sidebarV2Enabled && projectGroupCount > 1) {
           openCommandPalette({ open: "new-thread-in" });
           return;
         }
         void startNewThreadFromContext({
-          activeDraftThread: isRegularProjectThreadContext(projects, activeDraftThread)
-            ? activeDraftThread
-            : null,
-          activeThread: isRegularProjectThreadContext(projects, activeThread)
-            ? (activeThread ?? undefined)
-            : undefined,
-          defaultProjectRef: isRegularProjectThreadContext(projects, defaultProjectRef)
-            ? defaultProjectRef
-            : null,
+          activeDraftThread,
+          activeThread: activeThread ?? undefined,
+          defaultProjectRef,
           handleNewThread,
         });
         return;
@@ -168,7 +162,6 @@ function ChatRouteGlobalShortcuts() {
     defaultProjectRef,
     previewOpen,
     projectGroupCount,
-    projects,
     routeThreadRef,
     selectedThreadKeysSize,
     sidebarV2Enabled,
