@@ -2,7 +2,6 @@ import { SettingsIcon } from "lucide-react";
 import { memo, useCallback } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 
-import { APP_BASE_NAME } from "../../branding";
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
 import {
@@ -87,22 +86,14 @@ function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
 
 export function SidebarBrandIdentity({ onBackdrop }: { onBackdrop: boolean }) {
   return (
-    <>
-      <img
-        alt=""
-        aria-hidden
-        className="size-4 shrink-0 rounded-sm object-contain"
-        src="/tritonai-logo.png"
-      />
-      <span
-        className={cn(
-          "truncate text-sm font-medium tracking-tight",
-          onBackdrop ? "text-white/85" : "text-foreground",
-        )}
-      >
-        {APP_BASE_NAME}
-      </span>
-    </>
+    <span
+      className={cn(
+        "truncate text-sm font-medium tracking-tight",
+        onBackdrop ? "text-white/85" : "text-foreground",
+      )}
+    >
+      TritonAI
+    </span>
   );
 }
 
