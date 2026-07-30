@@ -4,6 +4,7 @@ import { LinkIcon, PlusIcon, RotateCcwIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { openCommandPalette } from "../commandPaletteBus";
+import { sortScopedProjectsForSidebar } from "../components/Sidebar.logic";
 import { Button } from "../components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../components/ui/empty";
 import { SidebarInset } from "../components/ui/sidebar";
@@ -14,7 +15,6 @@ import {
   useThreadShells,
 } from "../state/entities";
 import { useEnvironments } from "../state/environments";
-import { sortRegularScopedProjectsForSidebar } from "../tritonAiProjectSurfaces";
 import { APP_DISPLAY_NAME } from "~/branding";
 import { hasCloudPublicConfig } from "~/cloud/publicConfig";
 import { cn } from "~/lib/utils";
@@ -47,7 +47,7 @@ function IndexDraftLanding() {
   const mostRecentProject = useMemo(
     () =>
       bootstrapped
-        ? (sortRegularScopedProjectsForSidebar(projects, threads, "updated_at")[0] ?? null)
+        ? (sortScopedProjectsForSidebar(projects, threads, "updated_at")[0] ?? null)
         : null,
     [bootstrapped, projects, threads],
   );

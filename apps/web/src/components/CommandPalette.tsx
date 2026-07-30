@@ -58,7 +58,6 @@ import { readLocalApi } from "../localApi";
 import { desktopLocalBackendId } from "../connection/desktopLocal";
 import { filesystemEnvironment } from "../state/filesystem";
 import { projectEnvironment } from "../state/projects";
-import { isTritonAiChatsWorkspacePath } from "../tritonAiWorkspace";
 import { useEnvironmentQuery } from "../state/query";
 import { sourceControlEnvironment } from "../state/sourceControl";
 import { useAtomCommand } from "../state/use-atom-command";
@@ -513,11 +512,7 @@ function OpenCommandPaletteDialog(props: {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread } =
     useHandleNewThread();
-  const allProjects = useProjects();
-  const projects = useMemo(
-    () => allProjects.filter((project) => !isTritonAiChatsWorkspacePath(project.workspaceRoot)),
-    [allProjects],
-  );
+  const projects = useProjects();
   const projectOrder = useUiStateStore((store) => store.projectOrder);
   const threads = useThreadShells();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
@@ -725,12 +720,12 @@ function OpenCommandPaletteDialog(props: {
 
   const projectCwdById = useMemo(
     () =>
-      new Map<ProjectId, string>(allProjects.map((project) => [project.id, project.workspaceRoot])),
-    [allProjects],
+      new Map<ProjectId, string>(projects.map((project) => [project.id, project.workspaceRoot])),
+    [projects],
   );
   const projectTitleById = useMemo(
-    () => new Map<ProjectId, string>(allProjects.map((project) => [project.id, project.title])),
-    [allProjects],
+    () => new Map<ProjectId, string>(projects.map((project) => [project.id, project.title])),
+    [projects],
   );
 
   const activeThreadId = activeThread?.id;
@@ -1395,7 +1390,7 @@ function OpenCommandPaletteDialog(props: {
       if (cwd.length === 0) return;
 
       const existing = findProjectByPath(
-        allProjects.filter((project) => project.environmentId === input.environmentId),
+        projects.filter((project) => project.environmentId === input.environmentId),
         cwd,
       );
       if (existing) {
@@ -1484,7 +1479,7 @@ function OpenCommandPaletteDialog(props: {
       createProject,
       environments,
       navigate,
-      allProjects,
+      projects,
       primaryEnvironmentId,
       providers,
       setOpen,
