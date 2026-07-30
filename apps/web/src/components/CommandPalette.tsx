@@ -17,13 +17,10 @@ import {
   type EnvironmentId,
   type FilesystemBrowseResult,
   type ProjectId,
-  type SourceControlDiscoveryResult,
-  type SourceControlProviderKind,
   type SourceControlRepositoryInfo,
   PRIMARY_LOCAL_ENVIRONMENT_ID,
 } from "@t3tools/contracts";
 import { useNavigate, useParams } from "@tanstack/react-router";
-import * as Option from "effect/Option";
 import {
   ArrowDownIcon,
   ArrowLeftIcon,
@@ -105,6 +102,15 @@ import {
   ITEM_ICON_CLASS,
   RECENT_THREAD_LIMIT,
 } from "./CommandPalette.logic";
+import {
+  buildAddProjectRemoteSourceReadiness,
+  remoteProjectSourceLabel,
+  remoteProjectSourcePathHint,
+  sortAddProjectProviderSources,
+  type AddProjectRemoteProviderKind,
+  type AddProjectRemoteSource,
+  type AddProjectRemoteSourceReadiness,
+} from "./CommandPalette.sourceControl";
 import { orderItemsByPreferredIds, sortLogicalProjectsForSidebar } from "./Sidebar.logic";
 import { resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
 import { CommandPaletteResults } from "./CommandPaletteResults";
@@ -179,12 +185,6 @@ interface AddProjectEnvironmentOption {
   readonly isPrimary: boolean;
 }
 
-type AddProjectRemoteProviderKind = Extract<
-  SourceControlProviderKind,
-  "github" | "gitlab" | "bitbucket" | "azure-devops"
->;
-type AddProjectRemoteSource = AddProjectRemoteProviderKind | "url";
-
 type AddProjectCloneFlow =
   | {
       readonly step: "repository";
@@ -199,50 +199,6 @@ type AddProjectCloneFlow =
       readonly repository: SourceControlRepositoryInfo | null;
       readonly remoteUrl: string;
     };
-
-const REMOTE_PROJECT_SOURCES: ReadonlyArray<AddProjectRemoteSource> = [
-  "url",
-  "github",
-  "gitlab",
-  "bitbucket",
-  "azure-devops",
-];
-const REMOTE_PROJECT_PROVIDER_SOURCES: ReadonlyArray<AddProjectRemoteProviderKind> = [
-  "github",
-  "gitlab",
-  "bitbucket",
-  "azure-devops",
-];
-
-function remoteProjectSourceLabel(source: AddProjectRemoteSource): string {
-  switch (source) {
-    case "github":
-      return "GitHub";
-    case "gitlab":
-      return "GitLab";
-    case "bitbucket":
-      return "Bitbucket";
-    case "azure-devops":
-      return "Azure DevOps";
-    case "url":
-      return "Git URL";
-  }
-}
-
-function remoteProjectSourcePathHint(source: AddProjectRemoteSource): string {
-  switch (source) {
-    case "github":
-      return "owner/repo";
-    case "gitlab":
-      return "group/project";
-    case "bitbucket":
-      return "workspace/repository";
-    case "azure-devops":
-      return "project/repository";
-    case "url":
-      return "URL";
-  }
-}
 
 function remoteProjectSourceProvider(
   source: AddProjectRemoteSource,
@@ -272,79 +228,6 @@ function remoteProjectInputPlaceholder(flow: AddProjectCloneFlow | null): string
     return "Enter Git clone URL";
   }
   return `Enter ${remoteProjectSourceLabel(flow.source)} repository (${remoteProjectSourcePathHint(flow.source)})`;
-}
-
-function sourceProviderKind(source: AddProjectRemoteSource): AddProjectRemoteProviderKind | null {
-  return source === "url" ? null : source;
-}
-
-function sortAddProjectProviderSources(
-  readinessBySource: AddProjectRemoteSourceReadiness,
-): ReadonlyArray<AddProjectRemoteProviderKind> {
-  return REMOTE_PROJECT_PROVIDER_SOURCES.toSorted((left, right) => {
-    const leftReady = readinessBySource[left].ready;
-    const rightReady = readinessBySource[right].ready;
-    if (leftReady !== rightReady) {
-      return leftReady ? -1 : 1;
-    }
-    return remoteProjectSourceLabel(left).localeCompare(remoteProjectSourceLabel(right));
-  });
-}
-
-type AddProjectRemoteSourceReadiness = Record<
-  AddProjectRemoteSource,
-  { readonly ready: boolean; readonly hint: string | null }
->;
-
-function buildAddProjectRemoteSourceReadiness(
-  discovery: SourceControlDiscoveryResult | null,
-): AddProjectRemoteSourceReadiness {
-  const unavailable = {
-    ready: false,
-    hint: "Provider status unavailable. Open Settings -> Source Control and rescan.",
-  } as const;
-  const defaultReadiness: AddProjectRemoteSourceReadiness = {
-    url: { ready: true, hint: null },
-    github: unavailable,
-    gitlab: unavailable,
-    bitbucket: unavailable,
-    "azure-devops": unavailable,
-  };
-
-  if (!discovery) {
-    return defaultReadiness;
-  }
-
-  const providerByKind = new Map(
-    discovery.sourceControlProviders.map((provider) => [provider.kind, provider]),
-  );
-  const readiness = { ...defaultReadiness };
-
-  for (const source of REMOTE_PROJECT_SOURCES) {
-    const kind = sourceProviderKind(source);
-    if (!kind) continue;
-    const provider = providerByKind.get(kind);
-    if (!provider) {
-      readiness[source] = unavailable;
-      continue;
-    }
-    if (provider.status !== "available") {
-      readiness[source] = { ready: false, hint: provider.installHint };
-      continue;
-    }
-    if (provider.auth.status === "unauthenticated") {
-      readiness[source] = {
-        ready: false,
-        hint:
-          Option.getOrNull(provider.auth.detail) ??
-          `${provider.label} is not authenticated. Open Settings -> Source Control for setup guidance.`,
-      };
-      continue;
-    }
-    readiness[source] = { ready: true, hint: null };
-  }
-
-  return readiness;
 }
 
 function errorMessage(error: unknown): string {
