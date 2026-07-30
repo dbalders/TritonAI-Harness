@@ -15,6 +15,11 @@ import {
   resolveWebAssetBrandForPackageVersion,
   resolveWebIconOverrides,
 } from "../../../scripts/lib/brand-assets.ts";
+import {
+  loadManagedPluginCompositionFromEnvironment,
+  snapshotManagedPluginComposition,
+} from "../../../scripts/lib/managed-plugin-composition.ts";
+import { loadRepoEnv } from "../../../scripts/lib/public-config.ts";
 import { resolveCatalogDependencies } from "../../../scripts/lib/resolve-catalog.ts";
 import { fromJsonStringPretty } from "@t3tools/shared/schemaJson";
 import { fromYaml } from "@t3tools/shared/schemaYaml";
@@ -171,6 +176,15 @@ const buildCmd = Command.make(
         yield* Effect.log("[cli] Bundled web app into dist/client");
       } else {
         yield* Effect.logWarning("[cli] Web dist not found — skipping client bundle.");
+      }
+
+      const pluginSource = loadManagedPluginCompositionFromEnvironment(loadRepoEnv());
+      if (pluginSource) {
+        snapshotManagedPluginComposition(
+          pluginSource.root,
+          path.join(serverDir, "dist/production-integrations"),
+        );
+        yield* Effect.log("[cli] Bundled managed plugin composition into dist");
       }
     }),
 ).pipe(Command.withDescription("Build the server package (tsdown + bundle web client)."));

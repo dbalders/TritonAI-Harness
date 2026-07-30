@@ -47,6 +47,10 @@
       "types": "./src/semver.ts",
       "import": "./src/semver.ts"
     },
+    "./pluginHostRuntime": {
+      "types": "./src/pluginHostRuntime.ts",
+      "import": "./src/pluginHostRuntime.ts"
+    },
     "./Net": {
       "types": "./src/Net.ts",
       "import": "./src/Net.ts"

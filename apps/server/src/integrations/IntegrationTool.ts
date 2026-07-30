@@ -22,6 +22,18 @@ export interface IntegrationProviderTool {
 type ToolInputDecoder = (input: unknown) => Promise<unknown>;
 const toolInputDecoders = new WeakMap<object, ToolInputDecoder>();
 
+export function prepareIntegrationToolInput(definition: IntegrationProviderTool): void {
+  const key = definition.input as object;
+  if (toolInputDecoders.has(key)) return;
+  const compiled = Schema.decodeUnknownPromise(definition.input);
+  toolInputDecoders.set(key, (value) =>
+    compiled(value, {
+      errors: "all",
+      onExcessProperty: "error",
+    }),
+  );
+}
+
 export function integrationToolJsonSchema(
   definition: IntegrationProviderTool,
 ): Readonly<Record<string, unknown>> {
@@ -39,14 +51,8 @@ export function decodeIntegrationToolInput(
   const key = definition.input as object;
   let decode = toolInputDecoders.get(key);
   if (!decode) {
-    // Provider schemas are dynamic; cache the compiled decoder once per schema instance.
-    const compiled = Schema.decodeUnknownPromise(definition.input);
-    decode = (value) =>
-      compiled(value, {
-        errors: "all",
-        onExcessProperty: "error",
-      });
-    toolInputDecoders.set(key, decode);
+    prepareIntegrationToolInput(definition);
+    decode = toolInputDecoders.get(key)!;
   }
   return decode(input);
 }
