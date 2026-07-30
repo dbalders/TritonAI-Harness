@@ -8,9 +8,9 @@ import type {
   ServerProviderModel,
   ServerProviderState,
 } from "@t3tools/contracts";
-import { ProviderDriverKind } from "@t3tools/contracts";
 import type * as EffectAcpSchema from "effect-acp/schema";
 import { causeErrorTag } from "@t3tools/shared/observability";
+import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -50,7 +50,6 @@ import { CursorListAvailableModelsResponse } from "../acp/CursorAcpExtension.ts"
 const decodeCursorListAvailableModelsResponse = Schema.decodeUnknownEffect(
   CursorListAvailableModelsResponse,
 );
-const PROVIDER = ProviderDriverKind.make("cursor");
 const CURSOR_PRESENTATION = {
   displayName: "Cursor",
   badgeLabel: "Early Access",
@@ -65,7 +64,7 @@ const CURSOR_PARAMETERIZED_MODEL_PICKER_MIN_VERSION_DATE = 2026_04_08;
 const CURSOR_CLI_INSTALLATION_DOCS_URL = "https://cursor.com/docs/cli/installation";
 const CURSOR_ACP_MODEL_DISCOVERY_FAILED_MESSAGE = [
   "Cursor ACP model discovery failed.",
-  "Cursor CLI setup may be incomplete; install or enable the Cursor CLI, restart T3 Code, and try again.",
+  "Cursor CLI setup may be incomplete; install or enable the Cursor CLI, restart TritonAI Harness, and try again.",
   `See ${CURSOR_CLI_INSTALLATION_DOCS_URL}.`,
   "Check server logs for ACP details.",
 ].join(" ");
@@ -93,7 +92,7 @@ export function buildInitialCursorProviderSnapshot(
           version: null,
           status: "warning",
           auth: { status: "unknown" },
-          message: "Cursor is disabled in T3 Code settings.",
+          message: "Cursor is disabled in TritonAI Harness settings.",
         },
       });
     }
@@ -575,7 +574,7 @@ export const discoverCursorModelsViaAcp = (
 export function getCursorFallbackModels(
   cursorSettings: Pick<CursorSettings, "customModels">,
 ): ReadonlyArray<ServerProviderModel> {
-  return providerModelsFromSettings([], PROVIDER, cursorSettings.customModels, EMPTY_CAPABILITIES);
+  return providerModelsFromSettings([], cursorSettings.customModels, EMPTY_CAPABILITIES);
 }
 
 /** Timeout for `agent about` — it's slower than a simple `--version` probe. */
@@ -618,7 +617,7 @@ function joinProviderMessages(...messages: ReadonlyArray<string | undefined>): s
 function buildCursorCliCommandMissingMessage(binaryPath: string): string {
   return [
     `Cursor CLI command \`${binaryPath}\` was not found.`,
-    `Install or enable the Cursor CLI, make sure \`${binaryPath}\` is on PATH, then restart T3 Code.`,
+    `Install or enable the Cursor CLI, make sure \`${binaryPath}\` is on PATH, then restart TritonAI Harness.`,
     `See ${CURSOR_CLI_INSTALLATION_DOCS_URL}.`,
   ].join(" ");
 }
@@ -637,7 +636,6 @@ export function buildCursorProviderSnapshot(input: {
     checkedAt: input.checkedAt,
     models: providerModelsFromSettings(
       input.discoveredModels ?? [],
-      PROVIDER,
       input.cursorSettings.customModels,
       EMPTY_CAPABILITIES,
     ),
@@ -992,7 +990,7 @@ export const checkCursorProviderStatus = Effect.fn("checkCursorProviderStatus")(
 ): Effect.fn.Return<
   ServerProviderDraft,
   never,
-  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
+  ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | FileSystem.FileSystem | Path.Path
 > {
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
   const fallbackModels = getCursorFallbackModels(cursorSettings);
@@ -1008,7 +1006,7 @@ export const checkCursorProviderStatus = Effect.fn("checkCursorProviderStatus")(
         version: null,
         status: "warning",
         auth: { status: "unknown" },
-        message: "Cursor is disabled in T3 Code settings.",
+        message: "Cursor is disabled in TritonAI Harness settings.",
       },
     });
   }

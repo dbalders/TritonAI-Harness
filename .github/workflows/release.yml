@@ -26,7 +26,6 @@ jobs:
       version: ${{ steps.release_meta.outputs.version }}
       tag: ${{ steps.release_meta.outputs.tag }}
       release_name: ${{ steps.release_meta.outputs.name }}
-      cli_dist_tag: ${{ steps.release_meta.outputs.cli_dist_tag }}
       is_prerelease: ${{ steps.release_meta.outputs.is_prerelease }}
       make_latest: ${{ steps.release_meta.outputs.make_latest }}
       ref: ${{ steps.release_meta.outputs.ref }}
@@ -62,7 +61,6 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=v$version" >> "$GITHUB_OUTPUT"
           echo "name=TritonAI Harness v$version" >> "$GITHUB_OUTPUT"
-          echo "cli_dist_tag=latest" >> "$GITHUB_OUTPUT"
           if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
             echo "ref=v$version" >> "$GITHUB_OUTPUT"
           else
@@ -76,15 +74,19 @@ jobs:
             echo "make_latest=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Verify controlled release is published
+      # Keep the controlled release private until every Harness artifact and
+      # downstream composition check succeeds.
+      - name: Verify controlled release is an unpublished draft
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ steps.release_meta.outputs.tag }}
         run: |
+          set -euo pipefail
+
           is_draft="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')"
-          if [[ "$is_draft" != "false" ]]; then
-            echo "Controlled release $RELEASE_TAG must be published before starting release automation." >&2
+          if [[ "$is_draft" != "true" ]]; then
+            echo "Controlled release $RELEASE_TAG must exist as an unpublished draft before starting release automation." >&2
             exit 1
           fi
 
@@ -180,6 +182,8 @@ jobs:
             platform: win
             target: nsis
             arch: x64
+            rust_target: x86_64-pc-windows-msvc
+            resource_key: win32-x64
           # - label: Windows arm64
           #   runner: windows-11-arm
           #   platform: win
@@ -242,6 +246,11 @@ jobs:
           node-version-file: package.json
           cache: true
           run-install: true
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
 
       - name: Prepare pinned managed plugin composition
         shell: bash
@@ -349,8 +358,7 @@ jobs:
         shell: bash
         env:
           TRITONAI_PLUGIN_COMPOSITION_SOURCE: ${{ github.workspace }}/.release-input/installer/vendor/plugins
-          TRITONAI_MICROSOFT_GRAPH_CLIENT_ID: ${{ vars.TRITONAI_MICROSOFT_GRAPH_CLIENT_ID }}
-          TRITONAI_MICROSOFT_GRAPH_TENANT_ID: ${{ vars.TRITONAI_MICROSOFT_GRAPH_TENANT_ID }}
+          TRITONAI_PLUGIN_CONFIGURATION_JSON: ${{ vars.TRITONAI_PLUGIN_CONFIGURATION_JSON }}
           T3CODE_CLERK_PASSKEY_RP_DOMAINS: ${{ vars.CLERK_PASSKEY_RP_DOMAINS }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
@@ -439,6 +447,10 @@ jobs:
           #   done
           # fi
 
+      # The desktop artifact build already fails closed while compiling and
+      # staging this binary under packaged resources/resource-monitor. Upstream
+      # uploads a separate copy only for its npm CLI package; downstream does
+      # not publish that package or expose the raw executable as a release asset.
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7
         with:
@@ -446,48 +458,10 @@ jobs:
           path: release-publish/*
           if-no-files-found: error
 
-  publish_cli:
-    name: Publish CLI to npm
+  release:
+    name: Complete controlled GitHub Release
     needs: [preflight, build]
     if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.build.result == 'success' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ needs.preflight.outputs.ref }}
-
-      - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@v1
-        with:
-          node-version-file: package.json
-          cache: true
-          run-install: |
-            args:
-              - --filter=t3...
-              - --filter=@t3tools/web...
-              - --filter=@t3tools/scripts...
-
-      - name: Align package versions to release version
-        run: node scripts/update-release-package-versions.ts "${{ needs.preflight.outputs.version }}"
-
-      - name: Build web package
-        run: vp run --filter @t3tools/web build
-
-      - name: Build CLI package
-        run: vp run --filter t3 build
-
-      - name: Publish CLI package
-        run: node apps/server/scripts/cli.ts publish --tag "${{ needs.preflight.outputs.cli_dist_tag }}" --app-version "${{ needs.preflight.outputs.version }}" --verbose
-
-  release:
-    name: Attach Windows assets to GitHub Release
-    needs: [preflight, build, publish_cli]
-    if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.build.result == 'success' && needs.publish_cli.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -549,17 +523,76 @@ jobs:
       #       exit 1
       #     fi
 
+      - name: Verify controlled draft gate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app_token.outputs.token }}
+          RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          is_draft="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')"
+          if [[ "$is_draft" != "true" ]]; then
+            echo "Controlled release $RELEASE_TAG is no longer an unpublished draft; refusing to alter it." >&2
+            exit 1
+          fi
+
       - name: Attach Windows release assets
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.preflight.outputs.tag }}
-          files: |
-            release-assets/*.exe
-            release-assets/*.blockmap
-            release-assets/*.yml
-            release-assets/tritonai-plugin-composition-*.json
-          fail_on_unmatched_files: true
-          token: ${{ steps.app_token.outputs.token }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app_token.outputs.token }}
+          RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          required_patterns=(
+            "release-assets/*.exe"
+            "release-assets/*.blockmap"
+            "release-assets/*.yml"
+            "release-assets/tritonai-plugin-composition-*.json"
+          )
+          assets=()
+          for pattern in "${required_patterns[@]}"; do
+            mapfile -t matches < <(compgen -G "$pattern")
+            if (( ${#matches[@]} == 0 )); then
+              echo "Required release asset pattern did not match: $pattern" >&2
+              exit 1
+            fi
+            assets+=("${matches[@]}")
+          done
+
+          gh release upload "$RELEASE_TAG" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --clobber
+
+      - name: Publish controlled release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app_token.outputs.token }}
+          RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
+          IS_PRERELEASE: ${{ needs.preflight.outputs.is_prerelease }}
+          MAKE_LATEST: ${{ needs.preflight.outputs.make_latest }}
+        run: |
+          set -euo pipefail
+
+          edit_args=(--draft=false --verify-tag)
+          if [[ "$IS_PRERELEASE" == "true" ]]; then
+            edit_args+=(--prerelease)
+          else
+            edit_args+=(--prerelease=false)
+          fi
+          if [[ "$MAKE_LATEST" == "true" ]]; then
+            edit_args+=(--latest)
+          else
+            edit_args+=(--latest=false)
+          fi
+
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" "${edit_args[@]}"
+
+          release_state="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease --jq '[.isDraft, .isPrerelease] | @tsv')"
+          expected_state="$(printf 'false\t%s' "$IS_PRERELEASE")"
+          if [[ "$release_state" != "$expected_state" ]]; then
+            echo "Release publication state mismatch: expected $expected_state, got $release_state." >&2
+            exit 1
+          fi
 
   finalize:
     name: Finalize release

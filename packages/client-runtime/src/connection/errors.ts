@@ -45,6 +45,7 @@ function relayProtectedError(error: RelayProtectedError): ConnectionAttemptError
       });
     case "RelayEnvironmentConnectNotAuthorizedError":
     case "RelayEnvironmentLinkProofInvalidError":
+    case "RelayEnvironmentLinkLimitExceededError":
       return new ConnectionBlockedError({
         reason: "permission",
         detail: error.message,
@@ -130,6 +131,15 @@ export function mapRemoteEnvironmentError(
       return new ConnectionBlockedError({
         reason: "configuration",
         detail: "The environment rejected the authentication request.",
+        traceId: error.traceId,
+      });
+    case "EnvironmentResourceNotFoundError":
+      // Not expected during connection authorization, but the shared request
+      // error type now includes it (used by resource fetches like the thread
+      // snapshot). Treat it as a configuration issue with the endpoint.
+      return new ConnectionBlockedError({
+        reason: "configuration",
+        detail: "The environment endpoint could not be found.",
         traceId: error.traceId,
       });
     case "RemoteEnvironmentAuthTimeoutError":

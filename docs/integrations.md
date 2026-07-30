@@ -5,10 +5,12 @@ host-supplied service backend. The Harness build defines the available catalog; 
 marketplace or install arbitrary packages. In Settings → Plugins, they can turn each included plugin
 on or off and choose the user-facing abilities exposed by that plugin under **Access**.
 
-Production connector source remains in TritonAI-Plugins. A release-only, digest-verified composition
-can include the statically supported `microsoft-365` and `google-workspace` packages; the Harness
-build never discovers arbitrary packages at runtime. Development fixtures still prove the same host
-supports both a skills-only package and a credential-backed package with tools.
+Production connector source and compiled provider entrypoints remain in TritonAI-Plugins. A
+release-only, digest-verified composition is the explicit package allowlist; Harness does not carry
+provider-specific package IDs or discover arbitrary packages at runtime. Harness verifies and
+packages the prebuilt bytes supplied by that composition—it does not compile provider code.
+Development fixtures still prove the same host supports both a skills-only package and a
+credential-backed package with tools.
 
 ## Package contract
 
@@ -18,6 +20,12 @@ Every package contains `.tritonai-plugin/plugin.json` with:
 - a stable package ID and semantic version;
 - an optional provider ID;
 - fixed capabilities and the tools and skills associated with each capability.
+
+A package that declares a provider exports its exact validated manifest and a synchronous
+`createIntegrationProvider({ secrets, configuration })` factory from `dist/index.js`. Harness passes
+only a package-scoped secret-store facade and that package's opaque configuration object. The plugin
+owns the exact configuration keys, types, formats, and provider construction. A skills-only package
+must not export the provider factory.
 
 Capabilities are user-facing ability bundles and the single source of truth for skill and tool
 availability. Each capability declares `access: "default" | "opt-in"`. Tools and skills declare
@@ -34,6 +42,8 @@ bounded commit-admission machinery used by provider lifecycle mutations. A write
 `beginCommit()` immediately before its external mutation and use the returned commit-tail signal.
 After admission, cancellation cannot replace a settled write receipt with a false failure; an
 ambiguous admitted write retains the durable provider journal and faults the connection until reset.
+Production write providers therefore require a connection lifecycle whose disconnect path can clear
+that fault; the current stateless-provider support is read-only.
 
 The Harness-specific manifest name is intentional. These packages are curated, server-executed
 Harness components rather than user-installable Codex marketplace plugins. Their `skills/`
@@ -67,20 +77,21 @@ marketplace or arbitrary package update mechanism. The build must assemble the c
 before registry construction; post-start package discovery and registration are intentionally not
 supported.
 
-The managed composition validates exact package inventories and source provenance before build. Its
-OAuth identifiers and installed-app client credential are injected only through the existing build
-configuration:
-`TRITONAI_MICROSOFT_GRAPH_CLIENT_ID`, `TRITONAI_MICROSOFT_GRAPH_TENANT_ID`, and
-`TRITONAI_GOOGLE_WORKSPACE_CLIENT_ID` plus `TRITONAI_GOOGLE_WORKSPACE_CLIENT_SECRET`. The Google
-client ID must end in `.apps.googleusercontent.com`; the Google-issued installed-app client
-credential must never be committed, downloaded as credentials JSON, or placed in the composition,
-source tree, runtime settings, logs, or chat. It is embedded in the server bundle, is extractable
-from a distributed desktop binary, and is not a confidential authorization boundary.
+The managed composition validates exact package inventories and source provenance before build.
+Private build configuration is supplied through one bounded
+`TRITONAI_PLUGIN_CONFIGURATION_JSON` object whose keys must exactly match the selected package IDs.
+The configuration is not included in the public composition proof. The build embeds each selected
+plugin's configuration in the server bundle, so OAuth identifiers and installed-app credentials are
+extractable from a distributed desktop binary and are not a confidential authorization boundary.
+They must never be committed, downloaded as credentials JSON, placed in the composition or source
+tree, or emitted to logs or chat.
 
 ## Provider and security boundary
 
-Provider-specific behavior implements `IntegrationProvider` in `IntegrationRegistry.ts`. Every
-provider owns readiness status and tool invocation. An authenticated provider additionally
+Provider-specific behavior implements the structural `IntegrationProvider` contract owned by
+`IntegrationRegistry.ts`. Harness loads every selected provider through the same factory contract;
+adding another reviewed provider package does not add a provider branch to Harness. Every provider
+owns readiness status and tool invocation. An authenticated provider additionally
 implements `connect` and `disconnect` as one complete lifecycle; device-code and native-browser
 providers also implement `poll`, while API-key providers complete through a typed submission to `connect`. A
 stateless tool provider omits the lifecycle methods. Generic RPC, MCP, Codex, and Plugins UI code
@@ -200,6 +211,13 @@ from replacing or deleting another plugin's or the user's skill. A Codex task al
 temporary integration-only skill root; that root is removed when the provider session closes.
 Successful materializations are keyed by Codex home, package root, and active skill set, so routine
 status refreshes do not recopy unchanged skill trees.
+
+Production providers use one Harness-owned Effect runtime. The released Microsoft 365 package's
+exact Effect 4 beta build dependency is treated as its minimum tested baseline, while new packages
+declare the reviewed `>=4.0.0-beta.78 <4.0.0` peer contract. Composition and startup reject older
+hosts, newer plugin build baselines, extra runtime dependencies, broader peers, and stable or
+next-major Effect versions. Package provenance, file inventory, digests, and immutable snapshots
+remain exact; only the already-verified runtime link is supplied by the host.
 
 ## Runtime exposure
 

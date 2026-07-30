@@ -1,153 +1,84 @@
-# Release Checklist
+# TritonAI Harness Release Checklist
 
-This document covers the unified release workflow for stable and nightly desktop releases.
+This document covers the controlled TritonAI Harness release workflow in
+`.github/workflows/release.yml`.
 
-## What the workflow does
+TritonAI Harness releases first. TritonAI Installer is built and published afterward against the
+exact verified Harness assets.
 
-- Workflow: `.github/workflows/release.yml`
-- Triggers:
-  - push tag matching `v*.*.*` for stable releases
-  - scheduled nightly check every three hours
-  - manual `workflow_dispatch` for either channel
-- Runs quality gates first: lint, typecheck, test.
-- Builds four artifacts in parallel for both channels:
-  - macOS `arm64` DMG
-  - macOS `x64` DMG
-  - Linux `x64` AppImage
-  - Windows `x64` NSIS installer
-- Publishes one GitHub Release with all produced files.
-  - Stable tags with a suffix after `X.Y.Z` (for example `1.2.3-alpha.1`) are published as GitHub prereleases.
-  - Only plain stable `X.Y.Z` releases are marked as the repository's latest release.
-  - Nightly runs are always GitHub prereleases and never marked latest.
-  - Automatically generated release notes are pinned to the previous tag in the same channel, so stable compares to the previous stable tag and nightly compares to the previous nightly tag.
-- Includes Electron auto-update metadata (for example `latest*.yml`, `nightly*.yml`, and `*.blockmap`) in release assets.
-- Publishes the CLI package (`apps/server`, npm package `t3`) with OIDC trusted publishing from the same workflow file:
-  - stable releases publish npm dist-tag `latest`
-  - nightly releases publish npm dist-tag `nightly`
-- Signing is optional and auto-detected per platform from secrets.
+## Distribution boundary
 
-## Nightly builds
+TritonAI Harness is distributed through its GitHub release assets and TritonAI Installer. The
+workflow does not publish, verify, or depend on the public npm package named `t3`; that package is
+the upstream T3 Code distribution and is not the UCSD-managed Harness install path.
 
-- Workflow: `.github/workflows/release.yml`
-- Triggers:
-  - scheduled check every three hours
-  - manual `workflow_dispatch` with `channel=nightly`
-- Runs the same desktop quality gates and artifact matrix as the tagged release flow.
-- Publishes a GitHub prerelease only:
-  - tag format: `nightly-vX.Y.Z-nightly.YYYYMMDD.<run_number>`
-  - release name includes the short commit SHA
-  - `make_latest` is always `false`
-- Uses the next stable patch version as the nightly base. For example, `0.0.17` produces nightlies on `0.0.18-nightly.*`.
-- Publishes Electron auto-update metadata to the dedicated `nightly` updater channel, so desktop users can opt into that track independently from stable.
-- Publishes the CLI package (`apps/server`, npm package `t3`) to the `nightly` npm dist-tag using the same nightly version.
-- Does not commit version bumps back to `main`.
+The upstream server self-update contracts remain in source for compatibility, but non-desktop
+servers do not advertise automatic replacement and clients do not render or copy public-package
+update commands. See [Server Update Architecture](../architecture/server-updates.md).
 
-## Desktop auto-update notes
+## Workflow contract
 
-- Runtime updater: `electron-updater` in `apps/desktop/src/main.ts`.
-- Update UX:
-  - Background checks run on startup delay + interval.
-  - No automatic download or install.
-  - The desktop UI shows a rocket update button when an update is available; click once to download, click again after download to restart/install.
-- Provider: GitHub Releases (`provider: github`) configured at build time.
-- Repository slug source:
-  - `T3CODE_DESKTOP_UPDATE_REPOSITORY` (format `owner/repo`), if set.
-  - otherwise `GITHUB_REPOSITORY` from GitHub Actions.
-- Temporary private-repo auth workaround:
-  - set `T3CODE_DESKTOP_UPDATE_GITHUB_TOKEN` (or `GH_TOKEN`) in the desktop app runtime environment.
-  - the app forwards it as an `Authorization: Bearer <token>` request header for updater HTTP calls.
-- Required release assets for updater:
-  - platform installers (`.exe`, `.dmg`, `.AppImage`, plus macOS `.zip` for Squirrel.Mac update payloads)
-  - channel metadata: `latest*.yml` for stable releases, `nightly*.yml` for nightly releases
-  - `*.blockmap` files (used for differential downloads)
-- macOS metadata note:
-  - `electron-updater` reads `latest-mac.yml` on stable and `nightly-mac.yml` on nightly, for both Intel and Apple Silicon.
-  - The workflow merges the per-arch mac manifests into one channel-specific mac manifest before publishing the GitHub Release.
+The workflow runs for:
 
-## 0) npm OIDC trusted publishing setup (CLI)
+- a pushed stable tag matching `v*.*.*`, excluding upstream nightly tags;
+- a manual dispatch with an explicit version.
 
-The workflow publishes the CLI with `npm publish` from `apps/server` after bumping
-the package version to the release tag version.
+It requires a controlled GitHub release for the exact tag to exist as an unpublished draft. The
+draft remains private until all automated Harness checks, Windows packaging, signing, composition,
+and asset validation succeed.
 
-Checklist:
+The workflow:
 
-1. Confirm npm org/user owns package `t3` (or rename package first if needed).
-2. In npm package settings, configure Trusted Publisher:
-   - Provider: GitHub Actions
-   - Repository: this repo
-   - Workflow file: `.github/workflows/release.yml`
-   - Environment (if used): match your npm trusted publishing config
-3. Ensure npm account and org policies allow trusted publishing for the package.
-4. Create release tag `vX.Y.Z` and push; workflow will:
-   - set `apps/server/package.json` version to `X.Y.Z`
-   - build web + server
-   - run `npm publish --access public --tag latest`
-5. Nightly runs from the same workflow file publish with `npm publish --access public --tag nightly`.
+1. resolves and validates the release version and exact tagged ref;
+2. verifies the controlled release is still a draft;
+3. runs `vp check`, typecheck, and the full test suite;
+4. builds a Linux `node-pty` binary for the packaged Windows WSL backend;
+5. validates the pinned Installer composition commit and managed-plugin ref/commit;
+6. prepares the pinned managed-plugin composition;
+7. aligns package versions in the isolated build checkout;
+8. builds the Windows x64 NSIS Harness artifact;
+9. requires and verifies Azure Trusted Signing signatures;
+10. finalizes the managed-plugin composition proof;
+11. uploads the required Windows installer, blockmap, updater metadata, and composition proof;
+12. verifies the release is still a draft and only then publishes it;
+13. updates version metadata on `main` and announces the release after publication succeeds.
 
-## 1) Local unsigned packaging check
+The standard public GitHub runner workflow does not build macOS Harness assets. Verified macOS
+assets are produced through the controlled local signed/notarized release path and attached to the
+draft before it is published.
 
-Use local packaging commands without `--signed` only for development checks. Stable release
-automation never accepts unsigned Windows artifacts.
+## Draft-first publication sequence
 
-1. Confirm no signing secrets are required for this test.
-2. Create a test tag:
-   - `git tag v0.0.0-test.1`
-   - `git push origin v0.0.0-test.1`
-3. Wait for `.github/workflows/release.yml` to finish.
-4. Verify the GitHub Release contains all platform artifacts.
-5. Download each artifact and sanity-check installation on each OS.
+1. Freeze the intended Harness commit and artifact contract.
+2. Produce, sign, notarize, and validate required local macOS assets.
+3. Create the exact tag and an unpublished GitHub draft for it.
+4. Attach the verified local assets to the draft.
+5. Push the tag or dispatch the workflow for that version.
+6. Wait for preflight, Windows build, Authenticode, managed-plugin proof, and required-asset checks.
+7. Let the workflow attach Windows assets and publish the draft.
+8. Verify the published release state and downloaded asset identities.
+9. Only then build and publish TritonAI Installer against those exact Harness assets.
 
-## 2) Apple signing + notarization setup (macOS)
+Do not publish the draft manually while the workflow is running. Both preflight and the release job
+fail closed if the controlled release is no longer a draft.
 
-Required secrets used by the workflow:
+## Required downstream release pins
 
-- `CSC_LINK`
-- `CSC_KEY_PASSWORD`
-- `APPLE_API_KEY`
-- `APPLE_API_KEY_ID`
-- `APPLE_API_ISSUER`
-- `MACOS_PROVISIONING_PROFILE` (base64-encoded provisioning profile with Associated Domains)
+Repository variables:
 
-Required repository variables:
+- `TRITONAI_INSTALLER_COMPOSITION_COMMIT`: exact 40-character Installer commit that produces the
+  managed-plugin composition.
+- `TRITONAI_PLUGINS_REF`: explicit branch or tag ref in `dbalders/TritonAI-Plugins`.
+- `TRITONAI_PLUGINS_COMMIT`: exact commit resolved by that ref.
+- `TRITONAI_PLUGIN_CONFIGURATION_JSON`: bounded JSON object keyed by every package ID in the selected
+  composition. Each plugin owns and validates its opaque configuration object.
 
-- `APPLE_TEAM_ID`
+The workflow verifies the plugin checkout resolves to the pinned commit and detaches it before
+building. The final proof manifest is a required release asset.
 
-Optional repository variables:
+## Windows signing
 
-- `CLERK_PASSKEY_RP_DOMAINS`: comma-separated RP-domain override. By default, the build derives the
-  domain from the production Clerk publishable key.
-
-Checklist:
-
-1. Apple Developer account access:
-   - Team has rights to create Developer ID certificates.
-2. Create an explicit App ID for `com.t3tools.t3code` and enable Associated Domains.
-3. Create a `Developer ID Application` certificate and a compatible provisioning profile for that
-   App ID with Associated Domains enabled.
-4. Export the certificate + private key as `.p12` from Keychain.
-5. Base64-encode the `.p12` and store as `CSC_LINK`.
-6. Base64-encode the provisioning profile and store it as `MACOS_PROVISIONING_PROFILE`.
-7. Store the `.p12` export password as `CSC_KEY_PASSWORD`, and set `APPLE_TEAM_ID` to the
-   10-character Apple Developer Team ID.
-8. In App Store Connect, create an API key (Team key).
-9. Add API key values:
-   - `APPLE_API_KEY`: contents of the downloaded `.p8`
-   - `APPLE_API_KEY_ID`: Key ID
-   - `APPLE_API_ISSUER`: Issuer ID
-10. Complete the Clerk Native API and AASA setup in [T3 Connect Clerk Setup](../cloud/t3-connect-clerk.md#desktop-passkeys).
-11. Re-run a tag release and confirm macOS artifacts are signed/notarized and contain the expected
-    `com.apple.developer.associated-domains` entitlement.
-
-Notes:
-
-- `APPLE_API_KEY` is stored as raw key text in secrets.
-- The workflow writes it to a temporary `AuthKey_<id>.p8` file at runtime.
-- The workflow decodes `MACOS_PROVISIONING_PROFILE`, validates it with `security cms`, and passes it
-  to the desktop packager.
-
-## 3) Azure Trusted Signing setup (Windows)
-
-Required secrets used by the workflow:
+Stable Windows artifacts require all of:
 
 - `AZURE_TENANT_ID`
 - `AZURE_CLIENT_ID`
@@ -157,40 +88,47 @@ Required secrets used by the workflow:
 - `AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME`
 - `AZURE_TRUSTED_SIGNING_PUBLISHER_NAME`
 
-Checklist:
+The build fails closed when any value is missing. After packaging, the workflow verifies every EXE
+with Authenticode and checks the expected publisher identity before uploading it.
 
-1. Create Azure Trusted Signing account and certificate profile.
-2. Record ATS values:
-   - Endpoint
-   - Account name
-   - Certificate profile name
-   - Publisher name
-3. Create/choose an Entra app registration (service principal).
-4. Grant service principal permissions required by Trusted Signing.
-5. Create a client secret for the service principal.
-6. Add Azure secrets listed above in GitHub Actions secrets.
-7. Re-run a tag release and confirm the Windows build and Authenticode verification gates pass.
+## Required release assets
 
-## 4) Ongoing release checklist
+The release job refuses publication unless every required Windows pattern matches:
 
-1. Ensure `main` is green in CI.
-2. Bump app version as needed.
-3. Create release tag: `vX.Y.Z`.
-4. Push tag.
-5. Verify workflow steps:
-   - preflight passes
-   - all matrix builds pass
-   - release job uploads expected files
-6. Smoke test downloaded artifacts.
+- `*.exe`
+- `*.blockmap`
+- updater `*.yml`
+- `tritonai-plugin-composition-*.json`
 
-## 5) Troubleshooting
+Local macOS assets and checksums must already match the frozen artifact contract. A workflow success
+proves the automated Windows lane and publication transition; it does not by itself prove
+installation or runtime behavior on either platform.
 
-- macOS build unsigned when expected signed:
-  - Check all Apple secrets plus `APPLE_TEAM_ID` are populated and non-empty.
-  - Confirm the provisioning profile belongs to `APPLE_TEAM_ID.com.t3tools.t3code` and includes
-    Associated Domains.
-- Windows build unsigned when expected signed:
-  - Check all Azure ATS and auth secrets are populated and non-empty.
-- Build fails with signing error:
-  - Re-check certificate/profile names and tenant/client credentials.
-  - Confirm `AZURE_TRUSTED_SIGNING_PUBLISHER_NAME` exactly matches the certificate Common Name.
+## Release validation
+
+Before declaring the Harness release ready for Installer consumption:
+
+1. Confirm the published tag resolves to the frozen Harness commit.
+2. Download every expected asset and record its SHA-256.
+3. Confirm Windows Authenticode identity and macOS codesign, notarization, and Gatekeeper results.
+4. Confirm the managed-plugin proof names the expected Installer and plugin commits.
+5. Run packaged-app regression with an isolated profile, including first launch, provider startup,
+   preview tools, managed plugins, and update presentation.
+6. Confirm version-skew UI never offers a remote public-package update action.
+7. Record remaining native/mobile or platform-specific gates separately.
+
+Only after these checks should the Installer vendor and publish the Harness assets.
+
+## Troubleshooting
+
+- **Draft gate fails:** confirm the exact tag has an existing unpublished release and that nobody
+  published it early.
+- **Plugin pin check fails:** verify all three downstream pin variables are exact and that the ref
+  resolves to the stated plugin commit.
+- **Windows signing fails:** verify every Azure value and the expected publisher Common Name.
+- **WSL backend artifact is missing:** rerun the Linux `node-pty` prerequisite and do not bypass the
+  Windows build dependency.
+- **Required asset pattern is missing:** inspect the packaging output and composition-proof step;
+  do not publish a partial draft manually.
+- **Version metadata finalization fails:** the release may still be valid, but `main` has not yet
+  recorded the released version. Reconcile that state by PR before the next release.

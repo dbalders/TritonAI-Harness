@@ -16,7 +16,9 @@ bun run start
 
 # Build a shareable macOS .dmg (arm64 by default)
 bun run dist:desktop:dmg
-
-# Or from any project directory after publishing:
-npx t3
 ```
+
+For an installed copy, use the
+[latest TritonAI Installer release](https://github.com/dbalders/TritonAI-Installer/releases/latest).
+The public `t3` npm package is the upstream T3 Code distribution and is not the UCSD-managed
+TritonAI Harness install path.

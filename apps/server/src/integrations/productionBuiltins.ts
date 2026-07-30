@@ -6,16 +6,16 @@ import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 import * as NodeUtil from "node:util";
 
+import { resolvePluginHostRuntimeDependencies } from "@t3tools/shared/pluginHostRuntime";
+import effectPackageJson from "effect/package.json" with { type: "json" };
+
 import type * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import type { IntegrationPackage, IntegrationProvider } from "./IntegrationRegistry.ts";
 import { scopeIntegrationSecretStore } from "./IntegrationSecretStore.ts";
 import { validateIntegrationManifest } from "./manifest.ts";
 
 declare const __TRITONAI_BUILD_PLUGIN_COMPOSITION__: unknown;
-declare const __TRITONAI_BUILD_MICROSOFT_GRAPH_CLIENT_ID__: string | undefined;
-declare const __TRITONAI_BUILD_MICROSOFT_GRAPH_TENANT_ID__: string | undefined;
-declare const __TRITONAI_BUILD_GOOGLE_WORKSPACE_CLIENT_ID__: string | undefined;
-declare const __TRITONAI_BUILD_GOOGLE_WORKSPACE_CLIENT_SECRET__: string | undefined;
+declare const __TRITONAI_BUILD_PLUGIN_CONFIGURATION__: unknown;
 
 interface CompositionFile {
   readonly path: string;
@@ -46,65 +46,23 @@ interface ProductionComposition {
   readonly packages: ReadonlyArray<CompositionPackage>;
 }
 
-interface Microsoft365Module {
-  readonly MICROSOFT_GRAPH_PROVIDER_ID: string;
-  readonly MicrosoftGraphProvider: new (
-    secrets: Parameters<typeof scopeIntegrationSecretStore>[0],
-    configuration: { readonly clientId: string; readonly tenantId: string },
-  ) => IntegrationProvider;
+interface IntegrationPluginModule {
+  readonly createIntegrationProvider?: (input: {
+    readonly secrets: ReturnType<typeof scopeIntegrationSecretStore>;
+    readonly configuration: unknown;
+  }) => IntegrationProvider;
   readonly manifest: unknown;
 }
-
-interface GoogleWorkspaceModule {
-  readonly GOOGLE_WORKSPACE_PROVIDER_ID: string;
-  readonly GoogleWorkspaceProvider: new (
-    secrets: Parameters<typeof scopeIntegrationSecretStore>[0],
-    configuration: { readonly clientId: string; readonly clientSecret: string },
-  ) => IntegrationProvider;
-  readonly manifest: unknown;
-}
-
-interface RuntimeDependency {
-  readonly name: string;
-  readonly version: string;
-}
-
-const supportedRuntimeDependencies = new Set(["effect"]);
 
 const buildComposition =
   typeof __TRITONAI_BUILD_PLUGIN_COMPOSITION__ === "undefined"
     ? null
     : (__TRITONAI_BUILD_PLUGIN_COMPOSITION__ as ProductionComposition | null);
 
-function buildIdentifier(value: string | undefined): string {
-  return typeof value === "string" ? value.trim() : "";
-}
-
-const microsoftGraphConfiguration = {
-  clientId: buildIdentifier(
-    typeof __TRITONAI_BUILD_MICROSOFT_GRAPH_CLIENT_ID__ === "undefined"
-      ? undefined
-      : __TRITONAI_BUILD_MICROSOFT_GRAPH_CLIENT_ID__,
-  ),
-  tenantId: buildIdentifier(
-    typeof __TRITONAI_BUILD_MICROSOFT_GRAPH_TENANT_ID__ === "undefined"
-      ? undefined
-      : __TRITONAI_BUILD_MICROSOFT_GRAPH_TENANT_ID__,
-  ),
-};
-
-const googleWorkspaceConfiguration = {
-  clientId: buildIdentifier(
-    typeof __TRITONAI_BUILD_GOOGLE_WORKSPACE_CLIENT_ID__ === "undefined"
-      ? undefined
-      : __TRITONAI_BUILD_GOOGLE_WORKSPACE_CLIENT_ID__,
-  ),
-  clientSecret: buildIdentifier(
-    typeof __TRITONAI_BUILD_GOOGLE_WORKSPACE_CLIENT_SECRET__ === "undefined"
-      ? undefined
-      : __TRITONAI_BUILD_GOOGLE_WORKSPACE_CLIENT_SECRET__,
-  ),
-};
+const buildConfiguration =
+  typeof __TRITONAI_BUILD_PLUGIN_CONFIGURATION__ === "undefined"
+    ? null
+    : (__TRITONAI_BUILD_PLUGIN_CONFIGURATION__ as Readonly<Record<string, unknown>> | null);
 
 function isSafeCompositionPath(value: string): boolean {
   return (
@@ -248,37 +206,29 @@ async function sealSnapshotDirectory(directory: string): Promise<void> {
 function runtimeDependencies(
   plugin: CompositionPackage,
   verifiedFiles: ReadonlyArray<DescribedCompositionFile>,
-): ReadonlyArray<RuntimeDependency> {
+): ReturnType<typeof resolvePluginHostRuntimeDependencies> {
   const packageJsonFile = verifiedFiles.find(({ path }) => path === "package.json");
   if (!packageJsonFile) {
     throw new Error(`Built-in plugin ${plugin.id} package.json is missing.`);
   }
   const packageJson = JSON.parse(Buffer.from(packageJsonFile.contents).toString("utf8")) as {
     readonly dependencies?: unknown;
+    readonly peerDependencies?: unknown;
+    readonly optionalDependencies?: unknown;
+    readonly bundledDependencies?: unknown;
   };
-  if (packageJson.dependencies === undefined) return [];
-  if (
-    !packageJson.dependencies ||
-    typeof packageJson.dependencies !== "object" ||
-    Array.isArray(packageJson.dependencies)
-  ) {
-    throw new Error(`Built-in plugin ${plugin.id} dependencies are invalid.`);
+  try {
+    return resolvePluginHostRuntimeDependencies(packageJson, effectPackageJson.version);
+  } catch (error) {
+    throw new Error(`Built-in plugin ${plugin.id} host runtime contract is invalid.`, {
+      cause: error,
+    });
   }
-  return Object.entries(packageJson.dependencies)
-    .map(([name, version]): RuntimeDependency => {
-      if (
-        !supportedRuntimeDependencies.has(name) ||
-        typeof version !== "string" ||
-        !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u.test(version)
-      ) {
-        throw new Error(`Built-in plugin ${plugin.id} dependency is unsupported: ${name}.`);
-      }
-      return { name, version };
-    })
-    .toSorted((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
 }
 
-async function resolveRuntimeDependencyRoot(dependency: RuntimeDependency): Promise<string> {
+async function resolveRuntimeDependencyRoot(
+  dependency: ReturnType<typeof resolvePluginHostRuntimeDependencies>[number],
+): Promise<string> {
   const resolvedManifest = NodeURL.fileURLToPath(
     import.meta.resolve(`${dependency.name}/package.json`),
   );
@@ -397,16 +347,44 @@ export async function withProductionPackageSnapshotForTest<T>(
   return withProductionPackageSnapshot(composedPackageRoot, plugin, use);
 }
 
-async function loadMicrosoft365(
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  return (
+    Boolean(value) &&
+    (typeof value === "object" || typeof value === "function") &&
+    typeof (value as { readonly then?: unknown }).then === "function"
+  );
+}
+
+function validateBuildConfiguration(
+  composition: ProductionComposition,
+  value: unknown,
+): Readonly<Record<string, Readonly<Record<string, unknown>>>> {
+  if (!isRecord(value)) {
+    throw new Error("Built-in plugin configuration must be an object.");
+  }
+  const expectedIds = composition.packages.map(({ id }) => id);
+  const actualIds = Object.keys(value).toSorted();
+  if (!NodeUtil.isDeepStrictEqual(actualIds, expectedIds)) {
+    throw new Error("Built-in plugin configuration must exactly match the composed packages.");
+  }
+  for (const id of expectedIds) {
+    if (!isRecord(value[id])) {
+      throw new Error(`Built-in plugin configuration for ${id} must be an object.`);
+    }
+  }
+  return value as Readonly<Record<string, Readonly<Record<string, unknown>>>>;
+}
+
+async function loadProductionPackage(
+  composedPackageRoot: string,
   plugin: CompositionPackage,
   secrets: ServerSecretStore.ServerSecretStore["Service"],
+  configuration: Readonly<Record<string, unknown>>,
 ): Promise<IntegrationPackage> {
-  const composedPackageRoot = NodePath.join(
-    import.meta.dirname,
-    "production-integrations",
-    "packages",
-    plugin.id,
-  );
   return withProductionPackageSnapshot(
     composedPackageRoot,
     plugin,
@@ -420,75 +398,55 @@ async function loadMicrosoft365(
         ),
       );
       const moduleUrl = NodeURL.pathToFileURL(NodePath.join(packageRoot, "dist", "index.js")).href;
-      const loaded = (await import(moduleUrl)) as Microsoft365Module;
+      const loaded = (await import(moduleUrl)) as IntegrationPluginModule;
       const exportedManifest = validateIntegrationManifest(loaded.manifest);
       if (
         !NodeUtil.isDeepStrictEqual(exportedManifest, packageManifest) ||
         packageManifest.id !== plugin.id ||
-        packageManifest.version !== plugin.version ||
-        loaded.MICROSOFT_GRAPH_PROVIDER_ID !== packageManifest.provider
+        packageManifest.version !== plugin.version
       ) {
+        throw new Error(`Built-in plugin ${plugin.id} exports do not match its composed manifest.`);
+      }
+      let provider: IntegrationProvider | undefined;
+      if (packageManifest.provider) {
+        if (typeof loaded.createIntegrationProvider !== "function") {
+          throw new Error(`Built-in plugin ${plugin.id} does not export its provider factory.`);
+        }
+        const created = loaded.createIntegrationProvider({
+          secrets: scopeIntegrationSecretStore(secrets, packageManifest.id),
+          configuration,
+        });
+        if (isPromiseLike(created)) {
+          throw new Error(`Built-in plugin ${plugin.id} provider factory must be synchronous.`);
+        }
+        if (!isRecord(created) || created.id !== packageManifest.provider) {
+          throw new Error(
+            `Built-in plugin ${plugin.id} provider does not match its composed manifest.`,
+          );
+        }
+        provider = created as unknown as IntegrationProvider;
+      } else if (loaded.createIntegrationProvider !== undefined) {
         throw new Error(
-          "Built-in Microsoft 365 provider exports do not match the composed manifest.",
+          `Built-in plugin ${plugin.id} exports a provider factory without declaring a provider.`,
         );
       }
-      const provider = new loaded.MicrosoftGraphProvider(
-        scopeIntegrationSecretStore(secrets, packageManifest.id),
-        microsoftGraphConfiguration,
-      );
       const bundledFiles = Object.fromEntries(
         verifiedFiles.map((file) => [file.path, Uint8Array.from(file.contents)]),
       );
-      return { manifest: packageManifest, bundledFiles, provider };
+      return provider
+        ? { manifest: packageManifest, bundledFiles, provider }
+        : { manifest: packageManifest, bundledFiles };
     },
   );
 }
 
-async function loadGoogleWorkspace(
+export async function loadProductionPackageForTest(
+  composedPackageRoot: string,
   plugin: CompositionPackage,
   secrets: ServerSecretStore.ServerSecretStore["Service"],
+  configuration: Readonly<Record<string, unknown>>,
 ): Promise<IntegrationPackage> {
-  const composedPackageRoot = NodePath.join(
-    import.meta.dirname,
-    "production-integrations",
-    "packages",
-    plugin.id,
-  );
-  return withProductionPackageSnapshot(
-    composedPackageRoot,
-    plugin,
-    async (packageRoot, verifiedFiles) => {
-      const packageManifest = validateIntegrationManifest(
-        JSON.parse(
-          await NodeFSP.readFile(
-            NodePath.join(packageRoot, ".tritonai-plugin", "plugin.json"),
-            "utf8",
-          ),
-        ),
-      );
-      const moduleUrl = NodeURL.pathToFileURL(NodePath.join(packageRoot, "dist", "index.js")).href;
-      const loaded = (await import(moduleUrl)) as GoogleWorkspaceModule;
-      const exportedManifest = validateIntegrationManifest(loaded.manifest);
-      if (
-        !NodeUtil.isDeepStrictEqual(exportedManifest, packageManifest) ||
-        packageManifest.id !== plugin.id ||
-        packageManifest.version !== plugin.version ||
-        loaded.GOOGLE_WORKSPACE_PROVIDER_ID !== packageManifest.provider
-      ) {
-        throw new Error(
-          "Built-in Google Workspace provider exports do not match the composed manifest.",
-        );
-      }
-      const provider = new loaded.GoogleWorkspaceProvider(
-        scopeIntegrationSecretStore(secrets, packageManifest.id),
-        googleWorkspaceConfiguration,
-      );
-      const bundledFiles = Object.fromEntries(
-        verifiedFiles.map((file) => [file.path, Uint8Array.from(file.contents)]),
-      );
-      return { manifest: packageManifest, bundledFiles, provider };
-    },
-  );
+  return loadProductionPackage(composedPackageRoot, plugin, secrets, configuration);
 }
 
 export async function loadProductionIntegrations(
@@ -502,17 +460,18 @@ export async function loadProductionIntegrations(
   ) {
     throw new Error("Built-in plugin composition has an unsupported contract or provenance.");
   }
+  const configuration = validateBuildConfiguration(buildComposition, buildConfiguration);
   const result: Array<IntegrationPackage> = [];
   for (const plugin of buildComposition.packages) {
-    if (plugin.id === "microsoft-365") {
-      result.push(await loadMicrosoft365(plugin, secrets));
-      continue;
-    }
-    if (plugin.id === "google-workspace") {
-      result.push(await loadGoogleWorkspace(plugin, secrets));
-      continue;
-    }
-    throw new Error(`Built-in plugin is not statically supported: ${plugin.id}.`);
+    const composedPackageRoot = NodePath.join(
+      import.meta.dirname,
+      "production-integrations",
+      "packages",
+      plugin.id,
+    );
+    result.push(
+      await loadProductionPackage(composedPackageRoot, plugin, secrets, configuration[plugin.id]!),
+    );
   }
   return result;
 }

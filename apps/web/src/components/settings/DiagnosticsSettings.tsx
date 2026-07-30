@@ -23,7 +23,7 @@ import * as Option from "effect/Option";
 
 import { cn } from "../../lib/utils";
 import { resolveAndPersistPreferredEditor } from "../../editorPreferences";
-import { formatRelativeTime } from "../../timestampFormat";
+import { formatRelativeTimeLabel, getRelativeTimeState } from "../../timestampFormat";
 import { useEnvironmentQuery } from "../../state/query";
 import {
   primaryServerAvailableEditorsAtom,
@@ -37,6 +37,7 @@ import { Button } from "../ui/button";
 import { ScrollArea } from "../ui/scroll-area";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { toastManager } from "../ui/toast";
+import { ResourceTelemetryDiagnostics } from "./ResourceTelemetryDiagnostics";
 import { SettingsPageContainer, SettingsSection, useRelativeTimeTick } from "./settingsLayout";
 import { useAtomCommand } from "../../state/use-atom-command";
 
@@ -65,8 +66,7 @@ function formatBytes(value: number): string {
 
 function formatRelative(value: DateTime.Utc | null): string {
   if (!value) return "No trace records";
-  const relative = formatRelativeTime(DateTime.formatIso(value));
-  return relative.suffix ? `${relative.value} ${relative.suffix}` : relative.value;
+  return formatRelativeTimeLabel(DateTime.formatIso(value));
 }
 
 function formatRelativeNoWrap(value: DateTime.Utc | null): string {
@@ -755,10 +755,14 @@ function ProcessResourceHistoryTable({
 
 function DiagnosticsLastChecked({ checkedAt }: { checkedAt: DateTime.Utc | null }) {
   useRelativeTimeTick();
-  const relative = checkedAt ? formatRelativeTime(DateTime.formatIso(checkedAt)) : null;
+  const relative = getRelativeTimeState(checkedAt ? DateTime.formatIso(checkedAt) : null);
 
-  if (!relative) {
+  if (relative.status === "missing") {
     return <span className="text-[11px] text-muted-foreground/50">Checking</span>;
+  }
+
+  if (relative.status === "invalid") {
+    return <span className="text-[11px] text-muted-foreground/50">Checked unavailable</span>;
   }
 
   return (
@@ -901,12 +905,16 @@ export function DiagnosticsSettingsPanel() {
       if (environmentId === null) {
         return;
       }
+      const process = processData?.processes.find((entry) => entry.pid === pid);
+      if (process === undefined) {
+        return;
+      }
 
       setSignalingPid(pid);
       void (async () => {
         const result = await signalServerProcess({
           environmentId,
-          input: { pid, signal },
+          input: { pid, startTimeMs: process.startTimeMs, signal },
         });
         setSignalingPid(null);
         if (result._tag === "Failure") {
@@ -943,7 +951,7 @@ export function DiagnosticsSettingsPanel() {
         refreshProcesses();
       })();
     },
-    [environmentId, refreshProcesses, signalServerProcess],
+    [environmentId, processData?.processes, refreshProcesses, signalServerProcess],
   );
 
   const processDiagnosticsError = processData ? Option.getOrNull(processData.error) : null;
@@ -954,7 +962,9 @@ export function DiagnosticsSettingsPanel() {
     : false;
 
   return (
-    <SettingsPageContainer>
+    <SettingsPageContainer className="max-w-6xl gap-10">
+      <ResourceTelemetryDiagnostics />
+
       <SettingsSection
         title="Live Processes"
         headerAction={

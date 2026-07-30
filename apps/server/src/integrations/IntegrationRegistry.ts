@@ -41,6 +41,7 @@ import {
 import {
   decodeIntegrationToolInput,
   integrationToolJsonSchema,
+  prepareIntegrationToolInput,
   type IntegrationProviderTool,
 } from "./IntegrationTool.ts";
 
@@ -361,6 +362,13 @@ class ProviderFaultedError extends Error {
   constructor() {
     super("The integration provider is faulted until its connection is reset.");
     this.name = "ProviderFaultedError";
+  }
+}
+
+class ProviderWriteAdmissionError extends Error {
+  constructor() {
+    super("The integration provider returned a write result without commit admission.");
+    this.name = "ProviderWriteAdmissionError";
   }
 }
 
@@ -735,6 +743,14 @@ export class RegistryRuntime {
           `Provider ${provider.id} must implement connect and disconnect together; polling is optional.`,
         );
       }
+      if (
+        manifest.tools.some(({ effect }) => effect === "write") &&
+        !hasConnectionLifecycle(provider)
+      ) {
+        throw new Error(
+          `Provider ${provider.id} must implement connect and disconnect to recover write admission faults.`,
+        );
+      }
       if ([...this.#catalog.values()].some((entry) => entry.provider?.id === provider.id)) {
         throw new Error(`Integration provider ${provider.id} is already registered.`);
       }
@@ -795,6 +811,9 @@ export class RegistryRuntime {
       );
     }
     for (const definition of providerTools) {
+      // Compile externally supplied schemas at registration so an incompatible host runtime
+      // fails before any plugin tool is advertised.
+      prepareIntegrationToolInput(definition);
       const inputSchema = integrationToolJsonSchema(definition);
       const manifestTool = manifest.tools.find(({ name }) => name === definition.name)!;
       if (
@@ -2959,6 +2978,10 @@ export class RegistryRuntime {
           () => this.#activeInvocationWork.delete(invocationWork),
         );
         const result = await invocationWork;
+        if (tool.effect === "write" && !writeCommitAdmitted) {
+          this.#faultProvider(provider);
+          throw new ProviderWriteAdmissionError();
+        }
         if (controller.signal.aborted && !writeCommitAdmitted) {
           throw operationError("disabled", `${manifest.name} access was revoked.`);
         }
@@ -2966,6 +2989,12 @@ export class RegistryRuntime {
           throw cancellationError(context.signal);
         return result;
       } catch (error) {
+        if (error instanceof ProviderWriteAdmissionError) {
+          throw operationError(
+            "operation_failed",
+            `${manifest.name} returned a write result without commit admission and is unavailable until its connection is reset.`,
+          );
+        }
         if (controller.signal.aborted && !writeCommitAdmitted) {
           throw operationError("disabled", `${manifest.name} access was revoked.`);
         }

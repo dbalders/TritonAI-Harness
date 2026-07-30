@@ -1,14 +1,22 @@
 export const BRAND_ASSET_PATHS = {
+  developmentIconComposerProject: "assets/dev/app-icon.icon",
+  developmentIosIconPng: "assets/dev/tritonai-harness-dev-ios-1024.png",
+  developmentUniversalIconPng: "assets/dev/tritonai-harness-dev-universal-1024.png",
+
+  productionIconComposerProject: "assets/prod/app-icon.icon",
+  productionIosIconPng: "assets/prod/tritonai-harness-ios-1024.png",
   productionMacIconPng: "assets/prod/tritonai-harness-1024.png",
-  productionLinuxIconPng: "assets/prod/tritonai-harness-1024.png",
+  productionLinuxIconPng: "assets/prod/tritonai-harness-universal-1024.png",
   productionWindowsIconIco: "assets/prod/tritonai-harness-windows.ico",
   productionWebFaviconIco: "assets/prod/tritonai-harness-web-favicon.ico",
   productionWebFavicon16Png: "assets/prod/tritonai-harness-web-favicon-16x16.png",
   productionWebFavicon32Png: "assets/prod/tritonai-harness-web-favicon-32x32.png",
   productionWebAppleTouchIconPng: "assets/prod/tritonai-harness-web-apple-touch-180.png",
 
+  nightlyIconComposerProject: "assets/prod/app-icon.icon",
+  nightlyIosIconPng: "assets/prod/tritonai-harness-ios-1024.png",
   nightlyMacIconPng: "assets/prod/tritonai-harness-1024.png",
-  nightlyLinuxIconPng: "assets/prod/tritonai-harness-1024.png",
+  nightlyLinuxIconPng: "assets/prod/tritonai-harness-universal-1024.png",
   nightlyWindowsIconIco: "assets/prod/tritonai-harness-windows.ico",
   nightlyWebFaviconIco: "assets/prod/tritonai-harness-web-favicon.ico",
   nightlyWebFavicon16Png: "assets/prod/tritonai-harness-web-favicon-16x16.png",
@@ -31,6 +39,10 @@ export type WebAssetChannel = (typeof WEB_ASSET_CHANNELS)[number];
 
 export function resolveWebAssetBrandForChannel(channel: WebAssetChannel): WebAssetBrand {
   return channel === "nightly" ? "nightly" : "production";
+}
+
+export function resolveWebAssetBrandForPackageVersion(version: string): WebAssetBrand {
+  return version.includes("-nightly.") ? "nightly" : "production";
 }
 
 export interface IconOverride {
@@ -93,4 +105,7 @@ export function resolveWebIconOverrides(
 
 export const DEVELOPMENT_ICON_OVERRIDES = resolveWebIconOverrides("development", "dist/client");
 
-export const PUBLISH_ICON_OVERRIDES = resolveWebIconOverrides("production", "dist/client");
+export const DEVELOPMENT_PUBLIC_ICON_OVERRIDES = resolveWebIconOverrides(
+  "development",
+  "apps/web/public",
+);

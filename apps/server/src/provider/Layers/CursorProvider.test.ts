@@ -1,6 +1,7 @@
 import * as NodeOS from "node:os";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import type * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -28,7 +29,7 @@ const runNode = <A, E>(
   effect: Effect.Effect<
     A,
     E,
-    ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
+    ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | FileSystem.FileSystem | Path.Path
   >,
 ): Promise<A> => Effect.runPromise(effect.pipe(Effect.provide(NodeServices.layer)));
 
@@ -294,20 +295,20 @@ const parameterizedClaudeModelOptionConfigOptions = [
 
 const baseCursorSettings: CursorSettings = {
   enabled: true,
-  binaryPath: "agent",
+  binaryPath: "cursor-agent",
   apiEndpoint: "",
   customModels: [],
 };
 const cursorAcpDiscoveryFailedMessage = [
   "Cursor ACP model discovery failed.",
-  "Cursor CLI setup may be incomplete; install or enable the Cursor CLI, restart T3 Code, and try again.",
+  "Cursor CLI setup may be incomplete; install or enable the Cursor CLI, restart TritonAI Harness, and try again.",
   "See https://cursor.com/docs/cli/installation.",
   "Check server logs for ACP details.",
 ].join(" ");
 const missingCursorBinaryPath = "/definitely/not/installed/t3-cursor-agent";
 const cursorCliCommandMissingMessage = [
   `Cursor CLI command \`${missingCursorBinaryPath}\` was not found.`,
-  `Install or enable the Cursor CLI, make sure \`${missingCursorBinaryPath}\` is on PATH, then restart T3 Code.`,
+  `Install or enable the Cursor CLI, make sure \`${missingCursorBinaryPath}\` is on PATH, then restart TritonAI Harness.`,
   "See https://cursor.com/docs/cli/installation.",
 ].join(" ");
 

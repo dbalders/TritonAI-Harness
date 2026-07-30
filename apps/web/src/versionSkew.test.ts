@@ -8,7 +8,9 @@ import {
   dismissVersionMismatch,
   isVersionMismatchDismissed,
   resolveServerConfigVersionMismatch,
+  resolveServerSelfUpdateCapability,
   resolveVersionMismatch,
+  serverUpdateGuidance,
 } from "./versionSkew";
 
 describe("versionSkew", () => {
@@ -73,6 +75,53 @@ describe("versionSkew", () => {
 
     expect(appendVersionMismatchHint("Socket closed.", mismatch)).toBe(
       "Socket closed. Hint: Version mismatch. Try syncing the client and server to the same TritonAI Harness version.",
+    );
+  });
+
+  it("reads desktop-managed update capabilities from config descriptors", () => {
+    expect(
+      resolveServerSelfUpdateCapability({
+        environment: {
+          environmentId: EnvironmentId.make("environment-desktop"),
+          label: "Desktop",
+          platform: { os: "darwin", arch: "arm64" },
+          serverVersion: "9.9.9",
+          capabilities: {
+            repositoryIdentity: true,
+            serverSelfUpdate: "desktop-managed",
+          },
+        },
+      }),
+    ).toBe("desktop-managed");
+    expect(resolveServerSelfUpdateCapability(null)).toBeNull();
+  });
+
+  it.each(["boot-service", "respawn"] as const)(
+    "ignores legacy remote %s update capabilities",
+    (serverSelfUpdate) => {
+      expect(
+        resolveServerSelfUpdateCapability({
+          environment: {
+            environmentId: EnvironmentId.make(`environment-${serverSelfUpdate}`),
+            label: "Remote",
+            platform: { os: "linux", arch: "x64" },
+            serverVersion: "0.0.29",
+            capabilities: {
+              repositoryIdentity: true,
+              serverSelfUpdate,
+            },
+          },
+        }),
+      ).toBeNull();
+    },
+  );
+
+  it("provides downstream-safe version-drift guidance", () => {
+    expect(serverUpdateGuidance("desktop-managed", "Desktop server")).toBe(
+      "The Desktop server is run by the TritonAI Harness desktop app on its machine — update the desktop app there to sync them.",
+    );
+    expect(serverUpdateGuidance(null, "Local server")).toBe(
+      "Automatic updates are unavailable for the Local server; update it through its approved TritonAI Harness distribution.",
     );
   });
 });

@@ -349,6 +349,12 @@ describe("IntegrationRegistry lifecycle", () => {
         grantedCapabilities,
         message: null,
       }),
+      connect: async () => ({
+        kind: "connected",
+        flowId: "fixture-flow",
+        message: "Connected.",
+      }),
+      disconnect: async () => undefined,
       invoke: async (toolName, _input, context) => {
         if (!context) throw new Error("expected invocation context");
         if (toolName === "fixture.records.write" && holdWriteInvocation) {
@@ -360,6 +366,7 @@ describe("IntegrationRegistry lifecycle", () => {
             });
           });
         }
+        if (toolName === "fixture.records.write") await context.beginCommit?.();
         if (toolName !== "fixture.records.shared") return { toolName };
         sharedInvocationSignal = context.signal;
         markSharedInvocationStarted();
@@ -570,6 +577,12 @@ describe("IntegrationRegistry lifecycle", () => {
         grantedCapabilities: ["fixture.write"],
         message: null,
       }),
+      connect: async () => ({
+        kind: "connected",
+        flowId: "fixture-flow",
+        message: "Connected.",
+      }),
+      disconnect: async () => undefined,
       invoke: async (_toolName, _input, context) => {
         expect(context?.writeApproved).toBe(true);
         expect(context?.beginCommit).toBeTypeOf("function");
@@ -598,6 +611,98 @@ describe("IntegrationRegistry lifecycle", () => {
       await expect(invocation).resolves.toEqual({ status: "written", id: "receipt-1" });
     } finally {
       finishWrite();
+      await registry.close();
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects and faults a write provider that returns without commit admission", async () => {
+    const root = await NodeFSP.mkdtemp(
+      NodePath.join(NodeOS.tmpdir(), "tritonai-write-missing-admission-"),
+    );
+    const manifest: IntegrationManifest = {
+      ...fixtureManifest,
+      id: "test-write-missing-admission",
+      name: "Test Write Missing Admission",
+      provider: "test-write-missing-admission-provider",
+      capabilities: [
+        {
+          id: "fixture.write",
+          displayName: "Write fixture",
+          description: "Write fixture records.",
+          access: "default",
+        },
+      ],
+      tools: [
+        {
+          name: "test.fixture.write",
+          displayName: "Write fixture",
+          description: "Write one fixture record.",
+          capabilities: ["fixture.write"],
+          effect: "write",
+        },
+      ],
+      skills: [],
+    };
+    let invocations = 0;
+    const implementation: IntegrationProvider = {
+      id: "test-write-missing-admission-provider",
+      tools: [
+        {
+          name: "test.fixture.write",
+          description: "Write one fixture record.",
+          input: EmptyIntegrationToolInput,
+          readOnly: false,
+          openWorld: false,
+        },
+      ],
+      status: async () => ({
+        state: "connected",
+        accountLabel: "Fixture user",
+        grantedCapabilities: ["fixture.write"],
+        message: null,
+      }),
+      connect: async () => ({
+        kind: "connected",
+        flowId: "fixture-flow",
+        message: "Connected.",
+      }),
+      disconnect: async (context) => {
+        await context?.beginCommit();
+      },
+      invoke: async (_toolName, _input, context) => {
+        invocations += 1;
+        expect(context?.writeApproved).toBe(true);
+        expect(context?.beginCommit).toBeTypeOf("function");
+        return { status: "unverified-write" };
+      },
+    };
+    const registry = new RegistryRuntime(root, [packaged(manifest, implementation)]);
+    try {
+      await registry.install(manifest.id);
+      await expect(
+        registry.invokeTool(
+          "test.fixture.write",
+          {},
+          {
+            signal: new AbortController().signal,
+            writeApproved: true,
+          },
+        ),
+      ).rejects.toMatchObject({ code: "operation_failed" });
+      await expect(
+        registry.invokeTool(
+          "test.fixture.write",
+          {},
+          {
+            signal: new AbortController().signal,
+            writeApproved: true,
+          },
+        ),
+      ).rejects.toMatchObject({ code: "operation_failed" });
+      expect(invocations).toBe(1);
+      await expect(registry.disconnect(manifest.id)).resolves.toBeDefined();
+    } finally {
       await registry.close();
       await NodeFSP.rm(root, { recursive: true, force: true });
     }
@@ -689,6 +794,10 @@ describe("IntegrationRegistry lifecycle", () => {
         tools: completeProvider.tools.map((tool, index) =>
           index === 0 ? { ...tool, readOnly: false } : tool,
         ),
+        invoke: async (toolName, input, context) => {
+          await context?.beginCommit?.();
+          return completeProvider.invoke(toolName, input, context);
+        },
       };
       const writeManifest: IntegrationManifest = {
         ...connectedManifest,
@@ -752,7 +861,10 @@ describe("IntegrationRegistry lifecycle", () => {
       id: connectedProvider.id,
       tools: connectedProvider.tools,
       status: connectedProvider.status,
-      invoke: connectedProvider.invoke,
+      invoke: async (toolName, input, context) => {
+        expect(context?.beginCommit).toBeUndefined();
+        return connectedProvider.invoke(toolName, input, context);
+      },
     };
     try {
       const registry = new RegistryRuntime(root, [packaged(fixtureManifest, statelessProvider)]);

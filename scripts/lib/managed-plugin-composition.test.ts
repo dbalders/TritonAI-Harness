@@ -4,12 +4,14 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
+import { EFFECT_HOST_PEER_RANGE } from "@t3tools/shared/pluginHostRuntime";
+import effectPackageJson from "effect/package.json" with { type: "json" };
 
 import { finalizeManagedPluginProof } from "./finalize-managed-plugin-proof.ts";
 import {
-  assertManagedPluginBuildConfiguration,
   managedPluginProofFileName,
   managedPluginProofInputFileName,
+  readManagedPluginBuildConfiguration,
   readManagedPluginComposition,
   snapshotManagedPluginComposition,
 } from "./managed-plugin-composition.ts";
@@ -23,61 +25,57 @@ afterEach(() => {
 });
 
 describe("managed plugin release composition", () => {
-  it("accepts Google Workspace only as a statically named, strict provider package", () => {
-    const google = readManagedPluginComposition(makeCompositionFixture("google-workspace"));
-    expect(google.packages).toMatchObject([
+  it("accepts a novel plugin only when the exact release composition selects it", () => {
+    const composition = readManagedPluginComposition(
+      makeCompositionFixture(effectPackageJson.version, {}, "future-provider"),
+    );
+    expect(composition.packages).toMatchObject([
       {
-        id: "google-workspace",
-        name: "@tritonai/plugin-google-workspace",
+        id: "future-provider",
+        name: "@tritonai/plugin-future-provider",
         version: "1.0.1",
       },
     ]);
   });
 
-  it("requires only the public provider identifiers for each selected production package", () => {
-    const base = readManagedPluginComposition(makeCompositionFixture());
-    expect(() =>
-      assertManagedPluginBuildConfiguration(base, {
-        TRITONAI_MICROSOFT_GRAPH_CLIENT_ID: "11111111-1111-4111-8111-111111111111",
-        TRITONAI_MICROSOFT_GRAPH_TENANT_ID: "22222222-2222-4222-8222-222222222222",
+  it("reads only an exact package-keyed generic build configuration", () => {
+    const composition = readManagedPluginComposition(makeCompositionFixture());
+    const serialized = JSON.stringify({
+      "microsoft-365": {
+        clientId: "11111111-1111-4111-8111-111111111111",
+        tenantId: "22222222-2222-4222-8222-222222222222",
+      },
+    });
+    expect(
+      readManagedPluginBuildConfiguration(composition, {
+        TRITONAI_PLUGIN_CONFIGURATION_JSON: serialized,
       }),
-    ).not.toThrow();
-    expect(() => assertManagedPluginBuildConfiguration(base, {})).toThrow(
-      /TRITONAI_MICROSOFT_GRAPH_CLIENT_ID/u,
-    );
+    ).toEqual(JSON.parse(serialized));
 
-    const google = {
-      ...base,
-      packages: [
-        {
-          ...base.packages[0]!,
-          id: "google-workspace",
-          name: "@tritonai/plugin-google-workspace",
-        },
-      ],
-    };
+    for (const invalid of [
+      "",
+      "{",
+      "[]",
+      JSON.stringify({}),
+      JSON.stringify({ "microsoft-365": null }),
+      JSON.stringify({ "microsoft-365": [], extra: {} }),
+    ]) {
+      expect(() =>
+        readManagedPluginBuildConfiguration(composition, {
+          TRITONAI_PLUGIN_CONFIGURATION_JSON: invalid,
+        }),
+      ).toThrow();
+    }
     expect(() =>
-      assertManagedPluginBuildConfiguration(google, {
-        TRITONAI_GOOGLE_WORKSPACE_CLIENT_ID:
-          "123456789012-syntheticdesktopclient1234567890.apps.googleusercontent.com",
-        TRITONAI_GOOGLE_WORKSPACE_CLIENT_SECRET: "fixture-desktop-client-credential",
+      readManagedPluginBuildConfiguration(composition, {
+        TRITONAI_PLUGIN_CONFIGURATION_JSON: JSON.stringify({
+          "microsoft-365": { padding: "x".repeat(16 * 1024) },
+        }),
       }),
-    ).not.toThrow();
-    expect(() =>
-      assertManagedPluginBuildConfiguration(google, {
-        TRITONAI_GOOGLE_WORKSPACE_CLIENT_ID: "not-a-client",
-      }),
-    ).toThrow(/TRITONAI_GOOGLE_WORKSPACE_CLIENT_ID/u);
-    expect(() =>
-      assertManagedPluginBuildConfiguration(google, {
-        TRITONAI_GOOGLE_WORKSPACE_CLIENT_ID:
-          "123456789012-syntheticdesktopclient1234567890.apps.googleusercontent.com",
-        TRITONAI_GOOGLE_WORKSPACE_CLIENT_SECRET: "invalid secret",
-      }),
-    ).toThrow(/TRITONAI_GOOGLE_WORKSPACE_CLIENT_SECRET/u);
+    ).toThrow(/16384-byte limit/u);
   });
 
-  it("snapshots one strict current contract and rejects compatibility ranges", () => {
+  it("snapshots one strict current composition contract and rejects manifest compatibility ranges", () => {
     const sourceRoot = makeCompositionFixture();
     const composition = readManagedPluginComposition(sourceRoot);
     const snapshotRoot = NodePath.join(makeTemporaryDirectory(), "snapshot");
@@ -91,6 +89,39 @@ describe("managed plugin release composition", () => {
     plugin.compatibility = { harness: { min: "0.3.0", maxExclusive: "0.4.0" } };
     NodeFS.writeFileSync(manifestPath, JSON.stringify(legacy));
     expect(() => readManagedPluginComposition(sourceRoot)).toThrow(/unsupported fields/iu);
+  });
+
+  it("accepts the released Effect build pin and the canonical forward-compatible peer contract", () => {
+    expect(() =>
+      readManagedPluginComposition(makeCompositionFixture("4.0.0-beta.78")),
+    ).not.toThrow();
+    expect(() =>
+      readManagedPluginComposition(
+        makeCompositionFixture(null, {
+          peerDependencies: { effect: EFFECT_HOST_PEER_RANGE },
+        }),
+      ),
+    ).not.toThrow();
+  });
+
+  it("rejects newer build pins, broad peers, and additional runtime dependencies", () => {
+    expect(() => readManagedPluginComposition(makeCompositionFixture("4.0.0-beta.999"))).toThrow(
+      /incompatible host runtime contract/iu,
+    );
+    expect(() =>
+      readManagedPluginComposition(
+        makeCompositionFixture(null, {
+          peerDependencies: { effect: ">=4.0.0-beta.1 <5.0.0" },
+        }),
+      ),
+    ).toThrow(/incompatible host runtime contract/iu);
+    expect(() =>
+      readManagedPluginComposition(
+        makeCompositionFixture("4.0.0-beta.78", {
+          dependencies: { effect: "4.0.0-beta.78", unexpected: "1.0.0" },
+        }),
+      ),
+    ).toThrow(/incompatible host runtime contract/iu);
   });
 
   it("rejects symbolic links at both managed package directory boundaries", () => {
@@ -191,7 +222,9 @@ function makeTemporaryDirectory(): string {
 }
 
 function makeCompositionFixture(
-  pluginId: "microsoft-365" | "google-workspace" = "microsoft-365",
+  effectVersion: string | null = effectPackageJson.version,
+  packageRuntime: Readonly<Record<string, unknown>> = {},
+  pluginId = "microsoft-365",
 ): string {
   const sourceRoot = makeTemporaryDirectory();
   const packageRoot = NodePath.join(sourceRoot, "packages", pluginId);
@@ -246,6 +279,8 @@ function makeCompositionFixture(
         name: `@tritonai/plugin-${pluginId}`,
         version: "1.0.1",
         type: "module",
+        ...(effectVersion === null ? {} : { dependencies: { effect: effectVersion } }),
+        ...packageRuntime,
       }),
     ],
   ]);

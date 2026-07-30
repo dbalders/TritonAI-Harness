@@ -1,6 +1,6 @@
 import * as Schema from "effect/Schema";
 
-import { PortSchema } from "./baseSchemas.ts";
+import { PortSchema, PositiveInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 export const DesktopBackendBootstrap = Schema.Struct({
   // The first key encrypts new server-secret envelopes. Any remaining keys
@@ -24,6 +24,9 @@ export const DesktopBackendBootstrap = Schema.Struct({
   tailscaleServePort: PortSchema,
   otlpTracesUrl: Schema.optional(Schema.String),
   otlpMetricsUrl: Schema.optional(Schema.String),
+  desktopTelemetryFd: Schema.optionalKey(PositiveInt),
+  desktopTelemetryControlFd: Schema.optionalKey(PositiveInt),
+  resourceMonitorPath: Schema.optionalKey(TrimmedNonEmptyString),
 });
 
 export type DesktopBackendBootstrap = typeof DesktopBackendBootstrap.Type;

@@ -97,6 +97,7 @@ import * as DesktopBackendConfiguration from "./DesktopBackendConfiguration.ts";
 import * as DesktopBackendManager from "./DesktopBackendManager.ts";
 import * as DesktopObservability from "../app/DesktopObservability.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
+import * as DesktopTelemetryPublisher from "../telemetry/DesktopTelemetryPublisher.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 import * as ElectronDialog from "../electron/ElectronDialog.ts";
 
@@ -176,7 +177,8 @@ export type BackendInstanceFactoryRequirements =
   | FileSystem.FileSystem
   | ChildProcessSpawner.ChildProcessSpawner
   | HttpClient.HttpClient
-  | DesktopObservability.DesktopBackendOutputLogFactory;
+  | DesktopObservability.DesktopBackendOutputLogFactory
+  | DesktopTelemetryPublisher.DesktopTelemetryPublisher;
 
 interface ActiveRegisteredInstance {
   readonly _tag: "Active";
@@ -239,7 +241,7 @@ export const layer = Layer.effect(
           );
           yield* electronDialog.showErrorBox(
             "WSL backend is still unavailable",
-            `${reason}\n\nT3 Code will use the Windows backend for this launch and retry WSL the next time the app starts.`,
+            `${reason}\n\nTritonAI Harness will use the Windows backend for this launch and retry WSL the next time the app starts.`,
           );
           yield* appSettings.applyWslWindowsFallbackInMemory;
           return true;

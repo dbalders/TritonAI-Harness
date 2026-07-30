@@ -11,6 +11,7 @@ import {
   DEFAULT_TRITONAI_CODEX_MODEL,
   TRITONAI_APP_BASE_NAME,
   TRITONAI_APP_ID_BASE,
+  TRITONAI_CONNECT_NAME,
 } from "@t3tools/contracts";
 import type * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { loadBuiltinIntegrations } from "../integrations/builtins.ts";
@@ -99,6 +100,7 @@ describe("downstream provider and integration policy", () => {
 
     expect(TRITONAI_APP_BASE_NAME).toBe("TritonAI Harness");
     expect(TRITONAI_APP_ID_BASE).toBe("edu.ucsd.tritonai.harness");
+    expect(TRITONAI_CONNECT_NAME).toBe("TritonAI Connect");
     expect(DEFAULT_TRITONAI_AI_BASE_URL).toBe("https://tritonai-api.ucsd.edu/v1");
     expect(DEFAULT_TRITONAI_CODEX_MODEL).toBe("api-deepseek-v4-flash");
     expect(DEFAULT_SERVER_SETTINGS.enableProviderUpdateChecks).toBe(false);
@@ -145,6 +147,7 @@ it.layer(NodeServices.layer)("managed Codex home policy", (it) => {
         binaryPath: "",
         homePath: sharedHome,
         shadowHomePath: shadowHome,
+        launchArgs: "",
         customModels: [DEFAULT_TRITONAI_CODEX_MODEL],
         customModelMetadata: {},
       });

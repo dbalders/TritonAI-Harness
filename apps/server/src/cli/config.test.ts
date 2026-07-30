@@ -20,6 +20,9 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { deriveServerPaths } from "../config.ts";
 import { resolveServerConfig } from "./config.ts";
 
+const deriveExplicitServerPaths = (baseDir: string, devUrl: URL | undefined) =>
+  deriveServerPaths(baseDir, devUrl, { baseDirIsExplicit: true });
+
 const encodeDesktopBootstrap = Schema.encodeEffect(Schema.fromJsonString(DesktopBackendBootstrap));
 const headlessKeyFileSetting = ["TRITONAI", "SECRET", "STORE", "KEY", "FILE"].join("_");
 const encodeSecretStoreKeyring = Schema.encodeEffect(
@@ -52,13 +55,14 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
   const defaultObservabilityConfig = {
     traceMinLevel: "Info",
     traceTimingEnabled: true,
-    traceBatchWindowMs: 200,
+    traceBatchWindowMs: 1_000,
     traceMaxBytes: 10 * 1024 * 1024,
     traceMaxFiles: 10,
     otlpTracesUrl: undefined,
     otlpMetricsUrl: undefined,
     otlpExportIntervalMs: 10_000,
     otlpServiceName: "t3-server",
+    devAllowedOrigins: [],
   } as const;
 
   const openBootstrapFd = Effect.fn(function* (payload: DesktopBackendBootstrapValue) {
@@ -74,7 +78,10 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     Effect.gen(function* () {
       const { join } = yield* Path.Path;
       const baseDir = join(NodeOS.tmpdir(), "t3-cli-config-env-base");
-      const derivedPaths = yield* deriveServerPaths(baseDir, new URL("http://127.0.0.1:5173"));
+      const derivedPaths = yield* deriveExplicitServerPaths(
+        baseDir,
+        new URL("http://127.0.0.1:5173"),
+      );
       const resolved = yield* resolveServerConfig(
         {
           mode: Option.none(),
@@ -104,6 +111,8 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
                   TRITONAI_HOME: baseDir,
                   T3CODE_HOME: join(NodeOS.tmpdir(), "ignored-legacy-base"),
                   VITE_DEV_SERVER_URL: "http://127.0.0.1:5173",
+                  T3CODE_DEV_ALLOWED_ORIGINS:
+                    "https://host.example.ts.net, https://phone.example.ts.net ",
                   T3CODE_NO_BROWSER: "true",
                   T3CODE_AUTO_BOOTSTRAP_PROJECT_FROM_CWD: "false",
                   T3CODE_LOG_WS_EVENTS: "true",
@@ -126,6 +135,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         host: "0.0.0.0",
         staticDir: undefined,
         devUrl: new URL("http://127.0.0.1:5173"),
+        devAllowedOrigins: ["https://host.example.ts.net", "https://phone.example.ts.net"],
         noBrowser: true,
         startupPresentation: "browser",
         desktopBootstrapToken: undefined,
@@ -136,6 +146,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         secretStoreKeys: undefined,
         legacySecretFingerprints: {},
       });
+      assert.equal(resolved.stateDir, join(baseDir, "userdata"));
     }),
   );
 
@@ -143,7 +154,10 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     Effect.gen(function* () {
       const { join } = yield* Path.Path;
       const baseDir = join(NodeOS.tmpdir(), "t3-cli-config-flags-base");
-      const derivedPaths = yield* deriveServerPaths(baseDir, new URL("http://127.0.0.1:4173"));
+      const derivedPaths = yield* deriveExplicitServerPaths(
+        baseDir,
+        new URL("http://127.0.0.1:4173"),
+      );
       const resolved = yield* resolveServerConfig(
         {
           mode: Option.some("web"),
@@ -204,6 +218,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         secretStoreKeys: undefined,
         legacySecretFingerprints: {},
       });
+      assert.equal(resolved.dbPath, join(baseDir, "userdata", "state.sqlite"));
     }),
   );
 
@@ -218,7 +233,10 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           tailscaleServePort: 443,
         }),
       );
-      const derivedPaths = yield* deriveServerPaths(baseDir, new URL("http://127.0.0.1:4173"));
+      const derivedPaths = yield* deriveExplicitServerPaths(
+        baseDir,
+        new URL("http://127.0.0.1:4173"),
+      );
 
       const resolved = yield* resolveServerConfig(
         {
@@ -289,6 +307,8 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           t3Home: baseDir,
           noBrowser: true,
           desktopBootstrapToken: "desktop-token",
+          desktopTelemetryFd: 4,
+          desktopTelemetryControlFd: 5,
           tailscaleServeEnabled: false,
           tailscaleServePort: 443,
           otlpTracesUrl: "http://localhost:4318/v1/traces",
@@ -345,6 +365,9 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         noBrowser: true,
         startupPresentation: "browser",
         desktopBootstrapToken: "desktop-token",
+        desktopTelemetryFd: 4,
+        desktopTelemetryControlFd: 5,
+        resourceMonitorPath: undefined,
         autoBootstrapProjectFromCwd: false,
         logWebSocketEvents: false,
         tailscaleServeEnabled: false,
@@ -353,6 +376,8 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         legacySecretFingerprints: {},
       });
       assert.equal(join(baseDir, "userdata"), resolved.stateDir);
+      assert.equal(resolved.desktopTelemetryFd, 4);
+      assert.equal(resolved.desktopTelemetryControlFd, 5);
     }),
   );
 
@@ -420,7 +445,10 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           tailscaleServePort: 443,
         }),
       );
-      const derivedPaths = yield* deriveServerPaths(baseDir, new URL("http://127.0.0.1:4173"));
+      const derivedPaths = yield* deriveExplicitServerPaths(
+        baseDir,
+        new URL("http://127.0.0.1:4173"),
+      );
 
       const resolved = yield* resolveServerConfig(
         {
@@ -487,7 +515,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-cli-config-settings-" });
-      const derivedPaths = yield* deriveServerPaths(baseDir, undefined);
+      const derivedPaths = yield* deriveExplicitServerPaths(baseDir, undefined);
       yield* fs.makeDirectory(path.dirname(derivedPaths.settingsPath), { recursive: true });
       yield* fs.writeFileString(
         derivedPaths.settingsPath,
@@ -557,7 +585,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     Effect.gen(function* () {
       const { join } = yield* Path.Path;
       const baseDir = join(NodeOS.tmpdir(), "t3-cli-config-headless-base");
-      const derivedPaths = yield* deriveServerPaths(baseDir, undefined);
+      const derivedPaths = yield* deriveExplicitServerPaths(baseDir, undefined);
 
       const resolved = yield* resolveServerConfig(
         {

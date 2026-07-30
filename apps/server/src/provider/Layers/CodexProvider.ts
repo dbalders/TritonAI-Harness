@@ -22,6 +22,7 @@ import type {
   ServerProviderModel,
   ServerProviderSkill,
 } from "@t3tools/contracts";
+import { PREFERRED_DEFAULT_CODEX_MODELS } from "@t3tools/contracts";
 import {
   DEFAULT_TRITONAI_CODEX_MODEL,
   DEFAULT_TRITONAI_CODEX_MODEL_DISPLAY_NAME,
@@ -31,6 +32,7 @@ import {
 
 import { createModelCapabilities } from "@t3tools/shared/model";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
+import { codexAppServerArgs, resolveCodexLaunchArgs } from "./codexLaunchArgs.ts";
 import {
   AUTH_PROBE_TIMEOUT_MS,
   buildServerProvider,
@@ -119,6 +121,8 @@ const REASONING_EFFORT_LABELS: Readonly<Record<string, string>> = {
   medium: "Medium",
   high: "High",
   xhigh: "Extra High",
+  max: "Max",
+  ultra: "Ultra",
 };
 
 const DEFAULT_SERVICE_TIER_ID = "default";
@@ -280,8 +284,11 @@ export function mapCodexModelCapabilities(
     });
   }
 
+  const inputModalities = model.inputModalities?.filter(
+    (modality): modality is "text" | "image" => modality === "text" || modality === "image",
+  );
   return createModelCapabilities({
-    ...(model.inputModalities !== undefined ? { inputModalities: model.inputModalities } : {}),
+    ...(inputModalities !== undefined ? { inputModalities } : {}),
     optionDescriptors,
   });
 }
@@ -300,8 +307,34 @@ function parseCodexModelListResponse(
     slug: model.model,
     name: toDisplayName(model),
     isCustom: false,
+    ...(model.isDefault ? { isDefault: true } : {}),
     capabilities: mapCodexModelCapabilities(model),
   }));
+}
+
+/**
+ * Prefer our own default-model ranking when one of the preferred slugs is in
+ * the live catalog; otherwise keep whatever Codex itself flagged as default.
+ */
+export function applyPreferredCodexDefaultModel(
+  models: ReadonlyArray<ServerProviderModel>,
+): ReadonlyArray<ServerProviderModel> {
+  const preferredSlug = PREFERRED_DEFAULT_CODEX_MODELS.find((slug) =>
+    models.some((model) => model.slug === slug && !model.isCustom),
+  );
+  if (!preferredSlug) {
+    return models;
+  }
+  return models.map((model) => {
+    if (model.slug === preferredSlug) {
+      return model.isDefault ? model : { ...model, isDefault: true };
+    }
+    if (!model.isDefault) {
+      return model;
+    }
+    const { isDefault: _isDefault, ...rest } = model;
+    return rest;
+  });
 }
 
 function appendCustomCodexModels(
@@ -436,6 +469,7 @@ export function buildCodexInitializeParams(): CodexSchema.V1InitializeParams {
 const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(function* (input: {
   readonly binaryPath: string;
   readonly homePath?: string;
+  readonly launchArgs?: string;
   readonly cwd: string;
   readonly customModels?: ReadonlyArray<string>;
   readonly customModelMetadata?: CustomModelMetadata;
@@ -453,7 +487,7 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
   };
   const spawnCommand = yield* resolveSpawnCommand(
     input.binaryPath,
-    ["app-server", ...makeTritonAiCodexConfigArgs(environment)],
+    [...codexAppServerArgs(input.launchArgs), ...makeTritonAiCodexConfigArgs(environment)],
     {
       env: environment,
       extendEnv: true,
@@ -564,10 +598,8 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
   return {
     account: accountResponse,
     version,
-    models: curateVisibleCodexModels(
-      models,
-      input.customModels ?? [],
-      input.customModelMetadata ?? {},
+    models: applyPreferredCodexDefaultModel(
+      curateVisibleCodexModels(models, input.customModels ?? [], input.customModelMetadata ?? {}),
     ),
     skills,
   } satisfies CodexAppServerProviderSnapshot;
@@ -655,6 +687,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
   probe: (input: {
     readonly binaryPath: string;
     readonly homePath?: string;
+    readonly launchArgs?: string;
     readonly cwd: string;
     readonly customModels: ReadonlyArray<string>;
     readonly customModelMetadata: CustomModelMetadata;
@@ -694,6 +727,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
   const probeResult = yield* probe({
     binaryPath: codexSettings.binaryPath,
     homePath: codexSettings.homePath,
+    launchArgs: resolveCodexLaunchArgs(codexSettings.launchArgs, resolvedEnvironment),
     cwd: process.cwd(),
     customModels: codexSettings.customModels,
     customModelMetadata: codexSettings.customModelMetadata,
