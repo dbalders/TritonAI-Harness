@@ -4,6 +4,7 @@
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeOS from "node:os";
+import { DEFAULT_TRITONAI_HOME_DIRNAME } from "@t3tools/contracts";
 import { fromJsonStringPretty } from "@t3tools/shared/schemaJson";
 import * as Console from "effect/Console";
 import * as DateTime from "effect/DateTime";
@@ -63,7 +64,7 @@ export class SqliteStateSharedHomeMutationError extends Schema.TaggedErrorClass<
   {},
 ) {
   override get message(): string {
-    return "Refusing to mutate the shared ~/.t3 database. Use an isolated --base-dir.";
+    return "Refusing to mutate a shared TritonAI/T3 database. Use an isolated --base-dir.";
   }
 }
 
@@ -134,7 +135,7 @@ export interface RunSqliteStateInput {
 }
 
 export interface RunSqliteStateOptions {
-  readonly sharedHome?: string | undefined;
+  readonly sharedHomes?: ReadonlyArray<string> | undefined;
 }
 
 const resolveSqlSource = Effect.fn("resolveSqliteStateSqlSource")(function* (
@@ -212,9 +213,16 @@ export const runSqliteState = Effect.fn("runSqliteState")(function* (
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const baseDir = path.resolve(input.baseDir);
-  const sharedHome = path.resolve(options.sharedHome ?? path.join(NodeOS.homedir(), ".t3"));
+  const sharedHomes = (
+    options.sharedHomes ?? [
+      path.join(NodeOS.homedir(), DEFAULT_TRITONAI_HOME_DIRNAME),
+      path.join(NodeOS.homedir(), ".t3"),
+    ]
+  ).map((home) => path.resolve(home));
   const databasePath = path.join(baseDir, "userdata", "state.sqlite");
-  const sharedDatabasePath = path.join(sharedHome, "userdata", "state.sqlite");
+  const sharedDatabasePaths = sharedHomes.map((home) =>
+    path.join(home, "userdata", "state.sqlite"),
+  );
   const source = yield* resolveSqlSource(input.sql, input.file);
 
   if (canAccessExternalDatabase(source)) {
@@ -225,28 +233,31 @@ export const runSqliteState = Effect.fn("runSqliteState")(function* (
     return yield* new SqliteStateDatabaseMissingError({ databasePath });
   }
   if (input.operation === "exec") {
-    const [canonicalDatabasePath, canonicalSharedDatabasePath, databaseInfo, sharedInfo] =
-      yield* Effect.all([
-        fs.realPath(databasePath),
+    const [canonicalDatabasePath, databaseInfo] = yield* Effect.all([
+      fs.realPath(databasePath),
+      fs.stat(databasePath),
+    ]);
+    const databaseInode = Option.getOrUndefined(databaseInfo.ino);
+    for (const sharedDatabasePath of sharedDatabasePaths) {
+      const [canonicalSharedDatabasePath, sharedInfo] = yield* Effect.all([
         fs.realPath(sharedDatabasePath).pipe(Effect.orElseSucceed(() => sharedDatabasePath)),
-        fs.stat(databasePath),
         Effect.option(fs.stat(sharedDatabasePath)),
       ]);
-    const databaseInode = Option.getOrUndefined(databaseInfo.ino);
-    const aliasesSharedDatabase = Option.match(sharedInfo, {
-      onNone: () => false,
-      onSome: (info) => {
-        const sharedInode = Option.getOrUndefined(info.ino);
-        return (
-          databaseInfo.dev === info.dev &&
-          databaseInode !== undefined &&
-          sharedInode !== undefined &&
-          databaseInode === sharedInode
-        );
-      },
-    });
-    if (canonicalDatabasePath === canonicalSharedDatabasePath || aliasesSharedDatabase) {
-      return yield* new SqliteStateSharedHomeMutationError();
+      const aliasesSharedDatabase = Option.match(sharedInfo, {
+        onNone: () => false,
+        onSome: (info) => {
+          const sharedInode = Option.getOrUndefined(info.ino);
+          return (
+            databaseInfo.dev === info.dev &&
+            databaseInode !== undefined &&
+            sharedInode !== undefined &&
+            databaseInode === sharedInode
+          );
+        },
+      });
+      if (canonicalDatabasePath === canonicalSharedDatabasePath || aliasesSharedDatabase) {
+        return yield* new SqliteStateSharedHomeMutationError();
+      }
     }
   }
 

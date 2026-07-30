@@ -96,7 +96,7 @@ it.layer(NodeServices.layer)("t3-sqlite-state", (it) => {
           baseDir,
           sql: "DELETE FROM fixtures",
         },
-        { sharedHome: baseDir },
+        { sharedHomes: [path.join(baseDir, "unused-shared-home"), baseDir] },
       ).pipe(Effect.flip);
       assert.equal(error._tag, "SqliteStateSharedHomeMutationError");
 
@@ -111,7 +111,7 @@ it.layer(NodeServices.layer)("t3-sqlite-state", (it) => {
           baseDir: aliasBaseDir,
           sql: "DELETE FROM fixtures",
         },
-        { sharedHome: baseDir },
+        { sharedHomes: [path.join(baseDir, "unused-shared-home"), baseDir] },
       ).pipe(Effect.flip);
       assert.equal(aliasError._tag, "SqliteStateSharedHomeMutationError");
 
@@ -130,7 +130,7 @@ it.layer(NodeServices.layer)("t3-sqlite-state", (it) => {
           baseDir: databaseAliasBaseDir,
           sql: "DELETE FROM fixtures",
         },
-        { sharedHome: baseDir },
+        { sharedHomes: [path.join(baseDir, "unused-shared-home"), baseDir] },
       ).pipe(Effect.flip);
       assert.equal(databaseAliasError._tag, "SqliteStateSharedHomeMutationError");
 
@@ -145,7 +145,7 @@ it.layer(NodeServices.layer)("t3-sqlite-state", (it) => {
           baseDir: hardLinkBaseDir,
           sql: "DELETE FROM fixtures",
         },
-        { sharedHome: baseDir },
+        { sharedHomes: [path.join(baseDir, "unused-shared-home"), baseDir] },
       ).pipe(Effect.flip);
       assert.equal(hardLinkError._tag, "SqliteStateSharedHomeMutationError");
     }),
