@@ -448,19 +448,10 @@ jobs:
           #   done
           # fi
 
-      - name: Collect resource monitor
-        shell: bash
-        run: |
-          set -euo pipefail
-          binary_name="t3-resource-monitor"
-          if [[ "${{ matrix.platform }}" == "win" ]]; then
-            binary_name="${binary_name}.exe"
-          fi
-          source_path="native/resource-monitor/target/${{ matrix.rust_target }}/release/${binary_name}"
-          target_dir="resource-monitor-publish/${{ matrix.resource_key }}"
-          mkdir -p "$target_dir"
-          cp "$source_path" "$target_dir/$binary_name"
-
+      # The desktop artifact build already fails closed while compiling and
+      # staging this binary under packaged resources/resource-monitor. Upstream
+      # uploads a separate copy only for its npm CLI package; downstream does
+      # not publish that package or expose the raw executable as a release asset.
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7
         with:

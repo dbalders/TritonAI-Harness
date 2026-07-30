@@ -112,12 +112,12 @@ Run T3 Code in the background whenever this machine boots? (y/n): y<br><br>
 
 <h2>Why this is a small change</h2>
 <p>The entire <code>t3 connect</code> data plane already works: Clerk PKCE token exchange, encrypted secret store, cloudflared relay-client install, relay environment linking, DPoP tokens. The <em>only</em> broken piece on an SSH box is the redirect: <code>CliTokenManager.login()</code> hardcodes a loopback callback (<code>http://127.0.0.1:34338/callback</code>) that requires a browser on the same machine.</p>
-<p>We swap that one leg for a hosted out-of-band authorization page and keep everything else. Because PKCE's <code>code_verifier</code> never leaves the box, the displayed one-time code is useless to anyone who sees it &mdash; no new token-minting or storage is needed anywhere.</p>
+<p>We swap that one leg for a hosted out-of-band authorization page and keep everything else. Because PKCE's <code>code_verifier</code> is never placed in the copied URL or displayed code, the displayed one-time code is useless without the verifier &mdash; no new token-minting or storage is needed anywhere.</p>
 
 <div class="card">
 <h3>Reused as-is (zero changes)</h3>
 <ul>
-  <li><code>exchangeToken()</code> PKCE exchange &mdash; <code>apps/server/src/cloud/CliTokenManager.ts:147</code></li>
+  <li><code>exchangeToken()</code> PKCE exchange &mdash; <code>apps/server/src/cloud/CliTokenManager.ts</code></li>
   <li>Token persistence in <code>ServerSecretStore</code> (<code>cloud-cli-oauth-token</code>)</li>
   <li><code>acquireRelayClientForLink()</code> cloudflared install + progress &mdash; <code>cli/connect.ts:146</code></li>
   <li><code>CliState.setCliDesiredCloudLink()</code> + server-side provisioning on start</li>
@@ -180,7 +180,7 @@ Run T3 Code in the background whenever this machine boots? (y/n): y<br><br>
   <text x="130" y="411" fill="#4ade80" font-size="12.5" text-anchor="middle">8. store token, set desired link,</text>
   <text x="130" y="427" fill="#4ade80" font-size="12.5" text-anchor="middle">install relay client &#8594; Connected!</text>
 </svg>
-<figcaption>The verifier never leaves the box (steps 1&#8594;7), so the authorization code is worthless if observed. state/challenge ride the URL fragment &mdash; they are not secrets.</figcaption>
+<figcaption>The verifier is sent only in the token exchange and never appears in the copied URL or displayed code, so the authorization code is worthless if observed. state/challenge ride the URL fragment &mdash; they are not secrets.</figcaption>
 </figure>
 
 <div class="card">

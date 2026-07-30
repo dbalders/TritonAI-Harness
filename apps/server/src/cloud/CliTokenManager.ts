@@ -282,9 +282,10 @@ export interface OutOfBandOAuthPromptInput {
 /**
  * Out-of-band OAuth for machines without a local browser (SSH). The user
  * opens the hosted /connect URL elsewhere, signs in, and enters the displayed
- * code in this terminal. The PKCE verifier never leaves this process, so the
- * authorization code is useless to an observer, and the state bundled into
- * the blob preserves the loopback flow's CSRF check.
+ * code in this terminal. The PKCE verifier is never placed in the copied URL
+ * or displayed code and is sent only during the token exchange, so the
+ * authorization code is useless to an observer. The state bundled into the
+ * blob preserves the loopback flow's CSRF check.
  */
 export const outOfBandOAuthLogin = Effect.fn("cloud.cli_token.out_of_band_oauth_login")(function* <
   E,
