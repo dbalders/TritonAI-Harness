@@ -1,7 +1,5 @@
 import type { EnvironmentId, SidebarThreadSortOrder } from "@t3tools/contracts";
 import type { MenuAction } from "@react-native-menu/menu";
-import { useAtomValue } from "@effect/atom-react";
-import { AsyncResult } from "effect/unstable/reactivity";
 import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
 import { useCallback, useMemo, useRef } from "react";
 import { Platform, Pressable, Text as RNText, TextInput, View } from "react-native";
@@ -11,7 +9,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ControlPillMenu } from "../../components/ControlPill";
 import { SymbolView } from "../../components/AppSymbol";
 import { useThemeColor } from "../../lib/useThemeColor";
-import { mobilePreferencesAtom } from "../../state/preferences";
+import { useThreadListV2Enabled } from "../threads/use-thread-list-v2-enabled";
 import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
 import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
 import { createNativeMailSearchToolbarItem } from "../layout/native-mail-search-toolbar";
@@ -58,21 +56,14 @@ function checkedMenuState(checked: boolean) {
   return checked ? ("on" as const) : undefined;
 }
 
-/** Thread List v2 lays the list out in fixed creation order, so the
-    sort/group filter controls would be silently ignored — hide them and
-    key the "customized" icon state off the environment filter alone. */
-function useThreadListV2FilterGate() {
-  const preferencesResult = useAtomValue(mobilePreferencesAtom);
-  return (
-    AsyncResult.isSuccess(preferencesResult) && preferencesResult.value.threadListV2Enabled === true
-  );
-}
-
 function AndroidHomeHeader(props: HomeHeaderProps) {
   const insets = useSafeAreaInsets();
   const iconColor = useThemeColor("--color-icon");
   const mutedColor = useThemeColor("--color-foreground-muted");
-  const threadListV2Enabled = useThreadListV2FilterGate();
+  // Thread List v2 lays the list out in fixed creation order, so the
+  // sort/group filter controls would be silently ignored — hide them and
+  // key the "customized" icon state off the environment filter alone.
+  const threadListV2Enabled = useThreadListV2Enabled();
   const hasCustomListOptions = threadListV2Enabled
     ? props.selectedEnvironmentId !== null || props.selectedProjectKey !== null
     : hasCustomHomeListOptions(props);
@@ -283,7 +274,10 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
 function IosHomeHeader(props: HomeHeaderProps) {
   const searchBarRef = useRef<SearchBarCommands>(null);
   const iconColor = useThemeColor("--color-icon");
-  const threadListV2Enabled = useThreadListV2FilterGate();
+  // Thread List v2 lays the list out in fixed creation order, so the
+  // sort/group filter controls would be silently ignored — hide them and
+  // key the "customized" icon state off the environment filter alone.
+  const threadListV2Enabled = useThreadListV2Enabled();
   const hasCustomListOptions = threadListV2Enabled
     ? props.selectedEnvironmentId !== null || props.selectedProjectKey !== null
     : hasCustomHomeListOptions(props);

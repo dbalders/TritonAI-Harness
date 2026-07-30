@@ -252,9 +252,10 @@ function nodeText(node: ReactNode): string {
   if (!isValidElement(node)) return "";
   const props = node.props as {
     readonly children?: ReactNode;
+    readonly fixedHeader?: ReactNode;
     readonly render?: ReactNode;
   };
-  return nodeText(props.children) + nodeText(props.render);
+  return nodeText(props.children) + nodeText(props.fixedHeader) + nodeText(props.render);
 }
 
 function findElement(
@@ -272,9 +273,14 @@ function findElement(
   if (predicate(node)) return node;
   const props = node.props as {
     readonly children?: ReactNode;
+    readonly fixedHeader?: ReactNode;
     readonly render?: ReactNode;
   };
-  return findElement(props.children, predicate) ?? findElement(props.render, predicate);
+  return (
+    findElement(props.children, predicate) ??
+    findElement(props.fixedHeader, predicate) ??
+    findElement(props.render, predicate)
+  );
 }
 
 async function flushPromises(): Promise<void> {

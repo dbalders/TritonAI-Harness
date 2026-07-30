@@ -55,7 +55,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
   const defaultObservabilityConfig = {
     traceMinLevel: "Info",
     traceTimingEnabled: true,
-    traceBatchWindowMs: 200,
+    traceBatchWindowMs: 1_000,
     traceMaxBytes: 10 * 1024 * 1024,
     traceMaxFiles: 10,
     otlpTracesUrl: undefined,
@@ -307,6 +307,8 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           t3Home: baseDir,
           noBrowser: true,
           desktopBootstrapToken: "desktop-token",
+          desktopTelemetryFd: 4,
+          desktopTelemetryControlFd: 5,
           tailscaleServeEnabled: false,
           tailscaleServePort: 443,
           otlpTracesUrl: "http://localhost:4318/v1/traces",
@@ -363,6 +365,9 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         noBrowser: true,
         startupPresentation: "browser",
         desktopBootstrapToken: "desktop-token",
+        desktopTelemetryFd: 4,
+        desktopTelemetryControlFd: 5,
+        resourceMonitorPath: undefined,
         autoBootstrapProjectFromCwd: false,
         logWebSocketEvents: false,
         tailscaleServeEnabled: false,
@@ -371,6 +376,8 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         legacySecretFingerprints: {},
       });
       assert.equal(join(baseDir, "userdata"), resolved.stateDir);
+      assert.equal(resolved.desktopTelemetryFd, 4);
+      assert.equal(resolved.desktopTelemetryControlFd, 5);
     }),
   );
 

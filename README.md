@@ -1,6 +1,10 @@
 # TritonAI Harness
 
-TritonAI Harness is UCSD's downstream fork of [T3 Code](https://github.com/pingdotgg/t3code). It keeps the T3 Code desktop/web harness for coding agents, with UCSD/TritonAI defaults, a Codex-first model surface, and config that stays separate from a user's normal Codex setup.
+TritonAI Harness is UCSD's downstream fork of [T3 Code](https://github.com/pingdotgg/t3code).
+It is an agent-harness control surface for desktop, web, and mobile, with
+UCSD/TritonAI defaults, a Codex-first model surface, and configuration that stays
+separate from a user's normal Codex setup. The inherited runtime can control
+authenticated Codex, Claude Code, Cursor, Grok Build, and OpenCode providers.
 
 This is not a clean-room rewrite. The repo keeps the upstream T3 Code history and MIT license so the original work stays visible. TritonAI release assets and installer behavior are maintained separately from upstream T3 Code.
 

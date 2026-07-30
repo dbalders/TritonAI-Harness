@@ -1,5 +1,6 @@
 import { UserButton, useAuth } from "@clerk/react";
 import { LogInIcon, SmartphoneIcon } from "lucide-react";
+import { TRITONAI_CONNECT_NAME } from "@t3tools/contracts";
 
 import { hasCloudPublicConfig } from "../../cloud/publicConfig";
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
@@ -53,13 +54,9 @@ function ConfiguredT3ConnectSidebarSignIn() {
     <>
       <SidebarMenu>
         <SidebarMenuItem>
-          <SidebarMenuButton
-            size="sm"
-            className="h-8 items-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium text-sidebar-muted-foreground/80 hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
-            onClick={openAuthPrompt}
-          >
-            <LogInIcon className="size-4 shrink-0" />
-            <span>Sign in to TritonAI Connect</span>
+          <SidebarMenuButton onClick={openAuthPrompt}>
+            <LogInIcon />
+            <span>Sign in to {TRITONAI_CONNECT_NAME}</span>
           </SidebarMenuButton>
         </SidebarMenuItem>
       </SidebarMenu>

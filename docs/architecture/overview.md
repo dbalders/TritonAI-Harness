@@ -39,6 +39,10 @@ T3 Code runs as a **Node.js WebSocket server** that wraps `codex app-server` (JS
 
 - **Server updates**: The protocol retains upstream update capabilities, but TritonAI Harness only presents desktop-owned update guidance and suppresses public-package remote replacement. See [Server Update Architecture](./server-updates.md).
 
+Related design:
+
+- [Resource telemetry architecture](./resource-telemetry.md)
+
 ## Event Lifecycle
 
 ### Startup and client connect

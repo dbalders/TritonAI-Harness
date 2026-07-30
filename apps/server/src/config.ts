@@ -78,6 +78,9 @@ export class ServerConfig extends Context.Service<
     readonly secretStoreKeys: ReadonlyArray<string> | undefined;
     readonly legacySecretFingerprints: Readonly<Record<string, string>>;
     readonly secretStoreKeyFilePath?: string;
+    readonly desktopTelemetryFd?: number | undefined;
+    readonly desktopTelemetryControlFd?: number | undefined;
+    readonly resourceMonitorPath?: string | undefined;
     readonly autoBootstrapProjectFromCwd: boolean;
     readonly logWebSocketEvents: boolean;
     readonly tailscaleServeEnabled: boolean;
@@ -188,6 +191,9 @@ const makeTest = Effect.fn("ServerConfig.makeTest")(function* (
     desktopBootstrapToken: undefined,
     secretStoreKeys: ["WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo="],
     legacySecretFingerprints: {},
+    desktopTelemetryFd: undefined,
+    desktopTelemetryControlFd: undefined,
+    resourceMonitorPath: undefined,
     staticDir: undefined,
     devUrl,
     devAllowedOrigins: [],

@@ -1,3 +1,4 @@
+import { TRITONAI_CONNECT_NAME } from "@t3tools/contracts";
 import * as Console from "effect/Console";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -163,7 +164,7 @@ export const offerServiceDuringOnboarding = Effect.gen(function* () {
       message: installed
         ? "The installed TritonAI Harness service needs an update or repair. Update it now?"
         : "Run TritonAI Harness in the background whenever this machine boots? " +
-          "It stays reachable through T3 Connect even after you log out.",
+          `It stays reachable through ${TRITONAI_CONNECT_NAME} even after you log out.`,
       initial: true,
     }),
   );
