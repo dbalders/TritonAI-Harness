@@ -1,3 +1,4 @@
+import { TRITONAI_CONNECT_NAME } from "@t3tools/contracts";
 import type {
   RelayClientEnvironmentRecord,
   RelayEnvironmentStatusResponse,
@@ -123,7 +124,7 @@ export function createManagedRelaySession(input: ManagedRelaySessionInput): Mana
         try: () => readCachedClerkToken(nowMillis),
         catch: (cause) =>
           new ManagedRelaySessionError({
-            message: "Could not obtain the T3 Cloud session token.",
+            message: `Could not obtain the ${TRITONAI_CONNECT_NAME} session token.`,
             cause,
           }),
       });
@@ -181,7 +182,7 @@ function readSessionClerkToken(
         ? Effect.succeed(token)
         : Effect.fail(
             new ManagedRelaySessionError({
-              message: "The T3 Cloud session token is unavailable.",
+              message: `The ${TRITONAI_CONNECT_NAME} session token is unavailable.`,
             }),
           ),
     ),
@@ -226,7 +227,7 @@ function requireClerkToken(
   if (!session || session.accountId !== accountId) {
     return Effect.fail(
       new ManagedRelaySessionError({
-        message: "Sign in to T3 Cloud before loading relay data.",
+        message: `Sign in to ${TRITONAI_CONNECT_NAME} before loading relay data.`,
       }),
     );
   }
@@ -296,7 +297,8 @@ export function readManagedRelaySnapshotState<A>(
   let errorTraceId: string | null = null;
   if (result._tag === "Failure") {
     const cause = Cause.squash(result.cause);
-    error = cause instanceof Error ? cause.message : "Could not load T3 Cloud data.";
+    error =
+      cause instanceof Error ? cause.message : `Could not load ${TRITONAI_CONNECT_NAME} data.`;
     errorTraceId = findErrorTraceId(cause);
   }
   return {

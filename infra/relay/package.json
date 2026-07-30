@@ -11,11 +11,13 @@
   "dependencies": {
     "@clerk/backend": "catalog:",
     "@effect/sql-pg": "catalog:",
+    "@noble/curves": "catalog:",
+    "@noble/hashes": "catalog:",
     "@t3tools/client-runtime": "workspace:*",
     "@t3tools/contracts": "workspace:*",
     "@t3tools/shared": "workspace:*",
-    "alchemy": "https://pkg.ing/alchemy/078ff00",
-    "drizzle-orm": "1.0.0-rc.3",
+    "alchemy": "2.0.0-beta.65",
+    "drizzle-orm": "1.0.0-rc.4",
     "effect": "catalog:"
   },
   "devDependencies": {
@@ -23,8 +25,8 @@
     "@effect/platform-node": "catalog:",
     "@effect/vitest": "catalog:",
     "@types/node": "catalog:",
-    "drizzle-kit": "1.0.0-rc.3",
-    "vite": "npm:@voidzero-dev/vite-plus-core@0.2.1",
+    "drizzle-kit": "1.0.0-rc.4",
+    "vite": "catalog:",
     "vite-plus": "catalog:"
   }
 }

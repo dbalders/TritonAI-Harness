@@ -4,6 +4,7 @@ import { defineConfig, mergeConfig } from "vite-plus";
 import baseConfig from "../../vite.config.ts";
 import { loadManagedPluginCompositionFromEnvironment } from "../../scripts/lib/managed-plugin-composition.ts";
 import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
+import packageJson from "./package.json" with { type: "json" };
 
 const bundledPackagePrefixes = [
   "@pierre/diffs",
@@ -17,6 +18,7 @@ export function shouldBundleCliDependency(id: string): boolean {
 }
 
 const repoEnv = loadRepoEnv();
+const cliBuildChannel = packageJson.version.includes("-nightly.") ? "nightly" : "latest";
 const managedPluginComposition =
   loadManagedPluginCompositionFromEnvironment(repoEnv)?.composition ?? null;
 
@@ -45,6 +47,7 @@ export default mergeConfig(
         js: "#!/usr/bin/env node\n",
       },
       define: {
+        __T3CODE_BUILD_CHANNEL__: JSON.stringify(cliBuildChannel),
         __TRITONAI_BUILD_SUPPORTS_INTEGRATION_FIXTURES__: "false",
         __TRITONAI_BUILD_PLUGIN_COMPOSITION__: JSON.stringify(managedPluginComposition),
         __TRITONAI_BUILD_MICROSOFT_GRAPH_CLIENT_ID__: JSON.stringify(

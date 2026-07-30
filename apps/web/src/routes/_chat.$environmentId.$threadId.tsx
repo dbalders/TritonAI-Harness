@@ -2,10 +2,17 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect } from "react";
 
 import ChatView from "../components/ChatView";
+import { threadHasStarted } from "../components/ChatView.logic";
 import { finalizePromotedDraftThreadByRef, useComposerDraftStore } from "../composerDraftStore";
-import { resolveThreadRouteRef } from "../threadRoutes";
+import { resolveThreadRouteRef, resolveThreadRouteRenderState } from "../threadRoutes";
+import { resolveThreadSyncPhase } from "../threadSync";
 import { SidebarInset } from "~/components/ui/sidebar";
-import { useEnvironmentThreadRefs, useThreadDetail, useThreadShell } from "../state/entities";
+import {
+  useEnvironmentThreadRefs,
+  useThreadDetail,
+  useThreadShell,
+  useThreadStatus,
+} from "../state/entities";
 import { useEnvironmentQuery } from "../state/query";
 import { environmentShell } from "../state/shell";
 
@@ -19,9 +26,9 @@ function ChatThreadRouteView() {
   );
   const serverThreadShell = useThreadShell(threadRef);
   const serverThreadDetail = useThreadDetail(threadRef);
+  const serverThreadStatus = useThreadStatus(threadRef);
   const environmentThreadRefs = useEnvironmentThreadRefs(threadRef?.environmentId ?? null);
   const bootstrapComplete = shell.data?.snapshot._tag === "Some";
-  const threadExists = serverThreadShell !== null || serverThreadDetail !== null;
   const environmentHasServerThreads = environmentThreadRefs.length > 0;
   const draftThreadExists = useComposerDraftStore((store) =>
     threadRef ? store.getDraftThreadByRef(threadRef) !== null : false,
@@ -35,8 +42,19 @@ function ChatThreadRouteView() {
     }
     return store.hasDraftThreadsInEnvironment(threadRef.environmentId);
   });
-  const routeThreadExists = threadExists || draftThreadExists;
-  const serverThreadHasMessages = (serverThreadDetail?.messages.length ?? 0) > 0;
+  const renderState = resolveThreadRouteRenderState({
+    bootstrapComplete,
+    serverThreadShellExists: serverThreadShell !== null,
+    serverThreadDetailExists: serverThreadDetail !== null,
+    serverThreadDetailDeleted: serverThreadStatus === "deleted",
+    draftThreadExists,
+  });
+  const threadSyncPhase = resolveThreadSyncPhase({
+    detailExists: serverThreadDetail !== null,
+    shellExists: serverThreadShell !== null,
+    status: serverThreadStatus,
+  });
+  const serverThreadStarted = threadHasStarted(serverThreadDetail);
   const environmentHasAnyThreads = environmentHasServerThreads || environmentHasDraftThreads;
 
   useEffect(() => {
@@ -44,29 +62,32 @@ function ChatThreadRouteView() {
       return;
     }
 
-    if (!routeThreadExists && environmentHasAnyThreads) {
+    if (renderState === "missing" && environmentHasAnyThreads) {
       void navigate({ to: "/", replace: true });
     }
-  }, [bootstrapComplete, environmentHasAnyThreads, navigate, routeThreadExists, threadRef]);
+  }, [bootstrapComplete, environmentHasAnyThreads, navigate, renderState, threadRef]);
 
   useEffect(() => {
-    if (!threadRef || !serverThreadHasMessages || !draftThread) {
+    if (!threadRef || !serverThreadStarted || !draftThread) {
       return;
     }
     finalizePromotedDraftThreadByRef(threadRef);
-  }, [draftThread, serverThreadHasMessages, threadRef]);
+  }, [draftThread, serverThreadStarted, threadRef]);
 
-  if (!threadRef || !bootstrapComplete || !routeThreadExists) {
+  if (!threadRef) {
     return null;
   }
 
   return (
     <SidebarInset className="h-svh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground md:h-dvh">
-      <ChatView
-        environmentId={threadRef.environmentId}
-        threadId={threadRef.threadId}
-        routeKind="server"
-      />
+      {renderState === "ready" || (renderState === "loading" && serverThreadShell !== null) ? (
+        <ChatView
+          environmentId={threadRef.environmentId}
+          threadId={threadRef.threadId}
+          routeKind="server"
+          threadSyncPhase={threadSyncPhase}
+        />
+      ) : null}
     </SidebarInset>
   );
 }

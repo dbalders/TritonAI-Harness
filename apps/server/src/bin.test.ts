@@ -6,12 +6,18 @@ import * as NodePath from "node:path";
 
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { EnvironmentOrchestrationHttpApi } from "@t3tools/contracts";
+import {
+  CommandId,
+  EnvironmentOrchestrationHttpApi,
+  ProviderInstanceId,
+  ThreadId,
+} from "@t3tools/contracts";
 import * as NetService from "@t3tools/shared/Net";
 import * as SecretEnvelope from "@t3tools/shared/secretEnvelope";
 import { assert, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
+import * as DateTime from "effect/DateTime";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -26,6 +32,7 @@ import { Command } from "effect/unstable/cli";
 import { cli, makeCli } from "./bin.ts";
 import * as ServerConfig from "./config.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
 import { orchestrationHttpApiLayer } from "./orchestration/http.ts";
 import { layerConfig as SqlitePersistenceLayerLive } from "./persistence/Layers/Sqlite.ts";
@@ -155,6 +162,7 @@ const makeCliTestServerConfig = (baseDir: string) =>
       ...derivedPaths,
       staticDir: undefined,
       devUrl: undefined,
+      devAllowedOrigins: [],
       noBrowser: true,
       startupPresentation: "browser",
       desktopBootstrapToken: undefined,
@@ -267,12 +275,24 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
         assert.fail(`Expected ShowHelp, got ${error._tag}`);
       }
       assert.deepEqual(error.commandPath, ["t3", "connect"]);
-      assert.include(error.errors[0]?.message ?? "", "missing T3 Connect public configuration");
+      assert.include(
+        error.errors[0]?.message ?? "",
+        "missing TritonAI Connect public configuration",
+      );
 
       const output = (yield* TestConsole.errorLines).join("\n");
       assert.include(output, "ERROR");
-      assert.include(output, "missing T3 Connect public configuration");
+      assert.include(output, "missing TritonAI Connect public configuration");
     }).pipe(Effect.provide(Layer.mergeAll(CliRuntimeLayer, TestConsole.layer))),
+  );
+
+  it.effect("does not expose upstream public-package service commands", () =>
+    Effect.gen(function* () {
+      const { output } = yield* captureStdout(runCli(["--help"], noConnectCli));
+
+      assert.notInclude(output, "Manage the TritonAI Harness background service.");
+      assert.notInclude(output, "service  ");
+    }),
   );
 
   it.effect("reports fresh headless connect state without requiring local configuration", () =>
@@ -309,14 +329,17 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
         runConnectCli(["connect", "status", "--base-dir", baseDir]),
       );
 
-      assert.include(output, "T3 Connect\n  Exposure: disabled");
+      assert.include(output, "TritonAI Connect\n  Exposure: disabled");
       assert.include(output, "  Authorization: missing");
       assert.include(output, "  Environment link: not provisioned");
-      assert.include(output, "Next: Run `t3 connect link` to authorize and enable T3 Connect.");
+      assert.include(
+        output,
+        "Next: Run `t3 connect link` to authorize and enable TritonAI Connect.",
+      );
     }),
   );
 
-  it.effect("logs in to headless connect without enabling access", () =>
+  it.effect("accepts the --headless login override without enabling access", () =>
     Effect.gen(function* () {
       const baseDir = NodeFS.mkdtempSync(
         NodePath.join(NodeOS.tmpdir(), "t3-cli-cloud-login-test-"),
@@ -334,7 +357,7 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
       );
 
       const login = yield* captureStdout(
-        runConnectCli(["connect", "login", "--base-dir", baseDir]),
+        runConnectCli(["connect", "login", "--base-dir", baseDir, "--headless"]),
       );
       const status = yield* captureStdout(
         runConnectCli(["connect", "status", "--base-dir", baseDir, "--json"]),
@@ -345,7 +368,7 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
         readonly authenticated: boolean;
       };
 
-      assert.equal(login.output, "Signed in to T3 Connect.");
+      assert.equal(login.output, "✓ Signed in");
       assert.isFalse(decoded.desired);
       assert.isTrue(decoded.authenticated);
     }),
@@ -360,7 +383,7 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
         runConnectCli(["connect", "unlink", "--base-dir", baseDir]),
       );
 
-      assert.equal(output, "T3 Connect is disabled locally.");
+      assert.equal(output, "TritonAI Connect is disabled locally.");
     }),
   );
 
@@ -378,7 +401,7 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
         runConnectCli(["connect", "logout", "--base-dir", baseDir]),
       );
 
-      assert.equal(output, "Signed out of T3 Connect locally.");
+      assert.equal(output, "Signed out of TritonAI Connect locally.");
       assert.isFalse(NodeFS.existsSync(tokenPath));
     }),
   );
@@ -537,6 +560,63 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
         (project) => project.id === addedProject?.id,
       );
       assert.isTrue((removedProject?.deletedAt ?? null) !== null);
+    }),
+  );
+
+  it.effect("force removes projects that still contain threads", () =>
+    Effect.gen(function* () {
+      const baseDir = NodeFS.mkdtempSync(
+        NodePath.join(NodeOS.tmpdir(), "t3-cli-projects-force-remove-test-"),
+      );
+      const workspaceRoot = NodeFS.mkdtempSync(
+        NodePath.join(NodeOS.tmpdir(), "t3-cli-projects-force-remove-workspace-"),
+      );
+
+      yield* runCliWithRuntime(["project", "add", workspaceRoot, "--base-dir", baseDir]);
+      const afterAdd = yield* readPersistedSnapshot(baseDir);
+      const project = afterAdd.projects.find(
+        (candidate) => candidate.workspaceRoot === workspaceRoot && candidate.deletedAt === null,
+      );
+      assert.isTrue(project !== undefined);
+
+      const config = yield* makeCliTestServerConfig(baseDir);
+      yield* Effect.gen(function* () {
+        const engine = yield* OrchestrationEngine.OrchestrationEngineService;
+        yield* engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make("cmd-cli-force-remove-thread"),
+          threadId: ThreadId.make("thread-cli-force-remove"),
+          projectId: project!.id,
+          title: "Thread",
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5-codex",
+          },
+          interactionMode: "default",
+          runtimeMode: "approval-required",
+          branch: null,
+          worktreePath: null,
+          createdAt: DateTime.formatIso(yield* DateTime.now),
+        });
+      }).pipe(Effect.provide(makeProjectPersistenceLayer(config)));
+
+      yield* runCliWithRuntime([
+        "project",
+        "remove",
+        project!.id,
+        "--force",
+        "--base-dir",
+        baseDir,
+      ]);
+      const afterRemove = yield* readPersistedSnapshot(baseDir);
+      assert.isTrue(
+        (afterRemove.projects.find((candidate) => candidate.id === project!.id)?.deletedAt ??
+          null) !== null,
+      );
+      assert.isTrue(
+        (afterRemove.threads.find((thread) => thread.id === "thread-cli-force-remove")?.deletedAt ??
+          null) !== null,
+      );
     }),
   );
 

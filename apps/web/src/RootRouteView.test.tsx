@@ -36,6 +36,10 @@ vi.mock("./components/SlowRpcRequestToastCoordinator", () => ({
   SlowRpcRequestToastCoordinator: () => null,
 }));
 
+vi.mock("./components/TritonAiUsageWarning", () => ({
+  TritonAiUsageWarning: () => <div data-triton-ai-usage-warning />,
+}));
+
 vi.mock("./components/ui/toast", () => ({
   AnchoredToastProvider: ({ children }: { children: React.ReactNode }) => children,
   ToastProvider: ({ children }: { children: React.ReactNode }) => children,
@@ -77,6 +81,17 @@ vi.mock("./components/ProviderUpdateLaunchNotification", () => ({
 }));
 
 import { Route } from "./routes/__root";
+
+it("renders the TritonAI usage warning for an authenticated root", () => {
+  const RootRouteView = Route.options.component;
+  if (!RootRouteView) {
+    throw new Error("Root route component is missing");
+  }
+
+  const markup = renderToStaticMarkup(<RootRouteView />);
+
+  expect(markup).toContain("data-triton-ai-usage-warning");
+});
 
 it("does not render provider update launch notifications for an authenticated root", () => {
   const RootRouteView = Route.options.component;

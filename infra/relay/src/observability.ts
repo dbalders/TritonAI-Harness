@@ -1,6 +1,7 @@
 import * as Alchemy from "alchemy";
 import * as Axiom from "alchemy/Axiom";
 import * as Output from "alchemy/Output";
+import { TRITONAI_APP_BASE_NAME } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -9,7 +10,7 @@ import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as Tracer from "effect/Tracer";
-import { OtlpSerialization, OtlpTracer } from "effect/unstable/observability";
+import { OtlpExporter, OtlpSerialization, OtlpTracer } from "effect/unstable/observability";
 
 import { relayResourceNameForStage } from "./deploymentConfig.ts";
 
@@ -29,7 +30,7 @@ export const RelayObservability = Effect.gen(function* () {
   const traces = yield* Axiom.Dataset("RelayTracesDataset", {
     name: relayResourceNameForStage("t3-code-relay-traces", stage),
     kind: "otel:traces:v1",
-    description: "T3 Code relay Worker HTTP request spans.",
+    description: `${TRITONAI_APP_BASE_NAME} relay Worker HTTP request spans.`,
     retentionDays: 30,
     useRetentionPeriod: true,
   });
@@ -44,7 +45,7 @@ export const RelayObservability = Effect.gen(function* () {
 
   const mobileIngestToken = yield* Axiom.ApiToken("RelayMobileAxiomIngestToken", {
     name: relayResourceNameForStage("t3-code-mobile-otel-ingest", stage),
-    description: "Owned by Alchemy. Scoped OTLP ingest token for T3 Code mobile spans.",
+    description: `Owned by Alchemy. Scoped OTLP ingest token for ${TRITONAI_APP_BASE_NAME} mobile spans.`,
     datasetCapabilities: Output.map(traces.name, (dataset) => ({
       [dataset]: { ingest: ["create" as const] },
     })),
@@ -234,4 +235,4 @@ export const makeRelayTraceLayer = (input: {
       },
       exportInterval: "1 second",
     }).pipe(Effect.map(withSchemaErrorAttributes)),
-  ).pipe(Layer.provide(OtlpSerialization.layerJson));
+  ).pipe(Layer.provideMerge(OtlpExporter.layerFlusher), Layer.provide(OtlpSerialization.layerJson));

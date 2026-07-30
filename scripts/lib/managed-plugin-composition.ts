@@ -5,6 +5,8 @@ import * as NodePath from "node:path";
 import * as NodeUtil from "node:util";
 
 import { validateIntegrationManifest } from "@t3tools/contracts";
+import { resolvePluginHostRuntimeDependencies } from "@t3tools/shared/pluginHostRuntime";
+import effectPackageJson from "effect/package.json" with { type: "json" };
 
 export const MANAGED_PLUGIN_COMPOSITION_KIND = "tritonai-harness-plugin-composition";
 export const MANAGED_PLUGIN_COMPOSITION_VERSION = 1;
@@ -246,6 +248,13 @@ function validatePackage(
   assertRecord(packageJson, `Managed plugin ${id} package.json`);
   if (packageJson.name !== name || packageJson.version !== version) {
     throw new Error(`Managed plugin ${id} package.json does not match its composition proof.`);
+  }
+  try {
+    resolvePluginHostRuntimeDependencies(packageJson, effectPackageJson.version);
+  } catch (error) {
+    throw new Error(`Managed plugin ${id} has an incompatible host runtime contract.`, {
+      cause: error,
+    });
   }
   const manifest = validateIntegrationManifest(
     JSON.parse(

@@ -122,6 +122,16 @@ function mapPluginSource(source: CodexSchema.V2PluginListResponse__PluginSource)
         ...(sha !== undefined ? { sha } : {}),
       };
     }
+    case "npm": {
+      const registry = nonEmpty(source.registry);
+      const version = nonEmpty(source.version);
+      return {
+        type: "npm" as const,
+        package: source.package,
+        ...(registry !== undefined ? { registry } : {}),
+        ...(version !== undefined ? { version } : {}),
+      };
+    }
     case "remote": {
       return { type: "remote" as const };
     }

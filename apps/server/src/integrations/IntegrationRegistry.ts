@@ -41,6 +41,7 @@ import {
 import {
   decodeIntegrationToolInput,
   integrationToolJsonSchema,
+  prepareIntegrationToolInput,
   type IntegrationProviderTool,
 } from "./IntegrationTool.ts";
 
@@ -790,6 +791,9 @@ export class RegistryRuntime {
       );
     }
     for (const definition of providerTools) {
+      // Compile externally supplied schemas at registration so an incompatible host runtime
+      // fails before any plugin tool is advertised.
+      prepareIntegrationToolInput(definition);
       const inputSchema = integrationToolJsonSchema(definition);
       const manifestTool = manifest.tools.find(({ name }) => name === definition.name)!;
       if (

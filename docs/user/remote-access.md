@@ -1,6 +1,6 @@
 # Remote Access
 
-Use this when you want to connect to a T3 Code server from another device such as a phone, tablet, or separate desktop app.
+Use this when you want to connect to a TritonAI Harness server from another device such as a phone, tablet, or separate desktop app.
 
 ## Recommended Setup
 
@@ -57,53 +57,13 @@ The Tailscale support is an endpoint provider add-on. The core remote model stil
 
 For `https://app.t3.codes`, prefer an HTTPS Tailnet or other HTTPS endpoint. A plain `http://100.x.y.z:3773` endpoint can still work from a desktop client or another browser page served over HTTP, but it will not work from the hosted HTTPS app because of browser mixed-content rules.
 
-### Option 2: Headless Server (CLI)
+### Option 2: Desktop-Managed SSH Launch
 
-Use this when you want to run the server without a GUI, for example on a remote machine over SSH.
+Use this when you want the desktop app to start or reuse TritonAI Harness on another machine over SSH.
 
-Run the server with `t3 serve`.
-
-```bash
-npx t3 serve --host "$(tailscale ip -4)"
-```
-
-`t3 serve` starts the server without opening a browser and prints:
-
-- a connection string
-- a pairing token
-- a pairing URL
-- a QR code for the pairing URL
-
-From there, connect from another device in either of these ways:
-
-- scan the QR code on your phone
-- in the desktop app, enter the full pairing URL
-- in the desktop app, enter the host and token separately
-- in the hosted web app, open a hosted pairing URL when the backend is reachable over HTTPS
-
-Use `t3 serve --help` for the full flag reference. It supports the same general startup options as the normal server command, including an optional `cwd` argument.
-
-For hosted web pairing over Tailscale HTTPS, opt in to Tailscale Serve:
-
-```bash
-npx t3 serve --tailscale-serve
-```
-
-By default this configures Tailscale Serve on HTTPS port 443 and advertises
-`https://machine.tailnet.ts.net/`. Advanced users can choose a different HTTPS port:
-
-```bash
-npx t3 serve --tailscale-serve --tailscale-serve-port 8443
-```
-
-> Note
-> The GUIs do not currently support adding projects on remote environments.
-> For now, use `t3 project ...` on the server machine instead.
-> Full GUI support for remote project management is coming soon.
-
-### Option 3: Desktop-Managed SSH Launch
-
-Use this when you want the desktop app to start or reuse T3 Code on another machine over SSH.
+TritonAI Harness does not distribute a UCSD-managed public npm CLI. Do not use `npx t3`; that
+installs the upstream T3 Code package. Headless servers must be provisioned through an approved
+managed process. See the [Background Service Distribution Policy](./background-service.md).
 
 1. Open **Settings** → **Connections**.
 2. Under **Remote Environments**, choose **Add environment**.
@@ -119,13 +79,13 @@ SSH launch is a desktop feature because it needs local process and SSH access. O
 
 The desktop SSH launcher connects with a non-interactive `sh` session, writes a small launcher script under `~/.t3/ssh-launch/<host-key>/`, starts or reuses a remote T3 server, and forwards the remote loopback port back to your desktop.
 
-The remote host must have a compatible Node.js runtime. T3 Code uses the server package's `engines.node` requirement:
+The remote host must have a compatible Node.js runtime. TritonAI Harness uses the server package's `engines.node` requirement:
 
 ```text
 ^22.16 || ^23.11 || >=24.10
 ```
 
-During SSH launch, T3 Code first checks whether `node` is already available on `PATH`. If it is missing, the launcher tries common non-interactive shell locations and version-manager shims/activation hooks:
+During SSH launch, TritonAI Harness first checks whether `node` is already available on `PATH`. If it is missing, the launcher tries common non-interactive shell locations and version-manager shims/activation hooks:
 
 - `~/.local/bin`, `~/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`, `/bin`
 - Volta via `~/.volta/bin`
@@ -136,7 +96,7 @@ During SSH launch, T3 Code first checks whether `node` is already available on `
 - nvm via `$NVM_DIR/nvm.sh`, then `nvm use default`, `nvm use node`, or `nvm use --lts`
 - installed nvm versions under `$NVM_DIR/versions/node/*/bin`
 
-If launch fails with `node: command not found`, a port-scan failure, or a message that the remote Node version does not satisfy the required range, SSH into the host and check the same non-interactive shell path T3 Code uses:
+If launch fails with `node: command not found`, a port-scan failure, or a message that the remote Node version does not satisfy the required range, SSH into the host and check the same non-interactive shell path TritonAI Harness uses:
 
 ```bash
 ssh user@example.com 'sh -lc "command -v node && node --version"'
@@ -151,6 +111,16 @@ nvm alias default 24
 With mise/asdf/fnm/nodenv, make sure the tool's shim directory is installed and points at a Node version satisfying the range above.
 
 If reconnecting after an app update fails, retry the SSH launch once. The launcher now compares its generated runner script, stops stale launcher-managed remote servers, clears the SSH launch PID/port state, and starts a fresh remote server. You should not normally need to delete `~/.t3/ssh-launch` or kill `t3` processes manually.
+
+## Updating a Remote Server
+
+When TritonAI Harness and a remote server use different versions, a warning appears in the
+conversation and in **Settings** → **Connections**. Automatic public-package replacement is disabled
+in TritonAI Harness. Update the server through the same approved managed process that provisioned
+it. See [Keeping TritonAI Harness Versions in Sync](./server-updates.md).
+
+The upstream Linux boot-service path is also disabled for the downstream distribution. See the
+[Background Service Distribution Policy](./background-service.md).
 
 ## How Pairing Works
 
@@ -176,7 +146,7 @@ Use hosted pairing when the backend is reachable from the browser over HTTPS/WSS
 
 Do not use hosted pairing for plain HTTP LAN URLs such as `http://192.168.x.y:3773`. Browsers block an HTTPS page from connecting to an insecure HTTP or WS backend. For those endpoints, use the direct pairing URL shown by the desktop app or CLI from a client that can open that HTTP URL directly.
 
-Hosted pairing does not proxy traffic through T3 Code. The browser still connects directly to the backend URL in the pairing link.
+Hosted pairing does not proxy traffic through TritonAI Harness. The browser still connects directly to the backend URL in the pairing link.
 
 ## Managing Access Later
 

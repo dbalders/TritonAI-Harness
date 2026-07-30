@@ -331,6 +331,19 @@ In all of those cases, the `ExecutionEnvironment` is the same kind of thing.
 
 Only the launch and access paths differ.
 
+## Version Coordination
+
+Remote environments may stay online while web, desktop, or mobile clients move to a newer release.
+The environment descriptor therefore carries the running server version and retains the upstream
+replacement capability for protocol compatibility.
+
+TritonAI Harness filters public-package replacement capabilities. A desktop-managed backend points
+the user to the owning desktop app, while other servers show informational version-skew guidance
+without an automatic or copied npm update action.
+
+See [Server Update Architecture](./server-updates.md) for capability filtering, downstream distribution safety,
+and restart sequencing.
+
 ## Security model
 
 Remote support must assume that some environments will be reachable over untrusted networks.

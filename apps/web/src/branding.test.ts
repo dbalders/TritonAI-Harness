@@ -3,6 +3,8 @@ import {
   formatAppDisplayName,
   resolveServerBackedAppDisplayName,
   resolveServerBackedAppStageLabel,
+  resolveSidebarV2Default,
+  resolveSidebarV2Enabled,
 } from "./branding.logic";
 
 const originalWindow = globalThis.window;
@@ -49,6 +51,17 @@ describe("branding", () => {
     expect(branding.HOSTED_APP_CHANNEL_LABEL).toBe("Nightly");
     expect(branding.APP_STAGE_LABEL).toBe("Nightly");
     expect(branding.APP_DISPLAY_NAME).toBe("TritonAI Harness (Nightly)");
+  });
+
+  it("does not label the latest hosted app channel", async () => {
+    vi.stubEnv("VITE_HOSTED_APP_CHANNEL", "latest");
+
+    const branding = await import("./branding");
+
+    expect(branding.HOSTED_APP_CHANNEL).toBe("latest");
+    expect(branding.HOSTED_APP_CHANNEL_LABEL).toBe("Latest");
+    expect(branding.APP_STAGE_LABEL).toBe("Latest");
+    expect(branding.APP_DISPLAY_NAME).toBe("TritonAI Harness");
   });
 
   it("ignores unknown hosted app channels", async () => {
@@ -111,5 +124,72 @@ describe("branding logic", () => {
         primaryServerVersion: "0.0.28-nightly.20260616",
       }),
     ).toBe("TritonAI Harness");
+  });
+});
+
+describe("resolveSidebarV2Default", () => {
+  it.each(["Nightly", "Dev", "Alpha", "Latest", ""])("enables the beta for %s builds", (stage) => {
+    expect(resolveSidebarV2Default(stage)).toBe(true);
+  });
+});
+
+describe("resolveSidebarV2Enabled", () => {
+  const hydrated = { settingsHydrated: true } as const;
+
+  it.each(["Alpha", "Latest"])(
+    "keeps a legacy opt-in on %s builds even without the companion flag",
+    (stageLabel) => {
+      // `true` was never the schema default, so it can only be an explicit
+      // opt-in from settings written before `sidebarV2ConfiguredByUser` existed.
+      expect(
+        resolveSidebarV2Enabled({
+          ...hydrated,
+          enabled: true,
+          configuredByUser: false,
+          stageLabel,
+        }),
+      ).toBe(true);
+    },
+  );
+
+  it("applies the enabled default when the beta was never configured", () => {
+    expect(
+      resolveSidebarV2Enabled({
+        ...hydrated,
+        enabled: false,
+        configuredByUser: false,
+        stageLabel: "Nightly",
+      }),
+    ).toBe(true);
+    expect(
+      resolveSidebarV2Enabled({
+        ...hydrated,
+        enabled: false,
+        configuredByUser: false,
+        stageLabel: "Latest",
+      }),
+    ).toBe(true);
+  });
+
+  it("honors an explicit opt-out over the stage default", () => {
+    expect(
+      resolveSidebarV2Enabled({
+        ...hydrated,
+        enabled: false,
+        configuredByUser: true,
+        stageLabel: "Nightly",
+      }),
+    ).toBe(false);
+  });
+
+  it("holds v1 until settings hydrate so the sidebar does not remount", () => {
+    expect(
+      resolveSidebarV2Enabled({
+        enabled: true,
+        configuredByUser: true,
+        settingsHydrated: false,
+        stageLabel: "Nightly",
+      }),
+    ).toBe(false);
   });
 });

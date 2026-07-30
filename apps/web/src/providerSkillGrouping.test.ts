@@ -6,6 +6,7 @@ import type {
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  dedupeProviderSkillRows,
   groupProviderSkills,
   isProviderSkillMutationBlocked,
   type ProviderSkillRow,
@@ -20,6 +21,25 @@ function row(name: string): ProviderSkillRow {
   return {
     provider,
     skill: { name, path: `/tmp/skills/${name}/SKILL.md`, enabled: true },
+  };
+}
+
+function providerRow(input: {
+  readonly instanceId: string;
+  readonly name: string;
+  readonly path: string;
+  readonly enabled?: boolean;
+}): ProviderSkillRow {
+  return {
+    provider: {
+      ...provider,
+      instanceId: input.instanceId as ProviderInstanceId,
+    },
+    skill: {
+      name: input.name,
+      path: input.path,
+      enabled: input.enabled ?? true,
+    },
   };
 }
 
@@ -39,6 +59,38 @@ function entry(
 }
 
 describe("groupProviderSkills", () => {
+  it("deduplicates provider snapshots that point to the same skill file", () => {
+    const path = "/tmp/skills/ucsd-dsmlp-deploy/SKILL.md";
+    const cloud = providerRow({
+      instanceId: "tritonai-cloud",
+      name: "ucsd-dsmlp-deploy",
+      path,
+      enabled: false,
+    });
+    const onPrem = providerRow({
+      instanceId: "tritonai-on-prem",
+      name: "ucsd-dsmlp-deploy",
+      path,
+    });
+
+    expect(dedupeProviderSkillRows([cloud, onPrem])).toEqual([onPrem]);
+  });
+
+  it("keeps same-named skills when they have different paths", () => {
+    const cloud = providerRow({
+      instanceId: "tritonai-cloud",
+      name: "ucsd-dsmlp-deploy",
+      path: "/tmp/cloud/skills/ucsd-dsmlp-deploy/SKILL.md",
+    });
+    const onPrem = providerRow({
+      instanceId: "tritonai-on-prem",
+      name: "ucsd-dsmlp-deploy",
+      path: "/tmp/on-prem/skills/ucsd-dsmlp-deploy/SKILL.md",
+    });
+
+    expect(dedupeProviderSkillRows([cloud, onPrem])).toEqual([cloud, onPrem]);
+  });
+
   it("keeps secure managed skills in AI Team and arbitrary local skills in Other", () => {
     const managed = row("secure-review");
     const publicInstalled = row("tritonai-feedback");

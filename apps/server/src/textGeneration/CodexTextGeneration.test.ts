@@ -43,6 +43,8 @@ function makeFakeCodexBinary(
     requireReasoningEffort?: string;
     requireTritonAiProviderConfig?: boolean;
     forbidReasoningEffort?: boolean;
+    requireArg?: string;
+    forbidArg?: string;
     stdinMustContain?: string;
     stdinMustNotContain?: string;
   },
@@ -58,6 +60,7 @@ function makeFakeCodexBinary(
       codexPath,
       [
         "#!/bin/sh",
+        'original_args="$*"',
         'output_path=""',
         'seen_image="0"',
         'seen_service_tier=""',
@@ -131,6 +134,22 @@ function makeFakeCodexBinary(
         "  shift",
         "done",
         'stdin_content="$(cat)"',
+        ...(input.requireArg !== undefined
+          ? [
+              `case " $original_args " in *" ${input.requireArg} "*) ;; *)`,
+              `  printf "%s\\n" "missing arg: ${input.requireArg}" >&2`,
+              `  exit 8`,
+              "esac",
+            ]
+          : []),
+        ...(input.forbidArg !== undefined
+          ? [
+              `case " $original_args " in *" ${input.forbidArg} "*)`,
+              `  printf "%s\\n" "forbidden arg: ${input.forbidArg}" >&2`,
+              `  exit 9`,
+              "esac",
+            ]
+          : []),
         ...(input.requireImage
           ? [
               'if [ "$seen_image" != "1" ]; then',
@@ -248,8 +267,12 @@ function withFakeCodexEnv<A, E, R>(
     requireReasoningEffort?: string;
     requireTritonAiProviderConfig?: boolean;
     forbidReasoningEffort?: boolean;
+    requireArg?: string;
+    forbidArg?: string;
     stdinMustContain?: string;
     stdinMustNotContain?: string;
+    launchArgs?: string;
+    environment?: NodeJS.ProcessEnv;
     configOverrides?: Partial<CodexSettings>;
   },
   effectFn: (textGeneration: TextGeneration.TextGeneration["Service"]) => Effect.Effect<A, E, R>,
@@ -258,8 +281,12 @@ function withFakeCodexEnv<A, E, R>(
     const fs = yield* FileSystem.FileSystem;
     const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3code-codex-text-" });
     const codexPath = yield* makeFakeCodexBinary(tempDir, input);
-    const config = decodeCodexSettings({ ...input.configOverrides, binaryPath: codexPath });
-    const textGeneration = yield* makeCodexTextGeneration(config);
+    const config = decodeCodexSettings({
+      ...input.configOverrides,
+      binaryPath: codexPath,
+      launchArgs: input.launchArgs,
+    });
+    const textGeneration = yield* makeCodexTextGeneration(config, input.environment);
     return yield* effectFn(textGeneration);
   }).pipe(Effect.scoped);
 }
@@ -319,6 +346,51 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGeneration", (it) => {
             ]),
           }),
       ),
+  );
+
+  it.effect("passes exec-safe launch args into codex exec", () =>
+    withFakeCodexEnv(
+      {
+        output: JSON.stringify({
+          subject: "Add important change",
+          body: "",
+        }),
+        launchArgs: "--strict-config --listen off",
+        requireArg: "--strict-config",
+        forbidArg: "--listen",
+      },
+      (textGeneration) =>
+        textGeneration.generateCommitMessage({
+          cwd: process.cwd(),
+          branch: "feature/codex-effect",
+          stagedSummary: "M README.md",
+          stagedPatch: "diff --git a/README.md b/README.md",
+          modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+        }),
+    ),
+  );
+
+  it.effect("uses T3CODE_CODEX_LAUNCH_ARGS for codex exec over settings", () =>
+    withFakeCodexEnv(
+      {
+        output: JSON.stringify({
+          subject: "Add important change",
+          body: "",
+        }),
+        launchArgs: "--enable settings-feature",
+        environment: { T3CODE_CODEX_LAUNCH_ARGS: " --strict-config --listen off " },
+        requireArg: "--strict-config",
+        forbidArg: "settings-feature",
+      },
+      (textGeneration) =>
+        textGeneration.generateCommitMessage({
+          cwd: process.cwd(),
+          branch: "feature/codex-effect",
+          stagedSummary: "M README.md",
+          stagedPatch: "diff --git a/README.md b/README.md",
+          modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+        }),
+    ),
   );
 
   it.effect("defaults git text generation codex effort to low", () =>
