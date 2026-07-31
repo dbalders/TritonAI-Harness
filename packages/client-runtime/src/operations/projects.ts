@@ -29,7 +29,11 @@ export type AddProjectRemoteSource = AddProjectRemoteProviderKind | "url";
 
 export type AddProjectRemoteSourceReadiness = Record<
   AddProjectRemoteSource,
-  { readonly ready: boolean; readonly hint: string | null }
+  {
+    readonly visible: boolean;
+    readonly ready: boolean;
+    readonly hint: string | null;
+  }
 >;
 
 export type AddProjectCloneFlow =
@@ -102,7 +106,7 @@ export function sortAddProjectProviderSources(
   readinessBySource: AddProjectRemoteSourceReadiness,
 ): ReadonlyArray<AddProjectRemoteProviderKind> {
   return Arr.sort(
-    ADD_PROJECT_REMOTE_PROVIDER_SOURCES,
+    ADD_PROJECT_REMOTE_PROVIDER_SOURCES.filter((source) => readinessBySource[source].visible),
     Order.mapInput(
       Order.Struct({
         ready: Order.flip(Order.Boolean),
@@ -120,11 +124,12 @@ export function buildAddProjectRemoteSourceReadiness(
   discovery: SourceControlDiscoveryResult | null,
 ): AddProjectRemoteSourceReadiness {
   const unavailable = {
+    visible: false,
     ready: false,
     hint: "Provider status unavailable. Open Source Control settings and rescan.",
   } as const;
   const readiness: AddProjectRemoteSourceReadiness = {
-    url: { ready: true, hint: null },
+    url: { visible: true, ready: true, hint: null },
     github: unavailable,
     gitlab: unavailable,
     bitbucket: unavailable,
@@ -147,11 +152,16 @@ export function buildAddProjectRemoteSourceReadiness(
       continue;
     }
     if (provider.status !== "available") {
-      readiness[source] = { ready: false, hint: provider.installHint };
+      readiness[source] = {
+        visible: false,
+        ready: false,
+        hint: provider.installHint,
+      };
       continue;
     }
     if (provider.auth.status === "unauthenticated") {
       readiness[source] = {
+        visible: true,
         ready: false,
         hint:
           Option.getOrNull(provider.auth.detail) ??
@@ -159,7 +169,7 @@ export function buildAddProjectRemoteSourceReadiness(
       };
       continue;
     }
-    readiness[source] = { ready: true, hint: null };
+    readiness[source] = { visible: true, ready: true, hint: null };
   }
   return readiness;
 }

@@ -102,14 +102,14 @@ import {
   RECENT_THREAD_LIMIT,
 } from "./CommandPalette.logic";
 import {
+  addProjectRemoteSourceLabel as remoteProjectSourceLabel,
+  addProjectRemoteSourcePathHint as remoteProjectSourcePathHint,
   buildAddProjectRemoteSourceReadiness,
-  remoteProjectSourceLabel,
-  remoteProjectSourcePathHint,
   sortAddProjectProviderSources,
   type AddProjectRemoteProviderKind,
   type AddProjectRemoteSource,
   type AddProjectRemoteSourceReadiness,
-} from "./CommandPalette.sourceControl";
+} from "@t3tools/client-runtime/operations/projects";
 import { orderItemsByPreferredIds, sortLogicalProjectsForSidebar } from "./Sidebar.logic";
 import { resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
 import { CommandPaletteResults } from "./CommandPaletteResults";

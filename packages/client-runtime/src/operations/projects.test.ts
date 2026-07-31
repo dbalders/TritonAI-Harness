@@ -47,7 +47,7 @@ describe("add project shared logic", () => {
     ).toEqual({ ok: true, path: "/work/next" });
   });
 
-  it("marks authenticated source control providers as ready", () => {
+  it("shows ready and setup-required providers while hiding unavailable providers", () => {
     const discovery: SourceControlDiscoveryResult = {
       versionControlSystems: [],
       sourceControlProviders: [
@@ -66,27 +66,68 @@ describe("add project shared logic", () => {
           },
         },
         {
-          kind: "gitlab",
-          label: "GitLab",
+          kind: "bitbucket",
+          label: "Bitbucket",
           status: "available",
-          installHint: "Install glab",
-          version: Option.some("1.0.0"),
+          installHint: "Configure Bitbucket",
+          version: Option.none(),
           detail: Option.none(),
           auth: {
             status: "unauthenticated",
             account: Option.none(),
+            host: Option.some("bitbucket.org"),
+            detail: Option.some("Configure Bitbucket credentials"),
+          },
+        },
+        {
+          kind: "gitlab",
+          label: "GitLab",
+          status: "missing",
+          installHint: "Install glab",
+          version: Option.none(),
+          detail: Option.none(),
+          auth: {
+            status: "unknown",
+            account: Option.none(),
             host: Option.none(),
-            detail: Option.some("Run glab auth login"),
+            detail: Option.none(),
+          },
+        },
+        {
+          kind: "azure-devops",
+          label: "Azure DevOps",
+          status: "missing",
+          installHint: "Install az",
+          version: Option.none(),
+          detail: Option.none(),
+          auth: {
+            status: "unknown",
+            account: Option.none(),
+            host: Option.none(),
+            detail: Option.none(),
           },
         },
       ],
     };
 
     const readiness = buildAddProjectRemoteSourceReadiness(discovery);
-    expect(readiness.url.ready).toBe(true);
-    expect(readiness.github.ready).toBe(true);
-    expect(readiness.gitlab).toEqual({ ready: false, hint: "Run glab auth login" });
-    expect(sortAddProjectProviderSources(readiness)[0]).toBe("github");
+    expect(readiness.url).toEqual({ visible: true, ready: true, hint: null });
+    expect(readiness.github).toEqual({ visible: true, ready: true, hint: null });
+    expect(readiness.bitbucket).toEqual({
+      visible: true,
+      ready: false,
+      hint: "Configure Bitbucket credentials",
+    });
+    expect(readiness.gitlab.visible).toBe(false);
+    expect(readiness["azure-devops"].visible).toBe(false);
+    expect(sortAddProjectProviderSources(readiness)).toEqual(["github", "bitbucket"]);
+  });
+
+  it("does not imply provider readiness before discovery", () => {
+    const readiness = buildAddProjectRemoteSourceReadiness(null);
+
+    expect(readiness.url).toEqual({ visible: true, ready: true, hint: null });
+    expect(sortAddProjectProviderSources(readiness)).toEqual([]);
   });
 
   it("finds existing projects by normalized path in the target environment", () => {
