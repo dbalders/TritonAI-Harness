@@ -34,6 +34,12 @@ describe("isSourceControlProviderReady", () => {
         auth: { ...readyProvider.auth, status: "unauthenticated" },
       }),
     ).toBe(false);
+    expect(
+      isSourceControlProviderReady({
+        ...readyProvider,
+        auth: { ...readyProvider.auth, status: "unknown" },
+      }),
+    ).toBe(false);
   });
 });
 

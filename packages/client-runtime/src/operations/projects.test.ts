@@ -100,7 +100,7 @@ describe("add project shared logic", () => {
           version: Option.some("1.0.0"),
           detail: Option.none(),
           auth: {
-            status: "unknown",
+            status: "authenticated",
             account: Option.none(),
             host: Option.none(),
             detail: Option.none(),
@@ -109,7 +109,7 @@ describe("add project shared logic", () => {
       ],
     };
 
-    expect(listAddProjectRemoteSources(discovery)).toEqual(["url", "github"]);
+    expect(listAddProjectRemoteSources(discovery)).toEqual(["url", "azure-devops", "github"]);
   });
 
   it("does not imply provider readiness before discovery", () => {
