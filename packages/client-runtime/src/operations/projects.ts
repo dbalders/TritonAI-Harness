@@ -7,6 +7,7 @@ import type {
   SourceControlProviderKind,
   SourceControlRepositoryInfo,
 } from "@t3tools/contracts";
+import { isSourceControlProviderReady } from "@t3tools/shared/sourceControl";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Order from "effect/Order";
@@ -151,21 +152,15 @@ export function buildAddProjectRemoteSourceReadiness(
       readiness[source] = unavailable;
       continue;
     }
-    if (provider.status !== "available") {
-      readiness[source] = {
-        visible: false,
-        ready: false,
-        hint: provider.installHint,
-      };
-      continue;
-    }
-    if (provider.auth.status !== "authenticated") {
+    if (!isSourceControlProviderReady(provider)) {
       readiness[source] = {
         visible: false,
         ready: false,
         hint:
-          Option.getOrNull(provider.auth.detail) ??
-          `${provider.label} is not ready. Open Source Control settings for setup guidance.`,
+          provider.status === "available"
+            ? (Option.getOrNull(provider.auth.detail) ??
+              `${provider.label} is not ready. Open Source Control settings for setup guidance.`)
+            : provider.installHint,
       };
       continue;
     }
