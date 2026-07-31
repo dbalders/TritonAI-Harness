@@ -11,14 +11,17 @@ import effectPackageJson from "effect/package.json" with { type: "json" };
 export const MANAGED_PLUGIN_COMPOSITION_KIND = "tritonai-harness-plugin-composition";
 export const MANAGED_PLUGIN_COMPOSITION_VERSION = 1;
 export const PRODUCTION_PLUGIN_SOURCE_ENV = "TRITONAI_PLUGIN_COMPOSITION_SOURCE";
+export const PRODUCTION_PLUGIN_CONFIGURATION_ENV = "TRITONAI_PLUGIN_CONFIGURATION_JSON";
 
 const CANONICAL_PLUGIN_REPOSITORY = "https://github.com/dbalders/TritonAI-Plugins.git";
 const MANAGED_PLUGIN_SOURCE_MANIFEST_FILE = "manifest.json";
-const SUPPORTED_PRODUCTION_PLUGIN_IDS = new Set(["microsoft-365"]);
+const MANAGED_PLUGIN_ID = /^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$/u;
 const COMMIT = /^[a-f0-9]{40}$/u;
 const SHA256 = /^[a-f0-9]{64}$/u;
 const SAFE_REF = /^refs\/(?:heads|tags)\/[A-Za-z0-9][A-Za-z0-9._/-]{0,180}$/u;
 const STABLE_SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
+const MAX_PLUGIN_ID_LENGTH = 64;
+const MAX_PLUGIN_CONFIGURATION_BYTES = 16 * 1024;
 const MAX_PLUGIN_FILES = 512;
 const MAX_PLUGIN_DIRECTORIES = 256;
 const MAX_PLUGIN_FILE_BYTES = 8 * 1024 * 1024;
@@ -52,6 +55,10 @@ export interface ManagedPluginComposition {
   };
   readonly packages: ReadonlyArray<ManagedPluginPackage>;
 }
+
+export type ManagedPluginConfiguration = Readonly<
+  Record<string, Readonly<Record<string, unknown>>>
+>;
 
 export interface ManagedPluginArtifact {
   readonly fileName: string;
@@ -92,6 +99,35 @@ function assertOnlyKeys(
   }
 }
 
+function assertProviderlessRuntimeMetadata(
+  packageJson: Record<string, unknown>,
+  pluginId: string,
+): void {
+  const dependencyMetadata = [
+    packageJson.dependencies,
+    packageJson.peerDependencies,
+    packageJson.optionalDependencies,
+  ];
+  const bundledMetadata = [packageJson.bundledDependencies, packageJson.bundleDependencies];
+  if (
+    dependencyMetadata.some(
+      (value) =>
+        value !== undefined &&
+        (!value ||
+          typeof value !== "object" ||
+          Array.isArray(value) ||
+          Object.keys(value).length > 0),
+    ) ||
+    bundledMetadata.some(
+      (value) => value !== undefined && (!Array.isArray(value) || value.length > 0),
+    )
+  ) {
+    throw new Error(
+      `Managed plugin ${pluginId} cannot declare runtime metadata without a provider.`,
+    );
+  }
+}
+
 function isSafeRelativePath(value: unknown): value is string {
   if (typeof value !== "string" || !value || !/^[\x20-\x7e]+$/u.test(value)) return false;
   if (
@@ -102,7 +138,12 @@ function isSafeRelativePath(value: unknown): value is string {
   ) {
     return false;
   }
-  return value.split("/").every((segment) => segment && segment !== "." && segment !== "..");
+  return value
+    .split("/")
+    .every(
+      (segment) =>
+        segment && segment !== "." && segment !== ".." && segment.toLowerCase() !== "node_modules",
+    );
 }
 
 function sha256(contents: NodeJS.ArrayBufferView): string {
@@ -187,8 +228,8 @@ function validatePackage(
   assertRecord(value, "Managed plugin package");
   assertOnlyKeys(value, ["id", "name", "version", "digest", "files"], "Managed plugin package");
   const { id, name, version, digest, files } = value;
-  if (typeof id !== "string" || !SUPPORTED_PRODUCTION_PLUGIN_IDS.has(id)) {
-    throw new Error(`Managed plugin package is not build-allowlisted: ${String(id)}.`);
+  if (typeof id !== "string" || id.length > MAX_PLUGIN_ID_LENGTH || !MANAGED_PLUGIN_ID.test(id)) {
+    throw new Error(`Managed plugin package has an invalid id: ${String(id)}.`);
   }
   if (id <= previousId) throw new Error("Managed plugin packages must be unique and sorted by id.");
   if (
@@ -249,13 +290,6 @@ function validatePackage(
   if (packageJson.name !== name || packageJson.version !== version) {
     throw new Error(`Managed plugin ${id} package.json does not match its composition proof.`);
   }
-  try {
-    resolvePluginHostRuntimeDependencies(packageJson, effectPackageJson.version);
-  } catch (error) {
-    throw new Error(`Managed plugin ${id} has an incompatible host runtime contract.`, {
-      cause: error,
-    });
-  }
   const manifest = validateIntegrationManifest(
     JSON.parse(
       NodeFS.readFileSync(NodePath.join(packageRoot, ".tritonai-plugin", "plugin.json"), "utf8"),
@@ -263,6 +297,17 @@ function validatePackage(
   );
   if (manifest.id !== id || manifest.version !== version) {
     throw new Error(`Managed plugin ${id} manifest does not match its composition proof.`);
+  }
+  if (manifest.provider === undefined) {
+    assertProviderlessRuntimeMetadata(packageJson, id);
+  } else {
+    try {
+      resolvePluginHostRuntimeDependencies(packageJson, effectPackageJson.version);
+    } catch (error) {
+      throw new Error(`Managed plugin ${id} has an incompatible host runtime contract.`, {
+        cause: error,
+      });
+    }
   }
   return { id, name, version, digest, files: normalizedFiles };
 }
@@ -361,23 +406,40 @@ export function loadManagedPluginCompositionFromEnvironment(
   return { root, composition: readManagedPluginComposition(root) };
 }
 
-export function assertManagedPluginBuildConfiguration(
+export function readManagedPluginBuildConfiguration(
   composition: ManagedPluginComposition,
   env: Readonly<Record<string, string | undefined>>,
-): void {
-  if (!composition.packages.some(({ id }) => id === "microsoft-365")) return;
-  const entraIdentifier =
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
-  for (const name of [
-    "TRITONAI_MICROSOFT_GRAPH_CLIENT_ID",
-    "TRITONAI_MICROSOFT_GRAPH_TENANT_ID",
-  ] as const) {
-    if (!entraIdentifier.test(env[name]?.trim() ?? "")) {
-      throw new Error(
-        `${name} must be a valid Entra identifier for a Microsoft 365 production composition.`,
-      );
-    }
+): ManagedPluginConfiguration {
+  const serialized = env[PRODUCTION_PLUGIN_CONFIGURATION_ENV]?.trim() ?? "";
+  if (!serialized) {
+    throw new Error(`${PRODUCTION_PLUGIN_CONFIGURATION_ENV} is required.`);
   }
+  if (Buffer.byteLength(serialized, "utf8") > MAX_PLUGIN_CONFIGURATION_BYTES) {
+    throw new Error(
+      `${PRODUCTION_PLUGIN_CONFIGURATION_ENV} exceeds the ${MAX_PLUGIN_CONFIGURATION_BYTES}-byte limit.`,
+    );
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(serialized) as unknown;
+  } catch {
+    throw new Error(`${PRODUCTION_PLUGIN_CONFIGURATION_ENV} must be valid JSON.`);
+  }
+  assertRecord(value, PRODUCTION_PLUGIN_CONFIGURATION_ENV);
+  const expectedIds = composition.packages.map(({ id }) => id);
+  const actualIds = Object.keys(value).toSorted(compareText);
+  if (!NodeUtil.isDeepStrictEqual(actualIds, expectedIds)) {
+    throw new Error(
+      `${PRODUCTION_PLUGIN_CONFIGURATION_ENV} keys must exactly match the composed plugin ids.`,
+    );
+  }
+  const normalized: Record<string, Readonly<Record<string, unknown>>> = Object.create(null);
+  for (const id of expectedIds) {
+    const configuration = value[id];
+    assertRecord(configuration, `${PRODUCTION_PLUGIN_CONFIGURATION_ENV}.${id}`);
+    normalized[id] = configuration;
+  }
+  return normalized;
 }
 
 async function sha512Base64(path: string): Promise<string> {

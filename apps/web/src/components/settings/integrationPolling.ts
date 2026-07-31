@@ -1,11 +1,16 @@
-import type { IntegrationDeviceCodeConnectResult } from "@t3tools/contracts";
+import type { IntegrationConnectResult } from "@t3tools/contracts";
 
-export type ScheduledIntegrationFlow = IntegrationDeviceCodeConnectResult & {
+export type PollingIntegrationFlow = Extract<
+  IntegrationConnectResult,
+  { readonly kind: "device_code" | "authorization_url" }
+>;
+
+export type ScheduledIntegrationFlow = PollingIntegrationFlow & {
   readonly nextPollAtMilliseconds: number;
 };
 
 export function scheduleIntegrationFlow(
-  flow: IntegrationDeviceCodeConnectResult,
+  flow: PollingIntegrationFlow,
   nowMilliseconds = Date.now(),
 ): ScheduledIntegrationFlow {
   const expiresAtMilliseconds = Date.parse(flow.expiresAt);
@@ -19,20 +24,33 @@ export function scheduleIntegrationFlow(
 }
 
 export function withIntegrationPollDelay(
-  flow: IntegrationDeviceCodeConnectResult,
+  flow: PollingIntegrationFlow,
   retryAfterSeconds: number | null,
-): IntegrationDeviceCodeConnectResult {
+): PollingIntegrationFlow {
   return retryAfterSeconds === null
     ? flow
     : { ...flow, intervalSeconds: Math.max(1, retryAfterSeconds) };
 }
 
 export function integrationFlowIsActive(
-  flow: IntegrationDeviceCodeConnectResult,
+  flow: PollingIntegrationFlow,
   nowMilliseconds: number,
 ): boolean {
   const expiresAt = Date.parse(flow.expiresAt);
   return Number.isFinite(expiresAt) && expiresAt > nowMilliseconds;
+}
+
+export function integrationFlowCanRetryAfterPollError(
+  flow: PollingIntegrationFlow,
+  nowMilliseconds: number,
+): boolean {
+  return flow.kind === "device_code" && integrationFlowIsActive(flow, nowMilliseconds);
+}
+
+export function integrationConnectResultNeedsPolling(
+  flow: IntegrationConnectResult,
+): flow is PollingIntegrationFlow {
+  return flow.kind === "device_code" || flow.kind === "authorization_url";
 }
 
 export function updateIntegrationFlowIfCurrent<Flow extends { readonly flowId: string }>(

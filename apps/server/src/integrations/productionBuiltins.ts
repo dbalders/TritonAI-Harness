@@ -6,7 +6,10 @@ import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 import * as NodeUtil from "node:util";
 
-import { resolvePluginHostRuntimeDependencies } from "@t3tools/shared/pluginHostRuntime";
+import {
+  type PluginPackageRuntimeMetadata,
+  resolvePluginHostRuntimeDependencies,
+} from "@t3tools/shared/pluginHostRuntime";
 import effectPackageJson from "effect/package.json" with { type: "json" };
 
 import type * as ServerSecretStore from "../auth/ServerSecretStore.ts";
@@ -15,8 +18,7 @@ import { scopeIntegrationSecretStore } from "./IntegrationSecretStore.ts";
 import { validateIntegrationManifest } from "./manifest.ts";
 
 declare const __TRITONAI_BUILD_PLUGIN_COMPOSITION__: unknown;
-declare const __TRITONAI_BUILD_MICROSOFT_GRAPH_CLIENT_ID__: string | undefined;
-declare const __TRITONAI_BUILD_MICROSOFT_GRAPH_TENANT_ID__: string | undefined;
+declare const __TRITONAI_BUILD_PLUGIN_CONFIGURATION__: unknown;
 
 interface CompositionFile {
   readonly path: string;
@@ -47,12 +49,11 @@ interface ProductionComposition {
   readonly packages: ReadonlyArray<CompositionPackage>;
 }
 
-interface Microsoft365Module {
-  readonly MICROSOFT_GRAPH_PROVIDER_ID: string;
-  readonly MicrosoftGraphProvider: new (
-    secrets: Parameters<typeof scopeIntegrationSecretStore>[0],
-    configuration: { readonly clientId: string; readonly tenantId: string },
-  ) => IntegrationProvider;
+interface IntegrationPluginModule {
+  readonly createIntegrationProvider?: (input: {
+    readonly secrets: ReturnType<typeof scopeIntegrationSecretStore>;
+    readonly configuration: unknown;
+  }) => IntegrationProvider;
   readonly manifest: unknown;
 }
 
@@ -61,22 +62,10 @@ const buildComposition =
     ? null
     : (__TRITONAI_BUILD_PLUGIN_COMPOSITION__ as ProductionComposition | null);
 
-function buildIdentifier(value: string | undefined): string {
-  return typeof value === "string" ? value.trim() : "";
-}
-
-const microsoftGraphConfiguration = {
-  clientId: buildIdentifier(
-    typeof __TRITONAI_BUILD_MICROSOFT_GRAPH_CLIENT_ID__ === "undefined"
-      ? undefined
-      : __TRITONAI_BUILD_MICROSOFT_GRAPH_CLIENT_ID__,
-  ),
-  tenantId: buildIdentifier(
-    typeof __TRITONAI_BUILD_MICROSOFT_GRAPH_TENANT_ID__ === "undefined"
-      ? undefined
-      : __TRITONAI_BUILD_MICROSOFT_GRAPH_TENANT_ID__,
-  ),
-};
+const buildConfiguration =
+  typeof __TRITONAI_BUILD_PLUGIN_CONFIGURATION__ === "undefined"
+    ? null
+    : (__TRITONAI_BUILD_PLUGIN_CONFIGURATION__ as Readonly<Record<string, unknown>> | null);
 
 function isSafeCompositionPath(value: string): boolean {
   return (
@@ -221,22 +210,53 @@ function runtimeDependencies(
   plugin: CompositionPackage,
   verifiedFiles: ReadonlyArray<DescribedCompositionFile>,
 ): ReturnType<typeof resolvePluginHostRuntimeDependencies> {
-  const packageJsonFile = verifiedFiles.find(({ path }) => path === "package.json");
-  if (!packageJsonFile) {
-    throw new Error(`Built-in plugin ${plugin.id} package.json is missing.`);
-  }
-  const packageJson = JSON.parse(Buffer.from(packageJsonFile.contents).toString("utf8")) as {
-    readonly dependencies?: unknown;
-    readonly peerDependencies?: unknown;
-    readonly optionalDependencies?: unknown;
-    readonly bundledDependencies?: unknown;
-  };
+  const packageJson = verifiedPackageRuntimeMetadata(plugin, verifiedFiles);
   try {
     return resolvePluginHostRuntimeDependencies(packageJson, effectPackageJson.version);
   } catch (error) {
     throw new Error(`Built-in plugin ${plugin.id} host runtime contract is invalid.`, {
       cause: error,
     });
+  }
+}
+
+function verifiedPackageRuntimeMetadata(
+  plugin: CompositionPackage,
+  verifiedFiles: ReadonlyArray<DescribedCompositionFile>,
+): PluginPackageRuntimeMetadata {
+  const packageJsonFile = verifiedFiles.find(({ path }) => path === "package.json");
+  if (!packageJsonFile) {
+    throw new Error(`Built-in plugin ${plugin.id} package.json is missing.`);
+  }
+  const packageJson = JSON.parse(Buffer.from(packageJsonFile.contents).toString("utf8")) as unknown;
+  if (!isRecord(packageJson)) {
+    throw new Error(`Built-in plugin ${plugin.id} package.json must be an object.`);
+  }
+  return packageJson;
+}
+
+function validateProviderlessRuntimeMetadata(
+  plugin: CompositionPackage,
+  verifiedFiles: ReadonlyArray<DescribedCompositionFile>,
+): void {
+  const packageJson = verifiedPackageRuntimeMetadata(plugin, verifiedFiles);
+  const dependencyMetadata = [
+    packageJson.dependencies,
+    packageJson.peerDependencies,
+    packageJson.optionalDependencies,
+  ];
+  const bundledMetadata = [packageJson.bundledDependencies, packageJson.bundleDependencies];
+  if (
+    dependencyMetadata.some(
+      (value) => value !== undefined && (!isRecord(value) || Object.keys(value).length > 0),
+    ) ||
+    bundledMetadata.some(
+      (value) => value !== undefined && (!Array.isArray(value) || value.length > 0),
+    )
+  ) {
+    throw new Error(
+      `Built-in plugin ${plugin.id} cannot declare runtime metadata without a provider.`,
+    );
   }
 }
 
@@ -361,51 +381,196 @@ export async function withProductionPackageSnapshotForTest<T>(
   return withProductionPackageSnapshot(composedPackageRoot, plugin, use);
 }
 
-async function loadMicrosoft365(
-  plugin: CompositionPackage,
-  secrets: ServerSecretStore.ServerSecretStore["Service"],
-): Promise<IntegrationPackage> {
-  const composedPackageRoot = NodePath.join(
-    import.meta.dirname,
-    "production-integrations",
-    "packages",
-    plugin.id,
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  return (
+    Boolean(value) &&
+    (typeof value === "object" || typeof value === "function") &&
+    typeof (value as { readonly then?: unknown }).then === "function"
   );
-  return withProductionPackageSnapshot(
-    composedPackageRoot,
-    plugin,
-    async (packageRoot, verifiedFiles) => {
-      const packageManifest = validateIntegrationManifest(
-        JSON.parse(
-          await NodeFSP.readFile(
-            NodePath.join(packageRoot, ".tritonai-plugin", "plugin.json"),
-            "utf8",
-          ),
-        ),
-      );
-      const moduleUrl = NodeURL.pathToFileURL(NodePath.join(packageRoot, "dist", "index.js")).href;
-      const loaded = (await import(moduleUrl)) as Microsoft365Module;
-      const exportedManifest = validateIntegrationManifest(loaded.manifest);
-      if (
-        !NodeUtil.isDeepStrictEqual(exportedManifest, packageManifest) ||
-        packageManifest.id !== plugin.id ||
-        packageManifest.version !== plugin.version ||
-        loaded.MICROSOFT_GRAPH_PROVIDER_ID !== packageManifest.provider
-      ) {
-        throw new Error(
-          "Built-in Microsoft 365 provider exports do not match the composed manifest.",
+}
+
+function retainSnapshotUntilProviderClose(
+  provider: IntegrationProvider,
+  snapshotRoot: string,
+): IntegrationProvider {
+  const originalClose =
+    typeof provider.close === "function" ? provider.close.bind(provider) : undefined;
+  let closePromise: Promise<void> | undefined;
+  const boundMethods = new Map<PropertyKey, (...args: ReadonlyArray<unknown>) => unknown>();
+
+  const close = (): Promise<void> => {
+    closePromise ??= (async () => {
+      let providerCloseFailed = false;
+      let providerCloseError: unknown;
+      try {
+        await originalClose?.();
+      } catch (error) {
+        providerCloseFailed = true;
+        providerCloseError = error;
+      }
+
+      let snapshotCleanupFailed = false;
+      let snapshotCleanupError: unknown;
+      try {
+        await removeProductionPackageSnapshot(snapshotRoot);
+      } catch (error) {
+        snapshotCleanupFailed = true;
+        snapshotCleanupError = error;
+      }
+
+      if (providerCloseFailed && snapshotCleanupFailed) {
+        throw new AggregateError(
+          [providerCloseError, snapshotCleanupError],
+          "Provider close and built-in plugin snapshot cleanup both failed.",
         );
       }
-      const provider = new loaded.MicrosoftGraphProvider(
-        scopeIntegrationSecretStore(secrets, packageManifest.id),
-        microsoftGraphConfiguration,
-      );
-      const bundledFiles = Object.fromEntries(
-        verifiedFiles.map((file) => [file.path, Uint8Array.from(file.contents)]),
-      );
-      return { manifest: packageManifest, bundledFiles, provider };
+      if (providerCloseFailed) throw providerCloseError;
+      if (snapshotCleanupFailed) throw snapshotCleanupError;
+    })();
+    return closePromise;
+  };
+
+  return new Proxy({} as IntegrationProvider, {
+    get(_target, property) {
+      if (property === "close") return close;
+      const value = Reflect.get(provider, property, provider) as unknown;
+      if (typeof value !== "function") return value;
+      const existing = boundMethods.get(property);
+      if (existing) return existing;
+      const bound = value.bind(provider) as (...args: ReadonlyArray<unknown>) => unknown;
+      boundMethods.set(property, bound);
+      return bound;
     },
+    has(_target, property) {
+      return property === "close" || property in provider;
+    },
+  });
+}
+
+function validateBuildConfiguration(
+  composition: ProductionComposition,
+  value: unknown,
+): Readonly<Record<string, Readonly<Record<string, unknown>>>> {
+  if (!isRecord(value)) {
+    throw new Error("Built-in plugin configuration must be an object.");
+  }
+  const expectedIds = composition.packages.map(({ id }) => id);
+  const actualIds = Object.keys(value).toSorted();
+  if (!NodeUtil.isDeepStrictEqual(actualIds, expectedIds)) {
+    throw new Error("Built-in plugin configuration must exactly match the composed packages.");
+  }
+  for (const id of expectedIds) {
+    if (!isRecord(value[id])) {
+      throw new Error(`Built-in plugin configuration for ${id} must be an object.`);
+    }
+  }
+  return value as Readonly<Record<string, Readonly<Record<string, unknown>>>>;
+}
+
+async function loadProductionPackage(
+  composedPackageRoot: string,
+  plugin: CompositionPackage,
+  secrets: ServerSecretStore.ServerSecretStore["Service"],
+  configuration: Readonly<Record<string, unknown>>,
+): Promise<IntegrationPackage> {
+  const verifiedFiles = await verifiedPackageFiles(composedPackageRoot, plugin);
+  const packageManifestFile = verifiedFiles.find(
+    ({ path }) => path === ".tritonai-plugin/plugin.json",
   );
+  if (!packageManifestFile) {
+    throw new Error(`Built-in plugin ${plugin.id} manifest is missing.`);
+  }
+  const packageManifest = validateIntegrationManifest(
+    JSON.parse(Buffer.from(packageManifestFile.contents).toString("utf8")),
+  );
+  if (packageManifest.id !== plugin.id || packageManifest.version !== plugin.version) {
+    throw new Error(`Built-in plugin ${plugin.id} manifest does not match its composition.`);
+  }
+  const bundledFiles = Object.fromEntries(
+    verifiedFiles.map((file) => [file.path, Uint8Array.from(file.contents)]),
+  );
+
+  if (!packageManifest.provider) {
+    if (verifiedFiles.some(({ path }) => path.startsWith("dist/"))) {
+      throw new Error(
+        `Built-in plugin ${plugin.id} includes provider distribution files without declaring a provider.`,
+      );
+    }
+    validateProviderlessRuntimeMetadata(plugin, verifiedFiles);
+    return { manifest: packageManifest, bundledFiles };
+  }
+
+  const packageRoot = await materializeProductionPackageSnapshot(plugin, verifiedFiles);
+  let retainSnapshot = false;
+  try {
+    const moduleUrl = NodeURL.pathToFileURL(NodePath.join(packageRoot, "dist", "index.js")).href;
+    const loaded = (await import(moduleUrl)) as IntegrationPluginModule;
+    const exportedManifest = validateIntegrationManifest(loaded.manifest);
+    if (!NodeUtil.isDeepStrictEqual(exportedManifest, packageManifest)) {
+      throw new Error(`Built-in plugin ${plugin.id} exports do not match its composed manifest.`);
+    }
+    if (typeof loaded.createIntegrationProvider !== "function") {
+      throw new Error(`Built-in plugin ${plugin.id} does not export its provider factory.`);
+    }
+    const created = loaded.createIntegrationProvider({
+      secrets: scopeIntegrationSecretStore(secrets, packageManifest.id),
+      configuration,
+    });
+    if (isPromiseLike(created)) {
+      // The factory contract is synchronous, but an async function has already started by the time
+      // its thenable result is observable. Consume a late rejection so a malformed plugin cannot
+      // turn this deterministic startup validation error into an unhandled process rejection.
+      void Promise.resolve(created).catch(() => undefined);
+      throw new Error(`Built-in plugin ${plugin.id} provider factory must be synchronous.`);
+    }
+    if (!isRecord(created) || created.id !== packageManifest.provider) {
+      throw new Error(
+        `Built-in plugin ${plugin.id} provider does not match its composed manifest.`,
+      );
+    }
+    const provider = retainSnapshotUntilProviderClose(
+      created as unknown as IntegrationProvider,
+      packageRoot,
+    );
+    retainSnapshot = true;
+    return { manifest: packageManifest, bundledFiles, provider };
+  } finally {
+    if (!retainSnapshot) await removeProductionPackageSnapshot(packageRoot);
+  }
+}
+
+export async function loadProductionPackageForTest(
+  composedPackageRoot: string,
+  plugin: CompositionPackage,
+  secrets: ServerSecretStore.ServerSecretStore["Service"],
+  configuration: Readonly<Record<string, unknown>>,
+): Promise<IntegrationPackage> {
+  return loadProductionPackage(composedPackageRoot, plugin, secrets, configuration);
+}
+
+async function loadProductionPackages(
+  loaders: ReadonlyArray<() => Promise<IntegrationPackage>>,
+): Promise<ReadonlyArray<IntegrationPackage>> {
+  const loaded: Array<IntegrationPackage> = [];
+  try {
+    for (const load of loaders) loaded.push(await load());
+    return loaded;
+  } catch (error) {
+    await Promise.allSettled(
+      loaded.map(({ provider }) => Promise.resolve().then(() => provider?.close?.())),
+    );
+    throw error;
+  }
+}
+
+export async function loadProductionPackagesForTest(
+  loaders: ReadonlyArray<() => Promise<IntegrationPackage>>,
+): Promise<ReadonlyArray<IntegrationPackage>> {
+  return loadProductionPackages(loaders);
 }
 
 export async function loadProductionIntegrations(
@@ -419,14 +584,19 @@ export async function loadProductionIntegrations(
   ) {
     throw new Error("Built-in plugin composition has an unsupported contract or provenance.");
   }
-  const result: Array<IntegrationPackage> = [];
-  for (const plugin of buildComposition.packages) {
-    if (plugin.id !== "microsoft-365") {
-      throw new Error(`Built-in plugin is not statically supported: ${plugin.id}.`);
-    }
-    result.push(await loadMicrosoft365(plugin, secrets));
-  }
-  return result;
+  const configuration = validateBuildConfiguration(buildComposition, buildConfiguration);
+  return loadProductionPackages(
+    buildComposition.packages.map((plugin) => {
+      const composedPackageRoot = NodePath.join(
+        import.meta.dirname,
+        "production-integrations",
+        "packages",
+        plugin.id,
+      );
+      return () =>
+        loadProductionPackage(composedPackageRoot, plugin, secrets, configuration[plugin.id]!);
+    }),
+  );
 }
 
 export function productionIntegrationCompositionForTest(): ProductionComposition | null {
