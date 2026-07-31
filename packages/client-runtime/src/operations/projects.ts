@@ -159,13 +159,13 @@ export function buildAddProjectRemoteSourceReadiness(
       };
       continue;
     }
-    if (provider.auth.status === "unauthenticated") {
+    if (provider.auth.status !== "authenticated") {
       readiness[source] = {
-        visible: true,
+        visible: false,
         ready: false,
         hint:
           Option.getOrNull(provider.auth.detail) ??
-          `${provider.label} is not authenticated. Open Source Control settings for setup guidance.`,
+          `${provider.label} is not ready. Open Source Control settings for setup guidance.`,
       };
       continue;
     }

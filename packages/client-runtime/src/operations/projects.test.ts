@@ -47,7 +47,7 @@ describe("add project shared logic", () => {
     ).toEqual({ ok: true, path: "/work/next" });
   });
 
-  it("shows ready and setup-required providers while hiding unavailable providers", () => {
+  it("shows only authenticated providers while hiding providers that need setup", () => {
     const discovery: SourceControlDiscoveryResult = {
       versionControlSystems: [],
       sourceControlProviders: [
@@ -96,9 +96,9 @@ describe("add project shared logic", () => {
         {
           kind: "azure-devops",
           label: "Azure DevOps",
-          status: "missing",
+          status: "available",
           installHint: "Install az",
-          version: Option.none(),
+          version: Option.some("1.0.0"),
           detail: Option.none(),
           auth: {
             status: "unknown",
@@ -114,13 +114,13 @@ describe("add project shared logic", () => {
     expect(readiness.url).toEqual({ visible: true, ready: true, hint: null });
     expect(readiness.github).toEqual({ visible: true, ready: true, hint: null });
     expect(readiness.bitbucket).toEqual({
-      visible: true,
+      visible: false,
       ready: false,
       hint: "Configure Bitbucket credentials",
     });
     expect(readiness.gitlab.visible).toBe(false);
     expect(readiness["azure-devops"].visible).toBe(false);
-    expect(sortAddProjectProviderSources(readiness)).toEqual(["github", "bitbucket"]);
+    expect(sortAddProjectProviderSources(readiness)).toEqual(["github"]);
   });
 
   it("does not imply provider readiness before discovery", () => {
