@@ -2,12 +2,11 @@ import {
   addProjectRemoteSourceLabel,
   addProjectRemoteSourcePathHint,
   addProjectRemoteSourceProvider,
-  buildAddProjectRemoteSourceReadiness,
   buildProjectCreateCommand,
   findExistingAddProject,
   getAddProjectInitialQuery,
+  listAddProjectRemoteSources,
   resolveAddProjectPath,
-  sortAddProjectProviderSources,
   type AddProjectRemoteSource,
 } from "@t3tools/client-runtime/operations/projects";
 import {
@@ -345,8 +344,6 @@ function EmptyEnvironmentState() {
 function SourceControlRow(props: {
   readonly source: AddProjectRemoteSource;
   readonly selectedEnvironmentId: EnvironmentId;
-  readonly ready: boolean;
-  readonly hint: string;
   readonly isFirst: boolean;
 }) {
   const navigation = useNavigation();
@@ -356,19 +353,13 @@ function SourceControlRow(props: {
   const subtitle =
     props.source === "url"
       ? "Clone from a remote URL"
-      : `Clone ${addProjectRemoteSourceLabel(props.source)} ${props.hint}`;
+      : `Clone ${addProjectRemoteSourceLabel(props.source)} ${addProjectRemoteSourcePathHint(props.source)}`;
   const icon =
     props.source === "url" ? (
       <SymbolView name="link" size={17} tintColor={iconColor} type="monochrome" />
     ) : (
       <SourceControlIcon kind={props.source} size={18} color={String(iconColor)} />
     );
-
-  if (!props.ready) {
-    return (
-      <ListRow title={title} subtitle={props.hint} icon={icon} disabled isFirst={props.isFirst} />
-    );
-  }
 
   return (
     <ListRow
@@ -403,8 +394,8 @@ export function AddProjectSourceScreen(props: { readonly environmentId?: string 
           input: {},
         }),
   );
-  const readiness = useMemo(
-    () => buildAddProjectRemoteSourceReadiness(discoveryState.data),
+  const remoteSources = useMemo(
+    () => listAddProjectRemoteSources(discoveryState.data),
     [discoveryState.data],
   );
 
@@ -472,22 +463,14 @@ export function AddProjectSourceScreen(props: { readonly environmentId?: string 
                 })
               }
             />
-            {(["url", ...sortAddProjectProviderSources(readiness)] as AddProjectRemoteSource[]).map(
-              (candidate) => (
-                <SourceControlRow
-                  key={candidate}
-                  source={candidate}
-                  selectedEnvironmentId={selectedEnvironment.environmentId}
-                  ready={readiness[candidate].ready}
-                  hint={
-                    readiness[candidate].ready
-                      ? addProjectRemoteSourcePathHint(candidate)
-                      : (readiness[candidate].hint ?? "")
-                  }
-                  isFirst={false}
-                />
-              ),
-            )}
+            {remoteSources.map((candidate) => (
+              <SourceControlRow
+                key={candidate}
+                source={candidate}
+                selectedEnvironmentId={selectedEnvironment.environmentId}
+                isFirst={false}
+              />
+            ))}
           </ListSection>
           {discoveryState.isPending ? <ActivityIndicator color={accentColor} /> : null}
         </>

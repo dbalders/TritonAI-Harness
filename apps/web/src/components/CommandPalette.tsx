@@ -2,6 +2,13 @@
 
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
+  addProjectRemoteSourceLabel as remoteProjectSourceLabel,
+  addProjectRemoteSourcePathHint as remoteProjectSourcePathHint,
+  listAddProjectRemoteSources,
+  type AddProjectRemoteProviderKind,
+  type AddProjectRemoteSource,
+} from "@t3tools/client-runtime/operations/projects";
+import {
   canPreloadBrowsePath,
   createBrowseNavigationCoordinator,
   filterFilesystemBrowseEntries,
@@ -101,15 +108,6 @@ import {
   ITEM_ICON_CLASS,
   RECENT_THREAD_LIMIT,
 } from "./CommandPalette.logic";
-import {
-  addProjectRemoteSourceLabel as remoteProjectSourceLabel,
-  addProjectRemoteSourcePathHint as remoteProjectSourcePathHint,
-  buildAddProjectRemoteSourceReadiness,
-  sortAddProjectProviderSources,
-  type AddProjectRemoteProviderKind,
-  type AddProjectRemoteSource,
-  type AddProjectRemoteSourceReadiness,
-} from "@t3tools/client-runtime/operations/projects";
 import { orderItemsByPreferredIds, sortLogicalProjectsForSidebar } from "./Sidebar.logic";
 import { resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
 import { CommandPaletteResults } from "./CommandPaletteResults";
@@ -891,15 +889,10 @@ function OpenCommandPaletteDialog(props: {
     [pushPaletteView],
   );
 
-  const openSourceControlSettings = useCallback(() => {
-    setOpen(false);
-    void navigate({ to: "/settings/source-control" });
-  }, [navigate, setOpen]);
-
   const buildAddProjectSourceGroups = useCallback(
     (
       environmentId: EnvironmentId,
-      readinessBySource: AddProjectRemoteSourceReadiness,
+      remoteSources: ReadonlyArray<AddProjectRemoteSource>,
     ): CommandPaletteView["groups"] => {
       const sourceItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [
         {
@@ -916,60 +909,13 @@ function OpenCommandPaletteDialog(props: {
         },
       ];
 
-      const orderedSources: ReadonlyArray<AddProjectRemoteSource> = [
-        "url",
-        ...sortAddProjectProviderSources(readinessBySource),
-      ];
-
-      for (const source of orderedSources) {
+      for (const source of remoteSources) {
         const label = remoteProjectSourceLabel(source);
         const title = source === "url" ? "Git URL" : `${label} repository`;
         const description =
           source === "url"
             ? "Clone from a remote URL"
             : `Clone ${label} ${remoteProjectSourcePathHint(source)}`;
-        const readiness = readinessBySource[source];
-        const disabledHint = readiness.hint;
-
-        const titleTrailingContent = readiness.ready ? undefined : (
-          <span className="ml-auto">
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    variant="outline"
-                    size="xs"
-                    className="h-5 rounded-[.25rem] px-1.5 text-[10px] text-warning-foreground"
-                    onClick={() => {
-                      openSourceControlSettings();
-                    }}
-                  >
-                    Setup Required
-                  </Button>
-                }
-              />
-              <TooltipPopup align="end" side="left">
-                {disabledHint ?? "Open Settings -> Source Control to configure this provider."}
-              </TooltipPopup>
-            </Tooltip>
-          </span>
-        );
-
-        if (!readiness.ready) {
-          sourceItems.push({
-            kind: "action",
-            value: `action:add-project:${environmentId}:${source}:not-ready`,
-            searchTerms: ["clone", "remote", "repository", "repo", "git", label, "setup required"],
-            title,
-            description,
-            disabled: true,
-            icon: remoteProjectSourceIcon(source, ITEM_ICON_CLASS),
-            ...(titleTrailingContent ? { titleTrailingContent } : {}),
-            run: async () => {},
-          });
-          continue;
-        }
-
         sourceItems.push({
           kind: "action",
           value: `action:add-project:${environmentId}:${source}`,
@@ -977,7 +923,6 @@ function OpenCommandPaletteDialog(props: {
           title,
           description,
           icon: remoteProjectSourceIcon(source, ITEM_ICON_CLASS),
-          ...(titleTrailingContent ? { titleTrailingContent } : {}),
           keepOpen: true,
           run: async () => {
             startAddProjectClone(environmentId, source);
@@ -987,7 +932,7 @@ function OpenCommandPaletteDialog(props: {
 
       return [{ value: `sources:${environmentId}`, label: "Sources", items: sourceItems }];
     },
-    [openSourceControlSettings, startAddProjectBrowse, startAddProjectClone],
+    [startAddProjectBrowse, startAddProjectClone],
   );
 
   const startAddProjectSourceSelection = useCallback(
@@ -998,7 +943,7 @@ function OpenCommandPaletteDialog(props: {
         addonIcon: <FolderPlusIcon className={ADDON_ICON_CLASS} />,
         groups: buildAddProjectSourceGroups(
           environmentId,
-          buildAddProjectRemoteSourceReadiness(
+          listAddProjectRemoteSources(
             browseEnvironmentId === environmentId ? sourceControlDiscovery.data : null,
           ),
         ),
@@ -1226,7 +1171,7 @@ function OpenCommandPaletteDialog(props: {
     currentView.groups[0]?.value === sourceSelectionViewValue
       ? buildAddProjectSourceGroups(
           addProjectEnvironmentId,
-          buildAddProjectRemoteSourceReadiness(sourceControlDiscovery.data),
+          listAddProjectRemoteSources(sourceControlDiscovery.data),
         )
       : (currentView?.groups ?? rootGroups);
 

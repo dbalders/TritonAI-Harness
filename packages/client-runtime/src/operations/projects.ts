@@ -9,7 +9,6 @@ import type {
 } from "@t3tools/contracts";
 import { isSourceControlProviderReady } from "@t3tools/shared/sourceControl";
 import * as Arr from "effect/Array";
-import * as Option from "effect/Option";
 import * as Order from "effect/Order";
 
 import {
@@ -28,15 +27,6 @@ export type AddProjectRemoteProviderKind = Extract<
 >;
 export type AddProjectRemoteSource = AddProjectRemoteProviderKind | "url";
 
-export type AddProjectRemoteSourceReadiness = Record<
-  AddProjectRemoteSource,
-  {
-    readonly visible: boolean;
-    readonly ready: boolean;
-    readonly hint: string | null;
-  }
->;
-
 export type AddProjectCloneFlow =
   | {
       readonly step: "repository";
@@ -51,14 +41,6 @@ export type AddProjectCloneFlow =
       readonly repository: SourceControlRepositoryInfo | null;
       readonly remoteUrl: string;
     };
-
-const ADD_PROJECT_REMOTE_SOURCES: ReadonlyArray<AddProjectRemoteSource> = [
-  "url",
-  "github",
-  "gitlab",
-  "bitbucket",
-  "azure-devops",
-];
 
 const ADD_PROJECT_REMOTE_PROVIDER_SOURCES: ReadonlyArray<AddProjectRemoteProviderKind> = [
   "github",
@@ -103,70 +85,30 @@ export function addProjectRemoteSourceProvider(
   return source === "url" ? null : source;
 }
 
-export function sortAddProjectProviderSources(
-  readinessBySource: AddProjectRemoteSourceReadiness,
-): ReadonlyArray<AddProjectRemoteProviderKind> {
-  return Arr.sort(
-    ADD_PROJECT_REMOTE_PROVIDER_SOURCES.filter((source) => readinessBySource[source].visible),
-    Order.mapInput(
-      Order.Struct({
-        ready: Order.flip(Order.Boolean),
-        label: Order.String,
-      }),
-      (source: AddProjectRemoteProviderKind) => ({
-        ready: readinessBySource[source].ready,
-        label: addProjectRemoteSourceLabel(source),
-      }),
-    ),
-  );
-}
-
-export function buildAddProjectRemoteSourceReadiness(
+export function listAddProjectRemoteSources(
   discovery: SourceControlDiscoveryResult | null,
-): AddProjectRemoteSourceReadiness {
-  const unavailable = {
-    visible: false,
-    ready: false,
-    hint: "Provider status unavailable. Open Source Control settings and rescan.",
-  } as const;
-  const readiness: AddProjectRemoteSourceReadiness = {
-    url: { visible: true, ready: true, hint: null },
-    github: unavailable,
-    gitlab: unavailable,
-    bitbucket: unavailable,
-    "azure-devops": unavailable,
-  };
-
+): ReadonlyArray<AddProjectRemoteSource> {
   if (!discovery) {
-    return readiness;
+    return ["url"];
   }
 
   const providerByKind = new Map(
     discovery.sourceControlProviders.map((provider) => [provider.kind, provider]),
   );
-  for (const source of ADD_PROJECT_REMOTE_SOURCES) {
-    const kind = addProjectRemoteSourceProvider(source);
-    if (!kind) continue;
-    const provider = providerByKind.get(kind);
-    if (!provider) {
-      readiness[source] = unavailable;
-      continue;
-    }
-    if (!isSourceControlProviderReady(provider)) {
-      readiness[source] = {
-        visible: false,
-        ready: false,
-        hint:
-          provider.status === "available"
-            ? (Option.getOrNull(provider.auth.detail) ??
-              `${provider.label} is not ready. Open Source Control settings for setup guidance.`)
-            : provider.installHint,
-      };
-      continue;
-    }
-    readiness[source] = { visible: true, ready: true, hint: null };
-  }
-  return readiness;
+  const readyProviders = ADD_PROJECT_REMOTE_PROVIDER_SOURCES.filter((source) => {
+    const provider = providerByKind.get(source);
+    return provider !== undefined && isSourceControlProviderReady(provider);
+  });
+
+  return [
+    "url",
+    ...Arr.sort(
+      readyProviders,
+      Order.mapInput(Order.String, (source: AddProjectRemoteProviderKind) =>
+        addProjectRemoteSourceLabel(source),
+      ),
+    ),
+  ];
 }
 
 export function getAddProjectInitialQuery(baseDirectory: string | null | undefined): string {

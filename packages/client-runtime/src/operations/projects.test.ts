@@ -8,12 +8,11 @@ import {
 import * as Option from "effect/Option";
 
 import {
-  buildAddProjectRemoteSourceReadiness,
   buildProjectCreateCommand,
   findExistingAddProject,
   getAddProjectInitialQuery,
+  listAddProjectRemoteSources,
   resolveAddProjectPath,
-  sortAddProjectProviderSources,
 } from "./projects.ts";
 import type { EnvironmentProject } from "../state/models.ts";
 
@@ -110,24 +109,11 @@ describe("add project shared logic", () => {
       ],
     };
 
-    const readiness = buildAddProjectRemoteSourceReadiness(discovery);
-    expect(readiness.url).toEqual({ visible: true, ready: true, hint: null });
-    expect(readiness.github).toEqual({ visible: true, ready: true, hint: null });
-    expect(readiness.bitbucket).toEqual({
-      visible: false,
-      ready: false,
-      hint: "Configure Bitbucket credentials",
-    });
-    expect(readiness.gitlab.visible).toBe(false);
-    expect(readiness["azure-devops"].visible).toBe(false);
-    expect(sortAddProjectProviderSources(readiness)).toEqual(["github"]);
+    expect(listAddProjectRemoteSources(discovery)).toEqual(["url", "github"]);
   });
 
   it("does not imply provider readiness before discovery", () => {
-    const readiness = buildAddProjectRemoteSourceReadiness(null);
-
-    expect(readiness.url).toEqual({ visible: true, ready: true, hint: null });
-    expect(sortAddProjectProviderSources(readiness)).toEqual([]);
+    expect(listAddProjectRemoteSources(null)).toEqual(["url"]);
   });
 
   it("finds existing projects by normalized path in the target environment", () => {
