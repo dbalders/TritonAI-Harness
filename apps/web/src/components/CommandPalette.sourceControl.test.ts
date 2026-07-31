@@ -71,22 +71,21 @@ function discovery(): SourceControlDiscoveryResult {
 }
 
 describe("add-project source control providers", () => {
-  it("shows available providers and hides providers that are turned off", () => {
+  it("shows available providers and hides unavailable providers", () => {
     const readiness = buildAddProjectRemoteSourceReadiness(discovery());
 
-    expect(sortAddProjectProviderSources(readiness)).toEqual(["github"]);
+    expect(sortAddProjectProviderSources(readiness)).toEqual(["github", "bitbucket"]);
     expect(readiness.gitlab.visible).toBe(false);
-    expect(readiness.bitbucket.visible).toBe(false);
     expect(readiness["azure-devops"].visible).toBe(false);
   });
 
-  it("keeps Bitbucket off until credentials are configured", () => {
+  it("keeps available but unauthenticated providers visible as setup required", () => {
     const readiness = buildAddProjectRemoteSourceReadiness(discovery());
 
     expect(readiness.bitbucket).toEqual({
-      visible: false,
+      visible: true,
       ready: false,
-      hint: "Provider status unavailable. Open Settings -> Source Control and rescan.",
+      hint: "Configure Bitbucket credentials.",
     });
   });
 
