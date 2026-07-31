@@ -31,7 +31,6 @@ import {
 } from "@t3tools/contracts";
 
 import { createModelCapabilities } from "@t3tools/shared/model";
-import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import { codexAppServerArgs, resolveCodexLaunchArgs } from "./codexLaunchArgs.ts";
 import {
   AUTH_PROBE_TIMEOUT_MS,
@@ -41,6 +40,7 @@ import {
 import { expandHomePath } from "../../pathExpansion.ts";
 import * as Integrations from "../../integrations/IntegrationRegistry.ts";
 import { makeTritonAiCodexConfigArgs } from "../Drivers/TritonAiCodexConfig.ts";
+import { resolveCodexAppServerCommand } from "../Drivers/CodexAppServerCommand.ts";
 import packageJson from "../../../package.json" with { type: "json" };
 const isCodexAppServerSpawnError = Schema.is(CodexErrors.CodexAppServerSpawnError);
 
@@ -485,7 +485,7 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
     ...input.environment,
     ...(resolvedHomePath ? { CODEX_HOME: resolvedHomePath } : {}),
   };
-  const spawnCommand = yield* resolveSpawnCommand(
+  const spawnCommand = yield* resolveCodexAppServerCommand(
     input.binaryPath,
     [...codexAppServerArgs(input.launchArgs), ...makeTritonAiCodexConfigArgs(environment)],
     {
@@ -497,8 +497,8 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
     .spawn(
       ChildProcess.make(spawnCommand.command, spawnCommand.args, {
         cwd: input.cwd,
-        env: environment,
-        extendEnv: true,
+        env: spawnCommand.environment,
+        extendEnv: spawnCommand.extendEnv,
         forceKillAfter: CODEX_APP_SERVER_PROBE_FORCE_KILL_AFTER,
         shell: spawnCommand.shell,
       }),

@@ -7,13 +7,12 @@ import { openCommandPalette } from "~/commandPaletteBus";
 import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
 import { useClientSettings } from "~/hooks/useSettings";
 import { selectProjectGroupingSettings } from "~/logicalProject";
-import { buildSidebarProjectPickerEntries } from "~/sidebarProjectGrouping";
+import {
+  buildSidebarProjectPickerEntries,
+  buildSidebarProjectSnapshots,
+} from "~/sidebarProjectGrouping";
 import { useProjects, useThreadShells } from "~/state/entities";
 import { useEnvironments, usePrimaryEnvironmentId } from "~/state/environments";
-import {
-  buildRegularSidebarProjectSnapshots,
-  isRegularProjectThreadContext,
-} from "~/tritonAiProjectSurfaces";
 import { sortLogicalProjectsForSidebar } from "../Sidebar.logic";
 import {
   Menu,
@@ -53,7 +52,7 @@ export function DraftHeroHeadline({
   const projectGroups = useMemo(
     () =>
       sortLogicalProjectsForSidebar(
-        buildRegularSidebarProjectSnapshots({
+        buildSidebarProjectSnapshots({
           projects,
           settings: projectGroupingSettings,
           primaryEnvironmentId,
@@ -93,19 +92,12 @@ export function DraftHeroHeadline({
           ),
         ) ?? null);
   const activeProjectKey = activeProjectGroup?.projectKey ?? "";
-  const hasExcludedActiveProject =
-    activeProjectRef !== null &&
-    activeProjectTitle !== null &&
-    !isRegularProjectThreadContext(projects, activeProjectRef);
-  const activeProjectDisplayName =
-    activeProjectGroup?.displayName ?? (activeProjectRef === null ? activeProjectTitle : null);
+  const activeProjectDisplayName = activeProjectGroup?.displayName ?? activeProjectTitle;
   const hasResolvedProject = activeProjectTitle !== null;
   const canChooseProject = projectPickerEntries.length > 0;
-  const shouldShowProjectMenu = canChooseProject && !hasExcludedActiveProject;
+  const shouldShowProjectMenu = canChooseProject;
 
-  const projectSelector = hasExcludedActiveProject ? (
-    <span className="text-foreground">{activeProjectTitle}</span>
-  ) : shouldShowProjectMenu ? (
+  const projectSelector = shouldShowProjectMenu ? (
     <Menu>
       <MenuTrigger
         aria-label={hasResolvedProject ? "Change project" : "Choose a project"}
