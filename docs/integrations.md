@@ -5,9 +5,12 @@ host-supplied service backend. The Harness build defines the available catalog; 
 marketplace or install arbitrary packages. In Settings → Plugins, they can turn each included plugin
 on or off and choose the user-facing abilities exposed by that plugin under **Access**.
 
-This architecture lane intentionally includes no production plugins. Development fixtures prove the
-same host supports both a skills-only package and a credential-backed package with tools; production
-connectors live in their own plugin repositories and consume this contract.
+Production connector source and compiled provider entrypoints remain in TritonAI-Plugins. A
+release-only, digest-verified composition is the explicit package allowlist; Harness does not carry
+provider-specific package IDs or discover arbitrary packages at runtime. Harness verifies and
+packages the prebuilt bytes supplied by that composition—it does not compile provider code.
+Development fixtures still prove the same host supports both a skills-only package and a
+credential-backed package with tools.
 
 ## Package contract
 
@@ -18,6 +21,12 @@ Every package contains `.tritonai-plugin/plugin.json` with:
 - an optional provider ID;
 - fixed capabilities and the tools and skills associated with each capability.
 
+A package that declares a provider exports its exact validated manifest and a synchronous
+`createIntegrationProvider({ secrets, configuration })` factory from `dist/index.js`. Harness passes
+only a package-scoped secret-store facade and that package's opaque configuration object. The plugin
+owns the exact configuration keys, types, formats, and provider construction. A skills-only package
+must not export the provider factory.
+
 Capabilities are user-facing ability bundles and the single source of truth for skill and tool
 availability. Each capability declares `access: "default" | "opt-in"`. Tools and skills declare
 their dependencies with `capabilities`. Multiple references use union semantics, so a shared
@@ -27,6 +36,14 @@ package omits `provider` and declares no tools.
 Every tool also declares `effect: "read" | "write"`, which must agree with the provider's executable
 metadata. Write tools follow the task's selected runtime mode: supervised modes request approval,
 while Full access preauthorizes them.
+
+The Registry passes that approval only to declared write tools and runs each write through the same
+bounded commit-admission machinery used by provider lifecycle mutations. A write provider must call
+`beginCommit()` immediately before its external mutation and use the returned commit-tail signal.
+After admission, cancellation cannot replace a settled write receipt with a false failure; an
+ambiguous admitted write retains the durable provider journal and faults the connection until reset.
+Production write providers therefore require a connection lifecycle whose disconnect path can clear
+that fault; the current stateless-provider support is read-only.
 
 The Harness-specific manifest name is intentional. These packages are curated, server-executed
 Harness components rather than user-installable Codex marketplace plugins. Their `skills/`
@@ -60,12 +77,23 @@ marketplace or arbitrary package update mechanism. The build must assemble the c
 before registry construction; post-start package discovery and registration are intentionally not
 supported.
 
+The managed composition validates exact package inventories and source provenance before build.
+Private build configuration is supplied through one bounded
+`TRITONAI_PLUGIN_CONFIGURATION_JSON` object whose keys must exactly match the selected package IDs.
+The configuration is not included in the public composition proof. The build embeds each selected
+plugin's configuration in the server bundle, so OAuth identifiers and installed-app credentials are
+extractable from a distributed desktop binary and are not a confidential authorization boundary.
+They must never be committed, downloaded as credentials JSON, placed in the composition or source
+tree, or emitted to logs or chat.
+
 ## Provider and security boundary
 
-Provider-specific behavior implements `IntegrationProvider` in `IntegrationRegistry.ts`. Every
-provider owns readiness status and tool invocation. An authenticated provider additionally
-implements `connect` and `disconnect` as one complete lifecycle; device-code providers also
-implement `poll`, while API-key providers complete through a typed submission to `connect`. A
+Provider-specific behavior implements the structural `IntegrationProvider` contract owned by
+`IntegrationRegistry.ts`. Harness loads every selected provider through the same factory contract;
+adding another reviewed provider package does not add a provider branch to Harness. Every provider
+owns readiness status and tool invocation. An authenticated provider additionally
+implements `connect` and `disconnect` as one complete lifecycle; device-code and native-browser
+providers also implement `poll`, while API-key providers complete through a typed submission to `connect`. A
 stateless tool provider omits the lifecycle methods. Generic RPC, MCP, Codex, and Plugins UI code
 operate on provider-neutral summaries and lifecycle operations, so skill-only, stateless-tool, and
 authenticated packages do not require provider-specific host branches.
@@ -116,16 +144,18 @@ results are JSON-normalized and fail closed when they cannot be serialized.
 ## Connection flows
 
 Connection results are discriminated by `kind`. The current contract and UI implement
-`kind: "device_code"`, with a verification URL, user code, expiry, and polling interval, and
+`kind: "device_code"`, with a verification URL, user code, expiry, and polling interval;
+`kind: "authorization_url"`, with a bounded HTTPS authorization URL, expiry, and polling interval
+for system-browser flows whose local provider owns callback completion; and
 `kind: "api_key"`, with an opaque, length-bounded submission that goes directly to the provider's
 server-side commit boundary. A successful API-key submission returns `kind: "connected"`; the key
-is never included in a result. Redirect or other connection experiences must extend the union with
+is never included in a result. Other connection experiences must extend the union with
 their own secure submission contract and rendering instead of pretending to use another flow's
 fields or adding ambiguous optional fields.
 
 Connecting requests only the plugin's enabled capabilities. Enabling an ability whose provider
 grant is missing starts the same explicit authorization flow; the ability remains unavailable until
-both selection persistence and provider authorization succeed. Device-code polling and API-key
+both selection persistence and provider authorization succeed. Device-code/native-browser polling and API-key
 submission are keyed by plugin and flow ID and cannot overwrite another plugin's flow state;
 polling also honors provider retry delays and expiry.
 
@@ -183,11 +213,11 @@ Successful materializations are keyed by Codex home, package root, and active sk
 status refreshes do not recopy unchanged skill trees.
 
 Production providers use one Harness-owned Effect runtime. The released Microsoft 365 package's
-exact Effect 4 beta build dependency is treated as its minimum tested baseline, while new packages
-declare the reviewed `>=4.0.0-beta.78 <4.0.0` peer contract. Composition and startup reject older
-hosts, newer plugin build baselines, extra runtime dependencies, broader peers, and stable or
-next-major Effect versions. Package provenance, file inventory, digests, and immutable snapshots
-remain exact; only the already-verified runtime link is supplied by the host.
+exact `4.0.0-beta.78` dependency is a narrow legacy exception; new provider packages declare the
+reviewed `>=4.0.0-beta.78 <4.0.0` peer contract instead. Composition and startup reject every other
+exact build pin, extra runtime dependencies, broader peers, and stable or next-major Effect
+versions. Package provenance, file inventory, digests, and immutable snapshots remain exact; only
+the already-verified runtime link is supplied by the host.
 
 ## Runtime exposure
 
@@ -235,7 +265,7 @@ automatically and keep a persistent, accessible Connect action visible.
 
 ## Deliberate follow-up work
 
-Additional discriminated authorization experiences, declarative remote or stdio MCP loading,
+Additional provider-neutral authorization experiences, declarative remote or stdio MCP loading,
 provider process isolation, provider audit events, production credential UX, and mobile management
 remain separate work. If external package distribution is ever added, allowlisting, signing, and a
 separate trust model are required first. Removing an included production plugin also needs an

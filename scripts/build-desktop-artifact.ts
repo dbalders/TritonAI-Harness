@@ -19,10 +19,11 @@ import {
 } from "./lib/brand-assets.ts";
 import { getDefaultBuildArch } from "./lib/build-target-arch.ts";
 import {
+  PRODUCTION_PLUGIN_CONFIGURATION_ENV,
   PRODUCTION_PLUGIN_SOURCE_ENV,
-  assertManagedPluginBuildConfiguration,
   managedPluginProofFileName,
   managedPluginProofInputFileName,
+  readManagedPluginBuildConfiguration,
   snapshotManagedPluginComposition,
   type ManagedPluginComposition,
 } from "./lib/managed-plugin-composition.ts";
@@ -1900,20 +1901,25 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     });
   }
   const pluginSnapshotRoot = path.join(stageRoot, "plugin-composition-input");
-  const pluginComposition: ManagedPluginComposition | null = configuredPluginSource
+  const pluginBuildInput: {
+    readonly composition: ManagedPluginComposition;
+    readonly configurationJson: string;
+  } | null = configuredPluginSource
     ? yield* Effect.try({
         try: () => {
           const composition = snapshotManagedPluginComposition(
             path.resolve(repoRoot, configuredPluginSource),
             pluginSnapshotRoot,
           );
-          assertManagedPluginBuildConfiguration(composition, repoEnv);
-          return composition;
+          const configuration = readManagedPluginBuildConfiguration(composition, repoEnv);
+          // @effect-diagnostics-next-line preferSchemaOverJson:off - The generic map was bounded and validated above; this canonical copy closes the child-build TOCTOU window.
+          return { composition, configurationJson: JSON.stringify(configuration) };
         },
         catch: (cause) =>
           new ManagedPluginCompositionBuildError({ failure: "invalid-composition", cause }),
       })
     : null;
+  const pluginComposition = pluginBuildInput?.composition ?? null;
 
   const stageAppDir = path.join(stageRoot, "app");
   const stageResourcesDir = path.join(stageAppDir, "apps/desktop/resources");
@@ -1930,8 +1936,12 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     yield* runCommand(
       ChildProcess.make(spawnCommand.command, spawnCommand.args, {
         cwd: repoRoot,
-        env: pluginComposition
-          ? { ...process.env, [PRODUCTION_PLUGIN_SOURCE_ENV]: pluginSnapshotRoot }
+        env: pluginBuildInput
+          ? {
+              ...process.env,
+              [PRODUCTION_PLUGIN_SOURCE_ENV]: pluginSnapshotRoot,
+              [PRODUCTION_PLUGIN_CONFIGURATION_ENV]: pluginBuildInput.configurationJson,
+            }
           : process.env,
         shell: spawnCommand.shell,
       }),

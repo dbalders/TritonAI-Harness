@@ -257,13 +257,12 @@ jobs:
         env:
           TRITONAI_PLUGINS_REF: ${{ vars.TRITONAI_PLUGINS_REF }}
           TRITONAI_PLUGINS_COMMIT: ${{ vars.TRITONAI_PLUGINS_COMMIT }}
-          TRITONAI_PLUGIN_IDS: microsoft-365
           TRITONAI_PLUGINS_SOURCE: ${{ github.workspace }}/.release-input/plugins
         run: |
           set -euo pipefail
           npm --prefix .release-input/installer ci --ignore-scripts
           npm --prefix .release-input/installer run build
-          node .release-input/installer/dist/scripts/prepare-plugins-vendor.js
+          node .release-input/installer/dist/scripts/prepare-plugins-vendor.js --production
 
       - name: Align package versions to release version
         run: node scripts/update-release-package-versions.ts "${{ needs.preflight.outputs.version }}"
@@ -358,8 +357,7 @@ jobs:
         shell: bash
         env:
           TRITONAI_PLUGIN_COMPOSITION_SOURCE: ${{ github.workspace }}/.release-input/installer/vendor/plugins
-          TRITONAI_MICROSOFT_GRAPH_CLIENT_ID: ${{ vars.TRITONAI_MICROSOFT_GRAPH_CLIENT_ID }}
-          TRITONAI_MICROSOFT_GRAPH_TENANT_ID: ${{ vars.TRITONAI_MICROSOFT_GRAPH_TENANT_ID }}
+          TRITONAI_PLUGIN_CONFIGURATION_JSON: ${{ vars.TRITONAI_PLUGIN_CONFIGURATION_JSON }}
           T3CODE_CLERK_PASSKEY_RP_DOMAINS: ${{ vars.CLERK_PASSKEY_RP_DOMAINS }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}

@@ -34,7 +34,7 @@ The workflow:
 3. runs `vp check`, typecheck, and the full test suite;
 4. builds a Linux `node-pty` binary for the packaged Windows WSL backend;
 5. validates the pinned Installer composition commit and managed-plugin ref/commit;
-6. prepares the pinned managed-plugin composition;
+6. asks the pinned Installer commit to prepare its reviewed production managed-plugin composition;
 7. aligns package versions in the isolated build checkout;
 8. builds the Windows x64 NSIS Harness artifact;
 9. requires and verifies Azure Trusted Signing signatures;
@@ -70,7 +70,8 @@ Repository variables:
   managed-plugin composition.
 - `TRITONAI_PLUGINS_REF`: explicit branch or tag ref in `dbalders/TritonAI-Plugins`.
 - `TRITONAI_PLUGINS_COMMIT`: exact commit resolved by that ref.
-- `TRITONAI_MICROSOFT_GRAPH_CLIENT_ID`: client ID embedded for the managed Microsoft Graph plugin.
+- `TRITONAI_PLUGIN_CONFIGURATION_JSON`: bounded JSON object keyed by every package ID in the selected
+  composition. Each plugin owns and validates its opaque configuration object.
 
 The workflow verifies the plugin checkout resolves to the pinned commit and detaches it before
 building. The final proof manifest is a required release asset.
