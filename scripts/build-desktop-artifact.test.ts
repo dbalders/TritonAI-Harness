@@ -29,6 +29,7 @@ import {
   MacPasskeySigningConfigurationResolutionError,
   MissingAzureTrustedSigningConfigurationError,
   MissingMacPasskeyProvisioningProfileError,
+  renderMacInheritedEntitlements,
   renderMacPasskeyEntitlements,
   resolveClerkPasskeyNativeArtifacts,
   resolveMacPasskeySigningConfiguration,
@@ -449,6 +450,31 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.include(entitlements, "<key>com.apple.security.device.audio-input</key>");
   });
 
+  it("keeps hardened-runtime audio capabilities aligned for the main app and helpers", () => {
+    const configuration = resolveMacPasskeySigningConfiguration({
+      T3CODE_APPLE_TEAM_ID: "ABC1234567",
+      T3CODE_MACOS_PROVISIONING_PROFILE: "/tmp/t3code.provisionprofile",
+      T3CODE_CLERK_PASSKEY_RP_DOMAINS: "clerk.example.com",
+    });
+    const mainEntitlements = renderMacPasskeyEntitlements(configuration);
+    const inheritedEntitlements = renderMacInheritedEntitlements();
+    const hardenedRuntimeKeys = [
+      "com.apple.security.cs.allow-jit",
+      "com.apple.security.cs.allow-unsigned-executable-memory",
+      "com.apple.security.cs.disable-library-validation",
+      "com.apple.security.device.audio-input",
+    ];
+
+    for (const key of hardenedRuntimeKeys) {
+      assert.include(mainEntitlements, `<key>${key}</key>`);
+      assert.include(inheritedEntitlements, `<key>${key}</key>`);
+    }
+    assert.notInclude(inheritedEntitlements, "com.apple.application-identifier");
+    assert.notInclude(inheritedEntitlements, "com.apple.developer.associated-domains");
+    assert.notInclude(mainEntitlements, "com.apple.security.device.camera");
+    assert.notInclude(inheritedEntitlements, "com.apple.security.device.camera");
+  });
+
   it("rejects incomplete macOS passkey signing configuration", () => {
     const captureError = (env: Readonly<Record<string, string | undefined>>) => {
       try {
@@ -534,13 +560,21 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     Effect.gen(function* () {
       const config = yield* createBuildConfig("mac", "dmg", "1.2.3", true, false, undefined, {
         entitlementsPath: "/tmp/entitlements.mac.plist",
+        entitlementsInheritPath: "/tmp/entitlements.mac.inherit.plist",
         provisioningProfilePath: "/tmp/t3code.provisionprofile",
       });
 
       const mac = config.mac as Record<string, unknown>;
       assert.equal(config.appId, "edu.ucsd.tritonai.harness");
       assert.equal(mac.entitlements, "/tmp/entitlements.mac.plist");
+      assert.equal(mac.entitlementsInherit, "/tmp/entitlements.mac.inherit.plist");
       assert.equal(mac.provisioningProfile, "/tmp/t3code.provisionprofile");
+      assert.deepNestedInclude(mac, {
+        extendInfo: {
+          NSMicrophoneUsageDescription:
+            "TritonAI Harness uses the microphone for voice dictation in the composer.",
+        },
+      });
       assert.deepStrictEqual(mac.protocols, [
         { name: "TritonAI Harness", schemes: ["t3code", "t3code-dev"] },
       ]);
