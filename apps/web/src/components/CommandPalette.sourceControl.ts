@@ -106,6 +106,9 @@ export function buildAddProjectRemoteSourceReadiness(
     if (!provider || provider.status !== "available") {
       continue;
     }
+    if (source === "bitbucket" && provider.auth.status === "unauthenticated") {
+      continue;
+    }
     if (provider.auth.status === "unauthenticated") {
       readiness[source] = {
         visible: true,
