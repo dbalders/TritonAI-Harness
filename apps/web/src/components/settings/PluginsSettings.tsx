@@ -26,6 +26,7 @@ import type { ReactNode } from "react";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
@@ -241,6 +242,7 @@ export function IntegrationAuthorizationFlow({
   readonly onApiKeySubmit: (flowId: string, value: string) => Promise<void>;
 }) {
   const [apiKey, setApiKey] = useState("");
+  const { copyToClipboard, isCopied } = useCopyToClipboard({ target: "device code" });
 
   useEffect(() => {
     setApiKey("");
@@ -257,9 +259,17 @@ export function IntegrationAuthorizationFlow({
           <p className="text-sm font-semibold">Finish signing in to {integrationName}</p>
           <p className="mt-1 text-xs text-muted-foreground">{flow.message}</p>
           <div className="mt-3 flex flex-wrap items-center gap-2">
-            <code className="rounded bg-background px-3 py-1.5 text-sm font-semibold tracking-widest">
+            <code className="select-all rounded bg-background px-3 py-1.5 text-sm font-semibold tracking-widest">
               {flow.userCode}
             </code>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => copyToClipboard(flow.userCode)}
+            >
+              {isCopied ? "Copied!" : "Copy code"}
+            </Button>
             <Button
               size="sm"
               render={
