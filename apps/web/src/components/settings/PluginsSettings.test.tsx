@@ -46,6 +46,31 @@ const summary = (overrides: Partial<IntegrationSummary> = {}): IntegrationSummar
 });
 
 describe("PluginsSettings connection action", () => {
+  it("renders a device code with exact-value selection and copy affordances", () => {
+    const flow = {
+      kind: "device_code",
+      flowId: "flow-device",
+      verificationUri: "https://github.com/login/device",
+      verificationUriComplete: null,
+      userCode: "ABCD-EFGH",
+      message: "Enter the code in GitHub.",
+      expiresAt: "2030-01-01T00:00:00.000Z",
+      intervalSeconds: 5,
+    } satisfies IntegrationConnectResult;
+    const markup = renderToStaticMarkup(
+      <IntegrationAuthorizationFlow
+        integrationName="GitHub"
+        flow={flow}
+        busy={false}
+        onApiKeySubmit={async () => undefined}
+      />,
+    );
+    expect(markup).toContain("ABCD-EFGH");
+    expect(markup).toContain("select-all");
+    expect(markup).toContain("Copy code");
+    expect(markup).toContain('href="https://github.com/login/device"');
+  });
+
   it("renders a native-browser flow as a system-browser sign-in link without a code field", () => {
     const flow = {
       kind: "authorization_url",

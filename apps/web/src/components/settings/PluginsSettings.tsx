@@ -26,6 +26,7 @@ import type { ReactNode } from "react";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
@@ -229,6 +230,52 @@ function assertNever(value: never): never {
   throw new Error(`Unsupported integration authorization flow: ${String(value)}`);
 }
 
+function DeviceCodeAuthorization({
+  integrationName,
+  flow,
+}: {
+  readonly integrationName: string;
+  readonly flow: Extract<IntegrationConnectResult, { readonly kind: "device_code" }>;
+}) {
+  const { copyToClipboard, isCopied } = useCopyToClipboard({ target: "device code" });
+
+  return (
+    <div
+      className="mt-2 rounded-xl border border-primary/30 bg-primary/5 p-4"
+      role="status"
+      aria-live="polite"
+    >
+      <p className="text-sm font-semibold">Finish signing in to {integrationName}</p>
+      <p className="mt-1 text-xs text-muted-foreground">{flow.message}</p>
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <code className="select-all rounded bg-background px-3 py-1.5 text-sm font-semibold tracking-widest">
+          {flow.userCode}
+        </code>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          onClick={() => copyToClipboard(flow.userCode)}
+        >
+          {isCopied ? "Copied!" : "Copy code"}
+        </Button>
+        <Button
+          size="sm"
+          render={
+            <a
+              href={flow.verificationUriComplete ?? flow.verificationUri}
+              target="_blank"
+              rel="noreferrer"
+            />
+          }
+        >
+          Open sign-in
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 export function IntegrationAuthorizationFlow({
   integrationName,
   flow,
@@ -249,31 +296,7 @@ export function IntegrationAuthorizationFlow({
   switch (flow.kind) {
     case "device_code":
       return (
-        <div
-          className="mt-2 rounded-xl border border-primary/30 bg-primary/5 p-4"
-          role="status"
-          aria-live="polite"
-        >
-          <p className="text-sm font-semibold">Finish signing in to {integrationName}</p>
-          <p className="mt-1 text-xs text-muted-foreground">{flow.message}</p>
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            <code className="rounded bg-background px-3 py-1.5 text-sm font-semibold tracking-widest">
-              {flow.userCode}
-            </code>
-            <Button
-              size="sm"
-              render={
-                <a
-                  href={flow.verificationUriComplete ?? flow.verificationUri}
-                  target="_blank"
-                  rel="noreferrer"
-                />
-              }
-            >
-              Open sign-in
-            </Button>
-          </div>
-        </div>
+        <DeviceCodeAuthorization key={flow.flowId} integrationName={integrationName} flow={flow} />
       );
     case "authorization_url":
       return (
