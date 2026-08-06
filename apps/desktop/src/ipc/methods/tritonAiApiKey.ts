@@ -73,8 +73,17 @@ export const replaceTritonAiApiKey = makeIpcMethod({
     // Keep the Electron shell alive. Only the backend and its provider children
     // need to be recreated so they inherit the replacement credential.
     const backends = yield* pool.list;
+    const restartableBackends = yield* Effect.forEach(backends, (backend) =>
+      backend.snapshot.pipe(
+        Effect.map((snapshot) => ({ backend, shouldRestart: snapshot.desiredRunning })),
+      ),
+    );
     yield* Effect.forEach(backends, (backend) => backend.stop(), { discard: true });
-    yield* Effect.forEach(backends, (backend) => backend.start, { discard: true });
+    yield* Effect.forEach(
+      restartableBackends,
+      ({ backend, shouldRestart }) => (shouldRestart ? backend.start : Effect.void),
+      { discard: true },
+    );
     return result satisfies DesktopTritonAiApiKeyReplaceResult;
   }),
 });

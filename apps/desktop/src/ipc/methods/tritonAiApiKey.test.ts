@@ -39,22 +39,41 @@ function makeBackendPoolLayer(
   options?: {
     readonly onStop?: () => Effect.Effect<void>;
     readonly onStart?: () => Effect.Effect<void>;
+    readonly desiredRunning?: boolean;
+    readonly additionalBackends?: ReadonlyArray<{
+      readonly onStop?: () => Effect.Effect<void>;
+      readonly onStart?: () => Effect.Effect<void>;
+      readonly desiredRunning?: boolean;
+    }>;
   },
 ) {
   const currentConfig = {
     env: { UCSD_AI_BASE_URL: baseUrl },
     extendEnv: false,
   } as unknown as DesktopBackendManager.DesktopBackendStartConfig;
-  const primary = {
-    currentConfig: Effect.succeed(Option.some(currentConfig)),
-    stop: () => options?.onStop?.() ?? Effect.void,
-    start: options?.onStart?.() ?? Effect.void,
-  } as DesktopBackendManager.DesktopBackendInstance;
+  const makeBackend = (backendOptions?: {
+    readonly onStop?: () => Effect.Effect<void>;
+    readonly onStart?: () => Effect.Effect<void>;
+    readonly desiredRunning?: boolean;
+  }) =>
+    ({
+      currentConfig: Effect.succeed(Option.some(currentConfig)),
+      snapshot: Effect.succeed({
+        desiredRunning: backendOptions?.desiredRunning ?? true,
+      } as DesktopBackendManager.DesktopBackendSnapshot),
+      stop: () => backendOptions?.onStop?.() ?? Effect.void,
+      start: backendOptions?.onStart?.() ?? Effect.void,
+    }) as DesktopBackendManager.DesktopBackendInstance;
+  const primary = makeBackend(options);
+  const backends = [
+    primary,
+    ...(options?.additionalBackends ?? []).map((backendOptions) => makeBackend(backendOptions)),
+  ];
   return Layer.succeed(
     DesktopBackendPool.DesktopBackendPool,
     DesktopBackendPool.DesktopBackendPool.of({
       primary: Effect.succeed(primary),
-      list: Effect.succeed([primary]),
+      list: Effect.succeed(backends),
     } as unknown as DesktopBackendPool.DesktopBackendPool["Service"]),
   );
 }
@@ -124,6 +143,42 @@ describe("replaceTritonAiApiKey IPC", () => {
 
       assert.deepEqual(result, { status: "saved" });
       assert.deepEqual(backendLifecycle, ["stop", "start"]);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("does not start a backend that was already stopped", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const homeDirectory = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "tritonai-api-key-ipc-test-",
+      });
+      const backendLifecycle: string[] = [];
+      const environmentLayer = makeEnvironmentLayer(homeDirectory);
+      const backendPoolLayer = makeBackendPoolLayer("https://configured.tritonai.example/v1", {
+        onStop: () => Effect.sync(() => backendLifecycle.push("primary-stop")),
+        onStart: () => Effect.sync(() => backendLifecycle.push("primary-start")),
+        additionalBackends: [
+          {
+            desiredRunning: false,
+            onStop: () => Effect.sync(() => backendLifecycle.push("secondary-stop")),
+            onStart: () => Effect.sync(() => backendLifecycle.push("secondary-start")),
+          },
+        ],
+      });
+      const validationLayer = makeHttpClientLayer((request) =>
+        Effect.succeed(jsonResponse(request, { info: { key_alias: "replacement" } })),
+      );
+
+      const result = yield* replaceTritonAiApiKey
+        .handler("replacement-key")
+        .pipe(
+          Effect.provide(
+            Layer.mergeAll(environmentLayer, NodeServices.layer, backendPoolLayer, validationLayer),
+          ),
+        );
+
+      assert.deepEqual(result, { status: "saved" });
+      assert.deepEqual(backendLifecycle, ["primary-stop", "secondary-stop", "primary-start"]);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
