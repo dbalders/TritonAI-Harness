@@ -12,6 +12,9 @@ export const ServerTritonAiUsageBudget = Schema.Union([
 ]);
 export type ServerTritonAiUsageBudget = typeof ServerTritonAiUsageBudget.Type;
 
+export const ServerTritonAiUsageCredential = Schema.Literals(["current", "cloud", "on_prem"]);
+export type ServerTritonAiUsageCredential = typeof ServerTritonAiUsageCredential.Type;
+
 /**
  * A server-sanitized snapshot of the currently configured TritonAI key.
  *
@@ -19,6 +22,7 @@ export type ServerTritonAiUsageBudget = typeof ServerTritonAiUsageBudget.Type;
  * user, team, project, and organization identifiers.
  */
 export const ServerTritonAiUsageSnapshot = Schema.Struct({
+  credential: ServerTritonAiUsageCredential,
   keyName: Schema.NullOr(TrimmedNonEmptyString),
   keyAlias: Schema.NullOr(TrimmedNonEmptyString),
   spend: NonNegativeFinite,
@@ -36,6 +40,11 @@ export const ServerTritonAiUsageSnapshot = Schema.Struct({
   fetchedAt: IsoDateTime,
 });
 export type ServerTritonAiUsageSnapshot = typeof ServerTritonAiUsageSnapshot.Type;
+
+export const ServerTritonAiUsageInput = Schema.Struct({
+  credential: Schema.optionalKey(ServerTritonAiUsageCredential),
+});
+export type ServerTritonAiUsageInput = typeof ServerTritonAiUsageInput.Type;
 
 export const ServerTritonAiUsageErrorCode = Schema.Literals([
   "missing_api_key",

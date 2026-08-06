@@ -50,6 +50,7 @@ describe("fetchTritonAiUsage", () => {
       });
 
       assert.deepStrictEqual(result, {
+        credential: "current",
         keyName: "sk-...LjnA",
         keyAlias: "dbalderston-free",
         spend: 3.25,
@@ -71,6 +72,57 @@ describe("fetchTritonAiUsage", () => {
       expect(result).not.toHaveProperty("team_id");
       expect(result).not.toHaveProperty("organization_id");
       expect(fetchMock).toHaveBeenCalledTimes(1);
+    }),
+  );
+
+  it.effect("selects cloud and on-prem credentials without returning either secret", () =>
+    Effect.gen(function* () {
+      const authorizations: string[] = [];
+      const fetchMock = vi.fn(
+        async (_url: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+          const authorization = (init?.headers as Record<string, string> | undefined)
+            ?.Authorization;
+          if (authorization) authorizations.push(authorization);
+          return new Response(JSON.stringify(validProviderResponse));
+        },
+      );
+      const env = {
+        TRITONAI_API_KEY: "current-key",
+        LITELLM_CLOUD_API_KEY: "cloud-key",
+        LITELLM_ONPREM_ADMIN_KEY: "on-prem-key",
+      };
+
+      const cloud = yield* fetchTritonAiUsage({
+        env,
+        credential: "cloud",
+        fetch: fetchMock as unknown as typeof fetch,
+      });
+      const onPrem = yield* fetchTritonAiUsage({
+        env,
+        credential: "on_prem",
+        fetch: fetchMock as unknown as typeof fetch,
+      });
+
+      assert.deepStrictEqual(authorizations, ["Bearer cloud-key", "Bearer on-prem-key"]);
+      assert.equal(cloud.credential, "cloud");
+      assert.equal(onPrem.credential, "on_prem");
+      expect(cloud).not.toHaveProperty("key");
+      expect(onPrem).not.toHaveProperty("key");
+    }),
+  );
+
+  it.effect("reports the selected missing credential", () =>
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(
+        fetchTritonAiUsage({
+          env: { TRITONAI_API_KEY: "current-key" },
+          credential: "cloud",
+        }),
+      );
+
+      assert.equal(error.code, "missing_api_key");
+      assert.match(error.message, /cloud key/u);
+      assert.match(error.message, /LITELLM_CLOUD_API_KEY/u);
     }),
   );
 

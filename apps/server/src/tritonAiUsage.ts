@@ -3,6 +3,7 @@ import {
   ServerTritonAiUsageError,
   type ServerTritonAiUsageErrorCode,
   type ServerTritonAiUsageBudget,
+  type ServerTritonAiUsageCredential,
   type ServerTritonAiUsageSnapshot,
   TRITONAI_API_KEY_ENV,
   UCSD_AI_BASE_URL_ENV,
@@ -14,6 +15,8 @@ import * as Schema from "effect/Schema";
 export const TRITONAI_KEY_INFO_ENDPOINT = "https://tritonai-api.ucsd.edu/key/info";
 
 const USAGE_REQUEST_TIMEOUT_MS = 15_000;
+const LITELLM_CLOUD_API_KEY_ENV = "LITELLM_CLOUD_API_KEY";
+const LITELLM_ONPREM_ADMIN_KEY_ENV = "LITELLM_ONPREM_ADMIN_KEY";
 const NonNegativeFinite = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0));
 const NonNegativeInt = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
 const OptionalNullableString = Schema.optionalKey(Schema.NullOr(Schema.String));
@@ -44,6 +47,8 @@ const decodeTritonAiKeyInfoResponse = Schema.decodeUnknownEffect(TritonAiKeyInfo
 
 interface TritonAiUsageEnv {
   readonly TRITONAI_API_KEY?: string | undefined;
+  readonly LITELLM_CLOUD_API_KEY?: string | undefined;
+  readonly LITELLM_ONPREM_ADMIN_KEY?: string | undefined;
   readonly UCSD_AI_BASE_URL?: string | undefined;
 }
 
@@ -112,12 +117,37 @@ function resolveKeyInfoEndpoint(
   }
 }
 
-function httpFailure(status: number): ServerTritonAiUsageError {
+function credentialDetails(env: TritonAiUsageEnv, credential: ServerTritonAiUsageCredential) {
+  switch (credential) {
+    case "cloud":
+      return {
+        apiKey: env.LITELLM_CLOUD_API_KEY,
+        environmentVariable: LITELLM_CLOUD_API_KEY_ENV,
+        label: "cloud",
+      };
+    case "on_prem":
+      return {
+        apiKey: env.LITELLM_ONPREM_ADMIN_KEY,
+        environmentVariable: LITELLM_ONPREM_ADMIN_KEY_ENV,
+        label: "on-prem",
+      };
+    case "current":
+      return {
+        apiKey: env.TRITONAI_API_KEY,
+        environmentVariable: TRITONAI_API_KEY_ENV,
+        label: "current",
+      };
+  }
+}
+
+function httpFailure(
+  status: number,
+  credential: ReturnType<typeof credentialDetails>,
+): ServerTritonAiUsageError {
   if (status === 401 || status === 403) {
     return usageError({
       code: "key_rejected",
-      message:
-        "The configured TritonAI API key was rejected. Verify TRITONAI_API_KEY on the app server, restart it, and try again.",
+      message: `The configured TritonAI ${credential.label} key was rejected. Verify ${credential.environmentVariable} on the app server, restart it, and try again.`,
       status,
     });
   }
@@ -164,6 +194,7 @@ function sanitizeBudget(info: {
 
 export const fetchTritonAiUsage = Effect.fn("fetchTritonAiUsage")(function* (options?: {
   readonly env?: TritonAiUsageEnv;
+  readonly credential?: ServerTritonAiUsageCredential;
   readonly fetch?: FetchLike;
   readonly now?: () => string;
 }): Effect.fn.Return<ServerTritonAiUsageSnapshot, ServerTritonAiUsageError> {
@@ -171,14 +202,16 @@ export const fetchTritonAiUsage = Effect.fn("fetchTritonAiUsage")(function* (opt
     options?.env ??
     ({
       TRITONAI_API_KEY: process.env[TRITONAI_API_KEY_ENV],
+      LITELLM_CLOUD_API_KEY: process.env[LITELLM_CLOUD_API_KEY_ENV],
+      LITELLM_ONPREM_ADMIN_KEY: process.env[LITELLM_ONPREM_ADMIN_KEY_ENV],
       UCSD_AI_BASE_URL: process.env[UCSD_AI_BASE_URL_ENV],
     } satisfies TritonAiUsageEnv);
-  const apiKey = env.TRITONAI_API_KEY?.trim();
+  const credential = credentialDetails(env, options?.credential ?? "current");
+  const apiKey = credential.apiKey?.trim();
   if (!apiKey) {
     return yield* usageError({
       code: "missing_api_key",
-      message:
-        "Usage is not configured. Set TRITONAI_API_KEY on the app server, restart it, and refresh this page.",
+      message: `Usage is not configured for the ${credential.label} key. Set ${credential.environmentVariable} on the app server, restart it, and refresh this page.`,
     });
   }
 
@@ -198,7 +231,7 @@ export const fetchTritonAiUsage = Effect.fn("fetchTritonAiUsage")(function* (opt
   });
 
   if (!response.ok) {
-    return yield* httpFailure(response.status);
+    return yield* httpFailure(response.status, credential);
   }
 
   const payload = yield* Effect.tryPromise({
@@ -221,6 +254,7 @@ export const fetchTritonAiUsage = Effect.fn("fetchTritonAiUsage")(function* (opt
 
   const info = decoded.info;
   return {
+    credential: options?.credential ?? "current",
     keyName: optionalText(info.key_name),
     keyAlias: optionalText(info.key_alias),
     spend: info.spend,

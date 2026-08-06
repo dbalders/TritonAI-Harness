@@ -10,7 +10,7 @@ import { useState } from "react";
 
 import { cn } from "../../lib/utils";
 import { usePrimaryEnvironment } from "../../state/environments";
-import { useEnvironmentQuery } from "../../state/query";
+import { type EnvironmentQueryView, useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
@@ -369,16 +369,21 @@ function TritonAiApiKeySetting() {
 export function UsageSettingsPanel() {
   const primaryEnvironment = usePrimaryEnvironment();
   const environmentId = primaryEnvironment?.environmentId ?? null;
-  const { data, error, isPending, refresh } = useEnvironmentQuery(
-    environmentId === null ? null : serverEnvironment.tritonAiUsage({ environmentId, input: {} }),
+  const cloudUsage = useEnvironmentQuery(
+    environmentId === null
+      ? null
+      : serverEnvironment.tritonAiUsage({ environmentId, input: { credential: "cloud" } }),
   );
-  const viewState = getUsageViewState({
-    environmentSelected: environmentId !== null,
-    hasData: data !== null,
-    hasError: error !== null,
-    isPending,
-  });
-  const fetchedAt = data ? formatUsageDate(data.fetchedAt) : null;
+  const onPremUsage = useEnvironmentQuery(
+    environmentId === null
+      ? null
+      : serverEnvironment.tritonAiUsage({ environmentId, input: { credential: "on_prem" } }),
+  );
+  const isPending = cloudUsage.isPending || onPremUsage.isPending;
+  const refresh = () => {
+    cloudUsage.refresh();
+    onPremUsage.refresh();
+  };
 
   return (
     <SettingsPageContainer>
@@ -390,7 +395,7 @@ export function UsageSettingsPanel() {
           <Button
             size="xs"
             variant="ghost"
-            disabled={environmentId === null || isPending || viewState === "unavailable"}
+            disabled={environmentId === null || isPending}
             onClick={refresh}
           >
             <RefreshCwIcon className={cn(isPending && "animate-spin motion-reduce:animate-none")} />
@@ -398,70 +403,103 @@ export function UsageSettingsPanel() {
           </Button>
         }
       >
-        {viewState === "loading" ? <UsageLoadingState /> : null}
-        {viewState === "no-environment" ? (
+        {environmentId === null ? (
           <UsageEmptyState
             title="No server environment selected"
-            message="Connect to a TritonAI Harness server to load usage for its configured key."
+            message="Connect to a TritonAI Harness server to load usage for its cloud and on-prem keys."
             canRefresh={false}
             isPending={false}
             onRefresh={refresh}
           />
         ) : null}
-        {viewState === "unavailable" ? (
-          <UsageEmptyState
-            title="Server environment unavailable"
-            message="Reconnect the selected TritonAI Harness server to load usage for its configured key."
-            canRefresh={false}
-            isPending={false}
-            onRefresh={refresh}
-          />
-        ) : null}
-        {viewState === "error" && error ? (
-          <UsageEmptyState
-            title={usageErrorTitle(error)}
-            message={error}
-            canRefresh
-            isPending={isPending}
-            onRefresh={refresh}
-          />
-        ) : null}
-        {data ? (
-          <div aria-live="polite">
-            <div className="flex flex-col gap-2 border-b border-border/60 bg-muted/20 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5">
-              <div className="flex min-w-0 flex-wrap items-center gap-2">
-                <span className="truncate text-xs font-medium text-foreground">
-                  {data.keyAlias ?? data.keyName ?? "Configured server key"}
-                </span>
-              </div>
-              <span className="text-[11px] text-muted-foreground">
-                {fetchedAt ? `Updated ${fetchedAt}` : "Update time unavailable"}
-              </span>
-            </div>
-            {error ? (
-              <div className="flex items-start gap-2 border-b border-warning/30 bg-warning/5 px-4 py-2.5 text-xs text-warning-foreground sm:px-5">
-                <AlertTriangleIcon className="mt-0.5 size-3.5 shrink-0" />
-                <span>{error} Showing the last successful snapshot.</span>
-              </div>
-            ) : null}
-            {data.blocked === true || data.softBudgetCooldown === true ? (
-              <div className="flex items-start gap-2 border-b border-destructive/30 bg-destructive/5 px-4 py-2.5 text-xs text-destructive">
-                <ShieldAlertIcon className="mt-0.5 size-3.5 shrink-0" />
-                <span>
-                  {data.blocked === true
-                    ? "TritonAI reports that this key is blocked. Requests may fail until the restriction is removed."
-                    : "TritonAI reports that this key is in budget cooldown. Requests may be temporarily limited."}
-                </span>
-              </div>
-            ) : null}
-            <BudgetInstrument usage={data} />
+        {environmentId !== null ? (
+          <div className="space-y-5" aria-live="polite">
+            <UsageCredentialCard label="On-prem" usage={onPremUsage} />
+            <UsageCredentialCard label="Cloud" usage={cloudUsage} />
           </div>
         ) : null}
-        <div className="border-t border-border/60 px-4 py-3 text-[11px] leading-relaxed text-muted-foreground/70 sm:px-5">
-          This is a live quota snapshot from TritonAI, not a usage history. The API key remains on
-          the server.
-        </div>
       </SettingsSection>
     </SettingsPageContainer>
+  );
+}
+
+function UsageCredentialCard({
+  label,
+  usage,
+}: {
+  label: string;
+  usage: EnvironmentQueryView<ServerTritonAiUsageSnapshot>;
+}) {
+  const { data, error, isPending, refresh } = usage;
+  const viewState = getUsageViewState({
+    environmentSelected: true,
+    hasData: data !== null,
+    hasError: error !== null,
+    isPending,
+  });
+  const fetchedAt = data ? formatUsageDate(data.fetchedAt) : null;
+
+  return (
+    <div className="overflow-hidden rounded-xl border border-border/70 bg-card shadow-xs">
+      <div className="flex flex-col gap-2 border-b border-border/60 bg-muted/20 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <Badge variant="outline" size="sm">
+            {label}
+          </Badge>
+          {data ? (
+            <span className="truncate text-xs font-medium text-foreground">
+              {data.keyAlias ?? data.keyName ?? "Configured server key"}
+            </span>
+          ) : null}
+        </div>
+        <span className="text-[11px] text-muted-foreground">
+          {data ? (fetchedAt ? `Updated ${fetchedAt}` : "Update time unavailable") : ""}
+        </span>
+      </div>
+      {viewState === "loading" ? <UsageLoadingState /> : null}
+      {viewState === "unavailable" ? (
+        <UsageEmptyState
+          title="Server environment unavailable"
+          message={`Reconnect the selected TritonAI Harness server to load ${label.toLowerCase()} usage.`}
+          canRefresh={false}
+          isPending={false}
+          onRefresh={refresh}
+        />
+      ) : null}
+      {viewState === "error" && error ? (
+        <UsageEmptyState
+          title={usageErrorTitle(error)}
+          message={error}
+          canRefresh
+          isPending={isPending}
+          onRefresh={refresh}
+        />
+      ) : null}
+      {data ? (
+        <>
+          {error ? (
+            <div className="flex items-start gap-2 border-b border-warning/30 bg-warning/5 px-4 py-2.5 text-xs text-warning-foreground sm:px-5">
+              <AlertTriangleIcon className="mt-0.5 size-3.5 shrink-0" />
+              <span>{error} Showing the last successful snapshot.</span>
+            </div>
+          ) : null}
+          {data.blocked === true || data.softBudgetCooldown === true ? (
+            <div className="flex items-start gap-2 border-b border-destructive/30 bg-destructive/5 px-4 py-2.5 text-xs text-destructive">
+              <ShieldAlertIcon className="mt-0.5 size-3.5 shrink-0" />
+              <span>
+                {data.blocked === true
+                  ? "TritonAI reports that this key is blocked. Requests may fail until the restriction is removed."
+                  : "TritonAI reports that this key is in budget cooldown. Requests may be temporarily limited."}
+              </span>
+            </div>
+          ) : null}
+          <BudgetInstrument usage={data} />
+        </>
+      ) : null}
+      <div className="border-t border-border/60 px-4 py-3 text-[11px] leading-relaxed text-muted-foreground/70 sm:px-5">
+        This is a live quota snapshot from TritonAI, not a usage history. The {label.toLowerCase()}{" "}
+        key remains on the server.
+      </div>
+    </div>
   );
 }

@@ -13,6 +13,7 @@ function usage(
   overrides: Partial<ServerTritonAiUsageSnapshot> = {},
 ): ServerTritonAiUsageSnapshot {
   return {
+    credential: "current",
     keyName: "test-key",
     keyAlias: null,
     spend,

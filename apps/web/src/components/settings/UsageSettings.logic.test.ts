@@ -162,6 +162,11 @@ describe("usageErrorTitle", () => {
         "The configured TritonAI API key was rejected. Verify TRITONAI_API_KEY on the app server, restart it, and try again.",
       ),
     ).toBe("API key rejected");
+    expect(
+      usageErrorTitle(
+        "The configured TritonAI cloud key was rejected. Verify LITELLM_CLOUD_API_KEY on the app server, restart it, and try again.",
+      ),
+    ).toBe("API key rejected");
   });
 
   it("uses the general title for other upstream failures", () => {

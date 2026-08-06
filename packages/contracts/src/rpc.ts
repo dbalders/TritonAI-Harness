@@ -166,7 +166,11 @@ import {
   ServerVoiceTranscribeResult,
   ServerVoiceTranscriptionError,
 } from "./voice.ts";
-import { ServerTritonAiUsageError, ServerTritonAiUsageSnapshot } from "./tritonaiUsage.ts";
+import {
+  ServerTritonAiUsageError,
+  ServerTritonAiUsageInput,
+  ServerTritonAiUsageSnapshot,
+} from "./tritonaiUsage.ts";
 import {
   SourceControlCloneRepositoryInput,
   SourceControlCloneRepositoryResult,
@@ -377,7 +381,7 @@ export const WsServerTranscribeVoiceRpc = Rpc.make(WS_METHODS.serverTranscribeVo
 });
 
 export const WsServerGetTritonAiUsageRpc = Rpc.make(WS_METHODS.serverGetTritonAiUsage, {
-  payload: Schema.Struct({}),
+  payload: ServerTritonAiUsageInput,
   success: ServerTritonAiUsageSnapshot,
   error: Schema.Union([ServerTritonAiUsageError, EnvironmentAuthorizationError]),
 });

@@ -1482,10 +1482,14 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.serverTranscribeVoice, transcribeVoice(input), {
             "rpc.aggregate": "server",
           }),
-        [WS_METHODS.serverGetTritonAiUsage]: (_input) =>
-          observeRpcEffect(WS_METHODS.serverGetTritonAiUsage, fetchTritonAiUsage(), {
-            "rpc.aggregate": "server",
-          }),
+        [WS_METHODS.serverGetTritonAiUsage]: ({ credential }) =>
+          observeRpcEffect(
+            WS_METHODS.serverGetTritonAiUsage,
+            fetchTritonAiUsage(credential === undefined ? undefined : { credential }),
+            {
+              "rpc.aggregate": "server",
+            },
+          ),
         [WS_METHODS.serverDiscoverSourceControl]: (_input) =>
           observeRpcEffect(
             WS_METHODS.serverDiscoverSourceControl,
