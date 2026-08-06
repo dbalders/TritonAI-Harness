@@ -7,7 +7,6 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
-import * as DesktopLifecycle from "../../app/DesktopLifecycle.ts";
 import * as DesktopBackendPool from "../../backend/DesktopBackendPool.ts";
 import * as DesktopTritonAiApiKey from "../../settings/DesktopTritonAiApiKey.ts";
 import * as IpcChannels from "../channels.ts";
@@ -44,14 +43,13 @@ export const replaceTritonAiApiKey = makeIpcMethod({
   payload: Schema.Unknown,
   result: DesktopTritonAiApiKeyReplaceResultSchema,
   handler: Effect.fn("desktop.ipc.tritonAiApiKey.replace")(function* (rawApiKey) {
-    const lifecycle = yield* DesktopLifecycle.DesktopLifecycle;
+    const pool = yield* DesktopBackendPool.DesktopBackendPool;
+    const primary = yield* pool.primary;
     const result = yield* Effect.gen(function* () {
       const replacement = DesktopTritonAiApiKey.normalizeReplacementApiKey(rawApiKey);
       if (replacement === null) {
         return yield* new DesktopTritonAiApiKey.DesktopTritonAiApiKeyInputError();
       }
-      const pool = yield* DesktopBackendPool.DesktopBackendPool;
-      const primary = yield* pool.primary;
       const currentConfig = yield* primary.currentConfig;
       if (Option.isNone(currentConfig)) {
         return yield* new DesktopTritonAiApiKey.DesktopTritonAiApiKeyValidationError({
@@ -72,7 +70,11 @@ export const replaceTritonAiApiKey = makeIpcMethod({
     );
     if (result.status === "error") return result;
 
-    yield* lifecycle.relaunch("tritonai-api-key-replaced", { waitForIpcResponse: true });
+    // Keep the Electron shell alive. Only the backend and its provider children
+    // need to be recreated so they inherit the replacement credential.
+    const backends = yield* pool.list;
+    yield* Effect.forEach(backends, (backend) => backend.stop(), { discard: true });
+    yield* Effect.forEach(backends, (backend) => backend.start, { discard: true });
     return result satisfies DesktopTritonAiApiKeyReplaceResult;
   }),
 });

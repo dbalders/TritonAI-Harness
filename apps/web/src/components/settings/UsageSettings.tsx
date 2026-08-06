@@ -303,12 +303,7 @@ function TritonAiApiKeySetting() {
         return;
       }
       setApiKey("");
-      window.setTimeout(() => {
-        setIsSaving(false);
-        setSaveError(
-          "The key was saved, but TritonAI Harness did not restart. Restart the app manually to use the new key.",
-        );
-      }, 5_000);
+      setIsSaving(false);
     } catch (error) {
       setIsSaving(false);
       setSaveError(
@@ -337,8 +332,9 @@ function TritonAiApiKeySetting() {
           </label>
           <p className="mt-1 max-w-2xl text-xs leading-relaxed text-muted-foreground/80">
             The existing key is never displayed. Saving securely replaces the desktop override and
-            restarts TritonAI Harness so future Codex, usage, and voice transcription requests all
-            use the new key. Installer updates will not overwrite this choice.
+            applies it to future Codex, usage, and voice transcription requests. The local runtime
+            briefly reconnects while TritonAI Harness stays open. Installer updates will not
+            overwrite this choice.
           </p>
         </div>
         <div className="flex max-w-2xl flex-col gap-2 sm:flex-row">
@@ -357,7 +353,7 @@ function TritonAiApiKeySetting() {
             }}
           />
           <Button type="submit" disabled={replacement.length === 0 || isSaving}>
-            {isSaving ? "Saving…" : "Save and Restart"}
+            {isSaving ? "Applying…" : "Save key"}
           </Button>
         </div>
         {saveError ? (
