@@ -8,15 +8,9 @@ import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstab
 
 import * as DesktopConfig from "../../app/DesktopConfig.ts";
 import * as DesktopEnvironment from "../../app/DesktopEnvironment.ts";
-import * as DesktopLifecycle from "../../app/DesktopLifecycle.ts";
-import * as DesktopShutdown from "../../app/DesktopShutdown.ts";
-import * as DesktopState from "../../app/DesktopState.ts";
 import * as DesktopBackendManager from "../../backend/DesktopBackendManager.ts";
 import * as DesktopBackendPool from "../../backend/DesktopBackendPool.ts";
-import * as ElectronApp from "../../electron/ElectronApp.ts";
-import * as ElectronTheme from "../../electron/ElectronTheme.ts";
 import * as DesktopTritonAiApiKey from "../../settings/DesktopTritonAiApiKey.ts";
-import * as DesktopWindow from "../../window/DesktopWindow.ts";
 import { replaceTritonAiApiKey } from "./tritonAiApiKey.ts";
 
 function jsonResponse(request: HttpClientRequest.HttpClientRequest, body: unknown, status = 200) {
@@ -40,19 +34,47 @@ function makeHttpClientLayer(
   );
 }
 
-function makeBackendPoolLayer(baseUrl: string) {
+function makeBackendPoolLayer(
+  baseUrl: string,
+  options?: {
+    readonly onStop?: () => Effect.Effect<void>;
+    readonly onStart?: () => Effect.Effect<void>;
+    readonly desiredRunning?: boolean;
+    readonly additionalBackends?: ReadonlyArray<{
+      readonly onStop?: () => Effect.Effect<void>;
+      readonly onStart?: () => Effect.Effect<void>;
+      readonly desiredRunning?: boolean;
+    }>;
+  },
+) {
   const currentConfig = {
     env: { UCSD_AI_BASE_URL: baseUrl },
     extendEnv: false,
   } as unknown as DesktopBackendManager.DesktopBackendStartConfig;
-  const primary = {
-    currentConfig: Effect.succeed(Option.some(currentConfig)),
-  } as DesktopBackendManager.DesktopBackendInstance;
+  const makeBackend = (backendOptions?: {
+    readonly onStop?: () => Effect.Effect<void>;
+    readonly onStart?: () => Effect.Effect<void>;
+    readonly desiredRunning?: boolean;
+  }) =>
+    ({
+      currentConfig: Effect.succeed(Option.some(currentConfig)),
+      snapshot: Effect.succeed({
+        desiredRunning: backendOptions?.desiredRunning ?? true,
+      } as DesktopBackendManager.DesktopBackendSnapshot),
+      stop: () => backendOptions?.onStop?.() ?? Effect.void,
+      start: backendOptions?.onStart?.() ?? Effect.void,
+    }) as DesktopBackendManager.DesktopBackendInstance;
+  const primary = makeBackend(options);
+  const backends = [
+    primary,
+    ...(options?.additionalBackends ?? []).map((backendOptions) => makeBackend(backendOptions)),
+  ];
   return Layer.succeed(
     DesktopBackendPool.DesktopBackendPool,
     DesktopBackendPool.DesktopBackendPool.of({
       primary: Effect.succeed(primary),
-    } as DesktopBackendPool.DesktopBackendPool["Service"]),
+      list: Effect.succeed(backends),
+    } as unknown as DesktopBackendPool.DesktopBackendPool["Service"]),
   );
 }
 
@@ -74,40 +96,36 @@ function makeEnvironmentLayer(homeDirectory: string) {
   );
 }
 
-const unusedLifecycleRuntimeLayer = Layer.mergeAll(
-  DesktopShutdown.layer,
-  DesktopState.layer,
-  Layer.succeed(
-    DesktopWindow.DesktopWindow,
-    DesktopWindow.DesktopWindow.of({} as DesktopWindow.DesktopWindow["Service"]),
-  ),
-  Layer.succeed(
-    ElectronApp.ElectronApp,
-    ElectronApp.ElectronApp.of({} as ElectronApp.ElectronApp["Service"]),
-  ),
-  Layer.succeed(
-    ElectronTheme.ElectronTheme,
-    ElectronTheme.ElectronTheme.of({} as ElectronTheme.ElectronTheme["Service"]),
-  ),
-);
-
 describe("replaceTritonAiApiKey IPC", () => {
-  it.effect("persists the replacement before requesting an app relaunch", () =>
+  it.effect("persists the replacement before restarting only the backend", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const homeDirectory = yield* fileSystem.makeTempDirectoryScoped({
         prefix: "tritonai-api-key-ipc-test-",
       });
-      const relaunchRequests: Array<{
-        readonly reason: string;
-        readonly waitForIpcResponse: boolean;
-      }> = [];
+      const backendLifecycle: string[] = [];
       const environmentLayer = makeEnvironmentLayer(homeDirectory);
       const environment = yield* DesktopEnvironment.DesktopEnvironment.pipe(
         Effect.provide(environmentLayer),
       );
       const overridePath = DesktopTritonAiApiKey.tritonAiApiKeyOverridePath(environment);
-      const backendPoolLayer = makeBackendPoolLayer("https://configured.tritonai.example/v1");
+      const backendPoolLayer = makeBackendPoolLayer("https://configured.tritonai.example/v1", {
+        onStop: () =>
+          fileSystem.readFileString(overridePath).pipe(
+            Effect.orDie,
+            Effect.tap((contents) =>
+              Effect.sync(() => {
+                assert.equal(contents, "replacement-key\n");
+                backendLifecycle.push("stop");
+              }),
+            ),
+            Effect.asVoid,
+          ),
+        onStart: () =>
+          Effect.sync(() => {
+            backendLifecycle.push("start");
+          }),
+      });
       const validationLayer = makeHttpClientLayer((request) =>
         Effect.sync(() => {
           assert.equal(request.url, "https://configured.tritonai.example/key/info");
@@ -115,50 +133,56 @@ describe("replaceTritonAiApiKey IPC", () => {
           return jsonResponse(request, { info: { key_alias: "replacement" } });
         }),
       );
-      const lifecycleLayer = Layer.succeed(
-        DesktopLifecycle.DesktopLifecycle,
-        DesktopLifecycle.DesktopLifecycle.of({
-          relaunch: (reason, options) =>
-            fileSystem.readFileString(overridePath).pipe(
-              Effect.orDie,
-              Effect.tap((contents) =>
-                Effect.sync(() => {
-                  assert.equal(contents, "replacement-key\n");
-                  relaunchRequests.push({
-                    reason,
-                    waitForIpcResponse: options?.waitForIpcResponse ?? false,
-                  });
-                }),
-              ),
-              Effect.asVoid,
-            ),
-          register: Effect.void,
-        }),
+      const result = yield* replaceTritonAiApiKey
+        .handler("replacement-key")
+        .pipe(
+          Effect.provide(
+            Layer.mergeAll(environmentLayer, NodeServices.layer, backendPoolLayer, validationLayer),
+          ),
+        );
+
+      assert.deepEqual(result, { status: "saved" });
+      assert.deepEqual(backendLifecycle, ["stop", "start"]);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("does not start a backend that was already stopped", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const homeDirectory = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "tritonai-api-key-ipc-test-",
+      });
+      const backendLifecycle: string[] = [];
+      const environmentLayer = makeEnvironmentLayer(homeDirectory);
+      const backendPoolLayer = makeBackendPoolLayer("https://configured.tritonai.example/v1", {
+        onStop: () => Effect.sync(() => backendLifecycle.push("primary-stop")),
+        onStart: () => Effect.sync(() => backendLifecycle.push("primary-start")),
+        additionalBackends: [
+          {
+            desiredRunning: false,
+            onStop: () => Effect.sync(() => backendLifecycle.push("secondary-stop")),
+            onStart: () => Effect.sync(() => backendLifecycle.push("secondary-start")),
+          },
+        ],
+      });
+      const validationLayer = makeHttpClientLayer((request) =>
+        Effect.succeed(jsonResponse(request, { info: { key_alias: "replacement" } })),
       );
 
       const result = yield* replaceTritonAiApiKey
         .handler("replacement-key")
         .pipe(
           Effect.provide(
-            Layer.mergeAll(
-              environmentLayer,
-              NodeServices.layer,
-              backendPoolLayer,
-              validationLayer,
-              lifecycleLayer,
-              unusedLifecycleRuntimeLayer,
-            ),
+            Layer.mergeAll(environmentLayer, NodeServices.layer, backendPoolLayer, validationLayer),
           ),
         );
 
       assert.deepEqual(result, { status: "saved" });
-      assert.deepEqual(relaunchRequests, [
-        { reason: "tritonai-api-key-replaced", waitForIpcResponse: true },
-      ]);
+      assert.deepEqual(backendLifecycle, ["primary-stop", "secondary-stop", "primary-start"]);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("rejects blank replacements before writing or relaunching", () =>
+  it.effect("rejects blank replacements before writing or restarting the backend", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const homeDirectory = yield* fileSystem.makeTempDirectoryScoped({
@@ -167,26 +191,12 @@ describe("replaceTritonAiApiKey IPC", () => {
       const environmentLayer = makeEnvironmentLayer(homeDirectory);
       const backendPoolLayer = makeBackendPoolLayer("https://configured.tritonai.example/v1");
       const validationLayer = makeHttpClientLayer(() => Effect.die("unexpected validation"));
-      const lifecycleLayer = Layer.succeed(
-        DesktopLifecycle.DesktopLifecycle,
-        DesktopLifecycle.DesktopLifecycle.of({
-          relaunch: () => Effect.die("unexpected relaunch"),
-          register: Effect.void,
-        }),
-      );
 
       const result = yield* replaceTritonAiApiKey
         .handler("   ")
         .pipe(
           Effect.provide(
-            Layer.mergeAll(
-              environmentLayer,
-              NodeServices.layer,
-              backendPoolLayer,
-              validationLayer,
-              lifecycleLayer,
-              unusedLifecycleRuntimeLayer,
-            ),
+            Layer.mergeAll(environmentLayer, NodeServices.layer, backendPoolLayer, validationLayer),
           ),
         );
       assert.deepEqual(result, {
@@ -203,20 +213,13 @@ describe("replaceTritonAiApiKey IPC", () => {
         prefix: "tritonai-api-key-ipc-test-",
       });
       const environmentLayer = makeEnvironmentLayer(homeDirectory);
-      const backendPoolLayer = makeBackendPoolLayer("https://configured.tritonai.example/v1");
       const validationLayer = makeHttpClientLayer((request) =>
         Effect.succeed(jsonResponse(request, { error: "Unauthorized" }, 401)),
       );
-      let didRelaunch = false;
-      const lifecycleLayer = Layer.succeed(
-        DesktopLifecycle.DesktopLifecycle,
-        DesktopLifecycle.DesktopLifecycle.of({
-          relaunch: () =>
-            Effect.sync(() => {
-              didRelaunch = true;
-            }),
-          register: Effect.void,
-        }),
+      let didRestartBackend = false;
+      const guardedBackendPoolLayer = makeBackendPoolLayer(
+        "https://configured.tritonai.example/v1",
+        { onStop: () => Effect.sync(() => (didRestartBackend = true)) },
       );
 
       yield* DesktopTritonAiApiKey.replaceTritonAiApiKey("current-key").pipe(
@@ -229,10 +232,8 @@ describe("replaceTritonAiApiKey IPC", () => {
             Layer.mergeAll(
               environmentLayer,
               NodeServices.layer,
-              backendPoolLayer,
+              guardedBackendPoolLayer,
               validationLayer,
-              lifecycleLayer,
-              unusedLifecycleRuntimeLayer,
             ),
           ),
         );
@@ -241,7 +242,7 @@ describe("replaceTritonAiApiKey IPC", () => {
         status: "error",
         message: "TritonAI rejected the API key (HTTP 401).",
       });
-      assert.isFalse(didRelaunch);
+      assert.isFalse(didRestartBackend);
       const stored = yield* DesktopTritonAiApiKey.readTritonAiApiKeyOverride.pipe(
         Effect.provide(environmentLayer),
       );
@@ -257,20 +258,13 @@ describe("replaceTritonAiApiKey IPC", () => {
         prefix: "tritonai-api-key-ipc-test-",
       });
       const environmentLayer = makeEnvironmentLayer(homeDirectory);
-      const backendPoolLayer = makeBackendPoolLayer("https://configured.tritonai.example/v1");
       const validationLayer = makeHttpClientLayer((request) =>
         Effect.succeed(jsonResponse(request, { error: "Rate limited" }, 429)),
       );
-      let didRelaunch = false;
-      const lifecycleLayer = Layer.succeed(
-        DesktopLifecycle.DesktopLifecycle,
-        DesktopLifecycle.DesktopLifecycle.of({
-          relaunch: () =>
-            Effect.sync(() => {
-              didRelaunch = true;
-            }),
-          register: Effect.void,
-        }),
+      let didRestartBackend = false;
+      const guardedBackendPoolLayer = makeBackendPoolLayer(
+        "https://configured.tritonai.example/v1",
+        { onStop: () => Effect.sync(() => (didRestartBackend = true)) },
       );
 
       yield* DesktopTritonAiApiKey.replaceTritonAiApiKey("current-key").pipe(
@@ -283,10 +277,8 @@ describe("replaceTritonAiApiKey IPC", () => {
             Layer.mergeAll(
               environmentLayer,
               NodeServices.layer,
-              backendPoolLayer,
+              guardedBackendPoolLayer,
               validationLayer,
-              lifecycleLayer,
-              unusedLifecycleRuntimeLayer,
             ),
           ),
         );
@@ -296,7 +288,7 @@ describe("replaceTritonAiApiKey IPC", () => {
         message:
           "TritonAI could not verify the key because it is rate limiting requests (HTTP 429).",
       });
-      assert.isFalse(didRelaunch);
+      assert.isFalse(didRestartBackend);
       const stored = yield* DesktopTritonAiApiKey.readTritonAiApiKeyOverride.pipe(
         Effect.provide(environmentLayer),
       );

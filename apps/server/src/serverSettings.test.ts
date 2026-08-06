@@ -110,10 +110,11 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     }).pipe(Effect.provide(settingsLayer));
   });
 
-  it.effect("migrates installer-written provider secrets when settings are first loaded", () =>
+  it.effect("removes the installer-era provider key when settings are first loaded", () =>
     Effect.gen(function* () {
       const serverConfig = yield* ServerConfig.ServerConfig;
       const fileSystem = yield* FileSystem.FileSystem;
+      const secretStore = yield* ServerSecretStore.ServerSecretStore;
       const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
       const instanceId = ProviderInstanceId.make("codex");
       const plaintext = "installer-provisioned-api-key";
@@ -141,12 +142,6 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       // @effect-diagnostics-next-line preferSchemaOverJson:off
       assert.deepEqual(JSON.parse(persistedRaw).providerInstances.codex.environment, [
         {
-          name: "TRITONAI_API_KEY",
-          value: "",
-          sensitive: true,
-          valueRedacted: true,
-        },
-        {
           name: "UCSD_AI_BASE_URL",
           value: "https://example.invalid/v1",
           sensitive: false,
@@ -156,11 +151,19 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       assert.strictEqual(persistedInfo.mode & 0o777, 0o600);
 
       const materialized = yield* serverSettings.getSettings;
-      assert.strictEqual(
-        materialized.providerInstances[instanceId]?.environment?.[0]?.value,
-        plaintext,
+      assert.deepEqual(materialized.providerInstances[instanceId]?.environment, [
+        {
+          name: "UCSD_AI_BASE_URL",
+          value: "https://example.invalid/v1",
+          sensitive: false,
+        },
+      ]);
+      assert.isTrue(
+        Option.isNone(
+          yield* secretStore.get(providerEnvironmentSecretName(instanceId, "TRITONAI_API_KEY")),
+        ),
       );
-    }).pipe(Effect.provide(makeServerSettingsLayer())),
+    }).pipe(Effect.provide(makeInspectableServerSettingsLayer())),
   );
 
   it.effect("migrates legacy OpenCode server passwords out of settings.json", () =>
@@ -293,7 +296,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       const secretStore = yield* ServerSecretStore.ServerSecretStore;
       const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
       const instanceId = ProviderInstanceId.make("codex");
-      const variableName = "TRITONAI_API_KEY";
+      const variableName = "OPENROUTER_API_KEY";
       const secretName = providerEnvironmentSecretName(instanceId, variableName);
 
       yield* serverSettings.updateSettings({

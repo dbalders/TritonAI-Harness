@@ -23,6 +23,7 @@ import {
   ServerSettings,
   ServerSettingsError,
   type ServerSettingsPatch,
+  TRITONAI_API_KEY_ENV,
 } from "@t3tools/contracts";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
@@ -84,6 +85,22 @@ function providerEnvironmentSecretName(input: {
 }
 
 const LEGACY_OPENCODE_SERVER_CREDENTIAL_KEY = "provider-legacy-opencode-server-credential";
+
+function removeManagedTritonAiProviderEnvironment(settings: ServerSettings): ServerSettings {
+  let changed = false;
+  const providerInstances = Object.fromEntries(
+    Object.entries(settings.providerInstances).map(([instanceId, instance]) => {
+      if (!instance.environment) return [instanceId, instance];
+      const environment = instance.environment.filter(
+        (variable) => variable.name.toUpperCase() !== TRITONAI_API_KEY_ENV,
+      );
+      if (environment.length === instance.environment.length) return [instanceId, instance];
+      changed = true;
+      return [instanceId, { ...instance, environment }];
+    }),
+  );
+  return changed ? { ...settings, providerInstances } : settings;
+}
 
 function redactProviderEnvironmentVariable(
   variable: ProviderInstanceEnvironmentVariable,
@@ -684,25 +701,32 @@ const make = Effect.gen(function* () {
       });
       return DEFAULT_SERVER_SETTINGS;
     }
+    const withoutManagedTritonAiProviderEnvironment = removeManagedTritonAiProviderEnvironment(
+      decoded.value,
+    );
+    const removedManagedTritonAiProviderEnvironment =
+      withoutManagedTritonAiProviderEnvironment !== decoded.value;
     if (hasExplicitLegacyOpenCodePasswordClear(raw)) {
       return yield* runWithProviderSecretRollback(
         decoded.value,
-        decoded.value,
+        withoutManagedTritonAiProviderEnvironment,
         removeLegacyOpenCodeStoredValue.pipe(
-          Effect.andThen(persistProviderSecrets(decoded.value, decoded.value)),
+          Effect.andThen(
+            persistProviderSecrets(decoded.value, withoutManagedTritonAiProviderEnvironment),
+          ),
           Effect.flatMap(normalizeServerSettings),
           Effect.tap(writeSettingsAtomically),
         ),
       );
     }
-    if (!hasPlaintextProviderSecret(decoded.value)) {
+    if (!hasPlaintextProviderSecret(decoded.value) && !removedManagedTritonAiProviderEnvironment) {
       return decoded.value;
     }
 
     const migrated = yield* runWithProviderSecretRollback(
       decoded.value,
-      decoded.value,
-      persistProviderSecrets(decoded.value, decoded.value).pipe(
+      withoutManagedTritonAiProviderEnvironment,
+      persistProviderSecrets(decoded.value, withoutManagedTritonAiProviderEnvironment).pipe(
         Effect.flatMap(normalizeServerSettings),
         Effect.tap(writeSettingsAtomically),
       ),
@@ -798,7 +822,9 @@ const make = Effect.gen(function* () {
           const current = yield* getSettingsFromCache.pipe(
             Effect.flatMap(materializeProviderSecrets),
           );
-          const proposed = applyServerSettingsPatch(current, patch);
+          const proposed = removeManagedTritonAiProviderEnvironment(
+            applyServerSettingsPatch(current, patch),
+          );
           const next = yield* runWithProviderSecretRollback(
             current,
             proposed,

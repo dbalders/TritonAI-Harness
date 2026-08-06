@@ -21,7 +21,13 @@
  *
  * @module provider/Drivers/CodexDriver
  */
-import { CodexSettings, ProviderDriverKind, type ServerProvider } from "@t3tools/contracts";
+import {
+  CodexSettings,
+  ProviderDriverKind,
+  type ProviderInstanceEnvironment,
+  type ServerProvider,
+  TRITONAI_API_KEY_ENV,
+} from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
@@ -74,6 +80,35 @@ const UPDATE = makePackageManagedProviderMaintenanceResolver({
   homebrewFormula: "codex",
   nativeUpdate: null,
 });
+
+export function mergeCodexProviderEnvironment(
+  environment: ProviderInstanceEnvironment | undefined,
+  baseEnv: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
+): NodeJS.ProcessEnv {
+  const merged = mergeProviderInstanceEnvironment(
+    environment,
+    withoutInheritedCodexNetworkSandboxMarker(baseEnv, platform),
+    platform,
+  );
+  const managedTritonAiApiKey = baseEnv[TRITONAI_API_KEY_ENV]?.trim();
+  if (!managedTritonAiApiKey) return merged;
+
+  // TritonAI API keys are desktop-managed from Usage. Reapply the backend's
+  // current key after the generic per-instance merge so a stale installer-era
+  // provider secret cannot override the user's replacement.
+  return mergeProviderInstanceEnvironment(
+    [
+      {
+        name: TRITONAI_API_KEY_ENV,
+        value: managedTritonAiApiKey,
+        sensitive: true,
+      },
+    ],
+    merged,
+    platform,
+  );
+}
 
 /**
  * Services the driver needs to materialize an instance. Surfaced as the
@@ -134,11 +169,7 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
         PreviewAutomationBroker.PreviewAutomationBroker,
       );
       const hostPlatform = yield* HostProcessPlatform;
-      const processEnv = mergeProviderInstanceEnvironment(
-        environment,
-        withoutInheritedCodexNetworkSandboxMarker(process.env, hostPlatform),
-        hostPlatform,
-      );
+      const processEnv = mergeCodexProviderEnvironment(environment, process.env, hostPlatform);
       const configuredHomePath = config.homePath.trim();
       const managedConfig = {
         ...config,
