@@ -96,6 +96,7 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import * as DesktopBackendConfiguration from "./DesktopBackendConfiguration.ts";
 import * as DesktopBackendManager from "./DesktopBackendManager.ts";
 import * as DesktopObservability from "../app/DesktopObservability.ts";
+import * as DesktopShutdown from "../app/DesktopShutdown.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopTelemetryPublisher from "../telemetry/DesktopTelemetryPublisher.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
@@ -212,6 +213,7 @@ export const layer = Layer.effect(
     const desktopWindow = yield* DesktopWindow.DesktopWindow;
     const electronDialog = yield* ElectronDialog.ElectronDialog;
     const appSettings = yield* DesktopAppSettings.DesktopAppSettings;
+    const shutdown = yield* DesktopShutdown.DesktopShutdown;
     // Anchor the pool's lifetime to its layer scope so registered
     // instance scopes can be forked off it. Without this, instance
     // scopes are orphaned: they only close via explicit unregister()
@@ -294,11 +296,32 @@ export const layer = Layer.effect(
           Effect.catch((error) =>
             logBackendPoolWarning("failed to open main window after backend readiness", {
               error: error.message,
-            }),
+            }).pipe(
+              Effect.andThen(
+                electronDialog.showErrorBox(
+                  "TritonAI Harness couldn't open",
+                  `${error.message}\n\nRestart TritonAI Harness to try again. If the problem continues, send Support the latest logs from the Harness logs folder.`,
+                ),
+              ),
+              Effect.andThen(shutdown.request),
+            ),
           ),
         ),
       onShutdown: () => desktopWindow.handleBackendNotReady,
       onPreflightFailed: handlePrimaryPreflightFailure,
+      onRepeatedStartupFailure: ({ reason, attempt }) =>
+        logBackendPoolWarning("primary backend failed repeatedly before readiness", {
+          reason,
+          attempt,
+        }).pipe(
+          Effect.andThen(
+            electronDialog.showErrorBox(
+              "TritonAI Harness couldn't start",
+              `The local Harness service failed ${attempt} times and has stopped retrying.\n\n${reason}\n\nRestart TritonAI Harness to try again. If the problem continues, send Support the latest server-child.log from the Harness logs folder.`,
+            ),
+          ),
+          Effect.andThen(shutdown.request),
+        ),
     });
 
     const instancesRef = yield* SynchronizedRef.make<

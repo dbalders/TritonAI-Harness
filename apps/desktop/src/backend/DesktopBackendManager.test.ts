@@ -125,6 +125,10 @@ interface MakeInstanceInput {
   readonly onPreflightFailed?: (
     failure: DesktopBackendManager.PreflightFailure,
   ) => Effect.Effect<boolean>;
+  readonly onRepeatedStartupFailure?: (failure: {
+    readonly reason: string;
+    readonly attempt: number;
+  }) => Effect.Effect<void>;
   readonly config?: DesktopBackendManager.DesktopBackendStartConfig;
   readonly configResolve?: Effect.Effect<
     DesktopBackendManager.DesktopBackendStartConfig,
@@ -178,6 +182,9 @@ function makeTestInstance(input: MakeInstanceInput) {
     ...(input.onReady ? { onReady: () => input.onReady! } : {}),
     ...(input.onShutdown ? { onShutdown: () => input.onShutdown! } : {}),
     ...(input.onPreflightFailed ? { onPreflightFailed: input.onPreflightFailed } : {}),
+    ...(input.onRepeatedStartupFailure
+      ? { onRepeatedStartupFailure: input.onRepeatedStartupFailure }
+      : {}),
   });
 
   return instance.pipe(Effect.provide(servicesLayer));
@@ -306,6 +313,55 @@ describe("DesktopBackendManager", () => {
         );
       }).pipe(Effect.provide(layer));
     }),
+  );
+
+  it.effect("terminates a child that stays alive past the readiness timeout", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const requested = yield* Deferred.make<HttpClientRequest.HttpClientRequest>();
+        const killed = yield* Deferred.make<void>();
+        const readinessFailed =
+          yield* Deferred.make<DesktopBackendManager.BackendReadinessTimeoutError>();
+        let killCount = 0;
+        const spawnerLayer = Layer.succeed(
+          ChildProcessSpawner.ChildProcessSpawner,
+          ChildProcessSpawner.make(() =>
+            Effect.succeed(
+              makeProcess({
+                exitCode: Deferred.await(killed).pipe(Effect.as(ChildProcessSpawner.ExitCode(143))),
+                kill: () =>
+                  Effect.sync(() => {
+                    killCount += 1;
+                  }).pipe(Effect.andThen(Deferred.succeed(killed, void 0)), Effect.asVoid),
+              }),
+            ),
+          ),
+        );
+        const httpLayer = httpClientLayer((request) =>
+          Deferred.succeed(requested, request).pipe(Effect.andThen(Effect.never)),
+        );
+
+        const run = yield* DesktopBackendManager.runBackendProcess({
+          ...baseConfig,
+          readinessTimeout: Duration.millis(50),
+          desktopTelemetryStream: Stream.empty,
+          onReadinessFailure: (error) =>
+            Deferred.succeed(readinessFailed, error).pipe(Effect.asVoid),
+        }).pipe(Effect.forkChild, Effect.provide(Layer.merge(spawnerLayer, httpLayer)));
+
+        yield* Deferred.await(requested);
+        yield* TestClock.adjust(Duration.millis(50));
+        const error = yield* Deferred.await(readinessFailed);
+        const exit = yield* Fiber.join(run);
+
+        assert.instanceOf(error, DesktopBackendManager.BackendReadinessTimeoutError);
+        assert.equal(killCount, 1);
+        assert.deepEqual(exit, {
+          code: Option.some(ChildProcessSpawner.ExitCode(143)),
+          reason: "code=143",
+        });
+      }),
+    ),
   );
 
   it.effect("reports bootstrap encoding failures with stable process context", () =>
@@ -1142,6 +1198,48 @@ describe("DesktopBackendManager", () => {
         assert.equal(yield* Queue.size(starts), 0);
         yield* TestClock.adjust(Duration.millis(1));
         assert.equal(yield* Queue.take(starts), 3);
+      }).pipe(Effect.provide(TestClock.layer())),
+    ),
+  );
+
+  it.effect("surfaces and stops a backend that repeatedly exits before readiness", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const starts = yield* Queue.unbounded<number>();
+        const surfaced = yield* Queue.unbounded<{ reason: string; attempt: number }>();
+        let startCount = 0;
+
+        const spawnerLayer = Layer.succeed(
+          ChildProcessSpawner.ChildProcessSpawner,
+          ChildProcessSpawner.make(() =>
+            Effect.sync(() => {
+              startCount += 1;
+              return makeProcess({
+                exitCode: Queue.offer(starts, startCount).pipe(
+                  Effect.as(ChildProcessSpawner.ExitCode(1)),
+                ),
+              });
+            }),
+          ),
+        );
+
+        const instance = yield* makeTestInstance({
+          spawnerLayer,
+          httpClientLayer: httpClientLayer(() => Effect.never),
+          onRepeatedStartupFailure: (failure) => Queue.offer(surfaced, failure).pipe(Effect.asVoid),
+        });
+
+        yield* instance.start;
+        assert.equal(yield* Queue.take(starts), 1);
+        yield* TestClock.adjust(Duration.millis(500));
+        assert.equal(yield* Queue.take(starts), 2);
+        yield* TestClock.adjust(Duration.seconds(1));
+        assert.equal(yield* Queue.take(starts), 3);
+
+        assert.deepEqual(yield* Queue.take(surfaced), { reason: "code=1", attempt: 3 });
+        const stopped = yield* instance.snapshot;
+        assert.equal(stopped.desiredRunning, false);
+        assert.equal(stopped.restartScheduled, false);
       }).pipe(Effect.provide(TestClock.layer())),
     ),
   );

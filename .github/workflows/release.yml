@@ -291,10 +291,12 @@ jobs:
             exit $code
           }
 
-      - name: Prepare Azure Trusted Signing
+      - id: windows_signing
+        name: Resolve Windows signing mode
         if: matrix.platform == 'win'
         shell: pwsh
         env:
+          TRITONAI_ALLOW_UNSIGNED_WINDOWS_RELEASE: ${{ vars.TRITONAI_ALLOW_UNSIGNED_WINDOWS_RELEASE }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
@@ -305,7 +307,7 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
 
-          $requiredSecrets = @(
+          $signingValues = @(
             $env:AZURE_TENANT_ID,
             $env:AZURE_CLIENT_ID,
             $env:AZURE_CLIENT_SECRET,
@@ -314,10 +316,30 @@ jobs:
             $env:AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME,
             $env:AZURE_TRUSTED_SIGNING_PUBLISHER_NAME
           )
-          if ($requiredSecrets | Where-Object { [string]::IsNullOrWhiteSpace($_) }) {
-            Write-Error "Stable Windows releases require every Azure Trusted Signing secret."
+          $configuredCount = @(
+            $signingValues | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+          ).Count
+
+          if ($configuredCount -eq 0) {
+            if ($env:TRITONAI_ALLOW_UNSIGNED_WINDOWS_RELEASE -ne "1") {
+              Write-Error "Windows signing is unavailable. Set repository variable TRITONAI_ALLOW_UNSIGNED_WINDOWS_RELEASE=1 to authorize an unsigned release."
+              exit 1
+            }
+            "signed=false" >> $env:GITHUB_OUTPUT
+            Write-Warning "Azure Trusted Signing is not configured. Building an explicitly unsigned Windows release."
+          } elseif ($configuredCount -ne $signingValues.Count) {
+            Write-Error "Azure Trusted Signing is partially configured. Provide all seven values or remove all seven."
             exit 1
+          } else {
+            "signed=true" >> $env:GITHUB_OUTPUT
+            Write-Host "Azure Trusted Signing is fully configured. Building a signed Windows release."
           }
+
+      - name: Prepare Azure Trusted Signing
+        if: matrix.platform == 'win' && steps.windows_signing.outputs.signed == 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
 
           try {
             Install-PackageProvider `
@@ -353,7 +375,8 @@ jobs:
             Select-Object -Unique
           "PSModulePath=$($modulePathEntries -join ';')" >> $env:GITHUB_ENV
 
-      - name: Build desktop artifact
+      - id: build_desktop
+        name: Build desktop artifact
         shell: bash
         env:
           TRITONAI_PLUGIN_COMPOSITION_SOURCE: ${{ github.workspace }}/.release-input/installer/vendor/plugins
@@ -380,14 +403,18 @@ jobs:
             # so the packaged WSL backend ships a ready binary (no first-launch
             # compile). Required for a working WSL backend on Windows.
             args+=(--wsl-prebuild "$GITHUB_WORKSPACE/wsl-prebuild/pty.node")
-            echo "Windows signing required (Azure Trusted Signing)."
-            args+=(--signed)
+            if [[ "${{ steps.windows_signing.outputs.signed }}" == "true" ]]; then
+              echo "Windows signing enabled (Azure Trusted Signing)."
+              args+=(--signed)
+            else
+              echo "Windows signing unavailable; building the explicit unsigned release path."
+            fi
           fi
 
           vp run dist:desktop:artifact "${args[@]}"
 
       - name: Verify Windows Authenticode signatures
-        if: matrix.platform == 'win'
+        if: matrix.platform == 'win' && steps.windows_signing.outputs.signed == 'true'
         shell: powershell
         env:
           AZURE_TRUSTED_SIGNING_PUBLISHER_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_PUBLISHER_NAME }}
@@ -399,6 +426,27 @@ jobs:
           ./scripts/verify-windows-authenticode.ps1 `
             -ExpectedPublisherName $env:AZURE_TRUSTED_SIGNING_PUBLISHER_NAME `
             -EncodedPaths $encodedArtifacts
+
+      - name: Install and boot the Windows package
+        if: matrix.platform == 'win'
+        shell: powershell
+        env:
+          AZURE_TRUSTED_SIGNING_PUBLISHER_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_PUBLISHER_NAME }}
+        run: |
+          $artifact = @(Get-ChildItem -Path release -Filter *.exe -File)
+          if ($artifact.Count -ne 1) {
+            Write-Error "Expected exactly one Windows installer artifact; found $($artifact.Count)."
+            exit 1
+          }
+          $verification = @{
+            InstallerPath = $artifact[0].FullName
+          }
+          if ("${{ steps.windows_signing.outputs.signed }}" -eq "true") {
+            $verification.ExpectedPublisherName = $env:AZURE_TRUSTED_SIGNING_PUBLISHER_NAME
+          } else {
+            $verification.AllowUnsigned = $true
+          }
+          ./scripts/verify-windows-packaged-boot.ps1 @verification
 
       - name: Finalize managed plugin proof
         if: ${{ matrix.platform == 'win' }}

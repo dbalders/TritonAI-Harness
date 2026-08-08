@@ -407,6 +407,44 @@ try {
     "Windows release smoke unexpectedly removed the x64 builder debug fixture.",
   );
 
+  const releaseWorkflow = NodeFS.readFileSync(
+    NodePath.resolve(repoRoot, ".github/workflows/release.yml"),
+    "utf8",
+  );
+  assertContains(
+    releaseWorkflow,
+    "./scripts/verify-windows-packaged-boot.ps1",
+    "Windows release workflow must install and boot the exact package before upload.",
+  );
+  assertContains(
+    releaseWorkflow,
+    "steps.windows_signing.outputs.signed",
+    "Windows releases must select signed or unsigned mode explicitly.",
+  );
+  assertContains(
+    releaseWorkflow,
+    "TRITONAI_ALLOW_UNSIGNED_WINDOWS_RELEASE",
+    "Unsigned Windows releases must require an explicit repository opt-in.",
+  );
+  const packagedBootVerifier = NodeFS.readFileSync(
+    NodePath.resolve(repoRoot, "scripts/verify-windows-packaged-boot.ps1"),
+    "utf8",
+  );
+  assertContains(
+    packagedBootVerifier,
+    "[switch]$AllowUnsigned",
+    "Windows packaged boot verification must expose an explicit unsigned trust mode.",
+  );
+  assertContains(
+    packagedBootVerifier,
+    "TimeStamperCertificate",
+    "Signed Windows packaged boot verification must require a trusted timestamp.",
+  );
+  assertExists(
+    NodePath.resolve(repoRoot, "scripts/verify-windows-packaged-boot.ps1"),
+    "Windows packaged boot verifier is missing.",
+  );
+
   Effect.runSync(Console.log("Release smoke checks passed."));
 } finally {
   NodeFS.rmSync(tempRoot, { recursive: true, force: true });

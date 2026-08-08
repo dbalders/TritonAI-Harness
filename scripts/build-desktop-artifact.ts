@@ -4,11 +4,12 @@ import * as NodeModule from "node:module";
 
 import { TRITONAI_APP_BASE_NAME, TRITONAI_APP_ID_BASE } from "@t3tools/contracts";
 import { fromYaml } from "@t3tools/shared/schemaYaml";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { clerkFrontendApiHostnameFromPublishableKey } from "@t3tools/shared/relayAuth";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import rootPackageJson from "../package.json" with { type: "json" };
 import desktopPackageJson from "../apps/desktop/package.json" with { type: "json" };
+import desktopRuntimePackageJson from "../apps/desktop-runtime/package.json" with { type: "json" };
 import serverPackageJson from "../apps/server/package.json" with { type: "json" };
 
 import { applyWebBrandAssets } from "./apply-web-brand-assets.ts";
@@ -51,20 +52,23 @@ const APPLE_TEAM_ID_PATTERN = /^[A-Z0-9]{10}$/u;
 const BuildPlatform = Schema.Literals(["mac", "linux", "win"]);
 const BuildArch = Schema.Literals(["arm64", "x64", "universal"]);
 
+const SupportedArchitectures = Schema.Struct({
+  os: Schema.Array(Schema.String),
+  cpu: Schema.Array(Schema.String),
+  libc: Schema.optional(Schema.Array(Schema.String)),
+});
+
 const WorkspaceConfig = Schema.Struct({
   catalog: Schema.optional(Schema.Record(Schema.String, Schema.String)),
   overrides: Schema.optional(Schema.Record(Schema.String, Schema.String)),
   patchedDependencies: Schema.optional(Schema.Record(Schema.String, Schema.String)),
   allowBuilds: Schema.optional(Schema.Record(Schema.String, Schema.Boolean)),
+  supportedArchitectures: Schema.optional(SupportedArchitectures),
 });
 type WorkspaceConfig = typeof WorkspaceConfig.Type;
 
 const StageWorkspaceConfig = Schema.Struct({
-  supportedArchitectures: Schema.Struct({
-    os: Schema.Array(Schema.String),
-    cpu: Schema.Array(Schema.String),
-    libc: Schema.optional(Schema.Array(Schema.String)),
-  }),
+  supportedArchitectures: SupportedArchitectures,
   // pnpm 11 only reads these from pnpm-workspace.yaml (not package.json#pnpm).
   // Without allowBuilds the staged `vp install --prod` fails with
   // ERR_PNPM_IGNORED_BUILDS for packages that have lifecycle scripts.
@@ -82,8 +86,6 @@ const decodeWorkspaceConfig = Schema.decodeEffect(fromYaml(WorkspaceConfig));
 const decodeNodePtyManifest = Schema.decodeUnknownEffect(
   Schema.fromJsonString(Schema.Struct({ version: Schema.String })),
 );
-const encodeStageWorkspaceConfig = Schema.encodeEffect(fromYaml(StageWorkspaceConfig));
-
 const readWorkspaceConfig = Effect.fn("readWorkspaceConfig")(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -208,6 +210,43 @@ export class ClerkPasskeyNativePackageMissingError extends Schema.TaggedErrorCla
   }
 }
 
+export class PackagedNativeDependencyMissingError extends Schema.TaggedErrorClass<PackagedNativeDependencyMissingError>()(
+  "PackagedNativeDependencyMissingError",
+  {
+    packageName: Schema.String,
+    binaryFileName: Schema.String,
+    binaryPath: Schema.String,
+    platform: BuildPlatform,
+    arch: BuildArch,
+  },
+) {
+  override get message(): string {
+    return `Packaged native dependency is missing: ${this.packageName}/${this.binaryFileName} at ${this.binaryPath}`;
+  }
+}
+
+export class DesktopRuntimeManifestMismatchError extends Schema.TaggedErrorClass<DesktopRuntimeManifestMismatchError>()(
+  "DesktopRuntimeManifestMismatchError",
+  {
+    section: Schema.Literals(["dependencies", "optionalDependencies"]),
+  },
+) {
+  override get message(): string {
+    return `apps/desktop-runtime/package.json ${this.section} do not match the packaged runtime contract.`;
+  }
+}
+
+export class DesktopRuntimeDeploymentArchitectureMissingError extends Schema.TaggedErrorClass<DesktopRuntimeDeploymentArchitectureMissingError>()(
+  "DesktopRuntimeDeploymentArchitectureMissingError",
+  {
+    missing: Schema.Array(Schema.String),
+  },
+) {
+  override get message(): string {
+    return `pnpm-workspace.yaml does not enable the native deployment architectures: ${this.missing.join(", ")}.`;
+  }
+}
+
 export class UnsupportedHostBuildPlatformError extends Schema.TaggedErrorClass<UnsupportedHostBuildPlatformError>()(
   "UnsupportedHostBuildPlatformError",
   {
@@ -241,6 +280,7 @@ export class InvalidAzureTrustedSigningEndpointError extends Schema.TaggedErrorC
 
 const ManagedPluginCompositionBuildFailure = Schema.Literals([
   "invalid-composition",
+  "invalid-configuration",
   "skip-build",
   "unsupported-platform",
 ]);
@@ -254,6 +294,81 @@ export class ManagedPluginCompositionBuildError extends Schema.TaggedErrorClass<
 ) {
   override get message(): string {
     return `Failed to prepare managed plugin build input: ${this.failure}.`;
+  }
+}
+
+interface ManagedPluginConfigurationValidationResult {
+  readonly provider?: {
+    readonly close?: () => Promise<void>;
+  };
+}
+
+type ManagedPluginConfigurationLoader = (
+  packageRoot: string,
+  plugin: ManagedPluginComposition["packages"][number],
+  configuration: Readonly<Record<string, unknown>>,
+) => Promise<ManagedPluginConfigurationValidationResult>;
+
+type ManagedPluginPackageRootResolver = (
+  plugin: ManagedPluginComposition["packages"][number],
+) => string;
+
+const pluginConfigurationValidationSecretStore = {
+  get: () => Effect.succeed(Option.none<Uint8Array>()),
+  set: () => Effect.void,
+  create: () => Effect.void,
+  getOrCreateRandom: (_name: string, bytes: number) => Effect.succeed(new Uint8Array(bytes)),
+  remove: () => Effect.void,
+};
+
+const productionBuiltinsModuleUrl = new URL(
+  "../apps/server/src/integrations/productionBuiltins.ts",
+  import.meta.url,
+).href;
+
+const loadManagedPluginForConfigurationValidation: ManagedPluginConfigurationLoader = async (
+  packageRoot,
+  plugin,
+  configuration,
+) => {
+  // Keep the build script inside its TypeScript project while still exercising the exact
+  // server-owned production factory. A static cross-project import makes `vp run typecheck`
+  // pull the server source graph into scripts/tsconfig.json.
+  const productionBuiltins = (await import(productionBuiltinsModuleUrl)) as {
+    readonly loadProductionPackageForTest: ManagedPluginConfigurationLoaderWithSecrets;
+  };
+  return productionBuiltins.loadProductionPackageForTest(
+    packageRoot,
+    plugin,
+    pluginConfigurationValidationSecretStore,
+    configuration,
+  );
+};
+
+type ManagedPluginConfigurationLoaderWithSecrets = (
+  packageRoot: string,
+  plugin: ManagedPluginComposition["packages"][number],
+  secrets: typeof pluginConfigurationValidationSecretStore,
+  configuration: Readonly<Record<string, unknown>>,
+) => Promise<ManagedPluginConfigurationValidationResult>;
+
+export async function validateManagedPluginBuildConfiguration(
+  composition: ManagedPluginComposition,
+  configuration: Readonly<Record<string, Readonly<Record<string, unknown>>>>,
+  packageRootForPlugin: ManagedPluginPackageRootResolver,
+  loadPackage: ManagedPluginConfigurationLoader = loadManagedPluginForConfigurationValidation,
+): Promise<void> {
+  const loaded: Array<ManagedPluginConfigurationValidationResult> = [];
+  try {
+    for (const plugin of composition.packages) {
+      loaded.push(
+        await loadPackage(packageRootForPlugin(plugin), plugin, configuration[plugin.id]!),
+      );
+    }
+  } finally {
+    await Promise.allSettled(
+      loaded.toReversed().map(({ provider }) => Promise.resolve().then(() => provider?.close?.())),
+    );
   }
 }
 
@@ -473,6 +588,18 @@ export class DesktopBuildNoArtifactsProducedError extends Schema.TaggedErrorClas
   }
 }
 
+export class MacDesktopAppBundleMissingError extends Schema.TaggedErrorClass<MacDesktopAppBundleMissingError>()(
+  "MacDesktopAppBundleMissingError",
+  {
+    appPath: Schema.String,
+    arch: BuildArch,
+  },
+) {
+  override get message(): string {
+    return `macOS packaging completed without the expected app bundle at ${this.appPath}`;
+  }
+}
+
 export class WslNodePtyPrebuildMissingError extends Schema.TaggedErrorClass<WslNodePtyPrebuildMissingError>()(
   "WslNodePtyPrebuildMissingError",
   {
@@ -673,7 +800,16 @@ interface StagePackageJson {
   };
 }
 
-export const STAGE_INSTALL_ARGS = ["install", "--prod"] as const;
+export const RUNTIME_DEPLOY_ARGS = [
+  "exec",
+  "pnpm",
+  "--config.inject-workspace-packages=true",
+  "--filter",
+  "@t3tools/desktop-runtime",
+  "deploy",
+  "--prod",
+  "--frozen-lockfile",
+] as const;
 export const DESKTOP_MANAGED_PLUGIN_FILE_SET = {
   from: "apps/server/dist/production-integrations",
   to: "apps/server/dist/production-integrations",
@@ -958,6 +1094,72 @@ export function resolveFffNativeDependencies(
   );
 }
 
+export interface FfiRsNativeArtifact {
+  readonly packageName: string;
+  readonly binaryFileName: string;
+}
+
+export function resolveFfiRsNativeArtifacts(
+  platform: typeof BuildPlatform.Type,
+  arch: typeof BuildArch.Type,
+): readonly FfiRsNativeArtifact[] {
+  const architectures = arch === "universal" ? (["arm64", "x64"] as const) : [arch];
+
+  if (platform === "mac") {
+    return architectures.map((architecture) => ({
+      packageName: `@yuuang/ffi-rs-darwin-${architecture}`,
+      binaryFileName: `ffi-rs.darwin-${architecture}.node`,
+    }));
+  }
+
+  if (platform === "win") {
+    return architectures.flatMap((architecture) => [
+      {
+        packageName: `@yuuang/ffi-rs-win32-${architecture}-msvc`,
+        binaryFileName: `ffi-rs.win32-${architecture}-msvc.node`,
+      },
+      // The Windows distribution also runs the server inside Linux/glibc WSL.
+      {
+        packageName: `@yuuang/ffi-rs-linux-${architecture}-gnu`,
+        binaryFileName: `ffi-rs.linux-${architecture}-gnu.node`,
+      },
+    ]);
+  }
+
+  return architectures.map((architecture) => ({
+    packageName: `@yuuang/ffi-rs-linux-${architecture}-gnu`,
+    binaryFileName: `ffi-rs.linux-${architecture}-gnu.node`,
+  }));
+}
+
+export function resolveFfiRsNativeDependencies(
+  platform: typeof BuildPlatform.Type,
+  arch: typeof BuildArch.Type,
+  version: string,
+): Record<string, string> {
+  return Object.fromEntries(
+    resolveFfiRsNativeArtifacts(platform, arch).map(({ packageName }) => [packageName, version]),
+  );
+}
+
+function recordsEqual(left: Record<string, string>, right: Record<string, string>): boolean {
+  const leftEntries = Object.entries(left).sort(([a], [b]) => a.localeCompare(b));
+  const rightEntries = Object.entries(right).sort(([a], [b]) => a.localeCompare(b));
+  return JSON.stringify(leftEntries) === JSON.stringify(rightEntries);
+}
+
+export function resolveDesktopRuntimeNativeDependencies(): Record<string, string> {
+  const fffVersion = serverPackageJson.dependencies["@ff-labs/fff-node"];
+  const ffiRsVersion = serverPackageJson.dependencies["ffi-rs"];
+  return {
+    ...resolveFffNativeDependencies("mac", "universal", fffVersion),
+    ...resolveFffNativeDependencies("win", "universal", fffVersion),
+    ...resolveFffNativeDependencies("linux", "universal", fffVersion),
+    ...resolveFfiRsNativeDependencies("mac", "universal", ffiRsVersion),
+    ...resolveFfiRsNativeDependencies("win", "universal", ffiRsVersion),
+  };
+}
+
 export interface ClerkPasskeyNativeArtifact {
   readonly packageName: string;
   readonly binaryFileName: string;
@@ -1019,6 +1221,68 @@ const stageClerkPasskeyNativeBinaries = Effect.fn("stageClerkPasskeyNativeBinari
   }
 });
 
+function resolvePackagedResourcesDirectory(
+  stageDistDir: string,
+  platform: typeof BuildPlatform.Type,
+  arch: typeof BuildArch.Type,
+  productName: string,
+  path: Path.Path,
+): string {
+  if (platform === "mac") {
+    return path.join(
+      stageDistDir,
+      resolveMacAppBundleDirectoryName(arch),
+      `${productName}.app`,
+      "Contents",
+      "Resources",
+    );
+  }
+  const unpackedDirectory =
+    platform === "win"
+      ? "win-unpacked"
+      : arch === "arm64"
+        ? "linux-arm64-unpacked"
+        : "linux-unpacked";
+  return path.join(stageDistDir, unpackedDirectory, "resources");
+}
+
+export const assertPackagedFfiRsNativeBinaries = Effect.fn("assertPackagedFfiRsNativeBinaries")(
+  function* (input: {
+    readonly stageDistDir: string;
+    readonly platform: typeof BuildPlatform.Type;
+    readonly arch: typeof BuildArch.Type;
+    readonly productName: string;
+  }) {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const resourcesDir = resolvePackagedResourcesDirectory(
+      input.stageDistDir,
+      input.platform,
+      input.arch,
+      input.productName,
+      path,
+    );
+
+    for (const artifact of resolveFfiRsNativeArtifacts(input.platform, input.arch)) {
+      const binaryPath = path.join(
+        resourcesDir,
+        "app.asar.unpacked",
+        "node_modules",
+        ...artifact.packageName.split("/"),
+        artifact.binaryFileName,
+      );
+      if (!(yield* fs.exists(binaryPath))) {
+        return yield* new PackagedNativeDependencyMissingError({
+          ...artifact,
+          binaryPath,
+          platform: input.platform,
+          arch: input.arch,
+        });
+      }
+    }
+  },
+);
+
 export function createStageWorkspaceConfig(input: {
   readonly platform: typeof BuildPlatform.Type;
   readonly arch: typeof BuildArch.Type;
@@ -1059,6 +1323,43 @@ export function createStageWorkspaceConfig(input: {
       : {}),
     ...(overrides && Object.keys(overrides).length > 0 ? { overrides } : {}),
   };
+}
+
+export function findMissingRuntimeDeploymentArchitectures(input: {
+  readonly configured: StageWorkspaceConfig["supportedArchitectures"] | undefined;
+  readonly hostPlatform: NodeJS.Platform;
+  readonly hostArch: NodeJS.Architecture;
+  readonly targetPlatform: typeof BuildPlatform.Type;
+  readonly targetArch: typeof BuildArch.Type;
+}): ReadonlyArray<string> {
+  const required = createStageWorkspaceConfig({
+    platform: input.targetPlatform,
+    arch: input.targetArch,
+  }).supportedArchitectures;
+  const configured = input.configured;
+  if (!configured) {
+    return [
+      ...required.os.map((value) => `os:${value}`),
+      ...required.cpu.map((value) => `cpu:${value}`),
+      ...(required.libc ?? []).map((value) => `libc:${value}`),
+    ];
+  }
+
+  const configuredOs = new Set(
+    configured.os.map((value) => (value === "current" ? input.hostPlatform : value)),
+  );
+  const configuredCpu = new Set(
+    configured.cpu.map((value) => (value === "current" ? input.hostArch : value)),
+  );
+  const configuredLibc = new Set(configured.libc ?? []);
+
+  return [
+    ...required.os.filter((value) => !configuredOs.has(value)).map((value) => `os:${value}`),
+    ...required.cpu.filter((value) => !configuredCpu.has(value)).map((value) => `cpu:${value}`),
+    ...(required.libc ?? [])
+      .filter((value) => !configuredLibc.has(value))
+      .map((value) => `libc:${value}`),
+  ];
 }
 
 export function createStagePatchedDependencies(
@@ -1630,6 +1931,16 @@ export function resolveDesktopProductName(version: string): string {
     : TRITONAI_APP_BASE_NAME;
 }
 
+export function resolveMacAppBundleDirectoryName(arch: typeof BuildArch.Type): string {
+  if (arch === "arm64") return "mac-arm64";
+  if (arch === "universal") return "mac-universal";
+  return "mac";
+}
+
+export function resolveMacDmgArtifactName(version: string, arch: typeof BuildArch.Type): string {
+  return `TritonAI-Harness-${version}-${arch}.dmg`;
+}
+
 export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   platform: typeof BuildPlatform.Type,
   target: string,
@@ -1679,7 +1990,12 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
 
   if (platform === "mac") {
     buildConfig.mac = {
-      target: target === "dmg" ? [target, "zip"] : [target],
+      // TritonAI creates DMGs from the assembled app with Apple's hdiutil below. The
+      // dmgbuild path used by electron-builder copies into a mounted image and can be
+      // denied by macOS even when the same signed app and hdiutil source-folder flow
+      // are valid. Keep electron-builder responsible for app assembly/signing and the
+      // ZIP required by macOS updates, without inheriting that brittle copy boundary.
+      target: target === "dmg" ? ["zip"] : [target],
       icon: "icon.icns",
       category: "public.app-category.developer-tools",
       extendInfo: {
@@ -1739,6 +2055,55 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   }
 
   return buildConfig;
+});
+
+export const buildMacDmg = Effect.fn("buildMacDmg")(function* (input: {
+  readonly stageDistDir: string;
+  readonly version: string;
+  readonly arch: typeof BuildArch.Type;
+  readonly verbose: boolean;
+}) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const appPath = path.join(
+    input.stageDistDir,
+    resolveMacAppBundleDirectoryName(input.arch),
+    `${resolveDesktopProductName(input.version)}.app`,
+  );
+  if (!(yield* fs.exists(appPath))) {
+    return yield* new MacDesktopAppBundleMissingError({ appPath, arch: input.arch });
+  }
+
+  const dmgRoot = yield* fs.makeTempDirectoryScoped({
+    prefix: "tritonai-harness-dmg-root-",
+  });
+  const stagedAppPath = path.join(dmgRoot, `${resolveDesktopProductName(input.version)}.app`);
+  yield* runCommand(
+    ChildProcess.make("/usr/bin/ditto", ["--noextattr", "--noqtn", appPath, stagedAppPath]),
+    { label: "Stage macOS app for DMG", verbose: input.verbose },
+  );
+  yield* fs.symlink("/Applications", path.join(dmgRoot, "Applications"));
+
+  const dmgPath = path.join(
+    input.stageDistDir,
+    resolveMacDmgArtifactName(input.version, input.arch),
+  );
+  yield* fs.remove(dmgPath, { force: true });
+  yield* runCommand(
+    ChildProcess.make("/usr/bin/hdiutil", [
+      "create",
+      "-volname",
+      `${resolveDesktopProductName(input.version)} ${input.version}`,
+      "-srcfolder",
+      dmgRoot,
+      "-ov",
+      "-format",
+      "UDZO",
+      dmgPath,
+    ]),
+    { label: "Create macOS DMG with hdiutil", verbose: input.verbose },
+  );
+  return dmgPath;
 });
 
 const assertPlatformBuildResources = Effect.fn("assertPlatformBuildResources")(function* (
@@ -1839,6 +2204,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const path = yield* Path.Path;
   const fs = yield* FileSystem.FileSystem;
   const hostPlatform = yield* HostProcessPlatform;
+  const hostArch = yield* HostProcessArchitecture;
   const workspaceConfig = yield* readWorkspaceConfig();
   const workspaceCatalog = workspaceConfig.catalog ?? {};
   const workspaceOverrides = workspaceConfig.overrides ?? {};
@@ -1849,6 +2215,19 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   if (!platformConfig) {
     return yield* new UnsupportedDesktopBuildPlatformError({
       platform: options.platform,
+    });
+  }
+
+  const missingRuntimeDeploymentArchitectures = findMissingRuntimeDeploymentArchitectures({
+    configured: workspaceConfig.supportedArchitectures,
+    hostPlatform,
+    hostArch,
+    targetPlatform: options.platform,
+    targetArch: options.arch,
+  });
+  if (missingRuntimeDeploymentArchitectures.length > 0) {
+    return yield* new DesktopRuntimeDeploymentArchitectureMissingError({
+      missing: [...missingRuntimeDeploymentArchitectures],
     });
   }
 
@@ -1894,6 +2273,36 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
         cause,
       }),
   });
+  const declaredDesktopRuntimeDependencies = yield* Effect.try({
+    try: () =>
+      resolveCatalogDependencies(
+        desktopRuntimePackageJson.dependencies,
+        workspaceCatalog,
+        "apps/desktop-runtime",
+      ),
+    catch: (cause) =>
+      new DesktopBuildDependencyResolutionError({
+        kind: "desktop-runtime",
+        manifestPath: "apps/desktop-runtime/package.json",
+        cause,
+      }),
+  });
+  if (
+    !recordsEqual(declaredDesktopRuntimeDependencies, {
+      ...resolvedServerDependencies,
+      ...resolvedDesktopRuntimeDependencies,
+    })
+  ) {
+    return yield* new DesktopRuntimeManifestMismatchError({ section: "dependencies" });
+  }
+  if (
+    !recordsEqual(
+      desktopRuntimePackageJson.optionalDependencies,
+      resolveDesktopRuntimeNativeDependencies(),
+    )
+  ) {
+    return yield* new DesktopRuntimeManifestMismatchError({ section: "optionalDependencies" });
+  }
 
   const appVersion = options.version ?? serverPackageJson.version;
   const iconAssets = resolveDesktopBuildIconAssets(appVersion);
@@ -1920,6 +2329,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const pluginSnapshotRoot = path.join(stageRoot, "plugin-composition-input");
   const pluginBuildInput: {
     readonly composition: ManagedPluginComposition;
+    readonly configuration: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
     readonly configurationJson: string;
   } | null = configuredPluginSource
     ? yield* Effect.try({
@@ -1930,12 +2340,24 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
           );
           const configuration = readManagedPluginBuildConfiguration(composition, repoEnv);
           // @effect-diagnostics-next-line preferSchemaOverJson:off - The generic map was bounded and validated above; this canonical copy closes the child-build TOCTOU window.
-          return { composition, configurationJson: JSON.stringify(configuration) };
+          return { composition, configuration, configurationJson: JSON.stringify(configuration) };
         },
         catch: (cause) =>
           new ManagedPluginCompositionBuildError({ failure: "invalid-composition", cause }),
       })
     : null;
+  if (pluginBuildInput) {
+    yield* Effect.tryPromise({
+      try: () =>
+        validateManagedPluginBuildConfiguration(
+          pluginBuildInput.composition,
+          pluginBuildInput.configuration,
+          (plugin) => path.join(pluginSnapshotRoot, "packages", plugin.id),
+        ),
+      catch: (cause) =>
+        new ManagedPluginCompositionBuildError({ failure: "invalid-configuration", cause }),
+    });
+  }
   const pluginComposition = pluginBuildInput?.composition ?? null;
 
   const stageAppDir = path.join(stageRoot, "app");
@@ -2006,6 +2428,18 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     }
   }
 
+  yield* Effect.log(
+    "[desktop-artifact] Deploying production dependencies from the frozen workspace lockfile...",
+  );
+  const deployCommand = yield* resolveSpawnCommand("vp", [...RUNTIME_DEPLOY_ARGS, stageAppDir]);
+  yield* runCommand(
+    ChildProcess.make(deployCommand.command, deployCommand.args, {
+      cwd: repoRoot,
+      shell: deployCommand.shell,
+    }),
+    { label: "Deploy frozen desktop runtime", verbose: options.verbose },
+  );
+
   yield* fs.makeDirectory(path.join(stageAppDir, "apps/desktop"), { recursive: true });
   yield* fs.makeDirectory(path.join(stageAppDir, "apps/server"), { recursive: true });
 
@@ -2075,6 +2509,11 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       options.arch,
       serverPackageJson.dependencies["@ff-labs/fff-node"],
     ),
+    ...resolveFfiRsNativeDependencies(
+      options.platform,
+      options.arch,
+      serverPackageJson.dependencies["ffi-rs"],
+    ),
     // Windows artifacts also bundle the same-architecture WSL Linux backend, which loads the
     // fff native binary through ffi-rs. The platform fff binary above is the
     // host's (win32), so promote the matching Linux fff binaries too; without
@@ -2131,25 +2570,16 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     patchedDependencies: stagePatchedDependencies,
     overrides: resolvedOverrides,
   });
-  const stageWorkspaceConfigString = yield* encodeStageWorkspaceConfig(stageWorkspaceConfig);
+  const stageWorkspaceConfigString = yield* Schema.encodeEffect(fromYaml(StageWorkspaceConfig))(
+    stageWorkspaceConfig,
+  );
   yield* fs.writeFileString(
     path.join(stageAppDir, "pnpm-workspace.yaml"),
     stageWorkspaceConfigString,
   );
-
   if (Object.keys(stagePatchedDependencies).length > 0) {
     yield* fs.copy(path.join(repoRoot, "patches"), path.join(stageAppDir, "patches"));
   }
-
-  yield* Effect.log("[desktop-artifact] Installing staged production dependencies...");
-  const installCommand = yield* resolveSpawnCommand("vp", [...STAGE_INSTALL_ARGS]);
-  yield* runCommand(
-    ChildProcess.make(installCommand.command, installCommand.args, {
-      cwd: stageAppDir,
-      shell: installCommand.shell,
-    }),
-    { label: "vp install --prod", verbose: options.verbose },
-  );
   yield* stageClerkPasskeyNativeBinaries(stageAppDir, options.platform, options.arch);
 
   // WSL is Windows-only, so only the Windows artifact carries the Linux backend
@@ -2234,6 +2664,22 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       distPath: stageDistDir,
       platform: options.platform,
       arch: options.arch,
+    });
+  }
+
+  yield* assertPackagedFfiRsNativeBinaries({
+    stageDistDir,
+    platform: options.platform,
+    arch: options.arch,
+    productName: resolveDesktopProductName(appVersion),
+  });
+
+  if (options.platform === "mac" && options.target === "dmg") {
+    yield* buildMacDmg({
+      stageDistDir,
+      version: appVersion,
+      arch: options.arch,
+      verbose: options.verbose,
     });
   }
 

@@ -55,6 +55,7 @@ import * as DesktopTelemetryPublisher from "../telemetry/DesktopTelemetryPublish
 
 const INITIAL_RESTART_DELAY = Duration.millis(500);
 const MAX_RESTART_DELAY = Duration.seconds(10);
+const MAX_STARTUP_FAILURE_ATTEMPTS = 3;
 // After this many consecutive fatal preflight failures, stop the silent
 // restart loop and surface the reason via onPreflightFailed. Transient
 // failures may instead provide their own larger retryLimit when they should
@@ -294,6 +295,13 @@ export interface BackendInstanceSpec {
   // retries. Returns true when the callback changed configuration and the
   // manager should resolve once more; false stops the failed instance.
   readonly onPreflightFailed?: (failure: PreflightFailure) => Effect.Effect<boolean>;
+  // Fired once when the backend repeatedly fails before it ever becomes ready.
+  // Primary instances surface a diagnostic and end the app instead of leaving
+  // users in an invisible restart loop; secondary instances may omit it.
+  readonly onRepeatedStartupFailure?: (failure: {
+    readonly reason: string;
+    readonly attempt: number;
+  }) => Effect.Effect<void>;
 }
 
 interface ActiveBackendRun {
@@ -317,6 +325,11 @@ interface BackendManagerState {
   readonly restartFiber: Option.Option<Fiber.Fiber<void, never>>;
   readonly nextRunId: number;
 }
+
+type RestartAction =
+  | { readonly _tag: "None" }
+  | { readonly _tag: "Schedule"; readonly delay: Duration.Duration }
+  | { readonly _tag: "SurfaceFailure"; readonly attempt: number };
 
 const initialState: BackendManagerState = {
   desiredRunning: false,
@@ -572,7 +585,15 @@ export const runBackendProcess = Effect.fn("runBackendProcess")(function* (
   }).pipe(
     Effect.tap(() => options.onReady?.() ?? Effect.void),
     Effect.catchTags({
-      BackendReadinessTimeoutError: (error) => options.onReadinessFailure?.(error) ?? Effect.void,
+      BackendReadinessTimeoutError: (error) =>
+        (options.onReadinessFailure?.(error) ?? Effect.void).pipe(
+          // A child that stays alive without ever serving the readiness endpoint cannot recover
+          // under the supervisor: runBackendProcess is waiting for its exit, so the instance never
+          // reaches finalizeRun and the bounded restart policy never gets a turn. Terminate this
+          // exact child after recording the timeout; its observed exit then follows the ordinary
+          // retry/failure path instead of leaving the desktop stuck forever.
+          Effect.ensuring(handle.kill().pipe(Effect.ignore)),
+        ),
     }),
     Effect.forkScoped,
   );
@@ -700,7 +721,9 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
         );
         if (Option.isNone(config)) {
           if (current.desiredRunning) {
-            yield* scheduleRestart("failed to generate desktop backend configuration");
+            yield* scheduleRestart("failed to generate desktop backend configuration", {
+              surfaceRepeatedFailure: true,
+            });
           }
           return;
         }
@@ -787,7 +810,9 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
         );
 
         if (!entryExists) {
-          yield* scheduleRestart(`missing server entry at ${config.value.entryPath}`);
+          yield* scheduleRestart(`missing server entry at ${config.value.entryPath}`, {
+            surfaceRepeatedFailure: true,
+          });
           return;
         }
 
@@ -880,7 +905,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
               }
 
               if (isCurrentRun && nextState.desiredRunning) {
-                yield* scheduleRestart(reason);
+                yield* scheduleRestart(reason, { surfaceRepeatedFailure: !wasReady });
               }
             }),
           );
@@ -960,61 +985,88 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
 
   const scheduleRestart = Effect.fn("desktop.backendInstance.scheduleRestart")(function* (
     reason: string,
+    options: { readonly surfaceRepeatedFailure?: boolean } = {},
   ) {
-    const scheduled = yield* Ref.modify(state, (latest) => {
-      if (!latest.desiredRunning || Option.isSome(latest.restartFiber)) {
-        return [Option.none<Duration.Duration>(), latest] as const;
-      }
+    const action = yield* Ref.modify(
+      state,
+      (latest): readonly [RestartAction, BackendManagerState] => {
+        if (!latest.desiredRunning || Option.isSome(latest.restartFiber)) {
+          return [{ _tag: "None" } as const, latest] as const;
+        }
 
-      const delay = calculateRestartDelay(latest.restartAttempt);
-      return [
-        Option.some(delay),
-        {
-          ...latest,
-          restartAttempt: latest.restartAttempt + 1,
-        },
-      ] as const;
-    });
+        const attempt = latest.restartAttempt + 1;
+        if (
+          options.surfaceRepeatedFailure === true &&
+          spec.onRepeatedStartupFailure !== undefined &&
+          attempt >= MAX_STARTUP_FAILURE_ATTEMPTS
+        ) {
+          return [
+            { _tag: "SurfaceFailure", attempt } as const,
+            {
+              ...latest,
+              desiredRunning: false,
+              restartAttempt: attempt,
+            },
+          ] as const;
+        }
+        const delay = calculateRestartDelay(latest.restartAttempt);
+        return [
+          { _tag: "Schedule", delay } as const,
+          {
+            ...latest,
+            restartAttempt: attempt,
+          },
+        ] as const;
+      },
+    );
 
-    yield* Option.match(scheduled, {
-      onNone: () => Effect.void,
-      onSome: Effect.fn("desktop.backendInstance.scheduleRestartFiber")(function* (delay) {
-        yield* logInstanceError("backend exited unexpectedly; restart scheduled", {
-          reason,
-          delayMs: Duration.toMillis(delay),
-        });
-        const restartFiber = yield* Effect.forkIn(
-          Effect.sleep(delay).pipe(
-            Effect.andThen(
-              Ref.modify(state, (latest) => {
-                const shouldRestart = latest.desiredRunning;
-                return [
-                  shouldRestart,
-                  {
-                    ...latest,
-                    restartFiber: Option.none(),
-                  },
-                ] as const;
-              }),
-            ),
-            Effect.flatMap((shouldRestart) => (shouldRestart ? start : Effect.void)),
-            Effect.catchCause((cause) =>
-              logInstanceError("desktop backend restart fiber failed", {
-                cause: Cause.pretty(cause),
-              }),
-            ),
+    if (action._tag === "None") return;
+    if (action._tag === "SurfaceFailure") {
+      yield* logInstanceError("backend failed repeatedly before readiness; stopping", {
+        reason,
+        attempt: action.attempt,
+      });
+      yield* spec.onRepeatedStartupFailure?.({ reason, attempt: action.attempt }) ?? Effect.void;
+      return;
+    }
+
+    yield* Effect.gen(function* () {
+      const delay = action.delay;
+      yield* logInstanceError("backend exited unexpectedly; restart scheduled", {
+        reason,
+        delayMs: Duration.toMillis(delay),
+      });
+      const restartFiber = yield* Effect.forkIn(
+        Effect.sleep(delay).pipe(
+          Effect.andThen(
+            Ref.modify(state, (latest) => {
+              const shouldRestart = latest.desiredRunning;
+              return [
+                shouldRestart,
+                {
+                  ...latest,
+                  restartFiber: Option.none(),
+                },
+              ] as const;
+            }),
           ),
-          parentScope,
-        );
-        yield* Ref.update(state, (latest) =>
-          Option.isNone(latest.restartFiber)
-            ? {
-                ...latest,
-                restartFiber: Option.some(restartFiber),
-              }
-            : latest,
-        );
-      }),
+          Effect.flatMap((shouldRestart) => (shouldRestart ? start : Effect.void)),
+          Effect.catchCause((cause) =>
+            logInstanceError("desktop backend restart fiber failed", {
+              cause: Cause.pretty(cause),
+            }),
+          ),
+        ),
+        parentScope,
+      );
+      yield* Ref.update(state, (latest) =>
+        Option.isNone(latest.restartFiber)
+          ? {
+              ...latest,
+              restartFiber: Option.some(restartFiber),
+            }
+          : latest,
+      );
     });
   });
 
