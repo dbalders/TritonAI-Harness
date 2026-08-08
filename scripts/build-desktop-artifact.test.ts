@@ -359,6 +359,21 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       }),
       ["os:win32"],
     );
+    assert.deepStrictEqual(
+      findMissingRuntimeDeploymentArchitectures({
+        configured: {
+          os: ["current", "win32"],
+          cpu: ["current"],
+          libc: ["current"],
+        },
+        hostPlatform: "linux",
+        hostArch: "x64",
+        hostLibc: "glibc",
+        targetPlatform: "win",
+        targetArch: "x64",
+      }),
+      [],
+    );
   });
 
   it("stages pnpm 11 allowBuilds and patchedDependencies in the workspace yaml", () => {

@@ -8,6 +8,18 @@ const packageJson = JSON.parse(
   NodeFS.readFileSync(NodePath.join(desktopDir, "package.json"), "utf8"),
 );
 const electronVersion = packageJson.dependencies?.electron;
+const installedElectronPackagePath = NodePath.join(
+  desktopDir,
+  "node_modules",
+  "electron",
+  "package.json",
+);
+if (!NodeFS.existsSync(installedElectronPackagePath)) {
+  throw new Error(`Installed Electron package is missing: ${installedElectronPackagePath}`);
+}
+const installedElectronVersion = JSON.parse(
+  NodeFS.readFileSync(installedElectronPackagePath, "utf8"),
+).version;
 
 function parseExactVersion(version) {
   const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version ?? "");
@@ -32,5 +44,17 @@ if (compareVersions(parseExactVersion(electronVersion), minimumFixedVersion) < 0
       `use ${minimumFixedVersion.join(".")} or newer to prevent startup Keychain prompts.`,
   );
 }
+if (installedElectronVersion !== electronVersion) {
+  throw new Error(
+    `Installed Electron ${installedElectronVersion} does not match the pinned manifest version ${electronVersion}.`,
+  );
+}
+if (compareVersions(parseExactVersion(installedElectronVersion), minimumFixedVersion) < 0) {
+  throw new Error(
+    `Installed Electron ${installedElectronVersion} predates the macOS safeStorage lazy-initialization fix.`,
+  );
+}
 
-process.stdout.write(`Electron ${electronVersion} includes the macOS safeStorage startup fix.\n`);
+process.stdout.write(
+  `Electron ${installedElectronVersion} is installed from the exact manifest pin and includes the macOS safeStorage startup fix.\n`,
+);

@@ -711,6 +711,12 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
             latest.ready ? { ...latest, ready: false } : latest,
           );
         }
+        if (!current.desiredRunning) {
+          yield* Ref.update(state, (latest) => ({
+            ...latest,
+            desiredRunning: true,
+          }));
+        }
         const config = yield* spec.configResolve.pipe(
           Effect.tapError((error) =>
             logInstanceError("failed to generate desktop backend configuration", {
@@ -720,11 +726,9 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
           Effect.option,
         );
         if (Option.isNone(config)) {
-          if (current.desiredRunning) {
-            yield* scheduleRestart("failed to generate desktop backend configuration", {
-              surfaceRepeatedFailure: true,
-            });
-          }
+          yield* scheduleRestart("failed to generate desktop backend configuration", {
+            surfaceRepeatedFailure: true,
+          });
           return;
         }
         const entryExists = yield* fileSystem

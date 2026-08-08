@@ -45,23 +45,24 @@ function Assert-TritonAIArtifactTrust {
   }
 }
 
-function Get-TritonAIProcessByPath {
-  param([string]$ExecutablePath)
-
-  return @(
-    Get-CimInstance -ClassName Win32_Process -ErrorAction Stop |
-      Where-Object {
-        $_.ExecutablePath -and
-        [string]::Equals($_.ExecutablePath, $ExecutablePath, [System.StringComparison]::OrdinalIgnoreCase)
-      }
+function Invoke-TritonAIProcessTreeTermination {
+  param(
+    [Parameter(Mandatory = $true)]
+    [System.Diagnostics.Process]$Process
   )
-}
 
-function Stop-TritonAIProcessByPath {
-  param([string]$ExecutablePath)
+  $Process.Refresh()
+  if ($Process.HasExited) {
+    return
+  }
 
-  foreach ($candidate in Get-TritonAIProcessByPath -ExecutablePath $ExecutablePath) {
-    Stop-Process -Id $candidate.ProcessId -Force -ErrorAction SilentlyContinue
+  $taskkillPath = Join-Path $env:SystemRoot "System32\taskkill.exe"
+  & $taskkillPath /PID $Process.Id /T /F | Out-Null
+  if ($LASTEXITCODE -ne 0) {
+    throw "Could not terminate packaged-boot process tree $($Process.Id); taskkill exited with $LASTEXITCODE."
+  }
+  if (-not $Process.WaitForExit(10000)) {
+    throw "Could not confirm packaged-boot process tree $($Process.Id) exited."
   }
 }
 
@@ -142,7 +143,7 @@ try {
   Write-Host "Installed, signature-verified, opened, and sustained TritonAI Harness from $appPath."
 } finally {
   if ($null -ne $app) {
-    Stop-TritonAIProcessByPath -ExecutablePath $appPath
+    Invoke-TritonAIProcessTreeTermination -Process $app
   }
   $env:TRITONAI_HOME = $previousRuntimeHome
   Remove-Item -LiteralPath $runtimeHome -Recurse -Force -ErrorAction SilentlyContinue

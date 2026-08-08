@@ -1329,6 +1329,7 @@ export function findMissingRuntimeDeploymentArchitectures(input: {
   readonly configured: StageWorkspaceConfig["supportedArchitectures"] | undefined;
   readonly hostPlatform: NodeJS.Platform;
   readonly hostArch: NodeJS.Architecture;
+  readonly hostLibc?: "glibc" | "musl";
   readonly targetPlatform: typeof BuildPlatform.Type;
   readonly targetArch: typeof BuildArch.Type;
 }): ReadonlyArray<string> {
@@ -1351,7 +1352,11 @@ export function findMissingRuntimeDeploymentArchitectures(input: {
   const configuredCpu = new Set(
     configured.cpu.map((value) => (value === "current" ? input.hostArch : value)),
   );
-  const configuredLibc = new Set(configured.libc ?? []);
+  const configuredLibc = new Set(
+    (configured.libc ?? []).map((value) =>
+      value === "current" && input.hostLibc ? input.hostLibc : value,
+    ),
+  );
 
   return [
     ...required.os.filter((value) => !configuredOs.has(value)).map((value) => `os:${value}`),
@@ -1360,6 +1365,14 @@ export function findMissingRuntimeDeploymentArchitectures(input: {
       .filter((value) => !configuredLibc.has(value))
       .map((value) => `libc:${value}`),
   ];
+}
+
+function resolveHostLibc(hostPlatform: NodeJS.Platform): "glibc" | "musl" | undefined {
+  if (hostPlatform !== "linux") return undefined;
+  const report = process.report.getReport() as {
+    readonly header?: { readonly glibcVersionRuntime?: string };
+  };
+  return report.header?.glibcVersionRuntime ? "glibc" : "musl";
 }
 
 export function createStagePatchedDependencies(
@@ -2218,10 +2231,12 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     });
   }
 
+  const hostLibc = resolveHostLibc(hostPlatform);
   const missingRuntimeDeploymentArchitectures = findMissingRuntimeDeploymentArchitectures({
     configured: workspaceConfig.supportedArchitectures,
     hostPlatform,
     hostArch,
+    ...(hostLibc ? { hostLibc } : {}),
     targetPlatform: options.platform,
     targetArch: options.arch,
   });

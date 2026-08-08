@@ -360,7 +360,7 @@ describe("DesktopBackendManager", () => {
           code: Option.some(ChildProcessSpawner.ExitCode(143)),
           reason: "code=143",
         });
-      }),
+      }).pipe(Effect.provide(TestClock.layer())),
     ),
   );
 
@@ -1237,6 +1237,48 @@ describe("DesktopBackendManager", () => {
         assert.equal(yield* Queue.take(starts), 3);
 
         assert.deepEqual(yield* Queue.take(surfaced), { reason: "code=1", attempt: 3 });
+        const stopped = yield* instance.snapshot;
+        assert.equal(stopped.desiredRunning, false);
+        assert.equal(stopped.restartScheduled, false);
+      }).pipe(Effect.provide(TestClock.layer())),
+    ),
+  );
+
+  it.effect("surfaces and stops repeated configuration failures from the initial start", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const configAttempts = yield* Ref.make(0);
+        const surfaced = yield* Queue.unbounded<{ reason: string; attempt: number }>();
+        const configFailure = PlatformError.systemError({
+          _tag: "Unknown",
+          module: "DesktopBackendManager",
+          method: "configResolve",
+          description: "transient initial configuration failure",
+        });
+        const spawnerLayer = Layer.succeed(
+          ChildProcessSpawner.ChildProcessSpawner,
+          ChildProcessSpawner.make(() => Effect.die("configuration failure must prevent spawn")),
+        );
+        const instance = yield* makeTestInstance({
+          spawnerLayer,
+          configResolve: Ref.updateAndGet(configAttempts, (attempt) => attempt + 1).pipe(
+            Effect.andThen(Effect.fail(configFailure)),
+          ),
+          httpClientLayer: httpClientLayer(() => Effect.never),
+          onRepeatedStartupFailure: (failure) => Queue.offer(surfaced, failure).pipe(Effect.asVoid),
+        });
+
+        yield* instance.start;
+        assert.equal(yield* Ref.get(configAttempts), 1);
+        yield* TestClock.adjust(Duration.millis(500));
+        assert.equal(yield* Ref.get(configAttempts), 2);
+        yield* TestClock.adjust(Duration.seconds(1));
+
+        assert.equal(yield* Ref.get(configAttempts), 3);
+        assert.deepEqual(yield* Queue.take(surfaced), {
+          reason: "failed to generate desktop backend configuration",
+          attempt: 3,
+        });
         const stopped = yield* instance.snapshot;
         assert.equal(stopped.desiredRunning, false);
         assert.equal(stopped.restartScheduled, false);
