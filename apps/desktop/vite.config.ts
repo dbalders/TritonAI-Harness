@@ -14,7 +14,8 @@ export default defineConfig({
   run: {
     tasks: {
       build: {
-        command: "node scripts/build-preview-annotation-css.mjs && vp pack",
+        command:
+          "node scripts/assert-electron-keychain-fix.mjs && node scripts/build-preview-annotation-css.mjs && vp pack",
         dependsOn: ["t3#build"],
         cache: false,
       },

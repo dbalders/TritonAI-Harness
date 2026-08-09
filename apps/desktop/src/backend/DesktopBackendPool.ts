@@ -96,12 +96,13 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import * as DesktopBackendConfiguration from "./DesktopBackendConfiguration.ts";
 import * as DesktopBackendManager from "./DesktopBackendManager.ts";
 import * as DesktopObservability from "../app/DesktopObservability.ts";
+import * as DesktopShutdown from "../app/DesktopShutdown.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopTelemetryPublisher from "../telemetry/DesktopTelemetryPublisher.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 import * as ElectronDialog from "../electron/ElectronDialog.ts";
 
-const { logWarning: logBackendPoolWarning } =
+const { logWarning: logBackendPoolWarning, logError: logBackendPoolError } =
   DesktopObservability.makeComponentLogger("desktop-backend-pool");
 
 export type BackendInstanceId = DesktopBackendManager.BackendInstanceId;
@@ -212,6 +213,7 @@ export const layer = Layer.effect(
     const desktopWindow = yield* DesktopWindow.DesktopWindow;
     const electronDialog = yield* ElectronDialog.ElectronDialog;
     const appSettings = yield* DesktopAppSettings.DesktopAppSettings;
+    const shutdown = yield* DesktopShutdown.DesktopShutdown;
     // Anchor the pool's lifetime to its layer scope so registered
     // instance scopes can be forked off it. Without this, instance
     // scopes are orphaned: they only close via explicit unregister()
@@ -285,20 +287,40 @@ export const layer = Layer.effect(
       configResolve: configuration.resolvePrimary,
       // Window creation errors propagating out of handleBackendReady must
       // not block the readiness callback (that would prevent restartAttempt
-      // from being reset), so we absorb them here. The window service only
-      // logs on success, so log the failure here before swallowing it —
-      // otherwise a post-readiness window-open failure vanishes silently and
-      // is near-impossible to diagnose in production.
+      // from being reset), so we absorb them here instead of failing the
+      // callback. A ready backend without a window is unusable, so log the
+      // failure, surface it in a dialog, and end the app.
       onReady: (httpBaseUrl) =>
         desktopWindow.handleBackendReady(httpBaseUrl).pipe(
           Effect.catch((error) =>
             logBackendPoolWarning("failed to open main window after backend readiness", {
               error: error.message,
-            }),
+            }).pipe(
+              Effect.andThen(
+                electronDialog.showErrorBox(
+                  "TritonAI Harness couldn't open",
+                  `${error.message}\n\nRestart TritonAI Harness to try again. If the problem continues, send Support the latest logs from the Harness logs folder.`,
+                ),
+              ),
+              Effect.andThen(shutdown.request),
+            ),
           ),
         ),
       onShutdown: () => desktopWindow.handleBackendNotReady,
       onPreflightFailed: handlePrimaryPreflightFailure,
+      onRepeatedStartupFailure: ({ reason, attempt }) =>
+        logBackendPoolError("primary backend failed repeatedly before readiness", {
+          reason,
+          attempt,
+        }).pipe(
+          Effect.andThen(
+            electronDialog.showErrorBox(
+              "TritonAI Harness couldn't start",
+              `The local Harness service failed ${attempt} times and has stopped retrying.\n\n${reason}\n\nRestart TritonAI Harness to try again. If the problem continues, send Support the latest server-child.log from the Harness logs folder.`,
+            ),
+          ),
+          Effect.andThen(shutdown.request),
+        ),
     });
 
     const instancesRef = yield* SynchronizedRef.make<
