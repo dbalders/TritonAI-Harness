@@ -997,7 +997,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
           },
           textGenerationModelSelection: {
             instanceId: "codex",
-            model: "gpt-5.6-terra",
+            model: "gpt-5.5",
           },
         }),
         { mode: 0o600 },
@@ -1007,7 +1007,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       const effective = yield* serverSettings.getSettings;
       assert.equal(effective.providers.codex.binaryPath, "/installer/runtime/codex");
       assert.equal(effective.providers.codex.homePath, "/installer/home/codex");
-      assert.equal(effective.textGenerationModelSelection.model, "gpt-5.6-terra");
+      assert.equal(effective.textGenerationModelSelection.model, "gpt-5.6-sol");
       assert.deepInclude(effective.providerInstances[managedInstanceId]?.config, {
         unknownNested: "retained",
       });
@@ -1037,6 +1037,10 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       assert.deepInclude(persisted, {
         unknownTopLevel: { retained: true },
         addProjectBaseDirectory: "~/ManagedPolicyPreserved",
+        textGenerationModelSelection: {
+          instanceId: "codex",
+          model: "gpt-5.5",
+        },
         tritonAiManagedPolicy: {
           migrationVersion: 1,
           codexBinaryPath: "/installer/runtime/codex",
