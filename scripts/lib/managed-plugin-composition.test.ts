@@ -103,6 +103,12 @@ describe("managed plugin release composition", () => {
         '{"microsoft-365":{"clientId":"changed"}}',
       ),
     ).toThrow(/does not match the exact composition and configuration/iu);
+    const changedComposition = readManagedPluginComposition(
+      makeCompositionFixture("4.0.0-beta.78", {}, "google-workspace"),
+    );
+    expect(() =>
+      verifyManagedPluginValidationReceipt(receiptPath, changedComposition, configuration),
+    ).toThrow(/does not match the exact composition and configuration/iu);
   });
 
   it("snapshots one strict current composition contract and rejects manifest compatibility ranges", () => {

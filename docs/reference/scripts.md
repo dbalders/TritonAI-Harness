@@ -38,7 +38,8 @@ against the final distributable bytes. Never mutate an artifact after its proof 
 
 - Default build is unsigned/not notarized for local sharing.
 - The DMG build uses `assets/prod/black-macos-1024.png` as the production app icon source.
-- Electron Builder assembles and signs the app and produces the ZIP used by macOS updates. The
+- Electron Builder assembles the app, signs it when the build has signing/notarization configured,
+  and produces the ZIP used by macOS updates. The
   TritonAI wrapper then stages that exact app with `ditto --noextattr --noqtn` and creates the DMG
   with Apple's `hdiutil -srcfolder` path. This intentionally avoids Electron Builder's mounted-volume
   `dmgbuild` copy step, which can fail with `Operation not permitted` despite a valid signed app.
