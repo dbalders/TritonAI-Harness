@@ -168,6 +168,12 @@ export const resolveAvailableEditorsForConfig = <A, E, R>(
     Effect.map(Option.getOrElse(() => [])),
   );
 
+export function shouldStreamManagedPolicyDiagnostics(input: {
+  readonly managedPolicyDiagnosticsUpdates?: boolean;
+}): boolean {
+  return input.managedPolicyDiagnosticsUpdates === true;
+}
+
 function unexpectedCompatibilityError(error: never): never {
   throw new Error(`Unhandled compatibility error: ${String(error)}`);
 }
@@ -2116,7 +2122,7 @@ const makeWsRpcLayer = (
             ),
             { "rpc.aggregate": "preview" },
           ),
-        [WS_METHODS.subscribeServerConfig]: (_input) =>
+        [WS_METHODS.subscribeServerConfig]: (input) =>
           observeRpcStreamEffect(
             WS_METHODS.subscribeServerConfig,
             Effect.gen(function* () {
@@ -2146,13 +2152,15 @@ const makeWsRpcLayer = (
                   payload: { settings },
                 })),
               );
-              const managedPolicyDiagnosticsUpdates = managedPolicyDiagnosticsChanges.pipe(
-                Stream.map((diagnostics) => ({
-                  version: 1 as const,
-                  type: "managedPolicyDiagnosticsUpdated" as const,
-                  payload: { diagnostics },
-                })),
-              );
+              const managedPolicyDiagnosticsUpdates = shouldStreamManagedPolicyDiagnostics(input)
+                ? managedPolicyDiagnosticsChanges.pipe(
+                    Stream.map((diagnostics) => ({
+                      version: 1 as const,
+                      type: "managedPolicyDiagnosticsUpdated" as const,
+                      payload: { diagnostics },
+                    })),
+                  )
+                : Stream.empty;
 
               yield* providerRegistry
                 .refresh()

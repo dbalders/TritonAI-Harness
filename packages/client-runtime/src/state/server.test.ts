@@ -156,8 +156,17 @@ describe("server state projection", () => {
   it.effect("starts from cached configuration and persists the live projection", () =>
     Effect.gen(function* () {
       const events = yield* Queue.unbounded<ServerConfigStreamEvent>();
+      const subscriptionInputs = yield* Queue.unbounded<{
+        readonly managedPolicyDiagnosticsUpdates?: boolean;
+      }>();
       const client = {
-        [WS_METHODS.subscribeServerConfig]: () => Stream.fromQueue(events),
+        [WS_METHODS.subscribeServerConfig]: (input: {
+          readonly managedPolicyDiagnosticsUpdates?: boolean;
+        }) =>
+          Stream.concat(
+            Stream.fromEffect(Queue.offer(subscriptionInputs, input)).pipe(Stream.drain),
+            Stream.fromQueue(events),
+          ),
       } as unknown as WsRpcProtocolClient;
       const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
         target: TARGET,
@@ -191,6 +200,9 @@ describe("server state projection", () => {
             Effect.provideService(Persistence.EnvironmentCacheStore, cache),
           );
           expect(Option.getOrThrow(yield* SubscriptionRef.get(state)).config).toBe(CONFIG);
+          expect(yield* Queue.take(subscriptionInputs)).toEqual({
+            managedPolicyDiagnosticsUpdates: true,
+          });
 
           const providers: ServerConfig["providers"] = [];
           yield* Queue.offer(events, {

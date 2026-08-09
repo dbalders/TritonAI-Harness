@@ -165,7 +165,9 @@ export const makeEnvironmentServerConfigState = Effect.fn("EnvironmentServerConf
       Effect.forkScoped,
     );
 
-    yield* subscribe(WS_METHODS.subscribeServerConfig, {}).pipe(
+    yield* subscribe(WS_METHODS.subscribeServerConfig, {
+      managedPolicyDiagnosticsUpdates: true,
+    }).pipe(
       Stream.runForEach((event) =>
         Effect.gen(function* () {
           const next = applyServerConfigProjection(yield* SubscriptionRef.get(state), event);
