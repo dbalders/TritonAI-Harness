@@ -1158,6 +1158,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         buildVersion: Option.none(),
         outputDir: Option.none(),
         skipBuild: Option.none(),
+        pluginConfigurationPrevalidated: Option.none(),
+        pluginValidationReceipt: Option.none(),
         keepStage: Option.none(),
         signed: Option.none(),
         verbose: Option.none(),
@@ -1198,6 +1200,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
             buildVersion: Option.none(),
             outputDir: Option.none(),
             skipBuild: Option.none(),
+            pluginConfigurationPrevalidated: Option.none(),
+            pluginValidationReceipt: Option.none(),
             keepStage: Option.none(),
             signed: Option.none(),
             verbose: Option.none(),
@@ -1222,6 +1226,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         buildVersion: Option.none(),
         outputDir: Option.some("release-test"),
         skipBuild: Option.some(false),
+        pluginConfigurationPrevalidated: Option.some(false),
+        pluginValidationReceipt: Option.none(),
         keepStage: Option.some(false),
         signed: Option.some(false),
         verbose: Option.some(false),
@@ -1234,6 +1240,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
             ConfigProvider.fromEnv({
               env: {
                 T3CODE_DESKTOP_SKIP_BUILD: "true",
+                T3CODE_DESKTOP_PLUGIN_CONFIGURATION_PREVALIDATED: "true",
                 T3CODE_DESKTOP_KEEP_STAGE: "true",
                 T3CODE_DESKTOP_SIGNED: "true",
                 T3CODE_DESKTOP_VERBOSE: "true",
@@ -1245,6 +1252,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       );
 
       assert.equal(resolved.skipBuild, false);
+      assert.equal(resolved.pluginConfigurationPrevalidated, false);
       assert.equal(resolved.keepStage, false);
       assert.equal(resolved.signed, false);
       assert.equal(resolved.verbose, false);

@@ -113,14 +113,8 @@ jobs:
       - name: Test
         run: vp run test
 
-  # node-pty publishes no Linux prebuilt and the WSL backend runs under the
-  # distro's own (Linux) Node, which can't load the Windows/Electron binary. We
-  # build the Linux pty.node here, on Linux, and hand it to the Windows packaging
-  # job — the Windows artifact then ships a ready WSL backend binary with no
-  # cross-compiling and no first-launch compiler/node-gyp/network on the user's
-  # machine. node-pty is N-API, so one binary works across all WSL Node versions.
-  build_wsl_node_pty:
-    name: Build WSL node-pty (linux-x64)
+  prepare_managed_plugins:
+    name: Prepare immutable managed plugin composition
     needs: [preflight]
     if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' }}
     runs-on: ubuntu-24.04
@@ -131,70 +125,7 @@ jobs:
         with:
           ref: ${{ needs.preflight.outputs.ref }}
           fetch-depth: 0
-
-      - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@v1
-        with:
-          node-version-file: package.json
-          cache: true
-          run-install: true
-
-      - name: Build node-pty linux-x64 prebuild
-        shell: bash
-        run: |
-          set -euo pipefail
-          # Resolve node-pty from apps/server (where it's a dependency) and build
-          # its native binary from source for Linux. node-addon-api resolves from
-          # node-pty's own dependency tree, so node-gyp has everything it needs.
-          pty_pkg="$(node -e "console.log(require.resolve('node-pty/package.json', { paths: ['$GITHUB_WORKSPACE/apps/server'] }))")"
-          pty_dir="$(dirname "$pty_pkg")"
-          ( cd "$pty_dir" && npx --yes node-gyp rebuild )
-          mkdir -p wsl-prebuild
-          cp "$pty_dir/build/Release/pty.node" wsl-prebuild/pty.node
-          file wsl-prebuild/pty.node
-
-      - name: Upload node-pty linux-x64 prebuild
-        uses: actions/upload-artifact@v7
-        with:
-          name: wsl-node-pty-x64
-          path: wsl-prebuild/pty.node
-          if-no-files-found: error
-
-  build:
-    name: Build ${{ matrix.label }}
-    # The Windows package includes this Linux binary for its WSL backend, so the
-    # Windows build fails closed if the prerequisite artifact is unavailable.
-    needs: [preflight, build_wsl_node_pty]
-    if: ${{ !cancelled() && needs.preflight.result == 'success' }}
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # macOS arm64 release assets are built, signed, notarized, and
-          # published through the controlled local release path before the tag
-          # triggers this workflow. Standard GitHub macOS runners cannot package
-          # this dependency graph reliably, and paid runners are intentionally
-          # not used by this public downstream repository.
-          - label: Windows x64
-            runner: windows-2025
-            platform: win
-            target: nsis
-            arch: x64
-            rust_target: x86_64-pc-windows-msvc
-            resource_key: win32-x64
-          # - label: Windows arm64
-          #   runner: windows-11-arm
-          #   platform: win
-          #   target: nsis
-          #   arch: arm64
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ needs.preflight.outputs.ref }}
-          fetch-depth: 0
+          persist-credentials: false
 
       - name: Validate managed plugin release pins
         shell: bash
@@ -247,11 +178,6 @@ jobs:
           cache: true
           run-install: true
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.rust_target }}
-
       - name: Prepare pinned managed plugin composition
         shell: bash
         env:
@@ -263,6 +189,165 @@ jobs:
           npm --prefix .release-input/installer ci --ignore-scripts
           npm --prefix .release-input/installer run build
           node .release-input/installer/dist/scripts/prepare-plugins-vendor.js --production
+
+      - name: Upload exact pinned composition before provider execution
+        uses: actions/upload-artifact@v7
+        with:
+          name: managed-plugin-composition
+          path: .release-input/installer/vendor/plugins
+          include-hidden-files: true
+          if-no-files-found: error
+
+  validate_managed_plugins:
+    name: Validate managed plugins without release credentials
+    needs: [preflight, prepare_managed_plugins]
+    if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.prepare_managed_plugins.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.preflight.outputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Download immutable managed plugin composition
+        uses: actions/download-artifact@v7
+        with:
+          name: managed-plugin-composition
+          path: .release-input/installer/vendor/plugins
+
+      - name: Execute managed plugin configuration validation
+        env:
+          TRITONAI_PLUGIN_COMPOSITION_SOURCE: ${{ github.workspace }}/.release-input/installer/vendor/plugins
+          TRITONAI_PLUGIN_CONFIGURATION_JSON: ${{ vars.TRITONAI_PLUGIN_CONFIGURATION_JSON }}
+        run: |
+          node scripts/validate-managed-plugin-configuration.ts \
+            --receipt .release-input/managed-plugin-validation-receipt.json
+
+      - name: Upload validation receipt
+        uses: actions/upload-artifact@v7
+        with:
+          name: managed-plugin-validation-receipt
+          path: .release-input/managed-plugin-validation-receipt.json
+          if-no-files-found: error
+
+  # node-pty publishes no Linux prebuilt and the WSL backend runs under the
+  # distro's own (Linux) Node, which can't load the Windows/Electron binary. We
+  # build the Linux pty.node here, on Linux, and hand it to the Windows packaging
+  # job — the Windows artifact then ships a ready WSL backend binary with no
+  # cross-compiling and no first-launch compiler/node-gyp/network on the user's
+  # machine. node-pty is N-API, so one binary works across all WSL Node versions.
+  build_wsl_node_pty:
+    name: Build WSL node-pty (linux-x64)
+    needs: [preflight]
+    if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.preflight.outputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Build node-pty linux-x64 prebuild
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Resolve node-pty from apps/server (where it's a dependency) and build
+          # its native binary from source for Linux. node-addon-api resolves from
+          # node-pty's own dependency tree, so node-gyp has everything it needs.
+          pty_pkg="$(node -e "console.log(require.resolve('node-pty/package.json', { paths: ['$GITHUB_WORKSPACE/apps/server'] }))")"
+          pty_dir="$(dirname "$pty_pkg")"
+          ( cd "$pty_dir" && npx --yes node-gyp rebuild )
+          mkdir -p wsl-prebuild
+          cp "$pty_dir/build/Release/pty.node" wsl-prebuild/pty.node
+          file wsl-prebuild/pty.node
+
+      - name: Upload node-pty linux-x64 prebuild
+        uses: actions/upload-artifact@v7
+        with:
+          name: wsl-node-pty-x64
+          path: wsl-prebuild/pty.node
+          if-no-files-found: error
+
+  build:
+    name: Build ${{ matrix.label }}
+    # The Windows package includes this Linux binary for its WSL backend, so the
+    # Windows build fails closed if the prerequisite artifact is unavailable.
+    needs: [preflight, build_wsl_node_pty, validate_managed_plugins]
+    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.validate_managed_plugins.result == 'success' }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macOS arm64 release assets are built, signed, notarized, and
+          # published through the controlled local release path before the tag
+          # triggers this workflow. Standard GitHub macOS runners cannot package
+          # this dependency graph reliably, and paid runners are intentionally
+          # not used by this public downstream repository.
+          - label: Windows x64
+            runner: windows-2025
+            platform: win
+            target: nsis
+            arch: x64
+            rust_target: x86_64-pc-windows-msvc
+            resource_key: win32-x64
+          # - label: Windows arm64
+          #   runner: windows-11-arm
+          #   platform: win
+          #   target: nsis
+          #   arch: arm64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.preflight.outputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Download exact validated managed plugin composition
+        uses: actions/download-artifact@v7
+        with:
+          name: managed-plugin-composition
+          path: .release-input/installer/vendor/plugins
+
+      - name: Download managed plugin validation receipt
+        uses: actions/download-artifact@v7
+        with:
+          name: managed-plugin-validation-receipt
+          path: .release-input
 
       - name: Align package versions to release version
         run: node scripts/update-release-package-versions.ts "${{ needs.preflight.outputs.version }}"
@@ -396,6 +481,8 @@ jobs:
             --arch "${{ matrix.arch }}"
             --build-version "${{ needs.preflight.outputs.version }}"
             --verbose
+            --plugin-configuration-prevalidated
+            --plugin-validation-receipt "$GITHUB_WORKSPACE/.release-input/managed-plugin-validation-receipt.json"
           )
 
           if [[ "${{ matrix.platform }}" == "win" ]]; then

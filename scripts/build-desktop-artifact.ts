@@ -26,6 +26,7 @@ import {
   managedPluginProofInputFileName,
   readManagedPluginBuildConfiguration,
   snapshotManagedPluginComposition,
+  verifyManagedPluginValidationReceipt,
   type ManagedPluginComposition,
 } from "./lib/managed-plugin-composition.ts";
 import { loadRepoEnv } from "./lib/public-config.ts";
@@ -151,6 +152,8 @@ interface BuildCliInput {
   readonly buildVersion: Option.Option<string>;
   readonly outputDir: Option.Option<string>;
   readonly skipBuild: Option.Option<boolean>;
+  readonly pluginConfigurationPrevalidated: Option.Option<boolean>;
+  readonly pluginValidationReceipt: Option.Option<string>;
   readonly keepStage: Option.Option<boolean>;
   readonly signed: Option.Option<boolean>;
   readonly verbose: Option.Option<boolean>;
@@ -775,6 +778,8 @@ interface ResolvedBuildOptions {
   readonly version: string | undefined;
   readonly outputDir: string;
   readonly skipBuild: boolean;
+  readonly pluginConfigurationPrevalidated: boolean;
+  readonly pluginValidationReceipt: string | undefined;
   readonly keepStage: boolean;
   readonly signed: boolean;
   readonly verbose: boolean;
@@ -1453,6 +1458,12 @@ const BuildEnvConfig = Config.all({
   version: Config.string("T3CODE_DESKTOP_VERSION").pipe(Config.option),
   outputDir: Config.string("T3CODE_DESKTOP_OUTPUT_DIR").pipe(Config.option),
   skipBuild: Config.boolean("T3CODE_DESKTOP_SKIP_BUILD").pipe(Config.withDefault(false)),
+  pluginConfigurationPrevalidated: Config.boolean(
+    "T3CODE_DESKTOP_PLUGIN_CONFIGURATION_PREVALIDATED",
+  ).pipe(Config.withDefault(false)),
+  pluginValidationReceipt: Config.string("T3CODE_DESKTOP_PLUGIN_VALIDATION_RECEIPT").pipe(
+    Config.option,
+  ),
   keepStage: Config.boolean("T3CODE_DESKTOP_KEEP_STAGE").pipe(Config.withDefault(false)),
   signed: Config.boolean("T3CODE_DESKTOP_SIGNED").pipe(Config.withDefault(false)),
   verbose: Config.boolean("T3CODE_DESKTOP_VERBOSE").pipe(Config.withDefault(false)),
@@ -1538,6 +1549,13 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
   );
 
   const skipBuild = resolveBooleanFlag(input.skipBuild, env.skipBuild);
+  const pluginConfigurationPrevalidated = resolveBooleanFlag(
+    input.pluginConfigurationPrevalidated,
+    env.pluginConfigurationPrevalidated,
+  );
+  const pluginValidationReceipt =
+    Option.getOrUndefined(input.pluginValidationReceipt) ??
+    Option.getOrUndefined(env.pluginValidationReceipt);
   const keepStage = resolveBooleanFlag(input.keepStage, env.keepStage);
   const signed = resolveBooleanFlag(input.signed, env.signed);
   const verbose = resolveBooleanFlag(input.verbose, env.verbose);
@@ -1564,6 +1582,8 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
     version,
     outputDir,
     skipBuild,
+    pluginConfigurationPrevalidated,
+    pluginValidationReceipt,
     keepStage,
     signed,
     verbose,
@@ -2345,7 +2365,6 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const pluginBuildInput: {
     readonly composition: ManagedPluginComposition;
     readonly configuration: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
-    readonly configurationJson: string;
   } | null = configuredPluginSource
     ? yield* Effect.try({
         try: () => {
@@ -2354,14 +2373,13 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
             pluginSnapshotRoot,
           );
           const configuration = readManagedPluginBuildConfiguration(composition, repoEnv);
-          // @effect-diagnostics-next-line preferSchemaOverJson:off - The generic map was bounded and validated above; this canonical copy closes the child-build TOCTOU window.
-          return { composition, configuration, configurationJson: JSON.stringify(configuration) };
+          return { composition, configuration };
         },
         catch: (cause) =>
           new ManagedPluginCompositionBuildError({ failure: "invalid-composition", cause }),
       })
     : null;
-  if (pluginBuildInput) {
+  if (pluginBuildInput && !options.pluginConfigurationPrevalidated) {
     yield* Effect.tryPromise({
       try: () =>
         validateManagedPluginBuildConfiguration(
@@ -2369,6 +2387,23 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
           pluginBuildInput.configuration,
           (plugin) => path.join(pluginSnapshotRoot, "packages", plugin.id),
         ),
+      catch: (cause) =>
+        new ManagedPluginCompositionBuildError({ failure: "invalid-configuration", cause }),
+    });
+  } else if (pluginBuildInput) {
+    const receiptPath = options.pluginValidationReceipt?.trim();
+    const serializedConfiguration = repoEnv[PRODUCTION_PLUGIN_CONFIGURATION_ENV]?.trim() ?? "";
+    yield* Effect.try({
+      try: () => {
+        if (!receiptPath) {
+          throw new Error("Prevalidated managed plugins require an exact validation receipt path.");
+        }
+        verifyManagedPluginValidationReceipt(
+          path.resolve(repoRoot, receiptPath),
+          pluginBuildInput.composition,
+          serializedConfiguration,
+        );
+      },
       catch: (cause) =>
         new ManagedPluginCompositionBuildError({ failure: "invalid-configuration", cause }),
     });
@@ -2387,16 +2422,16 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   if (!options.skipBuild) {
     yield* Effect.log("[desktop-artifact] Building desktop/server/web artifacts...");
     const spawnCommand = yield* resolveSpawnCommand("vp", ["run", "build:desktop"]);
+    const buildEnvironment: NodeJS.ProcessEnv = { ...process.env };
+    delete buildEnvironment[PRODUCTION_PLUGIN_SOURCE_ENV];
+    delete buildEnvironment[PRODUCTION_PLUGIN_CONFIGURATION_ENV];
+    for (const key of Object.keys(buildEnvironment)) {
+      if (key.startsWith("AZURE_")) delete buildEnvironment[key];
+    }
     yield* runCommand(
       ChildProcess.make(spawnCommand.command, spawnCommand.args, {
         cwd: repoRoot,
-        env: pluginBuildInput
-          ? {
-              ...process.env,
-              [PRODUCTION_PLUGIN_SOURCE_ENV]: pluginSnapshotRoot,
-              [PRODUCTION_PLUGIN_CONFIGURATION_ENV]: pluginBuildInput.configurationJson,
-            }
-          : process.env,
+        env: buildEnvironment,
         shell: spawnCommand.shell,
       }),
       { label: "vp run build:desktop", verbose: options.verbose },
@@ -2800,6 +2835,18 @@ const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
   skipBuild: Flag.boolean("skip-build").pipe(
     Flag.withDescription(
       "Skip `vp run build:desktop` and use existing dist artifacts (env: T3CODE_DESKTOP_SKIP_BUILD).",
+    ),
+    Flag.optional,
+  ),
+  pluginConfigurationPrevalidated: Flag.boolean("plugin-configuration-prevalidated").pipe(
+    Flag.withDescription(
+      "Skip provider execution after an isolated release-validation job has approved the exact pinned composition.",
+    ),
+    Flag.optional,
+  ),
+  pluginValidationReceipt: Flag.string("plugin-validation-receipt").pipe(
+    Flag.withDescription(
+      "Receipt binding an isolated validation job to the exact composition and configuration.",
     ),
     Flag.optional,
   ),

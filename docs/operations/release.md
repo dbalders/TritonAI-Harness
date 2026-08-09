@@ -77,7 +77,11 @@ Repository variables:
   composition. Each plugin owns and validates its opaque configuration object.
 
 The workflow verifies the plugin checkout resolves to the pinned commit and detaches it before
-building. The final proof manifest is a required release asset.
+building. A preparation job uploads that exact composition before any provider code executes. A
+second, credential-free runner validates the immutable composition and emits a receipt binding its
+source, contents, and exact configuration. The Windows build consumes those two artifacts on a
+third fresh runner, verifies the receipt, and packages the composition without executing provider
+code. The final proof manifest is a required release asset.
 
 ## Windows signing
 

@@ -9,11 +9,13 @@ import effectPackageJson from "effect/package.json" with { type: "json" };
 
 import { finalizeManagedPluginProof } from "./finalize-managed-plugin-proof.ts";
 import {
+  createManagedPluginValidationReceipt,
   managedPluginProofFileName,
   managedPluginProofInputFileName,
   readManagedPluginBuildConfiguration,
   readManagedPluginComposition,
   snapshotManagedPluginComposition,
+  verifyManagedPluginValidationReceipt,
 } from "./managed-plugin-composition.ts";
 
 const temporaryDirectories: string[] = [];
@@ -77,6 +79,30 @@ describe("managed plugin release composition", () => {
         }),
       }),
     ).toThrow(/16384-byte limit/u);
+  });
+
+  it("binds isolated validation to the exact composition and configuration", () => {
+    const composition = readManagedPluginComposition(makeCompositionFixture());
+    const configuration = '{"microsoft-365":{"clientId":"example"}}';
+    const receiptPath = NodePath.join(makeTemporaryDirectory(), "validation-receipt.json");
+    NodeFS.writeFileSync(
+      receiptPath,
+      JSON.stringify(createManagedPluginValidationReceipt(composition, configuration)),
+    );
+
+    expect(verifyManagedPluginValidationReceipt(receiptPath, composition, configuration)).toEqual(
+      createManagedPluginValidationReceipt(composition, configuration),
+    );
+    expect(() =>
+      verifyManagedPluginValidationReceipt(receiptPath, composition, `${configuration} `),
+    ).not.toThrow();
+    expect(() =>
+      verifyManagedPluginValidationReceipt(
+        receiptPath,
+        composition,
+        '{"microsoft-365":{"clientId":"changed"}}',
+      ),
+    ).toThrow(/does not match the exact composition and configuration/iu);
   });
 
   it("snapshots one strict current composition contract and rejects manifest compatibility ranges", () => {

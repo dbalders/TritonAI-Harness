@@ -20,6 +20,12 @@
 - `vp run dist:desktop:linux` — Builds a Linux AppImage into `./release`.
 - `vp run dist:desktop:win` — Builds a Windows NSIS installer into `./release`.
 - `vp run dist:desktop:plugins:finalize -- --platform <mac|win> --arch <arch> --artifact <path> --output-dir release` — Binds a staged managed-plugin composition to final signed artifact bytes.
+- `node scripts/validate-managed-plugin-configuration.ts --receipt <path>` — Executes pinned provider
+  configuration validation and writes a receipt binding the composition and exact configuration.
+  Release automation runs this only in its dedicated credential-free job. The internal
+  `--plugin-configuration-prevalidated --plugin-validation-receipt <path>` artifact-build flags are
+  reserved for the dependent fresh-runner build job; local builds validate providers normally and
+  must not bypass that check.
 
 ## Managed plugin release proofs
 

@@ -426,6 +426,31 @@ try {
     "TRITONAI_ALLOW_UNSIGNED_WINDOWS_RELEASE",
     "Unsigned Windows releases must require an explicit repository opt-in.",
   );
+  assertContains(
+    releaseWorkflow,
+    "Validate managed plugins without release credentials",
+    "Managed plugin provider code must run in a dedicated credential-free release job.",
+  );
+  assertContains(
+    releaseWorkflow,
+    "needs: [preflight, build_wsl_node_pty, validate_managed_plugins]",
+    "Release artifact builds must depend on isolated managed plugin validation.",
+  );
+  assertContains(
+    releaseWorkflow,
+    "--plugin-configuration-prevalidated",
+    "The release build must package the separately validated plugin composition without executing providers.",
+  );
+  assertContains(
+    releaseWorkflow,
+    "managed-plugin-validation-receipt",
+    "Managed plugin validation must hand an immutable receipt to the release build.",
+  );
+  assertContains(
+    releaseWorkflow,
+    "--plugin-validation-receipt",
+    "The release build must verify its exact managed plugin validation receipt.",
+  );
   const packagedBootVerifier = NodeFS.readFileSync(
     NodePath.resolve(repoRoot, "scripts/verify-windows-packaged-boot.ps1"),
     "utf8",
