@@ -69,6 +69,20 @@ const checkForUpdatesFromMenu = Effect.gen(function* () {
       detail: updateState.message ?? "An unknown error occurred. Please try again later.",
       buttons: ["OK"],
     });
+  } else {
+    const version = updateState.availableVersion ?? updateState.downloadedVersion;
+    yield* electronDialog.showMessageBox({
+      type: "info",
+      title: updateState.status === "downloaded" ? "Harness update ready" : "Harness update found",
+      message: version
+        ? `TritonAI Harness ${version} is available.`
+        : "A TritonAI Harness update is in progress.",
+      detail:
+        updateState.status === "downloaded"
+          ? "Use the update control in the Harness window to install and restart."
+          : "Use the update control in the Harness window to download or monitor the update.",
+      buttons: ["OK"],
+    });
   }
 }).pipe(Effect.withSpan("desktop.menu.checkForUpdates"));
 

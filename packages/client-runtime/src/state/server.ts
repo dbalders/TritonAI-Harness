@@ -74,6 +74,15 @@ export function applyServerConfigProjection(
         latestEvent: event,
         source: "live",
       }));
+    case "managedPolicyDiagnosticsUpdated":
+      return Option.map(current, (projection) => ({
+        config: {
+          ...projection.config,
+          managedPolicyDiagnostics: event.payload.diagnostics,
+        },
+        latestEvent: event,
+        source: "live",
+      }));
   }
 }
 

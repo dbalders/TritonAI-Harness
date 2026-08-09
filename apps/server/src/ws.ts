@@ -82,7 +82,7 @@ import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as ServerSettings from "./serverSettings.ts";
-import { getManagedPolicyDiagnostics } from "./managedPolicy.ts";
+import { getManagedPolicyDiagnostics, managedPolicyDiagnosticsChanges } from "./managedPolicy.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as PreviewManager from "./preview/Manager.ts";
@@ -2146,6 +2146,13 @@ const makeWsRpcLayer = (
                   payload: { settings },
                 })),
               );
+              const managedPolicyDiagnosticsUpdates = managedPolicyDiagnosticsChanges.pipe(
+                Stream.map((diagnostics) => ({
+                  version: 1 as const,
+                  type: "managedPolicyDiagnosticsUpdated" as const,
+                  payload: { diagnostics },
+                })),
+              );
 
               yield* providerRegistry
                 .refresh()
@@ -2153,7 +2160,10 @@ const makeWsRpcLayer = (
 
               const liveUpdates = Stream.merge(
                 keybindingsUpdates,
-                Stream.merge(providerStatuses, settingsUpdates),
+                Stream.merge(
+                  providerStatuses,
+                  Stream.merge(settingsUpdates, managedPolicyDiagnosticsUpdates),
+                ),
               );
 
               return Stream.concat(

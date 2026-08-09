@@ -231,7 +231,7 @@ function ProviderSettingsFieldRow({
         <label htmlFor={inputId} className={cn(variant === "card" && "block")}>
           {label}
           <Textarea
-            disabled={readOnly}
+            readOnly={readOnly}
             id={inputId}
             className={cn(variant === "card" && "mt-1.5")}
             value={readProviderConfigString(value, field.key)}
@@ -254,7 +254,7 @@ function ProviderSettingsFieldRow({
         {label}
         {variant === "card" ? (
           <DraftInput
-            disabled={readOnly}
+            readOnly={readOnly}
             id={inputId}
             className="mt-1.5"
             type={type}
@@ -266,7 +266,7 @@ function ProviderSettingsFieldRow({
           />
         ) : (
           <Input
-            disabled={readOnly}
+            readOnly={readOnly}
             id={inputId}
             className="bg-background"
             type={type}

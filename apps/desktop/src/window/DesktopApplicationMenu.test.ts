@@ -226,4 +226,74 @@ describe("DesktopApplicationMenu", () => {
       );
     }),
   );
+
+  it.effect("explains when Harness updates are disabled without checking", () =>
+    Effect.gen(function* () {
+      const selectedAction = yield* Deferred.make<string>();
+      const applicationMenuTemplate =
+        yield* Deferred.make<readonly Electron.MenuItemConstructorOptions[]>();
+      const shownMessage = yield* Deferred.make<Electron.MessageBoxOptions>();
+      let checkCalls = 0;
+      const updateLayer = Layer.succeed(DesktopUpdates.DesktopUpdates, {
+        getState: Effect.die("unexpected getState"),
+        emitState: Effect.void,
+        disabledReason: Effect.succeed(Option.some("This build is not signed for updates.")),
+        configure: Effect.void,
+        setChannel: () => Effect.die("unexpected setChannel"),
+        check: () =>
+          Effect.sync(() => {
+            checkCalls += 1;
+            throw new Error("unexpected check");
+          }),
+        download: Effect.die("unexpected download"),
+        install: Effect.die("unexpected install"),
+      } satisfies DesktopUpdates.DesktopUpdates["Service"]);
+      const dialogLayer = Layer.succeed(ElectronDialog.ElectronDialog, {
+        pickFolder: () => Effect.succeed(Option.none()),
+        confirm: () => Effect.succeed(false),
+        showMessageBox: (options) =>
+          Deferred.succeed(shownMessage, options).pipe(
+            Effect.as({ response: 0, checkboxChecked: false }),
+          ),
+        showErrorBox: () => Effect.void,
+      } satisfies ElectronDialog.ElectronDialog["Service"]);
+
+      yield* Effect.gen(function* () {
+        const menu = yield* DesktopApplicationMenu.DesktopApplicationMenu;
+        yield* menu.configure;
+      }).pipe(
+        Effect.provide(
+          DesktopApplicationMenu.layer.pipe(
+            Layer.provideMerge(makeElectronMenuLayer(applicationMenuTemplate)),
+            Layer.provideMerge(makeDesktopWindowLayer(selectedAction)),
+            Layer.provideMerge(updateLayer),
+            Layer.provideMerge(dialogLayer),
+            Layer.provideMerge(electronAppLayer),
+            Layer.provideMerge(
+              DesktopEnvironment.layer(environmentInput).pipe(
+                Layer.provide(Layer.mergeAll(NodeServices.layer, DesktopConfig.layerTest({}))),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      const template = yield* Deferred.await(applicationMenuTemplate);
+      const helpMenu = template.find((item) => item.role === "help");
+      assert.isDefined(helpMenu);
+      if (!Array.isArray(helpMenu.submenu)) {
+        throw new Error("Expected Help menu submenu to be an array.");
+      }
+      const updateItem = helpMenu.submenu.find((item) => item.label === "Check for Updates...");
+      assert.isDefined(updateItem);
+      if (typeof updateItem.click !== "function") {
+        throw new Error("Expected update menu item to have a click handler.");
+      }
+
+      updateItem.click({} as Electron.MenuItem, {} as Electron.BrowserWindow, {} as KeyboardEvent);
+      const message = yield* Deferred.await(shownMessage);
+      assert.equal(message.title, "Updates unavailable");
+      assert.equal(checkCalls, 0);
+    }),
+  );
 });

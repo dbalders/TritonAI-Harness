@@ -12,6 +12,7 @@ import {
   normalizeCommandPath,
 } from "./providerMaintenance.ts";
 import {
+  isTritonAiManagedCodexMaintenanceCapabilities,
   makeTritonAiManagedCodexMaintenanceResolver,
   parseCodexCliVersion,
   resolveTritonAiManagedCodexInstallation,
@@ -143,6 +144,11 @@ it("routes managed launchers through the Harness updater and preserves parent fa
     args: ["/app/apps/server/dist/bin.mjs", "managed-codex-update", binaryPath],
     lockKey: "tritonai-managed-codex",
   });
+  const aliasResolution = resolver.resolve({
+    binaryPath: "codex",
+    resolvedCommandPath: binaryPath,
+  });
+  expect(isTritonAiManagedCodexMaintenanceCapabilities(aliasResolution)).toBe(true);
   expect(resolver.resolve({ binaryPath: "/opt/homebrew/bin/codex" }).update).toMatchObject({
     executable: "brew",
     args: ["upgrade", "codex"],

@@ -709,6 +709,12 @@ export const ServerConfigSettingsUpdatedPayload = Schema.Struct({
 });
 export type ServerConfigSettingsUpdatedPayload = typeof ServerConfigSettingsUpdatedPayload.Type;
 
+export const ServerConfigManagedPolicyDiagnosticsUpdatedPayload = Schema.Struct({
+  diagnostics: TritonAiManagedPolicyDiagnostics,
+});
+export type ServerConfigManagedPolicyDiagnosticsUpdatedPayload =
+  typeof ServerConfigManagedPolicyDiagnosticsUpdatedPayload.Type;
+
 export const ServerConfigStreamSnapshotEvent = Schema.Struct({
   version: Schema.Literal(1),
   type: Schema.Literal("snapshot"),
@@ -740,11 +746,20 @@ export const ServerConfigStreamSettingsUpdatedEvent = Schema.Struct({
 export type ServerConfigStreamSettingsUpdatedEvent =
   typeof ServerConfigStreamSettingsUpdatedEvent.Type;
 
+export const ServerConfigStreamManagedPolicyDiagnosticsUpdatedEvent = Schema.Struct({
+  version: Schema.Literal(1),
+  type: Schema.Literal("managedPolicyDiagnosticsUpdated"),
+  payload: ServerConfigManagedPolicyDiagnosticsUpdatedPayload,
+});
+export type ServerConfigStreamManagedPolicyDiagnosticsUpdatedEvent =
+  typeof ServerConfigStreamManagedPolicyDiagnosticsUpdatedEvent.Type;
+
 export const ServerConfigStreamEvent = Schema.Union([
   ServerConfigStreamSnapshotEvent,
   ServerConfigStreamKeybindingsUpdatedEvent,
   ServerConfigStreamProviderStatusesEvent,
   ServerConfigStreamSettingsUpdatedEvent,
+  ServerConfigStreamManagedPolicyDiagnosticsUpdatedEvent,
 ]);
 export type ServerConfigStreamEvent = typeof ServerConfigStreamEvent.Type;
 

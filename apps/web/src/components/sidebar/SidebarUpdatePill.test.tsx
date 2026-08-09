@@ -199,4 +199,32 @@ describe("SidebarUpdatePill", () => {
     expect(testState.confirm).toHaveBeenCalledOnce();
     expect(testState.installUpdate).toHaveBeenCalledOnce();
   });
+
+  it("does not install a downloaded Harness update when confirmation is declined", async () => {
+    testState.desktopUpdate = {
+      ...desktopUpdateBase,
+      status: "downloaded",
+      availableVersion: "1.1.0",
+      downloadedVersion: "1.1.0",
+    } as const;
+    testState.confirm.mockReturnValue(false);
+
+    const output = SidebarUpdatePill();
+    const updateButton = findElement(
+      output,
+      (element) =>
+        element.type === "button" &&
+        String((element.props as { readonly className?: string }).className).includes(
+          "update-main",
+        ),
+    );
+
+    expect(updateButton).not.toBeNull();
+    if (!updateButton) throw new Error("Expected the Harness install button.");
+    (updateButton.props as { readonly onClick: () => void }).onClick();
+    await flushPromises();
+
+    expect(testState.confirm).toHaveBeenCalledOnce();
+    expect(testState.installUpdate).not.toHaveBeenCalled();
+  });
 });

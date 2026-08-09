@@ -1048,6 +1048,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       });
       assert.notInclude(raw, "/attempted/override");
       assert.notInclude(raw, "/attempted/home");
+      assert.notInclude(raw, "UCSD_AI_BASE_URL");
     }).pipe(Effect.provide(makeManagedServerSettingsLayer())),
   );
 });

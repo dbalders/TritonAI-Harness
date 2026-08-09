@@ -2,6 +2,7 @@
 import * as NodeCrypto from "node:crypto";
 
 import { TRITONAI_API_KEY_ENV } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -57,6 +58,7 @@ export class SecureSkillsSyncError extends Schema.TaggedErrorClass<SecureSkillsS
   "SecureSkillsSyncError",
   { message: Schema.String, cause: Schema.optional(Schema.Defect()) },
 ) {}
+const isSecureSkillsSyncError = Schema.is(SecureSkillsSyncError);
 
 function syncError(message: string, cause?: unknown): SecureSkillsSyncError {
   return new SecureSkillsSyncError({ message, ...(cause === undefined ? {} : { cause }) });
@@ -112,95 +114,135 @@ export const synchronizeSecureSkillsFeed = Effect.fn("synchronizeSecureSkillsFee
   feed: SecureSkillFeed,
   skillsDirectory: string,
 ) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  yield* fs.makeDirectory(skillsDirectory, { recursive: true });
-  const managed = yield* loadManagedSkillManifest(skillsDirectory);
-  if (managedSkillManifestBlocksMutation(managed.status)) {
-    return yield* syncError("The existing managed-skills manifest is not safe to update.");
-  }
-  const previousNames = new Set(managed.skillNames);
-  for (const skill of feed.skills) {
-    if (
-      !previousNames.has(skill.name) &&
-      (yield* fs.exists(path.join(skillsDirectory, skill.name)))
-    ) {
-      return yield* syncError(`Managed skill '${skill.name}' conflicts with a user-owned skill.`);
-    }
-  }
-
-  const staging = yield* fs.makeTempDirectoryScoped({
-    directory: skillsDirectory,
-    prefix: ".secure-skills-stage.",
-  });
-  const backup = yield* fs.makeTempDirectoryScoped({
-    directory: skillsDirectory,
-    prefix: ".secure-skills-backup.",
-  });
-  for (const skill of feed.skills) {
-    for (const file of skill.files) {
-      const destination = path.join(staging, skill.name, ...file.path.split("/"));
-      yield* fs.makeDirectory(path.dirname(destination), { recursive: true });
-      yield* fs.writeFileString(destination, file.content, { mode: 0o600 });
-    }
-  }
-
-  const installed: string[] = [];
-  const backedUp: string[] = [];
-  const nextNames = feed.skills.map((skill) => skill.name).toSorted();
-  yield* Effect.gen(function* () {
-    for (const name of previousNames) {
-      const target = path.join(skillsDirectory, name);
-      if (!(yield* fs.exists(target))) continue;
-      if (
-        yield* fs.readLink(target).pipe(
-          Effect.as(true),
-          Effect.orElseSucceed(() => false),
-        )
-      ) {
-        return yield* syncError(`Managed skill '${name}' is a symbolic link.`);
+  return yield* Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      yield* fs.makeDirectory(skillsDirectory, { recursive: true });
+      const managed = yield* loadManagedSkillManifest(skillsDirectory);
+      if (managedSkillManifestBlocksMutation(managed.status)) {
+        return yield* syncError("The existing managed-skills manifest is not safe to update.");
       }
-      yield* fs.rename(target, path.join(backup, name));
-      backedUp.push(name);
-    }
-    for (const name of nextNames) {
-      yield* fs.rename(path.join(staging, name), path.join(skillsDirectory, name));
-      installed.push(name);
-    }
-    const manifest = yield* encodeManagedSkillManifest({
-      version: 1,
-      kind: "tritonai-secure",
-      skills: nextNames,
-    });
-    yield* writeFileStringAtomically({
-      filePath: path.join(skillsDirectory, ".tritonai-managed-skills.json"),
-      contents: `${manifest}\n`,
-      mode: 0o600,
-    });
-  }).pipe(
-    Effect.mapError((cause) =>
-      syncError("Managed skills could not be installed transactionally.", cause),
-    ),
-    Effect.catch((error) =>
-      Effect.gen(function* () {
-        for (const name of installed) {
-          yield* fs
-            .remove(path.join(skillsDirectory, name), { recursive: true, force: true })
-            .pipe(Effect.ignore);
+      const previousNames = new Set(managed.skillNames);
+      for (const skill of feed.skills) {
+        if (
+          !previousNames.has(skill.name) &&
+          (yield* fs.exists(path.join(skillsDirectory, skill.name)))
+        ) {
+          return yield* syncError(
+            `Managed skill '${skill.name}' conflicts with a user-owned skill.`,
+          );
         }
-        for (const name of backedUp) {
-          yield* fs
-            .rename(path.join(backup, name), path.join(skillsDirectory, name))
-            .pipe(Effect.ignore);
+      }
+
+      const staging = yield* fs.makeTempDirectoryScoped({
+        directory: skillsDirectory,
+        prefix: ".secure-skills-stage.",
+      });
+      const backup = yield* fs.makeTempDirectoryScoped({
+        directory: skillsDirectory,
+        prefix: ".secure-skills-backup.",
+      });
+      for (const skill of feed.skills) {
+        for (const file of skill.files) {
+          const destination = path.join(staging, skill.name, ...file.path.split("/"));
+          yield* fs.makeDirectory(path.dirname(destination), { recursive: true });
+          yield* fs.writeFileString(destination, file.content, { mode: 0o600 });
         }
-        return yield* error;
-      }),
-    ),
+      }
+
+      const installed: string[] = [];
+      const backedUp: string[] = [];
+      const nextNames = feed.skills.map((skill) => skill.name).toSorted();
+      yield* Effect.gen(function* () {
+        for (const name of previousNames) {
+          const target = path.join(skillsDirectory, name);
+          if (!(yield* fs.exists(target))) continue;
+          if (
+            yield* fs.readLink(target).pipe(
+              Effect.as(true),
+              Effect.orElseSucceed(() => false),
+            )
+          ) {
+            return yield* syncError(`Managed skill '${name}' is a symbolic link.`);
+          }
+          yield* fs.rename(target, path.join(backup, name));
+          backedUp.push(name);
+        }
+        for (const name of nextNames) {
+          yield* fs.rename(path.join(staging, name), path.join(skillsDirectory, name));
+          installed.push(name);
+        }
+        const manifest = yield* encodeManagedSkillManifest({
+          version: 1,
+          kind: "tritonai-secure",
+          skills: nextNames,
+        });
+        yield* writeFileStringAtomically({
+          filePath: path.join(skillsDirectory, ".tritonai-managed-skills.json"),
+          contents: `${manifest}\n`,
+          mode: 0o600,
+        });
+      }).pipe(
+        Effect.mapError((cause) =>
+          isSecureSkillsSyncError(cause)
+            ? cause
+            : syncError("Managed skills could not be installed transactionally.", cause),
+        ),
+        Effect.catch((error) =>
+          Effect.gen(function* () {
+            for (const name of installed) {
+              yield* fs
+                .remove(path.join(skillsDirectory, name), { recursive: true, force: true })
+                .pipe(Effect.ignore);
+            }
+            for (const name of backedUp) {
+              yield* fs
+                .rename(path.join(backup, name), path.join(skillsDirectory, name))
+                .pipe(Effect.ignore);
+            }
+            return yield* error;
+          }),
+        ),
+      );
+      return { revision: feed.revision, skillNames: nextNames };
+    }),
   );
-  return { revision: feed.revision, skillNames: nextNames };
 });
 
 type FetchLike = typeof fetch;
+
+export const readSecureSkillsResponseBody = Effect.fn("readSecureSkillsResponseBody")(function* (
+  response: Response,
+) {
+  return yield* Effect.tryPromise({
+    try: async () => {
+      const reader = response.body?.getReader();
+      if (!reader) return "";
+      const chunks: Uint8Array[] = [];
+      let bytes = 0;
+      try {
+        while (true) {
+          const next = await reader.read();
+          if (next.done) break;
+          bytes += next.value.byteLength;
+          if (bytes > MAX_FEED_BYTES) {
+            await reader.cancel();
+            throw syncError("The secure-skills feed is too large.");
+          }
+          chunks.push(next.value);
+        }
+      } finally {
+        reader.releaseLock();
+      }
+      return Buffer.concat(chunks).toString("utf8");
+    },
+    catch: (cause) =>
+      isSecureSkillsSyncError(cause)
+        ? cause
+        : syncError("The secure-skills response could not be read.", cause),
+  });
+});
 
 export const pollSecureSkillsOnce = Effect.fn("pollSecureSkillsOnce")(function* (options?: {
   readonly fetch?: FetchLike;
@@ -241,12 +283,7 @@ export const pollSecureSkillsOnce = Effect.fn("pollSecureSkillsOnce")(function* 
   const length = Number(response.headers.get("content-length"));
   if (Number.isFinite(length) && length > MAX_FEED_BYTES)
     return yield* syncError("The secure-skills feed is too large.");
-  const raw = yield* Effect.tryPromise({
-    try: () => response.text(),
-    catch: (cause) => syncError("The secure-skills response could not be read.", cause),
-  });
-  if (Buffer.byteLength(raw) > MAX_FEED_BYTES)
-    return yield* syncError("The secure-skills feed is too large.");
+  const raw = yield* readSecureSkillsResponseBody(response);
   const json = yield* decodeUnknownJson(raw).pipe(
     Effect.mapError((cause) => syncError("The secure-skills response was not valid JSON.", cause)),
   );
@@ -262,12 +299,16 @@ export const pollSecureSkillsOnce = Effect.fn("pollSecureSkillsOnce")(function* 
 
 export const pollingLayer = Effect.gen(function* () {
   const poll = pollSecureSkillsOnce().pipe(
-    Effect.catch((error) =>
+    Effect.catchCause((cause) =>
       Effect.gen(function* () {
+        const failure = Cause.squash(cause);
         updateSecureSkillsDiagnostics({
           secureSkillsStatus: "error",
           secureSkillsLastCheckedAt: DateTime.formatIso(yield* DateTime.now),
-          secureSkillsMessage: error.message,
+          secureSkillsMessage:
+            failure instanceof Error
+              ? failure.message
+              : `Secure-skills poll failed: ${String(failure)}`,
         });
       }),
     ),

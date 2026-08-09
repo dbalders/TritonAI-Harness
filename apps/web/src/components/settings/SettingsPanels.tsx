@@ -74,6 +74,7 @@ import { useInstallerUpdateState } from "../../state/installerUpdate";
 import { useDesktopUpdateState } from "../../state/desktopUpdate";
 import { ensureLocalApi, readLocalApi } from "../../localApi";
 import {
+  primaryServerConfigAtom,
   primaryServerObservabilityAtom,
   primaryServerProvidersAtom,
   serverEnvironment,
@@ -459,10 +460,12 @@ function HarnessVersionSection() {
   const buttonLabel =
     actionLabel[action] ?? statusLabel[updateState?.status ?? ""] ?? "Check for Updates";
 
+  if (!isElectron) return null;
+
   return (
     <>
       <SettingsRow
-        title={<AboutVersionTitle version={APP_VERSION} />}
+        title={<AboutVersionTitle version={updateState?.currentVersion ?? APP_VERSION} />}
         description={
           action === "download" || action === "install"
             ? "Harness update available."
@@ -1641,6 +1644,8 @@ export function GeneralSettingsPanel() {
 export function ProviderSettingsPanel() {
   const settings = usePrimarySettings();
   const updateSettings = useUpdatePrimarySettings();
+  const managedProviderInstanceId =
+    useAtomValue(primaryServerConfigAtom)?.managedPolicyDiagnostics?.managedProviderInstanceId;
   const serverProviders = useAtomValue(primaryServerProvidersAtom);
   const visibleServerProviders = useMemo(
     () => serverProviders.filter((provider) => getDriverOption(provider.driver) !== undefined),
@@ -2073,6 +2078,10 @@ export function ProviderSettingsPanel() {
               instance={row.instance}
               driverOption={driverOption}
               liveProvider={liveProvider}
+              isManagedByPolicy={
+                managedProviderInstanceId !== undefined &&
+                String(row.instanceId) === managedProviderInstanceId
+              }
               isExpanded={openInstanceDetails[row.instanceId] ?? false}
               onExpandedChange={(open) =>
                 setOpenInstanceDetails((existing) => ({

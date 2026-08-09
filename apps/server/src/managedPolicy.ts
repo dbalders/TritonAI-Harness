@@ -14,7 +14,10 @@ import {
   type TritonAiManagedPolicyDiagnostics,
   UCSD_AI_BASE_URL_ENV,
 } from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
+import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 
 import developmentManagedConfig from "../../../config/tritonai-managed-config.json" with { type: "json" };
 import packageJson from "../package.json" with { type: "json" };
@@ -107,6 +110,7 @@ let secureSkillsDiagnostics: Pick<
     ? "Secure skills have not been checked yet."
     : "No secure-skills endpoint is configured in this Harness release.",
 };
+const diagnosticsListeners = new Set<(diagnostics: TritonAiManagedPolicyDiagnostics) => void>();
 
 export function getManagedPolicyDiagnostics(): TritonAiManagedPolicyDiagnostics {
   return {
@@ -115,6 +119,7 @@ export function getManagedPolicyDiagnostics(): TritonAiManagedPolicyDiagnostics 
     policyVersion: managedConfig.policyVersion,
     configDigest: managedConfigDigest,
     loaded: true,
+    managedProviderInstanceId: managedConfig.provider.instanceId,
     migrationStatus,
     managedCategories: [...managedCategories],
     ...secureSkillsDiagnostics,
@@ -125,7 +130,24 @@ export function updateSecureSkillsDiagnostics(
   update: Partial<typeof secureSkillsDiagnostics>,
 ): void {
   secureSkillsDiagnostics = { ...secureSkillsDiagnostics, ...update };
+  const diagnostics = getManagedPolicyDiagnostics();
+  for (const listener of diagnosticsListeners) listener(diagnostics);
 }
+
+export const managedPolicyDiagnosticsChanges = Stream.callback<TritonAiManagedPolicyDiagnostics>(
+  (queue) =>
+    Effect.acquireRelease(
+      Effect.sync(() => {
+        const listener = (diagnostics: TritonAiManagedPolicyDiagnostics) => {
+          Queue.offerUnsafe(queue, diagnostics);
+        };
+        diagnosticsListeners.add(listener);
+        return listener;
+      }),
+      (listener) => Effect.sync(() => diagnosticsListeners.delete(listener)),
+    ).pipe(Effect.asVoid),
+  { bufferSize: 8, strategy: "sliding" },
+);
 
 function modelMetadata(
   config: ManagedConfig,
@@ -149,7 +171,9 @@ function resolveManagedSelection(
 ): ServerSettings["textGenerationModelSelection"] {
   const catalog = new Set(config.models.catalog.map((model) => model.id));
   const selectedModel = selectionWasPersisted ? selection.model : config.models.default;
-  const replacement = config.models.replacements[selectedModel];
+  const replacement = Object.hasOwn(config.models.replacements, selectedModel)
+    ? config.models.replacements[selectedModel]
+    : undefined;
   const model =
     replacement ?? (catalog.has(selectedModel) ? selectedModel : config.models.restrictedFallback);
   return {
@@ -311,6 +335,7 @@ export function migrateLegacyInstallerManagedSettings(
           ? marker.codexHomePath
           : DEFAULT_TRITONAI_CODEX_HOME_PATH,
     };
+    migrationStatus = "completed";
     return { document: input, migrated: false };
   }
 

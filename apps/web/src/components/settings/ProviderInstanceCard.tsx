@@ -330,6 +330,7 @@ interface ProviderInstanceCardProps {
   readonly instance: ProviderInstanceConfig;
   readonly driverOption: DriverOption | undefined;
   readonly liveProvider: ServerProvider | undefined;
+  readonly isManagedByPolicy: boolean;
   readonly isExpanded: boolean;
   readonly onExpandedChange: (open: boolean) => void;
   readonly onUpdate: (nextInstance: ProviderInstanceConfig) => void;
@@ -387,6 +388,7 @@ export function ProviderInstanceCard({
   instance,
   driverOption,
   liveProvider,
+  isManagedByPolicy,
   isExpanded,
   onExpandedChange,
   onUpdate,
@@ -401,8 +403,7 @@ export function ProviderInstanceCard({
   onRunUpdate,
   isUpdating = false,
 }: ProviderInstanceCardProps) {
-  const isTritonAiManagedInstance =
-    String(instanceId) === "codex" && String(instance.driver) === "codex";
+  const isTritonAiManagedInstance = isManagedByPolicy;
   const enabled = instance.enabled ?? true;
   // The server-reported status wins when present; otherwise fall back to
   // "disabled"/"warning" based on the local `enabled` flag so the dot
@@ -732,12 +733,23 @@ export function ProviderInstanceCard({
                 className={cn("size-3.5 transition-transform", isExpanded && "rotate-180")}
               />
             </Button>
-            <Switch
-              disabled={isTritonAiManagedInstance}
-              checked={enabled}
-              onCheckedChange={(checked) => updateEnabled(Boolean(checked))}
-              aria-label={`Enable ${displayName}`}
-            />
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Switch
+                    disabled={isTritonAiManagedInstance}
+                    checked={enabled}
+                    onCheckedChange={(checked) => updateEnabled(Boolean(checked))}
+                    aria-label={`Enable ${displayName}`}
+                  />
+                }
+              />
+              {isTritonAiManagedInstance ? (
+                <TooltipPopup side="top">
+                  UC San Diego policy keeps this managed provider enabled.
+                </TooltipPopup>
+              ) : null}
+            </Tooltip>
           </div>
         </div>
       </div>

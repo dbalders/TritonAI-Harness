@@ -1,3 +1,4 @@
+import * as NodeCrypto from "node:crypto";
 import { describe, expect, it } from "vite-plus/test";
 import * as NodeURL from "node:url";
 
@@ -15,7 +16,7 @@ describe("managed Harness config build input", () => {
     expect(
       input.config.models.catalog.some((model) => model.id === input.config.models.default),
     ).toBe(true);
-    expect(input.digest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(input.digest).toBe(NodeCrypto.createHash("sha256").update(input.source).digest("hex"));
   });
 
   it("rejects unknown fields and missing catalog references", () => {

@@ -80,6 +80,33 @@ describe("server state projection", () => {
     expect(result.latestEvent.type).toBe("settingsUpdated");
   });
 
+  it("projects live managed policy diagnostics", () => {
+    const snapshot = applyServerConfigProjection(Option.none(), snapshotEvent(CONFIG));
+    const diagnostics = {
+      applicationVersion: "1.2.3",
+      schemaVersion: 1,
+      policyVersion: 1,
+      configDigest: "0".repeat(64),
+      loaded: true,
+      managedProviderInstanceId: "codex",
+      migrationStatus: "completed",
+      managedCategories: [],
+      secureSkillsStatus: "current",
+      secureSkillsRevision: "revision-1",
+      secureSkillsLastCheckedAt: "2026-08-09T07:00:00.000Z",
+      secureSkillsMessage: "Current.",
+    } as const;
+    const projected = applyServerConfigProjection(snapshot, {
+      version: 1,
+      type: "managedPolicyDiagnosticsUpdated",
+      payload: { diagnostics },
+    });
+
+    const result = Option.getOrThrow(projected);
+    expect(result.config.managedPolicyDiagnostics).toBe(diagnostics);
+    expect(result.latestEvent.type).toBe("managedPolicyDiagnosticsUpdated");
+  });
+
   it("retains welcome when a ready event follows in the same stream chunk", () => {
     const welcome = {
       environment: {} as ServerLifecycleWelcomePayload["environment"],

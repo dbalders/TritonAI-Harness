@@ -66,8 +66,8 @@ import {
   type ProviderSnapshotSettings,
 } from "../providerUpdateSettings.ts";
 import {
+  isTritonAiManagedCodexMaintenanceCapabilities,
   makeTritonAiManagedCodexMaintenanceResolver,
-  resolveTritonAiManagedCodexInstallation,
 } from "../managedCodexUpdate.ts";
 import {
   codexContinuationIdentity,
@@ -277,7 +277,7 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
         enrichSnapshot: ({ settings, snapshot, publishSnapshot }) =>
           enrichProviderSnapshotWithVersionAdvisory(snapshot, maintenanceCapabilities, {
             enableProviderUpdateChecks:
-              resolveTritonAiManagedCodexInstallation(effectiveConfig.binaryPath) !== null ||
+              isTritonAiManagedCodexMaintenanceCapabilities(maintenanceCapabilities) ||
               settings.enableProviderUpdateChecks,
           }).pipe(
             Effect.provideService(HttpClient.HttpClient, httpClient),

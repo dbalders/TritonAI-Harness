@@ -67,6 +67,7 @@ export const TritonAiManagedPolicyDiagnostics = Schema.Struct({
   policyVersion: Schema.Int,
   configDigest: Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/u)),
   loaded: Schema.Boolean,
+  managedProviderInstanceId: Schema.String,
   migrationStatus: ManagedPolicyMigrationStatus,
   managedCategories: Schema.Array(Schema.String),
   secureSkillsStatus: SecureSkillsSyncStatus,

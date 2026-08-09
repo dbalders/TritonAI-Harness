@@ -885,8 +885,12 @@ const make = (managedPolicyEnabled: boolean) =>
 
       const startup = Effect.gen(function* () {
         yield* startWatcher;
-        yield* Cache.invalidate(settingsCache, cacheKey);
-        yield* getSettingsFromCache;
+        yield* writeSemaphore.withPermits(1)(
+          Effect.gen(function* () {
+            yield* Cache.invalidate(settingsCache, cacheKey);
+            yield* getSettingsFromCache;
+          }),
+        );
       });
 
       const startupExit = yield* Effect.exit(startup);

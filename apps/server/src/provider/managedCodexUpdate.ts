@@ -8,6 +8,7 @@ import type { ProcessRunInput, ProcessRunOutput, ProcessRunner } from "../proces
 import {
   makeProviderMaintenanceCapabilities,
   normalizeCommandPath,
+  type ProviderMaintenanceCapabilities,
   type ProviderMaintenanceCapabilitiesResolver,
 } from "./providerMaintenance.ts";
 
@@ -16,6 +17,12 @@ const MANAGED_CODEX_DIRECTORY = /^openai-codex-[a-z0-9][a-z0-9._-]*$/u;
 const MANAGED_CODEX_UPDATE_COMMAND = "managed-codex-update";
 const MANAGED_CODEX_UPDATE_LOCK = "tritonai-managed-codex";
 const CODEX_VERSION = /(?:codex-cli|codex)\s+(\d+\.\d+\.\d+(?:-[a-z0-9.-]+)?)/iu;
+
+export function isTritonAiManagedCodexMaintenanceCapabilities(
+  capabilities: ProviderMaintenanceCapabilities,
+): boolean {
+  return capabilities.update?.lockKey === MANAGED_CODEX_UPDATE_LOCK;
+}
 
 export interface TritonAiManagedCodexInstallation {
   readonly binaryPath: string;

@@ -5,7 +5,7 @@ import {
   ProviderInstanceId,
   type TritonAiManagedConfig,
 } from "@t3tools/contracts";
-import { describe, expect, it } from "vite-plus/test";
+import { beforeEach, describe, expect, it } from "vite-plus/test";
 
 import {
   applyManagedHarnessPolicy,
@@ -18,6 +18,16 @@ import {
 const managedInstanceId = ProviderInstanceId.make("codex");
 
 describe("TritonAI managed Harness policy", () => {
+  beforeEach(() => {
+    migrateLegacyInstallerManagedSettings({
+      tritonAiManagedPolicy: {
+        migrationVersion: 1,
+        codexBinaryPath: DEFAULT_SERVER_SETTINGS.providers.codex.binaryPath,
+        codexHomePath: DEFAULT_TRITONAI_CODEX_HOME_PATH,
+      },
+    });
+  });
+
   it("rejects malformed or identity-mismatched production resources", () => {
     expect(() =>
       validateBundledManagedConfig('{"schemaVersion":2}', managedConfig, "0".repeat(64)),
@@ -75,7 +85,10 @@ describe("TritonAI managed Harness policy", () => {
     const retained = applyManagedHarnessPolicy(
       {
         ...DEFAULT_SERVER_SETTINGS,
-        textGenerationModelSelection: { instanceId: "codex" as never, model: "gpt-5.6-terra" },
+        textGenerationModelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5.6-terra",
+        },
       },
       managedConfig,
       { textGenerationSelectionWasPersisted: true },
@@ -97,11 +110,25 @@ describe("TritonAI managed Harness policy", () => {
     const retired = applyManagedHarnessPolicy(
       {
         ...DEFAULT_SERVER_SETTINGS,
-        textGenerationModelSelection: { instanceId: "codex" as never, model: "retired-model" },
+        textGenerationModelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "retired-model",
+        },
       },
       retiredConfig,
     );
     expect(retired.textGenerationModelSelection.model).toBe("gpt-5.6-sol");
+
+    const inheritedKey = applyManagedHarnessPolicy({
+      ...DEFAULT_SERVER_SETTINGS,
+      textGenerationModelSelection: {
+        instanceId: ProviderInstanceId.make("codex"),
+        model: "constructor",
+      },
+    });
+    expect(inheritedKey.textGenerationModelSelection.model).toBe(
+      managedConfig.models.restrictedFallback,
+    );
   });
 
   it("removes managed values before persistence without removing user instance fields", () => {
