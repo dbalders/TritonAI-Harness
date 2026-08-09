@@ -52,6 +52,13 @@ import {
 } from "./providerStatus";
 
 const ENVIRONMENT_VARIABLE_NAME_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+const TRITONAI_MANAGED_CONFIG_FIELDS = new Set([
+  "enabled",
+  "binaryPath",
+  "homePath",
+  "customModels",
+  "customModelMetadata",
+]);
 
 let environmentVariableDraftId = 0;
 const nextEnvironmentVariableDraftId = () => `provider-env-${environmentVariableDraftId++}`;
@@ -323,6 +330,7 @@ interface ProviderInstanceCardProps {
   readonly instance: ProviderInstanceConfig;
   readonly driverOption: DriverOption | undefined;
   readonly liveProvider: ServerProvider | undefined;
+  readonly isManagedByPolicy: boolean;
   readonly isExpanded: boolean;
   readonly onExpandedChange: (open: boolean) => void;
   readonly onUpdate: (nextInstance: ProviderInstanceConfig) => void;
@@ -380,6 +388,7 @@ export function ProviderInstanceCard({
   instance,
   driverOption,
   liveProvider,
+  isManagedByPolicy,
   isExpanded,
   onExpandedChange,
   onUpdate,
@@ -394,6 +403,7 @@ export function ProviderInstanceCard({
   onRunUpdate,
   isUpdating = false,
 }: ProviderInstanceCardProps) {
+  const isTritonAiManagedInstance = isManagedByPolicy;
   const enabled = instance.enabled ?? true;
   // The server-reported status wins when present; otherwise fall back to
   // "disabled"/"warning" based on the local `enabled` flag so the dot
@@ -542,6 +552,11 @@ export function ProviderInstanceCard({
       {driverOption?.badgeLabel ? (
         <Badge variant="warning" size="sm" className="shrink-0">
           {driverOption.badgeLabel}
+        </Badge>
+      ) : null}
+      {isTritonAiManagedInstance ? (
+        <Badge variant="secondary" size="sm" className="shrink-0">
+          UCSD managed
         </Badge>
       ) : null}
     </>
@@ -718,11 +733,23 @@ export function ProviderInstanceCard({
                 className={cn("size-3.5 transition-transform", isExpanded && "rotate-180")}
               />
             </Button>
-            <Switch
-              checked={enabled}
-              onCheckedChange={(checked) => updateEnabled(Boolean(checked))}
-              aria-label={`Enable ${displayName}`}
-            />
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Switch
+                    disabled={isTritonAiManagedInstance}
+                    checked={enabled}
+                    onCheckedChange={(checked) => updateEnabled(Boolean(checked))}
+                    aria-label={`Enable ${displayName}`}
+                  />
+                }
+              />
+              {isTritonAiManagedInstance ? (
+                <TooltipPopup side="top">
+                  UC San Diego policy keeps this managed provider enabled.
+                </TooltipPopup>
+              ) : null}
+            </Tooltip>
           </div>
         </div>
       </div>
@@ -730,6 +757,13 @@ export function ProviderInstanceCard({
       <Collapsible open={isExpanded} onOpenChange={onExpandedChange}>
         <CollapsibleContent>
           <div className="space-y-5 px-3 pb-4 pt-2 sm:px-4">
+            {isTritonAiManagedInstance ? (
+              <p className="rounded-lg border border-border/70 bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                UC San Diego manages this provider's identity, TritonAI endpoint, Codex runtime
+                paths, and model catalog. Personal labels, display preferences, and unrelated
+                environment values remain editable.
+              </p>
+            ) : null}
             <div>
               <label htmlFor={`provider-instance-${instanceId}-display-name`} className="block">
                 <span className="text-xs font-medium text-foreground">Display name</span>
@@ -770,6 +804,9 @@ export function ProviderInstanceCard({
                 value={instance.config}
                 idPrefix={`provider-instance-${instanceId}`}
                 variant="card"
+                readOnlyFieldKeys={
+                  isTritonAiManagedInstance ? TRITONAI_MANAGED_CONFIG_FIELDS : undefined
+                }
                 onChange={updateConfig}
               />
             ) : null}
@@ -780,6 +817,7 @@ export function ProviderInstanceCard({
                 driverKind={driverKind}
                 models={modelsForDisplay}
                 customModels={customModels}
+                customModelsManaged={isTritonAiManagedInstance}
                 hiddenModels={hiddenModels}
                 favoriteModels={favoriteModels}
                 modelOrder={modelOrder}

@@ -30,6 +30,7 @@ import {
   type ManagedPluginComposition,
 } from "./lib/managed-plugin-composition.ts";
 import { loadRepoEnv } from "./lib/public-config.ts";
+import { loadManagedHarnessConfigForBuild } from "./lib/managed-harness-config.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
@@ -532,6 +533,7 @@ const DesktopBuildInputArtifact = Schema.Literals([
   "desktop-resources",
   "server-dist",
   "bundled-server-client",
+  "managed-config",
 ]);
 type DesktopBuildInputArtifact = typeof DesktopBuildInputArtifact.Type;
 const desktopBuildInputArtifactNames = {
@@ -539,6 +541,7 @@ const desktopBuildInputArtifactNames = {
   "desktop-resources": "desktopResources",
   "server-dist": "serverDist",
   "bundled-server-client": "bundled server client",
+  "managed-config": "validated TritonAI managed config",
 } satisfies Record<DesktopBuildInputArtifact, string>;
 
 export class MissingDesktopBuildInputError extends Schema.TaggedErrorClass<MissingDesktopBuildInputError>()(
@@ -551,6 +554,22 @@ export class MissingDesktopBuildInputError extends Schema.TaggedErrorClass<Missi
 ) {
   override get message(): string {
     return `Missing ${desktopBuildInputArtifactNames[this.artifact]} at ${this.artifactPath}. Run '${this.buildCommand}' first.`;
+  }
+}
+
+export class ManagedHarnessConfigArtifactError extends Schema.TaggedErrorClass<ManagedHarnessConfigArtifactError>()(
+  "ManagedHarnessConfigArtifactError",
+  {
+    reason: Schema.Literals(["source-invalid", "build-mismatch"]),
+    sourcePath: Schema.String,
+    bundledPath: Schema.String,
+    cause: Schema.optionalKey(Schema.Defect()),
+  },
+) {
+  override get message(): string {
+    return this.reason === "source-invalid"
+      ? `The required TritonAI managed config is invalid at ${this.sourcePath}.`
+      : `The bundled TritonAI managed config at ${this.bundledPath} does not match the validated release input.`;
   }
 }
 
@@ -835,6 +854,10 @@ export const DESKTOP_FILE_EXCLUSIONS = [
 // so nothing is duplicated.
 export const WINDOWS_ASAR_UNPACK = ["apps/server/dist/**", "**/node_modules/**"] as const;
 export const DESKTOP_EXTRA_RESOURCES = [
+  {
+    from: "apps/server/dist/tritonai-managed-config.json",
+    to: "tritonai-managed-config.json",
+  },
   {
     from: "apps/desktop/prod-resources/resource-monitor",
     to: "resource-monitor",
@@ -2238,6 +2261,16 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const fs = yield* FileSystem.FileSystem;
   const hostPlatform = yield* HostProcessPlatform;
   const hostArch = yield* HostProcessArchitecture;
+  const managedHarnessConfig = yield* Effect.try({
+    try: () => loadManagedHarnessConfigForBuild(repoRoot),
+    catch: (cause) =>
+      new ManagedHarnessConfigArtifactError({
+        reason: "source-invalid",
+        sourcePath: "config/tritonai-managed-config.json",
+        bundledPath: "apps/server/dist/tritonai-managed-config.json",
+        cause,
+      }),
+  });
   const workspaceConfig = yield* readWorkspaceConfig();
   const workspaceCatalog = workspaceConfig.catalog ?? {};
   const workspaceOverrides = workspaceConfig.overrides ?? {};
@@ -2418,6 +2451,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     serverDist: path.join(repoRoot, "apps/server/dist"),
   };
   const bundledClientEntry = path.join(distDirs.serverDist, "client/index.html");
+  const bundledManagedConfig = path.join(distDirs.serverDist, "tritonai-managed-config.json");
 
   if (!options.skipBuild) {
     yield* Effect.log("[desktop-artifact] Building desktop/server/web artifacts...");
@@ -2442,6 +2476,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     { artifact: "desktop-dist", artifactPath: distDirs.desktopDist },
     { artifact: "desktop-resources", artifactPath: distDirs.desktopResources },
     { artifact: "server-dist", artifactPath: distDirs.serverDist },
+    { artifact: "managed-config", artifactPath: bundledManagedConfig },
   ] as const;
   for (const input of requiredBuildInputs) {
     if (!(yield* fs.exists(input.artifactPath))) {
@@ -2450,6 +2485,15 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
         buildCommand: "vp run build:desktop",
       });
     }
+  }
+
+  const bundledManagedConfigSource = yield* fs.readFileString(bundledManagedConfig);
+  if (bundledManagedConfigSource !== managedHarnessConfig.source) {
+    return yield* new ManagedHarnessConfigArtifactError({
+      reason: "build-mismatch",
+      sourcePath: managedHarnessConfig.sourcePath,
+      bundledPath: bundledManagedConfig,
+    });
   }
 
   if (!(yield* fs.exists(bundledClientEntry))) {

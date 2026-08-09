@@ -75,7 +75,7 @@ import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as ServerConfig from "./config.ts";
 import * as HttpResponseCompression from "./httpCompression/HttpResponseCompression.ts";
 import { makeRoutesLayerFor } from "./server.ts";
-import { resolveAvailableEditorsForConfig } from "./ws.ts";
+import { resolveAvailableEditorsForConfig, shouldStreamManagedPolicyDiagnostics } from "./ws.ts";
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as Keybindings from "./keybindings.ts";
@@ -4477,6 +4477,14 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       });
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
+
+  it("gates managed policy diagnostics updates behind client opt-in", () => {
+    assert.isFalse(shouldStreamManagedPolicyDiagnostics({}));
+    assert.isFalse(
+      shouldStreamManagedPolicyDiagnostics({ managedPolicyDiagnosticsUpdates: false }),
+    );
+    assert.isTrue(shouldStreamManagedPolicyDiagnostics({ managedPolicyDiagnosticsUpdates: true }));
+  });
 
   it.effect("routes websocket resource telemetry through the subscription", () =>
     Effect.gen(function* () {
