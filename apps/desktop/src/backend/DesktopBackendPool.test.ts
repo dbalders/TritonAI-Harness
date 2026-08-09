@@ -10,6 +10,7 @@ import { HttpClient } from "effect/unstable/http";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import * as DesktopObservability from "../app/DesktopObservability.ts";
+import * as DesktopShutdown from "../app/DesktopShutdown.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopTelemetryPublisher from "../telemetry/DesktopTelemetryPublisher.ts";
 import * as ElectronDialog from "../electron/ElectronDialog.ts";
@@ -79,6 +80,7 @@ function makePoolLayer(
           resolveWsl: () => Effect.die("unexpected WSL config resolve"),
         } satisfies DesktopBackendConfiguration.DesktopBackendConfiguration["Service"]),
         DesktopAppSettings.layerTest(),
+        DesktopShutdown.layer,
         ElectronDialog.layer,
         Layer.succeed(DesktopWindow.DesktopWindow, {
           createMain: Effect.die("unexpected window create"),

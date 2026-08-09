@@ -20,6 +20,12 @@
 - `vp run dist:desktop:linux` — Builds a Linux AppImage into `./release`.
 - `vp run dist:desktop:win` — Builds a Windows NSIS installer into `./release`.
 - `vp run dist:desktop:plugins:finalize -- --platform <mac|win> --arch <arch> --artifact <path> --output-dir release` — Binds a staged managed-plugin composition to final signed artifact bytes.
+- `node scripts/validate-managed-plugin-configuration.ts --receipt <path>` — Executes pinned provider
+  configuration validation and writes a receipt binding the composition and exact configuration.
+  Release automation runs this only in its dedicated credential-free job. The internal
+  `--plugin-configuration-prevalidated --plugin-validation-receipt <path>` artifact-build flags are
+  reserved for the dependent fresh-runner build job; local builds validate providers normally and
+  must not bypass that check.
 
 ## Managed plugin release proofs
 
@@ -32,6 +38,11 @@ against the final distributable bytes. Never mutate an artifact after its proof 
 
 - Default build is unsigned/not notarized for local sharing.
 - The DMG build uses `assets/prod/black-macos-1024.png` as the production app icon source.
+- Electron Builder assembles the app, signs it when the build has signing/notarization configured,
+  and produces the ZIP used by macOS updates. The
+  TritonAI wrapper then stages that exact app with `ditto --noextattr --noqtn` and creates the DMG
+  with Apple's `hdiutil -srcfolder` path. This intentionally avoids Electron Builder's mounted-volume
+  `dmgbuild` copy step, which can fail with `Operation not permitted` despite a valid signed app.
 - Desktop production windows load the bundled UI from `t3code://app/index.html` (not a `127.0.0.1` document URL).
 
 - Desktop packaging includes `apps/server/dist` (the `t3` backend) and starts it on loopback with an auth token for WebSocket/API traffic.

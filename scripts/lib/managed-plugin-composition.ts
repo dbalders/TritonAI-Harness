@@ -10,6 +10,8 @@ import effectPackageJson from "effect/package.json" with { type: "json" };
 
 export const MANAGED_PLUGIN_COMPOSITION_KIND = "tritonai-harness-plugin-composition";
 export const MANAGED_PLUGIN_COMPOSITION_VERSION = 1;
+export const MANAGED_PLUGIN_VALIDATION_RECEIPT_KIND = "tritonai-managed-plugin-validation";
+export const MANAGED_PLUGIN_VALIDATION_RECEIPT_VERSION = 1;
 export const PRODUCTION_PLUGIN_SOURCE_ENV = "TRITONAI_PLUGIN_COMPOSITION_SOURCE";
 export const PRODUCTION_PLUGIN_CONFIGURATION_ENV = "TRITONAI_PLUGIN_CONFIGURATION_JSON";
 
@@ -54,6 +56,14 @@ export interface ManagedPluginComposition {
     readonly commit: string;
   };
   readonly packages: ReadonlyArray<ManagedPluginPackage>;
+}
+
+export interface ManagedPluginValidationReceipt {
+  readonly kind: typeof MANAGED_PLUGIN_VALIDATION_RECEIPT_KIND;
+  readonly version: typeof MANAGED_PLUGIN_VALIDATION_RECEIPT_VERSION;
+  readonly source: ManagedPluginComposition["source"];
+  readonly compositionSha256: string;
+  readonly configurationSha256: string;
 }
 
 export type ManagedPluginConfiguration = Readonly<
@@ -440,6 +450,44 @@ export function readManagedPluginBuildConfiguration(
     normalized[id] = configuration;
   }
   return normalized;
+}
+
+function sha256Text(value: string): string {
+  return NodeCrypto.createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+export function createManagedPluginValidationReceipt(
+  composition: ManagedPluginComposition,
+  serializedConfiguration: string,
+): ManagedPluginValidationReceipt {
+  return {
+    kind: MANAGED_PLUGIN_VALIDATION_RECEIPT_KIND,
+    version: MANAGED_PLUGIN_VALIDATION_RECEIPT_VERSION,
+    source: composition.source,
+    compositionSha256: sha256Text(JSON.stringify(composition)),
+    configurationSha256: sha256Text(serializedConfiguration.trim()),
+  };
+}
+
+export function verifyManagedPluginValidationReceipt(
+  receiptPath: string,
+  composition: ManagedPluginComposition,
+  serializedConfiguration: string,
+): ManagedPluginValidationReceipt {
+  const value = JSON.parse(NodeFS.readFileSync(receiptPath, "utf8")) as unknown;
+  assertRecord(value, "Managed plugin validation receipt");
+  assertOnlyKeys(
+    value,
+    ["kind", "version", "source", "compositionSha256", "configurationSha256"],
+    "Managed plugin validation receipt",
+  );
+  const expected = createManagedPluginValidationReceipt(composition, serializedConfiguration);
+  if (!NodeUtil.isDeepStrictEqual(value, expected)) {
+    throw new Error(
+      "Managed plugin validation receipt does not match the exact composition and configuration.",
+    );
+  }
+  return expected;
 }
 
 async function sha512Base64(path: string): Promise<string> {
