@@ -66,6 +66,10 @@ import {
   type ProviderSnapshotSettings,
 } from "../providerUpdateSettings.ts";
 import {
+  makeTritonAiManagedCodexMaintenanceResolver,
+  resolveTritonAiManagedCodexInstallation,
+} from "../managedCodexUpdate.ts";
+import {
   codexContinuationIdentity,
   materializeCodexShadowHome,
   resolveCodexHomeLayout,
@@ -74,11 +78,18 @@ import { materializeTritonAiCodexModelCatalog } from "./CodexModelCatalog.ts";
 const decodeCodexSettings = Schema.decodeSync(CodexSettings);
 
 const DRIVER_KIND = ProviderDriverKind.make("codex");
-const UPDATE = makePackageManagedProviderMaintenanceResolver({
+const PACKAGE_UPDATE = makePackageManagedProviderMaintenanceResolver({
   provider: DRIVER_KIND,
   npmPackageName: "@openai/codex",
   homebrewFormula: "codex",
   nativeUpdate: null,
+});
+const UPDATE = makeTritonAiManagedCodexMaintenanceResolver({
+  provider: DRIVER_KIND,
+  packageName: "@openai/codex",
+  fallback: PACKAGE_UPDATE,
+  executablePath: process.execPath,
+  serverEntryPath: process.argv[1] ?? "",
 });
 
 export function mergeCodexProviderEnvironment(
@@ -263,9 +274,11 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
         initialSnapshot: (settings) =>
           makePendingCodexProvider(settings.provider).pipe(Effect.map(stampIdentity)),
         checkProvider,
-        enrichSnapshot: ({ snapshot, publishSnapshot }) =>
+        enrichSnapshot: ({ settings, snapshot, publishSnapshot }) =>
           enrichProviderSnapshotWithVersionAdvisory(snapshot, maintenanceCapabilities, {
-            enableProviderUpdateChecks: false,
+            enableProviderUpdateChecks:
+              resolveTritonAiManagedCodexInstallation(effectiveConfig.binaryPath) !== null ||
+              settings.enableProviderUpdateChecks,
           }).pipe(
             Effect.provideService(HttpClient.HttpClient, httpClient),
             Effect.flatMap((enrichedSnapshot) => publishSnapshot(enrichedSnapshot)),

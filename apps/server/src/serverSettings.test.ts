@@ -30,7 +30,7 @@ const providerEnvironmentSecretName = (instanceId: string, name: string): string
   `provider-env-${Buffer.from(instanceId, "utf8").toString("base64url")}-${Buffer.from(name, "utf8").toString("base64url")}`;
 
 const makeServerSettingsLayer = () =>
-  ServerSettingsModule.layer.pipe(
+  ServerSettingsModule.layerUnmanagedTest.pipe(
     Layer.provide(ServerSecretStore.layer),
     Layer.provideMerge(
       Layer.fresh(
@@ -42,12 +42,24 @@ const makeServerSettingsLayer = () =>
   );
 
 const makeInspectableServerSettingsLayer = () =>
-  ServerSettingsModule.layer.pipe(
+  ServerSettingsModule.layerUnmanagedTest.pipe(
     Layer.provideMerge(ServerSecretStore.layer),
     Layer.provideMerge(
       Layer.fresh(
         ServerConfig.layerTest(process.cwd(), {
           prefix: "t3code-server-settings-inspectable-test-",
+        }),
+      ),
+    ),
+  );
+
+const makeManagedServerSettingsLayer = () =>
+  ServerSettingsModule.layer.pipe(
+    Layer.provideMerge(ServerSecretStore.layer),
+    Layer.provideMerge(
+      Layer.fresh(
+        ServerConfig.layerTest(process.cwd(), {
+          prefix: "tritonai-managed-server-settings-test-",
         }),
       ),
     ),
@@ -83,7 +95,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         prefix: "t3code-server-settings-secret-failure-test-",
       }),
     );
-    const settingsLayer = ServerSettingsModule.layer.pipe(
+    const settingsLayer = ServerSettingsModule.layerUnmanagedTest.pipe(
       Layer.provide(makeFailingSecretStoreLayer(cause)),
       Layer.provideMerge(configLayer),
     );
@@ -950,5 +962,92 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         "sk-or-secret",
       );
     }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
+  it.effect("keeps managed values effective while preserving the raw user document", () =>
+    Effect.gen(function* () {
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      const managedInstanceId = ProviderInstanceId.make("codex");
+      yield* fileSystem.writeFileString(
+        serverConfig.settingsPath,
+        encodeUnknownJson({
+          unknownTopLevel: { retained: true },
+          providers: {
+            codex: {
+              binaryPath: "/installer/runtime/codex",
+              homePath: "/installer/home/codex",
+              customModels: ["legacy-model"],
+            },
+          },
+          providerInstances: {
+            codex: {
+              driver: "codex",
+              config: {
+                binaryPath: "/installer/runtime/codex",
+                homePath: "/installer/home/codex",
+                unknownNested: "retained",
+              },
+              environment: [
+                { name: "UCSD_AI_BASE_URL", value: "https://legacy.invalid/v1" },
+                { name: "USER_FLAG", value: "retained" },
+              ],
+            },
+          },
+          textGenerationModelSelection: {
+            instanceId: "codex",
+            model: "gpt-5.6-terra",
+          },
+        }),
+        { mode: 0o600 },
+      );
+
+      yield* serverSettings.start;
+      const effective = yield* serverSettings.getSettings;
+      assert.equal(effective.providers.codex.binaryPath, "/installer/runtime/codex");
+      assert.equal(effective.providers.codex.homePath, "/installer/home/codex");
+      assert.equal(effective.textGenerationModelSelection.model, "gpt-5.6-terra");
+      assert.deepInclude(effective.providerInstances[managedInstanceId]?.config, {
+        unknownNested: "retained",
+      });
+      assert.deepInclude(
+        effective.providerInstances[managedInstanceId]?.environment?.find(
+          ({ name }) => name === "USER_FLAG",
+        ),
+        { name: "USER_FLAG", value: "retained", sensitive: false },
+      );
+
+      yield* serverSettings.updateSettings({
+        addProjectBaseDirectory: "~/ManagedPolicyPreserved",
+        providers: {
+          codex: {
+            binaryPath: "/attempted/override",
+            homePath: "/attempted/home",
+          },
+        },
+      });
+
+      const afterUpdate = yield* serverSettings.getSettings;
+      assert.equal(afterUpdate.providers.codex.binaryPath, "/installer/runtime/codex");
+      assert.equal(afterUpdate.providers.codex.homePath, "/installer/home/codex");
+      const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      const persisted = JSON.parse(raw);
+      assert.deepInclude(persisted, {
+        unknownTopLevel: { retained: true },
+        addProjectBaseDirectory: "~/ManagedPolicyPreserved",
+        tritonAiManagedPolicy: {
+          migrationVersion: 1,
+          codexBinaryPath: "/installer/runtime/codex",
+          codexHomePath: "/installer/home/codex",
+        },
+      });
+      assert.deepInclude(persisted.providerInstances.codex.config, {
+        unknownNested: "retained",
+      });
+      assert.notInclude(raw, "/attempted/override");
+      assert.notInclude(raw, "/attempted/home");
+    }).pipe(Effect.provide(makeManagedServerSettingsLayer())),
   );
 });

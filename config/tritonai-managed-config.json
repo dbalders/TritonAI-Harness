@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "policyVersion": 1,
+  "provider": {
+    "instanceId": "codex",
+    "driver": "codex",
+    "managedBinary": true,
+    "managedHome": true,
+    "baseUrl": "https://tritonai-api.ucsd.edu/v1",
+    "apiKeyEnvironmentVariable": "TRITONAI_API_KEY"
+  },
+  "models": {
+    "default": "api-glm-5.2",
+    "restrictedFallback": "api-glm-5.2",
+    "replacements": {
+      "gpt-5.5": "gpt-5.6-sol",
+      "claude-opus-4-8": "claude-opus-5"
+    },
+    "catalog": [
+      {
+        "id": "api-deepseek-v4-flash",
+        "name": "DeepSeek v4 Flash",
+        "shortName": "DeepSeek"
+      },
+      {
+        "id": "api-glm-5.2",
+        "name": "GLM 5.2",
+        "shortName": "GLM"
+      },
+      {
+        "id": "api-gemma-4-31b",
+        "name": "Gemma 4 31B",
+        "shortName": "Gemma"
+      },
+      {
+        "id": "gpt-5.6-luna",
+        "name": "GPT-5.6 Luna"
+      },
+      {
+        "id": "gpt-5.6-sol",
+        "name": "GPT-5.6 Sol"
+      },
+      {
+        "id": "gpt-5.6-terra",
+        "name": "GPT-5.6 Terra"
+      },
+      {
+        "id": "claude-opus-5",
+        "name": "Claude Opus 5"
+      }
+    ]
+  },
+  "secureSkills": {
+    "pollIntervalMinutes": 360
+  }
+}

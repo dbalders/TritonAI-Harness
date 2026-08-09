@@ -27,6 +27,7 @@ import { formatRelativeTimeLabel, getRelativeTimeState } from "../../timestampFo
 import { useEnvironmentQuery } from "../../state/query";
 import {
   primaryServerAvailableEditorsAtom,
+  primaryServerConfigAtom,
   primaryServerObservabilityAtom,
   serverEnvironment,
 } from "../../state/server";
@@ -809,6 +810,7 @@ function DiagnosticsRefreshButton({
 }
 
 export function DiagnosticsSettingsPanel() {
+  const managedPolicy = useAtomValue(primaryServerConfigAtom)?.managedPolicyDiagnostics;
   const observability = useAtomValue(primaryServerObservabilityAtom);
   const availableEditors = useAtomValue(primaryServerAvailableEditorsAtom);
   const primaryEnvironment = usePrimaryEnvironment();
@@ -963,6 +965,25 @@ export function DiagnosticsSettingsPanel() {
 
   return (
     <SettingsPageContainer className="max-w-6xl gap-10">
+      {managedPolicy ? (
+        <SettingsSection title="TritonAI Managed Update">
+          <StatsGrid>
+            <StatBlock label="Harness" value={managedPolicy.applicationVersion} />
+            <StatBlock label="Policy" value={`v${managedPolicy.policyVersion}`} />
+            <StatBlock label="Migration" value={managedPolicy.migrationStatus} />
+            <StatBlock label="Secure Skills" value={managedPolicy.secureSkillsStatus} />
+          </StatsGrid>
+          <div className="border-t border-border/60 px-4 py-3 text-xs text-muted-foreground sm:px-5">
+            <div>
+              Config SHA-256: <span className="font-mono">{managedPolicy.configDigest}</span>
+            </div>
+            <div className="mt-1">Managed: {managedPolicy.managedCategories.join(", ")}</div>
+            {managedPolicy.secureSkillsMessage ? (
+              <div className="mt-1">{managedPolicy.secureSkillsMessage}</div>
+            ) : null}
+          </div>
+        </SettingsSection>
+      ) : null}
       <ResourceTelemetryDiagnostics />
 
       <SettingsSection

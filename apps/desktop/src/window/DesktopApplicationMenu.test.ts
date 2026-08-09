@@ -13,7 +13,7 @@ import * as ElectronMenu from "../electron/ElectronMenu.ts";
 import * as DesktopApplicationMenu from "./DesktopApplicationMenu.ts";
 import * as DesktopConfig from "../app/DesktopConfig.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
-import * as InstallerUpdates from "../updates/InstallerUpdates.ts";
+import * as DesktopUpdates from "../updates/DesktopUpdates.ts";
 import * as DesktopWindow from "./DesktopWindow.ts";
 
 const environmentInput = {
@@ -57,17 +57,21 @@ const electronDialogLayer = Layer.succeed(ElectronDialog.ElectronDialog, {
   showErrorBox: () => Effect.void,
 } satisfies ElectronDialog.ElectronDialog["Service"]);
 
-const installerUpdatesLayer = Layer.succeed(InstallerUpdates.InstallerUpdates, {
+const desktopUpdatesLayer = Layer.succeed(DesktopUpdates.DesktopUpdates, {
   getState: Effect.die("unexpected getState"),
+  emitState: Effect.void,
+  disabledReason: Effect.succeed(Option.none()),
   configure: Effect.void,
-  check: Effect.die("unexpected check"),
-  open: Effect.die("unexpected open"),
-} satisfies InstallerUpdates.InstallerUpdates["Service"]);
+  setChannel: () => Effect.die("unexpected setChannel"),
+  check: () => Effect.die("unexpected check"),
+  download: Effect.die("unexpected download"),
+  install: Effect.die("unexpected install"),
+} satisfies DesktopUpdates.DesktopUpdates["Service"]);
 
 const makeDesktopWindowLayer = (selectedAction: Deferred.Deferred<string>) =>
   Layer.succeed(DesktopWindow.DesktopWindow, {
     createMain: Effect.die("unexpected createMain"),
-    ensureMain: Effect.die("unexpected ensureMain"),
+    ensureMain: Effect.succeed({} as Electron.BrowserWindow),
     revealOrCreateMain: Effect.die("unexpected revealOrCreateMain"),
     activate: Effect.void,
     createMainIfBackendReady: Effect.void,
@@ -104,7 +108,7 @@ describe("DesktopApplicationMenu", () => {
           DesktopApplicationMenu.layer.pipe(
             Layer.provideMerge(makeElectronMenuLayer(applicationMenuTemplate)),
             Layer.provideMerge(makeDesktopWindowLayer(selectedAction)),
-            Layer.provideMerge(installerUpdatesLayer),
+            Layer.provideMerge(desktopUpdatesLayer),
             Layer.provideMerge(electronDialogLayer),
             Layer.provideMerge(electronAppLayer),
             Layer.provideMerge(
@@ -134,7 +138,7 @@ describe("DesktopApplicationMenu", () => {
     }),
   );
 
-  it.effect("checks the full Installer version from the native menu", () =>
+  it.effect("checks the Harness version from the native menu", () =>
     Effect.gen(function* () {
       const selectedAction = yield* Deferred.make<string>();
       const applicationMenuTemplate =
@@ -145,21 +149,31 @@ describe("DesktopApplicationMenu", () => {
         state: {
           enabled: true,
           status: "up-to-date",
-          installedVersion: "1.2.3",
+          channel: "latest",
+          currentVersion: "1.2.3",
+          hostArch: "arm64",
+          appArch: "arm64",
+          runningUnderArm64Translation: false,
           availableVersion: null,
-          markerStatus: "valid",
+          downloadedVersion: null,
+          releaseNotes: [],
+          downloadPercent: null,
           checkedAt: "2026-07-10T12:00:00.000Z",
           message: null,
           errorContext: null,
           canRetry: false,
         },
       } as const;
-      const updateLayer = Layer.succeed(InstallerUpdates.InstallerUpdates, {
+      const updateLayer = Layer.succeed(DesktopUpdates.DesktopUpdates, {
         getState: Effect.succeed(checkResult.state),
+        emitState: Effect.void,
+        disabledReason: Effect.succeed(Option.none()),
         configure: Effect.void,
-        check: Effect.succeed(checkResult),
-        open: Effect.die("unexpected open"),
-      } satisfies InstallerUpdates.InstallerUpdates["Service"]);
+        setChannel: () => Effect.die("unexpected setChannel"),
+        check: () => Effect.succeed(checkResult),
+        download: Effect.die("unexpected download"),
+        install: Effect.die("unexpected install"),
+      } satisfies DesktopUpdates.DesktopUpdates["Service"]);
       const dialogLayer = Layer.succeed(ElectronDialog.ElectronDialog, {
         pickFolder: () => Effect.succeed(Option.none()),
         confirm: () => Effect.succeed(false),
@@ -206,7 +220,10 @@ describe("DesktopApplicationMenu", () => {
       updateClick({} as Electron.MenuItem, {} as Electron.BrowserWindow, {} as KeyboardEvent);
       const message = yield* Deferred.await(shownMessage);
       assert.equal(message.title, "You're up to date!");
-      assert.equal(message.message, "TritonAI 1.2.3 is currently the newest version available.");
+      assert.equal(
+        message.message,
+        "TritonAI Harness 1.2.3 is currently the newest version available.",
+      );
     }),
   );
 });

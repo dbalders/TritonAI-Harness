@@ -1,64 +1,112 @@
-import {
-  DownloadIcon,
-  LoaderCircleIcon,
-  RefreshCwIcon,
-  TriangleAlertIcon,
-  XIcon,
-} from "lucide-react";
+import { DownloadIcon, RotateCwIcon, TriangleAlertIcon, XIcon } from "lucide-react";
 import { useCallback, useState } from "react";
-
 import { isElectron } from "../../env";
-import { useClientSettings } from "../../hooks/useSettings";
 import { useDesktopUpdateState } from "../../state/desktopUpdate";
-import { useInstallerUpdateState } from "../../state/installerUpdate";
-import { shouldShowArm64IntelBuildWarning } from "../desktopUpdate.logic";
-import {
-  getInstallerUpdateActionError,
-  getInstallerUpdateButtonTooltip,
-  isInstallerUpdateButtonDisabled,
-  resolveInstallerUpdateButtonAction,
-  shouldShowInstallerUpdateButton,
-} from "../installerUpdate.logic";
-import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
 import { stackedThreadToast, toastManager } from "../ui/toast";
+import {
+  getArm64IntelBuildWarningDescription,
+  getDesktopUpdateActionError,
+  getDesktopUpdateButtonTooltip,
+  getDesktopUpdateInstallConfirmationMessage,
+  isDesktopUpdateButtonDisabled,
+  resolveDesktopUpdateButtonAction,
+  shouldShowArm64IntelBuildWarning,
+  shouldShowDesktopUpdateButton,
+  shouldToastDesktopUpdateActionResult,
+} from "../desktopUpdate.logic";
+import { showDesktopUpdateDownloadedToast } from "../desktopUpdate.toast";
+import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
+import { Separator } from "../ui/separator";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
+function keyReleaseNoteItems(items: ReadonlyArray<string>) {
+  const occurrences = new Map<string, number>();
+  return items.map((item) => {
+    const occurrence = occurrences.get(item) ?? 0;
+    occurrences.set(item, occurrence + 1);
+    return { item, key: JSON.stringify([item, occurrence]) };
+  });
+}
+function SidebarUpdateReleaseNotesTooltip({
+  state,
+  tooltip,
+}: {
+  readonly state: NonNullable<ReturnType<typeof useDesktopUpdateState>>;
+  readonly tooltip: string;
+}) {
+  if (state.channel !== "nightly" || state.releaseNotes.length === 0) {
+    return <>{tooltip}</>;
+  }
+
+  return (
+    <div className="w-120 max-w-[calc(100vw-2rem)] text-left">
+      <div className="px-1">
+        <div className="text-sm leading-5 font-medium">{tooltip}</div>
+      </div>
+      <div className="max-h-[min(28rem,calc(100vh-6rem))] overflow-y-auto px-1 pt-4 pb-1">
+        {state.releaseNotes.map((releaseNote, index) => (
+          <div key={releaseNote.version}>
+            {index > 0 && <Separator className="my-3 bg-border/60" />}
+            <section>
+              <h3 className="text-muted-foreground text-xs leading-4 font-semibold">
+                {index === 0 ? "What's changed" : `Changes in ${releaseNote.version}`}
+              </h3>
+              <ul className="mt-2 space-y-1.5 pl-4 text-xs leading-5 text-popover-foreground/90">
+                {keyReleaseNoteItems(releaseNote.items).map(({ item, key }) => (
+                  <li className="list-disc break-words" key={key}>
+                    {item}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function SidebarUpdatePill() {
-  const state = useInstallerUpdateState();
-  const desktopUpdateState = useDesktopUpdateState();
-  const sidebarV2Enabled = useClientSettings((settings) => settings.sidebarV2Enabled);
+  const state = useDesktopUpdateState();
   const [dismissed, setDismissed] = useState(false);
-  const visible = isElectron && shouldShowInstallerUpdateButton(state) && !dismissed;
-  const action = state ? resolveInstallerUpdateButtonAction(state) : "none";
-  const disabled = isInstallerUpdateButtonDisabled(state);
-  const tooltip = state
-    ? getInstallerUpdateButtonTooltip(state)
-    : "Check for TritonAI Installer updates";
-  const showArm64Warning =
-    isElectron && sidebarV2Enabled && shouldShowArm64IntelBuildWarning(desktopUpdateState);
+
+  const visible = isElectron && shouldShowDesktopUpdateButton(state) && !dismissed;
+  const tooltip = state ? getDesktopUpdateButtonTooltip(state) : "Update available";
+  const disabled = isDesktopUpdateButtonDisabled(state);
+  const action = state ? resolveDesktopUpdateButtonAction(state) : "none";
+
+  const showArm64Warning = isElectron && shouldShowArm64IntelBuildWarning(state);
+  const arm64Description =
+    state && showArm64Warning ? getArm64IntelBuildWarningDescription(state) : null;
 
   const handleAction = useCallback(() => {
     const bridge = window.desktopBridge;
-    if (!bridge || !state || disabled || action === "none") return;
+    if (!bridge || !state) return;
+    if (disabled || action === "none") return;
 
-    if (action === "check") {
+    if (action === "download") {
       void bridge
-        .checkInstallerUpdate()
+        .downloadUpdate()
         .then((result) => {
-          if (result.state.status !== "error") return;
+          if (result.completed) {
+            showDesktopUpdateDownloadedToast(bridge, result.state);
+          }
+          if (!shouldToastDesktopUpdateActionResult(result)) return;
+          const actionError = getDesktopUpdateActionError(result);
+          if (!actionError) return;
           toastManager.add(
             stackedThreadToast({
               type: "error",
-              title: "Could not check for installer updates",
-              description: result.state.message ?? "Try again after checking your network.",
+              title: "Could not download update",
+              description: actionError,
             }),
           );
         })
-        .catch((error: unknown) => {
+        .catch((error) => {
           toastManager.add(
             stackedThreadToast({
               type: "error",
-              title: "Could not check for installer updates",
+              title: "Could not start update download",
               description: error instanceof Error ? error.message : "An unexpected error occurred.",
             }),
           );
@@ -66,79 +114,55 @@ export function SidebarUpdatePill() {
       return;
     }
 
-    void bridge
-      .openInstallerUpdate()
-      .then((result) => {
-        if (result.completed) {
-          toastManager.add({
-            type: "success",
-            title: "Installer download opened",
-            description:
-              "Run the full TritonAI Installer to update Harness, Codex, and managed skills.",
-          });
-          return;
-        }
-        const actionError = getInstallerUpdateActionError(result);
-        if (!actionError) return;
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Could not open installer download",
-            description: actionError,
-          }),
-        );
-      })
-      .catch((error: unknown) => {
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Could not open installer download",
-            description: error instanceof Error ? error.message : "An unexpected error occurred.",
-          }),
-        );
-      });
+    if (action === "install") {
+      const confirmed = window.confirm(
+        getDesktopUpdateInstallConfirmationMessage(state, navigator.platform),
+      );
+      if (!confirmed) return;
+      void bridge
+        .installUpdate()
+        .then((result) => {
+          if (!shouldToastDesktopUpdateActionResult(result)) return;
+          const actionError = getDesktopUpdateActionError(result);
+          if (!actionError) return;
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Could not install update",
+              description: actionError,
+            }),
+          );
+        })
+        .catch((error) => {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Could not install update",
+              description: error instanceof Error ? error.message : "An unexpected error occurred.",
+            }),
+          );
+        });
+    }
   }, [action, disabled, state]);
 
-  if ((!visible || !state) && !showArm64Warning) return null;
-
-  const hasError = state?.status === "error";
-  const buttonLabel =
-    state?.status === "opening"
-      ? "Opening installer…"
-      : action === "check"
-        ? "Retry installer check"
-        : hasError && action === "none"
-          ? "Installer update unavailable"
-          : state?.errorContext === "open"
-            ? "Retry installer download"
-            : `Update Installer${state?.availableVersion ? ` (${state.availableVersion})` : ""}`;
+  if (!visible && !showArm64Warning) return null;
 
   return (
     <div className="flex flex-col gap-1">
-      {showArm64Warning ? (
+      {showArm64Warning && arm64Description && (
         <Alert variant="warning" className="rounded-2xl border-warning/40 bg-warning/8 text-xs">
           <TriangleAlertIcon />
           <AlertTitle>Intel build on Apple Silicon</AlertTitle>
-          <AlertDescription>
-            This Mac has Apple Silicon, but TritonAI Harness is running the Intel build under
-            Rosetta. Run the next full TritonAI Installer update to switch to the native build.
-          </AlertDescription>
+          <AlertDescription>{arm64Description}</AlertDescription>
         </Alert>
-      ) : null}
-      {visible && state ? (
+      )}
+      {visible && (
         <div
-          aria-live="polite"
-          className={`group/update relative flex min-h-8 w-full items-center rounded-lg text-xs font-medium ${
-            hasError ? "bg-destructive/10 text-destructive" : "bg-primary/15 text-primary"
-          } ${disabled ? " cursor-wait opacity-70" : ""}`}
+          className={`group/update relative flex h-7 w-full items-center rounded-lg bg-update-surface text-xs font-medium text-update ${
+            disabled ? " cursor-not-allowed opacity-60" : ""
+          }`}
         >
-          <div
-            className={`pointer-events-none absolute inset-0 rounded-lg transition-colors ${
-              hasError
-                ? "group-has-[button.update-main:hover]/update:bg-destructive/15"
-                : "group-has-[button.update-main:hover]/update:bg-primary/22"
-            }`}
-          />
+          <div className="pointer-events-none absolute inset-0 rounded-lg transition-colors group-has-[button.update-main:hover]/update:bg-update/12" />
           <Tooltip>
             <TooltipTrigger
               render={
@@ -147,48 +171,70 @@ export function SidebarUpdatePill() {
                   aria-label={tooltip}
                   aria-disabled={disabled || undefined}
                   disabled={disabled}
-                  className="update-main relative flex min-h-8 flex-1 items-center gap-2 px-2 text-left enabled:cursor-pointer"
+                  className="update-main relative flex h-full flex-1 items-center gap-2 px-2 enabled:cursor-pointer"
                   onClick={handleAction}
                 >
-                  {state.status === "opening" ? (
-                    <LoaderCircleIcon
-                      aria-hidden="true"
-                      className="size-3.5 shrink-0 animate-spin"
-                    />
-                  ) : action === "check" ? (
-                    <RefreshCwIcon aria-hidden="true" className="size-3.5 shrink-0" />
-                  ) : hasError ? (
-                    <TriangleAlertIcon aria-hidden="true" className="size-3.5 shrink-0" />
+                  {action === "install" ? (
+                    <>
+                      <RotateCwIcon className="size-3.5" />
+                      <span>Restart to update</span>
+                    </>
+                  ) : state?.status === "downloading" ? (
+                    <>
+                      <DownloadIcon className="size-3.5" />
+                      <span>
+                        Downloading
+                        {typeof state.downloadPercent === "number"
+                          ? ` (${Math.floor(state.downloadPercent)}%)`
+                          : "…"}
+                      </span>
+                    </>
                   ) : (
-                    <DownloadIcon aria-hidden="true" className="size-3.5 shrink-0" />
+                    <>
+                      <DownloadIcon className="size-3.5" />
+                      <span>Update available</span>
+                    </>
                   )}
-                  <span className="truncate">{buttonLabel}</span>
                 </button>
               }
             />
-            <TooltipPopup side="top" className="max-w-80">
-              {tooltip}
+            <TooltipPopup
+              align="start"
+              className={
+                state?.channel === "nightly" && state.releaseNotes.length > 0
+                  ? // pointer-events-auto overrides the positioner's pointer-events-none so the
+                    // release notes stay open (and scrollable) when the cursor moves into them.
+                    "pointer-events-auto max-w-none text-balance"
+                  : undefined
+              }
+              side="top"
+            >
+              {state ? (
+                <SidebarUpdateReleaseNotesTooltip state={state} tooltip={tooltip} />
+              ) : (
+                tooltip
+              )}
             </TooltipPopup>
           </Tooltip>
-          {action === "open" && state.errorContext !== "open" ? (
+          {action === "download" && (
             <Tooltip>
               <TooltipTrigger
                 render={
                   <button
                     type="button"
-                    aria-label="Dismiss installer update"
-                    className="relative mr-1 inline-flex size-5 items-center justify-center rounded-md opacity-60 transition-opacity hover:opacity-100"
+                    aria-label="Dismiss update"
+                    className="mr-1 inline-flex size-5 items-center justify-center rounded-md text-update/60 transition-colors hover:text-update"
                     onClick={() => setDismissed(true)}
                   >
-                    <XIcon aria-hidden="true" className="size-3.5" />
+                    <XIcon className="size-3.5" />
                   </button>
                 }
               />
               <TooltipPopup side="top">Dismiss until next launch</TooltipPopup>
             </Tooltip>
-          ) : null}
+          )}
         </div>
-      ) : null}
+      )}
     </div>
   );
 }
