@@ -1237,6 +1237,8 @@ describe("DesktopBackendManager", () => {
         assert.equal(yield* Queue.take(starts), 3);
 
         assert.deepEqual(yield* Queue.take(surfaced), { reason: "code=1", attempt: 3 });
+        yield* TestClock.adjust(Duration.seconds(30));
+        assert.equal(startCount, 3);
         const stopped = yield* instance.snapshot;
         assert.equal(stopped.desiredRunning, false);
         assert.equal(stopped.restartScheduled, false);
@@ -1279,6 +1281,8 @@ describe("DesktopBackendManager", () => {
           reason: "failed to generate desktop backend configuration",
           attempt: 3,
         });
+        yield* TestClock.adjust(Duration.seconds(30));
+        assert.equal(yield* Ref.get(configAttempts), 3);
         const stopped = yield* instance.snapshot;
         assert.equal(stopped.desiredRunning, false);
         assert.equal(stopped.restartScheduled, false);
