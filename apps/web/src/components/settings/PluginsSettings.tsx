@@ -850,9 +850,10 @@ export function LucidCodexPluginCard({
   readonly onToggle: (enabled: boolean) => void;
 }) {
   const name = plugin.displayName ?? "Lucid";
-  const unavailable =
+  const policyRestricted =
     plugin.availability === "DISABLED_BY_ADMIN" ||
     (!plugin.installed && plugin.installPolicy === "NOT_AVAILABLE");
+  const enableBlocked = !plugin.installed && policyRestricted;
 
   return (
     <article
@@ -880,9 +881,10 @@ export function LucidCodexPluginCard({
             {plugin.developerName ?? "Lucid Software"} · OAuth credentials stay with Lucid and
             ChatGPT.
           </p>
-          {unavailable ? (
+          {policyRestricted ? (
             <p className="mt-2 text-xs text-destructive" role="alert">
-              Lucid is unavailable under the current ChatGPT workspace policy.
+              Lucid is unavailable under the current ChatGPT workspace policy. Installed copies can
+              still be removed.
             </p>
           ) : null}
           {plugin.installed ? (
@@ -908,7 +910,7 @@ export function LucidCodexPluginCard({
         <label className="inline-flex shrink-0 items-center gap-2 pt-0.5 text-xs font-medium">
           <Switch
             checked={plugin.installed}
-            disabled={busy || unavailable}
+            disabled={busy || enableBlocked}
             aria-label={`${plugin.installed ? "Disable" : "Enable"} Lucid`}
             onCheckedChange={onToggle}
           />
@@ -1074,6 +1076,7 @@ export function PluginsSettingsPanel() {
           );
           if (environmentIdRef.current !== targetEnvironmentId) return;
           setCodexPluginData(result.plugins);
+          setLucidError(remotePluginCatalogError(result.plugins));
           const lucidApp = result.appsNeedingAuth.find(
             ({ id, name }) => id === LUCID_APP_ID || name.toLowerCase() === "lucid",
           );

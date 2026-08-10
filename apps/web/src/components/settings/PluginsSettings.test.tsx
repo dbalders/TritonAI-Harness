@@ -323,6 +323,26 @@ describe("Lucid hosted Codex plugin", () => {
     expect(markup).toContain('target="_blank"');
     expect(markup).toContain('aria-label="Disable Lucid"');
   });
+
+  it("allows an installed Lucid plugin to be removed after an admin policy change", () => {
+    const markup = renderToStaticMarkup(
+      <LucidCodexPluginCard
+        plugin={lucidPlugin({
+          installed: true,
+          enabled: true,
+          availability: "DISABLED_BY_ADMIN",
+        })}
+        busy={false}
+        authAttention={false}
+        authUrl={LUCID_AUTH_URL}
+        onToggle={() => undefined}
+      />,
+    );
+
+    expect(markup).toContain("Installed copies can still be removed.");
+    expect(markup).toContain('aria-label="Disable Lucid"');
+    expect(markup).not.toContain('aria-label="Disable Lucid" disabled');
+  });
 });
 
 describe("PluginsSettings capability access", () => {
