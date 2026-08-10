@@ -124,7 +124,8 @@ it.layer(testLayer)("CodexImageContext", (it) => {
       const missingKeyError = yield* Effect.flip(
         noKeyAnalyzer({ images: [{ name: "one.png", path: "/unused", mimeType: "image/png" }] }),
       );
-      expect(missingKeyError.detail).toContain("TRITONAI_API_KEY");
+      expect(missingKeyError.detail).toContain("TritonAI access key");
+      expect(missingKeyError.detail).toContain("app setup");
 
       const insecureAnalyzer = yield* makeCodexImageContextAnalyzer(
         {

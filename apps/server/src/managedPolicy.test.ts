@@ -9,6 +9,7 @@ import { beforeEach, describe, expect, it } from "vite-plus/test";
 
 import {
   applyManagedHarnessPolicy,
+  getManagedProviderInstanceRenames,
   managedConfig,
   migrateLegacyInstallerManagedSettings,
   stripManagedFieldsForPersistence,
@@ -88,6 +89,11 @@ describe("TritonAI managed Harness policy", () => {
     expect(effective.providerInstances[managedInstanceId]?.config).toMatchObject({
       customModels: ["api-deepseek-v4-flash", "api-glm-5.2", "api-gemma-4-31b"],
     });
+    expect(effective.providers.codex.customModels).toEqual([
+      "api-deepseek-v4-flash",
+      "api-glm-5.2",
+      "api-gemma-4-31b",
+    ]);
     expect(effective.providerInstances[frontierInstanceId]).toMatchObject({
       driver: "codex",
       displayName: "Frontier models",
@@ -307,6 +313,9 @@ describe("TritonAI managed Harness policy", () => {
       tritonAiManagedPolicy: {
         migrationVersion: 2,
         providerInstanceRenames: { codex_frontier: "codex_frontier_personal_2" },
+        providerInstanceReferenceRenames: {
+          codex_frontier: "codex_frontier_personal_2",
+        },
       },
     });
     expect(
@@ -314,5 +323,29 @@ describe("TritonAI managed Harness policy", () => {
         .codex_frontier,
     ).toBeUndefined();
     expect(migrateLegacyInstallerManagedSettings(first.document).migrated).toBe(false);
+    expect(getManagedProviderInstanceRenames()).toEqual({
+      codex_frontier: "codex_frontier_personal_2",
+    });
+
+    const oldMarker = structuredClone(first.document) as {
+      tritonAiManagedPolicy: Record<string, unknown>;
+    };
+    delete oldMarker.tritonAiManagedPolicy.providerInstanceReferenceRenames;
+    expect(migrateLegacyInstallerManagedSettings(oldMarker).migrated).toBe(false);
+    expect(getManagedProviderInstanceRenames()).toEqual({});
+
+    expect(
+      migrateLegacyInstallerManagedSettings({
+        tritonAiManagedPolicy: {
+          migrationVersion: 2,
+          providerInstanceReferenceRenames: {
+            codex_frontier: "codex_frontier_personal_10",
+          },
+        },
+      }).migrated,
+    ).toBe(false);
+    expect(getManagedProviderInstanceRenames()).toEqual({
+      codex_frontier: "codex_frontier_personal_10",
+    });
   });
 });

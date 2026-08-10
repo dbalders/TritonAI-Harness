@@ -92,6 +92,7 @@ export const managedConfig = loadedManagedConfig.config;
 export const managedConfigDigest = loadedManagedConfig.digest;
 
 let migrationStatus: TritonAiManagedPolicyDiagnostics["migrationStatus"] = "not-needed";
+let managedProviderInstanceRenames: Readonly<Record<string, string>> = {};
 let managedRuntimeAnchor = {
   binaryPath: DEFAULT_SERVER_SETTINGS.providers.codex.binaryPath,
   homePath: DEFAULT_TRITONAI_CODEX_HOME_PATH,
@@ -189,6 +190,29 @@ function preserveFrontierProviderCollision(root: JsonRecord): Record<string, str
   return { [frontierInstanceId]: candidate };
 }
 
+function providerInstanceReferenceRenamesFromMarker(
+  marker: JsonRecord | null,
+): Record<string, string> {
+  // This field was introduced with the durable-reference migration. Older
+  // collision markers intentionally do not qualify: they may already have
+  // produced managed frontier references that cannot be distinguished safely.
+  const renames = record(marker?.providerInstanceReferenceRenames);
+  const frontierInstanceId = managedConfig.provider.routes.frontier.instanceId;
+  const replacement = renames?.[frontierInstanceId];
+  if (
+    typeof replacement !== "string" ||
+    !/^codex_frontier_personal(?:_(?:[2-9]|[1-9][0-9]+))?$/.test(replacement)
+  ) {
+    return {};
+  }
+  return { [frontierInstanceId]: replacement };
+}
+
+/** Return the collision renames that must also be applied to durable routing references. */
+export function getManagedProviderInstanceRenames(): Readonly<Record<string, string>> {
+  return { ...managedProviderInstanceRenames };
+}
+
 function modelMetadata(
   models: ManagedConfig["models"]["catalog"],
 ): ServerSettings["providers"]["codex"]["customModelMetadata"] {
@@ -262,8 +286,11 @@ export function applyManagedHarnessPolicy(
   const availableModels = config.models.catalog.filter((model) =>
     availableRouteIds.has(model.route),
   );
-  const customModels = availableModels.map((model) => model.id);
-  const customModelMetadata = modelMetadata(availableModels);
+  const legacyDefaultRouteModels = availableModels.filter(
+    (model) => model.route === config.provider.routes.onPrem.id,
+  );
+  const customModels = legacyDefaultRouteModels.map((model) => model.id);
+  const customModelMetadata = modelMetadata(legacyDefaultRouteModels);
   const managedProviderInstances = Object.fromEntries(
     managedRoutes(config).map((route) => {
       const managedInstanceId = ProviderInstanceId.make(route.instanceId);
@@ -420,9 +447,13 @@ export function migrateLegacyInstallerManagedSettings(
   input: unknown,
 ): LegacyManagedSettingsMigrationResult {
   const root = record(input);
-  if (!root) return { document: input, migrated: false };
+  if (!root) {
+    managedProviderInstanceRenames = {};
+    return { document: input, migrated: false };
+  }
   const marker = record(root[MANAGED_POLICY_MARKER_KEY]);
   if (marker?.migrationVersion === MANAGED_POLICY_MIGRATION_VERSION) {
+    managedProviderInstanceRenames = providerInstanceReferenceRenamesFromMarker(marker);
     managedRuntimeAnchor = {
       binaryPath:
         typeof marker.codexBinaryPath === "string" && marker.codexBinaryPath.trim()
@@ -439,6 +470,7 @@ export function migrateLegacyInstallerManagedSettings(
 
   const next = structuredClone(root);
   const providerInstanceRenames = preserveFrontierProviderCollision(next);
+  managedProviderInstanceRenames = providerInstanceRenames ?? {};
   const providers = record(next.providers);
   const codexProvider = record(providers?.codex);
   const instancesBeforeMigration = record(next.providerInstances);
@@ -486,7 +518,16 @@ export function migrateLegacyInstallerManagedSettings(
     migrationVersion: MANAGED_POLICY_MIGRATION_VERSION,
     codexBinaryPath: managedRuntimeAnchor.binaryPath,
     codexHomePath: managedRuntimeAnchor.homePath,
-    ...(providerInstanceRenames ? { providerInstanceRenames } : {}),
+    ...(providerInstanceRenames
+      ? {
+          providerInstanceRenames,
+          // Only a collision observed by this migration contract may rewrite
+          // durable references. This provenance boundary prevents an older
+          // marker from capturing references later created for the managed
+          // frontier instance.
+          providerInstanceReferenceRenames: providerInstanceRenames,
+        }
+      : {}),
   };
   migrationStatus = "completed";
   return { document: next, migrated: true };
