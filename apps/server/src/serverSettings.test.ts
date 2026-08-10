@@ -1045,6 +1045,9 @@ it.layer(NodeServices.layer)("server settings", (it) => {
           migrationVersion: 2,
           codexBinaryPath: "/installer/runtime/codex",
           codexHomePath: "/installer/home/codex",
+          providerInstanceReferenceRenames: {
+            codex_frontier: "codex_frontier_personal",
+          },
         },
       });
       assert.deepInclude(persisted.providerInstances.codex.config, {
