@@ -162,12 +162,24 @@ routeLayer("managed provider route split", (it) => {
         VALUES ('{"instanceId":"codex","model":"gpt-5.6-sol"}')
       `;
       yield* sql`
+        INSERT INTO projection_projects (default_model_selection_json)
+        VALUES ('{"instanceId":"codex","model":"api-deepseek-v4-flash"}')
+      `;
+      yield* sql`
         INSERT INTO projection_threads (thread_id, model_selection_json)
         VALUES ('frontier-thread', '{"instanceId":"codex","model":"gpt-5.6-sol"}')
       `;
       yield* sql`
+        INSERT INTO projection_threads (thread_id, model_selection_json)
+        VALUES ('on-prem-thread', '{"instanceId":"codex","model":"api-deepseek-v4-flash"}')
+      `;
+      yield* sql`
         INSERT INTO projection_thread_sessions (thread_id, provider_instance_id)
         VALUES ('frontier-thread', ${previousInstanceId})
+      `;
+      yield* sql`
+        INSERT INTO projection_thread_sessions (thread_id, provider_instance_id)
+        VALUES ('on-prem-thread', ${previousInstanceId})
       `;
       yield* sql`
         INSERT INTO provider_session_runtime (provider_instance_id, runtime_payload_json)
@@ -177,8 +189,21 @@ routeLayer("managed provider route split", (it) => {
         )
       `;
       yield* sql`
+        INSERT INTO provider_session_runtime (provider_instance_id, runtime_payload_json)
+        VALUES (
+          ${previousInstanceId},
+          '{"providerInstanceId":"codex","modelSelection":{"instanceId":"codex","model":"api-deepseek-v4-flash"}}'
+        )
+      `;
+      yield* sql`
         INSERT INTO orchestration_events (payload_json)
         VALUES ('{"defaultModelSelection":{"instanceId":"codex","model":"gpt-5.6-sol"},"modelSelection":{"instanceId":"codex","model":"gpt-5.6-sol"},"session":{"providerInstanceId":"codex"}}')
+      `;
+      yield* sql`
+        INSERT INTO orchestration_events (payload_json)
+        VALUES (
+          '{"defaultModelSelection":{"instanceId":"codex","model":"api-deepseek-v4-flash"},"modelSelection":{"instanceId":"codex","model":"api-deepseek-v4-flash"},"session":{"providerInstanceId":"codex"}}'
+        )
       `;
 
       const routeSplit = {
@@ -191,13 +216,17 @@ routeLayer("managed provider route split", (it) => {
       const project = yield* sql<{ readonly instanceId: string }>`
         SELECT json_extract(default_model_selection_json, '$.instanceId') AS "instanceId"
         FROM projection_projects
+        ORDER BY rowid
       `;
       const thread = yield* sql<{ readonly instanceId: string }>`
         SELECT json_extract(model_selection_json, '$.instanceId') AS "instanceId"
         FROM projection_threads
+        ORDER BY rowid
       `;
       const threadSession = yield* sql<{ readonly instanceId: string }>`
-        SELECT provider_instance_id AS "instanceId" FROM projection_thread_sessions
+        SELECT provider_instance_id AS "instanceId"
+        FROM projection_thread_sessions
+        ORDER BY rowid
       `;
       const runtime = yield* sql<{
         readonly instanceId: string;
@@ -209,6 +238,7 @@ routeLayer("managed provider route split", (it) => {
           json_extract(runtime_payload_json, '$.providerInstanceId') AS "payloadInstanceId",
           json_extract(runtime_payload_json, '$.modelSelection.instanceId') AS "selectionInstanceId"
         FROM provider_session_runtime
+        ORDER BY rowid
       `;
       const event = yield* sql<{
         readonly projectInstanceId: string;
@@ -220,16 +250,31 @@ routeLayer("managed provider route split", (it) => {
           json_extract(payload_json, '$.modelSelection.instanceId') AS "threadInstanceId",
           json_extract(payload_json, '$.session.providerInstanceId') AS "sessionInstanceId"
         FROM orchestration_events
+        ORDER BY rowid
       `;
 
-      assert.deepStrictEqual(project, [{ instanceId: nextInstanceId }]);
-      assert.deepStrictEqual(thread, [{ instanceId: nextInstanceId }]);
-      assert.deepStrictEqual(threadSession, [{ instanceId: nextInstanceId }]);
+      assert.deepStrictEqual(project, [
+        { instanceId: nextInstanceId },
+        { instanceId: previousInstanceId },
+      ]);
+      assert.deepStrictEqual(thread, [
+        { instanceId: nextInstanceId },
+        { instanceId: previousInstanceId },
+      ]);
+      assert.deepStrictEqual(threadSession, [
+        { instanceId: nextInstanceId },
+        { instanceId: previousInstanceId },
+      ]);
       assert.deepStrictEqual(runtime, [
         {
           instanceId: nextInstanceId,
           payloadInstanceId: nextInstanceId,
           selectionInstanceId: nextInstanceId,
+        },
+        {
+          instanceId: previousInstanceId,
+          payloadInstanceId: previousInstanceId,
+          selectionInstanceId: previousInstanceId,
         },
       ]);
       assert.deepStrictEqual(event, [
@@ -237,6 +282,11 @@ routeLayer("managed provider route split", (it) => {
           projectInstanceId: nextInstanceId,
           threadInstanceId: nextInstanceId,
           sessionInstanceId: nextInstanceId,
+        },
+        {
+          projectInstanceId: previousInstanceId,
+          threadInstanceId: previousInstanceId,
+          sessionInstanceId: previousInstanceId,
         },
       ]);
 
@@ -253,6 +303,33 @@ routeLayer("managed provider route split", (it) => {
       assert.deepStrictEqual(projectsAfterRestart, [
         { instanceId: nextInstanceId },
         { instanceId: previousInstanceId },
+        { instanceId: previousInstanceId },
+      ]);
+
+      const laterFrontierModel = "claude-opus-5";
+      yield* sql`
+        INSERT INTO projection_projects (default_model_selection_json)
+        VALUES (
+          '{"instanceId":"codex","model":"claude-opus-5"}'
+        )
+      `;
+      yield* migrateManagedProviderInstanceReferences(
+        {},
+        {
+          ...routeSplit,
+          frontierModelIds: [frontierModel, laterFrontierModel],
+        },
+      );
+      const projectsAfterCatalogExpansion = yield* sql<{ readonly instanceId: string }>`
+        SELECT json_extract(default_model_selection_json, '$.instanceId') AS "instanceId"
+        FROM projection_projects
+        ORDER BY rowid
+      `;
+      assert.deepStrictEqual(projectsAfterCatalogExpansion, [
+        { instanceId: nextInstanceId },
+        { instanceId: previousInstanceId },
+        { instanceId: previousInstanceId },
+        { instanceId: nextInstanceId },
       ]);
     }),
   );

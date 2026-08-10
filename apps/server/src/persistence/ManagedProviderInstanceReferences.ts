@@ -117,107 +117,106 @@ export const migrateManagedProviderInstanceReferences = Effect.fn(
   );
 
   if (routeSplit && routeSplit.frontierModelIds.length > 0) {
-    const migrationKey = `provider-route-split:${routeSplit.previousInstanceId}:${routeSplit.nextInstanceId}`;
-    yield* sql.withTransaction(
-      Effect.gen(function* () {
-        const applied = yield* sql<{ readonly migrationKey: string }>`
-          SELECT migration_key AS "migrationKey"
-          FROM tritonai_managed_policy_migrations
-          WHERE migration_key = ${migrationKey}
-        `;
-        if (applied.length > 0) return;
+    yield* Effect.forEach(
+      routeSplit.frontierModelIds,
+      (modelId) => {
+        const migrationKey = `provider-route-split:${routeSplit.previousInstanceId}:${routeSplit.nextInstanceId}:${modelId}`;
+        return sql.withTransaction(
+          Effect.gen(function* () {
+            const applied = yield* sql<{ readonly migrationKey: string }>`
+              SELECT migration_key AS "migrationKey"
+              FROM tritonai_managed_policy_migrations
+              WHERE migration_key = ${migrationKey}
+            `;
+            if (applied.length > 0) return;
 
-        yield* Effect.forEach(
-          routeSplit.frontierModelIds,
-          (modelId) =>
-            Effect.gen(function* () {
-              yield* sql`
-                UPDATE projection_projects
-                SET default_model_selection_json = json_set(
-                  default_model_selection_json,
-                  '$.instanceId',
+            yield* sql`
+              UPDATE projection_projects
+              SET default_model_selection_json = json_set(
+                default_model_selection_json,
+                '$.instanceId',
+                ${routeSplit.nextInstanceId}
+              )
+              WHERE json_valid(default_model_selection_json)
+                AND json_extract(default_model_selection_json, '$.instanceId') = ${routeSplit.previousInstanceId}
+                AND json_extract(default_model_selection_json, '$.model') = ${modelId}
+            `;
+            yield* sql`
+              UPDATE projection_threads
+              SET model_selection_json = json_set(
+                model_selection_json,
+                '$.instanceId',
+                ${routeSplit.nextInstanceId}
+              )
+              WHERE json_valid(model_selection_json)
+                AND json_extract(model_selection_json, '$.instanceId') = ${routeSplit.previousInstanceId}
+                AND json_extract(model_selection_json, '$.model') = ${modelId}
+            `;
+            yield* sql`
+              UPDATE projection_thread_sessions
+              SET provider_instance_id = ${routeSplit.nextInstanceId}
+              WHERE provider_instance_id = ${routeSplit.previousInstanceId}
+                AND EXISTS (
+                  SELECT 1
+                  FROM projection_threads
+                  WHERE projection_threads.thread_id = projection_thread_sessions.thread_id
+                    AND json_valid(projection_threads.model_selection_json)
+                    AND json_extract(projection_threads.model_selection_json, '$.model') = ${modelId}
+                )
+            `;
+            yield* sql`
+              UPDATE provider_session_runtime
+              SET
+                provider_instance_id = ${routeSplit.nextInstanceId},
+                runtime_payload_json = json_set(
+                  runtime_payload_json,
+                  '$.modelSelection.instanceId',
+                  ${routeSplit.nextInstanceId},
+                  '$.providerInstanceId',
                   ${routeSplit.nextInstanceId}
                 )
-                WHERE json_valid(default_model_selection_json)
-                  AND json_extract(default_model_selection_json, '$.instanceId') = ${routeSplit.previousInstanceId}
-                  AND json_extract(default_model_selection_json, '$.model') = ${modelId}
-              `;
-              yield* sql`
-                UPDATE projection_threads
-                SET model_selection_json = json_set(
-                  model_selection_json,
-                  '$.instanceId',
-                  ${routeSplit.nextInstanceId}
-                )
-                WHERE json_valid(model_selection_json)
-                  AND json_extract(model_selection_json, '$.instanceId') = ${routeSplit.previousInstanceId}
-                  AND json_extract(model_selection_json, '$.model') = ${modelId}
-              `;
-              yield* sql`
-                UPDATE projection_thread_sessions
-                SET provider_instance_id = ${routeSplit.nextInstanceId}
-                WHERE provider_instance_id = ${routeSplit.previousInstanceId}
-                  AND EXISTS (
-                    SELECT 1
-                    FROM projection_threads
-                    WHERE projection_threads.thread_id = projection_thread_sessions.thread_id
-                      AND json_valid(projection_threads.model_selection_json)
-                      AND json_extract(projection_threads.model_selection_json, '$.model') = ${modelId}
-                  )
-              `;
-              yield* sql`
-                UPDATE provider_session_runtime
-                SET
-                  provider_instance_id = ${routeSplit.nextInstanceId},
-                  runtime_payload_json = json_set(
-                    runtime_payload_json,
-                    '$.modelSelection.instanceId',
-                    ${routeSplit.nextInstanceId},
-                    '$.providerInstanceId',
-                    ${routeSplit.nextInstanceId}
-                  )
-                WHERE provider_instance_id = ${routeSplit.previousInstanceId}
-                  AND json_valid(runtime_payload_json)
-                  AND COALESCE(
-                    json_extract(runtime_payload_json, '$.modelSelection.model'),
-                    json_extract(runtime_payload_json, '$.model')
-                  ) = ${modelId}
-              `;
-              for (const selectionKey of ["defaultModelSelection", "modelSelection"]) {
-                const instancePath = `$.${selectionKey}.instanceId`;
-                const modelPath = `$.${selectionKey}.model`;
-                yield* sql`
-                  UPDATE orchestration_events
-                  SET payload_json = json_set(
-                    payload_json,
-                    ${instancePath},
-                    ${routeSplit.nextInstanceId}
-                  )
-                  WHERE json_valid(payload_json)
-                    AND json_extract(payload_json, ${instancePath}) = ${routeSplit.previousInstanceId}
-                    AND json_extract(payload_json, ${modelPath}) = ${modelId}
-                `;
-              }
+              WHERE provider_instance_id = ${routeSplit.previousInstanceId}
+                AND json_valid(runtime_payload_json)
+                AND COALESCE(
+                  json_extract(runtime_payload_json, '$.modelSelection.model'),
+                  json_extract(runtime_payload_json, '$.model')
+                ) = ${modelId}
+            `;
+            for (const selectionKey of ["defaultModelSelection", "modelSelection"]) {
+              const instancePath = `$.${selectionKey}.instanceId`;
+              const modelPath = `$.${selectionKey}.model`;
               yield* sql`
                 UPDATE orchestration_events
                 SET payload_json = json_set(
                   payload_json,
-                  '$.session.providerInstanceId',
+                  ${instancePath},
                   ${routeSplit.nextInstanceId}
                 )
                 WHERE json_valid(payload_json)
-                  AND json_extract(payload_json, '$.session.providerInstanceId') = ${routeSplit.previousInstanceId}
-                  AND json_extract(payload_json, '$.modelSelection.model') = ${modelId}
+                  AND json_extract(payload_json, ${instancePath}) = ${routeSplit.previousInstanceId}
+                  AND json_extract(payload_json, ${modelPath}) = ${modelId}
               `;
-            }),
-          { discard: true },
-        );
+            }
+            yield* sql`
+              UPDATE orchestration_events
+              SET payload_json = json_set(
+                payload_json,
+                '$.session.providerInstanceId',
+                ${routeSplit.nextInstanceId}
+              )
+              WHERE json_valid(payload_json)
+                AND json_extract(payload_json, '$.session.providerInstanceId') = ${routeSplit.previousInstanceId}
+                AND json_extract(payload_json, '$.modelSelection.model') = ${modelId}
+            `;
 
-        yield* sql`
-          INSERT INTO tritonai_managed_policy_migrations (migration_key, applied_at)
-          VALUES (${migrationKey}, CURRENT_TIMESTAMP)
-        `;
-      }),
+            yield* sql`
+              INSERT INTO tritonai_managed_policy_migrations (migration_key, applied_at)
+              VALUES (${migrationKey}, CURRENT_TIMESTAMP)
+            `;
+          }),
+        );
+      },
+      { discard: true },
     );
   }
 });
