@@ -169,15 +169,24 @@ function isManagedProviderEnvironmentName(name: string, config: ManagedConfig): 
   ].some((managedName) => managedName.toUpperCase() === normalized);
 }
 
-function preserveFrontierProviderCollision(root: JsonRecord): Record<string, string> | undefined {
+function nextPersonalFrontierInstanceId(root: JsonRecord): string {
+  const instances = record(root.providerInstances);
+  let candidate = FRONTIER_PROVIDER_COLLISION_RENAME_BASE;
+  if (!instances) return candidate;
+  for (let suffix = 2; Object.hasOwn(instances, candidate); suffix += 1) {
+    candidate = `${FRONTIER_PROVIDER_COLLISION_RENAME_BASE}_${suffix}`;
+  }
+  return candidate;
+}
+
+function preserveFrontierProviderCollision(
+  root: JsonRecord,
+  candidate: string,
+): Record<string, string> | undefined {
   const instances = record(root.providerInstances);
   const frontierInstanceId = managedConfig.provider.routes.frontier.instanceId;
   if (!instances || !Object.hasOwn(instances, frontierInstanceId)) return undefined;
 
-  let candidate = FRONTIER_PROVIDER_COLLISION_RENAME_BASE;
-  for (let suffix = 2; Object.hasOwn(instances, candidate); suffix += 1) {
-    candidate = `${FRONTIER_PROVIDER_COLLISION_RENAME_BASE}_${suffix}`;
-  }
   instances[candidate] = instances[frontierInstanceId];
   delete instances[frontierInstanceId];
   for (const selectionKey of [
@@ -469,8 +478,21 @@ export function migrateLegacyInstallerManagedSettings(
   }
 
   const next = structuredClone(root);
-  const providerInstanceRenames = preserveFrontierProviderCollision(next);
-  managedProviderInstanceRenames = providerInstanceRenames ?? {};
+  const frontierInstanceId = managedConfig.provider.routes.frontier.instanceId;
+  const personalFrontierInstanceId = nextPersonalFrontierInstanceId(next);
+  const providerInstanceRenames = preserveFrontierProviderCollision(
+    next,
+    personalFrontierInstanceId,
+  );
+  // Version 1 could leave durable references behind even after a personal
+  // provider was removed from settings. Move every pre-v2 reference away from
+  // the newly claimed managed ID. When the provider still exists, this target
+  // is also the ID assigned to it; otherwise it remains an intentionally
+  // unbound tombstone instead of silently binding to managed credentials.
+  const providerInstanceReferenceRenames = {
+    [frontierInstanceId]: personalFrontierInstanceId,
+  };
+  managedProviderInstanceRenames = providerInstanceReferenceRenames;
   const providers = record(next.providers);
   const codexProvider = record(providers?.codex);
   const instancesBeforeMigration = record(next.providerInstances);
@@ -518,16 +540,10 @@ export function migrateLegacyInstallerManagedSettings(
     migrationVersion: MANAGED_POLICY_MIGRATION_VERSION,
     codexBinaryPath: managedRuntimeAnchor.binaryPath,
     codexHomePath: managedRuntimeAnchor.homePath,
-    ...(providerInstanceRenames
-      ? {
-          providerInstanceRenames,
-          // Only a collision observed by this migration contract may rewrite
-          // durable references. This provenance boundary prevents an older
-          // marker from capturing references later created for the managed
-          // frontier instance.
-          providerInstanceReferenceRenames: providerInstanceRenames,
-        }
-      : {}),
+    ...(providerInstanceRenames ? { providerInstanceRenames } : {}),
+    // This field is written for every v1-to-v2 migration, not just a live
+    // settings collision, because provider references outlive provider rows.
+    providerInstanceReferenceRenames,
   };
   migrationStatus = "completed";
   return { document: next, migrated: true };

@@ -264,9 +264,15 @@ describe("TritonAI managed Harness policy", () => {
         migrationVersion: 2,
         codexBinaryPath: "/managed/codex",
         codexHomePath: "/managed/home",
+        providerInstanceReferenceRenames: {
+          codex_frontier: "codex_frontier_personal",
+        },
       },
     });
     expect(migrateLegacyInstallerManagedSettings(first.document).migrated).toBe(false);
+    expect(getManagedProviderInstanceRenames()).toEqual({
+      codex_frontier: "codex_frontier_personal",
+    });
   });
 
   it("renames a personal instance that collides with the new managed frontier route", () => {
