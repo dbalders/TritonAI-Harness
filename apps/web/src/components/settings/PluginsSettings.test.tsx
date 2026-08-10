@@ -22,7 +22,7 @@ import {
   integrationNeedsConnectionAction,
   reconcileConnectionAttentionForIntegration,
   findLucidPlugin,
-  lucidPluginNeedsAuthorization,
+  lucidAuthAttentionOnLoad,
   lucidPluginUninstallInput,
   readLucidAuthHandoff,
   remotePluginCatalogError,
@@ -262,12 +262,19 @@ describe("Lucid hosted Codex plugin", () => {
     expect(safeLucidAuthUrl("not a url")).toBe(LUCID_AUTH_URL);
   });
 
-  it("recovers the sign-in action from an installed ON_INSTALL catalog entry", () => {
-    expect(lucidPluginNeedsAuthorization(lucidPlugin({ installed: true }))).toBe(true);
-    expect(
-      lucidPluginNeedsAuthorization(lucidPlugin({ installed: true, authPolicy: "ON_USE" })),
-    ).toBe(false);
-    expect(lucidPluginNeedsAuthorization(undefined)).toBe(false);
+  it("restores sign-in attention only from a pending handoff, not ON_INSTALL policy", () => {
+    const plugin = lucidPlugin({ installed: true });
+
+    expect(lucidAuthAttentionOnLoad(plugin, null)).toBe(false);
+    expect(lucidAuthAttentionOnLoad(plugin, { attention: true, authUrl: LUCID_AUTH_URL })).toBe(
+      true,
+    );
+    expect(lucidAuthAttentionOnLoad(plugin, { attention: false, authUrl: LUCID_AUTH_URL })).toBe(
+      false,
+    );
+    expect(lucidAuthAttentionOnLoad(undefined, { attention: true, authUrl: LUCID_AUTH_URL })).toBe(
+      false,
+    );
   });
 
   it("preserves an unconfirmed sign-in handoff across a Plugins screen remount", () => {

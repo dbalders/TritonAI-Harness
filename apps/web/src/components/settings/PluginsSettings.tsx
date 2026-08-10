@@ -211,8 +211,11 @@ export function safeLucidAuthUrl(candidate: string | undefined): string {
   }
 }
 
-export function lucidPluginNeedsAuthorization(plugin: ServerPluginSummary | undefined): boolean {
-  return plugin?.installed === true && plugin.authPolicy === "ON_INSTALL";
+export function lucidAuthAttentionOnLoad(
+  plugin: ServerPluginSummary | undefined,
+  persistedHandoff: LucidAuthHandoffState | null,
+): boolean {
+  return plugin?.installed === true && persistedHandoff?.attention === true;
 }
 
 export function readLucidAuthHandoff(
@@ -1041,7 +1044,7 @@ export function PluginsSettingsPanel() {
       const plugin = findLucidPlugin(result);
       const persistedHandoff = readLucidAuthHandoff(lucidAuthHandoffStorage(), targetEnvironmentId);
       if (plugin?.installed) {
-        setLucidAuthAttention(persistedHandoff?.attention ?? lucidPluginNeedsAuthorization(plugin));
+        setLucidAuthAttention(lucidAuthAttentionOnLoad(plugin, persistedHandoff));
         setLucidAuthUrl(persistedHandoff?.authUrl ?? LUCID_AUTH_URL);
       } else {
         writeLucidAuthHandoff(lucidAuthHandoffStorage(), targetEnvironmentId, null);
