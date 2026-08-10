@@ -270,7 +270,7 @@ describe("Lucid hosted Codex plugin", () => {
     expect(lucidPluginNeedsAuthorization(undefined)).toBe(false);
   });
 
-  it("preserves a validated sign-in handoff across a Plugins screen remount", () => {
+  it("preserves an unconfirmed sign-in handoff across a Plugins screen remount", () => {
     const values = new Map<string, string>();
     const storage = {
       getItem: (key: string) => values.get(key) ?? null,
@@ -282,6 +282,7 @@ describe("Lucid hosted Codex plugin", () => {
     writeLucidAuthHandoff(storage, "local", { attention: true, authUrl });
 
     expect(readLucidAuthHandoff(storage, "local")).toEqual({ attention: true, authUrl });
+    expect(readLucidAuthHandoff(storage, "local")?.attention).toBe(true);
     writeLucidAuthHandoff(storage, "local", null);
     expect(readLucidAuthHandoff(storage, "local")).toBeNull();
   });
@@ -319,6 +320,7 @@ describe("Lucid hosted Codex plugin", () => {
     expect(markup).toContain("Lucid Software");
     expect(markup).toContain("Action required: Connect Lucid");
     expect(markup).toContain("Finish sign-in");
+    expect(markup).toContain("I&#x27;ve finished sign-in");
     expect(markup).toContain(`href="${LUCID_AUTH_URL}"`);
     expect(markup).toContain('target="_blank"');
     expect(markup).toContain('aria-label="Disable Lucid"');

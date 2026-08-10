@@ -839,14 +839,14 @@ export function LucidCodexPluginCard({
   busy,
   authAttention,
   authUrl,
-  onAuthHandoff,
+  onAuthComplete,
   onToggle,
 }: {
   readonly plugin: ServerPluginSummary;
   readonly busy: boolean;
   readonly authAttention: boolean;
   readonly authUrl: string;
-  readonly onAuthHandoff?: () => void;
+  readonly onAuthComplete?: () => void;
   readonly onToggle: (enabled: boolean) => void;
 }) {
   const name = plugin.displayName ?? "Lucid";
@@ -897,13 +897,16 @@ export function LucidCodexPluginCard({
               <Button
                 size="sm"
                 variant="outline"
-                render={
-                  <a href={authUrl} target="_blank" rel="noreferrer" onClick={onAuthHandoff} />
-                }
+                render={<a href={authUrl} target="_blank" rel="noreferrer" />}
               >
                 {authAttention ? "Finish sign-in" : "Connect or manage Lucid"}
                 <ExternalLinkIcon />
               </Button>
+              {authAttention ? (
+                <Button size="sm" variant="ghost" onClick={onAuthComplete}>
+                  I&apos;ve finished sign-in
+                </Button>
+              ) : null}
             </div>
           ) : null}
         </div>
@@ -1112,7 +1115,7 @@ export function PluginsSettingsPanel() {
     [environmentId, installCodexPluginCommand, uninstallCodexPluginCommand],
   );
 
-  const acknowledgeLucidAuthHandoff = useCallback(() => {
+  const confirmLucidAuthCompleted = useCallback(() => {
     setLucidAuthAttention(false);
     if (environmentId === null) return;
     writeLucidAuthHandoff(lucidAuthHandoffStorage(), environmentId, {
@@ -1483,7 +1486,7 @@ export function PluginsSettingsPanel() {
             busy={lucidBusy}
             authAttention={lucidAuthAttention}
             authUrl={lucidAuthUrl}
-            onAuthHandoff={acknowledgeLucidAuthHandoff}
+            onAuthComplete={confirmLucidAuthCompleted}
             onToggle={(enabled) => void toggleLucid(lucidPlugin, enabled)}
           />
         ) : (

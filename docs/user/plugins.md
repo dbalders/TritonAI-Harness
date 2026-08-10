@@ -16,8 +16,9 @@ official Lucid app page instead. Lucid and ChatGPT own the hosted runtime and au
 does not receive the OAuth credentials.
 
 The validated sign-in handoff remains available in the current browser tab after the Plugins screen
-is reopened. If authorization was not completed, open it again. After you open the sign-in page, the
-button changes to **Connect or manage Lucid** and continues to use the same official app page.
+is reopened. If authorization was not completed, open it again. Harness keeps the action visible
+until you return and choose **I've finished sign-in**; after that, **Connect or manage Lucid**
+continues to open the same official app page.
 
 ## Disable Lucid
 
