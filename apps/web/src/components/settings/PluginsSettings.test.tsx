@@ -1,10 +1,18 @@
-import type { IntegrationConnectResult, IntegrationSummary } from "@t3tools/contracts";
+import type {
+  IntegrationConnectResult,
+  IntegrationSummary,
+  ServerPluginSummary,
+} from "@t3tools/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
   IntegrationConnectionActionCallout,
   IntegrationAuthorizationFlow,
+  LUCID_APP_ID,
+  LUCID_AUTH_URL,
+  LUCID_REMOTE_PLUGIN_ID,
+  LucidCodexPluginCard,
   WRITE_TOOL_ACCESS_ARIA_LABEL,
   WRITE_TOOL_ACCESS_LABEL,
   capabilityAccessStateLabel,
@@ -13,9 +21,29 @@ import {
   integrationConnectAriaLabel,
   integrationNeedsConnectionAction,
   reconcileConnectionAttentionForIntegration,
+  findLucidPlugin,
+  safeLucidAuthUrl,
   shouldExpandIntegrationCard,
   shouldFocusConnectionAction,
 } from "./PluginsSettings.tsx";
+
+const lucidPlugin = (overrides: Partial<ServerPluginSummary> = {}): ServerPluginSummary => ({
+  id: "app-69c597eebdd4819194fd9c4d03acedb6@openai-curated-remote",
+  name: "app-69c597eebdd4819194fd9c4d03acedb6",
+  displayName: "Lucid",
+  description: "Ideate, diagram, and align teams.",
+  developerName: "Lucid Software",
+  enabled: false,
+  installed: false,
+  authPolicy: "ON_INSTALL",
+  installPolicy: "AVAILABLE",
+  availability: "AVAILABLE",
+  remotePluginId: LUCID_REMOTE_PLUGIN_ID,
+  marketplaceName: "openai-curated-remote",
+  source: { type: "remote" },
+  keywords: [],
+  ...overrides,
+});
 
 const summary = (overrides: Partial<IntegrationSummary> = {}): IntegrationSummary => ({
   id: "microsoft-365-read",
@@ -200,6 +228,52 @@ describe("PluginsSettings connection action", () => {
     expect(reconcileConnectionAttentionForIntegration(current, integration.id, integration)).toBe(
       current,
     );
+  });
+});
+
+describe("Lucid hosted Codex plugin", () => {
+  it("selects only Lucid by its stable remote plugin ID", () => {
+    const plugin = lucidPlugin();
+    expect(
+      findLucidPlugin({
+        marketplaces: [
+          {
+            name: "openai-curated-remote",
+            plugins: [lucidPlugin({ remotePluginId: "plugin_asdk_unrelated" }), plugin],
+          },
+        ],
+        marketplaceLoadErrors: [],
+        featuredPluginIds: [],
+      }),
+    ).toBe(plugin);
+  });
+
+  it("accepts only Lucid's exact ChatGPT authorization URL", () => {
+    expect(safeLucidAuthUrl(LUCID_AUTH_URL)).toBe(LUCID_AUTH_URL);
+    expect(safeLucidAuthUrl(`https://chatgpt.com/apps/lucid/${LUCID_APP_ID}?continue=true`)).toBe(
+      `${LUCID_AUTH_URL}?continue=true`,
+    );
+    expect(safeLucidAuthUrl("https://evil.example/apps/lucid/fake")).toBe(LUCID_AUTH_URL);
+    expect(safeLucidAuthUrl("not a url")).toBe(LUCID_AUTH_URL);
+  });
+
+  it("renders a reversible install toggle and the OAuth handoff after installation", () => {
+    const markup = renderToStaticMarkup(
+      <LucidCodexPluginCard
+        plugin={lucidPlugin({ installed: true, enabled: true })}
+        busy={false}
+        authAttention={true}
+        authUrl={LUCID_AUTH_URL}
+        onToggle={() => undefined}
+      />,
+    );
+
+    expect(markup).toContain("Lucid Software");
+    expect(markup).toContain("Action required: Connect Lucid");
+    expect(markup).toContain("Finish sign-in");
+    expect(markup).toContain(`href="${LUCID_AUTH_URL}"`);
+    expect(markup).toContain('target="_blank"');
+    expect(markup).toContain('aria-label="Disable Lucid"');
   });
 });
 

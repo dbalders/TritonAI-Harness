@@ -139,6 +139,7 @@ import {
   ServerMarketplaceRemoveInput,
   ServerMarketplaceUpgradeInput,
   ServerPluginInstallInput,
+  ServerPluginInstallResult,
   ServerPluginOperationError,
   ServerPluginsListInput,
   ServerPluginsListResult,
@@ -472,7 +473,7 @@ export const WsServerListPluginsRpc = Rpc.make(WS_METHODS.serverListPlugins, {
 
 export const WsServerInstallPluginRpc = Rpc.make(WS_METHODS.serverInstallPlugin, {
   payload: ServerPluginInstallInput,
-  success: ServerPluginsListResult,
+  success: ServerPluginInstallResult,
   error: Schema.Union([ServerPluginOperationError, EnvironmentAuthorizationError]),
 });
 

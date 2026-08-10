@@ -8,6 +8,7 @@ import {
   ServerMarketplaceRemoveInput,
   ServerMarketplaceUpgradeInput,
   ServerPluginInstallInput,
+  type ServerPluginInstallResult,
   ServerPluginOperationError,
   type ServerPluginsListResult,
   ServerPluginUninstallInput,
@@ -177,6 +178,8 @@ function mapPluginListResponse(
             ...(developerName !== undefined ? { developerName } : {}),
             enabled: plugin.enabled,
             installed: plugin.installed,
+            authPolicy: plugin.authPolicy,
+            installPolicy: plugin.installPolicy,
             ...(plugin.availability !== undefined ? { availability: plugin.availability } : {}),
             ...(localVersion !== undefined ? { localVersion } : {}),
             ...(remotePluginId !== undefined ? { remotePluginId } : {}),
@@ -187,6 +190,62 @@ function mapPluginListResponse(
           };
         }),
       };
+    }),
+  };
+}
+
+export function filterPluginListResult(
+  result: ServerPluginsListResult,
+  pluginIds: ReadonlyArray<string> | undefined,
+): ServerPluginsListResult {
+  if (pluginIds === undefined) return result;
+
+  const requestedIds = new Set(pluginIds);
+  const marketplaces = result.marketplaces.flatMap((marketplace) => {
+    const plugins = marketplace.plugins.filter(
+      (plugin) =>
+        requestedIds.has(plugin.id) ||
+        (plugin.remotePluginId !== null &&
+          plugin.remotePluginId !== undefined &&
+          requestedIds.has(plugin.remotePluginId)),
+    );
+    return plugins.length > 0 ? [{ ...marketplace, plugins }] : [];
+  });
+  const includedPluginIds = new Set(
+    marketplaces.flatMap(({ plugins }) => plugins.map(({ id }) => id)),
+  );
+
+  return {
+    ...result,
+    marketplaces,
+    featuredPluginIds: result.featuredPluginIds.filter((id) => includedPluginIds.has(id)),
+  };
+}
+
+function mapPluginInstallResponse(
+  response: CodexSchema.V2PluginInstallResponse,
+  plugins: ServerPluginsListResult,
+): ServerPluginInstallResult {
+  return {
+    plugins,
+    authPolicy: response.authPolicy,
+    appsNeedingAuth: response.appsNeedingAuth.flatMap((app) => {
+      const id = nonEmpty(app.id);
+      const name = nonEmpty(app.name);
+      if (id === undefined || name === undefined) return [];
+
+      const description = nonEmpty(app.description);
+      const category = nonEmpty(app.category);
+      const installUrl = nonEmpty(app.installUrl);
+      return [
+        {
+          id,
+          name,
+          ...(description !== undefined ? { description } : {}),
+          ...(category !== undefined ? { category } : {}),
+          ...(installUrl !== undefined ? { installUrl } : {}),
+        },
+      ];
     }),
   };
 }
@@ -354,6 +413,7 @@ function withCodexClient<A>(
 export const listCodexPlugins = Effect.fn("listCodexPlugins")(function* (input?: {
   readonly includeRemote?: boolean;
   readonly instanceId?: ProviderInstanceId;
+  readonly pluginIds?: ReadonlyArray<string>;
 }) {
   const target = yield* resolveCodexManagementTarget(input?.instanceId);
   return yield* withCodexClient(target, "plugin/list", (client) =>
@@ -365,7 +425,9 @@ export const listCodexPlugins = Effect.fn("listCodexPlugins")(function* (input?:
     }),
   ).pipe(
     Effect.scoped,
-    Effect.map(mapPluginListResponse),
+    Effect.map((response) =>
+      filterPluginListResult(mapPluginListResponse(response), input?.pluginIds),
+    ),
     Effect.catchIf(isRemotePluginCatalogAuthError, () =>
       withCodexClient(target, "plugin/list", (client) =>
         client.request("plugin/list", {
@@ -375,7 +437,7 @@ export const listCodexPlugins = Effect.fn("listCodexPlugins")(function* (input?:
       ).pipe(
         Effect.scoped,
         Effect.map((response) => {
-          const result = mapPluginListResponse(response);
+          const result = filterPluginListResult(mapPluginListResponse(response), input?.pluginIds);
           return {
             ...result,
             marketplaceLoadErrors: [
@@ -404,7 +466,7 @@ export const installCodexPlugin = Effect.fn("installCodexPlugin")(function* (inp
     ),
   );
   const target = yield* resolveCodexManagementTarget();
-  yield* withCodexClient(target, "plugin/install", (client) =>
+  const installResponse = yield* withCodexClient(target, "plugin/install", (client) =>
     client.request("plugin/install", {
       pluginName: request.pluginName,
       ...(request.marketplacePath !== undefined
@@ -416,7 +478,12 @@ export const installCodexPlugin = Effect.fn("installCodexPlugin")(function* (inp
     }),
   ).pipe(Effect.scoped);
   yield* refreshProvidersAfterCodexMutation(target.instanceId);
-  return yield* listCodexPlugins({ includeRemote: true, instanceId: target.instanceId });
+  const plugins = yield* listCodexPlugins({
+    includeRemote: true,
+    instanceId: target.instanceId,
+    pluginIds: [request.pluginName],
+  });
+  return mapPluginInstallResponse(installResponse, plugins);
 });
 
 export const uninstallCodexPlugin = Effect.fn("uninstallCodexPlugin")(function* (input: unknown) {
@@ -430,7 +497,11 @@ export const uninstallCodexPlugin = Effect.fn("uninstallCodexPlugin")(function* 
     client.request("plugin/uninstall", { pluginId: request.pluginId }),
   ).pipe(Effect.scoped);
   yield* refreshProvidersAfterCodexMutation(target.instanceId);
-  return yield* listCodexPlugins({ includeRemote: true, instanceId: target.instanceId });
+  return yield* listCodexPlugins({
+    includeRemote: true,
+    instanceId: target.instanceId,
+    pluginIds: [request.pluginId],
+  });
 });
 
 export const addCodexMarketplace = Effect.fn("addCodexMarketplace")(function* (input: unknown) {

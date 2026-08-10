@@ -239,6 +239,8 @@ export const ServerPluginSummary = Schema.Struct({
   developerName: Schema.optionalKey(TrimmedNonEmptyString),
   enabled: Schema.Boolean,
   installed: Schema.Boolean,
+  authPolicy: Schema.Literals(["ON_INSTALL", "ON_USE"]),
+  installPolicy: Schema.Literals(["NOT_AVAILABLE", "AVAILABLE", "INSTALLED_BY_DEFAULT"]),
   availability: Schema.optionalKey(Schema.Literals(["DISABLED_BY_ADMIN", "AVAILABLE"])),
   localVersion: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
   remotePluginId: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
@@ -267,6 +269,7 @@ export type ServerPluginMarketplaceLoadError = typeof ServerPluginMarketplaceLoa
 
 export const ServerPluginsListInput = Schema.Struct({
   includeRemote: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  pluginIds: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
 });
 export type ServerPluginsListInput = typeof ServerPluginsListInput.Type;
 
@@ -287,6 +290,22 @@ export const ServerPluginInstallInput = Schema.Struct({
   remoteMarketplaceName: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
 });
 export type ServerPluginInstallInput = typeof ServerPluginInstallInput.Type;
+
+export const ServerPluginAuthApp = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  name: TrimmedNonEmptyString,
+  description: Schema.optionalKey(TrimmedNonEmptyString),
+  category: Schema.optionalKey(TrimmedNonEmptyString),
+  installUrl: Schema.optionalKey(TrimmedNonEmptyString),
+});
+export type ServerPluginAuthApp = typeof ServerPluginAuthApp.Type;
+
+export const ServerPluginInstallResult = Schema.Struct({
+  plugins: ServerPluginsListResult,
+  authPolicy: Schema.Literals(["ON_INSTALL", "ON_USE"]),
+  appsNeedingAuth: Schema.Array(ServerPluginAuthApp),
+});
+export type ServerPluginInstallResult = typeof ServerPluginInstallResult.Type;
 
 export const ServerPluginUninstallInput = Schema.Struct({
   pluginId: TrimmedNonEmptyString,
