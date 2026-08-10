@@ -197,7 +197,7 @@ describe("fetchTritonAiUsage", () => {
       );
 
       assert.equal(error.code, "missing_api_key");
-      assert.match(error.message, /TRITONAI_API_KEY/u);
+      assert.match(error.message, /access key/u);
       assert.equal(error.recoverable, true);
       expect(fetchMock).not.toHaveBeenCalled();
     }),

@@ -12,7 +12,7 @@ describe("managed Harness config build input", () => {
     const input = loadManagedHarnessConfigForBuild(
       NodeURL.fileURLToPath(new URL("../..", import.meta.url)),
     );
-    expect(input.config.schemaVersion).toBe(1);
+    expect(input.config.schemaVersion).toBe(2);
     expect(
       input.config.models.catalog.some((model) => model.id === input.config.models.default),
     ).toBe(true);
@@ -23,21 +23,35 @@ describe("managed Harness config build input", () => {
     expect(() =>
       parseManagedHarnessConfig(
         JSON.stringify({
-          schemaVersion: 1,
+          schemaVersion: 2,
           policyVersion: 1,
           provider: {
-            instanceId: "codex",
             driver: "codex",
             managedBinary: true,
             managedHome: true,
             baseUrl: "https://tritonai.example.test/v1",
-            apiKeyEnvironmentVariable: "TRITONAI_API_KEY",
+            sharedApiKeyEnvironmentVariable: "TRITONAI_API_KEY",
+            apiKeySourceEnvironmentVariable: "TRITONAI_API_KEY_SOURCE",
+            routes: {
+              onPrem: {
+                id: "on-prem",
+                instanceId: "codex",
+                displayName: "On-prem models",
+                apiKeyEnvironmentVariable: "TRITONAI_ONPREM_API_KEY",
+              },
+              frontier: {
+                id: "frontier",
+                instanceId: "codex_frontier",
+                displayName: "Frontier models",
+                apiKeyEnvironmentVariable: "TRITONAI_FRONTIER_API_KEY",
+              },
+            },
           },
           models: {
             default: "missing",
             restrictedFallback: "missing",
             replacements: {},
-            catalog: [{ id: "other", name: "Other" }],
+            catalog: [{ id: "other", name: "Other", route: "on-prem" }],
           },
           secureSkills: { pollIntervalMinutes: 60 },
           unexpected: true,

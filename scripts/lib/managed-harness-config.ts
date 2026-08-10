@@ -33,6 +33,13 @@ export function parseManagedHarnessConfig(source: string): Config {
       throw new Error(`Managed Harness config replacement '${replacement}' is not in the catalog.`);
     }
   }
+  for (const route of [config.provider.routes.onPrem, config.provider.routes.frontier]) {
+    if (!config.models.catalog.some((model) => model.route === route.id)) {
+      throw new Error(
+        `Managed Harness config route '${route.id}' must contain at least one model.`,
+      );
+    }
+  }
   return config;
 }
 

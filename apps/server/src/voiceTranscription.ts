@@ -10,6 +10,7 @@ import {
   type ServerVoiceTranscribeResult,
 } from "@t3tools/contracts";
 import { makeTritonAiClientHeaders } from "./tritonAiClientHeaders.ts";
+import { resolveTritonAiServiceApiKey } from "./tritonAiCredential.ts";
 
 const MAX_VOICE_AUDIO_BYTES = 25 * 1024 * 1024;
 const MAX_VOICE_AUDIO_BASE64_CHARS = Math.ceil(MAX_VOICE_AUDIO_BYTES / 3) * 4;
@@ -17,6 +18,8 @@ const TRANSCRIPTION_TIMEOUT_MS = 60_000;
 
 interface VoiceTranscriptionEnv {
   readonly TRITONAI_API_KEY?: string | undefined;
+  readonly TRITONAI_ONPREM_API_KEY?: string | undefined;
+  readonly TRITONAI_FRONTIER_API_KEY?: string | undefined;
   readonly UCSD_AI_BASE_URL?: string | undefined;
 }
 
@@ -105,12 +108,13 @@ function resolveVoiceTranscriptionConfig(
   input: ServerVoiceTranscribeInput,
   env: VoiceTranscriptionEnv,
 ): Effect.Effect<TranscriptionConfig, ServerVoiceTranscriptionError> {
-  const apiKey = env.TRITONAI_API_KEY?.trim();
+  const apiKey = resolveTritonAiServiceApiKey(env);
   if (!apiKey) {
     return Effect.fail(
       voiceError({
         code: "missing_api_key",
-        message: "Voice transcription is not configured. Set TRITONAI_API_KEY on the app server.",
+        message:
+          "Voice transcription is not configured. Add a TritonAI access key in the app setup.",
       }),
     );
   }
@@ -247,6 +251,8 @@ export function transcribeVoice(
       options?.env ??
       ({
         TRITONAI_API_KEY: process.env.TRITONAI_API_KEY,
+        TRITONAI_ONPREM_API_KEY: process.env.TRITONAI_ONPREM_API_KEY,
+        TRITONAI_FRONTIER_API_KEY: process.env.TRITONAI_FRONTIER_API_KEY,
         UCSD_AI_BASE_URL: process.env.UCSD_AI_BASE_URL,
       } satisfies VoiceTranscriptionEnv);
     const fetchImpl = options?.fetch ?? globalThis.fetch;

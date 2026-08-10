@@ -1,6 +1,11 @@
 import * as NodeOS from "node:os";
 
-import { LEGACY_T3CODE_HOME_ENV, TRITONAI_HOME_ENV } from "@t3tools/contracts";
+import {
+  LEGACY_T3CODE_HOME_ENV,
+  TRITONAI_FRONTIER_API_KEY_ENV,
+  TRITONAI_HOME_ENV,
+  TRITONAI_ONPREM_API_KEY_ENV,
+} from "@t3tools/contracts";
 import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serverSettings";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -103,6 +108,8 @@ const WSL_FORWARDED_ENV_NAMES = [
   "OPENAI_API_KEY",
   "ANTHROPIC_API_KEY",
   "TRITONAI_API_KEY",
+  TRITONAI_ONPREM_API_KEY_ENV,
+  TRITONAI_FRONTIER_API_KEY_ENV,
   "UCSD_AI_BASE_URL",
 ] as const;
 

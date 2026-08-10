@@ -639,12 +639,16 @@ describe("DesktopBackendConfiguration", () => {
       const previousOpenAiKey = process.env.OPENAI_API_KEY;
       const previousAnthropicKey = process.env.ANTHROPIC_API_KEY;
       const previousTritonAiKey = process.env.TRITONAI_API_KEY;
+      const previousTritonAiOnPremKey = process.env.TRITONAI_ONPREM_API_KEY;
+      const previousTritonAiFrontierKey = process.env.TRITONAI_FRONTIER_API_KEY;
       const previousUcsdAiBaseUrl = process.env.UCSD_AI_BASE_URL;
       try {
         process.env.WSLENV = "GOPATH/p:OPENAI_API_KEY/u:EMPTY::AZURE_DEVOPS_EXT_PAT/u";
         process.env.OPENAI_API_KEY = "openai-key";
         process.env.ANTHROPIC_API_KEY = "anthropic-key";
         process.env.TRITONAI_API_KEY = "tritonai-key";
+        process.env.TRITONAI_ONPREM_API_KEY = "on-prem-key";
+        process.env.TRITONAI_FRONTIER_API_KEY = "frontier-key";
         process.env.UCSD_AI_BASE_URL = "https://voice.example.test/v1";
 
         yield* Effect.gen(function* () {
@@ -666,6 +670,8 @@ describe("DesktopBackendConfiguration", () => {
           assert.equal(config.env.OPENAI_API_KEY, "openai-key");
           assert.equal(config.env.ANTHROPIC_API_KEY, "anthropic-key");
           assert.equal(config.env.TRITONAI_API_KEY, "tritonai-key");
+          assert.equal(config.env.TRITONAI_ONPREM_API_KEY, "on-prem-key");
+          assert.equal(config.env.TRITONAI_FRONTIER_API_KEY, "frontier-key");
           assert.equal(config.env.UCSD_AI_BASE_URL, "https://voice.example.test/v1");
           // The existing WSLENV is preserved byte-for-byte (note the empty
           // "::" segment survives — WSL ignores it, so we don't normalize
@@ -673,7 +679,7 @@ describe("DesktopBackendConfiguration", () => {
           // OPENAI_API_KEY is already declared, so it isn't forwarded twice.
           assert.equal(
             config.env.WSLENV,
-            "GOPATH/p:OPENAI_API_KEY/u:EMPTY::AZURE_DEVOPS_EXT_PAT/u:ANTHROPIC_API_KEY:TRITONAI_API_KEY:UCSD_AI_BASE_URL",
+            "GOPATH/p:OPENAI_API_KEY/u:EMPTY::AZURE_DEVOPS_EXT_PAT/u:ANTHROPIC_API_KEY:TRITONAI_API_KEY:TRITONAI_ONPREM_API_KEY:TRITONAI_FRONTIER_API_KEY:UCSD_AI_BASE_URL",
           );
         }).pipe(
           Effect.provide(
@@ -696,6 +702,8 @@ describe("DesktopBackendConfiguration", () => {
         restoreEnv("OPENAI_API_KEY", previousOpenAiKey);
         restoreEnv("ANTHROPIC_API_KEY", previousAnthropicKey);
         restoreEnv("TRITONAI_API_KEY", previousTritonAiKey);
+        restoreEnv("TRITONAI_ONPREM_API_KEY", previousTritonAiOnPremKey);
+        restoreEnv("TRITONAI_FRONTIER_API_KEY", previousTritonAiFrontierKey);
         restoreEnv("UCSD_AI_BASE_URL", previousUcsdAiBaseUrl);
       }
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),

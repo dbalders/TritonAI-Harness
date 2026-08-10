@@ -11,6 +11,8 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
+import { resolveTritonAiServiceApiKey } from "./tritonAiCredential.ts";
+
 export const TRITONAI_KEY_INFO_ENDPOINT = "https://tritonai-api.ucsd.edu/key/info";
 
 const USAGE_REQUEST_TIMEOUT_MS = 15_000;
@@ -44,6 +46,8 @@ const decodeTritonAiKeyInfoResponse = Schema.decodeUnknownEffect(TritonAiKeyInfo
 
 interface TritonAiUsageEnv {
   readonly TRITONAI_API_KEY?: string | undefined;
+  readonly TRITONAI_ONPREM_API_KEY?: string | undefined;
+  readonly TRITONAI_FRONTIER_API_KEY?: string | undefined;
   readonly UCSD_AI_BASE_URL?: string | undefined;
 }
 
@@ -171,14 +175,16 @@ export const fetchTritonAiUsage = Effect.fn("fetchTritonAiUsage")(function* (opt
     options?.env ??
     ({
       TRITONAI_API_KEY: process.env[TRITONAI_API_KEY_ENV],
+      TRITONAI_ONPREM_API_KEY: process.env.TRITONAI_ONPREM_API_KEY,
+      TRITONAI_FRONTIER_API_KEY: process.env.TRITONAI_FRONTIER_API_KEY,
       UCSD_AI_BASE_URL: process.env[UCSD_AI_BASE_URL_ENV],
     } satisfies TritonAiUsageEnv);
-  const apiKey = env.TRITONAI_API_KEY?.trim();
+  const apiKey = resolveTritonAiServiceApiKey(env);
   if (!apiKey) {
     return yield* usageError({
       code: "missing_api_key",
       message:
-        "Usage is not configured. Set TRITONAI_API_KEY on the app server, restart it, and refresh this page.",
+        "Usage is not configured. Add a TritonAI access key in the app setup, restart it, and refresh this page.",
     });
   }
 

@@ -1,7 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off - SHA-256 verifies untrusted skill feed bytes.
 import * as NodeCrypto from "node:crypto";
 
-import { TRITONAI_API_KEY_ENV } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -19,6 +18,7 @@ import {
   managedSkillManifestBlocksMutation,
 } from "./provider/managedSkillManifest.ts";
 import { ServerSettingsService } from "./serverSettings.ts";
+import { resolveTritonAiServiceApiKey } from "./tritonAiCredential.ts";
 
 const MAX_FEED_BYTES = 4 * 1024 * 1024;
 const MAX_SKILL_BYTES = 512 * 1024;
@@ -256,7 +256,7 @@ export const pollSecureSkillsOnce = Effect.fn("pollSecureSkillsOnce")(function* 
     });
     return;
   }
-  const apiKey = options?.apiKey?.trim() || process.env[TRITONAI_API_KEY_ENV]?.trim();
+  const apiKey = options?.apiKey?.trim() || resolveTritonAiServiceApiKey(process.env);
   if (!apiKey) {
     updateSecureSkillsDiagnostics({
       secureSkillsStatus: "missing-credential",
