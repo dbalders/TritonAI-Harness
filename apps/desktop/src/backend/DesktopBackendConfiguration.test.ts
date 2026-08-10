@@ -533,6 +533,38 @@ describe("DesktopBackendConfiguration", () => {
     }),
   );
 
+  it.effect("resolvePrimary applies a split desktop credential override atomically", () =>
+    Effect.gen(function* () {
+      const previousSharedKey = process.env.TRITONAI_API_KEY;
+      const previousOnPremKey = process.env.TRITONAI_ONPREM_API_KEY;
+      const previousFrontierKey = process.env.TRITONAI_FRONTIER_API_KEY;
+      try {
+        process.env.TRITONAI_API_KEY = "old-shared-key";
+        process.env.TRITONAI_ONPREM_API_KEY = "old-on-prem-key";
+        process.env.TRITONAI_FRONTIER_API_KEY = "old-frontier-key";
+
+        yield* withHarness(
+          Effect.gen(function* () {
+            const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+            yield* DesktopTritonAiApiKey.replaceTritonAiCredentials({
+              onPremApiKey: "new-on-prem-key",
+              frontierApiKey: "new-frontier-key",
+            });
+
+            const config = yield* configuration.resolvePrimary;
+            assert.isUndefined(config.env.TRITONAI_API_KEY);
+            assert.equal(config.env.TRITONAI_ONPREM_API_KEY, "new-on-prem-key");
+            assert.equal(config.env.TRITONAI_FRONTIER_API_KEY, "new-frontier-key");
+          }),
+        );
+      } finally {
+        restoreEnv("TRITONAI_API_KEY", previousSharedKey);
+        restoreEnv("TRITONAI_ONPREM_API_KEY", previousOnPremKey);
+        restoreEnv("TRITONAI_FRONTIER_API_KEY", previousFrontierKey);
+      }
+    }),
+  );
+
   it.effect("logs structured context when persisted observability settings cannot be read", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -771,6 +803,56 @@ describe("DesktopBackendConfiguration", () => {
         restoreEnv("ANTHROPIC_API_KEY", previousAnthropicKey);
         restoreEnv("TRITONAI_API_KEY", previousTritonAiKey);
         restoreEnv("UCSD_AI_BASE_URL", previousUcsdAiBaseUrl);
+      }
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("resolveWsl clears inherited shared credentials for a split desktop override", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-desktop-backend-config-test-",
+      });
+      yield* DesktopTritonAiApiKey.replaceTritonAiCredentials({
+        onPremApiKey: "wsl-on-prem-key",
+        frontierApiKey: "wsl-frontier-key",
+      }).pipe(Effect.provide(makeEnvironmentLayer(baseDir)));
+
+      const previousWslEnv = process.env.WSLENV;
+      const previousSharedKey = process.env.TRITONAI_API_KEY;
+      try {
+        process.env.WSLENV = "GOPATH/p";
+        process.env.TRITONAI_API_KEY = "stale-shared-key";
+
+        yield* Effect.gen(function* () {
+          const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+          const config = yield* configuration.resolveWsl({ port: 5050, distro: null });
+
+          assert.isUndefined(config.env.TRITONAI_API_KEY);
+          assert.equal(config.env.TRITONAI_ONPREM_API_KEY, "wsl-on-prem-key");
+          assert.equal(config.env.TRITONAI_FRONTIER_API_KEY, "wsl-frontier-key");
+          assert.notInclude(config.env.WSLENV ?? "", "TRITONAI_API_KEY");
+          assert.include(config.env.WSLENV ?? "", "TRITONAI_ONPREM_API_KEY");
+          assert.include(config.env.WSLENV ?? "", "TRITONAI_FRONTIER_API_KEY");
+        }).pipe(
+          Effect.provide(
+            DesktopBackendConfiguration.layer.pipe(
+              Layer.provideMerge(desktopTestServicesLayer),
+              Layer.provideMerge(DesktopAppSettings.layerTest()),
+              Layer.provideMerge(
+                DesktopWslEnvironment.layerTest({
+                  isAvailable: true,
+                  windowsToWslPath: () => Option.some("/mnt/c/repo/apps/server/src/index.ts"),
+                  getDistroIp: () => Option.some("172.27.0.99"),
+                }),
+              ),
+              Layer.provideMerge(makeEnvironmentLayer(baseDir, { platform: "win32" })),
+            ),
+          ),
+        );
+      } finally {
+        restoreEnv("WSLENV", previousWslEnv);
+        restoreEnv("TRITONAI_API_KEY", previousSharedKey);
       }
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );

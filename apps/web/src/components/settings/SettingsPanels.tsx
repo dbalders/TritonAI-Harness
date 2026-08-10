@@ -114,6 +114,7 @@ import {
   type ProviderUpdateCandidate,
 } from "../ProviderUpdateLaunchNotification.logic";
 import { ProviderInstanceCard } from "./ProviderInstanceCard";
+import { TritonAiCredentialSetting } from "./TritonAiCredentialSetting";
 import { DRIVER_OPTIONS, getDriverOption } from "./providerDriverMeta";
 import {
   backgroundActivitySharedPolicySettings,
@@ -1924,6 +1925,7 @@ export function ProviderSettingsPanel() {
 
   return (
     <SettingsPageContainer>
+      <TritonAiCredentialSetting />
       <SettingsSection
         title="TritonAI Runtime"
         headerAction={

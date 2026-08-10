@@ -120,8 +120,7 @@ function httpFailure(status: number): ServerTritonAiUsageError {
   if (status === 401 || status === 403) {
     return usageError({
       code: "key_rejected",
-      message:
-        "The configured TritonAI API key was rejected. Verify TRITONAI_API_KEY on the app server, restart it, and try again.",
+      message: "The configured TritonAI access key was rejected. Replace it and try again.",
       status,
     });
   }
@@ -183,8 +182,7 @@ export const fetchTritonAiUsage = Effect.fn("fetchTritonAiUsage")(function* (opt
   if (!apiKey) {
     return yield* usageError({
       code: "missing_api_key",
-      message:
-        "Usage is not configured. Add a TritonAI access key in the app setup, restart it, and refresh this page.",
+      message: "Usage is not configured. Add a TritonAI access key, then refresh this page.",
     });
   }
 

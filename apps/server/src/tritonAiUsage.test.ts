@@ -216,7 +216,7 @@ describe("fetchTritonAiUsage", () => {
 
       assert.equal(error.code, "key_rejected");
       assert.equal(error.status, 401);
-      assert.match(error.message, /Verify TRITONAI_API_KEY/u);
+      assert.match(error.message, /Replace it and try again/u);
     }),
   );
 

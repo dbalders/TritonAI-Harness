@@ -44,8 +44,10 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   },
   getLocalEnvironmentBearerToken: () =>
     ipcRenderer.invoke(IpcChannels.GET_LOCAL_ENVIRONMENT_BEARER_TOKEN_CHANNEL),
-  replaceTritonAiApiKey: (apiKey) =>
-    ipcRenderer.invoke(IpcChannels.REPLACE_TRITONAI_API_KEY_CHANNEL, apiKey),
+  getTritonAiCredentialStatus: () =>
+    ipcRenderer.invoke(IpcChannels.GET_TRITONAI_CREDENTIAL_STATUS_CHANNEL),
+  updateTritonAiCredentials: (apiKeys) =>
+    ipcRenderer.invoke(IpcChannels.UPDATE_TRITONAI_CREDENTIALS_CHANNEL, apiKeys),
   getClientSettings: () => ipcRenderer.invoke(IpcChannels.GET_CLIENT_SETTINGS_CHANNEL),
   setClientSettings: (settings) =>
     ipcRenderer.invoke(IpcChannels.SET_CLIENT_SETTINGS_CHANNEL, settings),
