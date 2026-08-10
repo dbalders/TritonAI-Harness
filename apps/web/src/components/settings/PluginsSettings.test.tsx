@@ -22,9 +22,14 @@ import {
   integrationNeedsConnectionAction,
   reconcileConnectionAttentionForIntegration,
   findLucidPlugin,
+  lucidPluginNeedsAuthorization,
+  lucidPluginUninstallInput,
+  readLucidAuthHandoff,
+  remotePluginCatalogError,
   safeLucidAuthUrl,
   shouldExpandIntegrationCard,
   shouldFocusConnectionAction,
+  writeLucidAuthHandoff,
 } from "./PluginsSettings.tsx";
 
 const lucidPlugin = (overrides: Partial<ServerPluginSummary> = {}): ServerPluginSummary => ({
@@ -255,6 +260,49 @@ describe("Lucid hosted Codex plugin", () => {
     );
     expect(safeLucidAuthUrl("https://evil.example/apps/lucid/fake")).toBe(LUCID_AUTH_URL);
     expect(safeLucidAuthUrl("not a url")).toBe(LUCID_AUTH_URL);
+  });
+
+  it("recovers the sign-in action from an installed ON_INSTALL catalog entry", () => {
+    expect(lucidPluginNeedsAuthorization(lucidPlugin({ installed: true }))).toBe(true);
+    expect(
+      lucidPluginNeedsAuthorization(lucidPlugin({ installed: true, authPolicy: "ON_USE" })),
+    ).toBe(false);
+    expect(lucidPluginNeedsAuthorization(undefined)).toBe(false);
+  });
+
+  it("preserves a validated sign-in handoff across a Plugins screen remount", () => {
+    const values = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => values.get(key) ?? null,
+      removeItem: (key: string) => values.delete(key),
+      setItem: (key: string, value: string) => values.set(key, value),
+    };
+    const authUrl = `${LUCID_AUTH_URL}?continue=true`;
+
+    writeLucidAuthHandoff(storage, "local", { attention: true, authUrl });
+
+    expect(readLucidAuthHandoff(storage, "local")).toEqual({ attention: true, authUrl });
+    writeLucidAuthHandoff(storage, "local", null);
+    expect(readLucidAuthHandoff(storage, "local")).toBeNull();
+  });
+
+  it("uninstalls Lucid with its installed catalog ID instead of its remote ID", () => {
+    const plugin = lucidPlugin();
+    expect(plugin.id).not.toBe(LUCID_REMOTE_PLUGIN_ID);
+    expect(lucidPluginUninstallInput(plugin)).toEqual({ pluginId: plugin.id });
+  });
+
+  it("keeps remote catalog errors visible after mutations", () => {
+    expect(
+      remotePluginCatalogError({
+        marketplaces: [],
+        marketplaceLoadErrors: [
+          { marketplacePath: "local", message: "Local warning" },
+          { marketplacePath: "remote plugin catalog", message: "Authentication required." },
+        ],
+        featuredPluginIds: [],
+      }),
+    ).toBe("Authentication required.");
   });
 
   it("renders a reversible install toggle and the OAuth handoff after installation", () => {

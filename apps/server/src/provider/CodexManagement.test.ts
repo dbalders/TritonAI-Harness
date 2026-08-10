@@ -1,7 +1,7 @@
 import type { ServerPluginSummary, ServerPluginsListResult } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { filterPluginListResult } from "./CodexManagement.ts";
+import { filterPluginListResult, mapPluginInstallResponse } from "./CodexManagement.ts";
 
 const plugin = (overrides: Partial<ServerPluginSummary>): ServerPluginSummary => ({
   id: "local-plugin@local",
@@ -45,12 +45,54 @@ describe("filterPluginListResult", () => {
     });
   });
 
-  it("returns the original result when no allowlist is requested", () => {
+  it("returns the original result when no response filter is requested", () => {
     const result: ServerPluginsListResult = {
       marketplaces: [],
       marketplaceLoadErrors: [],
       featuredPluginIds: [],
     };
     expect(filterPluginListResult(result, undefined)).toBe(result);
+  });
+});
+
+describe("mapPluginInstallResponse", () => {
+  it("preserves valid authorization metadata and removes incomplete apps", () => {
+    const plugins: ServerPluginsListResult = {
+      marketplaces: [],
+      marketplaceLoadErrors: [],
+      featuredPluginIds: [],
+    };
+
+    expect(
+      mapPluginInstallResponse(
+        {
+          authPolicy: "ON_INSTALL",
+          appsNeedingAuth: [
+            {
+              id: " asdk_app_lucid ",
+              name: " Lucid ",
+              description: " Diagram with Lucid. ",
+              category: " Productivity ",
+              installUrl: " https://chatgpt.com/apps/lucid/asdk_app_lucid ",
+            },
+            { id: "", name: "Missing ID" },
+            { id: "missing-name", name: "  " },
+          ],
+        },
+        plugins,
+      ),
+    ).toEqual({
+      plugins,
+      authPolicy: "ON_INSTALL",
+      appsNeedingAuth: [
+        {
+          id: "asdk_app_lucid",
+          name: "Lucid",
+          description: "Diagram with Lucid.",
+          category: "Productivity",
+          installUrl: "https://chatgpt.com/apps/lucid/asdk_app_lucid",
+        },
+      ],
+    });
   });
 });

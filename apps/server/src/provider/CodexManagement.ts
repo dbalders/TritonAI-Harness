@@ -222,7 +222,7 @@ export function filterPluginListResult(
   };
 }
 
-function mapPluginInstallResponse(
+export function mapPluginInstallResponse(
   response: CodexSchema.V2PluginInstallResponse,
   plugins: ServerPluginsListResult,
 ): ServerPluginInstallResult {

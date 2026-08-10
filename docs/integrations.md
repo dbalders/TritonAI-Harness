@@ -262,9 +262,11 @@ marketplace.
 
 ## Plugins screen
 
-Settings → Plugins renders approved hosted plugins separately from included packages. Hosted-plugin
-switches install or uninstall only the exact allowlisted remote package and hand any install-time
+Settings → Plugins renders approved hosted plugins separately from included packages. The Lucid
+control selects the exact remote catalog entry exposed by this UI and hands any install-time
 authorization URL to the system browser after validating its expected ChatGPT origin and app path.
+The server-side catalog filter limits this response for the caller; it is response shaping, not an
+authorization boundary for the permission-controlled generic plugin-management RPC.
 Included-package rows remain scannable and their top-level switch remains the master control.
 Expanding a row shows its connection,
 one **Access** switch per user-facing capability, and read-only derived Tool and Skill status. Write

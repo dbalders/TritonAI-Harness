@@ -3,6 +3,7 @@ import type {
   IntegrationSummary,
   IntegrationsListResult,
   ServerPluginSummary,
+  ServerPluginUninstallInput,
   ServerPluginsListResult,
 } from "@t3tools/contracts";
 import {
@@ -185,6 +186,12 @@ export const LUCID_REMOTE_PLUGIN_ID = "plugin_asdk_app_69c597eebdd4819194fd9c4d0
 export const LUCID_REMOTE_MARKETPLACE = "openai-curated-remote";
 export const LUCID_APP_ID = "asdk_app_69c597eebdd4819194fd9c4d03acedb6";
 export const LUCID_AUTH_URL = `https://chatgpt.com/apps/lucid/${LUCID_APP_ID}`;
+const LUCID_AUTH_HANDOFF_STORAGE_PREFIX = "t3code:lucid-auth-handoff:";
+
+interface LucidAuthHandoffState {
+  readonly attention: boolean;
+  readonly authUrl: string;
+}
 
 export function findLucidPlugin(result: ServerPluginsListResult): ServerPluginSummary | undefined {
   return result.marketplaces
@@ -202,6 +209,72 @@ export function safeLucidAuthUrl(candidate: string | undefined): string {
   } catch {
     return LUCID_AUTH_URL;
   }
+}
+
+export function lucidPluginNeedsAuthorization(plugin: ServerPluginSummary | undefined): boolean {
+  return plugin?.installed === true && plugin.authPolicy === "ON_INSTALL";
+}
+
+export function readLucidAuthHandoff(
+  storage: Pick<Storage, "getItem"> | undefined,
+  environmentId: string,
+): LucidAuthHandoffState | null {
+  try {
+    const raw = storage?.getItem(`${LUCID_AUTH_HANDOFF_STORAGE_PREFIX}${environmentId}`);
+    if (!raw) return null;
+    const parsed: unknown = JSON.parse(raw);
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      !("attention" in parsed) ||
+      typeof parsed.attention !== "boolean" ||
+      !("authUrl" in parsed) ||
+      typeof parsed.authUrl !== "string"
+    ) {
+      return null;
+    }
+    return { attention: parsed.attention, authUrl: safeLucidAuthUrl(parsed.authUrl) };
+  } catch {
+    return null;
+  }
+}
+
+export function writeLucidAuthHandoff(
+  storage: Pick<Storage, "removeItem" | "setItem"> | undefined,
+  environmentId: string,
+  state: LucidAuthHandoffState | null,
+): void {
+  try {
+    const key = `${LUCID_AUTH_HANDOFF_STORAGE_PREFIX}${environmentId}`;
+    if (state === null) {
+      storage?.removeItem(key);
+    } else {
+      storage?.setItem(key, JSON.stringify({ ...state, authUrl: safeLucidAuthUrl(state.authUrl) }));
+    }
+  } catch {
+    // Browser storage may be disabled. The known-safe fallback remains available in memory.
+  }
+}
+
+function lucidAuthHandoffStorage(): Storage | undefined {
+  if (typeof window === "undefined") return undefined;
+  try {
+    return window.sessionStorage;
+  } catch {
+    return undefined;
+  }
+}
+
+export function lucidPluginUninstallInput(plugin: ServerPluginSummary): ServerPluginUninstallInput {
+  return { pluginId: plugin.id };
+}
+
+export function remotePluginCatalogError(result: ServerPluginsListResult): string | null {
+  return (
+    result.marketplaceLoadErrors.find(
+      ({ marketplacePath }) => marketplacePath === "remote plugin catalog",
+    )?.message ?? null
+  );
 }
 
 function IntegrationFlowPoller({
@@ -766,12 +839,14 @@ export function LucidCodexPluginCard({
   busy,
   authAttention,
   authUrl,
+  onAuthHandoff,
   onToggle,
 }: {
   readonly plugin: ServerPluginSummary;
   readonly busy: boolean;
   readonly authAttention: boolean;
   readonly authUrl: string;
+  readonly onAuthHandoff?: () => void;
   readonly onToggle: (enabled: boolean) => void;
 }) {
   const name = plugin.displayName ?? "Lucid";
@@ -820,7 +895,9 @@ export function LucidCodexPluginCard({
               <Button
                 size="sm"
                 variant="outline"
-                render={<a href={authUrl} target="_blank" rel="noreferrer" />}
+                render={
+                  <a href={authUrl} target="_blank" rel="noreferrer" onClick={onAuthHandoff} />
+                }
               >
                 {authAttention ? "Finish sign-in" : "Connect or manage Lucid"}
                 <ExternalLinkIcon />
@@ -905,8 +982,12 @@ export function PluginsSettingsPanel() {
     setBusyIds(new Set());
     setErrors({});
     setLucidError(null);
-    setLucidAuthAttention(false);
-    setLucidAuthUrl(LUCID_AUTH_URL);
+    const persistedHandoff =
+      environmentId === null
+        ? null
+        : readLucidAuthHandoff(lucidAuthHandoffStorage(), environmentId);
+    setLucidAuthAttention(persistedHandoff?.attention ?? false);
+    setLucidAuthUrl(persistedHandoff?.authUrl ?? LUCID_AUTH_URL);
     setLucidBusy(false);
     setConnectionAttentionState({ attention: null, announcement: "" });
     connectionAttentionSequenceRef.current = 0;
@@ -951,10 +1032,17 @@ export function PluginsSettingsPanel() {
       );
       if (environmentIdRef.current !== targetEnvironmentId) return;
       setCodexPluginData(result);
-      const loadError = result.marketplaceLoadErrors.find(
-        ({ marketplacePath }) => marketplacePath === "remote plugin catalog",
-      );
-      setLucidError(loadError?.message ?? null);
+      setLucidError(remotePluginCatalogError(result));
+      const plugin = findLucidPlugin(result);
+      const persistedHandoff = readLucidAuthHandoff(lucidAuthHandoffStorage(), targetEnvironmentId);
+      if (plugin?.installed) {
+        setLucidAuthAttention(persistedHandoff?.attention ?? lucidPluginNeedsAuthorization(plugin));
+        setLucidAuthUrl(persistedHandoff?.authUrl ?? LUCID_AUTH_URL);
+      } else {
+        writeLucidAuthHandoff(lucidAuthHandoffStorage(), targetEnvironmentId, null);
+        setLucidAuthAttention(false);
+        setLucidAuthUrl(LUCID_AUTH_URL);
+      }
     } catch (cause) {
       if (environmentIdRef.current !== targetEnvironmentId) return;
       setLucidError(errorMessage(cause));
@@ -968,7 +1056,7 @@ export function PluginsSettingsPanel() {
   }, [loadLucid]);
 
   const toggleLucid = useCallback(
-    async (enabled: boolean) => {
+    async (plugin: ServerPluginSummary, enabled: boolean) => {
       if (!environmentId) return;
       const targetEnvironmentId = environmentId;
       setLucidBusy(true);
@@ -989,17 +1077,25 @@ export function PluginsSettingsPanel() {
           const lucidApp = result.appsNeedingAuth.find(
             ({ id, name }) => id === LUCID_APP_ID || name.toLowerCase() === "lucid",
           );
-          setLucidAuthUrl(safeLucidAuthUrl(lucidApp?.installUrl));
-          setLucidAuthAttention(result.authPolicy === "ON_INSTALL" && lucidApp !== undefined);
+          const authUrl = safeLucidAuthUrl(lucidApp?.installUrl);
+          const authAttention = result.authPolicy === "ON_INSTALL" && lucidApp !== undefined;
+          setLucidAuthUrl(authUrl);
+          setLucidAuthAttention(authAttention);
+          writeLucidAuthHandoff(lucidAuthHandoffStorage(), targetEnvironmentId, {
+            attention: authAttention,
+            authUrl,
+          });
         } else {
           const result = unwrap(
             await uninstallCodexPluginCommand({
               environmentId: targetEnvironmentId,
-              input: { pluginId: LUCID_REMOTE_PLUGIN_ID },
+              input: lucidPluginUninstallInput(plugin),
             }),
           );
           if (environmentIdRef.current !== targetEnvironmentId) return;
           setCodexPluginData(result);
+          setLucidError(remotePluginCatalogError(result));
+          writeLucidAuthHandoff(lucidAuthHandoffStorage(), targetEnvironmentId, null);
           setLucidAuthAttention(false);
           setLucidAuthUrl(LUCID_AUTH_URL);
         }
@@ -1012,6 +1108,15 @@ export function PluginsSettingsPanel() {
     },
     [environmentId, installCodexPluginCommand, uninstallCodexPluginCommand],
   );
+
+  const acknowledgeLucidAuthHandoff = useCallback(() => {
+    setLucidAuthAttention(false);
+    if (environmentId === null) return;
+    writeLucidAuthHandoff(lucidAuthHandoffStorage(), environmentId, {
+      attention: false,
+      authUrl: lucidAuthUrl,
+    });
+  }, [environmentId, lucidAuthUrl]);
 
   const pollFlow = useCallback<PollIntegrationFlow>(
     async (id, flow, cancelled) => {
@@ -1375,7 +1480,8 @@ export function PluginsSettingsPanel() {
             busy={lucidBusy}
             authAttention={lucidAuthAttention}
             authUrl={lucidAuthUrl}
-            onToggle={(enabled) => void toggleLucid(enabled)}
+            onAuthHandoff={acknowledgeLucidAuthHandoff}
+            onToggle={(enabled) => void toggleLucid(lucidPlugin, enabled)}
           />
         ) : (
           <div className="p-6 text-center text-xs text-muted-foreground">

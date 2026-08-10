@@ -76,7 +76,7 @@ describe("ServerProvider", () => {
 });
 
 describe("Codex plugin contracts", () => {
-  it("defaults remote discovery while accepting an exact plugin allowlist", () => {
+  it("defaults remote discovery while accepting an exact plugin response filter", () => {
     expect(decodePluginsListInput({ pluginIds: ["plugin_asdk_lucid"] })).toEqual({
       includeRemote: true,
       pluginIds: ["plugin_asdk_lucid"],
