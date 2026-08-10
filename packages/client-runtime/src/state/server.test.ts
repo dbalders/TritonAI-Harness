@@ -84,11 +84,12 @@ describe("server state projection", () => {
     const snapshot = applyServerConfigProjection(Option.none(), snapshotEvent(CONFIG));
     const diagnostics = {
       applicationVersion: "1.2.3",
-      schemaVersion: 1,
+      schemaVersion: 2,
       policyVersion: 1,
       configDigest: "0".repeat(64),
       loaded: true,
       managedProviderInstanceId: "codex",
+      managedProviderInstanceIds: ["codex", "codex_frontier"],
       migrationStatus: "completed",
       managedCategories: [],
       secureSkillsStatus: "current",

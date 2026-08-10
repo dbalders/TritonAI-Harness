@@ -25,9 +25,9 @@ import packageJson from "../package.json" with { type: "json" };
 declare const __TRITONAI_BUILD_MANAGED_CONFIG__: unknown;
 declare const __TRITONAI_BUILD_MANAGED_CONFIG_DIGEST__: string | undefined;
 
-const MANAGED_POLICY_MIGRATION_VERSION = 1;
+const MANAGED_POLICY_MIGRATION_VERSION = 2;
 const MANAGED_POLICY_MARKER_KEY = "tritonAiManagedPolicy";
-const MANAGED_PROVIDER_INSTANCE_ID = ProviderInstanceId.make("codex");
+const FRONTIER_PROVIDER_COLLISION_RENAME_BASE = "codex_frontier_personal";
 const managedCategories = [
   "provider identity and routing",
   "managed Codex binary and home",
@@ -92,6 +92,7 @@ export const managedConfig = loadedManagedConfig.config;
 export const managedConfigDigest = loadedManagedConfig.digest;
 
 let migrationStatus: TritonAiManagedPolicyDiagnostics["migrationStatus"] = "not-needed";
+let managedProviderInstanceRenames: Readonly<Record<string, string>> = {};
 let managedRuntimeAnchor = {
   binaryPath: DEFAULT_SERVER_SETTINGS.providers.codex.binaryPath,
   homePath: DEFAULT_TRITONAI_CODEX_HOME_PATH,
@@ -119,7 +120,8 @@ export function getManagedPolicyDiagnostics(): TritonAiManagedPolicyDiagnostics 
     policyVersion: managedConfig.policyVersion,
     configDigest: managedConfigDigest,
     loaded: true,
-    managedProviderInstanceId: managedConfig.provider.instanceId,
+    managedProviderInstanceId: managedConfig.provider.routes.onPrem.instanceId,
+    managedProviderInstanceIds: managedRoutes(managedConfig).map((route) => route.instanceId),
     migrationStatus,
     managedCategories: [...managedCategories],
     ...secureSkillsDiagnostics,
@@ -149,11 +151,84 @@ export const managedPolicyDiagnosticsChanges = Stream.callback<TritonAiManagedPo
   { bufferSize: 8, strategy: "sliding" },
 );
 
+type ManagedRoute =
+  | ManagedConfig["provider"]["routes"]["onPrem"]
+  | ManagedConfig["provider"]["routes"]["frontier"];
+
+function managedRoutes(config: ManagedConfig): readonly [ManagedRoute, ManagedRoute] {
+  return [config.provider.routes.onPrem, config.provider.routes.frontier];
+}
+
+function isManagedProviderEnvironmentName(name: string, config: ManagedConfig): boolean {
+  const normalized = name.toUpperCase();
+  return [
+    UCSD_AI_BASE_URL_ENV,
+    config.provider.sharedApiKeyEnvironmentVariable,
+    config.provider.apiKeySourceEnvironmentVariable,
+    ...managedRoutes(config).map((route) => route.apiKeyEnvironmentVariable),
+  ].some((managedName) => managedName.toUpperCase() === normalized);
+}
+
+function nextPersonalFrontierInstanceId(root: JsonRecord): string {
+  const instances = record(root.providerInstances);
+  let candidate = `${FRONTIER_PROVIDER_COLLISION_RENAME_BASE}_${NodeCrypto.randomUUID()}`;
+  if (!instances) return candidate;
+  while (Object.hasOwn(instances, candidate)) {
+    candidate = `${FRONTIER_PROVIDER_COLLISION_RENAME_BASE}_${NodeCrypto.randomUUID()}`;
+  }
+  return candidate;
+}
+
+function preserveFrontierProviderCollision(
+  root: JsonRecord,
+  candidate: string,
+): Record<string, string> | undefined {
+  const instances = record(root.providerInstances);
+  const frontierInstanceId = managedConfig.provider.routes.frontier.instanceId;
+  if (!instances || !Object.hasOwn(instances, frontierInstanceId)) return undefined;
+
+  instances[candidate] = instances[frontierInstanceId];
+  delete instances[frontierInstanceId];
+  for (const selectionKey of [
+    "textGenerationModelSelection",
+    "sourceControlWriterModelSelection",
+  ]) {
+    const selection = record(root[selectionKey]);
+    if (selection?.instanceId === frontierInstanceId) selection.instanceId = candidate;
+  }
+  return { [frontierInstanceId]: candidate };
+}
+
+function providerInstanceReferenceRenamesFromMarker(
+  marker: JsonRecord | null,
+): Record<string, string> {
+  // This field was introduced with the durable-reference migration. Older
+  // collision markers intentionally do not qualify: they may already have
+  // produced managed frontier references that cannot be distinguished safely.
+  const renames = record(marker?.providerInstanceReferenceRenames);
+  const frontierInstanceId = managedConfig.provider.routes.frontier.instanceId;
+  const replacement = renames?.[frontierInstanceId];
+  if (
+    typeof replacement !== "string" ||
+    !/^codex_frontier_personal(?:_(?:(?:[2-9]|[1-9][0-9]+)|[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}))?$/.test(
+      replacement,
+    )
+  ) {
+    return {};
+  }
+  return { [frontierInstanceId]: replacement };
+}
+
+/** Return the collision renames that must also be applied to durable routing references. */
+export function getManagedProviderInstanceRenames(): Readonly<Record<string, string>> {
+  return { ...managedProviderInstanceRenames };
+}
+
 function modelMetadata(
-  config: ManagedConfig,
+  models: ManagedConfig["models"]["catalog"],
 ): ServerSettings["providers"]["codex"]["customModelMetadata"] {
   return Object.fromEntries(
-    config.models.catalog.map((model) => [
+    models.map((model) => [
       model.id,
       {
         name: model.name,
@@ -164,21 +239,46 @@ function modelMetadata(
   );
 }
 
+function availableManagedRouteIds(
+  config: ManagedConfig,
+  environment: NodeJS.ProcessEnv,
+): ReadonlySet<string> {
+  const shared = environment[config.provider.sharedApiKeyEnvironmentVariable]?.trim();
+  if (shared) return new Set(managedRoutes(config).map((route) => route.id));
+
+  const available = new Set(
+    managedRoutes(config)
+      .filter((route) => Boolean(environment[route.apiKeyEnvironmentVariable]?.trim()))
+      .map((route) => route.id),
+  );
+  return available;
+}
+
 function resolveManagedSelection(
   selection: ServerSettings["textGenerationModelSelection"],
   config: ManagedConfig,
   selectionWasPersisted: boolean,
+  availableModels: ManagedConfig["models"]["catalog"],
 ): ServerSettings["textGenerationModelSelection"] {
-  const catalog = new Set(config.models.catalog.map((model) => model.id));
+  const catalog = new Set(availableModels.map((model) => model.id));
   const selectedModel = selectionWasPersisted ? selection.model : config.models.default;
-  const replacement = Object.hasOwn(config.models.replacements, selectedModel)
+  const configuredReplacement = Object.hasOwn(config.models.replacements, selectedModel)
     ? config.models.replacements[selectedModel]
     : undefined;
-  const model =
-    replacement ?? (catalog.has(selectedModel) ? selectedModel : config.models.restrictedFallback);
+  const replacement =
+    configuredReplacement && catalog.has(configuredReplacement) ? configuredReplacement : undefined;
+  const fallback = catalog.has(config.models.restrictedFallback)
+    ? config.models.restrictedFallback
+    : (availableModels[0]?.id ?? config.models.default);
+  const model = replacement ?? (catalog.has(selectedModel) ? selectedModel : fallback);
+  const managedModel = config.models.catalog.find((candidate) => candidate.id === model);
+  const route =
+    managedModel?.route === "frontier"
+      ? config.provider.routes.frontier
+      : config.provider.routes.onPrem;
   return {
     ...selection,
-    instanceId: ProviderInstanceId.make(config.provider.instanceId),
+    instanceId: ProviderInstanceId.make(route.instanceId),
     model,
   };
 }
@@ -186,33 +286,68 @@ function resolveManagedSelection(
 export function applyManagedHarnessPolicy(
   persisted: ServerSettings,
   config: ManagedConfig = managedConfig,
-  options: { readonly textGenerationSelectionWasPersisted?: boolean } = {},
+  options: {
+    readonly textGenerationSelectionWasPersisted?: boolean;
+    readonly credentialEnvironment?: NodeJS.ProcessEnv;
+  } = {},
 ): ServerSettings {
-  const managedInstanceId = ProviderInstanceId.make(config.provider.instanceId);
-  const existingInstance = persisted.providerInstances[managedInstanceId];
-  const existingConfig = record(existingInstance?.config) ?? {};
-  const existingEnvironment = existingInstance?.environment ?? [];
-  const environment = [
-    ...existingEnvironment.filter(
-      (variable) =>
-        variable.name.toUpperCase() !== UCSD_AI_BASE_URL_ENV &&
-        variable.name.toUpperCase() !== config.provider.apiKeyEnvironmentVariable,
-    ),
-    { name: UCSD_AI_BASE_URL_ENV, value: config.provider.baseUrl, sensitive: false },
-  ];
-  const customModels = config.models.catalog.map((model) => model.id);
-  const customModelMetadata = modelMetadata(config);
-  const managedCodexConfig = {
-    ...existingConfig,
-    enabled: true,
-    binaryPath: managedRuntimeAnchor.binaryPath,
-    homePath: managedRuntimeAnchor.homePath,
-    customModels,
-    customModelMetadata,
-  };
+  const availableRouteIds = options.credentialEnvironment
+    ? availableManagedRouteIds(config, options.credentialEnvironment)
+    : new Set(managedRoutes(config).map((route) => route.id));
+  const availableModels = config.models.catalog.filter((model) =>
+    availableRouteIds.has(model.route),
+  );
+  const legacyDefaultRouteModels = availableModels.filter(
+    (model) => model.route === config.provider.routes.onPrem.id,
+  );
+  const customModels = legacyDefaultRouteModels.map((model) => model.id);
+  const customModelMetadata = modelMetadata(legacyDefaultRouteModels);
+  const managedProviderInstances = Object.fromEntries(
+    managedRoutes(config).map((route) => {
+      const managedInstanceId = ProviderInstanceId.make(route.instanceId);
+      const existingInstance = persisted.providerInstances[managedInstanceId];
+      const existingConfig = record(existingInstance?.config) ?? {};
+      const routeModels = availableModels.filter((model) => model.route === route.id);
+      const enabled = availableRouteIds.has(route.id);
+      const routeEnvironment = [
+        ...(existingInstance?.environment ?? []).filter(
+          (variable) => !isManagedProviderEnvironmentName(variable.name, config),
+        ),
+        { name: UCSD_AI_BASE_URL_ENV, value: config.provider.baseUrl, sensitive: false },
+        {
+          name: config.provider.apiKeySourceEnvironmentVariable,
+          value: route.apiKeyEnvironmentVariable,
+          sensitive: false,
+        },
+      ];
+      return [
+        managedInstanceId,
+        {
+          ...existingInstance,
+          driver: ProviderDriverKind.make(config.provider.driver),
+          displayName: existingInstance?.displayName ?? route.displayName,
+          enabled,
+          config: {
+            ...existingConfig,
+            enabled,
+            binaryPath: managedRuntimeAnchor.binaryPath,
+            homePath: managedRuntimeAnchor.homePath,
+            customModels: routeModels.map((model) => model.id),
+            customModelMetadata: modelMetadata(routeModels),
+          },
+          environment: routeEnvironment,
+        },
+      ];
+    }),
+  );
 
   const sourceControlWriterModelSelection = persisted.sourceControlWriterModelSelection
-    ? resolveManagedSelection(persisted.sourceControlWriterModelSelection, config, true)
+    ? resolveManagedSelection(
+        persisted.sourceControlWriterModelSelection,
+        config,
+        true,
+        availableModels,
+      )
     : null;
 
   return {
@@ -230,18 +365,13 @@ export function applyManagedHarnessPolicy(
     },
     providerInstances: {
       ...persisted.providerInstances,
-      [managedInstanceId]: {
-        ...existingInstance,
-        driver: ProviderDriverKind.make(config.provider.driver),
-        enabled: true,
-        config: managedCodexConfig,
-        environment,
-      },
+      ...managedProviderInstances,
     },
     textGenerationModelSelection: resolveManagedSelection(
       persisted.textGenerationModelSelection,
       config,
       options.textGenerationSelectionWasPersisted ?? true,
+      availableModels,
     ),
     sourceControlWriterModelSelection,
   };
@@ -249,42 +379,48 @@ export function applyManagedHarnessPolicy(
 
 /** Remove only fields owned by the Harness overlay before settings are persisted. */
 export function stripManagedFieldsForPersistence(settings: ServerSettings): ServerSettings {
-  const managedInstance = settings.providerInstances[MANAGED_PROVIDER_INSTANCE_ID];
-  const managedInstanceConfig = record(managedInstance?.config) ?? {};
-  const {
-    enabled: _enabled,
-    binaryPath: _binaryPath,
-    homePath: _homePath,
-    customModels: _customModels,
-    customModelMetadata: _customModelMetadata,
-    ...userInstanceConfig
-  } = managedInstanceConfig;
-  const userEnvironment = (managedInstance?.environment ?? []).filter(
-    (variable) =>
-      variable.name.toUpperCase() !== UCSD_AI_BASE_URL_ENV &&
-      variable.name.toUpperCase() !== managedConfig.provider.apiKeyEnvironmentVariable,
-  );
-  const hasUserInstanceState =
-    Object.keys(userInstanceConfig).length > 0 ||
-    userEnvironment.length > 0 ||
-    managedInstance?.displayName !== undefined ||
-    managedInstance?.accentColor !== undefined;
   const providerInstances = { ...settings.providerInstances };
-  if (hasUserInstanceState && managedInstance) {
+  for (const route of managedRoutes(managedConfig)) {
+    const managedInstanceId = ProviderInstanceId.make(route.instanceId);
+    const managedInstance = settings.providerInstances[managedInstanceId];
+    const managedInstanceConfig = record(managedInstance?.config) ?? {};
     const {
-      enabled: _instanceEnabled,
-      config: _instanceConfig,
-      environment: _instanceEnvironment,
-      ...userInstanceEnvelope
-    } = managedInstance;
-    providerInstances[MANAGED_PROVIDER_INSTANCE_ID] = {
-      ...userInstanceEnvelope,
-      driver: ProviderDriverKind.make("codex"),
-      ...(Object.keys(userInstanceConfig).length > 0 ? { config: userInstanceConfig } : {}),
-      ...(userEnvironment.length > 0 ? { environment: userEnvironment } : {}),
-    };
-  } else {
-    delete providerInstances[MANAGED_PROVIDER_INSTANCE_ID];
+      enabled: _enabled,
+      binaryPath: _binaryPath,
+      homePath: _homePath,
+      customModels: _customModels,
+      customModelMetadata: _customModelMetadata,
+      ...userInstanceConfig
+    } = managedInstanceConfig;
+    const userEnvironment = (managedInstance?.environment ?? []).filter(
+      (variable) => !isManagedProviderEnvironmentName(variable.name, managedConfig),
+    );
+    const hasUserInstanceState =
+      Object.keys(userInstanceConfig).length > 0 ||
+      userEnvironment.length > 0 ||
+      (managedInstance?.displayName !== undefined &&
+        managedInstance.displayName !== route.displayName) ||
+      managedInstance?.accentColor !== undefined;
+    if (hasUserInstanceState && managedInstance) {
+      const {
+        enabled: _instanceEnabled,
+        displayName: _instanceDisplayName,
+        config: _instanceConfig,
+        environment: _instanceEnvironment,
+        ...userInstanceEnvelope
+      } = managedInstance;
+      providerInstances[managedInstanceId] = {
+        ...userInstanceEnvelope,
+        driver: ProviderDriverKind.make("codex"),
+        ...(managedInstance.displayName !== route.displayName
+          ? { displayName: managedInstance.displayName }
+          : {}),
+        ...(Object.keys(userInstanceConfig).length > 0 ? { config: userInstanceConfig } : {}),
+        ...(userEnvironment.length > 0 ? { environment: userEnvironment } : {}),
+      };
+    } else {
+      delete providerInstances[managedInstanceId];
+    }
   }
 
   return {
@@ -322,9 +458,13 @@ export function migrateLegacyInstallerManagedSettings(
   input: unknown,
 ): LegacyManagedSettingsMigrationResult {
   const root = record(input);
-  if (!root) return { document: input, migrated: false };
+  if (!root) {
+    managedProviderInstanceRenames = {};
+    return { document: input, migrated: false };
+  }
   const marker = record(root[MANAGED_POLICY_MARKER_KEY]);
   if (marker?.migrationVersion === MANAGED_POLICY_MIGRATION_VERSION) {
+    managedProviderInstanceRenames = providerInstanceReferenceRenamesFromMarker(marker);
     managedRuntimeAnchor = {
       binaryPath:
         typeof marker.codexBinaryPath === "string" && marker.codexBinaryPath.trim()
@@ -340,6 +480,21 @@ export function migrateLegacyInstallerManagedSettings(
   }
 
   const next = structuredClone(root);
+  const frontierInstanceId = managedConfig.provider.routes.frontier.instanceId;
+  const personalFrontierInstanceId = nextPersonalFrontierInstanceId(next);
+  const providerInstanceRenames = preserveFrontierProviderCollision(
+    next,
+    personalFrontierInstanceId,
+  );
+  // Version 1 could leave durable references behind even after a personal
+  // provider was removed from settings. Move every pre-v2 reference away from
+  // the newly claimed managed ID. When the provider still exists, this target
+  // is also the ID assigned to it; otherwise it remains an intentionally
+  // unbound tombstone instead of silently binding to managed credentials.
+  const providerInstanceReferenceRenames = {
+    [frontierInstanceId]: personalFrontierInstanceId,
+  };
+  managedProviderInstanceRenames = providerInstanceReferenceRenames;
   const providers = record(next.providers);
   const codexProvider = record(providers?.codex);
   const instancesBeforeMigration = record(next.providerInstances);
@@ -376,11 +531,7 @@ export function migrateLegacyInstallerManagedSettings(
     const environment = Array.isArray(codexInstance.environment)
       ? codexInstance.environment.filter((entry) => {
           const name = record(entry)?.name;
-          return (
-            typeof name !== "string" ||
-            (name.toUpperCase() !== UCSD_AI_BASE_URL_ENV &&
-              name.toUpperCase() !== managedConfig.provider.apiKeyEnvironmentVariable)
-          );
+          return typeof name !== "string" || !isManagedProviderEnvironmentName(name, managedConfig);
         })
       : undefined;
     if (environment && environment.length > 0) codexInstance.environment = environment;
@@ -391,6 +542,10 @@ export function migrateLegacyInstallerManagedSettings(
     migrationVersion: MANAGED_POLICY_MIGRATION_VERSION,
     codexBinaryPath: managedRuntimeAnchor.binaryPath,
     codexHomePath: managedRuntimeAnchor.homePath,
+    ...(providerInstanceRenames ? { providerInstanceRenames } : {}),
+    // This field is written for every v1-to-v2 migration, not just a live
+    // settings collision, because provider references outlive provider rows.
+    providerInstanceReferenceRenames,
   };
   migrationStatus = "completed";
   return { document: next, migrated: true };

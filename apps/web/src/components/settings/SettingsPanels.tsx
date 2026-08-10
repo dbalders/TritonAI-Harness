@@ -114,6 +114,7 @@ import {
   type ProviderUpdateCandidate,
 } from "../ProviderUpdateLaunchNotification.logic";
 import { ProviderInstanceCard } from "./ProviderInstanceCard";
+import { TritonAiCredentialSetting } from "./TritonAiCredentialSetting";
 import { DRIVER_OPTIONS, getDriverOption } from "./providerDriverMeta";
 import {
   backgroundActivitySharedPolicySettings,
@@ -1644,8 +1645,13 @@ export function GeneralSettingsPanel() {
 export function ProviderSettingsPanel() {
   const settings = usePrimarySettings();
   const updateSettings = useUpdatePrimarySettings();
-  const managedProviderInstanceId =
-    useAtomValue(primaryServerConfigAtom)?.managedPolicyDiagnostics?.managedProviderInstanceId;
+  const managedPolicyDiagnostics = useAtomValue(primaryServerConfigAtom)?.managedPolicyDiagnostics;
+  const managedProviderInstanceIds = new Set(
+    managedPolicyDiagnostics?.managedProviderInstanceIds ??
+      (managedPolicyDiagnostics?.managedProviderInstanceId === undefined
+        ? []
+        : [managedPolicyDiagnostics.managedProviderInstanceId]),
+  );
   const serverProviders = useAtomValue(primaryServerProvidersAtom);
   const visibleServerProviders = useMemo(
     () => serverProviders.filter((provider) => getDriverOption(provider.driver) !== undefined),
@@ -1919,6 +1925,7 @@ export function ProviderSettingsPanel() {
 
   return (
     <SettingsPageContainer>
+      <TritonAiCredentialSetting />
       <SettingsSection
         title="TritonAI Runtime"
         headerAction={
@@ -2078,10 +2085,7 @@ export function ProviderSettingsPanel() {
               instance={row.instance}
               driverOption={driverOption}
               liveProvider={liveProvider}
-              isManagedByPolicy={
-                managedProviderInstanceId !== undefined &&
-                String(row.instanceId) === managedProviderInstanceId
-              }
+              isManagedByPolicy={managedProviderInstanceIds.has(String(row.instanceId))}
               isExpanded={openInstanceDetails[row.instanceId] ?? false}
               onExpandedChange={(open) =>
                 setOpenInstanceDetails((existing) => ({

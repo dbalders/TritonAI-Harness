@@ -1,6 +1,5 @@
 import {
   DEFAULT_TRITONAI_AI_BASE_URL,
-  TRITONAI_API_KEY_ENV,
   TRITONAI_IMAGE_CONTEXT_MODEL,
   UCSD_AI_BASE_URL_ENV,
 } from "@t3tools/contracts";
@@ -10,6 +9,7 @@ import * as Schema from "effect/Schema";
 
 import { toJsonSchemaObject } from "../../textGeneration/TextGenerationUtils.ts";
 import { makeTritonAiClientHeaders } from "../../tritonAiClientHeaders.ts";
+import { resolveTritonAiServiceApiKey } from "../../tritonAiCredential.ts";
 
 const IMAGE_CONTEXT_TIMEOUT_MS = 2 * 60 * 1_000;
 const IMAGE_CONTEXT_MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
@@ -216,10 +216,10 @@ export const makeCodexImageContextAnalyzer = Effect.fn("makeCodexImageContextAna
         return [];
       }
 
-      const apiKey = resolvedEnvironment[TRITONAI_API_KEY_ENV]?.trim();
+      const apiKey = resolveTritonAiServiceApiKey(resolvedEnvironment);
       if (!apiKey) {
         return yield* new CodexImageContextAnalysisError({
-          detail: `The ${TRITONAI_API_KEY_ENV} environment variable is not configured.`,
+          detail: "Image context is not configured. Add a TritonAI access key in app setup.",
         });
       }
       const endpoint = yield* resolveImageContextEndpoint(resolvedEnvironment);

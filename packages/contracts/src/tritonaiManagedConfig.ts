@@ -11,6 +11,7 @@ const ManagedModel = Schema.Struct({
   id: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(128)),
   name: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(128)),
   shortName: Schema.optionalKey(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(64))),
+  route: Schema.Literals(["on-prem", "frontier"]),
   capabilities: Schema.optionalKey(ModelCapabilities),
 });
 
@@ -19,15 +20,29 @@ const ManagedModel = Schema.Struct({
  * Excess properties are rejected by the build and runtime decoders.
  */
 export const TritonAiManagedConfig = Schema.Struct({
-  schemaVersion: Schema.Literal(1),
+  schemaVersion: Schema.Literal(2),
   policyVersion: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
   provider: Schema.Struct({
-    instanceId: Schema.Literal("codex"),
     driver: Schema.Literal("codex"),
     managedBinary: Schema.Literal(true),
     managedHome: Schema.Literal(true),
     baseUrl: ManagedHttpsUrl,
-    apiKeyEnvironmentVariable: Schema.Literal("TRITONAI_API_KEY"),
+    sharedApiKeyEnvironmentVariable: Schema.Literal("TRITONAI_API_KEY"),
+    apiKeySourceEnvironmentVariable: Schema.Literal("TRITONAI_API_KEY_SOURCE"),
+    routes: Schema.Struct({
+      onPrem: Schema.Struct({
+        id: Schema.Literal("on-prem"),
+        instanceId: Schema.Literal("codex"),
+        displayName: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(64)),
+        apiKeyEnvironmentVariable: Schema.Literal("TRITONAI_ONPREM_API_KEY"),
+      }),
+      frontier: Schema.Struct({
+        id: Schema.Literal("frontier"),
+        instanceId: Schema.Literal("codex_frontier"),
+        displayName: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(64)),
+        apiKeyEnvironmentVariable: Schema.Literal("TRITONAI_FRONTIER_API_KEY"),
+      }),
+    }),
   }),
   models: Schema.Struct({
     default: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(128)),
@@ -63,11 +78,12 @@ export type SecureSkillsSyncStatus = typeof SecureSkillsSyncStatus.Type;
 
 export const TritonAiManagedPolicyDiagnostics = Schema.Struct({
   applicationVersion: Schema.String,
-  schemaVersion: Schema.Literal(1),
+  schemaVersion: Schema.Literal(2),
   policyVersion: Schema.Int,
   configDigest: Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/u)),
   loaded: Schema.Boolean,
   managedProviderInstanceId: Schema.String,
+  managedProviderInstanceIds: Schema.optionalKey(Schema.Array(Schema.String)),
   migrationStatus: ManagedPolicyMigrationStatus,
   managedCategories: Schema.Array(Schema.String),
   secureSkillsStatus: SecureSkillsSyncStatus,

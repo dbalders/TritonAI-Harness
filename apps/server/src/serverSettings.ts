@@ -339,7 +339,10 @@ function stripDefaultServerSettings(current: unknown, defaults: unknown): unknow
   return Object.is(current, defaults) ? undefined : current;
 }
 
-const make = (managedPolicyEnabled: boolean) =>
+const make = (
+  managedPolicyEnabled: boolean,
+  credentialEnvironment: NodeJS.ProcessEnv = process.env,
+) =>
   Effect.gen(function* () {
     const { settingsPath } = yield* ServerConfig.ServerConfig;
     const fs = yield* FileSystem.FileSystem;
@@ -364,6 +367,7 @@ const make = (managedPolicyEnabled: boolean) =>
               applyManagedHarnessPolicy(settings, undefined, {
                 textGenerationSelectionWasPersisted:
                   rawSettingsHasTextGenerationSelection(rawDocument),
+                credentialEnvironment,
               }),
             ),
           )
@@ -948,6 +952,10 @@ const make = (managedPolicyEnabled: boolean) =>
   });
 
 export const layer = Layer.effect(ServerSettingsService, make(true));
+
+/** Managed policy layer with an explicit credential snapshot for deterministic tests. */
+export const layerManagedTest = (credentialEnvironment: NodeJS.ProcessEnv) =>
+  Layer.effect(ServerSettingsService, make(true, credentialEnvironment));
 
 /** Parent-compatible settings behavior for tests that do not exercise the TritonAI overlay. */
 export const layerUnmanagedTest = Layer.effect(ServerSettingsService, make(false));

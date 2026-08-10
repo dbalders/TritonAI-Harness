@@ -54,7 +54,7 @@ const makeInspectableServerSettingsLayer = () =>
   );
 
 const makeManagedServerSettingsLayer = () =>
-  ServerSettingsModule.layer.pipe(
+  ServerSettingsModule.layerManagedTest({ TRITONAI_API_KEY: "managed-test-key" }).pipe(
     Layer.provideMerge(ServerSecretStore.layer),
     Layer.provideMerge(
       Layer.fresh(
@@ -1034,6 +1034,9 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
       // @effect-diagnostics-next-line preferSchemaOverJson:off
       const persisted = JSON.parse(raw);
+      const referenceTarget =
+        persisted.tritonAiManagedPolicy.providerInstanceReferenceRenames.codex_frontier;
+      assert.match(referenceTarget, /^codex_frontier_personal_[0-9a-f-]{36}$/);
       assert.deepInclude(persisted, {
         unknownTopLevel: { retained: true },
         addProjectBaseDirectory: "~/ManagedPolicyPreserved",
@@ -1042,9 +1045,12 @@ it.layer(NodeServices.layer)("server settings", (it) => {
           model: "gpt-5.5",
         },
         tritonAiManagedPolicy: {
-          migrationVersion: 1,
+          migrationVersion: 2,
           codexBinaryPath: "/installer/runtime/codex",
           codexHomePath: "/installer/home/codex",
+          providerInstanceReferenceRenames: {
+            codex_frontier: referenceTarget,
+          },
         },
       });
       assert.deepInclude(persisted.providerInstances.codex.config, {
