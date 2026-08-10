@@ -717,19 +717,35 @@ it.layer(NodeServices.layer)("server settings", (it) => {
   it.effect("replaces provider instance maps when clearing optional fields", () =>
     Effect.gen(function* () {
       const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
       const codexId = ProviderInstanceId.make("codex");
+      const removedId = ProviderInstanceId.make("codex_removed");
 
-      yield* serverSettings.updateSettings({
-        providerInstances: {
-          [codexId]: {
-            driver: ProviderDriverKind.make("codex"),
-            displayName: "Codex Work",
-            accentColor: "#7c3aed",
-            enabled: true,
-            config: { homePath: "~/.codex" },
+      yield* fileSystem.writeFileString(
+        serverConfig.settingsPath,
+        encodeUnknownJson({
+          unknownTopLevel: { retained: true },
+          providerInstances: {
+            [codexId]: {
+              driver: "codex",
+              displayName: "Codex Work",
+              accentColor: "#7c3aed",
+              environment: [{ name: "REMOVE_ME", value: "harmless", sensitive: false }],
+              enabled: true,
+              config: { homePath: "~/.codex" },
+            },
+            [removedId]: {
+              driver: "codex",
+              displayName: "Remove me",
+              enabled: true,
+              config: {},
+            },
           },
-        },
-      });
+        }),
+        { mode: 0o600 },
+      );
+      yield* serverSettings.start;
 
       const next = yield* serverSettings.updateSettings({
         providerInstances: {
@@ -748,6 +764,14 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         enabled: true,
         config: { homePath: "~/.codex" },
       });
+
+      const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      const persisted = JSON.parse(raw);
+      assert.deepEqual(persisted.unknownTopLevel, { retained: true });
+      assert.notProperty(persisted.providerInstances.codex, "accentColor");
+      assert.notProperty(persisted.providerInstances.codex, "environment");
+      assert.notProperty(persisted.providerInstances, "codex_removed");
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 
