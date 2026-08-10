@@ -222,6 +222,12 @@ export function filterPluginListResult(
   };
 }
 
+export function pluginIdsForPostInstallRefresh(
+  request: ServerPluginInstallInput,
+): ReadonlyArray<string> | undefined {
+  return typeof request.remoteMarketplaceName === "string" ? [request.pluginName] : undefined;
+}
+
 export function mapPluginInstallResponse(
   response: CodexSchema.V2PluginInstallResponse,
   plugins: ServerPluginsListResult,
@@ -478,10 +484,11 @@ export const installCodexPlugin = Effect.fn("installCodexPlugin")(function* (inp
     }),
   ).pipe(Effect.scoped);
   yield* refreshProvidersAfterCodexMutation(target.instanceId);
+  const pluginIds = pluginIdsForPostInstallRefresh(request);
   const plugins = yield* listCodexPlugins({
     includeRemote: true,
     instanceId: target.instanceId,
-    pluginIds: [request.pluginName],
+    ...(pluginIds !== undefined ? { pluginIds } : {}),
   });
   return mapPluginInstallResponse(installResponse, plugins);
 });
