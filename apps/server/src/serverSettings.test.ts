@@ -1034,6 +1034,9 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
       // @effect-diagnostics-next-line preferSchemaOverJson:off
       const persisted = JSON.parse(raw);
+      const referenceTarget =
+        persisted.tritonAiManagedPolicy.providerInstanceReferenceRenames.codex_frontier;
+      assert.match(referenceTarget, /^codex_frontier_personal_[0-9a-f-]{36}$/);
       assert.deepInclude(persisted, {
         unknownTopLevel: { retained: true },
         addProjectBaseDirectory: "~/ManagedPolicyPreserved",
@@ -1046,7 +1049,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
           codexBinaryPath: "/installer/runtime/codex",
           codexHomePath: "/installer/home/codex",
           providerInstanceReferenceRenames: {
-            codex_frontier: "codex_frontier_personal",
+            codex_frontier: referenceTarget,
           },
         },
       });

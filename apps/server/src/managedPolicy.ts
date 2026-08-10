@@ -171,10 +171,10 @@ function isManagedProviderEnvironmentName(name: string, config: ManagedConfig): 
 
 function nextPersonalFrontierInstanceId(root: JsonRecord): string {
   const instances = record(root.providerInstances);
-  let candidate = FRONTIER_PROVIDER_COLLISION_RENAME_BASE;
+  let candidate = `${FRONTIER_PROVIDER_COLLISION_RENAME_BASE}_${NodeCrypto.randomUUID()}`;
   if (!instances) return candidate;
-  for (let suffix = 2; Object.hasOwn(instances, candidate); suffix += 1) {
-    candidate = `${FRONTIER_PROVIDER_COLLISION_RENAME_BASE}_${suffix}`;
+  while (Object.hasOwn(instances, candidate)) {
+    candidate = `${FRONTIER_PROVIDER_COLLISION_RENAME_BASE}_${NodeCrypto.randomUUID()}`;
   }
   return candidate;
 }
@@ -210,7 +210,9 @@ function providerInstanceReferenceRenamesFromMarker(
   const replacement = renames?.[frontierInstanceId];
   if (
     typeof replacement !== "string" ||
-    !/^codex_frontier_personal(?:_(?:[2-9]|[1-9][0-9]+))?$/.test(replacement)
+    !/^codex_frontier_personal(?:_(?:(?:[2-9]|[1-9][0-9]+)|[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}))?$/.test(
+      replacement,
+    )
   ) {
     return {};
   }

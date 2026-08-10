@@ -250,6 +250,14 @@ describe("TritonAI managed Harness policy", () => {
 
     const first = migrateLegacyInstallerManagedSettings(legacy);
     expect(first.migrated).toBe(true);
+    const referenceTarget = (
+      first.document as {
+        tritonAiManagedPolicy: {
+          providerInstanceReferenceRenames: Record<string, string>;
+        };
+      }
+    ).tritonAiManagedPolicy.providerInstanceReferenceRenames.codex_frontier;
+    expect(referenceTarget).toMatch(/^codex_frontier_personal_[0-9a-f-]{36}$/);
     expect(first.document).toMatchObject({
       unknownTopLevel: { keep: true },
       providers: { codex: { userDefined: true } },
@@ -265,13 +273,13 @@ describe("TritonAI managed Harness policy", () => {
         codexBinaryPath: "/managed/codex",
         codexHomePath: "/managed/home",
         providerInstanceReferenceRenames: {
-          codex_frontier: "codex_frontier_personal",
+          codex_frontier: referenceTarget,
         },
       },
     });
     expect(migrateLegacyInstallerManagedSettings(first.document).migrated).toBe(false);
     expect(getManagedProviderInstanceRenames()).toEqual({
-      codex_frontier: "codex_frontier_personal",
+      codex_frontier: referenceTarget,
     });
   });
 
@@ -303,24 +311,30 @@ describe("TritonAI managed Harness policy", () => {
     });
 
     expect(first.migrated).toBe(true);
+    const renamedInstanceId = (
+      first.document as {
+        tritonAiManagedPolicy: { providerInstanceRenames: Record<string, string> };
+      }
+    ).tritonAiManagedPolicy.providerInstanceRenames.codex_frontier!;
+    expect(renamedInstanceId).toMatch(/^codex_frontier_personal_[0-9a-f-]{36}$/);
     expect(first.document).toMatchObject({
       providerInstances: {
         codex_frontier_personal: { displayName: "Already occupied" },
-        codex_frontier_personal_2: personalFrontierInstance,
+        [renamedInstanceId]: personalFrontierInstance,
       },
       textGenerationModelSelection: {
-        instanceId: "codex_frontier_personal_2",
+        instanceId: renamedInstanceId,
         model: "personal-model",
       },
       sourceControlWriterModelSelection: {
-        instanceId: "codex_frontier_personal_2",
+        instanceId: renamedInstanceId,
         model: "personal-writer-model",
       },
       tritonAiManagedPolicy: {
         migrationVersion: 2,
-        providerInstanceRenames: { codex_frontier: "codex_frontier_personal_2" },
+        providerInstanceRenames: { codex_frontier: renamedInstanceId },
         providerInstanceReferenceRenames: {
-          codex_frontier: "codex_frontier_personal_2",
+          codex_frontier: renamedInstanceId,
         },
       },
     });
@@ -330,7 +344,7 @@ describe("TritonAI managed Harness policy", () => {
     ).toBeUndefined();
     expect(migrateLegacyInstallerManagedSettings(first.document).migrated).toBe(false);
     expect(getManagedProviderInstanceRenames()).toEqual({
-      codex_frontier: "codex_frontier_personal_2",
+      codex_frontier: renamedInstanceId,
     });
 
     const oldMarker = structuredClone(first.document) as {
