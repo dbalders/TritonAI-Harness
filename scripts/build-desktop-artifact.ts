@@ -869,6 +869,11 @@ export const DESKTOP_FILE_EXCLUSIONS = [
   // are dead weight. The trailing dash keeps the SDK's own JS package.
   "!**/node_modules/@anthropic-ai/claude-agent-sdk-*/**/*",
 ] as const;
+// Production plugins are materialized into a verified temporary snapshot before import. Their
+// Harness-owned Effect peer is linked from app.asar.unpacked because a filesystem symlink cannot
+// traverse Electron's virtual asar filesystem. Keep the full dependency tree available beside
+// Effect so its own runtime imports resolve from that real filesystem location.
+export const MAC_ASAR_UNPACK = ["**/node_modules/**"] as const;
 // The WSL backend launches the server with plain `wsl.exe -- node`, which
 // cannot read inside an asar archive — and the server bundle externalizes its
 // runtime deps, so the whole node_modules tree must be unpacked, not just the
@@ -2047,10 +2052,13 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     // package, so copy that directory as an independent file set to preserve the
     // exact inventory that the runtime verifies.
     files: ["**/*", ...DESKTOP_FILE_EXCLUSIONS, DESKTOP_MANAGED_PLUGIN_FILE_SET],
-    // Only the Windows WSL backend needs files outside the asar (see
-    // WINDOWS_ASAR_UNPACK); macOS and Linux stay packed — smart unpack
-    // extracts native libraries, which fff-node finds in app.asar.unpacked.
-    ...(platform === "win" ? { asarUnpack: [...WINDOWS_ASAR_UNPACK] } : {}),
+    // Windows needs the complete server runtime outside the asar for WSL. macOS only unpacks the
+    // Harness-owned Effect peer that verified production-plugin snapshots link at runtime.
+    ...(platform === "win"
+      ? { asarUnpack: [...WINDOWS_ASAR_UNPACK] }
+      : platform === "mac"
+        ? { asarUnpack: [...MAC_ASAR_UNPACK] }
+        : {}),
     extraResources: DESKTOP_EXTRA_RESOURCES,
   };
   const updateChannel = resolveDesktopUpdateChannel(version);

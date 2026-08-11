@@ -30,6 +30,7 @@ import {
   UnsupportedDesktopBuildArchitectureError,
   isMacPasskeySigningConfigurationError,
   LinuxIconResizeError,
+  MAC_ASAR_UNPACK,
   MacDesktopAppBundleMissingError,
   MacPasskeySigningConfigurationResolutionError,
   MissingAzureTrustedSigningConfigurationError,
@@ -514,7 +515,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         to: "apps/server/dist/production-integrations",
         filter: ["**/*"],
       });
-      assert.notProperty(mac, "asarUnpack");
+      assert.deepStrictEqual(mac.asarUnpack, MAC_ASAR_UNPACK);
       assert.deepStrictEqual((mac.mac as Record<string, unknown>).target, ["zip"]);
       assert.notProperty(linux, "asarUnpack");
       assert.deepStrictEqual(win.asarUnpack, WINDOWS_ASAR_UNPACK);
