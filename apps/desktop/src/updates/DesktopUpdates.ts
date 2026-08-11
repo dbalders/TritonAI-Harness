@@ -400,6 +400,12 @@ export const make = Effect.gen(function* () {
     yield* Ref.set(updateDownloadInFlightRef, true);
     return yield* Effect.gen(function* () {
       yield* setState(reduceDesktopUpdateStateOnDownloadStart(state));
+      if (environment.platform === "darwin") {
+        // Squirrel.Mac must stage the native update while the proxy server is alive.
+        // With install-on-quit disabled it only starts staging after quitAndInstall,
+        // which can leave the app windowless while native update readiness is pending.
+        yield* electronUpdater.setAutoInstallOnAppQuit(true);
+      }
       yield* electronUpdater.setDisableDifferentialDownload(
         isArm64HostRunningIntelBuild(environment.runtimeInfo),
       );

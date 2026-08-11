@@ -39,6 +39,7 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
   let checkCount = 0;
   let allowDowngrade = false;
   let fullChangelog = false;
+  const autoInstallOnAppQuitValues: boolean[] = [];
   const feedUrls: ElectronUpdater.ElectronUpdaterFeedUrl[] = [];
   const listeners = new Map<string, Set<(...args: readonly unknown[]) => void>>();
   const sentStates: DesktopUpdateState[] = [];
@@ -66,7 +67,10 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
         feedUrls.push(options);
       }),
     setAutoDownload: () => Effect.void,
-    setAutoInstallOnAppQuit: () => Effect.void,
+    setAutoInstallOnAppQuit: (value) =>
+      Effect.sync(() => {
+        autoInstallOnAppQuitValues.push(value);
+      }),
     setChannel: () => Effect.void,
     setAllowPrerelease: () => Effect.void,
     allowDowngrade: Effect.sync(() => allowDowngrade),
@@ -190,6 +194,7 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
 
   return {
     layer,
+    autoInstallOnAppQuitValues: () => autoInstallOnAppQuitValues,
     checkCount: () => checkCount,
     feedUrls: () => feedUrls,
     fullChangelog: () => fullChangelog,
@@ -405,6 +410,25 @@ describe("DesktopUpdates", () => {
         ),
       ),
     );
+  });
+
+  it.effect("stages macOS updates for native installation before downloading", () => {
+    const harness = makeHarness();
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+        harness.emit("update-available", { version: "1.2.4" });
+        yield* flushCallbacks;
+
+        const result = yield* updates.download;
+
+        assert.isTrue(result.accepted);
+        assert.isTrue(result.completed);
+        assert.deepEqual(harness.autoInstallOnAppQuitValues(), [false, true]);
+      }),
+    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
   });
 
   it.effect("recovers download state after an unexpected setup failure", () => {
