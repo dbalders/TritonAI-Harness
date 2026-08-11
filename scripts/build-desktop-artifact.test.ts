@@ -1033,12 +1033,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }),
   );
 
-  it("stages the resource monitor as an external executable resource", () => {
+  it("keeps the managed config in the app while staging the resource monitor externally", () => {
     assert.deepStrictEqual(DESKTOP_EXTRA_RESOURCES, [
-      {
-        from: "apps/server/dist/tritonai-managed-config.json",
-        to: "tritonai-managed-config.json",
-      },
       {
         from: "apps/desktop/prod-resources/resource-monitor",
         to: "resource-monitor",
