@@ -72,6 +72,26 @@ describe("DesktopTritonAiApiKey", () => {
     );
   });
 
+  it("binds a replacement to the requested route even when the key covers both", () => {
+    const access = { onPrem: true, frontier: true };
+    const candidate = "all-access-key";
+    assert.deepEqual(DesktopTritonAiApiKey.credentialUpdateForRoute(candidate, access, "on-prem"), {
+      onPremApiKey: candidate,
+    });
+    assert.deepEqual(
+      DesktopTritonAiApiKey.credentialUpdateForRoute(candidate, access, "frontier"),
+      { frontierApiKey: candidate },
+    );
+    const frontierCandidate = "frontier-only-key";
+    assert.isNull(
+      DesktopTritonAiApiKey.credentialUpdateForRoute(
+        frontierCandidate,
+        { onPrem: false, frontier: true },
+        "on-prem",
+      ),
+    );
+  });
+
   it("keeps an existing route when a new key only replaces the other route", () => {
     assert.deepEqual(
       DesktopTritonAiApiKey.mergeCredentialUpdate(

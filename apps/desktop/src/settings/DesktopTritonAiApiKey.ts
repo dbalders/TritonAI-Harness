@@ -98,6 +98,8 @@ const DesktopTritonAiApiKeyValidationFailureReason = Schema.Literals([
   "upstream-error",
   "invalid-response",
   "no-model-access",
+  "no-on-prem-access",
+  "no-frontier-access",
 ]);
 
 export class DesktopTritonAiApiKeyValidationError extends Schema.TaggedErrorClass<DesktopTritonAiApiKeyValidationError>()(
@@ -125,6 +127,10 @@ export class DesktopTritonAiApiKeyValidationError extends Schema.TaggedErrorClas
         return "TritonAI returned an unexpected model list while verifying the key.";
       case "no-model-access":
         return "This key is active, but it does not include access to TritonAI Harness models.";
+      case "no-on-prem-access":
+        return "This key is active, but it does not include access to on-prem models.";
+      case "no-frontier-access":
+        return "This key is active, but it does not include access to frontier models.";
     }
   }
 }
@@ -235,6 +241,17 @@ export function mergeCredentialUpdate(
     ...(onPremApiKey === undefined ? {} : { onPremApiKey }),
     ...(frontierApiKey === undefined ? {} : { frontierApiKey }),
   };
+}
+
+export function credentialUpdateForRoute(
+  apiKey: string,
+  access: TritonAiCredentialAccess,
+  route: "on-prem" | "frontier",
+): TritonAiCredentialBundle | null {
+  if (route === "on-prem") {
+    return access.onPrem ? { onPremApiKey: apiKey } : null;
+  }
+  return access.frontier ? { frontierApiKey: apiKey } : null;
 }
 
 export function resolveTritonAiModelsEndpoint(

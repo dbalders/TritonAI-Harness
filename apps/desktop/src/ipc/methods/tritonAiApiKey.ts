@@ -1,6 +1,7 @@
 import {
   DesktopTritonAiCredentialStatusSchema,
   DesktopTritonAiCredentialsUpdateResultSchema,
+  type DesktopTritonAiCredentialRoute,
   type DesktopTritonAiCredentialsUpdateResult,
   UCSD_AI_BASE_URL_ENV,
 } from "@t3tools/contracts";
@@ -47,6 +48,16 @@ function effectiveEnvironment(
   };
 }
 
+function readRouteCredentialUpdate(
+  input: unknown,
+): { readonly route: DesktopTritonAiCredentialRoute; readonly apiKey: string } | null {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) return null;
+  const record = input as Record<string, unknown>;
+  if (record.route !== "on-prem" && record.route !== "frontier") return null;
+  const apiKey = DesktopTritonAiApiKey.normalizeReplacementApiKey(record.apiKey);
+  return apiKey === null ? null : { route: record.route, apiKey };
+}
+
 export const getTritonAiCredentialStatus = makeIpcMethod({
   channel: IpcChannels.GET_TRITONAI_CREDENTIAL_STATUS_CHANNEL,
   payload: Schema.Void,
@@ -84,10 +95,31 @@ export const updateTritonAiCredentials = makeIpcMethod({
         });
       }
       const environment = effectiveEnvironment(currentConfig.value);
-      const replacement = yield* DesktopTritonAiApiKey.validateAndAssignTritonAiCredentials(
-        rawApiKeys,
-        { baseUrl: environment[UCSD_AI_BASE_URL_ENV] },
-      );
+      const routeUpdate = readRouteCredentialUpdate(rawApiKeys);
+      const replacement = yield* Array.isArray(rawApiKeys)
+        ? DesktopTritonAiApiKey.validateAndAssignTritonAiCredentials(rawApiKeys, {
+            baseUrl: environment[UCSD_AI_BASE_URL_ENV],
+          })
+        : Effect.gen(function* () {
+            if (routeUpdate === null) {
+              return yield* new DesktopTritonAiApiKey.DesktopTritonAiApiKeyInputError();
+            }
+            const access = yield* DesktopTritonAiApiKey.validateTritonAiApiKey(routeUpdate.apiKey, {
+              baseUrl: environment[UCSD_AI_BASE_URL_ENV],
+            });
+            const routeReplacement = DesktopTritonAiApiKey.credentialUpdateForRoute(
+              routeUpdate.apiKey,
+              access,
+              routeUpdate.route,
+            );
+            if (routeReplacement === null) {
+              return yield* new DesktopTritonAiApiKey.DesktopTritonAiApiKeyValidationError({
+                reason:
+                  routeUpdate.route === "on-prem" ? "no-on-prem-access" : "no-frontier-access",
+              });
+            }
+            return routeReplacement;
+          });
       const credentials = DesktopTritonAiApiKey.mergeCredentialUpdate(
         DesktopTritonAiApiKey.credentialBundleFromEnvironment(environment),
         replacement,
