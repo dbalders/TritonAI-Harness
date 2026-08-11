@@ -876,11 +876,10 @@ export const DESKTOP_FILE_EXCLUSIONS = [
 // The Windows primary backend reads the same files through the asar redirect,
 // so nothing is duplicated.
 export const WINDOWS_ASAR_UNPACK = ["apps/server/dist/**", "**/node_modules/**"] as const;
+// Keep the managed config under apps/server/dist so managedPolicy can verify it beside the
+// packaged server bundle. Listing that same source as an extra resource makes electron-builder
+// omit it from app.asar and the packaged backend exits before readiness.
 export const DESKTOP_EXTRA_RESOURCES = [
-  {
-    from: "apps/server/dist/tritonai-managed-config.json",
-    to: "tritonai-managed-config.json",
-  },
   {
     from: "apps/desktop/prod-resources/resource-monitor",
     to: "resource-monitor",
