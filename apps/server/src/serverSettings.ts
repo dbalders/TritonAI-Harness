@@ -78,12 +78,17 @@ function jsonRecord(value: unknown): JsonRecord | null {
     : null;
 }
 
-function collectUnknownSettingsFields(raw: unknown, known: unknown): unknown | undefined {
+function collectUnknownSettingsFields(
+  raw: unknown,
+  known: unknown,
+  replacedRootKeys?: ReadonlySet<string>,
+): unknown | undefined {
   const rawRecord = jsonRecord(raw);
   const knownRecord = jsonRecord(known);
   if (!rawRecord || !knownRecord) return undefined;
   const preserved: JsonRecord = {};
   for (const [key, value] of Object.entries(rawRecord)) {
+    if (replacedRootKeys?.has(key)) continue;
     if (!Object.hasOwn(knownRecord, key)) {
       preserved[key] = value;
       continue;
@@ -718,14 +723,22 @@ const make = (
       });
 
     const writeSettingsAtomically = Effect.fnUntraced(
-      function* (settings: ServerSettings) {
+      function* (
+        settings: ServerSettings,
+        options?: { readonly replaceProviderInstances?: boolean },
+      ) {
         const [encodedSettings, encodedDefaults, rawDocument] = yield* Effect.all([
           encodeServerSettings(settings),
           encodeServerSettings(DEFAULT_SERVER_SETTINGS),
           Ref.get(rawDocumentRef),
         ]);
         const sparseSettings = stripDefaultServerSettings(encodedSettings, encodedDefaults) ?? {};
-        const unknownSettings = collectUnknownSettingsFields(rawDocument, encodedSettings) ?? {};
+        const unknownSettings =
+          collectUnknownSettingsFields(
+            rawDocument,
+            encodedSettings,
+            options?.replaceProviderInstances ? new Set(["providerInstances"]) : undefined,
+          ) ?? {};
         const persistedDocument = mergeJsonDocuments(unknownSettings, sparseSettings);
         const sparseSettingsJson = yield* encodeUnknownJsonPretty(persistedDocument);
 
@@ -930,7 +943,11 @@ const make = (
               proposed,
               persistProviderSecrets(current, proposed).pipe(
                 Effect.flatMap(normalizeServerSettings),
-                Effect.tap(writeSettingsAtomically),
+                Effect.tap((settings) =>
+                  writeSettingsAtomically(settings, {
+                    replaceProviderInstances: patch.providerInstances !== undefined,
+                  }),
+                ),
               ),
             );
             yield* Cache.set(settingsCache, cacheKey, next);
