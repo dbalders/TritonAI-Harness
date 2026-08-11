@@ -50,10 +50,14 @@ function effectiveEnvironment(
 
 function readRouteCredentialUpdate(
   input: unknown,
-): { readonly route: DesktopTritonAiCredentialRoute; readonly apiKey: string } | null {
+):
+  | { readonly route: DesktopTritonAiCredentialRoute; readonly apiKey: string }
+  | { readonly route: DesktopTritonAiCredentialRoute; readonly remove: true }
+  | null {
   if (typeof input !== "object" || input === null || Array.isArray(input)) return null;
   const record = input as Record<string, unknown>;
   if (record.route !== "on-prem" && record.route !== "frontier") return null;
+  if (record.remove === true) return { route: record.route, remove: true };
   const apiKey = DesktopTritonAiApiKey.normalizeReplacementApiKey(record.apiKey);
   return apiKey === null ? null : { route: record.route, apiKey };
 }
@@ -96,36 +100,46 @@ export const updateTritonAiCredentials = makeIpcMethod({
       }
       const environment = effectiveEnvironment(currentConfig.value);
       const routeUpdate = readRouteCredentialUpdate(rawApiKeys);
-      const replacement = yield* Array.isArray(rawApiKeys)
-        ? DesktopTritonAiApiKey.validateAndAssignTritonAiCredentials(rawApiKeys, {
-            baseUrl: environment[UCSD_AI_BASE_URL_ENV],
-          })
-        : Effect.gen(function* () {
-            if (routeUpdate === null) {
-              return yield* new DesktopTritonAiApiKey.DesktopTritonAiApiKeyInputError();
-            }
-            const access = yield* DesktopTritonAiApiKey.validateTritonAiApiKey(routeUpdate.apiKey, {
+      const existing = DesktopTritonAiApiKey.credentialBundleFromEnvironment(environment);
+      const isRemoval = routeUpdate !== null && "remove" in routeUpdate;
+      const credentials = yield* isRemoval
+        ? Effect.succeed(
+            DesktopTritonAiApiKey.credentialBundleWithoutRoute(existing, routeUpdate.route),
+          )
+        : Array.isArray(rawApiKeys)
+          ? DesktopTritonAiApiKey.validateAndAssignTritonAiCredentials(rawApiKeys, {
               baseUrl: environment[UCSD_AI_BASE_URL_ENV],
+            })
+          : Effect.gen(function* () {
+              if (routeUpdate === null) {
+                return yield* new DesktopTritonAiApiKey.DesktopTritonAiApiKeyInputError();
+              }
+              const access = yield* DesktopTritonAiApiKey.validateTritonAiApiKey(
+                routeUpdate.apiKey,
+                {
+                  baseUrl: environment[UCSD_AI_BASE_URL_ENV],
+                },
+              );
+              const routeReplacement = DesktopTritonAiApiKey.credentialUpdateForRoute(
+                routeUpdate.apiKey,
+                access,
+                routeUpdate.route,
+              );
+              if (routeReplacement === null) {
+                return yield* new DesktopTritonAiApiKey.DesktopTritonAiApiKeyValidationError({
+                  reason:
+                    routeUpdate.route === "on-prem" ? "no-on-prem-access" : "no-frontier-access",
+                });
+              }
+              return routeReplacement;
             });
-            const routeReplacement = DesktopTritonAiApiKey.credentialUpdateForRoute(
-              routeUpdate.apiKey,
-              access,
-              routeUpdate.route,
-            );
-            if (routeReplacement === null) {
-              return yield* new DesktopTritonAiApiKey.DesktopTritonAiApiKeyValidationError({
-                reason:
-                  routeUpdate.route === "on-prem" ? "no-on-prem-access" : "no-frontier-access",
-              });
-            }
-            return routeReplacement;
-          });
-      const credentials = DesktopTritonAiApiKey.mergeCredentialUpdate(
-        DesktopTritonAiApiKey.credentialBundleFromEnvironment(environment),
-        replacement,
-      );
-      yield* DesktopTritonAiApiKey.replaceTritonAiCredentials(credentials);
-      return credentials;
+      const nextCredentials = isRemoval
+        ? credentials
+        : DesktopTritonAiApiKey.mergeCredentialUpdate(existing, credentials);
+      yield* DesktopTritonAiApiKey.replaceTritonAiCredentials(nextCredentials, {
+        allowEmpty: isRemoval,
+      });
+      return nextCredentials;
     }).pipe(
       Effect.match({
         onFailure: (error) => ({ status: "error", message: updateFailureMessage(error) }) as const,

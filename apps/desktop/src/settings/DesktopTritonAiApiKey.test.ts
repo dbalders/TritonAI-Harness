@@ -105,6 +105,32 @@ describe("DesktopTritonAiApiKey", () => {
     );
   });
 
+  it("removes only the selected route, including from a shared key", () => {
+    assert.deepEqual(
+      DesktopTritonAiApiKey.credentialBundleWithoutRoute({ sharedApiKey: "shared-key" }, "on-prem"),
+      { frontierApiKey: "shared-key" },
+    );
+    assert.deepEqual(
+      DesktopTritonAiApiKey.credentialBundleWithoutRoute(
+        { onPremApiKey: "on-prem-key" },
+        "on-prem",
+      ),
+      {},
+    );
+  });
+
+  it.effect(
+    "persists an empty override so removing the last route does not reveal installer keys",
+    () =>
+      withKeyStore(
+        Effect.gen(function* () {
+          yield* DesktopTritonAiApiKey.replaceTritonAiCredentials({}, { allowEmpty: true });
+          const stored = yield* DesktopTritonAiApiKey.readTritonAiCredentialOverride;
+          assert.deepEqual(Option.getOrUndefined(stored), {});
+        }),
+      ),
+  );
+
   it.effect("reads an existing plain-text desktop override as a shared key", () =>
     withKeyStore(
       Effect.gen(function* () {

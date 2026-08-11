@@ -409,6 +409,8 @@ interface ProviderInstanceCardProps {
   readonly tritonAiCredentialControl?:
     | {
         readonly status: DesktopTritonAiCredentialStatus | null;
+        readonly statusError: string | null;
+        readonly onRetryStatus: () => void;
         readonly onStatusChange: (status: DesktopTritonAiCredentialStatus) => void;
       }
     | undefined;
@@ -838,6 +840,8 @@ export function ProviderInstanceCard({
               <TritonAiRouteCredentialControl
                 route={tritonAiCredentialRoute}
                 status={tritonAiCredentialControl.status}
+                statusError={tritonAiCredentialControl.statusError}
+                onRetryStatus={tritonAiCredentialControl.onRetryStatus}
                 onStatusChange={tritonAiCredentialControl.onStatusChange}
               />
             ) : null}

@@ -185,10 +185,15 @@ export type DesktopTritonAiCredentialStatus = typeof DesktopTritonAiCredentialSt
 export const DesktopTritonAiCredentialRouteSchema = Schema.Literals(["on-prem", "frontier"]);
 export type DesktopTritonAiCredentialRoute = typeof DesktopTritonAiCredentialRouteSchema.Type;
 
-export interface DesktopTritonAiRouteCredentialUpdate {
-  readonly route: DesktopTritonAiCredentialRoute;
-  readonly apiKey: string;
-}
+export type DesktopTritonAiRouteCredentialUpdate =
+  | {
+      readonly route: DesktopTritonAiCredentialRoute;
+      readonly apiKey: string;
+    }
+  | {
+      readonly route: DesktopTritonAiCredentialRoute;
+      readonly remove: true;
+    };
 
 export const DesktopTritonAiCredentialsUpdateResultSchema = Schema.Union([
   Schema.Struct({

@@ -1672,6 +1672,10 @@ export function ProviderSettingsPanel() {
   const [openInstanceDetails, setOpenInstanceDetails] = useState<Record<string, boolean>>({});
   const [tritonAiCredentialStatus, setTritonAiCredentialStatus] =
     useState<DesktopTritonAiCredentialStatus | null>(null);
+  const [tritonAiCredentialStatusError, setTritonAiCredentialStatusError] = useState<string | null>(
+    null,
+  );
+  const [tritonAiCredentialStatusRequest, setTritonAiCredentialStatusRequest] = useState(0);
   const refreshingRef = useRef(false);
   const updatingProviderKeysRef = useRef<Set<string>>(new Set());
   const desktopBridge = window.desktopBridge;
@@ -1679,18 +1683,22 @@ export function ProviderSettingsPanel() {
   useEffect(() => {
     if (!desktopBridge) return;
     let cancelled = false;
+    setTritonAiCredentialStatusError(null);
     void desktopBridge
       .getTritonAiCredentialStatus()
       .then((status) => {
         if (!cancelled) setTritonAiCredentialStatus(status);
       })
       .catch(() => {
-        if (!cancelled) setTritonAiCredentialStatus(null);
+        if (!cancelled) {
+          setTritonAiCredentialStatus(null);
+          setTritonAiCredentialStatusError("Could not load the saved TritonAI access setup.");
+        }
       });
     return () => {
       cancelled = true;
     };
-  }, [desktopBridge]);
+  }, [desktopBridge, tritonAiCredentialStatusRequest]);
 
   const providerUpdateCandidates = useMemo(
     () => collectProviderUpdateCandidates(visibleServerProviders),
@@ -2108,6 +2116,9 @@ export function ProviderSettingsPanel() {
                 ? {
                     tritonAiCredentialControl: {
                       status: tritonAiCredentialStatus,
+                      statusError: tritonAiCredentialStatusError,
+                      onRetryStatus: () =>
+                        setTritonAiCredentialStatusRequest((request) => request + 1),
                       onStatusChange: setTritonAiCredentialStatus,
                     },
                   }

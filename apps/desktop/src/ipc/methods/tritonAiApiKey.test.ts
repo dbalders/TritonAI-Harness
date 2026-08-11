@@ -321,6 +321,48 @@ describe("TritonAI credential IPC", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
+  it.effect("removes only the selected route and preserves the other route", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const homeDirectory = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "tritonai-api-key-ipc-test-",
+      });
+      const environmentLayer = makeEnvironmentLayer(homeDirectory);
+      const backendPoolLayer = makeBackendPoolLayer("https://configured.tritonai.example/v1", {
+        env: { TRITONAI_API_KEY: "existing-shared-key" },
+      });
+
+      const result = yield* updateTritonAiCredentials
+        .handler({ route: "on-prem", remove: true })
+        .pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              environmentLayer,
+              NodeServices.layer,
+              backendPoolLayer,
+              makeHttpClientLayer(() => Effect.die("removal must not validate a key")),
+            ),
+          ),
+        );
+      const stored = yield* DesktopTritonAiApiKey.readTritonAiCredentialOverride.pipe(
+        Effect.provide(environmentLayer),
+      );
+
+      assert.deepEqual(result, {
+        status: "saved",
+        credentials: {
+          ready: true,
+          usesSharedKey: false,
+          onPremConfigured: false,
+          frontierConfigured: true,
+        },
+      });
+      assert.deepEqual(Option.getOrUndefined(stored), {
+        frontierApiKey: "existing-shared-key",
+      });
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("does not start a backend that was already stopped", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;

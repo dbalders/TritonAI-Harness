@@ -11,6 +11,8 @@ import { Input } from "../ui/input";
 export function TritonAiRouteCredentialControl(props: {
   readonly route: DesktopTritonAiCredentialRoute;
   readonly status: DesktopTritonAiCredentialStatus | null;
+  readonly statusError: string | null;
+  readonly onRetryStatus: () => void;
   readonly onStatusChange: (status: DesktopTritonAiCredentialStatus) => void;
 }) {
   const [isEditing, setIsEditing] = useState(false);
@@ -68,6 +70,36 @@ export function TritonAiRouteCredentialControl(props: {
     }
   };
 
+  const remove = async () => {
+    if (isSaving || !configured) return;
+    if (!window.confirm(`Remove the saved ${routeLabel} access key?`)) return;
+    setIsSaving(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const result = await desktopBridge.updateTritonAiCredentials({
+        route: props.route,
+        remove: true,
+      });
+      if (result.status === "error") {
+        setError(result.message);
+        return;
+      }
+      props.onStatusChange(result.credentials);
+      setApiKey("");
+      setIsEditing(false);
+      setMessage(`${routeLabel} access key removed. The ${otherRouteLabel} key was kept.`);
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? `Desktop request failed: ${cause.message}`
+          : "The desktop request failed with an unknown error.",
+      );
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   return (
     <section className="rounded-lg border border-border/70 bg-muted/20 px-3 py-3">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -80,20 +112,27 @@ export function TritonAiRouteCredentialControl(props: {
           </div>
           <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{statusDescription}</p>
         </div>
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          disabled={isSaving || configured === null}
-          onClick={() => {
-            setIsEditing((editing) => !editing);
-            setApiKey("");
-            setError(null);
-            setMessage(null);
-          }}
-        >
-          {isEditing ? "Cancel" : configured ? "Change key" : "Add key"}
-        </Button>
+        <div className="flex items-center gap-2">
+          {configured ? (
+            <Button type="button" size="sm" variant="ghost" disabled={isSaving} onClick={remove}>
+              Remove key
+            </Button>
+          ) : null}
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={isSaving || configured === null}
+            onClick={() => {
+              setIsEditing((editing) => !editing);
+              setApiKey("");
+              setError(null);
+              setMessage(null);
+            }}
+          >
+            {isEditing ? "Cancel" : configured ? "Change key" : "Add key"}
+          </Button>
+        </div>
       </div>
 
       {isEditing ? (
@@ -135,6 +174,14 @@ export function TritonAiRouteCredentialControl(props: {
         <p className="mt-2 text-xs text-destructive" role="alert">
           {error}
         </p>
+      ) : null}
+      {props.statusError ? (
+        <div className="mt-2 flex flex-wrap items-center gap-2" role="alert">
+          <p className="text-xs text-destructive">{props.statusError}</p>
+          <Button type="button" size="sm" variant="outline" onClick={props.onRetryStatus}>
+            Retry
+          </Button>
+        </div>
       ) : null}
       {message ? (
         <p className="mt-2 text-xs text-success" role="status">
