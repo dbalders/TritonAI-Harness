@@ -834,6 +834,29 @@ export const RUNTIME_DEPLOY_ARGS = [
   "--prod",
   "--frozen-lockfile",
 ] as const;
+
+export function createDesktopSourceBuildEnvironment(
+  baseEnv: NodeJS.ProcessEnv,
+  managedPluginInput: {
+    readonly sourceRoot: string;
+    readonly serializedConfiguration: string;
+  } | null,
+): NodeJS.ProcessEnv {
+  const buildEnvironment: NodeJS.ProcessEnv = { ...baseEnv };
+  if (managedPluginInput) {
+    buildEnvironment[PRODUCTION_PLUGIN_SOURCE_ENV] = managedPluginInput.sourceRoot;
+    buildEnvironment[PRODUCTION_PLUGIN_CONFIGURATION_ENV] =
+      managedPluginInput.serializedConfiguration;
+  } else {
+    delete buildEnvironment[PRODUCTION_PLUGIN_SOURCE_ENV];
+    delete buildEnvironment[PRODUCTION_PLUGIN_CONFIGURATION_ENV];
+  }
+  for (const key of Object.keys(buildEnvironment)) {
+    if (key.startsWith("AZURE_")) delete buildEnvironment[key];
+  }
+  return buildEnvironment;
+}
+
 export const DESKTOP_MANAGED_PLUGIN_FILE_SET = {
   from: "apps/server/dist/production-integrations",
   to: "apps/server/dist/production-integrations",
@@ -2456,12 +2479,15 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   if (!options.skipBuild) {
     yield* Effect.log("[desktop-artifact] Building desktop/server/web artifacts...");
     const spawnCommand = yield* resolveSpawnCommand("vp", ["run", "build:desktop"]);
-    const buildEnvironment: NodeJS.ProcessEnv = { ...process.env };
-    delete buildEnvironment[PRODUCTION_PLUGIN_SOURCE_ENV];
-    delete buildEnvironment[PRODUCTION_PLUGIN_CONFIGURATION_ENV];
-    for (const key of Object.keys(buildEnvironment)) {
-      if (key.startsWith("AZURE_")) delete buildEnvironment[key];
-    }
+    const buildEnvironment = createDesktopSourceBuildEnvironment(
+      process.env,
+      pluginBuildInput
+        ? {
+            sourceRoot: pluginSnapshotRoot,
+            serializedConfiguration: repoEnv[PRODUCTION_PLUGIN_CONFIGURATION_ENV]?.trim() ?? "",
+          }
+        : null,
+    );
     yield* runCommand(
       ChildProcess.make(spawnCommand.command, spawnCommand.args, {
         cwd: repoRoot,

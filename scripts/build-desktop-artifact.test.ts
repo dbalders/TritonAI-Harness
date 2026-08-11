@@ -15,6 +15,7 @@ import {
   buildMacDmg,
   BuildCommandFailedError,
   createStageWorkspaceConfig,
+  createDesktopSourceBuildEnvironment,
   findMissingRuntimeDeploymentArchitectures,
   createStagePatchedDependencies,
   createBuildConfig,
@@ -130,6 +131,44 @@ it("validates every managed plugin configuration and closes loaded providers", a
     "load:/verified-composition/packages/beta:false",
     "close:alpha",
   ]);
+});
+
+it("builds the server from the frozen managed plugin snapshot and validated configuration", () => {
+  const environment = createDesktopSourceBuildEnvironment(
+    {
+      TRITONAI_PLUGIN_COMPOSITION_SOURCE: "/moving/source",
+      TRITONAI_PLUGIN_CONFIGURATION_JSON: '{"stale":true}',
+      AZURE_CLIENT_SECRET: "must-not-reach-the-source-build",
+      KEEP_ME: "yes",
+    },
+    {
+      sourceRoot: "/frozen/plugin-composition-input",
+      serializedConfiguration: '{"microsoft-365":{"clientId":"public-client"}}',
+    },
+  );
+
+  assert.equal(environment.TRITONAI_PLUGIN_COMPOSITION_SOURCE, "/frozen/plugin-composition-input");
+  assert.equal(
+    environment.TRITONAI_PLUGIN_CONFIGURATION_JSON,
+    '{"microsoft-365":{"clientId":"public-client"}}',
+  );
+  assert.notProperty(environment, "AZURE_CLIENT_SECRET");
+  assert.equal(environment.KEEP_ME, "yes");
+});
+
+it("removes ambient managed plugin inputs from builds without a frozen composition", () => {
+  const environment = createDesktopSourceBuildEnvironment(
+    {
+      TRITONAI_PLUGIN_COMPOSITION_SOURCE: "/ambient/source",
+      TRITONAI_PLUGIN_CONFIGURATION_JSON: '{"ambient":true}',
+      KEEP_ME: "yes",
+    },
+    null,
+  );
+
+  assert.notProperty(environment, "TRITONAI_PLUGIN_COMPOSITION_SOURCE");
+  assert.notProperty(environment, "TRITONAI_PLUGIN_CONFIGURATION_JSON");
+  assert.equal(environment.KEEP_ME, "yes");
 });
 
 function iconResizeSpawnerLayer(
