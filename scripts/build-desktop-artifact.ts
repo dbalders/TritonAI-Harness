@@ -2052,8 +2052,8 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     // package, so copy that directory as an independent file set to preserve the
     // exact inventory that the runtime verifies.
     files: ["**/*", ...DESKTOP_FILE_EXCLUSIONS, DESKTOP_MANAGED_PLUGIN_FILE_SET],
-    // Windows needs the complete server runtime outside the asar for WSL. macOS only unpacks the
-    // Harness-owned Effect peer that verified production-plugin snapshots link at runtime.
+    // Windows needs the complete server runtime outside the asar for WSL. macOS unpacks the
+    // Harness-owned dependency tree that verified production-plugin snapshots link at runtime.
     ...(platform === "win"
       ? { asarUnpack: [...WINDOWS_ASAR_UNPACK] }
       : platform === "mac"
