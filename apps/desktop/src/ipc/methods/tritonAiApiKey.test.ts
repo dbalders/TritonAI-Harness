@@ -247,6 +247,122 @@ describe("TritonAI credential IPC", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
+  it.effect("changes only the selected route when the new key covers both routes", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const homeDirectory = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "tritonai-api-key-ipc-test-",
+      });
+      const environmentLayer = makeEnvironmentLayer(homeDirectory);
+      const currentLocal = "current-on-prem-key";
+      const currentFrontier = "current-frontier-key";
+      const backendPoolLayer = makeBackendPoolLayer("https://configured.tritonai.example/v1", {
+        env: {
+          TRITONAI_ONPREM_API_KEY: currentLocal,
+          TRITONAI_FRONTIER_API_KEY: currentFrontier,
+        },
+      });
+      const validationLayer = makeHttpClientLayer((request) =>
+        Effect.succeed(
+          jsonResponse(request, {
+            data: [{ id: "api-deepseek-v4-flash" }, { id: "gpt-5.6-sol" }],
+          }),
+        ),
+      );
+      const candidate = "new-all-access-key";
+
+      const result = yield* updateTritonAiCredentials
+        .handler({ route: "on-prem", apiKey: candidate })
+        .pipe(
+          Effect.provide(
+            Layer.mergeAll(environmentLayer, NodeServices.layer, backendPoolLayer, validationLayer),
+          ),
+        );
+      const stored = yield* DesktopTritonAiApiKey.readTritonAiCredentialOverride.pipe(
+        Effect.provide(environmentLayer),
+      );
+
+      assert.equal((result as { status: string }).status, "saved");
+      assert.deepEqual(Option.getOrUndefined(stored), {
+        onPremApiKey: candidate,
+        frontierApiKey: currentFrontier,
+      });
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("rejects a route-specific key that cannot access the selected route", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const homeDirectory = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "tritonai-api-key-ipc-test-",
+      });
+      const environmentLayer = makeEnvironmentLayer(homeDirectory);
+      const current = "current-key";
+      const backendPoolLayer = makeBackendPoolLayer("https://configured.tritonai.example/v1", {
+        env: { TRITONAI_API_KEY: current },
+      });
+      const validationLayer = makeHttpClientLayer((request) =>
+        Effect.succeed(jsonResponse(request, { data: [{ id: "gpt-5.6-sol" }] })),
+      );
+      const candidate = "frontier-only-key";
+
+      const result = yield* updateTritonAiCredentials
+        .handler({ route: "on-prem", apiKey: candidate })
+        .pipe(
+          Effect.provide(
+            Layer.mergeAll(environmentLayer, NodeServices.layer, backendPoolLayer, validationLayer),
+          ),
+        );
+
+      assert.deepEqual(result, {
+        status: "error",
+        message: "This key is active, but it does not include access to on-prem models.",
+      });
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("removes only the selected route and preserves the other route", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const homeDirectory = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "tritonai-api-key-ipc-test-",
+      });
+      const environmentLayer = makeEnvironmentLayer(homeDirectory);
+      const backendPoolLayer = makeBackendPoolLayer("https://configured.tritonai.example/v1", {
+        env: { TRITONAI_API_KEY: "existing-shared-key" },
+      });
+
+      const result = yield* updateTritonAiCredentials
+        .handler({ route: "on-prem", remove: true })
+        .pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              environmentLayer,
+              NodeServices.layer,
+              backendPoolLayer,
+              makeHttpClientLayer(() => Effect.die("removal must not validate a key")),
+            ),
+          ),
+        );
+      const stored = yield* DesktopTritonAiApiKey.readTritonAiCredentialOverride.pipe(
+        Effect.provide(environmentLayer),
+      );
+
+      assert.deepEqual(result, {
+        status: "saved",
+        credentials: {
+          ready: true,
+          usesSharedKey: false,
+          onPremConfigured: false,
+          frontierConfigured: true,
+        },
+      });
+      assert.deepEqual(Option.getOrUndefined(stored), {
+        frontierApiKey: "existing-shared-key",
+      });
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("does not start a backend that was already stopped", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;

@@ -9,12 +9,13 @@ import {
 } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 import type { CSSProperties } from "react";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import {
   defaultInstanceIdForDriver,
   type BackgroundActivityProfile,
   type BackgroundActivitySettings,
+  type DesktopTritonAiCredentialStatus,
   type DesktopUpdateChannel,
   PROVIDER_DISPLAY_NAMES,
   ProviderDriverKind,
@@ -114,7 +115,6 @@ import {
   type ProviderUpdateCandidate,
 } from "../ProviderUpdateLaunchNotification.logic";
 import { ProviderInstanceCard } from "./ProviderInstanceCard";
-import { TritonAiCredentialSetting } from "./TritonAiCredentialSetting";
 import { DRIVER_OPTIONS, getDriverOption } from "./providerDriverMeta";
 import {
   backgroundActivitySharedPolicySettings,
@@ -1670,8 +1670,35 @@ export function ProviderSettingsPanel() {
     () => new Set(),
   );
   const [openInstanceDetails, setOpenInstanceDetails] = useState<Record<string, boolean>>({});
+  const [tritonAiCredentialStatus, setTritonAiCredentialStatus] =
+    useState<DesktopTritonAiCredentialStatus | null>(null);
+  const [tritonAiCredentialStatusError, setTritonAiCredentialStatusError] = useState<string | null>(
+    null,
+  );
+  const [tritonAiCredentialStatusRequest, setTritonAiCredentialStatusRequest] = useState(0);
   const refreshingRef = useRef(false);
   const updatingProviderKeysRef = useRef<Set<string>>(new Set());
+  const desktopBridge = window.desktopBridge;
+
+  useEffect(() => {
+    if (!desktopBridge) return;
+    let cancelled = false;
+    setTritonAiCredentialStatusError(null);
+    void desktopBridge
+      .getTritonAiCredentialStatus()
+      .then((status) => {
+        if (!cancelled) setTritonAiCredentialStatus(status);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setTritonAiCredentialStatus(null);
+          setTritonAiCredentialStatusError("Could not load the saved TritonAI access setup.");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [desktopBridge, tritonAiCredentialStatusRequest]);
 
   const providerUpdateCandidates = useMemo(
     () => collectProviderUpdateCandidates(visibleServerProviders),
@@ -1925,7 +1952,6 @@ export function ProviderSettingsPanel() {
 
   return (
     <SettingsPageContainer>
-      <TritonAiCredentialSetting />
       <SettingsSection
         title="TritonAI Runtime"
         headerAction={
@@ -2086,6 +2112,17 @@ export function ProviderSettingsPanel() {
               driverOption={driverOption}
               liveProvider={liveProvider}
               isManagedByPolicy={managedProviderInstanceIds.has(String(row.instanceId))}
+              {...(desktopBridge && managedProviderInstanceIds.has(String(row.instanceId))
+                ? {
+                    tritonAiCredentialControl: {
+                      status: tritonAiCredentialStatus,
+                      statusError: tritonAiCredentialStatusError,
+                      onRetryStatus: () =>
+                        setTritonAiCredentialStatusRequest((request) => request + 1),
+                      onStatusChange: setTritonAiCredentialStatus,
+                    },
+                  }
+                : {})}
               isExpanded={openInstanceDetails[row.instanceId] ?? false}
               onExpandedChange={(open) =>
                 setOpenInstanceDetails((existing) => ({

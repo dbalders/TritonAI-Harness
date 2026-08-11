@@ -182,6 +182,19 @@ export const DesktopTritonAiCredentialStatusSchema = Schema.Struct({
 });
 export type DesktopTritonAiCredentialStatus = typeof DesktopTritonAiCredentialStatusSchema.Type;
 
+export const DesktopTritonAiCredentialRouteSchema = Schema.Literals(["on-prem", "frontier"]);
+export type DesktopTritonAiCredentialRoute = typeof DesktopTritonAiCredentialRouteSchema.Type;
+
+export type DesktopTritonAiRouteCredentialUpdate =
+  | {
+      readonly route: DesktopTritonAiCredentialRoute;
+      readonly apiKey: string;
+    }
+  | {
+      readonly route: DesktopTritonAiCredentialRoute;
+      readonly remove: true;
+    };
+
 export const DesktopTritonAiCredentialsUpdateResultSchema = Schema.Union([
   Schema.Struct({
     status: Schema.Literal("saved"),
@@ -1055,7 +1068,7 @@ export interface DesktopBridge {
   getLocalEnvironmentBearerToken: () => Promise<string>;
   getTritonAiCredentialStatus: () => Promise<DesktopTritonAiCredentialStatus>;
   updateTritonAiCredentials: (
-    apiKeys: ReadonlyArray<string>,
+    update: ReadonlyArray<string> | DesktopTritonAiRouteCredentialUpdate,
   ) => Promise<DesktopTritonAiCredentialsUpdateResult>;
   getClientSettings: () => Promise<ClientSettings | null>;
   setClientSettings: (settings: ClientSettings) => Promise<void>;

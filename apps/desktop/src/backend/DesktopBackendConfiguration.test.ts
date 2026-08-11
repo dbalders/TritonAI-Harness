@@ -498,6 +498,50 @@ describe("DesktopBackendConfiguration", () => {
     }),
   );
 
+  it.effect("resolvePrimary clears an inherited shared key for split installer credentials", () =>
+    Effect.gen(function* () {
+      const previousSharedKey = process.env.TRITONAI_API_KEY;
+      const inherited = "stale-shared-key";
+      const installedLocal = "installed-on-prem-key";
+      const installedFrontier = "installed-frontier-key";
+      try {
+        process.env.TRITONAI_API_KEY = inherited;
+
+        yield* withHarness(
+          Effect.gen(function* () {
+            const fileSystem = yield* FileSystem.FileSystem;
+            const environment = yield* DesktopEnvironment.DesktopEnvironment;
+            const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+            const envFile = environment.path.join(
+              environment.homeDirectory,
+              ".agents",
+              "ucsd",
+              "env",
+            );
+            yield* fileSystem.makeDirectory(environment.path.dirname(envFile), {
+              recursive: true,
+            });
+            yield* fileSystem.writeFileString(
+              envFile,
+              [
+                `export TRITONAI_ONPREM_API_KEY='${installedLocal}'`,
+                `export TRITONAI_FRONTIER_API_KEY='${installedFrontier}'`,
+                "",
+              ].join("\n"),
+            );
+
+            const config = yield* configuration.resolvePrimary;
+            assert.isUndefined(config.env.TRITONAI_API_KEY);
+            assert.equal(config.env.TRITONAI_ONPREM_API_KEY, installedLocal);
+            assert.equal(config.env.TRITONAI_FRONTIER_API_KEY, installedFrontier);
+          }),
+        );
+      } finally {
+        restoreEnv("TRITONAI_API_KEY", previousSharedKey);
+      }
+    }),
+  );
+
   it.effect("resolvePrimary prefers the persistent desktop key override", () =>
     Effect.gen(function* () {
       const previousTritonAiKey = process.env.TRITONAI_API_KEY;

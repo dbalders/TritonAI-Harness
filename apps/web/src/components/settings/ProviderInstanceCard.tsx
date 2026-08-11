@@ -15,6 +15,15 @@ import * as Result from "effect/Result";
 import { useState, type ReactNode } from "react";
 import {
   isProviderDriverKind,
+  TRITONAI_API_KEY_ENV,
+  TRITONAI_API_KEY_SOURCE_ENV,
+  TRITONAI_FRONTIER_API_KEY_ENV,
+  TRITONAI_FRONTIER_PROVIDER_INSTANCE_ID,
+  TRITONAI_ONPREM_API_KEY_ENV,
+  TRITONAI_ONPREM_PROVIDER_INSTANCE_ID,
+  UCSD_AI_BASE_URL_ENV,
+  type DesktopTritonAiCredentialRoute,
+  type DesktopTritonAiCredentialStatus,
   type ProviderInstanceConfig,
   type ProviderInstanceEnvironmentVariable,
   type ProviderInstanceId,
@@ -52,6 +61,7 @@ import { ProviderModelsSection } from "./ProviderModelsSection";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import { ProviderAccentColorPicker } from "./ProviderAccentColorPicker";
 import { RedactedSensitiveText } from "./RedactedSensitiveText";
+import { TritonAiRouteCredentialControl } from "./TritonAiRouteCredentialControl";
 import {
   getProviderVersionAdvisoryPresentation,
   PROVIDER_STATUS_STYLES,
@@ -68,6 +78,15 @@ const TRITONAI_MANAGED_CONFIG_FIELDS = new Set([
   "customModels",
   "customModelMetadata",
 ]);
+const TRITONAI_MANAGED_ENVIRONMENT_FIELDS = new Set([
+  UCSD_AI_BASE_URL_ENV,
+  TRITONAI_API_KEY_ENV,
+  TRITONAI_API_KEY_SOURCE_ENV,
+  TRITONAI_ONPREM_API_KEY_ENV,
+  TRITONAI_FRONTIER_API_KEY_ENV,
+]);
+const isTritonAiManagedEnvironmentField = (name: string) =>
+  TRITONAI_MANAGED_ENVIRONMENT_FIELDS.has(name.toUpperCase());
 
 let environmentVariableDraftId = 0;
 const nextEnvironmentVariableDraftId = () => `provider-env-${environmentVariableDraftId++}`;
@@ -145,6 +164,27 @@ export function deriveProviderModelsForDisplay(input: {
       },
   );
   return [...serverModels, ...customModels];
+}
+
+export function editableProviderEnvironment(
+  environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>,
+  managed: boolean,
+): ReadonlyArray<ProviderInstanceEnvironmentVariable> {
+  return managed
+    ? environment.filter((variable) => !isTritonAiManagedEnvironmentField(variable.name))
+    : environment;
+}
+
+export function mergeEditableProviderEnvironment(
+  current: ReadonlyArray<ProviderInstanceEnvironmentVariable>,
+  editable: ReadonlyArray<ProviderInstanceEnvironmentVariable>,
+  managed: boolean,
+): ReadonlyArray<ProviderInstanceEnvironmentVariable> {
+  if (!managed) return editable;
+  return [
+    ...current.filter((variable) => isTritonAiManagedEnvironmentField(variable.name)),
+    ...editable,
+  ];
 }
 
 function ProviderAuthEmail(props: {
@@ -366,6 +406,14 @@ interface ProviderInstanceCardProps {
   readonly onModelOrderChange: (next: ReadonlyArray<string>) => void;
   readonly onRunUpdate?: (() => void) | undefined;
   readonly isUpdating?: boolean | undefined;
+  readonly tritonAiCredentialControl?:
+    | {
+        readonly status: DesktopTritonAiCredentialStatus | null;
+        readonly statusError: string | null;
+        readonly onRetryStatus: () => void;
+        readonly onStatusChange: (status: DesktopTritonAiCredentialStatus) => void;
+      }
+    | undefined;
 }
 
 /**
@@ -411,6 +459,7 @@ export function ProviderInstanceCard({
   onModelOrderChange,
   onRunUpdate,
   isUpdating = false,
+  tritonAiCredentialControl,
 }: ProviderInstanceCardProps) {
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const isTritonAiManagedInstance = isManagedByPolicy;
@@ -436,6 +485,12 @@ export function ProviderInstanceCard({
   const displayName =
     instance.displayName?.trim() || driverOption?.label || String(instance.driver);
   const accentColor = normalizeProviderAccentColor(instance.accentColor);
+  const tritonAiCredentialRoute: DesktopTritonAiCredentialRoute | null =
+    String(instanceId) === TRITONAI_ONPREM_PROVIDER_INSTANCE_ID
+      ? "on-prem"
+      : String(instanceId) === TRITONAI_FRONTIER_PROVIDER_INSTANCE_ID
+        ? "frontier"
+        : null;
   const { copyToClipboard } = useCopyToClipboard<{ providerName: string }>({
     onCopy: ({ providerName }) => {
       toastManager.add({
@@ -513,10 +568,15 @@ export function ProviderInstanceCard({
 
   const updateEnvironment = (environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>) => {
     const cleaned = environment.filter((variable) => variable.name.trim().length > 0);
+    const nextEnvironment = mergeEditableProviderEnvironment(
+      instance.environment ?? [],
+      cleaned,
+      isTritonAiManagedInstance,
+    );
     const { environment: _omit, ...rest } = instance;
     onUpdate(
-      cleaned.length > 0
-        ? ({ ...rest, environment: cleaned } as ProviderInstanceConfig)
+      nextEnvironment.length > 0
+        ? ({ ...rest, environment: nextEnvironment } as ProviderInstanceConfig)
         : (rest as ProviderInstanceConfig),
     );
   };
@@ -774,6 +834,17 @@ export function ProviderInstanceCard({
                 environment values remain editable.
               </p>
             ) : null}
+            {isTritonAiManagedInstance &&
+            tritonAiCredentialRoute !== null &&
+            tritonAiCredentialControl ? (
+              <TritonAiRouteCredentialControl
+                route={tritonAiCredentialRoute}
+                status={tritonAiCredentialControl.status}
+                statusError={tritonAiCredentialControl.statusError}
+                onRetryStatus={tritonAiCredentialControl.onRetryStatus}
+                onStatusChange={tritonAiCredentialControl.onStatusChange}
+              />
+            ) : null}
             <div>
               <label htmlFor={`provider-instance-${instanceId}-display-name`} className="block">
                 <span className="text-xs font-medium text-foreground">Display name</span>
@@ -803,7 +874,10 @@ export function ProviderInstanceCard({
 
             <div>
               <ProviderEnvironmentSection
-                environment={instance.environment ?? []}
+                environment={editableProviderEnvironment(
+                  instance.environment ?? [],
+                  isTritonAiManagedInstance,
+                )}
                 onChange={updateEnvironment}
               />
             </div>

@@ -98,6 +98,8 @@ const DesktopTritonAiApiKeyValidationFailureReason = Schema.Literals([
   "upstream-error",
   "invalid-response",
   "no-model-access",
+  "no-on-prem-access",
+  "no-frontier-access",
 ]);
 
 export class DesktopTritonAiApiKeyValidationError extends Schema.TaggedErrorClass<DesktopTritonAiApiKeyValidationError>()(
@@ -125,6 +127,10 @@ export class DesktopTritonAiApiKeyValidationError extends Schema.TaggedErrorClas
         return "TritonAI returned an unexpected model list while verifying the key.";
       case "no-model-access":
         return "This key is active, but it does not include access to TritonAI Harness models.";
+      case "no-on-prem-access":
+        return "This key is active, but it does not include access to on-prem models.";
+      case "no-frontier-access":
+        return "This key is active, but it does not include access to frontier models.";
     }
   }
 }
@@ -235,6 +241,27 @@ export function mergeCredentialUpdate(
     ...(onPremApiKey === undefined ? {} : { onPremApiKey }),
     ...(frontierApiKey === undefined ? {} : { frontierApiKey }),
   };
+}
+
+export function credentialUpdateForRoute(
+  apiKey: string,
+  access: TritonAiCredentialAccess,
+  route: "on-prem" | "frontier",
+): TritonAiCredentialBundle | null {
+  if (route === "on-prem") {
+    return access.onPrem ? { onPremApiKey: apiKey } : null;
+  }
+  return access.frontier ? { frontierApiKey: apiKey } : null;
+}
+
+export function credentialBundleWithoutRoute(
+  existing: TritonAiCredentialBundle | null,
+  route: "on-prem" | "frontier",
+): TritonAiCredentialBundle {
+  const otherRoute = route === "on-prem" ? "frontier" : "on-prem";
+  const otherApiKey = routeCredential(existing, otherRoute);
+  if (otherApiKey === undefined) return {};
+  return otherRoute === "on-prem" ? { onPremApiKey: otherApiKey } : { frontierApiKey: otherApiKey };
 }
 
 export function resolveTritonAiModelsEndpoint(
@@ -392,7 +419,7 @@ function parseStoredCredentialBundle(contents: string): TritonAiCredentialBundle
   }
   try {
     const parsed = decodeStoredCredentialBundle(trimmed, { onExcessProperty: "error" });
-    return normalizeCredentialBundle(parsed);
+    return normalizeCredentialBundle(parsed) ?? {};
   } catch {
     return null;
   }
@@ -426,13 +453,17 @@ export const readTritonAiCredentialOverride = Effect.gen(function* () {
 export const replaceTritonAiCredentials = Effect.fn("desktop.tritonAiApiKey.replaceCredentials")(
   function* (
     rawCredentials: TritonAiCredentialBundle,
+    options?: { readonly allowEmpty?: boolean },
   ): Effect.fn.Return<
     void,
     DesktopTritonAiApiKeyInputError | DesktopTritonAiApiKeyWriteError,
     DesktopEnvironment.DesktopEnvironment | Crypto.Crypto | FileSystem.FileSystem
   > {
-    const credentials = normalizeCredentialBundle(rawCredentials);
-    if (credentials === null) return yield* new DesktopTritonAiApiKeyInputError();
+    const normalized = normalizeCredentialBundle(rawCredentials);
+    if (normalized === null && !options?.allowEmpty) {
+      return yield* new DesktopTritonAiApiKeyInputError();
+    }
+    const credentials = normalized ?? {};
 
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
     const fileSystem = yield* FileSystem.FileSystem;
