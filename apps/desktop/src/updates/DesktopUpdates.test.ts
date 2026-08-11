@@ -39,7 +39,7 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
   let checkCount = 0;
   let allowDowngrade = false;
   let fullChangelog = false;
-  const autoInstallOnAppQuitValues: boolean[] = [];
+  const nativeUpdaterEvents: Array<boolean | "download"> = [];
   const feedUrls: ElectronUpdater.ElectronUpdaterFeedUrl[] = [];
   const listeners = new Map<string, Set<(...args: readonly unknown[]) => void>>();
   const sentStates: DesktopUpdateState[] = [];
@@ -69,7 +69,7 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
     setAutoDownload: () => Effect.void,
     setAutoInstallOnAppQuit: (value) =>
       Effect.sync(() => {
-        autoInstallOnAppQuitValues.push(value);
+        nativeUpdaterEvents.push(value);
       }),
     setChannel: () => Effect.void,
     setAllowPrerelease: () => Effect.void,
@@ -86,7 +86,9 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
     checkForUpdates: Effect.sync(() => {
       checkCount += 1;
     }).pipe(Effect.andThen(options.checkForUpdates ?? Effect.void)),
-    downloadUpdate: Effect.void,
+    downloadUpdate: Effect.sync(() => {
+      nativeUpdaterEvents.push("download");
+    }),
     quitAndInstall: () => Effect.void,
     on: (eventName, listener) =>
       Effect.acquireRelease(
@@ -194,7 +196,7 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
 
   return {
     layer,
-    autoInstallOnAppQuitValues: () => autoInstallOnAppQuitValues,
+    nativeUpdaterEvents: () => nativeUpdaterEvents,
     checkCount: () => checkCount,
     feedUrls: () => feedUrls,
     fullChangelog: () => fullChangelog,
@@ -426,7 +428,7 @@ describe("DesktopUpdates", () => {
 
         assert.isTrue(result.accepted);
         assert.isTrue(result.completed);
-        assert.deepEqual(harness.autoInstallOnAppQuitValues(), [false, true]);
+        assert.deepEqual(harness.nativeUpdaterEvents(), [false, true, "download"]);
       }),
     ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
   });
