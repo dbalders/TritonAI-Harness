@@ -94,7 +94,7 @@ node scripts/build-desktop-artifact.ts --platform mac --target dmg --arch arm64
 node scripts/build-desktop-artifact.ts --platform win --target nsis --arch x64
 ```
 
-Use `--mock-updates` instead only for a deliberately local mock-update artifact. macOS and Windows
+Use `--mock-updates` only for a deliberately local mock-update artifact. macOS and Windows
 builds stop before expensive packaging when neither production nor mock updater configuration is
 present, and the final assembled app is independently checked for `resources/app-update.yml`.
 
