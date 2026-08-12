@@ -1204,31 +1204,43 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       const stageDistDir = yield* fs.makeTempDirectoryScoped({
         prefix: "tritonai-update-config-test-",
       });
-      const resourceDirectories = [
-        path.join(stageDistDir, "mac-arm64", "TritonAI Harness.app", "Contents", "Resources"),
-        path.join(stageDistDir, "win-unpacked", "resources"),
-      ];
+      const packagedApps = [
+        {
+          platform: "mac",
+          arch: "arm64",
+          resourcesDirectory: path.join(
+            stageDistDir,
+            "mac-arm64",
+            "TritonAI Harness.app",
+            "Contents",
+            "Resources",
+          ),
+        },
+        {
+          platform: "win",
+          arch: "x64",
+          resourcesDirectory: path.join(stageDistDir, "win-unpacked", "resources"),
+        },
+        {
+          platform: "win",
+          arch: "arm64",
+          resourcesDirectory: path.join(stageDistDir, "win-arm64-unpacked", "resources"),
+        },
+      ] as const;
 
-      for (const resourcesDirectory of resourceDirectories) {
-        yield* fs.makeDirectory(resourcesDirectory, { recursive: true });
+      for (const app of packagedApps) {
+        yield* fs.makeDirectory(app.resourcesDirectory, { recursive: true });
         yield* fs.writeFileString(
-          path.join(resourcesDirectory, "app-update.yml"),
+          path.join(app.resourcesDirectory, "app-update.yml"),
           "provider: github\n",
         );
+        yield* assertPackagedDesktopUpdateConfig({
+          stageDistDir,
+          platform: app.platform,
+          arch: app.arch,
+          productName: "TritonAI Harness",
+        });
       }
-
-      yield* assertPackagedDesktopUpdateConfig({
-        stageDistDir,
-        platform: "mac",
-        arch: "arm64",
-        productName: "TritonAI Harness",
-      });
-      yield* assertPackagedDesktopUpdateConfig({
-        stageDistDir,
-        platform: "win",
-        arch: "x64",
-        productName: "TritonAI Harness",
-      });
     }),
   );
 

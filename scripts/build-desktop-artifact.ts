@@ -1319,7 +1319,9 @@ function resolvePackagedResourcesDirectory(
   }
   const unpackedDirectory =
     platform === "win"
-      ? "win-unpacked"
+      ? arch === "x64"
+        ? "win-unpacked"
+        : `win-${arch}-unpacked`
       : arch === "arm64"
         ? "linux-arm64-unpacked"
         : "linux-unpacked";
@@ -2932,8 +2934,18 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     const executableArtifacts = copiedArtifacts.filter(
       (artifactPath) => path.extname(artifactPath).toLowerCase() === ".exe",
     );
+    const unpackedResourcesDirectory = resolvePackagedResourcesDirectory(
+      stageDistDir,
+      options.platform,
+      options.arch,
+      resolveDesktopProductName(appVersion),
+      path,
+    );
     executableArtifacts.push(
-      path.join(stageDistDir, "win-unpacked", `${resolveDesktopProductName(appVersion)}.exe`),
+      path.join(
+        path.dirname(unpackedResourcesDirectory),
+        `${resolveDesktopProductName(appVersion)}.exe`,
+      ),
     );
     const executablePathsJson = yield* encodeJsonString(executableArtifacts);
     const encodedExecutablePaths = Buffer.from(executablePathsJson, "utf8").toString("base64");
