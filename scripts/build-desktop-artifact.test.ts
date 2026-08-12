@@ -11,6 +11,7 @@ import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import {
+  assertDesktopUpdatePublishConfiguration,
   assertPackagedDesktopUpdateConfig,
   assertPackagedFfiRsNativeBinaries,
   buildMacDmg,
@@ -24,6 +25,7 @@ import {
   DESKTOP_ELECTRON_LANGUAGES,
   DESKTOP_FILE_EXCLUSIONS,
   DESKTOP_EXTRA_RESOURCES,
+  DesktopUpdatePublishConfigurationMissingError,
   InvalidMacPasskeyRpDomainError,
   InvalidMacPasskeyPublishableKeyError,
   InvalidAzureTrustedSigningEndpointError,
@@ -265,6 +267,56 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         releaseType: "prerelease",
         channel: "nightly",
       });
+    }),
+  );
+
+  it.effect(
+    "fails before macOS and Windows packaging when updater publishing is unconfigured",
+    () =>
+      Effect.gen(function* () {
+        for (const platform of ["mac", "win"] as const) {
+          const error = yield* assertDesktopUpdatePublishConfiguration({
+            platform,
+            updateChannel: "latest",
+            mockUpdates: false,
+          }).pipe(Effect.flip);
+
+          assert.instanceOf(error, DesktopUpdatePublishConfigurationMissingError);
+          assert.equal(error.platform, platform);
+          assert.equal(error.updateChannel, "latest");
+          assert.include(error.message, "T3CODE_DESKTOP_UPDATE_REPOSITORY=owner/repo");
+          assert.include(error.message, "--mock-updates");
+        }
+      }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
+  );
+
+  it.effect("allows explicit production, mock-update, and Linux packaging modes", () =>
+    Effect.gen(function* () {
+      yield* assertDesktopUpdatePublishConfiguration({
+        platform: "mac",
+        updateChannel: "latest",
+        mockUpdates: false,
+      }).pipe(
+        Effect.provide(
+          ConfigProvider.layer(
+            ConfigProvider.fromEnv({
+              env: {
+                T3CODE_DESKTOP_UPDATE_REPOSITORY: "dbalders/TritonAI-Harness",
+              },
+            }),
+          ),
+        ),
+      );
+
+      for (const input of [
+        { platform: "win", mockUpdates: true },
+        { platform: "linux", mockUpdates: false },
+      ] as const) {
+        yield* assertDesktopUpdatePublishConfiguration({
+          ...input,
+          updateChannel: "latest",
+        }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} }))));
+      }
     }),
   );
 

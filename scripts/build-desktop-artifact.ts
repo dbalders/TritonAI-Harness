@@ -242,6 +242,18 @@ export class PackagedDesktopUpdateConfigMissingError extends Schema.TaggedErrorC
   }
 }
 
+export class DesktopUpdatePublishConfigurationMissingError extends Schema.TaggedErrorClass<DesktopUpdatePublishConfigurationMissingError>()(
+  "DesktopUpdatePublishConfigurationMissingError",
+  {
+    platform: Schema.Literals(["mac", "win"]),
+    updateChannel: Schema.Literals(["latest", "nightly"]),
+  },
+) {
+  override get message(): string {
+    return `Desktop ${this.platform} ${this.updateChannel} builds require updater publish configuration. Set T3CODE_DESKTOP_UPDATE_REPOSITORY=owner/repo (or GITHUB_REPOSITORY), or use --mock-updates for a mock update artifact.`;
+  }
+}
+
 export class DesktopRuntimeManifestMismatchError extends Schema.TaggedErrorClass<DesktopRuntimeManifestMismatchError>()(
   "DesktopRuntimeManifestMismatchError",
   {
@@ -2011,6 +2023,22 @@ export const resolveGitHubPublishConfig = Effect.fn("resolveGitHubPublishConfig"
   };
 });
 
+export const assertDesktopUpdatePublishConfiguration = Effect.fn(
+  "assertDesktopUpdatePublishConfiguration",
+)(function* (input: {
+  readonly platform: typeof BuildPlatform.Type;
+  readonly updateChannel: "latest" | "nightly";
+  readonly mockUpdates: boolean;
+}) {
+  if (input.platform === "linux" || input.mockUpdates) return;
+  if (yield* resolveGitHubPublishConfig(input.updateChannel)) return;
+
+  return yield* new DesktopUpdatePublishConfigurationMissingError({
+    platform: input.platform,
+    updateChannel: input.updateChannel,
+  });
+});
+
 export function resolveDesktopUpdateChannel(version: string): "latest" | "nightly" {
   return /-nightly\.\d{8}\.\d+$/.test(version) ? "nightly" : "latest";
 }
@@ -2335,6 +2363,21 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const fs = yield* FileSystem.FileSystem;
   const hostPlatform = yield* HostProcessPlatform;
   const hostArch = yield* HostProcessArchitecture;
+
+  const platformConfig = PLATFORM_CONFIG[options.platform];
+  if (!platformConfig) {
+    return yield* new UnsupportedDesktopBuildPlatformError({
+      platform: options.platform,
+    });
+  }
+
+  const appVersion = options.version ?? serverPackageJson.version;
+  yield* assertDesktopUpdatePublishConfiguration({
+    platform: options.platform,
+    updateChannel: resolveDesktopUpdateChannel(appVersion),
+    mockUpdates: options.mockUpdates,
+  });
+
   const managedHarnessConfig = yield* Effect.try({
     try: () => loadManagedHarnessConfigForBuild(repoRoot),
     catch: (cause) =>
@@ -2350,13 +2393,6 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const workspaceOverrides = workspaceConfig.overrides ?? {};
   const workspacePatchedDependencies = workspaceConfig.patchedDependencies ?? {};
   const workspaceAllowBuilds = workspaceConfig.allowBuilds ?? {};
-
-  const platformConfig = PLATFORM_CONFIG[options.platform];
-  if (!platformConfig) {
-    return yield* new UnsupportedDesktopBuildPlatformError({
-      platform: options.platform,
-    });
-  }
 
   const hostLibc = resolveHostLibc(hostPlatform);
   const missingRuntimeDeploymentArchitectures = findMissingRuntimeDeploymentArchitectures({
@@ -2446,7 +2482,6 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     return yield* new DesktopRuntimeManifestMismatchError({ section: "optionalDependencies" });
   }
 
-  const appVersion = options.version ?? serverPackageJson.version;
   const iconAssets = resolveDesktopBuildIconAssets(appVersion);
   const commitHash = yield* resolveGitCommitHash(repoRoot);
   const mkdir = options.keepStage ? fs.makeTempDirectory : fs.makeTempDirectoryScoped;
