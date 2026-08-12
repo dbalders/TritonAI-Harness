@@ -229,6 +229,19 @@ export class PackagedNativeDependencyMissingError extends Schema.TaggedErrorClas
   }
 }
 
+export class PackagedDesktopUpdateConfigMissingError extends Schema.TaggedErrorClass<PackagedDesktopUpdateConfigMissingError>()(
+  "PackagedDesktopUpdateConfigMissingError",
+  {
+    configPath: Schema.String,
+    platform: Schema.Literals(["mac", "win"]),
+    arch: BuildArch,
+  },
+) {
+  override get message(): string {
+    return `Packaged desktop update config is missing at ${this.configPath}`;
+  }
+}
+
 export class DesktopRuntimeManifestMismatchError extends Schema.TaggedErrorClass<DesktopRuntimeManifestMismatchError>()(
   "DesktopRuntimeManifestMismatchError",
   {
@@ -1300,6 +1313,37 @@ function resolvePackagedResourcesDirectory(
         : "linux-unpacked";
   return path.join(stageDistDir, unpackedDirectory, "resources");
 }
+
+export const assertPackagedDesktopUpdateConfig = Effect.fn("assertPackagedDesktopUpdateConfig")(
+  function* (input: {
+    readonly stageDistDir: string;
+    readonly platform: typeof BuildPlatform.Type;
+    readonly arch: typeof BuildArch.Type;
+    readonly productName: string;
+  }) {
+    if (input.platform === "linux") return;
+
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const configPath = path.join(
+      resolvePackagedResourcesDirectory(
+        input.stageDistDir,
+        input.platform,
+        input.arch,
+        input.productName,
+        path,
+      ),
+      "app-update.yml",
+    );
+    if (!(yield* fs.exists(configPath))) {
+      return yield* new PackagedDesktopUpdateConfigMissingError({
+        configPath,
+        platform: input.platform,
+        arch: input.arch,
+      });
+    }
+  },
+);
 
 export const assertPackagedFfiRsNativeBinaries = Effect.fn("assertPackagedFfiRsNativeBinaries")(
   function* (input: {
@@ -2793,6 +2837,13 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       arch: options.arch,
     });
   }
+
+  yield* assertPackagedDesktopUpdateConfig({
+    stageDistDir,
+    platform: options.platform,
+    arch: options.arch,
+    productName: resolveDesktopProductName(appVersion),
+  });
 
   yield* assertPackagedFfiRsNativeBinaries({
     stageDistDir,

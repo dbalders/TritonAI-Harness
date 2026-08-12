@@ -11,6 +11,7 @@ import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import {
+  assertPackagedDesktopUpdateConfig,
   assertPackagedFfiRsNativeBinaries,
   buildMacDmg,
   BuildCommandFailedError,
@@ -35,6 +36,7 @@ import {
   MissingAzureTrustedSigningConfigurationError,
   MissingMacPasskeyProvisioningProfileError,
   PackagedNativeDependencyMissingError,
+  PackagedDesktopUpdateConfigMissingError,
   renderMacInheritedEntitlements,
   renderMacPasskeyEntitlements,
   resolveClerkPasskeyNativeArtifacts,
@@ -1114,6 +1116,67 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         error.binaryPath,
         "app.asar.unpacked/node_modules/@yuuang/ffi-rs-darwin-arm64",
       );
+    }),
+  );
+
+  it.effect("fails closed when assembled macOS and Windows apps omit updater config", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const stageDistDir = yield* fs.makeTempDirectoryScoped({
+        prefix: "tritonai-update-config-test-",
+      });
+
+      for (const input of [
+        { platform: "mac", arch: "arm64" },
+        { platform: "win", arch: "x64" },
+      ] as const) {
+        const error = yield* assertPackagedDesktopUpdateConfig({
+          stageDistDir,
+          ...input,
+          productName: "TritonAI Harness",
+        }).pipe(Effect.flip);
+
+        assert.instanceOf(error, PackagedDesktopUpdateConfigMissingError);
+        assert.equal(error.platform, input.platform);
+        assert.equal(error.arch, input.arch);
+        assert.equal(path.basename(error.configPath), "app-update.yml");
+      }
+    }),
+  );
+
+  it.effect("accepts updater config in assembled macOS and Windows apps", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const stageDistDir = yield* fs.makeTempDirectoryScoped({
+        prefix: "tritonai-update-config-test-",
+      });
+      const resourceDirectories = [
+        path.join(stageDistDir, "mac-arm64", "TritonAI Harness.app", "Contents", "Resources"),
+        path.join(stageDistDir, "win-unpacked", "resources"),
+      ];
+
+      for (const resourcesDirectory of resourceDirectories) {
+        yield* fs.makeDirectory(resourcesDirectory, { recursive: true });
+        yield* fs.writeFileString(
+          path.join(resourcesDirectory, "app-update.yml"),
+          "provider: github\n",
+        );
+      }
+
+      yield* assertPackagedDesktopUpdateConfig({
+        stageDistDir,
+        platform: "mac",
+        arch: "arm64",
+        productName: "TritonAI Harness",
+      });
+      yield* assertPackagedDesktopUpdateConfig({
+        stageDistDir,
+        platform: "win",
+        arch: "x64",
+        productName: "TritonAI Harness",
+      });
     }),
   );
 
