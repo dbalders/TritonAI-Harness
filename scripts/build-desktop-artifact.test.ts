@@ -11,6 +11,8 @@ import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import {
+  assertDesktopUpdatePublishConfiguration,
+  assertPackagedDesktopUpdateConfig,
   assertPackagedFfiRsNativeBinaries,
   buildMacDmg,
   BuildCommandFailedError,
@@ -23,6 +25,7 @@ import {
   DESKTOP_ELECTRON_LANGUAGES,
   DESKTOP_FILE_EXCLUSIONS,
   DESKTOP_EXTRA_RESOURCES,
+  DesktopUpdatePublishConfigurationMissingError,
   InvalidMacPasskeyRpDomainError,
   InvalidMacPasskeyPublishableKeyError,
   InvalidAzureTrustedSigningEndpointError,
@@ -35,6 +38,7 @@ import {
   MissingAzureTrustedSigningConfigurationError,
   MissingMacPasskeyProvisioningProfileError,
   PackagedNativeDependencyMissingError,
+  PackagedDesktopUpdateConfigMissingError,
   renderMacInheritedEntitlements,
   renderMacPasskeyEntitlements,
   resolveClerkPasskeyNativeArtifacts,
@@ -263,6 +267,56 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         releaseType: "prerelease",
         channel: "nightly",
       });
+    }),
+  );
+
+  it.effect(
+    "fails before macOS and Windows packaging when updater publishing is unconfigured",
+    () =>
+      Effect.gen(function* () {
+        for (const platform of ["mac", "win"] as const) {
+          const error = yield* assertDesktopUpdatePublishConfiguration({
+            platform,
+            updateChannel: "latest",
+            mockUpdates: false,
+          }).pipe(Effect.flip);
+
+          assert.instanceOf(error, DesktopUpdatePublishConfigurationMissingError);
+          assert.equal(error.platform, platform);
+          assert.equal(error.updateChannel, "latest");
+          assert.include(error.message, "T3CODE_DESKTOP_UPDATE_REPOSITORY=owner/repo");
+          assert.include(error.message, "--mock-updates");
+        }
+      }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
+  );
+
+  it.effect("allows explicit production, mock-update, and Linux packaging modes", () =>
+    Effect.gen(function* () {
+      yield* assertDesktopUpdatePublishConfiguration({
+        platform: "mac",
+        updateChannel: "latest",
+        mockUpdates: false,
+      }).pipe(
+        Effect.provide(
+          ConfigProvider.layer(
+            ConfigProvider.fromEnv({
+              env: {
+                T3CODE_DESKTOP_UPDATE_REPOSITORY: "dbalders/TritonAI-Harness",
+              },
+            }),
+          ),
+        ),
+      );
+
+      for (const input of [
+        { platform: "win", mockUpdates: true },
+        { platform: "linux", mockUpdates: false },
+      ] as const) {
+        yield* assertDesktopUpdatePublishConfiguration({
+          ...input,
+          updateChannel: "latest",
+        }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} }))));
+      }
     }),
   );
 
@@ -1114,6 +1168,79 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         error.binaryPath,
         "app.asar.unpacked/node_modules/@yuuang/ffi-rs-darwin-arm64",
       );
+    }),
+  );
+
+  it.effect("fails closed when assembled macOS and Windows apps omit updater config", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const stageDistDir = yield* fs.makeTempDirectoryScoped({
+        prefix: "tritonai-update-config-test-",
+      });
+
+      for (const input of [
+        { platform: "mac", arch: "arm64" },
+        { platform: "win", arch: "x64" },
+      ] as const) {
+        const error = yield* assertPackagedDesktopUpdateConfig({
+          stageDistDir,
+          ...input,
+          productName: "TritonAI Harness",
+        }).pipe(Effect.flip);
+
+        assert.instanceOf(error, PackagedDesktopUpdateConfigMissingError);
+        assert.equal(error.platform, input.platform);
+        assert.equal(error.arch, input.arch);
+        assert.equal(path.basename(error.configPath), "app-update.yml");
+      }
+    }),
+  );
+
+  it.effect("accepts updater config in assembled macOS and Windows apps", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const stageDistDir = yield* fs.makeTempDirectoryScoped({
+        prefix: "tritonai-update-config-test-",
+      });
+      const packagedApps = [
+        {
+          platform: "mac",
+          arch: "arm64",
+          resourcesDirectory: path.join(
+            stageDistDir,
+            "mac-arm64",
+            "TritonAI Harness.app",
+            "Contents",
+            "Resources",
+          ),
+        },
+        {
+          platform: "win",
+          arch: "x64",
+          resourcesDirectory: path.join(stageDistDir, "win-unpacked", "resources"),
+        },
+        {
+          platform: "win",
+          arch: "arm64",
+          resourcesDirectory: path.join(stageDistDir, "win-arm64-unpacked", "resources"),
+        },
+      ] as const;
+
+      for (const app of packagedApps) {
+        yield* fs.makeDirectory(app.resourcesDirectory, { recursive: true });
+        yield* fs.writeFileString(
+          path.join(app.resourcesDirectory, "app-update.yml"),
+          "provider: github\n",
+        );
+        yield* assertPackagedDesktopUpdateConfig({
+          stageDistDir,
+          platform: app.platform,
+          arch: app.arch,
+          productName: "TritonAI Harness",
+        });
+      }
     }),
   );
 

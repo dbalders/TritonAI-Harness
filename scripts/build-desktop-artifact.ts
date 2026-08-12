@@ -229,6 +229,31 @@ export class PackagedNativeDependencyMissingError extends Schema.TaggedErrorClas
   }
 }
 
+export class PackagedDesktopUpdateConfigMissingError extends Schema.TaggedErrorClass<PackagedDesktopUpdateConfigMissingError>()(
+  "PackagedDesktopUpdateConfigMissingError",
+  {
+    configPath: Schema.String,
+    platform: Schema.Literals(["mac", "win"]),
+    arch: BuildArch,
+  },
+) {
+  override get message(): string {
+    return `Packaged desktop update config is missing at ${this.configPath}`;
+  }
+}
+
+export class DesktopUpdatePublishConfigurationMissingError extends Schema.TaggedErrorClass<DesktopUpdatePublishConfigurationMissingError>()(
+  "DesktopUpdatePublishConfigurationMissingError",
+  {
+    platform: Schema.Literals(["mac", "win"]),
+    updateChannel: Schema.Literals(["latest", "nightly"]),
+  },
+) {
+  override get message(): string {
+    return `Desktop ${this.platform} ${this.updateChannel} builds require updater publish configuration. Set T3CODE_DESKTOP_UPDATE_REPOSITORY=owner/repo (or GITHUB_REPOSITORY), or use --mock-updates for a mock update artifact.`;
+  }
+}
+
 export class DesktopRuntimeManifestMismatchError extends Schema.TaggedErrorClass<DesktopRuntimeManifestMismatchError>()(
   "DesktopRuntimeManifestMismatchError",
   {
@@ -1294,12 +1319,45 @@ function resolvePackagedResourcesDirectory(
   }
   const unpackedDirectory =
     platform === "win"
-      ? "win-unpacked"
+      ? arch === "x64"
+        ? "win-unpacked"
+        : `win-${arch}-unpacked`
       : arch === "arm64"
         ? "linux-arm64-unpacked"
         : "linux-unpacked";
   return path.join(stageDistDir, unpackedDirectory, "resources");
 }
+
+export const assertPackagedDesktopUpdateConfig = Effect.fn("assertPackagedDesktopUpdateConfig")(
+  function* (input: {
+    readonly stageDistDir: string;
+    readonly platform: typeof BuildPlatform.Type;
+    readonly arch: typeof BuildArch.Type;
+    readonly productName: string;
+  }) {
+    if (input.platform === "linux") return;
+
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const configPath = path.join(
+      resolvePackagedResourcesDirectory(
+        input.stageDistDir,
+        input.platform,
+        input.arch,
+        input.productName,
+        path,
+      ),
+      "app-update.yml",
+    );
+    if (!(yield* fs.exists(configPath))) {
+      return yield* new PackagedDesktopUpdateConfigMissingError({
+        configPath,
+        platform: input.platform,
+        arch: input.arch,
+      });
+    }
+  },
+);
 
 export const assertPackagedFfiRsNativeBinaries = Effect.fn("assertPackagedFfiRsNativeBinaries")(
   function* (input: {
@@ -1967,6 +2025,22 @@ export const resolveGitHubPublishConfig = Effect.fn("resolveGitHubPublishConfig"
   };
 });
 
+export const assertDesktopUpdatePublishConfiguration = Effect.fn(
+  "assertDesktopUpdatePublishConfiguration",
+)(function* (input: {
+  readonly platform: typeof BuildPlatform.Type;
+  readonly updateChannel: "latest" | "nightly";
+  readonly mockUpdates: boolean;
+}) {
+  if (input.platform === "linux" || input.mockUpdates) return;
+  if (yield* resolveGitHubPublishConfig(input.updateChannel)) return;
+
+  return yield* new DesktopUpdatePublishConfigurationMissingError({
+    platform: input.platform,
+    updateChannel: input.updateChannel,
+  });
+});
+
 export function resolveDesktopUpdateChannel(version: string): "latest" | "nightly" {
   return /-nightly\.\d{8}\.\d+$/.test(version) ? "nightly" : "latest";
 }
@@ -2291,6 +2365,21 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const fs = yield* FileSystem.FileSystem;
   const hostPlatform = yield* HostProcessPlatform;
   const hostArch = yield* HostProcessArchitecture;
+
+  const platformConfig = PLATFORM_CONFIG[options.platform];
+  if (!platformConfig) {
+    return yield* new UnsupportedDesktopBuildPlatformError({
+      platform: options.platform,
+    });
+  }
+
+  const appVersion = options.version ?? serverPackageJson.version;
+  yield* assertDesktopUpdatePublishConfiguration({
+    platform: options.platform,
+    updateChannel: resolveDesktopUpdateChannel(appVersion),
+    mockUpdates: options.mockUpdates,
+  });
+
   const managedHarnessConfig = yield* Effect.try({
     try: () => loadManagedHarnessConfigForBuild(repoRoot),
     catch: (cause) =>
@@ -2306,13 +2395,6 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const workspaceOverrides = workspaceConfig.overrides ?? {};
   const workspacePatchedDependencies = workspaceConfig.patchedDependencies ?? {};
   const workspaceAllowBuilds = workspaceConfig.allowBuilds ?? {};
-
-  const platformConfig = PLATFORM_CONFIG[options.platform];
-  if (!platformConfig) {
-    return yield* new UnsupportedDesktopBuildPlatformError({
-      platform: options.platform,
-    });
-  }
 
   const hostLibc = resolveHostLibc(hostPlatform);
   const missingRuntimeDeploymentArchitectures = findMissingRuntimeDeploymentArchitectures({
@@ -2402,7 +2484,6 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     return yield* new DesktopRuntimeManifestMismatchError({ section: "optionalDependencies" });
   }
 
-  const appVersion = options.version ?? serverPackageJson.version;
   const iconAssets = resolveDesktopBuildIconAssets(appVersion);
   const commitHash = yield* resolveGitCommitHash(repoRoot);
   const mkdir = options.keepStage ? fs.makeTempDirectory : fs.makeTempDirectoryScoped;
@@ -2794,6 +2875,13 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     });
   }
 
+  yield* assertPackagedDesktopUpdateConfig({
+    stageDistDir,
+    platform: options.platform,
+    arch: options.arch,
+    productName: resolveDesktopProductName(appVersion),
+  });
+
   yield* assertPackagedFfiRsNativeBinaries({
     stageDistDir,
     platform: options.platform,
@@ -2846,8 +2934,18 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     const executableArtifacts = copiedArtifacts.filter(
       (artifactPath) => path.extname(artifactPath).toLowerCase() === ".exe",
     );
+    const unpackedResourcesDirectory = resolvePackagedResourcesDirectory(
+      stageDistDir,
+      options.platform,
+      options.arch,
+      resolveDesktopProductName(appVersion),
+      path,
+    );
     executableArtifacts.push(
-      path.join(stageDistDir, "win-unpacked", `${resolveDesktopProductName(appVersion)}.exe`),
+      path.join(
+        path.dirname(unpackedResourcesDirectory),
+        `${resolveDesktopProductName(appVersion)}.exe`,
+      ),
     );
     const executablePathsJson = yield* encodeJsonString(executableArtifacts);
     const encodedExecutablePaths = Buffer.from(executablePathsJson, "utf8").toString("base64");
