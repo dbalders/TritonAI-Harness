@@ -45,6 +45,7 @@ import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ExternalLauncher from "../process/externalLauncher.ts";
 import { readPersistedServerRuntimeState } from "../serverRuntimeState.ts";
 import { projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
+import { resolveCliCommand } from "./invocation.ts";
 
 const jsonFlag = Flag.boolean("json").pipe(
   Flag.withDescription("Emit JSON instead of human-readable output."),
@@ -516,10 +517,11 @@ const connectLinkCommand = Command.make("link", {
         yield* Console.log("TritonAI Connect\n");
         const linked = yield* linkEnvironmentForConnect(flags);
         if (linked) {
+          const serveCommand = yield* resolveCliCommand("serve");
           yield* Console.log(
             flags.publishOnly
               ? `✓ Authorized${connectedAs(linked.identity)}\n\nNext\n  Start T3 to publish agent activity (no managed tunnel).`
-              : `✓ Authorized${connectedAs(linked.identity)}\n\nNext\n  Start the server with \`t3 serve\` to make this machine reachable.`,
+              : `✓ Authorized${connectedAs(linked.identity)}\n\nNext\n  Start the server with \`${serveCommand}\` to make this machine reachable.`,
           );
         }
       }),

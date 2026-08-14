@@ -65,7 +65,7 @@ const encodeServerSettings = Schema.encodeEffect(ServerSettings);
 const encodeUnknownJsonPretty = Schema.encodeUnknownEffect(fromJsonStringPretty(Schema.Unknown));
 const decodeServerSettings = Schema.decodeUnknownEffect(ServerSettings);
 const decodeServerSettingsExit = Schema.decodeUnknownExit(ServerSettings);
-const decodeUnknownJsonExit = Schema.decodeUnknownExit(Schema.UnknownFromJsonString);
+const decodeUnknownJsonExit = Schema.decodeUnknownExit(Schema.fromJsonString(Schema.Unknown));
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();

@@ -39,6 +39,9 @@ vi.mock("../../env", () => ({ isElectron: true }));
 vi.mock("../../state/desktopUpdate", () => ({
   useDesktopUpdateState: () => testState.desktopUpdate,
 }));
+vi.mock("../../localApi", () => ({
+  ensureLocalApi: () => ({ dialogs: { confirm: testState.confirm } }),
+}));
 vi.mock("../ui/toast", () => ({
   stackedThreadToast: (toast: unknown) => toast,
   toastManager: { add: testState.toast },

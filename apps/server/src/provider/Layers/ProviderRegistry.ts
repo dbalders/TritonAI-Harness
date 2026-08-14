@@ -212,6 +212,7 @@ const buildSnapshotSource = (instance: ProviderInstance): ProviderSnapshotSource
   getSnapshot: instance.snapshot.getSnapshot,
   refresh: instance.snapshot.refresh,
   streamChanges: instance.snapshot.streamChanges,
+  subscribeChanges: instance.snapshot.subscribeChanges,
 });
 
 export const ProviderRegistryLive = Layer.effect(
@@ -577,7 +578,10 @@ export const ProviderRegistryLive = Layer.effect(
         // the current read or the active subscriber observes the result.
         for (const [, instance] of newlyAdded) {
           const source = buildSnapshotSource(instance);
-          yield* Stream.runForEach(source.streamChanges, (provider) =>
+          const changes = source.subscribeChanges
+            ? Stream.fromSubscription(yield* source.subscribeChanges)
+            : source.streamChanges;
+          yield* Stream.runForEach(changes, (provider) =>
             correlateSnapshotWithSource(source, provider).pipe(Effect.flatMap(syncProvider)),
           ).pipe(Effect.forkScoped);
         }

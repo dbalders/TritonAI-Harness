@@ -9,7 +9,7 @@ import * as Schema from "effect/Schema";
 export const MANAGED_HARNESS_CONFIG_RELATIVE_PATH = "config/tritonai-managed-config.json";
 
 const decodeManagedConfig = Schema.decodeUnknownSync(TritonAiManagedConfig);
-const decodeUnknownJson = Schema.decodeUnknownSync(Schema.UnknownFromJsonString);
+const decodeUnknownJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 
 export interface ManagedHarnessConfigBuildInput {
   readonly config: Config;

@@ -79,6 +79,18 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --app-scrollbar-width: 6px;
   --app-scrollbar-thumb: rgb(217 217 217);
   --app-scrollbar-thumb-hover: rgb(191 191 191);
+  /*
+   * Compact UI geometry. Keep these values semantic so sidebar, palette,
+   * tooltip, and toolbar controls cannot quietly drift apart.
+   */
+  --control-radius: 0.5rem;
+  --sidebar-content-inset: 0.5rem;
+  --sidebar-control-gap: 0.5rem;
+  --sidebar-icon-color: color-mix(in srgb, var(--sidebar-muted-foreground) 60%, var(--sidebar));
+  --sidebar-row-content-inset: 0.625rem;
+  --command-shell-inset: 0.5rem;
+  --command-content-inset: 1rem;
+  --floating-content-inset: 0.75rem;
   --glass-blur: 12px;
   --glass-opacity: 80%;
   --glass-saturation: 1.14;
@@ -118,6 +130,15 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   );
 }
 
+/* The font tokens are declared outside the inline theme so utilities reference
+   the variables and Settings -> Appearance can override them at runtime. The
+   default stacks are mirrored in `appearanceFonts.ts`. */
+@theme {
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-mono:
+    ui-monospace, "SF Mono", "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
+}
+
 @theme inline {
   --color-zinc-25: oklch(99.2% 0 0);
   --animate-skeleton: skeleton 2s -1s infinite linear;
@@ -125,14 +146,15 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
      compositor updates discrete frames instead of every vsync. */
   --animate-status-pulse: status-pulse 2s infinite;
   --animate-status-ping: status-ping 2s infinite;
-  --animate-sidebar-working-text: sidebar-working-text 3.4s infinite;
-  --font-sans:
-    "DM Sans Variable", "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui,
-    sans-serif;
-  --font-mono:
-    "SF Mono", "SFMono-Regular", "JetBrains Mono", Consolas, "Liberation Mono", Menlo, monospace;
   --color-warning-foreground: var(--warning-foreground);
   --color-warning: var(--warning);
+  --color-warning-surface: var(--warning-surface);
+  --color-error-foreground: var(--error-foreground);
+  --color-error: var(--error);
+  --color-error-surface: var(--error-surface);
+  --color-update-foreground: var(--update-foreground);
+  --color-update: var(--update);
+  --color-update-surface: var(--update-surface);
   --color-success-foreground: var(--success-foreground);
   --color-success: var(--success);
   --color-info-foreground: var(--info-foreground);
@@ -146,6 +168,9 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --color-accent: var(--accent);
   --color-muted-foreground: var(--muted-foreground);
   --color-muted: var(--muted);
+  --color-placeholder: var(--placeholder);
+  --color-secondary-label: var(--secondary-label);
+  --color-icon-muted: var(--icon-muted);
   --color-secondary-foreground: var(--secondary-foreground);
   --color-secondary: var(--secondary);
   --color-primary-foreground: var(--primary-foreground);
@@ -157,6 +182,11 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --color-foreground: var(--foreground);
   --color-background: var(--background);
   --color-surface-raised: var(--surface-raised);
+  --color-message: var(--message-surface);
+  --color-message-foreground: var(--message-foreground);
+  --color-message-action: var(--message-action);
+  --color-message-action-foreground: var(--message-action-foreground);
+  --color-message-action-hover: var(--message-action-hover);
   --color-sidebar: var(--sidebar);
   --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar-accent: var(--sidebar-accent);
@@ -207,21 +237,6 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     100% {
       opacity: 0;
       scale: 2;
-    }
-  }
-  @keyframes sidebar-working-text {
-    0%,
-    36% {
-      opacity: 1;
-      animation-timing-function: steps(10);
-    }
-    50%,
-    86% {
-      opacity: 0.75;
-      animation-timing-function: steps(10);
-    }
-    100% {
-      opacity: 1;
     }
   }
 }
@@ -360,6 +375,28 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
       var(--app-scrollbar-width) 100%;
   }
 
+  @keyframes settings-search-target-pulse {
+    0%,
+    100% {
+      box-shadow: 0 0 0 0 transparent;
+    }
+    50% {
+      box-shadow: 0 0 0 2px color-mix(in oklab, var(--color-primary) 70%, transparent);
+    }
+  }
+
+  .settings-page-scroll-fade div.settings-search-target-pulse,
+  .settings-page-scroll-fade section.settings-search-target-pulse > div:first-child {
+    animation: settings-search-target-pulse 650ms ease-in-out 2;
+    border-radius: 0.75rem;
+  }
+
+  /* The pulse is the destination indicator; without it (reduced motion), the
+     focus outline takes over, so exactly one indicator shows at a time. */
+  .settings-page-scroll-fade .settings-search-target-pulse:focus {
+    outline: none;
+  }
+
   .workspace-titlebar-controls {
     position: absolute;
     top: var(--workspace-controls-top);
@@ -372,6 +409,13 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 
   .surface-subheader {
     @apply flex h-10 min-h-10 shrink-0 items-center border-b border-border/60 bg-background;
+  }
+
+  [data-preview-panel-mode="inline"] [data-right-panel-surface-content] [data-surface-subheader] {
+    height: calc(var(--spacing) * 7);
+    min-height: calc(var(--spacing) * 7);
+    margin-bottom: calc(var(--spacing) * 3);
+    border-bottom-color: transparent;
   }
 
   .chat-composer-horizontal-inset {
@@ -640,11 +684,11 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     background: color-mix(in srgb, var(--background) 64%, transparent);
   }
 
-  .glass-opacity-slider {
-    --glass-slider-progress: 0%;
-    --glass-slider-fill-offset: 0.5rem;
-    --glass-slider-fill-position: calc(
-      var(--glass-slider-progress) + var(--glass-slider-fill-offset)
+  .settings-slider {
+    --settings-slider-progress: 0%;
+    --settings-slider-fill-offset: 0.5rem;
+    --settings-slider-fill-position: calc(
+      var(--settings-slider-progress) + var(--settings-slider-fill-offset)
     );
     appearance: none;
     height: 1.5rem;
@@ -652,32 +696,32 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     cursor: pointer;
   }
 
-  .glass-opacity-slider::-webkit-slider-runnable-track {
+  .settings-slider::-webkit-slider-runnable-track {
     height: 0.375rem;
     border-radius: 9999px;
     background: linear-gradient(
       to right,
-      var(--primary) 0 var(--glass-slider-fill-position),
-      color-mix(in srgb, var(--muted-foreground) 22%, transparent) var(--glass-slider-fill-position)
-        100%
+      var(--primary) 0 var(--settings-slider-fill-position),
+      color-mix(in srgb, var(--muted-foreground) 22%, transparent)
+        var(--settings-slider-fill-position) 100%
     );
     box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border) 55%, transparent);
   }
 
-  .glass-opacity-slider::-moz-range-track {
+  .settings-slider::-moz-range-track {
     height: 0.375rem;
     border-radius: 9999px;
     background: color-mix(in srgb, var(--muted-foreground) 22%, transparent);
     box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border) 55%, transparent);
   }
 
-  .glass-opacity-slider::-moz-range-progress {
+  .settings-slider::-moz-range-progress {
     height: 0.375rem;
     border-radius: 9999px;
     background: var(--primary);
   }
 
-  .glass-opacity-slider::-webkit-slider-thumb {
+  .settings-slider::-webkit-slider-thumb {
     appearance: none;
     width: 1rem;
     height: 1rem;
@@ -691,7 +735,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
       box-shadow 120ms ease;
   }
 
-  .glass-opacity-slider::-moz-range-thumb {
+  .settings-slider::-moz-range-thumb {
     width: 1rem;
     height: 1rem;
     border: 2px solid var(--primary);
@@ -703,54 +747,54 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
       box-shadow 120ms ease;
   }
 
-  .glass-opacity-slider:hover::-webkit-slider-thumb {
+  .settings-slider:hover::-webkit-slider-thumb {
     transform: scale(1.08);
     box-shadow: 0 1px 3px color-mix(in srgb, var(--foreground) 20%, transparent);
   }
 
-  .glass-opacity-slider:hover::-moz-range-thumb {
+  .settings-slider:hover::-moz-range-thumb {
     transform: scale(1.08);
     box-shadow: 0 1px 3px color-mix(in srgb, var(--foreground) 20%, transparent);
   }
 
-  .glass-opacity-slider:active::-webkit-slider-thumb {
+  .settings-slider:active::-webkit-slider-thumb {
     transform: scale(0.94);
   }
 
-  .glass-opacity-slider:active::-moz-range-thumb {
+  .settings-slider:active::-moz-range-thumb {
     transform: scale(0.94);
   }
 
-  .glass-opacity-slider:focus-visible {
+  .settings-slider:focus-visible {
     outline: none;
   }
 
-  .glass-opacity-slider:focus-visible::-webkit-slider-thumb {
+  .settings-slider:focus-visible::-webkit-slider-thumb {
     box-shadow:
       0 0 0 3px var(--background),
       0 0 0 5px var(--ring);
   }
 
-  .glass-opacity-slider:focus-visible::-moz-range-thumb {
+  .settings-slider:focus-visible::-moz-range-thumb {
     box-shadow:
       0 0 0 3px var(--background),
       0 0 0 5px var(--ring);
   }
 
   @media (forced-colors: active) {
-    .glass-opacity-slider {
+    .settings-slider {
       appearance: auto;
       accent-color: Highlight;
     }
 
-    .glass-opacity-slider::-webkit-slider-runnable-track,
-    .glass-opacity-slider::-webkit-slider-thumb {
+    .settings-slider::-webkit-slider-runnable-track,
+    .settings-slider::-webkit-slider-thumb {
       all: revert;
     }
 
-    .glass-opacity-slider::-moz-range-track,
-    .glass-opacity-slider::-moz-range-progress,
-    .glass-opacity-slider::-moz-range-thumb {
+    .settings-slider::-moz-range-track,
+    .settings-slider::-moz-range-progress,
+    .settings-slider::-moz-range-thumb {
       all: revert;
     }
   }
@@ -806,7 +850,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 @utility surface-grain {
   background-image: var(--surface-grain);
   background-repeat: repeat;
-  background-size: 256px 256px;
+  background-size: var(--surface-grain-size);
 }
 
 /* Suppress all transitions during theme changes */
@@ -827,6 +871,12 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --ucsd-gold: #c69214;
   --background: var(--color-white);
   --app-chrome-background: var(--background);
+  --toolbar-background: var(--app-chrome-background);
+  --toolbar-foreground: var(--foreground);
+  --toolbar-border: var(--border);
+  --toolbar-control: var(--popover);
+  --toolbar-control-foreground: var(--foreground);
+  --toolbar-control-hover: var(--accent);
   --surface-raised: color-mix(in srgb, var(--card) 20%, transparent);
   --foreground: var(--color-neutral-800);
   --card: var(--color-white);
@@ -839,19 +889,34 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --secondary-foreground: var(--color-zinc-800);
   --muted: var(--color-zinc-50);
   --muted-foreground: var(--color-zinc-500);
+  --placeholder: var(--muted-foreground);
+  --secondary-label: var(--muted-foreground);
+  --icon-muted: var(--muted-foreground);
+  --message-surface: var(--accent);
+  --message-foreground: var(--foreground);
+  --message-action: var(--primary);
+  --message-action-foreground: var(--primary-foreground);
+  --message-action-hover: color-mix(in srgb, var(--primary) 90%, var(--background));
   --accent: var(--color-zinc-100);
   --accent-foreground: var(--color-zinc-900);
-  --destructive: var(--color-red-500);
+  --error: var(--color-red-500);
+  --error-foreground: var(--color-red-700);
+  --error-surface: color-mix(in srgb, var(--error) 8%, transparent);
+  --destructive: var(--error);
   --border: var(--color-zinc-200);
   --input: var(--color-zinc-300);
   --ring: oklch(0.488 0.217 264);
-  --destructive-foreground: var(--color-red-700);
+  --destructive-foreground: var(--error-foreground);
   --info: var(--color-blue-500);
   --info-foreground: var(--color-blue-700);
   --success: var(--color-emerald-500);
   --success-foreground: var(--color-emerald-700);
   --warning: var(--color-amber-500);
   --warning-foreground: var(--color-amber-700);
+  --warning-surface: color-mix(in srgb, var(--warning) 8%, transparent);
+  --update: var(--primary);
+  --update-foreground: var(--primary);
+  --update-surface: color-mix(in srgb, var(--update) 12%, transparent);
   /* Keep every sidebar primitive on the same light surface hierarchy, including
      portaled mobile sheets and settings navigation outside the app sidebar. */
   --sidebar: var(--color-zinc-50);
@@ -865,6 +930,14 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --sidebar-row-selected: var(--color-white);
   --sidebar-border: var(--border);
   --sidebar-stage-fade: var(--sidebar);
+  --code-background: color-mix(in srgb, var(--card) 90%, var(--background));
+  --code-foreground: var(--foreground);
+  --terminal-background: var(--background);
+  --terminal-foreground: var(--foreground);
+  --terminal-cursor: rgb(38 56 78);
+  --terminal-selection-background: rgb(37 63 99 / 20%);
+  --terminal-scrollbar: rgb(0 0 0 / 15%);
+  --terminal-scrollbar-hover: rgb(0 0 0 / 25%);
 
   @variant dark {
     color-scheme: dark;
@@ -884,19 +957,34 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     --secondary-foreground: var(--color-neutral-100);
     --muted: --alpha(var(--color-white) / 4%);
     --muted-foreground: color-mix(in srgb, var(--color-neutral-500) 90%, var(--color-white));
+    --placeholder: var(--muted-foreground);
+    --secondary-label: var(--muted-foreground);
+    --icon-muted: var(--muted-foreground);
+    --message-surface: var(--accent);
+    --message-foreground: var(--foreground);
+    --message-action: var(--primary);
+    --message-action-foreground: var(--primary-foreground);
+    --message-action-hover: color-mix(in srgb, var(--primary) 90%, var(--background));
     --accent: --alpha(var(--color-white) / 4%);
     --accent-foreground: var(--color-neutral-100);
-    --destructive: color-mix(in srgb, var(--color-red-500) 90%, var(--color-white));
+    --error: color-mix(in srgb, var(--color-red-500) 90%, var(--color-white));
+    --error-foreground: var(--color-red-400);
+    --error-surface: color-mix(in srgb, var(--error) 16%, transparent);
+    --destructive: var(--error);
     --border: --alpha(var(--color-white) / 6%);
     --input: --alpha(var(--color-white) / 8%);
     --ring: oklch(0.588 0.217 264);
-    --destructive-foreground: var(--color-red-400);
+    --destructive-foreground: var(--error-foreground);
     --info: var(--color-blue-500);
     --info-foreground: var(--color-blue-400);
     --success: var(--color-emerald-500);
     --success-foreground: var(--color-emerald-400);
     --warning: var(--color-amber-500);
     --warning-foreground: var(--color-amber-400);
+    --warning-surface: color-mix(in srgb, var(--warning) 16%, transparent);
+    --update: var(--primary);
+    --update-foreground: var(--color-blue-400);
+    --update-surface: color-mix(in srgb, var(--update) 18%, transparent);
     --sidebar: var(--card);
     --sidebar-foreground: var(--foreground);
     --sidebar-accent: var(--accent);
@@ -908,15 +996,19 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     --sidebar-row-selected: var(--muted);
     --sidebar-border: var(--border);
     --sidebar-stage-fade: var(--card);
+    --terminal-background: var(--background);
+    --terminal-foreground: var(--foreground);
+    --terminal-cursor: rgb(180 203 255);
+    --terminal-selection-background: rgb(180 203 255 / 25%);
+    --terminal-scrollbar: rgb(255 255 255 / 10%);
+    --terminal-scrollbar-hover: rgb(255 255 255 / 18%);
   }
 }
 
-/* Keep both navigation implementations on the same quiet zinc hierarchy:
-   zinc-50 navigation, zinc-25 hover, and white selected/raised surfaces.
-   The version attribute remains useful for layout-specific styling without
-   changing the color system when the beta is toggled. */
-[data-sidebar-version="v1"],
-[data-sidebar-version="v2"] {
+/* Keep both sidebar implementations (default and legacy) on the same quiet
+   zinc hierarchy: zinc-50 navigation, zinc-25 hover, and white selected/raised
+   surfaces. */
+[data-app-sidebar] {
   --background: var(--color-zinc-25);
   --foreground: var(--color-zinc-800);
   --card: var(--color-white);
@@ -939,8 +1031,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   background-color: var(--sidebar);
 }
 
-.dark [data-sidebar-version="v1"],
-.dark [data-sidebar-version="v2"] {
+.dark [data-app-sidebar] {
   --background: #000;
   --foreground: #f1f3f7;
   --card: #000;
@@ -1012,7 +1103,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --sidebar-stage-fade: var(--card);
 }
 
-:root[data-theme="ucsd-light"] {
+:root[data-theme-id="ucsd"]:not(.dark) {
   --app-chrome-background: color-mix(in srgb, var(--ucsd-navy) 3%, var(--color-white));
   --primary: var(--ucsd-blue);
   --primary-foreground: var(--color-white);
@@ -1041,7 +1132,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --ucsd-composer-idle-shadow: color-mix(in srgb, var(--ucsd-blue) 8%, transparent);
 }
 
-:root[data-theme="ucsd-dark"] {
+:root.dark[data-theme-id="ucsd"] {
   --background: color-mix(in srgb, var(--ucsd-navy) 88%, var(--color-black));
   --app-chrome-background: color-mix(in srgb, var(--ucsd-navy) 92%, var(--color-black));
   --foreground: color-mix(in srgb, var(--ucsd-yellow) 12%, var(--color-white));
@@ -1077,14 +1168,9 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 }
 
 body {
-  font-family:
-    "DM Sans Variable",
-    "DM Sans",
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    system-ui,
-    sans-serif;
+  /* Reference the theme token (not a literal stack) so the Settings ->
+     Appearance runtime override of --font-sans reaches all interface text. */
+  font-family: var(--font-sans);
   margin: 0;
   padding: 0;
 }
@@ -1125,18 +1211,46 @@ body {
    grain's subtle brightening and stand out against the body. */
 :root {
   --surface-grain: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E");
+  --surface-grain-size: 256px 256px;
+}
+
+/* The live T3 Chat texture is a 128px grayscale tile with a constant 7/255
+   alpha. Keep our procedural texture cheap while matching that scale and
+   strength for the branded preset. */
+html[data-theme-id="t3-chat"] {
+  --surface-grain: url("data:image/svg+xml,%3Csvg viewBox='0 0 128 128' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.02745'/%3E%3C/svg%3E");
+  --surface-grain-size: 128px 128px;
 }
 
 body {
   background-image: var(--surface-grain);
   background-repeat: repeat;
-  background-size: 256px 256px;
+  background-size: var(--surface-grain-size);
 }
 
 pre,
 code {
-  font-family:
-    "SF Mono", "SFMono-Regular", "JetBrains Mono", Consolas, "Liberation Mono", Menlo, monospace;
+  font-family: var(--font-mono);
+}
+
+/* Code blocks in chat carry the size preference. Scoped to chat markdown
+   rather than every pre: a global rule would beat text-size utilities and
+   inherited sizes on unrelated pre surfaces (terminal previews, approvals).
+   Inline code stays relative to its sentence so it never towers over prose;
+   diffs and file previews take the size through --diffs-font-size. */
+.chat-markdown .chat-markdown-shiki .shiki,
+.chat-markdown pre code {
+  font-size: var(--font-size-code, inherit);
+}
+
+/* @pierre/diffs surfaces (diffs, file previews, annotatable code, search
+   lines) render inside shadow roots but consult these hooks with their own
+   literal stacks as fallback. Custom properties inherit across the shadow
+   boundary, so defining them once here routes every code surface through the
+   appearance font tokens. */
+:root {
+  --diffs-font-family: var(--font-mono);
+  --diffs-header-font-family: var(--font-sans);
 }
 
 .tritonai-wordmark-name {
@@ -1193,6 +1307,54 @@ code {
   background: var(--app-scrollbar-thumb-hover);
 }
 
+/* Settings -> Appearance can point the composer at its own face (for example a
+   mono font); default follows the sans stack. Applied on the surface wrapper so
+   the editor and its placeholder inherit together. */
+.composer-editor-surface {
+  font-family: var(--font-composer, var(--font-sans));
+  font-size: var(--font-size-prompt, 0.875rem);
+}
+
+/* Touch browsers zoom the page when a focused field is under 16px, so keep
+   the floor there regardless of the preference. Gated on a coarse pointer:
+   the zoom quirk does not exist on desktop, where a narrow window must not
+   silently override a smaller chosen prompt size. */
+@media (max-width: 39.999rem) and (pointer: coarse) {
+  .composer-editor-surface {
+    font-size: max(var(--font-size-prompt, 1rem), 16px);
+  }
+}
+
+.t3-ghostty-canvas {
+  cursor: text;
+}
+
+.t3-ghostty-scrollbar {
+  position: absolute;
+  z-index: 1;
+  top: 4px;
+  right: 1px;
+  bottom: 4px;
+  width: var(--app-scrollbar-width);
+  cursor: default;
+  touch-action: none;
+}
+
+.t3-ghostty-scrollbar-thumb {
+  position: absolute;
+  top: 0;
+  right: 1px;
+  left: 1px;
+  border-radius: 3px;
+  background: var(--app-scrollbar-thumb);
+  transition: background-color 120ms ease-out;
+}
+
+.t3-ghostty-scrollbar:hover .t3-ghostty-scrollbar-thumb,
+.t3-ghostty-scrollbar:focus-visible .t3-ghostty-scrollbar-thumb {
+  background: var(--app-scrollbar-thumb-hover);
+}
+
 .model-picker-list::-webkit-scrollbar-track {
   margin-block: 0.5rem;
 }
@@ -1243,20 +1405,6 @@ code {
 
 .turn-chip-strip::-webkit-scrollbar {
   display: none;
-}
-
-/* Terminal drawer scrollbar parity with chat */
-.thread-terminal-drawer .xterm .xterm-scrollable-element > .scrollbar.vertical {
-  width: 6px !important;
-}
-
-.thread-terminal-drawer .xterm .xterm-scrollable-element > .scrollbar > .slider {
-  border-radius: 3px;
-}
-
-.thread-terminal-drawer .xterm .xterm-scrollable-element > .scrollbar.vertical > .slider {
-  width: 6px !important;
-  left: 0 !important;
 }
 
 /* Reasoning select -- clickable label surface */
@@ -1509,9 +1657,7 @@ label:has(> select#reasoning-effort) select {
 .chat-markdown .chat-markdown-codeblock {
   margin: 0.65rem 0;
   overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: 0.75rem;
-  background: color-mix(in srgb, var(--muted) 78%, var(--background));
+  border-radius: var(--radius);
 }
 
 .chat-markdown .chat-markdown-codeblock-header {
@@ -1519,10 +1665,8 @@ label:has(> select#reasoning-effort) select {
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
-  border-bottom: 1px solid var(--border);
-  background: var(--muted);
-  padding: 0.25rem 0.375rem 0.25rem 0.7rem;
-  color: var(--muted-foreground);
+  padding: 0.375rem 0.375rem 0 0.75rem;
+  color: color-mix(in srgb, var(--foreground) 72%, transparent);
 }
 
 .chat-markdown .chat-markdown-codeblock-title {
@@ -1535,7 +1679,7 @@ label:has(> select#reasoning-effort) select {
 }
 
 .chat-markdown .chat-markdown-chrome-action {
-  color: var(--muted-foreground);
+  color: color-mix(in srgb, var(--foreground) 72%, transparent);
 }
 
 .chat-markdown .chat-markdown-chrome-action:hover {
@@ -1655,15 +1799,34 @@ label:has(> select#reasoning-effort) select {
 
 /* Diffs theme bridge (match diff surfaces to app palette) */
 .diff-panel-viewport {
-  background: color-mix(in srgb, var(--background) 94%, var(--card));
+  background: var(--background);
+}
+
+/* Diffs live directly on the panel canvas. Normal chat code blocks may use a
+   raised code surface, but carrying that fill into the diff creates a card-like
+   rectangle that does not belong in the panel. */
+.diff-render-surface {
+  --code-background: var(--background);
 }
 
 .diff-render-file,
-.diff-render-surface > diffs-container {
-  border: 1px solid var(--border);
-  border-radius: 0.5rem;
+.diff-render-surface diffs-container {
+  border: 0;
+  border-radius: 0;
   overflow: clip;
-  background: color-mix(in srgb, var(--card) 92%, var(--background));
+  background: var(--code-background);
+  color: var(--code-foreground);
+}
+
+/* Pierre's file renderer owns its own surface tokens. Keep the root of a file
+   preview on the same themeable code surface as the diff panel. */
+.diff-render-surface diffs-container,
+.file-preview-virtualizer diffs-container {
+  --diffs-bg: var(--code-background) !important;
+  --diffs-light-bg: var(--code-background) !important;
+  --diffs-dark-bg: var(--code-background) !important;
+  background-color: var(--code-background) !important;
+  color: var(--code-foreground) !important;
 }
 
 @keyframes ultrathink-rainbow {

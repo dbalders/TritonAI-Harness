@@ -40,7 +40,7 @@ const decodeImageContextOutput = Schema.decodeEffect(Schema.fromJsonString(Image
 const decodeImageContextChatCompletionResponse = Schema.decodeEffect(
   Schema.fromJsonString(ImageContextChatCompletionResponse),
 );
-const encodeJsonString = Schema.encodeEffect(Schema.UnknownFromJsonString);
+const encodeJsonString = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
 export interface CodexImageContextInputImage {
   readonly name: string;

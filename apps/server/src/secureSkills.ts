@@ -51,7 +51,7 @@ const ManagedSkillManifest = Schema.Struct({
 });
 
 const decodeFeed = Schema.decodeUnknownEffect(SecureSkillFeed);
-const decodeUnknownJson = Schema.decodeUnknownEffect(Schema.UnknownFromJsonString);
+const decodeUnknownJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
 const encodeManagedSkillManifest = Schema.encodeEffect(Schema.fromJsonString(ManagedSkillManifest));
 
 export class SecureSkillsSyncError extends Schema.TaggedErrorClass<SecureSkillsSyncError>()(

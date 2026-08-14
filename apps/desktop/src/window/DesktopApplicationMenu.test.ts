@@ -39,7 +39,6 @@ const electronAppLayer = Layer.succeed(ElectronApp.ElectronApp, {
   setName: () => Effect.void,
   setAboutPanelOptions: () => Effect.void,
   setAppUserModelId: () => Effect.void,
-  requestSingleInstanceLock: Effect.succeed(true),
   getAppMetrics: Effect.succeed([]),
   isDefaultProtocolClient: () => Effect.succeed(false),
   setAsDefaultProtocolClient: () => Effect.succeed(true),
@@ -47,11 +46,13 @@ const electronAppLayer = Layer.succeed(ElectronApp.ElectronApp, {
   setDockIcon: () => Effect.void,
   appendCommandLineSwitch: () => Effect.void,
   onBeforeQuitForUpdate: () => Effect.void,
+  removeCommandLineSwitch: () => Effect.void,
   on: () => Effect.void,
 } satisfies ElectronApp.ElectronApp["Service"]);
 
 const electronDialogLayer = Layer.succeed(ElectronDialog.ElectronDialog, {
   pickFolder: () => Effect.succeed(Option.none()),
+  pickFiles: () => Effect.succeed([]),
   confirm: () => Effect.succeed(false),
   showMessageBox: () => Effect.succeed({ response: 0, checkboxChecked: false }),
   showErrorBox: () => Effect.void,
@@ -80,6 +81,8 @@ const makeDesktopWindowLayer = (selectedAction: Deferred.Deferred<string>) =>
     handleBackendNotReady: Effect.void,
     flushMainWindowBounds: Effect.void,
     dispatchMenuAction: (action) => Deferred.succeed(selectedAction, action).pipe(Effect.asVoid),
+    zoomMain: (direction) =>
+      Deferred.succeed(selectedAction, `zoom-${direction}`).pipe(Effect.asVoid),
     syncAppearance: Effect.void,
   } satisfies DesktopWindow.DesktopWindow["Service"]);
 
@@ -93,6 +96,30 @@ const makeElectronMenuLayer = (
     showContextMenu: () => Effect.succeed(Option.none()),
   } satisfies ElectronMenu.ElectronMenu["Service"]);
 
+const configureMenu = (
+  selectedAction: Deferred.Deferred<string>,
+  applicationMenuTemplate: Deferred.Deferred<readonly Electron.MenuItemConstructorOptions[]>,
+) =>
+  Effect.gen(function* () {
+    const menu = yield* DesktopApplicationMenu.DesktopApplicationMenu;
+    yield* menu.configure;
+  }).pipe(
+    Effect.provide(
+      DesktopApplicationMenu.layer.pipe(
+        Layer.provideMerge(makeElectronMenuLayer(applicationMenuTemplate)),
+        Layer.provideMerge(makeDesktopWindowLayer(selectedAction)),
+        Layer.provideMerge(desktopUpdatesLayer),
+        Layer.provideMerge(electronDialogLayer),
+        Layer.provideMerge(electronAppLayer),
+        Layer.provideMerge(
+          DesktopEnvironment.layer(environmentInput).pipe(
+            Layer.provide(Layer.mergeAll(NodeServices.layer, DesktopConfig.layerTest({}))),
+          ),
+        ),
+      ),
+    ),
+  );
+
 describe("DesktopApplicationMenu", () => {
   it.effect("installs the native menu and routes Settings through DesktopWindow", () =>
     Effect.gen(function* () {
@@ -100,25 +127,7 @@ describe("DesktopApplicationMenu", () => {
       const applicationMenuTemplate =
         yield* Deferred.make<readonly Electron.MenuItemConstructorOptions[]>();
 
-      yield* Effect.gen(function* () {
-        const menu = yield* DesktopApplicationMenu.DesktopApplicationMenu;
-        yield* menu.configure;
-      }).pipe(
-        Effect.provide(
-          DesktopApplicationMenu.layer.pipe(
-            Layer.provideMerge(makeElectronMenuLayer(applicationMenuTemplate)),
-            Layer.provideMerge(makeDesktopWindowLayer(selectedAction)),
-            Layer.provideMerge(desktopUpdatesLayer),
-            Layer.provideMerge(electronDialogLayer),
-            Layer.provideMerge(electronAppLayer),
-            Layer.provideMerge(
-              DesktopEnvironment.layer(environmentInput).pipe(
-                Layer.provide(Layer.mergeAll(NodeServices.layer, DesktopConfig.layerTest({}))),
-              ),
-            ),
-          ),
-        ),
-      );
+      yield* configureMenu(selectedAction, applicationMenuTemplate);
 
       const template = yield* Deferred.await(applicationMenuTemplate);
       const fileMenu = template.find((item) => item.label === "File");
@@ -176,6 +185,7 @@ describe("DesktopApplicationMenu", () => {
       } satisfies DesktopUpdates.DesktopUpdates["Service"]);
       const dialogLayer = Layer.succeed(ElectronDialog.ElectronDialog, {
         pickFolder: () => Effect.succeed(Option.none()),
+        pickFiles: () => Effect.succeed([]),
         confirm: () => Effect.succeed(false),
         showMessageBox: (options) =>
           Deferred.succeed(shownMessage, options).pipe(
@@ -250,6 +260,7 @@ describe("DesktopApplicationMenu", () => {
       } satisfies DesktopUpdates.DesktopUpdates["Service"]);
       const dialogLayer = Layer.succeed(ElectronDialog.ElectronDialog, {
         pickFolder: () => Effect.succeed(Option.none()),
+        pickFiles: () => Effect.succeed([]),
         confirm: () => Effect.succeed(false),
         showMessageBox: (options) =>
           Deferred.succeed(shownMessage, options).pipe(
