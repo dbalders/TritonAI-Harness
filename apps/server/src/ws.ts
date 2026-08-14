@@ -82,6 +82,7 @@ import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as ServerSettings from "./serverSettings.ts";
+import { getManagedPolicyDiagnostics, managedPolicyDiagnosticsChanges } from "./managedPolicy.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as PreviewManager from "./preview/Manager.ts";
@@ -166,6 +167,12 @@ export const resolveAvailableEditorsForConfig = <A, E, R>(
     Effect.timeoutOption(EDITOR_DISCOVERY_TIMEOUT),
     Effect.map(Option.getOrElse(() => [])),
   );
+
+export function shouldStreamManagedPolicyDiagnostics(input: {
+  readonly managedPolicyDiagnosticsUpdates?: boolean;
+}): boolean {
+  return input.managedPolicyDiagnosticsUpdates === true;
+}
 
 function unexpectedCompatibilityError(error: never): never {
   throw new Error(`Unhandled compatibility error: ${String(error)}`);
@@ -1038,6 +1045,7 @@ const makeWsRpcLayer = (
             otlpMetricsEnabled: config.otlpMetricsUrl !== undefined,
           },
           settings,
+          managedPolicyDiagnostics: getManagedPolicyDiagnostics(),
           shellResumeCompletionMarker: true,
           threadResumeCompletionMarker: true,
         };
@@ -2114,7 +2122,7 @@ const makeWsRpcLayer = (
             ),
             { "rpc.aggregate": "preview" },
           ),
-        [WS_METHODS.subscribeServerConfig]: (_input) =>
+        [WS_METHODS.subscribeServerConfig]: (input) =>
           observeRpcStreamEffect(
             WS_METHODS.subscribeServerConfig,
             Effect.gen(function* () {
@@ -2144,6 +2152,15 @@ const makeWsRpcLayer = (
                   payload: { settings },
                 })),
               );
+              const managedPolicyDiagnosticsUpdates = shouldStreamManagedPolicyDiagnostics(input)
+                ? managedPolicyDiagnosticsChanges.pipe(
+                    Stream.map((diagnostics) => ({
+                      version: 1 as const,
+                      type: "managedPolicyDiagnosticsUpdated" as const,
+                      payload: { diagnostics },
+                    })),
+                  )
+                : Stream.empty;
 
               yield* providerRegistry
                 .refresh()
@@ -2151,7 +2168,10 @@ const makeWsRpcLayer = (
 
               const liveUpdates = Stream.merge(
                 keybindingsUpdates,
-                Stream.merge(providerStatuses, settingsUpdates),
+                Stream.merge(
+                  providerStatuses,
+                  Stream.merge(settingsUpdates, managedPolicyDiagnosticsUpdates),
+                ),
               );
 
               return Stream.concat(

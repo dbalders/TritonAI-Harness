@@ -498,6 +498,50 @@ describe("DesktopBackendConfiguration", () => {
     }),
   );
 
+  it.effect("resolvePrimary clears an inherited shared key for split installer credentials", () =>
+    Effect.gen(function* () {
+      const previousSharedKey = process.env.TRITONAI_API_KEY;
+      const inherited = "stale-shared-key";
+      const installedLocal = "installed-on-prem-key";
+      const installedFrontier = "installed-frontier-key";
+      try {
+        process.env.TRITONAI_API_KEY = inherited;
+
+        yield* withHarness(
+          Effect.gen(function* () {
+            const fileSystem = yield* FileSystem.FileSystem;
+            const environment = yield* DesktopEnvironment.DesktopEnvironment;
+            const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+            const envFile = environment.path.join(
+              environment.homeDirectory,
+              ".agents",
+              "ucsd",
+              "env",
+            );
+            yield* fileSystem.makeDirectory(environment.path.dirname(envFile), {
+              recursive: true,
+            });
+            yield* fileSystem.writeFileString(
+              envFile,
+              [
+                `export TRITONAI_ONPREM_API_KEY='${installedLocal}'`,
+                `export TRITONAI_FRONTIER_API_KEY='${installedFrontier}'`,
+                "",
+              ].join("\n"),
+            );
+
+            const config = yield* configuration.resolvePrimary;
+            assert.isUndefined(config.env.TRITONAI_API_KEY);
+            assert.equal(config.env.TRITONAI_ONPREM_API_KEY, installedLocal);
+            assert.equal(config.env.TRITONAI_FRONTIER_API_KEY, installedFrontier);
+          }),
+        );
+      } finally {
+        restoreEnv("TRITONAI_API_KEY", previousSharedKey);
+      }
+    }),
+  );
+
   it.effect("resolvePrimary prefers the persistent desktop key override", () =>
     Effect.gen(function* () {
       const previousTritonAiKey = process.env.TRITONAI_API_KEY;
@@ -529,6 +573,38 @@ describe("DesktopBackendConfiguration", () => {
         );
       } finally {
         restoreEnv("TRITONAI_API_KEY", previousTritonAiKey);
+      }
+    }),
+  );
+
+  it.effect("resolvePrimary applies a split desktop credential override atomically", () =>
+    Effect.gen(function* () {
+      const previousSharedKey = process.env.TRITONAI_API_KEY;
+      const previousOnPremKey = process.env.TRITONAI_ONPREM_API_KEY;
+      const previousFrontierKey = process.env.TRITONAI_FRONTIER_API_KEY;
+      try {
+        process.env.TRITONAI_API_KEY = "old-shared-key";
+        process.env.TRITONAI_ONPREM_API_KEY = "old-on-prem-key";
+        process.env.TRITONAI_FRONTIER_API_KEY = "old-frontier-key";
+
+        yield* withHarness(
+          Effect.gen(function* () {
+            const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+            yield* DesktopTritonAiApiKey.replaceTritonAiCredentials({
+              onPremApiKey: "new-on-prem-key",
+              frontierApiKey: "new-frontier-key",
+            });
+
+            const config = yield* configuration.resolvePrimary;
+            assert.isUndefined(config.env.TRITONAI_API_KEY);
+            assert.equal(config.env.TRITONAI_ONPREM_API_KEY, "new-on-prem-key");
+            assert.equal(config.env.TRITONAI_FRONTIER_API_KEY, "new-frontier-key");
+          }),
+        );
+      } finally {
+        restoreEnv("TRITONAI_API_KEY", previousSharedKey);
+        restoreEnv("TRITONAI_ONPREM_API_KEY", previousOnPremKey);
+        restoreEnv("TRITONAI_FRONTIER_API_KEY", previousFrontierKey);
       }
     }),
   );
@@ -639,12 +715,16 @@ describe("DesktopBackendConfiguration", () => {
       const previousOpenAiKey = process.env.OPENAI_API_KEY;
       const previousAnthropicKey = process.env.ANTHROPIC_API_KEY;
       const previousTritonAiKey = process.env.TRITONAI_API_KEY;
+      const previousTritonAiOnPremKey = process.env.TRITONAI_ONPREM_API_KEY;
+      const previousTritonAiFrontierKey = process.env.TRITONAI_FRONTIER_API_KEY;
       const previousUcsdAiBaseUrl = process.env.UCSD_AI_BASE_URL;
       try {
         process.env.WSLENV = "GOPATH/p:OPENAI_API_KEY/u:EMPTY::AZURE_DEVOPS_EXT_PAT/u";
         process.env.OPENAI_API_KEY = "openai-key";
         process.env.ANTHROPIC_API_KEY = "anthropic-key";
         process.env.TRITONAI_API_KEY = "tritonai-key";
+        process.env.TRITONAI_ONPREM_API_KEY = "on-prem-key";
+        process.env.TRITONAI_FRONTIER_API_KEY = "frontier-key";
         process.env.UCSD_AI_BASE_URL = "https://voice.example.test/v1";
 
         yield* Effect.gen(function* () {
@@ -666,6 +746,8 @@ describe("DesktopBackendConfiguration", () => {
           assert.equal(config.env.OPENAI_API_KEY, "openai-key");
           assert.equal(config.env.ANTHROPIC_API_KEY, "anthropic-key");
           assert.equal(config.env.TRITONAI_API_KEY, "tritonai-key");
+          assert.equal(config.env.TRITONAI_ONPREM_API_KEY, "on-prem-key");
+          assert.equal(config.env.TRITONAI_FRONTIER_API_KEY, "frontier-key");
           assert.equal(config.env.UCSD_AI_BASE_URL, "https://voice.example.test/v1");
           // The existing WSLENV is preserved byte-for-byte (note the empty
           // "::" segment survives — WSL ignores it, so we don't normalize
@@ -673,7 +755,7 @@ describe("DesktopBackendConfiguration", () => {
           // OPENAI_API_KEY is already declared, so it isn't forwarded twice.
           assert.equal(
             config.env.WSLENV,
-            "GOPATH/p:OPENAI_API_KEY/u:EMPTY::AZURE_DEVOPS_EXT_PAT/u:ANTHROPIC_API_KEY:TRITONAI_API_KEY:UCSD_AI_BASE_URL",
+            "GOPATH/p:OPENAI_API_KEY/u:EMPTY::AZURE_DEVOPS_EXT_PAT/u:ANTHROPIC_API_KEY:TRITONAI_API_KEY:TRITONAI_ONPREM_API_KEY:TRITONAI_FRONTIER_API_KEY:UCSD_AI_BASE_URL",
           );
         }).pipe(
           Effect.provide(
@@ -696,6 +778,8 @@ describe("DesktopBackendConfiguration", () => {
         restoreEnv("OPENAI_API_KEY", previousOpenAiKey);
         restoreEnv("ANTHROPIC_API_KEY", previousAnthropicKey);
         restoreEnv("TRITONAI_API_KEY", previousTritonAiKey);
+        restoreEnv("TRITONAI_ONPREM_API_KEY", previousTritonAiOnPremKey);
+        restoreEnv("TRITONAI_FRONTIER_API_KEY", previousTritonAiFrontierKey);
         restoreEnv("UCSD_AI_BASE_URL", previousUcsdAiBaseUrl);
       }
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
@@ -763,6 +847,56 @@ describe("DesktopBackendConfiguration", () => {
         restoreEnv("ANTHROPIC_API_KEY", previousAnthropicKey);
         restoreEnv("TRITONAI_API_KEY", previousTritonAiKey);
         restoreEnv("UCSD_AI_BASE_URL", previousUcsdAiBaseUrl);
+      }
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("resolveWsl clears inherited shared credentials for a split desktop override", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-desktop-backend-config-test-",
+      });
+      yield* DesktopTritonAiApiKey.replaceTritonAiCredentials({
+        onPremApiKey: "wsl-on-prem-key",
+        frontierApiKey: "wsl-frontier-key",
+      }).pipe(Effect.provide(makeEnvironmentLayer(baseDir)));
+
+      const previousWslEnv = process.env.WSLENV;
+      const previousSharedKey = process.env.TRITONAI_API_KEY;
+      try {
+        process.env.WSLENV = "GOPATH/p";
+        process.env.TRITONAI_API_KEY = "stale-shared-key";
+
+        yield* Effect.gen(function* () {
+          const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+          const config = yield* configuration.resolveWsl({ port: 5050, distro: null });
+
+          assert.isUndefined(config.env.TRITONAI_API_KEY);
+          assert.equal(config.env.TRITONAI_ONPREM_API_KEY, "wsl-on-prem-key");
+          assert.equal(config.env.TRITONAI_FRONTIER_API_KEY, "wsl-frontier-key");
+          assert.notInclude(config.env.WSLENV ?? "", "TRITONAI_API_KEY");
+          assert.include(config.env.WSLENV ?? "", "TRITONAI_ONPREM_API_KEY");
+          assert.include(config.env.WSLENV ?? "", "TRITONAI_FRONTIER_API_KEY");
+        }).pipe(
+          Effect.provide(
+            DesktopBackendConfiguration.layer.pipe(
+              Layer.provideMerge(desktopTestServicesLayer),
+              Layer.provideMerge(DesktopAppSettings.layerTest()),
+              Layer.provideMerge(
+                DesktopWslEnvironment.layerTest({
+                  isAvailable: true,
+                  windowsToWslPath: () => Option.some("/mnt/c/repo/apps/server/src/index.ts"),
+                  getDistroIp: () => Option.some("172.27.0.99"),
+                }),
+              ),
+              Layer.provideMerge(makeEnvironmentLayer(baseDir, { platform: "win32" })),
+            ),
+          ),
+        );
+      } finally {
+        restoreEnv("WSLENV", previousWslEnv);
+        restoreEnv("TRITONAI_API_KEY", previousSharedKey);
       }
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );

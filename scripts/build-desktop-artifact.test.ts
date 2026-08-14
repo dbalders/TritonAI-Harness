@@ -11,14 +11,21 @@ import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import {
+  assertDesktopUpdatePublishConfiguration,
+  assertPackagedDesktopUpdateConfig,
+  assertPackagedFfiRsNativeBinaries,
+  buildMacDmg,
   BuildCommandFailedError,
   createStageWorkspaceConfig,
+  createDesktopSourceBuildEnvironment,
+  findMissingRuntimeDeploymentArchitectures,
   createStagePatchedDependencies,
   createBuildConfig,
   DESKTOP_MANAGED_PLUGIN_FILE_SET,
   DESKTOP_ELECTRON_LANGUAGES,
   DESKTOP_FILE_EXCLUSIONS,
   DESKTOP_EXTRA_RESOURCES,
+  DesktopUpdatePublishConfigurationMissingError,
   InvalidMacPasskeyRpDomainError,
   InvalidMacPasskeyPublishableKeyError,
   InvalidAzureTrustedSigningEndpointError,
@@ -26,14 +33,20 @@ import {
   UnsupportedDesktopBuildArchitectureError,
   isMacPasskeySigningConfigurationError,
   LinuxIconResizeError,
+  MacDesktopAppBundleMissingError,
   MacPasskeySigningConfigurationResolutionError,
   MissingAzureTrustedSigningConfigurationError,
   MissingMacPasskeyProvisioningProfileError,
+  PackagedNativeDependencyMissingError,
+  PackagedDesktopUpdateConfigMissingError,
+  renderMacInheritedEntitlements,
   renderMacPasskeyEntitlements,
   resolveClerkPasskeyNativeArtifacts,
   resolveMacPasskeySigningConfiguration,
   resolveDesktopRuntimeDependencies,
   resolveFffNativeDependencies,
+  resolveFfiRsNativeArtifacts,
+  resolveFfiRsNativeDependencies,
   resolveBuildOptions,
   resolveDesktopBuildIconAssets,
   resolveDesktopProductName,
@@ -41,13 +54,16 @@ import {
   resolveDesktopWebAssetBrand,
   resolveResourceMonitorRustTargets,
   resourceMonitorExecutableName,
+  RUNTIME_DEPLOY_ARGS,
   resolveGitHubPublishConfig,
+  resolveMacAppBundleDirectoryName,
+  resolveMacDmgArtifactName,
   resolveMockUpdateServerPort,
   resolveMockUpdateServerUrl,
   resolveAzureTrustedSigningConfiguration,
   resolvePackageManagerUserAgent,
   stageLinuxIconSize,
-  STAGE_INSTALL_ARGS,
+  validateManagedPluginBuildConfiguration,
   WINDOWS_ASAR_UNPACK,
 } from "./build-desktop-artifact.ts";
 import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
@@ -68,6 +84,96 @@ function mockProcess(exitCode: number) {
     getOutputFd: () => Stream.empty,
   });
 }
+
+it("validates every managed plugin configuration and closes loaded providers", async () => {
+  const events: string[] = [];
+  const composition = {
+    version: 1,
+    kind: "tritonai-harness-plugin-composition",
+    source: {
+      repository: "https://github.com/dbalders/TritonAI-Plugins.git",
+      ref: "refs/tags/v1.0.0",
+      commit: "a".repeat(40),
+    },
+    packages: [
+      {
+        id: "alpha",
+        name: "@tritonai/plugin-alpha",
+        version: "1.0.0",
+        digest: "a".repeat(64),
+        files: [],
+      },
+      {
+        id: "beta",
+        name: "@tritonai/plugin-beta",
+        version: "1.0.0",
+        digest: "b".repeat(64),
+        files: [],
+      },
+    ],
+  } as const;
+
+  let failure: unknown;
+  try {
+    await validateManagedPluginBuildConfiguration(
+      composition,
+      { alpha: { enabled: true }, beta: { enabled: false } },
+      (plugin) => `/verified-composition/packages/${plugin.id}`,
+      async (packageRoot, plugin, configuration) => {
+        events.push(`load:${packageRoot}:${String(configuration.enabled)}`);
+        if (plugin.id === "beta") throw new Error("invalid beta configuration");
+        return { provider: { close: async () => void events.push(`close:${plugin.id}`) } };
+      },
+    );
+  } catch (error) {
+    failure = error;
+  }
+  assert.instanceOf(failure, Error);
+  assert.equal(failure.message, "invalid beta configuration");
+  assert.deepEqual(events, [
+    "load:/verified-composition/packages/alpha:true",
+    "load:/verified-composition/packages/beta:false",
+    "close:alpha",
+  ]);
+});
+
+it("builds the server from the frozen managed plugin snapshot and validated configuration", () => {
+  const environment = createDesktopSourceBuildEnvironment(
+    {
+      TRITONAI_PLUGIN_COMPOSITION_SOURCE: "/moving/source",
+      TRITONAI_PLUGIN_CONFIGURATION_JSON: '{"stale":true}',
+      AZURE_CLIENT_SECRET: "must-not-reach-the-source-build",
+      KEEP_ME: "yes",
+    },
+    {
+      sourceRoot: "/frozen/plugin-composition-input",
+      serializedConfiguration: '{"microsoft-365":{"clientId":"public-client"}}',
+    },
+  );
+
+  assert.equal(environment.TRITONAI_PLUGIN_COMPOSITION_SOURCE, "/frozen/plugin-composition-input");
+  assert.equal(
+    environment.TRITONAI_PLUGIN_CONFIGURATION_JSON,
+    '{"microsoft-365":{"clientId":"public-client"}}',
+  );
+  assert.notProperty(environment, "AZURE_CLIENT_SECRET");
+  assert.equal(environment.KEEP_ME, "yes");
+});
+
+it("removes ambient managed plugin inputs from builds without a frozen composition", () => {
+  const environment = createDesktopSourceBuildEnvironment(
+    {
+      TRITONAI_PLUGIN_COMPOSITION_SOURCE: "/ambient/source",
+      TRITONAI_PLUGIN_CONFIGURATION_JSON: '{"ambient":true}',
+      KEEP_ME: "yes",
+    },
+    null,
+  );
+
+  assert.notProperty(environment, "TRITONAI_PLUGIN_COMPOSITION_SOURCE");
+  assert.notProperty(environment, "TRITONAI_PLUGIN_CONFIGURATION_JSON");
+  assert.equal(environment.KEEP_ME, "yes");
+});
 
 function iconResizeSpawnerLayer(
   commands: Array<{ readonly command: string; readonly args: ReadonlyArray<string> }>,
@@ -164,6 +270,56 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }),
   );
 
+  it.effect(
+    "fails before macOS and Windows packaging when updater publishing is unconfigured",
+    () =>
+      Effect.gen(function* () {
+        for (const platform of ["mac", "win"] as const) {
+          const error = yield* assertDesktopUpdatePublishConfiguration({
+            platform,
+            updateChannel: "latest",
+            mockUpdates: false,
+          }).pipe(Effect.flip);
+
+          assert.instanceOf(error, DesktopUpdatePublishConfigurationMissingError);
+          assert.equal(error.platform, platform);
+          assert.equal(error.updateChannel, "latest");
+          assert.include(error.message, "T3CODE_DESKTOP_UPDATE_REPOSITORY=owner/repo");
+          assert.include(error.message, "--mock-updates");
+        }
+      }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
+  );
+
+  it.effect("allows explicit production, mock-update, and Linux packaging modes", () =>
+    Effect.gen(function* () {
+      yield* assertDesktopUpdatePublishConfiguration({
+        platform: "mac",
+        updateChannel: "latest",
+        mockUpdates: false,
+      }).pipe(
+        Effect.provide(
+          ConfigProvider.layer(
+            ConfigProvider.fromEnv({
+              env: {
+                T3CODE_DESKTOP_UPDATE_REPOSITORY: "dbalders/TritonAI-Harness",
+              },
+            }),
+          ),
+        ),
+      );
+
+      for (const input of [
+        { platform: "win", mockUpdates: true },
+        { platform: "linux", mockUpdates: false },
+      ] as const) {
+        yield* assertDesktopUpdatePublishConfiguration({
+          ...input,
+          updateChannel: "latest",
+        }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} }))));
+      }
+    }),
+  );
+
   it("omits bundled workspace packages from staged desktop dependencies", () => {
     assert.deepStrictEqual(
       resolveDesktopRuntimeDependencies(
@@ -223,7 +379,16 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
   });
 
   it("installs optional native dependencies for the target desktop architecture", () => {
-    assert.deepStrictEqual(STAGE_INSTALL_ARGS, ["install", "--prod"]);
+    assert.deepStrictEqual(RUNTIME_DEPLOY_ARGS, [
+      "exec",
+      "pnpm",
+      "--config.inject-workspace-packages=true",
+      "--filter",
+      "@t3tools/desktop-runtime",
+      "deploy",
+      "--prod",
+      "--frozen-lockfile",
+    ]);
     assert.deepStrictEqual(createStageWorkspaceConfig({ platform: "mac", arch: "x64" }), {
       supportedArchitectures: {
         os: ["darwin"],
@@ -259,6 +424,49 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         cpu: ["arm64", "x64"],
       },
     });
+    assert.deepStrictEqual(
+      findMissingRuntimeDeploymentArchitectures({
+        configured: {
+          os: ["current", "linux"],
+          cpu: ["current", "x64"],
+          libc: ["current", "glibc"],
+        },
+        hostPlatform: "win32",
+        hostArch: "x64",
+        targetPlatform: "win",
+        targetArch: "x64",
+      }),
+      [],
+    );
+    assert.deepStrictEqual(
+      findMissingRuntimeDeploymentArchitectures({
+        configured: {
+          os: ["current", "linux"],
+          cpu: ["current", "x64"],
+          libc: ["current", "glibc"],
+        },
+        hostPlatform: "darwin",
+        hostArch: "arm64",
+        targetPlatform: "win",
+        targetArch: "x64",
+      }),
+      ["os:win32"],
+    );
+    assert.deepStrictEqual(
+      findMissingRuntimeDeploymentArchitectures({
+        configured: {
+          os: ["current", "win32"],
+          cpu: ["current"],
+          libc: ["current"],
+        },
+        hostPlatform: "linux",
+        hostArch: "x64",
+        hostLibc: "glibc",
+        targetPlatform: "win",
+        targetArch: "x64",
+      }),
+      [],
+    );
   });
 
   it("stages pnpm 11 allowBuilds and patchedDependencies in the workspace yaml", () => {
@@ -360,7 +568,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         to: "apps/server/dist/production-integrations",
         filter: ["**/*"],
       });
-      assert.notProperty(mac, "asarUnpack");
+      assert.deepStrictEqual(mac.asarUnpack, ["**/node_modules/**"]);
+      assert.deepStrictEqual((mac.mac as Record<string, unknown>).target, ["zip"]);
       assert.notProperty(linux, "asarUnpack");
       assert.deepStrictEqual(win.asarUnpack, WINDOWS_ASAR_UNPACK);
       for (const config of [mac, linux, win]) {
@@ -414,6 +623,104 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     });
   });
 
+  it("resolves the assembled macOS app and native DMG names for every architecture", () => {
+    assert.equal(resolveMacAppBundleDirectoryName("arm64"), "mac-arm64");
+    assert.equal(resolveMacAppBundleDirectoryName("x64"), "mac");
+    assert.equal(resolveMacAppBundleDirectoryName("universal"), "mac-universal");
+    assert.equal(resolveMacDmgArtifactName("1.2.3", "arm64"), "TritonAI-Harness-1.2.3-arm64.dmg");
+    assert.equal(resolveMacDmgArtifactName("1.2.3", "x64"), "TritonAI-Harness-1.2.3-x64.dmg");
+    assert.equal(
+      resolveMacDmgArtifactName("1.2.3", "universal"),
+      "TritonAI-Harness-1.2.3-universal.dmg",
+    );
+
+    const missingApp = new MacDesktopAppBundleMissingError({
+      appPath: "/tmp/mac-arm64/TritonAI Harness.app",
+      arch: "arm64",
+    });
+    assert.include(missingApp.message, "/tmp/mac-arm64/TritonAI Harness.app");
+  });
+
+  it.effect("stages DMGs through ditto and hdiutil without a mounted-volume copy", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const stageDistDir = yield* fs.makeTempDirectoryScoped({ prefix: "tritonai-dmg-test-" });
+      const appPath = path.join(stageDistDir, "mac-arm64", "TritonAI Harness.app");
+      yield* fs.makeDirectory(appPath, { recursive: true });
+      const commands: Array<{ readonly command: string; readonly args: ReadonlyArray<string> }> =
+        [];
+
+      const dmgPath = yield* buildMacDmg({
+        stageDistDir,
+        version: "1.2.3",
+        arch: "arm64",
+        verbose: false,
+      }).pipe(Effect.provide(iconResizeSpawnerLayer(commands, [0, 0])));
+
+      assert.equal(dmgPath, path.join(stageDistDir, "TritonAI-Harness-1.2.3-arm64.dmg"));
+      assert.equal(commands[0]?.command, "/usr/bin/ditto");
+      assert.deepStrictEqual(commands[0]?.args.slice(0, 2), ["--noextattr", "--noqtn"]);
+      assert.equal(commands[0]?.args[2], appPath);
+      assert.equal(commands[1]?.command, "/usr/bin/hdiutil");
+      const hdiutilArgs = commands[1]?.args ?? [];
+      for (const argument of ["create", "-srcfolder", "-format", "UDZO", dmgPath]) {
+        assert.include(hdiutilArgs, argument);
+      }
+      assert.notInclude(hdiutilArgs, "attach");
+    }),
+  );
+
+  it.effect("fails closed when Electron Builder did not assemble the expected macOS app", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const stageDistDir = yield* fs.makeTempDirectoryScoped({ prefix: "tritonai-dmg-test-" });
+      const commands: Array<{ readonly command: string; readonly args: ReadonlyArray<string> }> =
+        [];
+
+      const error = yield* buildMacDmg({
+        stageDistDir,
+        version: "1.2.3",
+        arch: "universal",
+        verbose: false,
+      }).pipe(Effect.provide(iconResizeSpawnerLayer(commands, [])), Effect.flip);
+
+      assert.instanceOf(error, MacDesktopAppBundleMissingError);
+      assert.include(error.appPath, "mac-universal/TritonAI Harness.app");
+      assert.lengthOf(commands, 0);
+    }),
+  );
+
+  it.effect("creates a real native DMG from a staged macOS app", () =>
+    Effect.gen(function* () {
+      const hostPlatform = yield* HostProcessPlatform;
+      if (hostPlatform !== "darwin") return;
+
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const stageDistDir = yield* fs.makeTempDirectoryScoped({
+        prefix: "tritonai-native-dmg-test-",
+      });
+      const contentsPath = path.join(stageDistDir, "mac-arm64", "TritonAI Harness.app", "Contents");
+      yield* fs.makeDirectory(contentsPath, { recursive: true });
+      yield* fs.writeFileString(
+        path.join(contentsPath, "Info.plist"),
+        '<?xml version="1.0"?><plist version="1.0"><dict></dict></plist>\n',
+      );
+
+      const dmgPath = yield* buildMacDmg({
+        stageDistDir,
+        version: "1.2.3",
+        arch: "arm64",
+        verbose: false,
+      });
+      const stat = yield* fs.stat(dmgPath);
+
+      assert.equal(stat.type, "File");
+      assert.isAbove(Number(stat.size), 0);
+    }),
+  );
+
   it("derives macOS passkey signing configuration from the Clerk publishable key", () => {
     const configuration = resolveMacPasskeySigningConfiguration({
       T3CODE_APPLE_TEAM_ID: "abc1234567",
@@ -447,6 +754,31 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.include(entitlements, "<string>webcredentials:example.clerk.accounts.dev</string>");
     assert.include(entitlements, "<key>com.apple.security.cs.allow-jit</key>");
     assert.include(entitlements, "<key>com.apple.security.device.audio-input</key>");
+  });
+
+  it("keeps hardened-runtime audio capabilities aligned for the main app and helpers", () => {
+    const configuration = resolveMacPasskeySigningConfiguration({
+      T3CODE_APPLE_TEAM_ID: "ABC1234567",
+      T3CODE_MACOS_PROVISIONING_PROFILE: "/tmp/t3code.provisionprofile",
+      T3CODE_CLERK_PASSKEY_RP_DOMAINS: "clerk.example.com",
+    });
+    const mainEntitlements = renderMacPasskeyEntitlements(configuration);
+    const inheritedEntitlements = renderMacInheritedEntitlements();
+    const hardenedRuntimeKeys = [
+      "com.apple.security.cs.allow-jit",
+      "com.apple.security.cs.allow-unsigned-executable-memory",
+      "com.apple.security.cs.disable-library-validation",
+      "com.apple.security.device.audio-input",
+    ];
+
+    for (const key of hardenedRuntimeKeys) {
+      assert.include(mainEntitlements, `<key>${key}</key>`);
+      assert.include(inheritedEntitlements, `<key>${key}</key>`);
+    }
+    assert.notInclude(inheritedEntitlements, "com.apple.application-identifier");
+    assert.notInclude(inheritedEntitlements, "com.apple.developer.associated-domains");
+    assert.notInclude(mainEntitlements, "com.apple.security.device.camera");
+    assert.notInclude(inheritedEntitlements, "com.apple.security.device.camera");
   });
 
   it("rejects incomplete macOS passkey signing configuration", () => {
@@ -534,13 +866,21 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     Effect.gen(function* () {
       const config = yield* createBuildConfig("mac", "dmg", "1.2.3", true, false, undefined, {
         entitlementsPath: "/tmp/entitlements.mac.plist",
+        entitlementsInheritPath: "/tmp/entitlements.mac.inherit.plist",
         provisioningProfilePath: "/tmp/t3code.provisionprofile",
       });
 
       const mac = config.mac as Record<string, unknown>;
       assert.equal(config.appId, "edu.ucsd.tritonai.harness");
       assert.equal(mac.entitlements, "/tmp/entitlements.mac.plist");
+      assert.equal(mac.entitlementsInherit, "/tmp/entitlements.mac.inherit.plist");
       assert.equal(mac.provisioningProfile, "/tmp/t3code.provisionprofile");
+      assert.deepNestedInclude(mac, {
+        extendInfo: {
+          NSMicrophoneUsageDescription:
+            "TritonAI Harness uses the microphone for voice dictation in the composer.",
+        },
+      });
       assert.deepStrictEqual(mac.protocols, [
         { name: "TritonAI Harness", schemes: ["t3code", "t3code-dev"] },
       ]);
@@ -747,7 +1087,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }),
   );
 
-  it("stages the resource monitor as an external executable resource", () => {
+  it("keeps the managed config in the app while staging the resource monitor externally", () => {
     assert.deepStrictEqual(DESKTOP_EXTRA_RESOURCES, [
       {
         from: "apps/desktop/prod-resources/resource-monitor",
@@ -787,6 +1127,122 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       "@ff-labs/fff-bin-linux-arm64-musl": "0.9.4",
     });
   });
+
+  it("promotes exact target ffi-rs native packages to direct staged dependencies", () => {
+    assert.deepStrictEqual(resolveFfiRsNativeDependencies("mac", "arm64", "1.3.2"), {
+      "@yuuang/ffi-rs-darwin-arm64": "1.3.2",
+    });
+    assert.deepStrictEqual(resolveFfiRsNativeDependencies("mac", "universal", "1.3.2"), {
+      "@yuuang/ffi-rs-darwin-arm64": "1.3.2",
+      "@yuuang/ffi-rs-darwin-x64": "1.3.2",
+    });
+    assert.deepStrictEqual(resolveFfiRsNativeDependencies("win", "x64", "1.3.2"), {
+      "@yuuang/ffi-rs-win32-x64-msvc": "1.3.2",
+      "@yuuang/ffi-rs-linux-x64-gnu": "1.3.2",
+    });
+    assert.deepStrictEqual(resolveFfiRsNativeArtifacts("linux", "arm64"), [
+      {
+        packageName: "@yuuang/ffi-rs-linux-arm64-gnu",
+        binaryFileName: "ffi-rs.linux-arm64-gnu.node",
+      },
+    ]);
+  });
+
+  it.effect("fails closed when an assembled app omits an ffi-rs native binary", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const stageDistDir = yield* fs.makeTempDirectoryScoped({
+        prefix: "tritonai-native-package-test-",
+      });
+
+      const error = yield* assertPackagedFfiRsNativeBinaries({
+        stageDistDir,
+        platform: "mac",
+        arch: "arm64",
+        productName: "TritonAI Harness",
+      }).pipe(Effect.flip);
+
+      assert.instanceOf(error, PackagedNativeDependencyMissingError);
+      assert.equal(error.packageName, "@yuuang/ffi-rs-darwin-arm64");
+      assert.include(
+        error.binaryPath,
+        "app.asar.unpacked/node_modules/@yuuang/ffi-rs-darwin-arm64",
+      );
+    }),
+  );
+
+  it.effect("fails closed when assembled macOS and Windows apps omit updater config", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const stageDistDir = yield* fs.makeTempDirectoryScoped({
+        prefix: "tritonai-update-config-test-",
+      });
+
+      for (const input of [
+        { platform: "mac", arch: "arm64" },
+        { platform: "win", arch: "x64" },
+      ] as const) {
+        const error = yield* assertPackagedDesktopUpdateConfig({
+          stageDistDir,
+          ...input,
+          productName: "TritonAI Harness",
+        }).pipe(Effect.flip);
+
+        assert.instanceOf(error, PackagedDesktopUpdateConfigMissingError);
+        assert.equal(error.platform, input.platform);
+        assert.equal(error.arch, input.arch);
+        assert.equal(path.basename(error.configPath), "app-update.yml");
+      }
+    }),
+  );
+
+  it.effect("accepts updater config in assembled macOS and Windows apps", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const stageDistDir = yield* fs.makeTempDirectoryScoped({
+        prefix: "tritonai-update-config-test-",
+      });
+      const packagedApps = [
+        {
+          platform: "mac",
+          arch: "arm64",
+          resourcesDirectory: path.join(
+            stageDistDir,
+            "mac-arm64",
+            "TritonAI Harness.app",
+            "Contents",
+            "Resources",
+          ),
+        },
+        {
+          platform: "win",
+          arch: "x64",
+          resourcesDirectory: path.join(stageDistDir, "win-unpacked", "resources"),
+        },
+        {
+          platform: "win",
+          arch: "arm64",
+          resourcesDirectory: path.join(stageDistDir, "win-arm64-unpacked", "resources"),
+        },
+      ] as const;
+
+      for (const app of packagedApps) {
+        yield* fs.makeDirectory(app.resourcesDirectory, { recursive: true });
+        yield* fs.writeFileString(
+          path.join(app.resourcesDirectory, "app-update.yml"),
+          "provider: github\n",
+        );
+        yield* assertPackagedDesktopUpdateConfig({
+          stageDistDir,
+          platform: app.platform,
+          arch: app.arch,
+          productName: "TritonAI Harness",
+        });
+      }
+    }),
+  );
 
   it("resolves target Clerk passkey native artifacts", () => {
     assert.deepStrictEqual(resolveClerkPasskeyNativeArtifacts("mac", "universal"), [
@@ -868,6 +1324,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         buildVersion: Option.none(),
         outputDir: Option.none(),
         skipBuild: Option.none(),
+        pluginConfigurationPrevalidated: Option.none(),
+        pluginValidationReceipt: Option.none(),
         keepStage: Option.none(),
         signed: Option.none(),
         verbose: Option.none(),
@@ -908,6 +1366,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
             buildVersion: Option.none(),
             outputDir: Option.none(),
             skipBuild: Option.none(),
+            pluginConfigurationPrevalidated: Option.none(),
+            pluginValidationReceipt: Option.none(),
             keepStage: Option.none(),
             signed: Option.none(),
             verbose: Option.none(),
@@ -932,6 +1392,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         buildVersion: Option.none(),
         outputDir: Option.some("release-test"),
         skipBuild: Option.some(false),
+        pluginConfigurationPrevalidated: Option.some(false),
+        pluginValidationReceipt: Option.none(),
         keepStage: Option.some(false),
         signed: Option.some(false),
         verbose: Option.some(false),
@@ -944,6 +1406,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
             ConfigProvider.fromEnv({
               env: {
                 T3CODE_DESKTOP_SKIP_BUILD: "true",
+                T3CODE_DESKTOP_PLUGIN_CONFIGURATION_PREVALIDATED: "true",
                 T3CODE_DESKTOP_KEEP_STAGE: "true",
                 T3CODE_DESKTOP_SIGNED: "true",
                 T3CODE_DESKTOP_VERBOSE: "true",
@@ -955,6 +1418,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       );
 
       assert.equal(resolved.skipBuild, false);
+      assert.equal(resolved.pluginConfigurationPrevalidated, false);
       assert.equal(resolved.keepStage, false);
       assert.equal(resolved.signed, false);
       assert.equal(resolved.verbose, false);

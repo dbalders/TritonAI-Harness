@@ -76,6 +76,16 @@ minimumReleaseAgeExclude:
   - effect@4.0.0-beta.102
 
 overrides:
+  "@hono/node-server": 2.0.10
+  "@vitest/browser": 4.1.10
+  "@vitest/browser-preview": 4.1.10
+  "@vitest/expect": 4.1.10
+  "@vitest/mocker": 4.1.10
+  "@vitest/pretty-format": 4.1.10
+  "@vitest/runner": 4.1.10
+  "@vitest/snapshot": 4.1.10
+  "@vitest/spy": 4.1.10
+  "@vitest/utils": 4.1.10
   "@clerk/backend": "catalog:"
   "@clerk/clerk-js": "catalog:"
   "@clerk/clerk-js>@base-org/account": "-"
@@ -99,12 +109,32 @@ overrides:
   "@effect/vitest>vitest": "-"
   "@expo/metro-config": 56.0.14
   "@pierre/diffs>@shikijs/transformers": ^4.2.0
+  "@vercel/routing-utils>path-to-regexp": 6.3.0
   "@types/node": "catalog:"
+  "brace-expansion@<2.0.0": 1.1.18
+  "brace-expansion@>=2.0.0 <3.0.0": 2.1.4
+  "brace-expansion@>=3.0.0": 5.0.9
+  builder-util-runtime: 9.7.0
   effect: "catalog:"
   expo-modules-jsi: 56.0.10
   "expo-sharing>@expo/config-plugins": 56.0.9
   "expo-sharing>@expo/config-types": 56.0.6
+  fast-uri: 3.1.5
+  form-data: 4.0.6
+  hono: 4.12.34
+  ip-address: 10.3.1
+  js-yaml: 4.3.0
+  postcss: 8.5.23
+  rolldown: 1.1.5
+  shell-quote: 1.10.0
+  sharp: 0.35.0
+  svgo: 4.0.2
+  tar: 7.5.22
+  "undici@>=6.0.0 <7.0.0": 6.28.0
+  "undici@>=7.0.0 <8.0.0": 7.29.0
+  "uuid@>=7.0.0 <12.0.0": 11.1.1
   vite: "catalog:"
+  vitest: 4.1.10
   yaml: "catalog:"
 
 packageExtensions:

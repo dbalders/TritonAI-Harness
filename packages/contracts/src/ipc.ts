@@ -174,15 +174,39 @@ export const DesktopAppBrandingSchema = Schema.Struct({
   displayName: Schema.String,
 });
 
-export const DesktopTritonAiApiKeyReplaceResultSchema = Schema.Union([
-  Schema.Struct({ status: Schema.Literal("saved") }),
+export const DesktopTritonAiCredentialStatusSchema = Schema.Struct({
+  ready: Schema.Boolean,
+  usesSharedKey: Schema.Boolean,
+  onPremConfigured: Schema.Boolean,
+  frontierConfigured: Schema.Boolean,
+});
+export type DesktopTritonAiCredentialStatus = typeof DesktopTritonAiCredentialStatusSchema.Type;
+
+export const DesktopTritonAiCredentialRouteSchema = Schema.Literals(["on-prem", "frontier"]);
+export type DesktopTritonAiCredentialRoute = typeof DesktopTritonAiCredentialRouteSchema.Type;
+
+export type DesktopTritonAiRouteCredentialUpdate =
+  | {
+      readonly route: DesktopTritonAiCredentialRoute;
+      readonly apiKey: string;
+    }
+  | {
+      readonly route: DesktopTritonAiCredentialRoute;
+      readonly remove: true;
+    };
+
+export const DesktopTritonAiCredentialsUpdateResultSchema = Schema.Union([
+  Schema.Struct({
+    status: Schema.Literal("saved"),
+    credentials: DesktopTritonAiCredentialStatusSchema,
+  }),
   Schema.Struct({
     status: Schema.Literal("error"),
     message: Schema.String,
   }),
 ]);
-export type DesktopTritonAiApiKeyReplaceResult =
-  typeof DesktopTritonAiApiKeyReplaceResultSchema.Type;
+export type DesktopTritonAiCredentialsUpdateResult =
+  typeof DesktopTritonAiCredentialsUpdateResultSchema.Type;
 
 export interface DesktopRuntimeInfo {
   hostArch: DesktopRuntimeArch;
@@ -1042,7 +1066,10 @@ export interface DesktopBridge {
   // The primary backend is identified by id === PRIMARY_LOCAL_ENVIRONMENT_ID.
   getLocalEnvironmentBootstraps: () => readonly DesktopEnvironmentBootstrap[];
   getLocalEnvironmentBearerToken: () => Promise<string>;
-  replaceTritonAiApiKey: (apiKey: string) => Promise<DesktopTritonAiApiKeyReplaceResult>;
+  getTritonAiCredentialStatus: () => Promise<DesktopTritonAiCredentialStatus>;
+  updateTritonAiCredentials: (
+    update: ReadonlyArray<string> | DesktopTritonAiRouteCredentialUpdate,
+  ) => Promise<DesktopTritonAiCredentialsUpdateResult>;
   getClientSettings: () => Promise<ClientSettings | null>;
   setClientSettings: (settings: ClientSettings) => Promise<void>;
   getConnectionCatalog?: () => Promise<string | null>;

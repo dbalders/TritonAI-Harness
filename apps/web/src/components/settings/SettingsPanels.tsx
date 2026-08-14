@@ -9,12 +9,14 @@ import {
 } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 import type { CSSProperties } from "react";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import {
   defaultInstanceIdForDriver,
   type BackgroundActivityProfile,
   type BackgroundActivitySettings,
+  type DesktopTritonAiCredentialStatus,
+  type DesktopUpdateChannel,
   PROVIDER_DISPLAY_NAMES,
   ProviderDriverKind,
   type ProviderInstanceConfig,
@@ -47,8 +49,14 @@ import * as Equal from "effect/Equal";
 import * as Result from "effect/Result";
 import { APP_VERSION } from "../../branding";
 import {
+  canCheckForUpdate,
+  getDesktopUpdateButtonTooltip,
+  getDesktopUpdateInstallConfirmationMessage,
+  isDesktopUpdateButtonDisabled,
+  resolveDesktopUpdateButtonAction,
+} from "../../components/desktopUpdate.logic";
+import {
   getInstallerSettingsButtonLabel,
-  getInstallerSettingsDescription,
   getInstallerSettingsVersion,
   getInstallerUpdateActionError,
   getInstallerUpdateButtonTooltip,
@@ -64,8 +72,10 @@ import { DEFAULT_THEME, isTheme, useTheme, type Theme } from "../../hooks/useThe
 import { usePrimarySettings, useUpdatePrimarySettings } from "../../hooks/useSettings";
 import { useThreadActions } from "../../hooks/useThreadActions";
 import { useInstallerUpdateState } from "../../state/installerUpdate";
+import { useDesktopUpdateState } from "../../state/desktopUpdate";
 import { ensureLocalApi, readLocalApi } from "../../localApi";
 import {
+  primaryServerConfigAtom,
   primaryServerObservabilityAtom,
   primaryServerProvidersAtom,
   serverEnvironment,
@@ -341,7 +351,178 @@ function AboutVersionTitle({ version }: { readonly version: string }) {
   );
 }
 
-function AboutVersionSection() {
+function HarnessVersionSection() {
+  const updateState = useDesktopUpdateState();
+  const [isChangingUpdateChannel, setIsChangingUpdateChannel] = useState(false);
+  const selectedUpdateChannel = updateState?.channel ?? "latest";
+
+  const handleUpdateChannelChange = useCallback(
+    (channel: DesktopUpdateChannel) => {
+      const bridge = window.desktopBridge;
+      if (
+        !bridge ||
+        typeof bridge.setUpdateChannel !== "function" ||
+        channel === selectedUpdateChannel
+      ) {
+        return;
+      }
+      setIsChangingUpdateChannel(true);
+      void bridge
+        .setUpdateChannel(channel)
+        .catch((error: unknown) => {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Could not change update track",
+              description: error instanceof Error ? error.message : "Update track change failed.",
+            }),
+          );
+        })
+        .finally(() => setIsChangingUpdateChannel(false));
+    },
+    [selectedUpdateChannel],
+  );
+
+  const handleButtonClick = useCallback(() => {
+    const bridge = window.desktopBridge;
+    if (!bridge) return;
+    const action = updateState ? resolveDesktopUpdateButtonAction(updateState) : "none";
+
+    if (action === "download") {
+      void bridge.downloadUpdate().catch((error: unknown) => {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Could not download update",
+            description: error instanceof Error ? error.message : "Download failed.",
+          }),
+        );
+      });
+      return;
+    }
+
+    if (action === "install") {
+      const confirmed = window.confirm(
+        getDesktopUpdateInstallConfirmationMessage(
+          updateState ?? { availableVersion: null, downloadedVersion: null },
+          navigator.platform,
+        ),
+      );
+      if (!confirmed) return;
+      void bridge.installUpdate().catch((error: unknown) => {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Could not install update",
+            description: error instanceof Error ? error.message : "Install failed.",
+          }),
+        );
+      });
+      return;
+    }
+
+    if (typeof bridge.checkForUpdate !== "function") return;
+    void bridge
+      .checkForUpdate()
+      .then((result) => {
+        if (result.checked) return;
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Could not check for updates",
+            description:
+              result.state.message ?? "Automatic updates are not available in this build.",
+          }),
+        );
+      })
+      .catch((error: unknown) => {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Could not check for updates",
+            description: error instanceof Error ? error.message : "Update check failed.",
+          }),
+        );
+      });
+  }, [updateState]);
+
+  const action = updateState ? resolveDesktopUpdateButtonAction(updateState) : "none";
+  const buttonTooltip = updateState ? getDesktopUpdateButtonTooltip(updateState) : null;
+  const buttonDisabled =
+    action === "none"
+      ? !canCheckForUpdate(updateState)
+      : isDesktopUpdateButtonDisabled(updateState);
+  const actionLabel: Record<string, string> = { download: "Download", install: "Install" };
+  const statusLabel: Record<string, string> = {
+    checking: "Checking…",
+    downloading: "Downloading…",
+    "up-to-date": "Up to Date",
+  };
+  const buttonLabel =
+    actionLabel[action] ?? statusLabel[updateState?.status ?? ""] ?? "Check for Updates";
+
+  if (!isElectron) return null;
+
+  return (
+    <>
+      <SettingsRow
+        title={<AboutVersionTitle version={updateState?.currentVersion ?? APP_VERSION} />}
+        description={
+          action === "download" || action === "install"
+            ? "Harness update available."
+            : "Current Harness application version."
+        }
+        control={
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  size="xs"
+                  variant={action === "install" ? "default" : "outline"}
+                  disabled={buttonDisabled}
+                  onClick={handleButtonClick}
+                >
+                  {buttonLabel}
+                </Button>
+              }
+            />
+            {buttonTooltip ? <TooltipPopup>{buttonTooltip}</TooltipPopup> : null}
+          </Tooltip>
+        }
+      />
+      <SettingsRow
+        title="Harness update track"
+        description="Stable follows signed releases. Nightly follows the nightly Harness channel."
+        control={
+          <Select
+            value={selectedUpdateChannel}
+            onValueChange={(value) => handleUpdateChannelChange(value as DesktopUpdateChannel)}
+          >
+            <SelectTrigger
+              className="w-full sm:w-40"
+              aria-label="Harness update track"
+              disabled={isChangingUpdateChannel}
+            >
+              <SelectValue>
+                {selectedUpdateChannel === "nightly" ? "Nightly" : "Stable"}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectPopup align="end" alignItemWithTrigger={false}>
+              <SelectItem hideIndicator value="latest">
+                Stable
+              </SelectItem>
+              <SelectItem hideIndicator value="nightly">
+                Nightly
+              </SelectItem>
+            </SelectPopup>
+          </Select>
+        }
+      />
+    </>
+  );
+}
+
+function FullInstallerRepairSection() {
   const updateState = useInstallerUpdateState();
 
   const handleButtonClick = useCallback(() => {
@@ -430,13 +611,12 @@ function AboutVersionSection() {
   const buttonTooltip = updateState ? getInstallerUpdateButtonTooltip(updateState) : null;
   const buttonDisabled = isInstallerUpdateButtonDisabled(updateState);
   const buttonLabel = getInstallerSettingsButtonLabel(updateState);
-  const description = getInstallerSettingsDescription(updateState, APP_VERSION);
   const version = getInstallerSettingsVersion(updateState);
 
   return (
     <SettingsRow
       title={<AboutVersionTitle version={version} />}
-      description={description}
+      description="Full Installer version. Use this only for first install, repair, or managed Node runtime updates."
       control={
         <Tooltip>
           <TooltipTrigger
@@ -455,6 +635,15 @@ function AboutVersionSection() {
         </Tooltip>
       }
     />
+  );
+}
+
+function AboutVersionSection() {
+  return (
+    <>
+      <HarnessVersionSection />
+      <FullInstallerRepairSection />
+    </>
   );
 }
 
@@ -1456,6 +1645,13 @@ export function GeneralSettingsPanel() {
 export function ProviderSettingsPanel() {
   const settings = usePrimarySettings();
   const updateSettings = useUpdatePrimarySettings();
+  const managedPolicyDiagnostics = useAtomValue(primaryServerConfigAtom)?.managedPolicyDiagnostics;
+  const managedProviderInstanceIds = new Set(
+    managedPolicyDiagnostics?.managedProviderInstanceIds ??
+      (managedPolicyDiagnostics?.managedProviderInstanceId === undefined
+        ? []
+        : [managedPolicyDiagnostics.managedProviderInstanceId]),
+  );
   const serverProviders = useAtomValue(primaryServerProvidersAtom);
   const visibleServerProviders = useMemo(
     () => serverProviders.filter((provider) => getDriverOption(provider.driver) !== undefined),
@@ -1474,8 +1670,35 @@ export function ProviderSettingsPanel() {
     () => new Set(),
   );
   const [openInstanceDetails, setOpenInstanceDetails] = useState<Record<string, boolean>>({});
+  const [tritonAiCredentialStatus, setTritonAiCredentialStatus] =
+    useState<DesktopTritonAiCredentialStatus | null>(null);
+  const [tritonAiCredentialStatusError, setTritonAiCredentialStatusError] = useState<string | null>(
+    null,
+  );
+  const [tritonAiCredentialStatusRequest, setTritonAiCredentialStatusRequest] = useState(0);
   const refreshingRef = useRef(false);
   const updatingProviderKeysRef = useRef<Set<string>>(new Set());
+  const desktopBridge = window.desktopBridge;
+
+  useEffect(() => {
+    if (!desktopBridge) return;
+    let cancelled = false;
+    setTritonAiCredentialStatusError(null);
+    void desktopBridge
+      .getTritonAiCredentialStatus()
+      .then((status) => {
+        if (!cancelled) setTritonAiCredentialStatus(status);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setTritonAiCredentialStatus(null);
+          setTritonAiCredentialStatusError("Could not load the saved TritonAI access setup.");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [desktopBridge, tritonAiCredentialStatusRequest]);
 
   const providerUpdateCandidates = useMemo(
     () => collectProviderUpdateCandidates(visibleServerProviders),
@@ -1888,6 +2111,18 @@ export function ProviderSettingsPanel() {
               instance={row.instance}
               driverOption={driverOption}
               liveProvider={liveProvider}
+              isManagedByPolicy={managedProviderInstanceIds.has(String(row.instanceId))}
+              {...(desktopBridge && managedProviderInstanceIds.has(String(row.instanceId))
+                ? {
+                    tritonAiCredentialControl: {
+                      status: tritonAiCredentialStatus,
+                      statusError: tritonAiCredentialStatusError,
+                      onRetryStatus: () =>
+                        setTritonAiCredentialStatusRequest((request) => request + 1),
+                      onStatusChange: setTritonAiCredentialStatus,
+                    },
+                  }
+                : {})}
               isExpanded={openInstanceDetails[row.instanceId] ?? false}
               onExpandedChange={(open) =>
                 setOpenInstanceDetails((existing) => ({

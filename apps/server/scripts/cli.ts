@@ -19,6 +19,7 @@ import {
   loadManagedPluginCompositionFromEnvironment,
   snapshotManagedPluginComposition,
 } from "../../../scripts/lib/managed-plugin-composition.ts";
+import { loadManagedHarnessConfigForBuild } from "../../../scripts/lib/managed-harness-config.ts";
 import { loadRepoEnv } from "../../../scripts/lib/public-config.ts";
 import { resolveCatalogDependencies } from "../../../scripts/lib/resolve-catalog.ts";
 import { fromJsonStringPretty } from "@t3tools/shared/schemaJson";
@@ -177,6 +178,13 @@ const buildCmd = Command.make(
       } else {
         yield* Effect.logWarning("[cli] Web dist not found — skipping client bundle.");
       }
+
+      const managedConfig = loadManagedHarnessConfigForBuild(repoRoot);
+      yield* fs.writeFileString(
+        path.join(serverDir, "dist/tritonai-managed-config.json"),
+        managedConfig.source,
+      );
+      yield* Effect.log("[cli] Bundled validated TritonAI managed config into dist");
 
       const pluginSource = loadManagedPluginCompositionFromEnvironment(loadRepoEnv());
       if (pluginSource) {

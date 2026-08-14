@@ -84,6 +84,20 @@ Installer and updater changes should consume GitHub Release assets from `dbalder
 
 Branches are for source integration. GitHub Releases are for installer and updater consumption.
 
+Official macOS and Windows artifact builds must explicitly bind their packaged updater metadata to
+the TritonAI Harness release repository. Set the repository for each isolated platform build; do
+not rely on an ambient fork or upstream remote:
+
+```sh
+export T3CODE_DESKTOP_UPDATE_REPOSITORY="dbalders/TritonAI-Harness"
+node scripts/build-desktop-artifact.ts --platform mac --target dmg --arch arm64
+node scripts/build-desktop-artifact.ts --platform win --target nsis --arch x64
+```
+
+Use `--mock-updates` only for a deliberately local mock-update artifact. macOS and Windows
+builds stop before expensive packaging when neither production nor mock updater configuration is
+present, and the final assembled app is independently checked for `resources/app-update.yml`.
+
 To prepare a PR that merges the latest stable parent T3 Code release into TritonAI Harness:
 
 ```sh

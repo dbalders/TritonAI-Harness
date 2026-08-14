@@ -1,4 +1,8 @@
-import type { SourceControlProviderInfo, SourceControlProviderKind } from "@t3tools/contracts";
+import type {
+  SourceControlProviderDiscoveryItem,
+  SourceControlProviderInfo,
+  SourceControlProviderKind,
+} from "@t3tools/contracts";
 
 export interface ChangeRequestPresentation {
   readonly icon: "github" | "gitlab" | "azure-devops" | "bitbucket" | "change-request";
@@ -20,6 +24,12 @@ export const DEFAULT_CHANGE_REQUEST_TERMINOLOGY: ChangeRequestTerminology = {
   shortLabel: "PR",
   singular: "pull request",
 };
+
+export function isSourceControlProviderReady(
+  provider: SourceControlProviderDiscoveryItem,
+): boolean {
+  return provider.status === "available" && provider.auth.status === "authenticated";
+}
 
 const GITHUB_CHANGE_REQUEST_PRESENTATION: ChangeRequestPresentation = {
   icon: "github",

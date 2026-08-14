@@ -66,7 +66,7 @@ import { useShortcutModifierState } from "../shortcutModifierState";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { isModelPickerOpen } from "../modelPickerVisibility";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
-import { isMacPlatform, newProjectId } from "~/lib/utils";
+import { isMacPlatform } from "~/lib/utils";
 import { useOpenPrLink } from "../lib/openPullRequestLink";
 import { readLocalApi } from "../localApi";
 import {
@@ -84,12 +84,8 @@ import { useThreadSelectionStore } from "../threadSelectionStore";
 import { useThreadActions } from "../hooks/useThreadActions";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { openCommandPalette } from "../commandPaletteBus";
-import { resolveThreadActionProjectRef } from "../lib/chatThreadActions";
-import {
-  useClientSettings,
-  usePrimarySettings,
-  useUpdateClientSettings,
-} from "../hooks/useSettings";
+import { startNewThreadFromContext } from "../lib/chatThreadActions";
+import { useClientSettings, useUpdateClientSettings } from "../hooks/useSettings";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useNowMinute } from "../hooks/useNowMinute";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
@@ -161,12 +157,6 @@ import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrom
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import { useComposerDraftStore } from "../composerDraftStore";
-import {
-  TRITONAI_CHATS_PROJECT_TITLE,
-  findPrimaryTritonAiChatsProjects,
-  partitionTritonAiChatsProjects,
-  resolveTritonAiChatsWorkspacePath,
-} from "../tritonAiWorkspace";
 
 // Settled-tail paging: recent history is the common lookup; the deep tail
 // stays behind an explicit Show more.
@@ -1026,16 +1016,12 @@ export default function SidebarV2() {
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const sidebarProjectSortOrder = useClientSettings((s) => s.sidebarProjectSortOrder);
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
-  const textGenerationModelSelection = usePrimarySettings((s) => s.textGenerationModelSelection);
   const { settleThread, unsettleThread, snoozeThread, unsnoozeThread, deleteThread } =
     useThreadActions();
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
   const deleteProject = useAtomCommand(projectEnvironment.delete, {
-    reportFailure: false,
-  });
-  const createProject = useAtomCommand(projectEnvironment.create, {
     reportFailure: false,
   });
   const updateProject = useAtomCommand(projectEnvironment.update, {
@@ -1055,6 +1041,27 @@ export default function SidebarV2() {
         stackedThreadToast({
           type: "error",
           title: "Failed to copy path",
+          description: error instanceof Error ? error.message : "An error occurred.",
+        }),
+      );
+    },
+  });
+  const { copyToClipboard: copyThreadId } = useCopyToClipboard<{
+    threadId: ScopedThreadRef["threadId"];
+  }>({
+    target: "thread ID",
+    onCopy: ({ threadId }) => {
+      toastManager.add({
+        type: "success",
+        title: "Thread ID copied",
+        description: threadId,
+      });
+    },
+    onError: (error) => {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Failed to copy thread ID",
           description: error instanceof Error ? error.message : "An error occurred.",
         }),
       );
@@ -1116,63 +1123,26 @@ export default function SidebarV2() {
       }),
     [projectOrder, projects],
   );
-  const { chatsProjects, regularProjects } = useMemo(
-    () => partitionTritonAiChatsProjects(projects),
-    [projects],
-  );
-  const { regularProjects: orderedRegularProjects } = useMemo(
-    () => partitionTritonAiChatsProjects(orderedProjects),
-    [orderedProjects],
-  );
   const unsortedProjectGroups = useMemo(
     () =>
       buildSidebarProjectSnapshots({
-        projects: sidebarProjectSortOrder === "manual" ? orderedRegularProjects : regularProjects,
+        projects: sidebarProjectSortOrder === "manual" ? orderedProjects : projects,
         settings: projectGroupingSettings,
         primaryEnvironmentId,
         resolveEnvironmentLabel: (environmentId) => environmentLabelById.get(environmentId) ?? null,
       }),
     [
       environmentLabelById,
-      orderedRegularProjects,
+      orderedProjects,
       primaryEnvironmentId,
       projectGroupingSettings,
-      regularProjects,
+      projects,
       sidebarProjectSortOrder,
     ],
   );
   const projectGroups = useMemo(
     () => sortLogicalProjectsForSidebar(unsortedProjectGroups, threads, sidebarProjectSortOrder),
     [sidebarProjectSortOrder, threads, unsortedProjectGroups],
-  );
-  const primaryChatsProjects = useMemo(
-    () => findPrimaryTritonAiChatsProjects(chatsProjects, primaryEnvironmentId),
-    [chatsProjects, primaryEnvironmentId],
-  );
-  const chatsProject = useMemo<SidebarProjectSnapshot | null>(() => {
-    const snapshots = buildSidebarProjectSnapshots({
-      projects: primaryChatsProjects,
-      settings: projectGroupingSettings,
-      primaryEnvironmentId,
-      resolveEnvironmentLabel: (environmentId) => environmentLabelById.get(environmentId) ?? null,
-    });
-    const project = snapshots[0] ?? null;
-    if (!project) return null;
-
-    const memberProjects = snapshots.flatMap((snapshot) => snapshot.memberProjects);
-    return {
-      ...project,
-      displayName: TRITONAI_CHATS_PROJECT_TITLE,
-      groupedProjectCount: memberProjects.length,
-      memberProjects,
-      memberProjectRefs: memberProjects.map((member) =>
-        scopeProjectRef(member.environmentId, member.id),
-      ),
-    };
-  }, [environmentLabelById, primaryChatsProjects, primaryEnvironmentId, projectGroupingSettings]);
-  const selectableProjectGroups = useMemo(
-    () => [...projectGroups, ...(chatsProject ? [chatsProject] : [])],
-    [chatsProject, projectGroups],
   );
   const serverProviders = useAtomValue(primaryServerProvidersAtom);
   const providerEntryByInstanceId = useMemo(
@@ -1197,130 +1167,14 @@ export default function SidebarV2() {
   const projectDisplayNameByKey = useMemo(
     () =>
       new Map(
-        selectableProjectGroups.flatMap((group) =>
+        projectGroups.flatMap((group) =>
           group.memberProjects.map(
             (project) => [`${project.environmentId}:${project.id}`, group.displayName] as const,
           ),
         ),
       ),
-    [selectableProjectGroups],
+    [projectGroups],
   );
-  const ensureChatsProjectRefInFlight = useRef(
-    new Map<string, Promise<ReturnType<typeof scopeProjectRef>>>(),
-  );
-  const ensuredChatsProjectByEnvironment = useRef(
-    new Map<string, { projectRef: ReturnType<typeof scopeProjectRef>; observed: boolean }>(),
-  );
-  useEffect(() => {
-    for (const [environmentId, cachedProject] of ensuredChatsProjectByEnvironment.current) {
-      const isPresent = projects.some(
-        (project) =>
-          project.environmentId === cachedProject.projectRef.environmentId &&
-          project.id === cachedProject.projectRef.projectId,
-      );
-      if (isPresent) {
-        ensuredChatsProjectByEnvironment.current.set(environmentId, {
-          ...cachedProject,
-          observed: true,
-        });
-      } else if (cachedProject.observed) {
-        ensuredChatsProjectByEnvironment.current.delete(environmentId);
-      }
-    }
-  }, [projects]);
-  const ensureChatsProjectRef = useCallback((): Promise<ReturnType<typeof scopeProjectRef>> => {
-    if (primaryEnvironmentId === null) {
-      return Promise.reject(new Error("Primary environment is not ready."));
-    }
-
-    const environmentId = primaryEnvironmentId;
-    const inFlight = ensureChatsProjectRefInFlight.current.get(environmentId);
-    if (inFlight) return inFlight;
-
-    const existingPrimaryProject = primaryChatsProjects[0] ?? null;
-    if (existingPrimaryProject) {
-      const projectRef = scopeProjectRef(
-        existingPrimaryProject.environmentId,
-        existingPrimaryProject.id,
-      );
-      ensuredChatsProjectByEnvironment.current.set(existingPrimaryProject.environmentId, {
-        projectRef,
-        observed: true,
-      });
-      return Promise.resolve(projectRef);
-    }
-
-    const promise = (async (): Promise<ReturnType<typeof scopeProjectRef>> => {
-      const cachedProject = ensuredChatsProjectByEnvironment.current.get(environmentId);
-      if (cachedProject) return cachedProject.projectRef;
-
-      const projectId = newProjectId();
-      const projectRef = scopeProjectRef(environmentId, projectId);
-      ensuredChatsProjectByEnvironment.current.set(environmentId, {
-        projectRef,
-        observed: false,
-      });
-      try {
-        const result = await createProject({
-          environmentId,
-          input: {
-            projectId,
-            title: TRITONAI_CHATS_PROJECT_TITLE,
-            workspaceRoot: resolveTritonAiChatsWorkspacePath(),
-            createWorkspaceRootIfMissing: true,
-            defaultModelSelection: textGenerationModelSelection,
-          },
-        });
-        if (result._tag === "Failure") {
-          if (isAtomCommandInterrupted(result)) {
-            throw new Error("Chat creation was interrupted.");
-          }
-          const error = squashAtomCommandFailure(result);
-          throw error instanceof Error ? error : new Error("Could not create Chats project.");
-        }
-        return projectRef;
-      } catch (error) {
-        const cachedProject = ensuredChatsProjectByEnvironment.current.get(environmentId);
-        if (
-          cachedProject?.projectRef.environmentId === projectRef.environmentId &&
-          cachedProject.projectRef.projectId === projectRef.projectId
-        ) {
-          ensuredChatsProjectByEnvironment.current.delete(environmentId);
-        }
-        throw error;
-      }
-    })();
-
-    ensureChatsProjectRefInFlight.current.set(environmentId, promise);
-    const clearInFlight = () => {
-      if (ensureChatsProjectRefInFlight.current.get(environmentId) === promise) {
-        ensureChatsProjectRefInFlight.current.delete(environmentId);
-      }
-    };
-    void promise.then(clearInFlight, clearInFlight);
-    return promise;
-  }, [createProject, primaryChatsProjects, primaryEnvironmentId, textGenerationModelSelection]);
-  const handleNewChat = useCallback(() => {
-    void (async () => {
-      try {
-        const projectRef = await ensureChatsProjectRef();
-        if (isMobile) setOpenMobile(false);
-        await newThreadContext.handleNewThread(projectRef, {
-          branch: null,
-          worktreePath: null,
-          envMode: "local",
-        });
-      } catch (error) {
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Could not start chat",
-            description: error instanceof Error ? error.message : "An unexpected error occurred.",
-          }),
-        );
-      }
-    })();
-  }, [ensureChatsProjectRef, isMobile, newThreadContext.handleNewThread, setOpenMobile]);
 
   // now is quantized to the minute so effectiveSettled memoization doesn't
   // churn on every render; auto-settle thresholds are day-granular anyway.
@@ -1360,9 +1214,8 @@ export default function SidebarV2() {
     () =>
       projectScopeKey === null
         ? null
-        : (selectableProjectGroups.find((project) => project.projectKey === projectScopeKey) ??
-          null),
-    [projectScopeKey, selectableProjectGroups],
+        : (projectGroups.find((project) => project.projectKey === projectScopeKey) ?? null),
+    [projectGroups, projectScopeKey],
   );
   const scopedProjectKeys = useMemo(
     () =>
@@ -2212,6 +2065,7 @@ export default function SidebarV2() {
                 : []),
               { id: "rename", label: "Rename thread" },
               { id: "mark-unread", label: "Mark unread" },
+              { id: "copy-thread-id", label: "Copy Thread ID" },
               { id: "delete", label: "Delete", destructive: true, icon: "trash" },
             ],
             position,
@@ -2264,6 +2118,9 @@ export default function SidebarV2() {
           case "mark-unread":
             markThreadUnread(threadKey, thread.latestTurn?.completedAt);
             return;
+          case "copy-thread-id":
+            copyThreadId(thread.id, { threadId: thread.id });
+            return;
           case "delete": {
             if (confirmThreadDelete) {
               const confirmed = await settlePromise(() =>
@@ -2301,6 +2158,7 @@ export default function SidebarV2() {
       attemptUnsettle,
       attemptUnsnooze,
       confirmThreadDelete,
+      copyThreadId,
       deleteThread,
       handleMultiSelectContextMenu,
       markThreadUnread,
@@ -2380,36 +2238,24 @@ export default function SidebarV2() {
     autoAnimate(node, { duration: 150, easing: "ease-out" });
   }, []);
 
-  // Ordinary new threads never target the dedicated Chats project. With one
-  // regular project there is nothing to pick; with several, the command
-  // palette owns the grouped-project selection.
+  // New thread defaults to the project you're in (active thread's project,
+  // falling back to the top project) — same resolution the command palette
+  // uses. The command palette already offers a "New thread in..." submenu
+  // for multi-project setups.
   const handleNewThreadClick = useCallback(() => {
-    if (projectGroups.length === 0) return;
-    if (projectGroups.length === 1) {
-      const group = projectGroups[0]!;
-      const contextualProjectRef = resolveThreadActionProjectRef({
+    if (projectGroups.length <= 1) {
+      if (isMobile) setOpenMobile(false);
+      void startNewThreadFromContext({
         activeDraftThread: newThreadContext.activeDraftThread,
         activeThread: newThreadContext.activeThread ?? undefined,
         defaultProjectRef: newThreadContext.defaultProjectRef,
         handleNewThread: newThreadContext.handleNewThread,
       });
-      const targetProjectRef =
-        contextualProjectRef &&
-        group.memberProjectRefs.some(
-          (projectRef) =>
-            projectRef.environmentId === contextualProjectRef.environmentId &&
-            projectRef.projectId === contextualProjectRef.projectId,
-        )
-          ? contextualProjectRef
-          : (group.memberProjectRefs[0] ?? null);
-      if (!targetProjectRef) return;
-      if (isMobile) setOpenMobile(false);
-      void newThreadContext.handleNewThread(targetProjectRef);
       return;
     }
     if (isMobile) setOpenMobile(false);
     openCommandPalette({ open: "new-thread-in" });
-  }, [isMobile, newThreadContext, projectGroups, setOpenMobile]);
+  }, [isMobile, newThreadContext, projectGroups.length, setOpenMobile]);
 
   const commandPaletteShortcutLabel = shortcutLabelForCommand(keybindings, "commandPalette.toggle");
   // Same resolution as v1: prefer the local-thread binding, fall back to
@@ -2454,7 +2300,7 @@ export default function SidebarV2() {
                         type="button"
                         className="relative focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
                         onClick={handleNewThreadClick}
-                        disabled={regularProjects.length === 0}
+                        disabled={projects.length === 0}
                         aria-label="New thread"
                       />
                     }
@@ -2472,32 +2318,8 @@ export default function SidebarV2() {
                   </TooltipPopup>
                 </Tooltip>
               </div>
-              <div className="shrink-0">
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <SidebarMenuButton
-                        size="icon"
-                        type="button"
-                        data-testid="sidebar-new-chat-trigger"
-                        className="relative focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
-                        onClick={handleNewChat}
-                        disabled={primaryEnvironmentId === null}
-                        aria-label="New chat"
-                      />
-                    }
-                  >
-                    <MessageSquareIcon />
-                    <span
-                      className="pointer-events-none absolute left-1/2 top-1/2 size-[max(100%,3rem)] -translate-1/2 pointer-fine:hidden"
-                      aria-hidden="true"
-                    />
-                  </TooltipTrigger>
-                  <TooltipPopup side="right">New chat</TooltipPopup>
-                </Tooltip>
-              </div>
             </div>
-            {selectableProjectGroups.length > 0 ? (
+            {projectGroups.length > 0 ? (
               <div className="flex items-center gap-1">
                 <Menu open={projectScopeMenuOpen} onOpenChange={setProjectScopeMenuOpen}>
                   <MenuTrigger
@@ -2537,7 +2359,7 @@ export default function SidebarV2() {
                         <FolderIcon className="size-4 shrink-0" />
                         <span className="min-w-0 truncate text-sm">All projects</span>
                       </MenuRadioItem>
-                      {selectableProjectGroups.map((project) => {
+                      {projectGroups.map((project) => {
                         const scopeKey = project.projectKey;
                         return (
                           <MenuRadioItem
@@ -2552,20 +2374,18 @@ export default function SidebarV2() {
                               className="size-4 shrink-0"
                             />
                             <span className="min-w-0 truncate text-sm">{project.displayName}</span>
-                            {project.projectKey !== chatsProject?.projectKey ? (
-                              <button
-                                type="button"
-                                aria-label={`Project actions for ${project.displayName}`}
-                                title={`Project actions for ${project.displayName}`}
-                                className="ml-auto inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground/55 outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-                                onPointerDown={(event) => event.stopPropagation()}
-                                onClick={(event) => {
-                                  void handleProjectActions(event, project);
-                                }}
-                              >
-                                <EllipsisIcon className="size-3.5" />
-                              </button>
-                            ) : null}
+                            <button
+                              type="button"
+                              aria-label={`Project actions for ${project.displayName}`}
+                              title={`Project actions for ${project.displayName}`}
+                              className="ml-auto inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground/55 outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                              onPointerDown={(event) => event.stopPropagation()}
+                              onClick={(event) => {
+                                void handleProjectActions(event, project);
+                              }}
+                            >
+                              <EllipsisIcon className="size-3.5" />
+                            </button>
                           </MenuRadioItem>
                         );
                       })}
@@ -2770,7 +2590,7 @@ export default function SidebarV2() {
           </TooltipProvider>
           {activeThreads.length + snoozedThreads.length + settledThreads.length === 0 ? (
             <div className="flex flex-col items-center gap-2 px-2 py-6 text-center text-xs text-muted-foreground/60">
-              {regularProjects.length === 0 && chatsProject === null ? (
+              {projects.length === 0 ? (
                 <>
                   <span>No projects yet</span>
                   <button
@@ -2783,13 +2603,7 @@ export default function SidebarV2() {
                   </button>
                 </>
               ) : scopedProjectGroup ? (
-                scopedProjectGroup.projectKey === chatsProject?.projectKey ? (
-                  "No chats yet"
-                ) : (
-                  `No threads in ${scopedProjectGroup.displayName} yet`
-                )
-              ) : regularProjects.length === 0 && chatsProject !== null ? (
-                "No chats yet"
+                `No threads in ${scopedProjectGroup.displayName} yet`
               ) : (
                 "No threads yet"
               )}

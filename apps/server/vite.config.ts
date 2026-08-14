@@ -1,8 +1,13 @@
 import "vite-plus/test/config";
+import * as NodeURL from "node:url";
 import { defineConfig, mergeConfig } from "vite-plus";
 
 import baseConfig from "../../vite.config.ts";
-import { loadManagedPluginCompositionFromEnvironment } from "../../scripts/lib/managed-plugin-composition.ts";
+import {
+  loadManagedPluginCompositionFromEnvironment,
+  readManagedPluginBuildConfiguration,
+} from "../../scripts/lib/managed-plugin-composition.ts";
+import { loadManagedHarnessConfigForBuild } from "../../scripts/lib/managed-harness-config.ts";
 import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
 import packageJson from "./package.json" with { type: "json" };
 
@@ -18,9 +23,14 @@ export function shouldBundleCliDependency(id: string): boolean {
 }
 
 const repoEnv = loadRepoEnv();
+const repoRoot = NodeURL.fileURLToPath(new URL("../..", import.meta.url));
 const cliBuildChannel = packageJson.version.includes("-nightly.") ? "nightly" : "latest";
-const managedPluginComposition =
-  loadManagedPluginCompositionFromEnvironment(repoEnv)?.composition ?? null;
+const managedHarnessConfig = loadManagedHarnessConfigForBuild(repoRoot);
+const managedPluginBuildInput = loadManagedPluginCompositionFromEnvironment(repoEnv);
+const managedPluginComposition = managedPluginBuildInput?.composition ?? null;
+const managedPluginConfiguration = managedPluginBuildInput
+  ? readManagedPluginBuildConfiguration(managedPluginBuildInput.composition, repoEnv)
+  : null;
 
 export default mergeConfig(
   baseConfig,
@@ -50,12 +60,9 @@ export default mergeConfig(
         __T3CODE_BUILD_CHANNEL__: JSON.stringify(cliBuildChannel),
         __TRITONAI_BUILD_SUPPORTS_INTEGRATION_FIXTURES__: "false",
         __TRITONAI_BUILD_PLUGIN_COMPOSITION__: JSON.stringify(managedPluginComposition),
-        __TRITONAI_BUILD_MICROSOFT_GRAPH_CLIENT_ID__: JSON.stringify(
-          repoEnv.TRITONAI_MICROSOFT_GRAPH_CLIENT_ID?.trim() ?? "",
-        ),
-        __TRITONAI_BUILD_MICROSOFT_GRAPH_TENANT_ID__: JSON.stringify(
-          repoEnv.TRITONAI_MICROSOFT_GRAPH_TENANT_ID?.trim() ?? "",
-        ),
+        __TRITONAI_BUILD_PLUGIN_CONFIGURATION__: JSON.stringify(managedPluginConfiguration),
+        __TRITONAI_BUILD_MANAGED_CONFIG__: JSON.stringify(managedHarnessConfig.config),
+        __TRITONAI_BUILD_MANAGED_CONFIG_DIGEST__: JSON.stringify(managedHarnessConfig.digest),
         __T3CODE_BUILD_RELAY_URL__: JSON.stringify(repoEnv.T3CODE_RELAY_URL?.trim() ?? ""),
         __T3CODE_BUILD_CLERK_PUBLISHABLE_KEY__: JSON.stringify(
           repoEnv.T3CODE_CLERK_PUBLISHABLE_KEY?.trim() ?? "",

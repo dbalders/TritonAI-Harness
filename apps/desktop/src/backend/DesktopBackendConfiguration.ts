@@ -1,6 +1,12 @@
 import * as NodeOS from "node:os";
 
-import { LEGACY_T3CODE_HOME_ENV, TRITONAI_HOME_ENV } from "@t3tools/contracts";
+import {
+  LEGACY_T3CODE_HOME_ENV,
+  TRITONAI_API_KEY_ENV,
+  TRITONAI_FRONTIER_API_KEY_ENV,
+  TRITONAI_HOME_ENV,
+  TRITONAI_ONPREM_API_KEY_ENV,
+} from "@t3tools/contracts";
 import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serverSettings";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -80,6 +86,12 @@ const emptyBackendObservabilitySettings: BackendObservabilitySettings = {
 
 const UCSD_ENV_FILE_PATH = [".agents", "ucsd", "env"] as const;
 
+const TRITONAI_CREDENTIAL_ENV_NAMES = new Set([
+  TRITONAI_API_KEY_ENV,
+  TRITONAI_ONPREM_API_KEY_ENV,
+  TRITONAI_FRONTIER_API_KEY_ENV,
+]);
+
 const DESKTOP_BACKEND_ENV_NAMES = [
   TRITONAI_HOME_ENV,
   LEGACY_T3CODE_HOME_ENV,
@@ -103,6 +115,8 @@ const WSL_FORWARDED_ENV_NAMES = [
   "OPENAI_API_KEY",
   "ANTHROPIC_API_KEY",
   "TRITONAI_API_KEY",
+  TRITONAI_ONPREM_API_KEY_ENV,
+  TRITONAI_FRONTIER_API_KEY_ENV,
   "UCSD_AI_BASE_URL",
 ] as const;
 
@@ -160,6 +174,28 @@ function ucsdEnvironmentFallback(ucsdEnvironment: Record<string, string>): Recor
       return inherited === undefined || inherited.length === 0;
     }),
   );
+}
+
+function withoutTritonAiCredentials(environment: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(environment).filter(([name]) => !TRITONAI_CREDENTIAL_ENV_NAMES.has(name)),
+  );
+}
+
+function resolveTritonAiCredentialEnvironment(
+  ucsdEnvironment: Record<string, string>,
+  desktopOverride: Option.Option<DesktopTritonAiApiKey.TritonAiCredentialBundle>,
+): Record<string, string | undefined> {
+  return Option.match(desktopOverride, {
+    onSome: DesktopTritonAiApiKey.credentialEnvironmentPatch,
+    onNone: () => {
+      const installerCredentials =
+        DesktopTritonAiApiKey.credentialBundleFromEnvironment(ucsdEnvironment);
+      return installerCredentials === null
+        ? {}
+        : DesktopTritonAiApiKey.credentialEnvironmentPatch(installerCredentials);
+    },
+  });
 }
 
 const getWslEnvEntryName = (entry: string): string => {
@@ -445,7 +481,11 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
     const serverExposure = yield* DesktopServerExposure.DesktopServerExposure;
     const backendExposure = yield* serverExposure.backendConfig;
     const ucsdEnvironment = yield* readUcsdEnvironmentFile;
-    const tritonAiApiKeyOverride = yield* DesktopTritonAiApiKey.readTritonAiApiKeyOverride;
+    const tritonAiCredentialOverride = yield* DesktopTritonAiApiKey.readTritonAiCredentialOverride;
+    const tritonAiCredentialEnvironment = resolveTritonAiCredentialEnvironment(
+      ucsdEnvironment,
+      tritonAiCredentialOverride,
+    );
 
     const bootstrap = {
       mode: "desktop" as const,
@@ -473,11 +513,8 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
       entryPath: environment.backendEntryPath,
       cwd: environment.backendCwd,
       env: {
-        ...ucsdEnvironmentFallback(ucsdEnvironment),
-        ...Option.match(tritonAiApiKeyOverride, {
-          onNone: () => ({}),
-          onSome: (apiKey) => ({ TRITONAI_API_KEY: apiKey }),
-        }),
+        ...ucsdEnvironmentFallback(withoutTritonAiCredentials(ucsdEnvironment)),
+        ...tritonAiCredentialEnvironment,
         ...backendChildEnvPatch(),
         ELECTRON_RUN_AS_NODE: "1",
       },
@@ -509,7 +546,15 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const wslEnvironment = yield* DesktopWslEnvironment.DesktopWslEnvironment;
   const ucsdEnvironment = yield* readUcsdEnvironmentFile;
-  const tritonAiApiKeyOverride = yield* DesktopTritonAiApiKey.readTritonAiApiKeyOverride;
+  const tritonAiCredentialOverride = yield* DesktopTritonAiApiKey.readTritonAiCredentialOverride;
+  const installerCredentials =
+    DesktopTritonAiApiKey.credentialBundleFromEnvironment(ucsdEnvironment);
+  const hasManagedCredentialBundle =
+    Option.isSome(tritonAiCredentialOverride) || installerCredentials !== null;
+  const tritonAiCredentialEnvironment = resolveTritonAiCredentialEnvironment(
+    ucsdEnvironment,
+    tritonAiCredentialOverride,
+  );
 
   // Bind to 0.0.0.0 inside WSL so the backend is reachable both via
   // WSL2's automatic localhost forwarding (wslhost: Windows 127.0.0.1
@@ -633,9 +678,10 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
   const forwardedEnv: Record<string, string> = {};
   const forwardedEnvNames: string[] = [];
   for (const name of WSL_FORWARDED_ENV_NAMES) {
+    const isCredential = TRITONAI_CREDENTIAL_ENV_NAMES.has(name);
     const value =
-      name === "TRITONAI_API_KEY" && Option.isSome(tritonAiApiKeyOverride)
-        ? tritonAiApiKeyOverride.value
+      hasManagedCredentialBundle && isCredential
+        ? tritonAiCredentialEnvironment[name]
         : process.env[name] && process.env[name].length > 0
           ? process.env[name]
           : ucsdEnvironment[name];
@@ -662,9 +708,10 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
     entryPath: wslEntryPath,
     cwd: environment.backendCwd,
     env: {
-      ...ucsdEnvironment,
+      ...withoutTritonAiCredentials(ucsdEnvironment),
       ...parentEnvWithoutManagedHome,
       ...backendChildEnvPatch(),
+      ...tritonAiCredentialEnvironment,
       ...forwardedEnv,
       ...(wslEnv !== undefined ? { WSLENV: wslEnv } : {}),
     },

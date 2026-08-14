@@ -58,6 +58,11 @@ export interface IntegrationInvocationContext {
   readonly signal: AbortSignal;
   /** Set only by a trusted Harness adapter after crossing its task-approval boundary. */
   readonly writeApproved?: boolean;
+  /**
+   * Present only for a write invocation. Providers must await this immediately before their
+   * narrow external mutation and use the returned signal for every fallible commit-tail step.
+   */
+  beginCommit?(): Promise<AbortSignal>;
 }
 
 export interface IntegrationLifecycleContext extends IntegrationInvocationContext {
@@ -357,6 +362,16 @@ class ProviderFaultedError extends Error {
   constructor() {
     super("The integration provider is faulted until its connection is reset.");
     this.name = "ProviderFaultedError";
+  }
+}
+
+class ProviderWriteAdmissionError extends Error {
+  constructor(cause?: unknown) {
+    super(
+      "The integration provider returned a write result without commit admission.",
+      cause === undefined ? undefined : { cause },
+    );
+    this.name = "ProviderWriteAdmissionError";
   }
 }
 
@@ -729,6 +744,14 @@ export class RegistryRuntime {
       if ((hasConnect || hasPoll || hasDisconnect) && (!hasConnect || !hasDisconnect)) {
         throw new Error(
           `Provider ${provider.id} must implement connect and disconnect together; polling is optional.`,
+        );
+      }
+      if (
+        manifest.tools.some(({ effect }) => effect === "write") &&
+        !hasConnectionLifecycle(provider)
+      ) {
+        throw new Error(
+          `Provider ${provider.id} must implement connect and disconnect to recover write admission faults.`,
         );
       }
       if ([...this.#catalog.values()].some((entry) => entry.provider?.id === provider.id)) {
@@ -2445,9 +2468,12 @@ export class RegistryRuntime {
                 onExcessProperty: "error",
               },
             );
-            if (decoded.kind === "device_code" && !hasPollingLifecycle(provider)) {
+            if (
+              (decoded.kind === "device_code" || decoded.kind === "authorization_url") &&
+              !hasPollingLifecycle(provider)
+            ) {
               throw new Error(
-                `Provider ${provider.id} returned a device-code flow without implementing poll.`,
+                `Provider ${provider.id} returned a polling authorization flow without implementing poll.`,
               );
             }
             return decoded;
@@ -2867,6 +2893,7 @@ export class RegistryRuntime {
       active.add(controller);
       this.#activeInvocationToolNames.set(controller, name);
       this.#activeInvocations.set(manifest.id, active);
+      let writeCommitAdmitted = false;
       try {
         await this.#prepareProvider(provider, signal);
         if (this.#activeProviderLifecycleWork.has(provider)) {
@@ -2917,7 +2944,7 @@ export class RegistryRuntime {
             `Input for integration tool ${name} did not match its declared schema.`,
           );
         }
-        const invocationWork = Promise.resolve().then(() => {
+        const invokeProvider = (providerContext?: IntegrationLifecycleContext) => {
           if (this.#faultedProviders.has(provider)) throw new ProviderFaultedError();
           if (
             signal.aborted ||
@@ -2927,36 +2954,77 @@ export class RegistryRuntime {
             if (context?.signal.aborted) throw cancellationError(context.signal);
             throw operationError("disabled", `${manifest.name} access is being revoked.`);
           }
-          return provider.invoke(name, decodedInput, { signal });
-        });
+          return provider.invoke(
+            name,
+            decodedInput,
+            tool.effect === "write" && providerContext
+              ? {
+                  signal: providerContext.signal,
+                  writeApproved: true,
+                  beginCommit: async () => {
+                    const commitSignal = await providerContext.beginCommit();
+                    writeCommitAdmitted = true;
+                    return commitSignal;
+                  },
+                }
+              : { signal },
+          );
+        };
+        const invocationWork = Promise.resolve().then(() =>
+          tool.effect === "write"
+            ? this.#providerOperation(provider, invokeProvider, { signal })
+            : invokeProvider(),
+        );
         this.#activeInvocationWork.add(invocationWork);
         void invocationWork.then(
           () => this.#activeInvocationWork.delete(invocationWork),
           () => this.#activeInvocationWork.delete(invocationWork),
         );
         const result = await invocationWork;
-        if (controller.signal.aborted) {
+        if (tool.effect === "write" && !writeCommitAdmitted) {
+          let journalFailure: unknown;
+          try {
+            await this.#writeProviderCommitJournal(manifest.id, provider.id);
+          } catch (error) {
+            journalFailure = error;
+          }
+          this.#faultProvider(provider);
+          throw new ProviderWriteAdmissionError(journalFailure);
+        }
+        if (controller.signal.aborted && !writeCommitAdmitted) {
           throw operationError("disabled", `${manifest.name} access was revoked.`);
         }
-        if (context?.signal.aborted) throw cancellationError(context.signal);
+        if (context?.signal.aborted && !writeCommitAdmitted)
+          throw cancellationError(context.signal);
         return result;
       } catch (error) {
-        if (controller.signal.aborted) {
+        if (error instanceof ProviderWriteAdmissionError) {
+          throw operationError(
+            "operation_failed",
+            `${manifest.name} returned a write result without commit admission and is unavailable until its connection is reset.`,
+          );
+        }
+        if (controller.signal.aborted && !writeCommitAdmitted) {
           throw operationError("disabled", `${manifest.name} access was revoked.`);
         }
-        if (context?.signal.aborted) throw cancellationError(context.signal);
+        if (context?.signal.aborted && !writeCommitAdmitted)
+          throw cancellationError(context.signal);
         if (error instanceof ProviderStatusTimeoutError) {
           throw operationError(
             "operation_failed",
             `${manifest.name} did not become ready before the status timeout.`,
           );
         }
-        if (error instanceof ProviderStatusContractError || error instanceof ProviderFaultedError) {
+        if (
+          error instanceof ProviderStatusContractError ||
+          error instanceof ProviderFaultedError ||
+          this.#faultedProviders.has(provider)
+        ) {
           throw operationError(
             "operation_failed",
-            error instanceof ProviderFaultedError
-              ? `${manifest.name} is unavailable until its connection is reset.`
-              : `${manifest.name} returned an invalid provider status.`,
+            error instanceof ProviderStatusContractError
+              ? `${manifest.name} returned an invalid provider status.`
+              : `${manifest.name} is unavailable until its connection is reset.`,
           );
         }
         throw error;
@@ -2975,6 +3043,26 @@ export class RegistryRuntime {
       }
     }
     throw operationError("not_found", `Integration tool ${name} was not found.`);
+  }
+}
+
+export async function createRegistryRuntime(
+  root: string,
+  packages: ReadonlyArray<IntegrationPackage>,
+  skills: IntegrationSkillMaterializer = noIntegrationSkills,
+): Promise<RegistryRuntime> {
+  try {
+    return new RegistryRuntime(root, packages, skills);
+  } catch (error) {
+    for (const { provider } of packages.toReversed()) {
+      try {
+        await provider?.close?.();
+      } catch {
+        // Constructor validation owns the startup failure. Provider cleanup is best-effort and
+        // must neither mask that failure nor prevent the remaining snapshots from being closed.
+      }
+    }
+    throw error;
   }
 }
 
@@ -3036,10 +3124,12 @@ export const startupLayer = Layer.effectDiscard(
         includeFixtures: process.env.TRITONAI_ENABLE_INTEGRATION_FIXTURES === "1",
       }),
     );
-    const registry = new RegistryRuntime(
-      NodePath.join(config.stateDir, "integrations"),
-      builtinIntegrations,
-      skillMaterializer,
+    const registry = yield* Effect.promise(() =>
+      createRegistryRuntime(
+        NodePath.join(config.stateDir, "integrations"),
+        builtinIntegrations,
+        skillMaterializer,
+      ),
     );
     yield* Effect.addFinalizer(() =>
       Effect.promise(() => registry.close()).pipe(

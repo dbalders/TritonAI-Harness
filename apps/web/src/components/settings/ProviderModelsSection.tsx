@@ -56,6 +56,8 @@ interface ProviderModelsSectionProps {
    * removed) via `onChange`.
    */
   readonly customModels: ReadonlyArray<string>;
+  /** Whether the custom-model catalog is supplied by organization policy. */
+  readonly customModelsManaged?: boolean | undefined;
   /** Server-returned model slugs hidden from the model picker. */
   readonly hiddenModels: ReadonlyArray<string>;
   /** Model slugs favorited for this provider instance. */
@@ -89,6 +91,7 @@ export function ProviderModelsSection({
   driverKind,
   models,
   customModels,
+  customModelsManaged = false,
   hiddenModels,
   favoriteModels,
   modelOrder,
@@ -189,6 +192,7 @@ export function ProviderModelsSection({
       <div className="text-xs font-medium text-foreground">Models</div>
       <div className="mt-1 text-xs text-muted-foreground">
         {models.length} model{models.length === 1 ? "" : "s"} available.
+        {customModelsManaged ? " The catalog is managed by UC San Diego." : ""}
       </div>
       <div ref={listRef} className="mt-2 max-h-40 overflow-y-auto pb-1">
         {orderedModels.map((model, index) => {
@@ -368,6 +372,7 @@ export function ProviderModelsSection({
                           variant="ghost"
                           className="size-5 rounded-sm p-0 text-muted-foreground hover:text-foreground"
                           aria-label={`Remove ${model.slug}`}
+                          disabled={customModelsManaged}
                           onClick={() => handleRemove(model.slug)}
                         />
                       }
@@ -385,6 +390,7 @@ export function ProviderModelsSection({
 
       <div className="mt-3 flex flex-col gap-2 sm:flex-row">
         <Input
+          disabled={customModelsManaged}
           id={`provider-instance-${instanceId}-custom-model`}
           value={input}
           onChange={(event) => {
@@ -399,7 +405,12 @@ export function ProviderModelsSection({
           placeholder={driverKind ? CUSTOM_MODEL_PLACEHOLDER_BY_KIND[driverKind] : "model-slug"}
           spellCheck={false}
         />
-        <Button className="shrink-0" variant="outline" onClick={handleAdd}>
+        <Button
+          className="shrink-0"
+          variant="outline"
+          disabled={customModelsManaged}
+          onClick={handleAdd}
+        >
           <PlusIcon className="size-3.5" />
           Add
         </Button>

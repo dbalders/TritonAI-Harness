@@ -24,8 +24,25 @@ describe("managed plugin host runtime", () => {
     ).toEqual([{ name: "effect", version: "4.0.0-beta.103", declaration: "peer" }]);
   });
 
+  it.each(["bundledDependencies", "bundleDependencies"] as const)(
+    "rejects packages using the %s npm bundling alias",
+    (field) => {
+      expect(() =>
+        resolvePluginHostRuntimeDependencies(
+          {
+            peerDependencies: { effect: EFFECT_HOST_PEER_RANGE },
+            [field]: ["effect"],
+          },
+          "4.0.0-beta.102",
+        ),
+      ).toThrow(/cannot bundle runtime dependencies/iu);
+    },
+  );
+
   it.each([
     [{ dependencies: { effect: "4.0.0-beta.103" } }, "4.0.0-beta.102"],
+    [{ dependencies: { effect: "4.0.0-beta.102" } }, "4.0.0-beta.102"],
+    [{ dependencies: { effect: "4.0.0-beta.79" } }, "4.0.0-beta.102"],
     [{ dependencies: { effect: "4.0.0-beta.77" } }, "4.0.0-beta.102"],
     [{ dependencies: { effect: "4.0.0-beta.78", other: "1.0.0" } }, "4.0.0-beta.102"],
     [{ peerDependencies: { effect: ">=4.0.0-beta.1 <5.0.0" } }, "4.0.0-beta.102"],

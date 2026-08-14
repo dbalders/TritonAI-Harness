@@ -9,10 +9,13 @@ import effectPackageJson from "effect/package.json" with { type: "json" };
 
 import { finalizeManagedPluginProof } from "./finalize-managed-plugin-proof.ts";
 import {
+  createManagedPluginValidationReceipt,
   managedPluginProofFileName,
   managedPluginProofInputFileName,
+  readManagedPluginBuildConfiguration,
   readManagedPluginComposition,
   snapshotManagedPluginComposition,
+  verifyManagedPluginValidationReceipt,
 } from "./managed-plugin-composition.ts";
 
 const temporaryDirectories: string[] = [];
@@ -24,6 +27,90 @@ afterEach(() => {
 });
 
 describe("managed plugin release composition", () => {
+  it("accepts a novel plugin only when the exact release composition selects it", () => {
+    const composition = readManagedPluginComposition(
+      makeCompositionFixture(
+        null,
+        { peerDependencies: { effect: EFFECT_HOST_PEER_RANGE } },
+        "future-provider",
+      ),
+    );
+    expect(composition.packages).toMatchObject([
+      {
+        id: "future-provider",
+        name: "@tritonai/plugin-future-provider",
+        version: "1.0.1",
+      },
+    ]);
+  });
+
+  it("reads only an exact package-keyed generic build configuration", () => {
+    const composition = readManagedPluginComposition(makeCompositionFixture());
+    const serialized = JSON.stringify({
+      "microsoft-365": {
+        clientId: "11111111-1111-4111-8111-111111111111",
+        tenantId: "22222222-2222-4222-8222-222222222222",
+      },
+    });
+    expect(
+      readManagedPluginBuildConfiguration(composition, {
+        TRITONAI_PLUGIN_CONFIGURATION_JSON: serialized,
+      }),
+    ).toEqual(JSON.parse(serialized));
+
+    for (const invalid of [
+      "",
+      "{",
+      "[]",
+      JSON.stringify({}),
+      JSON.stringify({ "microsoft-365": null }),
+      JSON.stringify({ "microsoft-365": [], extra: {} }),
+    ]) {
+      expect(() =>
+        readManagedPluginBuildConfiguration(composition, {
+          TRITONAI_PLUGIN_CONFIGURATION_JSON: invalid,
+        }),
+      ).toThrow();
+    }
+    expect(() =>
+      readManagedPluginBuildConfiguration(composition, {
+        TRITONAI_PLUGIN_CONFIGURATION_JSON: JSON.stringify({
+          "microsoft-365": { padding: "x".repeat(16 * 1024) },
+        }),
+      }),
+    ).toThrow(/16384-byte limit/u);
+  });
+
+  it("binds isolated validation to the exact composition and configuration", () => {
+    const composition = readManagedPluginComposition(makeCompositionFixture());
+    const configuration = '{"microsoft-365":{"clientId":"example"}}';
+    const receiptPath = NodePath.join(makeTemporaryDirectory(), "validation-receipt.json");
+    NodeFS.writeFileSync(
+      receiptPath,
+      JSON.stringify(createManagedPluginValidationReceipt(composition, configuration)),
+    );
+
+    expect(verifyManagedPluginValidationReceipt(receiptPath, composition, configuration)).toEqual(
+      createManagedPluginValidationReceipt(composition, configuration),
+    );
+    expect(() =>
+      verifyManagedPluginValidationReceipt(receiptPath, composition, `${configuration} `),
+    ).not.toThrow();
+    expect(() =>
+      verifyManagedPluginValidationReceipt(
+        receiptPath,
+        composition,
+        '{"microsoft-365":{"clientId":"changed"}}',
+      ),
+    ).toThrow(/does not match the exact composition and configuration/iu);
+    const changedComposition = readManagedPluginComposition(
+      makeCompositionFixture("4.0.0-beta.78", {}, "google-workspace"),
+    );
+    expect(() =>
+      verifyManagedPluginValidationReceipt(receiptPath, changedComposition, configuration),
+    ).toThrow(/does not match the exact composition and configuration/iu);
+  });
+
   it("snapshots one strict current composition contract and rejects manifest compatibility ranges", () => {
     const sourceRoot = makeCompositionFixture();
     const composition = readManagedPluginComposition(sourceRoot);
@@ -53,10 +140,42 @@ describe("managed plugin release composition", () => {
     ).not.toThrow();
   });
 
+  it("accepts providerless packages without runtime metadata and rejects nonempty runtime metadata", () => {
+    expect(() =>
+      readManagedPluginComposition(
+        makeCompositionFixture(null, {}, "skills-only", {}, { providerless: true }),
+      ),
+    ).not.toThrow();
+
+    for (const packageRuntime of [
+      { dependencies: { effect: "4.0.0-beta.78" } },
+      { peerDependencies: { effect: EFFECT_HOST_PEER_RANGE } },
+      { optionalDependencies: { effect: "4.0.0-beta.78" } },
+      { bundledDependencies: ["effect"] },
+      { bundleDependencies: ["effect"] },
+    ]) {
+      expect(() =>
+        readManagedPluginComposition(
+          makeCompositionFixture(
+            null,
+            packageRuntime,
+            "skills-only",
+            {},
+            {
+              providerless: true,
+            },
+          ),
+        ),
+      ).toThrow(/cannot declare runtime metadata without a provider/iu);
+    }
+  });
+
   it("rejects newer build pins, broad peers, and additional runtime dependencies", () => {
-    expect(() => readManagedPluginComposition(makeCompositionFixture("4.0.0-beta.999"))).toThrow(
-      /incompatible host runtime contract/iu,
-    );
+    for (const version of ["4.0.0-beta.79", effectPackageJson.version, "4.0.0-beta.999"]) {
+      expect(() => readManagedPluginComposition(makeCompositionFixture(version))).toThrow(
+        /incompatible host runtime contract/iu,
+      );
+    }
     expect(() =>
       readManagedPluginComposition(
         makeCompositionFixture(null, {
@@ -94,6 +213,23 @@ describe("managed plugin release composition", () => {
     NodeFS.writeFileSync(NodePath.join(unlistedRoot, "index.js"), "throw new Error('unproved');\n");
 
     expect(() => readManagedPluginComposition(sourceRoot)).toThrow(/unlisted entries/iu);
+  });
+
+  it("rejects composed inventory paths containing a node_modules segment before snapshotting", () => {
+    for (const nodeModulesSegment of ["node_modules", "Node_Modules", "NODE_MODULES"]) {
+      const sourceRoot = makeCompositionFixture("4.0.0-beta.78", {}, "microsoft-365", {
+        [`dist/${nodeModulesSegment}/unproved-code/index.js`]: "throw new Error('unproved');\n",
+      });
+      const snapshotRoot = NodePath.join(makeTemporaryDirectory(), "snapshot");
+      const markerPath = NodePath.join(snapshotRoot, "marker");
+      NodeFS.mkdirSync(snapshotRoot);
+      NodeFS.writeFileSync(markerPath, "untouched");
+
+      expect(() => snapshotManagedPluginComposition(sourceRoot, snapshotRoot)).toThrow(
+        /file paths must be safe/iu,
+      );
+      expect(NodeFS.readFileSync(markerPath, "utf8")).toBe("untouched");
+    }
   });
 
   it("rejects deeply nested package directories without recursive traversal", () => {
@@ -171,11 +307,16 @@ function makeTemporaryDirectory(): string {
 }
 
 function makeCompositionFixture(
-  effectVersion: string | null = effectPackageJson.version,
+  effectVersion: string | null = "4.0.0-beta.78",
   packageRuntime: Readonly<Record<string, unknown>> = {},
+  pluginId = "microsoft-365",
+  extraFiles: Readonly<Record<string, string>> = {},
+  options: { readonly providerless?: boolean } = {},
 ): string {
   const sourceRoot = makeTemporaryDirectory();
-  const packageRoot = NodePath.join(sourceRoot, "packages", "microsoft-365");
+  const packageRoot = NodePath.join(sourceRoot, "packages", pluginId);
+  const google = pluginId === "google-workspace";
+  const providerless = options.providerless === true;
   const files = new Map<string, string>([
     [
       ".tritonai-plugin/plugin.json",
@@ -183,11 +324,13 @@ function makeCompositionFixture(
         apiVersion: "tritonai.harness/v2",
         kind: "IntegrationPlugin",
         manifestVersion: 2,
-        id: "microsoft-365",
-        name: "Microsoft 365",
-        description: "Use reviewed Microsoft 365 tools.",
+        id: pluginId,
+        name: google ? "Google Workspace" : "Microsoft 365",
+        description: google
+          ? "Use reviewed Google Workspace tools."
+          : "Use reviewed Microsoft 365 tools.",
         version: "1.0.1",
-        provider: "microsoft-graph",
+        ...(providerless ? {} : { provider: google ? "google-workspace" : "microsoft-graph" }),
         capabilities: [
           {
             id: "mail.read",
@@ -196,29 +339,30 @@ function makeCompositionFixture(
             access: "default",
           },
         ],
-        tools: [
-          {
-            name: "microsoft365.mail.search",
-            displayName: "Search mail",
-            description: "Search mail metadata.",
-            capabilities: ["mail.read"],
-            effect: "read",
-          },
-        ],
+        tools: providerless
+          ? []
+          : [
+              {
+                name: google ? "googleworkspace.mail.search" : "microsoft365.mail.search",
+                displayName: "Search mail",
+                description: "Search mail metadata.",
+                capabilities: ["mail.read"],
+                effect: "read",
+              },
+            ],
         skills: [
           {
-            name: "outlook-mail",
-            description: "Search Outlook mail.",
+            name: google ? "gmail" : "outlook-mail",
+            description: google ? "Search Gmail." : "Search Outlook mail.",
             capabilities: ["mail.read"],
           },
         ],
       }),
     ],
-    ["dist/index.js", "export const provider = 'microsoft-graph';\n"],
     [
       "package.json",
       JSON.stringify({
-        name: "@tritonai/plugin-microsoft-365",
+        name: `@tritonai/plugin-${pluginId}`,
         version: "1.0.1",
         type: "module",
         ...(effectVersion === null ? {} : { dependencies: { effect: effectVersion } }),
@@ -226,6 +370,15 @@ function makeCompositionFixture(
       }),
     ],
   ]);
+  if (!providerless) {
+    files.set(
+      "dist/index.js",
+      `export const provider = '${google ? "google-workspace" : "microsoft-graph"}';\n`,
+    );
+  }
+  for (const [relativePath, contents] of Object.entries(extraFiles)) {
+    files.set(relativePath, contents);
+  }
   for (const [relativePath, contents] of files) {
     const target = NodePath.join(packageRoot, relativePath);
     NodeFS.mkdirSync(NodePath.dirname(target), { recursive: true });
@@ -258,8 +411,8 @@ function makeCompositionFixture(
       },
       packages: [
         {
-          id: "microsoft-365",
-          name: "@tritonai/plugin-microsoft-365",
+          id: pluginId,
+          name: `@tritonai/plugin-${pluginId}`,
           version: "1.0.1",
           digest: digest.digest("hex"),
           files: described,
