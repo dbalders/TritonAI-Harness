@@ -3,7 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { appendFileAttachmentPrompt } from "./fileAttachmentPrompt.ts";
 
 describe("appendFileAttachmentPrompt", () => {
-  it("appends resolvable file paths without reading their contents", () => {
+  it("appends resolvable file metadata without reading its contents", () => {
     const prompt = appendFileAttachmentPrompt({
       prompt: "Compare these files.",
       attachments: [
@@ -19,7 +19,18 @@ describe("appendFileAttachmentPrompt", () => {
     });
 
     expect(prompt).toBe(
-      "Compare these files.\n\n# Files mentioned by the user:\n## notes.txt: /tmp/attachments/notes.txt",
+      [
+        "Compare these files.",
+        "",
+        "# Files mentioned by the user:",
+        "",
+        "Inspect these files with format-appropriate tools. Start with bounded samples rather than printing entire files, and validate derived values before answering.",
+        "",
+        "## notes.txt",
+        "- Path: /tmp/attachments/notes.txt",
+        "- Media type: text/plain",
+        "- Size: 12 bytes",
+      ].join("\n"),
     );
   });
 

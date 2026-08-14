@@ -2385,7 +2385,9 @@ it.effect("passes generic attachments to Codex as filesystem context", () => {
     const turn = runtimeFactory.lastRuntime?.sendTurnImpl.mock.calls[0]?.[0];
     NodeAssert.match(turn?.input ?? "", /Summarize this file\./);
     NodeAssert.match(turn?.input ?? "", /# Files mentioned by the user:/);
-    NodeAssert.match(turn?.input ?? "", /requirements\.txt:/);
+    NodeAssert.match(turn?.input ?? "", /## requirements\.txt/);
+    NodeAssert.match(turn?.input ?? "", /Media type: text\/plain/);
+    NodeAssert.match(turn?.input ?? "", /Size: 12 bytes/);
     NodeAssert.match(turn?.input ?? "", new RegExp(attachmentPath.replaceAll("/", "\\/")));
     NodeAssert.equal(Object.hasOwn(turn ?? {}, "attachments"), false);
   }).pipe(
