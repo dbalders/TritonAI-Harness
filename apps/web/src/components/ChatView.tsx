@@ -5735,14 +5735,7 @@ function ChatViewContent(props: ChatViewProps) {
   });
 
   return (
-    <div
-      className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background"
-      data-chat-workspace-drop-target="true"
-      onDragEnter={workspaceFileDropHandlers.onDragEnter}
-      onDragOver={workspaceFileDropHandlers.onDragOver}
-      onDragLeave={workspaceFileDropHandlers.onDragLeave}
-      onDrop={workspaceFileDropHandlers.onDrop}
-    >
+    <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background">
       {rightPanelOpen && !shouldUsePlanSidebarSheet ? panelLayoutControls : null}
       <div
         className={cn(
@@ -5799,7 +5792,14 @@ function ChatViewContent(props: ChatViewProps) {
         {/* Main content area with optional plan sidebar */}
         <div className="flex min-h-0 min-w-0 flex-1">
           {/* Chat column */}
-          <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+          <div
+            className="relative flex min-h-0 min-w-0 flex-1 flex-col"
+            data-chat-workspace-drop-target="true"
+            onDragEnter={workspaceFileDropHandlers.onDragEnter}
+            onDragOver={workspaceFileDropHandlers.onDragOver}
+            onDragLeave={workspaceFileDropHandlers.onDragLeave}
+            onDrop={workspaceFileDropHandlers.onDrop}
+          >
             {isWorkspaceFileDragActive ? (
               <div
                 className="pointer-events-none absolute inset-2 z-40 flex items-center justify-center rounded-2xl border-2 border-dashed border-primary/60 bg-primary/[0.035]"

@@ -29,7 +29,7 @@ function makeDragEvent(options?: {
 function makeHost() {
   const setDragActive = vi.fn();
   const addFiles = vi.fn();
-  const host: WorkspaceFileDropHost = { setDragActive, addFiles };
+  const host = { setDragActive, addFiles } satisfies WorkspaceFileDropHost;
   return { host, setDragActive, addFiles };
 }
 
