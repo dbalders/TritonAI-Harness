@@ -463,7 +463,9 @@ const EnvironmentOrchestrationThreadSnapshotParams = Schema.Struct({
   threadId: ThreadId,
 });
 
-const EnvironmentOrchestrationAttachmentUpload = Multipart.SingleFileSchema.pipe(
+export const EnvironmentOrchestrationAttachmentUpload = Schema.Struct({
+  file: Multipart.SingleFileSchema,
+}).pipe(
   HttpApiSchema.asMultipart({
     maxParts: 1,
     maxFileSize: PROVIDER_SEND_TURN_MAX_FILE_BYTES,

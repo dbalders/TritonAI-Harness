@@ -87,7 +87,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
           yield* annotateEnvironmentRequest(args.endpoint.name);
           yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
 
-          const source = args.payload;
+          const source = args.payload.file;
           const fileInfo = yield* fileSystem
             .stat(source.path)
             .pipe(Effect.catch(() => failEnvironmentInvalidRequest("invalid_attachment")));
