@@ -43,6 +43,10 @@
       "types": "./src/state/auth.ts",
       "default": "./src/state/auth.ts"
     },
+    "./state/attachments": {
+      "types": "./src/state/attachmentUploadHttp.ts",
+      "default": "./src/state/attachmentUploadHttp.ts"
+    },
     "./state/assets": {
       "types": "./src/state/assets.ts",
       "default": "./src/state/assets.ts"

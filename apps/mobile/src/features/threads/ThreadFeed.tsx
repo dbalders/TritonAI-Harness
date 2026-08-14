@@ -898,6 +898,19 @@ function renderFeedEntry(
               />
             ) : null}
             {attachments.map((attachment) => {
+              if (attachment.type === "file") {
+                return (
+                  <View
+                    key={attachment.id}
+                    className="flex-row items-center gap-2 rounded-[12px] border border-white/15 bg-white/10 px-3 py-2"
+                  >
+                    <SymbolView name="doc" size={15} tintColor="#ffffff" type="monochrome" />
+                    <Text className="min-w-0 flex-1 text-sm text-white" numberOfLines={1}>
+                      {attachment.name}
+                    </Text>
+                  </View>
+                );
+              }
               return (
                 <MessageAttachmentImage
                   key={attachment.id}

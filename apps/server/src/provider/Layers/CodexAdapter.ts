@@ -61,6 +61,7 @@ import {
   type ProviderAdapterError,
 } from "../Errors.ts";
 import { type CodexAdapterShape } from "../Services/CodexAdapter.ts";
+import { appendFileAttachmentPrompt } from "../fileAttachmentPrompt.ts";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import {
@@ -2128,8 +2129,10 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       });
     }
     const attachments = input.attachments ?? [];
-    const turnModel = attachments.length > 0 ? effectiveModel : selectedModel;
-    const requiresImageContext = attachments.length > 0 && effectiveModelIsExplicitlyTextOnly;
+    const imageAttachments = attachments.filter((attachment) => attachment.type === "image");
+    const fileAttachments = attachments.filter((attachment) => attachment.type === "file");
+    const turnModel = imageAttachments.length > 0 ? effectiveModel : selectedModel;
+    const requiresImageContext = imageAttachments.length > 0 && effectiveModelIsExplicitlyTextOnly;
     const analysisAbortController = requiresImageContext ? new AbortController() : undefined;
     if (analysisAbortController) {
       preparation.controller = analysisAbortController;
@@ -2142,16 +2145,36 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     }
 
     return yield* Effect.gen(function* () {
-      let turnInput = input.input;
+      let turnInput = appendFileAttachmentPrompt({
+        prompt: input.input,
+        attachments: fileAttachments,
+        resolvePath: (attachment) =>
+          resolveAttachmentPath({
+            attachmentsDir: serverConfig.attachmentsDir,
+            attachment,
+          }),
+      });
       let codexAttachments: ReadonlyArray<{ readonly type: "image"; readonly url: string }> = [];
+
+      if ((turnInput?.length ?? 0) > PROVIDER_SEND_TURN_MAX_INPUT_CHARS) {
+        return yield* new ProviderAdapterRequestError({
+          provider: PROVIDER,
+          method: "turn/start",
+          detail: "The user message plus file attachment context exceeds the turn input limit.",
+        });
+      }
 
       if (analysisAbortController) {
         if (analysisAbortController.signal.aborted) {
           return yield* Effect.interrupt;
         }
-        const imageContextInputs = yield* Effect.forEach(attachments, resolveImageContextInput, {
-          concurrency: 1,
-        });
+        const imageContextInputs = yield* Effect.forEach(
+          imageAttachments,
+          resolveImageContextInput,
+          {
+            concurrency: 1,
+          },
+        );
         const analyses = yield* imageContextAnalyzer({
           images: imageContextInputs,
           signal: analysisAbortController.signal,
@@ -2176,7 +2199,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           images: imageContextInputs,
           analyses,
         });
-        turnInput = input.input ? `${input.input}\n\n${imageContext}` : imageContext;
+        turnInput = turnInput ? `${turnInput}\n\n${imageContext}` : imageContext;
         if (turnInput.length > PROVIDER_SEND_TURN_MAX_INPUT_CHARS) {
           return yield* new ProviderAdapterRequestError({
             provider: PROVIDER,
@@ -2187,7 +2210,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
         }
       } else {
         codexAttachments = yield* Effect.forEach(
-          attachments,
+          imageAttachments,
           (attachment) => resolveAttachment(input, attachment),
           { concurrency: 1 },
         );

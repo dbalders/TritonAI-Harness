@@ -1,0 +1,16 @@
+# File attachments
+
+TritonAI accepts images and regular files in the web and desktop chat composer. Use the paperclip,
+paste files, or drop them onto the composer. A message can contain up to eight attachments totaling
+50 MB. Images retain their existing 10 MB per-image limit.
+
+Images are sent through each provider's image-input path. Other files are uploaded to the selected
+environment and stored with the thread. The agent receives the file's local path and decides which
+tools to use to inspect it. This keeps PDFs, documents, spreadsheets, archives, source files, and
+future formats on one path-backed attachment system instead of extracting every format in the UI.
+
+File contents are not automatically pasted into the prompt. Treat an attachment like a local file
+you handed to the agent: ask it to read, summarize, compare, convert, or otherwise work with it.
+
+Mobile currently shows regular files in message history; selecting new non-image files is available
+from the web and desktop composer.

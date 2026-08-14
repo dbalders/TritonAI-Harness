@@ -8,9 +8,16 @@ import {
   type OrchestrationCommand,
   OrchestrationDispatchCommandError,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
+  PROVIDER_SEND_TURN_MAX_TOTAL_ATTACHMENT_BYTES,
 } from "@t3tools/contracts";
 
-import { createAttachmentId, resolveAttachmentPath } from "../attachmentStore.ts";
+import {
+  createAttachmentId,
+  parseThreadSegmentFromAttachmentId,
+  resolveAttachmentPath,
+  resolveAttachmentPathById,
+  toSafeThreadAttachmentSegment,
+} from "../attachmentStore.ts";
 import { ServerConfig } from "../config.ts";
 import { parseBase64DataUrl } from "../imageMime.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
@@ -104,10 +111,59 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
       return canonicalCommand as OrchestrationCommand;
     }
 
+    const totalAttachmentBytes = canonicalCommand.message.attachments.reduce(
+      (total, attachment) => total + attachment.sizeBytes,
+      0,
+    );
+    if (totalAttachmentBytes > PROVIDER_SEND_TURN_MAX_TOTAL_ATTACHMENT_BYTES) {
+      return yield* new OrchestrationDispatchCommandError({
+        message: "The combined attachment size exceeds the 50 MiB turn limit.",
+      });
+    }
+
     const normalizedAttachments = yield* Effect.forEach(
       canonicalCommand.message.attachments,
       (attachment) =>
         Effect.gen(function* () {
+          if (attachment.type === "file") {
+            const expectedThreadSegment = toSafeThreadAttachmentSegment(canonicalCommand.threadId);
+            const attachmentThreadSegment = parseThreadSegmentFromAttachmentId(attachment.id);
+            if (!expectedThreadSegment || attachmentThreadSegment !== expectedThreadSegment) {
+              return yield* new OrchestrationDispatchCommandError({
+                message: `File attachment '${attachment.name}' does not belong to this thread.`,
+              });
+            }
+
+            const persistedPath = resolveAttachmentPathById({
+              attachmentsDir: serverConfig.attachmentsDir,
+              attachmentId: attachment.id,
+            });
+            const expectedPath = resolveAttachmentPath({
+              attachmentsDir: serverConfig.attachmentsDir,
+              attachment,
+            });
+            if (!persistedPath || persistedPath !== expectedPath) {
+              return yield* new OrchestrationDispatchCommandError({
+                message: `File attachment '${attachment.name}' could not be resolved.`,
+              });
+            }
+            const fileInfo = yield* fileSystem
+              .stat(persistedPath)
+              .pipe(Effect.orElseSucceed(() => null));
+            const persistedSizeBytes = fileInfo ? Number(fileInfo.size) : 0;
+            if (
+              !fileInfo ||
+              fileInfo.type !== "File" ||
+              persistedSizeBytes === 0 ||
+              persistedSizeBytes !== attachment.sizeBytes
+            ) {
+              return yield* new OrchestrationDispatchCommandError({
+                message: `File attachment '${attachment.name}' is missing or has changed.`,
+              });
+            }
+            return attachment;
+          }
+
           const parsed = parseBase64DataUrl(attachment.dataUrl);
           if (!parsed || !parsed.mimeType.startsWith("image/")) {
             return yield* new OrchestrationDispatchCommandError({
@@ -116,9 +172,13 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
           }
 
           const bytes = Buffer.from(parsed.base64, "base64");
-          if (bytes.byteLength === 0 || bytes.byteLength > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES) {
+          if (
+            bytes.byteLength === 0 ||
+            bytes.byteLength > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES ||
+            bytes.byteLength !== attachment.sizeBytes
+          ) {
             return yield* new OrchestrationDispatchCommandError({
-              message: `Image attachment '${attachment.name}' is empty or too large.`,
+              message: `Image attachment '${attachment.name}' is empty, too large, or has changed.`,
             });
           }
 

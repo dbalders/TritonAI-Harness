@@ -37,6 +37,7 @@ import * as Stream from "effect/Stream";
 import * as CodexErrors from "effect-codex-app-server/errors";
 
 import { ServerConfig } from "../../config.ts";
+import { attachmentRelativePath } from "../../attachmentStore.ts";
 import {
   codexDynamicIntegrationToolName,
   type RegistryRuntime,
@@ -2348,6 +2349,50 @@ function imageAttachment(id: string) {
     sizeBytes: 5,
   };
 }
+
+it.effect("passes generic attachments to Codex as filesystem context", () => {
+  const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "codex-file-context-"));
+  const runtimeFactory = makeRuntimeFactory();
+  const analyzer: CodexImageContextAnalyzer = () => Effect.succeed([]);
+  const layer = makeImageContextAdapterLayer({ baseDir, runtimeFactory, analyzer });
+
+  return Effect.gen(function* () {
+    const adapter = yield* CodexAdapter;
+    const { attachmentsDir } = yield* ServerConfig;
+    const threadId = asThreadId("thread-file-context");
+    const attachment = {
+      type: "file" as const,
+      id: "thread-file-context-00000000-0000-4000-8000-000000000001",
+      name: "requirements.txt",
+      mimeType: "text/plain",
+      sizeBytes: 12,
+    };
+    const attachmentPath = NodePath.join(attachmentsDir, attachmentRelativePath(attachment));
+    NodeFS.writeFileSync(attachmentPath, "hello world\n");
+
+    yield* adapter.startSession({
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "text-only-model", []),
+      runtimeMode: "full-access",
+    });
+    yield* adapter.sendTurn({
+      threadId,
+      input: "Summarize this file.",
+      attachments: [attachment],
+    });
+
+    const turn = runtimeFactory.lastRuntime?.sendTurnImpl.mock.calls[0]?.[0];
+    NodeAssert.match(turn?.input ?? "", /Summarize this file\./);
+    NodeAssert.match(turn?.input ?? "", /# Files mentioned by the user:/);
+    NodeAssert.match(turn?.input ?? "", /requirements\.txt:/);
+    NodeAssert.match(turn?.input ?? "", new RegExp(attachmentPath.replaceAll("/", "\\/")));
+    NodeAssert.equal(Object.hasOwn(turn ?? {}, "attachments"), false);
+  }).pipe(
+    Effect.provide(layer),
+    Effect.ensuring(Effect.sync(() => NodeFS.rmSync(baseDir, { recursive: true, force: true }))),
+  );
+});
 
 it.effect("restarts legacy image history before using a text-only model", () => {
   const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "codex-image-resume-"));

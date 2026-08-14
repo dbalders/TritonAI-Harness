@@ -11,6 +11,7 @@ import {
 import { inferImageExtension, SAFE_IMAGE_FILE_EXTENSIONS } from "./imageMime.ts";
 
 const ATTACHMENT_FILENAME_EXTENSIONS = [...SAFE_IMAGE_FILE_EXTENSIONS, ".bin"];
+const SAFE_GENERIC_FILE_EXTENSION = /^\.[a-z0-9]{1,16}$/;
 const ATTACHMENT_ID_THREAD_SEGMENT_MAX_CHARS = 80;
 const ATTACHMENT_ID_THREAD_SEGMENT_PATTERN = "[a-z0-9_]+(?:-[a-z0-9_]+)*";
 const ATTACHMENT_ID_UUID_PATTERN = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
@@ -54,6 +55,16 @@ export function parseThreadSegmentFromAttachmentId(attachmentId: string): string
   return match[1]?.toLowerCase() ?? null;
 }
 
+export function inferFileExtension(fileName: string): string {
+  const normalizedName = fileName.trim().toLowerCase();
+  const extensionIndex = normalizedName.lastIndexOf(".");
+  if (extensionIndex <= 0) {
+    return ".bin";
+  }
+  const extension = normalizedName.slice(extensionIndex);
+  return SAFE_GENERIC_FILE_EXTENSION.test(extension) ? extension : ".bin";
+}
+
 export function attachmentRelativePath(attachment: ChatAttachment): string {
   switch (attachment.type) {
     case "image": {
@@ -63,6 +74,8 @@ export function attachmentRelativePath(attachment: ChatAttachment): string {
       });
       return `${attachment.id}${extension}`;
     }
+    case "file":
+      return `${attachment.id}${inferFileExtension(attachment.name)}`;
   }
 }
 
@@ -92,6 +105,21 @@ export function resolveAttachmentPathById(input: {
     if (maybePath && NodeFS.existsSync(maybePath)) {
       return maybePath;
     }
+  }
+  let entries: Array<string>;
+  try {
+    entries = NodeFS.readdirSync(input.attachmentsDir);
+  } catch {
+    return null;
+  }
+  const matchingEntry = entries.find(
+    (entry) => parseAttachmentIdFromRelativePath(entry) === normalizedId,
+  );
+  if (matchingEntry) {
+    return resolveAttachmentRelativePath({
+      attachmentsDir: input.attachmentsDir,
+      relativePath: matchingEntry,
+    });
   }
   return null;
 }

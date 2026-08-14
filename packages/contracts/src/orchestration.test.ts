@@ -5,6 +5,7 @@ import * as Schema from "effect/Schema";
 import {
   DEFAULT_PROVIDER_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
+  ClientOrchestrationCommand,
   ModelSelection,
   OrchestrationCommand,
   OrchestrationEvent,
@@ -53,6 +54,7 @@ const decodeThreadCreatedPayload = Schema.decodeUnknownEffect(ThreadCreatedPaylo
 const decodeOrchestrationCommand = Schema.decodeUnknownEffect(OrchestrationCommand);
 const decodeOrchestrationEvent = Schema.decodeUnknownEffect(OrchestrationEvent);
 const decodeThreadMetaUpdatedPayload = Schema.decodeUnknownEffect(ThreadMetaUpdatedPayload);
+const decodeClientOrchestrationCommand = Schema.decodeUnknownEffect(ClientOrchestrationCommand);
 
 it.effect("parses turn diff input when fromTurnCount <= toTurnCount", () =>
   Effect.gen(function* () {
@@ -223,6 +225,65 @@ it.effect("decodes thread.turn.start defaults for provider and runtime mode", ()
     assert.strictEqual(parsed.modelSelection, undefined);
     assert.strictEqual(parsed.runtimeMode, DEFAULT_RUNTIME_MODE);
     assert.strictEqual(parsed.interactionMode, DEFAULT_PROVIDER_INTERACTION_MODE);
+  }),
+);
+
+it.effect("accepts an uploaded generic file in a client turn", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeClientOrchestrationCommand({
+      type: "thread.turn.start",
+      commandId: "cmd-file-1",
+      threadId: "thread-1",
+      message: {
+        messageId: "msg-file-1",
+        role: "user",
+        text: "summarize it",
+        attachments: [
+          {
+            type: "file",
+            id: "thread-1-00000000-0000-4000-8000-000000000001",
+            name: "requirements.txt",
+            mimeType: "text/plain",
+            sizeBytes: 12,
+          },
+        ],
+      },
+      runtimeMode: "auto-accept-edits",
+      interactionMode: "default",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    if (parsed.type !== "thread.turn.start") {
+      assert.fail(`Expected thread.turn.start, got ${parsed.type}`);
+    }
+    assert.strictEqual(parsed.message.attachments[0]?.type, "file");
+  }),
+);
+
+it.effect("rejects more than eight attachments in a client turn", () =>
+  Effect.gen(function* () {
+    const result = yield* Effect.exit(
+      decodeClientOrchestrationCommand({
+        type: "thread.turn.start",
+        commandId: "cmd-file-limit",
+        threadId: "thread-1",
+        message: {
+          messageId: "msg-file-limit",
+          role: "user",
+          text: "summarize them",
+          attachments: Array.from({ length: 9 }, (_, index) => ({
+            type: "file",
+            id: `thread-1-00000000-0000-4000-8000-00000000000${index}`,
+            name: `file-${index}.txt`,
+            mimeType: "text/plain",
+            sizeBytes: 1,
+          })),
+        },
+        runtimeMode: "auto-accept-edits",
+        interactionMode: "default",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+    assert.strictEqual(result._tag, "Failure");
   }),
 );
 

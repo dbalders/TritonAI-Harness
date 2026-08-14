@@ -6,7 +6,9 @@ import * as NodePath from "node:path";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  attachmentRelativePath,
   createAttachmentId,
+  inferFileExtension,
   parseThreadSegmentFromAttachmentId,
   resolveAttachmentPathById,
 } from "./attachmentStore.ts";
@@ -73,6 +75,38 @@ describe("attachmentStore", () => {
         attachmentId: "thread-1-missing",
       });
       expect(resolved).toBeNull();
+    } finally {
+      NodeFS.rmSync(attachmentsDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses a safe final extension for generic files", () => {
+    expect(inferFileExtension("notes.TXT")).toBe(".txt");
+    expect(inferFileExtension("archive.tar.gz")).toBe(".gz");
+    expect(inferFileExtension("no-extension")).toBe(".bin");
+    expect(inferFileExtension("unsafe.<script>")).toBe(".bin");
+
+    expect(
+      attachmentRelativePath({
+        type: "file",
+        id: "thread-file-00000000-0000-4000-8000-000000000001",
+        name: "requirements.PDF",
+        mimeType: "application/pdf",
+        sizeBytes: 12,
+      }),
+    ).toBe("thread-file-00000000-0000-4000-8000-000000000001.pdf");
+  });
+
+  it("resolves generic attachment extensions from disk", () => {
+    const attachmentsDir = NodeFS.mkdtempSync(
+      NodePath.join(NodeOS.tmpdir(), "t3code-attachment-store-"),
+    );
+    try {
+      const attachmentId = "thread-file-00000000-0000-4000-8000-000000000001";
+      const textPath = NodePath.join(attachmentsDir, `${attachmentId}.txt`);
+      NodeFS.writeFileSync(textPath, "hello");
+
+      expect(resolveAttachmentPathById({ attachmentsDir, attachmentId })).toBe(textPath);
     } finally {
       NodeFS.rmSync(attachmentsDir, { recursive: true, force: true });
     }
