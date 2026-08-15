@@ -405,9 +405,8 @@ export const resolveAsset = Effect.fn("AssetAccess.resolveAsset")(function* (
     }
     if (claims.version === 1) {
       const path = yield* Path.Path;
-      const decodedFileName = decodeRelativePath(relativePath);
-      const legacyFileName = path.basename(decodedFileName ?? attachmentPath);
-      return isWorkspaceImagePreviewPath(legacyFileName)
+      const legacyFileName = path.basename(attachmentPath);
+      return isWorkspaceImagePreviewPath(attachmentPath)
         ? ({ kind: "file", path: attachmentPath } satisfies ResolvedAsset)
         : ({
             kind: "file",

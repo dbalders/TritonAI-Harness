@@ -257,15 +257,15 @@ describe("AssetAccess", () => {
       yield* fileSystem.writeFile(imagePath, new Uint8Array([1, 2, 3]));
       yield* fileSystem.writeFileString(htmlPath, "<script>alert('no')</script>");
 
-      expect(yield* resolveAsset(legacyToken(imageAttachmentId), "image.png")).toEqual({
+      expect(yield* resolveAsset(legacyToken(imageAttachmentId), "report.html")).toEqual({
         kind: "file",
         path: imagePath,
       });
-      expect(yield* resolveAsset(legacyToken(htmlAttachmentId), "report.html")).toEqual({
+      expect(yield* resolveAsset(legacyToken(htmlAttachmentId), "image.png")).toEqual({
         kind: "file",
         path: htmlPath,
         disposition: "attachment",
-        downloadName: "report.html",
+        downloadName: `${htmlAttachmentId}.html`,
       });
     }).pipe(Effect.provide(testLayer)),
   );
