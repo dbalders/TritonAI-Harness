@@ -2389,7 +2389,7 @@ it.effect("passes generic attachments to Codex as filesystem context", () => {
     NodeAssert.match(turn?.input ?? "", /"name": "requirements\.txt"/);
     NodeAssert.match(turn?.input ?? "", /"mediaType": "text\/plain"/);
     NodeAssert.match(turn?.input ?? "", /"sizeBytes": 12/);
-    NodeAssert.match(turn?.input ?? "", new RegExp(attachmentPath.replaceAll("/", "\\/")));
+    NodeAssert.ok((turn?.input ?? "").includes(attachmentPath));
     NodeAssert.equal(Object.hasOwn(turn ?? {}, "attachments"), false);
   }).pipe(
     Effect.provide(layer),

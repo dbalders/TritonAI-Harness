@@ -287,6 +287,63 @@ it.effect("rejects more than eight attachments in a client turn", () =>
   }),
 );
 
+it.effect("rejects mixed attachments over the aggregate byte limit in both turn schemas", () =>
+  Effect.gen(function* () {
+    const baseCommand = {
+      type: "thread.turn.start" as const,
+      commandId: "cmd-aggregate-file-limit",
+      threadId: "thread-1",
+      message: {
+        messageId: "msg-aggregate-file-limit",
+        role: "user" as const,
+        text: "summarize them",
+      },
+      runtimeMode: "auto-accept-edits" as const,
+      interactionMode: "default" as const,
+      createdAt: "2026-01-01T00:00:00.000Z",
+    };
+    const fileAttachment = {
+      type: "file" as const,
+      id: "thread-1-00000000-0000-4000-8000-000000000001",
+      name: "large.txt",
+      mimeType: "text/plain",
+      sizeBytes: 45 * 1024 * 1024,
+    };
+    const imageAttachment = {
+      type: "image" as const,
+      id: "thread-1-00000000-0000-4000-8000-000000000002",
+      name: "large.png",
+      mimeType: "image/png",
+      sizeBytes: 6 * 1024 * 1024,
+    };
+
+    const persistedResult = yield* Effect.exit(
+      decodeThreadTurnStartCommand({
+        ...baseCommand,
+        message: {
+          ...baseCommand.message,
+          attachments: [fileAttachment, imageAttachment],
+        },
+      }),
+    );
+    const clientResult = yield* Effect.exit(
+      decodeClientOrchestrationCommand({
+        ...baseCommand,
+        message: {
+          ...baseCommand.message,
+          attachments: [
+            fileAttachment,
+            { ...imageAttachment, id: undefined, dataUrl: "data:image/png;base64,AA==" },
+          ],
+        },
+      }),
+    );
+
+    assert.strictEqual(persistedResult._tag, "Failure");
+    assert.strictEqual(clientResult._tag, "Failure");
+  }),
+);
+
 it.effect("preserves explicit provider and runtime mode in thread.turn.start", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeThreadTurnStartCommand({

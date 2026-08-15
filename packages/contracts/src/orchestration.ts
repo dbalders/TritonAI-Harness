@@ -192,6 +192,13 @@ export type ChatAttachment = typeof ChatAttachment.Type;
 const UploadChatAttachment = Schema.Union([UploadChatImageAttachment, ChatFileAttachment]);
 export type UploadChatAttachment = typeof UploadChatAttachment.Type;
 
+const aggregateAttachmentByteLimit = Schema.makeFilter(
+  (attachments: ReadonlyArray<{ readonly sizeBytes: number }>) =>
+    attachments.reduce((total, attachment) => total + attachment.sizeBytes, 0) <=
+      PROVIDER_SEND_TURN_MAX_TOTAL_ATTACHMENT_BYTES ||
+    `Combined attachment size must not exceed ${PROVIDER_SEND_TURN_MAX_TOTAL_ATTACHMENT_BYTES} bytes.`,
+);
+
 export const ProjectScriptIcon = Schema.Literals([
   "play",
   "test",
@@ -829,6 +836,7 @@ export const ThreadTurnStartCommand = Schema.Struct({
     text: Schema.String,
     attachments: Schema.Array(ChatAttachment).check(
       Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_ATTACHMENTS),
+      aggregateAttachmentByteLimit,
     ),
   }),
   modelSelection: Schema.optional(ModelSelection),
@@ -852,6 +860,7 @@ const ClientThreadTurnStartCommand = Schema.Struct({
     text: Schema.String,
     attachments: Schema.Array(UploadChatAttachment).check(
       Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_ATTACHMENTS),
+      aggregateAttachmentByteLimit,
     ),
   }),
   modelSelection: Schema.optional(ModelSelection),
