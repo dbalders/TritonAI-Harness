@@ -473,6 +473,63 @@ validationLayer("CodexAdapterLive validation", (it) => {
   );
 });
 
+const computerUseRuntimeFactory = makeRuntimeFactory();
+const computerUseLayer = it.layer(
+  Layer.effect(
+    CodexAdapter,
+    makeCodexAdapter(decodeCodexSettings({}), {
+      environment: { EXISTING_ENV: "preserved" },
+      makeRuntime: computerUseRuntimeFactory.factory,
+    }),
+  ).pipe(
+    Layer.provideMerge(
+      ServerConfig.layerTest(process.cwd(), process.cwd(), {
+        computerUseMcp: {
+          command: "/Applications/TritonAI Harness.app/Contents/Resources/cua-driver/cua-driver",
+          args: ["mcp", "--socket", "/tmp/cua driver.sock"],
+          environment: {
+            CUA_DRIVER_RS_TELEMETRY_ENABLED: "false",
+            CUA_DRIVER_RS_UPDATE_CHECK: "false",
+          },
+        },
+      }),
+    ),
+    Layer.provideMerge(ServerSettingsService.layerTest()),
+    Layer.provideMerge(providerSessionDirectoryTestLayer),
+    Layer.provideMerge(NodeServices.layer),
+  ),
+);
+
+computerUseLayer("CodexAdapterLive computer use", (it) => {
+  it.effect("passes the desktop Cua MCP contract into the Codex runtime", () =>
+    Effect.gen(function* () {
+      computerUseRuntimeFactory.factory.mockClear();
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("thread-computer-use");
+
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+
+      const runtimeOptions = computerUseRuntimeFactory.lastRuntime?.options;
+      NodeAssert.ok(runtimeOptions);
+      NodeAssert.deepStrictEqual(runtimeOptions.appServerArgs, [
+        "-c",
+        'mcp_servers.cua-driver.command="/Applications/TritonAI Harness.app/Contents/Resources/cua-driver/cua-driver"',
+        "-c",
+        'mcp_servers.cua-driver.args=["mcp","--socket","/tmp/cua driver.sock"]',
+      ]);
+      NodeAssert.deepStrictEqual(runtimeOptions.environment, {
+        EXISTING_ENV: "preserved",
+        CUA_DRIVER_RS_TELEMETRY_ENABLED: "false",
+        CUA_DRIVER_RS_UPDATE_CHECK: "false",
+      });
+    }),
+  );
+});
+
 const reconciliationRuntimeFactory = makeRuntimeFactory();
 const reconciliationAvailability = {
   generation: 0,

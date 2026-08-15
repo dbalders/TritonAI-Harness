@@ -6,6 +6,7 @@
   - [Connection runtime](./architecture/connection-runtime.md)
   - [Remote environments](./architecture/remote.md)
   - [Server update architecture](./architecture/server-updates.md)
+  - [Computer-use runtime](./internals/computer-use.md)
 - User guides
   - [Background service distribution policy](./user/background-service.md)
   - [Remote access](./user/remote-access.md)

@@ -8,4 +8,6 @@ When available, the Codex agent can inspect apps and windows, capture the deskto
 
 Computer use is available only to the local desktop backend. WSL, SSH, and other remote backends intentionally do not receive the host computer-use connection.
 
-For development builds, set `TRITONAI_CUA_DRIVER_PATH` to an absolute path to a compatible `cua-driver` executable. Release builds download version `0.19.3` from the upstream GitHub release, verify a platform-specific SHA-256 checksum, place the executable outside ASAR, and disable the driver's own telemetry and update checks. Driver upgrades must update the pinned npm package, release asset version, and reviewed checksums together.
+Computer use currently works with the Codex provider. Claude, Cursor, Grok, and OpenCode sessions do not receive the computer-use tools in this release.
+
+Release builds bundle a reviewed driver version and disable the driver's own telemetry and update checks.

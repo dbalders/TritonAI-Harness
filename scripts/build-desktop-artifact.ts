@@ -8,6 +8,7 @@ import { fromYaml } from "@t3tools/shared/schemaYaml";
 import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { clerkFrontendApiHostnameFromPublishableKey } from "@t3tools/shared/relayAuth";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
+import extractZip from "extract-zip";
 import rootPackageJson from "../package.json" with { type: "json" };
 import desktopPackageJson from "../apps/desktop/package.json" with { type: "json" };
 import desktopRuntimePackageJson from "../apps/desktop-runtime/package.json" with { type: "json" };
@@ -1923,12 +1924,10 @@ const stageCuaDriver = Effect.fn("stageCuaDriver")(function* (input: {
 
   const extractedDirectory = path.join(temporaryDirectory, "extracted");
   yield* fs.makeDirectory(extractedDirectory, { recursive: true });
-  yield* runCommand(ChildProcess.make("tar", ["-xf", archivePath, "-C", extractedDirectory]), {
-    label: `extract Cua Driver ${CUA_DRIVER_VERSION}`,
-    verbose: input.verbose,
-  }).pipe(
-    Effect.mapError(
-      (cause) =>
+  if (input.platform === "win") {
+    yield* Effect.tryPromise({
+      try: () => extractZip(archivePath, { dir: extractedDirectory }),
+      catch: (cause) =>
         new CuaDriverArtifactError({
           operation: "extract",
           platform: input.platform,
@@ -1937,8 +1936,25 @@ const stageCuaDriver = Effect.fn("stageCuaDriver")(function* (input: {
           actualSha256,
           cause,
         }),
-    ),
-  );
+    });
+  } else {
+    yield* runCommand(ChildProcess.make("tar", ["-xf", archivePath, "-C", extractedDirectory]), {
+      label: `extract Cua Driver ${CUA_DRIVER_VERSION}`,
+      verbose: input.verbose,
+    }).pipe(
+      Effect.mapError(
+        (cause) =>
+          new CuaDriverArtifactError({
+            operation: "extract",
+            platform: input.platform,
+            arch: input.arch,
+            expectedSha256: asset.sha256,
+            actualSha256,
+            cause,
+          }),
+      ),
+    );
+  }
 
   const executableName = input.platform === "win" ? "cua-driver.exe" : "cua-driver";
   const extractedPath = path.join(extractedDirectory, executableName);
