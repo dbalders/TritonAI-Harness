@@ -6,6 +6,8 @@ import {
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
+import { AsyncResult } from "effect/unstable/reactivity";
 import { describe, expect, it } from "vite-plus/test";
 
 import type { Thread, ThreadShell } from "../types";
@@ -26,10 +28,41 @@ import {
   reconcileRetainedMountedThreadIds,
   resolveThreadMetadataUpdateForNextTurn,
   resolveSendEnvMode,
+  shouldCleanupAttachmentUploadsAfterTurnStart,
   startNewThreadForProject,
   shouldShowBranchMismatchBanner,
   shouldWriteThreadErrorToCurrentServerThread,
 } from "./ChatView.logic";
+
+describe("shouldCleanupAttachmentUploadsAfterTurnStart", () => {
+  it("cleans up after definitive server rejection or pre-dispatch unavailability", () => {
+    for (const _tag of [
+      "OrchestrationDispatchCommandError",
+      "EnvironmentAuthorizationError",
+      "EnvironmentRpcUnavailableError",
+    ]) {
+      expect(
+        shouldCleanupAttachmentUploadsAfterTurnStart(AsyncResult.failure(Cause.fail({ _tag }))),
+      ).toBe(true);
+    }
+  });
+
+  it("preserves uploads after ambiguous transport, interruption, or defect failures", () => {
+    expect(
+      shouldCleanupAttachmentUploadsAfterTurnStart(
+        AsyncResult.failure(Cause.fail({ _tag: "RpcClientError" })),
+      ),
+    ).toBe(false);
+    expect(
+      shouldCleanupAttachmentUploadsAfterTurnStart(
+        AsyncResult.failure(Cause.interrupt("test" as never)),
+      ),
+    ).toBe(false);
+    expect(
+      shouldCleanupAttachmentUploadsAfterTurnStart(AsyncResult.failure(Cause.die("boom"))),
+    ).toBe(false);
+  });
+});
 
 const environmentId = EnvironmentId.make("environment-local");
 const projectId = ProjectId.make("project-1");

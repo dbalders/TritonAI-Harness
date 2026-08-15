@@ -15,6 +15,7 @@ import {
   type AuthAccessStreamEvent,
   type AuthEnvironmentScope,
   AuthSessionId,
+  type ChatAttachment,
   CommandId,
   type DiscoveredLocalServerList,
   EventId,
@@ -1848,25 +1849,32 @@ const makeWsRpcLayer = (
               }
               if (input.resource._tag === "attachment") {
                 const resource = input.resource;
-                const thread = yield* projectionSnapshotQuery
-                  .getThreadDetailById(resource.threadId)
-                  .pipe(
-                    Effect.mapError(
-                      (cause) =>
-                        new AssetWorkspaceContextResolutionError({
-                          resource,
-                          cause,
-                        }),
-                    ),
+                const mapResolutionError = (cause: unknown) =>
+                  new AssetWorkspaceContextResolutionError({ resource, cause });
+                let attachment: ChatAttachment | undefined;
+                if (resource.threadId !== undefined) {
+                  const thread = yield* projectionSnapshotQuery
+                    .getThreadDetailById(resource.threadId)
+                    .pipe(Effect.mapError(mapResolutionError));
+                  if (Option.isNone(thread)) {
+                    return yield* new AssetWorkspaceContextNotFoundError({ resource });
+                  }
+                  attachment = thread.value.messages
+                    .flatMap((message) => message.attachments ?? [])
+                    .find((candidate) => candidate.id === resource.attachmentId);
+                } else {
+                  // Compatibility for clients that predate thread-scoped asset requests. Resolve
+                  // the id only when it has one authoritative message owner.
+                  const snapshot = yield* projectionSnapshotQuery
+                    .getSnapshot()
+                    .pipe(Effect.mapError(mapResolutionError));
+                  const matches = snapshot.threads.flatMap((thread) =>
+                    thread.messages
+                      .flatMap((message) => message.attachments ?? [])
+                      .filter((candidate) => candidate.id === resource.attachmentId),
                   );
-                if (Option.isNone(thread)) {
-                  return yield* new AssetWorkspaceContextNotFoundError({
-                    resource,
-                  });
+                  attachment = matches.length === 1 ? matches[0] : undefined;
                 }
-                const attachment = thread.value.messages
-                  .flatMap((message) => message.attachments ?? [])
-                  .find((candidate) => candidate.id === resource.attachmentId);
                 if (!attachment) {
                   return yield* new AssetAttachmentNotFoundError({
                     resource,

@@ -21,12 +21,34 @@ import {
   type TerminalContextDraft,
 } from "../lib/terminalContext";
 import type { DraftThreadEnvMode } from "../composerDraftStore";
+import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
 
 export const LAST_INVOKED_SCRIPT_BY_PROJECT_KEY = "t3code:last-invoked-script-by-project";
 export const MAX_HIDDEN_MOUNTED_TERMINAL_THREADS = 10;
 export const MAX_HIDDEN_MOUNTED_PREVIEW_THREADS = 3;
 
 export const LastInvokedScriptByProjectSchema = Schema.Record(ProjectId, Schema.String);
+
+const DEFINITIVE_TURN_START_FAILURE_TAGS = new Set([
+  "OrchestrationDispatchCommandError",
+  "EnvironmentAuthorizationError",
+  "EnvironmentRpcUnavailableError",
+]);
+
+export function shouldCleanupAttachmentUploadsAfterTurnStart(
+  result: AtomCommandResult<unknown, unknown>,
+): boolean {
+  if (result._tag !== "Failure" || result.cause.reasons.length === 0) return false;
+  return result.cause.reasons.every(
+    (reason) =>
+      reason._tag === "Fail" &&
+      typeof reason.error === "object" &&
+      reason.error !== null &&
+      "_tag" in reason.error &&
+      typeof reason.error._tag === "string" &&
+      DEFINITIVE_TURN_START_FAILURE_TAGS.has(reason.error._tag),
+  );
+}
 
 export function startNewThreadForProject(
   projectRef: ScopedProjectRef | null,

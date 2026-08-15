@@ -3453,6 +3453,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       <PaperclipIcon className="size-3.5 shrink-0 text-muted-foreground" />
                       <span className="max-w-64 truncate">{attachment.file.name}</span>
                       <Button
+                        type="button"
                         variant="ghost"
                         size="icon-xs"
                         onClick={() =>

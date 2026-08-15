@@ -284,6 +284,7 @@ import {
   reconcileMountedTerminalThreadIds,
   resolveThreadMetadataUpdateForNextTurn,
   resolveSendEnvMode,
+  shouldCleanupAttachmentUploadsAfterTurnStart,
   revokeBlobPreviewUrl,
   revokeUserMessagePreviewUrls,
   shouldWriteThreadErrorToCurrentServerThread,
@@ -4922,6 +4923,7 @@ function ChatViewContent(props: ChatViewProps) {
     }
 
     let turnStartAttempted = false;
+    let shouldCleanupUploadedAttachments = true;
     let turnStartSucceeded = false;
     if (failure === null && turnAttachmentsResult?._tag === "Success") {
       const shouldBootstrapCreateThread = isLocalDraftThread && !createdThreadForFileUpload;
@@ -4977,13 +4979,19 @@ function ChatViewContent(props: ChatViewProps) {
       });
       if (startResult._tag === "Failure") {
         failure = startResult;
+        shouldCleanupUploadedAttachments =
+          shouldCleanupAttachmentUploadsAfterTurnStart(startResult);
       } else {
         turnStartSucceeded = true;
       }
     }
 
     if (failure !== null) {
-      if (!turnStartAttempted && preparedConnection && uploadedAttachmentIdsForCleanup.length > 0) {
+      if (
+        shouldCleanupUploadedAttachments &&
+        preparedConnection &&
+        uploadedAttachmentIdsForCleanup.length > 0
+      ) {
         await Promise.allSettled(
           uploadedAttachmentIdsForCleanup.map((attachmentId) =>
             runtime.runPromise(
