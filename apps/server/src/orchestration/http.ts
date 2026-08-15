@@ -26,11 +26,11 @@ import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
 import {
   createAttachmentId,
+  isAttachmentIdOwnedByThread,
+  isCanonicalAttachmentIdOwnedByThread,
   parseAttachmentIdFromRelativePath,
-  parseThreadSegmentFromAttachmentId,
   resolveAttachmentPath,
   resolveAttachmentPathById,
-  toSafeThreadAttachmentSegment,
 } from "../attachmentStore.ts";
 import { ServerConfig } from "../config.ts";
 
@@ -83,7 +83,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
       "environment.orchestration.reclaimPendingAttachments",
     )(function* (input: {
       readonly snapshot: OrchestrationReadModel;
-      readonly targetThreadSegment: string;
+      readonly targetThreadId: string;
       readonly replacementAttachmentId: string;
     }) {
       const referencedIds = new Set(
@@ -129,7 +129,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
         }
         const sizeBytes = Number(info.value.size);
         globalPendingBytes += sizeBytes;
-        if (parseThreadSegmentFromAttachmentId(attachmentId) === input.targetThreadSegment) {
+        if (isAttachmentIdOwnedByThread(attachmentId, input.targetThreadId)) {
           targetPendingBytes += sizeBytes;
         }
       }
@@ -204,9 +204,8 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
           }
 
           const attachmentId = createAttachmentId(args.params.threadId, args.payload.uploadId);
-          const targetThreadSegment = toSafeThreadAttachmentSegment(args.params.threadId);
           const name = sanitizeAttachmentFileName(path.basename(source.name.trim()));
-          if (!attachmentId || !targetThreadSegment || name.length === 0) {
+          if (!attachmentId || name.length === 0) {
             return yield* failEnvironmentInvalidRequest("invalid_attachment");
           }
           const attachment = {
@@ -241,6 +240,16 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
               if (!targetThread) {
                 return yield* failEnvironmentNotFound("thread_not_found");
               }
+              const referencedByAnotherThread = snapshot.threads.some(
+                (thread) =>
+                  thread.id !== args.params.threadId &&
+                  thread.messages.some((message) =>
+                    (message.attachments ?? []).some((candidate) => candidate.id === attachmentId),
+                  ),
+              );
+              if (referencedByAnotherThread) {
+                return yield* failEnvironmentInvalidRequest("invalid_attachment");
+              }
               const existingAttachment = targetThread.messages
                 .flatMap((message) => message.attachments ?? [])
                 .find((candidate) => candidate.id === attachmentId);
@@ -265,7 +274,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
               }
               const pending = yield* reclaimPendingAttachments({
                 snapshot,
-                targetThreadSegment,
+                targetThreadId: args.params.threadId,
                 replacementAttachmentId: attachmentId,
               }).pipe(
                 Effect.catch((cause) =>
@@ -305,27 +314,27 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
           yield* annotateEnvironmentRequest(args.endpoint.name);
           yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
 
-          const thread = yield* projectionSnapshotQuery
-            .getThreadDetailById(args.params.threadId)
+          const snapshot = yield* projectionSnapshotQuery
+            .getSnapshot()
             .pipe(
               Effect.catch((cause) =>
                 failEnvironmentInternal("orchestration_thread_snapshot_failed", cause),
               ),
             );
-          if (Option.isNone(thread)) {
+          if (!snapshot.threads.some((thread) => thread.id === args.params.threadId)) {
             return yield* failEnvironmentNotFound("thread_not_found");
           }
 
-          const expectedThreadSegment = toSafeThreadAttachmentSegment(args.params.threadId);
-          const attachmentThreadSegment = parseThreadSegmentFromAttachmentId(
-            args.params.attachmentId,
-          );
-          if (!expectedThreadSegment || attachmentThreadSegment !== expectedThreadSegment) {
+          if (
+            !isCanonicalAttachmentIdOwnedByThread(args.params.attachmentId, args.params.threadId)
+          ) {
             return yield* failEnvironmentInvalidRequest("invalid_attachment");
           }
-          const referenced = thread.value.messages.some((message) =>
-            (message.attachments ?? []).some(
-              (attachment) => attachment.id === args.params.attachmentId,
+          const referenced = snapshot.threads.some((thread) =>
+            thread.messages.some((message) =>
+              (message.attachments ?? []).some(
+                (attachment) => attachment.id === args.params.attachmentId,
+              ),
             ),
           );
           if (referenced) {

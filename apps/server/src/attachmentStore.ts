@@ -13,6 +13,7 @@ import { inferImageExtension, SAFE_IMAGE_FILE_EXTENSIONS } from "./imageMime.ts"
 const ATTACHMENT_FILENAME_EXTENSIONS = [...SAFE_IMAGE_FILE_EXTENSIONS, ".bin"];
 const SAFE_GENERIC_FILE_EXTENSION = /^\.[a-z0-9]{1,16}$/;
 const ATTACHMENT_ID_THREAD_SEGMENT_MAX_CHARS = 80;
+const ATTACHMENT_ID_THREAD_HASH_CHARS = 16;
 const ATTACHMENT_ID_THREAD_SEGMENT_PATTERN = "[a-z0-9_]+(?:-[a-z0-9_]+)*";
 const ATTACHMENT_ID_UUID_PATTERN = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 const ATTACHMENT_UPLOAD_ID_PATTERN = new RegExp(`^${ATTACHMENT_ID_UUID_PATTERN}$`, "i");
@@ -36,16 +37,48 @@ export function toSafeThreadAttachmentSegment(threadId: string): string | null {
   return segment;
 }
 
+export function toCanonicalThreadAttachmentSegment(threadId: string): string | null {
+  const legacySegment = toSafeThreadAttachmentSegment(threadId);
+  if (!legacySegment) return null;
+  const digest = NodeCrypto.createHash("sha256")
+    .update(threadId)
+    .digest("hex")
+    .slice(0, ATTACHMENT_ID_THREAD_HASH_CHARS);
+  const prefix = legacySegment
+    .slice(0, ATTACHMENT_ID_THREAD_SEGMENT_MAX_CHARS - ATTACHMENT_ID_THREAD_HASH_CHARS - 1)
+    .replace(/[-_]+$/g, "");
+  return prefix.length > 0 ? `${prefix}-${digest}` : digest;
+}
+
 export function createAttachmentId(
   threadId: string,
   uploadId: string = NodeCrypto.randomUUID(),
 ): string | null {
-  const threadSegment = toSafeThreadAttachmentSegment(threadId);
+  const threadSegment = toCanonicalThreadAttachmentSegment(threadId);
   const normalizedUploadId = uploadId.trim().toLowerCase();
   if (!threadSegment || !ATTACHMENT_UPLOAD_ID_PATTERN.test(normalizedUploadId)) {
     return null;
   }
   return `${threadSegment}-${normalizedUploadId}`;
+}
+
+export function isAttachmentIdOwnedByThread(attachmentId: string, threadId: string): boolean {
+  const attachmentThreadSegment = parseThreadSegmentFromAttachmentId(attachmentId);
+  if (!attachmentThreadSegment) return false;
+  return (
+    attachmentThreadSegment === toCanonicalThreadAttachmentSegment(threadId) ||
+    attachmentThreadSegment === toSafeThreadAttachmentSegment(threadId)
+  );
+}
+
+export function isCanonicalAttachmentIdOwnedByThread(
+  attachmentId: string,
+  threadId: string,
+): boolean {
+  return (
+    parseThreadSegmentFromAttachmentId(attachmentId) ===
+    toCanonicalThreadAttachmentSegment(threadId)
+  );
 }
 
 export function parseThreadSegmentFromAttachmentId(attachmentId: string): string | null {

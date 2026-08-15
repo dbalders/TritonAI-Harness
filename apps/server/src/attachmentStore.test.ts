@@ -9,6 +9,7 @@ import {
   attachmentRelativePath,
   createAttachmentId,
   inferFileExtension,
+  isAttachmentIdOwnedByThread,
   parseThreadSegmentFromAttachmentId,
   resolveAttachmentPathById,
 } from "./attachmentStore.ts";
@@ -43,14 +44,25 @@ describe("attachmentStore", () => {
     if (!attachmentId) {
       return;
     }
-    expect(parseThreadSegmentFromAttachmentId(attachmentId)).toBe("thread-foo");
+    const threadSegment = parseThreadSegmentFromAttachmentId(attachmentId);
+    expect(threadSegment).toMatch(/^thread-foo-[0-9a-f]{16}$/);
+    expect(threadSegment).toBe(threadSegment?.toLowerCase());
   });
 
   it("creates deterministic ids for idempotent upload retries", () => {
     const uploadId = "00000000-0000-4000-8000-000000000005";
+    const attachmentId = createAttachmentId("Thread.One", uploadId);
 
-    expect(createAttachmentId("Thread.One", uploadId)).toBe(`thread-one-${uploadId}`);
+    expect(attachmentId).toBe(createAttachmentId("Thread.One", uploadId));
+    expect(attachmentId).not.toBe(createAttachmentId("thread-one", uploadId));
+    expect(attachmentId && isAttachmentIdOwnedByThread(attachmentId, "Thread.One")).toBe(true);
     expect(createAttachmentId("Thread.One", "not-a-uuid")).toBeNull();
+  });
+
+  it("continues to recognize legacy attachment ownership", () => {
+    expect(
+      isAttachmentIdOwnedByThread("thread-one-00000000-0000-4000-8000-000000000005", "Thread.One"),
+    ).toBe(true);
   });
 
   it("resolves attachment path by id using the extension that exists on disk", () => {

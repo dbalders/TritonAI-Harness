@@ -50,8 +50,9 @@ import {
 } from "../Services/ProjectionPipeline.ts";
 import {
   attachmentRelativePath,
+  isAttachmentIdOwnedByThread,
+  isCanonicalAttachmentIdOwnedByThread,
   parseAttachmentIdFromRelativePath,
-  parseThreadSegmentFromAttachmentId,
   toSafeThreadAttachmentSegment,
 } from "../../attachmentStore.ts";
 
@@ -331,15 +332,13 @@ function collectThreadAttachmentRelativePaths(
   threadId: string,
   messages: ReadonlyArray<ProjectionThreadMessage>,
 ): Set<string> {
-  const threadSegment = toSafeThreadAttachmentSegment(threadId);
-  if (!threadSegment) {
+  if (!toSafeThreadAttachmentSegment(threadId)) {
     return new Set();
   }
   const relativePaths = new Set<string>();
   for (const message of messages) {
     for (const attachment of message.attachments ?? []) {
-      const attachmentThreadSegment = parseThreadSegmentFromAttachmentId(attachment.id);
-      if (!attachmentThreadSegment || attachmentThreadSegment !== threadSegment) {
+      if (!isAttachmentIdOwnedByThread(attachment.id, threadId)) {
         continue;
       }
       relativePaths.add(attachmentRelativePath(attachment));
@@ -361,7 +360,7 @@ const runAttachmentSideEffects = Effect.fn("runAttachmentSideEffects")(function*
     .pipe(Effect.orElseSucceed(() => [] as Array<string>));
 
   const removeDeletedThreadAttachmentEntry = Effect.fn("removeDeletedThreadAttachmentEntry")(
-    function* (threadSegment: string, entry: string) {
+    function* (threadId: string, entry: string) {
       const normalizedEntry = entry.replace(/^[/\\]+/, "").replace(/\\/g, "/");
       if (normalizedEntry.length === 0 || normalizedEntry.includes("/")) {
         return;
@@ -370,8 +369,7 @@ const runAttachmentSideEffects = Effect.fn("runAttachmentSideEffects")(function*
       if (!attachmentId) {
         return;
       }
-      const attachmentThreadSegment = parseThreadSegmentFromAttachmentId(attachmentId);
-      if (!attachmentThreadSegment || attachmentThreadSegment !== threadSegment) {
+      if (!isCanonicalAttachmentIdOwnedByThread(attachmentId, threadId)) {
         return;
       }
       yield* fileSystem.remove(path.join(attachmentsRootDir, normalizedEntry), {
@@ -392,17 +390,13 @@ const runAttachmentSideEffects = Effect.fn("runAttachmentSideEffects")(function*
     }
 
     const entries = yield* readAttachmentRootEntries;
-    yield* Effect.forEach(
-      entries,
-      (entry) => removeDeletedThreadAttachmentEntry(threadSegment, entry),
-      {
-        concurrency: 1,
-      },
-    );
+    yield* Effect.forEach(entries, (entry) => removeDeletedThreadAttachmentEntry(threadId, entry), {
+      concurrency: 1,
+    });
   });
 
   const pruneThreadAttachmentEntry = Effect.fn("pruneThreadAttachmentEntry")(function* (
-    threadSegment: string,
+    threadId: string,
     keptThreadRelativePaths: Set<string>,
     entry: string,
   ) {
@@ -414,8 +408,7 @@ const runAttachmentSideEffects = Effect.fn("runAttachmentSideEffects")(function*
     if (!attachmentId) {
       return;
     }
-    const attachmentThreadSegment = parseThreadSegmentFromAttachmentId(attachmentId);
-    if (!attachmentThreadSegment || attachmentThreadSegment !== threadSegment) {
+    if (!isCanonicalAttachmentIdOwnedByThread(attachmentId, threadId)) {
       return;
     }
 
@@ -447,7 +440,7 @@ const runAttachmentSideEffects = Effect.fn("runAttachmentSideEffects")(function*
     const entries = yield* readAttachmentRootEntries;
     yield* Effect.forEach(
       entries,
-      (entry) => pruneThreadAttachmentEntry(threadSegment, keptThreadRelativePaths, entry),
+      (entry) => pruneThreadAttachmentEntry(threadId, keptThreadRelativePaths, entry),
       { concurrency: 1 },
     );
   });

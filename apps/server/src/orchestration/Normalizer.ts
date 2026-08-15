@@ -13,10 +13,9 @@ import {
 
 import {
   createAttachmentId,
-  parseThreadSegmentFromAttachmentId,
+  isAttachmentIdOwnedByThread,
   resolveAttachmentPath,
   resolveAttachmentPathById,
-  toSafeThreadAttachmentSegment,
 } from "../attachmentStore.ts";
 import { ServerConfig } from "../config.ts";
 import { parseBase64DataUrl } from "../imageMime.ts";
@@ -126,9 +125,7 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
       (attachment) =>
         Effect.gen(function* () {
           if (attachment.type === "file") {
-            const expectedThreadSegment = toSafeThreadAttachmentSegment(canonicalCommand.threadId);
-            const attachmentThreadSegment = parseThreadSegmentFromAttachmentId(attachment.id);
-            if (!expectedThreadSegment || attachmentThreadSegment !== expectedThreadSegment) {
+            if (!isAttachmentIdOwnedByThread(attachment.id, canonicalCommand.threadId)) {
               return yield* new OrchestrationDispatchCommandError({
                 message: `File attachment '${attachment.name}' does not belong to this thread.`,
               });

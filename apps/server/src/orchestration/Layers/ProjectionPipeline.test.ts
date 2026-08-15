@@ -34,6 +34,7 @@ import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQu
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { OrchestrationProjectionPipeline } from "../Services/ProjectionPipeline.ts";
 import { ServerConfig } from "../../config.ts";
+import { createAttachmentId } from "../../attachmentStore.ts";
 
 const makeProjectionPipelinePrefixedTestLayer = (prefix: string) =>
   OrchestrationProjectionPipelineLive.pipe(
@@ -795,10 +796,18 @@ it.layer(
       const { attachmentsDir } = yield* ServerConfig;
       const now = "2026-01-01T00:00:00.000Z";
       const threadId = ThreadId.make("Thread Revert.Files");
-      const keepAttachmentId = "thread-revert-files-00000000-0000-4000-8000-000000000001";
-      const removeAttachmentId = "thread-revert-files-00000000-0000-4000-8000-000000000002";
-      const otherThreadAttachmentId =
-        "thread-revert-files-extra-00000000-0000-4000-8000-000000000003";
+      const keepAttachmentId = createAttachmentId(
+        threadId,
+        "00000000-0000-4000-8000-000000000001",
+      )!;
+      const removeAttachmentId = createAttachmentId(
+        threadId,
+        "00000000-0000-4000-8000-000000000002",
+      )!;
+      const otherThreadAttachmentId = createAttachmentId(
+        "Thread Revert.Files Extra",
+        "00000000-0000-4000-8000-000000000003",
+      )!;
 
       const appendAndProject = (event: Parameters<typeof eventStore.append>[0]) =>
         eventStore
@@ -1004,9 +1013,12 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-atta
         const { attachmentsDir } = yield* ServerConfig;
         const now = "2026-01-01T00:00:00.000Z";
         const threadId = ThreadId.make("Thread Delete.Files");
-        const attachmentId = "thread-delete-files-00000000-0000-4000-8000-000000000001";
-        const otherThreadAttachmentId =
-          "thread-delete-files-extra-00000000-0000-4000-8000-000000000002";
+        const attachmentId = createAttachmentId(threadId, "00000000-0000-4000-8000-000000000001")!;
+        const otherThreadAttachmentId = createAttachmentId(
+          "Thread Delete.Files Extra",
+          "00000000-0000-4000-8000-000000000002",
+        )!;
+        const legacyAttachmentId = "thread-delete-files-00000000-0000-4000-8000-000000000003";
 
         const appendAndProject = (event: Parameters<typeof eventStore.append>[0]) =>
           eventStore
@@ -1096,11 +1108,14 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-atta
           attachmentsDir,
           `${otherThreadAttachmentId}.png`,
         );
+        const legacyAttachmentPath = path.join(attachmentsDir, `${legacyAttachmentId}.png`);
         yield* fileSystem.makeDirectory(attachmentsDir, { recursive: true });
         yield* fileSystem.writeFileString(threadAttachmentPath, "delete");
         yield* fileSystem.writeFileString(otherThreadAttachmentPath, "other-thread");
+        yield* fileSystem.writeFileString(legacyAttachmentPath, "legacy");
         assert.isTrue(yield* exists(threadAttachmentPath));
         assert.isTrue(yield* exists(otherThreadAttachmentPath));
+        assert.isTrue(yield* exists(legacyAttachmentPath));
 
         yield* appendAndProject({
           type: "thread.deleted",
@@ -1120,6 +1135,7 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-atta
 
         assert.isFalse(yield* exists(threadAttachmentPath));
         assert.isTrue(yield* exists(otherThreadAttachmentPath));
+        assert.isTrue(yield* exists(legacyAttachmentPath));
       }),
     );
   },
