@@ -54,7 +54,7 @@ import {
   type CodexSessionRuntimeShape,
   type CodexThreadSnapshot,
 } from "./CodexSessionRuntime.ts";
-import { makeCodexAdapter } from "./CodexAdapter.ts";
+import { createStdioMcpServerArgs, makeCodexAdapter } from "./CodexAdapter.ts";
 import {
   CodexImageContextAnalysisError,
   type CodexImageContextAnalyzer,
@@ -65,6 +65,22 @@ it("flattens plugin component names into provider-safe function names", () => {
   NodeAssert.equal(
     codexDynamicIntegrationToolName("fixture.records.search"),
     "fixture_records_search",
+  );
+});
+
+it("encodes the embedded Cua Driver as a Codex stdio MCP server", () => {
+  NodeAssert.deepEqual(
+    createStdioMcpServerArgs("cua-driver", {
+      command: "/Applications/TritonAI Harness.app/Contents/Resources/cua-driver/cua-driver",
+      args: ["mcp", "--socket", "/tmp/cua driver.sock"],
+      environment: {},
+    }),
+    [
+      "-c",
+      'mcp_servers.cua-driver.command="/Applications/TritonAI Harness.app/Contents/Resources/cua-driver/cua-driver"',
+      "-c",
+      'mcp_servers.cua-driver.args=["mcp","--socket","/tmp/cua driver.sock"]',
+    ],
   );
 });
 

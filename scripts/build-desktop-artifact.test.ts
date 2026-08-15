@@ -25,6 +25,7 @@ import {
   DESKTOP_ELECTRON_LANGUAGES,
   DESKTOP_FILE_EXCLUSIONS,
   DESKTOP_EXTRA_RESOURCES,
+  CUA_DRIVER_VERSION,
   DesktopUpdatePublishConfigurationMissingError,
   InvalidMacPasskeyRpDomainError,
   InvalidMacPasskeyPublishableKeyError,
@@ -54,6 +55,7 @@ import {
   resolveDesktopWebAssetBrand,
   resolveResourceMonitorRustTargets,
   resourceMonitorExecutableName,
+  resolveCuaDriverReleaseAsset,
   RUNTIME_DEPLOY_ARGS,
   resolveGitHubPublishConfig,
   resolveMacAppBundleDirectoryName,
@@ -1092,11 +1094,15 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }),
   );
 
-  it("keeps the managed config in the app while staging the resource monitor externally", () => {
+  it("keeps the managed config in the app while staging native helpers externally", () => {
     assert.deepStrictEqual(DESKTOP_EXTRA_RESOURCES, [
       {
         from: "apps/desktop/prod-resources/resource-monitor",
         to: "resource-monitor",
+      },
+      {
+        from: "apps/desktop/prod-resources/cua-driver",
+        to: "cua-driver",
       },
     ]);
     assert.deepStrictEqual(resolveResourceMonitorRustTargets("mac", "universal"), [
@@ -1111,6 +1117,16 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     ]);
     assert.equal(resourceMonitorExecutableName("mac"), "t3-resource-monitor");
     assert.equal(resourceMonitorExecutableName("win"), "t3-resource-monitor.exe");
+    assert.equal(CUA_DRIVER_VERSION, "0.19.3");
+    assert.deepStrictEqual(resolveCuaDriverReleaseAsset("mac", "universal"), {
+      fileName: "cua-driver-rs-0.19.3-darwin-universal-binary.tar.gz",
+      sha256: "733e28a3782ac8d325f8fce8b5d97486c1054af755b40dfd086151b34c79377e",
+      url: "https://github.com/trycua/cua/releases/download/cua-driver-rs-v0.19.3/cua-driver-rs-0.19.3-darwin-universal-binary.tar.gz",
+    });
+    assert.equal(
+      resolveCuaDriverReleaseAsset("win", "arm64").sha256,
+      "a26b27ae3470f36fa4b12805caae88db510e5cd60e30522bda6b492963727701",
+    );
   });
   it("promotes target fff binaries to direct staged dependencies", () => {
     assert.deepStrictEqual(resolveFffNativeDependencies("mac", "arm64", "0.9.4"), {

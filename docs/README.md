@@ -11,6 +11,7 @@
   - [Remote access](./user/remote-access.md)
   - [Keeping TritonAI Harness versions in sync](./user/server-updates.md)
   - [Keybindings](./user/keybindings.md)
+  - [Computer use](./user/computer-use.md)
 - [TritonAI Connect](./cloud/t3-connect-clerk.md)
 - [Integrations](./integrations/source-control-providers.md)
 - [Mobile](./mobile/app.md)

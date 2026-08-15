@@ -30,6 +30,7 @@ import * as DesktopServerExposure from "./DesktopServerExposure.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopTritonAiApiKey from "../settings/DesktopTritonAiApiKey.ts";
 import * as DesktopWslEnvironment from "../wsl/DesktopWslEnvironment.ts";
+import * as DesktopComputerUse from "../computerUse/DesktopComputerUse.ts";
 
 export class DesktopBackendObservabilitySettingsReadError extends Schema.TaggedErrorClass<DesktopBackendObservabilitySettingsReadError>()(
   "DesktopBackendObservabilitySettingsReadError",
@@ -486,6 +487,7 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
       ucsdEnvironment,
       tritonAiCredentialOverride,
     );
+    const computerUseMcp = DesktopComputerUse.currentComputerUseMcpConfiguration();
 
     const bootstrap = {
       mode: "desktop" as const,
@@ -504,6 +506,7 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
         onNone: () => ({}),
         onSome: (resourceMonitorPath) => ({ resourceMonitorPath }),
       }),
+      ...(computerUseMcp === undefined ? {} : { computerUseMcp }),
       ...buildObservabilityFragment(input.observabilitySettings),
     };
 
