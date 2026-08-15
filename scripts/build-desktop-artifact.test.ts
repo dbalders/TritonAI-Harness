@@ -572,6 +572,11 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.deepStrictEqual((mac.mac as Record<string, unknown>).target, ["zip"]);
       assert.notProperty(linux, "asarUnpack");
       assert.deepStrictEqual(win.asarUnpack, WINDOWS_ASAR_UNPACK);
+      // Linux must register the renderer schemes so the generated .desktop
+      // entry advertises MimeType=x-scheme-handler/t3code; for OAuth deep links.
+      assert.deepStrictEqual((linux.linux as Record<string, unknown>).protocols, [
+        { name: "T3 Code", schemes: ["t3code", "t3code-dev"] },
+      ]);
       for (const config of [mac, linux, win]) {
         assert.deepStrictEqual(config.electronLanguages, DESKTOP_ELECTRON_LANGUAGES);
         assert.deepStrictEqual(config.files, [

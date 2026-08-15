@@ -496,6 +496,16 @@ export const EnvironmentOrchestrationAttachmentDeleteResult = Schema.Struct({
   deleted: Schema.Boolean,
 });
 
+// Query-string window for windowed thread snapshots (GET payloads must encode
+// to strings). Both fields optional: omitting them keeps the full-snapshot
+// behavior, so pagination stays opt-in per request.
+const EnvironmentOrchestrationThreadSnapshotQuery = {
+  turnLimit: Schema.optional(
+    Schema.FiniteFromString.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1)),
+  ),
+  beforeCursor: Schema.optional(TrimmedNonEmptyString),
+};
+
 export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestration")
   .add(
     HttpApiEndpoint.get("snapshot", "/api/orchestration/snapshot", {
@@ -515,6 +525,7 @@ export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestr
     HttpApiEndpoint.get("threadSnapshot", "/api/orchestration/threads/:threadId", {
       headers: OptionalBearerHeaders,
       params: EnvironmentOrchestrationThreadSnapshotParams,
+      payload: EnvironmentOrchestrationThreadSnapshotQuery,
       success: OrchestrationThreadDetailSnapshot,
       error: EnvironmentOrchestrationThreadSnapshotErrors,
     }).middleware(EnvironmentAuthenticatedAuth),

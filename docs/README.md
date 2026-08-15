@@ -1,4 +1,4 @@
-# Documentation
+# T3 Code docs
 
 - [Getting started](./getting-started/quick-start.md)
 - Architecture

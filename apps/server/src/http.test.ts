@@ -1,7 +1,12 @@
 import { expect, it } from "@effect/vitest";
 import { describe } from "vite-plus/test";
 
-import { contentDispositionAttachment, isLoopbackHostname, resolveDevRedirectUrl } from "./http.ts";
+import {
+  assetResponseHeaders,
+  contentDispositionAttachment,
+  isLoopbackHostname,
+  resolveDevRedirectUrl,
+} from "./http.ts";
 
 describe("http dev routing", () => {
   it("treats localhost and loopback addresses as local", () => {
@@ -38,5 +43,24 @@ describe("attachment responses", () => {
     expect(contentDispositionAttachment(`report-${"\uD83D"}.pdf`)).toContain(
       "filename*=UTF-8''report-%EF%BF%BD.pdf",
     );
+  });
+});
+
+describe("assetResponseHeaders", () => {
+  it("sandboxes SVG assets", () => {
+    expect(assetResponseHeaders("/attachments/user-image.svg")).toMatchObject({
+      "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+      "X-Content-Type-Options": "nosniff",
+    });
+    expect(assetResponseHeaders("/attachments/user-image.SVG")).toHaveProperty(
+      "Content-Security-Policy",
+    );
+  });
+
+  it("does not apply document policy to raster images", () => {
+    expect(assetResponseHeaders("/attachments/user-image.png")).toEqual({
+      "Cache-Control": "private, max-age=3600",
+      "X-Content-Type-Options": "nosniff",
+    });
   });
 });

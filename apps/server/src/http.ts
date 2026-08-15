@@ -14,10 +14,10 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import { cast } from "effect/Function";
 import {
-  Headers,
   HttpBody,
   HttpClient,
   HttpClientResponse,
+  HttpMiddleware,
   HttpRouter,
   HttpServerResponse,
   HttpServerRequest,
@@ -30,7 +30,6 @@ import * as ServerConfig from "./config.ts";
 import { ASSET_ROUTE_PREFIX, resolveAsset } from "./assets/AssetAccess.ts";
 import * as BrowserTraceCollector from "./observability/BrowserTraceCollector.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
-import * as HttpResponseCompression from "./httpCompression/HttpResponseCompression.ts";
 import { traceRelayRequest } from "./cloud/traceRelayRequest.ts";
 import {
   annotateEnvironmentRequest,
@@ -44,7 +43,7 @@ import { browserApiCorsAllowedHeaders, browserApiCorsAllowedMethods } from "./ht
 const OTLP_TRACES_PROXY_PATH = "/api/observability/v1/traces";
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1", "localhost"]);
 const DESKTOP_RENDERER_ORIGINS = ["t3code://app", "t3code-dev://app"];
-const GZIP_MIN_BYTES = 1024;
+const SVG_CONTENT_SECURITY_POLICY = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
 
 export function contentDispositionAttachment(fileName: string): string {
   const wellFormedFileName = fileName.replace(
@@ -63,71 +62,19 @@ export function contentDispositionAttachment(fileName: string): string {
   return `attachment; filename="${fallback}"; filename*=UTF-8''${encoded}`;
 }
 
-function acceptsGzip(value: string | undefined): boolean {
-  if (!value) return false;
-
-  const accepted = new Map(
-    value.split(",").map((entry) => {
-      const [coding = "", ...parameters] = entry.trim().toLowerCase().split(";");
-      const quality = parameters
-        .map((parameter) => parameter.trim().match(/^q=(.+)$/)?.[1])
-        .find((parameter) => parameter !== undefined);
-      return [coding, quality === undefined ? 1 : Number(quality)] as const;
-    }),
-  );
-  return (accepted.get("gzip") ?? accepted.get("*") ?? 0) > 0;
+export function assetResponseHeaders(filePath: string): Record<string, string> {
+  return {
+    "Cache-Control": "private, max-age=3600",
+    "X-Content-Type-Options": "nosniff",
+    ...(filePath.toLowerCase().endsWith(".svg")
+      ? { "Content-Security-Policy": SVG_CONTENT_SECURITY_POLICY }
+      : {}),
+  };
 }
 
-function varyByAcceptEncoding(value: string | undefined): string {
-  if (!value) return "Accept-Encoding";
-  const values = new Set(value.split(",").map((entry) => entry.trim().toLowerCase()));
-  return values.has("*") || values.has("accept-encoding") ? value : `${value}, Accept-Encoding`;
-}
-
-const compressHttpResponse = Effect.fnUntraced(function* (
-  response: HttpServerResponse.HttpServerResponse,
-  acceptEncoding: string | undefined,
-) {
-  const body = response.body;
-  if (
-    body._tag !== "Uint8Array" ||
-    body.contentLength < GZIP_MIN_BYTES ||
-    !body.contentType.startsWith("application/json") ||
-    response.headers["content-encoding"]
-  ) {
-    return response;
-  }
-
-  const variedResponse = HttpServerResponse.setHeader(
-    response,
-    "vary",
-    varyByAcceptEncoding(response.headers.vary),
-  );
-  if (!acceptsGzip(acceptEncoding)) return variedResponse;
-
-  const compression = yield* HttpResponseCompression.HttpResponseCompression;
-  const headers = Headers.set(
-    Headers.remove(variedResponse.headers, "content-length"),
-    "content-encoding",
-    "gzip",
-  );
-  return compression.gzip(body.body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers,
-    cookies: response.cookies,
-    contentType: body.contentType,
-  });
+export const httpCompressionLayer = HttpRouter.middleware(HttpMiddleware.compression(), {
+  global: true,
 });
-
-export const httpCompressionLayer = HttpRouter.middleware(
-  (httpEffect) =>
-    Effect.flatMap(
-      Effect.all([httpEffect, HttpServerRequest.HttpServerRequest]),
-      ([response, request]) => compressHttpResponse(response, request.headers["accept-encoding"]),
-    ),
-  { global: true },
-);
 
 export const browserApiCorsLayer = Layer.unwrap(
   Effect.gen(function* () {
@@ -290,7 +237,7 @@ export const assetRouteLayer = HttpRouter.add(
     return yield* HttpServerResponse.file(asset.path, {
       status: 200,
       headers: {
-        "Cache-Control": "private, max-age=3600",
+        ...assetResponseHeaders(asset.path),
         ...(asset.disposition === "attachment"
           ? {
               "Content-Disposition": contentDispositionAttachment(
@@ -299,7 +246,6 @@ export const assetRouteLayer = HttpRouter.add(
               "Content-Type": "application/octet-stream",
             }
           : {}),
-        "X-Content-Type-Options": "nosniff",
       },
     }).pipe(
       Effect.orElseSucceed(() => HttpServerResponse.text("Internal Server Error", { status: 500 })),

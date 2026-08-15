@@ -60,6 +60,7 @@ const makeSafeStorageLayer = (options?: {
 const makeDialogLayer = (response = 0) =>
   Layer.succeed(ElectronDialog.ElectronDialog, {
     pickFolder: () => Effect.succeed(Option.none()),
+    pickFiles: () => Effect.succeed([]),
     confirm: () => Effect.succeed(false),
     showMessageBox: () => Effect.succeed({ response, checkboxChecked: false }),
     showErrorBox: () => Effect.void,
@@ -92,6 +93,7 @@ describe("DesktopSecretStoreKey", () => {
       );
       const dialog = Layer.succeed(ElectronDialog.ElectronDialog, {
         pickFolder: () => Effect.die("unexpected dialog"),
+        pickFiles: () => Effect.die("unexpected dialog"),
         confirm: () => Effect.die("unexpected dialog"),
         showMessageBox: () => Effect.die("authenticated envelopes must not prompt"),
         showErrorBox: () => Effect.die("unexpected dialog"),

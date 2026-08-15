@@ -16,6 +16,7 @@ import {
   type IncomingShareDestination,
   type IncomingShareDraft,
 } from "./incoming-share-model";
+import { createIncomingSharePayloadReader } from "./incoming-share-native";
 import { IncomingShareInbox } from "./incoming-share-inbox";
 import {
   loadIncomingShareDrafts,
@@ -48,6 +49,11 @@ function receiveSharingEnabled(): boolean {
   }
   return Constants.expoConfig?.extra?.iosPersonalTeamBuild !== true;
 }
+
+const getIncomingSharePayloads = createIncomingSharePayloadReader({
+  platform: Platform.OS,
+  readPayloads: getSharedPayloads,
+});
 
 async function resolvedPayloadsForImages(): Promise<ReadonlyArray<ResolvedSharePayload>> {
   try {
@@ -134,7 +140,7 @@ const incomingShareInbox = new IncomingShareInbox({
   loadDrafts: loadIncomingShareDrafts,
   writeDraft: writeIncomingShareDraft,
   removeDraft: removeIncomingShareDraft,
-  getPayloads: getSharedPayloads,
+  getPayloads: getIncomingSharePayloads,
   clearPayloads: clearSharedPayloads,
   buildDraft: async ({ payloads, id, createdAt }) => {
     const cleanupUris = new Set<string>();

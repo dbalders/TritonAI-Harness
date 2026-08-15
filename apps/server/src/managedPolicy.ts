@@ -44,7 +44,7 @@ function record(value: unknown): JsonRecord | null {
 }
 
 const decodeManagedConfig = Schema.decodeUnknownSync(TritonAiManagedConfig);
-const decodeUnknownJson = Schema.decodeUnknownSync(Schema.UnknownFromJsonString);
+const decodeUnknownJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 
 export function validateBundledManagedConfig(
   source: string,
