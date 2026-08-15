@@ -520,11 +520,11 @@ computerUseLayer("CodexAdapterLive computer use", (it) => {
         'mcp_servers.cua-driver.command="/Applications/TritonAI Harness.app/Contents/Resources/cua-driver/cua-driver"',
         "-c",
         'mcp_servers.cua-driver.args=["mcp","--socket","/tmp/cua driver.sock"]',
+        "-c",
+        'mcp_servers.cua-driver.env={"CUA_DRIVER_RS_TELEMETRY_ENABLED"="false","CUA_DRIVER_RS_UPDATE_CHECK"="false"}',
       ]);
       NodeAssert.deepStrictEqual(runtimeOptions.environment, {
         EXISTING_ENV: "preserved",
-        CUA_DRIVER_RS_TELEMETRY_ENABLED: "false",
-        CUA_DRIVER_RS_UPDATE_CHECK: "false",
       });
     }),
   );
