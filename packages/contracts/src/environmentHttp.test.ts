@@ -17,8 +17,10 @@ it("decodes the named file field produced by the multipart parser", () => {
   } as Multipart.PersistedFile;
 
   const decoded = decodeAttachmentUpload({
+    uploadId: "00000000-0000-4000-8000-000000000005",
     file: [persistedFile],
   });
 
+  assert.strictEqual(decoded.uploadId, "00000000-0000-4000-8000-000000000005");
   assert.strictEqual(decoded.file, persistedFile);
 });

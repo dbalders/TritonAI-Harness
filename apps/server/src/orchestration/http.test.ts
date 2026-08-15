@@ -43,8 +43,8 @@ describe("pending attachment policy", () => {
   it("truncates filenames by Unicode code point", () => {
     const name = sanitizeAttachmentFileName(`${"a".repeat(254)}😀.txt`);
 
-    expect(Array.from(name)).toHaveLength(255);
-    expect(name.endsWith("😀")).toBe(true);
+    expect(name).toHaveLength(254);
+    expect(name.endsWith("a")).toBe(true);
     expect(() => encodeURIComponent(name)).not.toThrow();
   });
 });

@@ -46,6 +46,13 @@ describe("attachmentStore", () => {
     expect(parseThreadSegmentFromAttachmentId(attachmentId)).toBe("thread-foo");
   });
 
+  it("creates deterministic ids for idempotent upload retries", () => {
+    const uploadId = "00000000-0000-4000-8000-000000000005";
+
+    expect(createAttachmentId("Thread.One", uploadId)).toBe(`thread-one-${uploadId}`);
+    expect(createAttachmentId("Thread.One", "not-a-uuid")).toBeNull();
+  });
+
   it("resolves attachment path by id using the extension that exists on disk", () => {
     const attachmentsDir = NodeFS.mkdtempSync(
       NodePath.join(NodeOS.tmpdir(), "t3code-attachment-store-"),

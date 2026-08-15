@@ -4763,6 +4763,7 @@ function ChatViewContent(props: ChatViewProps) {
           uploadEnvironmentAttachment({
             prepared: preparedConnection,
             threadId: threadIdForSend,
+            uploadId: attachment.id,
             file: attachment.file,
           }),
         );

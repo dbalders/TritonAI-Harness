@@ -480,10 +480,11 @@ const EnvironmentOrchestrationAttachmentParams = Schema.Struct({
 });
 
 export const EnvironmentOrchestrationAttachmentUpload = Schema.Struct({
+  uploadId: TrimmedNonEmptyString.check(Schema.isMaxLength(64)),
   file: Multipart.SingleFileSchema,
 }).pipe(
   HttpApiSchema.asMultipart({
-    maxParts: 1,
+    maxParts: 2,
     maxFileSize: PROVIDER_SEND_TURN_MAX_FILE_BYTES,
     // Leave room for multipart headers while keeping the file payload itself capped.
     maxTotalSize: PROVIDER_SEND_TURN_MAX_FILE_BYTES + 64 * 1024,

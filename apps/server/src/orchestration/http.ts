@@ -63,7 +63,9 @@ export function sanitizeAttachmentFileName(fileName: string): string {
     })
     .join("")
     .trim();
-  return Array.from(sanitizedName).slice(0, 255).join("");
+  const truncated = sanitizedName.slice(0, 255);
+  const finalCodeUnit = truncated.charCodeAt(truncated.length - 1);
+  return finalCodeUnit >= 0xd800 && finalCodeUnit <= 0xdbff ? truncated.slice(0, -1) : truncated;
 }
 
 export const orchestrationHttpApiLayer = HttpApiBuilder.group(
@@ -82,6 +84,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
     )(function* (input: {
       readonly snapshot: OrchestrationReadModel;
       readonly targetThreadSegment: string;
+      readonly replacementAttachmentId: string;
     }) {
       const referencedIds = new Set(
         input.snapshot.threads.flatMap((thread) =>
@@ -104,7 +107,13 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
         const normalizedEntry = entry.replace(/^[/\\]+/, "").replace(/\\/g, "/");
         if (normalizedEntry.length === 0 || normalizedEntry.includes("/")) continue;
         const attachmentId = parseAttachmentIdFromRelativePath(normalizedEntry);
-        if (!attachmentId || referencedIds.has(attachmentId)) continue;
+        if (
+          !attachmentId ||
+          referencedIds.has(attachmentId) ||
+          attachmentId === input.replacementAttachmentId
+        ) {
+          continue;
+        }
         const attachmentPath = path.join(serverConfig.attachmentsDir, normalizedEntry);
         const info = yield* fileSystem.stat(attachmentPath).pipe(Effect.option);
         if (Option.isNone(info) || info.value.type !== "File") continue;
@@ -194,7 +203,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
             return yield* failEnvironmentInvalidRequest("invalid_attachment");
           }
 
-          const attachmentId = createAttachmentId(args.params.threadId);
+          const attachmentId = createAttachmentId(args.params.threadId, args.payload.uploadId);
           const targetThreadSegment = toSafeThreadAttachmentSegment(args.params.threadId);
           const name = sanitizeAttachmentFileName(path.basename(source.name.trim()));
           if (!attachmentId || !targetThreadSegment || name.length === 0) {
@@ -217,7 +226,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
             return yield* failEnvironmentInvalidRequest("invalid_attachment");
           }
 
-          yield* attachmentUploadSemaphore.withPermit(
+          const persistedAttachment = yield* attachmentUploadSemaphore.withPermit(
             Effect.gen(function* () {
               const snapshot = yield* projectionSnapshotQuery
                 .getSnapshot()
@@ -226,12 +235,38 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
                     failEnvironmentInternal("orchestration_thread_snapshot_failed", cause),
                   ),
                 );
-              if (!snapshot.threads.some((thread) => thread.id === args.params.threadId)) {
+              const targetThread = snapshot.threads.find(
+                (thread) => thread.id === args.params.threadId,
+              );
+              if (!targetThread) {
                 return yield* failEnvironmentNotFound("thread_not_found");
+              }
+              const existingAttachment = targetThread.messages
+                .flatMap((message) => message.attachments ?? [])
+                .find((candidate) => candidate.id === attachmentId);
+              if (existingAttachment) {
+                if (existingAttachment.type !== "file") {
+                  return yield* failEnvironmentInvalidRequest("invalid_attachment");
+                }
+                return existingAttachment;
+              }
+              const previousPendingPath = resolveAttachmentPathById({
+                attachmentsDir: serverConfig.attachmentsDir,
+                attachmentId,
+              });
+              if (previousPendingPath && previousPendingPath !== destination) {
+                yield* fileSystem
+                  .remove(previousPendingPath, { force: true })
+                  .pipe(
+                    Effect.catch((cause) =>
+                      failEnvironmentInternal("orchestration_attachment_upload_failed", cause),
+                    ),
+                  );
               }
               const pending = yield* reclaimPendingAttachments({
                 snapshot,
                 targetThreadSegment,
+                replacementAttachmentId: attachmentId,
               }).pipe(
                 Effect.catch((cause) =>
                   failEnvironmentInternal("orchestration_attachment_upload_failed", cause),
@@ -258,9 +293,10 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
                 yield* fileSystem.remove(destination, { force: true }).pipe(Effect.ignore);
                 return yield* failEnvironmentInvalidRequest("invalid_attachment");
               }
+              return attachment;
             }),
           );
-          return attachment;
+          return persistedAttachment;
         }),
       )
       .handle(

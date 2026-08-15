@@ -15,6 +15,7 @@ export const uploadEnvironmentAttachment = Effect.fn(
 )(function* (input: {
   readonly prepared: PreparedConnection;
   readonly threadId: ThreadId;
+  readonly uploadId: string;
   readonly file: File;
 }) {
   const requestPath = `/api/orchestration/threads/${input.threadId}/attachments`;
@@ -28,6 +29,7 @@ export const uploadEnvironmentAttachment = Effect.fn(
     signer,
   );
   const payload = new FormData();
+  payload.append("uploadId", input.uploadId);
   payload.append("file", input.file, input.file.name);
 
   return yield* executeEnvironmentHttpRequest(

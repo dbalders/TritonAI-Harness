@@ -15,6 +15,7 @@ const SAFE_GENERIC_FILE_EXTENSION = /^\.[a-z0-9]{1,16}$/;
 const ATTACHMENT_ID_THREAD_SEGMENT_MAX_CHARS = 80;
 const ATTACHMENT_ID_THREAD_SEGMENT_PATTERN = "[a-z0-9_]+(?:-[a-z0-9_]+)*";
 const ATTACHMENT_ID_UUID_PATTERN = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+const ATTACHMENT_UPLOAD_ID_PATTERN = new RegExp(`^${ATTACHMENT_ID_UUID_PATTERN}$`, "i");
 const ATTACHMENT_ID_PATTERN = new RegExp(
   `^(${ATTACHMENT_ID_THREAD_SEGMENT_PATTERN})-(${ATTACHMENT_ID_UUID_PATTERN})$`,
   "i",
@@ -35,12 +36,16 @@ export function toSafeThreadAttachmentSegment(threadId: string): string | null {
   return segment;
 }
 
-export function createAttachmentId(threadId: string): string | null {
+export function createAttachmentId(
+  threadId: string,
+  uploadId: string = NodeCrypto.randomUUID(),
+): string | null {
   const threadSegment = toSafeThreadAttachmentSegment(threadId);
-  if (!threadSegment) {
+  const normalizedUploadId = uploadId.trim().toLowerCase();
+  if (!threadSegment || !ATTACHMENT_UPLOAD_ID_PATTERN.test(normalizedUploadId)) {
     return null;
   }
-  return `${threadSegment}-${NodeCrypto.randomUUID()}`;
+  return `${threadSegment}-${normalizedUploadId}`;
 }
 
 export function parseThreadSegmentFromAttachmentId(attachmentId: string): string | null {
