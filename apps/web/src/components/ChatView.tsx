@@ -4983,7 +4983,7 @@ function ChatViewContent(props: ChatViewProps) {
     }
 
     if (failure !== null) {
-      if (preparedConnection && uploadedAttachmentIdsForCleanup.length > 0) {
+      if (!turnStartAttempted && preparedConnection && uploadedAttachmentIdsForCleanup.length > 0) {
         await Promise.allSettled(
           uploadedAttachmentIdsForCleanup.map((attachmentId) =>
             runtime.runPromise(

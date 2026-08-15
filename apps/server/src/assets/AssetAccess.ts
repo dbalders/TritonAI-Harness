@@ -75,6 +75,12 @@ const AssetClaimsSchema = Schema.Union([
     version: Schema.Literal(1),
     kind: Schema.Literal("attachment"),
     attachmentId: Schema.String,
+    expiresAt: Schema.Number,
+  }),
+  Schema.Struct({
+    version: Schema.Literal(2),
+    kind: Schema.Literal("attachment"),
+    attachmentId: Schema.String,
     disposition: Schema.Literals(["inline", "attachment"]),
     fileName: Schema.String,
     expiresAt: Schema.Number,
@@ -273,7 +279,7 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
         });
       }
       claims = {
-        version: 1,
+        version: 2,
         kind: "attachment",
         attachmentId: input.resource.attachmentId,
         disposition: input.attachmentDisposition ?? "attachment",
@@ -396,6 +402,19 @@ export const resolveAsset = Effect.fn("AssetAccess.resolveAsset")(function* (
     );
     if (Option.isNone(info) || info.value.type !== "File") {
       return null;
+    }
+    if (claims.version === 1) {
+      const path = yield* Path.Path;
+      const decodedFileName = decodeRelativePath(relativePath);
+      const legacyFileName = path.basename(decodedFileName ?? attachmentPath);
+      return isWorkspaceImagePreviewPath(legacyFileName)
+        ? ({ kind: "file", path: attachmentPath } satisfies ResolvedAsset)
+        : ({
+            kind: "file",
+            path: attachmentPath,
+            disposition: "attachment",
+            downloadName: legacyFileName,
+          } satisfies ResolvedAsset);
     }
     return claims.disposition === "attachment"
       ? ({

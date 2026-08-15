@@ -2,12 +2,14 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ThreadId } from "@t3tools/contracts";
 import { PROJECT_FAVICON_FALLBACK_MARKER } from "@t3tools/shared/projectFavicon";
 import { describe, expect, it } from "@effect/vitest";
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 
+import { base64UrlEncode, signPayload } from "../auth/utils.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as ProjectFaviconResolver from "../project/ProjectFaviconResolver.ts";
@@ -229,6 +231,42 @@ describe("AssetAccess", () => {
       expect(
         yield* resolveAsset(suffix.slice(0, separatorIndex), suffix.slice(separatorIndex + 1)),
       ).toEqual({ kind: "file", path: attachmentPath });
+    }).pipe(Effect.provide(testLayer)),
+  );
+
+  it.effect("keeps legacy attachment capabilities valid without serving active files inline", () =>
+    Effect.gen(function* () {
+      const config = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const secretStore = yield* ServerSecretStore.ServerSecretStore;
+      const signingSecret = yield* secretStore.getOrCreateRandom("asset-access-signing-key", 32);
+      const expiresAt = (yield* Clock.currentTimeMillis) + 60_000;
+      const legacyToken = (attachmentId: string) => {
+        const encodedPayload = base64UrlEncode(
+          JSON.stringify({ version: 1, kind: "attachment", attachmentId, expiresAt }),
+        );
+        return `${encodedPayload}.${signPayload(encodedPayload, signingSecret)}`;
+      };
+
+      const imageAttachmentId = "thread-1-00000000-0000-4000-8000-000000000003";
+      const imagePath = path.join(config.attachmentsDir, `${imageAttachmentId}.png`);
+      const htmlAttachmentId = "thread-1-00000000-0000-4000-8000-000000000004";
+      const htmlPath = path.join(config.attachmentsDir, `${htmlAttachmentId}.html`);
+      yield* fileSystem.makeDirectory(config.attachmentsDir, { recursive: true });
+      yield* fileSystem.writeFile(imagePath, new Uint8Array([1, 2, 3]));
+      yield* fileSystem.writeFileString(htmlPath, "<script>alert('no')</script>");
+
+      expect(yield* resolveAsset(legacyToken(imageAttachmentId), "image.png")).toEqual({
+        kind: "file",
+        path: imagePath,
+      });
+      expect(yield* resolveAsset(legacyToken(htmlAttachmentId), "report.html")).toEqual({
+        kind: "file",
+        path: htmlPath,
+        disposition: "attachment",
+        downloadName: "report.html",
+      });
     }).pipe(Effect.provide(testLayer)),
   );
 

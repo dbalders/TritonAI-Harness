@@ -304,7 +304,9 @@ const EnvironmentOrchestrationThreadSnapshotErrors = [
 ] as const;
 const EnvironmentOrchestrationAttachmentDeleteErrors = [
   EnvironmentRequestInvalidError,
-  ...EnvironmentOrchestrationThreadSnapshotErrors,
+  EnvironmentScopeRequiredError,
+  EnvironmentResourceNotFoundError,
+  EnvironmentInternalError,
 ] as const;
 const EnvironmentOrchestrationDispatchErrors = [
   EnvironmentRequestInvalidError,
