@@ -13,7 +13,7 @@ import {
 
 import {
   createAttachmentId,
-  isAttachmentIdOwnedByThread,
+  isCanonicalAttachmentIdOwnedByThread,
   resolveAttachmentPath,
   resolveAttachmentPathById,
 } from "../attachmentStore.ts";
@@ -125,7 +125,7 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
       (attachment) =>
         Effect.gen(function* () {
           if (attachment.type === "file") {
-            if (!isAttachmentIdOwnedByThread(attachment.id, canonicalCommand.threadId)) {
+            if (!isCanonicalAttachmentIdOwnedByThread(attachment.id, canonicalCommand.threadId)) {
               return yield* new OrchestrationDispatchCommandError({
                 message: `File attachment '${attachment.name}' does not belong to this thread.`,
               });

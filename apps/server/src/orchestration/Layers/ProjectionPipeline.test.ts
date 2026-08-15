@@ -24,7 +24,6 @@ import {
   SqlitePersistenceMemory,
 } from "../../persistence/Layers/Sqlite.ts";
 import { OrchestrationEventStore } from "../../persistence/Services/OrchestrationEventStore.ts";
-import { ProjectionThreadMessageRepository } from "../../persistence/Services/ProjectionThreadMessages.ts";
 import * as RepositoryIdentityResolver from "../../project/RepositoryIdentityResolver.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import {
@@ -1010,10 +1009,10 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-atta
         const path = yield* Path.Path;
         const projectionPipeline = yield* OrchestrationProjectionPipeline;
         const eventStore = yield* OrchestrationEventStore;
-        const projectionThreadMessageRepository = yield* ProjectionThreadMessageRepository;
         const { attachmentsDir } = yield* ServerConfig;
         const now = "2026-01-01T00:00:00.000Z";
         const threadId = ThreadId.make("Thread Delete.Files");
+        const otherThreadId = ThreadId.make("Thread Delete.Files Extra");
         const attachmentId = createAttachmentId(threadId, "00000000-0000-4000-8000-000000000001")!;
         const otherThreadAttachmentId = createAttachmentId(
           "Thread Delete.Files Extra",
@@ -1021,6 +1020,10 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-atta
         )!;
         const legacyAttachmentId = "thread-delete-files-00000000-0000-4000-8000-000000000003";
         const sharedLegacyAttachmentId = "thread-delete-files-00000000-0000-4000-8000-000000000004";
+        const pendingAttachmentId = createAttachmentId(
+          threadId,
+          "00000000-0000-4000-8000-000000000005",
+        )!;
 
         const appendAndProject = (event: Parameters<typeof eventStore.append>[0]) =>
           eventStore
@@ -1119,24 +1122,61 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-atta
           },
         });
 
-        yield* projectionThreadMessageRepository.upsert({
-          messageId: MessageId.make("message-delete-files-other-thread"),
-          threadId: ThreadId.make("Thread Delete.Files Extra"),
-          turnId: null,
-          role: "user",
-          text: "Keep shared attachment",
-          attachments: [
-            {
-              type: "image",
-              id: sharedLegacyAttachmentId,
-              name: "shared.png",
-              mimeType: "image/png",
-              sizeBytes: 5,
+        yield* appendAndProject({
+          type: "thread.created",
+          eventId: EventId.make("evt-delete-files-other-thread-created"),
+          aggregateKind: "thread",
+          aggregateId: otherThreadId,
+          occurredAt: now,
+          commandId: CommandId.make("cmd-delete-files-other-thread-created"),
+          causationEventId: null,
+          correlationId: CorrelationId.make("cmd-delete-files-other-thread-created"),
+          metadata: {},
+          payload: {
+            threadId: otherThreadId,
+            projectId: ProjectId.make("project-delete-files"),
+            title: "Thread Delete Files Extra",
+            modelSelection: {
+              instanceId: ProviderInstanceId.make("codex"),
+              model: "gpt-5-codex",
             },
-          ],
-          isStreaming: false,
-          createdAt: now,
-          updatedAt: now,
+            runtimeMode: "full-access",
+            branch: null,
+            worktreePath: null,
+            createdAt: now,
+            updatedAt: now,
+          },
+        });
+
+        yield* appendAndProject({
+          type: "thread.message-sent",
+          eventId: EventId.make("evt-delete-files-other-thread-message"),
+          aggregateKind: "thread",
+          aggregateId: otherThreadId,
+          occurredAt: now,
+          commandId: CommandId.make("cmd-delete-files-other-thread-message"),
+          causationEventId: null,
+          correlationId: CorrelationId.make("cmd-delete-files-other-thread-message"),
+          metadata: {},
+          payload: {
+            threadId: otherThreadId,
+            messageId: MessageId.make("message-delete-files-other-thread"),
+            role: "user",
+            text: "Keep shared attachment",
+            attachments: [
+              {
+                type: "image",
+                id: sharedLegacyAttachmentId,
+                name: "shared.png",
+                mimeType: "image/png",
+                sizeBytes: 5,
+              },
+            ],
+            turnId: null,
+            streaming: false,
+            createdAt: now,
+            updatedAt: now,
+          },
         });
 
         const threadAttachmentPath = path.join(attachmentsDir, `${attachmentId}.png`);
@@ -1149,15 +1189,18 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-atta
           attachmentsDir,
           `${sharedLegacyAttachmentId}.png`,
         );
+        const pendingAttachmentPath = path.join(attachmentsDir, `${pendingAttachmentId}.txt`);
         yield* fileSystem.makeDirectory(attachmentsDir, { recursive: true });
         yield* fileSystem.writeFileString(threadAttachmentPath, "delete");
         yield* fileSystem.writeFileString(otherThreadAttachmentPath, "other-thread");
         yield* fileSystem.writeFileString(legacyAttachmentPath, "legacy");
         yield* fileSystem.writeFileString(sharedLegacyAttachmentPath, "shared");
+        yield* fileSystem.writeFileString(pendingAttachmentPath, "pending");
         assert.isTrue(yield* exists(threadAttachmentPath));
         assert.isTrue(yield* exists(otherThreadAttachmentPath));
         assert.isTrue(yield* exists(legacyAttachmentPath));
         assert.isTrue(yield* exists(sharedLegacyAttachmentPath));
+        assert.isTrue(yield* exists(pendingAttachmentPath));
 
         yield* appendAndProject({
           type: "thread.deleted",
@@ -1179,6 +1222,25 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-atta
         assert.isTrue(yield* exists(otherThreadAttachmentPath));
         assert.isFalse(yield* exists(legacyAttachmentPath));
         assert.isTrue(yield* exists(sharedLegacyAttachmentPath));
+        assert.isFalse(yield* exists(pendingAttachmentPath));
+
+        yield* appendAndProject({
+          type: "thread.deleted",
+          eventId: EventId.make("evt-delete-files-other-thread-deleted"),
+          aggregateKind: "thread",
+          aggregateId: otherThreadId,
+          occurredAt: now,
+          commandId: CommandId.make("cmd-delete-files-other-thread-deleted"),
+          causationEventId: null,
+          correlationId: CorrelationId.make("cmd-delete-files-other-thread-deleted"),
+          metadata: {},
+          payload: {
+            threadId: otherThreadId,
+            deletedAt: now,
+          },
+        });
+
+        assert.isFalse(yield* exists(sharedLegacyAttachmentPath));
       }),
     );
   },

@@ -349,6 +349,7 @@ const ATTACHMENT_ONLY_BOOTSTRAP_PROMPT =
 const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
 const EMPTY_PROVIDERS: ServerProvider[] = [];
 const EMPTY_PROVIDER_SKILLS: ServerProvider["skills"] = [];
+const EMPTY_COMPOSER_FILES: ReadonlyArray<ComposerFileAttachment> = [];
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
 function useDraftHeroLayoutTransition(isDraftHeroState: boolean) {
   const transitionGroupRef = useRef<HTMLDivElement | null>(null);
@@ -1366,7 +1367,7 @@ function ChatViewContent(props: ChatViewProps) {
     (store) => store.getComposerDraft(composerDraftTarget)?.activeProvider ?? null,
   );
   const composerFiles = useComposerDraftStore(
-    (store) => store.getComposerDraft(composerDraftTarget)?.files ?? [],
+    (store) => store.getComposerDraft(composerDraftTarget)?.files ?? EMPTY_COMPOSER_FILES,
   );
   const setComposerDraftPrompt = useComposerDraftStore((store) => store.setPrompt);
   const setComposerDraftFiles = useComposerDraftStore((store) => store.setFiles);
@@ -4272,6 +4273,7 @@ function ChatViewContent(props: ChatViewProps) {
       draft &&
       (draft.prompt.trim().length > 0 ||
         draft.images.length > 0 ||
+        draft.files.length > 0 ||
         draft.terminalContexts.length > 0 ||
         draft.elementContexts.length > 0 ||
         draft.previewAnnotations.length > 0 ||

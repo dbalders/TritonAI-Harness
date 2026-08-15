@@ -1985,7 +1985,20 @@ const makeWsRpcLayer = (
                       .flatMap((message) => message.attachments ?? [])
                       .filter((candidate) => candidate.id === resource.attachmentId),
                   );
-                  attachment = matches.length === 1 ? matches[0] : undefined;
+                  const distinctMatches = new Map(
+                    matches.map((candidate) => [
+                      JSON.stringify([
+                        candidate.type,
+                        candidate.id,
+                        candidate.name,
+                        candidate.mimeType,
+                        candidate.sizeBytes,
+                      ]),
+                      candidate,
+                    ]),
+                  );
+                  attachment =
+                    distinctMatches.size === 1 ? distinctMatches.values().next().value : undefined;
                 }
                 if (!attachment) {
                   return yield* new AssetAttachmentNotFoundError({
