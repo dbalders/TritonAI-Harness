@@ -25,7 +25,10 @@ import {
   connectionStatusTitle,
   type EnvironmentConnectionPresentation,
 } from "@t3tools/client-runtime/connection";
-import { uploadEnvironmentAttachment } from "@t3tools/client-runtime/state/attachments";
+import {
+  deleteEnvironmentAttachment,
+  uploadEnvironmentAttachment,
+} from "@t3tools/client-runtime/state/attachments";
 import { effectiveSettled, effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
 import {
   parseScopedThreadKey,
@@ -316,8 +319,8 @@ import {
 } from "../versionSkew";
 import { useAssetUrls } from "../assets/assetUrls";
 
-const IMAGE_ONLY_BOOTSTRAP_PROMPT =
-  "[User attached one or more images without additional text. Respond using the conversation context and the attached image(s).]";
+const ATTACHMENT_ONLY_BOOTSTRAP_PROMPT =
+  "[User attached one or more files without additional text. Inspect the attached files and respond using the conversation context.]";
 const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
 const EMPTY_PROVIDERS: ServerProvider[] = [];
 const EMPTY_PROVIDER_SKILLS: ServerProvider["skills"] = [];
@@ -2215,33 +2218,36 @@ function ChatViewContent(props: ChatViewProps) {
     });
   }, []);
   const serverMessages = activeThread?.messages;
-  const serverAttachmentIds = useMemo(() => {
+  const serverAttachmentResources = useMemo(() => {
     const attachmentIds = new Set<string>();
+    const resources: Array<{
+      readonly _tag: "attachment";
+      readonly threadId: ThreadId;
+      readonly attachmentId: string;
+    }> = [];
     for (const message of serverMessages ?? []) {
       for (const attachment of message.attachments ?? []) {
+        if (attachmentIds.has(attachment.id)) continue;
         attachmentIds.add(attachment.id);
+        resources.push({
+          _tag: "attachment",
+          threadId,
+          attachmentId: attachment.id,
+        });
       }
     }
-    return [...attachmentIds];
-  }, [serverMessages]);
-  const serverAttachmentResources = useMemo(
-    () =>
-      serverAttachmentIds.map((attachmentId) => ({
-        _tag: "attachment" as const,
-        attachmentId,
-      })),
-    [serverAttachmentIds],
-  );
+    return resources;
+  }, [serverMessages, threadId]);
   const serverAttachmentUrls = useAssetUrls(environmentId, serverAttachmentResources);
   const serverAttachmentUrlById = useMemo(
     () =>
       new Map(
-        serverAttachmentIds.flatMap((attachmentId, index) => {
+        serverAttachmentResources.flatMap((resource, index) => {
           const url = serverAttachmentUrls[index];
-          return url ? [[attachmentId, url] as const] : [];
+          return url ? [[resource.attachmentId, url] as const] : [];
         }),
       ),
-    [serverAttachmentIds, serverAttachmentUrls],
+    [serverAttachmentResources, serverAttachmentUrls],
   );
   const displayServerMessages = useMemo<ReadonlyArray<ChatMessage>>(() => {
     if (!serverMessages) return [];
@@ -4733,31 +4739,37 @@ function ChatViewContent(props: ChatViewProps) {
       model: ctxSelectedModel,
       models: ctxSelectedProviderModels,
       effort: ctxSelectedPromptEffort,
-      text: messageTextForSend || IMAGE_ONLY_BOOTSTRAP_PROMPT,
+      text: messageTextForSend || ATTACHMENT_ONLY_BOOTSTRAP_PROMPT,
     });
     const preparedConnection = readPreparedConnection(environmentId);
-    const resolveTurnAttachments = () =>
-      Promise.all([
-        ...composerImagesSnapshot.map(async (image) => ({
+    const uploadedAttachmentIdsForCleanup: string[] = [];
+    const resolveTurnAttachments = async () => {
+      const images = await Promise.all(
+        composerImagesSnapshot.map(async (image) => ({
           type: "image" as const,
           name: image.name,
           mimeType: image.mimeType,
           sizeBytes: image.sizeBytes,
           dataUrl: await readFileAsDataUrl(image.file),
         })),
-        ...composerFilesSnapshot.map(async (attachment) => {
-          if (!preparedConnection) {
-            throw new Error("The environment connection is not ready for file uploads.");
-          }
-          return runtime.runPromise(
-            uploadEnvironmentAttachment({
-              prepared: preparedConnection,
-              threadId: threadIdForSend,
-              file: attachment.file,
-            }),
-          );
-        }),
-      ]);
+      );
+      const files = [];
+      for (const attachment of composerFilesSnapshot) {
+        if (!preparedConnection) {
+          throw new Error("The environment connection is not ready for file uploads.");
+        }
+        const uploaded = await runtime.runPromise(
+          uploadEnvironmentAttachment({
+            prepared: preparedConnection,
+            threadId: threadIdForSend,
+            file: attachment.file,
+          }),
+        );
+        uploadedAttachmentIdsForCleanup.push(uploaded.id);
+        files.push(uploaded);
+      }
+      return [...images, ...files];
+    };
     const optimisticAttachments = [
       ...composerImagesSnapshot.map((image) => ({
         type: "image" as const,
@@ -4851,6 +4863,28 @@ function ChatViewContent(props: ChatViewProps) {
     );
 
     let failure: AtomCommandResult<unknown, unknown> | null = null;
+    let createdThreadForFileUpload = false;
+    if (isLocalDraftThread && composerFilesSnapshot.length > 0) {
+      const createResult = await createThread({
+        environmentId,
+        input: {
+          threadId: threadIdForSend,
+          projectId: activeProject.id,
+          title,
+          modelSelection: threadCreateModelSelection,
+          runtimeMode,
+          interactionMode,
+          branch: activeThreadBranch,
+          worktreePath: activeThread.worktreePath,
+          createdAt: activeThread.createdAt,
+        },
+      });
+      if (createResult._tag === "Failure") {
+        failure = createResult;
+      } else {
+        createdThreadForFileUpload = true;
+      }
+    }
     // Auto-title from first message
     if (isFirstMessage && isServerThread) {
       const titleResult = await updateThreadMetadata({
@@ -4887,12 +4921,14 @@ function ChatViewContent(props: ChatViewProps) {
       failure = turnAttachmentsResult;
     }
 
+    let turnStartAttempted = false;
     let turnStartSucceeded = false;
     if (failure === null && turnAttachmentsResult?._tag === "Success") {
+      const shouldBootstrapCreateThread = isLocalDraftThread && !createdThreadForFileUpload;
       const bootstrap =
-        isLocalDraftThread || baseBranchForWorktree
+        shouldBootstrapCreateThread || baseBranchForWorktree
           ? {
-              ...(isLocalDraftThread
+              ...(shouldBootstrapCreateThread
                 ? {
                     createThread: {
                       projectId: activeProject.id,
@@ -4920,6 +4956,7 @@ function ChatViewContent(props: ChatViewProps) {
             }
           : undefined;
       beginLocalDispatch({ preparingWorktree: false });
+      turnStartAttempted = true;
       const startResult = await startThreadTurn({
         environmentId,
         input: {
@@ -4946,6 +4983,33 @@ function ChatViewContent(props: ChatViewProps) {
     }
 
     if (failure !== null) {
+      if (preparedConnection && uploadedAttachmentIdsForCleanup.length > 0) {
+        await Promise.allSettled(
+          uploadedAttachmentIdsForCleanup.map((attachmentId) =>
+            runtime.runPromise(
+              deleteEnvironmentAttachment({
+                prepared: preparedConnection,
+                threadId: threadIdForSend,
+                attachmentId,
+              }),
+            ),
+          ),
+        );
+      }
+      if (createdThreadForFileUpload && !turnStartAttempted) {
+        const cleanupResult = await deleteThread({
+          environmentId,
+          input: {
+            threadId: threadIdForSend,
+          },
+        });
+        if (cleanupResult._tag === "Failure" && !isAtomCommandInterrupted(cleanupResult)) {
+          console.warn(
+            "Failed to clean up thread after attachment send failure.",
+            squashAtomCommandFailure(cleanupResult),
+          );
+        }
+      }
       if (
         promptRef.current.length === 0 &&
         composerImagesRef.current.length === 0 &&

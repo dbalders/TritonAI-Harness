@@ -9,6 +9,9 @@ environment and stored with the thread. The agent receives the file's local path
 tools to use to inspect it. This keeps PDFs, documents, spreadsheets, archives, source files, and
 future formats on one path-backed attachment system instead of extracting every format in the UI.
 
+Uploads are scoped to an existing thread and reclaimed if the send fails before the file is used.
+Regular files are served back as downloads; only validated image attachments can render inline.
+
 File contents are not automatically pasted into the prompt. Treat an attachment like a local file
 you handed to the agent: ask it to read, summarize, compare, convert, or otherwise work with it.
 

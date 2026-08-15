@@ -21,7 +21,13 @@ import {
 } from "../auth/http.ts";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
-import { createAttachmentId, resolveAttachmentPath } from "../attachmentStore.ts";
+import {
+  createAttachmentId,
+  parseThreadSegmentFromAttachmentId,
+  resolveAttachmentPath,
+  resolveAttachmentPathById,
+  toSafeThreadAttachmentSegment,
+} from "../attachmentStore.ts";
 import { ServerConfig } from "../config.ts";
 
 export const orchestrationHttpApiLayer = HttpApiBuilder.group(
@@ -87,6 +93,17 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
           yield* annotateEnvironmentRequest(args.endpoint.name);
           yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
 
+          const thread = yield* projectionSnapshotQuery
+            .getThreadShellById(args.params.threadId)
+            .pipe(
+              Effect.catch((cause) =>
+                failEnvironmentInternal("orchestration_thread_snapshot_failed", cause),
+              ),
+            );
+          if (Option.isNone(thread)) {
+            return yield* failEnvironmentNotFound("thread_not_found");
+          }
+
           const source = args.payload.file;
           const fileInfo = yield* fileSystem
             .stat(source.path)
@@ -137,7 +154,68 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
               failEnvironmentInternal("orchestration_attachment_upload_failed", cause),
             ),
           );
+          const persistedInfo = yield* fileSystem
+            .stat(destination)
+            .pipe(
+              Effect.catch((cause) =>
+                failEnvironmentInternal("orchestration_attachment_upload_failed", cause),
+              ),
+            );
+          if (persistedInfo.type !== "File" || Number(persistedInfo.size) !== sizeBytes) {
+            yield* fileSystem.remove(destination, { force: true }).pipe(Effect.ignore);
+            return yield* failEnvironmentInvalidRequest("invalid_attachment");
+          }
           return attachment;
+        }),
+      )
+      .handle(
+        "deleteAttachment",
+        Effect.fn("environment.orchestration.deleteAttachment")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
+
+          const thread = yield* projectionSnapshotQuery
+            .getThreadDetailById(args.params.threadId)
+            .pipe(
+              Effect.catch((cause) =>
+                failEnvironmentInternal("orchestration_thread_snapshot_failed", cause),
+              ),
+            );
+          if (Option.isNone(thread)) {
+            return yield* failEnvironmentNotFound("thread_not_found");
+          }
+
+          const expectedThreadSegment = toSafeThreadAttachmentSegment(args.params.threadId);
+          const attachmentThreadSegment = parseThreadSegmentFromAttachmentId(
+            args.params.attachmentId,
+          );
+          if (!expectedThreadSegment || attachmentThreadSegment !== expectedThreadSegment) {
+            return yield* failEnvironmentInvalidRequest("invalid_attachment");
+          }
+          const referenced = thread.value.messages.some((message) =>
+            (message.attachments ?? []).some(
+              (attachment) => attachment.id === args.params.attachmentId,
+            ),
+          );
+          if (referenced) {
+            return yield* failEnvironmentInvalidRequest("invalid_attachment");
+          }
+
+          const attachmentPath = resolveAttachmentPathById({
+            attachmentsDir: serverConfig.attachmentsDir,
+            attachmentId: args.params.attachmentId,
+          });
+          if (!attachmentPath) {
+            return { attachmentId: args.params.attachmentId, deleted: false };
+          }
+          yield* fileSystem
+            .remove(attachmentPath, { force: true })
+            .pipe(
+              Effect.catch((cause) =>
+                failEnvironmentInternal("orchestration_attachment_delete_failed", cause),
+              ),
+            );
+          return { attachmentId: args.params.attachmentId, deleted: true };
         }),
       )
       .handle(

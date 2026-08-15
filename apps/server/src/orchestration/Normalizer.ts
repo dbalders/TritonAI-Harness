@@ -229,6 +229,16 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
       { concurrency: 1 },
     );
 
+    const normalizedTotalAttachmentBytes = normalizedAttachments.reduce(
+      (total, attachment) => total + attachment.sizeBytes,
+      0,
+    );
+    if (normalizedTotalAttachmentBytes > PROVIDER_SEND_TURN_MAX_TOTAL_ATTACHMENT_BYTES) {
+      return yield* new OrchestrationDispatchCommandError({
+        message: "The combined attachment size exceeds the 50 MiB turn limit.",
+      });
+    }
+
     return {
       ...canonicalCommand,
       message: {

@@ -1,7 +1,7 @@
 import { expect, it } from "@effect/vitest";
 import { describe } from "vite-plus/test";
 
-import { isLoopbackHostname, resolveDevRedirectUrl } from "./http.ts";
+import { contentDispositionAttachment, isLoopbackHostname, resolveDevRedirectUrl } from "./http.ts";
 
 describe("http dev routing", () => {
   it("treats localhost and loopback addresses as local", () => {
@@ -23,6 +23,14 @@ describe("http dev routing", () => {
 
     expect(resolveDevRedirectUrl(devUrl, requestUrl)).toBe(
       "http://127.0.0.1:5173/pair?token=test-token",
+    );
+  });
+});
+
+describe("attachment responses", () => {
+  it("preserves Unicode filenames without allowing header injection", () => {
+    expect(contentDispositionAttachment('résumé\r\n".pdf')).toBe(
+      "attachment; filename=\"r_sum____.pdf\"; filename*=UTF-8''r%C3%A9sum%C3%A9%0D%0A%22.pdf",
     );
   });
 });

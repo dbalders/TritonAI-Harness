@@ -193,7 +193,8 @@ describe("AssetAccess", () => {
       yield* fileSystem.writeFile(attachmentPath, new Uint8Array([1, 2, 3]));
 
       const result = yield* issueAssetUrl({
-        resource: { _tag: "attachment", attachmentId },
+        resource: { _tag: "attachment", threadId: ThreadId.make("thread-1"), attachmentId },
+        attachmentFileName: "quarterly report.pdf",
       });
       const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
       const separatorIndex = suffix.indexOf("/");
@@ -202,7 +203,32 @@ describe("AssetAccess", () => {
       expect(yield* resolveAsset(token, "ignored.png")).toEqual({
         kind: "file",
         path: attachmentPath,
+        disposition: "attachment",
+        downloadName: "quarterly report.pdf",
       });
+    }).pipe(Effect.provide(testLayer)),
+  );
+
+  it.effect("keeps validated image attachment capabilities inline", () =>
+    Effect.gen(function* () {
+      const config = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const attachmentId = "thread-1-00000000-0000-4000-8000-000000000002";
+      const attachmentPath = path.join(config.attachmentsDir, `${attachmentId}.png`);
+      yield* fileSystem.makeDirectory(config.attachmentsDir, { recursive: true });
+      yield* fileSystem.writeFile(attachmentPath, new Uint8Array([1, 2, 3]));
+
+      const result = yield* issueAssetUrl({
+        resource: { _tag: "attachment", threadId: ThreadId.make("thread-1"), attachmentId },
+        attachmentDisposition: "inline",
+      });
+      const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+      const separatorIndex = suffix.indexOf("/");
+
+      expect(
+        yield* resolveAsset(suffix.slice(0, separatorIndex), suffix.slice(separatorIndex + 1)),
+      ).toEqual({ kind: "file", path: attachmentPath });
     }).pipe(Effect.provide(testLayer)),
   );
 

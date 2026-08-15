@@ -45,6 +45,7 @@ import {
   FilesystemBrowseError,
   AssetWorkspaceContextNotFoundError,
   AssetWorkspaceContextResolutionError,
+  AssetAttachmentNotFoundError,
   RpcClientId,
   EnvironmentAuthorizationError,
   ThreadId,
@@ -1842,8 +1843,40 @@ const makeWsRpcLayer = (
           observeRpcEffect(
             WS_METHODS.assetsCreateUrl,
             Effect.gen(function* () {
-              if (input.resource._tag !== "workspace-file") {
+              if (input.resource._tag === "project-favicon") {
                 return yield* issueAssetUrl({ resource: input.resource });
+              }
+              if (input.resource._tag === "attachment") {
+                const resource = input.resource;
+                const thread = yield* projectionSnapshotQuery
+                  .getThreadDetailById(resource.threadId)
+                  .pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new AssetWorkspaceContextResolutionError({
+                          resource,
+                          cause,
+                        }),
+                    ),
+                  );
+                if (Option.isNone(thread)) {
+                  return yield* new AssetWorkspaceContextNotFoundError({
+                    resource,
+                  });
+                }
+                const attachment = thread.value.messages
+                  .flatMap((message) => message.attachments ?? [])
+                  .find((candidate) => candidate.id === resource.attachmentId);
+                if (!attachment) {
+                  return yield* new AssetAttachmentNotFoundError({
+                    resource,
+                  });
+                }
+                return yield* issueAssetUrl({
+                  resource,
+                  attachmentDisposition: attachment.type === "image" ? "inline" : "attachment",
+                  attachmentFileName: attachment.name,
+                });
               }
               const thread = yield* projectionSnapshotQuery
                 .getThreadShellById(input.resource.threadId)

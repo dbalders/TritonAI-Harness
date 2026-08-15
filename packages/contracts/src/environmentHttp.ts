@@ -90,6 +90,7 @@ export const EnvironmentInternalErrorReason = Schema.Literals([
   "orchestration_thread_snapshot_failed",
   "orchestration_dispatch_failed",
   "orchestration_attachment_upload_failed",
+  "orchestration_attachment_delete_failed",
   "internal_error",
 ]);
 export type EnvironmentInternalErrorReason = typeof EnvironmentInternalErrorReason.Type;
@@ -301,10 +302,18 @@ const EnvironmentOrchestrationThreadSnapshotErrors = [
   EnvironmentResourceNotFoundError,
   EnvironmentInternalError,
 ] as const;
+const EnvironmentOrchestrationAttachmentDeleteErrors = [
+  EnvironmentRequestInvalidError,
+  ...EnvironmentOrchestrationThreadSnapshotErrors,
+] as const;
 const EnvironmentOrchestrationDispatchErrors = [
   EnvironmentRequestInvalidError,
   EnvironmentScopeRequiredError,
   EnvironmentInternalError,
+] as const;
+const EnvironmentOrchestrationAttachmentUploadErrors = [
+  EnvironmentResourceNotFoundError,
+  ...EnvironmentOrchestrationDispatchErrors,
 ] as const;
 
 export interface EnvironmentSessionPrincipalShape {
@@ -463,6 +472,11 @@ const EnvironmentOrchestrationThreadSnapshotParams = Schema.Struct({
   threadId: ThreadId,
 });
 
+const EnvironmentOrchestrationAttachmentParams = Schema.Struct({
+  threadId: ThreadId,
+  attachmentId: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
+});
+
 export const EnvironmentOrchestrationAttachmentUpload = Schema.Struct({
   file: Multipart.SingleFileSchema,
 }).pipe(
@@ -473,6 +487,11 @@ export const EnvironmentOrchestrationAttachmentUpload = Schema.Struct({
     maxTotalSize: PROVIDER_SEND_TURN_MAX_FILE_BYTES + 64 * 1024,
   }),
 );
+
+export const EnvironmentOrchestrationAttachmentDeleteResult = Schema.Struct({
+  attachmentId: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
+  deleted: Schema.Boolean,
+});
 
 export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestration")
   .add(
@@ -503,8 +522,20 @@ export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestr
       params: EnvironmentOrchestrationThreadSnapshotParams,
       payload: EnvironmentOrchestrationAttachmentUpload,
       success: ChatFileAttachment,
-      error: EnvironmentOrchestrationDispatchErrors,
+      error: EnvironmentOrchestrationAttachmentUploadErrors,
     }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.delete(
+      "deleteAttachment",
+      "/api/orchestration/threads/:threadId/attachments/:attachmentId",
+      {
+        headers: OptionalBearerHeaders,
+        params: EnvironmentOrchestrationAttachmentParams,
+        success: EnvironmentOrchestrationAttachmentDeleteResult,
+        error: EnvironmentOrchestrationAttachmentDeleteErrors,
+      },
+    ).middleware(EnvironmentAuthenticatedAuth),
   )
   .add(
     HttpApiEndpoint.post("dispatch", "/api/orchestration/dispatch", {

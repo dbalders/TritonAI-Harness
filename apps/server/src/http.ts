@@ -46,6 +46,19 @@ const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1", "localhost"]);
 const DESKTOP_RENDERER_ORIGINS = ["t3code://app", "t3code-dev://app"];
 const GZIP_MIN_BYTES = 1024;
 
+export function contentDispositionAttachment(fileName: string): string {
+  const fallback =
+    fileName
+      .replace(/[^\x20-\x7e]|["\\]/g, "_")
+      .trim()
+      .slice(0, 255) || "attachment";
+  const encoded = encodeURIComponent(fileName).replace(
+    /[!'()*]/g,
+    (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+  return `attachment; filename="${fallback}"; filename*=UTF-8''${encoded}`;
+}
+
 function acceptsGzip(value: string | undefined): boolean {
   if (!value) return false;
 
@@ -274,6 +287,14 @@ export const assetRouteLayer = HttpRouter.add(
       status: 200,
       headers: {
         "Cache-Control": "private, max-age=3600",
+        ...(asset.disposition === "attachment"
+          ? {
+              "Content-Disposition": contentDispositionAttachment(
+                asset.downloadName ?? "attachment",
+              ),
+              "Content-Type": "application/octet-stream",
+            }
+          : {}),
         "X-Content-Type-Options": "nosniff",
       },
     }).pipe(

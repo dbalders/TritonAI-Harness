@@ -75,6 +75,8 @@ const AssetClaimsSchema = Schema.Union([
     version: Schema.Literal(1),
     kind: Schema.Literal("attachment"),
     attachmentId: Schema.String,
+    disposition: Schema.Literals(["inline", "attachment"]),
+    fileName: Schema.String,
     expiresAt: Schema.Number,
   }),
   Schema.Struct({
@@ -91,7 +93,12 @@ const AssetClaimsJson = Schema.fromJsonString(AssetClaimsSchema);
 const decodeAssetClaims = Schema.decodeUnknownOption(AssetClaimsJson);
 const encodeAssetClaims = Schema.encodeSync(AssetClaimsJson);
 
-export type ResolvedAsset = { readonly kind: "file"; readonly path: string };
+export type ResolvedAsset = {
+  readonly kind: "file";
+  readonly path: string;
+  readonly disposition?: "attachment";
+  readonly downloadName?: string;
+};
 
 function decodeClaims(encodedPayload: string): AssetClaims | null {
   try {
@@ -165,6 +172,8 @@ const resolveCanonicalWorkspaceFileForRequest = (input: {
 export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (input: {
   readonly resource: AssetResource;
   readonly workspaceRoot?: string;
+  readonly attachmentDisposition?: "inline" | "attachment";
+  readonly attachmentFileName?: string;
 }) {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -267,9 +276,11 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
         version: 1,
         kind: "attachment",
         attachmentId: input.resource.attachmentId,
+        disposition: input.attachmentDisposition ?? "attachment",
+        fileName: input.attachmentFileName ?? path.basename(attachmentPath),
         expiresAt,
       };
-      fileName = path.basename(attachmentPath);
+      fileName = claims.fileName;
       break;
     }
     case "project-favicon": {
@@ -383,9 +394,17 @@ export const resolveAsset = Effect.fn("AssetAccess.resolveAsset")(function* (
       ),
       Effect.orElseSucceed(() => Option.none()),
     );
-    return Option.isSome(info) && info.value.type === "File"
-      ? ({ kind: "file", path: attachmentPath } satisfies ResolvedAsset)
-      : null;
+    if (Option.isNone(info) || info.value.type !== "File") {
+      return null;
+    }
+    return claims.disposition === "attachment"
+      ? ({
+          kind: "file",
+          path: attachmentPath,
+          disposition: "attachment",
+          downloadName: claims.fileName,
+        } satisfies ResolvedAsset)
+      : ({ kind: "file", path: attachmentPath } satisfies ResolvedAsset);
   }
 
   if (claims.kind === "project-favicon") {

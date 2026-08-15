@@ -8,6 +8,7 @@ import { executeEnvironmentHttpRequest, makeEnvironmentHttpApiClient } from "../
 import { buildEnvironmentAuthHeaders, withEnvironmentCredentials } from "./environmentHttpAuth.ts";
 
 const ATTACHMENT_UPLOAD_TIMEOUT_MS = 120_000;
+const ATTACHMENT_DELETE_TIMEOUT_MS = 30_000;
 
 export const uploadEnvironmentAttachment = Effect.fn(
   "clientRuntime.state.uploadEnvironmentAttachment",
@@ -38,6 +39,37 @@ export const uploadEnvironmentAttachment = Effect.fn(
         params: { threadId: input.threadId },
         headers,
         payload,
+      }),
+    ),
+  );
+});
+
+export const deleteEnvironmentAttachment = Effect.fn(
+  "clientRuntime.state.deleteEnvironmentAttachment",
+)(function* (input: {
+  readonly prepared: PreparedConnection;
+  readonly threadId: ThreadId;
+  readonly attachmentId: string;
+}) {
+  const requestPath = `/api/orchestration/threads/${input.threadId}/attachments/${encodeURIComponent(input.attachmentId)}`;
+  const requestUrl = environmentEndpointUrl(input.prepared.httpBaseUrl, requestPath);
+  const client = yield* makeEnvironmentHttpApiClient(input.prepared.httpBaseUrl);
+  const signer = yield* Effect.serviceOption(ManagedRelayDpopSigner);
+  const headers = yield* buildEnvironmentAuthHeaders(
+    input.prepared.httpAuthorization,
+    "DELETE",
+    requestUrl,
+    signer,
+  );
+
+  return yield* executeEnvironmentHttpRequest(
+    requestUrl,
+    ATTACHMENT_DELETE_TIMEOUT_MS,
+    withEnvironmentCredentials(
+      input.prepared.httpAuthorization,
+      client.orchestration.deleteAttachment({
+        params: { threadId: input.threadId, attachmentId: input.attachmentId },
+        headers,
       }),
     ),
   );
