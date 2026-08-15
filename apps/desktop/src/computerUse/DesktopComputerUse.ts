@@ -42,7 +42,7 @@ export function resolveCuaDriverBinaryPath(
   configuredPath: string | undefined = process.env[CUA_DRIVER_PATH_ENV],
 ): string {
   const override = configuredPath?.trim();
-  if (override) return environment.path.resolve(override);
+  if (override && !environment.isPackaged) return environment.path.resolve(override);
   const executableName = environment.platform === "win32" ? "cua-driver.exe" : "cua-driver";
   return environment.path.join(environment.resourcesPath, "cua-driver", executableName);
 }
