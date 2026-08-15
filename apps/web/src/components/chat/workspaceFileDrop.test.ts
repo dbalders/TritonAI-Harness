@@ -65,8 +65,8 @@ describe("makeWorkspaceFileDropHandlers", () => {
     expect(setDragActive).not.toHaveBeenCalled();
   });
 
-  it("adds dropped files and clears the active state", () => {
-    const file = new File(["image"], "example.png", { type: "image/png" });
+  it("adds dropped non-image files and clears the active state", () => {
+    const file = new File(["document"], "example.pdf", { type: "application/pdf" });
     const { host, setDragActive, addFiles } = makeHost();
     const { event } = makeDragEvent({ files: [file] });
 

@@ -2797,69 +2797,81 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   ]);
 
   // ------------------------------------------------------------------
-  // Callbacks: images
+  // Callbacks: attachments
   // ------------------------------------------------------------------
-  const addComposerAttachments = (files: File[]) => {
-    if (!activeThreadId || files.length === 0) return;
-    if (pendingUserInputs.length > 0) {
-      toastManager.add({
-        type: "error",
-        title: "Attach files after answering plan questions.",
-      });
-      return;
-    }
-    const nextImages: ComposerImageAttachment[] = [];
-    const nextFiles = [...composerFilesRef.current];
-    let attachmentCount = composerImagesRef.current.length + nextFiles.length;
-    let totalBytes = [...composerImagesRef.current, ...composerFilesRef.current].reduce(
-      (total, attachment) => total + attachment.file.size,
-      0,
-    );
-    let error: string | null = null;
-    for (const file of files) {
-      if (attachmentCount >= PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {
-        error = `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} files per message.`;
-        break;
-      }
-      const isImage = file.type.startsWith("image/");
-      const sizeLimit = isImage
-        ? PROVIDER_SEND_TURN_MAX_IMAGE_BYTES
-        : PROVIDER_SEND_TURN_MAX_FILE_BYTES;
-      const sizeLimitLabel = isImage ? IMAGE_SIZE_LIMIT_LABEL : FILE_SIZE_LIMIT_LABEL;
-      if (file.size === 0 || file.size > sizeLimit) {
-        error = `'${file.name}' is empty or exceeds the ${sizeLimitLabel} attachment limit.`;
-        continue;
-      }
-      if (totalBytes + file.size > PROVIDER_SEND_TURN_MAX_TOTAL_ATTACHMENT_BYTES) {
-        error = "Attachments can total up to 50MB per message.";
-        break;
-      }
-      if (isImage) {
-        nextImages.push({
-          type: "image",
-          id: randomUUID(),
-          name: file.name || "image",
-          mimeType: file.type,
-          sizeBytes: file.size,
-          previewUrl: URL.createObjectURL(file),
-          file,
+  const addComposerAttachments = useCallback(
+    (files: File[]) => {
+      if (!activeThreadId || files.length === 0) return;
+      if (pendingUserInputs.length > 0) {
+        toastManager.add({
+          type: "error",
+          title: "Attach files after answering plan questions.",
         });
-      } else {
-        nextFiles.push({ id: randomUUID(), file });
+        return;
       }
-      attachmentCount += 1;
-      totalBytes += file.size;
-    }
-    if (nextImages.length === 1 && nextImages[0]) {
-      addComposerImage(nextImages[0]);
-    } else if (nextImages.length > 1) {
-      addComposerImagesToDraft(nextImages);
-    }
-    if (nextFiles.length !== composerFilesRef.current.length) {
-      onComposerFilesChange(nextFiles);
-    }
-    setThreadError(activeThreadId, error);
-  };
+      const nextImages: ComposerImageAttachment[] = [];
+      const nextFiles = [...composerFilesRef.current];
+      let attachmentCount = composerImagesRef.current.length + nextFiles.length;
+      let totalBytes = [...composerImagesRef.current, ...composerFilesRef.current].reduce(
+        (total, attachment) => total + attachment.file.size,
+        0,
+      );
+      let error: string | null = null;
+      for (const file of files) {
+        if (attachmentCount >= PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {
+          error = `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} files per message.`;
+          break;
+        }
+        const isImage = file.type.startsWith("image/");
+        const sizeLimit = isImage
+          ? PROVIDER_SEND_TURN_MAX_IMAGE_BYTES
+          : PROVIDER_SEND_TURN_MAX_FILE_BYTES;
+        const sizeLimitLabel = isImage ? IMAGE_SIZE_LIMIT_LABEL : FILE_SIZE_LIMIT_LABEL;
+        if (file.size === 0 || file.size > sizeLimit) {
+          error = `'${file.name}' is empty or exceeds the ${sizeLimitLabel} attachment limit.`;
+          continue;
+        }
+        if (totalBytes + file.size > PROVIDER_SEND_TURN_MAX_TOTAL_ATTACHMENT_BYTES) {
+          error = "Attachments can total up to 50MB per message.";
+          break;
+        }
+        if (isImage) {
+          nextImages.push({
+            type: "image",
+            id: randomUUID(),
+            name: file.name || "image",
+            mimeType: file.type,
+            sizeBytes: file.size,
+            previewUrl: URL.createObjectURL(file),
+            file,
+          });
+        } else {
+          nextFiles.push({ id: randomUUID(), file });
+        }
+        attachmentCount += 1;
+        totalBytes += file.size;
+      }
+      if (nextImages.length === 1 && nextImages[0]) {
+        addComposerImage(nextImages[0]);
+      } else if (nextImages.length > 1) {
+        addComposerImagesToDraft(nextImages);
+      }
+      if (nextFiles.length !== composerFilesRef.current.length) {
+        onComposerFilesChange(nextFiles);
+      }
+      setThreadError(activeThreadId, error);
+    },
+    [
+      activeThreadId,
+      addComposerImage,
+      addComposerImagesToDraft,
+      composerFilesRef,
+      composerImagesRef,
+      onComposerFilesChange,
+      pendingUserInputs.length,
+      setThreadError,
+    ],
+  );
 
   const removeComposerImage = (imageId: string) => {
     removeComposerImageFromDraft(imageId);
@@ -3083,7 +3095,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     }),
     [
       activeThread,
-      addComposerImages,
+      addComposerAttachments,
       composerDraftTarget,
       composerCursor,
       composerTerminalContexts,

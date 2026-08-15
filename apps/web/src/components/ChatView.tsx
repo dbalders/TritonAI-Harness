@@ -150,7 +150,7 @@ import {
   CheckCircle2Icon,
   ChevronDownIcon,
   GitBranchIcon,
-  ImagePlusIcon,
+  PaperclipIcon,
   TriangleAlertIcon,
   WifiOffIcon,
 } from "lucide-react";
@@ -5859,7 +5859,7 @@ function ChatViewContent(props: ChatViewProps) {
                   role="status"
                   className="flex items-center gap-2 rounded-full border border-primary/25 bg-background/95 px-4 py-2.5 text-sm font-medium text-foreground shadow-lg"
                 >
-                  <ImagePlusIcon className="size-4 text-primary" aria-hidden="true" />
+                  <PaperclipIcon className="size-4 text-primary" aria-hidden="true" />
                   Drop to attach
                 </div>
               </div>
