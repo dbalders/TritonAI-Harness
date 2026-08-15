@@ -1189,12 +1189,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
    */
   const stashInFlightRef = useRef<Set<string>>(new Set());
   /**
-   * Count of pasted images still being compressed, per thread. Reserved
-   * against the attachment limit so concurrent pastes can't overshoot it,
-   * and checked by `submitComposer` so a send can't race an image into the
-   * next draft.
+   * Images being compressed or waiting for their draft update to render, keyed by thread and
+   * attachment id. A null byte count reserves the attachment slot while compression runs; the
+   * final byte count keeps aggregate validation atomic until the image appears in the draft.
    */
-  const pendingImageCompressionsRef = useRef<Map<ThreadId, number>>(new Map());
+  const pendingImageReservationsRef = useRef<Map<ThreadId, Map<string, number | null>>>(new Map());
 
   // ------------------------------------------------------------------
   // Derived: composer send state
@@ -1533,7 +1532,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
   useEffect(() => {
     composerImagesRef.current = composerImages;
-  }, [composerImages, composerImagesRef]);
+    if (!activeThreadId) return;
+    const reservations = pendingImageReservationsRef.current.get(activeThreadId);
+    if (!reservations) return;
+    for (const image of composerImages) {
+      reservations.delete(image.id);
+    }
+    if (reservations.size === 0) {
+      pendingImageReservationsRef.current.delete(activeThreadId);
+    }
+  }, [activeThreadId, composerImages, composerImagesRef]);
 
   useEffect(() => {
     composerFilesRef.current = composerFiles;
@@ -2339,7 +2347,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       // image: the turn snapshot wouldn't include it, and it would surface
       // in the *next* draft instead. Only oversized images hit this — small
       // files clear the pending counter within a microtask.
-      if (activeThreadId && (pendingImageCompressionsRef.current.get(activeThreadId) ?? 0) > 0) {
+      if (
+        activeThreadId &&
+        (pendingImageReservationsRef.current.get(activeThreadId)?.size ?? 0) > 0
+      ) {
         event?.preventDefault();
         toastManager.add({
           type: "info",
@@ -2817,14 +2828,22 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         return;
       }
       const threadId = activeThreadId;
-      const pendingCount = pendingImageCompressionsRef.current.get(threadId) ?? 0;
-      const acceptedImages: File[] = [];
+      const existingReservations = pendingImageReservationsRef.current.get(threadId);
+      const pendingCount = existingReservations?.size ?? 0;
+      const pendingBytes = existingReservations
+        ? [...existingReservations.values()].reduce<number>(
+            (sum, sizeBytes) => sum + (sizeBytes ?? 0),
+            0,
+          )
+        : 0;
+      const acceptedImages: Array<{ readonly id: string; readonly file: File }> = [];
       const nextFiles = [...composerFilesRef.current];
       let attachmentCount = composerImagesRef.current.length + nextFiles.length + pendingCount;
-      let totalBytes = [...composerImagesRef.current, ...composerFilesRef.current].reduce(
-        (total, attachment) => total + attachment.file.size,
-        0,
-      );
+      let totalBytes =
+        [...composerImagesRef.current, ...composerFilesRef.current].reduce(
+          (total, attachment) => total + attachment.file.size,
+          0,
+        ) + pendingBytes;
       let error: string | null = null;
       for (const file of files) {
         if (attachmentCount >= PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {
@@ -2845,7 +2864,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           break;
         }
         if (isImage) {
-          acceptedImages.push(file);
+          acceptedImages.push({ id: randomUUID(), file });
         } else {
           nextFiles.push({ id: randomUUID(), file });
           totalBytes += file.size;
@@ -2858,11 +2877,18 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       setThreadError(threadId, error);
       if (acceptedImages.length === 0) return;
 
-      pendingImageCompressionsRef.current.set(threadId, pendingCount + acceptedImages.length);
+      const reservations =
+        pendingImageReservationsRef.current.get(threadId) ?? new Map<string, number | null>();
+      for (const image of acceptedImages) {
+        reservations.set(image.id, null);
+      }
+      pendingImageReservationsRef.current.set(threadId, reservations);
+      const committedReservationIds = new Set<string>();
       try {
         const nextImages: ComposerImageAttachment[] = [];
         let compressionError: string | null = null;
-        for (const file of acceptedImages) {
+        for (const acceptedImage of acceptedImages) {
+          const { file } = acceptedImage;
           const compressed = await compressImageToByteLimit(
             file,
             PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
@@ -2872,21 +2898,31 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               compressed.reason === "unreadable"
                 ? `'${file.name}' could not be read as an image.`
                 : `'${file.name}' is too large to attach, even after compression.`;
+            reservations.delete(acceptedImage.id);
             continue;
           }
           const attachmentFile = compressed.file;
+          const committedBytes = [...composerImagesRef.current, ...composerFilesRef.current].reduce(
+            (sum, attachment) => sum + attachment.file.size,
+            0,
+          );
+          const reservedBytes = [...reservations.values()].reduce<number>(
+            (sum, sizeBytes) => sum + (sizeBytes ?? 0),
+            0,
+          );
           if (
-            totalBytes +
-              nextImages.reduce((sum, image) => sum + image.file.size, 0) +
-              attachmentFile.size >
+            committedBytes + reservedBytes + attachmentFile.size >
             PROVIDER_SEND_TURN_MAX_TOTAL_ATTACHMENT_BYTES
           ) {
             compressionError = "Attachments can total up to 50MB per message.";
+            reservations.delete(acceptedImage.id);
             continue;
           }
+          reservations.set(acceptedImage.id, attachmentFile.size);
+          committedReservationIds.add(acceptedImage.id);
           nextImages.push({
             type: "image",
-            id: randomUUID(),
+            id: acceptedImage.id,
             name: attachmentFile.name || "image",
             mimeType: attachmentFile.type,
             sizeBytes: attachmentFile.size,
@@ -2903,12 +2939,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           setThreadError(threadId, compressionError);
         }
       } finally {
-        const remaining =
-          (pendingImageCompressionsRef.current.get(threadId) ?? 0) - acceptedImages.length;
-        if (remaining > 0) {
-          pendingImageCompressionsRef.current.set(threadId, remaining);
-        } else {
-          pendingImageCompressionsRef.current.delete(threadId);
+        for (const image of acceptedImages) {
+          if (!committedReservationIds.has(image.id)) {
+            reservations.delete(image.id);
+          }
+        }
+        if (reservations.size === 0) {
+          pendingImageReservationsRef.current.delete(threadId);
         }
       }
     },
