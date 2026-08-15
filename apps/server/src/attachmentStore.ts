@@ -1,8 +1,9 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeCrypto from "node:crypto";
-import * as NodeFS from "node:fs";
 
 import type { ChatAttachment } from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 
 import {
   normalizeAttachmentRelativePath,
@@ -127,10 +128,11 @@ export function resolveAttachmentPath(input: {
   });
 }
 
-export function resolveAttachmentPathById(input: {
+export const resolveAttachmentPathById = Effect.fn("resolveAttachmentPathById")(function* (input: {
   readonly attachmentsDir: string;
   readonly attachmentId: string;
-}): string | null {
+}) {
+  const fileSystem = yield* FileSystem.FileSystem;
   const normalizedId = normalizeAttachmentRelativePath(input.attachmentId);
   if (!normalizedId || normalizedId.includes("/") || normalizedId.includes(".")) {
     return null;
@@ -140,16 +142,19 @@ export function resolveAttachmentPathById(input: {
       attachmentsDir: input.attachmentsDir,
       relativePath: `${normalizedId}${extension}`,
     });
-    if (maybePath && NodeFS.existsSync(maybePath)) {
+    const isFile = maybePath
+      ? yield* fileSystem.stat(maybePath).pipe(
+          Effect.map((info) => info.type === "File"),
+          Effect.orElseSucceed(() => false),
+        )
+      : false;
+    if (maybePath && isFile) {
       return maybePath;
     }
   }
-  let entries: Array<string>;
-  try {
-    entries = NodeFS.readdirSync(input.attachmentsDir);
-  } catch {
-    return null;
-  }
+  const entries = yield* fileSystem
+    .readDirectory(input.attachmentsDir, { recursive: false })
+    .pipe(Effect.orElseSucceed(() => [] as Array<string>));
   const matchingEntry = entries.find(
     (entry) => parseAttachmentIdFromRelativePath(entry) === normalizedId,
   );
@@ -160,7 +165,7 @@ export function resolveAttachmentPathById(input: {
     });
   }
   return null;
-}
+});
 
 export function parseAttachmentIdFromRelativePath(relativePath: string): string | null {
   const normalized = normalizeAttachmentRelativePath(relativePath);

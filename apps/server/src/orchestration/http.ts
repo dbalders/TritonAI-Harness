@@ -2,7 +2,6 @@ import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   EnvironmentHttpApi,
-  type OrchestrationReadModel,
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
@@ -33,6 +32,7 @@ import {
   resolveAttachmentPathById,
 } from "../attachmentStore.ts";
 import { ServerConfig } from "../config.ts";
+import { ProjectionThreadMessageRepository } from "../persistence/Services/ProjectionThreadMessages.ts";
 
 const PENDING_ATTACHMENT_TTL_MS = 60 * 60 * 1000;
 const MAX_GLOBAL_PENDING_ATTACHMENT_BYTES = 10 * PROVIDER_SEND_TURN_MAX_FILE_BYTES;
@@ -73,6 +73,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
   "orchestration",
   Effect.fnUntraced(function* (handlers) {
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
+    const projectionThreadMessageRepository = yield* ProjectionThreadMessageRepository;
     const orchestrationEngine = yield* OrchestrationEngineService;
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -82,17 +83,10 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
     const reclaimPendingAttachments = Effect.fn(
       "environment.orchestration.reclaimPendingAttachments",
     )(function* (input: {
-      readonly snapshot: OrchestrationReadModel;
+      readonly referencedAttachmentIds: ReadonlySet<string>;
       readonly targetThreadId: string;
       readonly replacementAttachmentId: string;
     }) {
-      const referencedIds = new Set(
-        input.snapshot.threads.flatMap((thread) =>
-          thread.messages.flatMap((message) =>
-            (message.attachments ?? []).map((attachment) => attachment.id),
-          ),
-        ),
-      );
       const now = yield* Clock.currentTimeMillis;
       const entries = yield* fileSystem.readDirectory(serverConfig.attachmentsDir).pipe(
         Effect.catchTags({
@@ -109,7 +103,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
         const attachmentId = parseAttachmentIdFromRelativePath(normalizedEntry);
         if (
           !attachmentId ||
-          referencedIds.has(attachmentId) ||
+          input.referencedAttachmentIds.has(attachmentId) ||
           attachmentId === input.replacementAttachmentId
         ) {
           continue;
@@ -242,30 +236,28 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
 
           const persistedAttachment = yield* attachmentUploadSemaphore.withPermit(
             Effect.gen(function* () {
-              const snapshot = yield* projectionSnapshotQuery
-                .getSnapshot()
-                .pipe(
-                  Effect.catch((cause) =>
-                    failEnvironmentInternal("orchestration_thread_snapshot_failed", cause),
-                  ),
-                );
-              const targetThread = snapshot.threads.find(
-                (thread) => thread.id === args.params.threadId,
+              const [targetThread, liveAttachmentReferences] = yield* Effect.all([
+                projectionSnapshotQuery.getThreadDetailById(args.params.threadId),
+                projectionThreadMessageRepository.listLiveAttachmentReferences({
+                  excludedThreadId: null,
+                }),
+              ]).pipe(
+                Effect.catch((cause) =>
+                  failEnvironmentInternal("orchestration_thread_snapshot_failed", cause),
+                ),
               );
-              if (!targetThread) {
+              if (Option.isNone(targetThread)) {
                 return yield* failEnvironmentNotFound("thread_not_found");
               }
-              const referencedByAnotherThread = snapshot.threads.some(
-                (thread) =>
-                  thread.id !== args.params.threadId &&
-                  thread.messages.some((message) =>
-                    (message.attachments ?? []).some((candidate) => candidate.id === attachmentId),
-                  ),
+              const referencedByAnotherThread = liveAttachmentReferences.some(
+                (reference) =>
+                  reference.threadId !== args.params.threadId &&
+                  reference.attachments.some((candidate) => candidate.id === attachmentId),
               );
               if (referencedByAnotherThread) {
                 return yield* failEnvironmentInvalidRequest("invalid_attachment");
               }
-              const existingAttachment = targetThread.messages
+              const existingAttachment = targetThread.value.messages
                 .flatMap((message) => message.attachments ?? [])
                 .find((candidate) => candidate.id === attachmentId);
               if (existingAttachment) {
@@ -274,7 +266,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
                 }
                 return existingAttachment;
               }
-              const previousPendingPath = resolveAttachmentPathById({
+              const previousPendingPath = yield* resolveAttachmentPathById({
                 attachmentsDir: serverConfig.attachmentsDir,
                 attachmentId,
               });
@@ -287,8 +279,13 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
                     ),
                   );
               }
+              const referencedAttachmentIds = new Set(
+                liveAttachmentReferences.flatMap((reference) =>
+                  reference.attachments.map((candidate) => candidate.id),
+                ),
+              );
               const pending = yield* reclaimPendingAttachments({
-                snapshot,
+                referencedAttachmentIds,
                 targetThreadId: args.params.threadId,
                 replacementAttachmentId: attachmentId,
               }).pipe(
@@ -329,48 +326,56 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
           yield* annotateEnvironmentRequest(args.endpoint.name);
           yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
 
-          const snapshot = yield* projectionSnapshotQuery
-            .getSnapshot()
-            .pipe(
-              Effect.catch((cause) =>
-                failEnvironmentInternal("orchestration_thread_snapshot_failed", cause),
-              ),
-            );
-          if (!snapshot.threads.some((thread) => thread.id === args.params.threadId)) {
-            return yield* failEnvironmentNotFound("thread_not_found");
-          }
+          return yield* attachmentUploadSemaphore.withPermit(
+            Effect.gen(function* () {
+              const [targetThread, liveAttachmentReferences] = yield* Effect.all([
+                projectionSnapshotQuery.getThreadDetailById(args.params.threadId),
+                projectionThreadMessageRepository.listLiveAttachmentReferences({
+                  excludedThreadId: null,
+                }),
+              ]).pipe(
+                Effect.catch((cause) =>
+                  failEnvironmentInternal("orchestration_thread_snapshot_failed", cause),
+                ),
+              );
+              if (Option.isNone(targetThread)) {
+                return yield* failEnvironmentNotFound("thread_not_found");
+              }
 
-          if (
-            !isCanonicalAttachmentIdOwnedByThread(args.params.attachmentId, args.params.threadId)
-          ) {
-            return yield* failEnvironmentInvalidRequest("invalid_attachment");
-          }
-          const referenced = snapshot.threads.some((thread) =>
-            thread.messages.some((message) =>
-              (message.attachments ?? []).some(
-                (attachment) => attachment.id === args.params.attachmentId,
-              ),
-            ),
+              if (
+                !isCanonicalAttachmentIdOwnedByThread(
+                  args.params.attachmentId,
+                  args.params.threadId,
+                )
+              ) {
+                return yield* failEnvironmentInvalidRequest("invalid_attachment");
+              }
+              const referenced = liveAttachmentReferences.some((reference) =>
+                reference.attachments.some(
+                  (attachment) => attachment.id === args.params.attachmentId,
+                ),
+              );
+              if (referenced) {
+                return yield* failEnvironmentInvalidRequest("invalid_attachment");
+              }
+
+              const attachmentPath = yield* resolveAttachmentPathById({
+                attachmentsDir: serverConfig.attachmentsDir,
+                attachmentId: args.params.attachmentId,
+              });
+              if (!attachmentPath) {
+                return { attachmentId: args.params.attachmentId, deleted: false };
+              }
+              yield* fileSystem
+                .remove(attachmentPath, { force: true })
+                .pipe(
+                  Effect.catch((cause) =>
+                    failEnvironmentInternal("orchestration_attachment_delete_failed", cause),
+                  ),
+                );
+              return { attachmentId: args.params.attachmentId, deleted: true };
+            }),
           );
-          if (referenced) {
-            return yield* failEnvironmentInvalidRequest("invalid_attachment");
-          }
-
-          const attachmentPath = resolveAttachmentPathById({
-            attachmentsDir: serverConfig.attachmentsDir,
-            attachmentId: args.params.attachmentId,
-          });
-          if (!attachmentPath) {
-            return { attachmentId: args.params.attachmentId, deleted: false };
-          }
-          yield* fileSystem
-            .remove(attachmentPath, { force: true })
-            .pipe(
-              Effect.catch((cause) =>
-                failEnvironmentInternal("orchestration_attachment_delete_failed", cause),
-              ),
-            );
-          return { attachmentId: args.params.attachmentId, deleted: true };
         }),
       )
       .handle(

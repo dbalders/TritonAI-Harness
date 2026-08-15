@@ -15,7 +15,6 @@ import {
   createAttachmentId,
   isCanonicalAttachmentIdOwnedByThread,
   resolveAttachmentPath,
-  resolveAttachmentPathById,
 } from "../attachmentStore.ts";
 import { ServerConfig } from "../config.ts";
 import { parseBase64DataUrl } from "../imageMime.ts";
@@ -131,21 +130,17 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
               });
             }
 
-            const persistedPath = resolveAttachmentPathById({
-              attachmentsDir: serverConfig.attachmentsDir,
-              attachmentId: attachment.id,
-            });
             const expectedPath = resolveAttachmentPath({
               attachmentsDir: serverConfig.attachmentsDir,
               attachment,
             });
-            if (!persistedPath || persistedPath !== expectedPath) {
+            if (!expectedPath) {
               return yield* new OrchestrationDispatchCommandError({
                 message: `File attachment '${attachment.name}' could not be resolved.`,
               });
             }
             const fileInfo = yield* fileSystem
-              .stat(persistedPath)
+              .stat(expectedPath)
               .pipe(Effect.orElseSucceed(() => null));
             const persistedSizeBytes = fileInfo ? Number(fileInfo.size) : 0;
             if (

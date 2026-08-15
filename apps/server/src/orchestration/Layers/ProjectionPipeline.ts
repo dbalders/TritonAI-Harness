@@ -339,11 +339,13 @@ function collectAttachmentRelativePaths(
 }
 
 function collectReferencedAttachmentRelativePaths(
-  messages: ReadonlyArray<ProjectionThreadMessage>,
+  references: ReadonlyArray<{
+    readonly attachments?: ReadonlyArray<ChatAttachment>;
+  }>,
 ): Set<string> {
   return new Set(
-    messages.flatMap((message) =>
-      (message.attachments ?? []).map((attachment) => attachmentRelativePath(attachment)),
+    references.flatMap((reference) =>
+      (reference.attachments ?? []).map((attachment) => attachmentRelativePath(attachment)),
     ),
   );
 }
@@ -419,22 +421,6 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const serverConfig = yield* ServerConfig;
-
-    const collectLiveReferencedAttachmentRelativePaths = Effect.fn(
-      "collectLiveReferencedAttachmentRelativePaths",
-    )(function* (messages: ReadonlyArray<ProjectionThreadMessage>, excludedThreadId?: string) {
-      const liveThreadIds = new Set<string>();
-      for (const threadId of new Set(messages.map((message) => message.threadId))) {
-        if (threadId === excludedThreadId) continue;
-        const thread = yield* projectionThreadRepository.getById({ threadId });
-        if (Option.isSome(thread) && thread.value.deletedAt === null) {
-          liveThreadIds.add(threadId);
-        }
-      }
-      return collectReferencedAttachmentRelativePaths(
-        messages.filter((message) => liveThreadIds.has(message.threadId)),
-      );
-    });
 
     const applyProjectsProjection: ProjectorDefinition["apply"] = Effect.fn(
       "applyProjectsProjection",
@@ -792,18 +778,17 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           if (Option.isNone(existingRow)) {
             return;
           }
-          const [threadMessages, allMessages] = yield* Effect.all([
+          const [threadMessages, liveAttachmentReferences] = yield* Effect.all([
             projectionThreadMessageRepository.listByThreadId({
               threadId: event.payload.threadId,
             }),
-            projectionThreadMessageRepository.listAll(),
+            projectionThreadMessageRepository.listLiveAttachmentReferences({
+              excludedThreadId: event.payload.threadId,
+            }),
           ]);
           const relativePathsToDelete = collectAttachmentRelativePaths(threadMessages);
           const relativePathsReferencedElsewhere =
-            yield* collectLiveReferencedAttachmentRelativePaths(
-              allMessages,
-              event.payload.threadId,
-            );
+            collectReferencedAttachmentRelativePaths(liveAttachmentReferences);
           for (const relativePath of relativePathsReferencedElsewhere) {
             relativePathsToDelete.delete(relativePath);
           }
@@ -989,8 +974,10 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           for (const relativePath of keptRelativePaths) {
             relativePathsToDelete.delete(relativePath);
           }
-          const stillReferencedRelativePaths = yield* collectLiveReferencedAttachmentRelativePaths(
-            yield* projectionThreadMessageRepository.listAll(),
+          const stillReferencedRelativePaths = collectReferencedAttachmentRelativePaths(
+            yield* projectionThreadMessageRepository.listLiveAttachmentReferences({
+              excludedThreadId: null,
+            }),
           );
           for (const relativePath of stillReferencedRelativePaths) {
             relativePathsToDelete.delete(relativePath);

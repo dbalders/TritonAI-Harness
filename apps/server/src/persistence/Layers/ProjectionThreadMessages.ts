@@ -13,7 +13,9 @@ import {
   ProjectionThreadMessageRepository,
   type ProjectionThreadMessageRepositoryShape,
   DeleteProjectionThreadMessagesInput,
+  ListLiveProjectionAttachmentReferencesInput,
   ListProjectionThreadMessagesInput,
+  ProjectionThreadAttachmentReferences,
   ProjectionThreadMessage,
 } from "../Services/ProjectionThreadMessages.ts";
 
@@ -137,23 +139,26 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
       `,
   });
 
-  const listAllProjectionThreadMessageRows = SqlSchema.findAll({
-    Request: Schema.Void,
-    Result: ProjectionThreadMessageDbRowSchema,
-    execute: () =>
+  const listLiveProjectionAttachmentReferenceRows = SqlSchema.findAll({
+    Request: ListLiveProjectionAttachmentReferencesInput,
+    Result: ProjectionThreadAttachmentReferences.mapFields(
+      Struct.assign({
+        attachments: Schema.fromJsonString(Schema.Array(ChatAttachment)),
+      }),
+    ),
+    execute: ({ excludedThreadId }) =>
       sql`
         SELECT
-          message_id AS "messageId",
-          thread_id AS "threadId",
-          turn_id AS "turnId",
-          role,
-          text,
-          attachments_json AS "attachments",
-          is_streaming AS "isStreaming",
-          created_at AS "createdAt",
-          updated_at AS "updatedAt"
-        FROM projection_thread_messages
-        ORDER BY created_at ASC, message_id ASC
+          messages.thread_id AS "threadId",
+          messages.attachments_json AS "attachments"
+        FROM projection_thread_messages AS messages
+        INNER JOIN projection_threads AS threads
+          ON threads.thread_id = messages.thread_id
+        WHERE threads.deleted_at IS NULL
+          AND messages.attachments_json IS NOT NULL
+          AND messages.attachments_json != '[]'
+          AND (${excludedThreadId} IS NULL OR messages.thread_id != ${excludedThreadId})
+        ORDER BY messages.created_at ASC, messages.message_id ASC
       `,
   });
 
@@ -187,11 +192,15 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
       Effect.map((rows) => rows.map(toProjectionThreadMessage)),
     );
 
-  const listAll: ProjectionThreadMessageRepositoryShape["listAll"] = () =>
-    listAllProjectionThreadMessageRows().pipe(
-      Effect.mapError(toPersistenceSqlError("ProjectionThreadMessageRepository.listAll:query")),
-      Effect.map((rows) => rows.map(toProjectionThreadMessage)),
-    );
+  const listLiveAttachmentReferences: ProjectionThreadMessageRepositoryShape["listLiveAttachmentReferences"] =
+    (input) =>
+      listLiveProjectionAttachmentReferenceRows(input).pipe(
+        Effect.mapError(
+          toPersistenceSqlError(
+            "ProjectionThreadMessageRepository.listLiveAttachmentReferences:query",
+          ),
+        ),
+      );
 
   const deleteByThreadId: ProjectionThreadMessageRepositoryShape["deleteByThreadId"] = (input) =>
     deleteProjectionThreadMessageRows(input).pipe(
@@ -204,7 +213,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
     upsert,
     getByMessageId,
     listByThreadId,
-    listAll,
+    listLiveAttachmentReferences,
     deleteByThreadId,
   } satisfies ProjectionThreadMessageRepositoryShape;
 });

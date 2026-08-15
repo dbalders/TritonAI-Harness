@@ -49,6 +49,18 @@ export const DeleteProjectionThreadMessagesInput = Schema.Struct({
 });
 export type DeleteProjectionThreadMessagesInput = typeof DeleteProjectionThreadMessagesInput.Type;
 
+export const ListLiveProjectionAttachmentReferencesInput = Schema.Struct({
+  excludedThreadId: Schema.NullOr(ThreadId),
+});
+export type ListLiveProjectionAttachmentReferencesInput =
+  typeof ListLiveProjectionAttachmentReferencesInput.Type;
+
+export const ProjectionThreadAttachmentReferences = Schema.Struct({
+  threadId: ThreadId,
+  attachments: Schema.Array(ChatAttachment),
+});
+export type ProjectionThreadAttachmentReferences = typeof ProjectionThreadAttachmentReferences.Type;
+
 /**
  * ProjectionThreadMessageRepositoryShape - Service API for projected thread messages.
  */
@@ -78,9 +90,11 @@ export interface ProjectionThreadMessageRepositoryShape {
     input: ListProjectionThreadMessagesInput,
   ) => Effect.Effect<ReadonlyArray<ProjectionThreadMessage>, ProjectionRepositoryError>;
 
-  /** List all projected thread messages in deterministic order. */
-  readonly listAll: () => Effect.Effect<
-    ReadonlyArray<ProjectionThreadMessage>,
+  /** List attachment references for live threads without hydrating message bodies. */
+  readonly listLiveAttachmentReferences: (
+    input: ListLiveProjectionAttachmentReferencesInput,
+  ) => Effect.Effect<
+    ReadonlyArray<ProjectionThreadAttachmentReferences>,
     ProjectionRepositoryError
   >;
 
