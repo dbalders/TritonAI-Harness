@@ -1,9 +1,11 @@
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
-import { ServerProvider } from "./server.ts";
+import { ServerPluginInstallResult, ServerPluginsListInput, ServerProvider } from "./server.ts";
 
 const decodeServerProvider = Schema.decodeUnknownSync(ServerProvider);
+const decodePluginsListInput = Schema.decodeUnknownSync(ServerPluginsListInput);
+const decodePluginInstallResult = Schema.decodeUnknownSync(ServerPluginInstallResult);
 
 describe("ServerProvider", () => {
   it("defaults capability arrays when decoding provider snapshots", () => {
@@ -70,5 +72,31 @@ describe("ServerProvider", () => {
     });
 
     expect(parsed.continuation?.groupKey).toBe("codex:home:/Users/julius/.codex");
+  });
+});
+
+describe("Codex plugin contracts", () => {
+  it("defaults remote discovery while accepting an exact plugin response filter", () => {
+    expect(decodePluginsListInput({ pluginIds: ["plugin_asdk_lucid"] })).toEqual({
+      includeRemote: true,
+      pluginIds: ["plugin_asdk_lucid"],
+    });
+  });
+
+  it("preserves install-time app authorization metadata", () => {
+    const parsed = decodePluginInstallResult({
+      plugins: { marketplaces: [], marketplaceLoadErrors: [], featuredPluginIds: [] },
+      authPolicy: "ON_INSTALL",
+      appsNeedingAuth: [
+        {
+          id: "asdk_app_lucid",
+          name: "Lucid",
+          installUrl: "https://chatgpt.com/apps/lucid/asdk_app_lucid",
+        },
+      ],
+    });
+
+    expect(parsed.appsNeedingAuth[0]?.name).toBe("Lucid");
+    expect(parsed.authPolicy).toBe("ON_INSTALL");
   });
 });

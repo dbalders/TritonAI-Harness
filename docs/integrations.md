@@ -5,6 +5,12 @@ host-supplied service backend. The Harness build defines the available catalog; 
 marketplace or install arbitrary packages. In Settings → Plugins, they can turn each included plugin
 on or off and choose the user-facing abilities exposed by that plugin under **Access**.
 
+The same screen can expose a deliberately allowlisted hosted Codex plugin without exposing the
+general Codex marketplace. Lucid is the first such exception: Harness queries and installs its
+stable remote plugin ID from the official Codex catalog, while Lucid and ChatGPT own the hosted MCP
+runtime and OAuth credentials. The UI filters the app-server response to the approved ID before it
+crosses the Harness WebSocket boundary.
+
 Production connector source and compiled provider entrypoints remain in TritonAI-Plugins. A
 release-only, digest-verified composition is the explicit package allowlist; Harness does not carry
 provider-specific package IDs or discover arbitrary packages at runtime. Harness verifies and
@@ -46,11 +52,10 @@ Production write providers therefore require a connection lifecycle whose discon
 that fault; the current stateless-provider support is read-only.
 
 The Harness-specific manifest name is intentional. These packages are curated, server-executed
-Harness components rather than user-installable Codex marketplace plugins. Their `skills/`
+Harness components rather than arbitrary user-installable Codex marketplace plugins. Their `skills/`
 directories use the normal Codex `SKILL.md` contract, while the Harness manifest adds the
-provider, capability, and tool allowlist needed for host-side enforcement. If
-portable Codex plugin ingestion is added later, it should be an explicit adapter rather than
-treating arbitrary Codex MCP or app configuration as trusted Harness backend code.
+provider, capability, and tool allowlist needed for host-side enforcement. An approved hosted Codex
+plugin remains an explicit adapter and is not treated as trusted Harness backend code.
 
 Manifest v1 deliberately permits at most one host provider per package while allowing many
 capabilities, skills, and narrow tools. Read and write abilities can share that connection while
@@ -257,16 +262,21 @@ marketplace.
 
 ## Plugins screen
 
-Settings → Plugins renders one row per included package, keeping a catalog of many plugins
-scannable. The top-level switch remains the master control. Expanding a row shows its connection,
+Settings → Plugins renders approved hosted plugins separately from included packages. The Lucid
+control selects the exact remote catalog entry exposed by this UI and hands any install-time
+authorization URL to the system browser after validating its expected ChatGPT origin and app path.
+The server-side catalog filter limits this response for the caller; it is response shaping, not an
+authorization boundary for the permission-controlled generic plugin-management RPC.
+Included-package rows remain scannable and their top-level switch remains the master control.
+Expanding a row shows its connection,
 one **Access** switch per user-facing capability, and read-only derived Tool and Skill status. Write
 abilities are marked as following task access. Enabled plugins with an unresolved connection expand
 automatically and keep a persistent, accessible Connect action visible.
 
 ## Deliberate follow-up work
 
-Additional provider-neutral authorization experiences, declarative remote or stdio MCP loading,
-provider process isolation, provider audit events, production credential UX, and mobile management
+Additional provider-neutral authorization experiences, arbitrary declarative remote or stdio MCP
+loading, provider process isolation, provider audit events, production credential UX, and mobile management
 remain separate work. If external package distribution is ever added, allowlisting, signing, and a
 separate trust model are required first. Removing an included production plugin also needs an
 explicit provider-aware retirement migration so its scoped credentials can be deleted with its

@@ -1,10 +1,18 @@
-import type { IntegrationConnectResult, IntegrationSummary } from "@t3tools/contracts";
+import type {
+  IntegrationConnectResult,
+  IntegrationSummary,
+  ServerPluginSummary,
+} from "@t3tools/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
   IntegrationConnectionActionCallout,
   IntegrationAuthorizationFlow,
+  LUCID_APP_ID,
+  LUCID_AUTH_URL,
+  LUCID_REMOTE_PLUGIN_ID,
+  LucidCodexPluginCard,
   WRITE_TOOL_ACCESS_ARIA_LABEL,
   WRITE_TOOL_ACCESS_LABEL,
   capabilityAccessStateLabel,
@@ -13,9 +21,34 @@ import {
   integrationConnectAriaLabel,
   integrationNeedsConnectionAction,
   reconcileConnectionAttentionForIntegration,
+  findLucidPlugin,
+  lucidAuthAttentionOnLoad,
+  lucidPluginUninstallInput,
+  readLucidAuthHandoff,
+  remotePluginCatalogError,
+  safeLucidAuthUrl,
   shouldExpandIntegrationCard,
   shouldFocusConnectionAction,
+  writeLucidAuthHandoff,
 } from "./PluginsSettings.tsx";
+
+const lucidPlugin = (overrides: Partial<ServerPluginSummary> = {}): ServerPluginSummary => ({
+  id: "app-69c597eebdd4819194fd9c4d03acedb6@openai-curated-remote",
+  name: "app-69c597eebdd4819194fd9c4d03acedb6",
+  displayName: "Lucid",
+  description: "Ideate, diagram, and align teams.",
+  developerName: "Lucid Software",
+  enabled: false,
+  installed: false,
+  authPolicy: "ON_INSTALL",
+  installPolicy: "AVAILABLE",
+  availability: "AVAILABLE",
+  remotePluginId: LUCID_REMOTE_PLUGIN_ID,
+  marketplaceName: "openai-curated-remote",
+  source: { type: "remote" },
+  keywords: [],
+  ...overrides,
+});
 
 const summary = (overrides: Partial<IntegrationSummary> = {}): IntegrationSummary => ({
   id: "microsoft-365-read",
@@ -200,6 +233,124 @@ describe("PluginsSettings connection action", () => {
     expect(reconcileConnectionAttentionForIntegration(current, integration.id, integration)).toBe(
       current,
     );
+  });
+});
+
+describe("Lucid hosted Codex plugin", () => {
+  it("selects only Lucid by its stable remote plugin ID", () => {
+    const plugin = lucidPlugin();
+    expect(
+      findLucidPlugin({
+        marketplaces: [
+          {
+            name: "openai-curated-remote",
+            plugins: [lucidPlugin({ remotePluginId: "plugin_asdk_unrelated" }), plugin],
+          },
+        ],
+        marketplaceLoadErrors: [],
+        featuredPluginIds: [],
+      }),
+    ).toBe(plugin);
+  });
+
+  it("accepts only Lucid's exact ChatGPT authorization URL", () => {
+    expect(safeLucidAuthUrl(LUCID_AUTH_URL)).toBe(LUCID_AUTH_URL);
+    expect(safeLucidAuthUrl(`https://chatgpt.com/apps/lucid/${LUCID_APP_ID}?continue=true`)).toBe(
+      `${LUCID_AUTH_URL}?continue=true`,
+    );
+    expect(safeLucidAuthUrl("https://evil.example/apps/lucid/fake")).toBe(LUCID_AUTH_URL);
+    expect(safeLucidAuthUrl("not a url")).toBe(LUCID_AUTH_URL);
+  });
+
+  it("restores sign-in attention only from a pending handoff, not ON_INSTALL policy", () => {
+    const plugin = lucidPlugin({ installed: true });
+
+    expect(lucidAuthAttentionOnLoad(plugin, null)).toBe(false);
+    expect(lucidAuthAttentionOnLoad(plugin, { attention: true, authUrl: LUCID_AUTH_URL })).toBe(
+      true,
+    );
+    expect(lucidAuthAttentionOnLoad(plugin, { attention: false, authUrl: LUCID_AUTH_URL })).toBe(
+      false,
+    );
+    expect(lucidAuthAttentionOnLoad(undefined, { attention: true, authUrl: LUCID_AUTH_URL })).toBe(
+      false,
+    );
+  });
+
+  it("preserves an unconfirmed sign-in handoff across a Plugins screen remount", () => {
+    const values = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => values.get(key) ?? null,
+      removeItem: (key: string) => values.delete(key),
+      setItem: (key: string, value: string) => values.set(key, value),
+    };
+    const authUrl = `${LUCID_AUTH_URL}?continue=true`;
+
+    writeLucidAuthHandoff(storage, "local", { attention: true, authUrl });
+
+    expect(readLucidAuthHandoff(storage, "local")).toEqual({ attention: true, authUrl });
+    expect(readLucidAuthHandoff(storage, "local")?.attention).toBe(true);
+    writeLucidAuthHandoff(storage, "local", null);
+    expect(readLucidAuthHandoff(storage, "local")).toBeNull();
+  });
+
+  it("uninstalls Lucid with its installed catalog ID instead of its remote ID", () => {
+    const plugin = lucidPlugin();
+    expect(plugin.id).not.toBe(LUCID_REMOTE_PLUGIN_ID);
+    expect(lucidPluginUninstallInput(plugin)).toEqual({ pluginId: plugin.id });
+  });
+
+  it("keeps remote catalog errors visible after mutations", () => {
+    expect(
+      remotePluginCatalogError({
+        marketplaces: [],
+        marketplaceLoadErrors: [
+          { marketplacePath: "local", message: "Local warning" },
+          { marketplacePath: "remote plugin catalog", message: "Authentication required." },
+        ],
+        featuredPluginIds: [],
+      }),
+    ).toBe("Authentication required.");
+  });
+
+  it("renders a reversible install toggle and the OAuth handoff after installation", () => {
+    const markup = renderToStaticMarkup(
+      <LucidCodexPluginCard
+        plugin={lucidPlugin({ installed: true, enabled: true })}
+        busy={false}
+        authAttention={true}
+        authUrl={LUCID_AUTH_URL}
+        onToggle={() => undefined}
+      />,
+    );
+
+    expect(markup).toContain("Lucid Software");
+    expect(markup).toContain("Action required: Connect Lucid");
+    expect(markup).toContain("Finish sign-in");
+    expect(markup).toContain("I&#x27;ve finished sign-in");
+    expect(markup).toContain(`href="${LUCID_AUTH_URL}"`);
+    expect(markup).toContain('target="_blank"');
+    expect(markup).toContain('aria-label="Disable Lucid"');
+  });
+
+  it("allows an installed Lucid plugin to be removed after an admin policy change", () => {
+    const markup = renderToStaticMarkup(
+      <LucidCodexPluginCard
+        plugin={lucidPlugin({
+          installed: true,
+          enabled: true,
+          availability: "DISABLED_BY_ADMIN",
+        })}
+        busy={false}
+        authAttention={false}
+        authUrl={LUCID_AUTH_URL}
+        onToggle={() => undefined}
+      />,
+    );
+
+    expect(markup).toContain("Installed copies can still be removed.");
+    expect(markup).toContain('aria-label="Disable Lucid"');
+    expect(markup).not.toContain('aria-label="Disable Lucid" disabled');
   });
 });
 
