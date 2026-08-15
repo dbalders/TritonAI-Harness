@@ -3,6 +3,7 @@ import { defineConfig } from "vite-plus";
 import * as NodeURL from "node:url";
 
 export default defineConfig({
+  assetsInclude: ["**/*.wasm"],
   resolve: {
     alias: {
       "~": NodeURL.fileURLToPath(new URL("./apps/web/src", import.meta.url)),
@@ -15,6 +16,7 @@ export default defineConfig({
       "**/node_modules/**",
       "**/dist/**",
       "**/dist-electron/**",
+      ".github/scripts/**/*.test.cjs",
       "**/.{idea,git,cache,output,temp}/**",
     ],
     hookTimeout: 60_000,

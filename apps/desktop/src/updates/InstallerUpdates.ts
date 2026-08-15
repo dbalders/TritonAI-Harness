@@ -35,7 +35,7 @@ const MAX_RELEASE_RESPONSE_BYTES = 512 * 1024;
 const MAX_MARKER_BYTES = 16 * 1024;
 const INSTALLER_UPDATE_POLL_INTERVAL = Duration.hours(6);
 const STABLE_VERSION_PATTERN = /^\d+\.\d+\.\d+$/;
-const decodeUnknownJson = Schema.decodeUnknownEffect(Schema.UnknownFromJsonString);
+const decodeUnknownJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
 
 class InstallerReleaseFetchError extends Schema.TaggedErrorClass<InstallerReleaseFetchError>()(
   "InstallerReleaseFetchError",

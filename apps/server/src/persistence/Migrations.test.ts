@@ -6,7 +6,19 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { migrationEntries, runMigrations } from "./Migrations.ts";
 import * as NodeSqliteClient from "./NodeSqliteClient.ts";
 
-it("keeps the migration registry unique and preserves the 033-035 identities", () => {
+const POST_032_MIGRATION_IDENTITIES: Array<readonly [number, string]> = [
+  [33, "BackfillProjectionThreadSessionInstanceId"],
+  [34, "ProjectionThreadsSettled"],
+  [35, "ProjectionThreadsSnoozed"],
+  [36, "ProjectionThreadsPinned"],
+  [37, "ProjectionTurnsKeysetIndex"],
+  [38, "ProjectionThreadsPinOrderKey"],
+  [39, "ProjectionProjectsDefaultThreadEnvMode"],
+  [40, "ProjectionProjectFaviconPath"],
+  [41, "ProjectionThreadTitleRegeneration"],
+];
+
+it("keeps the migration registry unique and preserves shipped downstream identities", () => {
   const identities = migrationEntries.map(([id, name]) => [id, name] as const);
   const ids = identities.map(([id]) => id);
 
@@ -15,11 +27,7 @@ it("keeps the migration registry unique and preserves the 033-035 identities", (
     [...ids].sort((left, right) => left - right),
   );
   assert.strictEqual(new Set(ids).size, ids.length);
-  assert.deepStrictEqual(identities.slice(-3), [
-    [33, "BackfillProjectionThreadSessionInstanceId"],
-    [34, "ProjectionThreadsSettled"],
-    [35, "ProjectionThreadsSnoozed"],
-  ]);
+  assert.deepStrictEqual(identities.slice(32), POST_032_MIGRATION_IDENTITIES);
 });
 
 it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()))("clean migration install", (it) => {
@@ -43,21 +51,10 @@ it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()))("clean migration instal
         migrationEntries.map(([id, name]) => [id, name]),
       );
       assert.deepStrictEqual(
-        recorded.filter(({ migration_id }) => migration_id >= 33),
-        [
-          {
-            migration_id: 33,
-            name: "BackfillProjectionThreadSessionInstanceId",
-          },
-          {
-            migration_id: 34,
-            name: "ProjectionThreadsSettled",
-          },
-          {
-            migration_id: 35,
-            name: "ProjectionThreadsSnoozed",
-          },
-        ],
+        recorded
+          .filter(({ migration_id }) => migration_id >= 33)
+          .map(({ migration_id, name }) => [migration_id, name] as const),
+        POST_032_MIGRATION_IDENTITIES,
       );
 
       const columns = yield* sql<{ readonly name: string }>`
@@ -95,10 +92,7 @@ it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()))("migration upgrade from
       );
 
       const executed = yield* runMigrations();
-      assert.deepStrictEqual(executed, [
-        [34, "ProjectionThreadsSettled"],
-        [35, "ProjectionThreadsSnoozed"],
-      ]);
+      assert.deepStrictEqual(executed, POST_032_MIGRATION_IDENTITIES.slice(1));
 
       const recorded = yield* sql<{
         readonly migration_id: number;
@@ -109,20 +103,10 @@ it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()))("migration upgrade from
         WHERE migration_id >= 33
         ORDER BY migration_id
       `;
-      assert.deepStrictEqual(recorded, [
-        {
-          migration_id: 33,
-          name: "BackfillProjectionThreadSessionInstanceId",
-        },
-        {
-          migration_id: 34,
-          name: "ProjectionThreadsSettled",
-        },
-        {
-          migration_id: 35,
-          name: "ProjectionThreadsSnoozed",
-        },
-      ]);
+      assert.deepStrictEqual(
+        recorded.map(({ migration_id, name }) => [migration_id, name] as const),
+        POST_032_MIGRATION_IDENTITIES,
+      );
 
       const upgradedColumns = yield* sql<{ readonly name: string }>`
         PRAGMA table_info(projection_threads)
@@ -167,7 +151,7 @@ it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()))("migration upgrade from
       );
 
       const executed = yield* runMigrations();
-      assert.deepStrictEqual(executed, [[35, "ProjectionThreadsSnoozed"]]);
+      assert.deepStrictEqual(executed, POST_032_MIGRATION_IDENTITIES.slice(2));
 
       const recorded = yield* sql<{
         readonly migration_id: number;
@@ -175,19 +159,13 @@ it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()))("migration upgrade from
       }>`
         SELECT migration_id, name
         FROM effect_sql_migrations
-        WHERE migration_id IN (34, 35)
+        WHERE migration_id >= 34
         ORDER BY migration_id
       `;
-      assert.deepStrictEqual(recorded, [
-        {
-          migration_id: 34,
-          name: "ProjectionThreadsSettled",
-        },
-        {
-          migration_id: 35,
-          name: "ProjectionThreadsSnoozed",
-        },
-      ]);
+      assert.deepStrictEqual(
+        recorded.map(({ migration_id, name }) => [migration_id, name] as const),
+        POST_032_MIGRATION_IDENTITIES.slice(1),
+      );
 
       const upgradedColumns = yield* sql<{ readonly name: string }>`
         PRAGMA table_info(projection_threads)

@@ -21,7 +21,7 @@ import {
   makeCodexPreviewDynamicToolFailureResult,
 } from "./CodexPreviewDynamicTools.ts";
 
-const encodeUnknownJson = Schema.encodeEffect(Schema.UnknownFromJsonString);
+const encodeUnknownJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 const isInvocationError = Schema.is(CodexPreviewDynamicToolInvocationError);
 const isToolNotFoundError = Schema.is(CodexPreviewDynamicToolNotFoundError);
 

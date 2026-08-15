@@ -1,0 +1,164 @@
+name: Mobile Fingerprint Label
+
+# Runs trusted default-branch code only after the read-only PR fingerprint
+# workflow finishes. The artifact is untrusted input and must pass strict
+# schema, PR association, and current-head validation before label mutation.
+on:
+  workflow_run:
+    workflows: [Mobile Fingerprint Check]
+    types: [completed]
+
+concurrency:
+  group: mobile-fingerprint-label-${{ github.event.workflow_run.id }}
+  cancel-in-progress: false
+
+jobs:
+  label:
+    name: Sync native change label
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+      pull-requests: read
+    steps:
+      - name: Download fingerprint result
+        uses: actions/download-artifact@v8
+        with:
+          name: native-fingerprint-result
+          path: ${{ runner.temp }}/native-fingerprint-result
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.event.workflow_run.id }}
+
+      - name: Validate result and sync label
+        uses: actions/github-script@v8
+        env:
+          RESULT_PATH: ${{ runner.temp }}/native-fingerprint-result/native-fingerprint-result.json
+          ASSOCIATED_PULL_REQUESTS: ${{ toJson(github.event.workflow_run.pull_requests) }}
+        with:
+          script: |
+            const fs = require("node:fs");
+
+            const resultPath = process.env.RESULT_PATH;
+            const stat = fs.lstatSync(resultPath);
+            if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 4096) {
+              throw new Error("Fingerprint result must be one small regular file");
+            }
+
+            const result = JSON.parse(fs.readFileSync(resultPath, "utf8"));
+            const expectedKeys = ["changedPlatforms", "headSha", "prNumber", "schemaVersion"];
+            const actualKeys = Object.keys(result).sort();
+            if (JSON.stringify(actualKeys) !== JSON.stringify(expectedKeys)) {
+              throw new Error("Fingerprint result has an unexpected schema");
+            }
+            if (result.schemaVersion !== 1 || !Number.isSafeInteger(result.prNumber)) {
+              throw new Error("Fingerprint result identifiers are invalid");
+            }
+            if (typeof result.headSha !== "string" || !/^[0-9a-f]{40}$/.test(result.headSha)) {
+              throw new Error("Fingerprint result head SHA is invalid");
+            }
+            if (
+              !Array.isArray(result.changedPlatforms) ||
+              result.changedPlatforms.length > 2 ||
+              new Set(result.changedPlatforms).size !== result.changedPlatforms.length ||
+              !result.changedPlatforms.every((value) => value === "ios" || value === "android")
+            ) {
+              throw new Error("Fingerprint result platforms are invalid");
+            }
+
+            const associatedPullRequests = JSON.parse(process.env.ASSOCIATED_PULL_REQUESTS ?? "[]");
+            if (
+              !Array.isArray(associatedPullRequests) ||
+              associatedPullRequests.length !== 1 ||
+              associatedPullRequests[0]?.number !== result.prNumber
+            ) {
+              throw new Error("Fingerprint result is not associated with exactly one expected PR");
+            }
+
+            const { data: pullRequest } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: result.prNumber,
+            });
+            if (pullRequest.state !== "open" || pullRequest.head.sha !== result.headSha) {
+              core.notice(`Ignoring stale fingerprint result for PR #${result.prNumber}`);
+              return;
+            }
+            if (pullRequest.base.repo.full_name !== `${context.repo.owner}/${context.repo.repo}`) {
+              throw new Error("Fingerprint result targets a different base repository");
+            }
+
+            const managedLabel = {
+              name: "📱 Native Change",
+              color: "d93f0b",
+              description:
+                "Changes the native fingerprint; merging blocks production OTAs until a new store build ships.",
+            };
+            const nativeChanged = result.changedPlatforms.length > 0;
+
+            try {
+              const { data: existing } = await github.rest.issues.getLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: managedLabel.name,
+              });
+              if (
+                existing.color !== managedLabel.color ||
+                (existing.description ?? "") !== managedLabel.description
+              ) {
+                await github.rest.issues.updateLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: managedLabel.name,
+                  color: managedLabel.color,
+                  description: managedLabel.description,
+                });
+              }
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              try {
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: managedLabel.name,
+                  color: managedLabel.color,
+                  description: managedLabel.description,
+                });
+              } catch (createError) {
+                if (createError.status !== 422) throw createError;
+              }
+            }
+
+            const { data: currentLabels } = await github.rest.issues.listLabelsOnIssue({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: result.prNumber,
+              per_page: 100,
+            });
+            const hasLabel = currentLabels.some((label) => label.name === managedLabel.name);
+            if (nativeChanged && !hasLabel) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: result.prNumber,
+                labels: [managedLabel.name],
+              });
+            } else if (!nativeChanged && hasLabel) {
+              try {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: result.prNumber,
+                  name: managedLabel.name,
+                });
+              } catch (removeError) {
+                if (removeError.status !== 404) throw removeError;
+              }
+            }
+
+            core.info(
+              `PR #${result.prNumber}: native fingerprint ${nativeChanged ? `changed (${result.changedPlatforms.join(" ")})` : "unchanged"}`,
+            );
