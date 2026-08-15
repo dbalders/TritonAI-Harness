@@ -47,12 +47,16 @@ const DESKTOP_RENDERER_ORIGINS = ["t3code://app", "t3code-dev://app"];
 const GZIP_MIN_BYTES = 1024;
 
 export function contentDispositionAttachment(fileName: string): string {
+  const wellFormedFileName = fileName.replace(
+    /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g,
+    "\uFFFD",
+  );
   const fallback =
-    fileName
+    wellFormedFileName
       .replace(/[^\x20-\x7e]|["\\]/g, "_")
       .trim()
       .slice(0, 255) || "attachment";
-  const encoded = encodeURIComponent(fileName).replace(
+  const encoded = encodeURIComponent(wellFormedFileName).replace(
     /[!'()*]/g,
     (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
   );

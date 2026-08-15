@@ -1,7 +1,11 @@
 import { PROVIDER_SEND_TURN_MAX_FILE_BYTES } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 
-import { exceedsPendingAttachmentCapacity, isPendingAttachmentExpired } from "./http.ts";
+import {
+  exceedsPendingAttachmentCapacity,
+  isPendingAttachmentExpired,
+  sanitizeAttachmentFileName,
+} from "./http.ts";
 
 describe("pending attachment policy", () => {
   it("expires old pending files but preserves files without trustworthy timestamps", () => {
@@ -34,5 +38,13 @@ describe("pending attachment policy", () => {
         incomingBytes: 1,
       }),
     ).toBe(true);
+  });
+
+  it("truncates filenames by Unicode code point", () => {
+    const name = sanitizeAttachmentFileName(`${"a".repeat(254)}😀.txt`);
+
+    expect(Array.from(name)).toHaveLength(255);
+    expect(name.endsWith("😀")).toBe(true);
+    expect(() => encodeURIComponent(name)).not.toThrow();
   });
 });

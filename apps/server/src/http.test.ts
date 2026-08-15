@@ -33,4 +33,10 @@ describe("attachment responses", () => {
       "attachment; filename=\"r_sum____.pdf\"; filename*=UTF-8''r%C3%A9sum%C3%A9%0D%0A%22.pdf",
     );
   });
+
+  it("replaces unpaired surrogates before URI encoding", () => {
+    expect(contentDispositionAttachment(`report-${"\uD83D"}.pdf`)).toContain(
+      "filename*=UTF-8''report-%EF%BF%BD.pdf",
+    );
+  });
 });

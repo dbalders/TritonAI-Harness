@@ -55,6 +55,17 @@ export function exceedsPendingAttachmentCapacity(input: {
   );
 }
 
+export function sanitizeAttachmentFileName(fileName: string): string {
+  const sanitizedName = Array.from(fileName)
+    .map((character) => {
+      const codePoint = character.codePointAt(0) ?? 0;
+      return codePoint < 32 || codePoint === 127 ? " " : character;
+    })
+    .join("")
+    .trim();
+  return Array.from(sanitizedName).slice(0, 255).join("");
+}
+
 export const orchestrationHttpApiLayer = HttpApiBuilder.group(
   EnvironmentHttpApi,
   "orchestration",
@@ -185,16 +196,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
 
           const attachmentId = createAttachmentId(args.params.threadId);
           const targetThreadSegment = toSafeThreadAttachmentSegment(args.params.threadId);
-          const name = path
-            .basename(source.name.trim())
-            .split("")
-            .map((character) => {
-              const codePoint = character.codePointAt(0) ?? 0;
-              return codePoint < 32 || codePoint === 127 ? " " : character;
-            })
-            .join("")
-            .trim()
-            .slice(0, 255);
+          const name = sanitizeAttachmentFileName(path.basename(source.name.trim()));
           if (!attachmentId || !targetThreadSegment || name.length === 0) {
             return yield* failEnvironmentInvalidRequest("invalid_attachment");
           }
