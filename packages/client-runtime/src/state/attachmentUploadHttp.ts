@@ -18,7 +18,7 @@ export const uploadEnvironmentAttachment = Effect.fn(
   readonly uploadId: string;
   readonly file: File;
 }) {
-  const requestPath = `/api/orchestration/threads/${input.threadId}/attachments`;
+  const requestPath = `/api/orchestration/threads/${encodeURIComponent(input.threadId)}/attachments`;
   const requestUrl = environmentEndpointUrl(input.prepared.httpBaseUrl, requestPath);
   const client = yield* makeEnvironmentHttpApiClient(input.prepared.httpBaseUrl);
   const signer = yield* Effect.serviceOption(ManagedRelayDpopSigner);
@@ -53,7 +53,7 @@ export const deleteEnvironmentAttachment = Effect.fn(
   readonly threadId: ThreadId;
   readonly attachmentId: string;
 }) {
-  const requestPath = `/api/orchestration/threads/${input.threadId}/attachments/${encodeURIComponent(input.attachmentId)}`;
+  const requestPath = `/api/orchestration/threads/${encodeURIComponent(input.threadId)}/attachments/${encodeURIComponent(input.attachmentId)}`;
   const requestUrl = environmentEndpointUrl(input.prepared.httpBaseUrl, requestPath);
   const client = yield* makeEnvironmentHttpApiClient(input.prepared.httpBaseUrl);
   const signer = yield* Effect.serviceOption(ManagedRelayDpopSigner);
