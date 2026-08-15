@@ -50,6 +50,7 @@ import {
   makeComposerMentionDragHandlers,
 } from "./composerMentionDrag";
 import {
+  type ComposerFileAttachment,
   type ComposerImageAttachment,
   type DraftId,
   type PersistedComposerImageAttachment,
@@ -246,11 +247,6 @@ import { useAtomCommand } from "../../state/use-atom-command";
 
 const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
 const FILE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_FILE_BYTES / (1024 * 1024))}MB`;
-
-export interface ComposerFileAttachment {
-  readonly id: string;
-  readonly file: File;
-}
 
 const runtimeModeConfig: Record<
   RuntimeMode,

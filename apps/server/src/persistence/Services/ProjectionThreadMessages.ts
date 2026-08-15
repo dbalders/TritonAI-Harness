@@ -78,6 +78,12 @@ export interface ProjectionThreadMessageRepositoryShape {
     input: ListProjectionThreadMessagesInput,
   ) => Effect.Effect<ReadonlyArray<ProjectionThreadMessage>, ProjectionRepositoryError>;
 
+  /** List all projected thread messages in deterministic order. */
+  readonly listAll: () => Effect.Effect<
+    ReadonlyArray<ProjectionThreadMessage>,
+    ProjectionRepositoryError
+  >;
+
   /**
    * Delete projected thread messages by thread.
    */

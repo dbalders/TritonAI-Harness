@@ -137,6 +137,26 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
       `,
   });
 
+  const listAllProjectionThreadMessageRows = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: ProjectionThreadMessageDbRowSchema,
+    execute: () =>
+      sql`
+        SELECT
+          message_id AS "messageId",
+          thread_id AS "threadId",
+          turn_id AS "turnId",
+          role,
+          text,
+          attachments_json AS "attachments",
+          is_streaming AS "isStreaming",
+          created_at AS "createdAt",
+          updated_at AS "updatedAt"
+        FROM projection_thread_messages
+        ORDER BY created_at ASC, message_id ASC
+      `,
+  });
+
   const deleteProjectionThreadMessageRows = SqlSchema.void({
     Request: DeleteProjectionThreadMessagesInput,
     execute: ({ threadId }) =>
@@ -167,6 +187,12 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
       Effect.map((rows) => rows.map(toProjectionThreadMessage)),
     );
 
+  const listAll: ProjectionThreadMessageRepositoryShape["listAll"] = () =>
+    listAllProjectionThreadMessageRows().pipe(
+      Effect.mapError(toPersistenceSqlError("ProjectionThreadMessageRepository.listAll:query")),
+      Effect.map((rows) => rows.map(toProjectionThreadMessage)),
+    );
+
   const deleteByThreadId: ProjectionThreadMessageRepositoryShape["deleteByThreadId"] = (input) =>
     deleteProjectionThreadMessageRows(input).pipe(
       Effect.mapError(
@@ -178,6 +204,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
     upsert,
     getByMessageId,
     listByThreadId,
+    listAll,
     deleteByThreadId,
   } satisfies ProjectionThreadMessageRepositoryShape;
 });

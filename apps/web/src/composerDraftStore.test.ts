@@ -258,6 +258,38 @@ describe("composerDraftStore addImages", () => {
   });
 });
 
+describe("composerDraftStore setFiles", () => {
+  beforeEach(resetComposerDraftStore);
+
+  it("keeps generic File objects isolated by composer target", () => {
+    const firstThreadId = ThreadId.make("thread-files-first");
+    const secondThreadId = ThreadId.make("thread-files-second");
+    const firstThreadRef = scopeThreadRef(TEST_ENVIRONMENT_ID, firstThreadId);
+    const secondThreadRef = scopeThreadRef(TEST_ENVIRONMENT_ID, secondThreadId);
+    const firstFile = new File(["first"], "first.txt", { type: "text/plain" });
+    const secondFile = new File(["second"], "second.csv", { type: "text/csv" });
+
+    useComposerDraftStore
+      .getState()
+      .setFiles(firstThreadRef, [{ id: "file-first", file: firstFile }]);
+    useComposerDraftStore
+      .getState()
+      .setFiles(secondThreadRef, [{ id: "file-second", file: secondFile }]);
+
+    expect(draftFor(firstThreadId, TEST_ENVIRONMENT_ID)?.files).toEqual([
+      { id: "file-first", file: firstFile },
+    ]);
+    expect(draftFor(secondThreadId, TEST_ENVIRONMENT_ID)?.files).toEqual([
+      { id: "file-second", file: secondFile },
+    ]);
+
+    useComposerDraftStore.getState().clearComposerContent(firstThreadRef);
+
+    expect(draftFor(firstThreadId, TEST_ENVIRONMENT_ID)).toBeUndefined();
+    expect(draftFor(secondThreadId, TEST_ENVIRONMENT_ID)?.files[0]?.file).toBe(secondFile);
+  });
+});
+
 describe("composerDraftStore clearComposerContent", () => {
   const threadId = ThreadId.make("thread-clear");
   const threadRef = scopeThreadRef(TEST_ENVIRONMENT_ID, threadId);

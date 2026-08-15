@@ -199,6 +199,7 @@ import {
 import { buildPhysicalToLogicalProjectKeyMap } from "../sidebarProjectGrouping";
 import { buildDraftThreadRouteParams } from "../threadRoutes";
 import {
+  type ComposerFileAttachment,
   type ComposerImageAttachment,
   type DraftThreadEnvMode,
   useComposerDraftStore,
@@ -247,11 +248,7 @@ import {
 import { environmentShell } from "../state/shell";
 import { readPreparedConnection } from "../state/session";
 import { runtime } from "../lib/runtime";
-import {
-  ChatComposer,
-  type ChatComposerHandle,
-  type ComposerFileAttachment,
-} from "./chat/ChatComposer";
+import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
 import { DraftHeroHeadline } from "./chat/DraftHeroHeadline";
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
@@ -1368,7 +1365,11 @@ function ChatViewContent(props: ChatViewProps) {
   const composerActiveProvider = useComposerDraftStore(
     (store) => store.getComposerDraft(composerDraftTarget)?.activeProvider ?? null,
   );
+  const composerFiles = useComposerDraftStore(
+    (store) => store.getComposerDraft(composerDraftTarget)?.files ?? [],
+  );
   const setComposerDraftPrompt = useComposerDraftStore((store) => store.setPrompt);
+  const setComposerDraftFiles = useComposerDraftStore((store) => store.setFiles);
   const addComposerDraftImages = useComposerDraftStore((store) => store.addImages);
   const setComposerDraftTerminalContexts = useComposerDraftStore(
     (store) => store.setTerminalContexts,
@@ -1396,12 +1397,10 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const promptRef = useRef("");
   const composerImagesRef = useRef<ComposerImageAttachment[]>([]);
-  const [composerFiles, setComposerFiles] = useState<ReadonlyArray<ComposerFileAttachment>>([]);
-  const composerFilesRef = useRef<ReadonlyArray<ComposerFileAttachment>>([]);
+  const composerFilesRef = useRef<ReadonlyArray<ComposerFileAttachment>>(composerFiles);
   useEffect(() => {
-    composerFilesRef.current = [];
-    setComposerFiles([]);
-  }, [composerDraftTarget]);
+    composerFilesRef.current = composerFiles;
+  }, [composerFiles]);
   const composerTerminalContextsRef = useRef<TerminalContextDraft[]>([]);
   const composerElementContextsRef = useRef<ElementContextDraft[]>([]);
   const localComposerRef = useRef<ChatComposerHandle | null>(null);
@@ -5191,7 +5190,6 @@ function ChatViewContent(props: ChatViewProps) {
     promptRef.current = "";
     clearComposerDraftContent(composerDraftTarget);
     composerFilesRef.current = [];
-    setComposerFiles([]);
     composerRef.current?.resetCursorState();
 
     let firstComposerImageName: string | null = null;
@@ -5401,11 +5399,11 @@ function ChatViewContent(props: ChatViewProps) {
         const retryComposerImages = composerImagesSnapshot.map(cloneComposerImageForRetry);
         composerImagesRef.current = retryComposerImages;
         composerFilesRef.current = composerFilesSnapshot;
-        setComposerFiles(composerFilesSnapshot);
         composerTerminalContextsRef.current = composerTerminalContextsSnapshot;
         composerElementContextsRef.current = composerElementContextsSnapshot;
         setComposerDraftPrompt(composerDraftTarget, promptForSend);
         addComposerDraftImages(composerDraftTarget, retryComposerImages);
+        setComposerDraftFiles(composerDraftTarget, composerFilesSnapshot);
         setComposerDraftTerminalContexts(composerDraftTarget, composerTerminalContextsSnapshot);
         setComposerDraftElementContexts(composerDraftTarget, composerElementContextsSnapshot);
         setComposerDraftPreviewAnnotations(composerDraftTarget, composerPreviewAnnotationsSnapshot);
@@ -6478,7 +6476,7 @@ function ChatViewContent(props: ChatViewProps) {
                             onSend={onSend}
                             onComposerFilesChange={(files) => {
                               composerFilesRef.current = files;
-                              setComposerFiles(files);
+                              setComposerDraftFiles(composerDraftTarget, files);
                             }}
                             onInterrupt={onInterrupt}
                             onImplementPlanInNewThread={onImplementPlanInNewThread}

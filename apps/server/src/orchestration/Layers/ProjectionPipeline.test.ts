@@ -24,6 +24,7 @@ import {
   SqlitePersistenceMemory,
 } from "../../persistence/Layers/Sqlite.ts";
 import { OrchestrationEventStore } from "../../persistence/Services/OrchestrationEventStore.ts";
+import { ProjectionThreadMessageRepository } from "../../persistence/Services/ProjectionThreadMessages.ts";
 import * as RepositoryIdentityResolver from "../../project/RepositoryIdentityResolver.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import {
@@ -802,10 +803,7 @@ it.layer(
         threadId,
         "00000000-0000-4000-8000-000000000001",
       )!;
-      const removeAttachmentId = createAttachmentId(
-        threadId,
-        "00000000-0000-4000-8000-000000000002",
-      )!;
+      const removeAttachmentId = "thread-revert-files-00000000-0000-4000-8000-000000000002";
       const otherThreadAttachmentId = createAttachmentId(
         "Thread Revert.Files Extra",
         "00000000-0000-4000-8000-000000000003",
@@ -1012,6 +1010,7 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-atta
         const path = yield* Path.Path;
         const projectionPipeline = yield* OrchestrationProjectionPipeline;
         const eventStore = yield* OrchestrationEventStore;
+        const projectionThreadMessageRepository = yield* ProjectionThreadMessageRepository;
         const { attachmentsDir } = yield* ServerConfig;
         const now = "2026-01-01T00:00:00.000Z";
         const threadId = ThreadId.make("Thread Delete.Files");
@@ -1021,6 +1020,7 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-atta
           "00000000-0000-4000-8000-000000000002",
         )!;
         const legacyAttachmentId = "thread-delete-files-00000000-0000-4000-8000-000000000003";
+        const sharedLegacyAttachmentId = "thread-delete-files-00000000-0000-4000-8000-000000000004";
 
         const appendAndProject = (event: Parameters<typeof eventStore.append>[0]) =>
           eventStore
@@ -1097,6 +1097,20 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-atta
                 mimeType: "image/png",
                 sizeBytes: 5,
               },
+              {
+                type: "image",
+                id: legacyAttachmentId,
+                name: "legacy.png",
+                mimeType: "image/png",
+                sizeBytes: 5,
+              },
+              {
+                type: "image",
+                id: sharedLegacyAttachmentId,
+                name: "shared.png",
+                mimeType: "image/png",
+                sizeBytes: 5,
+              },
             ],
             turnId: null,
             streaming: false,
@@ -1105,19 +1119,45 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-atta
           },
         });
 
+        yield* projectionThreadMessageRepository.upsert({
+          messageId: MessageId.make("message-delete-files-other-thread"),
+          threadId: ThreadId.make("Thread Delete.Files Extra"),
+          turnId: null,
+          role: "user",
+          text: "Keep shared attachment",
+          attachments: [
+            {
+              type: "image",
+              id: sharedLegacyAttachmentId,
+              name: "shared.png",
+              mimeType: "image/png",
+              sizeBytes: 5,
+            },
+          ],
+          isStreaming: false,
+          createdAt: now,
+          updatedAt: now,
+        });
+
         const threadAttachmentPath = path.join(attachmentsDir, `${attachmentId}.png`);
         const otherThreadAttachmentPath = path.join(
           attachmentsDir,
           `${otherThreadAttachmentId}.png`,
         );
         const legacyAttachmentPath = path.join(attachmentsDir, `${legacyAttachmentId}.png`);
+        const sharedLegacyAttachmentPath = path.join(
+          attachmentsDir,
+          `${sharedLegacyAttachmentId}.png`,
+        );
         yield* fileSystem.makeDirectory(attachmentsDir, { recursive: true });
         yield* fileSystem.writeFileString(threadAttachmentPath, "delete");
         yield* fileSystem.writeFileString(otherThreadAttachmentPath, "other-thread");
         yield* fileSystem.writeFileString(legacyAttachmentPath, "legacy");
+        yield* fileSystem.writeFileString(sharedLegacyAttachmentPath, "shared");
         assert.isTrue(yield* exists(threadAttachmentPath));
         assert.isTrue(yield* exists(otherThreadAttachmentPath));
         assert.isTrue(yield* exists(legacyAttachmentPath));
+        assert.isTrue(yield* exists(sharedLegacyAttachmentPath));
 
         yield* appendAndProject({
           type: "thread.deleted",
@@ -1137,7 +1177,8 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-atta
 
         assert.isFalse(yield* exists(threadAttachmentPath));
         assert.isTrue(yield* exists(otherThreadAttachmentPath));
-        assert.isTrue(yield* exists(legacyAttachmentPath));
+        assert.isFalse(yield* exists(legacyAttachmentPath));
+        assert.isTrue(yield* exists(sharedLegacyAttachmentPath));
       }),
     );
   },
