@@ -5364,7 +5364,7 @@ function ChatViewContent(props: ChatViewProps) {
           ),
         );
       }
-      if (createdThreadForFileUpload && !turnStartAttempted) {
+      if (createdThreadForFileUpload && (!turnStartAttempted || shouldCleanupUploadedAttachments)) {
         const cleanupResult = await deleteThread({
           environmentId,
           input: {
