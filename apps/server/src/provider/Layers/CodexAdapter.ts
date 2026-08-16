@@ -63,7 +63,6 @@ import {
   type ProviderAdapterError,
 } from "../Errors.ts";
 import { type CodexAdapterShape } from "../Services/CodexAdapter.ts";
-import { appendFileAttachmentPrompt } from "../fileAttachmentPrompt.ts";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import {
@@ -2398,7 +2397,6 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     }
     const attachments = input.attachments ?? [];
     const imageAttachments = attachments.filter((attachment) => attachment.type === "image");
-    const fileAttachments = attachments.filter((attachment) => attachment.type === "file");
     const turnModel = imageAttachments.length > 0 ? effectiveModel : selectedModel;
     const requiresImageContext = imageAttachments.length > 0 && effectiveModelIsExplicitlyTextOnly;
     const analysisAbortController = requiresImageContext ? new AbortController() : undefined;
@@ -2413,24 +2411,8 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     }
 
     return yield* Effect.gen(function* () {
-      let turnInput = appendFileAttachmentPrompt({
-        prompt: input.input,
-        attachments: fileAttachments,
-        resolvePath: (attachment) =>
-          resolveAttachmentPath({
-            attachmentsDir: serverConfig.attachmentsDir,
-            attachment,
-          }),
-      });
+      let turnInput = input.input;
       let codexAttachments: ReadonlyArray<{ readonly type: "image"; readonly url: string }> = [];
-
-      if ((turnInput?.length ?? 0) > PROVIDER_SEND_TURN_MAX_INPUT_CHARS) {
-        return yield* new ProviderAdapterRequestError({
-          provider: PROVIDER,
-          method: "turn/start",
-          detail: "The user message plus file attachment context exceeds the turn input limit.",
-        });
-      }
 
       if (analysisAbortController) {
         if (analysisAbortController.signal.aborted) {

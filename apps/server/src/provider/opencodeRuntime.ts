@@ -309,10 +309,10 @@ export function toOpenCodeFileParts(input: {
   const parts: Array<FilePartInput> = [];
 
   for (const attachment of input.attachments ?? []) {
-    const attachmentPath =
-      attachment.type === "file" && "path" in attachment
-        ? attachment.path
-        : input.resolveAttachmentPath(attachment);
+    if (attachment.type !== "image") {
+      continue;
+    }
+    const attachmentPath = input.resolveAttachmentPath(attachment);
     if (!attachmentPath) {
       continue;
     }

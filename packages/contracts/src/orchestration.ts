@@ -216,7 +216,9 @@ const aggregateUploadedAttachmentByteLimit = Schema.makeFilter(
   (attachments: ReadonlyArray<UploadChatAttachment | ChatAttachment>) =>
     attachments.reduce(
       (total, attachment) =>
-        attachment.type === "file" && "path" in attachment ? total : total + attachment.sizeBytes,
+        attachment.type === "file" && !("path" in attachment)
+          ? total + attachment.sizeBytes
+          : total,
       0,
     ) <= PROVIDER_SEND_TURN_MAX_TOTAL_ATTACHMENT_BYTES ||
     `Combined uploaded attachment size must not exceed ${PROVIDER_SEND_TURN_MAX_TOTAL_ATTACHMENT_BYTES} bytes.`,

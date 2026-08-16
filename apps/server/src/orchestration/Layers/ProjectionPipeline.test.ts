@@ -798,14 +798,23 @@ it.layer(
       const { attachmentsDir } = yield* ServerConfig;
       const now = "2026-01-01T00:00:00.000Z";
       const threadId = ThreadId.make("Thread Revert.Files");
+      const otherThreadId = ThreadId.make("Thread Revert.Files Extra");
       const keepAttachmentId = createAttachmentId(
         threadId,
         "00000000-0000-4000-8000-000000000001",
       )!;
       const removeAttachmentId = "thread-revert-files-00000000-0000-4000-8000-000000000002";
       const otherThreadAttachmentId = createAttachmentId(
-        "Thread Revert.Files Extra",
+        otherThreadId,
         "00000000-0000-4000-8000-000000000003",
+      )!;
+      const sharedAttachmentId = createAttachmentId(
+        threadId,
+        "00000000-0000-4000-8000-000000000004",
+      )!;
+      const pendingAttachmentId = createAttachmentId(
+        threadId,
+        "00000000-0000-4000-8000-000000000005",
       )!;
 
       const appendAndProject = (event: Parameters<typeof eventStore.append>[0]) =>
@@ -879,6 +888,63 @@ it.layer(
           files: [],
           assistantMessageId: MessageId.make("message-keep"),
           completedAt: now,
+        },
+      });
+
+      yield* appendAndProject({
+        type: "thread.created",
+        eventId: EventId.make("evt-revert-files-other-thread"),
+        aggregateKind: "thread",
+        aggregateId: otherThreadId,
+        occurredAt: now,
+        commandId: CommandId.make("cmd-revert-files-other-thread"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-revert-files-other-thread"),
+        metadata: {},
+        payload: {
+          threadId: otherThreadId,
+          projectId: ProjectId.make("project-revert-files"),
+          title: "Thread Revert Files Extra",
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5-codex",
+          },
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+
+      yield* appendAndProject({
+        type: "thread.message-sent",
+        eventId: EventId.make("evt-revert-files-shared-attachment"),
+        aggregateKind: "thread",
+        aggregateId: otherThreadId,
+        occurredAt: now,
+        commandId: CommandId.make("cmd-revert-files-shared-attachment"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-revert-files-shared-attachment"),
+        metadata: {},
+        payload: {
+          threadId: otherThreadId,
+          messageId: MessageId.make("message-shared-attachment"),
+          role: "assistant",
+          text: "Shared",
+          attachments: [
+            {
+              type: "image",
+              id: sharedAttachmentId,
+              name: "shared.png",
+              mimeType: "image/png",
+              sizeBytes: 6,
+            },
+          ],
+          turnId: null,
+          streaming: false,
+          createdAt: now,
+          updatedAt: now,
         },
       });
 
@@ -973,9 +1039,15 @@ it.layer(
       yield* fileSystem.writeFileString(removePath, "remove");
       const otherThreadPath = path.join(attachmentsDir, `${otherThreadAttachmentId}.png`);
       yield* fileSystem.writeFileString(otherThreadPath, "other");
+      const sharedPath = path.join(attachmentsDir, `${sharedAttachmentId}.png`);
+      yield* fileSystem.writeFileString(sharedPath, "shared");
+      const pendingPath = path.join(attachmentsDir, `${pendingAttachmentId}.bin`);
+      yield* fileSystem.writeFileString(pendingPath, "pending");
       assert.isTrue(yield* exists(keepPath));
       assert.isTrue(yield* exists(removePath));
       assert.isTrue(yield* exists(otherThreadPath));
+      assert.isTrue(yield* exists(sharedPath));
+      assert.isTrue(yield* exists(pendingPath));
 
       yield* appendAndProject({
         type: "thread.reverted",
@@ -996,6 +1068,8 @@ it.layer(
       assert.isTrue(yield* exists(keepPath));
       assert.isFalse(yield* exists(removePath));
       assert.isTrue(yield* exists(otherThreadPath));
+      assert.isTrue(yield* exists(sharedPath));
+      assert.isTrue(yield* exists(pendingPath));
     }),
   );
 });
@@ -1019,7 +1093,10 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-atta
           "00000000-0000-4000-8000-000000000002",
         )!;
         const legacyAttachmentId = "thread-delete-files-00000000-0000-4000-8000-000000000003";
-        const sharedLegacyAttachmentId = "thread-delete-files-00000000-0000-4000-8000-000000000004";
+        const sharedLegacyAttachmentId = createAttachmentId(
+          otherThreadId,
+          "00000000-0000-4000-8000-000000000004",
+        )!;
         const pendingAttachmentId = createAttachmentId(
           threadId,
           "00000000-0000-4000-8000-000000000005",
@@ -1189,7 +1266,7 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-atta
           attachmentsDir,
           `${sharedLegacyAttachmentId}.png`,
         );
-        const pendingAttachmentPath = path.join(attachmentsDir, `${pendingAttachmentId}.txt`);
+        const pendingAttachmentPath = path.join(attachmentsDir, `${pendingAttachmentId}.bin`);
         yield* fileSystem.makeDirectory(attachmentsDir, { recursive: true });
         yield* fileSystem.writeFileString(threadAttachmentPath, "delete");
         yield* fileSystem.writeFileString(otherThreadAttachmentPath, "other-thread");

@@ -43,7 +43,6 @@ import type * as EffectAcpSchema from "effect-acp/schema";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
-import { appendFileAttachmentPrompt } from "../fileAttachmentPrompt.ts";
 import {
   ProviderAdapterProcessError,
   ProviderAdapterRequestError,
@@ -963,15 +962,7 @@ export function makeCursorAdapter(
 
           const promptParts: Array<EffectAcpSchema.ContentBlock> = [];
           const attachments = input.attachments ?? [];
-          const promptText = appendFileAttachmentPrompt({
-            prompt: input.input,
-            attachments: attachments.filter((attachment) => attachment.type === "file"),
-            resolvePath: (attachment) =>
-              resolveAttachmentPath({
-                attachmentsDir: serverConfig.attachmentsDir,
-                attachment,
-              }),
-          });
+          const promptText = input.input;
           if (promptText?.trim()) {
             promptParts.push({ type: "text", text: promptText.trim() });
           }

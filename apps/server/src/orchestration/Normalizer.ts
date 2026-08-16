@@ -111,7 +111,9 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
 
     const totalAttachmentBytes = canonicalCommand.message.attachments.reduce(
       (total, attachment) =>
-        attachment.type === "file" && "path" in attachment ? total : total + attachment.sizeBytes,
+        attachment.type === "file" && !("path" in attachment)
+          ? total + attachment.sizeBytes
+          : total,
       0,
     );
     if (totalAttachmentBytes > PROVIDER_SEND_TURN_MAX_TOTAL_ATTACHMENT_BYTES) {
@@ -129,7 +131,24 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
             // the environment filesystem, so the provider receives the path
             // directly rather than forcing a copy into attachment storage.
             if ("path" in attachment) {
-              return attachment;
+              if (!path.isAbsolute(attachment.path)) {
+                return yield* new OrchestrationDispatchCommandError({
+                  message: `File attachment '${attachment.name}' must use an absolute path.`,
+                });
+              }
+              const fileInfo = yield* fileSystem
+                .stat(attachment.path)
+                .pipe(Effect.orElseSucceed(() => null));
+              if (
+                !fileInfo ||
+                fileInfo.type !== "File" ||
+                Number(fileInfo.size) !== attachment.sizeBytes
+              ) {
+                return yield* new OrchestrationDispatchCommandError({
+                  message: `File attachment '${attachment.name}' is missing or has changed.`,
+                });
+              }
+              return { ...attachment, path: path.normalize(attachment.path) };
             }
             if (!isCanonicalAttachmentIdOwnedByThread(attachment.id, canonicalCommand.threadId)) {
               return yield* new OrchestrationDispatchCommandError({

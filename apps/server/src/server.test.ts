@@ -823,7 +823,7 @@ const buildAppUnderTest = (options?: {
             upsert: () => Effect.void,
             getByMessageId: () => Effect.succeed(Option.none()),
             listByThreadId: () => Effect.succeed([]),
-            listLiveAttachmentReferences: () => Effect.succeed([]),
+            listLiveAttachmentIds: () => Effect.succeed([]),
             deleteByThreadId: () => Effect.void,
             ...options?.layers?.projectionThreadMessageRepository,
           }),

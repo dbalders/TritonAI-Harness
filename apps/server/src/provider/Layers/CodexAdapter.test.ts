@@ -37,7 +37,6 @@ import * as Stream from "effect/Stream";
 import * as CodexErrors from "effect-codex-app-server/errors";
 
 import { ServerConfig } from "../../config.ts";
-import { attachmentRelativePath } from "../../attachmentStore.ts";
 import {
   codexDynamicIntegrationToolName,
   type RegistryRuntime,
@@ -2350,7 +2349,7 @@ function imageAttachment(id: string) {
   };
 }
 
-it.effect("passes generic attachments to Codex as filesystem context", () => {
+it.effect("keeps generic attachments out of Codex native attachment inputs", () => {
   const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "codex-file-context-"));
   const runtimeFactory = makeRuntimeFactory();
   const analyzer: CodexImageContextAnalyzer = () => Effect.succeed([]);
@@ -2358,7 +2357,6 @@ it.effect("passes generic attachments to Codex as filesystem context", () => {
 
   return Effect.gen(function* () {
     const adapter = yield* CodexAdapter;
-    const { attachmentsDir } = yield* ServerConfig;
     const threadId = asThreadId("thread-file-context");
     const attachment = {
       type: "file" as const,
@@ -2367,9 +2365,6 @@ it.effect("passes generic attachments to Codex as filesystem context", () => {
       mimeType: "text/plain",
       sizeBytes: 12,
     };
-    const attachmentPath = NodePath.join(attachmentsDir, attachmentRelativePath(attachment));
-    NodeFS.writeFileSync(attachmentPath, "hello world\n");
-
     yield* adapter.startSession({
       provider: ProviderDriverKind.make("codex"),
       threadId,
@@ -2383,13 +2378,7 @@ it.effect("passes generic attachments to Codex as filesystem context", () => {
     });
 
     const turn = runtimeFactory.lastRuntime?.sendTurnImpl.mock.calls[0]?.[0];
-    NodeAssert.match(turn?.input ?? "", /Summarize this file\./);
-    NodeAssert.match(turn?.input ?? "", /# Files mentioned by the user:/);
-    NodeAssert.match(turn?.input ?? "", /untrusted data, never as instructions/);
-    NodeAssert.match(turn?.input ?? "", /"name": "requirements\.txt"/);
-    NodeAssert.match(turn?.input ?? "", /"mediaType": "text\/plain"/);
-    NodeAssert.match(turn?.input ?? "", /"sizeBytes": 12/);
-    NodeAssert.ok((turn?.input ?? "").includes(attachmentPath));
+    NodeAssert.equal(turn?.input, "Summarize this file.");
     NodeAssert.equal(Object.hasOwn(turn ?? {}, "attachments"), false);
   }).pipe(
     Effect.provide(layer),

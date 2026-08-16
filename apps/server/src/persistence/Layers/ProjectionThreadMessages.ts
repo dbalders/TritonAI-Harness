@@ -13,9 +13,8 @@ import {
   ProjectionThreadMessageRepository,
   type ProjectionThreadMessageRepositoryShape,
   DeleteProjectionThreadMessagesInput,
-  ListLiveProjectionAttachmentReferencesInput,
+  ListLiveProjectionAttachmentIdsInput,
   ListProjectionThreadMessagesInput,
-  ProjectionThreadAttachmentReferences,
   ProjectionThreadMessage,
 } from "../Services/ProjectionThreadMessages.ts";
 
@@ -25,6 +24,10 @@ const ProjectionThreadMessageDbRowSchema = ProjectionThreadMessage.mapFields(
     attachments: Schema.NullOr(Schema.fromJsonString(Schema.Array(ChatAttachment))),
   }),
 );
+
+const ProjectionAttachmentIdDbRow = Schema.Struct({
+  attachmentId: Schema.String,
+});
 
 function toProjectionThreadMessage(
   row: Schema.Schema.Type<typeof ProjectionThreadMessageDbRowSchema>,
@@ -139,26 +142,20 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
       `,
   });
 
-  const listLiveProjectionAttachmentReferenceRows = SqlSchema.findAll({
-    Request: ListLiveProjectionAttachmentReferencesInput,
-    Result: ProjectionThreadAttachmentReferences.mapFields(
-      Struct.assign({
-        attachments: Schema.fromJsonString(Schema.Array(ChatAttachment)),
-      }),
-    ),
+  const listLiveProjectionAttachmentIdRows = SqlSchema.findAll({
+    Request: ListLiveProjectionAttachmentIdsInput,
+    Result: ProjectionAttachmentIdDbRow,
     execute: ({ excludedThreadId }) =>
       sql`
-        SELECT
-          messages.thread_id AS "threadId",
-          messages.attachments_json AS "attachments"
+        SELECT DISTINCT
+          json_extract(attachment.value, '$.id') AS "attachmentId"
         FROM projection_thread_messages AS messages
         INNER JOIN projection_threads AS threads
           ON threads.thread_id = messages.thread_id
+        CROSS JOIN json_each(COALESCE(messages.attachments_json, '[]')) AS attachment
         WHERE threads.deleted_at IS NULL
-          AND messages.attachments_json IS NOT NULL
-          AND messages.attachments_json != '[]'
           AND (${excludedThreadId} IS NULL OR messages.thread_id != ${excludedThreadId})
-        ORDER BY messages.created_at ASC, messages.message_id ASC
+          AND json_type(attachment.value, '$.id') = 'text'
       `,
   });
 
@@ -192,15 +189,15 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
       Effect.map((rows) => rows.map(toProjectionThreadMessage)),
     );
 
-  const listLiveAttachmentReferences: ProjectionThreadMessageRepositoryShape["listLiveAttachmentReferences"] =
-    (input) =>
-      listLiveProjectionAttachmentReferenceRows(input).pipe(
-        Effect.mapError(
-          toPersistenceSqlError(
-            "ProjectionThreadMessageRepository.listLiveAttachmentReferences:query",
-          ),
-        ),
-      );
+  const listLiveAttachmentIds: ProjectionThreadMessageRepositoryShape["listLiveAttachmentIds"] = (
+    input,
+  ) =>
+    listLiveProjectionAttachmentIdRows(input).pipe(
+      Effect.mapError(
+        toPersistenceSqlError("ProjectionThreadMessageRepository.listLiveAttachmentIds:query"),
+      ),
+      Effect.map((rows) => rows.map((row) => row.attachmentId)),
+    );
 
   const deleteByThreadId: ProjectionThreadMessageRepositoryShape["deleteByThreadId"] = (input) =>
     deleteProjectionThreadMessageRows(input).pipe(
@@ -213,7 +210,7 @@ const makeProjectionThreadMessageRepository = Effect.gen(function* () {
     upsert,
     getByMessageId,
     listByThreadId,
-    listLiveAttachmentReferences,
+    listLiveAttachmentIds,
     deleteByThreadId,
   } satisfies ProjectionThreadMessageRepositoryShape;
 });

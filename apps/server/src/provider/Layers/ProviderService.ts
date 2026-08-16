@@ -17,6 +17,7 @@ import {
   ProviderRespondToRequestInput,
   ProviderRespondToUserInputInput,
   ProviderSendTurnInput,
+  PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   ProviderSessionStartInput,
   ProviderStopSessionInput,
   type ProviderInstanceId,
@@ -48,6 +49,7 @@ import {
   withMetrics,
 } from "../../observability/Metrics.ts";
 import { type ProviderAdapterError, ProviderValidationError } from "../Errors.ts";
+import { appendFileAttachmentPrompt } from "../fileAttachmentPrompt.ts";
 import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "../Services/ProviderAdapterRegistry.ts";
 import * as ProviderService from "../Services/ProviderService.ts";
@@ -680,36 +682,48 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       );
     }
 
-    // Adapters inline attachment pixels into the model prompt, but the model's
-    // tools cannot dereference pixels. Appending the on-disk path is what lets
-    // a turn like "include this screenshot in the PR" copy the actual file.
-    // This runs after schema decode, so the appended lines are exempt from the
-    // PROVIDER_SEND_TURN_MAX_INPUT_CHARS check; attachment count is capped, so
-    // the overhead is bounded. Unresolvable ids are skipped here and surface
-    // as adapter errors when the file is read for inlining.
-    const attachmentPathLines = attachments.flatMap((attachment) => {
-      const attachmentPath =
-        attachment.type === "file" && "path" in attachment
-          ? attachment.path
-          : resolveAttachmentPath({
-              attachmentsDir: serverConfig.attachmentsDir,
-              attachment,
-            });
+    // Images remain native provider inputs, but their paths are also useful to
+    // agents that need to copy the original bytes. Generic files are described
+    // once here as untrusted metadata so every provider gets the same bounded,
+    // tool-directed context without eagerly reading file contents.
+    const imagePathLines = attachments.flatMap((attachment) => {
+      if (attachment.type !== "image") return [];
+      const attachmentPath = resolveAttachmentPath({
+        attachmentsDir: serverConfig.attachmentsDir,
+        attachment,
+      });
       return attachmentPath === null
         ? []
-        : [`[Attached ${attachment.type} "${attachment.name}" is saved at: ${attachmentPath}]`];
+        : [`[Attached image "${attachment.name}" is saved at: ${attachmentPath}]`];
     });
-    const inputTextWithAttachmentPaths =
-      attachmentPathLines.length === 0
-        ? parsed.input
-        : [parsed.input, attachmentPathLines.join("\n")]
+    const inputTextWithFileContext = appendFileAttachmentPrompt({
+      prompt: parsed.input,
+      attachments: attachments.filter((attachment) => attachment.type === "file"),
+      resolvePath: (attachment) =>
+        resolveAttachmentPath({
+          attachmentsDir: serverConfig.attachmentsDir,
+          attachment,
+        }),
+    });
+    if ((inputTextWithFileContext?.length ?? 0) > PROVIDER_SEND_TURN_MAX_INPUT_CHARS) {
+      return yield* toValidationError(
+        "ProviderService.sendTurn",
+        "The user message plus attachment context exceeds the turn input limit",
+      );
+    }
+    // Preserve the existing image behavior: these bounded, server-generated
+    // path hints remain outside the public user-input character allowance.
+    const inputTextWithAttachmentContext =
+      imagePathLines.length === 0
+        ? inputTextWithFileContext
+        : [inputTextWithFileContext, imagePathLines.join("\n")]
             .filter((part): part is string => typeof part === "string" && part.length > 0)
             .join("\n\n");
 
     const input = {
       ...parsed,
-      ...(inputTextWithAttachmentPaths !== undefined
-        ? { input: inputTextWithAttachmentPaths }
+      ...(inputTextWithAttachmentContext !== undefined
+        ? { input: inputTextWithAttachmentContext }
         : {}),
       attachments,
     };

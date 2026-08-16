@@ -16,7 +16,7 @@ describe("pending attachment policy", () => {
     );
   });
 
-  it("caps pending bytes per thread and across the environment", () => {
+  it("caps pending upload bytes per thread and environment", () => {
     expect(
       exceedsPendingAttachmentCapacity({
         targetPendingBytes: PROVIDER_SEND_TURN_MAX_FILE_BYTES - 1,

@@ -15,6 +15,7 @@ import {
   EventId,
   ProviderDriverKind,
   ProviderInstanceId,
+  PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   ProviderSessionStartInput,
   ThreadId,
   TurnId,
@@ -984,6 +985,16 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const imageOnlyInput = routing.codex.sendTurn.mock.calls[0]?.[0] as ProviderSendTurnInput;
       assert.equal(imageOnlyInput.input?.startsWith('[Attached image "screenshot.png"'), true);
 
+      // Image path hints have always been server-generated context outside the
+      // public user-input allowance; attaching an image must not shrink it.
+      routing.codex.sendTurn.mockClear();
+      yield* provider.sendTurn({
+        threadId: session.threadId,
+        input: "x".repeat(PROVIDER_SEND_TURN_MAX_INPUT_CHARS),
+        attachments: [attachment],
+      });
+      assert.equal(routing.codex.sendTurn.mock.calls.length, 1);
+
       const localFilePath = "/tmp/project/large.csv";
       routing.codex.sendTurn.mockClear();
       yield* provider.sendTurn({
@@ -1001,10 +1012,10 @@ routing.layer("ProviderServiceLive routing", (it) => {
         ],
       });
       const localFileInput = routing.codex.sendTurn.mock.calls[0]?.[0] as ProviderSendTurnInput;
-      assert.include(
-        localFileInput.input ?? "",
-        `[Attached file "large.csv" is saved at: ${localFilePath}]`,
-      );
+      assert.include(localFileInput.input ?? "", "# Files mentioned by the user:");
+      assert.include(localFileInput.input ?? "", '"name": "large.csv"');
+      assert.include(localFileInput.input ?? "", `"path": "${localFilePath}"`);
+      assert.notInclude(localFileInput.input ?? "", "[Attached file");
 
       yield* provider.stopSession({ threadId: session.threadId });
     }),

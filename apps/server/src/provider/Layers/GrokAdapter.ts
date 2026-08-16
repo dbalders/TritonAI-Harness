@@ -35,7 +35,6 @@ import type * as EffectAcpSchema from "effect-acp/schema";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
-import { appendFileAttachmentPrompt } from "../fileAttachmentPrompt.ts";
 import {
   ProviderAdapterProcessError,
   ProviderAdapterRequestError,
@@ -952,15 +951,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
               });
 
               const attachments = input.attachments ?? [];
-              const text = appendFileAttachmentPrompt({
-                prompt: input.input,
-                attachments: attachments.filter((attachment) => attachment.type === "file"),
-                resolvePath: (attachment) =>
-                  resolveAttachmentPath({
-                    attachmentsDir: serverConfig.attachmentsDir,
-                    attachment,
-                  }),
-              })?.trim();
+              const text = input.input?.trim();
               const imagePromptParts = yield* Effect.forEach(
                 attachments.filter((attachment) => attachment.type === "image"),
                 (attachment) =>

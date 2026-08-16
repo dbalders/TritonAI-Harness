@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import { toOpenCodeFileParts } from "./opencodeRuntime.ts";
 
 describe("toOpenCodeFileParts", () => {
-  it("uses an original local path without invoking stored-attachment resolution", () => {
+  it("keeps generic files out of provider-native file parts", () => {
     const resolveAttachmentPath = vi.fn(() => null);
 
     expect(
@@ -20,14 +20,7 @@ describe("toOpenCodeFileParts", () => {
         ],
         resolveAttachmentPath,
       }),
-    ).toEqual([
-      {
-        type: "file",
-        mime: "text/csv",
-        filename: "large.csv",
-        url: "file:///Users/david/Downloads/large.csv",
-      },
-    ]);
+    ).toEqual([]);
     expect(resolveAttachmentPath).not.toHaveBeenCalled();
   });
 });

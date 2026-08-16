@@ -341,6 +341,33 @@ it.effect("rejects stored files over the aggregate upload limit in both turn sch
   }),
 );
 
+it.effect("preserves the existing per-image limits without adding an aggregate cap", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeThreadTurnStartCommand({
+      type: "thread.turn.start",
+      commandId: "cmd-existing-image-limits",
+      threadId: "thread-1",
+      message: {
+        messageId: "msg-existing-image-limits",
+        role: "user",
+        text: "compare these images",
+        attachments: Array.from({ length: 6 }, (_, index) => ({
+          type: "image" as const,
+          id: `thread-1-00000000-0000-4000-8000-00000000000${index}`,
+          name: `image-${index}.png`,
+          mimeType: "image/png",
+          sizeBytes: 10 * 1024 * 1024,
+        })),
+      },
+      runtimeMode: "auto-accept-edits",
+      interactionMode: "default",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    assert.strictEqual(parsed.message.attachments.length, 6);
+  }),
+);
+
 it.effect("accepts a large local file reference without copying its bytes", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeClientOrchestrationCommand({

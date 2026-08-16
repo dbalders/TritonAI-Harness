@@ -2824,22 +2824,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       const threadId = activeThreadId;
       const existingReservations = pendingImageReservationsRef.current.get(threadId);
       const pendingCount = existingReservations?.size ?? 0;
-      const pendingBytes = existingReservations
-        ? [...existingReservations.values()].reduce<number>(
-            (sum, sizeBytes) => sum + (sizeBytes ?? 0),
-            0,
-          )
-        : 0;
       const acceptedImages: Array<{ readonly id: string; readonly file: File }> = [];
       const nextFiles = [...composerFilesRef.current];
       let attachmentCount = composerImagesRef.current.length + nextFiles.length + pendingCount;
-      let pendingUploadBytes =
-        composerImagesRef.current.reduce((total, attachment) => total + attachment.file.size, 0) +
-        nextFiles.reduce(
-          (total, attachment) => (attachment.path === null ? total + attachment.file.size : total),
-          0,
-        ) +
-        pendingBytes;
+      let pendingUploadBytes = nextFiles.reduce(
+        (total, attachment) => (attachment.path === null ? total + attachment.file.size : total),
+        0,
+      );
       let error: string | null = null;
       for (const file of files) {
         if (attachmentCount >= PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {
@@ -2909,23 +2900,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             continue;
           }
           const attachmentFile = compressed.file;
-          const committedBytes = [
-            ...composerImagesRef.current,
-            ...composerFilesRef.current.filter((attachment) => attachment.path === null),
-          ].reduce((sum, attachment) => sum + attachment.file.size, 0);
-          const reservedBytes = [...reservations.values()].reduce<number>(
-            (sum, sizeBytes) => sum + (sizeBytes ?? 0),
-            0,
-          );
-          if (
-            committedBytes + reservedBytes + attachmentFile.size >
-            PROVIDER_SEND_TURN_MAX_TOTAL_ATTACHMENT_BYTES
-          ) {
-            compressionError = "Uploaded attachments can total up to 50MB per message.";
-            reservations.delete(acceptedImage.id);
-            continue;
-          }
-          reservations.set(acceptedImage.id, attachmentFile.size);
           committedReservationIds.add(acceptedImage.id);
           nextImages.push({
             type: "image",
@@ -3105,7 +3079,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         composerEditorRef.current?.focusAt(cursor);
       },
       addDroppedFiles: (files: File[]) => {
-        addComposerAttachments(files);
+        void addComposerAttachments(files.filter((file) => file.type.startsWith("image/")));
         focusComposer();
       },
       insertTextAtEnd: insertComposerTextAtEnd,

@@ -75,7 +75,6 @@ import * as Stream from "effect/Stream";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
-import { appendFileAttachmentPrompt } from "../fileAttachmentPrompt.ts";
 import { resolveClaudeSdkExecutablePath } from "../Drivers/ClaudeExecutable.ts";
 import { makeClaudeEnvironment } from "../Drivers/ClaudeHome.ts";
 import {
@@ -1228,15 +1227,7 @@ const buildUserMessageEffect = Effect.fn("buildUserMessageEffect")(function* (
   },
 ) {
   const attachments = input.attachments ?? [];
-  const text = appendFileAttachmentPrompt({
-    prompt: buildPromptText(input, dependencies.boundInstanceId),
-    attachments: attachments.filter((attachment) => attachment.type === "file"),
-    resolvePath: (attachment) =>
-      resolveAttachmentPath({
-        attachmentsDir: dependencies.attachmentsDir,
-        attachment,
-      }),
-  });
+  const text = buildPromptText(input, dependencies.boundInstanceId);
   const sdkContent: Array<Record<string, unknown>> = [];
 
   if (text && text.length > 0) {

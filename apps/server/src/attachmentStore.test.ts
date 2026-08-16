@@ -10,7 +10,6 @@ import * as Effect from "effect/Effect";
 import {
   attachmentRelativePath,
   createAttachmentId,
-  inferFileExtension,
   isAttachmentIdOwnedByThread,
   parseThreadSegmentFromAttachmentId,
   resolveAttachmentPathById,
@@ -102,12 +101,7 @@ describe("attachmentStore", () => {
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
-  it("uses a safe final extension for generic files", () => {
-    expect(inferFileExtension("notes.TXT")).toBe(".txt");
-    expect(inferFileExtension("archive.tar.gz")).toBe(".gz");
-    expect(inferFileExtension("no-extension")).toBe(".bin");
-    expect(inferFileExtension("unsafe.<script>")).toBe(".bin");
-
+  it("stores generic files as opaque blobs while preserving metadata separately", () => {
     expect(
       attachmentRelativePath({
         type: "file",
@@ -116,17 +110,17 @@ describe("attachmentStore", () => {
         mimeType: "application/pdf",
         sizeBytes: 12,
       }),
-    ).toBe("thread-file-00000000-0000-4000-8000-000000000001.pdf");
+    ).toBe("thread-file-00000000-0000-4000-8000-000000000001.bin");
   });
 
-  it.effect("resolves generic attachment extensions from disk", () =>
+  it.effect("resolves a generic attachment from its deterministic blob path", () =>
     Effect.gen(function* () {
       const attachmentsDir = NodeFS.mkdtempSync(
         NodePath.join(NodeOS.tmpdir(), "t3code-attachment-store-"),
       );
       try {
         const attachmentId = "thread-file-00000000-0000-4000-8000-000000000001";
-        const textPath = NodePath.join(attachmentsDir, `${attachmentId}.txt`);
+        const textPath = NodePath.join(attachmentsDir, `${attachmentId}.bin`);
         NodeFS.writeFileSync(textPath, "hello");
 
         expect(yield* resolveAttachmentPathById({ attachmentsDir, attachmentId })).toBe(textPath);
