@@ -11,6 +11,7 @@ import {
   type CanonicalItemType,
   type CanonicalRequestType,
   type CodexSettings,
+  type DesktopMcpServerConfiguration,
   ProviderDriverKind,
   type ProviderEvent,
   ProviderInstanceId,
@@ -132,6 +133,30 @@ interface CodexAdapterSessionContext {
 
 // TritonAI Installer writes its key-scoped managed catalog into customModelMetadata.
 // Models without managed modality metadata intentionally retain upstream raw-image behavior.
+export function createStdioMcpServerArgs(
+  serverName: string,
+  configuration: DesktopMcpServerConfiguration,
+): ReadonlyArray<string> {
+  const environmentEntries = Object.entries(configuration.environment);
+  return [
+    "-c",
+    `mcp_servers.${serverName}.command=${encodeCodexConfigString(configuration.command)}`,
+    "-c",
+    `mcp_servers.${serverName}.args=[${configuration.args.map(encodeCodexConfigString).join(",")}]`,
+    ...(environmentEntries.length > 0
+      ? [
+          "-c",
+          `mcp_servers.${serverName}.env={${environmentEntries
+            .map(
+              ([name, value]) =>
+                `${encodeCodexConfigString(name)}=${encodeCodexConfigString(value)}`,
+            )
+            .join(",")}}`,
+        ]
+      : []),
+  ];
+}
+
 function managedModelIsExplicitlyTextOnly(
   codexConfig: CodexSettings,
   model: string | undefined,
@@ -1949,6 +1974,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
             requiresApproval: binding.requiresApproval,
           })),
         ];
+        const computerUseMcp = serverConfig.computerUseMcp;
         const appServerArgs = [
           ...(options?.modelCatalogPath
             ? ["-c", `model_catalog_json=${encodeCodexConfigString(options.modelCatalogPath)}`]
@@ -1962,6 +1988,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
                 'mcp_servers.t3-code.bearer_token_env_var="T3_MCP_BEARER_TOKEN"',
               ]
             : []),
+          ...(computerUseMcp ? createStdioMcpServerArgs("cua-driver", computerUseMcp) : []),
         ];
         const runtimeEnvironment =
           mcpSession && !usesCustomModel

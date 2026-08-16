@@ -17,6 +17,7 @@ import * as ElectronDialog from "../electron/ElectronDialog.ts";
 import * as ElectronSafeStorage from "../electron/ElectronSafeStorage.ts";
 import * as DesktopBackendConfiguration from "./DesktopBackendConfiguration.ts";
 import * as DesktopConfig from "../app/DesktopConfig.ts";
+import * as DesktopComputerUse from "../computerUse/DesktopComputerUse.ts";
 import * as DesktopServerExposure from "./DesktopServerExposure.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopTritonAiApiKey from "../settings/DesktopTritonAiApiKey.ts";
@@ -72,7 +73,12 @@ const makeDialogLayer = (response = 0) =>
 
 const dialogLayer = makeDialogLayer();
 
-const desktopTestServicesLayer = Layer.mergeAll(serverExposureLayer, safeStorageLayer, dialogLayer);
+const desktopTestServicesLayer = Layer.mergeAll(
+  serverExposureLayer,
+  safeStorageLayer,
+  dialogLayer,
+  DesktopComputerUse.layerTest(),
+);
 
 function makeEnvironmentLayer(
   baseDir: string,
@@ -272,7 +278,12 @@ describe("DesktopBackendConfiguration", () => {
         Effect.provide(
           DesktopBackendConfiguration.layer.pipe(
             Layer.provideMerge(
-              Layer.mergeAll(serverExposureLayer, safeStorageLayer, makeDialogLayer(1)),
+              Layer.mergeAll(
+                serverExposureLayer,
+                safeStorageLayer,
+                makeDialogLayer(1),
+                DesktopComputerUse.layerTest(),
+              ),
             ),
             Layer.provideMerge(DesktopAppSettings.layerTest()),
             Layer.provideMerge(

@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 
 import * as NodeModule from "node:module";
+import * as NodeCrypto from "node:crypto";
 
 import { TRITONAI_APP_BASE_NAME, TRITONAI_APP_ID_BASE } from "@t3tools/contracts";
 import { fromYaml } from "@t3tools/shared/schemaYaml";
 import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { clerkFrontendApiHostnameFromPublishableKey } from "@t3tools/shared/relayAuth";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
+import extractZip from "extract-zip";
 import rootPackageJson from "../package.json" with { type: "json" };
 import desktopPackageJson from "../apps/desktop/package.json" with { type: "json" };
 import desktopRuntimePackageJson from "../apps/desktop-runtime/package.json" with { type: "json" };
@@ -46,6 +48,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { Command, Flag } from "effect/unstable/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/unstable/http";
 
 const LINUX_ICON_SIZES = [16, 22, 24, 32, 48, 64, 128, 256, 512] as const;
 const DESKTOP_APP_ID = TRITONAI_APP_ID_BASE;
@@ -472,6 +475,22 @@ export class ResourceMonitorBuildOutputMissingError extends Schema.TaggedErrorCl
 ) {
   override get message(): string {
     return `Resource monitor build for ${this.rustTarget} did not produce ${this.binaryPath}.`;
+  }
+}
+
+export class CuaDriverArtifactError extends Schema.TaggedErrorClass<CuaDriverArtifactError>()(
+  "CuaDriverArtifactError",
+  {
+    operation: Schema.Literals(["download", "checksum", "extract"]),
+    platform: BuildPlatform,
+    arch: BuildArch,
+    expectedSha256: Schema.String,
+    actualSha256: Schema.optionalKey(Schema.String),
+    cause: Schema.optionalKey(Schema.Defect()),
+  },
+) {
+  override get message(): string {
+    return `Failed to ${this.operation} pinned Cua Driver ${CUA_DRIVER_VERSION} for ${this.platform}-${this.arch}.`;
   }
 }
 
@@ -914,7 +933,54 @@ export const DESKTOP_EXTRA_RESOURCES = [
     from: "apps/desktop/prod-resources/resource-monitor",
     to: "resource-monitor",
   },
+  {
+    from: "apps/desktop/prod-resources/cua-driver",
+    to: "cua-driver",
+  },
 ] as const;
+
+export const CUA_DRIVER_VERSION = "0.19.3" as const;
+
+interface CuaDriverReleaseAsset {
+  readonly fileName: string;
+  readonly sha256: string;
+}
+
+const CUA_DRIVER_RELEASE_ASSETS = {
+  mac: {
+    fileName: `cua-driver-rs-${CUA_DRIVER_VERSION}-darwin-universal-binary.tar.gz`,
+    sha256: "733e28a3782ac8d325f8fce8b5d97486c1054af755b40dfd086151b34c79377e",
+  },
+  "linux-x64": {
+    fileName: `cua-driver-rs-${CUA_DRIVER_VERSION}-linux-x86_64-binary.tar.gz`,
+    sha256: "3db9d4257d84bacaf7eb104d225f85613ce67edbb20d6eeb83c1384b6d8a5b10",
+  },
+  "linux-arm64": {
+    fileName: `cua-driver-rs-${CUA_DRIVER_VERSION}-linux-arm64-binary.tar.gz`,
+    sha256: "68c4bc4455250384b6e0fc6ab99ed2be5de8944de4ecea00fc3f4a88d8f4d460",
+  },
+  "win-x64": {
+    fileName: `cua-driver-rs-${CUA_DRIVER_VERSION}-windows-x86_64-binary.zip`,
+    sha256: "51a316b14ec9667c04106d8aff80d696ded427cb64cef48de09095e4709f583d",
+  },
+  "win-arm64": {
+    fileName: `cua-driver-rs-${CUA_DRIVER_VERSION}-windows-arm64-binary.zip`,
+    sha256: "a26b27ae3470f36fa4b12805caae88db510e5cd60e30522bda6b492963727701",
+  },
+} as const satisfies Record<string, CuaDriverReleaseAsset>;
+
+export function resolveCuaDriverReleaseAsset(
+  platform: typeof BuildPlatform.Type,
+  arch: typeof BuildArch.Type,
+): CuaDriverReleaseAsset & { readonly url: string } {
+  const key = platform === "mac" ? "mac" : (`${platform}-${arch}` as const);
+  const asset = CUA_DRIVER_RELEASE_ASSETS[key as keyof typeof CUA_DRIVER_RELEASE_ASSETS];
+  if (!asset) throw new Error(`Unsupported Cua Driver release target: ${platform}-${arch}`);
+  return {
+    ...asset,
+    url: `https://github.com/trycua/cua/releases/download/cua-driver-rs-v${CUA_DRIVER_VERSION}/${asset.fileName}`,
+  };
+}
 
 export interface MacPasskeySigningConfiguration {
   readonly appId: string;
@@ -1222,6 +1288,23 @@ export function resolveFfiRsNativeDependencies(
   );
 }
 
+export function resolveCuaDriverNativeDependencies(
+  platform: typeof BuildPlatform.Type,
+  arch: typeof BuildArch.Type,
+  version: string,
+): Record<string, string> {
+  const architectures = arch === "universal" ? (["arm64", "x64"] as const) : [arch];
+  const platformName = platform === "mac" ? "darwin" : platform === "win" ? "win32" : "linux";
+  const suffix = platform === "win" ? "-msvc" : platform === "linux" ? "-gnu" : "";
+
+  return Object.fromEntries(
+    architectures.map((architecture) => [
+      `@trycua/cua-driver-${platformName}-${architecture}${suffix}`,
+      version,
+    ]),
+  );
+}
+
 function recordsEqual(left: Record<string, string>, right: Record<string, string>): boolean {
   const leftEntries = Object.entries(left).sort(([a], [b]) => a.localeCompare(b));
   const rightEntries = Object.entries(right).sort(([a], [b]) => a.localeCompare(b));
@@ -1231,12 +1314,16 @@ function recordsEqual(left: Record<string, string>, right: Record<string, string
 export function resolveDesktopRuntimeNativeDependencies(): Record<string, string> {
   const fffVersion = serverPackageJson.dependencies["@ff-labs/fff-node"];
   const ffiRsVersion = serverPackageJson.dependencies["ffi-rs"];
+  const cuaDriverVersion = desktopPackageJson.dependencies["@trycua/cua-driver"];
   return {
     ...resolveFffNativeDependencies("mac", "universal", fffVersion),
     ...resolveFffNativeDependencies("win", "universal", fffVersion),
     ...resolveFffNativeDependencies("linux", "universal", fffVersion),
     ...resolveFfiRsNativeDependencies("mac", "universal", ffiRsVersion),
     ...resolveFfiRsNativeDependencies("win", "universal", ffiRsVersion),
+    ...resolveCuaDriverNativeDependencies("mac", "universal", cuaDriverVersion),
+    ...resolveCuaDriverNativeDependencies("win", "universal", cuaDriverVersion),
+    ...resolveCuaDriverNativeDependencies("linux", "universal", cuaDriverVersion),
   };
 }
 
@@ -1802,6 +1889,116 @@ const stageResourceMonitor = Effect.fn("stageResourceMonitor")(function* (input:
   if (input.platform !== "win") {
     yield* fs.chmod(destinationPath, 0o755);
   }
+});
+
+const stageCuaDriver = Effect.fn("stageCuaDriver")(function* (input: {
+  readonly stageResourcesDir: string;
+  readonly platform: typeof BuildPlatform.Type;
+  readonly arch: typeof BuildArch.Type;
+  readonly verbose: boolean;
+}) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const asset = resolveCuaDriverReleaseAsset(input.platform, input.arch);
+  const temporaryDirectory = yield* fs.makeTempDirectoryScoped({ prefix: "tritonai-cua-driver-" });
+  const archivePath = path.join(temporaryDirectory, asset.fileName);
+
+  const httpClient = yield* HttpClient.HttpClient;
+  const response = yield* httpClient.get(asset.url).pipe(
+    Effect.flatMap(HttpClientResponse.filterStatusOk),
+    Effect.mapError(
+      (cause) =>
+        new CuaDriverArtifactError({
+          operation: "download",
+          platform: input.platform,
+          arch: input.arch,
+          expectedSha256: asset.sha256,
+          cause,
+        }),
+    ),
+  );
+  const archiveBytes = new Uint8Array(
+    yield* response.arrayBuffer.pipe(
+      Effect.mapError(
+        (cause) =>
+          new CuaDriverArtifactError({
+            operation: "download",
+            platform: input.platform,
+            arch: input.arch,
+            expectedSha256: asset.sha256,
+            cause,
+          }),
+      ),
+    ),
+  );
+  const actualSha256 = NodeCrypto.createHash("sha256").update(archiveBytes).digest("hex");
+  if (actualSha256 !== asset.sha256) {
+    return yield* new CuaDriverArtifactError({
+      operation: "checksum",
+      platform: input.platform,
+      arch: input.arch,
+      expectedSha256: asset.sha256,
+      actualSha256,
+    });
+  }
+  yield* fs.writeFile(archivePath, archiveBytes);
+
+  const extractedDirectory = path.join(temporaryDirectory, "extracted");
+  yield* fs.makeDirectory(extractedDirectory, { recursive: true });
+  if (input.platform === "win") {
+    yield* Effect.tryPromise({
+      try: () => extractZip(archivePath, { dir: extractedDirectory }),
+      catch: (cause) =>
+        new CuaDriverArtifactError({
+          operation: "extract",
+          platform: input.platform,
+          arch: input.arch,
+          expectedSha256: asset.sha256,
+          actualSha256,
+          cause,
+        }),
+    });
+  } else {
+    yield* runCommand(ChildProcess.make("tar", ["-xf", archivePath, "-C", extractedDirectory]), {
+      label: `extract Cua Driver ${CUA_DRIVER_VERSION}`,
+      verbose: input.verbose,
+    }).pipe(
+      Effect.mapError(
+        (cause) =>
+          new CuaDriverArtifactError({
+            operation: "extract",
+            platform: input.platform,
+            arch: input.arch,
+            expectedSha256: asset.sha256,
+            actualSha256,
+            cause,
+          }),
+      ),
+    );
+  }
+
+  const executableName = input.platform === "win" ? "cua-driver.exe" : "cua-driver";
+  const extractedPath = path.join(extractedDirectory, executableName);
+  if (!(yield* fs.exists(extractedPath))) {
+    return yield* new CuaDriverArtifactError({
+      operation: "extract",
+      platform: input.platform,
+      arch: input.arch,
+      expectedSha256: asset.sha256,
+      actualSha256,
+    });
+  }
+
+  const destinationDirectory = path.join(input.stageResourcesDir, "cua-driver");
+  const destinationPath = path.join(destinationDirectory, executableName);
+  yield* fs.remove(destinationDirectory, { recursive: true, force: true }).pipe(Effect.ignore);
+  yield* fs.makeDirectory(destinationDirectory, { recursive: true });
+  yield* fs.copyFile(extractedPath, destinationPath);
+  yield* fs.copyFile(
+    path.join(yield* RepoRoot, "third_party/cua-driver/LICENSE.md"),
+    path.join(destinationDirectory, "LICENSE.md"),
+  );
+  if (input.platform !== "win") yield* fs.chmod(destinationPath, 0o755);
 });
 
 function generateMacIconSet(
@@ -2664,6 +2861,12 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   yield* fs.copy(distDirs.desktopDist, path.join(stageAppDir, "apps/desktop/dist-electron"));
   yield* fs.copy(distDirs.desktopResources, stageResourcesDir);
   yield* fs.copy(distDirs.serverDist, path.join(stageAppDir, "apps/server/dist"));
+  yield* stageCuaDriver({
+    stageResourcesDir,
+    platform: options.platform,
+    arch: options.arch,
+    verbose: options.verbose,
+  });
   yield* stageResourceMonitor({
     repoRoot,
     stageResourcesDir,
@@ -2730,6 +2933,11 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       options.platform,
       options.arch,
       serverPackageJson.dependencies["ffi-rs"],
+    ),
+    ...resolveCuaDriverNativeDependencies(
+      options.platform,
+      options.arch,
+      desktopPackageJson.dependencies["@trycua/cua-driver"],
     ),
     // Windows artifacts also bundle the same-architecture WSL Linux backend, which loads the
     // fff native binary through ffi-rs. The platform fff binary above is the
@@ -3068,7 +3276,11 @@ const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
   Command.withHandler((input) => Effect.flatMap(resolveBuildOptions(input), buildDesktopArtifact)),
 );
 
-const cliRuntimeLayer = Layer.mergeAll(Logger.layer([Logger.consolePretty()]), NodeServices.layer);
+const cliRuntimeLayer = Layer.mergeAll(
+  Logger.layer([Logger.consolePretty()]),
+  NodeServices.layer,
+  FetchHttpClient.layer,
+);
 
 if (import.meta.main) {
   Command.run(buildDesktopArtifactCli, { version: "0.0.0" }).pipe(

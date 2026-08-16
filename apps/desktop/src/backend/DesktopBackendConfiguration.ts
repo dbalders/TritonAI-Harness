@@ -30,6 +30,7 @@ import * as DesktopServerExposure from "./DesktopServerExposure.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopTritonAiApiKey from "../settings/DesktopTritonAiApiKey.ts";
 import * as DesktopWslEnvironment from "../wsl/DesktopWslEnvironment.ts";
+import * as DesktopComputerUse from "../computerUse/DesktopComputerUse.ts";
 
 export class DesktopBackendObservabilitySettingsReadError extends Schema.TaggedErrorClass<DesktopBackendObservabilitySettingsReadError>()(
   "DesktopBackendObservabilitySettingsReadError",
@@ -473,6 +474,7 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
   ): Effect.fn.Return<
     DesktopBackendManager.DesktopBackendStartConfig,
     never,
+    | DesktopComputerUse.DesktopComputerUse
     | DesktopEnvironment.DesktopEnvironment
     | DesktopServerExposure.DesktopServerExposure
     | FileSystem.FileSystem
@@ -486,6 +488,8 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
       ucsdEnvironment,
       tritonAiCredentialOverride,
     );
+    const computerUse = yield* DesktopComputerUse.DesktopComputerUse;
+    const computerUseMcp = yield* computerUse.currentMcpConfiguration;
 
     const bootstrap = {
       mode: "desktop" as const,
@@ -504,6 +508,7 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
         onNone: () => ({}),
         onSome: (resourceMonitorPath) => ({ resourceMonitorPath }),
       }),
+      ...(computerUseMcp === undefined ? {} : { computerUseMcp }),
       ...buildObservabilityFragment(input.observabilitySettings),
     };
 
@@ -784,6 +789,7 @@ export const make = Effect.gen(function* () {
   const serverExposure = yield* DesktopServerExposure.DesktopServerExposure;
   const wslEnvironment = yield* DesktopWslEnvironment.DesktopWslEnvironment;
   const settings = yield* DesktopAppSettings.DesktopAppSettings;
+  const computerUse = yield* DesktopComputerUse.DesktopComputerUse;
   const crypto = yield* Crypto.Crypto;
   const dialog = yield* ElectronDialog.ElectronDialog;
   const safeStorage = yield* ElectronSafeStorage.ElectronSafeStorage;
@@ -875,6 +881,7 @@ export const make = Effect.gen(function* () {
       Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
     );
     return yield* resolvePrimaryStartConfig({ ...shared, resourceMonitorPath }).pipe(
+      Effect.provideService(DesktopComputerUse.DesktopComputerUse, computerUse),
       Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
       Effect.provideService(DesktopServerExposure.DesktopServerExposure, serverExposure),
       Effect.provideService(FileSystem.FileSystem, fileSystem),

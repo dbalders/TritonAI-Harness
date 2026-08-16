@@ -408,6 +408,9 @@ describe("buildCodexDeveloperInstructions", () => {
     NodeAssert.match(instructions, /TritonAI Harness/);
     NodeAssert.doesNotMatch(instructions, /running in T3 Code/);
     NodeAssert.match(instructions, /Codex harness/);
+    NodeAssert.match(instructions, /## TritonAI Harness computer use/);
+    NodeAssert.match(instructions, /start_session/);
+    NodeAssert.match(instructions, /end_session/);
     NodeAssert.match(instructions, /as gpt-5\.3-codex with high reasoning effort/);
   });
 
