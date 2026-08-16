@@ -146,8 +146,8 @@ const bootstrap = Effect.gen(function* () {
   const primaryBackend = yield* pool.primary;
   const state = yield* DesktopState.DesktopState;
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
-  yield* DesktopComputerUse.acquire(environment);
   const desktopSettings = yield* DesktopAppSettings.DesktopAppSettings;
+  const computerUse = yield* DesktopComputerUse.DesktopComputerUse;
   const serverExposure = yield* DesktopServerExposure.DesktopServerExposure;
   const wslBackend = yield* DesktopWslBackend.DesktopWslBackend;
   const desktopWindow = yield* DesktopWindow.DesktopWindow;
@@ -170,6 +170,9 @@ const bootstrap = Effect.gen(function* () {
   );
 
   const settings = yield* desktopSettings.get;
+  if (settings.computerUseEnabled) {
+    yield* computerUse.acquire;
+  }
   if (settings.serverExposureMode !== environment.defaultDesktopSettings.serverExposureMode) {
     yield* logBootstrapInfo("bootstrap restoring persisted server exposure mode", {
       mode: settings.serverExposureMode,

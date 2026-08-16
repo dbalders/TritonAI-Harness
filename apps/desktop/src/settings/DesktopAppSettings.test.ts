@@ -11,6 +11,7 @@ import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopAppSettings from "./DesktopAppSettings.ts";
 
 const DesktopSettingsPatch = Schema.Struct({
+  computerUseEnabled: Schema.optionalKey(Schema.Boolean),
   linuxPasswordStore: Schema.optionalKey(
     Schema.Literals(["auto", "gnome-libsecret", "kwallet", "kwallet5", "kwallet6"]),
   ),
@@ -105,6 +106,7 @@ describe("DesktopSettings", () => {
     assert.deepEqual(
       DesktopAppSettings.resolveDefaultDesktopSettings("0.0.17-nightly.20260415.1"),
       {
+        computerUseEnabled: false,
         linuxPasswordStore: "auto",
         mainWindowBounds: null,
         mainWindowMaximized: false,
@@ -125,6 +127,7 @@ describe("DesktopSettings", () => {
       Effect.gen(function* () {
         const settings = yield* DesktopAppSettings.DesktopAppSettings;
         yield* writeSettingsPatch({
+          computerUseEnabled: true,
           linuxPasswordStore: "gnome-libsecret",
           serverExposureMode: "network-accessible",
           tailscaleServeEnabled: true,
@@ -134,6 +137,7 @@ describe("DesktopSettings", () => {
         });
 
         assert.deepEqual(yield* settings.load, {
+          computerUseEnabled: true,
           linuxPasswordStore: "gnome-libsecret",
           mainWindowBounds: null,
           mainWindowMaximized: false,
@@ -146,6 +150,10 @@ describe("DesktopSettings", () => {
           wslOnly: false,
           wslDistro: null,
         } satisfies DesktopAppSettings.DesktopSettings);
+
+        const computerUse = yield* settings.setComputerUseEnabled(false);
+        assert.isTrue(computerUse.changed);
+        assert.equal(computerUse.settings.computerUseEnabled, false);
 
         const exposure = yield* settings.setServerExposureMode("local-only");
         assert.isTrue(exposure.changed);
@@ -241,6 +249,7 @@ describe("DesktopSettings", () => {
         );
 
         assert.deepEqual(yield* settings.load, {
+          computerUseEnabled: false,
           linuxPasswordStore: "auto",
           mainWindowBounds: { x: 120, y: 80, width: 1280, height: 900 },
           mainWindowMaximized: false,
@@ -297,6 +306,7 @@ describe("DesktopSettings", () => {
           );
 
           assert.deepEqual(yield* settings.load, {
+            computerUseEnabled: false,
             linuxPasswordStore: "auto",
             mainWindowBounds: null,
             mainWindowMaximized: false,
@@ -345,6 +355,7 @@ describe("DesktopSettings", () => {
         });
 
         assert.deepEqual(yield* settings.load, {
+          computerUseEnabled: false,
           linuxPasswordStore: "auto",
           mainWindowBounds: null,
           mainWindowMaximized: false,
@@ -373,6 +384,7 @@ describe("DesktopSettings", () => {
         });
 
         assert.deepEqual(yield* settings.load, {
+          computerUseEnabled: false,
           linuxPasswordStore: "auto",
           mainWindowBounds: null,
           mainWindowMaximized: false,
@@ -400,6 +412,7 @@ describe("DesktopSettings", () => {
         });
 
         assert.deepEqual(yield* settings.load, {
+          computerUseEnabled: false,
           linuxPasswordStore: "auto",
           mainWindowBounds: null,
           mainWindowMaximized: false,

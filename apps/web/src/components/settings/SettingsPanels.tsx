@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import {
   type BackgroundActivityProfile,
+  type DesktopComputerUseState,
   type DesktopUpdateChannel,
   ProviderDriverKind,
   type ScopedThreadRef,
@@ -187,6 +188,86 @@ const BACKGROUND_ACTIVITY_PROFILE_DESCRIPTIONS: Record<BackgroundActivityProfile
 
 const ADVANCED_BACKGROUND_ACTIVITY_DESCRIPTION =
   "Uses custom background intervals with the selected shared power policy.";
+
+function describeComputerUseState(state: DesktopComputerUseState | null): string {
+  if (state === null) return "Allow Codex to control native desktop apps on this computer.";
+  if (!state.available) return "Computer use is not available in this desktop build.";
+  if (
+    state.enabled &&
+    (state.accessibilityPermission === false || state.screenRecordingPermission === false)
+  ) {
+    return "Grant Accessibility and Screen Recording in System Settings, then restart TritonAI Harness.";
+  }
+  if (state.running) {
+    return "Codex can control native desktop apps with a separate agent cursor.";
+  }
+  if (state.enabled) return "Computer use will be available after TritonAI Harness restarts.";
+  return "Allow Codex to control native desktop apps with a separate agent cursor.";
+}
+
+function ComputerUseSetting() {
+  const bridge = typeof window === "undefined" ? undefined : window.desktopBridge;
+  const [state, setState] = useState<DesktopComputerUseState | null>(null);
+  const [pending, setPending] = useState(false);
+
+  useEffect(() => {
+    if (!bridge) return;
+    let cancelled = false;
+    void bridge
+      .getComputerUseState()
+      .then((nextState) => {
+        if (!cancelled) setState(nextState);
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Could not read computer use status",
+            description: error instanceof Error ? error.message : "Computer use status failed.",
+          }),
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [bridge]);
+
+  if (!bridge) return null;
+
+  return (
+    <SettingsRow
+      {...searchableSetting("computer-use")}
+      description={describeComputerUseState(state)}
+      control={
+        <Switch
+          checked={state?.enabled ?? false}
+          disabled={pending || state === null || (!state.available && !state.enabled)}
+          onCheckedChange={(checked) => {
+            setPending(true);
+            void bridge
+              .setComputerUseEnabled(Boolean(checked))
+              .then(setState)
+              .catch((error: unknown) => {
+                toastManager.add(
+                  stackedThreadToast({
+                    type: "error",
+                    title: "Could not change computer use",
+                    description:
+                      error instanceof Error ? error.message : "Computer use update failed.",
+                  }),
+                );
+              })
+              .finally(() => {
+                setPending(false);
+              });
+          }}
+          aria-label="Computer use"
+        />
+      }
+    />
+  );
+}
 
 const DEFAULT_DRIVER_KIND = ProviderDriverKind.make("codex");
 const BACKGROUND_ACTIVITY_BOOLEAN_OVERRIDES: ReadonlyArray<{
@@ -2059,6 +2140,8 @@ export function GeneralSettingsPanel() {
             />
           }
         />
+
+        <ComputerUseSetting />
 
         <SettingsRow
           title={

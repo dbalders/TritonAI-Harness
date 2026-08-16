@@ -25,6 +25,7 @@ import { resolveDefaultDesktopUpdateChannel } from "../updates/updateChannels.ts
 import { isValidDistroName } from "../wsl/wslPathParsing.ts";
 
 export interface DesktopSettings {
+  readonly computerUseEnabled: boolean;
   readonly linuxPasswordStore: LinuxPasswordStorePreference;
   readonly mainWindowBounds: DesktopWindowBounds | null;
   readonly mainWindowMaximized: boolean;
@@ -73,6 +74,7 @@ export const DEFAULT_MAIN_WINDOW_SIZE = {
 } as const;
 
 export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
+  computerUseEnabled: false,
   linuxPasswordStore: DEFAULT_LINUX_PASSWORD_STORE,
   mainWindowBounds: null,
   mainWindowMaximized: false,
@@ -94,6 +96,7 @@ const DesktopWindowBoundsDocument = Schema.Struct({
 });
 
 const DesktopSettingsDocument = Schema.Struct({
+  computerUseEnabled: Schema.optionalKey(Schema.Boolean),
   linuxPasswordStore: Schema.optionalKey(Schema.Unknown),
   mainWindowBounds: Schema.optionalKey(Schema.NullOr(DesktopWindowBoundsDocument)),
   mainWindowMaximized: Schema.optionalKey(Schema.Boolean),
@@ -155,6 +158,9 @@ export class DesktopAppSettings extends Context.Service<
     readonly setMainWindowBounds: (
       bounds: DesktopWindowBounds,
       isMaximized: boolean,
+    ) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
+    readonly setComputerUseEnabled: (
+      enabled: boolean,
     ) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
     readonly setServerExposureMode: (
       mode: DesktopServerExposureMode,
@@ -224,6 +230,7 @@ function normalizeDesktopSettingsDocument(
     (parsed.wslBackendEnabled === undefined && parsed.wslMode === "wsl");
 
   return {
+    computerUseEnabled: parsed.computerUseEnabled === true,
     linuxPasswordStore: normalizeLinuxPasswordStorePreference(parsed.linuxPasswordStore),
     mainWindowBounds,
     mainWindowMaximized: mainWindowBounds !== null && parsed.mainWindowMaximized === true,
@@ -247,6 +254,9 @@ function toDesktopSettingsDocument(
 ): DesktopSettingsDocument {
   const document: Mutable<DesktopSettingsDocument> = {};
 
+  if (settings.computerUseEnabled !== defaults.computerUseEnabled) {
+    document.computerUseEnabled = settings.computerUseEnabled;
+  }
   if (settings.linuxPasswordStore !== defaults.linuxPasswordStore) {
     document.linuxPasswordStore = settings.linuxPasswordStore;
   }
@@ -293,6 +303,15 @@ function setServerExposureMode(
     : {
         ...settings,
         serverExposureMode: requestedMode,
+      };
+}
+
+function setComputerUseEnabled(settings: DesktopSettings, enabled: boolean): DesktopSettings {
+  return settings.computerUseEnabled === enabled
+    ? settings
+    : {
+        ...settings,
+        computerUseEnabled: enabled,
       };
 }
 
@@ -506,6 +525,10 @@ export const make = Effect.gen(function* () {
       );
       return yield* SynchronizedRef.setAndGet(settingsRef, settings);
     }).pipe(Effect.withSpan("desktop.settings.load")),
+    setComputerUseEnabled: (enabled) =>
+      persist((settings) => setComputerUseEnabled(settings, enabled)).pipe(
+        Effect.withSpan("desktop.settings.setComputerUseEnabled", { attributes: { enabled } }),
+      ),
     setMainWindowBounds: (bounds, isMaximized) =>
       persist((settings) => setMainWindowBounds(settings, bounds, isMaximized)).pipe(
         Effect.withSpan("desktop.settings.setMainWindowBounds", {
@@ -575,6 +598,8 @@ export const layerTest = (initialSettings: DesktopSettings = DEFAULT_DESKTOP_SET
       return DesktopAppSettings.of({
         get: SynchronizedRef.get(settingsRef),
         load: SynchronizedRef.get(settingsRef),
+        setComputerUseEnabled: (enabled) =>
+          update((settings) => setComputerUseEnabled(settings, enabled)),
         setMainWindowBounds: (bounds, isMaximized) =>
           update((settings) => setMainWindowBounds(settings, bounds, isMaximized)),
         setServerExposureMode: (mode) =>

@@ -526,6 +526,22 @@ export const DesktopServerExposureStateSchema = Schema.Struct({
   tailscaleServePort: Schema.Number,
 });
 
+export interface DesktopComputerUseState {
+  enabled: boolean;
+  available: boolean;
+  running: boolean;
+  accessibilityPermission: boolean | null;
+  screenRecordingPermission: boolean | null;
+}
+
+export const DesktopComputerUseStateSchema = Schema.Struct({
+  enabled: Schema.Boolean,
+  available: Schema.Boolean,
+  running: Schema.Boolean,
+  accessibilityPermission: Schema.NullOr(Schema.Boolean),
+  screenRecordingPermission: Schema.NullOr(Schema.Boolean),
+});
+
 export interface PickFolderOptions {
   initialPath?: string | null;
   // When set, the desktop dialog opens against the named backend's
@@ -1136,6 +1152,8 @@ export interface DesktopBridge {
     readonly port?: number;
   }) => Promise<DesktopServerExposureState>;
   getAdvertisedEndpoints: () => Promise<readonly AdvertisedEndpoint[]>;
+  getComputerUseState: () => Promise<DesktopComputerUseState>;
+  setComputerUseEnabled: (enabled: boolean) => Promise<DesktopComputerUseState>;
   getWslState: () => Promise<DesktopWslState>;
   setWslBackendEnabled: (enabled: boolean) => Promise<DesktopWslState>;
   setWslDistro: (distro: string | null) => Promise<DesktopWslState>;
