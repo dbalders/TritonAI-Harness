@@ -23,6 +23,19 @@ import * as Scope from "effect/Scope";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 
 const CUA_DRIVER_PATH_ENV = "TRITONAI_CUA_DRIVER_PATH";
+const CUA_DRIVER_HOME_DIRNAME = "cua-driver-home";
+const CUA_DRIVER_CONFIG_DIRNAME = ".cua-driver";
+const CUA_DRIVER_CONFIG_FILENAME = "config.json";
+
+export const CUA_DRIVER_POLICY = {
+  telemetry_enabled: false,
+  update_check_enabled: false,
+} as const;
+export const CuaDriverPolicy = Schema.Struct({
+  telemetry_enabled: Schema.Boolean,
+  update_check_enabled: Schema.Boolean,
+});
+const encodeCuaDriverPolicy = Schema.encodeSync(Schema.fromJsonString(CuaDriverPolicy));
 
 type EmbeddedHost = ReturnType<typeof EmbeddedCuaDriverHost.withOptions> & {
   readonly uniffiDestroy?: () => void;
@@ -31,7 +44,14 @@ type EmbeddedHost = ReturnType<typeof EmbeddedCuaDriverHost.withOptions> & {
 class DesktopComputerUseRuntimeError extends Schema.TaggedErrorClass<DesktopComputerUseRuntimeError>()(
   "DesktopComputerUseRuntimeError",
   {
-    operation: Schema.Literals(["availability", "permissions", "open-settings", "start", "stop"]),
+    operation: Schema.Literals([
+      "availability",
+      "permissions",
+      "open-settings",
+      "policy",
+      "start",
+      "stop",
+    ]),
     cause: Schema.Defect(),
   },
 ) {}
@@ -48,6 +68,7 @@ export function resolveCuaDriverBinaryPath(
 
 export function createCuaDriverHostOptions(input: {
   readonly binaryPath: string;
+  readonly driverHomeDirectory: string;
   readonly hostBundleId: string;
   readonly inheritStderr: boolean;
 }) {
@@ -57,8 +78,30 @@ export function createCuaDriverHostOptions(input: {
     permissionMode: EmbeddedPermissionMode.Standard,
     approveSessionPolicy: false,
     dangerouslyBypassApprovals: false,
-    environment: [],
+    // Embedded mode reserves driver-control environment variables, including
+    // the telemetry and update-check flags. HOME is SDK-allowlisted, so point
+    // the driver at the app-owned policy prepared below instead.
+    environment: [{ name: "HOME", value: input.driverHomeDirectory }],
     inheritStderr: input.inheritStderr,
+  });
+}
+
+export function prepareCuaDriverHome(input: {
+  readonly fileSystem: FileSystem.FileSystem;
+  readonly path: { readonly join: (...paths: ReadonlyArray<string>) => string };
+  readonly driverHomeDirectory: string;
+}) {
+  const configDirectory = input.path.join(input.driverHomeDirectory, CUA_DRIVER_CONFIG_DIRNAME);
+  const configPath = input.path.join(configDirectory, CUA_DRIVER_CONFIG_FILENAME);
+
+  return Effect.gen(function* () {
+    yield* input.fileSystem.makeDirectory(configDirectory, { recursive: true });
+    yield* input.fileSystem.writeFileString(
+      configPath,
+      `${encodeCuaDriverPolicy(CUA_DRIVER_POLICY)}\n`,
+      { mode: 0o600 },
+    );
+    return configPath;
   });
 }
 
@@ -86,6 +129,11 @@ export const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const connectionRef = yield* Ref.make<EmbeddedDriverConnection | undefined>(undefined);
   const binaryPath = resolveCuaDriverBinaryPath(environment);
+  const driverHomeDirectory = environment.path.join(
+    environment.stateDir,
+    "computer-use",
+    CUA_DRIVER_HOME_DIRNAME,
+  );
 
   const readPermissionStatus = Effect.fn("desktop.computerUse.readPermissionStatus")(function* (
     request: boolean,
@@ -155,9 +203,20 @@ export const make = Effect.gen(function* () {
         return;
       }
 
+      yield* prepareCuaDriverHome({
+        fileSystem,
+        path: environment.path,
+        driverHomeDirectory,
+      }).pipe(
+        Effect.mapError(
+          (cause) => new DesktopComputerUseRuntimeError({ operation: "policy", cause }),
+        ),
+      );
+
       const host = EmbeddedCuaDriverHost.withOptions(
         createCuaDriverHostOptions({
           binaryPath,
+          driverHomeDirectory,
           hostBundleId: environment.appUserModelId,
           inheritStderr: environment.isDevelopment,
         }),
@@ -211,7 +270,10 @@ export const make = Effect.gen(function* () {
       return {
         command: mcp.command,
         args: [...mcp.args],
-        environment: Object.fromEntries(mcp.environment.map(({ name, value }) => [name, value])),
+        environment: {
+          ...Object.fromEntries(mcp.environment.map(({ name, value }) => [name, value])),
+          HOME: driverHomeDirectory,
+        },
       };
     }),
   );
