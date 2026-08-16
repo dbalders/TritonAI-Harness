@@ -1288,6 +1288,23 @@ export function resolveFfiRsNativeDependencies(
   );
 }
 
+export function resolveCuaDriverNativeDependencies(
+  platform: typeof BuildPlatform.Type,
+  arch: typeof BuildArch.Type,
+  version: string,
+): Record<string, string> {
+  const architectures = arch === "universal" ? (["arm64", "x64"] as const) : [arch];
+  const platformName = platform === "mac" ? "darwin" : platform === "win" ? "win32" : "linux";
+  const suffix = platform === "win" ? "-msvc" : platform === "linux" ? "-gnu" : "";
+
+  return Object.fromEntries(
+    architectures.map((architecture) => [
+      `@trycua/cua-driver-${platformName}-${architecture}${suffix}`,
+      version,
+    ]),
+  );
+}
+
 function recordsEqual(left: Record<string, string>, right: Record<string, string>): boolean {
   const leftEntries = Object.entries(left).sort(([a], [b]) => a.localeCompare(b));
   const rightEntries = Object.entries(right).sort(([a], [b]) => a.localeCompare(b));
@@ -1297,12 +1314,16 @@ function recordsEqual(left: Record<string, string>, right: Record<string, string
 export function resolveDesktopRuntimeNativeDependencies(): Record<string, string> {
   const fffVersion = serverPackageJson.dependencies["@ff-labs/fff-node"];
   const ffiRsVersion = serverPackageJson.dependencies["ffi-rs"];
+  const cuaDriverVersion = desktopPackageJson.dependencies["@trycua/cua-driver"];
   return {
     ...resolveFffNativeDependencies("mac", "universal", fffVersion),
     ...resolveFffNativeDependencies("win", "universal", fffVersion),
     ...resolveFffNativeDependencies("linux", "universal", fffVersion),
     ...resolveFfiRsNativeDependencies("mac", "universal", ffiRsVersion),
     ...resolveFfiRsNativeDependencies("win", "universal", ffiRsVersion),
+    ...resolveCuaDriverNativeDependencies("mac", "universal", cuaDriverVersion),
+    ...resolveCuaDriverNativeDependencies("win", "universal", cuaDriverVersion),
+    ...resolveCuaDriverNativeDependencies("linux", "universal", cuaDriverVersion),
   };
 }
 
@@ -2912,6 +2933,11 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       options.platform,
       options.arch,
       serverPackageJson.dependencies["ffi-rs"],
+    ),
+    ...resolveCuaDriverNativeDependencies(
+      options.platform,
+      options.arch,
+      desktopPackageJson.dependencies["@trycua/cua-driver"],
     ),
     // Windows artifacts also bundle the same-architecture WSL Linux backend, which loads the
     // fff native binary through ffi-rs. The platform fff binary above is the

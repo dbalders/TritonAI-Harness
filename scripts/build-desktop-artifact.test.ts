@@ -43,6 +43,7 @@ import {
   renderMacInheritedEntitlements,
   renderMacPasskeyEntitlements,
   resolveClerkPasskeyNativeArtifacts,
+  resolveCuaDriverNativeDependencies,
   resolveMacPasskeySigningConfiguration,
   resolveDesktopRuntimeDependencies,
   resolveFffNativeDependencies,
@@ -1167,6 +1168,22 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         binaryFileName: "ffi-rs.linux-arm64-gnu.node",
       },
     ]);
+  });
+
+  it("promotes exact target Cua Driver native packages to direct staged dependencies", () => {
+    assert.deepStrictEqual(resolveCuaDriverNativeDependencies("mac", "arm64", "0.19.3"), {
+      "@trycua/cua-driver-darwin-arm64": "0.19.3",
+    });
+    assert.deepStrictEqual(resolveCuaDriverNativeDependencies("mac", "universal", "0.19.3"), {
+      "@trycua/cua-driver-darwin-arm64": "0.19.3",
+      "@trycua/cua-driver-darwin-x64": "0.19.3",
+    });
+    assert.deepStrictEqual(resolveCuaDriverNativeDependencies("win", "x64", "0.19.3"), {
+      "@trycua/cua-driver-win32-x64-msvc": "0.19.3",
+    });
+    assert.deepStrictEqual(resolveCuaDriverNativeDependencies("linux", "arm64", "0.19.3"), {
+      "@trycua/cua-driver-linux-arm64-gnu": "0.19.3",
+    });
   });
 
   it.effect("fails closed when an assembled app omits an ffi-rs native binary", () =>

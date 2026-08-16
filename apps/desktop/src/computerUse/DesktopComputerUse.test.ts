@@ -2,9 +2,10 @@
 import * as NodeAssert from "node:assert/strict";
 import * as NodePath from "node:path";
 import { it } from "@effect/vitest";
+import { EmbeddedCuaDriverHost } from "@trycua/cua-driver/embedded";
 
 import type * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
-import { resolveCuaDriverBinaryPath } from "./DesktopComputerUse.ts";
+import { createCuaDriverHostOptions, resolveCuaDriverBinaryPath } from "./DesktopComputerUse.ts";
 
 const environment = (
   platform: NodeJS.Platform,
@@ -40,4 +41,18 @@ it("does not allow the development override to bypass the packaged driver", () =
     resolveCuaDriverBinaryPath(environment("darwin", true), "/tmp/unreviewed-cua-driver"),
     "/opt/TritonAI Harness/resources/cua-driver/cua-driver",
   );
+});
+
+it("constructs the embedded host with SDK-approved environment options", () => {
+  const host = EmbeddedCuaDriverHost.withOptions(
+    createCuaDriverHostOptions({
+      binaryPath: "/tmp/cua-driver",
+      hostBundleId: "edu.ucsd.tritonai.harness.test",
+      inheritStderr: false,
+    }),
+  ) as ReturnType<typeof EmbeddedCuaDriverHost.withOptions> & {
+    readonly uniffiDestroy?: () => void;
+  };
+
+  host.uniffiDestroy?.();
 });

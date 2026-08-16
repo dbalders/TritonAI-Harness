@@ -203,6 +203,25 @@ importers:
       vite-plus:
         specifier: 'catalog:'
         version: 0.2.2(@types/node@24.12.4)(bufferutil@4.1.0)(esbuild@0.28.1)(jiti@2.7.0)(msw@2.12.11(@types/node@24.12.4)(typescript@6.0.3))(terser@5.48.0)(typescript@6.0.3)(unrun@0.2.39)(utf-8-validate@6.0.6)(yaml@2.9.0)
+    optionalDependencies:
+      '@trycua/cua-driver-darwin-arm64':
+        specifier: 0.19.3
+        version: 0.19.3
+      '@trycua/cua-driver-darwin-x64':
+        specifier: 0.19.3
+        version: 0.19.3
+      '@trycua/cua-driver-linux-arm64-gnu':
+        specifier: 0.19.3
+        version: 0.19.3
+      '@trycua/cua-driver-linux-x64-gnu':
+        specifier: 0.19.3
+        version: 0.19.3
+      '@trycua/cua-driver-win32-arm64-msvc':
+        specifier: 0.19.3
+        version: 0.19.3
+      '@trycua/cua-driver-win32-x64-msvc':
+        specifier: 0.19.3
+        version: 0.19.3
 
   apps/desktop-runtime:
     dependencies:
@@ -288,6 +307,24 @@ importers:
       '@ff-labs/fff-bin-win32-x64':
         specifier: 0.9.4
         version: 0.9.4
+      '@trycua/cua-driver-darwin-arm64':
+        specifier: 0.19.3
+        version: 0.19.3
+      '@trycua/cua-driver-darwin-x64':
+        specifier: 0.19.3
+        version: 0.19.3
+      '@trycua/cua-driver-linux-arm64-gnu':
+        specifier: 0.19.3
+        version: 0.19.3
+      '@trycua/cua-driver-linux-x64-gnu':
+        specifier: 0.19.3
+        version: 0.19.3
+      '@trycua/cua-driver-win32-arm64-msvc':
+        specifier: 0.19.3
+        version: 0.19.3
+      '@trycua/cua-driver-win32-x64-msvc':
+        specifier: 0.19.3
+        version: 0.19.3
       '@yuuang/ffi-rs-darwin-arm64':
         specifier: 1.3.2
         version: 1.3.2

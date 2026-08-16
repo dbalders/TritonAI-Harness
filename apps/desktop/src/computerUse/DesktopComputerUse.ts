@@ -2,7 +2,6 @@ import { currentMacOsPermissionStatus } from "@trycua/cua-driver";
 import {
   EmbeddedCuaDriverHost,
   EmbeddedDriverHostOptions,
-  EmbeddedEnvironmentVariable,
   EmbeddedPermissionMode,
   type EmbeddedDriverConnection,
 } from "@trycua/cua-driver/embedded";
@@ -24,10 +23,6 @@ import * as Scope from "effect/Scope";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 
 const CUA_DRIVER_PATH_ENV = "TRITONAI_CUA_DRIVER_PATH";
-const CUA_DRIVER_CHILD_ENVIRONMENT = [
-  EmbeddedEnvironmentVariable.new({ name: "CUA_DRIVER_RS_TELEMETRY_ENABLED", value: "false" }),
-  EmbeddedEnvironmentVariable.new({ name: "CUA_DRIVER_RS_UPDATE_CHECK", value: "false" }),
-];
 
 type EmbeddedHost = ReturnType<typeof EmbeddedCuaDriverHost.withOptions> & {
   readonly uniffiDestroy?: () => void;
@@ -49,6 +44,22 @@ export function resolveCuaDriverBinaryPath(
   if (override && !environment.isPackaged) return environment.path.resolve(override);
   const executableName = environment.platform === "win32" ? "cua-driver.exe" : "cua-driver";
   return environment.path.join(environment.resourcesPath, "cua-driver", executableName);
+}
+
+export function createCuaDriverHostOptions(input: {
+  readonly binaryPath: string;
+  readonly hostBundleId: string;
+  readonly inheritStderr: boolean;
+}) {
+  return EmbeddedDriverHostOptions.new({
+    binaryPath: input.binaryPath,
+    hostBundleId: input.hostBundleId,
+    permissionMode: EmbeddedPermissionMode.Standard,
+    approveSessionPolicy: false,
+    dangerouslyBypassApprovals: false,
+    environment: [],
+    inheritStderr: input.inheritStderr,
+  });
 }
 
 function destroyHost(host: EmbeddedHost): void {
@@ -145,13 +156,9 @@ export const make = Effect.gen(function* () {
       }
 
       const host = EmbeddedCuaDriverHost.withOptions(
-        EmbeddedDriverHostOptions.new({
+        createCuaDriverHostOptions({
           binaryPath,
           hostBundleId: environment.appUserModelId,
-          permissionMode: EmbeddedPermissionMode.Standard,
-          approveSessionPolicy: false,
-          dangerouslyBypassApprovals: false,
-          environment: CUA_DRIVER_CHILD_ENVIRONMENT,
           inheritStderr: environment.isDevelopment,
         }),
       ) as EmbeddedHost;
