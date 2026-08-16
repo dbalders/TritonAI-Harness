@@ -332,6 +332,7 @@ function collectAttachmentRelativePaths(
   const relativePaths = new Set<string>();
   for (const message of messages) {
     for (const attachment of message.attachments ?? []) {
+      if (attachment.type === "file" && "path" in attachment) continue;
       relativePaths.add(attachmentRelativePath(attachment));
     }
   }
@@ -345,7 +346,11 @@ function collectReferencedAttachmentRelativePaths(
 ): Set<string> {
   return new Set(
     references.flatMap((reference) =>
-      (reference.attachments ?? []).map((attachment) => attachmentRelativePath(attachment)),
+      (reference.attachments ?? []).flatMap((attachment) =>
+        attachment.type === "file" && "path" in attachment
+          ? []
+          : [attachmentRelativePath(attachment)],
+      ),
     ),
   );
 }

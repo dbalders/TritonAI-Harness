@@ -95,6 +95,8 @@ export interface ComposerImageAttachment extends Omit<ChatImageAttachment, "prev
 export interface ComposerFileAttachment {
   readonly id: string;
   readonly file: File;
+  /** Host path used directly when the selected environment shares Electron's filesystem. */
+  readonly path: string | null;
 }
 
 const PersistedTerminalContextDraft = Schema.Struct({

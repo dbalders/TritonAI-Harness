@@ -16,6 +16,7 @@ import {
   type ThreadId,
   type TurnId,
   type KeybindingCommand,
+  PRIMARY_LOCAL_ENVIRONMENT_ID,
   OrchestrationThreadActivity,
   ProviderInteractionMode,
   ProviderDriverKind,
@@ -76,6 +77,7 @@ import {
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { isElectron } from "../env";
+import { desktopLocalBackendId } from "../connection/desktopLocal";
 import { readLocalApi } from "../localApi";
 import { useDiffPanelStore } from "../diffPanelStore";
 import {
@@ -1824,6 +1826,12 @@ function ChatViewContent(props: ChatViewProps) {
   ]);
   const activeEnvironment =
     activeThread == null ? null : (environmentById.get(activeThread.environmentId) ?? null);
+  const activeDesktopLocalBackendId =
+    activeEnvironment?.entry.target._tag === "PrimaryConnectionTarget"
+      ? PRIMARY_LOCAL_ENVIRONMENT_ID
+      : activeEnvironment
+        ? desktopLocalBackendId(activeEnvironment.entry.target)
+        : null;
   const activeEnvironmentConnectionPhase = activeEnvironment?.connection.phase ?? "available";
   const activeEnvironmentUnavailable =
     activeEnvironment !== null && activeEnvironmentConnectionPhase !== "connected";
@@ -2406,6 +2414,7 @@ function ChatViewContent(props: ChatViewProps) {
     }> = [];
     for (const message of serverMessages ?? []) {
       for (const attachment of message.attachments ?? []) {
+        if (attachment.type === "file" && "path" in attachment) continue;
         if (attachmentIds.has(attachment.id)) continue;
         attachmentIds.add(attachment.id);
         resources.push({
@@ -5114,6 +5123,17 @@ function ChatViewContent(props: ChatViewProps) {
       );
       const files = [];
       for (const attachment of composerFilesSnapshot) {
+        if (attachment.path !== null) {
+          files.push({
+            type: "file" as const,
+            id: attachment.id,
+            name: attachment.file.name,
+            mimeType: attachment.file.type || "application/octet-stream",
+            sizeBytes: attachment.file.size,
+            path: attachment.path,
+          });
+          continue;
+        }
         if (!preparedConnection) {
           throw new Error("The environment connection is not ready for file uploads.");
         }
@@ -5145,6 +5165,7 @@ function ChatViewContent(props: ChatViewProps) {
         name: attachment.file.name,
         mimeType: attachment.file.type || "application/octet-stream",
         sizeBytes: attachment.file.size,
+        ...(attachment.path !== null ? { path: attachment.path } : {}),
       })),
     ];
     // Sending always returns to the live edge. The new row becomes the
@@ -5224,7 +5245,8 @@ function ChatViewContent(props: ChatViewProps) {
 
     let failure: AtomCommandResult<unknown, unknown> | null = null;
     let createdThreadForFileUpload = false;
-    if (isLocalDraftThread && composerFilesSnapshot.length > 0) {
+    const requiresFileUpload = composerFilesSnapshot.some((attachment) => attachment.path === null);
+    if (isLocalDraftThread && requiresFileUpload) {
       const createResult = await createThread({
         environmentId,
         input: {
@@ -6428,6 +6450,7 @@ function ChatViewContent(props: ChatViewProps) {
                             composerRef={composerRef}
                             composerDraftTarget={composerDraftTarget}
                             environmentId={environmentId}
+                            desktopLocalBackendId={activeDesktopLocalBackendId}
                             routeKind={routeKind}
                             routeThreadRef={routeThreadRef}
                             draftId={draftId}

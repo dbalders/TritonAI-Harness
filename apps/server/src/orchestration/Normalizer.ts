@@ -110,12 +110,13 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
     }
 
     const totalAttachmentBytes = canonicalCommand.message.attachments.reduce(
-      (total, attachment) => total + attachment.sizeBytes,
+      (total, attachment) =>
+        attachment.type === "file" && "path" in attachment ? total : total + attachment.sizeBytes,
       0,
     );
     if (totalAttachmentBytes > PROVIDER_SEND_TURN_MAX_TOTAL_ATTACHMENT_BYTES) {
       return yield* new OrchestrationDispatchCommandError({
-        message: "The combined attachment size exceeds the 50 MiB turn limit.",
+        message: "The combined uploaded attachment size exceeds the 50 MiB turn limit.",
       });
     }
 
@@ -124,6 +125,12 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
       (attachment) =>
         Effect.gen(function* () {
           if (attachment.type === "file") {
+            // Match Codex desktop behavior: native-local files are already on
+            // the environment filesystem, so the provider receives the path
+            // directly rather than forcing a copy into attachment storage.
+            if ("path" in attachment) {
+              return attachment;
+            }
             if (!isCanonicalAttachmentIdOwnedByThread(attachment.id, canonicalCommand.threadId)) {
               return yield* new OrchestrationDispatchCommandError({
                 message: `File attachment '${attachment.name}' does not belong to this thread.`,
@@ -222,12 +229,13 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
     );
 
     const normalizedTotalAttachmentBytes = normalizedAttachments.reduce(
-      (total, attachment) => total + attachment.sizeBytes,
+      (total, attachment) =>
+        attachment.type === "file" && "path" in attachment ? total : total + attachment.sizeBytes,
       0,
     );
     if (normalizedTotalAttachmentBytes > PROVIDER_SEND_TURN_MAX_TOTAL_ATTACHMENT_BYTES) {
       return yield* new OrchestrationDispatchCommandError({
-        message: "The combined attachment size exceeds the 50 MiB turn limit.",
+        message: "The combined uploaded attachment size exceeds the 50 MiB turn limit.",
       });
     }
 

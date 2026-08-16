@@ -1993,6 +1993,7 @@ const makeWsRpcLayer = (
                         candidate.name,
                         candidate.mimeType,
                         candidate.sizeBytes,
+                        candidate.type === "file" && "path" in candidate ? candidate.path : null,
                       ]),
                       candidate,
                     ]),
@@ -2004,6 +2005,9 @@ const makeWsRpcLayer = (
                   return yield* new AssetAttachmentNotFoundError({
                     resource,
                   });
+                }
+                if (attachment.type === "file" && "path" in attachment) {
+                  return yield* new AssetAttachmentNotFoundError({ resource });
                 }
                 return yield* issueAssetUrl({
                   resource,

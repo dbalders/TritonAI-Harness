@@ -1097,6 +1097,11 @@ export const DesktopPreviewAutomationWaitForInputSchema = Schema.Struct({
 
 export interface DesktopBridge {
   getAppBranding: () => DesktopAppBranding | null;
+  /**
+   * Resolve an Electron File to its original host path without reading or copying it.
+   * Optional so a newer web bundle remains compatible with older desktop shells.
+   */
+  getPathForFile?: (file: File) => string | null;
   // One bootstrap per pool instance currently registered with bootstrap
   // info (omits instances whose backend hasn't produced a config yet).
   // The primary backend is identified by id === PRIMARY_LOCAL_ENVIRONMENT_ID.

@@ -688,10 +688,13 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     // the overhead is bounded. Unresolvable ids are skipped here and surface
     // as adapter errors when the file is read for inlining.
     const attachmentPathLines = attachments.flatMap((attachment) => {
-      const attachmentPath = resolveAttachmentPath({
-        attachmentsDir: serverConfig.attachmentsDir,
-        attachment,
-      });
+      const attachmentPath =
+        attachment.type === "file" && "path" in attachment
+          ? attachment.path
+          : resolveAttachmentPath({
+              attachmentsDir: serverConfig.attachmentsDir,
+              attachment,
+            });
       return attachmentPath === null
         ? []
         : [`[Attached ${attachment.type} "${attachment.name}" is saved at: ${attachmentPath}]`];

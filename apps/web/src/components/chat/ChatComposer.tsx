@@ -67,6 +67,7 @@ import {
 } from "../../promptStashStore";
 import { ComposerStashBadge } from "./ComposerStashBadge";
 import { ComposerStashMenu } from "./ComposerStashMenu";
+import { resolveDesktopLocalFilePath } from "./localFileAttachment";
 import { compressImageForStash, compressImageToByteLimit } from "../../lib/imageCompression";
 import { isCommandPaletteOpen } from "../../commandPaletteBus";
 import { getTerminalFocusOwner } from "../../lib/terminalFocus";
@@ -245,7 +246,6 @@ import { insertVoiceTranscript } from "../../voiceInsertion";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 
-const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
 const FILE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_FILE_BYTES / (1024 * 1024))}MB`;
 
 const runtimeModeConfig: Record<
@@ -667,6 +667,7 @@ export interface ChatComposerHandle {
 export interface ChatComposerProps {
   composerDraftTarget: ScopedThreadRef | DraftId;
   environmentId: EnvironmentId;
+  desktopLocalBackendId: string | null;
   routeKind: "server" | "draft";
   routeThreadRef: ScopedThreadRef;
   draftId: DraftId | null;
@@ -781,6 +782,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const {
     composerDraftTarget,
     environmentId,
+    desktopLocalBackendId,
     routeKind,
     routeThreadRef,
     draftId,
@@ -1184,11 +1186,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
    * thread) can still be stashed while an earlier encode is running.
    */
   const stashInFlightRef = useRef<Set<string>>(new Set());
-  /**
-   * Images being compressed or waiting for their draft update to render, keyed by thread and
-   * attachment id. A null byte count reserves the attachment slot while compression runs; the
-   * final byte count keeps aggregate validation atomic until the image appears in the draft.
-   */
+  /** Images being compressed or waiting for their draft update to render. */
   const pendingImageReservationsRef = useRef<Map<ThreadId, Map<string, number | null>>>(new Map());
 
   // ------------------------------------------------------------------
@@ -2835,11 +2833,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       const acceptedImages: Array<{ readonly id: string; readonly file: File }> = [];
       const nextFiles = [...composerFilesRef.current];
       let attachmentCount = composerImagesRef.current.length + nextFiles.length + pendingCount;
-      let totalBytes =
-        [...composerImagesRef.current, ...composerFilesRef.current].reduce(
-          (total, attachment) => total + attachment.file.size,
+      let pendingUploadBytes =
+        composerImagesRef.current.reduce((total, attachment) => total + attachment.file.size, 0) +
+        nextFiles.reduce(
+          (total, attachment) => (attachment.path === null ? total + attachment.file.size : total),
           0,
-        ) + pendingBytes;
+        ) +
+        pendingBytes;
       let error: string | null = null;
       for (const file of files) {
         if (attachmentCount >= PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {
@@ -2847,23 +2847,34 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           break;
         }
         const isImage = file.type.startsWith("image/");
-        const sizeLimit = isImage
-          ? PROVIDER_SEND_TURN_MAX_IMAGE_BYTES
-          : PROVIDER_SEND_TURN_MAX_FILE_BYTES;
-        const sizeLimitLabel = isImage ? IMAGE_SIZE_LIMIT_LABEL : FILE_SIZE_LIMIT_LABEL;
-        if (file.size === 0 || (!isImage && file.size > sizeLimit)) {
-          error = `'${file.name}' is empty or exceeds the ${sizeLimitLabel} attachment limit.`;
-          continue;
-        }
-        if (!isImage && totalBytes + file.size > PROVIDER_SEND_TURN_MAX_TOTAL_ATTACHMENT_BYTES) {
-          error = "Attachments can total up to 50MB per message.";
-          break;
-        }
         if (isImage) {
+          if (file.size === 0) {
+            error = `'${file.name}' is empty and cannot be attached.`;
+            continue;
+          }
           acceptedImages.push({ id: randomUUID(), file });
         } else {
-          nextFiles.push({ id: randomUUID(), file });
-          totalBytes += file.size;
+          const localPath = resolveDesktopLocalFilePath({
+            bridge: window.desktopBridge ?? null,
+            backendId: desktopLocalBackendId,
+            file,
+          });
+          if (
+            localPath === null &&
+            (file.size === 0 || file.size > PROVIDER_SEND_TURN_MAX_FILE_BYTES)
+          ) {
+            error = `'${file.name}' is empty or exceeds the ${FILE_SIZE_LIMIT_LABEL} upload limit for this environment.`;
+            continue;
+          }
+          if (
+            localPath === null &&
+            pendingUploadBytes + file.size > PROVIDER_SEND_TURN_MAX_TOTAL_ATTACHMENT_BYTES
+          ) {
+            error = "Uploaded attachments can total up to 50MB per message in this environment.";
+            break;
+          }
+          nextFiles.push({ id: randomUUID(), file, path: localPath });
+          if (localPath === null) pendingUploadBytes += file.size;
         }
         attachmentCount += 1;
       }
@@ -2898,10 +2909,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             continue;
           }
           const attachmentFile = compressed.file;
-          const committedBytes = [...composerImagesRef.current, ...composerFilesRef.current].reduce(
-            (sum, attachment) => sum + attachment.file.size,
-            0,
-          );
+          const committedBytes = [
+            ...composerImagesRef.current,
+            ...composerFilesRef.current.filter((attachment) => attachment.path === null),
+          ].reduce((sum, attachment) => sum + attachment.file.size, 0);
           const reservedBytes = [...reservations.values()].reduce<number>(
             (sum, sizeBytes) => sum + (sizeBytes ?? 0),
             0,
@@ -2910,7 +2921,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             committedBytes + reservedBytes + attachmentFile.size >
             PROVIDER_SEND_TURN_MAX_TOTAL_ATTACHMENT_BYTES
           ) {
-            compressionError = "Attachments can total up to 50MB per message.";
+            compressionError = "Uploaded attachments can total up to 50MB per message.";
             reservations.delete(acceptedImage.id);
             continue;
           }
@@ -2951,6 +2962,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       addComposerImagesToDraft,
       composerFilesRef,
       composerImagesRef,
+      desktopLocalBackendId,
       onComposerFilesChange,
       pendingUserInputs.length,
       setThreadError,

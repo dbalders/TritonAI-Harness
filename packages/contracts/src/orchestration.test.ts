@@ -287,7 +287,7 @@ it.effect("rejects more than eight attachments in a client turn", () =>
   }),
 );
 
-it.effect("rejects mixed attachments over the aggregate byte limit in both turn schemas", () =>
+it.effect("rejects stored files over the aggregate upload limit in both turn schemas", () =>
   Effect.gen(function* () {
     const baseCommand = {
       type: "thread.turn.start" as const,
@@ -302,19 +302,19 @@ it.effect("rejects mixed attachments over the aggregate byte limit in both turn 
       interactionMode: "default" as const,
       createdAt: "2026-01-01T00:00:00.000Z",
     };
-    const fileAttachment = {
+    const firstFileAttachment = {
       type: "file" as const,
       id: "thread-1-00000000-0000-4000-8000-000000000001",
       name: "large.txt",
       mimeType: "text/plain",
-      sizeBytes: 45 * 1024 * 1024,
+      sizeBytes: 30 * 1024 * 1024,
     };
-    const imageAttachment = {
-      type: "image" as const,
+    const secondFileAttachment = {
+      type: "file" as const,
       id: "thread-1-00000000-0000-4000-8000-000000000002",
-      name: "large.png",
-      mimeType: "image/png",
-      sizeBytes: 6 * 1024 * 1024,
+      name: "other-large.txt",
+      mimeType: "text/plain",
+      sizeBytes: 21 * 1024 * 1024,
     };
 
     const persistedResult = yield* Effect.exit(
@@ -322,7 +322,7 @@ it.effect("rejects mixed attachments over the aggregate byte limit in both turn 
         ...baseCommand,
         message: {
           ...baseCommand.message,
-          attachments: [fileAttachment, imageAttachment],
+          attachments: [firstFileAttachment, secondFileAttachment],
         },
       }),
     );
@@ -331,16 +331,47 @@ it.effect("rejects mixed attachments over the aggregate byte limit in both turn 
         ...baseCommand,
         message: {
           ...baseCommand.message,
-          attachments: [
-            fileAttachment,
-            { ...imageAttachment, id: undefined, dataUrl: "data:image/png;base64,AA==" },
-          ],
+          attachments: [firstFileAttachment, secondFileAttachment],
         },
       }),
     );
 
     assert.strictEqual(persistedResult._tag, "Failure");
     assert.strictEqual(clientResult._tag, "Failure");
+  }),
+);
+
+it.effect("accepts a large local file reference without copying its bytes", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeClientOrchestrationCommand({
+      type: "thread.turn.start",
+      commandId: "cmd-local-file",
+      threadId: "thread-1",
+      message: {
+        messageId: "msg-local-file",
+        role: "user",
+        text: "analyze this dataset",
+        attachments: [
+          {
+            type: "file",
+            id: "local-file-1",
+            name: "large.csv",
+            mimeType: "text/csv",
+            sizeBytes: 100 * 1024 * 1024,
+            path: "/Users/david/Downloads/large.csv",
+          },
+        ],
+      },
+      runtimeMode: "auto-accept-edits",
+      interactionMode: "default",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    if (parsed.type !== "thread.turn.start") {
+      assert.fail(`Expected thread.turn.start, got ${parsed.type}`);
+    }
+    const attachment = parsed.message.attachments[0];
+    assert.strictEqual(attachment?.type, "file");
+    assert.isTrue(attachment?.type === "file" && "path" in attachment);
   }),
 );
 

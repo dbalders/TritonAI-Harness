@@ -271,16 +271,16 @@ describe("composerDraftStore setFiles", () => {
 
     useComposerDraftStore
       .getState()
-      .setFiles(firstThreadRef, [{ id: "file-first", file: firstFile }]);
+      .setFiles(firstThreadRef, [{ id: "file-first", file: firstFile, path: "/tmp/first.txt" }]);
     useComposerDraftStore
       .getState()
-      .setFiles(secondThreadRef, [{ id: "file-second", file: secondFile }]);
+      .setFiles(secondThreadRef, [{ id: "file-second", file: secondFile, path: null }]);
 
     expect(draftFor(firstThreadId, TEST_ENVIRONMENT_ID)?.files).toEqual([
-      { id: "file-first", file: firstFile },
+      { id: "file-first", file: firstFile, path: "/tmp/first.txt" },
     ]);
     expect(draftFor(secondThreadId, TEST_ENVIRONMENT_ID)?.files).toEqual([
-      { id: "file-second", file: secondFile },
+      { id: "file-second", file: secondFile, path: null },
     ]);
 
     useComposerDraftStore.getState().clearComposerContent(firstThreadRef);

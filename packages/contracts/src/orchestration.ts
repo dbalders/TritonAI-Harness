@@ -167,13 +167,33 @@ export const ChatImageAttachment = Schema.Struct({
 });
 export type ChatImageAttachment = typeof ChatImageAttachment.Type;
 
-export const ChatFileAttachment = Schema.Struct({
+const ChatFileAttachmentBase = {
   type: Schema.Literal("file"),
   id: ChatAttachmentId,
   name: TrimmedNonEmptyString.check(Schema.isMaxLength(255)),
   mimeType: TrimmedNonEmptyString.check(Schema.isMaxLength(100)),
+};
+
+export const ChatReferencedFileAttachment = Schema.Struct({
+  ...ChatFileAttachmentBase,
+  sizeBytes: NonNegativeInt,
+  path: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(32_768)),
+});
+export type ChatReferencedFileAttachment = typeof ChatReferencedFileAttachment.Type;
+
+export const ChatStoredFileAttachment = Schema.Struct({
+  ...ChatFileAttachmentBase,
   sizeBytes: NonNegativeInt.check(Schema.isLessThanOrEqualTo(PROVIDER_SEND_TURN_MAX_FILE_BYTES)),
 });
+export type ChatStoredFileAttachment = typeof ChatStoredFileAttachment.Type;
+
+// Keep the path-bearing form first: Struct decoding permits excess properties,
+// so this ordering prevents a direct reference from being decoded as a stored
+// upload with its path silently discarded.
+export const ChatFileAttachment = Schema.Union([
+  ChatReferencedFileAttachment,
+  ChatStoredFileAttachment,
+]);
 export type ChatFileAttachment = typeof ChatFileAttachment.Type;
 
 const UploadChatImageAttachment = Schema.Struct({
@@ -192,11 +212,14 @@ export type ChatAttachment = typeof ChatAttachment.Type;
 const UploadChatAttachment = Schema.Union([UploadChatImageAttachment, ChatFileAttachment]);
 export type UploadChatAttachment = typeof UploadChatAttachment.Type;
 
-const aggregateAttachmentByteLimit = Schema.makeFilter(
-  (attachments: ReadonlyArray<{ readonly sizeBytes: number }>) =>
-    attachments.reduce((total, attachment) => total + attachment.sizeBytes, 0) <=
-      PROVIDER_SEND_TURN_MAX_TOTAL_ATTACHMENT_BYTES ||
-    `Combined attachment size must not exceed ${PROVIDER_SEND_TURN_MAX_TOTAL_ATTACHMENT_BYTES} bytes.`,
+const aggregateUploadedAttachmentByteLimit = Schema.makeFilter(
+  (attachments: ReadonlyArray<UploadChatAttachment | ChatAttachment>) =>
+    attachments.reduce(
+      (total, attachment) =>
+        attachment.type === "file" && "path" in attachment ? total : total + attachment.sizeBytes,
+      0,
+    ) <= PROVIDER_SEND_TURN_MAX_TOTAL_ATTACHMENT_BYTES ||
+    `Combined uploaded attachment size must not exceed ${PROVIDER_SEND_TURN_MAX_TOTAL_ATTACHMENT_BYTES} bytes.`,
 );
 
 export const ProjectScriptIcon = Schema.Literals([
@@ -836,7 +859,7 @@ export const ThreadTurnStartCommand = Schema.Struct({
     text: Schema.String,
     attachments: Schema.Array(ChatAttachment).check(
       Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_ATTACHMENTS),
-      aggregateAttachmentByteLimit,
+      aggregateUploadedAttachmentByteLimit,
     ),
   }),
   modelSelection: Schema.optional(ModelSelection),
@@ -860,7 +883,7 @@ const ClientThreadTurnStartCommand = Schema.Struct({
     text: Schema.String,
     attachments: Schema.Array(UploadChatAttachment).check(
       Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_ATTACHMENTS),
-      aggregateAttachmentByteLimit,
+      aggregateUploadedAttachmentByteLimit,
     ),
   }),
   modelSelection: Schema.optional(ModelSelection),

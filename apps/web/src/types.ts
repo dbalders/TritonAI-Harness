@@ -36,9 +36,9 @@ export interface ChatImageAttachment extends ContractChatImageAttachment {
   readonly previewUrl?: string;
 }
 
-export interface ChatFileAttachment extends ContractChatFileAttachment {
+export type ChatFileAttachment = ContractChatFileAttachment & {
   readonly downloadUrl?: string;
-}
+};
 
 export type ChatAttachment = ChatImageAttachment | ChatFileAttachment;
 

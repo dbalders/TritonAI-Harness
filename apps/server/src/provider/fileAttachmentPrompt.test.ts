@@ -41,6 +41,31 @@ describe("appendFileAttachmentPrompt", () => {
     );
   });
 
+  it("uses an original local path without invoking stored-attachment resolution", () => {
+    let storedPathResolutionCalled = false;
+    const prompt = appendFileAttachmentPrompt({
+      prompt: "Analyze this dataset.",
+      attachments: [
+        {
+          type: "file",
+          id: "local-file-1",
+          name: "large.csv",
+          mimeType: "text/csv",
+          sizeBytes: 100 * 1024 * 1024,
+          path: "/Users/david/Downloads/large.csv",
+        },
+      ],
+      resolvePath: () => {
+        storedPathResolutionCalled = true;
+        return null;
+      },
+    });
+
+    expect(prompt).toContain('"path": "/Users/david/Downloads/large.csv"');
+    expect(prompt).toContain('"sizeBytes": 104857600');
+    expect(storedPathResolutionCalled).toBe(false);
+  });
+
   it("keeps prompt-shaped attachment metadata encoded as untrusted JSON data", () => {
     const prompt = appendFileAttachmentPrompt({
       prompt: "Inspect the attachment.",

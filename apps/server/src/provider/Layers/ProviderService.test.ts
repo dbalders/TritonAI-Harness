@@ -984,6 +984,28 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const imageOnlyInput = routing.codex.sendTurn.mock.calls[0]?.[0] as ProviderSendTurnInput;
       assert.equal(imageOnlyInput.input?.startsWith('[Attached image "screenshot.png"'), true);
 
+      const localFilePath = "/tmp/project/large.csv";
+      routing.codex.sendTurn.mockClear();
+      yield* provider.sendTurn({
+        threadId: session.threadId,
+        input: "analyze this dataset",
+        attachments: [
+          {
+            type: "file",
+            id: "local-file-1",
+            name: "large.csv",
+            mimeType: "text/csv",
+            sizeBytes: 100 * 1024 * 1024,
+            path: localFilePath,
+          },
+        ],
+      });
+      const localFileInput = routing.codex.sendTurn.mock.calls[0]?.[0] as ProviderSendTurnInput;
+      assert.include(
+        localFileInput.input ?? "",
+        `[Attached file "large.csv" is saved at: ${localFilePath}]`,
+      );
+
       yield* provider.stopSession({ threadId: session.threadId });
     }),
   );

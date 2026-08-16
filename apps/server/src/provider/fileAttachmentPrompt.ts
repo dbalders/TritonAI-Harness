@@ -22,7 +22,7 @@ export function appendFileAttachmentPrompt(input: {
     readonly sizeBytes: number;
   }> = [];
   for (const attachment of input.attachments) {
-    const attachmentPath = input.resolvePath(attachment);
+    const attachmentPath = "path" in attachment ? attachment.path : input.resolvePath(attachment);
     if (attachmentPath) {
       resolvedAttachments.push({
         name: attachment.name,
