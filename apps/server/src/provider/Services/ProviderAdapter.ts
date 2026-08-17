@@ -14,6 +14,7 @@ import type {
   ProviderUserInputAnswers,
   ProviderRuntimeEvent,
   ProviderSendTurnInput,
+  ProviderSetThreadGoalInput,
   ProviderSession,
   ProviderSessionStartInput,
   ProviderUploadFeedbackInput,
@@ -32,6 +33,8 @@ export interface ProviderAdapterCapabilities {
    * Declares whether changing the model on an existing session is supported.
    */
   readonly sessionModelSwitch: ProviderSessionModelSwitchMode;
+  /** Native persisted goal control is currently exposed by Codex app-server. */
+  readonly threadGoals?: "native";
 }
 
 export interface ProviderThreadTurnSnapshot {
@@ -92,6 +95,10 @@ export interface ProviderAdapterShape<TError> {
    * Stop one provider session.
    */
   readonly stopSession: (threadId: ThreadId) => Effect.Effect<void, TError>;
+
+  readonly setThreadGoal?: (input: ProviderSetThreadGoalInput) => Effect.Effect<void, TError>;
+
+  readonly clearThreadGoal?: (threadId: ThreadId) => Effect.Effect<void, TError>;
 
   /**
    * List currently active provider sessions for this adapter.

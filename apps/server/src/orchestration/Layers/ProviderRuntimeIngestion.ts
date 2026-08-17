@@ -390,6 +390,34 @@ export function runtimeEventToActivities(
       : {};
   })();
   switch (event.type) {
+    case "thread.goal.updated":
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: "info",
+          kind: "goal.updated",
+          summary: `Goal ${event.payload.goal.status}`,
+          payload: { goal: event.payload.goal },
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+
+    case "thread.goal.cleared":
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: "info",
+          kind: "goal.cleared",
+          summary: "Goal cleared",
+          payload: {},
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+
     case "request.opened": {
       if (event.payload.requestType === "tool_user_input") {
         return [];
@@ -1957,6 +1985,25 @@ const make = Effect.gen(function* () {
             title: event.payload.name,
           });
         }
+      }
+
+      if (event.type === "thread.goal.updated") {
+        yield* orchestrationEngine.dispatch({
+          type: "thread.goal.sync",
+          commandId: yield* providerCommandId(event, "thread-goal-sync"),
+          threadId: thread.id,
+          goal: event.payload.goal,
+          createdAt: now,
+        });
+      }
+
+      if (event.type === "thread.goal.cleared") {
+        yield* orchestrationEngine.dispatch({
+          type: "thread.goal.sync-clear",
+          commandId: yield* providerCommandId(event, "thread-goal-sync-clear"),
+          threadId: thread.id,
+          createdAt: now,
+        });
       }
 
       if (event.type === "turn.diff.updated") {

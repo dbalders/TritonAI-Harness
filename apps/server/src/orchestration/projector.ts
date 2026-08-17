@@ -19,6 +19,10 @@ import {
   ThreadCreatedPayload,
   ThreadDeletedPayload,
   ThreadInteractionModeSetPayload,
+  ThreadGoalSetRequestedPayload,
+  ThreadGoalClearRequestedPayload,
+  ThreadGoalUpdatedPayload,
+  ThreadGoalClearedPayload,
   ThreadMetaUpdatedPayload,
   ThreadProposedPlanUpsertedPayload,
   ThreadRuntimeModeSetPayload,
@@ -311,6 +315,7 @@ export function projectEvent(
             activities: [],
             checkpoints: [],
             session: null,
+            goal: undefined,
           },
           event.type,
           "thread",
@@ -499,6 +504,62 @@ export function projectEvent(
           threads: updateThread(nextBase.threads, payload.threadId, {
             interactionMode: payload.interactionMode,
             updatedAt: payload.updatedAt,
+          }),
+        })),
+      );
+
+    case "thread.goal-set-requested":
+      return decodeForEvent(
+        ThreadGoalSetRequestedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            updatedAt: payload.createdAt,
+          }),
+        })),
+      );
+
+    case "thread.goal-clear-requested":
+      return decodeForEvent(
+        ThreadGoalClearRequestedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            updatedAt: payload.createdAt,
+          }),
+        })),
+      );
+
+    case "thread.goal-updated":
+      return decodeForEvent(ThreadGoalUpdatedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => {
+          const current = nextBase.threads.find((thread) => thread.id === payload.threadId)?.goal;
+          if (current && current.updatedAt > payload.goal.updatedAt) return nextBase;
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              goal: payload.goal,
+              updatedAt: event.occurredAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.goal-cleared":
+      return decodeForEvent(ThreadGoalClearedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            goal: undefined,
+            updatedAt: event.occurredAt,
           }),
         })),
       );

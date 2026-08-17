@@ -19,6 +19,7 @@ const POST_032_MIGRATION_IDENTITIES: Array<readonly [number, string]> = [
   [42, "AuthSessionClientConnection"],
   [43, "ProjectionThreadLinkedPullRequest"],
   [44, "ProjectionThreadsUnsettledAt"],
+  [45, "ProjectionThreadGoals"],
 ];
 
 it("keeps the migration registry unique and preserves shipped downstream identities", () => {

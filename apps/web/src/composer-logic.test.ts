@@ -7,8 +7,10 @@ import {
   detectComposerTrigger,
   expandCollapsedComposerCursor,
   isCollapsedCursorAdjacentToInlineToken,
+  parseGoalComposerSlashCommand,
   parseStandaloneComposerSlashCommand,
   replaceTextRange,
+  resolveGoalComposerCommand,
 } from "./composer-logic";
 import { INLINE_TERMINAL_CONTEXT_PLACEHOLDER } from "./lib/terminalContext";
 
@@ -413,5 +415,55 @@ describe("parseStandaloneComposerSlashCommand", () => {
 
   it("ignores slash commands with extra message text", () => {
     expect(parseStandaloneComposerSlashCommand("/plan explain this")).toBeNull();
+  });
+});
+
+describe("parseGoalComposerSlashCommand", () => {
+  it("parses a goal objective", () => {
+    expect(parseGoalComposerSlashCommand("/goal ship reliable reconnects")).toEqual({
+      type: "set",
+      objective: "ship reliable reconnects",
+    });
+    expect(parseGoalComposerSlashCommand("/goal set pause")).toEqual({
+      type: "set",
+      objective: "pause",
+    });
+  });
+
+  it("parses goal lifecycle controls", () => {
+    expect(parseGoalComposerSlashCommand("/goal")).toEqual({ type: "view" });
+    expect(parseGoalComposerSlashCommand("/goal pause")).toEqual({ type: "pause" });
+    expect(parseGoalComposerSlashCommand("/goal resume")).toEqual({ type: "resume" });
+    expect(parseGoalComposerSlashCommand("/goal clear")).toEqual({ type: "clear" });
+  });
+
+  it("does not capture unrelated slash commands", () => {
+    expect(parseGoalComposerSlashCommand("/goals are useful")).toBeNull();
+  });
+});
+
+describe("resolveGoalComposerCommand", () => {
+  it("treats text in explicit goal mode as the objective", () => {
+    expect(resolveGoalComposerCommand("  Ship reliable reconnects  ", { goalArmed: true })).toEqual(
+      {
+        type: "set",
+        objective: "Ship reliable reconnects",
+      },
+    );
+    expect(resolveGoalComposerCommand("pause", { goalArmed: true })).toEqual({
+      type: "set",
+      objective: "pause",
+    });
+  });
+
+  it("keeps an empty explicit goal mode armed without creating a command", () => {
+    expect(resolveGoalComposerCommand("   ", { goalArmed: true })).toBeNull();
+  });
+
+  it("preserves raw goal commands outside explicit goal mode", () => {
+    expect(resolveGoalComposerCommand("/goal pause", { goalArmed: false })).toEqual({
+      type: "pause",
+    });
+    expect(resolveGoalComposerCommand("$goal pause", { goalArmed: false })).toBeNull();
   });
 });

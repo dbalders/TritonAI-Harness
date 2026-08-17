@@ -128,6 +128,26 @@ export const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
 export const ProviderInteractionMode = Schema.Literals(["default", "plan"]);
 export type ProviderInteractionMode = typeof ProviderInteractionMode.Type;
 export const DEFAULT_PROVIDER_INTERACTION_MODE: ProviderInteractionMode = "default";
+export const ThreadGoalStatus = Schema.Literals([
+  "active",
+  "paused",
+  "blocked",
+  "usageLimited",
+  "budgetLimited",
+  "complete",
+]);
+export type ThreadGoalStatus = typeof ThreadGoalStatus.Type;
+export const THREAD_GOAL_MAX_OBJECTIVE_CHARS = 4_000;
+export const ThreadGoal = Schema.Struct({
+  objective: TrimmedNonEmptyString.check(Schema.isMaxLength(THREAD_GOAL_MAX_OBJECTIVE_CHARS)),
+  status: ThreadGoalStatus,
+  tokenBudget: Schema.NullOr(NonNegativeInt),
+  tokensUsed: NonNegativeInt,
+  timeUsedSeconds: NonNegativeInt,
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+});
+export type ThreadGoal = typeof ThreadGoal.Type;
 export const ProviderRequestKind = Schema.Literals([
   "command",
   "file-read",
@@ -517,6 +537,7 @@ export const OrchestrationThread = Schema.Struct({
   activities: Schema.Array(OrchestrationThreadActivity),
   checkpoints: Schema.Array(OrchestrationCheckpointSummary),
   session: Schema.NullOr(OrchestrationSession),
+  goal: Schema.optional(ThreadGoal),
 });
 export type OrchestrationThread = typeof OrchestrationThread.Type;
 
@@ -571,6 +592,7 @@ export const OrchestrationThreadShell = Schema.Struct({
   pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   titleRegeneration: Schema.optional(Schema.NullOr(ThreadTitleRegeneration)),
   session: Schema.NullOr(OrchestrationSession),
+  goal: Schema.optional(ThreadGoal),
   latestUserMessageAt: Schema.NullOr(IsoDateTime),
   hasPendingApprovals: Schema.Boolean,
   hasPendingUserInput: Schema.Boolean,
@@ -905,6 +927,13 @@ const ThreadInteractionModeSetCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadGoalClearCommand = Schema.Struct({
+  type: Schema.Literal("thread.goal.clear"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  createdAt: IsoDateTime,
+});
+
 const ThreadTurnStartBootstrapCreateThread = Schema.Struct({
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
@@ -930,6 +959,20 @@ const ThreadTurnStartBootstrap = Schema.Struct({
 });
 
 export type ThreadTurnStartBootstrap = typeof ThreadTurnStartBootstrap.Type;
+
+const ThreadGoalSetCommand = Schema.Struct({
+  type: Schema.Literal("thread.goal.set"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  objective: Schema.optional(
+    TrimmedNonEmptyString.check(Schema.isMaxLength(THREAD_GOAL_MAX_OBJECTIVE_CHARS)),
+  ),
+  status: Schema.optional(ThreadGoalStatus),
+  tokenBudget: Schema.optional(Schema.NullOr(NonNegativeInt)),
+  modelSelection: Schema.optional(ModelSelection),
+  bootstrap: Schema.optional(ThreadTurnStartBootstrap),
+  createdAt: IsoDateTime,
+});
 
 export const ThreadTurnStartCommand = Schema.Struct({
   type: Schema.Literal("thread.turn.start"),
@@ -1042,6 +1085,8 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadMetaUpdateCommand,
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
+  ThreadGoalSetCommand,
+  ThreadGoalClearCommand,
   ThreadTurnStartCommand,
   ThreadTurnInterruptCommand,
   ThreadApprovalRespondCommand,
@@ -1070,6 +1115,8 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadMetaUpdateCommand,
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
+  ThreadGoalSetCommand,
+  ThreadGoalClearCommand,
   ClientThreadTurnStartCommand,
   ThreadTurnInterruptCommand,
   ThreadApprovalRespondCommand,
@@ -1084,6 +1131,21 @@ const ThreadSessionSetCommand = Schema.Struct({
   commandId: CommandId,
   threadId: ThreadId,
   session: OrchestrationSession,
+  createdAt: IsoDateTime,
+});
+
+const ThreadGoalSyncCommand = Schema.Struct({
+  type: Schema.Literal("thread.goal.sync"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  goal: ThreadGoal,
+  createdAt: IsoDateTime,
+});
+
+const ThreadGoalSyncClearCommand = Schema.Struct({
+  type: Schema.Literal("thread.goal.sync-clear"),
+  commandId: CommandId,
+  threadId: ThreadId,
   createdAt: IsoDateTime,
 });
 
@@ -1155,6 +1217,8 @@ const ThreadTitleRegenerationCompleteCommand = Schema.Struct({
 const InternalOrchestrationCommand = Schema.Union([
   ThreadAutoSettleCommand,
   ThreadSessionSetCommand,
+  ThreadGoalSyncCommand,
+  ThreadGoalSyncClearCommand,
   ThreadMessageAssistantDeltaCommand,
   ThreadMessageAssistantCompleteCommand,
   ThreadProposedPlanUpsertCommand,
@@ -1189,6 +1253,10 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.meta-updated",
   "thread.runtime-mode-set",
   "thread.interaction-mode-set",
+  "thread.goal-set-requested",
+  "thread.goal-clear-requested",
+  "thread.goal-updated",
+  "thread.goal-cleared",
   "thread.message-sent",
   "thread.turn-start-requested",
   "thread.turn-interrupt-requested",
@@ -1347,6 +1415,31 @@ export const ThreadInteractionModeSetPayload = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
   updatedAt: IsoDateTime,
+});
+
+export const ThreadGoalSetRequestedPayload = Schema.Struct({
+  threadId: ThreadId,
+  objective: Schema.optional(
+    TrimmedNonEmptyString.check(Schema.isMaxLength(THREAD_GOAL_MAX_OBJECTIVE_CHARS)),
+  ),
+  status: Schema.optional(ThreadGoalStatus),
+  tokenBudget: Schema.optional(Schema.NullOr(NonNegativeInt)),
+  modelSelection: Schema.optional(ModelSelection),
+  createdAt: IsoDateTime,
+});
+
+export const ThreadGoalClearRequestedPayload = Schema.Struct({
+  threadId: ThreadId,
+  createdAt: IsoDateTime,
+});
+
+export const ThreadGoalUpdatedPayload = Schema.Struct({
+  threadId: ThreadId,
+  goal: ThreadGoal,
+});
+
+export const ThreadGoalClearedPayload = Schema.Struct({
+  threadId: ThreadId,
 });
 
 export const ThreadMessageSentPayload = Schema.Struct({
@@ -1555,6 +1648,26 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.interaction-mode-set"),
     payload: ThreadInteractionModeSetPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.goal-set-requested"),
+    payload: ThreadGoalSetRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.goal-clear-requested"),
+    payload: ThreadGoalClearRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.goal-updated"),
+    payload: ThreadGoalUpdatedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.goal-cleared"),
+    payload: ThreadGoalClearedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

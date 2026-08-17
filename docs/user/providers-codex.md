@@ -10,6 +10,32 @@ Common reasons:
 - switch to another account when one account hits limits
 - keep one shared Codex history instead of maintaining two separate Codex setups
 
+## Work Toward A Persistent Goal
+
+In a Codex thread, type `/goal` and choose the Goal command. The composer enters Goal mode, shows a
+removable Goal chip, and prompts you to describe the objective. Enter the objective and send it:
+
+```text
+Finish the migration, preserve behavior, and pass the test suite
+```
+
+The goal rail above the composer shows the current objective, status, token use, elapsed time, and
+last update. Codex can keep pursuing the objective across turns until the goal is paused, completed,
+limited, stalled, or cleared.
+
+You can also type raw commands without choosing the command-menu item:
+
+```text
+/goal                 Show the current goal
+/goal pause           Pause it
+/goal resume          Resume it
+/goal clear           Clear it
+/goal set <objective> Replace it, including objectives named pause, resume, or clear
+```
+
+Goal creation is currently available for Codex providers. Goals are text-only because Codex's native
+goal API does not accept attachments or composer context cards.
+
 ## I Only Use One Codex Account
 
 Use the default provider.

@@ -34,7 +34,11 @@ export const canonicalizeClientCommandTimestamps = (
         }
       : command;
 
-  if (canonicalCommand.type !== "thread.turn.start" || !canonicalCommand.bootstrap?.createThread) {
+  if (
+    (canonicalCommand.type !== "thread.turn.start" &&
+      canonicalCommand.type !== "thread.goal.set") ||
+    !canonicalCommand.bootstrap?.createThread
+  ) {
     return canonicalCommand;
   }
 
