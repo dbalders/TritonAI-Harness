@@ -65,14 +65,15 @@ describe("makeWorkspaceFileDropHandlers", () => {
     expect(setDragActive).not.toHaveBeenCalled();
   });
 
-  it("adds dropped files and clears the active state", () => {
-    const file = new File(["image"], "example.png", { type: "image/png" });
+  it("adds dropped images and generic files and clears the active state", () => {
+    const image = new File(["image"], "example.png", { type: "image/png" });
+    const document = new File(["document"], "example.txt", { type: "text/plain" });
     const { host, setDragActive, addFiles } = makeHost();
-    const { event } = makeDragEvent({ files: [file] });
+    const { event } = makeDragEvent({ files: [image, document] });
 
     makeWorkspaceFileDropHandlers(host).onDrop(event);
 
     expect(setDragActive).toHaveBeenCalledWith(false);
-    expect(addFiles).toHaveBeenCalledWith([file]);
+    expect(addFiles).toHaveBeenCalledWith([image, document]);
   });
 });

@@ -111,9 +111,7 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
 
     const totalAttachmentBytes = canonicalCommand.message.attachments.reduce(
       (total, attachment) =>
-        attachment.type === "file" && !("path" in attachment)
-          ? total + attachment.sizeBytes
-          : total,
+        attachment.type === "file" && "path" in attachment ? total : total + attachment.sizeBytes,
       0,
     );
     if (totalAttachmentBytes > PROVIDER_SEND_TURN_MAX_TOTAL_ATTACHMENT_BYTES) {
