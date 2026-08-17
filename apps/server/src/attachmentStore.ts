@@ -141,6 +141,23 @@ export const resolveAttachmentPathById = Effect.fn("resolveAttachmentPathById")(
       return maybePath;
     }
   }
+  const entries = yield* fileSystem
+    .readDirectory(input.attachmentsDir, { recursive: false })
+    .pipe(Effect.orElseSucceed(() => [] as Array<string>));
+  for (const entry of entries.toSorted()) {
+    if (parseAttachmentIdFromRelativePath(entry) !== normalizedId) continue;
+    const maybePath = resolveAttachmentRelativePath({
+      attachmentsDir: input.attachmentsDir,
+      relativePath: entry,
+    });
+    const isFile = maybePath
+      ? yield* fileSystem.stat(maybePath).pipe(
+          Effect.map((info) => info.type === "File"),
+          Effect.orElseSucceed(() => false),
+        )
+      : false;
+    if (maybePath && isFile) return maybePath;
+  }
   return null;
 });
 

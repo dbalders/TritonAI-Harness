@@ -129,4 +129,21 @@ describe("attachmentStore", () => {
       }
     }).pipe(Effect.provide(NodeServices.layer)),
   );
+
+  it.effect("keeps legacy attachment extensions resolvable", () =>
+    Effect.gen(function* () {
+      const attachmentsDir = NodeFS.mkdtempSync(
+        NodePath.join(NodeOS.tmpdir(), "t3code-attachment-store-"),
+      );
+      try {
+        const attachmentId = "thread-file-00000000-0000-4000-8000-000000000002";
+        const legacyPath = NodePath.join(attachmentsDir, `${attachmentId}.html`);
+        NodeFS.writeFileSync(legacyPath, "<p>legacy</p>");
+
+        expect(yield* resolveAttachmentPathById({ attachmentsDir, attachmentId })).toBe(legacyPath);
+      } finally {
+        NodeFS.rmSync(attachmentsDir, { recursive: true, force: true });
+      }
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
 });

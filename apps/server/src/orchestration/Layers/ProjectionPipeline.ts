@@ -382,12 +382,14 @@ const runAttachmentSideEffects = Effect.fn("runAttachmentSideEffects")(function*
     { concurrency: 1 },
   );
 
-  const entries = yield* readAttachmentRootEntries;
-  yield* Effect.forEach(
-    entries,
-    (entry) => removePrunedAttachmentEntry(sideEffects.prunedAttachmentIds, entry),
-    { concurrency: 1 },
-  );
+  if (sideEffects.prunedAttachmentIds.size > 0) {
+    const entries = yield* readAttachmentRootEntries;
+    yield* Effect.forEach(
+      entries,
+      (entry) => removePrunedAttachmentEntry(sideEffects.prunedAttachmentIds, entry),
+      { concurrency: 1 },
+    );
+  }
 });
 
 const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjectionPipeline")(
