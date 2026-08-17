@@ -2422,6 +2422,43 @@ function imageAttachment(id: string) {
   };
 }
 
+it.effect("keeps generic attachments out of Codex native attachment inputs", () => {
+  const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "codex-file-context-"));
+  const runtimeFactory = makeRuntimeFactory();
+  const analyzer: CodexImageContextAnalyzer = () => Effect.succeed([]);
+  const layer = makeImageContextAdapterLayer({ baseDir, runtimeFactory, analyzer });
+
+  return Effect.gen(function* () {
+    const adapter = yield* CodexAdapter;
+    const threadId = asThreadId("thread-file-context");
+    const attachment = {
+      type: "file" as const,
+      id: "thread-file-context-00000000-0000-4000-8000-000000000001",
+      name: "requirements.txt",
+      mimeType: "text/plain",
+      sizeBytes: 12,
+    };
+    yield* adapter.startSession({
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "text-only-model", []),
+      runtimeMode: "full-access",
+    });
+    yield* adapter.sendTurn({
+      threadId,
+      input: "Summarize this file.",
+      attachments: [attachment],
+    });
+
+    const turn = runtimeFactory.lastRuntime?.sendTurnImpl.mock.calls[0]?.[0];
+    NodeAssert.equal(turn?.input, "Summarize this file.");
+    NodeAssert.equal(Object.hasOwn(turn ?? {}, "attachments"), false);
+  }).pipe(
+    Effect.provide(layer),
+    Effect.ensuring(Effect.sync(() => NodeFS.rmSync(baseDir, { recursive: true, force: true }))),
+  );
+});
+
 it.effect("restarts legacy image history before using a text-only model", () => {
   const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "codex-image-resume-"));
   const runtimeFactory = makeRuntimeFactory();

@@ -45,6 +45,23 @@ const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1", "localhost"]);
 const DESKTOP_RENDERER_ORIGINS = ["t3code://app", "t3code-dev://app"];
 const SVG_CONTENT_SECURITY_POLICY = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
 
+export function contentDispositionAttachment(fileName: string): string {
+  const wellFormedFileName = fileName.replace(
+    /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g,
+    "\uFFFD",
+  );
+  const fallback =
+    wellFormedFileName
+      .replace(/[^\x20-\x7e]|["\\]/g, "_")
+      .trim()
+      .slice(0, 255) || "attachment";
+  const encoded = encodeURIComponent(wellFormedFileName).replace(
+    /[!'()*]/g,
+    (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+  return `attachment; filename="${fallback}"; filename*=UTF-8''${encoded}`;
+}
+
 export function assetResponseHeaders(filePath: string): Record<string, string> {
   return {
     "Cache-Control": "private, max-age=3600",
@@ -219,7 +236,17 @@ export const assetRouteLayer = HttpRouter.add(
     }
     return yield* HttpServerResponse.file(asset.path, {
       status: 200,
-      headers: assetResponseHeaders(asset.path),
+      headers: {
+        ...assetResponseHeaders(asset.path),
+        ...(asset.disposition === "attachment"
+          ? {
+              "Content-Disposition": contentDispositionAttachment(
+                asset.downloadName ?? "attachment",
+              ),
+              "Content-Type": "application/octet-stream",
+            }
+          : {}),
+      },
     }).pipe(
       Effect.orElseSucceed(() => HttpServerResponse.text("Internal Server Error", { status: 500 })),
     );

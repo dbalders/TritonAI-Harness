@@ -8,9 +8,14 @@ import {
   type OrchestrationCommand,
   OrchestrationDispatchCommandError,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
+  PROVIDER_SEND_TURN_MAX_TOTAL_ATTACHMENT_BYTES,
 } from "@t3tools/contracts";
 
-import { createAttachmentId, resolveAttachmentPath } from "../attachmentStore.ts";
+import {
+  createAttachmentId,
+  isCanonicalAttachmentIdOwnedByThread,
+  resolveAttachmentPath,
+} from "../attachmentStore.ts";
 import { ServerConfig } from "../config.ts";
 import { parseBase64DataUrl } from "../imageMime.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
@@ -104,10 +109,77 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
       return canonicalCommand as OrchestrationCommand;
     }
 
+    const totalAttachmentBytes = canonicalCommand.message.attachments.reduce(
+      (total, attachment) =>
+        attachment.type === "file" && "path" in attachment ? total : total + attachment.sizeBytes,
+      0,
+    );
+    if (totalAttachmentBytes > PROVIDER_SEND_TURN_MAX_TOTAL_ATTACHMENT_BYTES) {
+      return yield* new OrchestrationDispatchCommandError({
+        message: "The combined uploaded attachment size exceeds the 50 MiB turn limit.",
+      });
+    }
+
     const normalizedAttachments = yield* Effect.forEach(
       canonicalCommand.message.attachments,
       (attachment) =>
         Effect.gen(function* () {
+          if (attachment.type === "file") {
+            // Match Codex desktop behavior: native-local files are already on
+            // the environment filesystem, so the provider receives the path
+            // directly rather than forcing a copy into attachment storage.
+            if ("path" in attachment) {
+              if (!path.isAbsolute(attachment.path)) {
+                return yield* new OrchestrationDispatchCommandError({
+                  message: `File attachment '${attachment.name}' must use an absolute path.`,
+                });
+              }
+              const fileInfo = yield* fileSystem
+                .stat(attachment.path)
+                .pipe(Effect.orElseSucceed(() => null));
+              if (
+                !fileInfo ||
+                fileInfo.type !== "File" ||
+                Number(fileInfo.size) !== attachment.sizeBytes
+              ) {
+                return yield* new OrchestrationDispatchCommandError({
+                  message: `File attachment '${attachment.name}' is missing or has changed.`,
+                });
+              }
+              return { ...attachment, path: path.normalize(attachment.path) };
+            }
+            if (!isCanonicalAttachmentIdOwnedByThread(attachment.id, canonicalCommand.threadId)) {
+              return yield* new OrchestrationDispatchCommandError({
+                message: `File attachment '${attachment.name}' does not belong to this thread.`,
+              });
+            }
+
+            const expectedPath = resolveAttachmentPath({
+              attachmentsDir: serverConfig.attachmentsDir,
+              attachment,
+            });
+            if (!expectedPath) {
+              return yield* new OrchestrationDispatchCommandError({
+                message: `File attachment '${attachment.name}' could not be resolved.`,
+              });
+            }
+            const fileInfo = yield* fileSystem
+              .stat(expectedPath)
+              .pipe(Effect.orElseSucceed(() => null));
+            const persistedSizeBytes = fileInfo ? Number(fileInfo.size) : 0;
+            if (
+              !fileInfo ||
+              fileInfo.type !== "File" ||
+              persistedSizeBytes === 0 ||
+              persistedSizeBytes !== attachment.sizeBytes
+            ) {
+              return yield* new OrchestrationDispatchCommandError({
+                message: `File attachment '${attachment.name}' is missing or has changed.`,
+              });
+            }
+            return attachment;
+          }
+
           const parsed = parseBase64DataUrl(attachment.dataUrl);
           if (!parsed || !parsed.mimeType.startsWith("image/")) {
             return yield* new OrchestrationDispatchCommandError({
@@ -116,9 +188,13 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
           }
 
           const bytes = Buffer.from(parsed.base64, "base64");
-          if (bytes.byteLength === 0 || bytes.byteLength > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES) {
+          if (
+            bytes.byteLength === 0 ||
+            bytes.byteLength > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES ||
+            bytes.byteLength !== attachment.sizeBytes
+          ) {
             return yield* new OrchestrationDispatchCommandError({
-              message: `Image attachment '${attachment.name}' is empty or too large.`,
+              message: `Image attachment '${attachment.name}' is empty, too large, or has changed.`,
             });
           }
 
@@ -168,6 +244,17 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
         }),
       { concurrency: 1 },
     );
+
+    const normalizedTotalAttachmentBytes = normalizedAttachments.reduce(
+      (total, attachment) =>
+        attachment.type === "file" && "path" in attachment ? total : total + attachment.sizeBytes,
+      0,
+    );
+    if (normalizedTotalAttachmentBytes > PROVIDER_SEND_TURN_MAX_TOTAL_ATTACHMENT_BYTES) {
+      return yield* new OrchestrationDispatchCommandError({
+        message: "The combined uploaded attachment size exceeds the 50 MiB turn limit.",
+      });
+    }
 
     return {
       ...canonicalCommand,

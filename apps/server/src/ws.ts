@@ -15,6 +15,7 @@ import {
   type AuthAccessStreamEvent,
   type AuthEnvironmentScope,
   AuthSessionId,
+  type ChatAttachment,
   CommandId,
   type DiscoveredLocalServerList,
   EventId,
@@ -49,6 +50,7 @@ import {
   FilesystemBrowseError,
   AssetWorkspaceContextNotFoundError,
   AssetWorkspaceContextResolutionError,
+  AssetAttachmentNotFoundError,
   RpcClientId,
   EnvironmentAuthorizationError,
   ThreadId,
@@ -1958,7 +1960,60 @@ const makeWsRpcLayer = (
             WS_METHODS.assetsCreateUrl,
             Effect.gen(function* () {
               if (input.resource._tag === "attachment") {
-                return yield* issueAssetUrl({ resource: input.resource });
+                const resource = input.resource;
+                const mapResolutionError = (cause: unknown) =>
+                  new AssetWorkspaceContextResolutionError({ resource, cause });
+                let attachment: ChatAttachment | undefined;
+                if (resource.threadId !== undefined) {
+                  const thread = yield* projectionSnapshotQuery
+                    .getThreadDetailById(resource.threadId)
+                    .pipe(Effect.mapError(mapResolutionError));
+                  if (Option.isNone(thread)) {
+                    return yield* new AssetWorkspaceContextNotFoundError({ resource });
+                  }
+                  attachment = thread.value.messages
+                    .flatMap((message) => message.attachments ?? [])
+                    .find((candidate) => candidate.id === resource.attachmentId);
+                } else {
+                  // Compatibility for clients that predate thread-scoped asset requests. Resolve
+                  // the id only when it has one authoritative message owner.
+                  const snapshot = yield* projectionSnapshotQuery
+                    .getSnapshot()
+                    .pipe(Effect.mapError(mapResolutionError));
+                  const matches = snapshot.threads.flatMap((thread) =>
+                    thread.messages
+                      .flatMap((message) => message.attachments ?? [])
+                      .filter((candidate) => candidate.id === resource.attachmentId),
+                  );
+                  const distinctMatches = new Map(
+                    matches.map((candidate) => [
+                      JSON.stringify([
+                        candidate.type,
+                        candidate.id,
+                        candidate.name,
+                        candidate.mimeType,
+                        candidate.sizeBytes,
+                        candidate.type === "file" && "path" in candidate ? candidate.path : null,
+                      ]),
+                      candidate,
+                    ]),
+                  );
+                  attachment =
+                    distinctMatches.size === 1 ? distinctMatches.values().next().value : undefined;
+                }
+                if (!attachment) {
+                  return yield* new AssetAttachmentNotFoundError({
+                    resource,
+                  });
+                }
+                if (attachment.type === "file" && "path" in attachment) {
+                  return yield* new AssetAttachmentNotFoundError({ resource });
+                }
+                return yield* issueAssetUrl({
+                  resource,
+                  attachmentDisposition: attachment.type === "image" ? "inline" : "attachment",
+                  attachmentFileName: attachment.name,
+                });
               }
               if (input.resource._tag === "project-favicon") {
                 const project = yield* projectionSnapshotQuery

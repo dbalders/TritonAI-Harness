@@ -1226,14 +1226,15 @@ const buildUserMessageEffect = Effect.fn("buildUserMessageEffect")(function* (
     readonly boundInstanceId: ProviderInstanceId;
   },
 ) {
+  const attachments = input.attachments ?? [];
   const text = buildPromptText(input, dependencies.boundInstanceId);
   const sdkContent: Array<Record<string, unknown>> = [];
 
-  if (text.length > 0) {
+  if (text && text.length > 0) {
     sdkContent.push({ type: "text", text });
   }
 
-  for (const attachment of input.attachments ?? []) {
+  for (const attachment of attachments) {
     if (attachment.type !== "image") {
       continue;
     }

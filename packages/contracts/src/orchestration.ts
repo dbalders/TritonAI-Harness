@@ -144,6 +144,8 @@ export type ProviderUserInputAnswers = typeof ProviderUserInputAnswers.Type;
 export const PROVIDER_SEND_TURN_MAX_INPUT_CHARS = 120_000;
 export const PROVIDER_SEND_TURN_MAX_ATTACHMENTS = 8;
 export const PROVIDER_SEND_TURN_MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+export const PROVIDER_SEND_TURN_MAX_FILE_BYTES = 50 * 1024 * 1024;
+export const PROVIDER_SEND_TURN_MAX_TOTAL_ATTACHMENT_BYTES = 50 * 1024 * 1024;
 const PROVIDER_SEND_TURN_MAX_IMAGE_DATA_URL_CHARS = 14_000_000;
 const CHAT_ATTACHMENT_ID_MAX_CHARS = 128;
 // Correlation id is command id by design in this model.
@@ -165,6 +167,35 @@ export const ChatImageAttachment = Schema.Struct({
 });
 export type ChatImageAttachment = typeof ChatImageAttachment.Type;
 
+const ChatFileAttachmentBase = {
+  type: Schema.Literal("file"),
+  id: ChatAttachmentId,
+  name: TrimmedNonEmptyString.check(Schema.isMaxLength(255)),
+  mimeType: TrimmedNonEmptyString.check(Schema.isMaxLength(100)),
+};
+
+export const ChatReferencedFileAttachment = Schema.Struct({
+  ...ChatFileAttachmentBase,
+  sizeBytes: NonNegativeInt,
+  path: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(32_768)),
+});
+export type ChatReferencedFileAttachment = typeof ChatReferencedFileAttachment.Type;
+
+export const ChatStoredFileAttachment = Schema.Struct({
+  ...ChatFileAttachmentBase,
+  sizeBytes: NonNegativeInt.check(Schema.isLessThanOrEqualTo(PROVIDER_SEND_TURN_MAX_FILE_BYTES)),
+});
+export type ChatStoredFileAttachment = typeof ChatStoredFileAttachment.Type;
+
+// Keep the path-bearing form first: Struct decoding permits excess properties,
+// so this ordering prevents a direct reference from being decoded as a stored
+// upload with its path silently discarded.
+export const ChatFileAttachment = Schema.Union([
+  ChatReferencedFileAttachment,
+  ChatStoredFileAttachment,
+]);
+export type ChatFileAttachment = typeof ChatFileAttachment.Type;
+
 const UploadChatImageAttachment = Schema.Struct({
   type: Schema.Literal("image"),
   name: TrimmedNonEmptyString.check(Schema.isMaxLength(255)),
@@ -176,10 +207,22 @@ const UploadChatImageAttachment = Schema.Struct({
 });
 export type UploadChatImageAttachment = typeof UploadChatImageAttachment.Type;
 
-export const ChatAttachment = Schema.Union([ChatImageAttachment]);
+export const ChatAttachment = Schema.Union([ChatImageAttachment, ChatFileAttachment]);
 export type ChatAttachment = typeof ChatAttachment.Type;
-const UploadChatAttachment = Schema.Union([UploadChatImageAttachment]);
+const UploadChatAttachment = Schema.Union([UploadChatImageAttachment, ChatFileAttachment]);
 export type UploadChatAttachment = typeof UploadChatAttachment.Type;
+
+const aggregateUploadedAttachmentByteLimit = Schema.makeFilter(
+  (attachments: ReadonlyArray<UploadChatAttachment | ChatAttachment>) =>
+    attachments.reduce(
+      (total, attachment) =>
+        attachment.type === "file" && !("path" in attachment)
+          ? total + attachment.sizeBytes
+          : total,
+      0,
+    ) <= PROVIDER_SEND_TURN_MAX_TOTAL_ATTACHMENT_BYTES ||
+    `Combined uploaded attachment size must not exceed ${PROVIDER_SEND_TURN_MAX_TOTAL_ATTACHMENT_BYTES} bytes.`,
+);
 
 export const ProjectScriptIcon = Schema.Literals([
   "play",
@@ -816,7 +859,10 @@ export const ThreadTurnStartCommand = Schema.Struct({
     messageId: MessageId,
     role: Schema.Literal("user"),
     text: Schema.String,
-    attachments: Schema.Array(ChatAttachment),
+    attachments: Schema.Array(ChatAttachment).check(
+      Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_ATTACHMENTS),
+      aggregateUploadedAttachmentByteLimit,
+    ),
   }),
   modelSelection: Schema.optional(ModelSelection),
   titleSeed: Schema.optional(TrimmedNonEmptyString),
@@ -837,7 +883,10 @@ const ClientThreadTurnStartCommand = Schema.Struct({
     messageId: MessageId,
     role: Schema.Literal("user"),
     text: Schema.String,
-    attachments: Schema.Array(UploadChatAttachment),
+    attachments: Schema.Array(UploadChatAttachment).check(
+      Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_ATTACHMENTS),
+      aggregateUploadedAttachmentByteLimit,
+    ),
   }),
   modelSelection: Schema.optional(ModelSelection),
   titleSeed: Schema.optional(TrimmedNonEmptyString),

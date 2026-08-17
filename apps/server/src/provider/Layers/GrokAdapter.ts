@@ -950,9 +950,10 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                   mapAcpToAdapterError(PROVIDER, input.threadId, "session/set_model", cause),
               });
 
+              const attachments = input.attachments ?? [];
               const text = input.input?.trim();
               const imagePromptParts = yield* Effect.forEach(
-                input.attachments ?? [],
+                attachments.filter((attachment) => attachment.type === "image"),
                 (attachment) =>
                   Effect.gen(function* () {
                     const attachmentPath = resolveAttachmentPath({

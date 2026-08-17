@@ -82,6 +82,14 @@ const AssetClaimsSchema = Schema.Union([
     expiresAt: Schema.Number,
   }),
   Schema.Struct({
+    version: Schema.Literal(2),
+    kind: Schema.Literal("attachment"),
+    attachmentId: Schema.String,
+    disposition: Schema.Literals(["inline", "attachment"]),
+    fileName: Schema.String,
+    expiresAt: Schema.Number,
+  }),
+  Schema.Struct({
     version: Schema.Literal(1),
     kind: Schema.Literal("project-favicon"),
     workspaceRoot: Schema.String,
@@ -95,7 +103,12 @@ const AssetClaimsJson = Schema.fromJsonString(AssetClaimsSchema);
 const decodeAssetClaims = Schema.decodeUnknownOption(AssetClaimsJson);
 const encodeAssetClaims = Schema.encodeSync(AssetClaimsJson);
 
-export type ResolvedAsset = { readonly kind: "file"; readonly path: string };
+export type ResolvedAsset = {
+  readonly kind: "file";
+  readonly path: string;
+  readonly disposition?: "attachment";
+  readonly downloadName?: string;
+};
 
 function decodeClaims(encodedPayload: string): AssetClaims | null {
   try {
@@ -169,6 +182,8 @@ const resolveCanonicalWorkspaceFileForRequest = (input: {
 export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (input: {
   readonly resource: AssetResource;
   readonly workspaceRoot?: string;
+  readonly attachmentDisposition?: "inline" | "attachment";
+  readonly attachmentFileName?: string;
   readonly projectFaviconPath?: string;
 }) {
   const fileSystem = yield* FileSystem.FileSystem;
@@ -260,7 +275,7 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
     }
     case "attachment": {
       const config = yield* ServerConfig.ServerConfig;
-      const attachmentPath = resolveAttachmentPathById({
+      const attachmentPath = yield* resolveAttachmentPathById({
         attachmentsDir: config.attachmentsDir,
         attachmentId: input.resource.attachmentId,
       });
@@ -270,12 +285,14 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
         });
       }
       claims = {
-        version: 1,
+        version: 2,
         kind: "attachment",
         attachmentId: input.resource.attachmentId,
+        disposition: input.attachmentDisposition ?? "attachment",
+        fileName: input.attachmentFileName ?? path.basename(attachmentPath),
         expiresAt,
       };
-      fileName = path.basename(attachmentPath);
+      fileName = claims.fileName;
       break;
     }
     case "project-favicon": {
@@ -411,7 +428,7 @@ export const resolveAsset = Effect.fn("AssetAccess.resolveAsset")(function* (
 
   if (claims.kind === "attachment") {
     const config = yield* ServerConfig.ServerConfig;
-    const attachmentPath = resolveAttachmentPathById({
+    const attachmentPath = yield* resolveAttachmentPathById({
       attachmentsDir: config.attachmentsDir,
       attachmentId: claims.attachmentId,
     });
@@ -427,9 +444,29 @@ export const resolveAsset = Effect.fn("AssetAccess.resolveAsset")(function* (
       ),
       Effect.orElseSucceed(() => Option.none()),
     );
-    return Option.isSome(info) && info.value.type === "File"
-      ? ({ kind: "file", path: attachmentPath } satisfies ResolvedAsset)
-      : null;
+    if (Option.isNone(info) || info.value.type !== "File") {
+      return null;
+    }
+    if (claims.version === 1) {
+      const path = yield* Path.Path;
+      const legacyFileName = path.basename(attachmentPath);
+      return isWorkspaceImagePreviewPath(attachmentPath)
+        ? ({ kind: "file", path: attachmentPath } satisfies ResolvedAsset)
+        : ({
+            kind: "file",
+            path: attachmentPath,
+            disposition: "attachment",
+            downloadName: legacyFileName,
+          } satisfies ResolvedAsset);
+    }
+    return claims.disposition === "attachment"
+      ? ({
+          kind: "file",
+          path: attachmentPath,
+          disposition: "attachment",
+          downloadName: claims.fileName,
+        } satisfies ResolvedAsset)
+      : ({ kind: "file", path: attachmentPath } satisfies ResolvedAsset);
   }
 
   if (claims.kind === "project-favicon") {

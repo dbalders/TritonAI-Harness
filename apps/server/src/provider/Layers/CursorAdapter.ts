@@ -961,11 +961,16 @@ export function makeCursorAdapter(
           }
 
           const promptParts: Array<EffectAcpSchema.ContentBlock> = [];
-          if (input.input?.trim()) {
-            promptParts.push({ type: "text", text: input.input.trim() });
+          const attachments = input.attachments ?? [];
+          const promptText = input.input;
+          if (promptText?.trim()) {
+            promptParts.push({ type: "text", text: promptText.trim() });
           }
-          if (input.attachments && input.attachments.length > 0) {
-            for (const attachment of input.attachments) {
+          if (attachments.length > 0) {
+            for (const attachment of attachments) {
+              if (attachment.type !== "image") {
+                continue;
+              }
               const attachmentPath = resolveAttachmentPath({
                 attachmentsDir: serverConfig.attachmentsDir,
                 attachment,

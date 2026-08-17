@@ -159,12 +159,14 @@ export interface ThreadFeedProps {
 
 function MessageAttachmentImage(props: {
   readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId;
   readonly attachmentId: string;
   readonly className: string;
   readonly onPressImage: (uri: string, headers?: Record<string, string>) => void;
 }) {
   const uri = useAssetUrl(props.environmentId, {
     _tag: "attachment",
+    threadId: props.threadId,
     attachmentId: props.attachmentId,
   });
 
@@ -810,7 +812,7 @@ function useMarkdownStyles(onLinkPress: (href: string) => void): MarkdownStyleSe
 
 function renderFeedEntry(
   info: { item: ThreadFeedEntry; index: number },
-  props: Pick<ThreadFeedProps, "environmentId" | "skills"> & {
+  props: Pick<ThreadFeedProps, "environmentId" | "threadId" | "skills"> & {
     readonly copiedRowId: string | null;
     readonly expandedWorkRows: Record<string, boolean>;
     readonly terminalAssistantMessageIds: ReadonlySet<string>;
@@ -922,10 +924,24 @@ function renderFeedEntry(
               />
             ) : null}
             {attachments.map((attachment) => {
+              if (attachment.type === "file") {
+                return (
+                  <View
+                    key={attachment.id}
+                    className="flex-row items-center gap-2 rounded-[12px] border border-white/15 bg-white/10 px-3 py-2"
+                  >
+                    <SymbolView name="doc" size={15} tintColor="#ffffff" type="monochrome" />
+                    <Text className="min-w-0 flex-1 text-sm text-white" numberOfLines={1}>
+                      {attachment.name}
+                    </Text>
+                  </View>
+                );
+              }
               return (
                 <MessageAttachmentImage
                   key={attachment.id}
                   environmentId={props.environmentId}
+                  threadId={props.threadId}
                   attachmentId={attachment.id}
                   className="aspect-[1.3] w-full rounded-[14px] bg-white/15"
                   onPressImage={props.onPressImage}
@@ -983,10 +999,27 @@ function renderFeedEntry(
           )
         ) : null}
         {attachments.map((attachment) => {
+          if (attachment.type === "file") {
+            return (
+              <View
+                key={attachment.id}
+                className="mt-1.5 flex-row items-center gap-2 rounded-[12px] border border-neutral-200 bg-neutral-100 px-3 py-2 dark:border-neutral-700 dark:bg-neutral-800"
+              >
+                <SymbolView name="doc" size={15} tintColor={iconSubtleColor} type="monochrome" />
+                <Text
+                  className="min-w-0 flex-1 text-sm text-neutral-800 dark:text-neutral-100"
+                  numberOfLines={1}
+                >
+                  {attachment.name}
+                </Text>
+              </View>
+            );
+          }
           return (
             <MessageAttachmentImage
               key={attachment.id}
               environmentId={props.environmentId}
+              threadId={props.threadId}
               attachmentId={attachment.id}
               className="mt-1.5 aspect-[1.3] w-full rounded-[18px] bg-neutral-200 dark:bg-neutral-800"
               onPressImage={props.onPressImage}
@@ -1761,6 +1794,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     (info: { item: ThreadFeedEntry; index: number }) =>
       renderFeedEntry(info, {
         environmentId: props.environmentId,
+        threadId: props.threadId,
         copiedRowId,
         expandedWorkRows,
         terminalAssistantMessageIds,
@@ -1797,6 +1831,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       onToggleWorkGroup,
       onToggleWorkRow,
       props.environmentId,
+      props.threadId,
       props.skills,
     ],
   );

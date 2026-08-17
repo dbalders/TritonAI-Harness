@@ -16,6 +16,7 @@ import {
   type ThreadId,
   type TurnId,
   type KeybindingCommand,
+  PRIMARY_LOCAL_ENVIRONMENT_ID,
   OrchestrationThreadActivity,
   ProviderInteractionMode,
   ProviderDriverKind,
@@ -26,6 +27,10 @@ import {
   connectionStatusTitle,
   type EnvironmentConnectionPresentation,
 } from "@t3tools/client-runtime/connection";
+import {
+  deleteEnvironmentAttachment,
+  uploadEnvironmentAttachment,
+} from "@t3tools/client-runtime/state/attachments";
 import {
   effectiveSettled,
   effectiveSnoozed,
@@ -72,6 +77,7 @@ import {
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { isElectron } from "../env";
+import { desktopLocalBackendId } from "../connection/desktopLocal";
 import { readLocalApi } from "../localApi";
 import { useDiffPanelStore } from "../diffPanelStore";
 import {
@@ -195,6 +201,7 @@ import {
 import { buildPhysicalToLogicalProjectKeyMap } from "../sidebarProjectGrouping";
 import { buildDraftThreadRouteParams } from "../threadRoutes";
 import {
+  type ComposerFileAttachment,
   type ComposerImageAttachment,
   type DraftThreadEnvMode,
   useComposerDraftStore,
@@ -241,6 +248,8 @@ import {
   useThreadShell,
 } from "../state/entities";
 import { environmentShell } from "../state/shell";
+import { readPreparedConnection } from "../state/session";
+import { runtime } from "../lib/runtime";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
 import { DraftHeroHeadline } from "./chat/DraftHeroHeadline";
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
@@ -301,6 +310,7 @@ import {
   reconcileMountedTerminalThreadIds,
   resolveThreadMetadataUpdateForNextTurn,
   resolveSendEnvMode,
+  shouldCleanupAttachmentUploadsAfterTurnStart,
   revokeBlobPreviewUrl,
   revokeUserMessagePreviewUrls,
   shouldWriteThreadErrorToCurrentServerThread,
@@ -336,11 +346,12 @@ import {
 } from "../versionSkew";
 import { useAssetUrls } from "../assets/assetUrls";
 
-const IMAGE_ONLY_BOOTSTRAP_PROMPT =
-  "[User attached one or more images without additional text. Respond using the conversation context and the attached image(s).]";
+const ATTACHMENT_ONLY_BOOTSTRAP_PROMPT =
+  "[User attached one or more files without additional text. Inspect the attached files and respond using the conversation context.]";
 const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
 const EMPTY_PROVIDERS: ServerProvider[] = [];
 const EMPTY_PROVIDER_SKILLS: ServerProvider["skills"] = [];
+const EMPTY_COMPOSER_FILES: ReadonlyArray<ComposerFileAttachment> = [];
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
 function useDraftHeroLayoutTransition(isDraftHeroState: boolean) {
   const transitionGroupRef = useRef<HTMLDivElement | null>(null);
@@ -1357,7 +1368,11 @@ function ChatViewContent(props: ChatViewProps) {
   const composerActiveProvider = useComposerDraftStore(
     (store) => store.getComposerDraft(composerDraftTarget)?.activeProvider ?? null,
   );
+  const composerFiles = useComposerDraftStore(
+    (store) => store.getComposerDraft(composerDraftTarget)?.files ?? EMPTY_COMPOSER_FILES,
+  );
   const setComposerDraftPrompt = useComposerDraftStore((store) => store.setPrompt);
+  const setComposerDraftFiles = useComposerDraftStore((store) => store.setFiles);
   const addComposerDraftImages = useComposerDraftStore((store) => store.addImages);
   const setComposerDraftTerminalContexts = useComposerDraftStore(
     (store) => store.setTerminalContexts,
@@ -1385,6 +1400,10 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const promptRef = useRef("");
   const composerImagesRef = useRef<ComposerImageAttachment[]>([]);
+  const composerFilesRef = useRef<ReadonlyArray<ComposerFileAttachment>>(composerFiles);
+  useEffect(() => {
+    composerFilesRef.current = composerFiles;
+  }, [composerFiles]);
   const composerTerminalContextsRef = useRef<TerminalContextDraft[]>([]);
   const composerElementContextsRef = useRef<ElementContextDraft[]>([]);
   const localComposerRef = useRef<ChatComposerHandle | null>(null);
@@ -1807,6 +1826,12 @@ function ChatViewContent(props: ChatViewProps) {
   ]);
   const activeEnvironment =
     activeThread == null ? null : (environmentById.get(activeThread.environmentId) ?? null);
+  const activeDesktopLocalBackendId =
+    activeEnvironment?.entry.target._tag === "PrimaryConnectionTarget"
+      ? PRIMARY_LOCAL_ENVIRONMENT_ID
+      : activeEnvironment
+        ? desktopLocalBackendId(activeEnvironment.entry.target)
+        : null;
   const activeEnvironmentConnectionPhase = activeEnvironment?.connection.phase ?? "available";
   const activeEnvironmentUnavailable =
     activeEnvironment !== null && activeEnvironmentConnectionPhase !== "connected";
@@ -2380,33 +2405,37 @@ function ChatViewContent(props: ChatViewProps) {
     });
   }, []);
   const serverMessages = activeThread?.messages;
-  const serverAttachmentIds = useMemo(() => {
+  const serverAttachmentResources = useMemo(() => {
     const attachmentIds = new Set<string>();
+    const resources: Array<{
+      readonly _tag: "attachment";
+      readonly threadId: ThreadId;
+      readonly attachmentId: string;
+    }> = [];
     for (const message of serverMessages ?? []) {
       for (const attachment of message.attachments ?? []) {
+        if (attachment.type === "file" && "path" in attachment) continue;
+        if (attachmentIds.has(attachment.id)) continue;
         attachmentIds.add(attachment.id);
+        resources.push({
+          _tag: "attachment",
+          threadId,
+          attachmentId: attachment.id,
+        });
       }
     }
-    return [...attachmentIds];
-  }, [serverMessages]);
-  const serverAttachmentResources = useMemo(
-    () =>
-      serverAttachmentIds.map((attachmentId) => ({
-        _tag: "attachment" as const,
-        attachmentId,
-      })),
-    [serverAttachmentIds],
-  );
+    return resources;
+  }, [serverMessages, threadId]);
   const serverAttachmentUrls = useAssetUrls(environmentId, serverAttachmentResources);
   const serverAttachmentUrlById = useMemo(
     () =>
       new Map(
-        serverAttachmentIds.flatMap((attachmentId, index) => {
+        serverAttachmentResources.flatMap((resource, index) => {
           const url = serverAttachmentUrls[index];
-          return url ? [[attachmentId, url] as const] : [];
+          return url ? [[resource.attachmentId, url] as const] : [];
         }),
       ),
-    [serverAttachmentIds, serverAttachmentUrls],
+    [serverAttachmentResources, serverAttachmentUrls],
   );
   const displayServerMessages = useMemo<ReadonlyArray<ChatMessage>>(() => {
     if (!serverMessages) return [];
@@ -2417,8 +2446,11 @@ function ChatViewContent(props: ChatViewProps) {
       return {
         ...message,
         attachments: message.attachments.map((attachment) => {
-          const previewUrl = serverAttachmentUrlById.get(attachment.id);
-          return previewUrl ? { ...attachment, previewUrl } : attachment;
+          const attachmentUrl = serverAttachmentUrlById.get(attachment.id);
+          if (!attachmentUrl) return attachment;
+          return attachment.type === "image"
+            ? { ...attachment, previewUrl: attachmentUrl }
+            : { ...attachment, downloadUrl: attachmentUrl };
         }),
       };
     });
@@ -4250,6 +4282,7 @@ function ChatViewContent(props: ChatViewProps) {
       draft &&
       (draft.prompt.trim().length > 0 ||
         draft.images.length > 0 ||
+        draft.files.length > 0 ||
         draft.terminalContexts.length > 0 ||
         draft.elementContexts.length > 0 ||
         draft.previewAnnotations.length > 0 ||
@@ -4910,6 +4943,7 @@ function ChatViewContent(props: ChatViewProps) {
     }
     const {
       images: sendContextImages,
+      files: sendComposerFiles,
       terminalContexts: composerTerminalContexts,
       elementContexts: composerElementContexts,
       previewAnnotations: sendContextPreviewAnnotations,
@@ -4948,7 +4982,7 @@ function ChatViewContent(props: ChatViewProps) {
       hasSendableContent,
     } = deriveComposerSendState({
       prompt: promptForSend,
-      imageCount: composerImages.length,
+      imageCount: composerImages.length + sendComposerFiles.length,
       terminalContexts: composerTerminalContexts,
       elementContextCount:
         composerElementContexts.length +
@@ -4974,6 +5008,7 @@ function ChatViewContent(props: ChatViewProps) {
     const standaloneSlashCommand =
       settings.planModeEnabled &&
       composerImages.length === 0 &&
+      sendComposerFiles.length === 0 &&
       sendableComposerTerminalContexts.length === 0 &&
       composerElementContexts.length === 0 &&
       composerPreviewAnnotations.length === 0 &&
@@ -5048,6 +5083,7 @@ function ChatViewContent(props: ChatViewProps) {
     beginLocalDispatch({ preparingWorktree: Boolean(baseBranchForWorktree) });
 
     const composerImagesSnapshot = [...composerImages];
+    const composerFilesSnapshot = [...sendComposerFiles];
     const composerTerminalContextsSnapshot = [...sendableComposerTerminalContexts];
     const composerElementContextsSnapshot = [...composerElementContexts];
     const composerPreviewAnnotationsSnapshot = [...composerPreviewAnnotations];
@@ -5071,25 +5107,67 @@ function ChatViewContent(props: ChatViewProps) {
       model: ctxSelectedModel,
       models: ctxSelectedProviderModels,
       effort: ctxSelectedPromptEffort,
-      text: messageTextForSend || IMAGE_ONLY_BOOTSTRAP_PROMPT,
+      text: messageTextForSend || ATTACHMENT_ONLY_BOOTSTRAP_PROMPT,
     });
-    const turnAttachmentsPromise = Promise.all(
-      composerImagesSnapshot.map(async (image) => ({
+    const preparedConnection = readPreparedConnection(environmentId);
+    const uploadedAttachmentIdsForCleanup: string[] = [];
+    const resolveTurnAttachments = async () => {
+      const images = await Promise.all(
+        composerImagesSnapshot.map(async (image) => ({
+          type: "image" as const,
+          name: image.name,
+          mimeType: image.mimeType,
+          sizeBytes: image.sizeBytes,
+          dataUrl: await readFileAsDataUrl(image.file),
+        })),
+      );
+      const files = [];
+      for (const attachment of composerFilesSnapshot) {
+        if (attachment.path !== null) {
+          files.push({
+            type: "file" as const,
+            id: attachment.id,
+            name: attachment.file.name,
+            mimeType: attachment.file.type || "application/octet-stream",
+            sizeBytes: attachment.file.size,
+            path: attachment.path,
+          });
+          continue;
+        }
+        if (!preparedConnection) {
+          throw new Error("The environment connection is not ready for file uploads.");
+        }
+        const uploaded = await runtime.runPromise(
+          uploadEnvironmentAttachment({
+            prepared: preparedConnection,
+            threadId: threadIdForSend,
+            uploadId: attachment.id,
+            file: attachment.file,
+          }),
+        );
+        uploadedAttachmentIdsForCleanup.push(uploaded.id);
+        files.push(uploaded);
+      }
+      return [...images, ...files];
+    };
+    const optimisticAttachments = [
+      ...composerImagesSnapshot.map((image) => ({
         type: "image" as const,
+        id: image.id,
         name: image.name,
         mimeType: image.mimeType,
         sizeBytes: image.sizeBytes,
-        dataUrl: await readFileAsDataUrl(image.file),
+        previewUrl: image.previewUrl,
       })),
-    );
-    const optimisticAttachments = composerImagesSnapshot.map((image) => ({
-      type: "image" as const,
-      id: image.id,
-      name: image.name,
-      mimeType: image.mimeType,
-      sizeBytes: image.sizeBytes,
-      previewUrl: image.previewUrl,
-    }));
+      ...composerFilesSnapshot.map((attachment) => ({
+        type: "file" as const,
+        id: attachment.id,
+        name: attachment.file.name,
+        mimeType: attachment.file.type || "application/octet-stream",
+        sizeBytes: attachment.file.size,
+        ...(attachment.path !== null ? { path: attachment.path } : {}),
+      })),
+    ];
     // Sending always returns to the live edge. The new row becomes the
     // anchored end-space target so it lands near the top while the response
     // streams into the reserved space below it.
@@ -5134,6 +5212,7 @@ function ChatViewContent(props: ChatViewProps) {
     }
     promptRef.current = "";
     clearComposerDraftContent(composerDraftTarget);
+    composerFilesRef.current = [];
     composerRef.current?.resetCursorState();
 
     let firstComposerImageName: string | null = null;
@@ -5147,6 +5226,8 @@ function ChatViewContent(props: ChatViewProps) {
     if (!titleSeed) {
       if (firstComposerImageName) {
         titleSeed = `Image: ${firstComposerImageName}`;
+      } else if (composerFilesSnapshot[0]) {
+        titleSeed = `File: ${composerFilesSnapshot[0].file.name}`;
       } else if (composerTerminalContextsSnapshot.length > 0) {
         titleSeed = formatTerminalContextLabel(composerTerminalContextsSnapshot[0]!);
       } else if (composerElementContextsSnapshot.length > 0) {
@@ -5163,6 +5244,29 @@ function ChatViewContent(props: ChatViewProps) {
     );
 
     let failure: AtomCommandResult<unknown, unknown> | null = null;
+    let createdThreadForFileUpload = false;
+    const requiresFileUpload = composerFilesSnapshot.some((attachment) => attachment.path === null);
+    if (isLocalDraftThread && requiresFileUpload) {
+      const createResult = await createThread({
+        environmentId,
+        input: {
+          threadId: threadIdForSend,
+          projectId: activeProject.id,
+          title,
+          modelSelection: threadCreateModelSelection,
+          runtimeMode,
+          interactionMode,
+          branch: activeThreadBranch,
+          worktreePath: activeThread.worktreePath,
+          createdAt: activeThread.createdAt,
+        },
+      });
+      if (createResult._tag === "Failure") {
+        failure = createResult;
+      } else {
+        createdThreadForFileUpload = true;
+      }
+    }
     // Auto-title from first message
     if (isFirstMessage && isServerThread) {
       const titleResult = await updateThreadMetadata({
@@ -5193,17 +5297,21 @@ function ChatViewContent(props: ChatViewProps) {
       }
     }
 
-    const turnAttachmentsResult = await settlePromise(() => turnAttachmentsPromise);
-    if (failure === null && turnAttachmentsResult._tag === "Failure") {
+    const turnAttachmentsResult =
+      failure === null ? await settlePromise(resolveTurnAttachments) : null;
+    if (failure === null && turnAttachmentsResult?._tag === "Failure") {
       failure = turnAttachmentsResult;
     }
 
+    let turnStartAttempted = false;
+    let shouldCleanupUploadedAttachments = true;
     let turnStartSucceeded = false;
-    if (failure === null && turnAttachmentsResult._tag === "Success") {
+    if (failure === null && turnAttachmentsResult?._tag === "Success") {
+      const shouldBootstrapCreateThread = isLocalDraftThread && !createdThreadForFileUpload;
       const bootstrap =
-        isLocalDraftThread || baseBranchForWorktree
+        shouldBootstrapCreateThread || baseBranchForWorktree
           ? {
-              ...(isLocalDraftThread
+              ...(shouldBootstrapCreateThread
                 ? {
                     createThread: {
                       projectId: activeProject.id,
@@ -5231,6 +5339,7 @@ function ChatViewContent(props: ChatViewProps) {
             }
           : undefined;
       beginLocalDispatch({ preparingWorktree: false });
+      turnStartAttempted = true;
       const startResult = await startThreadTurn({
         environmentId,
         input: {
@@ -5251,6 +5360,8 @@ function ChatViewContent(props: ChatViewProps) {
       });
       if (startResult._tag === "Failure") {
         failure = startResult;
+        shouldCleanupUploadedAttachments =
+          shouldCleanupAttachmentUploadsAfterTurnStart(startResult);
       } else {
         turnStartSucceeded = true;
         acknowledgeActiveThreadWoke();
@@ -5259,8 +5370,40 @@ function ChatViewContent(props: ChatViewProps) {
 
     if (failure !== null) {
       if (
+        shouldCleanupUploadedAttachments &&
+        preparedConnection &&
+        uploadedAttachmentIdsForCleanup.length > 0
+      ) {
+        await Promise.allSettled(
+          uploadedAttachmentIdsForCleanup.map((attachmentId) =>
+            runtime.runPromise(
+              deleteEnvironmentAttachment({
+                prepared: preparedConnection,
+                threadId: threadIdForSend,
+                attachmentId,
+              }),
+            ),
+          ),
+        );
+      }
+      if (createdThreadForFileUpload && (!turnStartAttempted || shouldCleanupUploadedAttachments)) {
+        const cleanupResult = await deleteThread({
+          environmentId,
+          input: {
+            threadId: threadIdForSend,
+          },
+        });
+        if (cleanupResult._tag === "Failure" && !isAtomCommandInterrupted(cleanupResult)) {
+          console.warn(
+            "Failed to clean up thread after attachment send failure.",
+            squashAtomCommandFailure(cleanupResult),
+          );
+        }
+      }
+      if (
         promptRef.current.length === 0 &&
         composerImagesRef.current.length === 0 &&
+        composerFilesRef.current.length === 0 &&
         composerTerminalContextsRef.current.length === 0 &&
         composerElementContextsRef.current.length === 0 &&
         (useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.previewAnnotations
@@ -5279,10 +5422,12 @@ function ChatViewContent(props: ChatViewProps) {
         promptRef.current = promptForSend;
         const retryComposerImages = composerImagesSnapshot.map(cloneComposerImageForRetry);
         composerImagesRef.current = retryComposerImages;
+        composerFilesRef.current = composerFilesSnapshot;
         composerTerminalContextsRef.current = composerTerminalContextsSnapshot;
         composerElementContextsRef.current = composerElementContextsSnapshot;
         setComposerDraftPrompt(composerDraftTarget, promptForSend);
         addComposerDraftImages(composerDraftTarget, retryComposerImages);
+        setComposerDraftFiles(composerDraftTarget, composerFilesSnapshot);
         setComposerDraftTerminalContexts(composerDraftTarget, composerTerminalContextsSnapshot);
         setComposerDraftElementContexts(composerDraftTarget, composerElementContextsSnapshot);
         setComposerDraftPreviewAnnotations(composerDraftTarget, composerPreviewAnnotationsSnapshot);
@@ -6305,6 +6450,7 @@ function ChatViewContent(props: ChatViewProps) {
                             composerRef={composerRef}
                             composerDraftTarget={composerDraftTarget}
                             environmentId={environmentId}
+                            desktopLocalBackendId={activeDesktopLocalBackendId}
                             routeKind={routeKind}
                             routeThreadRef={routeThreadRef}
                             draftId={draftId}
@@ -6348,9 +6494,15 @@ function ChatViewContent(props: ChatViewProps) {
                             gitCwd={gitCwd}
                             promptRef={promptRef}
                             composerImagesRef={composerImagesRef}
+                            composerFiles={composerFiles}
+                            composerFilesRef={composerFilesRef}
                             composerTerminalContextsRef={composerTerminalContextsRef}
                             composerElementContextsRef={composerElementContextsRef}
                             onSend={onSend}
+                            onComposerFilesChange={(files) => {
+                              composerFilesRef.current = files;
+                              setComposerDraftFiles(composerDraftTarget, files);
+                            }}
                             onInterrupt={onInterrupt}
                             onImplementPlanInNewThread={onImplementPlanInNewThread}
                             onRespondToApproval={onRespondToApproval}
