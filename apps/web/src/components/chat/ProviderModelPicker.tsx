@@ -68,9 +68,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
     selectedInstanceOptions[0];
   const triggerTitle = selectedModel ? getTriggerDisplayModelName(selectedModel) : props.model;
   const triggerLabel = selectedModel ? getTriggerDisplayModelLabel(selectedModel) : props.model;
-  const ManagedRouteIcon = activeEntry
-    ? getTritonAiManagedRouteIcon(activeEntry.instanceId, activeEntry.displayName)
-    : null;
+  const ManagedRouteIcon = activeEntry ? getTritonAiManagedRouteIcon(activeEntry.instanceId) : null;
   const duplicateDriverCount = props.instanceEntries.filter(
     (entry) => activeEntry !== null && entry.driverKind === activeEntry.driverKind,
   ).length;

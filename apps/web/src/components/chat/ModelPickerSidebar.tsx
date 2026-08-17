@@ -144,10 +144,7 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
             const isSelected = props.selectedInstanceId === entry.instanceId;
             const isHovered = hoveredInstanceId === entry.instanceId;
             const showNewBadge = props.newBadgeInstanceIds?.has(entry.instanceId) ?? false;
-            const ManagedRouteIcon = getTritonAiManagedRouteIcon(
-              entry.instanceId,
-              entry.displayName,
-            );
+            const ManagedRouteIcon = getTritonAiManagedRouteIcon(entry.instanceId);
             const showInstanceBadge =
               Boolean(entry.accentColor) || (duplicateDriverCounts.get(entry.driverKind) ?? 0) > 1;
 
