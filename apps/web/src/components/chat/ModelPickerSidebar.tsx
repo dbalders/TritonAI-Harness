@@ -5,7 +5,6 @@ import { ProviderInstanceIcon } from "./ProviderInstanceIcon";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { cn } from "~/lib/utils";
 import { isProviderInstancePickerReady, type ProviderInstanceEntry } from "../../providerInstances";
-import { getTritonAiManagedRouteIcon } from "./tritonAiManagedRouteIcon";
 
 /**
  * Build the hover tooltip for an instance button. Mirrors the old
@@ -144,7 +143,6 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
             const isSelected = props.selectedInstanceId === entry.instanceId;
             const isHovered = hoveredInstanceId === entry.instanceId;
             const showNewBadge = props.newBadgeInstanceIds?.has(entry.instanceId) ?? false;
-            const ManagedRouteIcon = getTritonAiManagedRouteIcon(entry.instanceId);
             const showInstanceBadge =
               Boolean(entry.accentColor) || (duplicateDriverCounts.get(entry.driverKind) ?? 0) > 1;
 
@@ -182,28 +180,25 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
                       : entry.displayName
                 }
               >
-                {ManagedRouteIcon ? (
-                  <ManagedRouteIcon aria-hidden className="size-5 shrink-0" />
-                ) : (
-                  <ProviderInstanceIcon
-                    driverKind={entry.driverKind}
-                    displayName={entry.displayName}
-                    accentColor={entry.accentColor}
-                    showBadge={showInstanceBadge}
-                    className="size-6"
-                    iconClassName="size-5"
-                    indicatorBackground={
-                      isHovered && !isDisabled
-                        ? "var(--muted)"
-                        : isSelected
-                          ? "var(--background)"
-                          : "color-mix(in oklab, var(--muted) 30%, transparent)"
-                    }
-                    {...(entry.accentColor
-                      ? { badgeClassName: "h-3 min-w-3 px-0.5 text-[7px]" }
-                      : {})}
-                  />
-                )}
+                <ProviderInstanceIcon
+                  driverKind={entry.driverKind}
+                  instanceId={entry.instanceId}
+                  displayName={entry.displayName}
+                  accentColor={entry.accentColor}
+                  showBadge={showInstanceBadge}
+                  className="size-6"
+                  iconClassName="size-5"
+                  indicatorBackground={
+                    isHovered && !isDisabled
+                      ? "var(--muted)"
+                      : isSelected
+                        ? "var(--background)"
+                        : "color-mix(in oklab, var(--muted) 30%, transparent)"
+                  }
+                  {...(entry.accentColor
+                    ? { badgeClassName: "h-3 min-w-3 px-0.5 text-[7px]" }
+                    : {})}
+                />
                 {showNewBadge ? (
                   <span className={NEW_BADGE_CLASS} aria-hidden>
                     <SparklesIcon className="size-2" />

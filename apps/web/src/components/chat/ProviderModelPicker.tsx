@@ -18,7 +18,6 @@ import {
 } from "./providerIconUtils";
 import type { ProviderInstanceEntry } from "../../providerInstances";
 import { ComposerControl, ComposerControlChevron } from "./ComposerControl";
-import { getTritonAiManagedRouteIcon } from "./tritonAiManagedRouteIcon";
 
 export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   /**
@@ -68,7 +67,6 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
     selectedInstanceOptions[0];
   const triggerTitle = selectedModel ? getTriggerDisplayModelName(selectedModel) : props.model;
   const triggerLabel = selectedModel ? getTriggerDisplayModelLabel(selectedModel) : props.model;
-  const ManagedRouteIcon = activeEntry ? getTritonAiManagedRouteIcon(activeEntry.instanceId) : null;
   const duplicateDriverCount = props.instanceEntries.filter(
     (entry) => activeEntry !== null && entry.driverKind === activeEntry.driverKind,
   ).length;
@@ -163,26 +161,20 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
       >
         <span className="flex min-w-0 flex-1 items-center gap-1.5">
           {activeEntry ? (
-            ManagedRouteIcon ? (
-              <ManagedRouteIcon
-                aria-hidden
-                className={cn("size-4 shrink-0", props.activeProviderIconClassName)}
-              />
-            ) : (
-              <ProviderInstanceIcon
-                driverKind={activeEntry.driverKind}
-                displayName={activeEntry.displayName}
-                accentColor={activeEntry.accentColor}
-                showBadge={showInstanceBadge}
-                className="size-4"
-                iconClassName={cn("size-4", props.activeProviderIconClassName)}
-                indicatorBackground="var(--input)"
-                badgeClassName={cn(
-                  "right-[-0.125rem] bottom-[-0.125rem] h-3 min-w-3",
-                  "px-0.5 text-[7px]",
-                )}
-              />
-            )
+            <ProviderInstanceIcon
+              driverKind={activeEntry.driverKind}
+              instanceId={activeEntry.instanceId}
+              displayName={activeEntry.displayName}
+              accentColor={activeEntry.accentColor}
+              showBadge={showInstanceBadge}
+              className="size-4"
+              iconClassName={cn("size-4", props.activeProviderIconClassName)}
+              indicatorBackground="var(--input)"
+              badgeClassName={cn(
+                "right-[-0.125rem] bottom-[-0.125rem] h-3 min-w-3",
+                "px-0.5 text-[7px]",
+              )}
+            />
           ) : null}
           <Tooltip>
             <TooltipTrigger render={<span className="min-w-0 flex-1 overflow-hidden truncate" />}>
