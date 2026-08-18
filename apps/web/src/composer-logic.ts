@@ -296,6 +296,8 @@ export function parseGoalComposerSlashCommand(text: string): GoalComposerCommand
     return { type: "set", objective: explicitSetMatch[1]!.trim() };
   }
   switch (argument.toLowerCase()) {
+    case "set":
+      return { type: "view" };
     case "pause":
       return { type: "pause" };
     case "resume":

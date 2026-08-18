@@ -55,6 +55,22 @@ function goalEvent(sequence: number, goal: ThreadGoal): OrchestrationEvent {
   };
 }
 
+function clearEvent(sequence: number, occurredAt: string): OrchestrationEvent {
+  return {
+    sequence,
+    eventId: EventId.make(`goal-clear-event-${sequence}`),
+    type: "thread.goal-cleared",
+    aggregateKind: "thread",
+    aggregateId: threadId,
+    occurredAt,
+    commandId: CommandId.make(`goal-clear-command-${sequence}`),
+    causationEventId: null,
+    correlationId: null,
+    metadata: {},
+    payload: { threadId },
+  };
+}
+
 it.effect("does not replace provider goal state with an older delayed update", () =>
   Effect.gen(function* () {
     const currentGoal: ThreadGoal = {
@@ -78,5 +94,53 @@ it.effect("does not replace provider goal state with an older delayed update", (
 
     expect(afterStale.threads[0]?.goal).toEqual(currentGoal);
     expect(afterStale.snapshotSequence).toBe(2);
+  }),
+);
+
+it.effect("keeps goal clears and replacements ordered by provider revision", () =>
+  Effect.gen(function* () {
+    const currentGoal: ThreadGoal = {
+      objective: "Current goal",
+      status: "active",
+      tokenBudget: null,
+      tokensUsed: 200,
+      timeUsedSeconds: 20,
+      createdAt: baseTime,
+      updatedAt: "2026-08-17T00:02:00.000Z",
+    };
+    const replacementGoal: ThreadGoal = {
+      ...currentGoal,
+      objective: "Replacement goal",
+      updatedAt: "2026-08-17T00:04:00.000Z",
+    };
+    const initial = { ...createEmptyReadModel(baseTime), threads: [thread] };
+    const withCurrent = yield* projectEvent(initial, goalEvent(1, currentGoal));
+
+    const afterStaleClear = yield* projectEvent(
+      withCurrent,
+      clearEvent(2, "2026-08-17T00:01:30.000Z"),
+    );
+    expect(afterStaleClear.threads[0]?.goal).toEqual(currentGoal);
+
+    const cleared = yield* projectEvent(afterStaleClear, clearEvent(3, "2026-08-17T00:03:00.000Z"));
+    expect(cleared.threads[0]?.goal).toBeUndefined();
+    expect(cleared.threads[0]?.goalRevisionAt).toBe("2026-08-17T00:03:00.000Z");
+
+    const delayedGoal: ThreadGoal = {
+      ...currentGoal,
+      objective: "Delayed pre-clear goal",
+      updatedAt: "2026-08-17T00:02:30.000Z",
+    };
+    const afterDelayedUpdate = yield* projectEvent(cleared, goalEvent(4, delayedGoal));
+    expect(afterDelayedUpdate.threads[0]?.goal).toBeUndefined();
+
+    const replaced = yield* projectEvent(afterDelayedUpdate, goalEvent(5, replacementGoal));
+    expect(replaced.threads[0]?.goal).toEqual(replacementGoal);
+
+    const afterDelayedClear = yield* projectEvent(
+      replaced,
+      clearEvent(6, "2026-08-17T00:03:30.000Z"),
+    );
+    expect(afterDelayedClear.threads[0]?.goal).toEqual(replacementGoal);
   }),
 );

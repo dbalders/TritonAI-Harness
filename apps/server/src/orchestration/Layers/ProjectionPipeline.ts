@@ -578,6 +578,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             pendingUserInputCount: 0,
             hasActionableProposedPlan: 0,
             goal: null,
+            goalRevisionAt: null,
             deletedAt: null,
           });
           return;
@@ -803,15 +804,15 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           if (Option.isNone(existingRow)) {
             return;
           }
-          if (
-            existingRow.value.goal &&
-            existingRow.value.goal.updatedAt > event.payload.goal.updatedAt
-          ) {
+          const currentRevisionAt =
+            existingRow.value.goalRevisionAt ?? existingRow.value.goal?.updatedAt ?? null;
+          if (currentRevisionAt !== null && currentRevisionAt >= event.payload.goal.updatedAt) {
             return;
           }
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
             goal: event.payload.goal,
+            goalRevisionAt: event.payload.goal.updatedAt,
             updatedAt: event.occurredAt,
           });
           return;
@@ -824,9 +825,15 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           if (Option.isNone(existingRow)) {
             return;
           }
+          const currentRevisionAt =
+            existingRow.value.goalRevisionAt ?? existingRow.value.goal?.updatedAt ?? null;
+          if (currentRevisionAt !== null && currentRevisionAt >= event.occurredAt) {
+            return;
+          }
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
             goal: null,
+            goalRevisionAt: event.occurredAt,
             updatedAt: event.occurredAt,
           });
           return;

@@ -482,6 +482,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
           goal_json AS "goal",
+          goal_revision_at AS "goalRevisionAt",
           deleted_at AS "deletedAt"
         FROM projection_threads
         ORDER BY created_at ASC, thread_id ASC
@@ -521,6 +522,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
           goal_json AS "goal",
+          goal_revision_at AS "goalRevisionAt",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE deleted_at IS NULL
@@ -562,6 +564,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
           goal_json AS "goal",
+          goal_revision_at AS "goalRevisionAt",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE deleted_at IS NULL
@@ -1007,6 +1010,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
           goal_json AS "goal",
+          goal_revision_at AS "goalRevisionAt",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE thread_id = ${threadId}
@@ -1895,6 +1899,7 @@ pending_approval_requests AS (
                 checkpoints: checkpointsByThread.get(row.threadId) ?? [],
                 session: sessionsByThread.get(row.threadId) ?? null,
                 ...(row.goal !== null ? { goal: row.goal } : {}),
+                goalRevisionAt: row.goalRevisionAt ?? null,
               }));
 
               const snapshot = {
@@ -2107,6 +2112,7 @@ pending_approval_requests AS (
                   checkpoints: [],
                   session: sessionByThread.get(row.threadId) ?? null,
                   ...(row.goal !== null ? { goal: row.goal } : {}),
+                  goalRevisionAt: row.goalRevisionAt ?? null,
                 });
               }
 
@@ -2243,6 +2249,7 @@ pending_approval_requests AS (
                       titleRegeneration: mapTitleRegeneration(row),
                       session: sessionByThread.get(row.threadId) ?? null,
                       ...(row.goal !== null ? { goal: row.goal } : {}),
+                      goalRevisionAt: row.goalRevisionAt ?? null,
                       latestUserMessageAt: row.latestUserMessageAt,
                       hasPendingApprovals: row.pendingApprovalCount > 0,
                       hasPendingUserInput: row.pendingUserInputCount > 0,
@@ -2393,6 +2400,7 @@ pending_approval_requests AS (
                   titleRegeneration: mapTitleRegeneration(row),
                   session: sessionByThread.get(row.threadId) ?? null,
                   ...(row.goal !== null ? { goal: row.goal } : {}),
+                  goalRevisionAt: row.goalRevisionAt ?? null,
                   latestUserMessageAt: row.latestUserMessageAt,
                   hasPendingApprovals: row.pendingApprovalCount > 0,
                   hasPendingUserInput: row.pendingUserInputCount > 0,
@@ -2677,6 +2685,7 @@ pending_approval_requests AS (
         titleRegeneration: mapTitleRegeneration(threadRow.value),
         session: Option.isSome(sessionRow) ? mapSessionRow(sessionRow.value) : null,
         ...(threadRow.value.goal !== null ? { goal: threadRow.value.goal } : {}),
+        goalRevisionAt: threadRow.value.goalRevisionAt ?? null,
         latestUserMessageAt: threadRow.value.latestUserMessageAt,
         hasPendingApprovals: threadRow.value.pendingApprovalCount > 0,
         hasPendingUserInput: threadRow.value.pendingUserInputCount > 0,
@@ -2943,6 +2952,7 @@ pending_approval_requests AS (
         })),
         session: Option.isSome(sessionRow) ? mapSessionRow(sessionRow.value) : null,
         ...(threadRow.value.goal !== null ? { goal: threadRow.value.goal } : {}),
+        goalRevisionAt: threadRow.value.goalRevisionAt ?? null,
       };
 
       return Option.some(

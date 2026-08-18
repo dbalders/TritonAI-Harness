@@ -1733,6 +1733,7 @@ function ChatViewContent(props: ChatViewProps) {
     [activeThread],
   );
   const [isGoalMutationPending, setIsGoalMutationPending] = useState(false);
+  const goalMutationInFlightRef = useRef(false);
   const threadError = isServerThread
     ? (localServerError ?? activeServerThread?.session?.lastError ?? null)
     : localDraftError;
@@ -5692,57 +5693,68 @@ function ChatViewContent(props: ChatViewProps) {
     ],
   );
 
-  const updateGoalStatus = useCallback(
+  const runGoalMutation = useCallback(async (operation: () => Promise<void>) => {
+    if (goalMutationInFlightRef.current) return;
+    goalMutationInFlightRef.current = true;
+    setIsGoalMutationPending(true);
+    try {
+      await operation();
+    } finally {
+      goalMutationInFlightRef.current = false;
+      setIsGoalMutationPending(false);
+    }
+  }, []);
+
+  const performGoalStatusUpdate = useCallback(
     async (status: "active" | "paused") => {
-      if (!activeThread || !isServerThread || isGoalMutationPending) return;
-      setIsGoalMutationPending(true);
-      try {
-        const result = await setThreadGoal({
-          environmentId,
-          input: { threadId: activeThread.id, status },
-        });
-        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-          const error = squashAtomCommandFailure(result);
-          setThreadError(
-            activeThread.id,
-            error instanceof Error ? error.message : "Failed to update the goal.",
-          );
-        }
-      } finally {
-        setIsGoalMutationPending(false);
+      if (!activeThread || !isServerThread) return;
+      const result = await setThreadGoal({
+        environmentId,
+        input: { threadId: activeThread.id, status },
+      });
+      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        setThreadError(
+          activeThread.id,
+          error instanceof Error ? error.message : "Failed to update the goal.",
+        );
       }
     },
-    [
-      activeThread,
-      environmentId,
-      isGoalMutationPending,
-      isServerThread,
-      setThreadError,
-      setThreadGoal,
-    ],
+    [activeThread, environmentId, isServerThread, setThreadError, setThreadGoal],
+  );
+
+  const updateGoalStatus = useCallback(
+    async (status: "active" | "paused") => {
+      if (!activeThread || !isServerThread) return;
+      await runGoalMutation(() => performGoalStatusUpdate(status));
+    },
+    [activeThread, isServerThread, performGoalStatusUpdate, runGoalMutation],
   );
 
   const handleResumeGoal = useCallback(async () => {
-    if (!activeGoal || isGoalMutationPending) return;
+    if (!activeGoal) return;
     const localApi = readLocalApi();
     if (!localApi) return;
-    const confirmed = await localApi.dialogs.confirm(
-      ["Resume goal?", activeGoal.objective, "Choose Cancel to keep paused."].join("\n\n"),
-    );
-    if (confirmed) await updateGoalStatus("active");
-  }, [activeGoal, isGoalMutationPending, updateGoalStatus]);
+    await runGoalMutation(async () => {
+      const confirmed = await localApi.dialogs.confirm(
+        ["Resume goal?", activeGoal.objective, "Choose Cancel to keep paused."].join("\n\n"),
+      );
+      if (confirmed) await performGoalStatusUpdate("active");
+    });
+  }, [activeGoal, performGoalStatusUpdate, runGoalMutation]);
 
   const handleClearGoal = useCallback(async () => {
-    if (!activeThread || !activeGoal || !isServerThread || isGoalMutationPending) return;
+    if (!activeThread || !activeGoal || !isServerThread) return;
     const localApi = readLocalApi();
     if (!localApi) return;
-    const confirmed = await localApi.dialogs.confirm(
-      ["Clear goal?", activeGoal.objective, "This removes the goal from this thread."].join("\n\n"),
-      { variant: "destructive" },
-    );
-    if (!confirmed) return;
-    setIsGoalMutationPending(true);
-    try {
+    await runGoalMutation(async () => {
+      const confirmed = await localApi.dialogs.confirm(
+        ["Clear goal?", activeGoal.objective, "This removes the goal from this thread."].join(
+          "\n\n",
+        ),
+        { variant: "destructive" },
+      );
+      if (!confirmed) return;
       const result = await clearThreadGoal({
         environmentId,
         input: { threadId: activeThread.id },
@@ -5754,16 +5766,14 @@ function ChatViewContent(props: ChatViewProps) {
           error instanceof Error ? error.message : "Failed to clear the goal.",
         );
       }
-    } finally {
-      setIsGoalMutationPending(false);
-    }
+    });
   }, [
     activeGoal,
     activeThread,
     clearThreadGoal,
     environmentId,
-    isGoalMutationPending,
     isServerThread,
+    runGoalMutation,
     setThreadError,
   ]);
 
@@ -5798,7 +5808,8 @@ function ChatViewContent(props: ChatViewProps) {
       isConnecting ||
       threadDetailLoading ||
       sendInFlightRef.current ||
-      feedbackUploadsInFlightRef.current.has(routeThreadKey)
+      feedbackUploadsInFlightRef.current.has(routeThreadKey) ||
+      goalMutationInFlightRef.current
     ) {
       notifyDirectAnnotationAttached();
       return;
@@ -6205,6 +6216,7 @@ function ChatViewContent(props: ChatViewProps) {
           : undefined;
 
       sendInFlightRef.current = true;
+      goalMutationInFlightRef.current = true;
       setIsGoalMutationPending(true);
       if (isDraftHeroState && activeThreadKey) {
         let resolveDockStarted: (() => void) | undefined;
@@ -6229,6 +6241,7 @@ function ChatViewContent(props: ChatViewProps) {
       composerRef.current?.resetCursorState();
 
       let failure: AtomCommandResult<unknown, unknown> | null = null;
+      let goalSetSucceeded = false;
       try {
         if (isFirstMessage && isServerThread) {
           const titleResult = await updateThreadMetadata({
@@ -6259,7 +6272,11 @@ function ChatViewContent(props: ChatViewProps) {
               createdAt,
             },
           });
-          if (goalResult._tag === "Failure") failure = goalResult;
+          if (goalResult._tag === "Failure") {
+            failure = goalResult;
+          } else {
+            goalSetSucceeded = true;
+          }
         }
 
         if (failure !== null) {
@@ -6283,7 +6300,10 @@ function ChatViewContent(props: ChatViewProps) {
           );
         }
       } finally {
-        resetLocalDispatch();
+        if (!goalSetSucceeded) {
+          resetLocalDispatch();
+        }
+        goalMutationInFlightRef.current = false;
         setIsGoalMutationPending(false);
         sendInFlightRef.current = false;
       }

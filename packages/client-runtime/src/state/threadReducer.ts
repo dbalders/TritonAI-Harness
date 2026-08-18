@@ -102,6 +102,7 @@ export function applyThreadDetailEvent(
           checkpoints: [],
           session: null,
           goal: undefined,
+          goalRevisionAt: null,
         },
       };
 
@@ -265,8 +266,9 @@ export function applyThreadDetailEvent(
         },
       };
 
-    case "thread.goal-updated":
-      if (thread.goal && thread.goal.updatedAt > event.payload.goal.updatedAt) {
+    case "thread.goal-updated": {
+      const currentRevisionAt = thread.goalRevisionAt ?? thread.goal?.updatedAt ?? null;
+      if (currentRevisionAt !== null && currentRevisionAt >= event.payload.goal.updatedAt) {
         return { kind: "unchanged" };
       }
       return {
@@ -274,19 +276,27 @@ export function applyThreadDetailEvent(
         thread: {
           ...thread,
           goal: event.payload.goal,
+          goalRevisionAt: event.payload.goal.updatedAt,
           updatedAt: event.occurredAt,
         },
       };
+    }
 
-    case "thread.goal-cleared":
+    case "thread.goal-cleared": {
+      const currentRevisionAt = thread.goalRevisionAt ?? thread.goal?.updatedAt ?? null;
+      if (currentRevisionAt !== null && currentRevisionAt >= event.occurredAt) {
+        return { kind: "unchanged" };
+      }
       return {
         kind: "updated",
         thread: {
           ...thread,
           goal: undefined,
+          goalRevisionAt: event.occurredAt,
           updatedAt: event.occurredAt,
         },
       };
+    }
 
     case "thread.turn-start-requested":
       return {

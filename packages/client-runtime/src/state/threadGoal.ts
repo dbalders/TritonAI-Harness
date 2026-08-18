@@ -11,12 +11,19 @@ const isThreadGoal = Schema.is(ThreadGoal);
 export function deriveThreadGoal(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): ThreadGoalValue | null {
-  for (let index = activities.length - 1; index >= 0; index -= 1) {
+  let latest: {
+    readonly revisionAt: string;
+    readonly ordering: number;
+    readonly goal: ThreadGoalValue | null;
+  } | null = null;
+  for (let index = 0; index < activities.length; index += 1) {
     const activity = activities[index];
-    if (activity?.kind === "goal.cleared") {
-      return null;
-    }
-    if (activity?.kind === "goal.updated") {
+    if (!activity) continue;
+    let candidate: { readonly revisionAt: string; readonly goal: ThreadGoalValue | null } | null =
+      null;
+    if (activity.kind === "goal.cleared") {
+      candidate = { revisionAt: activity.createdAt, goal: null };
+    } else if (activity.kind === "goal.updated") {
       const goal =
         typeof activity.payload === "object" &&
         activity.payload !== null &&
@@ -24,9 +31,18 @@ export function deriveThreadGoal(
           ? activity.payload.goal
           : undefined;
       if (isThreadGoal(goal)) {
-        return goal;
+        candidate = { revisionAt: goal.updatedAt, goal };
       }
     }
+    if (!candidate) continue;
+    const ordering = activity.sequence ?? index;
+    if (
+      latest === null ||
+      candidate.revisionAt > latest.revisionAt ||
+      (candidate.revisionAt === latest.revisionAt && ordering >= latest.ordering)
+    ) {
+      latest = { ...candidate, ordering };
+    }
   }
-  return null;
+  return latest?.goal ?? null;
 }

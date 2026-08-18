@@ -538,6 +538,8 @@ export const OrchestrationThread = Schema.Struct({
   checkpoints: Schema.Array(OrchestrationCheckpointSummary),
   session: Schema.NullOr(OrchestrationSession),
   goal: Schema.optional(ThreadGoal),
+  // Latest accepted provider goal change, retained after clear as an ordering tombstone.
+  goalRevisionAt: Schema.optional(Schema.NullOr(IsoDateTime)),
 });
 export type OrchestrationThread = typeof OrchestrationThread.Type;
 
@@ -593,6 +595,7 @@ export const OrchestrationThreadShell = Schema.Struct({
   titleRegeneration: Schema.optional(Schema.NullOr(ThreadTitleRegeneration)),
   session: Schema.NullOr(OrchestrationSession),
   goal: Schema.optional(ThreadGoal),
+  goalRevisionAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   latestUserMessageAt: Schema.NullOr(IsoDateTime),
   hasPendingApprovals: Schema.Boolean,
   hasPendingUserInput: Schema.Boolean,

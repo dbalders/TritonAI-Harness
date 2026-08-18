@@ -17,6 +17,7 @@ function activity(
   kind: "goal.updated" | "goal.cleared",
   payload: unknown,
   sequence: number,
+  createdAt = "2026-07-22T00:01:00.000Z",
 ): OrchestrationThreadActivity {
   return {
     id: EventId.make(`goal-${sequence}`),
@@ -26,7 +27,7 @@ function activity(
     payload,
     turnId: null,
     sequence,
-    createdAt: "2026-07-22T00:01:00.000Z",
+    createdAt,
   };
 }
 
@@ -48,5 +49,39 @@ describe("deriveThreadGoal", () => {
         activity("goal.updated", { goal: { ...goal, status: "unknown" } }, 2),
       ]),
     ).toEqual(goal);
+  });
+
+  it("orders valid goal updates by provider revision instead of arrival order", () => {
+    const staleGoal = {
+      ...goal,
+      objective: "Delayed stale goal",
+      updatedAt: "2026-07-22T00:00:30.000Z",
+    };
+    expect(
+      deriveThreadGoal([
+        activity("goal.updated", { goal }, 1),
+        activity("goal.updated", { goal: staleGoal }, 2),
+      ]),
+    ).toEqual(goal);
+  });
+
+  it("does not resurrect a cleared goal from a delayed older update", () => {
+    expect(
+      deriveThreadGoal([
+        activity("goal.updated", { goal }, 1),
+        activity("goal.cleared", {}, 2, "2026-07-22T00:02:00.000Z"),
+        activity(
+          "goal.updated",
+          {
+            goal: {
+              ...goal,
+              objective: "Delayed pre-clear goal",
+              updatedAt: "2026-07-22T00:01:30.000Z",
+            },
+          },
+          3,
+        ),
+      ]),
+    ).toBeNull();
   });
 });

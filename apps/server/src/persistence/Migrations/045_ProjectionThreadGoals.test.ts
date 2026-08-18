@@ -18,12 +18,14 @@ layer("045_ProjectionThreadGoals", (it) => {
         PRAGMA table_info(projection_threads)
       `;
       assert.isFalse(before.some((column) => column.name === "goal_json"));
+      assert.isFalse(before.some((column) => column.name === "goal_revision_at"));
 
       yield* runMigrations({ toMigrationInclusive: 42 });
       const after = yield* sql<{ readonly name: string }>`
         PRAGMA table_info(projection_threads)
       `;
       assert.isTrue(after.some((column) => column.name === "goal_json"));
+      assert.isTrue(after.some((column) => column.name === "goal_revision_at"));
     }),
   );
 });

@@ -432,6 +432,7 @@ describe("parseGoalComposerSlashCommand", () => {
 
   it("parses goal lifecycle controls", () => {
     expect(parseGoalComposerSlashCommand("/goal")).toEqual({ type: "view" });
+    expect(parseGoalComposerSlashCommand("/goal set")).toEqual({ type: "view" });
     expect(parseGoalComposerSlashCommand("/goal pause")).toEqual({ type: "pause" });
     expect(parseGoalComposerSlashCommand("/goal resume")).toEqual({ type: "resume" });
     expect(parseGoalComposerSlashCommand("/goal clear")).toEqual({ type: "clear" });

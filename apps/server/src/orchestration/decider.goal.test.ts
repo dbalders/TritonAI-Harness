@@ -148,4 +148,41 @@ it.layer(NodeServices.layer)("goal decider", (it) => {
       expect(error._tag).toBe("OrchestrationCommandInvariantError");
     }),
   );
+
+  it.effect("does not wake a settled thread for a stale reconnect goal sync", () =>
+    Effect.gen(function* () {
+      const currentGoalUpdatedAt = "2026-07-22T00:02:00.000Z";
+      const result = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.goal.sync",
+          commandId: CommandId.make("command-goal-stale-reconnect-sync"),
+          threadId,
+          goal: {
+            objective: "Delayed reconnect goal",
+            status: "active",
+            tokenBudget: null,
+            tokensUsed: 50,
+            timeUsedSeconds: 5,
+            createdAt: now,
+            updatedAt: "2026-07-22T00:01:00.000Z",
+          },
+          createdAt: "2026-07-22T00:03:00.000Z",
+        },
+        readModel: {
+          ...createEmptyReadModel(now),
+          threads: [
+            {
+              ...thread,
+              settledOverride: "settled",
+              settledAt: currentGoalUpdatedAt,
+              goalRevisionAt: currentGoalUpdatedAt,
+            },
+          ],
+        },
+      });
+
+      const events = Array.isArray(result) ? result : [result];
+      expect(events.map((event) => event.type)).toEqual(["thread.goal-updated"]);
+    }),
+  );
 });

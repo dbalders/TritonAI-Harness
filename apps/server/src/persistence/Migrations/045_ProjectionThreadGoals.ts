@@ -7,4 +7,8 @@ export default Effect.gen(function* () {
     ALTER TABLE projection_threads
     ADD COLUMN goal_json TEXT
   `;
+  yield* sql`
+    ALTER TABLE projection_threads
+    ADD COLUMN goal_revision_at TEXT
+  `;
 });

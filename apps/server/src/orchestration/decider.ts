@@ -981,6 +981,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
 
     case "thread.goal.sync": {
       const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
+      const currentRevisionAt = thread.goalRevisionAt ?? thread.goal?.updatedAt ?? null;
       const goalUpdatedEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...(yield* withEventBase({
           aggregateKind: "thread",
@@ -991,7 +992,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         type: "thread.goal-updated",
         payload: { threadId: command.threadId, goal: command.goal },
       };
-      if (thread.settledOverride === null) {
+      if (
+        thread.settledOverride === null ||
+        (currentRevisionAt !== null && currentRevisionAt >= command.goal.updatedAt)
+      ) {
         return goalUpdatedEvent;
       }
       const unsettledEvent: Omit<OrchestrationEvent, "sequence"> = {

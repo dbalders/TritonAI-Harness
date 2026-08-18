@@ -10,6 +10,7 @@ import {
   Trash2Icon,
 } from "lucide-react";
 
+import { useNowMinute } from "~/hooks/useNowMinute";
 import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
 import {
@@ -60,6 +61,7 @@ export function GoalProgressRow(props: {
   className?: string;
 }) {
   const { goal } = props;
+  useNowMinute();
   const presentation = statusPresentation[goal.status];
   const StatusIcon = presentation.icon;
   const usage = [
@@ -79,9 +81,13 @@ export function GoalProgressRow(props: {
     >
       <div className="flex min-h-14 items-center gap-3 rounded-t-[18px] border border-b-0 border-border/70 bg-background/92 px-3.5 pb-3 pt-2.5 shadow-xs backdrop-blur-sm motion-safe:transition-colors motion-safe:duration-200">
         <StatusIcon className={cn("size-4 shrink-0", presentation.tone)} aria-hidden="true" />
-        <div className="min-w-0 flex-1" role="status" aria-live="polite">
+        <div className="min-w-0 flex-1">
           <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
-            <span className={cn("shrink-0 text-xs font-semibold", presentation.tone)}>
+            <span
+              className={cn("shrink-0 text-xs font-semibold", presentation.tone)}
+              role="status"
+              aria-live="polite"
+            >
               {presentation.label}
             </span>
             <span className="truncate text-[11px] text-muted-foreground">
@@ -108,7 +114,7 @@ export function GoalProgressRow(props: {
               <PauseIcon aria-hidden="true" />
               Pause
             </Button>
-          ) : goal.status === "paused" ? (
+          ) : goal.status !== "complete" ? (
             <Button
               variant="ghost"
               size="xs"

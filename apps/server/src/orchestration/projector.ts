@@ -316,6 +316,7 @@ export function projectEvent(
             checkpoints: [],
             session: null,
             goal: undefined,
+            goalRevisionAt: null,
           },
           event.type,
           "thread",
@@ -541,12 +542,16 @@ export function projectEvent(
     case "thread.goal-updated":
       return decodeForEvent(ThreadGoalUpdatedPayload, event.payload, event.type, "payload").pipe(
         Effect.map((payload) => {
-          const current = nextBase.threads.find((thread) => thread.id === payload.threadId)?.goal;
-          if (current && current.updatedAt > payload.goal.updatedAt) return nextBase;
+          const current = nextBase.threads.find((thread) => thread.id === payload.threadId);
+          const currentRevisionAt = current?.goalRevisionAt ?? current?.goal?.updatedAt ?? null;
+          if (currentRevisionAt !== null && currentRevisionAt >= payload.goal.updatedAt) {
+            return nextBase;
+          }
           return {
             ...nextBase,
             threads: updateThread(nextBase.threads, payload.threadId, {
               goal: payload.goal,
+              goalRevisionAt: payload.goal.updatedAt,
               updatedAt: event.occurredAt,
             }),
           };
@@ -555,13 +560,21 @@ export function projectEvent(
 
     case "thread.goal-cleared":
       return decodeForEvent(ThreadGoalClearedPayload, event.payload, event.type, "payload").pipe(
-        Effect.map((payload) => ({
-          ...nextBase,
-          threads: updateThread(nextBase.threads, payload.threadId, {
-            goal: undefined,
-            updatedAt: event.occurredAt,
-          }),
-        })),
+        Effect.map((payload) => {
+          const current = nextBase.threads.find((thread) => thread.id === payload.threadId);
+          const currentRevisionAt = current?.goalRevisionAt ?? current?.goal?.updatedAt ?? null;
+          if (currentRevisionAt !== null && currentRevisionAt >= event.occurredAt) {
+            return nextBase;
+          }
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              goal: undefined,
+              goalRevisionAt: event.occurredAt,
+              updatedAt: event.occurredAt,
+            }),
+          };
+        }),
       );
 
     case "thread.message-sent":
