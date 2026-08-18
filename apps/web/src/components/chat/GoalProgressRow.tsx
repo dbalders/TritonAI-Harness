@@ -19,6 +19,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "../ui/menu";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 const compactNumber = new Intl.NumberFormat(undefined, {
   notation: "compact",
@@ -54,6 +55,7 @@ function formatUpdatedAt(updatedAt: string): string {
 export function GoalProgressRow(props: {
   goal: ThreadGoal;
   pending: boolean;
+  actionsEnabled: boolean;
   onPause: () => void;
   onResume: () => void;
   onEdit: () => void;
@@ -94,59 +96,68 @@ export function GoalProgressRow(props: {
               {formatUpdatedAt(goal.updatedAt)}
             </span>
           </div>
-          <p className="line-clamp-2 text-xs leading-4 text-foreground" title={goal.objective}>
-            {goal.objective}
-          </p>
+          <Tooltip>
+            <TooltipTrigger
+              render={<p className="line-clamp-2 text-xs leading-4 text-foreground" />}
+            >
+              {goal.objective}
+            </TooltipTrigger>
+            <TooltipPopup side="top" className="max-w-96 whitespace-pre-wrap leading-tight">
+              {goal.objective}
+            </TooltipPopup>
+          </Tooltip>
           {usage.length > 0 ? (
             <p className="truncate text-[10px] text-muted-foreground/75">{usage.join(" · ")}</p>
           ) : null}
         </div>
-        <div className="flex shrink-0 items-center gap-1">
-          {goal.status === "active" ? (
-            <Button
-              variant="ghost"
-              size="xs"
-              disabled={props.pending}
-              aria-label="Pause goal"
-              onClick={props.onPause}
-              className="gap-1.5"
-            >
-              <PauseIcon aria-hidden="true" />
-              Pause
-            </Button>
-          ) : goal.status !== "complete" ? (
-            <Button
-              variant="ghost"
-              size="xs"
-              disabled={props.pending}
-              aria-label="Resume goal"
-              onClick={props.onResume}
-              className="gap-1.5"
-            >
-              <PlayIcon aria-hidden="true" />
-              Resume
-            </Button>
-          ) : null}
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              disabled={props.pending}
-              aria-label="Goal actions"
-              className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
-            >
-              <EllipsisIcon className="size-4" aria-hidden="true" />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-40">
-              <DropdownMenuItem onClick={props.onEdit}>
-                <PencilIcon aria-hidden="true" />
-                Edit goal
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={props.onClear} className="text-destructive">
-                <Trash2Icon aria-hidden="true" />
-                Clear goal
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
+        {props.actionsEnabled ? (
+          <div className="flex shrink-0 items-center gap-1">
+            {goal.status === "active" ? (
+              <Button
+                variant="ghost"
+                size="xs"
+                disabled={props.pending}
+                aria-label="Pause goal"
+                onClick={props.onPause}
+                className="gap-1.5"
+              >
+                <PauseIcon aria-hidden="true" />
+                Pause
+              </Button>
+            ) : goal.status !== "complete" ? (
+              <Button
+                variant="ghost"
+                size="xs"
+                disabled={props.pending}
+                aria-label="Resume goal"
+                onClick={props.onResume}
+                className="gap-1.5"
+              >
+                <PlayIcon aria-hidden="true" />
+                Resume
+              </Button>
+            ) : null}
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                disabled={props.pending}
+                aria-label="Goal actions"
+                className="inline-flex size-7 items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+              >
+                <EllipsisIcon className="size-4" aria-hidden="true" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-40">
+                <DropdownMenuItem onClick={props.onEdit}>
+                  <PencilIcon aria-hidden="true" />
+                  Edit goal
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={props.onClear} className="text-destructive">
+                  <Trash2Icon aria-hidden="true" />
+                  Clear goal
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        ) : null}
       </div>
     </section>
   );

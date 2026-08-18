@@ -102,6 +102,7 @@ describe("orchestration projector", () => {
         session: null,
         goal: undefined,
         goalRevisionAt: null,
+        goalRevisionSequence: null,
       },
     ]);
   });

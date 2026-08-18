@@ -1,4 +1,6 @@
 import {
+  isThreadGoalRevisionNewer,
+  normalizeThreadGoalRevisionAt,
   ThreadGoal,
   type OrchestrationThreadActivity,
   type ThreadGoal as ThreadGoalValue,
@@ -38,10 +40,18 @@ export function deriveThreadGoal(
     const ordering = activity.sequence ?? index;
     if (
       latest === null ||
-      candidate.revisionAt > latest.revisionAt ||
-      (candidate.revisionAt === latest.revisionAt && ordering >= latest.ordering)
+      isThreadGoalRevisionNewer({
+        currentAt: latest.revisionAt,
+        currentSequence: latest.ordering,
+        candidateAt: candidate.revisionAt,
+        candidateSequence: ordering,
+      })
     ) {
-      latest = { ...candidate, ordering };
+      latest = {
+        revisionAt: normalizeThreadGoalRevisionAt(candidate.revisionAt),
+        ordering,
+        goal: candidate.goal,
+      };
     }
   }
   return latest?.goal ?? null;

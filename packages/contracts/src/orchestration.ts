@@ -148,6 +148,38 @@ export const ThreadGoal = Schema.Struct({
   updatedAt: IsoDateTime,
 });
 export type ThreadGoal = typeof ThreadGoal.Type;
+/** Normalize provider goal revisions to Codex's native one-second precision. */
+export function normalizeThreadGoalRevisionAt(value: IsoDateTime): IsoDateTime {
+  const utcTimestamp = /^(.*:\d{2})(?:\.\d+)?Z$/.exec(value);
+  return utcTimestamp?.[1] ? `${utcTimestamp[1]}.000Z` : value;
+}
+
+/** Compare a candidate goal revision using event sequence as the same-second tie-breaker. */
+export function isThreadGoalRevisionNewer(input: {
+  readonly currentAt: IsoDateTime | null | undefined;
+  readonly currentSequence: number | null | undefined;
+  readonly candidateAt: IsoDateTime;
+  readonly candidateSequence: number;
+}): boolean {
+  if (input.currentAt == null) return true;
+  const currentAt = normalizeThreadGoalRevisionAt(input.currentAt);
+  const candidateAt = normalizeThreadGoalRevisionAt(input.candidateAt);
+  if (candidateAt !== currentAt) return candidateAt > currentAt;
+  return input.candidateSequence > (input.currentSequence ?? -1);
+}
+
+export function sameThreadGoal(left: ThreadGoal | undefined, right: ThreadGoal): boolean {
+  return (
+    left !== undefined &&
+    left.objective === right.objective &&
+    left.status === right.status &&
+    left.tokenBudget === right.tokenBudget &&
+    left.tokensUsed === right.tokensUsed &&
+    left.timeUsedSeconds === right.timeUsedSeconds &&
+    left.createdAt === right.createdAt &&
+    left.updatedAt === right.updatedAt
+  );
+}
 export const ProviderRequestKind = Schema.Literals([
   "command",
   "file-read",
@@ -540,6 +572,7 @@ export const OrchestrationThread = Schema.Struct({
   goal: Schema.optional(ThreadGoal),
   // Latest accepted provider goal change, retained after clear as an ordering tombstone.
   goalRevisionAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  goalRevisionSequence: Schema.optional(Schema.NullOr(NonNegativeInt)),
 });
 export type OrchestrationThread = typeof OrchestrationThread.Type;
 
@@ -596,6 +629,7 @@ export const OrchestrationThreadShell = Schema.Struct({
   session: Schema.NullOr(OrchestrationSession),
   goal: Schema.optional(ThreadGoal),
   goalRevisionAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  goalRevisionSequence: Schema.optional(Schema.NullOr(NonNegativeInt)),
   latestUserMessageAt: Schema.NullOr(IsoDateTime),
   hasPendingApprovals: Schema.Boolean,
   hasPendingUserInput: Schema.Boolean,

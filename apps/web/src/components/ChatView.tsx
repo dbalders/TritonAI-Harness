@@ -3053,6 +3053,7 @@ function ChatViewContent(props: ChatViewProps) {
     const defaultInstanceId = defaultInstanceIdForDriver(selectedProvider);
     return providerStatuses.find((status) => status.instanceId === defaultInstanceId) ?? null;
   }, [activeProviderInstanceId, providerStatuses, selectedProvider]);
+  const canManageActiveGoal = activeProviderStatus?.supportsThreadGoals === true;
   const [resumeCompactionPermanentlyDismissed, setResumeCompactionPermanentlyDismissed] =
     useLocalStorage(
       `t3code:resume-compaction-dismissed:${environmentId}:${activeProviderInstanceId ?? "claudeAgent"}`,
@@ -5707,7 +5708,7 @@ function ChatViewContent(props: ChatViewProps) {
 
   const performGoalStatusUpdate = useCallback(
     async (status: "active" | "paused") => {
-      if (!activeThread || !isServerThread) return;
+      if (!activeThread || !isServerThread || !canManageActiveGoal) return;
       const result = await setThreadGoal({
         environmentId,
         input: { threadId: activeThread.id, status },
@@ -5720,7 +5721,14 @@ function ChatViewContent(props: ChatViewProps) {
         );
       }
     },
-    [activeThread, environmentId, isServerThread, setThreadError, setThreadGoal],
+    [
+      activeThread,
+      canManageActiveGoal,
+      environmentId,
+      isServerThread,
+      setThreadError,
+      setThreadGoal,
+    ],
   );
 
   const updateGoalStatus = useCallback(
@@ -5732,7 +5740,7 @@ function ChatViewContent(props: ChatViewProps) {
   );
 
   const handleResumeGoal = useCallback(async () => {
-    if (!activeGoal) return;
+    if (!activeGoal || !canManageActiveGoal) return;
     const localApi = readLocalApi();
     if (!localApi) return;
     await runGoalMutation(async () => {
@@ -5741,10 +5749,10 @@ function ChatViewContent(props: ChatViewProps) {
       );
       if (confirmed) await performGoalStatusUpdate("active");
     });
-  }, [activeGoal, performGoalStatusUpdate, runGoalMutation]);
+  }, [activeGoal, canManageActiveGoal, performGoalStatusUpdate, runGoalMutation]);
 
   const handleClearGoal = useCallback(async () => {
-    if (!activeThread || !activeGoal || !isServerThread) return;
+    if (!activeThread || !activeGoal || !isServerThread || !canManageActiveGoal) return;
     const localApi = readLocalApi();
     if (!localApi) return;
     await runGoalMutation(async () => {
@@ -5770,6 +5778,7 @@ function ChatViewContent(props: ChatViewProps) {
   }, [
     activeGoal,
     activeThread,
+    canManageActiveGoal,
     clearThreadGoal,
     environmentId,
     isServerThread,
@@ -5778,10 +5787,10 @@ function ChatViewContent(props: ChatViewProps) {
   ]);
 
   const handleEditGoal = useCallback(() => {
-    if (!activeGoal) return;
+    if (!activeGoal || !canManageActiveGoal) return;
     composerRef.current?.setGoalMode(true, activeGoal.objective);
     composerRef.current?.focusAtEnd();
-  }, [activeGoal, composerRef]);
+  }, [activeGoal, canManageActiveGoal, composerRef]);
 
   const onSend = async (
     e?: { preventDefault: () => void },
@@ -7824,6 +7833,7 @@ function ChatViewContent(props: ChatViewProps) {
                     <GoalProgressRow
                       goal={activeGoal}
                       pending={isGoalMutationPending}
+                      actionsEnabled={canManageActiveGoal}
                       onPause={() => void updateGoalStatus("paused")}
                       onResume={() => void handleResumeGoal()}
                       onEdit={handleEditGoal}

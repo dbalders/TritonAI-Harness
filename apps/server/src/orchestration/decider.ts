@@ -1,5 +1,7 @@
 import {
   EventId,
+  normalizeThreadGoalRevisionAt,
+  sameThreadGoal,
   type OrchestrationCommand,
   type OrchestrationEvent,
   type OrchestrationReadModel,
@@ -981,7 +983,13 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
 
     case "thread.goal.sync": {
       const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
-      const currentRevisionAt = thread.goalRevisionAt ?? thread.goal?.updatedAt ?? null;
+      const rawCurrentRevisionAt = thread.goalRevisionAt ?? thread.goal?.updatedAt ?? null;
+      const currentRevisionAt =
+        rawCurrentRevisionAt === null ? null : normalizeThreadGoalRevisionAt(rawCurrentRevisionAt);
+      const candidateRevisionAt = normalizeThreadGoalRevisionAt(command.goal.updatedAt);
+      const staleOrUnchanged =
+        (currentRevisionAt !== null && currentRevisionAt > candidateRevisionAt) ||
+        (currentRevisionAt === candidateRevisionAt && sameThreadGoal(thread.goal, command.goal));
       const goalUpdatedEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...(yield* withEventBase({
           aggregateKind: "thread",
@@ -992,10 +1000,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         type: "thread.goal-updated",
         payload: { threadId: command.threadId, goal: command.goal },
       };
-      if (
-        thread.settledOverride === null ||
-        (currentRevisionAt !== null && currentRevisionAt >= command.goal.updatedAt)
-      ) {
+      if (thread.settledOverride === null || staleOrUnchanged) {
         return goalUpdatedEvent;
       }
       const unsettledEvent: Omit<OrchestrationEvent, "sequence"> = {

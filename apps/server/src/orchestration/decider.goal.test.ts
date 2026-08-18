@@ -185,4 +185,45 @@ it.layer(NodeServices.layer)("goal decider", (it) => {
       expect(events.map((event) => event.type)).toEqual(["thread.goal-updated"]);
     }),
   );
+
+  it.effect("wakes a settled thread for a replacement in the clear second", () =>
+    Effect.gen(function* () {
+      const revisionAt = "2026-07-22T00:02:00.000Z";
+      const result = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.goal.sync",
+          commandId: CommandId.make("command-goal-same-second-sync"),
+          threadId,
+          goal: {
+            objective: "Replacement after clear",
+            status: "active",
+            tokenBudget: null,
+            tokensUsed: 0,
+            timeUsedSeconds: 0,
+            createdAt: revisionAt,
+            updatedAt: revisionAt,
+          },
+          createdAt: "2026-07-22T00:02:00.800Z",
+        },
+        readModel: {
+          ...createEmptyReadModel(now),
+          threads: [
+            {
+              ...thread,
+              settledOverride: "settled",
+              settledAt: revisionAt,
+              goalRevisionAt: revisionAt,
+              goalRevisionSequence: 10,
+            },
+          ],
+        },
+      });
+
+      const events = Array.isArray(result) ? result : [result];
+      expect(events.map((event) => event.type)).toEqual([
+        "thread.unsettled",
+        "thread.goal-updated",
+      ]);
+    }),
+  );
 });

@@ -125,6 +125,7 @@ it.effect("keeps goal clears and replacements ordered by provider revision", () 
     const cleared = yield* projectEvent(afterStaleClear, clearEvent(3, "2026-08-17T00:03:00.000Z"));
     expect(cleared.threads[0]?.goal).toBeUndefined();
     expect(cleared.threads[0]?.goalRevisionAt).toBe("2026-08-17T00:03:00.000Z");
+    expect(cleared.threads[0]?.goalRevisionSequence).toBe(3);
 
     const delayedGoal: ThreadGoal = {
       ...currentGoal,
@@ -142,5 +143,33 @@ it.effect("keeps goal clears and replacements ordered by provider revision", () 
       clearEvent(6, "2026-08-17T00:03:30.000Z"),
     );
     expect(afterDelayedClear.threads[0]?.goal).toEqual(replacementGoal);
+  }),
+);
+
+it.effect("accepts a new goal created later in the same second as a clear", () =>
+  Effect.gen(function* () {
+    const currentGoal: ThreadGoal = {
+      objective: "Current goal",
+      status: "active",
+      tokenBudget: null,
+      tokensUsed: 10,
+      timeUsedSeconds: 5,
+      createdAt: baseTime,
+      updatedAt: "2026-08-17T00:02:59.000Z",
+    };
+    const replacementGoal: ThreadGoal = {
+      ...currentGoal,
+      objective: "Same-second replacement",
+      updatedAt: "2026-08-17T00:03:00.000Z",
+    };
+    const initial = { ...createEmptyReadModel(baseTime), threads: [thread] };
+    const withCurrent = yield* projectEvent(initial, goalEvent(1, currentGoal));
+    const cleared = yield* projectEvent(withCurrent, clearEvent(2, "2026-08-17T00:03:00.500Z"));
+    const replaced = yield* projectEvent(cleared, goalEvent(3, replacementGoal));
+
+    expect(cleared.threads[0]?.goalRevisionAt).toBe("2026-08-17T00:03:00.000Z");
+    expect(cleared.threads[0]?.goalRevisionSequence).toBe(2);
+    expect(replaced.threads[0]?.goal).toEqual(replacementGoal);
+    expect(replaced.threads[0]?.goalRevisionSequence).toBe(3);
   }),
 );

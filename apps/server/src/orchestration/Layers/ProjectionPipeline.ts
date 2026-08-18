@@ -1,6 +1,8 @@
 import {
   ApprovalRequestId,
   type ChatAttachment,
+  isThreadGoalRevisionNewer,
+  normalizeThreadGoalRevisionAt,
   type OrchestrationEvent,
   type OrchestrationSessionStatus,
   ThreadId,
@@ -579,6 +581,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             hasActionableProposedPlan: 0,
             goal: null,
             goalRevisionAt: null,
+            goalRevisionSequence: null,
             deletedAt: null,
           });
           return;
@@ -806,13 +809,21 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           }
           const currentRevisionAt =
             existingRow.value.goalRevisionAt ?? existingRow.value.goal?.updatedAt ?? null;
-          if (currentRevisionAt !== null && currentRevisionAt >= event.payload.goal.updatedAt) {
+          if (
+            !isThreadGoalRevisionNewer({
+              currentAt: currentRevisionAt,
+              currentSequence: existingRow.value.goalRevisionSequence,
+              candidateAt: event.payload.goal.updatedAt,
+              candidateSequence: event.sequence,
+            })
+          ) {
             return;
           }
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
             goal: event.payload.goal,
-            goalRevisionAt: event.payload.goal.updatedAt,
+            goalRevisionAt: normalizeThreadGoalRevisionAt(event.payload.goal.updatedAt),
+            goalRevisionSequence: event.sequence,
             updatedAt: event.occurredAt,
           });
           return;
@@ -827,13 +838,21 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           }
           const currentRevisionAt =
             existingRow.value.goalRevisionAt ?? existingRow.value.goal?.updatedAt ?? null;
-          if (currentRevisionAt !== null && currentRevisionAt >= event.occurredAt) {
+          if (
+            !isThreadGoalRevisionNewer({
+              currentAt: currentRevisionAt,
+              currentSequence: existingRow.value.goalRevisionSequence,
+              candidateAt: event.occurredAt,
+              candidateSequence: event.sequence,
+            })
+          ) {
             return;
           }
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
             goal: null,
-            goalRevisionAt: event.occurredAt,
+            goalRevisionAt: normalizeThreadGoalRevisionAt(event.occurredAt),
+            goalRevisionSequence: event.sequence,
             updatedAt: event.occurredAt,
           });
           return;

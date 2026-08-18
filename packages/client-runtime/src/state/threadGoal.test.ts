@@ -84,4 +84,18 @@ describe("deriveThreadGoal", () => {
       ]),
     ).toBeNull();
   });
+
+  it("uses activity sequence to accept a replacement later in the clear second", () => {
+    const replacementGoal = {
+      ...goal,
+      objective: "Same-second replacement",
+      updatedAt: "2026-07-22T00:02:00.000Z",
+    };
+    expect(
+      deriveThreadGoal([
+        activity("goal.cleared", {}, 2, "2026-07-22T00:02:00.500Z"),
+        activity("goal.updated", { goal: replacementGoal }, 3, "2026-07-22T00:02:00.800Z"),
+      ]),
+    ).toEqual(replacementGoal);
+  });
 });

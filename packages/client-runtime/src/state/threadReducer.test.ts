@@ -164,6 +164,7 @@ describe("applyThreadDetailEvent", () => {
       if (cleared.kind !== "updated") return;
       expect(cleared.thread.goal).toBeUndefined();
       expect(cleared.thread.goalRevisionAt).toBe(clearedAt);
+      expect(cleared.thread.goalRevisionSequence).toBe(4);
       expect(cleared.thread.updatedAt).toBe(clearedAt);
 
       const staleAfterClear = applyThreadDetailEvent(cleared.thread, {
@@ -211,6 +212,45 @@ describe("applyThreadDetailEvent", () => {
         payload: { threadId: baseThread.id },
       });
       expect(staleClear.kind).toBe("unchanged");
+    });
+
+    it("accepts a goal update later in the same second as a clear", () => {
+      const cleared = applyThreadDetailEvent(baseThread, {
+        ...baseEventFields,
+        sequence: 8,
+        occurredAt: "2026-04-01T02:00:00.500Z",
+        aggregateKind: "thread",
+        aggregateId: baseThread.id,
+        type: "thread.goal-cleared",
+        payload: { threadId: baseThread.id },
+      });
+      expect(cleared.kind).toBe("updated");
+      if (cleared.kind !== "updated") return;
+
+      const replacementGoal = {
+        objective: "Same-second replacement",
+        status: "active" as const,
+        tokenBudget: 20_000,
+        tokensUsed: 0,
+        timeUsedSeconds: 0,
+        createdAt: "2026-04-01T02:00:00.000Z",
+        updatedAt: "2026-04-01T02:00:00.000Z",
+      };
+      const replaced = applyThreadDetailEvent(cleared.thread, {
+        ...baseEventFields,
+        sequence: 9,
+        occurredAt: "2026-04-01T02:00:00.800Z",
+        aggregateKind: "thread",
+        aggregateId: baseThread.id,
+        type: "thread.goal-updated",
+        payload: { threadId: baseThread.id, goal: replacementGoal },
+      });
+
+      expect(replaced.kind).toBe("updated");
+      if (replaced.kind !== "updated") return;
+      expect(replaced.thread.goal).toEqual(replacementGoal);
+      expect(replaced.thread.goalRevisionAt).toBe("2026-04-01T02:00:00.000Z");
+      expect(replaced.thread.goalRevisionSequence).toBe(9);
     });
   });
 

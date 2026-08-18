@@ -1,5 +1,7 @@
 import type { OrchestrationEvent, OrchestrationReadModel, ThreadId } from "@t3tools/contracts";
 import {
+  isThreadGoalRevisionNewer,
+  normalizeThreadGoalRevisionAt,
   OrchestrationCheckpointSummary,
   OrchestrationMessage,
   OrchestrationSession,
@@ -317,6 +319,7 @@ export function projectEvent(
             session: null,
             goal: undefined,
             goalRevisionAt: null,
+            goalRevisionSequence: null,
           },
           event.type,
           "thread",
@@ -544,14 +547,22 @@ export function projectEvent(
         Effect.map((payload) => {
           const current = nextBase.threads.find((thread) => thread.id === payload.threadId);
           const currentRevisionAt = current?.goalRevisionAt ?? current?.goal?.updatedAt ?? null;
-          if (currentRevisionAt !== null && currentRevisionAt >= payload.goal.updatedAt) {
+          if (
+            !isThreadGoalRevisionNewer({
+              currentAt: currentRevisionAt,
+              currentSequence: current?.goalRevisionSequence,
+              candidateAt: payload.goal.updatedAt,
+              candidateSequence: event.sequence,
+            })
+          ) {
             return nextBase;
           }
           return {
             ...nextBase,
             threads: updateThread(nextBase.threads, payload.threadId, {
               goal: payload.goal,
-              goalRevisionAt: payload.goal.updatedAt,
+              goalRevisionAt: normalizeThreadGoalRevisionAt(payload.goal.updatedAt),
+              goalRevisionSequence: event.sequence,
               updatedAt: event.occurredAt,
             }),
           };
@@ -563,14 +574,22 @@ export function projectEvent(
         Effect.map((payload) => {
           const current = nextBase.threads.find((thread) => thread.id === payload.threadId);
           const currentRevisionAt = current?.goalRevisionAt ?? current?.goal?.updatedAt ?? null;
-          if (currentRevisionAt !== null && currentRevisionAt >= event.occurredAt) {
+          if (
+            !isThreadGoalRevisionNewer({
+              currentAt: currentRevisionAt,
+              currentSequence: current?.goalRevisionSequence,
+              candidateAt: event.occurredAt,
+              candidateSequence: event.sequence,
+            })
+          ) {
             return nextBase;
           }
           return {
             ...nextBase,
             threads: updateThread(nextBase.threads, payload.threadId, {
               goal: undefined,
-              goalRevisionAt: event.occurredAt,
+              goalRevisionAt: normalizeThreadGoalRevisionAt(event.occurredAt),
+              goalRevisionSequence: event.sequence,
               updatedAt: event.occurredAt,
             }),
           };
