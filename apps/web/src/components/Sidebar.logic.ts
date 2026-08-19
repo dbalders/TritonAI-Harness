@@ -517,6 +517,47 @@ export function sortThreadsForSidebar<
   );
 }
 
+/** Project sections are activity-oriented: once the stable project grouping
+    has narrowed the list, the most recently used thread belongs at the top. */
+export function sortThreadsByActivityForSidebar<
+  T extends { readonly id: string } & ThreadSortInput,
+>(threads: readonly T[]): T[] {
+  return sortThreads(threads, "updated_at");
+}
+
+export function groupThreadsByProjectForSidebar<
+  TProject extends LogicalSidebarProject,
+  TThread extends { readonly id: string } & ScopedSidebarThread,
+>(projects: readonly TProject[], threads: readonly TThread[]) {
+  const projectKeyByMember = new Map(
+    projects.flatMap((project) =>
+      project.memberProjectRefs.map(
+        (projectRef) =>
+          [`${projectRef.environmentId}\0${projectRef.projectId}`, project.projectKey] as const,
+      ),
+    ),
+  );
+  const threadsByProject = new Map<string, TThread[]>();
+  for (const thread of threads) {
+    if (thread.archivedAt !== null) continue;
+    const projectKey = projectKeyByMember.get(`${thread.environmentId}\0${thread.projectId}`);
+    if (!projectKey) continue;
+    const groupedThreads = threadsByProject.get(projectKey);
+    if (groupedThreads) {
+      groupedThreads.push(thread);
+    } else {
+      threadsByProject.set(projectKey, [thread]);
+    }
+  }
+
+  return projects.flatMap((project) => {
+    const projectThreads = threadsByProject.get(project.projectKey);
+    return projectThreads
+      ? [{ project, threads: sortThreadsByActivityForSidebar(projectThreads) }]
+      : [];
+  });
+}
+
 // Pinned-reorder key math and the keyed sort live in client-runtime
 // (state/thread-sort) so web and mobile compute identical pinned orders.
 export {
