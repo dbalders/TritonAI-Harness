@@ -6,6 +6,7 @@ import {
   createThreadJumpHintVisibilityController,
   getSidebarThreadIdsToPrewarm,
   getVisibleSidebarThreadIds,
+  groupThreadsByProjectForSidebar,
   resolveAdjacentThreadId,
   getFallbackThreadIdAfterDelete,
   getVisibleThreadsForProject,
@@ -29,6 +30,7 @@ import {
   pinOrderKeyBetween,
   planPinnedReorder,
   sortPinnedThreadsForSidebar,
+  sortThreadsByActivityForSidebar,
   sortThreadsForSidebar,
   sortProjectsForSidebar,
   sortScopedProjectsForSidebar,
@@ -740,6 +742,122 @@ describe("sortThreadsForSidebar", () => {
     ]);
 
     expect(sorted.map((thread) => thread.id)).toEqual(["a", "b"]);
+  });
+});
+
+describe("sortThreadsByActivityForSidebar", () => {
+  const sortable = (input: {
+    id: string;
+    createdAt: string;
+    updatedAt: string;
+    latestUserMessageAt?: string;
+  }) => input;
+
+  it("orders project threads by latest activity", () => {
+    const sorted = sortThreadsByActivityForSidebar([
+      sortable({
+        id: "recently-messaged",
+        createdAt: "2026-03-09T08:00:00.000Z",
+        updatedAt: "2026-03-09T08:00:00.000Z",
+        latestUserMessageAt: "2026-03-09T12:00:00.000Z",
+      }),
+      sortable({
+        id: "recently-updated",
+        createdAt: "2026-03-09T10:00:00.000Z",
+        updatedAt: "2026-03-09T11:00:00.000Z",
+      }),
+      sortable({
+        id: "oldest",
+        createdAt: "2026-03-09T09:00:00.000Z",
+        updatedAt: "2026-03-09T09:00:00.000Z",
+      }),
+    ]);
+
+    expect(sorted.map((thread) => thread.id)).toEqual([
+      "recently-messaged",
+      "recently-updated",
+      "oldest",
+    ]);
+  });
+});
+
+describe("groupThreadsByProjectForSidebar", () => {
+  it("preserves project order and sorts each project by activity", () => {
+    const alphaProjectId = ProjectId.make("project-alpha");
+    const betaProjectId = ProjectId.make("project-beta");
+    const projects = [
+      {
+        ...makeProject({ id: betaProjectId, title: "Beta" }),
+        projectKey: "logical-beta",
+        memberProjectRefs: [{ environmentId: localEnvironmentId, projectId: betaProjectId }],
+      },
+      {
+        ...makeProject({ id: alphaProjectId, title: "Alpha" }),
+        projectKey: "logical-alpha",
+        memberProjectRefs: [{ environmentId: localEnvironmentId, projectId: alphaProjectId }],
+      },
+    ];
+    const threads = [
+      makeThread({
+        id: ThreadId.make("alpha-older"),
+        projectId: alphaProjectId,
+        updatedAt: "2026-03-09T09:00:00.000Z",
+      }),
+      makeThread({
+        id: ThreadId.make("beta-only"),
+        projectId: betaProjectId,
+        updatedAt: "2026-03-09T10:00:00.000Z",
+      }),
+      makeThread({
+        id: ThreadId.make("alpha-newer"),
+        projectId: alphaProjectId,
+        updatedAt: "2026-03-09T11:00:00.000Z",
+      }),
+    ];
+
+    const groups = groupThreadsByProjectForSidebar(projects, threads);
+
+    expect(groups.map((group) => group.project?.projectKey ?? null)).toEqual([
+      "logical-beta",
+      "logical-alpha",
+    ]);
+    expect(groups[1]?.threads.map((thread) => thread.id)).toEqual(["alpha-newer", "alpha-older"]);
+  });
+
+  it("keeps unmapped threads in a fallback group and omits archived threads", () => {
+    const projectId = ProjectId.make("project-active");
+    const missingProjectId = ProjectId.make("project-missing");
+    const projects = [
+      {
+        ...makeProject({ id: projectId, title: "Active" }),
+        projectKey: "logical-active",
+        memberProjectRefs: [{ environmentId: localEnvironmentId, projectId }],
+      },
+    ];
+    const threads = [
+      makeThread({ id: ThreadId.make("mapped"), projectId }),
+      makeThread({
+        id: ThreadId.make("unmapped"),
+        projectId: missingProjectId,
+        updatedAt: "2026-03-09T11:00:00.000Z",
+      }),
+      makeThread({
+        id: ThreadId.make("archived"),
+        projectId,
+        archivedAt: "2026-03-09T12:00:00.000Z",
+      }),
+    ];
+
+    const groups = groupThreadsByProjectForSidebar(projects, threads);
+
+    expect(groups.map((group) => group.project?.projectKey ?? null)).toEqual([
+      "logical-active",
+      null,
+    ]);
+    expect(groups[1]?.threads.map((thread) => thread.id)).toEqual(["unmapped"]);
+    expect(groups.flatMap((group) => group.threads).map((thread) => thread.id)).not.toContain(
+      "archived",
+    );
   });
 });
 
