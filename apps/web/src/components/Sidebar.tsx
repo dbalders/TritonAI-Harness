@@ -660,6 +660,29 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
   );
 });
 
+function SidebarNewThreadButton(props: { shortcutLabel: string | null; onClick: () => void }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <button
+            type="button"
+            className="inline-flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-md px-1.5 text-xs font-medium text-sidebar-muted-foreground outline-none hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring"
+            onClick={props.onClick}
+            aria-label="New thread"
+          />
+        }
+      >
+        <PlusIcon className="size-3.5" />
+        <span>New</span>
+      </TooltipTrigger>
+      <TooltipPopup side="right">
+        {props.shortcutLabel ? `New thread (${props.shortcutLabel})` : "New thread"}
+      </TooltipPopup>
+    </Tooltip>
+  );
+}
+
 const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   thread: SidebarThreadSummary;
   variant: "card" | "grouped" | "slim";
@@ -1940,7 +1963,7 @@ export default function Sidebar() {
   }, [clearSelection, projectScopeKey]);
 
   const handleProjectSettings = useCallback(
-    (event: ReactMouseEvent<HTMLButtonElement>, projectGroup: SidebarProjectSnapshot) => {
+    (event: ReactMouseEvent<HTMLElement>, projectGroup: SidebarProjectSnapshot) => {
       event.preventDefault();
       event.stopPropagation();
       setProjectScopeMenuOpen(false);
@@ -3396,23 +3419,20 @@ export default function Sidebar() {
                               <span className="min-w-0 truncate text-sm">
                                 {project.displayName}
                               </span>
-                              <button
-                                type="button"
-                                aria-label={`Project settings for ${project.displayName}`}
-                                title={`Project settings for ${project.displayName}`}
-                                className="ml-auto inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-icon-muted outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-                                onPointerDown={(event) => event.stopPropagation()}
-                                onClick={(event) => {
-                                  void handleProjectSettings(event, project);
-                                }}
-                              >
-                                <SettingsIcon className="size-3.5" />
-                              </button>
                             </MenuRadioItem>
                           );
                         })}
                       </MenuRadioGroup>
                       <MenuSeparator />
+                      {scopedProjectGroup ? (
+                        <MenuItem
+                          className="h-8 min-h-8 px-2 py-0 text-sm font-medium"
+                          onClick={(event) => handleProjectSettings(event, scopedProjectGroup)}
+                        >
+                          <SettingsIcon className="size-4" />
+                          Project settings
+                        </MenuItem>
+                      ) : null}
                       <MenuItem
                         className="h-8 min-h-8 px-2 py-0 text-sm font-medium"
                         onClick={openAddProjectCommandPalette}
@@ -3447,13 +3467,22 @@ export default function Sidebar() {
       >
         <SidebarGroup className="ps-[calc(var(--sidebar-content-inset)+1px)] pe-[var(--sidebar-content-inset)] pb-1 pt-0">
           {isSearchingThreads ? (
-            threadSearchResults.length > 0 ? (
-              <TooltipProvider
-                key="sidebar-thread-search-tooltips-150"
-                delay={150}
-                closeDelay={0}
-                timeout={400}
-              >
+            <TooltipProvider
+              key="sidebar-thread-search-tooltips-150"
+              delay={150}
+              closeDelay={0}
+              timeout={400}
+            >
+              <div className="mt-2 flex items-center px-2.5 pb-1 pt-1">
+                <span className="min-w-0 flex-1 text-[10px] font-medium tracking-[0.08em] text-sidebar-muted-foreground uppercase">
+                  Search results
+                </span>
+                <SidebarNewThreadButton
+                  shortcutLabel={newThreadShortcutLabel}
+                  onClick={handleNewThreadClick}
+                />
+              </div>
+              {threadSearchResults.length > 0 ? (
                 <ul
                   id="sidebar-thread-search-results"
                   role="listbox"
@@ -3492,15 +3521,15 @@ export default function Sidebar() {
                     );
                   })}
                 </ul>
-              </TooltipProvider>
-            ) : (
-              <p
-                role="status"
-                className="px-2 py-6 text-center text-xs text-sidebar-muted-foreground"
-              >
-                No threads found
-              </p>
-            )
+              ) : (
+                <p
+                  role="status"
+                  className="px-2 py-6 text-center text-xs text-sidebar-muted-foreground"
+                >
+                  No threads found
+                </p>
+              )}
+            </TooltipProvider>
           ) : null}
           {!isSearchingThreads ? (
             <TooltipProvider
@@ -3663,7 +3692,7 @@ export default function Sidebar() {
                       />,
                     );
                   }
-                  if (projectGroups.length > 0) {
+                  if (activeThreadGroups.length > 0 || projectGroups.length > 0) {
                     items.push(
                       <li
                         key="active-threads-label"
@@ -3673,26 +3702,10 @@ export default function Sidebar() {
                         <span className="min-w-0 flex-1 text-[10px] font-medium tracking-[0.08em] text-sidebar-muted-foreground uppercase">
                           Active threads
                         </span>
-                        <Tooltip>
-                          <TooltipTrigger
-                            render={
-                              <button
-                                type="button"
-                                className="inline-flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-md px-1.5 text-xs font-medium text-sidebar-muted-foreground outline-none hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring"
-                                onClick={handleNewThreadClick}
-                                aria-label="New thread"
-                              />
-                            }
-                          >
-                            <PlusIcon className="size-3.5" />
-                            <span>New</span>
-                          </TooltipTrigger>
-                          <TooltipPopup side="right">
-                            {newThreadShortcutLabel
-                              ? `New thread (${newThreadShortcutLabel})`
-                              : "New thread"}
-                          </TooltipPopup>
-                        </Tooltip>
+                        <SidebarNewThreadButton
+                          shortcutLabel={newThreadShortcutLabel}
+                          onClick={handleNewThreadClick}
+                        />
                       </li>,
                     );
                   }
@@ -3702,7 +3715,11 @@ export default function Sidebar() {
                   ] of activeThreadGroups.entries()) {
                     items.push(
                       <li
-                        key={`active-project:${project.projectKey}`}
+                        key={
+                          project
+                            ? `active-project:${project.projectKey}`
+                            : "active-project-fallback"
+                        }
                         data-thread-selection-safe
                         className={cn(
                           "list-none px-2.5 py-2",
@@ -3710,21 +3727,25 @@ export default function Sidebar() {
                         )}
                       >
                         <div className="flex min-w-0 items-center gap-2">
-                          <ProjectFavicon
-                            environmentId={project.environmentId}
-                            cwd={project.workspaceRoot}
-                            faviconPath={project.faviconPath}
-                            className="size-4 shrink-0"
-                            fallbackIcon={FolderIcon}
-                          />
+                          {project ? (
+                            <ProjectFavicon
+                              environmentId={project.environmentId}
+                              cwd={project.workspaceRoot}
+                              faviconPath={project.faviconPath}
+                              className="size-4 shrink-0"
+                              fallbackIcon={FolderIcon}
+                            />
+                          ) : (
+                            <FolderIcon className="size-4 shrink-0" />
+                          )}
                           <span className="min-w-0 flex-1 truncate text-sm font-medium text-sidebar-foreground">
-                            {project.displayName}
+                            {project?.displayName ?? "Other threads"}
                           </span>
-                          <span
-                            aria-label={`${projectThreads.length} active ${projectThreads.length === 1 ? "thread" : "threads"}`}
-                            className="shrink-0 text-xs text-sidebar-muted-foreground tabular-nums"
-                          >
-                            {projectThreads.length}
+                          <span className="shrink-0 text-xs text-sidebar-muted-foreground tabular-nums">
+                            <span aria-hidden>{projectThreads.length}</span>
+                            <span className="sr-only">
+                              {`${projectThreads.length} active ${projectThreads.length === 1 ? "thread" : "threads"}`}
+                            </span>
                           </span>
                         </div>
                       </li>,

@@ -525,9 +525,9 @@ export function sortThreadsByActivityForSidebar<
   return sortThreads(threads, "updated_at");
 }
 
-export function groupThreadsByProjectForSidebar<
+function bucketThreadsByLogicalProject<
   TProject extends LogicalSidebarProject,
-  TThread extends { readonly id: string } & ScopedSidebarThread,
+  TThread extends ScopedSidebarThread,
 >(projects: readonly TProject[], threads: readonly TThread[]) {
   const projectKeyByMember = new Map(
     projects.flatMap((project) =>
@@ -537,25 +537,50 @@ export function groupThreadsByProjectForSidebar<
       ),
     ),
   );
-  const threadsByProject = new Map<string, TThread[]>();
+  const threadsByProjectKey = new Map<string, TThread[]>();
+  const unmatchedThreads: TThread[] = [];
   for (const thread of threads) {
     if (thread.archivedAt !== null) continue;
     const projectKey = projectKeyByMember.get(`${thread.environmentId}\0${thread.projectId}`);
-    if (!projectKey) continue;
-    const groupedThreads = threadsByProject.get(projectKey);
+    if (!projectKey) {
+      unmatchedThreads.push(thread);
+      continue;
+    }
+    const groupedThreads = threadsByProjectKey.get(projectKey);
     if (groupedThreads) {
       groupedThreads.push(thread);
     } else {
-      threadsByProject.set(projectKey, [thread]);
+      threadsByProjectKey.set(projectKey, [thread]);
     }
   }
+  return { threadsByProjectKey, unmatchedThreads };
+}
 
-  return projects.flatMap((project) => {
-    const projectThreads = threadsByProject.get(project.projectKey);
+export function groupThreadsByProjectForSidebar<
+  TProject extends LogicalSidebarProject,
+  TThread extends { readonly id: string } & ScopedSidebarThread,
+>(projects: readonly TProject[], threads: readonly TThread[]) {
+  const { threadsByProjectKey, unmatchedThreads } = bucketThreadsByLogicalProject(
+    projects,
+    threads,
+  );
+  const projectGroups = projects.flatMap((project) => {
+    const projectThreads = threadsByProjectKey.get(project.projectKey);
     return projectThreads
-      ? [{ project, threads: sortThreadsByActivityForSidebar(projectThreads) }]
+      ? [
+          {
+            project: project as TProject | null,
+            threads: sortThreadsByActivityForSidebar(projectThreads),
+          },
+        ]
       : [];
   });
+  return unmatchedThreads.length > 0
+    ? [
+        ...projectGroups,
+        { project: null, threads: sortThreadsByActivityForSidebar(unmatchedThreads) },
+      ]
+    : projectGroups;
 }
 
 // Pinned-reorder key math and the keyed sort live in client-runtime
@@ -899,26 +924,7 @@ export function sortLogicalProjectsForSidebar<
   threads: readonly TThread[],
   sortOrder: SidebarProjectSortOrder,
 ): TProject[] {
-  const groupKeyByProjectRef = new Map(
-    projects.flatMap((project) =>
-      project.memberProjectRefs.map(
-        (projectRef) =>
-          [`${projectRef.environmentId}\0${projectRef.projectId}`, project.projectKey] as const,
-      ),
-    ),
-  );
-  const threadsByProjectKey = new Map<string, TThread[]>();
-  for (const thread of threads) {
-    if (thread.archivedAt !== null) continue;
-    const projectKey = groupKeyByProjectRef.get(`${thread.environmentId}\0${thread.projectId}`);
-    if (!projectKey) continue;
-    const existing = threadsByProjectKey.get(projectKey);
-    if (existing) {
-      existing.push(thread);
-    } else {
-      threadsByProjectKey.set(projectKey, [thread]);
-    }
-  }
+  const { threadsByProjectKey } = bucketThreadsByLogicalProject(projects, threads);
 
   return sortProjectsByActivity(
     projects,

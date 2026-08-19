@@ -817,11 +817,47 @@ describe("groupThreadsByProjectForSidebar", () => {
 
     const groups = groupThreadsByProjectForSidebar(projects, threads);
 
-    expect(groups.map((group) => group.project.projectKey)).toEqual([
+    expect(groups.map((group) => group.project?.projectKey ?? null)).toEqual([
       "logical-beta",
       "logical-alpha",
     ]);
     expect(groups[1]?.threads.map((thread) => thread.id)).toEqual(["alpha-newer", "alpha-older"]);
+  });
+
+  it("keeps unmapped threads in a fallback group and omits archived threads", () => {
+    const projectId = ProjectId.make("project-active");
+    const missingProjectId = ProjectId.make("project-missing");
+    const projects = [
+      {
+        ...makeProject({ id: projectId, title: "Active" }),
+        projectKey: "logical-active",
+        memberProjectRefs: [{ environmentId: localEnvironmentId, projectId }],
+      },
+    ];
+    const threads = [
+      makeThread({ id: ThreadId.make("mapped"), projectId }),
+      makeThread({
+        id: ThreadId.make("unmapped"),
+        projectId: missingProjectId,
+        updatedAt: "2026-03-09T11:00:00.000Z",
+      }),
+      makeThread({
+        id: ThreadId.make("archived"),
+        projectId,
+        archivedAt: "2026-03-09T12:00:00.000Z",
+      }),
+    ];
+
+    const groups = groupThreadsByProjectForSidebar(projects, threads);
+
+    expect(groups.map((group) => group.project?.projectKey ?? null)).toEqual([
+      "logical-active",
+      null,
+    ]);
+    expect(groups[1]?.threads.map((thread) => thread.id)).toEqual(["unmapped"]);
+    expect(groups.flatMap((group) => group.threads).map((thread) => thread.id)).not.toContain(
+      "archived",
+    );
   });
 });
 

@@ -12,10 +12,11 @@ If reordering is unavailable for one environment, update the T3 Code server runn
 environment. Older servers can still pin and unpin threads, but do not understand synced ordering;
 their pinned threads keep the default newest-first order below the ones you have arranged.
 
-Active threads are grouped by project on web and desktop. Projects follow your saved project order,
-and each project shows its most recently active thread first. Use the project filter above the list
-to focus the sidebar on one project. Branch, provider, and environment details remain available by
-hovering a thread without taking up space in every row.
+Active threads are grouped by project on web and desktop. Projects follow your project sort setting:
+your saved order when sorting is manual, and most recent activity otherwise. Each project shows its
+most recently active thread first. Use the project filter above the list to focus the sidebar on one
+project. Branch, provider, and environment details remain available by hovering a thread without
+taking up space in every row.
 
 Unsent drafts appear in a separate **Draft threads** section above Active threads. The section is
 hidden when there are no saved drafts, keeping draft work distinct from submitted threads.
