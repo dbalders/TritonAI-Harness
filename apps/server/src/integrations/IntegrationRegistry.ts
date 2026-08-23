@@ -196,8 +196,10 @@ const DEFAULT_PROVIDER_OPERATION_TIMEOUT_MS = 30_000;
 /** Maximum UTF-8 bytes in normalized JSON returned to a model-facing tool surface. */
 export const MAX_INTEGRATION_TOOL_RESULT_BYTES = 512 * 1024;
 
-export const INTEGRATION_TOOL_RESULT_UNAVAILABLE = Object.freeze({
-  error: "integration_tool_result_unavailable",
+export const INTEGRATION_TOOL_RESULT_OMITTED = Object.freeze({
+  resultOmitted: true,
+  reason: "integration_tool_result_omitted",
+  message: "Integration tool completed, but its result was omitted.",
 });
 
 /**
@@ -221,7 +223,7 @@ export function normalizeIntegrationToolResult(value: unknown): Record<string, u
   }
   if (!serialized) throw new Error("Integration tool results must be JSON-serializable.");
   if (Buffer.byteLength(serialized, "utf8") > MAX_INTEGRATION_TOOL_RESULT_BYTES) {
-    return INTEGRATION_TOOL_RESULT_UNAVAILABLE;
+    return INTEGRATION_TOOL_RESULT_OMITTED;
   }
   const parsed: unknown = JSON.parse(serialized);
   if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
@@ -229,7 +231,7 @@ export function normalizeIntegrationToolResult(value: unknown): Record<string, u
   }
   const normalized = { result: parsed };
   if (Buffer.byteLength(JSON.stringify(normalized), "utf8") > MAX_INTEGRATION_TOOL_RESULT_BYTES) {
-    return INTEGRATION_TOOL_RESULT_UNAVAILABLE;
+    return INTEGRATION_TOOL_RESULT_OMITTED;
   }
   return normalized;
 }
@@ -3044,7 +3046,7 @@ export class RegistryRuntime {
           // The provider has already returned and an admitted write may already be externally
           // committed. Omit its unusable result without reporting that completed mutation as a
           // failed call or faulting the provider. Read-result contract failures still reject.
-          if (writeCommitAdmitted) return INTEGRATION_TOOL_RESULT_UNAVAILABLE;
+          if (writeCommitAdmitted) return INTEGRATION_TOOL_RESULT_OMITTED;
           throw error;
         }
       } catch (error) {

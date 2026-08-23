@@ -8,7 +8,7 @@ import * as NodePath from "node:path";
 import { type IntegrationManifest, validateIntegrationManifest } from "./manifest.ts";
 import {
   createRegistryRuntime,
-  INTEGRATION_TOOL_RESULT_UNAVAILABLE,
+  INTEGRATION_TOOL_RESULT_OMITTED,
   IntegrationProviderPublicError,
   MAX_INTEGRATION_TOOL_RESULT_BYTES,
   normalizeIntegrationToolResult,
@@ -201,7 +201,7 @@ describe("integration tool result normalization", () => {
       MAX_INTEGRATION_TOOL_RESULT_BYTES,
     );
     expect(normalized).toEqual({ result: atLimit });
-    expect(normalizeIntegrationToolResult(`${atLimit}x`)).toBe(INTEGRATION_TOOL_RESULT_UNAVAILABLE);
+    expect(normalizeIntegrationToolResult(`${atLimit}x`)).toBe(INTEGRATION_TOOL_RESULT_OMITTED);
   });
 
   it("measures UTF-8 bytes and preserves the bounded multibyte compatibility shape", () => {
@@ -214,7 +214,7 @@ describe("integration tool result normalization", () => {
 
     const multibyte = "界".repeat(Math.ceil(MAX_INTEGRATION_TOOL_RESULT_BYTES / 3));
     expect(multibyte.length).toBeLessThan(MAX_INTEGRATION_TOOL_RESULT_BYTES);
-    expect(normalizeIntegrationToolResult(multibyte)).toBe(INTEGRATION_TOOL_RESULT_UNAVAILABLE);
+    expect(normalizeIntegrationToolResult(multibyte)).toBe(INTEGRATION_TOOL_RESULT_OMITTED);
   });
 
   it("fails closed when JSON escaping expands a bounded text shape beyond the ceiling", () => {
@@ -223,7 +223,7 @@ describe("integration tool result normalization", () => {
     expect(Buffer.byteLength(JSON.stringify(escaped), "utf8")).toBeGreaterThan(
       MAX_INTEGRATION_TOOL_RESULT_BYTES,
     );
-    expect(normalizeIntegrationToolResult(escaped)).toBe(INTEGRATION_TOOL_RESULT_UNAVAILABLE);
+    expect(normalizeIntegrationToolResult(escaped)).toBe(INTEGRATION_TOOL_RESULT_OMITTED);
   });
 
   it("returns the measured plain snapshot instead of serializing provider objects twice", () => {
@@ -759,17 +759,17 @@ describe("IntegrationRegistry lifecycle", () => {
     try {
       await registry.install(manifest.id);
       await expect(registry.invokeTool("test.fixture.write", {}, invocationContext)).resolves.toBe(
-        INTEGRATION_TOOL_RESULT_UNAVAILABLE,
+        INTEGRATION_TOOL_RESULT_OMITTED,
       );
       await expect(NodeFSP.access(journalPath)).rejects.toMatchObject({ code: "ENOENT" });
       expect(registry.isToolAvailableSync("test.fixture.write")).toBe(true);
 
       await expect(registry.invokeTool("test.fixture.write", {}, invocationContext)).resolves.toBe(
-        INTEGRATION_TOOL_RESULT_UNAVAILABLE,
+        INTEGRATION_TOOL_RESULT_OMITTED,
       );
       await expect(NodeFSP.access(journalPath)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(registry.invokeTool("test.fixture.write", {}, invocationContext)).resolves.toBe(
-        INTEGRATION_TOOL_RESULT_UNAVAILABLE,
+        INTEGRATION_TOOL_RESULT_OMITTED,
       );
       await expect(NodeFSP.access(journalPath)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(

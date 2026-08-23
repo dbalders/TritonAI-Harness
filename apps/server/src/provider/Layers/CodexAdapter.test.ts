@@ -40,7 +40,7 @@ import * as CodexErrors from "effect-codex-app-server/errors";
 import { ServerConfig } from "../../config.ts";
 import {
   codexDynamicIntegrationToolName,
-  INTEGRATION_TOOL_RESULT_UNAVAILABLE,
+  INTEGRATION_TOOL_RESULT_OMITTED,
   type RegistryRuntime,
 } from "../../integrations/IntegrationRegistry.ts";
 import { EmptyIntegrationToolInput } from "../../integrations/IntegrationTool.ts";
@@ -635,7 +635,7 @@ reconciliationLayer("CodexAdapter integration availability reconciliation", (it)
       reconciliationAvailability.advancesDuringPrepare = 0;
       reconciliationRuntimeFactory.factory.mockClear();
       reconciliationInvokeTool.mockClear();
-      reconciliationInvokeTool.mockResolvedValueOnce(INTEGRATION_TOOL_RESULT_UNAVAILABLE);
+      reconciliationInvokeTool.mockResolvedValueOnce(INTEGRATION_TOOL_RESULT_OMITTED);
       const adapter = yield* CodexAdapter;
       const threadId = asThreadId("thread-bounded-integration-result");
 
@@ -653,7 +653,7 @@ reconciliationLayer("CodexAdapter integration availability reconciliation", (it)
         }),
       );
 
-      NodeAssert.strictEqual(result, INTEGRATION_TOOL_RESULT_UNAVAILABLE);
+      NodeAssert.strictEqual(result, INTEGRATION_TOOL_RESULT_OMITTED);
       NodeAssert.deepStrictEqual(reconciliationInvokeTool.mock.calls, [
         [reconciliationToolName, { query: "bounded" }, { signal }],
       ]);

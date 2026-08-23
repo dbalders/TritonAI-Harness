@@ -202,7 +202,7 @@ it.effect("preserves bounded results and reports omitted results as completed MC
   const invokeTool = vi
     .fn<Integrations.RegistryRuntime["invokeTool"]>()
     .mockResolvedValueOnce({ records: [{ id: "record-1" }] })
-    .mockResolvedValueOnce(Integrations.INTEGRATION_TOOL_RESULT_UNAVAILABLE);
+    .mockResolvedValueOnce(Integrations.INTEGRATION_TOOL_RESULT_OMITTED);
   const registrySpy = vi.spyOn(Integrations, "getIntegrationRegistry").mockReturnValue({
     invokeTool,
   } as unknown as Integrations.RegistryRuntime);
@@ -221,20 +221,18 @@ it.effect("preserves bounded results and reports omitted results as completed MC
       expect(bounded.structuredContent).toEqual({ records: [{ id: "record-1" }] });
       expect(bounded.content).toEqual([{ type: "text", text: '{"records":[{"id":"record-1"}]}' }]);
 
-      const unavailable = yield* server
+      const omitted = yield* server
         .callTool({ name: "fixture.read", arguments: {} })
         .pipe(
           Effect.provideService(McpInvocationContext.McpInvocationContext, authorized),
           Effect.provideService(McpSchema.McpServerClient, {} as never),
         );
-      expect(unavailable.isError).toBe(false);
-      expect(unavailable.structuredContent).toEqual(
-        Integrations.INTEGRATION_TOOL_RESULT_UNAVAILABLE,
-      );
-      expect(unavailable.content).toEqual([
+      expect(omitted.isError).toBe(false);
+      expect(omitted.structuredContent).toEqual(Integrations.INTEGRATION_TOOL_RESULT_OMITTED);
+      expect(omitted.content).toEqual([
         {
           type: "text",
-          text: '{"error":"integration_tool_result_unavailable"}',
+          text: '{"resultOmitted":true,"reason":"integration_tool_result_omitted","message":"Integration tool completed, but its result was omitted."}',
         },
       ]);
       expect(invokeTool).toHaveBeenCalledTimes(2);

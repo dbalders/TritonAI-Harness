@@ -11,7 +11,7 @@ import * as CodexErrors from "effect-codex-app-server/errors";
 import * as CodexRpc from "effect-codex-app-server/rpc";
 import * as EffectCodexSchema from "effect-codex-app-server/schema";
 
-import { INTEGRATION_TOOL_RESULT_UNAVAILABLE } from "../../integrations/IntegrationRegistry.ts";
+import { INTEGRATION_TOOL_RESULT_OMITTED } from "../../integrations/IntegrationRegistry.ts";
 import {
   buildCodexDeveloperInstructions,
   codexDefaultModeDeveloperInstructions,
@@ -113,13 +113,13 @@ describe("Codex resume cursor compatibility", () => {
 });
 
 describe("integration write-tool approval", () => {
-  it("reports an unavailable integration result as a completed dynamic-tool call", () => {
-    NodeAssert.deepStrictEqual(dynamicToolResultResponse(INTEGRATION_TOOL_RESULT_UNAVAILABLE), {
+  it("reports an omitted integration result as a completed dynamic-tool call", () => {
+    NodeAssert.deepStrictEqual(dynamicToolResultResponse(INTEGRATION_TOOL_RESULT_OMITTED), {
       success: true,
       contentItems: [
         {
           type: "inputText",
-          text: '{"error":"integration_tool_result_unavailable"}',
+          text: '{"resultOmitted":true,"reason":"integration_tool_result_omitted","message":"Integration tool completed, but its result was omitted."}',
         },
       ],
     });
