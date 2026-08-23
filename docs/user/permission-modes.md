@@ -9,8 +9,9 @@ before sending.
 
 ## The Modes
 
-**Supervised**: ask before commands and file changes. The agent pauses and shows you what it
-wants to run or edit, and waits for approval. Work outside the workspace is restricted.
+**Supervised**: safe read-only work may proceed without a prompt. Commands that need additional
+permissions, file-changing operations, and write tools pause and wait for approval. Exact command
+handling depends on the provider; work outside the workspace remains restricted.
 
 **Auto-accept edits**: auto-approve edits, ask before other actions. File changes go through
 without prompting; commands and anything else still stop for approval.
@@ -33,19 +34,21 @@ actions still ask for approval. It does not change the thread to **Full access**
 
 Use **Full access** for work in a worktree or a sandbox you can throw away.
 
-Use **Supervised** on a repository where an unwanted command is expensive, or the first time you
-run an unfamiliar task.
+Use **Supervised** when you want commands needing additional permissions and file changes to wait
+for approval, or the first time you run an unfamiliar task.
 
 **Auto-accept edits** suits refactors where the edits are the point and you only care about the
 shell commands.
 
 ## Provider Behavior
 
-Each provider maps these modes onto its own approval and sandbox settings. Codex, for example,
-translates the mode into its approval policy and sandbox level, so **Supervised** runs the CLI
-with prompting enabled and a restricted workspace while **Full access** disables both. Grok
-threads do the same: **Supervised** starts Grok in ask mode even if your Grok CLI config is
-set to always-approve, and **Full access** starts Grok with always-approve. The labels above
-describe what you get; the exact per-provider translation is internal and may change.
+Each provider maps these modes onto its own approval and sandbox settings. For Codex,
+**Supervised** uses the `untrusted` approval policy and a read-only sandbox. A limited allowlist of
+safe read-only commands may run inside that sandbox without a separate approval; commands needing
+additional permissions, file-changing operations, and write tools ask first. **Full access**
+disables approval prompts and sandbox restrictions for Codex. Grok threads map **Supervised** to
+ask mode even if the Grok CLI config is set to always-approve, and **Full access** to
+always-approve. The labels above describe the shared boundary; the exact per-provider translation
+is internal and may change.
 
 Mobile offers the same four modes with the same labels and descriptions.
