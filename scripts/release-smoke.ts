@@ -163,6 +163,12 @@ function assertContains(haystack: string, needle: string, message: string): void
   }
 }
 
+function assertNotContains(haystack: string, needle: string, message: string): void {
+  if (haystack.includes(needle)) {
+    throw new Error(message);
+  }
+}
+
 function assertExists(path: string, message: string): void {
   if (!NodeFS.existsSync(path)) {
     throw new Error(message);
@@ -405,6 +411,30 @@ try {
   assertExists(
     winDebugX64Path,
     "Windows release smoke unexpectedly removed the x64 builder debug fixture.",
+  );
+
+  const upstreamSyncWorkflow = NodeFS.readFileSync(
+    NodePath.resolve(repoRoot, ".github/workflows/tritonai-upstream-sync.yml"),
+    "utf8",
+  );
+  assertContains(
+    upstreamSyncWorkflow,
+    "corepack enable pnpm",
+    "Upstream sync must enable the package.json-pinned pnpm through Corepack.",
+  );
+  assertContains(
+    upstreamSyncWorkflow,
+    "pnpm install --frozen-lockfile",
+    "Upstream sync must install from the frozen pnpm lockfile.",
+  );
+  assertNotContains(
+    upstreamSyncWorkflow,
+    "bun install",
+    "Upstream sync must not use Bun as an installer.",
+  );
+  assertMissing(
+    NodePath.resolve(repoRoot, "bun.lock"),
+    "bun.lock must remain absent; pnpm-lock.yaml is the dependency-resolution authority.",
   );
 
   const releaseWorkflow = NodeFS.readFileSync(
