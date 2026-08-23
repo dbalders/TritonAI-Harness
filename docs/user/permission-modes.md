@@ -9,9 +9,9 @@ before sending.
 
 ## The Modes
 
-**Supervised**: safe read-only work may proceed without a prompt. Commands that need additional
-permissions, file-changing operations, and write tools pause and wait for approval. Exact command
-handling depends on the provider; work outside the workspace remains restricted.
+**Supervised**: where supported, safe read-only work may proceed without a prompt. Commands that
+need additional permissions, file-changing operations, and write tools pause and wait for approval.
+Exact command handling depends on the provider; work outside the workspace remains restricted.
 
 **Auto-accept edits**: auto-approve edits, ask before other actions. File changes go through
 without prompting; commands and anything else still stop for approval.

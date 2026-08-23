@@ -7,7 +7,7 @@ describe("runtime mode copy", () => {
     expect(runtimeModeConfig["approval-required"]).toMatchObject({
       label: "Supervised",
       description:
-        "Safe read-only commands may run; ask before commands needing more access, file changes, and write tools.",
+        "Where supported, safe read-only commands may run; ask before commands needing more access, file changes, and write tools.",
     });
   });
 
