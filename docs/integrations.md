@@ -142,8 +142,9 @@ cross the client boundary. Tool
 results are JSON-normalized and fail closed when they cannot be serialized. Normalized results are
 limited to 512 KiB of UTF-8 JSON before they reach a model-facing tool surface; larger results are
 replaced as a whole with a generic result-unavailable response and are never partially truncated.
-The ceiling preserves existing 50,000-code-unit text contracts, including compatibility-shaped
-results that repeat multibyte text and their surrounding JSON metadata, which can exceed 256 KiB.
+The ceiling preserves the ordinary compatibility shape that repeats a 50,000-code-unit field with
+unescaped three-byte UTF-8 text and surrounding metadata, which can exceed 256 KiB. Content whose
+JSON escaping expands beyond the ceiling is deliberately replaced by the generic response.
 
 ## Connection flows
 

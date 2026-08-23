@@ -202,8 +202,8 @@ export const INTEGRATION_TOOL_RESULT_UNAVAILABLE = Object.freeze({
 
 /**
  * Normalize provider output once at the shared registry boundary. The 512 KiB ceiling preserves
- * existing 50,000-code-unit text contracts, including compatibility results that repeat a
- * three-byte UTF-8 field plus JSON metadata; 256 KiB would reject that ordinary shape.
+ * the ordinary compatibility shape that repeats a 50,000-code-unit, unescaped three-byte UTF-8
+ * field plus JSON metadata; 256 KiB would reject it. Larger JSON escape expansion fails closed.
  */
 export function normalizeIntegrationToolResult(value: unknown): Record<string, unknown> {
   if (typeof value === "bigint" || typeof value === "function" || typeof value === "symbol") {
@@ -3038,7 +3038,15 @@ export class RegistryRuntime {
         }
         if (context?.signal.aborted && !writeCommitAdmitted)
           throw cancellationError(context.signal);
-        return normalizeIntegrationToolResult(result);
+        try {
+          return normalizeIntegrationToolResult(result);
+        } catch (error) {
+          // The provider has already returned and an admitted write may already be externally
+          // committed. Omit its unusable result without reporting that completed mutation as a
+          // failed call or faulting the provider. Read-result contract failures still reject.
+          if (writeCommitAdmitted) return INTEGRATION_TOOL_RESULT_UNAVAILABLE;
+          throw error;
+        }
       } catch (error) {
         if (error instanceof ProviderWriteAdmissionError) {
           throw operationError(

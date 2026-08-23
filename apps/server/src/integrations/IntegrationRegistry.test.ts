@@ -217,6 +217,15 @@ describe("integration tool result normalization", () => {
     expect(normalizeIntegrationToolResult(multibyte)).toBe(INTEGRATION_TOOL_RESULT_UNAVAILABLE);
   });
 
+  it("fails closed when JSON escaping expands a bounded text shape beyond the ceiling", () => {
+    const body = "\0".repeat(50_000);
+    const escaped = { body, source: { body } };
+    expect(Buffer.byteLength(JSON.stringify(escaped), "utf8")).toBeGreaterThan(
+      MAX_INTEGRATION_TOOL_RESULT_BYTES,
+    );
+    expect(normalizeIntegrationToolResult(escaped)).toBe(INTEGRATION_TOOL_RESULT_UNAVAILABLE);
+  });
+
   it("returns the measured plain snapshot instead of serializing provider objects twice", () => {
     let serializations = 0;
     const providerResult = {
@@ -674,7 +683,7 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
-  it("keeps an admitted write successful when only its oversized result is unavailable", async () => {
+  it("keeps an admitted write successful when only its result is unavailable", async () => {
     const root = await NodeFSP.mkdtemp(
       NodePath.join(NodeOS.tmpdir(), "tritonai-write-result-bound-"),
     );
@@ -702,6 +711,14 @@ describe("IntegrationRegistry lifecycle", () => {
       ],
       skills: [],
     };
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    const results: ReadonlyArray<unknown> = [
+      { receipt: "x".repeat(MAX_INTEGRATION_TOOL_RESULT_BYTES) },
+      cyclic,
+      { receipt: 1n },
+      { receipt: "bounded" },
+    ];
     let invocations = 0;
     const implementation: IntegrationProvider = {
       id: "test-write-result-bound-provider",
@@ -727,9 +744,10 @@ describe("IntegrationRegistry lifecycle", () => {
       }),
       disconnect: async () => undefined,
       invoke: async (_toolName, _input, context) => {
-        invocations += 1;
         await context?.beginCommit?.();
-        return { receipt: "x".repeat(MAX_INTEGRATION_TOOL_RESULT_BYTES) };
+        const result = results[invocations];
+        invocations += 1;
+        return result;
       },
     };
     const registry = new RegistryRuntime(root, [packaged(manifest, implementation)]);
@@ -749,7 +767,15 @@ describe("IntegrationRegistry lifecycle", () => {
       await expect(registry.invokeTool("test.fixture.write", {}, invocationContext)).resolves.toBe(
         INTEGRATION_TOOL_RESULT_UNAVAILABLE,
       );
-      expect(invocations).toBe(2);
+      await expect(NodeFSP.access(journalPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(registry.invokeTool("test.fixture.write", {}, invocationContext)).resolves.toBe(
+        INTEGRATION_TOOL_RESULT_UNAVAILABLE,
+      );
+      await expect(NodeFSP.access(journalPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(
+        registry.invokeTool("test.fixture.write", {}, invocationContext),
+      ).resolves.toEqual({ receipt: "bounded" });
+      expect(invocations).toBe(4);
     } finally {
       await registry.close();
       await NodeFSP.rm(root, { recursive: true, force: true });

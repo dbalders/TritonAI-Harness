@@ -11,6 +11,7 @@ import * as CodexErrors from "effect-codex-app-server/errors";
 import * as CodexRpc from "effect-codex-app-server/rpc";
 import * as EffectCodexSchema from "effect-codex-app-server/schema";
 
+import { INTEGRATION_TOOL_RESULT_UNAVAILABLE } from "../../integrations/IntegrationRegistry.ts";
 import {
   buildCodexDeveloperInstructions,
   codexDefaultModeDeveloperInstructions,
@@ -22,8 +23,9 @@ import {
   computeDynamicToolFingerprint,
   describeMcpElicitation,
   dynamicToolApprovalRequired,
-  dynamicToolInvocationAllowed,
   dynamicToolInvocationAvailable,
+  dynamicToolInvocationAllowed,
+  dynamicToolResultResponse,
   hasConfiguredMcpServer,
   isRecoverableThreadResumeError,
   makeMemoryConsolidationNotificationFilter,
@@ -111,6 +113,18 @@ describe("Codex resume cursor compatibility", () => {
 });
 
 describe("integration write-tool approval", () => {
+  it("reports an unavailable integration result as a completed dynamic-tool call", () => {
+    NodeAssert.deepStrictEqual(dynamicToolResultResponse(INTEGRATION_TOOL_RESULT_UNAVAILABLE), {
+      success: true,
+      contentItems: [
+        {
+          type: "inputText",
+          text: '{"error":"integration_tool_result_unavailable"}',
+        },
+      ],
+    });
+  });
+
   it("uses the selected runtime mode as the write-tool approval contract", () => {
     NodeAssert.equal(dynamicToolInvocationAllowed(false, undefined), true);
     NodeAssert.equal(dynamicToolInvocationAllowed(true, undefined), false);
