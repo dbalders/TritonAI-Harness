@@ -40,6 +40,7 @@ import * as CodexErrors from "effect-codex-app-server/errors";
 import { ServerConfig } from "../../config.ts";
 import {
   codexDynamicIntegrationToolName,
+  INTEGRATION_TOOL_RESULT_UNAVAILABLE,
   type RegistryRuntime,
 } from "../../integrations/IntegrationRegistry.ts";
 import { EmptyIntegrationToolInput } from "../../integrations/IntegrationTool.ts";
@@ -548,6 +549,9 @@ const reconciliationAvailability = {
 };
 const reconciliationToolName = "fixture.records.search";
 const reconciliationWriteToolName = "fixture.records.write";
+const reconciliationInvokeTool = vi.fn<RegistryRuntime["invokeTool"]>(() =>
+  Promise.resolve({ records: [] }),
+);
 const reconciliationRegistry = {
   get availabilityGeneration() {
     return reconciliationAvailability.generation;
@@ -584,7 +588,7 @@ const reconciliationRegistry = {
   toolRequiresApprovalSync: () => false,
   isSkillAvailableSync: () => false,
   reserveSkillsSync: () => null,
-  invokeTool: () => Promise.resolve({ records: [] }),
+  invokeTool: reconciliationInvokeTool,
 } as unknown as RegistryRuntime;
 let resolvedReconciliationRegistry: RegistryRuntime = reconciliationRegistry;
 
@@ -623,6 +627,39 @@ const reconciliationLayer = it.layer(
 );
 
 reconciliationLayer("CodexAdapter integration availability reconciliation", (it) => {
+  it.effect("forwards the registry result through the direct dynamic-tool path", () =>
+    Effect.gen(function* () {
+      reconciliationAvailability.generation = 1;
+      reconciliationAvailability.available = true;
+      reconciliationAvailability.writeAvailable = false;
+      reconciliationAvailability.advancesDuringPrepare = 0;
+      reconciliationRuntimeFactory.factory.mockClear();
+      reconciliationInvokeTool.mockClear();
+      reconciliationInvokeTool.mockResolvedValueOnce(INTEGRATION_TOOL_RESULT_UNAVAILABLE);
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("thread-bounded-integration-result");
+
+      yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
+      const runtime = reconciliationRuntimeFactory.lastRuntime!;
+      const binding = runtime.options.dynamicTools?.find(
+        ({ name }) => name === codexDynamicIntegrationToolName(reconciliationToolName),
+      );
+      const signal = new AbortController().signal;
+      const result = yield* Effect.promise(() =>
+        runtime.options.invokeDynamicTool!({
+          name: binding!.name,
+          arguments: { query: "bounded" },
+          signal,
+        }),
+      );
+
+      NodeAssert.strictEqual(result, INTEGRATION_TOOL_RESULT_UNAVAILABLE);
+      NodeAssert.deepStrictEqual(reconciliationInvokeTool.mock.calls, [
+        [reconciliationToolName, { query: "bounded" }, { signal }],
+      ]);
+    }),
+  );
+
   it.effect("does not disclose disabled write tools to Codex", () =>
     Effect.gen(function* () {
       reconciliationAvailability.generation = 1;
