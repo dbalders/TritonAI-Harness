@@ -39,9 +39,12 @@ import * as CodexErrors from "effect-codex-app-server/errors";
 import { ServerConfig } from "../../config.ts";
 import {
   codexDynamicIntegrationToolName,
-  type RegistryRuntime,
+  type IntegrationProvider,
+  type IntegrationInvocationContext,
+  RegistryRuntime,
 } from "../../integrations/IntegrationRegistry.ts";
 import { EmptyIntegrationToolInput } from "../../integrations/IntegrationTool.ts";
+import type { IntegrationManifest } from "../../integrations/manifest.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import * as PreviewAutomationBroker from "../../mcp/PreviewAutomationBroker.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
@@ -614,6 +617,180 @@ const reconciliationLayer = it.layer(
 );
 
 reconciliationLayer("CodexAdapter integration availability reconciliation", (it) => {
+  it.effect("materializes files through direct integration tool calls", () => {
+    const root = NodeFS.mkdtempSync(
+      NodePath.join(NodeOS.tmpdir(), "tritonai-codex-integration-file-"),
+    );
+    const threadId = asThreadId("thread-direct-integration-file-scope");
+    const providerSessionId = "provider-session-direct-integration-file";
+    const bytes = Uint8Array.from(Buffer.from("%PDF-1.7\ndirect Codex fixture\n", "utf8"));
+    const invocationContext: { current: IntegrationInvocationContext | undefined } = {
+      current: undefined,
+    };
+    let providerInvocationCount = 0;
+    const manifest: IntegrationManifest = {
+      apiVersion: "tritonai.harness/v2",
+      kind: "IntegrationPlugin",
+      manifestVersion: 2,
+      id: "test-codex-integration-file",
+      name: "Test Codex Integration File",
+      description: "Direct Codex integration file fixture.",
+      version: "1.0.0",
+      provider: "test-codex-integration-file-provider",
+      capabilities: [
+        {
+          id: "files.read",
+          displayName: "Files",
+          description: "Read fixture files.",
+          access: "default",
+        },
+      ],
+      tools: [
+        {
+          name: reconciliationToolName,
+          displayName: "Read fixture file",
+          description: "Read a fixture file.",
+          capabilities: ["files.read"],
+          effect: "read",
+        },
+      ],
+      skills: [],
+    };
+    const implementation: IntegrationProvider = {
+      id: "test-codex-integration-file-provider",
+      tools: [
+        {
+          name: reconciliationToolName,
+          description: "Read a fixture file.",
+          input: EmptyIntegrationToolInput,
+          readOnly: true,
+          openWorld: false,
+        },
+      ],
+      status: async () => ({
+        state: "connected",
+        accountLabel: null,
+        grantedCapabilities: ["files.read"],
+        message: null,
+      }),
+      invoke: async (_name, _input, context) => {
+        providerInvocationCount += 1;
+        if (!context?.materializeFile) throw new Error("Materialization context is required.");
+        return {
+          file: await context.materializeFile({
+            bytes,
+            name: "../../same-named-local.pdf",
+            mediaType: "application/pdf",
+          }),
+        };
+      },
+    };
+    const registry = new RegistryRuntime(root, [{ manifest, provider: implementation }]);
+    const adapterRegistry = new Proxy(registry, {
+      get(target, property) {
+        if (property === "invokeTool") {
+          return (name: string, input: unknown, context?: IntegrationInvocationContext) => {
+            invocationContext.current = context;
+            return target.invokeTool(name, input, context);
+          };
+        }
+        const value = Reflect.get(target, property, target) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+
+    return Effect.gen(function* () {
+      reconciliationAvailability.generation = 1;
+      reconciliationAvailability.available = true;
+      reconciliationAvailability.writeAvailable = false;
+      reconciliationAvailability.advancesDuringPrepare = 0;
+      reconciliationRuntimeFactory.factory.mockClear();
+      yield* Effect.promise(() => registry.install(manifest.id));
+      resolvedReconciliationRegistry = adapterRegistry;
+      const adapter = yield* CodexAdapter;
+      McpProviderSession.setMcpProviderSession({
+        environmentId: EnvironmentId.make("environment-direct-integration-file"),
+        threadId,
+        providerSessionId,
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        endpoint: "http://127.0.0.1:43123/mcp",
+        authorizationHeader: "Bearer fixture",
+      });
+      try {
+        yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
+        const binding = reconciliationRuntimeFactory.lastRuntime?.options.dynamicTools?.[0];
+        NodeAssert.ok(binding);
+        const result = (yield* Effect.promise(() =>
+          reconciliationRuntimeFactory.lastRuntime!.options.invokeDynamicTool!({
+            name: binding.name,
+            arguments: {},
+            signal: new AbortController().signal,
+          }),
+        )) as {
+          readonly file: {
+            readonly path: string;
+            readonly name: string;
+            readonly mediaType: string;
+            readonly sizeBytes: number;
+            readonly trust: string;
+          };
+        };
+
+        NodeAssert.ok(invocationContext.current);
+        NodeAssert.equal(invocationContext.current.threadId, threadId);
+        NodeAssert.equal(invocationContext.current.providerSessionId, providerSessionId);
+        NodeAssert.equal(NodePath.isAbsolute(result.file.path), true);
+        NodeAssert.notEqual(NodePath.basename(result.file.path), "same-named-local.pdf");
+        NodeAssert.deepStrictEqual(NodeFS.readFileSync(result.file.path), Buffer.from(bytes));
+        NodeAssert.deepStrictEqual(result, {
+          file: {
+            path: result.file.path,
+            name: NodePath.basename(result.file.path),
+            mediaType: "application/pdf",
+            sizeBytes: bytes.byteLength,
+            trust: "untrusted",
+          },
+        });
+        NodeAssert.equal(providerInvocationCount, 1);
+
+        const activeSession = McpProviderSession.readMcpProviderSession(threadId);
+        NodeAssert.ok(activeSession);
+        McpProviderSession.setMcpProviderSession({
+          ...activeSession,
+          providerSessionId: "provider-session-direct-integration-file-replaced",
+        });
+        NodeAssert.equal(
+          reconciliationRuntimeFactory.lastRuntime!.options.isDynamicToolAvailable?.(binding.name),
+          false,
+        );
+        yield* Effect.promise(() =>
+          NodeAssert.rejects(
+            () =>
+              reconciliationRuntimeFactory.lastRuntime!.options.invokeDynamicTool!({
+                name: binding.name,
+                arguments: {},
+                signal: new AbortController().signal,
+              }),
+            /unavailable/u,
+          ),
+        );
+        NodeAssert.equal(providerInvocationCount, 1);
+      } finally {
+        yield* adapter.stopSession(threadId).pipe(Effect.ignore);
+        McpProviderSession.clearMcpProviderSession(threadId);
+      }
+    }).pipe(
+      Effect.ensuring(
+        Effect.promise(async () => {
+          resolvedReconciliationRegistry = reconciliationRegistry;
+          McpProviderSession.clearMcpProviderSession(threadId);
+          await registry.close().catch(() => undefined);
+          NodeFS.rmSync(root, { recursive: true, force: true });
+        }),
+      ),
+    );
+  });
+
   it.effect("does not disclose disabled write tools to Codex", () =>
     Effect.gen(function* () {
       reconciliationAvailability.generation = 1;

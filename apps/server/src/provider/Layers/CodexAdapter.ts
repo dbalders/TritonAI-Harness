@@ -1880,6 +1880,15 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           );
         }
         const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
+        const capturedMcpSessionIsCurrent = () => {
+          if (!mcpSession) return false;
+          const current = McpProviderSession.readMcpProviderSession(input.threadId);
+          return (
+            current?.providerSessionId === mcpSession.providerSessionId &&
+            current.providerInstanceId === mcpSession.providerInstanceId &&
+            current.environmentId === mcpSession.environmentId
+          );
+        };
         const previewAutomationBroker = options?.previewAutomationBroker;
         const selectedModel =
           input.modelSelection?.instanceId === boundInstanceId
@@ -2016,17 +2025,13 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
                 dynamicTools: allDynamicToolDefinitions,
                 isDynamicToolAvailable: (name: string) => {
                   if (previewDynamicToolNames.has(name)) {
-                    const activeMcpSession = McpProviderSession.readMcpProviderSession(
-                      input.threadId,
-                    );
-                    return (
-                      activeMcpSession?.providerSessionId === mcpSession?.providerSessionId &&
-                      previewAutomationBroker !== undefined
-                    );
+                    return capturedMcpSessionIsCurrent() && previewAutomationBroker !== undefined;
                   }
                   const canonicalName = dynamicToolByName.get(name);
                   return Boolean(
-                    canonicalName && integrationRegistry?.isToolAvailableSync(canonicalName),
+                    canonicalName &&
+                    capturedMcpSessionIsCurrent() &&
+                    integrationRegistry?.isToolAvailableSync(canonicalName),
                   );
                 },
                 invokeDynamicTool: async ({
@@ -2057,11 +2062,17 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
                     );
                   }
                   const canonicalName = dynamicToolByName.get(name);
-                  if (!canonicalName || !integrationRegistry?.isToolAvailableSync(canonicalName)) {
+                  if (
+                    !canonicalName ||
+                    !capturedMcpSessionIsCurrent() ||
+                    !integrationRegistry?.isToolAvailableSync(canonicalName)
+                  ) {
                     throw new Error("Dynamic tool is unavailable.");
                   }
                   return integrationRegistry.invokeTool(canonicalName, toolArguments, {
                     signal,
+                    threadId: input.threadId,
+                    ...(mcpSession ? { providerSessionId: mcpSession.providerSessionId } : {}),
                     ...(writeApproved ? { writeApproved: true } : {}),
                   });
                 },

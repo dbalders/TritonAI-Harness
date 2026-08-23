@@ -9,6 +9,7 @@ import * as Integrations from "../integrations/IntegrationRegistry.ts";
 import type { IntegrationProviderTool } from "../integrations/IntegrationRegistry.ts";
 import { integrationToolJsonSchema } from "../integrations/IntegrationTool.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
+import * as McpProviderSession from "./McpProviderSession.ts";
 
 class IntegrationToolInvocationError extends Schema.TaggedErrorClass<IntegrationToolInvocationError>()(
   "IntegrationToolInvocationError",
@@ -26,12 +27,24 @@ class IntegrationToolRegistrationError extends Schema.TaggedErrorClass<Integrati
 
 const INTEGRATION_INVOCATION_CAPABILITY = "integrations.invoke" as const;
 
+type InvokeIntegrationTool = (
+  name: string,
+  input: unknown,
+  context: Integrations.IntegrationInvocationContext,
+) => Promise<unknown>;
+
+const invokeActiveIntegrationTool: InvokeIntegrationTool = (name, input, context) =>
+  Integrations.getIntegrationRegistry().invokeTool(name, input, context);
+
 export function integrationToolInvocationContext(
   definition: IntegrationProviderTool,
   signal: AbortSignal,
+  invocation: Pick<McpInvocationContext.McpInvocationScope, "threadId" | "providerSessionId">,
 ): Integrations.IntegrationInvocationContext {
   return {
     signal,
+    threadId: invocation.threadId,
+    providerSessionId: invocation.providerSessionId,
     // Harness gives this bearer only to its managed provider runtime, which enforces
     // the selected task mode before issuing an MCP write call. Mark that trusted
     // adapter boundary explicitly so Registry retains its write gate without adding
@@ -40,14 +53,25 @@ export function integrationToolInvocationContext(
   };
 }
 
+function invocationSessionIsCurrent(invocation: McpInvocationContext.McpInvocationScope): boolean {
+  const current = McpProviderSession.readMcpProviderSession(invocation.threadId);
+  return (
+    current?.providerSessionId === invocation.providerSessionId &&
+    current.providerInstanceId === invocation.providerInstanceId &&
+    current.environmentId === invocation.environmentId
+  );
+}
+
 const invocationCanUseIntegrations = (): boolean => {
   const fiber = Fiber.getCurrent();
   if (!fiber) return false;
+  const invocation = Context.getOrUndefined(
+    fiber.context,
+    McpInvocationContext.McpInvocationContext,
+  );
   return (
-    Context.getOrUndefined(
-      fiber.context,
-      McpInvocationContext.McpInvocationContext,
-    )?.capabilities.has(INTEGRATION_INVOCATION_CAPABILITY) === true
+    invocation?.capabilities.has(INTEGRATION_INVOCATION_CAPABILITY) === true &&
+    invocationSessionIsCurrent(invocation)
   );
 };
 
@@ -78,6 +102,7 @@ function registerTool(
   definition: IntegrationProviderTool,
   isAvailable: (name: string) => boolean,
   reservedToolNames: ReadonlySet<string>,
+  invokeIntegrationTool: InvokeIntegrationTool,
 ) {
   const registration: Parameters<typeof server.addTool>[0] = {
     tool: new McpSchema.Tool({
@@ -103,14 +128,15 @@ function registerTool(
           McpInvocationContext.McpInvocationContext,
         );
         return invocation.capabilities.has(INTEGRATION_INVOCATION_CAPABILITY) &&
+          invocationSessionIsCurrent(invocation) &&
           isAvailable(definition.name)
           ? Effect.tryPromise({
               try: async (signal) =>
                 normalizeIntegrationToolResult(
-                  await Integrations.getIntegrationRegistry().invokeTool(
+                  await invokeIntegrationTool(
                     definition.name,
                     payload,
-                    integrationToolInvocationContext(definition, signal),
+                    integrationToolInvocationContext(definition, signal, invocation),
                   ),
                 ),
               catch: (cause) => new IntegrationToolInvocationError({ cause }),
@@ -162,12 +188,19 @@ export const registrationLayerFor = (
   definitions: ReadonlyArray<IntegrationProviderTool>,
   isAvailable: (name: string) => boolean = activeToolAvailable,
   reservedToolNames: ReadonlySet<string> = new Set(),
+  invokeIntegrationTool: InvokeIntegrationTool = invokeActiveIntegrationTool,
 ) => {
   return Layer.effectDiscard(
     Effect.gen(function* () {
       const server = yield* McpServer.McpServer;
       for (const definition of definitions) {
-        yield* registerTool(server, definition, isAvailable, reservedToolNames);
+        yield* registerTool(
+          server,
+          definition,
+          isAvailable,
+          reservedToolNames,
+          invokeIntegrationTool,
+        );
       }
     }),
   );
@@ -184,7 +217,13 @@ export const registrationLayer = (
       const server = yield* McpServer.McpServer;
       const registry = yield* Effect.promise(loadRegistry);
       for (const definition of registry.toolDefinitions()) {
-        yield* registerTool(server, definition, activeToolAvailable, reservedToolNames);
+        yield* registerTool(
+          server,
+          definition,
+          activeToolAvailable,
+          reservedToolNames,
+          invokeActiveIntegrationTool,
+        );
       }
     }),
   );
