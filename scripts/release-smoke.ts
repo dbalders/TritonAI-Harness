@@ -169,6 +169,17 @@ function assertDoesNotMatch(haystack: string, pattern: RegExp, message: string):
   }
 }
 
+function assertInOrder(haystack: string, needles: ReadonlyArray<string>, message: string): void {
+  let cursor = 0;
+  for (const needle of needles) {
+    const index = haystack.indexOf(needle, cursor);
+    if (index === -1) {
+      throw new Error(message);
+    }
+    cursor = index + needle.length;
+  }
+}
+
 function assertExists(path: string, message: string): void {
   if (!NodeFS.existsSync(path)) {
     throw new Error(message);
@@ -427,10 +438,29 @@ try {
     "pnpm install --frozen-lockfile",
     "Upstream sync must install from the frozen pnpm lockfile.",
   );
+  const upstreamSyncScript = NodeFS.readFileSync(
+    NodePath.resolve(repoRoot, "scripts/tritonai-sync-upstream.mjs"),
+    "utf8",
+  );
+  assertContains(
+    upstreamSyncScript,
+    '["pnpm", "install", "--frozen-lockfile"]',
+    "The merged upstream worktree must install from its own frozen pnpm lockfile.",
+  );
+  assertInOrder(
+    upstreamSyncScript,
+    [
+      'const mergeResult = gitStatus(["merge"',
+      "const installResult = run(",
+      "const checkResult = shell(checks",
+      "const review = runAgentReview(",
+    ],
+    "The merged upstream worktree must install before validation and review.",
+  );
   assertDoesNotMatch(
-    upstreamSyncWorkflow,
+    `${upstreamSyncWorkflow}\n${upstreamSyncScript}`,
     /\bbun\s+(?:add|i|install|link|patch(?:-commit)?|pm|remove|rm|unlink|up|update)\b/,
-    "Upstream sync must not use Bun as an installer.",
+    "Upstream sync workflow and orchestration must not use Bun as an installer.",
   );
   assertMissing(
     NodePath.resolve(repoRoot, "bun.lock"),
