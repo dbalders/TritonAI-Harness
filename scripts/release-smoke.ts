@@ -163,8 +163,8 @@ function assertContains(haystack: string, needle: string, message: string): void
   }
 }
 
-function assertNotContains(haystack: string, needle: string, message: string): void {
-  if (haystack.includes(needle)) {
+function assertDoesNotMatch(haystack: string, pattern: RegExp, message: string): void {
+  if (pattern.test(haystack)) {
     throw new Error(message);
   }
 }
@@ -427,9 +427,9 @@ try {
     "pnpm install --frozen-lockfile",
     "Upstream sync must install from the frozen pnpm lockfile.",
   );
-  assertNotContains(
+  assertDoesNotMatch(
     upstreamSyncWorkflow,
-    "bun install",
+    /\bbun\s+(?:add|i|install|link|patch(?:-commit)?|pm|remove|rm|unlink|up|update)\b/,
     "Upstream sync must not use Bun as an installer.",
   );
   assertMissing(
