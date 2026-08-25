@@ -13,6 +13,19 @@ const DEFAULT_DOWNSTREAM_BRANCH = "main";
 const DEFAULT_SYNC_BRANCH_PREFIX = "sync/upstream-";
 const DEFAULT_CHECKS = "bun run typecheck && bun run test";
 const DEFAULT_SECRET_ALLOWLIST = "CODEX_HOME,TRITONAI_HOME,TRITONAI_API_KEY";
+const VALIDATION_ENV_ALLOWLIST = [
+  "CI",
+  "LANG",
+  "LC_ALL",
+  "LC_CTYPE",
+  "NO_COLOR",
+  "PATH",
+  "SHELL",
+  "TEMP",
+  "TERM",
+  "TMP",
+  "TMPDIR",
+];
 
 function parseArgs(args) {
   const parsed = {
@@ -165,6 +178,21 @@ function makeSanitizedEnv({ sourceEnv = process.env, allowSecretNames = [], extr
   for (const [key, value] of Object.entries(extra)) {
     if (value !== undefined) {
       next[key] = value;
+    }
+  }
+  return next;
+}
+
+function makeValidationEnv({ home, sourceEnv = process.env }) {
+  const next = {
+    COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
+    HOME: home,
+    NPM_CONFIG_USERCONFIG: NodePath.join(home, ".npmrc"),
+  };
+  for (const name of VALIDATION_ENV_ALLOWLIST) {
+    const value = sourceEnv[name];
+    if (value !== undefined) {
+      next[name] = value;
     }
   }
   return next;
@@ -401,7 +429,10 @@ function main() {
       return args.allowNeedsReview ? 0 : 2;
     }
 
-    const checkEnv = makeSanitizedEnv({ allowSecretNames: [] });
+    const validationHome = NodePath.join(worktreeRoot, "validation-home");
+    NodeFS.mkdirSync(validationHome);
+    NodeFS.writeFileSync(NodePath.join(validationHome, ".npmrc"), "");
+    const checkEnv = makeValidationEnv({ home: validationHome });
     const installResult = run("corepack", ["pnpm", "install", "--frozen-lockfile"], {
       cwd: worktree,
       env: checkEnv,
