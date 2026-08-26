@@ -1,5 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeCrypto from "node:crypto";
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
 
 import type { ChatAttachment } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -186,34 +188,34 @@ export type AttachmentClaimPlan =
     }
   | { readonly ok: false; readonly reason: string };
 
-export function planAttachmentClaim(input: {
+export const planAttachmentClaim = Effect.fn("planAttachmentClaim")(function* (input: {
   readonly attachmentsDir: string;
   readonly threadId: string;
   readonly attachmentId: string;
-}): AttachmentClaimPlan {
+}) {
   const uuid = parseAttachmentUuid(input.attachmentId);
   const requestedSegment = parseThreadSegmentFromAttachmentId(input.attachmentId);
   if (!uuid || !requestedSegment) {
-    return { ok: false, reason: "invalid attachment id" };
+    return { ok: false, reason: "invalid attachment id" } as const;
   }
 
   if (!toSafeThreadAttachmentSegment(input.threadId)) {
-    return { ok: false, reason: "invalid thread id" };
+    return { ok: false, reason: "invalid thread id" } as const;
   }
   if (requestedSegment !== PENDING_ATTACHMENT_THREAD_SEGMENT) {
-    return { ok: false, reason: "attachment must be a pending upload" };
+    return { ok: false, reason: "attachment must be a pending upload" } as const;
   }
 
-  const currentPath = resolveAttachmentPathById({
+  const currentPath = yield* resolveAttachmentPathById({
     attachmentsDir: input.attachmentsDir,
     attachmentId: input.attachmentId,
   });
   if (!currentPath) {
-    return { ok: false, reason: "attachment not found (removed or expired)" };
+    return { ok: false, reason: "attachment not found (removed or expired)" } as const;
   }
   const finalId = createAttachmentId(input.threadId);
   if (!finalId) {
-    return { ok: false, reason: "failed to create attachment id" };
+    return { ok: false, reason: "failed to create attachment id" } as const;
   }
 
   const expectedFinalPath = resolveAttachmentRelativePath({
@@ -221,15 +223,15 @@ export function planAttachmentClaim(input: {
     relativePath: `${finalId}${NodePath.extname(currentPath)}`,
   });
   if (!expectedFinalPath) {
-    return { ok: false, reason: "failed to resolve attachment path" };
+    return { ok: false, reason: "failed to resolve attachment path" } as const;
   }
   return {
     ok: true,
     finalId,
     currentPath,
     finalPath: expectedFinalPath,
-  };
-}
+  } as const;
+});
 
 export function sweepStalePendingAttachments(input: {
   readonly attachmentsDir: string;

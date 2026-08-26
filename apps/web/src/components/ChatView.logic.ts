@@ -22,7 +22,9 @@ import {
   type TerminalContextDraft,
 } from "../lib/terminalContext";
 import type { DraftThreadEnvMode } from "../composerDraftStore";
+import type { ComposerSubmissionIntent } from "../composer-logic";
 import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
+import type { TimelineEntry } from "../session-logic";
 
 export const LAST_INVOKED_SCRIPT_BY_PROJECT_KEY = "t3code:last-invoked-script-by-project";
 export const MAX_HIDDEN_MOUNTED_TERMINAL_THREADS = 10;
@@ -50,6 +52,72 @@ export function shouldCleanupAttachmentUploadsAfterTurnStart(
       typeof reason.error._tag === "string" &&
       DEFINITIVE_TURN_START_FAILURE_TAGS.has(reason.error._tag),
   );
+}
+
+export function shouldDockDraftHeroForSubmission(input: {
+  isDraftHeroState: boolean;
+  activeThreadKey: string | null;
+  submissionIntent: ComposerSubmissionIntent;
+}): boolean {
+  return (
+    input.submissionIntent === "foreground" &&
+    input.isDraftHeroState &&
+    input.activeThreadKey !== null
+  );
+}
+
+export function shouldReleaseTimelineAnchorForToolActivity(input: {
+  anchorMessageId: MessageId | null;
+  liveFollowEnabled: boolean;
+  runningTurnId: TurnId | null;
+  timelineEntries: ReadonlyArray<TimelineEntry>;
+}): boolean {
+  if (input.anchorMessageId === null || !input.liveFollowEnabled || input.runningTurnId === null) {
+    return false;
+  }
+
+  return input.timelineEntries.some((timelineEntry) => {
+    if (timelineEntry.kind !== "work" || timelineEntry.entry.turnId !== input.runningTurnId) {
+      return false;
+    }
+
+    const entry = timelineEntry.entry;
+    return (
+      entry.tone === "tool" ||
+      entry.itemType !== undefined ||
+      entry.requestKind !== undefined ||
+      (entry.command?.trim().length ?? 0) > 0
+    );
+  });
+}
+
+export function resolveDraftHeroState(input: {
+  isLocalDraftThread: boolean;
+  hasTimelineEntries: boolean;
+  isWorking: boolean;
+  draftHeroDockRequested: boolean;
+  backgroundSubmissionPending: boolean;
+}): boolean {
+  if (input.backgroundSubmissionPending) {
+    return true;
+  }
+  return (
+    input.isLocalDraftThread &&
+    !input.hasTimelineEntries &&
+    !input.isWorking &&
+    !input.draftHeroDockRequested
+  );
+}
+
+export function resolveDraftPromotionNavigationTarget(input: {
+  serverThreadRef: ScopedThreadRef | null;
+  serverThreadStarted: boolean;
+  backgroundSubmissionPending: boolean;
+}): ScopedThreadRef | null {
+  if (input.backgroundSubmissionPending) {
+    return null;
+  }
+  return input.serverThreadStarted ? input.serverThreadRef : null;
 }
 
 export function scheduleEnvironmentReconnectWarning(showWarning: () => void): () => void {
@@ -640,7 +708,7 @@ export function hasServerAcknowledgedLocalDispatch(input: {
     !input.hasPendingApproval &&
     !input.hasPendingUserInput &&
     !input.threadError &&
-    (input.phase === "connecting" || input.phase === "ready")
+    input.phase === "ready"
   ) {
     return false;
   }

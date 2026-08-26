@@ -16,6 +16,7 @@ import {
   type AuthEnvironmentScope,
   AuthSessionId,
   type ChatAttachment,
+  ClientSurface,
   CommandId,
   type DiscoveredLocalServerList,
   EventId,
@@ -89,6 +90,7 @@ import {
   observeRpcStreamEffect as instrumentRpcStreamEffect,
 } from "./observability/RpcInstrumentation.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
+import * as ProviderService from "./provider/Services/ProviderService.ts";
 import * as CodexManagement from "./provider/CodexManagement.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";

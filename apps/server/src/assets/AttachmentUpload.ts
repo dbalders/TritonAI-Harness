@@ -201,7 +201,7 @@ export const deletePendingAttachment = Effect.fn("AttachmentUpload.deletePending
   }
 
   const config = yield* ServerConfig.ServerConfig;
-  const attachmentPath = resolveAttachmentPathById({
+  const attachmentPath = yield* resolveAttachmentPathById({
     attachmentsDir: config.attachmentsDir,
     attachmentId,
   });

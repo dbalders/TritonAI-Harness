@@ -12,9 +12,11 @@ import { connectCommand } from "./cli/connect.ts";
 import { pairCommand } from "./cli/pair.ts";
 import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
 import { sharedServerCommandFlags } from "./cli/config.ts";
+import { isEntrypoint } from "./entrypoint.ts";
 import { managedCodexUpdateCommand } from "./cli/managedCodexUpdate.ts";
 import { projectCommand } from "./cli/project.ts";
 import { runServerCommand, serveCommand, startCommand } from "./cli/server.ts";
+import { triageCommand } from "./cli/triage.ts";
 
 const CliRuntimeLayer = Layer.mergeAll(NodeServices.layer, NetService.layer);
 
@@ -55,6 +57,7 @@ export const makeCli = ({ cloudEnabled = hasCloudPublicConfig } = {}) =>
       authCommand,
       projectCommand,
       managedCodexUpdateCommand,
+      triageCommand,
       cloudEnabled ? connectCommand : connectUnavailableCommand,
     ]),
   );

@@ -71,6 +71,7 @@ function makeFakeBrowserWindow() {
         details: { readonly requestingUrl: string; readonly mediaTypes?: readonly string[] },
       ) => void)
     | null = null;
+  let zoomLevel = 0;
   const webContents = {
     copyImageAt: vi.fn(),
     getURL: vi.fn(() => "t3code-dev://app/"),
@@ -92,6 +93,7 @@ function makeFakeBrowserWindow() {
         permissionRequestHandler = handler;
       }),
     },
+    setBackgroundThrottling: vi.fn(),
     setWindowOpenHandler: vi.fn(),
   };
 

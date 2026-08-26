@@ -6,7 +6,12 @@ import {
   canCreateProjectInEnvironment,
   findExistingAddProject,
   getAddProjectInitialQuery,
+  getCloneDestinationBrowsePath,
+  getCloneDestinationPath,
+  getCloneDirectoryName,
+  getDefaultCloneUrl,
   listAddProjectRemoteSources,
+  normalizePastedCloneUrl,
   resolveAddProjectPath,
   type AddProjectRemoteSource,
 } from "@t3tools/client-runtime/operations/projects";

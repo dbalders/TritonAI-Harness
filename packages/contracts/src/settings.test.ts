@@ -235,10 +235,10 @@ describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
 });
 
 describe("provider enabled defaults", () => {
-  it("enables only the stable bindings by default", () => {
+  it("enables only the managed TritonAI binding by default", () => {
     const decoded = decodeServerSettings({});
     expect(decoded.providers.codex.enabled).toBe(true);
-    expect(decoded.providers.claudeAgent.enabled).toBe(true);
+    expect(decoded.providers.claudeAgent.enabled).toBe(false);
     expect(decoded.providers.cursor.enabled).toBe(false);
     expect(decoded.providers.grok.enabled).toBe(false);
     expect(decoded.providers.opencode.enabled).toBe(false);

@@ -12,7 +12,7 @@ import {
 } from "@react-navigation/native-stack";
 import { TRITONAI_CONNECT_NAME } from "@t3tools/contracts";
 import { type ComponentProps, useEffect, useRef } from "react";
-import { DynamicColorIOS, Platform, Pressable, ScrollView, StyleSheet } from "react-native";
+import { DynamicColorIOS, Platform, Pressable, ScrollView, StyleSheet, View } from "react-native";
 import { useResolveClassNames } from "uniwind";
 
 import { AppText as Text } from "./components/AppText";
@@ -78,6 +78,13 @@ import { useThreadOutboxDrain } from "./state/use-thread-outbox-drain";
 
 const HEADER_SCROLL_EDGE_EFFECTS = nativeHeaderScrollEdgeEffects(Platform.OS, Platform.Version);
 
+// Matches --color-sheet in global.css (light/dark). DynamicColorIOS lets the header
+// background stay static config while still adapting to appearance changes.
+const SHEET_BACKGROUND_COLOR =
+  Platform.OS === "ios"
+    ? DynamicColorIOS({ light: "rgba(242, 242, 247, 0.98)", dark: "rgba(14, 14, 14, 0.98)" })
+    : undefined;
+
 type AppScreenOptions = NativeStackNavigationOptions & {
   readonly unstable_navigationItemStyle?: "editor";
 };
@@ -94,7 +101,11 @@ const GLASS_HEADER_OPTIONS: AppScreenOptions = {
   headerLargeTitle: false,
   headerShadowVisible: false,
   headerShown: true,
-  headerStyle: NATIVE_LIQUID_GLASS_SUPPORTED ? { backgroundColor: "transparent" } : undefined,
+  headerStyle: NATIVE_LIQUID_GLASS_SUPPORTED
+    ? { backgroundColor: "transparent" }
+    : SHEET_BACKGROUND_COLOR !== undefined
+      ? { backgroundColor: SHEET_BACKGROUND_COLOR as unknown as string }
+      : undefined,
   headerTitleStyle: { fontSize: 18, fontWeight: "800" },
   headerTransparent: NATIVE_LIQUID_GLASS_SUPPORTED,
   scrollEdgeEffects: NATIVE_LIQUID_GLASS_SUPPORTED ? HEADER_SCROLL_EDGE_EFFECTS : undefined,
@@ -109,6 +120,12 @@ const SOLID_HEADER_OPTIONS: AppScreenOptions = {
   headerLargeTitle: false,
   headerShadowVisible: false,
   headerShown: true,
+  headerStyle:
+    SHEET_BACKGROUND_COLOR !== undefined
+      ? // native-stack types this as `string`, but the native side accepts any
+        // ColorValue including DynamicColorIOS.
+        { backgroundColor: SHEET_BACKGROUND_COLOR as unknown as string }
+      : undefined,
   headerTitleStyle: { fontSize: 18, fontWeight: "800" },
   headerTransparent: false,
   unstable_navigationItemStyle: Platform.OS === "ios" ? "editor" : undefined,

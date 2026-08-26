@@ -92,8 +92,8 @@ function EmptyMobileClients() {
         <SmartphoneIcon />
       </EmptyMedia>
       <EmptyHeader>
-        <EmptyTitle>No mobile clients</EmptyTitle>
-        <EmptyDescription>
+        <EmptyTitle className="text-[1.0625rem] leading-6">No mobile clients</EmptyTitle>
+        <EmptyDescription className="text-[0.8125rem] leading-[1.125rem]">
           Sign in to TritonAI Harness on your iPhone to register it for push notifications and Live
           Activities.
         </EmptyDescription>
@@ -110,18 +110,12 @@ export function MobileClientsUserProfilePage() {
   const hasErrorWithoutData = devicesState.error !== null && devicesState.data === null;
 
   return (
-    <div className="flex min-h-[30rem] w-full flex-col bg-background text-foreground">
-      <header className="flex flex-col gap-4 border-b px-6 py-5 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h2 className="text-base font-semibold tracking-[-0.01em]">Mobile clients</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Devices registered to receive TritonAI Connect activity from your environments.
-          </p>
-        </div>
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={devicesState.isPending}
+    <ClerkUserProfilePage
+      title="Mobile clients"
+      description="Devices registered to receive TritonAI Connect activity from your environments."
+      action={
+        <ClerkUserProfileRefreshButton
+          isPending={devicesState.isPending}
           onClick={devicesState.refresh}
         />
       }

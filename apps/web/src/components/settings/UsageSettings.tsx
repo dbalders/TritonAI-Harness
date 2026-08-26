@@ -15,6 +15,7 @@ import { serverEnvironment } from "../../state/server";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Skeleton } from "../ui/skeleton";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { SettingsPageContainer, SettingsSection } from "./settingsLayout";
 import {
   budgetUtilizationTone,
@@ -45,16 +46,22 @@ function UsageMetric({
       <dt className="text-[10px] font-semibold uppercase tracking-[0.1em] text-muted-foreground/70">
         {label}
       </dt>
-      <dd
-        className={cn(
-          "mt-1.5 truncate font-mono text-base font-semibold tabular-nums text-foreground",
-          tone === "warning" && "text-warning-foreground",
-          tone === "danger" && "text-destructive",
-        )}
-        title={value}
-      >
-        {value}
-      </dd>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <dd
+              className={cn(
+                "mt-1.5 truncate font-mono text-base font-semibold tabular-nums text-foreground",
+                tone === "warning" && "text-warning-foreground",
+                tone === "danger" && "text-destructive",
+              )}
+            >
+              {value}
+            </dd>
+          }
+        />
+        <TooltipPopup side="top">{value}</TooltipPopup>
+      </Tooltip>
       {detail ? <dd className="mt-1 text-[11px] text-muted-foreground/70">{detail}</dd> : null}
     </div>
   );

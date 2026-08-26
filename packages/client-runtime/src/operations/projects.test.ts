@@ -12,7 +12,12 @@ import {
   canCreateProjectInEnvironment,
   findExistingAddProject,
   getAddProjectInitialQuery,
+  getCloneDestinationBrowsePath,
+  getCloneDestinationPath,
+  getCloneDirectoryName,
+  getDefaultCloneUrl,
   listAddProjectRemoteSources,
+  normalizePastedCloneUrl,
   resolveAddProjectPath,
 } from "./projects.ts";
 import type { EnvironmentProject } from "../state/models.ts";

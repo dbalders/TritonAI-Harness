@@ -16,6 +16,8 @@ const POST_032_MIGRATION_IDENTITIES: Array<readonly [number, string]> = [
   [39, "ProjectionProjectsDefaultThreadEnvMode"],
   [40, "ProjectionProjectFaviconPath"],
   [41, "ProjectionThreadTitleRegeneration"],
+  [42, "AuthSessionClientConnection"],
+  [43, "ProjectionThreadLinkedPullRequest"],
 ];
 
 it("keeps the migration registry unique and preserves shipped downstream identities", () => {

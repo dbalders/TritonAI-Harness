@@ -148,7 +148,10 @@ const PtyAdapterLive = Layer.unwrap(
   }),
 );
 
-const ServerSettingsLayerLive = ServerSettings.layer.pipe(Layer.provide(ServerSecretStore.layer));
+const ServerSettingsLayerLive = ServerSettings.layer.pipe(
+  Layer.provide(ServerSecretStore.layer),
+  Layer.provideMerge(SqlitePersistenceLayerLive),
+);
 const SecureSkillsPollingLayerLive = Layer.effectDiscard(SecureSkills.pollingLayer).pipe(
   Layer.provide(ServerSettingsLayerLive),
 );
@@ -457,6 +460,13 @@ const commandReadinessLayer = HttpRouter.middleware(
   { global: true },
 );
 
+const PullRequestServiceLive = PullRequestService.layer.pipe(
+  Layer.provide(PullRequestProviderRegistry.layer),
+  Layer.provide(SourceControlProviderRegistryLayerLive),
+  Layer.provide(SourceControlRateLimit.layer),
+  Layer.provide(VcsProcess.layer),
+);
+
 export const makeRoutesLayerFor = (
   loadIntegrationRegistry?: Parameters<typeof McpHttpServer.makeLayer>[0],
 ) =>
@@ -466,16 +476,19 @@ export const makeRoutesLayerFor = (
         Layer.provide(authHttpApiLayer),
         Layer.provide(connectHttpApiLayer),
         Layer.provide(orchestrationHttpApiLayer),
+        Layer.provide(pullRequestHttpApiLayer),
         Layer.provide(serverEnvironmentHttpApiLayer),
         Layer.provide(environmentAuthenticatedAuthLayer),
       ),
       otlpTracesProxyRouteLayer,
       assetRouteLayer,
+      attachmentUploadRouteLayer,
       staticAndDevRouteLayer,
       websocketRpcRouteLayer,
     ),
     McpHttpServer.makeLayer(loadIntegrationRegistry).pipe(Layer.provide(McpSessionRegistry.layer)),
   ).pipe(
+    Layer.provide(PullRequestServiceLive),
     Layer.provide(PreviewAutomationBroker.layer),
     Layer.provide(ServerSelfUpdate.layer),
     Layer.provide(commandReadinessLayer),

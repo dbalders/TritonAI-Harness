@@ -30,7 +30,7 @@ import {
   scopeThreadRef,
   scopedThreadKey,
 } from "@t3tools/client-runtime/environment";
-import type { ScopedThreadRef, ThreadId } from "@t3tools/contracts";
+import type { ScopedThreadRef } from "@t3tools/contracts";
 import type { TimestampFormat } from "@t3tools/contracts/settings";
 import {
   AlarmClockIcon,
@@ -147,6 +147,7 @@ import {
 } from "./Sidebar.logic";
 import { resolveLocalCheckoutBranchMismatch } from "./BranchToolbar.logic";
 import {
+  nextThreadChangeRequestSnapshot,
   prStatusIndicator,
   resolveDisplayedThreadPr,
   resolveDisplayedThreadPrProvider,
@@ -176,15 +177,7 @@ import { useThreadRunningTerminalIds } from "../state/terminalSessions";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
-import {
-  Menu,
-  MenuItem,
-  MenuPopup,
-  MenuRadioGroup,
-  MenuRadioItem,
-  MenuSeparator,
-  MenuTrigger,
-} from "./ui/menu";
+import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "./ui/menu";
 import { SidebarContent, SidebarGroup, SidebarMenuButton, useSidebar } from "./ui/sidebar";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
@@ -762,6 +755,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   isActive: boolean;
   openPullRequestsInRightPanel: boolean;
   jumpLabel: string | null;
+  currentEnvironmentId: string | null;
   environmentLabel: string | null;
   projectCwd: string | null;
   projectFaviconPath: string | null;
@@ -978,7 +972,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
 
   const modelInstanceId = thread.session?.providerInstanceId ?? thread.modelSelection.instanceId;
   const providerEntry = props.providerEntryByInstanceId.get(modelInstanceId) ?? null;
-  const driverKind = providerEntry?.driverKind ?? null;
   const showInstanceBadge =
     providerEntry !== null &&
     shouldShowInstanceBadge(providerEntry, props.providerEntryByInstanceId.values());
@@ -1308,7 +1301,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                     <button
                       type="button"
                       aria-label="Dismiss Woke notification"
-                      title="Dismiss Woke notification"
                       onClick={handleAcknowledgeWokeClick}
                       className={cn(
                         "inline-flex cursor-pointer items-center gap-1 rounded-sm font-medium outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring",
@@ -1893,24 +1885,6 @@ export default function Sidebar() {
         stackedThreadToast({
           type: "error",
           title: "Failed to copy branch",
-          description: error instanceof Error ? error.message : "An error occurred.",
-        }),
-      );
-    },
-  });
-  const { copyToClipboard: copyThreadIdToClipboard } = useCopyToClipboard<{ threadId: ThreadId }>({
-    onCopy: ({ threadId }) => {
-      toastManager.add({
-        type: "success",
-        title: "Thread ID copied",
-        description: threadId,
-      });
-    },
-    onError: (error) => {
-      toastManager.add(
-        stackedThreadToast({
-          type: "error",
-          title: "Failed to copy thread ID",
           description: error instanceof Error ? error.message : "An error occurred.",
         }),
       );
@@ -3315,9 +3289,6 @@ export default function Sidebar() {
               copyBranchToClipboard(thread.branch, { branch: thread.branch });
             }
             return;
-          case "copy-thread-id":
-            copyThreadIdToClipboard(thread.id, { threadId: thread.id });
-            return;
           case "archive": {
             if (confirmThreadArchive) {
               const confirmed = await settlePromise(() =>
@@ -3526,160 +3497,194 @@ export default function Sidebar() {
         fixedHeader={
           // Lifted above the stage backdrop, whose fade bleeds below the
           // header and would otherwise paint across the search row's outline.
-          <SidebarGroup className="relative z-[1] gap-3 border-b border-sidebar-border/60 p-[var(--sidebar-content-inset)] pb-4">
-            <div className="flex h-9 min-w-0 items-center gap-2 rounded-md border border-sidebar-border bg-sidebar-control-surface px-2.5 py-1.5 text-sm font-medium text-sidebar-muted-foreground focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 focus-within:ring-offset-sidebar hover:text-sidebar-foreground">
-              <SearchIcon className="size-4 shrink-0 text-sidebar-muted-foreground/80" />
-              <Input
-                ref={threadSearchInputRef}
-                nativeInput
-                unstyled
-                type="search"
-                value={threadSearchQuery}
-                onChange={(event) => {
-                  setThreadSearchQuery(event.currentTarget.value);
-                  setActiveSearchResultIndex(0);
-                }}
-                onKeyDown={handleThreadSearchKeyDown}
-                placeholder="Search threads"
-                aria-label="Search threads"
-                role="combobox"
-                aria-autocomplete="list"
-                aria-expanded={isSearchingThreads && threadSearchResults.length > 0}
-                aria-controls={
-                  isSearchingThreads && threadSearchResults.length > 0
-                    ? "sidebar-thread-search-results"
-                    : undefined
-                }
-                aria-activedescendant={
-                  isSearchingThreads && threadSearchResults[activeSearchResultIndex]
-                    ? `sidebar-thread-search-result-${activeSearchResultIndex}`
-                    : undefined
-                }
-                className="min-w-0 flex-1 [&_[data-slot=input]]:h-auto [&_[data-slot=input]]:p-0 [&_[data-slot=input]]:leading-normal [&_[data-slot=input]]:text-sm [&_[data-slot=input]]:font-medium [&_[data-slot=input]]:text-sidebar-foreground [&_[data-slot=input]]:placeholder:text-sidebar-muted-foreground"
-              />
-              {isSearchingThreads ? (
-                <Button
-                  type="button"
-                  size="icon-xs"
-                  variant="ghost"
-                  className="size-5 shrink-0 rounded-sm text-sidebar-muted-foreground hover:bg-sidebar-control-surface hover:text-sidebar-foreground"
-                  aria-label="Clear thread search"
-                  onClick={() => {
-                    clearThreadSearch();
-                    threadSearchInputRef.current?.focus();
+          <SidebarGroup className="relative z-[1] gap-1 p-[var(--sidebar-content-inset)]">
+            <div className="flex items-center gap-1">
+              <div className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground">
+                <SearchIcon className="size-4 shrink-0 text-sidebar-muted-foreground/80" />
+                <Input
+                  ref={threadSearchInputRef}
+                  nativeInput
+                  unstyled
+                  type="search"
+                  value={threadSearchQuery}
+                  onChange={(event) => {
+                    setThreadSearchQuery(event.currentTarget.value);
+                    setActiveSearchResultIndex(0);
                   }}
-                >
-                  <XIcon className="size-3" />
-                </Button>
-              ) : null}
+                  onKeyDown={handleThreadSearchKeyDown}
+                  placeholder="Search"
+                  aria-label="Search threads"
+                  role="combobox"
+                  aria-autocomplete="list"
+                  aria-expanded={isSearchingThreads && threadSearchResults.length > 0}
+                  aria-controls={
+                    isSearchingThreads && threadSearchResults.length > 0
+                      ? "sidebar-thread-search-results"
+                      : undefined
+                  }
+                  aria-activedescendant={
+                    isSearchingThreads && threadSearchResults[activeSearchResultIndex]
+                      ? `sidebar-thread-search-result-${activeSearchResultIndex}`
+                      : undefined
+                  }
+                  className="min-w-0 flex-1 [&_[data-slot=input]]:h-auto [&_[data-slot=input]]:p-0 [&_[data-slot=input]]:leading-normal [&_[data-slot=input]]:text-sm [&_[data-slot=input]]:font-medium [&_[data-slot=input]]:text-sidebar-foreground [&_[data-slot=input]]:placeholder:text-sidebar-muted-foreground"
+                />
+                {isSearchingThreads ? (
+                  <Button
+                    type="button"
+                    size="icon-micro"
+                    variant="ghost"
+                    className="shrink-0 text-sidebar-muted-foreground hover:bg-sidebar-control-surface hover:text-sidebar-foreground"
+                    aria-label="Clear thread search"
+                    onClick={() => {
+                      clearThreadSearch();
+                      threadSearchInputRef.current?.focus();
+                    }}
+                  >
+                    <XIcon className="size-3" />
+                  </Button>
+                ) : null}
+              </div>
+              <div className="shrink-0">
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <SidebarMenuButton
+                        size="icon"
+                        type="button"
+                        className="relative focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
+                        onClick={handleNewThreadClick}
+                        disabled={projects.length === 0}
+                        aria-label="New thread"
+                      />
+                    }
+                  >
+                    <SquarePenIcon />
+                    <span
+                      className="pointer-events-none absolute left-1/2 top-1/2 size-[max(100%,3rem)] -translate-1/2 pointer-fine:hidden"
+                      aria-hidden="true"
+                    />
+                  </TooltipTrigger>
+                  <TooltipPopup side="right">
+                    {projectGroups.length > 1 ? (
+                      <span className="flex flex-col gap-0.5">
+                        <span>
+                          {newThreadShortcutLabel
+                            ? `New thread (${newThreadShortcutLabel})`
+                            : "New thread"}
+                        </span>
+                        <span className="text-muted-foreground">
+                          New thread in current project: Shift+click
+                          {newThreadInProjectShortcutLabel
+                            ? ` (${newThreadInProjectShortcutLabel})`
+                            : ""}
+                        </span>
+                      </span>
+                    ) : newThreadShortcutLabel ? (
+                      `New thread (${newThreadShortcutLabel})`
+                    ) : (
+                      "New thread"
+                    )}
+                  </TooltipPopup>
+                </Tooltip>
+              </div>
             </div>
             {projectGroups.length > 0 ? (
-              <div className="grid gap-1.5">
-                <div
-                  id="sidebar-project-filter-label"
-                  className="px-1 text-[10px] font-medium tracking-[0.08em] text-sidebar-muted-foreground uppercase"
-                >
-                  Project filter
-                </div>
-                <div className="flex items-center gap-2">
-                  <Menu open={projectScopeMenuOpen} onOpenChange={setProjectScopeMenuOpen}>
-                    <MenuTrigger
-                      render={
-                        <SidebarMenuButton
-                          aria-label={`Project filter: ${scopedProjectGroup?.displayName ?? "All projects"}`}
-                          className="w-0 min-w-0 flex-1 border border-sidebar-border bg-sidebar-control-surface ps-[calc(var(--sidebar-row-content-inset)-1px)] focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
-                        />
+              <div className="flex items-center gap-1">
+                <Menu open={projectScopeMenuOpen} onOpenChange={setProjectScopeMenuOpen}>
+                  <MenuTrigger
+                    render={
+                      <SidebarMenuButton
+                        aria-label="Filter threads by project"
+                        className="min-w-0 flex-1 ps-[calc(var(--sidebar-row-content-inset)-1px)] focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
+                      />
+                    }
+                  >
+                    {scopedProjectGroup ? (
+                      <ProjectFavicon
+                        environmentId={scopedProjectGroup.environmentId}
+                        cwd={scopedProjectGroup.workspaceRoot}
+                        faviconPath={scopedProjectGroup.faviconPath}
+                        className="size-4 shrink-0"
+                      />
+                    ) : (
+                      <FolderIcon className="size-4 shrink-0" />
+                    )}
+                    <span className="min-w-0 flex-1 truncate">
+                      {scopedProjectGroup?.displayName ?? "All projects"}
+                    </span>
+                    <ChevronDownIcon className="-mr-px size-4 shrink-0" />
+                  </MenuTrigger>
+                  <MenuPopup align="start" className="w-(--anchor-width)">
+                    <MenuRadioGroup
+                      value={projectScopeKey ?? "all"}
+                      onValueChange={(value) =>
+                        setProjectScopeKey(value === "all" ? null : (value as string))
                       }
                     >
-                      {scopedProjectGroup ? (
-                        <ProjectFavicon
-                          environmentId={scopedProjectGroup.environmentId}
-                          cwd={scopedProjectGroup.workspaceRoot}
-                          faviconPath={scopedProjectGroup.faviconPath}
-                          className="size-4 shrink-0"
-                        />
-                      ) : (
+                      <MenuRadioItem
+                        value="all"
+                        closeOnClick
+                        className="h-8 min-h-8 py-0 text-sm font-medium [&>span:last-child]:flex [&>span:last-child]:min-w-0 [&>span:last-child]:items-center [&>span:last-child]:gap-2"
+                      >
                         <FolderIcon className="size-4 shrink-0" />
-                      )}
-                      <span className="min-w-0 flex-1 truncate">
-                        {scopedProjectGroup?.displayName ?? "All projects"}
-                      </span>
-                      <ChevronDownIcon className="-mr-px size-4 shrink-0" />
-                    </MenuTrigger>
-                    <MenuPopup align="start" className="w-(--anchor-width)">
-                      <MenuRadioGroup
-                        value={projectScopeKey ?? "all"}
-                        onValueChange={(value) =>
-                          setProjectScopeKey(value === "all" ? null : (value as string))
-                        }
-                      >
-                        <MenuRadioItem
-                          value="all"
-                          closeOnClick
-                          className="h-8 min-h-8 px-1 py-0 text-sm font-medium [&>span:last-child]:flex [&>span:last-child]:min-w-0 [&>span:last-child]:items-center [&>span:last-child]:gap-2"
-                        >
-                          <FolderIcon className="size-4 shrink-0" />
-                          <span className="min-w-0 truncate text-sm">All projects</span>
-                        </MenuRadioItem>
-                        {projectGroups.map((project) => {
-                          const scopeKey = project.projectKey;
-                          return (
-                            <MenuRadioItem
-                              key={scopeKey}
-                              value={scopeKey}
-                              closeOnClick
-                              className="h-8 min-h-8 px-1 py-0 text-sm font-medium [&>span:last-child]:flex [&>span:last-child]:min-w-0 [&>span:last-child]:items-center [&>span:last-child]:gap-2"
+                        <span className="min-w-0 truncate text-sm">All projects</span>
+                      </MenuRadioItem>
+                      {projectGroups.map((project) => {
+                        const scopeKey = project.projectKey;
+                        return (
+                          <MenuRadioItem
+                            key={scopeKey}
+                            value={scopeKey}
+                            closeOnClick
+                            className="h-8 min-h-8 py-0 text-sm font-medium [&>span:last-child]:flex [&>span:last-child]:min-w-0 [&>span:last-child]:items-center [&>span:last-child]:gap-2"
+                          >
+                            <ProjectFavicon
+                              environmentId={project.environmentId}
+                              cwd={project.workspaceRoot}
+                              faviconPath={project.faviconPath}
+                              className="size-4 shrink-0"
+                            />
+                            <span className="min-w-0 truncate text-sm">{project.displayName}</span>
+                            <Button
+                              size="icon-xs"
+                              variant="ghost-muted"
+                              aria-label={`Project settings for ${project.displayName}`}
+                              title={`Project settings for ${project.displayName}`}
+                              className="ml-auto size-6 [--control-icon-color:currentColor] text-icon-muted focus-visible:bg-accent focus-visible:text-foreground"
+                              onPointerDown={(event) => event.stopPropagation()}
+                              onClick={(event) => {
+                                void handleProjectSettings(event, project);
+                              }}
                             >
-                              <ProjectFavicon
-                                environmentId={project.environmentId}
-                                cwd={project.workspaceRoot}
-                                faviconPath={project.faviconPath}
-                                className="size-4 shrink-0"
-                              />
-                              <span className="min-w-0 truncate text-sm">
-                                {project.displayName}
-                              </span>
-                            </MenuRadioItem>
-                          );
-                        })}
-                      </MenuRadioGroup>
-                      <MenuSeparator />
-                      {scopedProjectGroup ? (
-                        <MenuItem
-                          className="h-8 min-h-8 px-2 py-0 text-sm font-medium"
-                          onClick={(event) => handleProjectSettings(event, scopedProjectGroup)}
-                        >
-                          <SettingsIcon className="size-4" />
-                          Project settings
-                        </MenuItem>
-                      ) : null}
-                      <MenuItem
-                        className="h-8 min-h-8 px-2 py-0 text-sm font-medium"
+                              <SettingsIcon className="size-3.5" />
+                            </Button>
+                          </MenuRadioItem>
+                        );
+                      })}
+                    </MenuRadioGroup>
+                  </MenuPopup>
+                </Menu>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <SidebarMenuButton
+                        size="icon"
+                        className="relative shrink-0 focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
                         onClick={openAddProjectCommandPalette}
-                      >
-                        <FolderPlusIcon className="size-4" />
-                        New project
-                      </MenuItem>
-                    </MenuPopup>
-                  </Menu>
-                  <TooltipProvider delay={150} closeDelay={0}>
-                    <Tooltip>
-                      <TooltipTrigger
-                        render={
-                          <SidebarMenuButton
-                            className="size-8 shrink-0 justify-center px-0 text-sidebar-muted-foreground focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
-                            onClick={openAddProjectCommandPalette}
-                            type="button"
-                            aria-label="New project"
-                          />
-                        }
-                      >
-                        <FolderPlusIcon className="size-4" />
-                      </TooltipTrigger>
-                      <TooltipPopup side="bottom">New project</TooltipPopup>
-                    </Tooltip>
-                  </TooltipProvider>
-                </div>
+                        type="button"
+                        aria-label="New project"
+                      />
+                    }
+                  >
+                    <FolderPlusIcon />
+                    <span
+                      className="pointer-events-none absolute left-1/2 top-1/2 size-[max(100%,3rem)] -translate-1/2 pointer-fine:hidden"
+                      aria-hidden="true"
+                    />
+                  </TooltipTrigger>
+                  <TooltipPopup side="right">New project</TooltipPopup>
+                </Tooltip>
               </div>
             ) : null}
           </SidebarGroup>
@@ -3698,7 +3703,7 @@ export default function Sidebar() {
                   Search results
                 </span>
                 <SidebarNewThreadButton
-                  shortcutLabel={newThreadShortcutLabel}
+                  shortcutLabel={newThreadShortcutLabel ?? null}
                   onClick={handleNewThreadClick}
                 />
               </div>
@@ -3822,7 +3827,11 @@ export default function Sidebar() {
                         // rows resolve to null on their own.
                         wokeAt={threadWokeAt(thread, { now: snoozeNow })}
                         isActive={routeThreadKey === threadKey}
-                        jumpLabel={showJumpHints ? (jumpLabelByKey.get(threadKey) ?? null) : null}
+                        openPullRequestsInRightPanel={routeThreadRef !== null}
+                        jumpLabel={
+                          showThreadJumpHints ? (jumpLabelByKey.get(threadKey) ?? null) : null
+                        }
+                        currentEnvironmentId={primaryEnvironmentId}
                         environmentLabel={environmentLabelById.get(thread.environmentId) ?? null}
                         projectCwd={
                           projectCwdByKey.get(`${thread.environmentId}:${thread.projectId}`) ?? null
@@ -3940,7 +3949,7 @@ export default function Sidebar() {
                           Active threads
                         </span>
                         <SidebarNewThreadButton
-                          shortcutLabel={newThreadShortcutLabel}
+                          shortcutLabel={newThreadShortcutLabel ?? null}
                           onClick={handleNewThreadClick}
                         />
                       </li>,

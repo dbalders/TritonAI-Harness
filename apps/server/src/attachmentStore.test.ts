@@ -147,4 +147,29 @@ describe("attachmentStore", () => {
       }
     }).pipe(Effect.provide(NodeServices.layer)),
   );
+
+  it("removes expired pending and partial files without touching thread attachments", () => {
+    const attachmentsDir = NodeFS.mkdtempSync(
+      NodePath.join(NodeOS.tmpdir(), "t3code-attachment-sweep-"),
+    );
+    try {
+      const now = 1_800_000_000_000;
+      const oldTimeSeconds = (now - 2 * 24 * 60 * 60 * 1000) / 1000;
+      const uuid = "00000000-0000-4000-8000-000000000002";
+      const pendingPath = NodePath.join(attachmentsDir, `pending-${uuid}.png`);
+      const threadPath = NodePath.join(attachmentsDir, `thread-1-${uuid}.png`);
+      const partialPath = NodePath.join(attachmentsDir, `${uuid}.part`);
+      for (const filePath of [pendingPath, threadPath, partialPath]) {
+        NodeFS.writeFileSync(filePath, Buffer.from("pixels"));
+        NodeFS.utimesSync(filePath, oldTimeSeconds, oldTimeSeconds);
+      }
+
+      expect(sweepStalePendingAttachments({ attachmentsDir, nowMs: now })).toEqual({ deleted: 2 });
+      expect(NodeFS.existsSync(pendingPath)).toBe(false);
+      expect(NodeFS.existsSync(partialPath)).toBe(false);
+      expect(NodeFS.existsSync(threadPath)).toBe(true);
+    } finally {
+      NodeFS.rmSync(attachmentsDir, { recursive: true, force: true });
+    }
+  });
 });

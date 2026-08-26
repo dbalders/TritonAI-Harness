@@ -92,7 +92,51 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
       expect(first.environmentId).toBe(second.environmentId);
       expect(second.capabilities.repositoryIdentity).toBe(true);
       expect(second.capabilities.connectionProbe).toBe(true);
+      expect(second.capabilities.attachmentUploads).toBe(true);
+      expect(second.capabilities.pullRequests).toBe(true);
+      expect(second.capabilities.threadTitleRegeneration).toBe(true);
+      expect(second.capabilities.threadPullRequestLinking).toBe(true);
+      expect(second.capabilities.agentActivityPublishing).toBe(false);
       expect(second.capabilities.serverSelfUpdate).toBeUndefined();
+    }),
+  );
+
+  it.effect("reports agent activity publishing from the current secret state", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-server-environment-publish-test-",
+      });
+      const testLayer = Layer.mergeAll(
+        ServerEnvironment.layer.pipe(Layer.provide(ServerSecretStore.layer)),
+        ServerSecretStore.layer,
+      ).pipe(Layer.provide(ServerConfig.layerTest(process.cwd(), baseDir)));
+
+      yield* Effect.gen(function* () {
+        const secrets = yield* ServerSecretStore.ServerSecretStore;
+        const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
+        const encode = (value: string) => new TextEncoder().encode(value);
+
+        const unlinked = yield* serverEnvironment.getDescriptor;
+        expect(unlinked.capabilities.agentActivityPublishing).toBe(false);
+
+        yield* secrets.set(PUBLISH_AGENT_ACTIVITY_SECRET, encode("true"));
+        const withoutLink = yield* serverEnvironment.getDescriptor;
+        expect(withoutLink.capabilities.agentActivityPublishing).toBe(false);
+
+        yield* secrets.set(RELAY_URL_SECRET, encode(""));
+        yield* secrets.set(RELAY_ENVIRONMENT_CREDENTIAL_SECRET, encode("credential"));
+        const emptyUrl = yield* serverEnvironment.getDescriptor;
+        expect(emptyUrl.capabilities.agentActivityPublishing).toBe(false);
+
+        yield* secrets.set(RELAY_URL_SECRET, encode("https://relay.example"));
+        const linked = yield* serverEnvironment.getDescriptor;
+        expect(linked.capabilities.agentActivityPublishing).toBe(true);
+
+        yield* secrets.set(PUBLISH_AGENT_ACTIVITY_SECRET, encode("false"));
+        const disabled = yield* serverEnvironment.getDescriptor;
+        expect(disabled.capabilities.agentActivityPublishing).toBe(false);
+      }).pipe(Effect.provide(testLayer));
     }),
   );
 

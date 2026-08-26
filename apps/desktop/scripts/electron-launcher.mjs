@@ -20,17 +20,21 @@ export const APP_BUNDLE_ID = isDevelopment
   ? `edu.ucsd.tritonai.harness.dev.${devBundleIdSuffix || "local"}`
   : "edu.ucsd.tritonai.harness";
 const APP_PROTOCOL_SCHEMES = isDevelopment ? ["t3code-dev"] : ["t3code"];
-const LAUNCHER_VERSION = 14;
+const LAUNCHER_VERSION = 15;
 const MICROPHONE_USAGE_DESCRIPTION =
   "TritonAI Harness uses the microphone for voice dictation in the composer.";
-const defaultIconPath = NodePath.join(desktopDir, "resources", "icon.icns");
 const developmentMacIconPngPath = NodePath.join(
   repoRoot,
   "assets",
   "dev",
   "tritonai-harness-dev-1024.png",
 );
-const productionMacIconPngPath = NodePath.join(repoRoot, "assets", "prod", "black-macos-1024.png");
+const productionMacIconPngPath = NodePath.join(
+  repoRoot,
+  "assets",
+  "prod",
+  "tritonai-harness-1024.png",
+);
 // oxlint-disable-next-line t3code/no-global-process-runtime -- Standalone launcher script has no Effect runtime.
 const hostPlatform = NodeOS.platform();
 

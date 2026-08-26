@@ -164,22 +164,38 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
     ...DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS,
   };
   const setUpdateChannelError = options.setUpdateChannelError;
-  const settingsLayer = setUpdateChannelError
-    ? Layer.succeed(DesktopAppSettings.DesktopAppSettings, {
-        get: Effect.succeed(DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS),
-        load: Effect.succeed(DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS),
-        setComputerUseEnabled: () => Effect.die("unexpected computer use toggle"),
-        setMainWindowBounds: () => Effect.die("unexpected main window bounds update"),
-        setServerExposureMode: () => Effect.die("unexpected server exposure update"),
-        setTailscaleServe: () => Effect.die("unexpected Tailscale Serve update"),
-        setUpdateChannel: () => Effect.fail(setUpdateChannelError),
-        setWslBackendEnabled: () => Effect.die("unexpected WSL backend toggle"),
-        setWslDistro: () => Effect.die("unexpected WSL distro change"),
-        setWslOnly: () => Effect.die("unexpected WSL-only toggle"),
-        applyWslWindowsFallback: Effect.die("unexpected WSL Windows fallback"),
-        applyWslWindowsFallbackInMemory: Effect.die("unexpected WSL Windows fallback"),
-      } satisfies DesktopAppSettings.DesktopAppSettings["Service"])
-    : DesktopAppSettings.layer;
+  const settingsLayer =
+    setUpdateChannelError || options.beforeSetUpdateChannel
+      ? Layer.succeed(DesktopAppSettings.DesktopAppSettings, {
+          get: Effect.sync(() => testSettings),
+          load: Effect.sync(() => testSettings),
+          setComputerUseEnabled: () => Effect.die("unexpected computer use toggle"),
+          setMainWindowBounds: () => Effect.die("unexpected main window bounds update"),
+          setServerExposureMode: () => Effect.die("unexpected server exposure update"),
+          setTailscaleServe: () => Effect.die("unexpected Tailscale Serve update"),
+          setUpdateChannel: (channel) =>
+            setUpdateChannelError
+              ? Effect.fail(setUpdateChannelError)
+              : (options.beforeSetUpdateChannel ?? Effect.void).pipe(
+                  Effect.andThen(
+                    Effect.sync(() => {
+                      const changed = testSettings.updateChannel !== channel;
+                      testSettings = {
+                        ...testSettings,
+                        updateChannel: channel,
+                        updateChannelConfiguredByUser: true,
+                      };
+                      return { settings: testSettings, changed };
+                    }),
+                  ),
+                ),
+          setWslBackendEnabled: () => Effect.die("unexpected WSL backend toggle"),
+          setWslDistro: () => Effect.die("unexpected WSL distro change"),
+          setWslOnly: () => Effect.die("unexpected WSL-only toggle"),
+          applyWslWindowsFallback: Effect.die("unexpected WSL Windows fallback"),
+          applyWslWindowsFallbackInMemory: Effect.die("unexpected WSL Windows fallback"),
+        } satisfies DesktopAppSettings.DesktopAppSettings["Service"])
+      : DesktopAppSettings.layer;
 
   const layer = DesktopUpdates.layer.pipe(
     Layer.provideMerge(updaterLayer),

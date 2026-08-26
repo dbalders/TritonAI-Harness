@@ -53,6 +53,14 @@ vi.mock("./firstRunOnboarding", () => ({
 
 vi.mock("./hooks/useSettings", () => ({
   useClientSettings: () => ({}),
+  useClientSettingsHydrated: () => true,
+  usePrimarySettings: (select: (settings: Record<string, unknown>) => unknown) =>
+    select({
+      planModeEnabled: false,
+      sourceControlWriterModelSelection: null,
+      textGenerationModelSelection: null,
+    }),
+  useUpdatePrimarySettings: () => vi.fn(),
 }));
 
 vi.mock("./state/entities", () => ({

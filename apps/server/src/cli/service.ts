@@ -1,4 +1,5 @@
 import { TRITONAI_CONNECT_NAME } from "@t3tools/contracts";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Console from "effect/Console";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -49,7 +50,7 @@ export function formatServiceStatus(
   cliVersion: string,
 ): string {
   if (!status.supported) {
-    return "TritonAI Harness service\n  Status: unavailable on this machine\n  Supported on: Linux with systemd";
+    return "TritonAI Harness service\n  Status: unavailable on this machine\n  Supported on: Linux with systemd, macOS with launchd";
   }
   if (!status.installed) {
     return "TritonAI Harness service\n  Status: not installed";
@@ -166,8 +167,11 @@ export const offerServiceDuringOnboarding = Effect.gen(function* () {
     Prompt.confirm({
       message: installed
         ? "The installed TritonAI Harness service needs an update or repair. Update it now?"
-        : "Run TritonAI Harness in the background whenever this machine boots? " +
-          `It stays reachable through ${TRITONAI_CONNECT_NAME} even after you log out.`,
+        : platform === "darwin"
+          ? "Run TritonAI Harness in the background whenever you log in to this Mac? " +
+            `It stays reachable through ${TRITONAI_CONNECT_NAME} while you are logged in.`
+          : "Run TritonAI Harness in the background whenever this machine boots? " +
+            `It stays reachable through ${TRITONAI_CONNECT_NAME} even after you log out.`,
       initial: true,
     }),
   );

@@ -277,7 +277,7 @@ describe("desktop update UI helpers", () => {
         downloadedVersion: "1.1.0",
       }),
     ).toBe(
-      "Install update 1.1.0 and restart T3 Code?\n\nAny running tasks will be interrupted. Make sure you're ready before continuing.",
+      "Install update 1.1.0 and restart TritonAI Harness?\n\nAny running tasks will be interrupted. Make sure you're ready before continuing.",
     );
   });
 });

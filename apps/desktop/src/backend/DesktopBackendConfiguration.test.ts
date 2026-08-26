@@ -13,11 +13,11 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import * as SecretEnvelope from "@t3tools/shared/secretEnvelope";
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
+import * as DesktopComputerUse from "../computerUse/DesktopComputerUse.ts";
 import * as ElectronDialog from "../electron/ElectronDialog.ts";
 import * as ElectronSafeStorage from "../electron/ElectronSafeStorage.ts";
 import * as DesktopBackendConfiguration from "./DesktopBackendConfiguration.ts";
 import * as DesktopConfig from "../app/DesktopConfig.ts";
-import * as DesktopComputerUse from "../computerUse/DesktopComputerUse.ts";
 import * as DesktopServerExposure from "./DesktopServerExposure.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopTritonAiApiKey from "../settings/DesktopTritonAiApiKey.ts";
@@ -201,7 +201,7 @@ describe("DesktopBackendConfiguration", () => {
       }).pipe(
         Effect.provide(
           DesktopBackendConfiguration.layer.pipe(
-            Layer.provideMerge(serverExposureLayer),
+            Layer.provideMerge(desktopTestServicesLayer),
             Layer.provideMerge(DesktopAppSettings.layerTest()),
             Layer.provideMerge(DesktopWslEnvironment.layerTest()),
             Layer.provideMerge(
@@ -330,6 +330,11 @@ describe("DesktopBackendConfiguration", () => {
               ),
             ),
             Layer.provideMerge(DesktopAppSettings.layerTest()),
+            Layer.provideMerge(
+              DesktopWslServerTree.layerTest({
+                result: { ok: true, root: path.join(baseDir, "app.asar.unpacked") },
+              }),
+            ),
             Layer.provideMerge(
               DesktopWslEnvironment.layerTest({
                 isAvailable: true,
@@ -890,6 +895,7 @@ describe("DesktopBackendConfiguration", () => {
             DesktopBackendConfiguration.layer.pipe(
               Layer.provideMerge(desktopTestServicesLayer),
               Layer.provideMerge(DesktopAppSettings.layerTest()),
+              Layer.provideMerge(DesktopWslServerTree.layerTest()),
               Layer.provideMerge(
                 DesktopWslEnvironment.layerTest({
                   isAvailable: true,
@@ -943,6 +949,7 @@ describe("DesktopBackendConfiguration", () => {
             DesktopBackendConfiguration.layer.pipe(
               Layer.provideMerge(desktopTestServicesLayer),
               Layer.provideMerge(DesktopAppSettings.layerTest()),
+              Layer.provideMerge(DesktopWslServerTree.layerTest()),
               Layer.provideMerge(
                 DesktopWslEnvironment.layerTest({
                   isAvailable: true,
@@ -1131,7 +1138,7 @@ describe("DesktopBackendConfiguration", () => {
       }).pipe(
         Effect.provide(
           DesktopBackendConfiguration.layer.pipe(
-            Layer.provideMerge(serverExposureLayer),
+            Layer.provideMerge(desktopTestServicesLayer),
             Layer.provideMerge(DesktopAppSettings.layerTest()),
             Layer.provideMerge(
               DesktopWslServerTree.layerTest({

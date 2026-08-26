@@ -322,6 +322,7 @@ describe("provider traits render guards", () => {
       modelOptions: undefined,
       prompt: "",
       onPromptChange: () => {},
+      planModeEnabled: false,
     };
 
     expect(shouldRenderTraitsControls(args)).toBe(false);
@@ -344,6 +345,7 @@ describe("provider traits render guards", () => {
         models,
         modelOptions: undefined,
         prompt: "",
+        planModeEnabled: false,
       }),
     ).toBe(true);
   });

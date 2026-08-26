@@ -1426,69 +1426,21 @@ export function updateThemeColorFamily(
   }
 }
 
-export const GROVE_THEME: ThemeDefinition = {
-  id: GROVE_THEME_ID,
-  label: GROVE_THEME_LABEL,
-  appearance: "light",
-  colors: {
-    ...createManagedThemeColors("light", "#f2f8f4", "#19734a"),
-    ...themeActionColors("#8f6410"),
-  },
-  variants: {
-    dark: {
-      ...createManagedThemeColors("dark", "#1d2b24", "#69d69a"),
-      ...themeActionColors("#e3b34e"),
-    },
-  },
-};
-
-export const OCEAN_THEME: ThemeDefinition = {
-  id: OCEAN_THEME_ID,
-  label: OCEAN_THEME_LABEL,
-  appearance: "light",
-  colors: {
-    ...createManagedThemeColors("light", "#f2f7fb", "#2878b8"),
-    ...themeActionColors("#0a6f75"),
-  },
-  variants: {
-    dark: {
-      ...createManagedThemeColors("dark", "#1b2938", "#70b9ee"),
-      ...themeActionColors("#5bd0d6"),
-    },
-  },
-};
-
-export const EMBER_THEME: ThemeDefinition = {
-  id: EMBER_THEME_ID,
-  label: EMBER_THEME_LABEL,
-  appearance: "light",
-  colors: {
-    ...createManagedThemeColors("light", "#fff6ef", "#c4602f"),
-    ...themeActionColors("#b23535"),
-  },
-  variants: {
-    dark: {
-      ...createManagedThemeColors("dark", "#30231e", "#f39a62"),
-      ...themeActionColors("#f78a7a"),
-    },
-  },
-};
-
-export const IRIS_THEME: ThemeDefinition = {
-  id: IRIS_THEME_ID,
-  label: IRIS_THEME_LABEL,
-  appearance: "light",
-  colors: {
-    ...createManagedThemeColors("light", "#f7f4fc", "#7254b9"),
-    ...themeActionColors("#a82c87"),
-  },
-  variants: {
-    dark: {
-      ...createManagedThemeColors("dark", "#29243b", "#ad92f5"),
-      ...themeActionColors("#f099d8"),
-    },
-  },
-};
+function themeActionColors(
+  action: string,
+): Pick<ThemeColors, "messageAction" | "messageActionForeground" | "messageActionHover"> {
+  const rgb = parseThemeRgbColor(action, THEME_DARK_FOREGROUND);
+  const foreground = readableThemeForeground(rgb);
+  const towardOpposite =
+    foreground === THEME_LIGHT_FOREGROUND || foreground === THEME_WHITE_FOREGROUND
+      ? THEME_BLACK_FOREGROUND
+      : THEME_WHITE_FOREGROUND;
+  return {
+    messageAction: action,
+    messageActionForeground: themeRgbToHexColor(foreground),
+    messageActionHover: themeRgbToHexColor(mixThemeRgbColors(rgb, towardOpposite, 0.12)),
+  };
+}
 
 /** UC San Diego's TritonAI palette, kept as a first-class built-in theme. */
 export const UCSD_THEME: ThemeDefinition = {
@@ -1507,14 +1459,7 @@ export const UCSD_THEME: ThemeDefinition = {
   },
 };
 
-const BUILT_IN_THEME_DEFINITIONS: ReadonlyArray<ThemeDefinition> = [
-  UCSD_THEME,
-  T3_CHAT_THEME,
-  GROVE_THEME,
-  OCEAN_THEME,
-  EMBER_THEME,
-  IRIS_THEME,
-];
+const BUILT_IN_THEME_DEFINITIONS: ReadonlyArray<ThemeDefinition> = [UCSD_THEME, ...BUILT_IN_THEMES];
 
 export function getThemeDefinition(theme: ThemePreference): ThemeDefinition | null {
   const themeId = themeIdFromPreference(theme);

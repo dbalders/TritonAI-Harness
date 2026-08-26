@@ -1180,6 +1180,8 @@ export const DesktopPreviewAutomationWaitForInputSchema = Schema.Struct({
 
 export interface DesktopBridge {
   getAppBranding: () => DesktopAppBranding | null;
+  /** The operating system locale as a normalized BCP-47 tag. */
+  getSystemLocale?: () => string | null;
   /**
    * Resolve an Electron File to its original host path without reading or copying it.
    * Optional so a newer web bundle remains compatible with older desktop shells.

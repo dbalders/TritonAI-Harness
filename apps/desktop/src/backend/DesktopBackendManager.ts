@@ -576,26 +576,34 @@ export const runBackendProcess = Effect.fn("runBackendProcess")(function* (
       ).pipe(Effect.forkScoped),
     );
   }
-  yield* waitForHttpReady({
-    executablePath: options.executablePath,
-    entryPath: options.entryPath,
-    cwd: options.cwd,
-    httpBaseUrl: options.httpBaseUrl,
-    timeout: options.readinessTimeout ?? DEFAULT_BACKEND_READINESS_TIMEOUT,
-  }).pipe(
-    Effect.tap(() => options.onReady?.() ?? Effect.void),
-    Effect.catchTags({
-      BackendReadinessTimeoutError: (error) =>
-        (options.onReadinessFailure?.(error) ?? Effect.void).pipe(
-          // A child that stays alive without ever serving the readiness endpoint cannot recover
-          // under the supervisor: runBackendProcess is waiting for its exit, so the instance never
-          // reaches finalizeRun and the bounded restart policy never gets a turn. Terminate this
-          // exact child after recording the timeout; its observed exit then follows the ordinary
-          // retry/failure path instead of leaving the desktop stuck forever.
-          Effect.ensuring(handle.kill().pipe(Effect.ignore)),
-        ),
-    }),
-    Effect.forkScoped,
+  // Probe readiness in a loop while the backend process is still alive
+  // instead of giving up after the first budget. A slow cold boot (the
+  // WSL bundle loading across /mnt/c, or a first launch right after an
+  // update) can exceed the initial readiness budget while the backend is
+  // about to come up moments later; a one-shot probe left the app stuck
+  // on "Connecting to WSL…" forever even though the backend kept running
+  // and became healthy. Each round gets a fresh budget, and the forked
+  // loop is torn down with the run scope once the child exits.
+  const probeReadiness = Effect.fn("desktop.backendProcess.probeReadiness")(() =>
+    waitForHttpReady({
+      executablePath: options.executablePath,
+      entryPath: options.entryPath,
+      cwd: options.cwd,
+      httpBaseUrl: options.httpBaseUrl,
+      timeout: options.readinessTimeout ?? DEFAULT_BACKEND_READINESS_TIMEOUT,
+    }).pipe(
+      Effect.flatMap(() => options.onReady?.() ?? Effect.void),
+      Effect.as(true),
+      Effect.catchTags({
+        BackendReadinessTimeoutError: (error) =>
+          (options.onReadinessFailure?.(error) ?? Effect.void).pipe(
+            // A live child that never serves readiness prevents the supervisor from reaching its
+            // bounded restart path. Terminate this exact child after recording the timeout.
+            Effect.ensuring(handle.kill().pipe(Effect.ignore)),
+            Effect.as(true),
+          ),
+      }),
+    ),
   );
 
   yield* probeReadiness().pipe(Effect.repeat({ while: (ready) => !ready }), Effect.forkScoped);

@@ -11,7 +11,19 @@ import {
   ProviderOptionSelections,
 } from "./model.ts";
 import { ModelSelection } from "./orchestration.ts";
-import { ProviderInstanceConfig, ProviderInstanceId } from "./providerInstance.ts";
+import {
+  DEFAULT_PREVIEW_APPEARANCE,
+  DEFAULT_PREVIEW_ZOOM_FACTOR,
+  FILL_PREVIEW_VIEWPORT,
+  PreviewAppearancePreference,
+  PreviewViewportSetting,
+  PreviewZoomFactor,
+} from "./preview.ts";
+import {
+  ProviderInstanceConfig,
+  ProviderInstanceId,
+  type ProviderDriverKind,
+} from "./providerInstance.ts";
 import { DEFAULT_TRITONAI_CODEX_HOME_PATH, DEFAULT_TRITONAI_CODEX_MODEL } from "./tritonai.ts";
 import { DEFAULT_VOICE_INPUT_SETTINGS, VoiceInputSettings } from "./voice.ts";
 
@@ -228,6 +240,7 @@ export const ClientSettingsSchema = Schema.Struct({
   sidebarAutoSettleAfterDays: Schema.NullOr(SidebarAutoSettleAfterDays).pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS)),
   ),
+  sidebarAutoSettleOnMerge: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   voiceInput: VoiceInputSettings.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_VOICE_INPUT_SETTINGS)),
   ),
@@ -637,6 +650,8 @@ export const ServerSettings = Schema.Struct({
   enableProviderUpdateChecks: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
   ),
+  /** Whether agents may drive the in-app preview browser. */
+  enableAgentBrowserAccess: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   backgroundActivity: BackgroundActivitySettings,
   // Legacy flat fields retained for old settings files and old clients. New
   // consumers should resolve `backgroundActivity` instead.
@@ -945,6 +960,7 @@ export const ClientSettingsPatch = Schema.Struct({
   showSkillsInSlashMenu: Schema.optionalKey(Schema.Boolean),
   legacySidebarEnabled: Schema.optionalKey(Schema.Boolean),
   sidebarAutoSettleAfterDays: Schema.optionalKey(Schema.NullOr(SidebarAutoSettleAfterDays)),
+  sidebarAutoSettleOnMerge: Schema.optionalKey(Schema.Boolean),
   voiceInput: Schema.optionalKey(VoiceInputSettings),
   sidebarProjectGroupingMode: Schema.optionalKey(SidebarProjectGroupingMode),
   sidebarProjectGroupingOverrides: Schema.optionalKey(

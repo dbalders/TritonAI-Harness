@@ -11,7 +11,7 @@ import {
   effectiveSnoozed,
   type ChangeRequestSettleSource,
 } from "@t3tools/client-runtime/state/thread-settled";
-import type { ScopedThreadRef, ThreadId } from "@t3tools/contracts";
+import type { ScopedThreadRef } from "@t3tools/contracts";
 import { useCallback } from "react";
 
 import { resolveSnoozePresets, snoozeWakeDescription } from "../components/Sidebar.snooze";
@@ -107,13 +107,6 @@ export function useThreadActionMenu(input: {
     },
     onError: (error) => failureToast("Failed to copy branch", error),
   });
-  const { copyToClipboard: copyThreadIdToClipboard } = useCopyToClipboard<{ threadId: ThreadId }>({
-    onCopy: ({ threadId }) => {
-      toastManager.add({ type: "success", title: "Thread ID copied", description: threadId });
-    },
-    onError: (error) => failureToast("Failed to copy thread ID", error),
-  });
-
   const openMenu = useCallback(
     (position: { x: number; y: number }) => {
       if (threadRef === null) return;
@@ -264,9 +257,6 @@ export function useThreadActionMenu(input: {
             if (thread.branch) {
               copyBranchToClipboard(thread.branch, { branch: thread.branch });
             }
-            return;
-          case "copy-thread-id":
-            copyThreadIdToClipboard(thread.id, { threadId: thread.id });
             return;
           case "archive": {
             if (confirmThreadArchive) {

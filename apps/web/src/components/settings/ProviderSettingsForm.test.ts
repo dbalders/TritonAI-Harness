@@ -37,16 +37,9 @@ describe("ProviderSettingsForm helpers", () => {
     });
   });
 
-  it("shows the auto-compaction threshold for Claude providers", () => {
+  it("keeps non-managed Claude provider settings hidden", () => {
     const claude = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("claudeAgent")];
-    expect(claude).toBeDefined();
-
-    expect(deriveProviderSettingsFields(claude!).map((field) => field.key)).toEqual([
-      "binaryPath",
-      "homePath",
-      "autoCompactWindow",
-      "launchArgs",
-    ]);
+    expect(claude).toBeUndefined();
   });
 
   it("preserves unknown config keys while omitting empty configurable fields", () => {

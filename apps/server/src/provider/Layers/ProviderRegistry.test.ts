@@ -419,13 +419,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               shortDescription: "Debug failing GitHub Actions checks",
             },
           ]);
-          assert.deepStrictEqual(status.slashCommands, [
-            {
-              name: "feedback",
-              description: "Send this thread and Codex logs to OpenAI",
-              input: { hint: "Describe the issue (optional)" },
-            },
-          ]);
+          assert.deepStrictEqual(status.slashCommands, []);
         }),
       );
 

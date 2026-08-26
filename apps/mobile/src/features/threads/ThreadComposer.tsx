@@ -1,4 +1,3 @@
-import { isLiquidGlassSupported, LiquidGlassView } from "@callstack/liquid-glass";
 import {
   EnvironmentId,
   MessageId,
@@ -556,6 +555,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     // Sending a prompt starts agent work: arm the lock-screen card now, while
     // the app is foregrounded and the activity token can be registered.
     armAgentAwarenessLiveActivityForLocalWork({
+      environmentId: props.environmentId,
       threadTitle: props.selectedThread.title,
       projectTitle: props.environmentLabel ?? TRITONAI_APP_BASE_NAME,
     });
@@ -571,7 +571,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       armAgentAwarenessLiveActivityForLocalWork({
         environmentId: props.environmentId,
         threadTitle: props.selectedThread.title,
-        projectTitle: props.environmentLabel ?? "T3 Code",
+        projectTitle: props.environmentLabel ?? TRITONAI_APP_BASE_NAME,
       });
     } finally {
       inFlightThreadIdsRef.current.delete(threadKey);

@@ -817,6 +817,8 @@ export function buildTurnStartParams(input: {
   readonly effort?: EffectCodexSchema.V2TurnStartParams__ReasoningEffort;
   readonly interactionMode?: ProviderInteractionMode;
   readonly pluginSkills?: ReadonlyArray<CodexPluginSkillDefinition>;
+  /** Defaults to true so callers that predate the agent-access gate are unchanged. */
+  readonly browserToolsAvailable?: boolean;
 }): Effect.Effect<
   CodexTurnStartParamsWithCollaborationMode,
   CodexErrors.CodexAppServerProtocolParseError
@@ -2534,6 +2536,10 @@ export const makeCodexSessionRuntime = (
               ...(input.effort ? { effort: input.effort } : {}),
               ...(input.interactionMode ? { interactionMode: input.interactionMode } : {}),
               ...(pluginSkills.length ? { pluginSkills } : {}),
+              // Derived from the session's own MCP configuration rather than the
+              // setting, so the prompt describes the tools this turn actually
+              // has even if the setting changed after the session started.
+              browserToolsAvailable: hasConfiguredMcpServer(options.appServerArgs),
             });
           let params: CodexTurnStartParamsWithCollaborationMode | null = null;
           let pluginSkillLease: CodexPluginSkillLease | null = null;
@@ -2543,11 +2549,10 @@ export const makeCodexSessionRuntime = (
             );
             const candidateParams = yield* makeTurnParams(availability.skills);
             const names = availability.skills.map((skill) => skill.name);
-            if (names.length === 0) {
-              params = candidateParams;
-              break;
-            }
-            if (!options.reservePluginSkills && !options.isPluginSkillAvailable) {
+            if (
+              names.length === 0 ||
+              (!options.reservePluginSkills && !options.isPluginSkillAvailable)
+            ) {
               params = candidateParams;
               break;
             }

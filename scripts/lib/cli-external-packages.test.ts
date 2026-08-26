@@ -87,7 +87,7 @@ describe("selectCliRuntimeExternalDependencies", () => {
   it("selects every external root declared by the server", () => {
     assert.deepStrictEqual(
       Object.keys(selectCliRuntimeExternalDependencies(serverPackageJson.dependencies)).sort(),
-      ["@ff-labs/fff-node", "msgpackr-extract", "node-pty"],
+      ["@ff-labs/fff-node", "ffi-rs", "node-pty"],
     );
   });
 });
@@ -189,9 +189,9 @@ it.layer(NodeServices.layer)("external package dependency closure", (it) => {
         if (!manifest) continue;
 
         const declared = {
-          ...(manifest.dependencies ?? {}),
-          ...(manifest.optionalDependencies ?? {}),
-          ...(manifest.peerDependencies ?? {}),
+          ...manifest.dependencies,
+          ...manifest.optionalDependencies,
+          ...manifest.peerDependencies,
         };
         for (const dependency of Object.keys(declared)) {
           if (!isRuntimeExternal(dependency)) {

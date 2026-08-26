@@ -13,7 +13,9 @@ import {
 
 import {
   createAttachmentId,
-  isCanonicalAttachmentIdOwnedByThread,
+  planAttachmentClaim,
+  PENDING_ATTACHMENT_THREAD_SEGMENT,
+  parseThreadSegmentFromAttachmentId,
   resolveAttachmentPath,
 } from "../attachmentStore.ts";
 import { ServerConfig } from "../config.ts";
@@ -143,64 +145,88 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
       });
     }
 
+    const claimedAttachmentPaths: string[] = [];
     const normalizedAttachments = yield* Effect.forEach(
       canonicalCommand.message.attachments,
       (attachment) =>
         Effect.gen(function* () {
-          if (attachment.type === "file") {
-            // Match Codex desktop behavior: native-local files are already on
-            // the environment filesystem, so the provider receives the path
-            // directly rather than forcing a copy into attachment storage.
-            if ("path" in attachment) {
-              if (!path.isAbsolute(attachment.path)) {
-                return yield* new OrchestrationDispatchCommandError({
-                  message: `File attachment '${attachment.name}' must use an absolute path.`,
-                });
-              }
-              const fileInfo = yield* fileSystem
-                .stat(attachment.path)
-                .pipe(Effect.orElseSucceed(() => null));
-              if (
-                !fileInfo ||
-                fileInfo.type !== "File" ||
-                Number(fileInfo.size) !== attachment.sizeBytes
-              ) {
-                return yield* new OrchestrationDispatchCommandError({
-                  message: `File attachment '${attachment.name}' is missing or has changed.`,
-                });
-              }
-              return { ...attachment, path: path.normalize(attachment.path) };
-            }
-            if (!isCanonicalAttachmentIdOwnedByThread(attachment.id, canonicalCommand.threadId)) {
+          if (attachment.type === "file" && "path" in attachment) {
+            if (!path.isAbsolute(attachment.path)) {
               return yield* new OrchestrationDispatchCommandError({
-                message: `File attachment '${attachment.name}' does not belong to this thread.`,
-              });
-            }
-
-            const expectedPath = resolveAttachmentPath({
-              attachmentsDir: serverConfig.attachmentsDir,
-              attachment,
-            });
-            if (!expectedPath) {
-              return yield* new OrchestrationDispatchCommandError({
-                message: `File attachment '${attachment.name}' could not be resolved.`,
+                message: `File attachment '${attachment.name}' must use an absolute path.`,
               });
             }
             const fileInfo = yield* fileSystem
-              .stat(expectedPath)
+              .stat(attachment.path)
               .pipe(Effect.orElseSucceed(() => null));
-            const persistedSizeBytes = fileInfo ? Number(fileInfo.size) : 0;
             if (
               !fileInfo ||
               fileInfo.type !== "File" ||
-              persistedSizeBytes === 0 ||
-              persistedSizeBytes !== attachment.sizeBytes
+              Number(fileInfo.size) !== attachment.sizeBytes
             ) {
               return yield* new OrchestrationDispatchCommandError({
                 message: `File attachment '${attachment.name}' is missing or has changed.`,
               });
             }
-            return attachment;
+            return { ...attachment, path: path.normalize(attachment.path) };
+          }
+
+          if (!("dataUrl" in attachment)) {
+            const claim = yield* planAttachmentClaim({
+              attachmentsDir: serverConfig.attachmentsDir,
+              threadId: canonicalCommand.threadId,
+              attachmentId: attachment.id,
+            });
+            if (!claim.ok) {
+              return yield* new OrchestrationDispatchCommandError({
+                message: `Attachment '${attachment.name}' cannot be sent: ${claim.reason}.`,
+              });
+            }
+
+            const info = yield* fileSystem.stat(claim.currentPath).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationDispatchCommandError({
+                    message: `Attachment '${attachment.name}' cannot be sent: attachment not found.`,
+                    cause,
+                  }),
+              ),
+            );
+            if (Number(info.size) !== attachment.sizeBytes) {
+              return yield* new OrchestrationDispatchCommandError({
+                message: `Attachment '${attachment.name}' cannot be sent: stored size does not match.`,
+              });
+            }
+
+            const normalizedAttachment = {
+              ...attachment,
+              id: claim.finalId,
+              mimeType: attachment.mimeType.toLowerCase(),
+            };
+            const expectedPath = resolveAttachmentPath({
+              attachmentsDir: serverConfig.attachmentsDir,
+              attachment: normalizedAttachment,
+            });
+            if (expectedPath !== claim.finalPath) {
+              return yield* new OrchestrationDispatchCommandError({
+                message: `Attachment '${attachment.name}' cannot be sent: image type does not match the upload.`,
+              });
+            }
+
+            // Keep the pending copy until the turn succeeds. A failed thread
+            // bootstrap can then retry with a fresh thread id.
+            yield* fileSystem.copyFile(claim.currentPath, claim.finalPath).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationDispatchCommandError({
+                    message: `Failed to claim attachment '${attachment.name}' for this thread.`,
+                    cause,
+                  }),
+              ),
+            );
+            claimedAttachmentPaths.push(claim.finalPath);
+
+            return normalizedAttachment;
           }
 
           const parsed = parseBase64DataUrl(attachment.dataUrl);

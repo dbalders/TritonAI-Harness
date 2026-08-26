@@ -19,7 +19,7 @@ import {
 } from "./versionSkew";
 
 const MISMATCH_HINT =
-  "Version mismatch. Try syncing the client and server to the same T3 Code version.";
+  "Version mismatch. Try syncing the client and server to the same TritonAI Harness version.";
 
 describe("versionSkew", () => {
   beforeEach(() => {
@@ -30,11 +30,11 @@ describe("versionSkew", () => {
     expect(resolveVersionMismatch(APP_VERSION)).toBeNull();
   });
 
-  it("returns a mismatch when the server version differs from the client", () => {
-    expect(resolveVersionMismatch("9.9.9")).toEqual({
-      clientVersion: APP_VERSION,
-      serverVersion: "9.9.9",
-      hint: "Version mismatch. Try syncing the client and server to the same TritonAI Harness version.",
+  it("returns a mismatch when the server is behind the client", () => {
+    expect(resolveVersionMismatch("0.0.33")).toEqual({
+      clientVersion: "0.0.34",
+      serverVersion: "0.0.33",
+      hint: MISMATCH_HINT,
     });
   });
 

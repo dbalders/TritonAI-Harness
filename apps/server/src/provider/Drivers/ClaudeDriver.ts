@@ -128,6 +128,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
       const httpClient = yield* HttpClient.HttpClient;
       const serverSettings = yield* ServerSettingsService;
       const eventLoggers = yield* ProviderEventLoggers;
+      const modelManifest = yield* ModelManifest.ModelManifest;
       const hostPlatform = yield* HostProcessPlatform;
       const processEnv = mergeProviderInstanceEnvironment(environment, process.env, hostPlatform);
       const fallbackContinuationIdentity = defaultProviderContinuationIdentity({

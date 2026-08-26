@@ -3,7 +3,6 @@ import { assert, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as FileSystem from "effect/FileSystem";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
@@ -12,66 +11,81 @@ import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import {
+  ancestorNodeModulesPaths,
   assertDesktopUpdatePublishConfiguration,
   assertPackagedDesktopUpdateConfig,
   assertPackagedFfiRsNativeBinaries,
   buildMacDmg,
+  BundleNotSelfContainedError,
   BuildCommandFailedError,
-  DesktopDmgBackgroundSourceMissingError,
-  createStageWorkspaceConfig,
+  CUA_DRIVER_VERSION,
+  copyDirectoryPreservingSymlinks,
   createDesktopSourceBuildEnvironment,
-  findMissingRuntimeDeploymentArchitectures,
-  createStagePatchedDependencies,
   createBuildConfig,
+  createStagePatchedDependencies,
+  DesktopDmgBackgroundSourceMissingError,
+  DesktopUpdatePublishConfigurationMissingError,
   DESKTOP_MANAGED_PLUGIN_FILE_SET,
   DESKTOP_ELECTRON_LANGUAGES,
-  DESKTOP_FILE_EXCLUSIONS,
   DESKTOP_EXTRA_RESOURCES,
-  CUA_DRIVER_VERSION,
-  DesktopUpdatePublishConfigurationMissingError,
+  DESKTOP_FILE_EXCLUSIONS,
+  createStageWorkspaceConfig,
+  findMissingRuntimeDeploymentArchitectures,
+  InvalidAzureTrustedSigningEndpointError,
   InvalidMacPasskeyRpDomainError,
   InvalidMacPasskeyPublishableKeyError,
-  InvalidAzureTrustedSigningEndpointError,
   InvalidMockUpdateServerPortError,
-  UnsupportedDesktopBuildArchitectureError,
   isMacPasskeySigningConfigurationError,
   LinuxIconResizeError,
+  MAC_FILE_EXCLUSIONS,
   MacDesktopAppBundleMissingError,
   MacPasskeySigningConfigurationResolutionError,
   MissingAzureTrustedSigningConfigurationError,
   MissingMacPasskeyProvisioningProfileError,
-  PackagedNativeDependencyMissingError,
+  packWindowsServerAsar,
   PackagedDesktopUpdateConfigMissingError,
+  PackagedNativeDependencyMissingError,
   renderMacInheritedEntitlements,
   renderMacPasskeyEntitlements,
+  resolveAzureTrustedSigningConfiguration,
+  resolveBuildOptions,
   resolveClerkPasskeyNativeArtifacts,
   resolveCuaDriverNativeDependencies,
-  resolveMacPasskeySigningConfiguration,
+  resolveCuaDriverReleaseAsset,
+  resolveDesktopBuildIconAssets,
+  resolveDesktopProductName,
   resolveDesktopRuntimeDependencies,
-  resolveMacStageDependencies,
+  resolveDesktopUpdateChannel,
+  resolveDesktopWebAssetBrand,
   resolveFffNativeDependencies,
   resolveFfiRsNativeArtifacts,
   resolveFfiRsNativeDependencies,
-  resolveBuildOptions,
-  resolveDesktopBuildIconAssets,
-  resolveDesktopProductName,
-  resolveDesktopUpdateChannel,
-  resolveDesktopWebAssetBrand,
-  resolveResourceMonitorRustTargets,
-  resolveWindowsServerAsarIgnoreGlobs,
-  resourceMonitorExecutableName,
-  resolveCuaDriverReleaseAsset,
-  RUNTIME_DEPLOY_ARGS,
   resolveGitHubPublishConfig,
   resolveMacAppBundleDirectoryName,
   resolveMacDmgArtifactName,
+  resolveMacPasskeySigningConfiguration,
+  resolveMacStageDependencies,
   resolveMockUpdateServerPort,
   resolveMockUpdateServerUrl,
-  resolveAzureTrustedSigningConfiguration,
   resolvePackageManagerUserAgent,
+  resolveResourceMonitorRustTargets,
+  resolveWindowsServerAsarIgnoreGlobs,
+  resourceMonitorExecutableName,
+  RUNTIME_DEPLOY_ARGS,
+  stageDesktopDmgBackground,
   stageLinuxIconSize,
+  stageResourceMonitor,
+  UnsupportedDesktopBuildArchitectureError,
   validateManagedPluginBuildConfiguration,
-  WINDOWS_ASAR_UNPACK,
+  validateWindowsPackagedPayload,
+  WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT,
+  WINDOWS_SERVER_ASAR_RESOURCE,
+  WINDOWS_SERVER_ASAR_IGNORE_GLOBS,
+  WINDOWS_SERVER_EXTRA_RESOURCES,
+  WINDOWS_SERVER_ASAR_UNPACK_GLOB,
+  WINDOWS_SERVER_RESOURCE_SOURCE_DIR,
+  WindowsPackagedPayloadValidationError,
+  WindowsPrimaryNativeProbeError,
 } from "./build-desktop-artifact.ts";
 import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
 import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
@@ -375,6 +389,45 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }),
   );
 
+  it.effect("omits update feeds for pull request preview builds", () =>
+    Effect.gen(function* () {
+      const preview = yield* createBuildConfig(
+        "mac",
+        "dmg",
+        "0.0.33-pr.8182.1",
+        false,
+        false,
+        undefined,
+        undefined,
+      );
+      const release = yield* createBuildConfig(
+        "mac",
+        "dmg",
+        "0.0.33",
+        false,
+        false,
+        undefined,
+        undefined,
+      );
+
+      assert.notProperty(preview, "publish");
+      assert.deepStrictEqual(release.publish, [
+        {
+          provider: "github",
+          owner: "pingdotgg",
+          repo: "t3code",
+          releaseType: "release",
+        },
+      ]);
+    }).pipe(
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromEnv({ env: { GITHUB_REPOSITORY: "pingdotgg/t3code" } }),
+        ),
+      ),
+    ),
+  );
+
   it("omits bundled workspace packages from staged desktop dependencies", () => {
     assert.deepStrictEqual(
       resolveDesktopRuntimeDependencies(
@@ -652,7 +705,6 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         filter: ["**/*"],
       });
       assert.deepStrictEqual(mac.asarUnpack, ["**/node_modules/**"]);
-      assert.deepStrictEqual((mac.mac as Record<string, unknown>).target, ["zip"]);
       assert.notProperty(linux, "asarUnpack");
       assert.notProperty(win, "asarUnpack");
       assert.deepStrictEqual(win.extraResources, [
@@ -660,9 +712,16 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           from: "apps/desktop/prod-resources/resource-monitor",
           to: "resource-monitor",
         },
+        {
+          from: "apps/desktop/prod-resources/cua-driver",
+          to: "cua-driver",
+        },
         ...WINDOWS_SERVER_EXTRA_RESOURCES,
       ]);
-      assert.deepStrictEqual(win.nsis, { differentialPackage: true });
+      assert.deepStrictEqual(win.nsis, {
+        differentialPackage: true,
+        include: "apps/desktop/resources/installer.nsh",
+      });
       // Native binaries and helper executables cannot load from inside an
       // asar; everything else stays packed. The Claude SDK platform packages
       // and .bin shims never ship.
@@ -677,7 +736,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         "**/node_modules/.bin/**",
       ]);
       assert.deepStrictEqual(mac.dmg, {
-        title: "T3 Code (Alpha) 1.2.3 Installer",
+        title: "TritonAI Harness 1.2.3 Installer",
         background: "dmg/dmg-background-latest.png",
         window: { width: 540, height: 412 },
         contents: [
@@ -690,18 +749,24 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       // Linux must register the renderer schemes so the generated .desktop
       // entry advertises MimeType=x-scheme-handler/t3code; for OAuth deep links.
       assert.deepStrictEqual((linux.linux as Record<string, unknown>).protocols, [
-        { name: "T3 Code", schemes: ["t3code", "t3code-dev"] },
+        { name: "TritonAI Harness", schemes: ["t3code", "t3code-dev"] },
       ]);
-      assert.deepStrictEqual(mac.files, [...DESKTOP_FILE_EXCLUSIONS, ...MAC_FILE_EXCLUSIONS]);
+      assert.deepStrictEqual((mac.mac as Record<string, unknown>).target, ["zip"]);
+      assert.deepStrictEqual(mac.files, [
+        "**/*",
+        ...DESKTOP_FILE_EXCLUSIONS,
+        ...MAC_FILE_EXCLUSIONS,
+        DESKTOP_MANAGED_PLUGIN_FILE_SET,
+      ]);
       assert.notProperty(mac.mac as Record<string, unknown>, "sign");
-      for (const config of [linux, win]) {
-        assert.deepStrictEqual(config.electronLanguages, DESKTOP_ELECTRON_LANGUAGES);
-        assert.deepStrictEqual(config.files, [
-          "**/*",
-          ...DESKTOP_FILE_EXCLUSIONS,
-          DESKTOP_MANAGED_PLUGIN_FILE_SET,
-        ]);
-      }
+      assert.deepStrictEqual(linux.files, [
+        "**/*",
+        ...DESKTOP_FILE_EXCLUSIONS,
+        DESKTOP_MANAGED_PLUGIN_FILE_SET,
+      ]);
+      assert.deepStrictEqual(win.files, ["**/*", ...DESKTOP_FILE_EXCLUSIONS]);
+      assert.deepStrictEqual(linux.electronLanguages, DESKTOP_ELECTRON_LANGUAGES);
+      assert.deepStrictEqual(win.electronLanguages, DESKTOP_ELECTRON_LANGUAGES);
       assert.deepStrictEqual(mac.electronLanguages, DESKTOP_ELECTRON_LANGUAGES);
     }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
   );
@@ -1167,6 +1232,77 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     });
   });
 
+  it.effect("rasterizes staged DMG backgrounds at standard and Retina sizes", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const stageResourcesDir = yield* fs.makeTempDirectoryScoped({
+          prefix: "t3code-dmg-background-",
+        });
+        const dmgDir = path.join(stageResourcesDir, "dmg");
+        yield* fs.makeDirectory(dmgDir, { recursive: true });
+        const sourcePath = path.join(dmgDir, "dmg-background-nightly.svg");
+        yield* fs.writeFileString(sourcePath, '<svg xmlns="http://www.w3.org/2000/svg"/>');
+        const commands: Array<{ readonly command: string; readonly args: ReadonlyArray<string> }> =
+          [];
+
+        yield* stageDesktopDmgBackground(stageResourcesDir, "nightly", false).pipe(
+          Effect.provide(iconResizeSpawnerLayer(commands, [0, 0])),
+        );
+
+        assert.deepStrictEqual(
+          commands.map((command) => [command.command, ...command.args]),
+          [
+            [
+              "sips",
+              "-s",
+              "format",
+              "png",
+              "-z",
+              "380",
+              "540",
+              sourcePath,
+              "--out",
+              path.join(dmgDir, "dmg-background-nightly.png"),
+            ],
+            [
+              "sips",
+              "-s",
+              "format",
+              "png",
+              "-z",
+              "760",
+              "1080",
+              sourcePath,
+              "--out",
+              path.join(dmgDir, "dmg-background-nightly@2x.png"),
+            ],
+          ],
+        );
+      }),
+    ),
+  );
+
+  it.effect("fails clearly when the selected DMG background source is missing", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const stageResourcesDir = yield* fs.makeTempDirectoryScoped({
+          prefix: "t3code-dmg-background-missing-",
+        });
+
+        const error = yield* stageDesktopDmgBackground(stageResourcesDir, "latest", false).pipe(
+          Effect.flip,
+        );
+
+        assert.instanceOf(error, DesktopDmgBackgroundSourceMissingError);
+        assert.equal(error.channel, "latest");
+        assert.include(error.sourcePath, "dmg-background-latest.svg");
+      }),
+    ),
+  );
+
   it("resolves the assembled macOS app and native DMG names for every architecture", () => {
     assert.equal(resolveMacAppBundleDirectoryName("arm64"), "mac-arm64");
     assert.equal(resolveMacAppBundleDirectoryName("x64"), "mac");
@@ -1419,6 +1555,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.equal(mac.entitlements, "/tmp/entitlements.mac.plist");
       assert.equal(mac.entitlementsInherit, "/tmp/entitlements.mac.inherit.plist");
       assert.equal(mac.provisioningProfile, "/tmp/t3code.provisionprofile");
+      assert.match(String(mac.sign), /\/scripts\/sign-macos\.ts$/);
       assert.deepNestedInclude(mac, {
         extendInfo: {
           NSMicrophoneUsageDescription:

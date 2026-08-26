@@ -1,5 +1,5 @@
 import { UserButton, useAuth } from "@clerk/react";
-import { LogInIcon, SmartphoneIcon } from "lucide-react";
+import { LogInIcon, ServerIcon, SmartphoneIcon } from "lucide-react";
 import { TRITONAI_CONNECT_NAME } from "@t3tools/contracts";
 
 import { hasCloudPublicConfig } from "../../cloud/publicConfig";

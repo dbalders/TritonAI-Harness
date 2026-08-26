@@ -1,8 +1,8 @@
 import * as NodeAssert from "node:assert/strict";
 
 import { it } from "@effect/vitest";
-import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import { describe } from "vite-plus/test";
@@ -20,9 +20,10 @@ import { codexSessionAppServerArgs } from "./codexLaunchArgs.ts";
 import {
   buildTurnStartParams,
   computeDynamicToolFingerprint,
+  describeMcpElicitation,
   dynamicToolApprovalRequired,
-  dynamicToolInvocationAvailable,
   dynamicToolInvocationAllowed,
+  dynamicToolInvocationAvailable,
   hasConfiguredMcpServer,
   isRecoverableThreadResumeError,
   makeMemoryConsolidationNotificationFilter,
@@ -30,6 +31,7 @@ import {
   readCompatibleResumeThreadId,
   reconcilePluginSkillAvailability,
   resolvePluginSkillAvailability,
+  toMcpElicitationResponse,
   withPluginSkillLease,
 } from "./CodexSessionRuntime.ts";
 const isCodexAppServerRequestError = Schema.is(CodexErrors.CodexAppServerRequestError);
@@ -361,10 +363,7 @@ describe("buildTurnStartParams", () => {
     );
 
     NodeAssert.deepStrictEqual(params.input, [
-      {
-        type: "text",
-        text: "$fixture-records summarize the newest record",
-      },
+      { type: "text", text: "$fixture-records summarize the newest record" },
       {
         type: "skill",
         name: "fixture-records",
@@ -608,7 +607,7 @@ describe("buildCodexDeveloperInstructions", () => {
       reasoningEffort: "high",
     });
 
-    NodeAssert.ok(instructions.startsWith(CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS));
+    NodeAssert.ok(instructions.startsWith(codexDefaultModeDeveloperInstructions(true)));
     NodeAssert.match(instructions, /TritonAI Harness/);
     NodeAssert.doesNotMatch(instructions, /running in T3 Code/);
     NodeAssert.match(instructions, /Codex harness/);

@@ -9,7 +9,6 @@ import {
 } from "react";
 import {
   ArchiveIcon,
-  ArrowLeftIcon,
   BookOpenIcon,
   BotIcon,
   GitBranchIcon,
@@ -53,6 +52,7 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/appearance": PaletteIcon,
   "/settings/keybindings": KeyboardIcon,
   "/settings/providers": BotIcon,
+  "/settings/integrations": Link2Icon,
   "/settings/usage": GaugeIcon,
   "/settings/skills": BookOpenIcon,
   "/settings/plugins": PuzzleIcon,

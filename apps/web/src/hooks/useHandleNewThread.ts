@@ -9,7 +9,6 @@ import { useParams, useRouter } from "@tanstack/react-router";
 import { useCallback, useMemo } from "react";
 import {
   composerDraftHasUserContent,
-  type DraftId,
   markPromotedDraftThreadByRef,
   type DraftId,
   type DraftThreadEnvMode,
@@ -431,6 +430,7 @@ export function useNewThreadHandler() {
           // whatever sticky state just wrote".
           setModelSelection(draftId, carryModelSelection, { replaceOptions: true });
         }
+        carryComposerContentTo(draftId);
         seedNewDraftPrompt(draftId, options?.newDraftPrompt);
 
         await router.navigate({

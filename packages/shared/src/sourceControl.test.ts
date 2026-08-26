@@ -5,6 +5,7 @@ import * as Option from "effect/Option";
 import {
   detectSourceControlProviderFromRemoteUrl,
   getChangeRequestTerminologyForKind,
+  isSshRemoteUrl,
   isSourceControlProviderReady,
   resolveChangeRequestPresentation,
 } from "./sourceControl.ts";

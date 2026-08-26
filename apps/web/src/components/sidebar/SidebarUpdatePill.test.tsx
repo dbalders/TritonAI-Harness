@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const testState = vi.hoisted(() => ({
   desktopUpdate: null as DesktopUpdateState | null,
+  checkForUpdate: vi.fn(),
   downloadUpdate: vi.fn(),
   installUpdate: vi.fn(),
   confirm: vi.fn(),
@@ -14,6 +15,7 @@ const hooks = vi.hoisted(() => ({
   useCallback<T>(callback: T): T {
     return callback;
   },
+  useEffect(): void {},
   useMemoCache(size: number): unknown[] {
     return Array.from({ length: size }, () => Symbol.for("react.memo_cache_sentinel"));
   },
@@ -30,6 +32,7 @@ vi.mock("react", async (importOriginal) => {
   return {
     ...actual,
     useCallback: hooks.useCallback,
+    useEffect: hooks.useEffect,
     useState: hooks.useState,
   };
 });
@@ -39,6 +42,7 @@ vi.mock("../../env", () => ({ isElectron: true }));
 vi.mock("../../state/desktopUpdate", () => ({
   useDesktopUpdateState: () => testState.desktopUpdate,
 }));
+vi.mock("../../hooks/useMediaQuery", () => ({ useMediaQuery: () => false }));
 vi.mock("../../localApi", () => ({
   ensureLocalApi: () => ({ dialogs: { confirm: testState.confirm } }),
 }));
@@ -47,7 +51,7 @@ vi.mock("../ui/toast", () => ({
   toastManager: { add: testState.toast },
 }));
 
-import { SidebarUpdatePill } from "./SidebarUpdatePill";
+import { SidebarUpdateArchitectureWarningContent, SidebarUpdateControl } from "./SidebarUpdatePill";
 
 const desktopUpdateBase: DesktopUpdateState = {
   enabled: true,
@@ -103,6 +107,7 @@ async function flushPromises(): Promise<void> {
 describe("SidebarUpdatePill", () => {
   beforeEach(() => {
     testState.desktopUpdate = null;
+    testState.checkForUpdate.mockReset();
     testState.downloadUpdate.mockReset();
     testState.installUpdate.mockReset();
     testState.confirm.mockReset();
@@ -111,6 +116,7 @@ describe("SidebarUpdatePill", () => {
       configurable: true,
       value: {
         desktopBridge: {
+          checkForUpdate: testState.checkForUpdate,
           downloadUpdate: testState.downloadUpdate,
           installUpdate: testState.installUpdate,
         },
@@ -131,7 +137,7 @@ describe("SidebarUpdatePill", () => {
       runningUnderArm64Translation: true,
     };
 
-    const output = SidebarUpdatePill();
+    const output = SidebarUpdateArchitectureWarningContent();
 
     expect(nodeText(output)).toContain("Intel build on Apple Silicon");
     expect(nodeText(output)).toContain("The next app update will replace it");
@@ -150,15 +156,8 @@ describe("SidebarUpdatePill", () => {
       state: availableState,
     });
 
-    const output = SidebarUpdatePill();
-    const updateButton = findElement(
-      output,
-      (element) =>
-        element.type === "button" &&
-        String((element.props as { readonly className?: string }).className).includes(
-          "update-main",
-        ),
-    );
+    const output = SidebarUpdateControl();
+    const updateButton = findElement(output, (element) => element.type === "button");
 
     expect(updateButton).not.toBeNull();
     if (!updateButton) throw new Error("Expected the Harness update button.");
@@ -184,15 +183,8 @@ describe("SidebarUpdatePill", () => {
       state: downloadedState,
     });
 
-    const output = SidebarUpdatePill();
-    const updateButton = findElement(
-      output,
-      (element) =>
-        element.type === "button" &&
-        String((element.props as { readonly className?: string }).className).includes(
-          "update-main",
-        ),
-    );
+    const output = SidebarUpdateControl();
+    const updateButton = findElement(output, (element) => element.type === "button");
 
     expect(updateButton).not.toBeNull();
     if (!updateButton) throw new Error("Expected the Harness install button.");
@@ -212,15 +204,8 @@ describe("SidebarUpdatePill", () => {
     } as const;
     testState.confirm.mockReturnValue(false);
 
-    const output = SidebarUpdatePill();
-    const updateButton = findElement(
-      output,
-      (element) =>
-        element.type === "button" &&
-        String((element.props as { readonly className?: string }).className).includes(
-          "update-main",
-        ),
-    );
+    const output = SidebarUpdateControl();
+    const updateButton = findElement(output, (element) => element.type === "button");
 
     expect(updateButton).not.toBeNull();
     if (!updateButton) throw new Error("Expected the Harness install button.");

@@ -48,6 +48,7 @@ const makeServerSettingsLayer = () =>
 const makeInspectableServerSettingsLayer = () =>
   ServerSettingsModule.layerUnmanagedTest.pipe(
     Layer.provideMerge(ServerSecretStore.layer),
+    Layer.provideMerge(Layer.fresh(SqlitePersistenceMemory)),
     Layer.provideMerge(
       Layer.fresh(
         ServerConfig.layerTest(process.cwd(), {
@@ -60,6 +61,7 @@ const makeInspectableServerSettingsLayer = () =>
 const makeManagedServerSettingsLayer = () =>
   ServerSettingsModule.layerManagedTest({ TRITONAI_API_KEY: "managed-test-key" }).pipe(
     Layer.provideMerge(ServerSecretStore.layer),
+    Layer.provideMerge(Layer.fresh(SqlitePersistenceMemory)),
     Layer.provideMerge(
       Layer.fresh(
         ServerConfig.layerTest(process.cwd(), {
@@ -230,6 +232,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       assert.notInclude(persistedRaw, serverPassword);
       // @effect-diagnostics-next-line preferSchemaOverJson:off
       assert.deepEqual(JSON.parse(persistedRaw).providers.opencode, {
+        enabled: false,
         serverUrl: "http://127.0.0.1:4096",
       });
       assert.strictEqual(
@@ -1225,7 +1228,6 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       assert.isUndefined(persisted.providers.opencode.serverPassword);
       // Rehydrate the runtime-only secret so the existing sparse-settings comparison stays intact.
       Object.assign(persisted.providers.opencode, next.providers.opencode);
-      delete persisted.providers.opencode.enabled;
       delete persisted.providers.opencode.binaryPath;
       delete persisted.providers.opencode.customModels;
       assert.deepEqual(persisted, {

@@ -262,17 +262,22 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   );
 
   const prepareMcpSession = (threadId: ThreadId, providerInstanceId: ProviderInstanceId) =>
-    McpSessionRegistry.issueActiveMcpCredential({
-      threadId,
-      providerInstanceId,
-      capabilities: McpSessionRegistry.providerSessionCapabilities(),
-    }).pipe(
-      Effect.tap((credential) =>
-        credential
-          ? Effect.sync(() => McpProviderSession.setMcpProviderSession(credential.config))
-          : Effect.void,
-      ),
-    );
+    Effect.gen(function* () {
+      if (!(yield* agentBrowserAccessEnabled)) {
+        yield* revokeMcpCredential(threadId);
+        yield* Effect.sync(() => McpProviderSession.clearMcpProviderSession(threadId));
+        return undefined;
+      }
+      const credential = yield* issueMcpCredential({
+        threadId,
+        providerInstanceId,
+        capabilities: McpSessionRegistry.providerSessionCapabilities(),
+      });
+      if (credential) {
+        yield* Effect.sync(() => McpProviderSession.setMcpProviderSession(credential.config));
+      }
+      return credential;
+    });
   const clearMcpSession = (threadId: ThreadId) =>
     McpSessionRegistry.revokeActiveMcpThread(threadId).pipe(
       Effect.tap(() => Effect.sync(() => McpProviderSession.clearMcpProviderSession(threadId))),

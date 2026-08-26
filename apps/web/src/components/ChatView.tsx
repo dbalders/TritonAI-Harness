@@ -27,12 +27,13 @@ import {
   connectionStatusTitle,
   type EnvironmentConnectionPresentation,
 } from "@t3tools/client-runtime/connection";
-import { wasBootstrapThreadDeleted } from "@t3tools/client-runtime/errors";
 import {
   deleteEnvironmentAttachment,
   uploadEnvironmentAttachment,
 } from "@t3tools/client-runtime/state/attachments";
+import { wasBootstrapThreadDeleted } from "@t3tools/client-runtime/errors";
 import {
+  changeRequestAutoSettles,
   effectiveSettled,
   effectiveSnoozed,
   threadWokeAt,
@@ -185,7 +186,8 @@ import {
   CheckCircle2Icon,
   ChevronDownIcon,
   GitBranchIcon,
-  ImagePlusIcon,
+  Minimize2Icon,
+  PaperclipIcon,
   WifiOffIcon,
 } from "lucide-react";
 import { cn, randomHex } from "~/lib/utils";
@@ -231,6 +233,9 @@ import {
 import { buildPhysicalToLogicalProjectKeyMap } from "../sidebarProjectGrouping";
 import { buildDraftThreadRouteParams, buildThreadRouteParams } from "../threadRoutes";
 import {
+  beginBackgroundDraftSubmissionByRef,
+  clearBackgroundDraftSubmissionByRef,
+  composerDraftHasUserContent,
   type ComposerFileAttachment,
   type ComposerImageAttachment,
   type DraftThreadEnvMode,
@@ -270,7 +275,6 @@ import {
   threadHasOlderTurns,
 } from "@t3tools/client-runtime/state/threads";
 import { vcsEnvironment } from "../state/vcs";
-import { makeWorkspaceFileDropHandlers } from "./chat/workspaceFileDrop";
 import { useEnvironments, usePrimaryEnvironment } from "../state/environments";
 import {
   useProject,
@@ -654,8 +658,10 @@ function useLocalDispatchState(input: {
   const [localDispatch, setLocalDispatch] = useState<LocalDispatchSnapshot | null>(() =>
     readLocalDispatchHandoff(input.threadKey),
   );
-  const latestUserMessageId =
-    input.activeThread?.messages.findLast((message) => message.role === "user")?.id ?? null;
+  const latestUserMessage = input.activeThread?.messages.findLast(
+    (message) => message.role === "user",
+  );
+  const latestUserMessageId = latestUserMessage?.id ?? null;
 
   const resetLocalDispatch = useCallback(() => {
     clearLocalDispatchHandoff(input.threadKey);
@@ -713,10 +719,13 @@ function useLocalDispatchState(input: {
       const preparingWorktree = Boolean(options?.preparingWorktree);
       setLocalDispatch((current) => {
         const active = serverAcknowledgedLocalDispatch ? null : current;
+        const submissionIntent =
+          options?.submissionIntent ?? active?.submissionIntent ?? "foreground";
         const next = active
-          ? active.preparingWorktree === preparingWorktree
+          ? active.preparingWorktree === preparingWorktree &&
+            active.submissionIntent === submissionIntent
             ? active
-            : { ...active, preparingWorktree }
+            : { ...active, preparingWorktree, submissionIntent }
           : createLocalDispatchSnapshot(input.activeThread, options);
         writeLocalDispatchHandoff(input.threadKey, next);
         return next;
@@ -1457,6 +1466,9 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const composerFiles = useComposerDraftStore(
     (store) => store.getComposerDraft(composerDraftTarget)?.files ?? EMPTY_COMPOSER_FILES,
+  );
+  const composerHasUnsentContent = useComposerDraftStore((store) =>
+    composerDraftHasUserContent(store.getComposerDraft(composerDraftTarget)),
   );
   const setComposerDraftPrompt = useComposerDraftStore((store) => store.setPrompt);
   const setComposerDraftFiles = useComposerDraftStore((store) => store.setFiles);
@@ -4669,19 +4681,6 @@ function ChatViewContent(props: ChatViewProps) {
   // Dismissal lives in a module-level set (survives remounts); this tick just
   // forces a re-render so the banner leaves immediately.
   const [, setBranchMismatchDismissTick] = useState(0);
-  const composerHasDraftContent = useComposerDraftStore((store) => {
-    const draft = store.getComposerDraft(composerDraftTarget);
-    return Boolean(
-      draft &&
-      (draft.prompt.trim().length > 0 ||
-        draft.images.length > 0 ||
-        draft.files.length > 0 ||
-        draft.terminalContexts.length > 0 ||
-        draft.elementContexts.length > 0 ||
-        draft.previewAnnotations.length > 0 ||
-        draft.reviewComments.length > 0),
-    );
-  });
   const activeBranchMismatchKey = branchMismatchKey(
     activeThread?.id ?? null,
     localCheckoutBranchMismatch,
@@ -5738,17 +5737,74 @@ function ChatViewContent(props: ChatViewProps) {
       effort: ctxSelectedPromptEffort,
       text: messageTextForSend || ATTACHMENT_ONLY_BOOTSTRAP_PROMPT,
     });
+    if (composerRef.current?.validateProviderInput(outgoingMessageText) === false) {
+      return;
+    }
+
+    sendInFlightRef.current = true;
+    if (supportsAttachmentUploads && composerImagesSnapshot.length > 0) {
+      for (const image of composerImagesSnapshot) {
+        startAttachmentUpload({ environmentId, image });
+      }
+      await awaitAttachmentUploads(composerImagesSnapshot.map((image) => image.id));
+      if (getUploadedAttachments({ environmentId, images: composerImagesSnapshot }) === null) {
+        sendInFlightRef.current = false;
+        setThreadError(threadIdForSend, "Retry or remove failed image uploads before sending.");
+        return;
+      }
+    }
+
+    const resolvedSubmissionIntent =
+      submissionIntent === "background" && isLocalDraftThread ? "background" : "foreground";
+    if (
+      shouldDockDraftHeroForSubmission({
+        isDraftHeroState,
+        activeThreadKey,
+        submissionIntent: resolvedSubmissionIntent,
+      }) &&
+      activeThreadKey
+    ) {
+      let resolveDockStarted: (() => void) | undefined;
+      const dockStarted = new Promise<void>((resolve) => {
+        resolveDockStarted = resolve;
+      });
+      const dockTransition = runMobileComposerTransition(() => {
+        flushSync(() => {
+          captureDraftHeroComposerRect();
+          setDockedDraftHeroThreadKey(activeThreadKey);
+        });
+        resolveDockStarted?.();
+      });
+      void dockTransition.catch(() => resolveDockStarted?.());
+      await dockStarted;
+    }
+    beginLocalDispatch({
+      preparingWorktree: Boolean(baseBranchForWorktree),
+      submissionIntent: resolvedSubmissionIntent,
+    });
+
+    const messageIdForSend = newMessageId();
+    const messageCreatedAt = new Date().toISOString();
     const preparedConnection = readPreparedConnection(environmentId);
     const uploadedAttachmentIdsForCleanup: string[] = [];
     const resolveTurnAttachments = async () => {
       const images = await Promise.all(
-        composerImagesSnapshot.map(async (image) => ({
-          type: "image" as const,
-          name: image.name,
-          mimeType: image.mimeType,
-          sizeBytes: image.sizeBytes,
-          dataUrl: await readFileAsDataUrl(image.file),
-        })),
+        composerImagesSnapshot.map(async (image) => {
+          if (supportsAttachmentUploads) {
+            const uploaded = getUploadedAttachments({ environmentId, images: [image] })?.[0];
+            if (!uploaded) {
+              throw new Error(`Image '${image.name}' did not finish uploading.`);
+            }
+            return uploaded;
+          }
+          return {
+            type: "image" as const,
+            name: image.name,
+            mimeType: image.mimeType,
+            sizeBytes: image.sizeBytes,
+            dataUrl: await readFileAsDataUrl(image.file),
+          };
+        }),
       );
       const files = [];
       for (const attachment of composerFilesSnapshot) {
@@ -5797,21 +5853,25 @@ function ChatViewContent(props: ChatViewProps) {
         ...(attachment.path !== null ? { path: attachment.path } : {}),
       })),
     ];
-    // Sending always returns to the live edge. The new row becomes the
-    // anchored end-space target so it lands near the top while the response
-    // streams into the reserved space below it.
-    isAtEndRef.current = true;
-    timelineScrollModeRef.current = "anchoring-new-turn";
-    liveFollowUserScrollGenerationRef.current = anchorUserScrollGenerationRef.current;
-    setTimelineLiveFollowEnabled(true);
-    pendingTimelineAnchorRef.current = messageIdForSend;
-    activeTimelineAnchorIndexRef.current = null;
-    showScrollDebouncer.current.cancel();
-    setShowScrollToBottom(false);
-    setTimelineAnchor({
-      threadKey: scopedThreadKey(scopeThreadRef(activeThread.environmentId, threadIdForSend)),
-      messageId: messageIdForSend,
-    });
+    const shouldAnchorFirstMessage =
+      activeThread.latestTurn === null &&
+      !timelineMessages.some((message) => message.role === "user");
+    if (shouldAnchorFirstMessage) {
+      isAtEndRef.current = true;
+      timelineScrollModeRef.current = "anchoring-new-turn";
+      liveFollowUserScrollGenerationRef.current = anchorUserScrollGenerationRef.current;
+      setTimelineLiveFollowEnabled(true);
+      pendingTimelineAnchorRef.current = messageIdForSend;
+      activeTimelineAnchorIndexRef.current = null;
+      showScrollDebouncer.current.cancel();
+      setShowScrollToBottom(false);
+      setTimelineAnchor({
+        threadKey: scopedThreadKey(scopeThreadRef(activeThread.environmentId, threadIdForSend)),
+        messageId: messageIdForSend,
+      });
+    } else {
+      scrollToEnd();
+    }
     setOptimisticUserMessages((existing) => [
       ...existing,
       {
@@ -5968,6 +6028,13 @@ function ChatViewContent(props: ChatViewProps) {
             }
           : undefined;
       beginLocalDispatch({ preparingWorktree: false });
+      const backgroundThreadRef =
+        resolvedSubmissionIntent === "background"
+          ? scopeThreadRef(activeThread.environmentId, threadIdForSend)
+          : null;
+      if (backgroundThreadRef) {
+        beginBackgroundDraftSubmissionByRef(backgroundThreadRef);
+      }
       turnStartAttempted = true;
       const startResult = await startThreadTurn({
         environmentId,
@@ -6965,6 +7032,8 @@ function ChatViewContent(props: ChatViewProps) {
     setDragActive: setIsWorkspaceFileDragActive,
     addFiles: (files) => composerRef.current?.addDroppedFiles(files),
   });
+  const externalComposerDrawerAttached =
+    composerBannerItems.length > 0 || Boolean(threadSyncPhase && !activeEnvironmentUnavailable);
 
   return (
     <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background">
@@ -7042,8 +7111,8 @@ function ChatViewContent(props: ChatViewProps) {
                   role="status"
                   className="flex items-center gap-2 rounded-full border border-primary/25 bg-background/95 px-4 py-2.5 text-sm font-medium text-foreground shadow-lg"
                 >
-                  <ImagePlusIcon className="size-4 text-primary" aria-hidden="true" />
-                  Drop to attach
+                  <PaperclipIcon className="size-4 text-primary" aria-hidden="true" />
+                  Drop files to attach
                 </div>
               </div>
             ) : null}
@@ -7174,6 +7243,8 @@ function ChatViewContent(props: ChatViewProps) {
                             composerDraftTarget={composerDraftTarget}
                             environmentId={environmentId}
                             desktopLocalBackendId={activeDesktopLocalBackendId}
+                            attachmentUploadsCapabilityKnown={attachmentUploadsCapabilityKnown}
+                            supportsAttachmentUploads={supportsAttachmentUploads}
                             routeKind={routeKind}
                             routeThreadRef={routeThreadRef}
                             draftId={draftId}

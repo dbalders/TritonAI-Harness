@@ -144,6 +144,7 @@ function RootRouteView() {
         <SlowRpcRequestToastCoordinator />
         <HostedStaticEnvironmentBootstrap />
         {primaryEnvironmentAuthenticated ? <EventRouter /> : null}
+        {primaryEnvironmentAuthenticated ? <PlanAgentSelectionHeal /> : null}
         {primaryEnvironmentAuthenticated ? <TritonAiUsageWarning /> : null}
         {/* Provider updates stay available in Settings and the sidebar; TritonAI has no launch popup. */}
         {primaryEnvironmentAuthenticated ? (

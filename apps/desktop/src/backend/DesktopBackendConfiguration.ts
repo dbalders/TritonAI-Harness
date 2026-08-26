@@ -24,13 +24,14 @@ import serverPackageJson from "../../../server/package.json" with { type: "json"
 import * as DesktopBackendManager from "./DesktopBackendManager.ts";
 import * as DesktopSecretStoreKey from "./DesktopSecretStoreKey.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
+import * as DesktopComputerUse from "../computerUse/DesktopComputerUse.ts";
 import * as ElectronDialog from "../electron/ElectronDialog.ts";
 import * as ElectronSafeStorage from "../electron/ElectronSafeStorage.ts";
 import * as DesktopServerExposure from "./DesktopServerExposure.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopTritonAiApiKey from "../settings/DesktopTritonAiApiKey.ts";
 import * as DesktopWslEnvironment from "../wsl/DesktopWslEnvironment.ts";
-import * as DesktopComputerUse from "../computerUse/DesktopComputerUse.ts";
+import * as DesktopWslServerTree from "../wsl/DesktopWslServerTree.ts";
 
 export class DesktopBackendObservabilitySettingsReadError extends Schema.TaggedErrorClass<DesktopBackendObservabilitySettingsReadError>()(
   "DesktopBackendObservabilitySettingsReadError",
@@ -545,11 +546,13 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
   PlatformError.PlatformError,
   | DesktopEnvironment.DesktopEnvironment
   | DesktopWslEnvironment.DesktopWslEnvironment
+  | DesktopWslServerTree.DesktopWslServerTree
   | ElectronDialog.ElectronDialog
   | FileSystem.FileSystem
 > {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const wslEnvironment = yield* DesktopWslEnvironment.DesktopWslEnvironment;
+  const wslServerTree = yield* DesktopWslServerTree.DesktopWslServerTree;
   const ucsdEnvironment = yield* readUcsdEnvironmentFile;
   const tritonAiCredentialOverride = yield* DesktopTritonAiApiKey.readTritonAiCredentialOverride;
   const installerCredentials =
@@ -574,16 +577,14 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
   // LAN; the primary owns LAN exposure when the user opts in.
   const wslBindHost = "0.0.0.0";
 
-  // In packaged builds environment.appRoot is .../resources/app.asar — an
-  // archive FILE. The Windows primary reads its entry through
-  // ELECTRON_RUN_AS_NODE (asar-aware), but the WSL backend launches plain
-  // `wsl.exe -- node`, which can't read inside an asar. electron-builder unpacks
-  // the server bundle + node-pty (see asarUnpack in build-desktop-artifact.ts)
-  // to the app.asar.unpacked sibling, so point WSL there. In dev appRoot is
-  // already a real directory, so this is a no-op.
-  const wslAppRoot = environment.isPackaged
-    ? environment.path.join(environment.resourcesPath, "app.asar.unpacked")
-    : environment.appRoot;
+  // In packaged builds the server tree ships inside resources/server.asar —
+  // an archive FILE the Windows primary reads through ELECTRON_RUN_AS_NODE
+  // (asar-aware). The WSL backend launches plain `wsl.exe -- node`, which
+  // can't read an asar, so materialize (or reuse) the extracted copy of the
+  // sidecar before preflighting. In dev the server tree is the real checkout
+  // directory and ensure returns it unchanged.
+  const serverTree = yield* wslServerTree.ensure;
+  const wslAppRoot = serverTree.ok ? serverTree.root : environment.serverRoot;
   const wslEntryPath = environment.path.join(wslAppRoot, "apps/server/dist/bin.mjs");
 
   const preflight = serverTree.ok
@@ -600,7 +601,11 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
         // arch/distro), rather than silently dropping into a fragile runtime build.
         allowBuild: !environment.isPackaged,
       })
-    : ({ _tag: "Failed", reason: serverTree.reason, fatal: serverTree.fatal } as const);
+    : ({
+        _tag: "Failed",
+        reason: serverTree.reason,
+        fatal: serverTree.fatal,
+      } satisfies WslPreflightFailure);
 
   // Every operation after preflight uses the same concrete distro. In
   // default-tracking mode this closes the race where the system default
@@ -872,6 +877,7 @@ export const make = Effect.gen(function* () {
     }).pipe(
       Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
       Effect.provideService(DesktopWslEnvironment.DesktopWslEnvironment, wslEnvironment),
+      Effect.provideService(DesktopWslServerTree.DesktopWslServerTree, wslServerTree),
       Effect.provideService(ElectronDialog.ElectronDialog, dialog),
       Effect.provideService(FileSystem.FileSystem, fileSystem),
     );
@@ -937,6 +943,7 @@ export const make = Effect.gen(function* () {
         return yield* resolveWslStartConfig({ ...shared, ...input }).pipe(
           Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
           Effect.provideService(DesktopWslEnvironment.DesktopWslEnvironment, wslEnvironment),
+          Effect.provideService(DesktopWslServerTree.DesktopWslServerTree, wslServerTree),
           Effect.provideService(ElectronDialog.ElectronDialog, dialog),
           Effect.provideService(FileSystem.FileSystem, fileSystem),
         );

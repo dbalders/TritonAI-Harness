@@ -5,6 +5,14 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodeModule from "node:module";
 import * as NodeCrypto from "node:crypto";
 
+import {
+  createPackageWithOptions,
+  extractAll,
+  getRawHeader,
+  statFile,
+  type DirectoryRecord,
+} from "@electron/asar";
+
 import { TRITONAI_APP_BASE_NAME, TRITONAI_APP_ID_BASE } from "@t3tools/contracts";
 import { fromYaml } from "@t3tools/shared/schemaYaml";
 import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
@@ -24,6 +32,11 @@ import {
 } from "./lib/brand-assets.ts";
 import { getDefaultBuildArch } from "./lib/build-target-arch.ts";
 import {
+  findInlinedExternalPackages,
+  selectCliRuntimeExternalDependencies,
+} from "./lib/cli-external-packages.ts";
+import { loadManagedHarnessConfigForBuild } from "./lib/managed-harness-config.ts";
+import {
   PRODUCTION_PLUGIN_CONFIGURATION_ENV,
   PRODUCTION_PLUGIN_SOURCE_ENV,
   managedPluginProofFileName,
@@ -34,7 +47,6 @@ import {
   type ManagedPluginComposition,
 } from "./lib/managed-plugin-composition.ts";
 import { loadRepoEnv } from "./lib/public-config.ts";
-import { loadManagedHarnessConfigForBuild } from "./lib/managed-harness-config.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
@@ -96,6 +108,7 @@ const decodeWorkspaceConfig = Schema.decodeEffect(fromYaml(WorkspaceConfig));
 const decodeNodePtyManifest = Schema.decodeUnknownEffect(
   Schema.fromJsonString(Schema.Struct({ version: Schema.String })),
 );
+const encodeStageWorkspaceConfig = Schema.encodeEffect(fromYaml(StageWorkspaceConfig));
 const readWorkspaceConfig = Effect.fn("readWorkspaceConfig")(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -1014,6 +1027,7 @@ interface StagePackageJson {
   };
 }
 
+export const STAGE_INSTALL_ARGS = ["install", "--prod"] as const;
 export const RUNTIME_DEPLOY_ARGS = [
   "exec",
   "pnpm",
@@ -1069,6 +1083,11 @@ export const MAC_FILE_EXCLUSIONS = [
   "!**/node_modules/node-pty/prebuilds/win32-*/**/*",
   "!**/node_modules/node-pty/third_party/conpty/**/*",
 ] as const;
+// Production plugins are materialized into a verified temporary snapshot before import. Their
+// Harness-owned Effect peer is linked from app.asar.unpacked because a filesystem symlink cannot
+// traverse Electron's virtual asar filesystem. Keep the full dependency tree available beside
+// Effect so its own runtime imports resolve from that real filesystem location.
+export const MAC_ASAR_UNPACK = ["**/node_modules/**"] as const;
 // Windows ships the server tree (bundle + node_modules) as a separate
 // resources/server.asar sidecar instead of loose files: the NSIS installer
 // then extracts a handful of large archives instead of thousands of small
@@ -1120,21 +1139,6 @@ export const WINDOWS_SERVER_EXTRA_RESOURCES = [
     filter: [WINDOWS_SERVER_ASAR_RESOURCE, `${WINDOWS_SERVER_ASAR_RESOURCE}.unpacked/**/*`],
   },
 ] as const;
-// Production plugins are materialized into a verified temporary snapshot before import. Their
-// Harness-owned Effect peer is linked from app.asar.unpacked because a filesystem symlink cannot
-// traverse Electron's virtual asar filesystem. Keep the full dependency tree available beside
-// Effect so its own runtime imports resolve from that real filesystem location.
-export const MAC_ASAR_UNPACK = ["**/node_modules/**"] as const;
-// The WSL backend launches the server with plain `wsl.exe -- node`, which
-// cannot read inside an asar archive — and the server bundle externalizes its
-// runtime deps, so the whole node_modules tree must be unpacked, not just the
-// bundle (otherwise ERR_MODULE_NOT_FOUND: "Cannot find package 'effect'").
-// The Windows primary backend reads the same files through the asar redirect,
-// so nothing is duplicated.
-export const WINDOWS_ASAR_UNPACK = ["apps/server/dist/**", "**/node_modules/**"] as const;
-// Keep the managed config under apps/server/dist so managedPolicy can verify it beside the
-// packaged server bundle. Listing that same source as an extra resource makes electron-builder
-// omit it from app.asar and the packaged backend exits before readiness.
 export const DESKTOP_EXTRA_RESOURCES = [
   {
     from: "apps/desktop/prod-resources/resource-monitor",
@@ -1534,6 +1538,19 @@ export function resolveDesktopRuntimeNativeDependencies(): Record<string, string
   };
 }
 
+export function resolveMacStageDependencies(input: {
+  readonly serverDependencies: Record<string, string>;
+  readonly desktopDependencies: Record<string, string>;
+  readonly arch: typeof BuildArch.Type;
+  readonly fffNodeVersion: string;
+}) {
+  return {
+    ...selectCliRuntimeExternalDependencies(input.serverDependencies),
+    ...input.desktopDependencies,
+    ...resolveFffNativeDependencies("mac", input.arch, input.fffNodeVersion),
+  };
+}
+
 export interface ClerkPasskeyNativeArtifact {
   readonly packageName: string;
   readonly binaryFileName: string;
@@ -1673,7 +1690,7 @@ export const assertPackagedFfiRsNativeBinaries = Effect.fn("assertPackagedFfiRsN
     for (const artifact of resolveFfiRsNativeArtifacts(input.platform, input.arch)) {
       const binaryPath = path.join(
         resourcesDir,
-        "app.asar.unpacked",
+        input.platform === "win" ? `${WINDOWS_SERVER_ASAR_RESOURCE}.unpacked` : "app.asar.unpacked",
         "node_modules",
         ...artifact.packageName.split("/"),
         artifact.binaryFileName,
@@ -2840,22 +2857,25 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     productName: resolveDesktopProductName(version),
     artifactName: "TritonAI-Harness-${version}-${arch}.${ext}",
     electronLanguages: [...DESKTOP_ELECTRON_LANGUAGES],
+    // electron-builder's default app matcher excludes several package file types,
+    // including `*.d.ts`. Managed plugin integrity describes the complete staged
+    // package, so preserve its exact inventory as an independent file set.
+    files: [
+      "**/*",
+      ...DESKTOP_FILE_EXCLUSIONS,
+      ...(platform === "mac" ? MAC_FILE_EXCLUSIONS : []),
+      ...(platform === "win" ? [] : [DESKTOP_MANAGED_PLUGIN_FILE_SET]),
+    ],
     directories: {
       buildResources: "apps/desktop/resources",
     },
-    // electron-builder's default app matcher excludes several package file types,
-    // including `*.d.ts`. Managed plugin integrity describes the complete staged
-    // package, so copy that directory as an independent file set to preserve the
-    // exact inventory that the runtime verifies.
-    files: ["**/*", ...DESKTOP_FILE_EXCLUSIONS, DESKTOP_MANAGED_PLUGIN_FILE_SET],
-    // Windows needs the complete server runtime outside the asar for WSL. macOS unpacks the
+    // Windows ships the server tree in its hand-packed sidecar. macOS unpacks the
     // Harness-owned dependency tree that verified production-plugin snapshots link at runtime.
-    ...(platform === "win"
-      ? { asarUnpack: [...WINDOWS_ASAR_UNPACK] }
-      : platform === "mac"
-        ? { asarUnpack: [...MAC_ASAR_UNPACK] }
-        : {}),
-    extraResources: DESKTOP_EXTRA_RESOURCES,
+    ...(platform === "mac" ? { asarUnpack: [...MAC_ASAR_UNPACK] } : {}),
+    extraResources: [
+      ...DESKTOP_EXTRA_RESOURCES,
+      ...(platform === "win" ? WINDOWS_SERVER_EXTRA_RESOURCES : []),
+    ],
   };
   const updateChannel = resolveDesktopUpdateChannel(version);
   if (!isDesktopPreviewVersion(version)) {
@@ -2876,11 +2896,8 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     const path = yield* Path.Path;
     const repoRoot = yield* RepoRoot;
     buildConfig.mac = {
-      // TritonAI creates DMGs from the assembled app with Apple's hdiutil below. The
-      // dmgbuild path used by electron-builder copies into a mounted image and can be
-      // denied by macOS even when the same signed app and hdiutil source-folder flow
-      // are valid. Keep electron-builder responsible for app assembly/signing and the
-      // ZIP required by macOS updates, without inheriting that brittle copy boundary.
+      // TritonAI creates DMGs from the assembled app with Apple's hdiutil below. Keep
+      // electron-builder responsible for app assembly/signing and the update ZIP.
       target: target === "dmg" ? ["zip"] : [target],
       icon: "icon.icns",
       category: "public.app-category.developer-tools",
@@ -2898,8 +2915,6 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       ...(macPasskeySigning
         ? {
             entitlements: macPasskeySigning.entitlementsPath,
-            // Chromium captures microphone input in the base Electron Helper
-            // AudioService process, so its child signature needs the same capability.
             entitlementsInherit: macPasskeySigning.entitlementsInheritPath,
             provisioningProfile: macPasskeySigning.provisioningProfilePath,
           }
@@ -2941,7 +2956,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       // t3code:// OAuth callbacks to the app.
       protocols: [
         {
-          name: "T3 Code",
+          name: TRITONAI_APP_BASE_NAME,
           schemes: ["t3code", "t3code-dev"],
         },
       ],
@@ -2955,7 +2970,11 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
 
   if (platform === "win") {
     buildConfig.npmRebuild = false;
+    // Keep blockmap-based differential downloads enabled while changing the
+    // installed file topology. The optimization is in the payload shape, not
+    // in trading update bandwidth for install speed.
     buildConfig.nsis = {
+      differentialPackage: true,
       include: "apps/desktop/resources/installer.nsh",
     };
     const winConfig: Record<string, unknown> = {
@@ -3175,6 +3194,12 @@ export const stageWindowsServerSidecar = Effect.fn("stageWindowsServerSidecar")(
     // ffi-rs) from the extracted copy of this same tree.
     ...resolveFffNativeDependencies("win", input.arch, input.fffNodeVersion),
     ...resolveFffNativeDependencies("linux", input.arch, input.fffNodeVersion),
+    ...resolveFfiRsNativeDependencies("win", input.arch, serverPackageJson.dependencies["ffi-rs"]),
+    ...resolveFfiRsNativeDependencies(
+      "linux",
+      input.arch,
+      serverPackageJson.dependencies["ffi-rs"],
+    ),
   };
   const sidecarPatchedDependencies = createStagePatchedDependencies(
     input.patchedDependencies,
@@ -3743,6 +3768,68 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     }
   }
 
+  // Assert against the emitted bundle, not the bundler config. `alwaysBundle`
+  // only forces packages IN, so a transitive dependency of an external package
+  // is bundled by default however the predicate is written — that silently
+  // inlined msgpackr-extract and its native loader while every list-based test
+  // still passed. An inlined native loader resolves its prebuilds relative to
+  // the bundle and quietly falls back to a slower pure-JS path, so this fails
+  // the build rather than shipping a silent regression.
+  {
+    const chunkNames = (yield* fs.readDirectory(distDirs.serverDist)).filter((entry) =>
+      entry.endsWith(".mjs"),
+    );
+    let totalRegions = 0;
+    const inlined = new Set<string>();
+    const inlinedPackages = new Set<string>();
+    for (const chunkName of chunkNames) {
+      const source = yield* fs.readFileString(path.join(distDirs.serverDist, chunkName));
+      const scan = findInlinedExternalPackages(source);
+      totalRegions += scan.regionCount;
+      for (const name of scan.inlined) inlined.add(name);
+      for (const name of scan.inlinedPackages) inlinedPackages.add(name);
+    }
+    if (inlined.size > 0) {
+      return yield* new InlinedExternalPackageError({
+        packages: [...inlined].sort(),
+      });
+    }
+    // No regions at all means the scan went blind (marker format changed), not
+    // that the bundle is clean.
+    if (totalRegions === 0) {
+      return yield* new InlinedExternalPackageError({
+        packages: ["<no module regions found; the bundle scan needs updating>"],
+      });
+    }
+    // The check above is one-directional: it only proves nothing external got
+    // inlined. A regression to externalizing everything would also pass it,
+    // since source-file regions still exist -- and that is the failure this
+    // whole change exists to prevent, because those packages are not in the
+    // selected sidecar closure and both backends would die on ERR_MODULE_NOT_FOUND.
+    // `effect` is imported by every server module, so it is inlined in any
+    // correctly bundled build.
+    // The list-based check above only sees packages someone already thought to
+    // list. bufferutil and utf-8-validate were inlined for exactly that reason:
+    // native, but absent from the list, so nothing flagged them. Ask the store
+    // what each inlined package actually is instead.
+    const nativeInlined: string[] = [];
+    for (const name of [...inlinedPackages].sort()) {
+      const packageDir = yield* findStorePackageDirectory(repoRoot, name);
+      if (packageDir === null) continue;
+      if (yield* hasNativeLoaderMarkers(packageDir)) nativeInlined.push(name);
+    }
+    if (nativeInlined.length > 0) {
+      return yield* new InlinedNativePackageError({ packages: nativeInlined });
+    }
+
+    if (!inlinedPackages.has(BUNDLE_SELF_CONTAINED_SENTINEL)) {
+      return yield* new ExternalizedBundleError({
+        sentinel: BUNDLE_SELF_CONTAINED_SENTINEL,
+        inlinedPackageCount: inlinedPackages.size,
+      });
+    }
+  }
+
   const bundledManagedConfigSource = yield* fs.readFileString(bundledManagedConfig);
   if (bundledManagedConfigSource !== managedHarnessConfig.source) {
     return yield* new ManagedHarnessConfigArtifactError({
@@ -3778,17 +3865,21 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     }
   }
 
-  yield* Effect.log(
-    "[desktop-artifact] Deploying production dependencies from the frozen workspace lockfile...",
-  );
-  const deployCommand = yield* resolveSpawnCommand("vp", [...RUNTIME_DEPLOY_ARGS, stageAppDir]);
-  yield* runCommand(
-    ChildProcess.make(deployCommand.command, deployCommand.args, {
-      cwd: repoRoot,
-      shell: deployCommand.shell,
-    }),
-    { label: "Deploy frozen desktop runtime", verbose: options.verbose },
-  );
+  // The Windows build now separates its server runtime into server.asar, so keep its
+  // purpose-built installs below. macOS and Linux retain the frozen desktop-runtime deploy.
+  if (options.platform !== "win") {
+    yield* Effect.log(
+      "[desktop-artifact] Deploying production dependencies from the frozen workspace lockfile...",
+    );
+    const deployCommand = yield* resolveSpawnCommand("vp", [...RUNTIME_DEPLOY_ARGS, stageAppDir]);
+    yield* runCommand(
+      ChildProcess.make(deployCommand.command, deployCommand.args, {
+        cwd: repoRoot,
+        shell: deployCommand.shell,
+      }),
+      { label: "Deploy frozen desktop runtime", verbose: options.verbose },
+    );
+  }
 
   yield* fs.makeDirectory(path.join(stageAppDir, "apps/desktop"), { recursive: true });
   if (options.platform !== "win") {
@@ -3798,7 +3889,18 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   yield* Effect.log("[desktop-artifact] Staging release app...");
   yield* fs.copy(distDirs.desktopDist, path.join(stageAppDir, "apps/desktop/dist-electron"));
   yield* fs.copy(distDirs.desktopResources, stageResourcesDir);
-  yield* fs.copy(distDirs.serverDist, path.join(stageAppDir, "apps/server/dist"));
+  if (options.platform === "mac" && options.target === "dmg") {
+    yield* stageDesktopDmgBackground(
+      stageResourcesDir,
+      resolveDesktopUpdateChannel(appVersion),
+      options.verbose,
+    );
+  }
+  // On Windows the server tree ships in the server.asar sidecar instead of
+  // app.asar (see stageWindowsServerSidecar), so the app stage omits it.
+  if (options.platform !== "win") {
+    yield* fs.copy(distDirs.serverDist, path.join(stageAppDir, "apps/server/dist"));
+  }
   yield* stageCuaDriver({
     stageResourcesDir,
     platform: options.platform,
@@ -3860,36 +3962,59 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     yield* fs.writeFileString(macEntitlementsInheritPath, renderMacInheritedEntitlements());
   }
 
-  const stageDependencies = {
-    ...resolvedServerDependencies,
-    ...resolvedDesktopRuntimeDependencies,
-    ...resolveFffNativeDependencies(
-      options.platform,
-      options.arch,
-      serverPackageJson.dependencies["@ff-labs/fff-node"],
-    ),
-    ...resolveFfiRsNativeDependencies(
-      options.platform,
-      options.arch,
-      serverPackageJson.dependencies["ffi-rs"],
-    ),
-    ...resolveCuaDriverNativeDependencies(
-      options.platform,
-      options.arch,
-      desktopPackageJson.dependencies["@trycua/cua-driver"],
-    ),
-    // Windows artifacts also bundle the same-architecture WSL Linux backend, which loads the
-    // fff native binary through ffi-rs. The platform fff binary above is the
-    // host's (win32), so promote the matching Linux fff binaries too; without
-    // them file-finding in WSL fails to load its Linux native package.
-    ...(options.platform === "win"
-      ? resolveFffNativeDependencies(
-          "linux",
-          options.arch,
-          serverPackageJson.dependencies["@ff-labs/fff-node"],
-        )
-      : {}),
-  };
+  // Windows splits dependencies per process: app.asar carries only the
+  // desktop main-process runtime deps, while the server bundle's deps live in
+  // the server.asar sidecar (see stageWindowsServerSidecar). macOS adds only
+  // server packages that remain external to its merged app.asar. Linux retains
+  // its existing full dependency tree.
+  const stageDependencies =
+    options.platform === "win"
+      ? {
+          ...resolvedDesktopRuntimeDependencies,
+          ...resolveCuaDriverNativeDependencies(
+            "win",
+            options.arch,
+            desktopPackageJson.dependencies["@trycua/cua-driver"],
+          ),
+        }
+      : options.platform === "mac"
+        ? {
+            ...resolveMacStageDependencies({
+              serverDependencies: resolvedServerDependencies,
+              desktopDependencies: resolvedDesktopRuntimeDependencies,
+              arch: options.arch,
+              fffNodeVersion: serverPackageJson.dependencies["@ff-labs/fff-node"],
+            }),
+            ...resolveFfiRsNativeDependencies(
+              "mac",
+              options.arch,
+              serverPackageJson.dependencies["ffi-rs"],
+            ),
+            ...resolveCuaDriverNativeDependencies(
+              "mac",
+              options.arch,
+              desktopPackageJson.dependencies["@trycua/cua-driver"],
+            ),
+          }
+        : {
+            ...resolvedServerDependencies,
+            ...resolvedDesktopRuntimeDependencies,
+            ...resolveFffNativeDependencies(
+              options.platform,
+              options.arch,
+              serverPackageJson.dependencies["@ff-labs/fff-node"],
+            ),
+            ...resolveFfiRsNativeDependencies(
+              "linux",
+              options.arch,
+              serverPackageJson.dependencies["ffi-rs"],
+            ),
+            ...resolveCuaDriverNativeDependencies(
+              "linux",
+              options.arch,
+              desktopPackageJson.dependencies["@trycua/cua-driver"],
+            ),
+          };
   const stagePatchedDependencies = createStagePatchedDependencies(
     workspacePatchedDependencies,
     stageDependencies,
@@ -3938,15 +4063,26 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     patchedDependencies: stagePatchedDependencies,
     overrides: resolvedOverrides,
   });
-  const stageWorkspaceConfigString = yield* Schema.encodeEffect(fromYaml(StageWorkspaceConfig))(
-    stageWorkspaceConfig,
-  );
+  const stageWorkspaceConfigString = yield* encodeStageWorkspaceConfig(stageWorkspaceConfig);
   yield* fs.writeFileString(
     path.join(stageAppDir, "pnpm-workspace.yaml"),
     stageWorkspaceConfigString,
   );
+
   if (Object.keys(stagePatchedDependencies).length > 0) {
     yield* fs.copy(path.join(repoRoot, "patches"), path.join(stageAppDir, "patches"));
+  }
+
+  if (options.platform === "win") {
+    yield* Effect.log("[desktop-artifact] Installing staged desktop dependencies...");
+    const installCommand = yield* resolveSpawnCommand("vp", [...STAGE_INSTALL_ARGS]);
+    yield* runCommand(
+      ChildProcess.make(installCommand.command, installCommand.args, {
+        cwd: stageAppDir,
+        shell: installCommand.shell,
+      }),
+      { label: "vp install --prod (desktop app)", verbose: options.verbose },
+    );
   }
   yield* stageClerkPasskeyNativeBinaries(stageAppDir, options.platform, options.arch);
 
@@ -4045,6 +4181,27 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       distPath: stageDistDir,
       platform: options.platform,
       arch: options.arch,
+    });
+  }
+
+  // Prove the packaged bundle is self-contained by loading it the way the WSL
+  // backend does, rather than by reasoning about the emitted source.
+  //
+  // Static analysis kept getting this wrong here. Scanning for bare imports
+  // matched specifiers inside effect's JSDoc examples and inside ajv's runtime
+  // codegen template, and asserting that one sentinel package was inlined
+  // missed a build that inlined `effect` while leaving `yaml` external. Node's
+  // resolver has no such ambiguity: it either finds every import or it does not.
+  //
+  // Only Windows unpacks anything; macOS and Linux keep the whole tree inside
+  // the app asar. Windows validates and executes the separately packed server
+  // sidecar after electron-builder copies it into the final payload.
+  if (options.platform === "win") {
+    yield* validateWindowsPackagedPayload({
+      stageDistDir,
+      appExecutableName: `${resolveDesktopProductName(appVersion)}.exe`,
+      targetArch: options.arch,
+      verbose: options.verbose,
     });
   }
 

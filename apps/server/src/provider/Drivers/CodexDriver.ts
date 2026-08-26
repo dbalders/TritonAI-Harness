@@ -225,6 +225,7 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
       const serverConfig = yield* ServerConfig;
       const serverSettings = yield* ServerSettingsService;
       const eventLoggers = yield* ProviderEventLoggers;
+      const modelManifest = yield* ModelManifest.ModelManifest;
       const previewAutomationBroker = yield* Effect.serviceOption(
         PreviewAutomationBroker.PreviewAutomationBroker,
       );

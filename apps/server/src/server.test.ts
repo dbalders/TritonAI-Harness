@@ -105,6 +105,7 @@ import { makeRoutesLayerFor } from "./server.ts";
 import {
   isThreadDetailEvent,
   resolveAvailableEditorsForConfig,
+  resolveFileManagerRevealKindForConfig,
   shouldStreamManagedPolicyDiagnostics,
 } from "./ws.ts";
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";

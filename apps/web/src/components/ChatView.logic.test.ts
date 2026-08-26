@@ -32,6 +32,7 @@ import {
   resolveDraftPromotionNavigationTarget,
   resolveThreadMetadataUpdateForNextTurn,
   resolveSendEnvMode,
+  resolveDraftHeroState,
   shouldCleanupAttachmentUploadsAfterTurnStart,
   scheduleEnvironmentReconnectWarning,
   startNewThreadForProject,

@@ -23,6 +23,19 @@ import {
   resolveBackgroundActivityProfileOption,
 } from "./SettingsPanels.logic";
 
+describe("typography settings restore", () => {
+  it("detects family and size changes by font row", () => {
+    expect(getChangedTypographySettingLabels(DEFAULT_UNIFIED_SETTINGS)).toEqual([]);
+    expect(
+      getChangedTypographySettingLabels({
+        ...DEFAULT_UNIFIED_SETTINGS,
+        fontSizeInterface: 18,
+        fontFamilyCode: "Fira Code",
+      }),
+    ).toEqual(["Interface font", "Code font"]);
+  });
+});
+
 describe("providerUpdateTrackingKey", () => {
   it("scopes in-flight provider updates to both environment and driver", () => {
     const environmentId = EnvironmentId.make("primary-a");

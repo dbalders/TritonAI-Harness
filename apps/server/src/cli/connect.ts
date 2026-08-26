@@ -5,7 +5,6 @@ import {
   type RelayClientInstallProgressStage,
 } from "@t3tools/contracts";
 import { RelayOkResponse } from "@t3tools/contracts/relay";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as RelayClient from "@t3tools/shared/relayClient";
 import { withRelayClientTracing } from "@t3tools/shared/relayTracing";
 import * as Cause from "effect/Cause";
@@ -440,7 +439,7 @@ const runCloudCommand = Effect.fn("cloud.cli.run_cloud_command")(function* <A, E
     ),
     RelayClient.layerCloudflared({ baseDir: config.baseDir }),
     EnvironmentAuth.runtimeLayer,
-    ServerEnvironment.layer,
+    ServerEnvironment.layer.pipe(Layer.provide(ServerSecretStore.layer)),
     headlessRelayClientTracingLayer,
   ).pipe(
     Layer.provideMerge(FetchHttpClient.layer),

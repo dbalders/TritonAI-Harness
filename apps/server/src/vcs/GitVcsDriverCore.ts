@@ -1498,29 +1498,35 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     if (branchResult === null) {
       return NON_REPOSITORY_REMOTE_STATUS_DETAILS;
     }
-    if (branchResult.exitCode !== 0 && branchResult.exitCode !== 1) {
+    let branch: string | null;
+    if (branchResult.exitCode !== 0) {
       if (isNonRepositoryGitStderr(branchResult.stderr)) {
         return NON_REPOSITORY_REMOTE_STATUS_DETAILS;
       }
-      return yield* new GitCommandError({
-        ...gitCommandContext({
-          operation: "GitVcsDriver.statusDetailsRemote.branch",
+      if (branchResult.exitCode === 1) {
+        // symbolic-ref uses exit code 1 for a detached HEAD. This is a valid
+        // repository state with no current branch, not a Git command failure.
+        branch = null;
+      } else if (!isUnbornHeadStderr(branchResult.stderr)) {
+        return yield* new GitCommandError({
+          ...gitCommandContext({
+            operation: "GitVcsDriver.statusDetailsRemote.branch",
+            cwd,
+            args: ["symbolic-ref", "--quiet", "--short", "HEAD"],
+          }),
+          detail: "Git branch lookup failed.",
+          exitCode: branchResult.exitCode,
+          stdoutLength: branchResult.stdout.length,
+          stderrLength: branchResult.stderr.length,
+        });
+      } else {
+        const branchValue = yield* runGitStdout(
+          "GitVcsDriver.statusDetailsRemote.unbornBranch",
           cwd,
-          args: ["symbolic-ref", "--quiet", "--short", "HEAD"],
-        }),
-        detail: "Git branch lookup failed.",
-        exitCode: branchResult.exitCode,
-        stdoutLength: branchResult.stdout.length,
-        stderrLength: branchResult.stderr.length,
-      });
-    }
-
-      const branchValue = yield* runGitStdout(
-        "GitVcsDriver.statusDetailsRemote.unbornBranch",
-        cwd,
-        ["symbolic-ref", "--quiet", "--short", "HEAD"],
-      );
-      branch = branchValue.trim() || null;
+          ["symbolic-ref", "--quiet", "--short", "HEAD"],
+        );
+        branch = branchValue.trim() || null;
+      }
     } else {
       const branchValue = branchResult.stdout.trim();
       branch = branchValue.length > 0 && branchValue !== "HEAD" ? branchValue : null;

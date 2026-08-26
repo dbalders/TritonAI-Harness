@@ -138,6 +138,7 @@ describe("ModelManifest service", () => {
         serviceLayers({
           prefix: "model-manifest-fetch-test",
           response: () => Response.json(REMOTE_MANIFEST),
+          settings: { enableProviderUpdateChecks: true },
         }),
       ),
     ),
@@ -153,6 +154,7 @@ describe("ModelManifest service", () => {
         serviceLayers({
           prefix: "model-manifest-malformed-test",
           response: () => Response.json({ version: 999, nonsense: true }),
+          settings: { enableProviderUpdateChecks: true },
         }),
       ),
     ),

@@ -106,10 +106,7 @@ export function getDesktopUpdateInstallConfirmationMessage(
   state: Pick<DesktopUpdateState, "availableVersion" | "downloadedVersion">,
 ): string {
   const version = state.downloadedVersion ?? state.availableVersion;
-  const windowsInstallWarning = isWindowsPlatform(platform)
-    ? "\n\nOn Windows, TritonAI Harness may remain closed for several minutes while the update installs, and no installer window may appear. TritonAI Harness will reopen automatically when installation finishes."
-    : "";
-  return `Install update${version ? ` ${version}` : ""} and restart TritonAI Harness?\n\nAny running tasks will be interrupted. Make sure you're ready before continuing.${windowsInstallWarning}`;
+  return `Install update${version ? ` ${version}` : ""} and restart TritonAI Harness?\n\nAny running tasks will be interrupted. Make sure you're ready before continuing.`;
 }
 
 export function getDesktopUpdateActionError(result: DesktopUpdateActionResult): string | null {

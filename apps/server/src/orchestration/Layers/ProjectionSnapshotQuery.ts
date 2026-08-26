@@ -25,6 +25,7 @@ import {
   ModelSelection,
   ProjectId,
   ProviderInstanceId,
+  ThreadLinkedPullRequest,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Arr from "effect/Array";
@@ -71,6 +72,10 @@ const decodeReadModel = Schema.decodeUnknownEffect(OrchestrationReadModel);
 const decodeShellSnapshot = Schema.decodeUnknownEffect(OrchestrationShellSnapshot);
 const decodeThread = Schema.decodeUnknownEffect(OrchestrationThread);
 const isProviderInstanceId = Schema.is(ProviderInstanceId);
+// Keep detail reads consistent with the in-memory projector's retained
+// activity window. Applying the limit in SQL avoids decoding an unbounded
+// payload_json set before the projector can enforce that invariant.
+const THREAD_DETAIL_ACTIVITY_LIMIT = 500;
 const ProjectionProjectDbRowSchema = ProjectionProject.mapFields(
   Struct.assign({
     defaultModelSelection: Schema.NullOr(Schema.fromJsonString(ModelSelection)),
