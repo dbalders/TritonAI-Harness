@@ -22,6 +22,10 @@ const ATTACHMENT_ID_PATTERN = new RegExp(
   "i",
 );
 
+export const PENDING_ATTACHMENT_THREAD_SEGMENT = "pending";
+export const PENDING_ATTACHMENT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const PARTIAL_UPLOAD_MAX_AGE_MS = 60 * 60 * 1000;
+
 export function toSafeThreadAttachmentSegment(threadId: string): string | null {
   const segment = threadId
     .trim()
@@ -34,7 +38,19 @@ export function toSafeThreadAttachmentSegment(threadId: string): string | null {
   if (segment.length === 0) {
     return null;
   }
-  return segment;
+  return segment === PENDING_ATTACHMENT_THREAD_SEGMENT ? "_pending" : segment;
+}
+
+export function createPendingAttachmentId(): string {
+  return `${PENDING_ATTACHMENT_THREAD_SEGMENT}-${NodeCrypto.randomUUID()}`;
+}
+
+export function parseAttachmentUuid(attachmentId: string): string | null {
+  const normalizedId = normalizeAttachmentRelativePath(attachmentId);
+  if (!normalizedId || normalizedId.includes("/") || normalizedId.includes(".")) {
+    return null;
+  }
+  return normalizedId.match(ATTACHMENT_ID_PATTERN)?.[2]?.toLowerCase() ?? null;
 }
 
 export function toCanonicalThreadAttachmentSegment(threadId: string): string | null {
@@ -160,6 +176,105 @@ export const resolveAttachmentPathById = Effect.fn("resolveAttachmentPathById")(
   }
   return null;
 });
+
+export type AttachmentClaimPlan =
+  | {
+      readonly ok: true;
+      readonly finalId: string;
+      readonly currentPath: string;
+      readonly finalPath: string;
+    }
+  | { readonly ok: false; readonly reason: string };
+
+export function planAttachmentClaim(input: {
+  readonly attachmentsDir: string;
+  readonly threadId: string;
+  readonly attachmentId: string;
+}): AttachmentClaimPlan {
+  const uuid = parseAttachmentUuid(input.attachmentId);
+  const requestedSegment = parseThreadSegmentFromAttachmentId(input.attachmentId);
+  if (!uuid || !requestedSegment) {
+    return { ok: false, reason: "invalid attachment id" };
+  }
+
+  if (!toSafeThreadAttachmentSegment(input.threadId)) {
+    return { ok: false, reason: "invalid thread id" };
+  }
+  if (requestedSegment !== PENDING_ATTACHMENT_THREAD_SEGMENT) {
+    return { ok: false, reason: "attachment must be a pending upload" };
+  }
+
+  const currentPath = resolveAttachmentPathById({
+    attachmentsDir: input.attachmentsDir,
+    attachmentId: input.attachmentId,
+  });
+  if (!currentPath) {
+    return { ok: false, reason: "attachment not found (removed or expired)" };
+  }
+  const finalId = createAttachmentId(input.threadId);
+  if (!finalId) {
+    return { ok: false, reason: "failed to create attachment id" };
+  }
+
+  const expectedFinalPath = resolveAttachmentRelativePath({
+    attachmentsDir: input.attachmentsDir,
+    relativePath: `${finalId}${NodePath.extname(currentPath)}`,
+  });
+  if (!expectedFinalPath) {
+    return { ok: false, reason: "failed to resolve attachment path" };
+  }
+  return {
+    ok: true,
+    finalId,
+    currentPath,
+    finalPath: expectedFinalPath,
+  };
+}
+
+export function sweepStalePendingAttachments(input: {
+  readonly attachmentsDir: string;
+  readonly nowMs: number;
+}): { readonly deleted: number } {
+  let entries: string[];
+  try {
+    entries = NodeFS.readdirSync(input.attachmentsDir);
+  } catch {
+    return { deleted: 0 };
+  }
+
+  let deleted = 0;
+  for (const entry of entries) {
+    const isPartial = entry.endsWith(".part");
+    if (!isPartial) {
+      const attachmentId = parseAttachmentIdFromRelativePath(entry);
+      if (
+        !attachmentId ||
+        parseThreadSegmentFromAttachmentId(attachmentId) !== PENDING_ATTACHMENT_THREAD_SEGMENT
+      ) {
+        continue;
+      }
+    }
+
+    const resolved = resolveAttachmentRelativePath({
+      attachmentsDir: input.attachmentsDir,
+      relativePath: entry,
+    });
+    if (!resolved) {
+      continue;
+    }
+    try {
+      const maxAgeMs = isPartial ? PARTIAL_UPLOAD_MAX_AGE_MS : PENDING_ATTACHMENT_MAX_AGE_MS;
+      if (input.nowMs - NodeFS.statSync(resolved).mtimeMs > maxAgeMs) {
+        NodeFS.unlinkSync(resolved);
+        deleted += 1;
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  return { deleted };
+}
 
 export function parseAttachmentIdFromRelativePath(relativePath: string): string | null {
   const normalized = normalizeAttachmentRelativePath(relativePath);

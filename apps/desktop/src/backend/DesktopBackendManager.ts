@@ -598,6 +598,8 @@ export const runBackendProcess = Effect.fn("runBackendProcess")(function* (
     Effect.forkScoped,
   );
 
+  yield* probeReadiness().pipe(Effect.repeat({ while: (ready) => !ready }), Effect.forkScoped);
+
   const exit = yield* handle.exitCode.pipe(
     Effect.mapError(
       (cause) =>

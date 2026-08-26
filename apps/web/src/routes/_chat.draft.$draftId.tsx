@@ -4,6 +4,7 @@ import ChatView from "../components/ChatView";
 import {
   DraftId,
   markPromotedDraftThreadByRef,
+  useBackgroundDraftSubmissionPending,
   useComposerDraftStore,
 } from "../composerDraftStore";
 import { SidebarInset } from "../components/ui/sidebar";

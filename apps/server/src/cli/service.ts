@@ -159,6 +159,9 @@ export const offerServiceDuringOnboarding = Effect.gen(function* () {
     );
     return true;
   }
+  // A LaunchAgent starts at login and dies at logout; there is no
+  // enable-linger equivalent on macOS. Do not promise more than that.
+  const platform = yield* HostProcessPlatform;
   const wanted = yield* Prompt.run(
     Prompt.confirm({
       message: installed

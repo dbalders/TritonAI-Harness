@@ -2,6 +2,7 @@ import {
   type EnvironmentId,
   isProviderDriverKind,
   ProjectId,
+  type MessageId,
   type ModelSelection,
   type ProviderDriverKind,
   type ServerProvider,
@@ -65,7 +66,7 @@ export function hasEnvironmentReconnectWarningGraceElapsed(
 
 export function startNewThreadForProject(
   projectRef: ScopedProjectRef | null,
-  handleNewThread: (projectRef: ScopedProjectRef) => Promise<void>,
+  handleNewThread: (projectRef: ScopedProjectRef) => Promise<unknown>,
 ): boolean {
   if (projectRef === null) return false;
   void handleNewThread(projectRef);
@@ -277,6 +278,24 @@ export function resolveSendEnvMode(input: {
   isGitRepo: boolean;
 }): DraftThreadEnvMode {
   return input.isGitRepo ? input.requestedEnvMode : "local";
+}
+
+export function resolveBackgroundDraftWorkspaceOptions(input: {
+  envMode: DraftThreadEnvMode;
+  branch: string | null;
+  startFromOrigin: boolean;
+}): {
+  envMode: DraftThreadEnvMode;
+  branch: string | null;
+  worktreePath: null;
+  startFromOrigin: boolean;
+} {
+  return {
+    envMode: input.envMode,
+    branch: input.branch,
+    worktreePath: null,
+    startFromOrigin: input.envMode === "worktree" && input.startFromOrigin,
+  };
 }
 
 export function cloneComposerImageForRetry(
@@ -513,6 +532,7 @@ export async function waitForStartedServerThread(
 export interface LocalDispatchSnapshot {
   startedAt: string;
   preparingWorktree: boolean;
+  submissionIntent: ComposerSubmissionIntent;
   latestUserMessageId: ChatMessage["id"] | null;
   latestTurnTurnId: TurnId | null;
   latestTurnRequestedAt: string | null;
@@ -524,7 +544,10 @@ export interface LocalDispatchSnapshot {
 
 export function createLocalDispatchSnapshot(
   activeThread: Thread | undefined,
-  options?: { preparingWorktree?: boolean },
+  options?: {
+    preparingWorktree?: boolean;
+    submissionIntent?: ComposerSubmissionIntent;
+  },
 ): LocalDispatchSnapshot {
   const latestTurn = activeThread?.latestTurn ?? null;
   const session = activeThread?.session ?? null;
@@ -532,6 +555,7 @@ export function createLocalDispatchSnapshot(
   return {
     startedAt: new Date().toISOString(),
     preparingWorktree: Boolean(options?.preparingWorktree),
+    submissionIntent: options?.submissionIntent ?? "foreground",
     latestUserMessageId: latestUserMessage?.id ?? null,
     latestTurnTurnId: latestTurn?.turnId ?? null,
     latestTurnRequestedAt: latestTurn?.requestedAt ?? null,
@@ -557,6 +581,9 @@ export function hasServerAcknowledgedLocalDispatch(input: {
   }
   if (input.hasPendingApproval || input.hasPendingUserInput || Boolean(input.threadError)) {
     return true;
+  }
+  if (input.phase === "connecting") {
+    return false;
   }
 
   const latestTurn = input.latestTurn ?? null;

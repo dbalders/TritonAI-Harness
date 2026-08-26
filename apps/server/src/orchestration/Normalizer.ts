@@ -48,6 +48,29 @@ export const canonicalizeClientCommandTimestamps = (
   };
 };
 
+const removeClaimedAttachmentPaths = Effect.fn("Normalizer.removeClaimedAttachmentPaths")(
+  function* (attachmentPaths: ReadonlyArray<string>) {
+    if (attachmentPaths.length === 0) {
+      return;
+    }
+    const fileSystem = yield* FileSystem.FileSystem;
+    yield* Effect.forEach(
+      attachmentPaths,
+      (attachmentPath) =>
+        fileSystem.remove(attachmentPath, { force: true }).pipe(
+          Effect.tapError((cause) =>
+            Effect.logWarning("Failed to remove an unclaimed attachment copy.", {
+              attachmentPath,
+              cause,
+            }),
+          ),
+          Effect.orElseSucceed(() => undefined),
+        ),
+      { concurrency: 1 },
+    );
+  },
+);
+
 export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
   Effect.gen(function* () {
     const receivedAt = DateTime.formatIso(yield* DateTime.now);
@@ -243,7 +266,7 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
           return persistedAttachment;
         }),
       { concurrency: 1 },
-    );
+    ).pipe(Effect.tapError(() => removeClaimedAttachmentPaths(claimedAttachmentPaths)));
 
     const normalizedTotalAttachmentBytes = normalizedAttachments.reduce(
       (total, attachment) =>
@@ -264,3 +287,33 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
       },
     } satisfies OrchestrationCommand;
   });
+
+export const cleanupFailedUploadedAttachments = Effect.fn(
+  "Normalizer.cleanupFailedUploadedAttachments",
+)(function* (command: ClientOrchestrationCommand, normalizedCommand: OrchestrationCommand) {
+  if (command.type !== "thread.turn.start" || normalizedCommand.type !== "thread.turn.start") {
+    return;
+  }
+
+  const serverConfig = yield* ServerConfig;
+  const claimedPaths: string[] = [];
+  for (const [index, attachment] of normalizedCommand.message.attachments.entries()) {
+    const original = command.message.attachments[index];
+    if (
+      !original ||
+      "dataUrl" in original ||
+      parseThreadSegmentFromAttachmentId(original.id) !== PENDING_ATTACHMENT_THREAD_SEGMENT
+    ) {
+      continue;
+    }
+
+    const claimedPath = resolveAttachmentPath({
+      attachmentsDir: serverConfig.attachmentsDir,
+      attachment,
+    });
+    if (claimedPath) {
+      claimedPaths.push(claimedPath);
+    }
+  }
+  yield* removeClaimedAttachmentPaths(claimedPaths);
+});

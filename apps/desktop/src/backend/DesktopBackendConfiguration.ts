@@ -586,19 +586,21 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
     : environment.appRoot;
   const wslEntryPath = environment.path.join(wslAppRoot, "apps/server/dist/bin.mjs");
 
-  const preflight = yield* runWslPreflight({
-    distro: input.distro,
-    windowsEntryPath: wslEntryPath,
-    windowsRepoRoot: wslAppRoot,
-    // Packaged builds ship a prebuilt Linux node-pty (built on Linux in CI and
-    // attached to the Windows artifact — see build-desktop-artifact.ts), so the
-    // WSL backend never needs a compiler, node-gyp, or network on first launch.
-    // Compiling from source is a dev-only convenience: a checkout has no shipped
-    // prebuilt, and developers have the toolchain. In packaged builds we instead
-    // surface a clear diagnostic if the prebuilt can't load (unsupported
-    // arch/distro), rather than silently dropping into a fragile runtime build.
-    allowBuild: !environment.isPackaged,
-  });
+  const preflight = serverTree.ok
+    ? yield* runWslPreflight({
+        distro: input.distro,
+        windowsEntryPath: wslEntryPath,
+        windowsRepoRoot: wslAppRoot,
+        // Packaged builds ship a prebuilt Linux node-pty (built on Linux in CI and
+        // attached to the Windows artifact — see build-desktop-artifact.ts), so the
+        // WSL backend never needs a compiler, node-gyp, or network on first launch.
+        // Compiling from source is a dev-only convenience: a checkout has no shipped
+        // prebuilt, and developers have the toolchain. In packaged builds we instead
+        // surface a clear diagnostic if the prebuilt can't load (unsupported
+        // arch/distro), rather than silently dropping into a fragile runtime build.
+        allowBuild: !environment.isPackaged,
+      })
+    : ({ _tag: "Failed", reason: serverTree.reason, fatal: serverTree.fatal } as const);
 
   // Every operation after preflight uses the same concrete distro. In
   // default-tracking mode this closes the race where the system default
@@ -788,6 +790,7 @@ export const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const serverExposure = yield* DesktopServerExposure.DesktopServerExposure;
   const wslEnvironment = yield* DesktopWslEnvironment.DesktopWslEnvironment;
+  const wslServerTree = yield* DesktopWslServerTree.DesktopWslServerTree;
   const settings = yield* DesktopAppSettings.DesktopAppSettings;
   const computerUse = yield* DesktopComputerUse.DesktopComputerUse;
   const crypto = yield* Crypto.Crypto;

@@ -13,6 +13,7 @@ import {
   isAttachmentIdOwnedByThread,
   parseThreadSegmentFromAttachmentId,
   resolveAttachmentPathById,
+  sweepStalePendingAttachments,
 } from "./attachmentStore.ts";
 
 describe("attachmentStore", () => {

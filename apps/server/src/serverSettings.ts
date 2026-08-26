@@ -43,6 +43,7 @@ import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { writeFileStringAtomically } from "./atomicWrite.ts";
 import * as ServerConfig from "./config.ts";
 import { type DeepPartial, deepMerge } from "@t3tools/shared/Struct";
@@ -115,6 +116,7 @@ const normalizeServerSettings = (
 ): Effect.Effect<ServerSettings, ServerSettingsError> =>
   encodeServerSettings(settings).pipe(
     Effect.flatMap(decodeServerSettings),
+    Effect.map(foldProviderInstanceEnabledFlags),
     Effect.mapError(
       (cause) =>
         new ServerSettingsError({
@@ -309,6 +311,17 @@ const ATOMIC_SETTINGS_KEYS: ReadonlySet<string> = new Set([
   "sourceControlWriterModelSelection",
   "textGenerationModelSelection",
 ]);
+
+// Preserve both enabled states because provider history cannot recover a new opt-in.
+const PERSISTED_SERVER_SETTINGS_DEFAULTS = {
+  ...DEFAULT_SERVER_SETTINGS,
+  providers: {
+    ...DEFAULT_SERVER_SETTINGS.providers,
+    cursor: { ...DEFAULT_SERVER_SETTINGS.providers.cursor, enabled: undefined },
+    grok: { ...DEFAULT_SERVER_SETTINGS.providers.grok, enabled: undefined },
+    opencode: { ...DEFAULT_SERVER_SETTINGS.providers.opencode, enabled: undefined },
+  },
+};
 
 function stripDefaultServerSettings(current: unknown, defaults: unknown): unknown | undefined {
   if (Array.isArray(current) || Array.isArray(defaults)) {

@@ -333,6 +333,7 @@ function IosHomeHeader(props: HomeHeaderProps) {
                     onSearchTextChange: props.onSearchQueryChange,
                     placeholder: "Search",
                     searchTextChangeId: "home-search-text",
+                    showsSearchDismissButton: true,
                   }),
                 ],
               }

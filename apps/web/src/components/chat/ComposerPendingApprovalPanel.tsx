@@ -1,27 +1,34 @@
 import { memo } from "react";
 import { type PendingApproval } from "../../session-logic";
+import { cn } from "~/lib/utils";
 
 interface ComposerPendingApprovalPanelProps {
   approval: PendingApproval;
   pendingCount: number;
+  className?: string;
 }
 
 export const ComposerPendingApprovalPanel = memo(function ComposerPendingApprovalPanel({
   approval,
   pendingCount,
+  className,
 }: ComposerPendingApprovalPanelProps) {
-  const approvalSummary =
-    approval.requestKind === "command"
-      ? "Command approval requested"
-      : approval.requestKind === "file-read"
-        ? "File-read approval requested"
-        : "File-change approval requested";
-  const detailLabel =
-    approval.requestKind === "command"
-      ? "Command"
-      : approval.requestKind === "file-read"
-        ? "File to read"
-        : "File change";
+  const fallbackLabel =
+    approval.requestKind === "mcp-elicitation"
+      ? "App access approval"
+      : approval.requestKind === "command"
+        ? "Command approval"
+        : approval.requestKind === "file-read"
+          ? "File read approval"
+          : "File change approval";
+  const detailAriaLabel =
+    approval.requestKind === "mcp-elicitation"
+      ? "App access request"
+      : approval.requestKind === "command"
+        ? "Command"
+        : approval.requestKind === "file-read"
+          ? "File to read"
+          : "File change";
 
   return (
     <div className="px-4 py-3.5 sm:px-5 sm:py-4">

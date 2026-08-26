@@ -3,9 +3,16 @@ import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 
+import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import {
+  PUBLISH_AGENT_ACTIVITY_SECRET,
+  RELAY_ENVIRONMENT_CREDENTIAL_SECRET,
+  RELAY_URL_SECRET,
+} from "../cloud/config.ts";
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "./ServerEnvironment.ts";
 
@@ -14,7 +21,21 @@ const isServerEnvironmentIdPersistenceError = Schema.is(
 );
 
 const makeServerEnvironmentLayer = (baseDir: string) =>
-  ServerEnvironment.layer.pipe(Layer.provide(ServerConfig.layerTest(process.cwd(), baseDir)));
+  ServerEnvironment.layer.pipe(
+    Layer.provide(ServerSecretStore.layer),
+    Layer.provide(ServerConfig.layerTest(process.cwd(), baseDir)),
+  );
+
+const emptySecretStoreLayer = Layer.succeed(
+  ServerSecretStore.ServerSecretStore,
+  ServerSecretStore.ServerSecretStore.of({
+    get: () => Effect.succeed(Option.none()),
+    set: () => Effect.void,
+    create: () => Effect.void,
+    getOrCreateRandom: () => Effect.succeed(new Uint8Array()),
+    remove: () => Effect.void,
+  }),
+);
 
 const makeServerConfig = Effect.fn(function* (baseDir: string) {
   const derivedPaths = yield* ServerConfig.deriveServerPaths(baseDir, undefined);
@@ -114,6 +135,7 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
         }).pipe(
           Effect.provide(
             ServerEnvironment.layer.pipe(
+              Layer.provide(emptySecretStoreLayer),
               Layer.provide(Layer.merge(ServerConfig.layer(serverConfig), failingFileSystemLayer)),
             ),
           ),

@@ -313,7 +313,6 @@ function parseCodexModelListResponse(
     name: toDisplayName(model),
     isCustom: false,
     ...(model.isDefault ? { isDefault: true } : {}),
-    ...(isLegacyCodexModel(model.model) ? { isLegacy: true } : {}),
     capabilities: mapCodexModelCapabilities(model),
   }));
 }
@@ -760,7 +759,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
         auth: { status: "unknown" },
         message: installed
           ? `Codex app-server provider probe failed: ${error.message}.`
-          : "Codex CLI (`codex`) is not installed or not on PATH.",
+          : "Codex CLI (`codex`) was not found on PATH.",
       },
     });
   }

@@ -21,6 +21,8 @@ export type ThreadActionMenuId =
   | "copy-thread-id"
   | "copy-path"
   | "copy-branch"
+  | "copy-thread-id"
+  | "archive"
   | "delete";
 
 export interface ThreadActionMenuState {
@@ -30,6 +32,8 @@ export interface ThreadActionMenuState {
   readonly isSnoozed: boolean;
   readonly canSnoozeNow: boolean;
   readonly isRegeneratingTitle: boolean;
+  /** Archive rejects a thread with an active turn, so disable it here rather than let the action fail. */
+  readonly isRunning: boolean;
   readonly supports: {
     readonly settlement: boolean;
     readonly snooze: boolean;
@@ -53,14 +57,15 @@ export function buildThreadActionMenuItems(
           {
             id: "new-thread-on-branch" as const,
             label: `New thread on ${state.branch}`,
+            icon: "message-square-plus",
           },
         ]
       : []),
     ...(state.supports.pinning
       ? [
           state.isPinned
-            ? { id: "unpin" as const, label: "Unpin thread" }
-            : { id: "pin" as const, label: "Pin thread" },
+            ? { id: "unpin" as const, label: "Unpin thread", icon: "pin-off" }
+            : { id: "pin" as const, label: "Pin thread", icon: "pin" },
         ]
       : []),
     // Both lifecycle actions stay available on pinned threads: settling
@@ -69,17 +74,18 @@ export function buildThreadActionMenuItems(
     ...(state.supports.settlement
       ? [
           state.isSettled
-            ? { id: "unsettle" as const, label: "Un-settle thread" }
-            : { id: "settle" as const, label: "Settle thread" },
+            ? { id: "unsettle" as const, label: "Un-settle thread", icon: "circle-check" }
+            : { id: "settle" as const, label: "Settle thread", icon: "circle-check" },
         ]
       : []),
     ...(state.supports.snooze
       ? [
           state.isSnoozed
-            ? { id: "unsnooze" as const, label: "Wake thread" }
+            ? { id: "unsnooze" as const, label: "Wake thread", icon: "clock" }
             : {
                 id: "snooze" as const,
                 label: "Snooze",
+                icon: "clock",
                 disabled: !state.canSnoozeNow,
                 children: state.snoozePresets.map((preset) => ({
                   id: `snooze:${preset.id}` as const,
@@ -88,12 +94,13 @@ export function buildThreadActionMenuItems(
               },
         ]
       : []),
-    { id: "rename", label: "Rename thread" },
+    { id: "rename", label: "Rename thread", icon: "pencil", separatorBefore: true },
     ...(state.supports.titleRegeneration
       ? [
           {
             id: "regenerate-title" as const,
             label: state.isRegeneratingTitle ? "Regenerating…" : "Regenerate title",
+            icon: "refresh-cw",
             disabled: state.isRegeneratingTitle,
           },
         ]

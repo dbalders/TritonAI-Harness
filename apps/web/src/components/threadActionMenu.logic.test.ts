@@ -9,6 +9,7 @@ const baseState: ThreadActionMenuState = {
   isSnoozed: false,
   canSnoozeNow: true,
   isRegeneratingTitle: false,
+  isRunning: false,
   supports: { settlement: true, snooze: true, pinning: true, titleRegeneration: true },
   snoozePresets: [
     { id: "hour", label: "In 1 hour", whenLabel: "3:00 PM", snoozedUntil: "2026-08-07T15:00:00Z" },
@@ -17,6 +18,12 @@ const baseState: ThreadActionMenuState = {
 
 function ids(state: ThreadActionMenuState): string[] {
   return buildThreadActionMenuItems(state).map((item) => item.id);
+}
+
+function allIds(state: ThreadActionMenuState): string[] {
+  const flatten = (items: ReturnType<typeof buildThreadActionMenuItems>): string[] =>
+    items.flatMap((item) => [item.id, ...(item.children ? flatten(item.children) : [])]);
+  return flatten(buildThreadActionMenuItems(state));
 }
 
 describe("buildThreadActionMenuItems", () => {
@@ -30,11 +37,11 @@ describe("buildThreadActionMenuItems", () => {
   });
 
   it("includes branch items only for threads with a branch", () => {
-    const withBranch = ids({ ...baseState, branch: "feat/menu" });
+    const withBranch = allIds({ ...baseState, branch: "feat/menu" });
     expect(withBranch).toContain("new-thread-on-branch");
     expect(withBranch).toContain("copy-branch");
-    expect(ids(baseState)).not.toContain("new-thread-on-branch");
-    expect(ids(baseState)).not.toContain("copy-branch");
+    expect(allIds(baseState)).not.toContain("new-thread-on-branch");
+    expect(allIds(baseState)).not.toContain("copy-branch");
   });
 
   it("flips lifecycle labels with thread state", () => {
@@ -62,5 +69,30 @@ describe("buildThreadActionMenuItems", () => {
   it("marks delete as destructive and keeps it last", () => {
     const items = buildThreadActionMenuItems({ ...baseState, branch: "main" });
     expect(items.at(-1)).toMatchObject({ id: "delete", destructive: true });
+  });
+  it("offers archive as a non-destructive action right before delete", () => {
+    const items = buildThreadActionMenuItems(baseState);
+    const archiveItem = items.at(-2);
+    expect(archiveItem?.id).toBe("archive");
+    expect(archiveItem?.icon).toBe("archive");
+    expect(archiveItem?.separatorBefore).toBe(true);
+    expect(archiveItem?.destructive).toBeFalsy();
+    expect(items.at(-1)?.id).toBe("delete");
+  });
+
+  it("keeps archive available even when the environment lacks every other capability", () => {
+    expect(
+      ids({
+        ...baseState,
+        supports: { settlement: false, snooze: false, pinning: false, titleRegeneration: false },
+      }),
+    ).toContain("archive");
+  });
+
+  it("disables archive while the thread is running", () => {
+    const archiveItem = buildThreadActionMenuItems({ ...baseState, isRunning: true }).find(
+      (item) => item.id === "archive",
+    );
+    expect(archiveItem?.disabled).toBe(true);
   });
 });
