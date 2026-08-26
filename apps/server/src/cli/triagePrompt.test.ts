@@ -23,6 +23,17 @@ it("stays byte-identical to .github/triage/PLAYBOOK.md", () => {
   assert.equal(TRIAGE_PLAYBOOK, NodeFS.readFileSync(canonicalPath, "utf8"));
 });
 
+it("keeps mutable triage instructions and support routing downstream-owned", () => {
+  assert.include(
+    TRIAGE_PLAYBOOK,
+    "https://raw.githubusercontent.com/dbalders/TritonAI-Harness/main/.github/triage/PLAYBOOK.md",
+  );
+  assert.include(TRIAGE_PLAYBOOK, "https://github.com/dbalders/TritonAI-Harness");
+  assert.include(TRIAGE_PLAYBOOK, "dbalders/TritonAI-Harness/issues/new");
+  assert.notInclude(TRIAGE_PLAYBOOK, "https://raw.githubusercontent.com/pingdotgg/t3code/main");
+  assert.include(TRIAGE_PLAYBOOK, "search pingdotgg/t3code");
+});
+
 it("seed prompt names the context file and embeds the playbook", () => {
   const prompt = buildTriageSeedPrompt("/tmp/triage-run/context.md");
   assert.include(prompt, "/tmp/triage-run/context.md");
@@ -68,4 +79,5 @@ it("context file carries every path the playbook depends on", () => {
   assert.include(context, "/home/u/.t3/source");
   assert.include(context, "npx t3 triage");
   assert.include(context, "v0.0.33");
+  assert.include(context, "https://github.com/dbalders/TritonAI-Harness");
 });
