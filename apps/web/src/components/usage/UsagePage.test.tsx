@@ -49,6 +49,9 @@ vi.mock("../ui/select", () => ({
 }));
 vi.mock("../ui/sidebar", () => ({ SidebarInset: "div" }));
 vi.mock("../ui/toggle-group", () => ({ Toggle: "button", ToggleGroup: "div" }));
+vi.mock("../settings/UsageSettings", () => ({
+  TritonAiUsageSnapshot: () => <section>TritonAI quota</section>,
+}));
 vi.mock("../WorkspaceBreadcrumb", () => ({
   WorkspaceBreadcrumb: "div",
   WorkspaceBreadcrumbItem: "div",
@@ -135,6 +138,10 @@ beforeEach(() => {
 });
 
 describe("UsagePage hourly breakdown", () => {
+  it("includes the TritonAI quota snapshot", () => {
+    expect(renderToStaticMarkup(<UsagePage />)).toContain("TritonAI quota");
+  });
+
   it("keeps recent activity visible first without empty hourly rows", () => {
     const markup = renderToStaticMarkup(<UsagePage />);
     const body = markup.match(/<tbody>(.*?)<\/tbody>/)?.[1] ?? "";
