@@ -18,6 +18,7 @@ const POST_032_MIGRATION_IDENTITIES: Array<readonly [number, string]> = [
   [41, "ProjectionThreadTitleRegeneration"],
   [42, "AuthSessionClientConnection"],
   [43, "ProjectionThreadLinkedPullRequest"],
+  [44, "ProjectionThreadsUnsettledAt"],
 ];
 
 it("keeps the migration registry unique and preserves shipped downstream identities", () => {
@@ -66,9 +67,15 @@ it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()))("clean migration instal
         columns
           .map(({ name }) => name)
           .filter((name) =>
-            ["settled_override", "settled_at", "snoozed_until", "snoozed_at"].includes(name),
+            [
+              "settled_override",
+              "settled_at",
+              "snoozed_until",
+              "snoozed_at",
+              "unsettled_at",
+            ].includes(name),
           ),
-        ["settled_override", "settled_at", "snoozed_until", "snoozed_at"],
+        ["settled_override", "settled_at", "snoozed_until", "snoozed_at", "unsettled_at"],
       );
     }),
   );
@@ -117,9 +124,15 @@ it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()))("migration upgrade from
         upgradedColumns
           .map(({ name }) => name)
           .filter((name) =>
-            ["settled_override", "settled_at", "snoozed_until", "snoozed_at"].includes(name),
+            [
+              "settled_override",
+              "settled_at",
+              "snoozed_until",
+              "snoozed_at",
+              "unsettled_at",
+            ].includes(name),
           ),
-        ["settled_override", "settled_at", "snoozed_until", "snoozed_at"],
+        ["settled_override", "settled_at", "snoozed_until", "snoozed_at", "unsettled_at"],
       );
     }),
   );
@@ -176,9 +189,15 @@ it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()))("migration upgrade from
         upgradedColumns
           .map(({ name }) => name)
           .filter((name) =>
-            ["settled_override", "settled_at", "snoozed_until", "snoozed_at"].includes(name),
+            [
+              "settled_override",
+              "settled_at",
+              "snoozed_until",
+              "snoozed_at",
+              "unsettled_at",
+            ].includes(name),
           ),
-        ["settled_override", "settled_at", "snoozed_until", "snoozed_at"],
+        ["settled_override", "settled_at", "snoozed_until", "snoozed_at", "unsettled_at"],
       );
     }),
   );
