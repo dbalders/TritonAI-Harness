@@ -433,12 +433,10 @@ interface ProviderInstanceCardProps {
  *     notice instead of editable fields, so fork instances round-trip
  *     without accidentally destroying their config.
  *   - The enabled Switch writes to the envelope's `instance.enabled`
- *     field; the server's registry consults this at `entry.enabled ?? true`
- *     before materializing the instance, and the probe also checks its
- *     driver-specific `config.enabled`. We treat the envelope flag as the
- *     single source of truth from the UI — built-in cards used to write
- *     the inner flag, but on the promotion-to-instance path every edit
- *     flows through the envelope.
+ *     field, which is the single enabled flag: the server folds any legacy
+ *     driver-specific `config.enabled` into the envelope on load and both
+ *     sides resolve through `resolveProviderInstanceEnabled` (an explicit
+ *     false wins, then envelope, then config, then the driver default).
  */
 export function ProviderInstanceCard({
   instanceId,
@@ -645,7 +643,7 @@ export function ProviderInstanceCard({
             <TooltipTrigger
               render={
                 <Button
-                  size="icon-xs"
+                  size="icon-micro"
                   variant="ghost"
                   className="size-5 rounded-sm p-0 text-muted-foreground hover:text-destructive"
                   onClick={() => setDeleteConfirmOpen(true)}
@@ -704,7 +702,7 @@ export function ProviderInstanceCard({
                           "size-5 rounded-sm p-0",
                           versionAdvisory.emphasis === "strong"
                             ? "text-warning hover:text-warning"
-                            : "text-update hover:text-update",
+                            : "text-update-foreground hover:text-update-foreground",
                         )}
                         aria-label="Update available — view details"
                       >
@@ -793,9 +791,8 @@ export function ProviderInstanceCard({
           </div>
           <div className="flex w-full shrink-0 items-center gap-2 sm:w-auto sm:justify-end">
             <Button
-              size="sm"
-              variant="ghost"
-              className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground"
+              size="compact"
+              variant="ghost-muted"
               onClick={() => onExpandedChange(!isExpanded)}
               aria-label={`Toggle ${displayName} details`}
             >

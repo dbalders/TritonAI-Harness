@@ -26,6 +26,8 @@ const success = (stdout = ""): ProcessRunOutput => ({
   timedOut: false,
   stdoutTruncated: false,
   stderrTruncated: false,
+  stdoutInvalidUtf8: false,
+  stderrInvalidUtf8: false,
 });
 
 const failure = (stderr: string): ProcessRunOutput => ({
@@ -35,6 +37,8 @@ const failure = (stderr: string): ProcessRunOutput => ({
   timedOut: false,
   stdoutTruncated: false,
   stderrTruncated: false,
+  stdoutInvalidUtf8: false,
+  stderrInvalidUtf8: false,
 });
 
 const makeFixture = Effect.fn("managedCodexUpdate.test.makeFixture")(function* () {

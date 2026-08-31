@@ -43,6 +43,7 @@ import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { writeFileStringAtomically } from "./atomicWrite.ts";
 import * as ServerConfig from "./config.ts";
 import { type DeepPartial, deepMerge } from "@t3tools/shared/Struct";
@@ -110,11 +111,52 @@ function mergeJsonDocuments(base: unknown, overlay: unknown): unknown {
   return merged;
 }
 
+/**
+ * Older provider configs duplicated `enabled` inside the driver-specific
+ * config blob. Fold that legacy flag into the canonical instance field; a
+ * disable on either side wins so a user's disable is never silently undone.
+ */
+const foldProviderInstanceEnabledFlags = (settings: ServerSettings): ServerSettings => {
+  let changed = false;
+  const providerInstances: Record<string, ProviderInstanceConfig> = {};
+  for (const [instanceId, instance] of Object.entries(settings.providerInstances)) {
+    const config = instance.config;
+    if (
+      config === null ||
+      typeof config !== "object" ||
+      Array.isArray(config) ||
+      typeof (config as { readonly enabled?: unknown }).enabled !== "boolean"
+    ) {
+      providerInstances[instanceId] = instance;
+      continue;
+    }
+    const { enabled: configEnabled, ...restConfig } = config as Record<string, unknown> & {
+      readonly enabled: boolean;
+    };
+    const resolved =
+      instance.enabled === false || configEnabled === false
+        ? false
+        : (instance.enabled ?? configEnabled);
+    changed = true;
+    providerInstances[instanceId] = {
+      ...instance,
+      enabled: resolved,
+      config: restConfig,
+    } satisfies ProviderInstanceConfig;
+  }
+  if (!changed) return settings;
+  return {
+    ...settings,
+    providerInstances: providerInstances as ServerSettings["providerInstances"],
+  };
+};
+
 const normalizeServerSettings = (
   settings: ServerSettings,
 ): Effect.Effect<ServerSettings, ServerSettingsError> =>
   encodeServerSettings(settings).pipe(
     Effect.flatMap(decodeServerSettings),
+    Effect.map(foldProviderInstanceEnabledFlags),
     Effect.mapError(
       (cause) =>
         new ServerSettingsError({
@@ -264,6 +306,66 @@ const LegacyOpenCodePasswordJson = fromLenientJson(
   }),
 );
 const decodeLegacyOpenCodePasswordJsonExit = Schema.decodeUnknownExit(LegacyOpenCodePasswordJson);
+const PersistedOptionalProviderSettings = Schema.Struct({
+  providers: Schema.optionalKey(
+    Schema.Struct({
+      cursor: Schema.optionalKey(Schema.Struct({ enabled: Schema.optionalKey(Schema.Boolean) })),
+      grok: Schema.optionalKey(Schema.Struct({ enabled: Schema.optionalKey(Schema.Boolean) })),
+      opencode: Schema.optionalKey(Schema.Struct({ enabled: Schema.optionalKey(Schema.Boolean) })),
+    }),
+  ),
+});
+const decodePersistedOptionalProviderSettingsJsonExit = Schema.decodeUnknownExit(
+  fromLenientJson(PersistedOptionalProviderSettings),
+);
+
+function restoreUsedProviders(
+  settings: ServerSettings,
+  persisted: typeof PersistedOptionalProviderSettings.Type,
+  providerHistory: ReadonlyArray<{
+    readonly providerName: string;
+    readonly providerInstanceId: string | null;
+  }>,
+): ServerSettings {
+  const usedProviders = new Set(providerHistory.map(({ providerName }) => providerName));
+  const usedProviderInstances = new Set(
+    providerHistory.map(
+      ({ providerName, providerInstanceId }) => providerInstanceId ?? providerName,
+    ),
+  );
+  const providerInstances = Object.fromEntries(
+    Object.entries(settings.providerInstances).map(([instanceId, instance]) => [
+      instanceId,
+      instance.enabled === undefined &&
+      (instance.driver === "cursor" ||
+        instance.driver === "grok" ||
+        instance.driver === "opencode") &&
+      usedProviderInstances.has(instanceId)
+        ? { ...instance, enabled: true }
+        : instance,
+    ]),
+  );
+
+  return {
+    ...settings,
+    providers: {
+      ...settings.providers,
+      cursor: {
+        ...settings.providers.cursor,
+        enabled: persisted.providers?.cursor?.enabled ?? usedProviders.has("cursor"),
+      },
+      grok: {
+        ...settings.providers.grok,
+        enabled: persisted.providers?.grok?.enabled ?? usedProviders.has("grok"),
+      },
+      opencode: {
+        ...settings.providers.opencode,
+        enabled: persisted.providers?.opencode?.enabled ?? usedProviders.has("opencode"),
+      },
+    },
+    providerInstances,
+  };
+}
 
 function hasExplicitLegacyOpenCodePasswordClear(raw: string): boolean {
   const decoded = decodeLegacyOpenCodePasswordJsonExit(raw);
@@ -310,6 +412,30 @@ const ATOMIC_SETTINGS_KEYS: ReadonlySet<string> = new Set([
   "textGenerationModelSelection",
 ]);
 
+// Provider history can restore previous use, but cannot recover a new explicit
+// opt-in or opt-out. Remove these defaults before sparse comparison so both
+// boolean states remain persisted.
+function removeOptionalProviderEnabledDefaults(encodedDefaults: unknown): unknown {
+  const defaults = jsonRecord(encodedDefaults);
+  const providers = jsonRecord(defaults?.providers);
+  if (!defaults || !providers) return encodedDefaults;
+  const withoutEnabled = (value: unknown): unknown => {
+    const provider = jsonRecord(value);
+    if (!provider) return value;
+    const { enabled: _enabled, ...rest } = provider;
+    return rest;
+  };
+  return {
+    ...defaults,
+    providers: {
+      ...providers,
+      cursor: withoutEnabled(providers.cursor),
+      grok: withoutEnabled(providers.grok),
+      opencode: withoutEnabled(providers.opencode),
+    },
+  };
+}
+
 function stripDefaultServerSettings(current: unknown, defaults: unknown): unknown | undefined {
   if (Array.isArray(current) || Array.isArray(defaults)) {
     return Equal.equals(current, defaults) ? undefined : current;
@@ -353,6 +479,7 @@ const make = (
     const fs = yield* FileSystem.FileSystem;
     const pathService = yield* Path.Path;
     const secretStore = yield* ServerSecretStore.ServerSecretStore;
+    const sql = yield* SqlClient.SqlClient;
     const writeSemaphore = yield* Semaphore.make(1);
     const cacheKey = "settings" as const;
     const changesPubSub = yield* PubSub.unbounded<ServerSettings>();
@@ -729,7 +856,9 @@ const make = (
       ) {
         const [encodedSettings, encodedDefaults, rawDocument] = yield* Effect.all([
           encodeServerSettings(settings),
-          encodeServerSettings(DEFAULT_SERVER_SETTINGS),
+          encodeServerSettings(DEFAULT_SERVER_SETTINGS).pipe(
+            Effect.map(removeOptionalProviderEnabledDefaults),
+          ),
           Ref.get(rawDocumentRef),
         ]);
         const sparseSettings = stripDefaultServerSettings(encodedSettings, encodedDefaults) ?? {};
@@ -771,12 +900,47 @@ const make = (
       );
 
     const loadSettingsFromDisk = Effect.gen(function* () {
+      let persisted: typeof PersistedOptionalProviderSettings.Type = {};
+      const providerHistory = yield* sql<{
+        readonly providerName: string;
+        readonly providerInstanceId: string | null;
+      }>`
+        SELECT DISTINCT
+          provider_name AS "providerName",
+          provider_instance_id AS "providerInstanceId"
+        FROM projection_thread_sessions
+        WHERE provider_name IN ('cursor', 'grok', 'opencode')
+        UNION
+        SELECT DISTINCT
+          provider_name AS "providerName",
+          provider_instance_id AS "providerInstanceId"
+        FROM provider_session_runtime
+        WHERE provider_name IN ('cursor', 'grok', 'opencode')
+      `.pipe(
+        Effect.mapError(
+          (cause) =>
+            new ServerSettingsError({
+              settingsPath,
+              operation: "read-provider-history",
+              cause,
+            }),
+        ),
+      );
+      const restoreProviderHistory = (settings: ServerSettings) =>
+        foldProviderInstanceEnabledFlags(
+          restoreUsedProviders(settings, persisted, providerHistory),
+        );
+
       if (!(yield* readConfigExists)) {
         yield* Ref.set(rawDocumentRef, {});
-        return DEFAULT_SERVER_SETTINGS;
+        return restoreProviderHistory(DEFAULT_SERVER_SETTINGS);
       }
 
       const raw = yield* readRawConfig;
+      const persistedSettings = decodePersistedOptionalProviderSettingsJsonExit(raw);
+      if (persistedSettings._tag === "Success") {
+        persisted = persistedSettings.value;
+      }
       const parsed = decodeUnknownJsonExit(raw);
       if (parsed._tag === "Failure") {
         yield* Effect.logWarning("failed to parse settings.json, using defaults", {
@@ -785,7 +949,7 @@ const make = (
           cause: parsed.cause,
         });
         yield* Ref.set(rawDocumentRef, {});
-        return DEFAULT_SERVER_SETTINGS;
+        return restoreProviderHistory(DEFAULT_SERVER_SETTINGS);
       }
       const migration = managedPolicyEnabled
         ? migrateLegacyInstallerManagedSettings(parsed.value)
@@ -798,20 +962,20 @@ const make = (
           issues: Cause.pretty(decoded.cause),
           cause: decoded.cause,
         });
-        return DEFAULT_SERVER_SETTINGS;
+        return restoreProviderHistory(DEFAULT_SERVER_SETTINGS);
       }
-      const withoutManagedTritonAiProviderEnvironment = removeManagedTritonAiProviderEnvironment(
-        decoded.value,
-      );
+      const restoredSettings = restoreProviderHistory(decoded.value);
+      const withoutManagedTritonAiProviderEnvironment =
+        removeManagedTritonAiProviderEnvironment(restoredSettings);
       const removedManagedTritonAiProviderEnvironment =
-        withoutManagedTritonAiProviderEnvironment !== decoded.value;
+        withoutManagedTritonAiProviderEnvironment !== restoredSettings;
       if (hasExplicitLegacyOpenCodePasswordClear(raw)) {
         return yield* runWithProviderSecretRollback(
-          decoded.value,
+          restoredSettings,
           withoutManagedTritonAiProviderEnvironment,
           removeLegacyOpenCodeStoredValue.pipe(
             Effect.andThen(
-              persistProviderSecrets(decoded.value, withoutManagedTritonAiProviderEnvironment),
+              persistProviderSecrets(restoredSettings, withoutManagedTritonAiProviderEnvironment),
             ),
             Effect.flatMap(normalizeServerSettings),
             Effect.tap(writeSettingsAtomically),
@@ -819,19 +983,19 @@ const make = (
         );
       }
       if (
-        !hasPlaintextProviderSecret(decoded.value) &&
+        !hasPlaintextProviderSecret(restoredSettings) &&
         !removedManagedTritonAiProviderEnvironment
       ) {
         if (migration.migrated) {
           yield* writeSettingsAtomically(withoutManagedTritonAiProviderEnvironment);
         }
-        return decoded.value;
+        return restoredSettings;
       }
 
       const migrated = yield* runWithProviderSecretRollback(
-        decoded.value,
+        restoredSettings,
         withoutManagedTritonAiProviderEnvironment,
-        persistProviderSecrets(decoded.value, withoutManagedTritonAiProviderEnvironment).pipe(
+        persistProviderSecrets(restoredSettings, withoutManagedTritonAiProviderEnvironment).pipe(
           Effect.flatMap(normalizeServerSettings),
           Effect.tap(writeSettingsAtomically),
         ),

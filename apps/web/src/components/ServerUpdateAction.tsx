@@ -1,5 +1,6 @@
 import type { EnvironmentId, ServerSelfUpdateCapability } from "@t3tools/contracts";
 import type { ServerUpdateStage, ServerUpdateState } from "@t3tools/client-runtime/state/server";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
 // The wire "installing" stage is a sub-second launcher handoff, so the UI
 // folds it into the download phase; everything after the handoff is the
@@ -29,9 +30,10 @@ export function ServerUpdateProgress({
     return (
       <div className="mt-1 flex min-w-0 items-center gap-2 text-xs text-destructive" role="alert">
         <span className="size-1.5 shrink-0 rounded-full bg-destructive" aria-hidden="true" />
-        <span className="min-w-0 truncate" title={state.message}>
-          {state.message}
-        </span>
+        <Tooltip>
+          <TooltipTrigger render={<span className="min-w-0 truncate">{state.message}</span>} />
+          <TooltipPopup side="top">{state.message}</TooltipPopup>
+        </Tooltip>
       </div>
     );
   }
