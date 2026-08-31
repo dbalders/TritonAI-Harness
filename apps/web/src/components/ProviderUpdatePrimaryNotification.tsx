@@ -10,7 +10,7 @@ import { useDismissedProviderUpdateNotificationKeys } from "../providerUpdateDis
 import { PROVIDER_ICON_BY_PROVIDER } from "./chat/providerIconUtils";
 import {
   canOneClickUpdateProviderCandidate,
-  collectProviderUpdateCandidates,
+  collectProviderLaunchUpdateCandidates,
   collectUpdatedProviderSnapshots,
   firstFailedProviderUpdateMessage,
   getProviderUpdateInitialToastView,
@@ -101,7 +101,11 @@ function addProviderUpdateToast(input: {
  * local environment (no WSL backend). Non-WSL users see exactly this flow — the
  * per-environment split is gated behind WSL presence.
  */
-export function ProviderUpdatePrimaryNotification() {
+export function ProviderUpdatePrimaryNotification({
+  providerDriver,
+}: {
+  readonly providerDriver?: ProviderDriverKind | undefined;
+}) {
   const navigate = useNavigate();
   const providers = useAtomValue(primaryServerProvidersAtom);
   const primaryEnvironment = usePrimaryEnvironment();
@@ -124,7 +128,10 @@ export function ProviderUpdatePrimaryNotification() {
     };
   }, []);
 
-  const updateProviders = useMemo(() => collectProviderUpdateCandidates(providers), [providers]);
+  const updateProviders = useMemo(
+    () => collectProviderLaunchUpdateCandidates(providers, providerDriver),
+    [providerDriver, providers],
+  );
   const notificationKey = useMemo(
     () => providerUpdateNotificationKey(updateProviders),
     [updateProviders],
