@@ -1,8 +1,13 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { ProviderDriverKind, type ServerProviderModel } from "@t3tools/contracts";
+import {
+  ProviderDriverKind,
+  ServerSettingsError,
+  type ServerProviderModel,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Stream from "effect/Stream";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
 import * as ServerConfig from "../config.ts";
@@ -112,12 +117,32 @@ const serviceLayers = (input: {
   readonly prefix: string;
   readonly response: () => Response;
   readonly settings?: Parameters<typeof ServerSettings.layerTest>[0];
+  readonly settingsLayer?: Layer.Layer<ServerSettings.ServerSettingsService>;
 }) =>
   ServerConfig.layerTest(process.cwd(), { prefix: input.prefix }).pipe(
     Layer.provideMerge(NodeServices.layer),
-    Layer.provideMerge(ServerSettings.layerTest(input.settings ?? {})),
+    Layer.provideMerge(input.settingsLayer ?? ServerSettings.layerTest(input.settings ?? {})),
     Layer.provideMerge(httpClientLayer(input.response)),
   );
+
+const failingSettingsLayer = Layer.succeed(
+  ServerSettings.ServerSettingsService,
+  ServerSettings.ServerSettingsService.of({
+    start: Effect.void,
+    ready: Effect.void,
+    getSettings: Effect.fail(
+      new ServerSettingsError({
+        settingsPath: "test-settings.json",
+        operation: "read-file",
+        cause: new Error("settings unavailable"),
+      }),
+    ),
+    getPersistedSettings: Effect.die(new Error("unused in this test")),
+    updateSettings: () => Effect.die(new Error("unused in this test")),
+    streamChanges: Stream.empty,
+    subscribeChanges: Effect.succeed(Stream.empty),
+  }),
+);
 
 describe("ModelManifest service", () => {
   it.live("prefers a fetched manifest over the bundle and caches it to disk", () =>
@@ -180,6 +205,31 @@ describe("ModelManifest service", () => {
           prefix: "model-manifest-optout-test",
           response: () => Response.json(REMOTE_MANIFEST),
           settings: { enableProviderUpdateChecks: false },
+        }),
+      ),
+    ),
+  );
+
+  it.live("does not fetch when provider update settings cannot be read", () =>
+    Effect.gen(function* () {
+      let fetchCount = 0;
+      const service = yield* make.pipe(
+        Effect.provide(
+          httpClientLayer(() => {
+            fetchCount += 1;
+            return Response.json(REMOTE_MANIFEST);
+          }),
+        ),
+      );
+      assert.deepStrictEqual(yield* service.refresh, BUNDLED_MODEL_MANIFEST);
+      assert.strictEqual(fetchCount, 0);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        serviceLayers({
+          prefix: "model-manifest-settings-failure-test",
+          response: () => Response.json(REMOTE_MANIFEST),
+          settingsLayer: failingSettingsLayer,
         }),
       ),
     ),
