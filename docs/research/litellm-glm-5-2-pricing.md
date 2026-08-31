@@ -44,6 +44,8 @@ There is no separately published GLM-5.2 reasoning-token price. Z.AI exposes thi
 
 Z.AI reports cache hits under `usage.prompt_tokens_details.cached_tokens`; its [context-caching guide](https://docs.z.ai/guides/capabilities/cache) describes those tokens as lower-priced input. The published "Cached Input Storage" price is a promotional state, so a long-lived implementation should refresh it from the upstream table rather than assuming permanent zero-cost writes.
 
+The zero cache-write fallback was verified against Z.AI's pricing table on August 31, 2026. While LiteLLM still lacks a direct `zai/glm-5.2` row, reverify that promotional rate against Z.AI before each Harness release and update the fallback immediately if the promotion ends.
+
 Using the rounded values visible in the reported usage screen—263K cached input, 57K uncached input, and 4.54K output—the public-rate estimate is approximately:
 
 ```text

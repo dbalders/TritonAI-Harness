@@ -6,6 +6,7 @@ import {
   normalizeModelName,
   parseRateTable,
   priceUsage,
+  withTritonAiRates,
 } from "./usagePricing.ts";
 
 const rate = (input: number, cacheRead?: number) => ({
@@ -68,7 +69,10 @@ describe("usage pricing", () => {
   });
 
   it("prices the TritonAI GLM-5.2 alias from Z.AI's published rates", () => {
-    const rates = parseRateTable({});
+    const parsed = parseRateTable({});
+    const rates = withTritonAiRates(parsed);
+
+    expect(parsed.size).toBe(0);
 
     expect(lookupRate(rates, "api-glm-5.2")).toEqual({
       inputCostPerToken: 1.4e-6,
@@ -84,14 +88,16 @@ describe("usage pricing", () => {
   });
 
   it("prefers LiteLLM's first-party GLM-5.2 row when it becomes available", () => {
-    const rates = parseRateTable({
-      "zai/glm-5.2": {
-        input_cost_per_token: 2e-6,
-        output_cost_per_token: 6e-6,
-        cache_read_input_token_cost: 5e-7,
-        cache_creation_input_token_cost: 1e-7,
-      },
-    });
+    const rates = withTritonAiRates(
+      parseRateTable({
+        "zai/glm-5.2": {
+          input_cost_per_token: 2e-6,
+          output_cost_per_token: 6e-6,
+          cache_read_input_token_cost: 5e-7,
+          cache_creation_input_token_cost: 1e-7,
+        },
+      }),
+    );
 
     expect(lookupRate(rates, "api-glm-5.2")).toEqual({
       inputCostPerToken: 2e-6,

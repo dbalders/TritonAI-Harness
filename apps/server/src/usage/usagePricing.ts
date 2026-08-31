@@ -106,9 +106,19 @@ export function parseRateTable(document: unknown): RateTable {
     if (rate !== null) table.set(alias, rate);
   }
 
-  table.set("api-glm-5.2", table.get("zai/glm-5.2") ?? TRITONAI_GLM_5_2_RATE);
-
   return table;
+}
+
+/**
+ * Layers TritonAI gateway aliases onto an already-validated external table.
+ *
+ * Keeping this separate from `parseRateTable` lets `UsageService` reject an
+ * empty or malformed LiteLLM document before local fallbacks make it non-empty.
+ */
+export function withTritonAiRates(table: RateTable): RateTable {
+  const resolved = new Map(table);
+  resolved.set("api-glm-5.2", table.get("zai/glm-5.2") ?? TRITONAI_GLM_5_2_RATE);
+  return resolved;
 }
 
 function sameRate(a: ModelRate, b: ModelRate): boolean {
