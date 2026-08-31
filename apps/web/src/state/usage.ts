@@ -10,6 +10,7 @@ import { useAtomValue } from "@effect/atom-react";
 import {
   USAGE_CONTRACT_VERSION,
   type EnvironmentId,
+  type UsageProviderKind,
   type UsageSummary,
   type UsageSummaryInput,
 } from "@t3tools/contracts";
@@ -71,7 +72,22 @@ export interface UsageView {
   readonly refresh: () => void;
 }
 
-export function useUsage(input: UsageSummaryInput): UsageView {
+/**
+ * Narrows one environment's transcript summary before cross-environment
+ * merging so every derived total stays aligned with the visible provider.
+ */
+export function selectUsageProvider(
+  summary: UsageSummary,
+  provider: UsageProviderKind,
+): UsageSummary {
+  return {
+    ...summary,
+    buckets: summary.buckets.filter((bucket) => bucket.provider === provider),
+    sources: summary.sources.filter((source) => source.fingerprint.provider === provider),
+  };
+}
+
+export function useUsage(input: UsageSummaryInput, provider?: UsageProviderKind): UsageView {
   const windowKey = useMemo(
     () =>
       JSON.stringify({
@@ -114,12 +130,15 @@ export function useUsage(input: UsageSummaryInput): UsageView {
             {
               environmentId: environment.environmentId,
               label: environment.label,
-              summary: environment.summary,
+              summary:
+                provider === undefined
+                  ? environment.summary
+                  : selectUsageProvider(environment.summary, provider),
             },
           ],
     );
     return mergeUsage(answered, USAGE_CONTRACT_VERSION);
-  }, [environments]);
+  }, [environments, provider]);
 
   const answeredCount = environments.filter((environment) => environment.summary !== null).length;
   const stillReporting = environments.filter(

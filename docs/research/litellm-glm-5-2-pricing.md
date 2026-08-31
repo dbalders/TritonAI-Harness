@@ -61,7 +61,7 @@ LiteLLM does contain provider-specific GLM-5.2 keys. Examples in the reviewed ma
 - [`together_ai/zai-org/GLM-5.2`](https://github.com/BerriAI/litellm/blob/10631eb834c7802aa61611e807474170b8a4d425/model_prices_and_context_window.json#L39240-L39255): $1.40 input, $0.26 cached input, $4.40 output per 1M.
 - [`deepinfra/zai-org/GLM-5.2`](https://github.com/BerriAI/litellm/blob/10631eb834c7802aa61611e807474170b8a4d425/model_prices_and_context_window.json#L54272-L54285): $0.75 input, $0.14 cached input, $2.40 output per 1M.
 
-The current Harness parser strips everything through the final slash from every LiteLLM key before inserting it into a map. That collapses multiple provider-specific keys such as Cloudflare, DashScope, Together, Novita, W&B, and DeepInfra to the same normalized `glm-5.2` key. JSON order then decides which provider's rate wins. See [`normalizeModelName` and `parseRateTable`](../../apps/server/src/usage/usagePricing.ts). Adding only an `api-` stripping rule would make `api-glm-5.2` hit that order-dependent collision and can materially understate cost.
+The Harness parser preserves each complete lowercased LiteLLM key and creates a bare alias only when every qualified candidate has the same rate. That prevents provider-specific keys such as Cloudflare, DashScope, Together, Novita, W&B, and DeepInfra from collapsing into one order-dependent `glm-5.2` price. See [`normalizeModelName` and `parseRateTable`](../../apps/server/src/usage/usagePricing.ts). Resolving `api-glm-5.2` through a loose suffix match would bypass that protection and could materially understate cost.
 
 ## Recommended matching rule
 
