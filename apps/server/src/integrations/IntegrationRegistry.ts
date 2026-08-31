@@ -5,6 +5,7 @@ import {
   IntegrationConnectResult,
   IntegrationProviderPollResult,
   IntegrationOperationError,
+  type ThreadId,
   type IntegrationConnectionSubmission,
   type IntegrationProviderPollResult as IntegrationProviderPollResultType,
   type IntegrationPollResult,
@@ -39,6 +40,11 @@ import {
   resolveIntegrationCodexHomes,
 } from "./IntegrationSkillMaterializer.ts";
 import {
+  IntegrationFileMaterializer,
+  type IntegrationFileDescriptor,
+  type IntegrationFileMaterializationInput,
+} from "./IntegrationFileMaterializer.ts";
+import {
   decodeIntegrationToolInput,
   integrationToolJsonSchema,
   prepareIntegrationToolInput,
@@ -56,6 +62,17 @@ export interface IntegrationProviderStatus {
 
 export interface IntegrationInvocationContext {
   readonly signal: AbortSignal;
+  /** Trusted Harness invocation identity. Registry does not forward this value to providers. */
+  readonly threadId?: ThreadId;
+  /** Trusted provider-session identity used only to scope Harness-owned cache quotas and cleanup. */
+  readonly providerSessionId?: string;
+  /**
+   * Present only during an active, thread-bound tool invocation. The host chooses the target,
+   * validates and bounds the bytes, and revokes this callback when the invocation settles.
+   */
+  readonly materializeFile?: (
+    input: IntegrationFileMaterializationInput,
+  ) => Promise<IntegrationFileDescriptor>;
   /** Set only by a trusted Harness adapter after crossing its task-approval boundary. */
   readonly writeApproved?: boolean;
   /**
@@ -188,6 +205,7 @@ type RemovingIntegrationState = NonNullable<PersistedIntegrationState["removing"
 export interface RegistryRuntimeOptions {
   readonly providerStatusTimeoutMs?: number;
   readonly providerOperationTimeoutMs?: number;
+  readonly integrationFilesRoot?: string;
 }
 
 const DEFAULT_PROVIDER_STATUS_TIMEOUT_MS = 5_000;
@@ -662,6 +680,7 @@ export class RegistryRuntime {
   readonly #activeSkillReservations = new Map<string, number>();
   readonly #skillReservationWaiters = new Map<string, Set<() => void>>();
   readonly #skills: IntegrationSkillMaterializer;
+  readonly #integrationFiles: IntegrationFileMaterializer;
   readonly #removeInstalledPackage: (path: string) => Promise<void>;
   readonly #providerStatusTimeoutMs: number;
   readonly #providerOperationTimeoutMs: number;
@@ -697,6 +716,9 @@ export class RegistryRuntime {
     this.#statePath = NodePath.join(root, "state.json");
     this.#commitJournalRoot = NodePath.join(root, "commit-journal");
     this.#skills = skills;
+    this.#integrationFiles = new IntegrationFileMaterializer(
+      options.integrationFilesRoot ?? NodePath.join(root, "materialized-files"),
+    );
     this.#removeInstalledPackage = removeInstalledPackage;
     this.#providerStatusTimeoutMs =
       options.providerStatusTimeoutMs ?? DEFAULT_PROVIDER_STATUS_TIMEOUT_MS;
@@ -982,6 +1004,7 @@ export class RegistryRuntime {
 
   async #load(): Promise<void> {
     await ensureManagedDirectory(this.#root);
+    await this.#integrationFiles.initialize();
     await Promise.all(
       ["installed", ".trash", ".staging", "commit-journal"].map((name) =>
         ensureManagedDirectory(NodePath.join(this.#root, name)),
@@ -2685,6 +2708,21 @@ export class RegistryRuntime {
     return this.#closePromise;
   }
 
+  async clearThreadFiles(threadId: ThreadId): Promise<void> {
+    await this.#ready;
+    await this.#integrationFiles.clearThread(threadId);
+  }
+
+  async clearProviderSessionFiles(threadId: ThreadId, providerSessionId?: string): Promise<void> {
+    await this.#ready;
+    await this.#integrationFiles.clearSession(threadId, providerSessionId);
+  }
+
+  async clearAllFiles(): Promise<void> {
+    await this.#ready;
+    await this.#integrationFiles.clearAll();
+  }
+
   async #waitForClosePhase(work: Promise<unknown>, deadline: number): Promise<void> {
     const remaining = deadline - Date.now();
     if (remaining <= 0) {
@@ -2819,8 +2857,18 @@ export class RegistryRuntime {
       closeFailure ??= error;
     }
 
-    await this.#drainCloseWork(deadline);
-    if (closeFailure !== undefined) throw closeFailure;
+    let runtimeFailure = closeFailure;
+    try {
+      await this.#drainCloseWork(deadline);
+    } catch (error) {
+      runtimeFailure ??= error;
+    }
+    try {
+      await this.#integrationFiles.close();
+    } catch (error) {
+      runtimeFailure ??= error;
+    }
+    if (runtimeFailure !== undefined) throw runtimeFailure;
   }
 
   async invokeTool(
@@ -2894,7 +2942,24 @@ export class RegistryRuntime {
       this.#activeInvocationToolNames.set(controller, name);
       this.#activeInvocations.set(manifest.id, active);
       let writeCommitAdmitted = false;
+      let fileInvocation: ReturnType<IntegrationFileMaterializer["beginInvocation"]> | null = null;
+      let fileInvocationCommitted = false;
       try {
+        // Register the lease before provider preparation/status can yield. Session cleanup can
+        // then revoke and drain every already-admitted invocation before removing its files.
+        // Write leases settle explicitly below because an admitted write intentionally outlives
+        // caller cancellation; cancellation before admission and every failure still aborts it.
+        const fileInvocationSignal =
+          tool.effect === "write" ? new AbortController().signal : signal;
+        fileInvocation = context?.threadId
+          ? this.#integrationFiles.beginInvocation({
+              threadId: context.threadId,
+              ...(context.providerSessionId !== undefined
+                ? { sessionId: context.providerSessionId }
+                : {}),
+              signal: fileInvocationSignal,
+            })
+          : null;
         await this.#prepareProvider(provider, signal);
         if (this.#activeProviderLifecycleWork.has(provider)) {
           throw operationError(
@@ -2961,13 +3026,17 @@ export class RegistryRuntime {
               ? {
                   signal: providerContext.signal,
                   writeApproved: true,
+                  ...(fileInvocation ? { materializeFile: fileInvocation.materializeFile } : {}),
                   beginCommit: async () => {
                     const commitSignal = await providerContext.beginCommit();
                     writeCommitAdmitted = true;
                     return commitSignal;
                   },
                 }
-              : { signal },
+              : {
+                  signal,
+                  ...(fileInvocation ? { materializeFile: fileInvocation.materializeFile } : {}),
+                },
           );
         };
         const invocationWork = Promise.resolve().then(() =>
@@ -2996,6 +3065,8 @@ export class RegistryRuntime {
         }
         if (context?.signal.aborted && !writeCommitAdmitted)
           throw cancellationError(context.signal);
+        await fileInvocation?.commit();
+        fileInvocationCommitted = true;
         return result;
       } catch (error) {
         if (error instanceof ProviderWriteAdmissionError) {
@@ -3029,16 +3100,22 @@ export class RegistryRuntime {
         }
         throw error;
       } finally {
-        active.delete(controller);
-        this.#activeInvocationToolNames.delete(controller);
-        this.#activeInvocationGrantedCapabilities.delete(controller);
-        this.#activeInvocationCompletionsByController.delete(controller);
-        if (active.size === 0) this.#activeInvocations.delete(manifest.id);
-        finishInvocation();
-        this.#activeInvocationCompletions.delete(invocationCompletion);
-        integrationCompletions.delete(invocationCompletion);
-        if (integrationCompletions.size === 0) {
-          this.#activeInvocationCompletionsByIntegration.delete(manifest.id);
+        try {
+          if (fileInvocation && !fileInvocationCommitted) {
+            await fileInvocation.abort();
+          }
+        } finally {
+          active.delete(controller);
+          this.#activeInvocationToolNames.delete(controller);
+          this.#activeInvocationGrantedCapabilities.delete(controller);
+          this.#activeInvocationCompletionsByController.delete(controller);
+          if (active.size === 0) this.#activeInvocations.delete(manifest.id);
+          finishInvocation();
+          this.#activeInvocationCompletions.delete(invocationCompletion);
+          integrationCompletions.delete(invocationCompletion);
+          if (integrationCompletions.size === 0) {
+            this.#activeInvocationCompletionsByIntegration.delete(manifest.id);
+          }
         }
       }
     }
@@ -3050,9 +3127,10 @@ export async function createRegistryRuntime(
   root: string,
   packages: ReadonlyArray<IntegrationPackage>,
   skills: IntegrationSkillMaterializer = noIntegrationSkills,
+  options: RegistryRuntimeOptions = {},
 ): Promise<RegistryRuntime> {
   try {
-    return new RegistryRuntime(root, packages, skills);
+    return new RegistryRuntime(root, packages, skills, undefined, options);
   } catch (error) {
     for (const { provider } of packages.toReversed()) {
       try {
@@ -3129,6 +3207,12 @@ export const startupLayer = Layer.effectDiscard(
         NodePath.join(config.stateDir, "integrations"),
         builtinIntegrations,
         skillMaterializer,
+        {
+          // Every supported provider can inspect exact paths in this host-owned attachment root.
+          // The materializer owns only its flat reserved-prefix leaves; durable attachments and
+          // the root itself remain outside its cleanup authority.
+          integrationFilesRoot: config.attachmentsDir,
+        },
       ),
     );
     yield* Effect.addFinalizer(() =>

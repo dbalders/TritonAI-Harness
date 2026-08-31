@@ -12,6 +12,7 @@ import type {
 } from "@t3tools/contracts";
 import {
   ApprovalRequestId,
+  EnvironmentId,
   EventId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -59,6 +60,9 @@ import {
 import * as ServerConfig from "../../config.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import * as AnalyticsService from "../../telemetry/AnalyticsService.ts";
+import * as Integrations from "../../integrations/IntegrationRegistry.ts";
+import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
 import { makeAdapterRegistryMock } from "../testUtils/providerAdapterRegistryMock.ts";
 
 const defaultServerSettingsLayer = ServerSettings.ServerSettingsService.layerTest();
@@ -323,6 +327,14 @@ function makeProviderServiceLayer() {
 
 it.effect("ProviderServiceLive catches stopAll failures during shutdown", () =>
   Effect.gen(function* () {
+    const clearAllFiles = vi.fn(async () => {});
+    const integrationRegistrySpy = vi
+      .spyOn(Integrations, "getIntegrationRegistryOptional")
+      .mockReturnValue({
+        clearThreadFiles: vi.fn(async () => {}),
+        clearProviderSessionFiles: vi.fn(async () => {}),
+        clearAllFiles,
+      } as unknown as Integrations.RegistryRuntime);
     const codex = makeFakeCodexAdapter();
     codex.stopAll.mockImplementation(() =>
       Effect.fail(
@@ -362,15 +374,103 @@ it.effect("ProviderServiceLive catches stopAll failures during shutdown", () =>
       runtimeRepositoryLayer,
       NodeServices.layer,
     );
-    const scope = yield* Scope.make();
-    const runtimeServices = yield* Layer.build(providerLayer).pipe(Scope.provide(scope));
+    yield* Effect.gen(function* () {
+      const scope = yield* Scope.make();
+      const runtimeServices = yield* Layer.build(providerLayer).pipe(Scope.provide(scope));
 
-    yield* ProviderService.ProviderService.pipe(Effect.provide(runtimeServices));
-    const closeExit = yield* Scope.close(scope, Exit.void).pipe(Effect.exit);
+      yield* ProviderService.ProviderService.pipe(Effect.provide(runtimeServices));
+      const closeExit = yield* Scope.close(scope, Exit.void).pipe(Effect.exit);
 
-    assert.equal(Exit.isSuccess(closeExit), true);
-    assert.equal(codex.stopAll.mock.calls.length, 1);
+      assert.equal(Exit.isSuccess(closeExit), true);
+      assert.equal(codex.stopAll.mock.calls.length, 1);
+      assert.equal(clearAllFiles.mock.calls.length, 1);
+    }).pipe(Effect.ensuring(Effect.sync(() => integrationRegistrySpy.mockRestore())));
   }),
+);
+
+it.effect(
+  "ProviderServiceLive revokes authority when session discovery fails during shutdown",
+  () =>
+    Effect.gen(function* () {
+      const threadId = asThreadId("thread-stop-all-discovery-failure");
+      const clearAllFiles = vi.fn(async () => {});
+      const integrationRegistrySpy = vi
+        .spyOn(Integrations, "getIntegrationRegistryOptional")
+        .mockReturnValue({
+          clearThreadFiles: vi.fn(async () => {}),
+          clearProviderSessionFiles: vi.fn(async () => {}),
+          clearAllFiles,
+        } as unknown as Integrations.RegistryRuntime);
+      const revokeAllCredentialsSpy = vi
+        .spyOn(McpSessionRegistry, "revokeAllActiveMcpCredentials")
+        .mockImplementation(() => Effect.void);
+      McpProviderSession.setMcpProviderSession({
+        environmentId: EnvironmentId.make("environment-stop-all-discovery-failure"),
+        threadId,
+        providerSessionId: "provider-session-stop-all-discovery-failure",
+        providerInstanceId: codexInstanceId,
+        endpoint: "http://127.0.0.1:43123/mcp",
+        authorizationHeader: "Bearer fixture",
+      });
+      const codex = makeFakeCodexAdapter();
+      codex.listSessions.mockImplementation(() =>
+        Effect.die(new Error("simulated listSessions failure")),
+      );
+      const registry = makeAdapterRegistryMock({
+        [CODEX_DRIVER]: codex.adapter,
+      });
+      const providerAdapterLayer = Layer.succeed(
+        ProviderAdapterRegistry.ProviderAdapterRegistry,
+        registry,
+      );
+      const runtimeRepositoryLayer = ProviderSessionRuntime.layer.pipe(
+        Layer.provide(SqlitePersistenceMemory),
+      );
+      const directoryLayer = ProviderSessionDirectoryLive.pipe(
+        Layer.provide(runtimeRepositoryLayer),
+      );
+      const providerLayer = Layer.mergeAll(
+        makeProviderServiceLive().pipe(
+          Layer.provide(providerAdapterLayer),
+          Layer.provide(directoryLayer),
+          Layer.provide(defaultServerSettingsLayer),
+          Layer.provide(serverConfigTestLayer),
+          Layer.provideMerge(AnalyticsService.layerTest),
+          Layer.provide(
+            Layer.succeed(
+              ProviderEventLoggers.ProviderEventLoggers,
+              ProviderEventLoggers.NoOpProviderEventLoggers,
+            ),
+          ),
+        ),
+        directoryLayer,
+        runtimeRepositoryLayer,
+        NodeServices.layer,
+      );
+
+      yield* Effect.gen(function* () {
+        const scope = yield* Scope.make();
+        const runtimeServices = yield* Layer.build(providerLayer).pipe(Scope.provide(scope));
+
+        yield* ProviderService.ProviderService.pipe(Effect.provide(runtimeServices));
+        const closeExit = yield* Scope.close(scope, Exit.void).pipe(Effect.exit);
+
+        assert.equal(Exit.isSuccess(closeExit), true);
+        assert.equal(codex.listSessions.mock.calls.length, 1);
+        assert.equal(codex.stopAll.mock.calls.length, 0);
+        assert.equal(revokeAllCredentialsSpy.mock.calls.length, 1);
+        assert.equal(clearAllFiles.mock.calls.length, 1);
+        assert.equal(McpProviderSession.readMcpProviderSession(threadId), undefined);
+      }).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            integrationRegistrySpy.mockRestore();
+            revokeAllCredentialsSpy.mockRestore();
+            McpProviderSession.clearMcpProviderSession(threadId);
+          }),
+        ),
+      );
+    }),
 );
 
 it.effect("ProviderServiceLive rejects new sessions for disabled providers", () =>
@@ -855,6 +955,190 @@ it.effect(
 );
 
 routing.layer("ProviderServiceLive routing", (it) => {
+  it.effect("revokes authority and clears integration files when session routing fails", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-missing-integration-file-cleanup");
+      McpProviderSession.setMcpProviderSession({
+        environmentId: EnvironmentId.make("environment-missing-integration-file-cleanup"),
+        threadId,
+        providerSessionId: "provider-session-missing-integration-file-cleanup",
+        providerInstanceId: codexInstanceId,
+        endpoint: "http://127.0.0.1:43123/mcp",
+        authorizationHeader: "Bearer fixture",
+      });
+      const clearThreadFiles = vi.fn(async (_threadId: ThreadId) => {});
+      const clearProviderSessionFiles = vi.fn(
+        async (_threadId: ThreadId, _providerSessionId: string) => {},
+      );
+      const integrationRegistry = {
+        clearThreadFiles,
+        clearProviderSessionFiles,
+        clearAllFiles: vi.fn(async () => {}),
+      } as unknown as Integrations.RegistryRuntime;
+      const registrySpy = vi
+        .spyOn(Integrations, "getIntegrationRegistryOptional")
+        .mockReturnValue(integrationRegistry);
+
+      yield* Effect.exit(provider.stopSession({ threadId })).pipe(
+        Effect.tap((exit) =>
+          Effect.sync(() => {
+            assert.equal(Exit.isFailure(exit), true);
+            assert.deepEqual(clearThreadFiles.mock.calls, [[threadId], [threadId]]);
+            assert.equal(clearProviderSessionFiles.mock.calls.length, 0);
+            assert.equal(McpProviderSession.readMcpProviderSession(threadId), undefined);
+          }),
+        ),
+        Effect.ensuring(
+          Effect.sync(() => {
+            registrySpy.mockRestore();
+            McpProviderSession.clearMcpProviderSession(threadId);
+          }),
+        ),
+      );
+    }),
+  );
+
+  it.effect("uses provider-session-scoped cleanup when replacing a session", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-integration-file-session-replacement");
+      yield* provider.startSession(threadId, {
+        provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: codexInstanceId,
+        threadId,
+        cwd: "/tmp/project-integration-file-session-replacement",
+        runtimeMode: "full-access",
+      });
+
+      const providerSessionId = "provider-session-before-replacement";
+      McpProviderSession.setMcpProviderSession({
+        environmentId: EnvironmentId.make("environment-integration-file-session-replacement"),
+        threadId,
+        providerSessionId,
+        providerInstanceId: codexInstanceId,
+        endpoint: "http://127.0.0.1:43123/mcp",
+        authorizationHeader: "Bearer fixture",
+      });
+      const clearThreadFiles = vi.fn(async (_threadId: ThreadId) => {});
+      const clearProviderSessionFiles = vi.fn(
+        async (_threadId: ThreadId, _providerSessionId: string) => {},
+      );
+      const integrationRegistry = {
+        clearThreadFiles,
+        clearProviderSessionFiles,
+        clearAllFiles: vi.fn(async () => {}),
+      } as unknown as Integrations.RegistryRuntime;
+      const registrySpy = vi
+        .spyOn(Integrations, "getIntegrationRegistryOptional")
+        .mockReturnValue(integrationRegistry);
+
+      yield* provider
+        .startSession(threadId, {
+          provider: ProviderDriverKind.make("codex"),
+          providerInstanceId: codexInstanceId,
+          threadId,
+          cwd: "/tmp/project-integration-file-session-replacement",
+          runtimeMode: "full-access",
+        })
+        .pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              assert.deepEqual(clearProviderSessionFiles.mock.calls, [
+                [threadId, providerSessionId],
+              ]);
+              assert.equal(clearThreadFiles.mock.calls.length, 0);
+            }),
+          ),
+          Effect.ensuring(
+            routing.codex.stopSession(threadId).pipe(
+              Effect.ignore,
+              Effect.ensuring(
+                Effect.sync(() => {
+                  registrySpy.mockRestore();
+                  McpProviderSession.clearMcpProviderSession(threadId);
+                }),
+              ),
+            ),
+          ),
+        );
+    }),
+  );
+
+  it.effect("preserves prior-session files until a failed replacement retry succeeds", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-integration-file-failed-replacement");
+      yield* provider.startSession(threadId, {
+        provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: codexInstanceId,
+        threadId,
+        cwd: "/tmp/project-integration-file-failed-replacement",
+        runtimeMode: "full-access",
+      });
+
+      const providerSessionId = "provider-session-before-failed-replacement";
+      McpProviderSession.setMcpProviderSession({
+        environmentId: EnvironmentId.make("environment-integration-file-failed-replacement"),
+        threadId,
+        providerSessionId,
+        providerInstanceId: codexInstanceId,
+        endpoint: "http://127.0.0.1:43123/mcp",
+        authorizationHeader: "Bearer fixture",
+      });
+      const clearThreadFiles = vi.fn(async (_threadId: ThreadId) => {});
+      const clearProviderSessionFiles = vi.fn(
+        async (_threadId: ThreadId, _providerSessionId: string) => {},
+      );
+      const registrySpy = vi.spyOn(Integrations, "getIntegrationRegistryOptional").mockReturnValue({
+        clearThreadFiles,
+        clearProviderSessionFiles,
+        clearAllFiles: vi.fn(async () => {}),
+      } as unknown as Integrations.RegistryRuntime);
+      routing.codex.startSession.mockImplementationOnce(() =>
+        Effect.die(new Error("simulated replacement startup failure")),
+      );
+
+      yield* Effect.gen(function* () {
+        const failedExit = yield* Effect.exit(
+          provider.startSession(threadId, {
+            provider: ProviderDriverKind.make("codex"),
+            providerInstanceId: codexInstanceId,
+            threadId,
+            cwd: "/tmp/project-integration-file-failed-replacement",
+            runtimeMode: "full-access",
+          }),
+        );
+        assert.equal(Exit.isFailure(failedExit), true);
+        assert.equal(clearProviderSessionFiles.mock.calls.length, 0);
+        assert.equal(clearThreadFiles.mock.calls.length, 0);
+        assert.equal(McpProviderSession.readMcpProviderSession(threadId), undefined);
+
+        yield* provider.startSession(threadId, {
+          provider: ProviderDriverKind.make("codex"),
+          providerInstanceId: codexInstanceId,
+          threadId,
+          cwd: "/tmp/project-integration-file-failed-replacement",
+          runtimeMode: "full-access",
+        });
+        assert.deepEqual(clearThreadFiles.mock.calls, [[threadId]]);
+        assert.equal(clearProviderSessionFiles.mock.calls.length, 0);
+      }).pipe(
+        Effect.ensuring(
+          routing.codex.stopSession(threadId).pipe(
+            Effect.ignore,
+            Effect.ensuring(
+              Effect.sync(() => {
+                registrySpy.mockRestore();
+                McpProviderSession.clearMcpProviderSession(threadId);
+              }),
+            ),
+          ),
+        ),
+      );
+    }),
+  );
+
   it.effect("routes provider operations and rollback conversation", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService.ProviderService;

@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off globalDate:off globalTimers:off cryptoRandomUUID:off
 import { describe, expect, it } from "@effect/vitest";
+import { ThreadId } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
@@ -8,6 +9,7 @@ import * as NodePath from "node:path";
 import { type IntegrationManifest, validateIntegrationManifest } from "./manifest.ts";
 import {
   createRegistryRuntime,
+  type IntegrationInvocationContext,
   IntegrationProviderPublicError,
   RegistryRuntime,
   type IntegrationProvider,
@@ -525,7 +527,7 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
-  it("forwards write approval and preserves an admitted write receipt through cancellation", async () => {
+  it("preserves an admitted write receipt and materialized file through cancellation", async () => {
     const root = await NodeFSP.mkdtemp(
       NodePath.join(NodeOS.tmpdir(), "tritonai-write-commit-admission-"),
     );
@@ -561,6 +563,7 @@ describe("IntegrationRegistry lifecycle", () => {
     const writeCanFinish = new Promise<void>((resolve) => {
       finishWrite = resolve;
     });
+    const fileBytes = Uint8Array.from(Buffer.from("%PDF-1.7\nadmitted write fixture\n", "utf8"));
     const implementation: IntegrationProvider = {
       id: "test-write-commit-provider",
       tools: [
@@ -587,15 +590,23 @@ describe("IntegrationRegistry lifecycle", () => {
       invoke: async (_toolName, _input, context) => {
         expect(context?.writeApproved).toBe(true);
         expect(context?.beginCommit).toBeTypeOf("function");
+        expect(context?.materializeFile).toBeTypeOf("function");
+        const file = await context!.materializeFile!({
+          bytes: fileBytes,
+          name: "admitted-write.pdf",
+          mediaType: "application/pdf",
+        });
         const commitSignal = await context!.beginCommit!();
         markCommitAdmitted();
         await writeCanFinish;
         expect(commitSignal.aborted).toBe(false);
-        return { status: "written", id: "receipt-1" };
+        return { status: "written", id: "receipt-1", file };
       },
     };
     const registry = new RegistryRuntime(root, [packaged(manifest, implementation)]);
     const controller = new AbortController();
+    const threadId = ThreadId.make("thread-admitted-write-file");
+    const providerSessionId = "provider-session-admitted-write-file";
     try {
       await registry.install(manifest.id);
       const invocation = registry.invokeTool(
@@ -604,12 +615,23 @@ describe("IntegrationRegistry lifecycle", () => {
         {
           signal: controller.signal,
           writeApproved: true,
+          threadId,
+          providerSessionId,
         },
       );
       await commitAdmitted;
       controller.abort();
       finishWrite();
-      await expect(invocation).resolves.toEqual({ status: "written", id: "receipt-1" });
+      const result = (await invocation) as {
+        readonly status: string;
+        readonly id: string;
+        readonly file: { readonly path: string };
+      };
+      expect(result).toMatchObject({ status: "written", id: "receipt-1" });
+      await expect(NodeFSP.readFile(result.file.path)).resolves.toEqual(Buffer.from(fileBytes));
+
+      await registry.clearProviderSessionFiles(threadId, providerSessionId);
+      await expect(NodeFSP.access(result.file.path)).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
       finishWrite();
       await registry.close();
@@ -981,6 +1003,260 @@ describe("IntegrationRegistry lifecycle", () => {
         toolName: "test.fixture.read",
       });
     } finally {
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("materializes bounded remote files as revocable thread-scoped descriptors", async () => {
+    const root = await NodeFSP.mkdtemp(
+      NodePath.join(NodeOS.tmpdir(), "tritonai-integration-file-registry-"),
+    );
+    const state: ProviderState = {
+      status: {
+        state: "connected",
+        accountLabel: null,
+        grantedCapabilities: ["fixture.read"],
+        message: null,
+      },
+      credential: null,
+      disconnectFails: false,
+    };
+    const bytes = Uint8Array.from(Buffer.from("%PDF-1.7\nregistry fixture\n", "utf8"));
+    let retainedMaterialize:
+      | NonNullable<IntegrationInvocationContext["materializeFile"]>
+      | undefined;
+    const implementation: IntegrationProvider = {
+      ...provider("test-fixture-provider", state),
+      invoke: async (_toolName, _input, context) => {
+        if (!context?.materializeFile) throw new Error("Materialization context is required.");
+        retainedMaterialize = context.materializeFile;
+        return {
+          file: await context.materializeFile({
+            bytes,
+            name: "../../ignore-local-copy.pdf",
+            mediaType: "application/pdf",
+          }),
+        };
+      },
+    };
+    const registry = new RegistryRuntime(root, [packaged(fixtureManifest, implementation)]);
+    const firstThread = ThreadId.make("thread-integration-file-first");
+    const secondThread = ThreadId.make("thread-integration-file-second");
+    try {
+      await registry.install(fixtureManifest.id);
+      const firstResult = (await registry.invokeTool(
+        "test.fixture.read",
+        {},
+        {
+          signal: new AbortController().signal,
+          threadId: firstThread,
+          providerSessionId: "provider-session-first",
+        },
+      )) as { readonly file: { readonly path: string; readonly trust: string } };
+      expect(NodePath.isAbsolute(firstResult.file.path)).toBe(true);
+      expect(NodePath.basename(firstResult.file.path)).not.toContain("ignore-local-copy");
+      expect(firstResult.file.trust).toBe("untrusted");
+      expect(await NodeFSP.readFile(firstResult.file.path)).toEqual(Buffer.from(bytes));
+      expect(JSON.stringify(firstResult)).not.toContain(Buffer.from(bytes).toString("base64"));
+      expect(retainedMaterialize).toBeDefined();
+      await expect(
+        retainedMaterialize!({
+          bytes,
+          name: "late.pdf",
+          mediaType: "application/pdf",
+        }),
+      ).rejects.toThrow(/invocation|lease|revoked|settled/iu);
+
+      const duplicate = (await registry.invokeTool(
+        "test.fixture.read",
+        {},
+        {
+          signal: new AbortController().signal,
+          threadId: firstThread,
+          providerSessionId: "provider-session-first",
+        },
+      )) as { readonly file: { readonly path: string } };
+      expect(duplicate.file.path).toBe(firstResult.file.path);
+
+      const isolated = (await registry.invokeTool(
+        "test.fixture.read",
+        {},
+        {
+          signal: new AbortController().signal,
+          threadId: secondThread,
+          providerSessionId: "provider-session-second",
+        },
+      )) as { readonly file: { readonly path: string } };
+      expect(isolated.file.path).not.toBe(firstResult.file.path);
+
+      await registry.clearProviderSessionFiles(firstThread, "provider-session-first");
+      await expect(NodeFSP.access(firstResult.file.path)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(NodeFSP.readFile(isolated.file.path)).resolves.toEqual(Buffer.from(bytes));
+    } finally {
+      await registry.close();
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rolls back a materialized file when its provider invocation fails", async () => {
+    const root = await NodeFSP.mkdtemp(
+      NodePath.join(NodeOS.tmpdir(), "tritonai-integration-file-failure-"),
+    );
+    const state: ProviderState = {
+      status: {
+        state: "connected",
+        accountLabel: null,
+        grantedCapabilities: ["fixture.read"],
+        message: null,
+      },
+      credential: null,
+      disconnectFails: false,
+    };
+    let materializedPath: string | undefined;
+    const implementation: IntegrationProvider = {
+      ...provider("test-fixture-provider", state),
+      invoke: async (_toolName, _input, context) => {
+        const descriptor = await context?.materializeFile?.({
+          bytes: Uint8Array.from(Buffer.from("%PDF-1.7\nfailed fixture\n", "utf8")),
+          name: "failed.pdf",
+          mediaType: "application/pdf",
+        });
+        materializedPath = descriptor?.path;
+        throw new Error("provider failed after materialization");
+      },
+    };
+    const registry = new RegistryRuntime(root, [packaged(fixtureManifest, implementation)]);
+    try {
+      await registry.install(fixtureManifest.id);
+      await expect(
+        registry.invokeTool(
+          "test.fixture.read",
+          {},
+          {
+            signal: new AbortController().signal,
+            threadId: ThreadId.make("thread-integration-file-failed"),
+            providerSessionId: "provider-session-failed",
+          },
+        ),
+      ).rejects.toThrow("provider failed after materialization");
+      expect(materializedPath).toBeDefined();
+      await expect(NodeFSP.access(materializedPath!)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await registry.close();
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("revokes a session file lease while provider preparation is still pending", async () => {
+    const root = await NodeFSP.mkdtemp(
+      NodePath.join(NodeOS.tmpdir(), "tritonai-integration-file-prepare-revocation-"),
+    );
+    const state: ProviderState = {
+      status: {
+        state: "connected",
+        accountLabel: null,
+        grantedCapabilities: ["fixture.read"],
+        message: null,
+      },
+      credential: null,
+      disconnectFails: false,
+    };
+    let markPrepareStarted!: () => void;
+    const prepareStarted = new Promise<void>((resolve) => {
+      markPrepareStarted = resolve;
+    });
+    let releasePrepare!: () => void;
+    const prepareCanFinish = new Promise<void>((resolve) => {
+      releasePrepare = resolve;
+    });
+    let providerInvoked = false;
+    const implementation: IntegrationProvider = {
+      ...provider("test-fixture-provider", state),
+      prepare: async () => {
+        markPrepareStarted();
+        await prepareCanFinish;
+      },
+      invoke: async (_toolName, _input, context) => {
+        providerInvoked = true;
+        if (!context?.materializeFile) throw new Error("Materialization context is required.");
+        return {
+          file: await context.materializeFile({
+            bytes: Uint8Array.from(Buffer.from("%PDF-1.7\nrevoked fixture\n", "utf8")),
+            name: "revoked.pdf",
+            mediaType: "application/pdf",
+          }),
+        };
+      },
+    };
+    const registry = new RegistryRuntime(root, [packaged(fixtureManifest, implementation)]);
+    const threadId = ThreadId.make("thread-integration-file-prepare-revocation");
+    const providerSessionId = "provider-session-prepare-revocation";
+    try {
+      await registry.install(fixtureManifest.id);
+      const invocation = registry.invokeTool(
+        "test.fixture.read",
+        {},
+        {
+          signal: new AbortController().signal,
+          threadId,
+          providerSessionId,
+        },
+      );
+      await prepareStarted;
+
+      await registry.clearProviderSessionFiles(threadId, providerSessionId);
+      releasePrepare();
+
+      await expect(invocation).rejects.toThrow(/active|lease|revoked/iu);
+      expect(providerInvoked).toBe(true);
+      await expect(NodeFSP.readdir(NodePath.join(root, "materialized-files"))).resolves.toEqual([]);
+    } finally {
+      releasePrepare();
+      await registry.close();
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an empty provider session identity instead of using the default scope", async () => {
+    const root = await NodeFSP.mkdtemp(
+      NodePath.join(NodeOS.tmpdir(), "tritonai-integration-file-empty-session-"),
+    );
+    const state: ProviderState = {
+      status: {
+        state: "connected",
+        accountLabel: null,
+        grantedCapabilities: ["fixture.read"],
+        message: null,
+      },
+      credential: null,
+      disconnectFails: false,
+    };
+    let providerInvocations = 0;
+    const implementation: IntegrationProvider = {
+      ...provider("test-fixture-provider", state),
+      invoke: async () => {
+        providerInvocations += 1;
+        return { records: [] };
+      },
+    };
+    const registry = new RegistryRuntime(root, [packaged(fixtureManifest, implementation)]);
+    try {
+      await registry.install(fixtureManifest.id);
+      await expect(
+        registry.invokeTool(
+          "test.fixture.read",
+          {},
+          {
+            signal: new AbortController().signal,
+            threadId: ThreadId.make("thread-integration-file-empty-session"),
+            providerSessionId: "",
+          },
+        ),
+      ).rejects.toMatchObject({ code: "invalid_input" });
+      expect(providerInvocations).toBe(0);
+      await expect(NodeFSP.readdir(NodePath.join(root, "materialized-files"))).resolves.toEqual([]);
+    } finally {
+      await registry.close();
       await NodeFSP.rm(root, { recursive: true, force: true });
     }
   });

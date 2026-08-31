@@ -36,6 +36,7 @@ import { RuntimeReceiptBus } from "../Services/RuntimeReceiptBus.ts";
 import type { CheckpointStoreError } from "../../checkpointing/Errors.ts";
 import type { OrchestrationDispatchError } from "../Errors.ts";
 import { isGitRepository } from "../../git/Utils.ts";
+import * as Integrations from "../../integrations/IntegrationRegistry.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import * as WorkspaceEntries from "../../workspace/WorkspaceEntries.ts";
 
@@ -768,6 +769,20 @@ const make = Effect.gen(function* () {
         createdAt: now,
       }).pipe(Effect.catch(() => Effect.void));
       return;
+    }
+
+    const integrationRegistry = Integrations.getIntegrationRegistryOptional();
+    if (integrationRegistry) {
+      yield* Effect.tryPromise(() =>
+        integrationRegistry.clearThreadFiles(event.payload.threadId),
+      ).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("failed to clear integration files after checkpoint restore", {
+            threadId: event.payload.threadId,
+            cause: Cause.pretty(cause),
+          }),
+        ),
+      );
     }
 
     // Refresh the workspace entry index so the @-mention file picker

@@ -20,6 +20,7 @@ import {
   TurnId,
 } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { it as effectIt } from "@effect/vitest";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -31,6 +32,7 @@ import * as Stream from "effect/Stream";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import * as CheckpointStore from "../../checkpointing/CheckpointStore.ts";
+import * as Integrations from "../../integrations/IntegrationRegistry.ts";
 import * as VcsDriverRegistry from "../../vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "../../vcs/VcsProcess.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
@@ -258,6 +260,7 @@ describe("CheckpointReactor", () => {
   const tempDirs: string[] = [];
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     if (scope) {
       await Effect.runPromise(Scope.close(scope, Exit.void));
     }
@@ -1002,6 +1005,10 @@ describe("CheckpointReactor", () => {
   });
 
   it("executes provider revert and emits thread.reverted for checkpoint revert requests", async () => {
+    const clearThreadFiles = vi.fn((_threadId: ThreadId) => Promise.resolve());
+    vi.spyOn(Integrations, "getIntegrationRegistryOptional").mockReturnValue({
+      clearThreadFiles,
+    } as unknown as NonNullable<ReturnType<typeof Integrations.getIntegrationRegistryOptional>>);
     const harness = await createHarness();
     const createdAt = "2026-01-01T00:00:00.000Z";
 
@@ -1076,11 +1083,73 @@ describe("CheckpointReactor", () => {
       threadId: ThreadId.make("thread-1"),
       numTurns: 1,
     });
+    expect(clearThreadFiles).toHaveBeenCalledTimes(1);
+    expect(clearThreadFiles).toHaveBeenCalledWith(ThreadId.make("thread-1"));
     expect(NodeFS.readFileSync(NodePath.join(harness.cwd, "README.md"), "utf8")).toBe("v2\n");
     expect(
       gitRefExists(harness.cwd, checkpointRefForThreadTurn(ThreadId.make("thread-1"), 2)),
     ).toBe(false);
   });
+
+  effectIt.effect("keeps integration files when the filesystem checkpoint cannot be restored", () =>
+    Effect.gen(function* () {
+      const clearThreadFiles = vi.fn((_threadId: ThreadId) => Promise.resolve());
+      vi.spyOn(Integrations, "getIntegrationRegistryOptional").mockReturnValue({
+        clearThreadFiles,
+      } as unknown as NonNullable<ReturnType<typeof Integrations.getIntegrationRegistryOptional>>);
+      const harness = yield* Effect.promise(() => createHarness());
+      const createdAt = "2026-01-01T00:00:00.000Z";
+      const checkpointRef = checkpointRefForThreadTurn(ThreadId.make("thread-1"), 1);
+
+      yield* harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-set-missing-checkpoint"),
+        threadId: ThreadId.make("thread-1"),
+        session: {
+          threadId: ThreadId.make("thread-1"),
+          status: "ready",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: createdAt,
+        },
+        createdAt,
+      });
+      yield* harness.engine.dispatch({
+        type: "thread.turn.diff.complete",
+        commandId: CommandId.make("cmd-diff-missing-checkpoint"),
+        threadId: ThreadId.make("thread-1"),
+        turnId: asTurnId("turn-missing-checkpoint"),
+        completedAt: createdAt,
+        checkpointRef,
+        status: "ready",
+        files: [],
+        checkpointTurnCount: 1,
+        createdAt,
+      });
+      runGit(harness.cwd, ["update-ref", "-d", checkpointRef]);
+
+      yield* harness.engine.dispatch({
+        type: "thread.checkpoint.revert",
+        commandId: CommandId.make("cmd-revert-missing-checkpoint"),
+        threadId: ThreadId.make("thread-1"),
+        turnCount: 1,
+        createdAt,
+      });
+
+      const thread = yield* Effect.promise(() =>
+        waitForThread(harness.readModel, (entry) =>
+          entry.activities.some((activity) => activity.kind === "checkpoint.revert.failed"),
+        ),
+      );
+
+      expect(
+        thread.activities.some((activity) => activity.kind === "checkpoint.revert.failed"),
+      ).toBe(true);
+      expect(clearThreadFiles).not.toHaveBeenCalled();
+    }),
+  );
 
   it("executes provider revert and emits thread.reverted for claude sessions", async () => {
     const harness = await createHarness({ providerName: ProviderDriverKind.make("claudeAgent") });

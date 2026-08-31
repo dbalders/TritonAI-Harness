@@ -38,6 +38,7 @@ import * as Stream from "effect/Stream";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import * as ServerConfig from "../../config.ts";
+import * as Integrations from "../../integrations/IntegrationRegistry.ts";
 import {
   increment,
   providerMetricAttributes,
@@ -219,18 +220,77 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
   const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
-  const prepareMcpSession = (threadId: ThreadId, providerInstanceId: ProviderInstanceId) =>
-    McpSessionRegistry.issueActiveMcpCredential({
+  const clearIntegrationFiles = (threadId: ThreadId, providerSessionId: string | null) => {
+    const integrationRegistry = Integrations.getIntegrationRegistryOptional();
+    return integrationRegistry
+      ? Effect.tryPromise(() =>
+          providerSessionId !== null
+            ? integrationRegistry.clearProviderSessionFiles(threadId, providerSessionId)
+            : integrationRegistry.clearThreadFiles(threadId),
+        ).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("failed to clear integration files for provider session", {
+              threadId,
+              errorTag: causeErrorTag(cause),
+            }),
+          ),
+        )
+      : Effect.void;
+  };
+  const clearIntegrationThreadFiles = (threadId: ThreadId) => clearIntegrationFiles(threadId, null);
+  const clearReplacedIntegrationSessionFiles = (
+    threadId: ThreadId,
+    prepared: {
+      readonly previousProviderSessionId: string | undefined;
+      readonly currentProviderSessionId: string | undefined;
+    },
+  ) =>
+    // A failed start revokes its credential, so a later retry may no longer know the displaced
+    // session id. Clear the thread conservatively only after the replacement has started.
+    prepared.previousProviderSessionId === undefined
+      ? clearIntegrationThreadFiles(threadId)
+      : prepared.previousProviderSessionId !== prepared.currentProviderSessionId
+        ? clearIntegrationFiles(threadId, prepared.previousProviderSessionId)
+        : Effect.void;
+  const clearAllIntegrationFiles = () => {
+    const integrationRegistry = Integrations.getIntegrationRegistryOptional();
+    return integrationRegistry
+      ? Effect.tryPromise(() => integrationRegistry.clearAllFiles()).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("failed to clear integration files for provider shutdown", {
+              errorTag: causeErrorTag(cause),
+            }),
+          ),
+        )
+      : Effect.void;
+  };
+  const revokeAllProviderAuthorityAndClearIntegrationFiles = () =>
+    McpSessionRegistry.revokeAllActiveMcpCredentials().pipe(
+      Effect.ensuring(Effect.sync(() => McpProviderSession.clearAllMcpProviderSessions())),
+      Effect.ensuring(clearAllIntegrationFiles()),
+    );
+  const prepareMcpSession = Effect.fn("ProviderService.prepareMcpSession")(function* (
+    threadId: ThreadId,
+    providerInstanceId: ProviderInstanceId,
+  ) {
+    const previousProviderSessionId =
+      McpProviderSession.readMcpProviderSession(threadId)?.providerSessionId;
+    const credential = yield* McpSessionRegistry.issueActiveMcpCredential({
       threadId,
       providerInstanceId,
       capabilities: McpSessionRegistry.providerSessionCapabilities(),
-    }).pipe(
-      Effect.tap((credential) =>
-        credential
-          ? Effect.sync(() => McpProviderSession.setMcpProviderSession(credential.config))
-          : Effect.void,
-      ),
-    );
+    });
+    if (credential) {
+      McpProviderSession.setMcpProviderSession(credential.config);
+    } else {
+      // Without a new credential, no managed runtime may retain the previous session's authority.
+      McpProviderSession.clearMcpProviderSession(threadId);
+    }
+    return {
+      previousProviderSessionId,
+      currentProviderSessionId: credential?.config.providerSessionId,
+    } as const;
+  });
   const clearMcpSession = (threadId: ThreadId) =>
     McpSessionRegistry.revokeActiveMcpThread(threadId).pipe(
       Effect.tap(() => Effect.sync(() => McpProviderSession.clearMcpProviderSession(threadId))),
@@ -406,7 +466,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       const persistedCwd = readPersistedCwd(input.binding.runtimePayload);
       const persistedModelSelection = readPersistedModelSelection(input.binding.runtimePayload);
 
-      yield* prepareMcpSession(input.binding.threadId, bindingInstanceId);
+      const preparedMcpSession = yield* prepareMcpSession(
+        input.binding.threadId,
+        bindingInstanceId,
+      );
       const resumed = yield* adapter
         .startSession({
           threadId: input.binding.threadId,
@@ -425,6 +488,8 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           `Adapter/provider mismatch while recovering thread '${input.binding.threadId}'. Expected '${adapter.provider}', received '${resumed.provider}'.`,
         );
       }
+
+      yield* clearReplacedIntegrationSessionFiles(input.binding.threadId, preparedMcpSession);
 
       yield* upsertSessionBinding(
         { ...resumed, providerInstanceId: bindingInstanceId },
@@ -602,7 +667,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           "provider.cwd.effective": effectiveCwd ?? "",
         });
         const adapter = yield* registry.getByInstance(resolvedInstanceId);
-        yield* prepareMcpSession(threadId, resolvedInstanceId);
+        const preparedMcpSession = yield* prepareMcpSession(threadId, resolvedInstanceId);
         const session = yield* adapter
           .startSession({
             ...input,
@@ -619,6 +684,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
             `Adapter/provider mismatch: requested '${adapter.provider}', received '${session.provider}'.`,
           );
         }
+        yield* clearReplacedIntegrationSessionFiles(threadId, preparedMcpSession);
         const sessionWithInstance = {
           ...session,
           providerInstanceId: resolvedInstanceId,
@@ -913,6 +979,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       });
       let metricProvider = "unknown";
       return yield* Effect.gen(function* () {
+        // Revoke both MCP and captured direct-runtime authority before cleanup. The first pass
+        // aborts/drains admitted leases; the finalizer catches any late adapter shutdown work.
+        yield* clearMcpSession(input.threadId);
+        yield* clearIntegrationThreadFiles(input.threadId);
         const routed = yield* resolveRoutableSession({
           threadId: input.threadId,
           operation: "ProviderService.stopSession",
@@ -927,7 +997,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         if (routed.isActive) {
           yield* routed.adapter.stopSession(routed.threadId);
         }
-        yield* clearMcpSession(input.threadId);
         yield* directory.upsert({
           threadId: input.threadId,
           provider: routed.adapter.provider,
@@ -941,6 +1010,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           provider: routed.adapter.provider,
         });
       }).pipe(
+        Effect.ensuring(clearIntegrationThreadFiles(input.threadId)),
         withMetrics({
           counter: providerSessionsTotal,
           outcomeAttributes: () =>
@@ -1087,53 +1157,55 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   });
 
   const runStopAll = Effect.fn("runStopAll")(function* () {
-    const threadIds = yield* directory.listThreadIds();
-    const currentAdapters = yield* getAdapterEntries;
-    const activeSessions = yield* Effect.forEach(currentAdapters, ([instanceId, adapter]) =>
-      adapter.listSessions().pipe(
-        Effect.map((sessions) =>
-          sessions.map((session) => ({
-            ...session,
-            providerInstanceId: instanceId,
-          })),
+    yield* Effect.gen(function* () {
+      const threadIds = yield* directory.listThreadIds();
+      const currentAdapters = yield* getAdapterEntries;
+      const activeSessions = yield* Effect.forEach(currentAdapters, ([instanceId, adapter]) =>
+        adapter.listSessions().pipe(
+          Effect.map((sessions) =>
+            sessions.map((session) => ({
+              ...session,
+              providerInstanceId: instanceId,
+            })),
+          ),
         ),
-      ),
-    ).pipe(Effect.map((sessionsByAdapter) => sessionsByAdapter.flatMap((sessions) => sessions)));
-    yield* Effect.forEach(activeSessions, (session) =>
-      Effect.flatMap(nowIso, (lastRuntimeEventAt) =>
-        upsertSessionBinding(session, session.threadId, {
-          lastRuntimeEvent: "provider.stopAll",
-          lastRuntimeEventAt,
-        }),
-      ),
-    ).pipe(Effect.asVoid);
-    yield* Effect.forEach(currentAdapters, ([, adapter]) => adapter.stopAll()).pipe(Effect.asVoid);
-    yield* McpSessionRegistry.revokeAllActiveMcpCredentials();
-    McpProviderSession.clearAllMcpProviderSessions();
-    const bindings = yield* directory.listBindings().pipe(Effect.orElseSucceed(() => []));
-    yield* Effect.forEach(bindings, (binding) =>
-      Effect.gen(function* () {
-        const providerInstanceId = dieOnMissingBindingInstanceId(
-          "ProviderService.stopAll",
-          binding,
-        );
-        return yield* directory.upsert({
-          threadId: binding.threadId,
-          provider: binding.provider,
-          providerInstanceId,
-          status: "stopped",
-          runtimePayload: {
-            activeTurnId: null,
+      ).pipe(Effect.map((sessionsByAdapter) => sessionsByAdapter.flatMap((sessions) => sessions)));
+      yield* Effect.forEach(activeSessions, (session) =>
+        Effect.flatMap(nowIso, (lastRuntimeEventAt) =>
+          upsertSessionBinding(session, session.threadId, {
             lastRuntimeEvent: "provider.stopAll",
-            lastRuntimeEventAt: yield* nowIso,
-          },
-        });
-      }),
-    ).pipe(Effect.asVoid);
-    yield* analytics.record("provider.sessions.stopped_all", {
-      sessionCount: threadIds.length,
-    });
-    yield* analytics.flush;
+            lastRuntimeEventAt,
+          }),
+        ),
+      ).pipe(Effect.asVoid);
+      yield* Effect.forEach(currentAdapters, ([, adapter]) => adapter.stopAll()).pipe(
+        Effect.asVoid,
+      );
+      const bindings = yield* directory.listBindings().pipe(Effect.orElseSucceed(() => []));
+      yield* Effect.forEach(bindings, (binding) =>
+        Effect.gen(function* () {
+          const providerInstanceId = dieOnMissingBindingInstanceId(
+            "ProviderService.stopAll",
+            binding,
+          );
+          return yield* directory.upsert({
+            threadId: binding.threadId,
+            provider: binding.provider,
+            providerInstanceId,
+            status: "stopped",
+            runtimePayload: {
+              activeTurnId: null,
+              lastRuntimeEvent: "provider.stopAll",
+              lastRuntimeEventAt: yield* nowIso,
+            },
+          });
+        }),
+      ).pipe(Effect.asVoid);
+      yield* analytics.record("provider.sessions.stopped_all", {
+        sessionCount: threadIds.length,
+      });
+      yield* analytics.flush;
+    }).pipe(Effect.ensuring(revokeAllProviderAuthorityAndClearIntegrationFiles()));
   });
 
   yield* Effect.addFinalizer(() =>
