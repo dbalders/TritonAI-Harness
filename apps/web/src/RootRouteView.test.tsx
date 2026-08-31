@@ -94,7 +94,9 @@ vi.mock("./state/use-atom-command", () => ({
 }));
 
 vi.mock("./components/ProviderUpdateLaunchNotification", () => ({
-  ProviderUpdateLaunchNotification: () => <div data-provider-update-launch-notification />,
+  ProviderUpdateLaunchNotification: ({ providerDriver }: { providerDriver?: string }) => (
+    <div data-provider-update-launch-notification={providerDriver} />
+  ),
 }));
 
 import { Route } from "./routes/__root";
@@ -110,7 +112,7 @@ it("renders the TritonAI usage warning for an authenticated root", () => {
   expect(markup).toContain("data-triton-ai-usage-warning");
 });
 
-it("does not render provider update launch notifications for an authenticated root", () => {
+it("renders a Codex-scoped provider update launch notification for an authenticated root", () => {
   const RootRouteView = Route.options.component;
   if (!RootRouteView) {
     throw new Error("Root route component is missing");
@@ -118,5 +120,5 @@ it("does not render provider update launch notifications for an authenticated ro
 
   const markup = renderToStaticMarkup(<RootRouteView />);
 
-  expect(markup).not.toContain("data-provider-update-launch-notification");
+  expect(markup).toContain('data-provider-update-launch-notification="codex"');
 });

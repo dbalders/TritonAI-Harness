@@ -1,4 +1,4 @@
-import { type ServerLifecycleWelcomePayload } from "@t3tools/contracts";
+import { ProviderDriverKind, type ServerLifecycleWelcomePayload } from "@t3tools/contracts";
 import { scopedProjectKey, scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import {
@@ -18,6 +18,7 @@ import { ConfirmDialogHost } from "../components/ConfirmDialogHost";
 import { ConnectOnboardingDialog } from "../components/cloud/ConnectOnboardingDialog";
 import { RelayClientInstallDialog } from "../components/cloud/RelayClientInstallDialog";
 import { SshPasswordPromptDialog } from "../components/desktop/SshPasswordPromptDialog";
+import { ProviderUpdateLaunchNotification } from "../components/ProviderUpdateLaunchNotification";
 import { SlowRpcRequestToastCoordinator } from "../components/SlowRpcRequestToastCoordinator";
 import { TritonAiUsageWarning } from "../components/TritonAiUsageWarning";
 import { ThemeEditorHost } from "../components/settings/ThemeEditorHost";
@@ -60,6 +61,8 @@ import {
   createKeybindingsUpdateToastController,
   type KeybindingsUpdateToastController,
 } from "../components/KeybindingsUpdateToast.logic";
+
+const CODEX_PROVIDER_DRIVER = ProviderDriverKind.make("codex");
 
 export const Route = createRootRoute({
   beforeLoad: async ({ location }) => {
@@ -149,7 +152,9 @@ function RootRouteView() {
         {primaryEnvironmentAuthenticated ? <EventRouter /> : null}
         {primaryEnvironmentAuthenticated ? <PlanAgentSelectionHeal /> : null}
         {primaryEnvironmentAuthenticated ? <TritonAiUsageWarning /> : null}
-        {/* Provider updates stay available in Settings and the sidebar; TritonAI has no launch popup. */}
+        {primaryEnvironmentAuthenticated ? (
+          <ProviderUpdateLaunchNotification providerDriver={CODEX_PROVIDER_DRIVER} />
+        ) : null}
         {primaryEnvironmentAuthenticated ? (
           <TritonAiFirstRunOnboardingBootstrap pathname={pathname} />
         ) : null}
