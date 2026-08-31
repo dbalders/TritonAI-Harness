@@ -34,8 +34,38 @@ interface LiteLlmEntry {
   readonly cache_creation_input_token_cost?: unknown;
 }
 
+/**
+ * TritonAI transcripts identify the Z.AI model as `api-glm-5.2`. LiteLLM does
+ * not currently publish the corresponding first-party `zai/glm-5.2` entry, so
+ * use Z.AI's published list prices until that row lands. A direct LiteLLM row
+ * takes precedence automatically when it becomes available.
+ *
+ * Prices: https://docs.z.ai/guides/overview/pricing
+ */
+const TRITONAI_GLM_5_2_RATE: ModelRate = {
+  inputCostPerToken: 1.4e-6,
+  outputCostPerToken: 4.4e-6,
+  cacheReadCostPerToken: 2.6e-7,
+  cacheCreationCostPerToken: 0,
+};
+
 function finiteNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function parseModelRate(raw: unknown): ModelRate | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const entry = raw as LiteLlmEntry;
+  const input = finiteNumber(entry.input_cost_per_token);
+  const output = finiteNumber(entry.output_cost_per_token);
+  if (input === null || output === null) return null;
+
+  return {
+    inputCostPerToken: input,
+    outputCostPerToken: output,
+    cacheReadCostPerToken: finiteNumber(entry.cache_read_input_token_cost) ?? input,
+    cacheCreationCostPerToken: finiteNumber(entry.cache_creation_input_token_cost) ?? input,
+  };
 }
 
 /**
@@ -53,23 +83,11 @@ export function parseRateTable(document: unknown): RateTable {
   if (typeof document !== "object" || document === null) return table;
 
   for (const [name, raw] of Object.entries(document as Record<string, unknown>)) {
-    if (typeof raw !== "object" || raw === null) continue;
-    const entry = raw as LiteLlmEntry;
-    const input = finiteNumber(entry.input_cost_per_token);
-    const output = finiteNumber(entry.output_cost_per_token);
-    if (input === null || output === null) continue;
-
+    const rate = parseModelRate(raw);
+    if (rate === null) continue;
     const key = normalizeRateKey(name);
     if (key.length === 0) continue;
-    table.set(key, {
-      inputCostPerToken: input,
-      outputCostPerToken: output,
-      // Anthropic bills cache reads at a discount and cache writes at a
-      // premium. When a model omits them, cached input is priced as plain
-      // input rather than as free.
-      cacheReadCostPerToken: finiteNumber(entry.cache_read_input_token_cost) ?? input,
-      cacheCreationCostPerToken: finiteNumber(entry.cache_creation_input_token_cost) ?? input,
-    });
+    table.set(key, rate);
   }
 
   // `null` marks a bare name claimed at conflicting rates: no alias for it.
@@ -89,6 +107,18 @@ export function parseRateTable(document: unknown): RateTable {
   }
 
   return table;
+}
+
+/**
+ * Layers TritonAI gateway aliases onto an already-validated external table.
+ *
+ * Keeping this separate from `parseRateTable` lets `UsageService` reject an
+ * empty or malformed LiteLLM document before local fallbacks make it non-empty.
+ */
+export function withTritonAiRates(table: RateTable): RateTable {
+  const resolved = new Map(table);
+  resolved.set("api-glm-5.2", table.get("zai/glm-5.2") ?? TRITONAI_GLM_5_2_RATE);
+  return resolved;
 }
 
 function sameRate(a: ModelRate, b: ModelRate): boolean {

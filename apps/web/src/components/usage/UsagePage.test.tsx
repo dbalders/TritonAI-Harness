@@ -142,6 +142,12 @@ describe("UsagePage hourly breakdown", () => {
     expect(renderToStaticMarkup(<UsagePage />)).toContain("TritonAI quota");
   });
 
+  it("requests Codex-only transcript aggregation", () => {
+    renderToStaticMarkup(<UsagePage />);
+
+    expect(testState.useUsage).toHaveBeenCalledWith(expect.anything(), "codex");
+  });
+
   it("keeps recent activity visible first without empty hourly rows", () => {
     const markup = renderToStaticMarkup(<UsagePage />);
     const body = markup.match(/<tbody>(.*?)<\/tbody>/)?.[1] ?? "";

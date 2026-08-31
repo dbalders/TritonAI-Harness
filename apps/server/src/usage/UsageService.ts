@@ -40,7 +40,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import { resolveClaudeHomePath } from "../provider/Drivers/ClaudeHome.ts";
 import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
 import { UsageAggregator } from "./usageAggregation.ts";
-import { parseRateTable, type RateTable } from "./usagePricing.ts";
+import { parseRateTable, type RateTable, withTritonAiRates } from "./usagePricing.ts";
 import {
   listTranscriptFiles,
   readDirectoryVolumeId,
@@ -153,7 +153,7 @@ export const make = Effect.gen(function* () {
       if (fromDisk !== null) {
         const parsed = parseRateTable(fromDisk.document);
         if (parsed.size > 0) {
-          rates = parsed;
+          rates = withTritonAiRates(parsed);
           ratesFetchedAtMs = fromDisk.fetchedAtMs;
           ratesStatus = "cached";
           if (now - fromDisk.fetchedAtMs < RATES_TTL_MS) return;
@@ -177,7 +177,7 @@ export const make = Effect.gen(function* () {
     const parsed = parseRateTable(fetched);
     if (parsed.size === 0) return;
 
-    rates = parsed;
+    rates = withTritonAiRates(parsed);
     ratesFetchedAtMs = now;
     ratesStatus = "fresh";
 

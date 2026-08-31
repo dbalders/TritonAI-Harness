@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   searchableSetting,
   searchSettings,
+  SETTINGS_SECTION_LABELS,
   SETTINGS_SEARCH_ITEMS,
   type SettingsSearchItem,
 } from "./settingsSearch";
@@ -97,5 +98,10 @@ describe("searchSettings", () => {
       to: "/settings/appearance",
       targetId: "appearance",
     });
+  });
+
+  it("does not expose the legacy Settings usage destination", () => {
+    expect(SETTINGS_SECTION_LABELS).not.toHaveProperty("/settings/usage");
+    expect(searchSettings("usage")).toEqual([]);
   });
 });

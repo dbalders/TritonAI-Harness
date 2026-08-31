@@ -21,6 +21,21 @@ export interface EnvironmentUsage {
   readonly summary: UsageSummary;
 }
 
+/**
+ * Narrows one environment's transcript summary before cross-environment
+ * merging so every derived total stays aligned with the visible provider.
+ */
+export function selectUsageProvider(
+  summary: UsageSummary,
+  provider: UsageProviderKind,
+): UsageSummary {
+  return {
+    ...summary,
+    buckets: summary.buckets.filter((bucket) => bucket.provider === provider),
+    sources: summary.sources.filter((source) => source.fingerprint.provider === provider),
+  };
+}
+
 export interface ProviderTotals {
   readonly provider: UsageProviderKind;
   readonly costUsd: number;
@@ -210,10 +225,13 @@ const EMPTY_MERGED: MergedUsage = {
  * id is reported so the UI can say coverage is partial. Versions in
  * [{@link USAGE_MERGE_COMPATIBLE_SINCE}, expected] still merge, so an additive
  * provider expansion does not drop Claude/Codex totals from older servers.
+ * When `provider` is supplied, summaries are narrowed before source ownership
+ * and all derived totals are calculated.
  */
 export function mergeUsage(
   environments: readonly EnvironmentUsage[],
   expectedContractVersion: number,
+  provider?: UsageProviderKind,
 ): MergedUsage {
   if (environments.length === 0) return EMPTY_MERGED;
 
@@ -221,7 +239,11 @@ export function mergeUsage(
   const staleEnvironments: EnvironmentId[] = [];
   for (const environment of environments) {
     if (isCompatibleContractVersion(environment.summary.contractVersion, expectedContractVersion)) {
-      current.push(environment);
+      current.push(
+        provider === undefined
+          ? environment
+          : { ...environment, summary: selectUsageProvider(environment.summary, provider) },
+      );
     } else {
       staleEnvironments.push(environment.environmentId);
     }
