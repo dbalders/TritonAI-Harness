@@ -974,6 +974,8 @@ export function makeCursorAdapter(
           }
           if (attachments.length > 0) {
             for (const attachment of attachments) {
+              // Cursor ingests images only. Generic files reach the agent
+              // through the path line ProviderService puts in the prompt.
               if (attachment.type !== "image") {
                 continue;
               }

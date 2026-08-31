@@ -1,5 +1,6 @@
 import type {
   ChatFileAttachment as ContractChatFileAttachment,
+  ChatAttachment as ContractChatAttachment,
   ChatImageAttachment as ContractChatImageAttachment,
   OrchestrationCheckpointFile,
   OrchestrationCheckpointSummary,
@@ -40,7 +41,17 @@ export type ChatFileAttachment = ContractChatFileAttachment & {
   readonly downloadUrl?: string;
 };
 
-export type ChatAttachment = ChatImageAttachment | ChatFileAttachment;
+export type ChatAttachment =
+  | ChatImageAttachment
+  | (Exclude<ContractChatAttachment, ContractChatImageAttachment> & {
+      readonly downloadUrl?: string;
+    });
+
+// The union has an open member (`type: string`), so a literal comparison does
+// not narrow. Use this guard wherever image-only fields are read.
+export function isImageAttachment(attachment: ChatAttachment): attachment is ChatImageAttachment {
+  return attachment.type === "image";
+}
 
 export interface ChatMessage extends Omit<OrchestrationMessage, "attachments"> {
   readonly attachments?: ReadonlyArray<ChatAttachment> | undefined;

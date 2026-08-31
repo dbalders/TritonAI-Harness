@@ -19,8 +19,9 @@ const ATTACHMENT_ID_THREAD_HASH_CHARS = 16;
 const ATTACHMENT_ID_THREAD_SEGMENT_PATTERN = "[a-z0-9_]+(?:-[a-z0-9_]+)*";
 const ATTACHMENT_ID_UUID_PATTERN = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 const ATTACHMENT_UPLOAD_ID_PATTERN = new RegExp(`^${ATTACHMENT_ID_UUID_PATTERN}$`, "i");
+const ATTACHMENT_ID_FILE_EXTENSION_PATTERN = "[a-z0-9]{1,10}";
 const ATTACHMENT_ID_PATTERN = new RegExp(
-  `^(${ATTACHMENT_ID_THREAD_SEGMENT_PATTERN})-(${ATTACHMENT_ID_UUID_PATTERN})$`,
+  `^(${ATTACHMENT_ID_THREAD_SEGMENT_PATTERN})-(${ATTACHMENT_ID_UUID_PATTERN})(?:-(${ATTACHMENT_ID_FILE_EXTENSION_PATTERN}))?$`,
   "i",
 );
 
@@ -43,8 +44,28 @@ export function toSafeThreadAttachmentSegment(threadId: string): string | null {
   return segment === PENDING_ATTACHMENT_THREAD_SEGMENT ? "_pending" : segment;
 }
 
-export function createPendingAttachmentId(): string {
-  return `${PENDING_ATTACHMENT_THREAD_SEGMENT}-${NodeCrypto.randomUUID()}`;
+export function attachmentFileExtension(fileName: string): string {
+  const extension = NodePath.extname(fileName).toLowerCase();
+  // ".part" is reserved for in-flight uploads; a stored "archive.part" would
+  // look stale to sweepStalePendingAttachments and get deleted.
+  if (extension === ".part" || !/^\.[a-z0-9]{1,10}$/.test(extension)) {
+    return ".bin";
+  }
+  return extension;
+}
+
+function attachmentIdExtensionSuffix(extension: string | undefined): string {
+  if (!extension) {
+    return "";
+  }
+  const normalized = extension.replace(/^\./, "").toLowerCase();
+  return new RegExp(`^${ATTACHMENT_ID_FILE_EXTENSION_PATTERN}$`).test(normalized)
+    ? `-${normalized}`
+    : "-bin";
+}
+
+export function createPendingAttachmentId(extension?: string): string {
+  return `${PENDING_ATTACHMENT_THREAD_SEGMENT}-${NodeCrypto.randomUUID()}${attachmentIdExtensionSuffix(extension)}`;
 }
 
 export function parseAttachmentUuid(attachmentId: string): string | null {
@@ -53,6 +74,14 @@ export function parseAttachmentUuid(attachmentId: string): string | null {
     return null;
   }
   return normalizedId.match(ATTACHMENT_ID_PATTERN)?.[2]?.toLowerCase() ?? null;
+}
+
+export function parseAttachmentFileExtension(attachmentId: string): string | null {
+  const normalizedId = normalizeAttachmentRelativePath(attachmentId);
+  if (!normalizedId || normalizedId.includes("/") || normalizedId.includes(".")) {
+    return null;
+  }
+  return normalizedId.match(ATTACHMENT_ID_PATTERN)?.[3]?.toLowerCase() ?? null;
 }
 
 export function toCanonicalThreadAttachmentSegment(threadId: string): string | null {
@@ -71,13 +100,14 @@ export function toCanonicalThreadAttachmentSegment(threadId: string): string | n
 export function createAttachmentId(
   threadId: string,
   uploadId: string = NodeCrypto.randomUUID(),
+  extension?: string,
 ): string | null {
   const threadSegment = toCanonicalThreadAttachmentSegment(threadId);
   const normalizedUploadId = uploadId.trim().toLowerCase();
   if (!threadSegment || !ATTACHMENT_UPLOAD_ID_PATTERN.test(normalizedUploadId)) {
     return null;
   }
-  return `${threadSegment}-${normalizedUploadId}`;
+  return `${threadSegment}-${normalizedUploadId}${attachmentIdExtensionSuffix(extension)}`;
 }
 
 export function isAttachmentIdOwnedByThread(attachmentId: string, threadId: string): boolean {
@@ -111,7 +141,8 @@ export function parseThreadSegmentFromAttachmentId(attachmentId: string): string
   return match[1]?.toLowerCase() ?? null;
 }
 
-export function attachmentRelativePath(attachment: ChatAttachment): string {
+/** Null for attachment types this build does not know; callers skip those. */
+export function attachmentRelativePath(attachment: ChatAttachment): string | null {
   switch (attachment.type) {
     case "image": {
       const extension = inferImageExtension({
@@ -121,7 +152,9 @@ export function attachmentRelativePath(attachment: ChatAttachment): string {
       return `${attachment.id}${extension}`;
     }
     case "file":
-      return `${attachment.id}.bin`;
+      return `${attachment.id}${attachmentFileExtension(attachment.name)}`;
+    default:
+      return null;
   }
 }
 
@@ -129,9 +162,13 @@ export function resolveAttachmentPath(input: {
   readonly attachmentsDir: string;
   readonly attachment: ChatAttachment;
 }): string | null {
+  const relativePath = attachmentRelativePath(input.attachment);
+  if (!relativePath) {
+    return null;
+  }
   return resolveAttachmentRelativePath({
     attachmentsDir: input.attachmentsDir,
-    relativePath: attachmentRelativePath(input.attachment),
+    relativePath,
   });
 }
 
@@ -143,6 +180,14 @@ export const resolveAttachmentPathById = Effect.fn("resolveAttachmentPathById")(
   const normalizedId = normalizeAttachmentRelativePath(input.attachmentId);
   if (!normalizedId || normalizedId.includes("/") || normalizedId.includes(".")) {
     return null;
+  }
+  const fileExtension = parseAttachmentFileExtension(normalizedId);
+  if (fileExtension) {
+    const filePath = resolveAttachmentRelativePath({
+      attachmentsDir: input.attachmentsDir,
+      relativePath: `${normalizedId}.${fileExtension.toLowerCase()}`,
+    });
+    return filePath && NodeFS.existsSync(filePath) ? filePath : null;
   }
   for (const extension of ATTACHMENT_FILENAME_EXTENSIONS) {
     const maybePath = resolveAttachmentRelativePath({
@@ -213,7 +258,8 @@ export const planAttachmentClaim = Effect.fn("planAttachmentClaim")(function* (i
   if (!currentPath) {
     return { ok: false, reason: "attachment not found (removed or expired)" } as const;
   }
-  const finalId = createAttachmentId(input.threadId);
+  const fileExtension = parseAttachmentFileExtension(input.attachmentId) ?? undefined;
+  const finalId = createAttachmentId(input.threadId, uuid, fileExtension);
   if (!finalId) {
     return { ok: false, reason: "failed to create attachment id" } as const;
   }
