@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "policyVersion": 2,
+  "policyVersion": 3,
   "provider": {
     "driver": "codex",
     "managedBinary": true,
@@ -24,9 +24,10 @@
     }
   },
   "models": {
-    "default": "api-glm-5.2",
-    "restrictedFallback": "api-glm-5.2",
+    "default": "api-glm-5.3",
+    "restrictedFallback": "api-glm-5.3",
     "replacements": {
+      "api-glm-5.2": "api-glm-5.3",
       "gpt-5.5": "gpt-5.6-sol",
       "claude-opus-4-8": "claude-opus-5"
     },
@@ -38,8 +39,8 @@
         "route": "on-prem"
       },
       {
-        "id": "api-glm-5.2",
-        "name": "GLM 5.2",
+        "id": "api-glm-5.3",
+        "name": "GLM 5.3",
         "shortName": "GLM",
         "route": "on-prem"
       },

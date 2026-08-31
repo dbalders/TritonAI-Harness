@@ -87,11 +87,11 @@ describe("TritonAI managed Harness policy", () => {
       },
     ]);
     expect(effective.providerInstances[managedInstanceId]?.config).toMatchObject({
-      customModels: ["api-deepseek-v4-flash", "api-glm-5.2", "api-gemma-4-31b"],
+      customModels: ["api-deepseek-v4-flash", "api-glm-5.3", "api-gemma-4-31b"],
     });
     expect(effective.providers.codex.customModels).toEqual([
       "api-deepseek-v4-flash",
-      "api-glm-5.2",
+      "api-glm-5.3",
       "api-gemma-4-31b",
     ]);
     expect(effective.providerInstances[frontierInstanceId]).toMatchObject({
@@ -132,6 +132,16 @@ describe("TritonAI managed Harness policy", () => {
     });
     expect(absent.textGenerationModelSelection.model).toBe(managedConfig.models.default);
     expect(absent.textGenerationModelSelection.instanceId).toBe(managedInstanceId);
+
+    const retiredGlm = applyManagedHarnessPolicy({
+      ...DEFAULT_SERVER_SETTINGS,
+      textGenerationModelSelection: {
+        instanceId: managedInstanceId,
+        model: "api-glm-5.2",
+      },
+    });
+    expect(retiredGlm.textGenerationModelSelection.model).toBe("api-glm-5.3");
+    expect(retiredGlm.textGenerationModelSelection.instanceId).toBe(managedInstanceId);
 
     const retiredConfig: TritonAiManagedConfig = {
       ...managedConfig,
