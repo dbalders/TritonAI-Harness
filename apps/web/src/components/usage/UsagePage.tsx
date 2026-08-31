@@ -24,6 +24,7 @@ import { ScrollArea } from "../ui/scroll-area";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { SidebarInset } from "../ui/sidebar";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
+import { TritonAiUsageSnapshot } from "../settings/UsageSettings";
 import {
   WorkspaceBreadcrumb,
   WorkspaceBreadcrumbItem,
@@ -208,6 +209,8 @@ export function UsagePage() {
 
         <ScrollArea className="min-h-0 flex-1">
           <WorkspacePageContainer width="wide">
+            <TritonAiUsageSnapshot />
+
             {settling ? (
               <>
                 {environments.length > 1 ? <UsageDeviceStrip environments={environments} /> : null}

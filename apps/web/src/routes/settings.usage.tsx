@@ -1,7 +1,7 @@
-import { createFileRoute } from "@tanstack/react-router";
-
-import { UsageSettingsPanel } from "../components/settings/UsageSettings";
+import { createFileRoute, redirect } from "@tanstack/react-router";
 
 export const Route = createFileRoute("/settings/usage")({
-  component: UsageSettingsPanel,
+  beforeLoad: () => {
+    throw redirect({ to: "/usage", replace: true });
+  },
 });
