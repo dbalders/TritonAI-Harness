@@ -8,7 +8,7 @@ authenticated Codex, Claude Code, Cursor, Grok Build, and OpenCode providers.
 
 This is not a clean-room rewrite. The repo keeps the upstream T3 Code history and MIT license so the original work stays visible. TritonAI release assets and installer behavior are maintained separately from upstream T3 Code.
 
-The TritonAI downstream is created and maintained by David Balderston for UC San Diego.
+TritonAI Harness was created by David Balderston as a UC San Diego-focused distribution of T3 Code and is maintained separately from the upstream project.
 
 ## Installation
 
