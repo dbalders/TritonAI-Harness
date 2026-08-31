@@ -145,6 +145,8 @@ it. See [Keeping TritonAI Harness Versions in Sync](./server-updates.md).
 The upstream Linux boot-service path is also disabled for the downstream distribution. See the
 [Background Service Distribution Policy](./background-service.md).
 
+If T3 Connect cannot connect, check the date and time on both devices, then try again.
+
 ## How Pairing Works
 
 The remote device does not need a long-lived secret up front.

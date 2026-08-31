@@ -11,6 +11,7 @@ import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 import * as HttpServer from "effect/unstable/http/HttpServer";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
+import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 
 import packageJson from "../../package.json" with { type: "json" };
 import * as ServerConfig from "../config.ts";
@@ -26,7 +27,6 @@ interface RecordedEventRequest {
     readonly props?: Readonly<Record<string, unknown>>;
   } | null;
 }
-
 it.layer(NodeServices.layer)("AnalyticsService test", (it) => {
   it.effect("flush delivers buffered events individually to Plausible", () =>
     Effect.gen(function* () {
@@ -66,6 +66,12 @@ it.layer(NodeServices.layer)("AnalyticsService test", (it) => {
       );
       const runtimeLayer = telemetryLayer.pipe(
         Layer.provide(configLayer),
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.succeed(HostProcessPlatform, "linux"),
+            Layer.succeed(HostProcessArchitecture, "arm64"),
+          ),
+        ),
         Layer.provideMerge(NodeHttpServer.layerTest),
       );
 
@@ -141,6 +147,10 @@ it.layer(NodeServices.layer)("AnalyticsService test", (it) => {
       assert.equal(typeof firstRequest?.body?.props?.platform, "string");
       assert.equal(typeof firstRequest?.body?.props?.arch, "string");
       assert.equal(firstRequest?.body?.props?.wsl, false);
+      assert.equal(firstRequest?.body?.props?.serverOs, "Linux");
+      assert.equal(firstRequest?.body?.props?.serverArch, "arm64");
+      assert.equal(firstRequest?.body?.props?.serverAppVersion, packageJson.version);
+      assert.equal(firstRequest?.body?.props?.serverMode, "web");
       assert.notProperty(firstRequest?.body?.props ?? {}, "nestedValueIsDropped");
       assert.notProperty(firstRequest?.body?.props ?? {}, "nonFiniteValueIsDropped");
 

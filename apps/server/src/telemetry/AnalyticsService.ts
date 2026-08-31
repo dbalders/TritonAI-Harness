@@ -7,6 +7,7 @@
  * @module AnalyticsService
  */
 import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import type { ClientOs } from "@t3tools/contracts";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
@@ -139,6 +140,21 @@ export interface AnalyticsServiceOptions {
   readonly shutdownTimeoutMs?: number;
 }
 
+export function serverOsFromNodePlatform(platform: string): ClientOs {
+  switch (platform) {
+    case "darwin":
+      return "macOS";
+    case "win32":
+      return "Windows";
+    case "linux":
+      return "Linux";
+    case "android":
+      return "Android";
+    default:
+      return "other";
+  }
+}
+
 function positiveMilliseconds(value: number | undefined, fallback: number): number {
   return value !== undefined && Number.isFinite(value) && value > 0 ? value : fallback;
 }
@@ -209,6 +225,10 @@ export const makeWithOptions = (options: AnalyticsServiceOptions = {}) =>
           arch: hostArchitecture,
           version: packageJson.version,
           clientType,
+          serverOs: serverOsFromNodePlatform(hostPlatform),
+          serverArch: hostArchitecture,
+          serverAppVersion: packageJson.version,
+          serverMode: serverConfig.mode,
         },
       };
 

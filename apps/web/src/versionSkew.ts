@@ -164,8 +164,5 @@ export function appendVersionMismatchHint(
   if (!normalizedMessage) {
     return mismatch?.hint ?? null;
   }
-  if (!mismatch) {
-    return normalizedMessage;
-  }
-  return `${normalizedMessage} Hint: ${mismatch.hint}`;
+  return mismatch ? `${normalizedMessage} Hint: ${mismatch.hint}` : normalizedMessage;
 }
