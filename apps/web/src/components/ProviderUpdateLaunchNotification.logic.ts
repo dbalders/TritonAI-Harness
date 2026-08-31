@@ -189,6 +189,20 @@ export function canOneClickUpdateProviderCandidate(
   );
 }
 
+/**
+ * Candidates eligible for an unsolicited launch prompt. Launch prompts may be
+ * scoped to one provider without narrowing the update surfaces in Settings and
+ * the sidebar.
+ */
+export function collectProviderLaunchUpdateCandidates(
+  providers: ReadonlyArray<ServerProvider>,
+  providerDriver?: ProviderDriverKind,
+): ProviderUpdateCandidate[] {
+  return collectProviderUpdateCandidates(providers).filter(
+    (candidate) => providerDriver === undefined || candidate.driver === providerDriver,
+  );
+}
+
 export function providerUpdateNotificationKey(
   providers: ReadonlyArray<ProviderUpdateCandidate>,
 ): string | null {
@@ -724,14 +738,15 @@ export interface LocalEnvironmentUpdateGroup {
  */
 export function buildLocalEnvironmentUpdateGroups(
   environments: ReadonlyArray<LocalEnvironmentProvidersInput>,
+  providerDriver?: ProviderDriverKind,
 ): { groups: LocalEnvironmentUpdateGroup[]; isAnySettling: boolean } {
   const groups = environments.map((environment) => ({
     environmentId: environment.environmentId,
     label: environment.label,
     isPrimary: environment.isPrimary,
     isSettling: environment.connectionState === "connecting",
-    candidates: collectProviderUpdateCandidates(environment.providers).filter((candidate) =>
-      canOneClickUpdateProviderCandidate(candidate, environment.providers),
+    candidates: collectProviderLaunchUpdateCandidates(environment.providers, providerDriver).filter(
+      (candidate) => canOneClickUpdateProviderCandidate(candidate, environment.providers),
     ),
     providers: environment.providers,
   }));

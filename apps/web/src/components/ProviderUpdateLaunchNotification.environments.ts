@@ -1,5 +1,5 @@
 import type { ConnectionCatalogEntry } from "@t3tools/client-runtime/connection";
-import type { ServerConfig } from "@t3tools/contracts";
+import type { ProviderDriverKind, ServerConfig } from "@t3tools/contracts";
 import { useMemo } from "react";
 
 import { useEnvironments, usePrimaryEnvironmentId } from "~/state/environments";
@@ -47,7 +47,7 @@ function normalizeConnectionState(phase: string | undefined): EnvironmentUpdateC
  * flag for whether any is still connecting. Drives the launch popover's gating
  * and its per-environment update triggers.
  */
-export function useLocalEnvironmentUpdateGroups(): {
+export function useLocalEnvironmentUpdateGroups(providerDriver?: ProviderDriverKind): {
   readonly groups: LocalEnvironmentUpdateGroup[];
   readonly isAnySettling: boolean;
 } {
@@ -92,6 +92,6 @@ export function useLocalEnvironmentUpdateGroups(): {
     // Primary first, then the rest in catalog order.
     inputs.sort((left, right) => Number(right.isPrimary) - Number(left.isPrimary));
 
-    return buildLocalEnvironmentUpdateGroups(inputs);
-  }, [environments, primaryEnvironmentId]);
+    return buildLocalEnvironmentUpdateGroups(inputs, providerDriver);
+  }, [environments, primaryEnvironmentId, providerDriver]);
 }
