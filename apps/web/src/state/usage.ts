@@ -72,21 +72,6 @@ export interface UsageView {
   readonly refresh: () => void;
 }
 
-/**
- * Narrows one environment's transcript summary before cross-environment
- * merging so every derived total stays aligned with the visible provider.
- */
-export function selectUsageProvider(
-  summary: UsageSummary,
-  provider: UsageProviderKind,
-): UsageSummary {
-  return {
-    ...summary,
-    buckets: summary.buckets.filter((bucket) => bucket.provider === provider),
-    sources: summary.sources.filter((source) => source.fingerprint.provider === provider),
-  };
-}
-
 export function useUsage(input: UsageSummaryInput, provider?: UsageProviderKind): UsageView {
   const windowKey = useMemo(
     () =>
@@ -130,14 +115,11 @@ export function useUsage(input: UsageSummaryInput, provider?: UsageProviderKind)
             {
               environmentId: environment.environmentId,
               label: environment.label,
-              summary:
-                provider === undefined
-                  ? environment.summary
-                  : selectUsageProvider(environment.summary, provider),
+              summary: environment.summary,
             },
           ],
     );
-    return mergeUsage(answered, USAGE_CONTRACT_VERSION);
+    return mergeUsage(answered, USAGE_CONTRACT_VERSION, provider);
   }, [environments, provider]);
 
   const answeredCount = environments.filter((environment) => environment.summary !== null).length;

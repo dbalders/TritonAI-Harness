@@ -2,9 +2,7 @@ import { USAGE_CONTRACT_VERSION, type EnvironmentId, type UsageSummary } from "@
 import { mergeUsage } from "@t3tools/shared/usageMerge";
 import { describe, expect, it } from "vite-plus/test";
 
-import { selectUsageProvider } from "./usage";
-
-describe("selectUsageProvider", () => {
+describe("mergeUsage provider selection", () => {
   it("keeps buckets and source session totals for only the selected provider", () => {
     const summary = {
       contractVersion: USAGE_CONTRACT_VERSION,
@@ -68,21 +66,18 @@ describe("selectUsageProvider", () => {
       ],
     } as unknown as UsageSummary;
 
-    const selected = selectUsageProvider(summary, "codex");
     const merged = mergeUsage(
       [
         {
           environmentId: "environment" as EnvironmentId,
           label: "Primary server",
-          summary: selected,
+          summary,
         },
       ],
       USAGE_CONTRACT_VERSION,
+      "codex",
     );
 
-    expect(selected.buckets.map((bucket) => bucket.provider)).toEqual(["codex"]);
-    expect(selected.sources.map((source) => source.fingerprint.provider)).toEqual(["codex"]);
-    expect(selected.sources.map((source) => source.distinctSessions)).toEqual([2]);
     expect(merged.totalTokens).toBe(125);
     expect(merged.sessions).toBe(2);
     expect(merged.providers.map((provider) => provider.provider)).toEqual(["codex"]);

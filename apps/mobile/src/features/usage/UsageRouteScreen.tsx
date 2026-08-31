@@ -43,7 +43,7 @@ export function UsageRouteScreen() {
   const [metric, setMetric] = useState<UsageChartMetric>("cost");
   const { days: windowDays, window } = windowSelection;
   const isPast24Hours = windowDays === 1;
-  const { merged, environments, isPending, isPartial, refresh } = useUsage(window);
+  const { merged, environments, isPending, isPartial, refresh } = useUsage(window, "codex");
 
   const days = useMemo(
     () => enumerateDays(window.sinceDay, window.untilDay),
