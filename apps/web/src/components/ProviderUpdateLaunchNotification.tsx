@@ -1,4 +1,5 @@
 import { useNavigate } from "@tanstack/react-router";
+import type { ProviderDriverKind } from "@t3tools/contracts";
 import { DownloadIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -37,13 +38,17 @@ function useHasLocalSecondaryEnvironment(): boolean {
  * trigger per environment; without one (the common case) it falls back to the
  * single-prompt flow so non-WSL users see no change.
  */
-export function ProviderUpdateLaunchNotification() {
+export function ProviderUpdateLaunchNotification({
+  providerDriver,
+}: {
+  readonly providerDriver?: ProviderDriverKind | undefined;
+}) {
   const hasLocalSecondary = useHasLocalSecondaryEnvironment();
 
   return hasLocalSecondary ? (
-    <ProviderUpdateEnvironmentsNotification />
+    <ProviderUpdateEnvironmentsNotification providerDriver={providerDriver} />
   ) : (
-    <ProviderUpdatePrimaryNotification />
+    <ProviderUpdatePrimaryNotification providerDriver={providerDriver} />
   );
 }
 
@@ -55,9 +60,13 @@ type ProviderUpdateToastId = ReturnType<typeof toastManager.add>;
 // suppress the primary's updates indefinitely.
 const SETTLING_GRACE_MS = 30_000;
 
-function ProviderUpdateEnvironmentsNotification() {
+function ProviderUpdateEnvironmentsNotification({
+  providerDriver,
+}: {
+  readonly providerDriver?: ProviderDriverKind | undefined;
+}) {
   const navigate = useNavigate();
-  const { groups, isAnySettling } = useLocalEnvironmentUpdateGroups();
+  const { groups, isAnySettling } = useLocalEnvironmentUpdateGroups(providerDriver);
   const { dismissedNotificationKeys, dismissNotificationKey } =
     useDismissedProviderUpdateNotificationKeys();
 
@@ -166,6 +175,7 @@ function ProviderUpdateEnvironmentsNotification() {
         }).title,
         description: (
           <ProviderUpdateEnvironmentRows
+            providerDriver={providerDriver}
             onInteract={() => {
               hasInteractedRef.current = true;
             }}
@@ -192,6 +202,7 @@ function ProviderUpdateEnvironmentsNotification() {
     dismissedNotificationKeys,
     dismissNotificationKey,
     openProviderSettings,
+    providerDriver,
   ]);
 
   return null;
