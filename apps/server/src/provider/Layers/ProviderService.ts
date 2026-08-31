@@ -21,6 +21,7 @@ import {
   ProviderSessionStartInput,
   ProviderStopSessionInput,
   ProviderUploadFeedbackInput,
+  type ChatFileAttachment,
   type ProviderInstanceId,
   type ProviderDriverKind,
   type ProviderRuntimeEvent,
@@ -745,7 +746,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     });
     const inputTextWithFileContext = appendFileAttachmentPrompt({
       prompt: parsed.input,
-      attachments: attachments.filter((attachment) => attachment.type === "file"),
+      attachments: attachments.filter(
+        (attachment): attachment is ChatFileAttachment => attachment.type === "file",
+      ),
       resolvePath: (attachment) =>
         resolveAttachmentPath({
           attachmentsDir: serverConfig.attachmentsDir,

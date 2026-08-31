@@ -48,6 +48,7 @@ const SIGNING_SECRET_NAME = "asset-access-signing-key";
 const ASSET_TOKEN_TTL_MS = 60 * 60 * 1000;
 const PROJECT_FAVICON_TOKEN_BUCKET_MS = 30 * 60 * 1000;
 const PROJECT_FAVICON_VERSION_PREFIX = "v";
+const INLINE_VIDEO_MIME_TYPE_PATTERN = /^video\/[\w!#$&^.+-]+$/i;
 const PREVIEW_ASSET_EXTENSIONS = new Set([
   ...WORKSPACE_BROWSER_PREVIEW_EXTENSIONS,
   ...WORKSPACE_IMAGE_PREVIEW_EXTENSIONS,
@@ -93,7 +94,7 @@ const AssetClaimsSchema = Schema.Union([
     kind: Schema.Literal("attachment"),
     attachmentId: Schema.String,
     disposition: Schema.Literals(["inline", "attachment"]),
-    fileName: Schema.String,
+    fileName: Schema.optionalKey(Schema.String),
     mimeType: Schema.optionalKey(Schema.String),
     expiresAt: Schema.Number,
   }),
@@ -120,7 +121,8 @@ const encodeAssetClaims = Schema.encodeSync(AssetClaimsJson);
 export type ResolvedAsset = {
   readonly kind: "file";
   readonly path: string;
-  readonly download?: boolean;
+  readonly disposition?: "inline" | "attachment";
+  readonly downloadName?: string;
   readonly fileName?: string;
   readonly mimeType?: string;
 };
@@ -311,20 +313,28 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
         });
       }
       // Generic files carry their extension inside the attachment id (that
-      // shape resolves the on-disk path); images do not. Only generic files
-      // download, images render inline in chat.
+      // shape resolves the on-disk path); images do not. Videos and images
+      // render inline; other generic files download.
       const isGenericFile = parseAttachmentFileExtension(input.resource.attachmentId) !== null;
+      const videoMimeType = input.resource.mimeType?.split(";", 1)[0]?.trim() ?? "";
+      const isVideo = INLINE_VIDEO_MIME_TYPE_PATTERN.test(videoMimeType);
+      const attachmentFileName = input.attachmentFileName ?? input.resource.fileName;
       claims = {
         version: 2,
         kind: "attachment",
         attachmentId: input.resource.attachmentId,
-        disposition: input.attachmentDisposition ?? (isGenericFile ? "attachment" : "inline"),
-        fileName:
-          input.attachmentFileName ?? input.resource.fileName ?? path.basename(attachmentPath),
-        ...(input.resource.mimeType !== undefined ? { mimeType: input.resource.mimeType } : {}),
+        disposition:
+          input.attachmentDisposition ??
+          (input.attachmentFileName !== undefined || (isGenericFile && !isVideo)
+            ? "attachment"
+            : "inline"),
+        ...(attachmentFileName !== undefined ? { fileName: attachmentFileName } : {}),
+        ...(input.resource.mimeType !== undefined
+          ? { mimeType: isVideo ? videoMimeType : input.resource.mimeType }
+          : {}),
         expiresAt,
       };
-      fileName = claims.fileName;
+      fileName = attachmentFileName ?? path.basename(attachmentPath);
       break;
     }
     case "project-favicon": {
@@ -499,15 +509,25 @@ export const resolveAsset = Effect.fn("AssetAccess.resolveAsset")(function* (
       return null;
     }
     const path = yield* Path.Path;
-    const download =
+    const disposition =
       claims.version === 1
         ? (claims.download ?? !isWorkspaceImagePreviewPath(attachmentPath))
-        : claims.disposition === "attachment";
-    const fileName = claims.fileName ?? path.basename(attachmentPath);
+          ? "attachment"
+          : "inline"
+        : claims.disposition;
+    const fileName =
+      claims.version === 1 ? (claims.fileName ?? path.basename(attachmentPath)) : claims.fileName;
     return {
       kind: "file",
       path: attachmentPath,
-      ...(download ? { download: true, fileName } : {}),
+      ...(disposition === "attachment"
+        ? {
+            disposition,
+            ...(fileName !== undefined ? { downloadName: fileName } : {}),
+          }
+        : claims.mimeType !== undefined && fileName !== undefined
+          ? { fileName }
+          : {}),
       ...(claims.mimeType !== undefined ? { mimeType: claims.mimeType } : {}),
     } satisfies ResolvedAsset;
   }

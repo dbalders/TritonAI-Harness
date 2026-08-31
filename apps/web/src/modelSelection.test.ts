@@ -1,4 +1,9 @@
-import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@t3tools/contracts";
+import {
+  DEFAULT_TRITONAI_CODEX_MODEL,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  type ServerProvider,
+} from "@t3tools/contracts";
 import { DEFAULT_UNIFIED_SETTINGS, type UnifiedSettings } from "@t3tools/contracts/settings";
 import { describe, expect, it } from "vite-plus/test";
 import { createModelSelection } from "@t3tools/shared/model";
@@ -455,7 +460,7 @@ describe("instance-scoped model selection", () => {
       getAppModelOptionsForInstance(settingsWithProviderInstances(), entry, "gpt-missing").map(
         (option) => option.slug,
       ),
-    ).toEqual(["gpt-5.6-sol"]);
+    ).toEqual(["gpt-5.6-sol", DEFAULT_TRITONAI_CODEX_MODEL]);
     expect(
       resolveAppModelSelectionForInstance(
         ProviderInstanceId.make("codex"),

@@ -82,7 +82,6 @@ import {
   stageResourceMonitor,
   stageWslRuntimeArchive,
   bundlesWslRuntime,
-  STAGE_INSTALL_ARGS,
   UnsupportedDesktopBuildArchitectureError,
   validateManagedPluginBuildConfiguration,
   validateWindowsPackagedPayload,
@@ -843,6 +842,10 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         {
           from: "apps/desktop/prod-resources/resource-monitor",
           to: "resource-monitor",
+        },
+        {
+          from: "apps/desktop/prod-resources/cua-driver",
+          to: "cua-driver",
         },
         ...WINDOWS_SERVER_EXTRA_RESOURCES,
       ]);

@@ -259,7 +259,7 @@ export const planAttachmentClaim = Effect.fn("planAttachmentClaim")(function* (i
     return { ok: false, reason: "attachment not found (removed or expired)" } as const;
   }
   const fileExtension = parseAttachmentFileExtension(input.attachmentId) ?? undefined;
-  const finalId = createAttachmentId(input.threadId, uuid, fileExtension);
+  const finalId = createAttachmentId(input.threadId, undefined, fileExtension);
   if (!finalId) {
     return { ok: false, reason: "failed to create attachment id" } as const;
   }

@@ -63,6 +63,14 @@ vi.mock("./hooks/useSettings", () => ({
   useUpdatePrimarySettings: () => vi.fn(),
 }));
 
+vi.mock("./hooks/useDefaultTheme", () => ({
+  useDefaultThemeAdoption: () => undefined,
+}));
+
+vi.mock("./hooks/useEnvironmentTheme", () => ({
+  useEnvironmentThemeSync: () => undefined,
+}));
+
 vi.mock("./state/entities", () => ({
   readProject: () => null,
   setActiveEnvironmentId: vi.fn(),
@@ -77,6 +85,7 @@ vi.mock("./state/environments", () => ({
 vi.mock("./state/server", () => ({
   primaryServerConfigAtom: Symbol("primaryServerConfigAtom"),
   primaryServerConfigEventAtom: Symbol("primaryServerConfigEventAtom"),
+  primaryServerEnvironmentThemesAtom: Symbol("primaryServerEnvironmentThemesAtom"),
   primaryServerWelcomeAtom: Symbol("primaryServerWelcomeAtom"),
 }));
 
