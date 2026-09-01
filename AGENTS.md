@@ -110,8 +110,9 @@ An empty database is a bad test. Seed your worktree's `.t3` with a copy of real 
 ## Verifying
 
 - Smallest proof that the change works. `vp test run <files>` for the tests you touched, targeted lint and typecheck for the scope you changed.
+- **TritonAI completion gate.** Before considering a change complete, run `vp check --fix`, `vp run typecheck`, and `vp test`. Start with focused checks, but do not substitute CI for this local gate.
 - Test meaningful logic or observable behavior. Do not render components to static markup to assert props or attributes, or add tests that merely assert callback wiring or mirror the implementation.
-- **Do not run repo-wide tests or typechecks during ordinary validation.** Before committing, run `vp check --fix` for formatting and lint. Do not run `vp run -r test` or `vp run -r typecheck` unless I ask; CI owns the full suite.
+- **Do not run additional recursive repo-wide commands.** Do not run `vp run -r test` or `vp run -r typecheck` unless I ask.
 - Backend behavior changes ship with focused tests for that behavior.
 - The server is event-sourced and its async flows emit typed receipts. Wait on receipts and worker drains, never on sleeps or polling. A test that needs a timeout to pass is wrong.
 - Upon request, user-visible frontend changes should get one integrated pass in a real client: `test-t3-app` for web, `test-t3-mobile` for mobile. The primary agent does this once after integrating. Subagents do not launch their own dev servers. Ask permission before doing computer use or spinning up browsers.
