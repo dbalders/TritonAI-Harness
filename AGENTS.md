@@ -164,3 +164,11 @@ Full glossary with file links: `docs/internals/glossary.md`
 
 - Don't verify with browsers or computer use unless the user explicitly agrees or requests it.
 - Security is important, but should not be over-indexed on, especially for dev mode/maintainer-only features.
+
+## TritonAI downstream alignment
+
+- Before introducing a broad refactor, compare the affected surface with upstream `pingdotgg/t3code` and explain why any downstream divergence is necessary.
+- Accept downstream differences for TritonAI branding, provider and model policy, UCSD integration, local Codex behavior, security, and release control.
+- Prefer upstream-compatible extensions; do not duplicate tooling or runtime logic when the upstream shape can be extended cleanly.
+- Keep upstream-sync pull requests human-reviewable, and never treat skipped checks or skipped AI review as approval.
+- Publish TritonAI Harness before TritonAI Installer. The Installer vendors Harness release assets and must consume a correct public Harness release.
