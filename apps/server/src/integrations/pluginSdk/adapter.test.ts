@@ -95,11 +95,14 @@ function artifact(
   entry = providerSource,
   skillBody: string | null = "# Fixture reader\n",
   options: {
+    readonly configurationSchema?: JsonValue;
     readonly skillFrontmatter?: string;
     readonly extraPayloads?: ReadonlyArray<readonly [string, Uint8Array]>;
   } = {},
 ) {
-  const manifestBytes = bytes(`${canonicalJson(manifest as unknown as JsonValue)}\n`);
+  const artifactConfigurationSchema = options.configurationSchema ?? configurationSchema;
+  const artifactManifest = { ...manifest, configurationSchema: artifactConfigurationSchema };
+  const manifestBytes = bytes(`${canonicalJson(artifactManifest as unknown as JsonValue)}\n`);
   const payloads = new Map([
     [".tritonai-plugin/plugin.json", manifestBytes],
     ["plugin.mjs", bytes(entry)],
@@ -132,7 +135,7 @@ function artifact(
     },
     entry: "plugin.mjs",
     manifest: ".tritonai-plugin/plugin.json",
-    configurationSchema: sha256(canonicalJson(configurationSchema as unknown as JsonValue)),
+    configurationSchema: sha256(canonicalJson(artifactConfigurationSchema)),
     schemas: [
       {
         tool: "fixture.records.list",
@@ -282,6 +285,38 @@ describe("plugin SDK adapter", () => {
         }),
       ),
     ).rejects.toThrow(/frontmatter does not match/u);
+  });
+
+  it("inspects only schema positions and preserves JSON Pointer tokens", async () => {
+    const load = (schema: JsonValue) =>
+      loadPluginSdkIntegration({
+        files: artifact(providerSource, "# Fixture reader\n", { configurationSchema: schema }),
+        secrets: secretStore(),
+        configuration: { pattern: "fixture" },
+        expected: { id, version: "1.0.0" },
+        hostNodeVersion: "24.13.1",
+      });
+    await expect(
+      load({
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        type: "object",
+        additionalProperties: false,
+        $defs: { label: { type: "string" } },
+        properties: {
+          pattern: { $ref: "#/%24defs/label" },
+          metadata: { type: "object", default: { $id: "instance-data", $ref: "not-a-schema" } },
+        },
+      }),
+    ).resolves.toBeDefined();
+    await expect(
+      load({
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        type: "object",
+        additionalProperties: false,
+        $defs: { item: { type: "object" } },
+        properties: { pattern: { $ref: "#/$defs/item/" } },
+      }),
+    ).rejects.toThrow(/does not resolve/u);
   });
 
   it("isolates module state by the complete admitted artifact", async () => {

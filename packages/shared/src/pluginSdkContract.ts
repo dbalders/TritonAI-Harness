@@ -33,6 +33,26 @@ const TOOL_KEYS = new Set([
 ]);
 const MAX_JSON_NODES = 20_000;
 const MAX_SCHEMA_BYTES = 128 * 1_024;
+const SCHEMA_VALUE_KEYWORDS = [
+  "additionalProperties",
+  "contains",
+  "contentSchema",
+  "else",
+  "if",
+  "items",
+  "not",
+  "propertyNames",
+  "then",
+  "unevaluatedItems",
+  "unevaluatedProperties",
+] as const;
+const SCHEMA_ARRAY_KEYWORDS = ["allOf", "anyOf", "oneOf", "prefixItems"] as const;
+const SCHEMA_MAP_KEYWORDS = [
+  "$defs",
+  "dependentSchemas",
+  "patternProperties",
+  "properties",
+] as const;
 
 export type JsonPrimitive = null | boolean | number | string;
 export type JsonValue = JsonPrimitive | JsonObject | ReadonlyArray<JsonValue>;
@@ -158,17 +178,20 @@ function validateSchema(value: unknown, label: string): JsonSchema {
   assert(isRecord(schema.properties), `${label} must declare root properties.`);
 
   const resolveReference = (reference: string, path: string): JsonValue => {
+    let pointer: string;
+    try {
+      pointer = decodeURIComponent(reference.slice(1));
+    } catch {
+      throw new Error(`${path} must be a local fragment JSON Pointer.`);
+    }
     assert(
-      /^#(?:\/(?:[^~/]|~[01])*)*$/u.test(reference),
+      reference.startsWith("#") && /^(?:\/(?:[^~/]|~[01])*)*$/u.test(pointer),
       `${path} must be a local fragment JSON Pointer.`,
     );
     let target: JsonValue = schema;
-    const tokens = reference
-      .slice(2)
-      .split("/")
-      .filter(Boolean)
-      .map((part) => part.replaceAll("~1", "/").replaceAll("~0", "~"));
-    for (const token of tokens) {
+    const tokens = pointer.length === 0 ? [] : pointer.slice(1).split("/");
+    for (const part of tokens) {
+      const token = part.replaceAll("~1", "/").replaceAll("~0", "~");
       if (Array.isArray(target)) {
         assert(/^(?:0|[1-9]\d*)$/u.test(token), `${path} does not resolve.`);
         const index = Number(token);
@@ -183,11 +206,34 @@ function validateSchema(value: unknown, label: string): JsonSchema {
     return target;
   };
 
-  const inspect = (current: JsonValue, path: string): void => {
-    if (Array.isArray(current)) {
-      current.forEach((item, index) => inspect(item, `${path}[${index}]`));
-      return;
+  const isSchemaValue = (candidate: unknown): candidate is JsonObject | boolean =>
+    typeof candidate === "boolean" || isRecord(candidate);
+  const visitSubschemas = (
+    current: JsonObject,
+    path: string,
+    visit: (subschema: JsonObject | boolean, path: string) => void,
+  ): void => {
+    for (const keyword of SCHEMA_VALUE_KEYWORDS) {
+      const subschema = current[keyword];
+      if (isSchemaValue(subschema)) visit(subschema, `${path}.${keyword}`);
     }
+    for (const keyword of SCHEMA_ARRAY_KEYWORDS) {
+      const subschemas = current[keyword];
+      if (!Array.isArray(subschemas)) continue;
+      subschemas.forEach((subschema, index) => {
+        if (isSchemaValue(subschema)) visit(subschema, `${path}.${keyword}[${index}]`);
+      });
+    }
+    for (const keyword of SCHEMA_MAP_KEYWORDS) {
+      const subschemas = current[keyword];
+      if (!isRecord(subschemas)) continue;
+      for (const [name, subschema] of Object.entries(subschemas)) {
+        if (isSchemaValue(subschema)) visit(subschema, `${path}.${keyword}.${name}`);
+      }
+    }
+  };
+
+  const inspect = (current: JsonValue, path: string): void => {
     if (!isRecord(current)) return;
     for (const keyword of [
       "$anchor",
@@ -226,7 +272,7 @@ function validateSchema(value: unknown, label: string): JsonSchema {
       assert(typeof current.$ref === "string", `${path} has an invalid $ref.`);
       resolveReference(current.$ref, `${path}.$ref`);
     }
-    Object.entries(current).forEach(([key, item]) => inspect(item as JsonValue, `${path}.${key}`));
+    visitSubschemas(current as JsonObject, path, inspect);
   };
   inspect(schema, label);
 
@@ -238,10 +284,9 @@ function validateSchema(value: unknown, label: string): JsonSchema {
     visiting.add(target);
     const nested = new Set<string>();
     const collect = (current: JsonValue): void => {
-      if (Array.isArray(current)) return current.forEach(collect);
       if (!isRecord(current)) return;
       if (typeof current.$ref === "string") nested.add(current.$ref);
-      Object.values(current).forEach((item) => collect(item as JsonValue));
+      visitSubschemas(current as JsonObject, label, collect);
     };
     collect(target);
     nested.forEach((reference) =>
