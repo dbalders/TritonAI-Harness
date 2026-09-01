@@ -12,7 +12,7 @@ TritonAI Commons is the public skill library in **Settings → Skills**. AI Team
 
 You can also ask in chat to “submit `<skill-name>` to UCSD.” Harness exposes a dedicated, approval-gated action for this request. The action resolves one exact installed skill in the active Codex provider and uses the same validation and submission service as the Settings button. If more than one skill has that name, use the Settings button beside the intended row.
 
-Harness reads the existing local skill folder; it does not generate or replace the skill. Supporting text files under folders such as `references/` and `scripts/` are included. If `SKILL.md` has no maintainer, Harness adds the signed-in GitHub user as maintainer in the submitted copy without changing the local file.
+Harness reads the existing local skill folder; it does not generate or replace the skill. Supporting text files under folders such as `references/` and `scripts/` are included. If `SKILL.md` has no maintainer, Harness adds the signed-in GitHub user as maintainer in the submitted copy. If the folder has no license, Harness adds the current Commons MIT license to the submitted copy. A conflicting local license must be resolved before submission. None of these public-copy adjustments change local files.
 
 Submission requires the GitHub integration to be installed, connected, and allowed to read and write repositories and create pull requests. The button authorizes Harness to validate the public copy, create or verify your fork, create a contribution branch, add the skill under `community/<skill-name>/`, and open a ready-for-review pull request.
 

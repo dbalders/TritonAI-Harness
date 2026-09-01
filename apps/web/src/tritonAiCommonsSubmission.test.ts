@@ -18,6 +18,8 @@ describe("TritonAI Commons submission UI", () => {
 
     expect(message).toContain("publicly with UCSD");
     expect(message).toContain("Every supported, non-hidden text file");
+    expect(message).toContain("current TritonAI Commons MIT license");
+    expect(message).toContain("conflicting local license stops");
     expect(message).toContain("connected GitHub identity");
     expect(message).toContain("ready-for-review pull request");
     expect(message).toContain("never merge");

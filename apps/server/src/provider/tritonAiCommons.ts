@@ -281,6 +281,7 @@ function digestBundle(files: ReadonlyArray<ServerProviderSkillBundleFile>): stri
 export function prepareTritonAiCommonsSubmission(input: {
   readonly bundle: ServerProviderSkillBundle;
   readonly githubLogin: string;
+  readonly repositoryLicense: string;
 }): PreparedCommonsSubmission {
   if (input.bundle.files.length === 0 || input.bundle.files.length > MAX_BUNDLE_FILE_COUNT) {
     throw commonsError("The local skill contains no files or too many files to submit.");
@@ -304,6 +305,24 @@ export function prepareTritonAiCommonsSubmission(input: {
     validatePublicBoundary(path, file.content);
     return { path, content: file.content };
   });
+
+  const localLicense = normalizedFiles.find((file) => file.path === "LICENSE");
+  if (localLicense && localLicense.content !== input.repositoryLicense) {
+    throw commonsError(
+      "The local LICENSE does not match the TritonAI Commons MIT license. Resolve the licensing difference before submitting.",
+    );
+  }
+  if (!localLicense) {
+    totalBytes += Buffer.byteLength(input.repositoryLicense);
+    if (totalBytes > MAX_BUNDLE_BYTES) {
+      throw commonsError("The local skill is larger than the 2 MiB Commons submission limit.");
+    }
+    validatePublicBoundary("LICENSE", input.repositoryLicense);
+    normalizedFiles.push({ path: "LICENSE", content: input.repositoryLicense });
+  }
+  if (normalizedFiles.length > MAX_BUNDLE_FILE_COUNT) {
+    throw commonsError("The local skill contains too many files to submit.");
+  }
 
   const entrypoint = normalizedFiles.find((file) => file.path === "SKILL.md");
   if (!entrypoint) throw commonsError("The local skill does not contain SKILL.md at its root.");
@@ -673,11 +692,28 @@ export async function submitProviderSkillToTritonAiCommons(input: {
     const identityValue = await invokeRead(input.registry, input.signal, "github.identity.get", {});
     if (!isRecord(identityValue)) throw commonsError("GitHub returned invalid identity metadata.");
     const login = boundedString(identityValue.login, "identity login", 100);
-    const prepared = prepareTritonAiCommonsSubmission({ bundle: input.bundle, githubLogin: login });
-    const name = prepared.bundle.skillId;
-
     const upstream = await repositoryMetadata(input.registry, input.signal, COMMONS_OWNER);
     const base = boundedString(upstream.default_branch, "default branch", 255);
+    const repositoryLicenseFile = await readGitHubFile({
+      registry: input.registry,
+      signal: input.signal,
+      owner: COMMONS_OWNER,
+      path: "LICENSE",
+      ref: base,
+    });
+    if (!repositoryLicenseFile) {
+      throw commonsError(
+        "TritonAI Commons does not expose its required repository license. Submission is unavailable until maintainers restore it.",
+        undefined,
+        "submission_failed",
+      );
+    }
+    const prepared = prepareTritonAiCommonsSubmission({
+      bundle: input.bundle,
+      githubLogin: login,
+      repositoryLicense: decodeGitHubTextFile(repositoryLicenseFile, "LICENSE"),
+    });
+    const name = prepared.bundle.skillId;
     await assertSkillIsUnpublished({
       registry: input.registry,
       signal: input.signal,

@@ -8,6 +8,8 @@ import {
 } from "./tritonAiCommons.ts";
 
 const GITHUB_MISSING = "GitHub could not find that item, or the signed-in user cannot access it.";
+const TEST_LICENSE =
+  "MIT License\n\nCopyright (c) 2026 The Regents of the University of California\n";
 const TOOL_NAMES = [
   "github.identity.get",
   "github.repositories.get",
@@ -86,6 +88,13 @@ function registryFixture(options?: {
       }
       if (name === "github.contents.get") {
         const { path, ref } = input as { path: string; ref: string };
+        if (path === "LICENSE" && ref === "main") {
+          return {
+            type: "file",
+            encoding: "base64",
+            content: Buffer.from(TEST_LICENSE).toString("base64"),
+          };
+        }
         if (options?.existingPaths?.has(path)) return { type: "file", sha: "a".repeat(40) };
         if (path === "README.md" && branchCreated && ref.startsWith("tritonai-commons/")) {
           return {
@@ -139,14 +148,15 @@ function registryFixture(options?: {
 }
 
 describe("TritonAI Commons local skill submission", () => {
-  it("prepares the existing local skill without generating a replacement", () => {
+  it("preserves the existing skill while adding required public metadata", () => {
     const prepared = prepareTritonAiCommonsSubmission({
       bundle: localSkill(),
       githubLogin: "contributor",
+      repositoryLicense: TEST_LICENSE,
     });
 
     expect(prepared.bundle.skillId).toBe("local-accessibility-review");
-    expect(prepared.bundle.files).toHaveLength(2);
+    expect(prepared.bundle.files).toHaveLength(3);
     expect(prepared.bundle.files.find(({ path }) => path === "SKILL.md")?.content).toContain(
       'maintainer: "@contributor"',
     );
@@ -159,6 +169,9 @@ describe("TritonAI Commons local skill submission", () => {
     expect(
       prepared.bundle.files.find(({ path }) => path === "references/checklist.md")?.content,
     ).toContain("Keyboard access");
+    expect(prepared.bundle.files.find(({ path }) => path === "LICENSE")?.content).toBe(
+      TEST_LICENSE,
+    );
   });
 
   it("preserves an explicit maintainer from the local skill", () => {
@@ -167,6 +180,7 @@ describe("TritonAI Commons local skill submission", () => {
         `---\nname: local-accessibility-review\ndescription: Review a public webpage for accessibility issues.\nmaintainer: Accessibility Team\n---\n\n# Review\n\nReview the webpage.\n`,
       ),
       githubLogin: "contributor",
+      repositoryLicense: TEST_LICENSE,
     });
 
     expect(prepared.maintainer).toBe("Accessibility Team");
@@ -186,12 +200,14 @@ describe("TritonAI Commons local skill submission", () => {
           ],
         },
         githubLogin: "contributor",
+        repositoryLicense: TEST_LICENSE,
       }),
     ).toThrow("hardcoded credential");
     expect(() =>
       prepareTritonAiCommonsSubmission({
         bundle: { ...localSkill(), skillId: "Not Public Safe" },
         githubLogin: "contributor",
+        repositoryLicense: TEST_LICENSE,
       }),
     ).toThrow("lowercase");
     expect(() =>
@@ -201,8 +217,19 @@ describe("TritonAI Commons local skill submission", () => {
           files: [...localSkill().files, { path: "references/credentials.json", content: "{}" }],
         },
         githubLogin: "contributor",
+        repositoryLicense: TEST_LICENSE,
       }),
     ).toThrow("sensitive file type");
+    expect(() =>
+      prepareTritonAiCommonsSubmission({
+        bundle: {
+          ...localSkill(),
+          files: [...localSkill().files, { path: "LICENSE", content: "Different license\n" }],
+        },
+        githubLogin: "contributor",
+        repositoryLicense: TEST_LICENSE,
+      }),
+    ).toThrow("does not match");
   });
 
   it("submits every local skill file to Community and opens a ready pull request", async () => {
@@ -238,6 +265,7 @@ describe("TritonAI Commons local skill submission", () => {
         .map(({ input }) => (input as { path: string }).path),
     ).toEqual([
       "community/local-accessibility-review/SKILL.md",
+      "community/local-accessibility-review/LICENSE",
       "community/local-accessibility-review/references/checklist.md",
     ]);
     const pull = fixture.calls.find(({ name }) => name === "github.pulls.create")!;
@@ -289,7 +317,7 @@ describe("TritonAI Commons local skill submission", () => {
     expect(second).toEqual(first);
     expect(fixture.calls.filter(({ name }) => name === "github.branches.create")).toHaveLength(1);
     expect(fixture.calls.filter(({ name }) => name === "github.pulls.create")).toHaveLength(1);
-    expect(fixture.calls.filter(({ name }) => name === "github.contents.put")).toHaveLength(2);
+    expect(fixture.calls.filter(({ name }) => name === "github.contents.put")).toHaveLength(3);
   });
 
   it("does not report a previously closed pull request as a successful review", async () => {

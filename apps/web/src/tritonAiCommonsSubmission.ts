@@ -10,6 +10,8 @@ export function tritonAiCommonsPublicShareConfirmation(input: {
     "",
     `Every supported, non-hidden text file in this local skill folder will be copied to the public dbalders/UCSD-Skills-Library repository under community/:\n${input.skillPath}`,
     "",
+    "If the folder has no LICENSE, Harness will add the current TritonAI Commons MIT license to the public copy. A conflicting local license stops the submission.",
+    "",
     "Harness will use your connected GitHub identity. It may create a personal fork, branch, commits, and a ready-for-review pull request. Maintainers decide whether to accept it; Harness will never merge it or change your local files.",
     "",
     "Review the folder for private, regulated, or sensitive information before continuing.",
