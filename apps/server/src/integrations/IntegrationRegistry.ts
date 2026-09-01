@@ -192,6 +192,66 @@ export interface RegistryRuntimeOptions {
 
 const DEFAULT_PROVIDER_STATUS_TIMEOUT_MS = 5_000;
 const DEFAULT_PROVIDER_OPERATION_TIMEOUT_MS = 30_000;
+
+/** Maximum UTF-8 bytes in normalized JSON returned to a model-facing tool surface. */
+export const MAX_INTEGRATION_TOOL_RESULT_BYTES = 512 * 1024;
+
+export const INTEGRATION_TOOL_RESULT_OMITTED = Object.freeze({
+  resultOmitted: true,
+  reason: "integration_tool_result_omitted",
+  message: "Integration tool completed, but its result was omitted.",
+});
+
+function isBinaryIntegrationToolResultValue(value: unknown): boolean {
+  return Buffer.isBuffer(value) || value instanceof ArrayBuffer || ArrayBuffer.isView(value);
+}
+
+/**
+ * Normalize provider output once at the shared registry boundary. The 512 KiB ceiling preserves
+ * the ordinary compatibility shape that repeats a 50,000-code-unit, unescaped three-byte UTF-8
+ * field plus JSON metadata; 256 KiB would reject it. Larger JSON escape expansion fails closed.
+ */
+export function normalizeIntegrationToolResult(value: unknown): Record<string, unknown> {
+  if (typeof value === "bigint" || typeof value === "function" || typeof value === "symbol") {
+    throw new Error("Integration tool results must be JSON-serializable.");
+  }
+  const candidate =
+    value !== null && typeof value === "object" && !Array.isArray(value)
+      ? value
+      : { result: value ?? null };
+  let serialized: string | undefined;
+  let containsBinary = false;
+  try {
+    serialized = JSON.stringify(candidate, function (key, item: unknown) {
+      const original = (this as Record<string, unknown>)[key];
+      if (
+        isBinaryIntegrationToolResultValue(original) ||
+        isBinaryIntegrationToolResultValue(item)
+      ) {
+        containsBinary = true;
+        return null;
+      }
+      return item;
+    });
+  } catch (error) {
+    throw new Error("Integration tool results must be JSON-serializable.", { cause: error });
+  }
+  if (containsBinary) return INTEGRATION_TOOL_RESULT_OMITTED;
+  if (!serialized) throw new Error("Integration tool results must be JSON-serializable.");
+  if (Buffer.byteLength(serialized, "utf8") > MAX_INTEGRATION_TOOL_RESULT_BYTES) {
+    return INTEGRATION_TOOL_RESULT_OMITTED;
+  }
+  const parsed: unknown = JSON.parse(serialized);
+  if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+    return parsed as Record<string, unknown>;
+  }
+  const normalized = { result: parsed };
+  if (Buffer.byteLength(JSON.stringify(normalized), "utf8") > MAX_INTEGRATION_TOOL_RESULT_BYTES) {
+    return INTEGRATION_TOOL_RESULT_OMITTED;
+  }
+  return normalized;
+}
+
 const decodeProviderConnectResult = Schema.decodeUnknownPromise(IntegrationConnectResult);
 const decodeProviderPollResult = Schema.decodeUnknownPromise(IntegrationProviderPollResult);
 
@@ -2827,7 +2887,7 @@ export class RegistryRuntime {
     name: string,
     input: unknown,
     context?: IntegrationInvocationContext,
-  ): Promise<unknown> {
+  ): Promise<Record<string, unknown>> {
     if (this.#closing) throw operationError("disabled", "Integration registry is closing.");
     await this.#ready;
     if (this.#closing) throw operationError("disabled", "Integration registry is closing.");
@@ -2996,7 +3056,15 @@ export class RegistryRuntime {
         }
         if (context?.signal.aborted && !writeCommitAdmitted)
           throw cancellationError(context.signal);
-        return result;
+        try {
+          return normalizeIntegrationToolResult(result);
+        } catch (error) {
+          // The provider has already returned and an admitted write may already be externally
+          // committed. Omit its unusable result without reporting that completed mutation as a
+          // failed call or faulting the provider. Read-result contract failures still reject.
+          if (writeCommitAdmitted) return INTEGRATION_TOOL_RESULT_OMITTED;
+          throw error;
+        }
       } catch (error) {
         if (error instanceof ProviderWriteAdmissionError) {
           throw operationError(

@@ -1,4 +1,4 @@
-import { expect, it } from "@effect/vitest";
+import { expect, it, vi } from "@effect/vitest";
 import { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
@@ -10,9 +10,9 @@ import {
   EmptyIntegrationToolInput,
   integrationToolJsonSchema,
 } from "../integrations/IntegrationTool.ts";
+import * as Integrations from "../integrations/IntegrationRegistry.ts";
 import {
   integrationToolInvocationContext,
-  normalizeIntegrationToolResult,
   registrationLayer,
   registrationLayerFor,
 } from "./IntegrationTools.ts";
@@ -198,15 +198,46 @@ it.effect("rejects reserved built-in names before built-in registration complete
   }).pipe(Effect.scoped),
 );
 
-it("normalizes arbitrary provider results into JSON object content", () => {
-  expect(normalizeIntegrationToolResult("ready")).toEqual({ result: "ready" });
-  expect(normalizeIntegrationToolResult([1, 2])).toEqual({ result: [1, 2] });
-  expect(normalizeIntegrationToolResult(undefined)).toEqual({ result: null });
-  expect(normalizeIntegrationToolResult({ value: 1, omitted: undefined })).toEqual({ value: 1 });
-  expect(() => normalizeIntegrationToolResult(1n)).toThrow(/JSON-serializable/u);
-  const cyclic: Record<string, unknown> = {};
-  cyclic.self = cyclic;
-  expect(() => normalizeIntegrationToolResult(cyclic)).toThrow(/JSON-serializable/u);
+it.effect("preserves bounded results and reports omitted results as completed MCP calls", () => {
+  const invokeTool = vi
+    .fn<Integrations.RegistryRuntime["invokeTool"]>()
+    .mockResolvedValueOnce({ records: [{ id: "record-1" }] })
+    .mockResolvedValueOnce(Integrations.INTEGRATION_TOOL_RESULT_OMITTED);
+  const registrySpy = vi.spyOn(Integrations, "getIntegrationRegistry").mockReturnValue({
+    invokeTool,
+  } as unknown as Integrations.RegistryRuntime);
+  const authorized = invocation(new Set(["integrations.invoke"]));
+
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const server = yield* McpServer.McpServer;
+      const bounded = yield* server
+        .callTool({ name: "fixture.read", arguments: {} })
+        .pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, authorized),
+          Effect.provideService(McpSchema.McpServerClient, {} as never),
+        );
+      expect(bounded.isError).toBe(false);
+      expect(bounded.structuredContent).toEqual({ records: [{ id: "record-1" }] });
+      expect(bounded.content).toEqual([{ type: "text", text: '{"records":[{"id":"record-1"}]}' }]);
+
+      const omitted = yield* server
+        .callTool({ name: "fixture.read", arguments: {} })
+        .pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, authorized),
+          Effect.provideService(McpSchema.McpServerClient, {} as never),
+        );
+      expect(omitted.isError).toBe(false);
+      expect(omitted.structuredContent).toEqual(Integrations.INTEGRATION_TOOL_RESULT_OMITTED);
+      expect(omitted.content).toEqual([
+        {
+          type: "text",
+          text: '{"resultOmitted":true,"reason":"integration_tool_result_omitted","message":"Integration tool completed, but its result was omitted."}',
+        },
+      ]);
+      expect(invokeTool).toHaveBeenCalledTimes(2);
+    }).pipe(Effect.provide(testLayer)),
+  ).pipe(Effect.ensuring(Effect.sync(() => registrySpy.mockRestore())));
 });
 
 it.effect("hides integration tools from MCP credentials without integration access", () =>

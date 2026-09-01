@@ -51,28 +51,6 @@ const invocationCanUseIntegrations = (): boolean => {
   );
 };
 
-export function normalizeIntegrationToolResult(value: unknown): Record<string, unknown> {
-  if (typeof value === "bigint" || typeof value === "function" || typeof value === "symbol") {
-    throw new Error("Integration tool results must be JSON-serializable.");
-  }
-  const candidate =
-    value !== null && typeof value === "object" && !Array.isArray(value)
-      ? value
-      : { result: value ?? null };
-  let serialized: string | undefined;
-  try {
-    serialized = JSON.stringify(candidate);
-  } catch (error) {
-    throw new Error("Integration tool results must be JSON-serializable.", { cause: error });
-  }
-  if (!serialized) throw new Error("Integration tool results must be JSON-serializable.");
-  const parsed: unknown = JSON.parse(serialized);
-  if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
-    return parsed as Record<string, unknown>;
-  }
-  return { result: parsed };
-}
-
 function registerTool(
   server: McpServer.McpServer["Service"],
   definition: IntegrationProviderTool,
@@ -105,13 +83,11 @@ function registerTool(
         return invocation.capabilities.has(INTEGRATION_INVOCATION_CAPABILITY) &&
           isAvailable(definition.name)
           ? Effect.tryPromise({
-              try: async (signal) =>
-                normalizeIntegrationToolResult(
-                  await Integrations.getIntegrationRegistry().invokeTool(
-                    definition.name,
-                    payload,
-                    integrationToolInvocationContext(definition, signal),
-                  ),
+              try: (signal) =>
+                Integrations.getIntegrationRegistry().invokeTool(
+                  definition.name,
+                  payload,
+                  integrationToolInvocationContext(definition, signal),
                 ),
               catch: (cause) => new IntegrationToolInvocationError({ cause }),
             })
