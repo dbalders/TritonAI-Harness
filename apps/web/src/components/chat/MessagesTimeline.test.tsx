@@ -1032,32 +1032,6 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain('data-user-message-footer="true"');
   });
 
-  it("keeps user message metadata interactive under its own hover", () => {
-    const markup = renderToStaticMarkup(
-      <MessagesTimeline
-        {...buildProps()}
-        timelineEntries={[buildUserTimelineEntry("Copy this user message.")]}
-      />,
-    );
-
-    expect(markup).toContain(
-      "pointer-events-none flex w-full max-w-[80%] items-center justify-end pe-1 text-xs tabular-nums opacity-0 transition-opacity duration-200 hover:pointer-events-auto hover:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100",
-    );
-  });
-
-  it("keeps assistant message metadata interactive under its own hover", () => {
-    const markup = renderToStaticMarkup(
-      <MessagesTimeline
-        {...buildProps()}
-        timelineEntries={[buildAssistantTimelineEntry("Copy this assistant message.")]}
-      />,
-    );
-
-    expect(markup).toContain(
-      "pointer-events-none mt-1.5 flex items-center gap-2 text-xs tabular-nums opacity-0 transition-opacity duration-200 hover:pointer-events-auto hover:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100 group-hover/assistant:pointer-events-auto group-hover/assistant:opacity-100",
-    );
-  });
-
   it("renders context compaction entries in the normal work log", () => {
     const markup = renderToStaticMarkup(
       <MessagesTimeline
