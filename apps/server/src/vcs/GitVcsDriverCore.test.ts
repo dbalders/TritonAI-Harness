@@ -1661,20 +1661,23 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
     it.effect("treats selected file paths literally", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();
-        yield* initRepoWithCommit(cwd);
+        yield* git(cwd, ["init", "--initial-branch=main"]);
+        yield* git(cwd, ["config", "user.email", "test@test.com"]);
+        yield* git(cwd, ["config", "user.name", "Test"]);
         const driver = yield* GitVcsDriver.GitVcsDriver;
 
         yield* writeTextFile(cwd, "selected[1].txt", "literal\n");
         yield* writeTextFile(cwd, "selected1.txt", "pattern match\n");
+        yield* git(cwd, ["add", "selected1.txt"]);
 
         yield* driver.prepareCommitContext(cwd, ["selected[1].txt"]);
 
-        assert.equal(yield* git(cwd, ["diff", "--cached", "--name-only"]), "");
+        assert.equal(yield* git(cwd, ["diff", "--cached", "--name-only"]), "selected1.txt");
         yield* driver.commit(cwd, "Add literal path", "", {
           stage: { filePaths: ["selected[1].txt"] },
         });
         assert.equal(
-          yield* git(cwd, ["diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"]),
+          yield* git(cwd, ["diff-tree", "--root", "--no-commit-id", "--name-only", "-r", "HEAD"]),
           "selected[1].txt",
         );
 

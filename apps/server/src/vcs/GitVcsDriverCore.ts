@@ -1840,10 +1840,17 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     env: NodeJS.ProcessEnv | undefined,
   ) {
     if (filePaths && filePaths.length > 0) {
-      yield* runGit("GitVcsDriver.stageCommitChanges.reset", cwd, ["reset"], { env }).pipe(
-        Effect.catchTags({
-          GitCommandError: () => Effect.void,
-        }),
+      const head = yield* executeGit(
+        "GitVcsDriver.stageCommitChanges.resolveHead",
+        cwd,
+        ["rev-parse", "--verify", "HEAD"],
+        { allowNonZeroExit: true },
+      );
+      yield* runGit(
+        "GitVcsDriver.stageCommitChanges.reset",
+        cwd,
+        head.exitCode === 0 ? ["reset"] : ["read-tree", "--empty"],
+        { env },
       );
       yield* runGit(
         "GitVcsDriver.stageCommitChanges.addSelected",
