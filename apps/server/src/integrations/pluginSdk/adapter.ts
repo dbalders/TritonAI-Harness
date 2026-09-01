@@ -256,9 +256,7 @@ export async function loadPluginSdkIntegration(input: {
     }),
   );
 
-  const entryDigest = artifact.descriptor.files.find(({ path }) => path === "plugin.mjs")?.sha256;
-  if (!entryDigest) throw new Error("Plugin SDK entry digest is missing.");
-  const moduleUrl = `data:text/javascript;base64,${Buffer.from(artifact.entryBytes).toString("base64")}#sha256=${entryDigest}`;
+  const moduleUrl = `data:text/javascript;base64,${Buffer.from(artifact.entryBytes).toString("base64")}#artifact-sha256=${artifact.descriptorSha256}`;
   let loaded: PluginSdkModule;
   try {
     loaded = (await import(moduleUrl)) as PluginSdkModule;

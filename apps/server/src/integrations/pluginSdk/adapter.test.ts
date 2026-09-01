@@ -91,10 +91,10 @@ function bytes(value: string): Uint8Array {
   return Buffer.from(value, "utf8");
 }
 
-function artifact(entry = providerSource) {
+function artifact(entry = providerSource, skillBody = "# Fixture reader\n") {
   const manifestBytes = bytes(`${canonicalJson(manifest as unknown as JsonValue)}\n`);
   const skillBytes = bytes(
-    "---\nname: fixture-reader\ndescription: Read deterministic fixture records.\n---\n\n# Fixture reader\n",
+    `---\nname: fixture-reader\ndescription: Read deterministic fixture records.\n---\n\n${skillBody}`,
   );
   const payloads = new Map([
     [".tritonai-plugin/plugin.json", manifestBytes],
@@ -222,5 +222,33 @@ describe("plugin SDK adapter", () => {
         hostNodeVersion: "24.13.1",
       }),
     ).rejects.toBeInstanceOf(PluginSdkQuarantineError);
+  });
+
+  it("isolates module state by the complete admitted artifact", async () => {
+    const statefulSource = `
+let instanceCount = 0;
+export function createIntegrationProvider() {
+  const accountLabel = String(++instanceCount);
+  return {
+    id: "${id}",
+    async status() { return { state: "connected", accountLabel, grantedCapabilities: ["fixture.read"], message: null }; },
+    async invoke() { return null; }
+  };
+}
+`;
+    const load = (skillBody: string) =>
+      loadPluginSdkIntegration({
+        files: artifact(statefulSource, skillBody),
+        secrets: secretStore(),
+        configuration: { prefix: "fixture" },
+        expected: { id, version: "1.0.0" },
+        hostNodeVersion: "24.13.1",
+      });
+    const first = await load("# First reviewed artifact\n");
+    const second = await load("# Second reviewed artifact\n");
+    const context = { signal: new AbortController().signal };
+
+    await expect(first.provider?.status(context)).resolves.toMatchObject({ accountLabel: "1" });
+    await expect(second.provider?.status(context)).resolves.toMatchObject({ accountLabel: "1" });
   });
 });
