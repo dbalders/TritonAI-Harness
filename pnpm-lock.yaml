@@ -27,6 +27,9 @@ catalogs:
     '@typescript/native-preview':
       specifier: 7.0.0-dev.20260604.1
       version: 7.0.0-dev.20260604.1
+    es-module-lexer:
+      specifier: 2.1.0
+      version: 2.1.0
     jose:
       specifier: 6.2.2
       version: 6.2.2
@@ -1054,6 +1057,9 @@ importers:
       effect:
         specifier: 4.0.0-beta.103
         version: 4.0.0-beta.103(patch_hash=af36b7948b6f9c56623074662b51dade5699880c1a7c71245de73e13c3185fb6)
+      es-module-lexer:
+        specifier: 'catalog:'
+        version: 2.1.0
       jose:
         specifier: 'catalog:'
         version: 6.2.2

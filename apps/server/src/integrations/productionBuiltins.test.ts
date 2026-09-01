@@ -17,6 +17,8 @@ import {
   verifyProductionPackageForTest,
   withProductionPackageSnapshotForTest,
 } from "./productionBuiltins.ts";
+import { validateIntegrationManifest } from "./manifest.ts";
+import { PluginSdkQuarantineError } from "./pluginSdk/adapter.ts";
 
 interface TestFile {
   readonly path: string;
@@ -492,6 +494,16 @@ describe("production built-in package verification", () => {
     } finally {
       await NodeFSP.rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("quarantines one SDK provider without disabling later production packages", async () => {
+    const retained = { manifest: validateIntegrationManifest(skillsOnlyManifest()) };
+    await expect(
+      loadProductionPackagesForTest([
+        () => Promise.reject(new PluginSdkQuarantineError()),
+        () => Promise.resolve(retained),
+      ]),
+    ).resolves.toEqual([retained]);
   });
 
   it("accepts an exact package inventory and digest", async () => {
