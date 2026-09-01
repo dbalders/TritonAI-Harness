@@ -210,6 +210,45 @@ function adaptProvider(
   };
 }
 
+function admitProvider(value: Record<string, unknown>, expectedId: string): PluginSdkProvider {
+  const id = value.id;
+  const status = value.status;
+  const invoke = value.invoke;
+  if (id !== expectedId || typeof status !== "function" || typeof invoke !== "function") {
+    throw new Error("Invalid provider shape.");
+  }
+  const prepare = value.prepare;
+  const connect = value.connect;
+  const poll = value.poll;
+  const disconnect = value.disconnect;
+  const close = value.close;
+  for (const hook of [prepare, connect, poll, disconnect, close]) {
+    if (hook !== undefined && typeof hook !== "function") {
+      throw new Error("Invalid optional provider hook.");
+    }
+  }
+  return {
+    id,
+    status: status.bind(value) as PluginSdkProvider["status"],
+    invoke: invoke.bind(value) as PluginSdkProvider["invoke"],
+    ...(typeof prepare === "function"
+      ? { prepare: prepare.bind(value) as NonNullable<PluginSdkProvider["prepare"]> }
+      : {}),
+    ...(typeof connect === "function"
+      ? { connect: connect.bind(value) as NonNullable<PluginSdkProvider["connect"]> }
+      : {}),
+    ...(typeof poll === "function"
+      ? { poll: poll.bind(value) as NonNullable<PluginSdkProvider["poll"]> }
+      : {}),
+    ...(typeof disconnect === "function"
+      ? { disconnect: disconnect.bind(value) as NonNullable<PluginSdkProvider["disconnect"]> }
+      : {}),
+    ...(typeof close === "function"
+      ? { close: close.bind(value) as NonNullable<PluginSdkProvider["close"]> }
+      : {}),
+  };
+}
+
 function installedFiles(artifact: VerifiedPluginSdkArtifact): Readonly<Record<string, Uint8Array>> {
   const manifest = Buffer.from(`${JSON.stringify(artifact.manifest, null, 2)}\n`, "utf8");
   return {
@@ -273,15 +312,8 @@ export async function loadPluginSdkIntegration(input: {
       configuration: configuration as JsonObject,
     });
     if (isPromiseLike(created) || !isRecord(created)) throw new Error("Invalid provider factory.");
-    provider = created;
+    provider = admitProvider(created, artifact.sdkManifest.provider);
   } catch {
-    throw new PluginSdkQuarantineError();
-  }
-  if (
-    provider.id !== artifact.sdkManifest.provider ||
-    typeof provider.status !== "function" ||
-    typeof provider.invoke !== "function"
-  ) {
     throw new PluginSdkQuarantineError();
   }
   return {

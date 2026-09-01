@@ -91,16 +91,28 @@ function bytes(value: string): Uint8Array {
   return Buffer.from(value, "utf8");
 }
 
-function artifact(entry = providerSource, skillBody = "# Fixture reader\n") {
+function artifact(
+  entry = providerSource,
+  skillBody: string | null = "# Fixture reader\n",
+  options: {
+    readonly skillFrontmatter?: string;
+    readonly extraPayloads?: ReadonlyArray<readonly [string, Uint8Array]>;
+  } = {},
+) {
   const manifestBytes = bytes(`${canonicalJson(manifest as unknown as JsonValue)}\n`);
-  const skillBytes = bytes(
-    `---\nname: fixture-reader\ndescription: Read deterministic fixture records.\n---\n\n${skillBody}`,
-  );
   const payloads = new Map([
     [".tritonai-plugin/plugin.json", manifestBytes],
     ["plugin.mjs", bytes(entry)],
-    ["skills/fixture-reader/SKILL.md", skillBytes],
   ]);
+  if (skillBody !== null) {
+    payloads.set(
+      "skills/fixture-reader/SKILL.md",
+      bytes(
+        `${options.skillFrontmatter ?? "---\nname: fixture-reader\ndescription: Read deterministic fixture records.\n---"}\n\n${skillBody}`,
+      ),
+    );
+  }
+  for (const [path, contents] of options.extraPayloads ?? []) payloads.set(path, contents);
   const files = [...payloads.entries()]
     .map(([path, contents]) => ({ path, sha256: sha256(contents), size: contents.byteLength }))
     .sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0));
@@ -222,6 +234,54 @@ describe("plugin SDK adapter", () => {
         hostNodeVersion: "24.13.1",
       }),
     ).rejects.toBeInstanceOf(PluginSdkQuarantineError);
+
+    for (const entry of [
+      `export function createIntegrationProvider() {
+        return Object.defineProperty({ async status() {}, async invoke() {} }, "id", {
+          get() { throw new Error("private getter detail"); }
+        });
+      }\n`,
+      `export function createIntegrationProvider() {
+        return { id: "${id}", async status() {}, async invoke() {}, close: true };
+      }\n`,
+    ]) {
+      await expect(
+        loadPluginSdkIntegration({
+          files: artifact(entry),
+          secrets: secretStore(),
+          configuration: { prefix: "fixture" },
+          expected: { id, version: "1.0.0" },
+          hostNodeVersion: "24.13.1",
+        }),
+      ).rejects.toBeInstanceOf(PluginSdkQuarantineError);
+    }
+  });
+
+  it("requires the manifest's exact skill inventory and frontmatter", async () => {
+    const load = (files: ReturnType<typeof artifact>) =>
+      loadPluginSdkIntegration({
+        files,
+        secrets: secretStore(),
+        configuration: { prefix: "fixture" },
+        expected: { id, version: "1.0.0" },
+        hostNodeVersion: "24.13.1",
+      });
+    await expect(load(artifact(providerSource, null))).rejects.toThrow(/payload inventory/u);
+    await expect(
+      load(
+        artifact(providerSource, "# Fixture reader\n", {
+          extraPayloads: [["skills/undeclared/SKILL.md", bytes("undeclared\n")]],
+        }),
+      ),
+    ).rejects.toThrow(/payload inventory/u);
+    await expect(
+      load(
+        artifact(providerSource, "# Fixture reader\n", {
+          skillFrontmatter:
+            "---\nname: fixture-reader\ndescription: Drifted fixture description.\n---",
+        }),
+      ),
+    ).rejects.toThrow(/frontmatter does not match/u);
   });
 
   it("isolates module state by the complete admitted artifact", async () => {

@@ -2,6 +2,7 @@
 import * as NodeCrypto from "node:crypto";
 
 import { initSync, parse } from "es-module-lexer";
+import { parseDocument } from "yaml";
 
 import {
   canonicalJson,
@@ -155,6 +156,35 @@ function inspectModule(source: string): {
   };
 }
 
+function validateSkillEntrypoint(
+  contents: Uint8Array,
+  skill: PluginSdkManifest["skills"][number],
+): void {
+  const path = `skills/${skill.name}/SKILL.md`;
+  const source = Buffer.from(contents).toString("utf8");
+  assert(
+    Buffer.from(source, "utf8").equals(Buffer.from(contents)),
+    `Plugin SDK skill must be UTF-8: ${path}.`,
+  );
+  const opening = /^---\r?\n/u.exec(source);
+  assert(opening, `Plugin SDK skill is missing frontmatter: ${path}.`);
+  const remainder = source.slice(opening[0].length);
+  const closing = /^---\s*$/mu.exec(remainder);
+  assert(closing, `Plugin SDK skill is missing frontmatter: ${path}.`);
+  const document = parseDocument(remainder.slice(0, closing.index), {
+    strict: true,
+    uniqueKeys: true,
+  });
+  assert(document.errors.length === 0, `Plugin SDK skill frontmatter is invalid: ${path}.`);
+  const frontmatter = document.toJS({ maxAliasCount: 0 }) as unknown;
+  assert(
+    isRecord(frontmatter) &&
+      frontmatter.name === skill.name &&
+      frontmatter.description === skill.description,
+    `Plugin SDK skill frontmatter does not match its manifest: ${path}.`,
+  );
+}
+
 export function hasPluginSdkArtifact(files: ReadonlyArray<{ readonly path: string }>): boolean {
   return files.some(({ path }) => path === ARTIFACT_PATH);
 }
@@ -268,6 +298,19 @@ export function verifyPluginSdkArtifact(
   const { sdkManifest, manifest } = validatePluginSdkManifest(
     parseCanonicalJson(manifestBytes, "Plugin SDK manifest"),
   );
+  const expectedPayloadPaths = [
+    MANIFEST_PATH,
+    ENTRY_PATH,
+    ...sdkManifest.skills.map(({ name }) => `skills/${name}/SKILL.md`),
+  ].sort();
+  const actualPayloadPaths = [...payloads.keys()].filter((path) => path !== ARTIFACT_PATH).sort();
+  assert(
+    canonicalJson(actualPayloadPaths) === canonicalJson(expectedPayloadPaths),
+    "Plugin SDK artifact payload inventory does not match its manifest.",
+  );
+  for (const skill of sdkManifest.skills) {
+    validateSkillEntrypoint(payloads.get(`skills/${skill.name}/SKILL.md`)!, skill);
+  }
   const source = Buffer.from(entryBytes).toString("utf8");
   assert(
     Buffer.from(source, "utf8").equals(Buffer.from(entryBytes)),
@@ -302,9 +345,10 @@ export function verifyPluginSdkArtifact(
     "Plugin SDK artifact descriptor does not match its exact payloads.",
   );
   const skillFiles = Object.fromEntries(
-    [...payloads.entries()]
-      .filter(([path]) => path.startsWith("skills/"))
-      .map(([path, contents]) => [path, Uint8Array.from(contents)]),
+    sdkManifest.skills.map(({ name }) => {
+      const path = `skills/${name}/SKILL.md`;
+      return [path, Uint8Array.from(payloads.get(path)!)] as const;
+    }),
   );
   return {
     descriptor,
