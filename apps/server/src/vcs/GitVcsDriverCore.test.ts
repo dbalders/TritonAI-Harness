@@ -1682,6 +1682,37 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         assert.include(status, "?? selected1.txt");
       }),
     );
+
+    it.effect("includes force-added ignored files without changing the index", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const pathService = yield* Path.Path;
+
+        yield* writeTextFile(cwd, ".gitignore", "*.generated\n");
+        yield* git(cwd, ["add", ".gitignore"]);
+        yield* git(cwd, ["commit", "-m", "Ignore generated files"]);
+        yield* writeTextFile(cwd, "included.generated", "included\n");
+        yield* git(cwd, ["add", "-f", "included.generated"]);
+        const indexPath = pathService.join(cwd, ".git", "index");
+        const originalIndex = yield* fileSystem.readFile(indexPath);
+
+        const context = yield* driver.prepareCommitContext(cwd);
+
+        assert.include(context?.stagedSummary ?? "", "included.generated");
+        assert.deepEqual(
+          Array.from(yield* fileSystem.readFile(indexPath)),
+          Array.from(originalIndex),
+        );
+        yield* driver.commit(cwd, "Add generated file", "", { stage: {} });
+        assert.equal(
+          yield* git(cwd, ["diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"]),
+          "included.generated",
+        );
+      }),
+    );
   });
 
   describe("remote operations", () => {
