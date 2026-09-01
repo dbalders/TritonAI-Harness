@@ -133,7 +133,9 @@ function nodeVersionSupported(version: string): boolean {
   return major === 24 && (minor > 13 || (minor === 13 && patch >= 1));
 }
 
-function inspectModule(source: string): {
+// This inventories static ESM imports for reviewed application code. It is not a capability
+// boundary: curated providers execute in the normal trusted Node backend realm.
+function inspectTrustedModuleImports(source: string): {
   readonly nodeBuiltins: ReadonlyArray<string>;
   readonly exports: ReadonlyArray<string>;
 } {
@@ -316,7 +318,7 @@ export function verifyPluginSdkArtifact(
     Buffer.from(source, "utf8").equals(Buffer.from(entryBytes)),
     "Plugin SDK entry must be UTF-8.",
   );
-  const module = inspectModule(source);
+  const module = inspectTrustedModuleImports(source);
   assert(
     canonicalJson(module.exports) === canonicalJson(["createIntegrationProvider"]),
     "Plugin SDK entry must export only createIntegrationProvider.",

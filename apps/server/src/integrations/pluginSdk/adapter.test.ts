@@ -381,6 +381,23 @@ export function createIntegrationProvider() {
     await expect(provider.close!()).rejects.toThrow(/must be undefined/u);
   });
 
+  it("quarantines a module whose top-level evaluation does not settle", async () => {
+    const pendingModule = `
+await new Promise(() => {});
+export function createIntegrationProvider() { throw new Error("unreachable"); }
+`;
+    await expect(
+      loadPluginSdkIntegration({
+        files: artifact(pendingModule),
+        secrets: secretStore(),
+        configuration: { prefix: "fixture" },
+        expected: { id, version: "1.0.0" },
+        hostNodeVersion: "24.13.1",
+        admissionTimeoutMs: 10,
+      }),
+    ).rejects.toBeInstanceOf(PluginSdkQuarantineError);
+  });
+
   it("isolates module state by the complete admitted artifact", async () => {
     const statefulSource = `
 let instanceCount = 0;

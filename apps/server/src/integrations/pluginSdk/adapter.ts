@@ -77,6 +77,8 @@ interface PluginSdkModule {
   }) => PluginSdkProvider;
 }
 
+const DEFAULT_ADMISSION_TIMEOUT_MS = 5_000;
+
 export class PluginSdkQuarantineError extends Error {
   constructor() {
     super("A plugin SDK provider was quarantined.");
@@ -322,13 +324,30 @@ function installedFiles(artifact: VerifiedPluginSdkArtifact): Readonly<Record<st
   };
 }
 
+async function importPluginModule(moduleUrl: string, timeoutMs: number): Promise<PluginSdkModule> {
+  const loaded = await Effect.runPromise(
+    Effect.promise(() => import(moduleUrl)).pipe(Effect.timeoutOption(timeoutMs)),
+  );
+  return Option.match(loaded, {
+    onNone: () => {
+      throw new PluginSdkQuarantineError();
+    },
+    onSome: (module) => module as PluginSdkModule,
+  });
+}
+
 export async function loadPluginSdkIntegration(input: {
   readonly files: ReadonlyArray<PluginSdkArtifactFile>;
   readonly secrets: ServerSecretStore.ServerSecretStore["Service"];
   readonly configuration: Readonly<Record<string, unknown>>;
   readonly expected: { readonly id: string; readonly version: string };
   readonly hostNodeVersion?: string | null;
+  readonly admissionTimeoutMs?: number;
 }): Promise<IntegrationPackage> {
+  const admissionTimeoutMs = input.admissionTimeoutMs ?? DEFAULT_ADMISSION_TIMEOUT_MS;
+  if (!Number.isSafeInteger(admissionTimeoutMs) || admissionTimeoutMs <= 0) {
+    throw new Error("Plugin SDK admission timeout must be a positive integer.");
+  }
   const artifact = verifyPluginSdkArtifact(
     input.files,
     input.hostNodeVersion === undefined ? {} : { hostNodeVersion: input.hostNodeVersion },
@@ -363,7 +382,7 @@ export async function loadPluginSdkIntegration(input: {
   const moduleUrl = `data:text/javascript;base64,${Buffer.from(artifact.entryBytes).toString("base64")}#artifact-sha256=${artifact.descriptorSha256}`;
   let loaded: PluginSdkModule;
   try {
-    loaded = (await import(moduleUrl)) as PluginSdkModule;
+    loaded = await importPluginModule(moduleUrl, admissionTimeoutMs);
   } catch {
     throw new PluginSdkQuarantineError();
   }
