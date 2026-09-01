@@ -247,20 +247,26 @@ function validateSchema(value: unknown, label: string): JsonSchema {
   ): void => {
     for (const keyword of SCHEMA_VALUE_KEYWORDS) {
       const subschema = current[keyword];
-      if (isSchemaValue(subschema)) visit(subschema, `${path}.${keyword}`);
+      if (subschema === undefined) continue;
+      assert(isSchemaValue(subschema), `${path}.${keyword} must be a schema.`);
+      visit(subschema, `${path}.${keyword}`);
     }
     for (const keyword of SCHEMA_ARRAY_KEYWORDS) {
       const subschemas = current[keyword];
-      if (!Array.isArray(subschemas)) continue;
+      if (subschemas === undefined) continue;
+      assert(Array.isArray(subschemas), `${path}.${keyword} must be a schema array.`);
       subschemas.forEach((subschema, index) => {
-        if (isSchemaValue(subschema)) visit(subschema, `${path}.${keyword}[${index}]`);
+        assert(isSchemaValue(subschema), `${path}.${keyword}[${index}] must be a schema.`);
+        visit(subschema, `${path}.${keyword}[${index}]`);
       });
     }
     for (const keyword of SCHEMA_MAP_KEYWORDS) {
       const subschemas = current[keyword];
-      if (!isRecord(subschemas)) continue;
+      if (subschemas === undefined) continue;
+      assert(isRecord(subschemas), `${path}.${keyword} must be a schema map.`);
       for (const [name, subschema] of Object.entries(subschemas)) {
-        if (isSchemaValue(subschema)) visit(subschema, `${path}.${keyword}.${name}`);
+        assert(isSchemaValue(subschema), `${path}.${keyword}.${name} must be a schema.`);
+        visit(subschema, `${path}.${keyword}.${name}`);
       }
     }
   };

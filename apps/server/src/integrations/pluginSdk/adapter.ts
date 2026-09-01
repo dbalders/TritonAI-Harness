@@ -336,6 +336,20 @@ async function importPluginModule(moduleUrl: string, timeoutMs: number): Promise
   });
 }
 
+async function closeRejectedProvider(value: unknown, timeoutMs: number): Promise<void> {
+  try {
+    if (!isRecord(value)) return;
+    const close = value.close;
+    if (typeof close !== "function") return;
+    const result = close.call(value) as unknown;
+    await Effect.runPromise(
+      Effect.promise(() => Promise.resolve(result)).pipe(Effect.timeoutOption(timeoutMs)),
+    );
+  } catch {
+    // Admission already failed. Cleanup is bounded and best-effort before quarantine.
+  }
+}
+
 export async function loadPluginSdkIntegration(input: {
   readonly files: ReadonlyArray<PluginSdkArtifactFile>;
   readonly secrets: ServerSecretStore.ServerSecretStore["Service"];
@@ -389,15 +403,17 @@ export async function loadPluginSdkIntegration(input: {
   if (typeof loaded.createIntegrationProvider !== "function") {
     throw new PluginSdkQuarantineError();
   }
+  let created: unknown = undefined;
   let provider: PluginSdkProvider;
   try {
-    const created = loaded.createIntegrationProvider({
+    created = loaded.createIntegrationProvider({
       secrets: secretStore(input.secrets, artifact.sdkManifest.id),
       configuration: configuration as JsonObject,
     });
     if (isPromiseLike(created) || !isRecord(created)) throw new Error("Invalid provider factory.");
     provider = admitProvider(created, artifact.sdkManifest.provider);
   } catch {
+    await closeRejectedProvider(created, admissionTimeoutMs);
     throw new PluginSdkQuarantineError();
   }
   return {

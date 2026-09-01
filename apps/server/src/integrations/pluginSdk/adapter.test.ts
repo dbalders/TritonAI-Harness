@@ -258,6 +258,36 @@ describe("plugin SDK adapter", () => {
         }),
       ).rejects.toBeInstanceOf(PluginSdkQuarantineError);
     }
+
+    const cleanupState = globalThis as { __pluginSdkRejectedProviderClosed?: boolean };
+    delete cleanupState.__pluginSdkRejectedProviderClosed;
+    try {
+      await expect(
+        loadPluginSdkIntegration({
+          files: artifact(`
+export function createIntegrationProvider() {
+  return {
+    id: "wrong-provider",
+    async status() {},
+    async invoke() {},
+    async close() {
+      globalThis.__pluginSdkRejectedProviderClosed = true;
+      await new Promise(() => {});
+    }
+  };
+}
+`),
+          secrets: secretStore(),
+          configuration: { prefix: "fixture" },
+          expected: { id, version: "1.0.0" },
+          hostNodeVersion: "24.13.1",
+          admissionTimeoutMs: 10,
+        }),
+      ).rejects.toBeInstanceOf(PluginSdkQuarantineError);
+      expect(cleanupState.__pluginSdkRejectedProviderClosed).toBe(true);
+    } finally {
+      delete cleanupState.__pluginSdkRejectedProviderClosed;
+    }
   });
 
   it("requires the manifest's exact skill inventory and frontmatter", async () => {
@@ -328,6 +358,14 @@ describe("plugin SDK adapter", () => {
         properties: { pattern: { $ref: "#/$defs/item/" } },
       }),
     ).rejects.toThrow(/does not resolve/u);
+    await expect(
+      load({
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        type: "object",
+        additionalProperties: false,
+        properties: { pattern: 1 },
+      }),
+    ).rejects.toThrow(/properties\.pattern must be a schema/u);
   });
 
   it("validates every provider result at the SDK boundary", async () => {
