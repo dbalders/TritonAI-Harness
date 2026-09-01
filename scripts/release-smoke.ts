@@ -163,6 +163,23 @@ function assertContains(haystack: string, needle: string, message: string): void
   }
 }
 
+function assertDoesNotMatch(haystack: string, pattern: RegExp, message: string): void {
+  if (pattern.test(haystack)) {
+    throw new Error(message);
+  }
+}
+
+function assertInOrder(haystack: string, needles: ReadonlyArray<string>, message: string): void {
+  let cursor = 0;
+  for (const needle of needles) {
+    const index = haystack.indexOf(needle, cursor);
+    if (index === -1) {
+      throw new Error(message);
+    }
+    cursor = index + needle.length;
+  }
+}
+
 function assertExists(path: string, message: string): void {
   if (!NodeFS.existsSync(path)) {
     throw new Error(message);
@@ -405,6 +422,49 @@ try {
   assertExists(
     winDebugX64Path,
     "Windows release smoke unexpectedly removed the x64 builder debug fixture.",
+  );
+
+  const upstreamSyncWorkflow = NodeFS.readFileSync(
+    NodePath.resolve(repoRoot, ".github/workflows/tritonai-upstream-sync.yml"),
+    "utf8",
+  );
+  assertContains(
+    upstreamSyncWorkflow,
+    "corepack enable pnpm",
+    "Upstream sync must enable the package.json-pinned pnpm through Corepack.",
+  );
+  assertContains(
+    upstreamSyncWorkflow,
+    "pnpm install --frozen-lockfile",
+    "Upstream sync must install from the frozen pnpm lockfile.",
+  );
+  const upstreamSyncScript = NodeFS.readFileSync(
+    NodePath.resolve(repoRoot, "scripts/tritonai-sync-upstream.mjs"),
+    "utf8",
+  );
+  assertContains(
+    upstreamSyncScript,
+    '["pnpm", "install", "--frozen-lockfile"]',
+    "The merged upstream worktree must install from its own frozen pnpm lockfile.",
+  );
+  assertInOrder(
+    upstreamSyncScript,
+    [
+      'const mergeResult = gitStatus(["merge"',
+      "const installResult = run(",
+      "const checkResult = shell(checks",
+      "const review = runAgentReview(",
+    ],
+    "The merged upstream worktree must install before validation and review.",
+  );
+  assertDoesNotMatch(
+    `${upstreamSyncWorkflow}\n${upstreamSyncScript}`,
+    /\bbun\s+(?:add|i|install|link|patch(?:-commit)?|pm|remove|rm|unlink|up|update)\b/,
+    "Upstream sync workflow and orchestration must not use Bun as an installer.",
+  );
+  assertMissing(
+    NodePath.resolve(repoRoot, "bun.lock"),
+    "bun.lock must remain absent; pnpm-lock.yaml is the dependency-resolution authority.",
   );
 
   const releaseWorkflow = NodeFS.readFileSync(
