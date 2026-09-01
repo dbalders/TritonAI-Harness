@@ -49,6 +49,12 @@ describe("IntegrationConnectResult", () => {
       decodeConnectResult({ ...apiKeyFlow, setupInstructions: Array(7).fill("Step") }),
     ).toThrow();
     expect(
+      decodeConnectResult({
+        ...apiKeyFlow,
+        setupInstructions: ["Repeat this step.", "Repeat this step."],
+      }),
+    ).toMatchObject({ setupInstructions: ["Repeat this step.", "Repeat this step."] });
+    expect(
       decodeConnectResult({ kind: "connected", flowId: "flow-2", message: "Connected." }),
     ).toEqual({ kind: "connected", flowId: "flow-2", message: "Connected." });
   });
