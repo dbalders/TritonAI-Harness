@@ -1,8 +1,10 @@
 import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
+  ChatFileAttachment,
   EnvironmentHttpApi,
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
+  type ChatStoredFileAttachment,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
@@ -10,10 +12,11 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Semaphore from "effect/Semaphore";
+import * as Schema from "effect/Schema";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 
 import { projectThreadDetailSnapshot } from "./ActivityPayloadProjection.ts";
-import { normalizeDispatchCommand } from "./Normalizer.ts";
+import { cleanupFailedUploadedAttachments, normalizeDispatchCommand } from "./Normalizer.ts";
 import {
   annotateEnvironmentRequest,
   failEnvironmentInternal,
@@ -35,6 +38,7 @@ import { ProjectionThreadMessageRepository } from "../persistence/Services/Proje
 
 const PENDING_ATTACHMENT_TTL_MS = 60 * 60 * 1000;
 const MAX_GLOBAL_PENDING_ATTACHMENT_BYTES = 10 * PROVIDER_SEND_TURN_MAX_FILE_BYTES;
+const isChatFileAttachment = Schema.is(ChatFileAttachment);
 
 export function isPendingAttachmentExpired(input: {
   readonly modifiedAt: number | null;
@@ -222,8 +226,8 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
           if (!attachmentId || name.length === 0) {
             return yield* failEnvironmentInvalidRequest("invalid_attachment");
           }
-          const attachment = {
-            type: "file" as const,
+          const attachment: ChatStoredFileAttachment = {
+            type: "file",
             id: attachmentId,
             name,
             mimeType: (source.contentType.trim() || "application/octet-stream")
@@ -258,7 +262,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
                 .flatMap((message) => message.attachments ?? [])
                 .find((candidate) => candidate.id === attachmentId);
               if (existingAttachment) {
-                if (existingAttachment.type !== "file") {
+                if (!isChatFileAttachment(existingAttachment)) {
                   return yield* failEnvironmentInvalidRequest("invalid_attachment");
                 }
                 return existingAttachment;
@@ -378,13 +382,14 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
           const normalizedCommand = yield* normalizeDispatchCommand(args.payload).pipe(
             Effect.catch(() => failEnvironmentInvalidRequest("invalid_command")),
           );
-          return yield* orchestrationEngine
-            .dispatch(normalizedCommand)
-            .pipe(
-              Effect.catch((cause) =>
-                failEnvironmentInternal("orchestration_dispatch_failed", cause),
-              ),
-            );
+          return yield* orchestrationEngine.dispatch(normalizedCommand).pipe(
+            Effect.tapError(() =>
+              cleanupFailedUploadedAttachments(args.payload, normalizedCommand),
+            ),
+            Effect.catch((cause) =>
+              failEnvironmentInternal("orchestration_dispatch_failed", cause),
+            ),
+          );
         }),
       );
   }),

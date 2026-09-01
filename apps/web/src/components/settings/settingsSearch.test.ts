@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   searchableSetting,
   searchSettings,
+  SETTINGS_SECTION_LABELS,
   SETTINGS_SEARCH_ITEMS,
   type SettingsSearchItem,
 } from "./settingsSearch";
@@ -56,8 +57,21 @@ describe("searchSettings", () => {
     ]);
   });
 
+  it("lists thread confirmations in panel order", () => {
+    expect(searchSettings("confirmation").map((item) => item.id)).toEqual([
+      "unpin-confirmation",
+      "archive-confirmation",
+      "delete-confirmation",
+    ]);
+  });
+
   it("returns no results for an empty query", () => {
     expect(searchSettings("   ", ITEMS)).toEqual([]);
+  });
+
+  it("hides desktop-only settings from browser search", () => {
+    expect(SETTINGS_SEARCH_ITEMS.some((item) => item.id === "quit-confirmation")).toBe(true);
+    expect(searchSettings("quit confirmation")).toEqual([]);
   });
 
   it("keeps catalog result ids unique", () => {
@@ -84,5 +98,10 @@ describe("searchSettings", () => {
       to: "/settings/appearance",
       targetId: "appearance",
     });
+  });
+
+  it("does not expose the legacy Settings usage destination", () => {
+    expect(SETTINGS_SECTION_LABELS).not.toHaveProperty("/settings/usage");
+    expect(searchSettings("usage")).toEqual([]);
   });
 });

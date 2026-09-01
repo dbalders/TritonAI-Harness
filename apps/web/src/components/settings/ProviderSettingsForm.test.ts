@@ -37,6 +37,11 @@ describe("ProviderSettingsForm helpers", () => {
     });
   });
 
+  it("keeps non-managed Claude provider settings hidden", () => {
+    const claude = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("claudeAgent")];
+    expect(claude).toBeUndefined();
+  });
+
   it("preserves unknown config keys while omitting empty configurable fields", () => {
     const codex = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("codex")];
     expect(codex).toBeDefined();

@@ -3,6 +3,7 @@ import type {
   RelayClientEnvironmentRecord,
   RelayEnvironmentStatusResponse,
 } from "@t3tools/contracts/relay";
+import type { EnvironmentId } from "@t3tools/contracts";
 import {
   RelayEnvironmentConnectScope,
   RelayEnvironmentStatusScope,
@@ -13,15 +14,18 @@ import * as Clock from "effect/Clock";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { AsyncResult, Atom, AtomRegistry } from "effect/unstable/reactivity";
 
 import { findErrorTraceId } from "../errors/errorTrace.ts";
 import * as ManagedRelay from "./managedRelay.ts";
+import { relayProtectedErrorMessage } from "./errorPresentation.ts";
 
 const DEFAULT_STALE_TIME_MS = 15_000;
 const DEFAULT_IDLE_TTL_MS = 5 * 60_000;
 const CLERK_TOKEN_EXPIRY_SKEW_MS = 5_000;
+const isManagedRelayRequestFailedError = Schema.is(ManagedRelay.ManagedRelayRequestFailedError);
 
 export interface ManagedRelaySession {
   readonly accountId: string;
@@ -219,6 +223,24 @@ export const waitForManagedRelayClerkToken = Effect.fn(
   });
 });
 
+/** Removes an environment from the signed-in account without contacting that environment. */
+export const deregisterManagedRelayEnvironment = Effect.fn(
+  "clientRuntime.managedRelaySession.deregisterEnvironment",
+)(function* (
+  registry: AtomRegistry.AtomRegistry,
+  input: { readonly accountId: string; readonly environmentId: EnvironmentId },
+) {
+  const session = registry.get(managedRelaySessionAtom);
+  if (!session || session.accountId !== input.accountId) {
+    return yield* new ManagedRelaySessionError({
+      message: "Sign in to T3 Connect before deregistering an environment.",
+    });
+  }
+  const clerkToken = yield* readSessionClerkToken(session);
+  const relay = yield* ManagedRelay.ManagedRelayClient;
+  yield* relay.unlinkEnvironment({ clerkToken, environmentId: input.environmentId });
+});
+
 function requireClerkToken(
   get: Atom.AtomContext,
   accountId: string,
@@ -298,7 +320,11 @@ export function readManagedRelaySnapshotState<A>(
   if (result._tag === "Failure") {
     const cause = Cause.squash(result.cause);
     error =
-      cause instanceof Error ? cause.message : `Could not load ${TRITONAI_CONNECT_NAME} data.`;
+      isManagedRelayRequestFailedError(cause) && cause.relayError
+        ? relayProtectedErrorMessage(cause.relayError)
+        : cause instanceof Error
+          ? cause.message
+          : `Could not load ${TRITONAI_CONNECT_NAME} data.`;
     errorTraceId = findErrorTraceId(cause);
   }
   return {

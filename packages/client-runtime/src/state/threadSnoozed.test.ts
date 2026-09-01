@@ -265,10 +265,15 @@ describe("resolveSnoozePresets", () => {
     const presets = resolveSnoozePresets(localDate(2026, 4, 8, 10));
     expect(presets.map((preset) => preset.id)).toEqual([
       "hour",
+      "three-hours",
       "evening",
       "tomorrow",
       "next-week",
     ]);
+    expect(presets.find((preset) => preset.id === "three-hours")?.snoozedUntil).toBe(
+      localDate(2026, 4, 8, 13).toISOString(),
+    );
+    expect(presets.find((preset) => preset.id === "three-hours")?.label).toBe("In 3 hours");
     expect(presets.find((preset) => preset.id === "evening")?.label).toBe("This evening");
     expect(
       new Date(presets.find((preset) => preset.id === "tomorrow")!.snoozedUntil).getHours(),
@@ -278,6 +283,7 @@ describe("resolveSnoozePresets", () => {
   it("drops the evening choice once evening is near or past", () => {
     expect(resolveSnoozePresets(localDate(2026, 4, 8, 17, 30)).map((preset) => preset.id)).toEqual([
       "hour",
+      "three-hours",
       "tomorrow",
       "next-week",
     ]);
@@ -290,5 +296,18 @@ describe("resolveSnoozePresets", () => {
     );
     expect(nextWeek.getDay()).toBe(1);
     expect(nextWeek.getDate()).toBe(13);
+  });
+
+  it("drops next week on Sundays, when it lands on the same Monday as tomorrow", () => {
+    // Sunday 2026-08-30 07:01: "Tomorrow" and "Next week" are both Monday 9:00.
+    const presets = resolveSnoozePresets(localDate(2026, 8, 30, 7, 1));
+    expect(presets.map((preset) => preset.id)).toEqual([
+      "hour",
+      "three-hours",
+      "evening",
+      "tomorrow",
+    ]);
+    const tomorrow = new Date(presets.find((preset) => preset.id === "tomorrow")!.snoozedUntil);
+    expect(tomorrow.getDay()).toBe(1);
   });
 });

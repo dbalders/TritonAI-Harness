@@ -15,7 +15,8 @@ import { serverEnvironment } from "../../state/server";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Skeleton } from "../ui/skeleton";
-import { SettingsPageContainer, SettingsSection } from "./settingsLayout";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { SettingsSection } from "./settingsLayout";
 import {
   budgetUtilizationTone,
   calculateBudgetUsage,
@@ -45,16 +46,22 @@ function UsageMetric({
       <dt className="text-[10px] font-semibold uppercase tracking-[0.1em] text-muted-foreground/70">
         {label}
       </dt>
-      <dd
-        className={cn(
-          "mt-1.5 truncate font-mono text-base font-semibold tabular-nums text-foreground",
-          tone === "warning" && "text-warning-foreground",
-          tone === "danger" && "text-destructive",
-        )}
-        title={value}
-      >
-        {value}
-      </dd>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <dd
+              className={cn(
+                "mt-1.5 truncate font-mono text-base font-semibold tabular-nums text-foreground",
+                tone === "warning" && "text-warning-foreground",
+                tone === "danger" && "text-destructive",
+              )}
+            >
+              {value}
+            </dd>
+          }
+        />
+        <TooltipPopup side="top">{value}</TooltipPopup>
+      </Tooltip>
       {detail ? <dd className="mt-1 text-[11px] text-muted-foreground/70">{detail}</dd> : null}
     </div>
   );
@@ -281,7 +288,7 @@ function UsageEmptyState({
   );
 }
 
-export function UsageSettingsPanel() {
+export function TritonAiUsageSnapshot() {
   const primaryEnvironment = usePrimaryEnvironment();
   const environmentId = primaryEnvironment?.environmentId ?? null;
   const { data, error, isPending, refresh } = useEnvironmentQuery(
@@ -296,31 +303,29 @@ export function UsageSettingsPanel() {
   const fetchedAt = data ? formatUsageDate(data.fetchedAt) : null;
 
   return (
-    <SettingsPageContainer>
-      <SettingsSection
-        title="Usage snapshot"
-        aria-busy={isPending}
-        headerAction={
-          <div className="flex items-center gap-1">
-            {window.desktopBridge ? (
-              <Button render={<Link to="/settings/providers" />} size="xs" variant="ghost">
-                Manage access
-              </Button>
-            ) : null}
-            <Button
-              size="xs"
-              variant="ghost"
-              disabled={environmentId === null || isPending || viewState === "unavailable"}
-              onClick={refresh}
-            >
-              <RefreshCwIcon
-                className={cn(isPending && "animate-spin motion-reduce:animate-none")}
-              />
-              Refresh
+    <SettingsSection
+      title="TritonAI quota"
+      aria-busy={isPending}
+      headerAction={
+        <div className="flex items-center gap-1">
+          {window.desktopBridge ? (
+            <Button render={<Link to="/settings/providers" />} size="xs" variant="ghost">
+              Manage access
             </Button>
-          </div>
-        }
-      >
+          ) : null}
+          <Button
+            size="xs"
+            variant="ghost"
+            disabled={environmentId === null || isPending || viewState === "unavailable"}
+            onClick={refresh}
+          >
+            <RefreshCwIcon className={cn(isPending && "animate-spin motion-reduce:animate-none")} />
+            Refresh
+          </Button>
+        </div>
+      }
+    >
+      <div className="overflow-hidden rounded-2xl border border-border/70 bg-card shadow-[0_1px_1px_rgb(0_0_0/0.03)]">
         {viewState === "loading" ? <UsageLoadingState /> : null}
         {viewState === "no-environment" ? (
           <UsageEmptyState
@@ -384,7 +389,7 @@ export function UsageSettingsPanel() {
           This is a live quota snapshot from TritonAI, not a usage history. The API key remains on
           the server.
         </div>
-      </SettingsSection>
-    </SettingsPageContainer>
+      </div>
+    </SettingsSection>
   );
 }

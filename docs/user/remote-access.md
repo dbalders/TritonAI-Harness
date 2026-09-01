@@ -145,6 +145,8 @@ it. See [Keeping TritonAI Harness Versions in Sync](./server-updates.md).
 The upstream Linux boot-service path is also disabled for the downstream distribution. See the
 [Background Service Distribution Policy](./background-service.md).
 
+If T3 Connect cannot connect, check the date and time on both devices, then try again.
+
 ## How Pairing Works
 
 The remote device does not need a long-lived secret up front.
@@ -182,6 +184,17 @@ Typical uses:
 - revoke old pairing links or sessions
 
 Use `t3 auth --help` and the nested subcommand help pages for the full reference.
+
+### Deregister a T3 Connect Environment
+
+Open your account menu and choose **T3 Connect** to see every environment registered to your
+account. On mobile, open **Settings** → **T3 Connect**. Choose **Deregister** to revoke an
+environment's T3 Connect access, remove any managed tunnel, and free its host space.
+
+Deregistration is an account action and does not need a connection to the environment, so it also
+works for a server that was wiped or is no longer reachable. Device-local connect and disconnect
+controls remain in **Settings** → **Connections** on web and desktop or **Settings** →
+**Environments** on mobile.
 
 ## Security Notes
 
