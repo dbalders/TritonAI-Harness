@@ -19,6 +19,7 @@ import {
   loadManagedPluginCompositionFromEnvironment,
   snapshotManagedPluginComposition,
 } from "../../../scripts/lib/managed-plugin-composition.ts";
+import { loadManagedHarnessConfigForBuild } from "../../../scripts/lib/managed-harness-config.ts";
 import { loadRepoEnv } from "../../../scripts/lib/public-config.ts";
 import { resolveCatalogDependencies } from "../../../scripts/lib/resolve-catalog.ts";
 import { fromJsonStringPretty } from "@t3tools/shared/schemaJson";
@@ -178,6 +179,13 @@ const buildCmd = Command.make(
         yield* Effect.logWarning("[cli] Web dist not found — skipping client bundle.");
       }
 
+      const managedConfig = loadManagedHarnessConfigForBuild(repoRoot);
+      yield* fs.writeFileString(
+        path.join(serverDir, "dist/tritonai-managed-config.json"),
+        managedConfig.source,
+      );
+      yield* Effect.log("[cli] Bundled validated TritonAI managed config into dist");
+
       const pluginSource = loadManagedPluginCompositionFromEnvironment(loadRepoEnv());
       if (pluginSource) {
         snapshotManagedPluginComposition(
@@ -237,7 +245,11 @@ const publishCmd = Command.make(
       const packageJsonPath = path.join(serverDir, "package.json");
 
       // Assert build assets exist
-      for (const relPath of ["dist/bin.mjs", "dist/client/index.html"]) {
+      for (const relPath of [
+        "dist/bin.mjs",
+        "dist/service-launcher.mjs",
+        "dist/client/index.html",
+      ]) {
         const abs = path.join(serverDir, relPath);
         if (!(yield* fs.exists(abs))) {
           return yield* new ServerCliBuildAssetMissingError({ assetPath: abs });

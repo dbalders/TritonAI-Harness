@@ -21,6 +21,19 @@ on:
           - both
           - dark
           - light
+      theme:
+        description: Palette to capture (all multiplies the run by six)
+        required: true
+        default: t3-code
+        type: choice
+        options:
+          - t3-code
+          - t3-chat
+          - grove
+          - ocean
+          - ember
+          - iris
+          - all
 
 permissions:
   contents: read
@@ -32,7 +45,7 @@ jobs:
   ios:
     name: iPhone 6.9, iPhone 6.5, and iPad 13
     if: inputs.platform == 'all' || inputs.platform == 'ios'
-    runs-on: blacksmith-12vcpu-macos-26
+    runs-on: macos-15
     timeout-minutes: 60
     steps:
       - name: Checkout
@@ -45,7 +58,11 @@ jobs:
         with:
           node-version-file: package.json
           cache: true
-          run-install: true
+          run-install: |
+            args:
+              - --filter=@t3tools/mobile...
+              - --filter=@t3tools/scripts...
+              - --filter=t3...
 
       - name: Expose pnpm
         run: |
@@ -55,10 +72,10 @@ jobs:
           "$vp_pnpm_bin/pnpm" --version
 
       - name: Capture iOS showcase
-        run: pnpm screenshots:mobile --platform ios --appearance "${{ inputs.appearance }}"
+        run: pnpm screenshots:mobile --platform ios --appearance "${{ inputs.appearance }}" --theme "${{ inputs.theme }}"
 
       - name: Validate App Store Connect assets
-        run: pnpm screenshots:mobile --platform ios --appearance "${{ inputs.appearance }}" --validate-only
+        run: pnpm screenshots:mobile --platform ios --appearance "${{ inputs.appearance }}" --theme "${{ inputs.theme }}" --validate-only
 
       - name: Upload iOS screenshots
         if: always()
@@ -72,7 +89,7 @@ jobs:
   android:
     name: Android phone, 7-inch tablet, and 10-inch tablet
     if: inputs.platform == 'all' || inputs.platform == 'android'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
       T3_SHOWCASE_ANDROID_ABI: x86_64
@@ -87,7 +104,11 @@ jobs:
         with:
           node-version-file: package.json
           cache: true
-          run-install: true
+          run-install: |
+            args:
+              - --filter=@t3tools/mobile...
+              - --filter=@t3tools/scripts...
+              - --filter=t3...
 
       - name: Expose pnpm
         run: |
@@ -123,10 +144,10 @@ jobs:
           cores: 8
           ram-size: 4096M
           disable-animations: false
-          script: pnpm screenshots:mobile --platform android --appearance "${{ inputs.appearance }}"
+          script: pnpm screenshots:mobile --platform android --appearance "${{ inputs.appearance }}" --theme "${{ inputs.theme }}"
 
       - name: Validate Google Play assets
-        run: pnpm screenshots:mobile --platform android --appearance "${{ inputs.appearance }}" --validate-only
+        run: pnpm screenshots:mobile --platform android --appearance "${{ inputs.appearance }}" --theme "${{ inputs.theme }}" --validate-only
 
       - name: Upload Android screenshots
         if: always()

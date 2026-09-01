@@ -45,8 +45,8 @@ describe("CodexModelCatalog", () => {
   it("adds only custom models with explicit input modality metadata", () => {
     const result = JSON.parse(
       buildTritonAiCodexModelCatalog(bundledCatalog, {
-        "api-glm-5.2": {
-          name: "GLM 5.2",
+        "api-glm-5.3": {
+          name: "GLM 5.3",
           capabilities: { inputModalities: ["text"] },
         },
         "api-gemma-4-31b": {
@@ -59,9 +59,9 @@ describe("CodexModelCatalog", () => {
 
     NodeAssert.deepStrictEqual(
       result.models.map((model) => model.slug),
-      ["gpt-5.2", "gpt-5.5", "api-glm-5.2", "api-gemma-4-31b"],
+      ["gpt-5.2", "gpt-5.5", "api-glm-5.3", "api-gemma-4-31b"],
     );
-    const glm = result.models.find((model) => model.slug === "api-glm-5.2");
+    const glm = result.models.find((model) => model.slug === "api-glm-5.3");
     NodeAssert.deepStrictEqual(glm?.input_modalities, ["text"]);
     NodeAssert.equal(glm?.visibility, "hide");
     NodeAssert.equal(glm?.base_instructions, "You are GPT-5.2.");

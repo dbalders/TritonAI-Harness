@@ -6,7 +6,7 @@ import {
   ShieldAlertIcon,
 } from "lucide-react";
 import type { ServerTritonAiUsageSnapshot } from "@t3tools/contracts";
-import { useState } from "react";
+import { Link } from "@tanstack/react-router";
 
 import { cn } from "../../lib/utils";
 import { usePrimaryEnvironment } from "../../state/environments";
@@ -14,9 +14,9 @@ import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
-import { Input } from "../ui/input";
 import { Skeleton } from "../ui/skeleton";
-import { SettingsPageContainer, SettingsSection } from "./settingsLayout";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { SettingsSection } from "./settingsLayout";
 import {
   budgetUtilizationTone,
   calculateBudgetUsage,
@@ -46,16 +46,22 @@ function UsageMetric({
       <dt className="text-[10px] font-semibold uppercase tracking-[0.1em] text-muted-foreground/70">
         {label}
       </dt>
-      <dd
-        className={cn(
-          "mt-1.5 truncate font-mono text-base font-semibold tabular-nums text-foreground",
-          tone === "warning" && "text-warning-foreground",
-          tone === "danger" && "text-destructive",
-        )}
-        title={value}
-      >
-        {value}
-      </dd>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <dd
+              className={cn(
+                "mt-1.5 truncate font-mono text-base font-semibold tabular-nums text-foreground",
+                tone === "warning" && "text-warning-foreground",
+                tone === "danger" && "text-destructive",
+              )}
+            >
+              {value}
+            </dd>
+          }
+        />
+        <TooltipPopup side="top">{value}</TooltipPopup>
+      </Tooltip>
       {detail ? <dd className="mt-1 text-[11px] text-muted-foreground/70">{detail}</dd> : null}
     </div>
   );
@@ -282,95 +288,7 @@ function UsageEmptyState({
   );
 }
 
-function TritonAiApiKeySetting() {
-  const desktopBridge = window.desktopBridge;
-  const [apiKey, setApiKey] = useState("");
-  const [isSaving, setIsSaving] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
-
-  if (!desktopBridge) return null;
-
-  const replacement = apiKey.trim();
-  const saveReplacement = async () => {
-    if (replacement.length === 0 || isSaving) return;
-    setIsSaving(true);
-    setSaveError(null);
-    try {
-      const result = await desktopBridge.replaceTritonAiApiKey(replacement);
-      if (result.status === "error") {
-        setIsSaving(false);
-        setSaveError(result.message);
-        return;
-      }
-      setApiKey("");
-      window.setTimeout(() => {
-        setIsSaving(false);
-        setSaveError(
-          "The key was saved, but TritonAI Harness did not restart. Restart the app manually to use the new key.",
-        );
-      }, 5_000);
-    } catch (error) {
-      setIsSaving(false);
-      setSaveError(
-        error instanceof Error
-          ? `Desktop request failed: ${error.message}`
-          : "The desktop request failed with an unknown error.",
-      );
-    }
-  };
-
-  return (
-    <SettingsSection title="API key">
-      <form
-        className="space-y-4 px-4 py-5 sm:px-5"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void saveReplacement();
-        }}
-      >
-        <div>
-          <label
-            htmlFor="tritonai-api-key-replacement"
-            className="text-xs font-medium text-foreground"
-          >
-            Replace this desktop's TritonAI API key
-          </label>
-          <p className="mt-1 max-w-2xl text-xs leading-relaxed text-muted-foreground/80">
-            The existing key is never displayed. Saving securely replaces the desktop override and
-            restarts TritonAI Harness so future Codex, usage, and voice transcription requests all
-            use the new key. Installer updates will not overwrite this choice.
-          </p>
-        </div>
-        <div className="flex max-w-2xl flex-col gap-2 sm:flex-row">
-          <Input
-            id="tritonai-api-key-replacement"
-            type="password"
-            maxLength={8_192}
-            autoComplete="new-password"
-            spellCheck={false}
-            value={apiKey}
-            placeholder="Enter replacement API key"
-            disabled={isSaving}
-            onChange={(event) => {
-              setApiKey(event.target.value);
-              setSaveError(null);
-            }}
-          />
-          <Button type="submit" disabled={replacement.length === 0 || isSaving}>
-            {isSaving ? "Saving…" : "Save and Restart"}
-          </Button>
-        </div>
-        {saveError ? (
-          <p className="text-xs text-destructive" role="alert">
-            {saveError}
-          </p>
-        ) : null}
-      </form>
-    </SettingsSection>
-  );
-}
-
-export function UsageSettingsPanel() {
+export function TritonAiUsageSnapshot() {
   const primaryEnvironment = usePrimaryEnvironment();
   const environmentId = primaryEnvironment?.environmentId ?? null;
   const { data, error, isPending, refresh } = useEnvironmentQuery(
@@ -385,12 +303,16 @@ export function UsageSettingsPanel() {
   const fetchedAt = data ? formatUsageDate(data.fetchedAt) : null;
 
   return (
-    <SettingsPageContainer>
-      <TritonAiApiKeySetting />
-      <SettingsSection
-        title="Usage snapshot"
-        aria-busy={isPending}
-        headerAction={
+    <SettingsSection
+      title="TritonAI quota"
+      aria-busy={isPending}
+      headerAction={
+        <div className="flex items-center gap-1">
+          {window.desktopBridge ? (
+            <Button render={<Link to="/settings/providers" />} size="xs" variant="ghost">
+              Manage access
+            </Button>
+          ) : null}
           <Button
             size="xs"
             variant="ghost"
@@ -400,8 +322,10 @@ export function UsageSettingsPanel() {
             <RefreshCwIcon className={cn(isPending && "animate-spin motion-reduce:animate-none")} />
             Refresh
           </Button>
-        }
-      >
+        </div>
+      }
+    >
+      <div className="overflow-hidden rounded-2xl border border-border/70 bg-card shadow-[0_1px_1px_rgb(0_0_0/0.03)]">
         {viewState === "loading" ? <UsageLoadingState /> : null}
         {viewState === "no-environment" ? (
           <UsageEmptyState
@@ -465,7 +389,7 @@ export function UsageSettingsPanel() {
           This is a live quota snapshot from TritonAI, not a usage history. The API key remains on
           the server.
         </div>
-      </SettingsSection>
-    </SettingsPageContainer>
+      </div>
+    </SettingsSection>
   );
 }

@@ -25,6 +25,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import * as DesktopBackendManager from "./DesktopBackendManager.ts";
 import * as DesktopObservability from "../app/DesktopObservability.ts";
 import * as DesktopTelemetryPublisher from "../telemetry/DesktopTelemetryPublisher.ts";
+import * as DesktopWslEnvironment from "../wsl/DesktopWslEnvironment.ts";
 
 const decodeDesktopBackendBootstrap = Schema.decodeEffect(
   Schema.fromJsonString(DesktopBackendBootstrap),
@@ -125,6 +126,10 @@ interface MakeInstanceInput {
   readonly onPreflightFailed?: (
     failure: DesktopBackendManager.PreflightFailure,
   ) => Effect.Effect<boolean>;
+  readonly onRepeatedStartupFailure?: (failure: {
+    readonly reason: string;
+    readonly attempt: number;
+  }) => Effect.Effect<void>;
   readonly config?: DesktopBackendManager.DesktopBackendStartConfig;
   readonly configResolve?: Effect.Effect<
     DesktopBackendManager.DesktopBackendStartConfig,
@@ -134,6 +139,7 @@ interface MakeInstanceInput {
   readonly desktopTelemetryPublisher?: Partial<
     DesktopTelemetryPublisher.DesktopTelemetryPublisher["Service"]
   >;
+  readonly pruneRuntimes?: (distro: string | null, runtimeId: string) => Effect.Effect<void>;
 }
 
 // Helper that constructs a primary backend instance using the factory
@@ -169,6 +175,9 @@ function makeTestInstance(input: MakeInstanceInput) {
       removeControlSource: () => Effect.void,
       ...input.desktopTelemetryPublisher,
     }),
+    DesktopWslEnvironment.layerTest(
+      input.pruneRuntimes === undefined ? {} : { pruneRuntimes: input.pruneRuntimes },
+    ),
   );
 
   const instance = DesktopBackendManager.makeBackendInstance({
@@ -178,6 +187,9 @@ function makeTestInstance(input: MakeInstanceInput) {
     ...(input.onReady ? { onReady: () => input.onReady! } : {}),
     ...(input.onShutdown ? { onShutdown: () => input.onShutdown! } : {}),
     ...(input.onPreflightFailed ? { onPreflightFailed: input.onPreflightFailed } : {}),
+    ...(input.onRepeatedStartupFailure
+      ? { onRepeatedStartupFailure: input.onRepeatedStartupFailure }
+      : {}),
   });
 
   return instance.pipe(Effect.provide(servicesLayer));
@@ -306,6 +318,55 @@ describe("DesktopBackendManager", () => {
         );
       }).pipe(Effect.provide(layer));
     }),
+  );
+
+  it.effect("terminates a child that stays alive past the readiness timeout", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const requested = yield* Deferred.make<HttpClientRequest.HttpClientRequest>();
+        const killed = yield* Deferred.make<void>();
+        const readinessFailed =
+          yield* Deferred.make<DesktopBackendManager.BackendReadinessTimeoutError>();
+        let killCount = 0;
+        const spawnerLayer = Layer.succeed(
+          ChildProcessSpawner.ChildProcessSpawner,
+          ChildProcessSpawner.make(() =>
+            Effect.succeed(
+              makeProcess({
+                exitCode: Deferred.await(killed).pipe(Effect.as(ChildProcessSpawner.ExitCode(143))),
+                kill: () =>
+                  Effect.sync(() => {
+                    killCount += 1;
+                  }).pipe(Effect.andThen(Deferred.succeed(killed, void 0)), Effect.asVoid),
+              }),
+            ),
+          ),
+        );
+        const httpLayer = httpClientLayer((request) =>
+          Deferred.succeed(requested, request).pipe(Effect.andThen(Effect.never)),
+        );
+
+        const run = yield* DesktopBackendManager.runBackendProcess({
+          ...baseConfig,
+          readinessTimeout: Duration.millis(50),
+          desktopTelemetryStream: Stream.empty,
+          onReadinessFailure: (error) =>
+            Deferred.succeed(readinessFailed, error).pipe(Effect.asVoid),
+        }).pipe(Effect.forkChild, Effect.provide(Layer.merge(spawnerLayer, httpLayer)));
+
+        yield* Deferred.await(requested);
+        yield* TestClock.adjust(Duration.millis(50));
+        const error = yield* Deferred.await(readinessFailed);
+        const exit = yield* Fiber.join(run);
+
+        assert.instanceOf(error, DesktopBackendManager.BackendReadinessTimeoutError);
+        assert.equal(killCount, 1);
+        assert.deepEqual(exit, {
+          code: Option.some(ChildProcessSpawner.ExitCode(143)),
+          reason: "code=143",
+        });
+      }).pipe(Effect.provide(TestClock.layer())),
+    ),
   );
 
   it.effect("reports bootstrap encoding failures with stable process context", () =>
@@ -649,10 +710,13 @@ describe("DesktopBackendManager", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const requestUrls: Array<string> = [];
+        const prunedRuntimes: Array<[string | null, string]> = [];
         const statuses = [503, 200];
         let readyCount = 0;
         const firstRequest = yield* Deferred.make<void>();
-        const ready = yield* Deferred.make<void>();
+        const backendReady = yield* Deferred.make<void>();
+        const processExit = yield* Deferred.make<void>();
+        const pruneComplete = yield* Deferred.make<void>();
         const exited = yield* Queue.unbounded<void>();
 
         const spawnerLayer = Layer.succeed(
@@ -660,7 +724,9 @@ describe("DesktopBackendManager", () => {
           ChildProcessSpawner.make(() =>
             Effect.succeed(
               makeProcess({
-                exitCode: Deferred.await(ready).pipe(Effect.as(ChildProcessSpawner.ExitCode(0))),
+                exitCode: Deferred.await(processExit).pipe(
+                  Effect.as(ChildProcessSpawner.ExitCode(0)),
+                ),
               }),
             ),
           ),
@@ -668,6 +734,15 @@ describe("DesktopBackendManager", () => {
 
         const instance = yield* makeTestInstance({
           spawnerLayer,
+          config: {
+            ...baseConfig,
+            runningDistro: "Ubuntu",
+            wslRuntimeId: "1.2.3-x64",
+          },
+          pruneRuntimes: (distro, runtimeId) =>
+            Effect.sync(() => {
+              prunedRuntimes.push([distro, runtimeId]);
+            }).pipe(Effect.andThen(Deferred.succeed(pruneComplete, void 0)), Effect.asVoid),
           httpClientLayer: httpClientLayer((request) =>
             Effect.gen(function* () {
               const status = statuses.shift();
@@ -679,7 +754,7 @@ describe("DesktopBackendManager", () => {
           ),
           onReady: Effect.sync(() => {
             readyCount += 1;
-          }).pipe(Effect.andThen(Deferred.succeed(ready, void 0)), Effect.asVoid),
+          }).pipe(Effect.andThen(Deferred.succeed(backendReady, void 0)), Effect.asVoid),
           backendOutputLog: {
             persistFailure: () => Queue.offer(exited, void 0).pipe(Effect.asVoid),
           },
@@ -689,12 +764,17 @@ describe("DesktopBackendManager", () => {
         yield* Deferred.await(firstRequest);
 
         assert.equal(readyCount, 0);
+        assert.deepEqual(prunedRuntimes, []);
         assert.deepEqual(requestUrls, ["http://127.0.0.1:3773/.well-known/t3/environment"]);
 
         yield* TestClock.adjust(Duration.millis(100));
+        yield* Deferred.await(backendReady);
+        yield* Deferred.await(pruneComplete);
+        yield* Deferred.succeed(processExit, void 0);
         yield* Queue.take(exited);
 
         assert.equal(readyCount, 1);
+        assert.deepEqual(prunedRuntimes, [["Ubuntu", "1.2.3-x64"]]);
         assert.deepEqual(requestUrls, [
           "http://127.0.0.1:3773/.well-known/t3/environment",
           "http://127.0.0.1:3773/.well-known/t3/environment",
@@ -1142,6 +1222,94 @@ describe("DesktopBackendManager", () => {
         assert.equal(yield* Queue.size(starts), 0);
         yield* TestClock.adjust(Duration.millis(1));
         assert.equal(yield* Queue.take(starts), 3);
+      }).pipe(Effect.provide(TestClock.layer())),
+    ),
+  );
+
+  it.effect("surfaces and stops a backend that repeatedly exits before readiness", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const starts = yield* Queue.unbounded<number>();
+        const surfaced = yield* Queue.unbounded<{ reason: string; attempt: number }>();
+        let startCount = 0;
+
+        const spawnerLayer = Layer.succeed(
+          ChildProcessSpawner.ChildProcessSpawner,
+          ChildProcessSpawner.make(() =>
+            Effect.sync(() => {
+              startCount += 1;
+              return makeProcess({
+                exitCode: Queue.offer(starts, startCount).pipe(
+                  Effect.as(ChildProcessSpawner.ExitCode(1)),
+                ),
+              });
+            }),
+          ),
+        );
+
+        const instance = yield* makeTestInstance({
+          spawnerLayer,
+          httpClientLayer: httpClientLayer(() => Effect.never),
+          onRepeatedStartupFailure: (failure) => Queue.offer(surfaced, failure).pipe(Effect.asVoid),
+        });
+
+        yield* instance.start;
+        assert.equal(yield* Queue.take(starts), 1);
+        yield* TestClock.adjust(Duration.millis(500));
+        assert.equal(yield* Queue.take(starts), 2);
+        yield* TestClock.adjust(Duration.seconds(1));
+        assert.equal(yield* Queue.take(starts), 3);
+
+        assert.deepEqual(yield* Queue.take(surfaced), { reason: "code=1", attempt: 3 });
+        yield* TestClock.adjust(Duration.seconds(30));
+        assert.equal(startCount, 3);
+        const stopped = yield* instance.snapshot;
+        assert.equal(stopped.desiredRunning, false);
+        assert.equal(stopped.restartScheduled, false);
+      }).pipe(Effect.provide(TestClock.layer())),
+    ),
+  );
+
+  it.effect("surfaces and stops repeated configuration failures from the initial start", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const configAttempts = yield* Ref.make(0);
+        const surfaced = yield* Queue.unbounded<{ reason: string; attempt: number }>();
+        const configFailure = PlatformError.systemError({
+          _tag: "Unknown",
+          module: "DesktopBackendManager",
+          method: "configResolve",
+          description: "transient initial configuration failure",
+        });
+        const spawnerLayer = Layer.succeed(
+          ChildProcessSpawner.ChildProcessSpawner,
+          ChildProcessSpawner.make(() => Effect.die("configuration failure must prevent spawn")),
+        );
+        const instance = yield* makeTestInstance({
+          spawnerLayer,
+          configResolve: Ref.updateAndGet(configAttempts, (attempt) => attempt + 1).pipe(
+            Effect.andThen(Effect.fail(configFailure)),
+          ),
+          httpClientLayer: httpClientLayer(() => Effect.never),
+          onRepeatedStartupFailure: (failure) => Queue.offer(surfaced, failure).pipe(Effect.asVoid),
+        });
+
+        yield* instance.start;
+        assert.equal(yield* Ref.get(configAttempts), 1);
+        yield* TestClock.adjust(Duration.millis(500));
+        assert.equal(yield* Ref.get(configAttempts), 2);
+        yield* TestClock.adjust(Duration.seconds(1));
+
+        assert.equal(yield* Ref.get(configAttempts), 3);
+        assert.deepEqual(yield* Queue.take(surfaced), {
+          reason: "failed to generate desktop backend configuration",
+          attempt: 3,
+        });
+        yield* TestClock.adjust(Duration.seconds(30));
+        assert.equal(yield* Ref.get(configAttempts), 3);
+        const stopped = yield* instance.snapshot;
+        assert.equal(stopped.desiredRunning, false);
+        assert.equal(stopped.restartScheduled, false);
       }).pipe(Effect.provide(TestClock.layer())),
     ),
   );

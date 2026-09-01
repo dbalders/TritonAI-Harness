@@ -498,6 +498,7 @@ export const resolveServerConfig = (
     const desktopTelemetryFd = bootstrap?.desktopTelemetryFd;
     const desktopTelemetryControlFd = bootstrap?.desktopTelemetryControlFd;
     const resourceMonitorPath = bootstrap?.resourceMonitorPath;
+    const computerUseMcp = bootstrap?.computerUseMcp;
     const autoBootstrapProjectFromCwd = Option.getOrElse(
       resolveOptionPrecedence(
         Option.fromUndefinedOr(options?.forceAutoBootstrapProjectFromCwd),
@@ -580,6 +581,7 @@ export const resolveServerConfig = (
       desktopTelemetryFd,
       desktopTelemetryControlFd,
       resourceMonitorPath,
+      computerUseMcp,
       autoBootstrapProjectFromCwd,
       logWebSocketEvents,
       tailscaleServeEnabled,
@@ -664,7 +666,7 @@ export const DurationFromString = Schema.String.pipe(
           return Effect.succeed(duration);
         }
         return Effect.fail(
-          new SchemaIssue.InvalidValue(Option.some(value), {
+          new SchemaIssue.InvalidValue({
             message: "Invalid duration. Use values like 5m, 1h, 30d, or 15 minutes.",
           }),
         );

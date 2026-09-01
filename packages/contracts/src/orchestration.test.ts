@@ -1,12 +1,15 @@
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
 
 import {
   DEFAULT_PROVIDER_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
+  ClientOrchestrationCommand,
   ModelSelection,
   OrchestrationCommand,
+  OrchestrationDispatchCommandError,
   OrchestrationEvent,
   OrchestrationGetFullThreadDiffInput,
   OrchestrationGetTurnDiffInput,
@@ -18,11 +21,15 @@ import {
   OrchestrationThread,
   OrchestrationThreadShell,
   ProjectCreateCommand,
+  OrchestrationMessage,
+  ThreadMessageSentPayload,
   ThreadMetaUpdatedPayload,
   ThreadTurnStartCommand,
   ThreadCreatedPayload,
   ThreadTurnDiff,
   ThreadTurnStartRequestedPayload,
+  isProviderSendTurnSupportedImageMimeType,
+  PROVIDER_SEND_TURN_MAX_FILE_BYTES,
 } from "./orchestration.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 
@@ -33,6 +40,9 @@ const decodeProjectCreateCommand = Schema.decodeUnknownEffect(ProjectCreateComma
 const decodeProjectCreatedPayload = Schema.decodeUnknownEffect(ProjectCreatedPayload);
 const decodeProjectMetaUpdatedPayload = Schema.decodeUnknownEffect(ProjectMetaUpdatedPayload);
 const decodeThreadTurnStartCommand = Schema.decodeUnknownEffect(ThreadTurnStartCommand);
+const decodeClientOrchestrationCommand = Schema.decodeUnknownEffect(ClientOrchestrationCommand);
+const decodeOrchestrationMessage = Schema.decodeUnknownEffect(OrchestrationMessage);
+const decodeThreadMessageSentPayload = Schema.decodeUnknownEffect(ThreadMessageSentPayload);
 const decodeThreadTurnStartRequestedPayload = Schema.decodeUnknownEffect(
   ThreadTurnStartRequestedPayload,
 );
@@ -53,6 +63,19 @@ const decodeThreadCreatedPayload = Schema.decodeUnknownEffect(ThreadCreatedPaylo
 const decodeOrchestrationCommand = Schema.decodeUnknownEffect(OrchestrationCommand);
 const decodeOrchestrationEvent = Schema.decodeUnknownEffect(OrchestrationEvent);
 const decodeThreadMetaUpdatedPayload = Schema.decodeUnknownEffect(ThreadMetaUpdatedPayload);
+const decodeDispatchCommandError = Schema.decodeUnknownEffect(OrchestrationDispatchCommandError);
+
+it.effect("decodes a dispatch error after its bootstrap thread was deleted", () =>
+  Effect.gen(function* () {
+    const error = yield* decodeDispatchCommandError({
+      _tag: "OrchestrationDispatchCommandError",
+      message: "Failed to create worktree.",
+      bootstrapThreadDisposition: "deleted",
+    });
+
+    assert.strictEqual(error.bootstrapThreadDisposition, "deleted");
+  }),
+);
 
 it.effect("parses turn diff input when fromTurnCount <= toTurnCount", () =>
   Effect.gen(function* () {
@@ -226,6 +249,273 @@ it.effect("decodes thread.turn.start defaults for provider and runtime mode", ()
   }),
 );
 
+it.effect("accepts inline images, uploaded images, and uploaded files from clients", () =>
+  Effect.gen(function* () {
+    const command = yield* decodeClientOrchestrationCommand({
+      type: "thread.turn.start",
+      commandId: "cmd-turn-attachments",
+      threadId: "thread-1",
+      message: {
+        messageId: "msg-attachments",
+        role: "user",
+        text: "hello",
+        attachments: [
+          {
+            type: "image",
+            name: "legacy.png",
+            mimeType: "image/png",
+            sizeBytes: 3,
+            dataUrl: "data:image/png;base64,YWJj",
+          },
+          {
+            type: "image",
+            id: "pending-00000000-0000-4000-8000-000000000001",
+            name: "uploaded.png",
+            mimeType: "image/png",
+            sizeBytes: 3,
+          },
+          {
+            type: "file",
+            id: "pending-00000000-0000-4000-8000-000000000002-pdf",
+            name: "report.pdf",
+            mimeType: "application/pdf",
+            sizeBytes: 3,
+          },
+        ],
+      },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    if (command.type !== "thread.turn.start") {
+      assert.fail(`Expected thread.turn.start, received ${command.type}.`);
+    }
+    assert.strictEqual(command.message.attachments.length, 3);
+    assert.strictEqual("dataUrl" in command.message.attachments[0]!, true);
+    assert.strictEqual("id" in command.message.attachments[1]!, true);
+    assert.strictEqual(command.message.attachments[2]!.type, "file");
+  }),
+);
+
+it.effect("rejects more than eight attachments in a client turn", () =>
+  Effect.gen(function* () {
+    const result = yield* Effect.exit(
+      decodeClientOrchestrationCommand({
+        type: "thread.turn.start",
+        commandId: "cmd-file-limit",
+        threadId: "thread-1",
+        message: {
+          messageId: "msg-file-limit",
+          role: "user",
+          text: "summarize them",
+          attachments: Array.from({ length: 9 }, (_, index) => ({
+            type: "file",
+            id: `thread-1-00000000-0000-4000-8000-00000000000${index}`,
+            name: `file-${index}.txt`,
+            mimeType: "text/plain",
+            sizeBytes: 1,
+          })),
+        },
+        runtimeMode: "auto-accept-edits",
+        interactionMode: "default",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+    assert.strictEqual(result._tag, "Failure");
+  }),
+);
+
+it.effect("rejects stored files over the aggregate upload limit in both turn schemas", () =>
+  Effect.gen(function* () {
+    const baseCommand = {
+      type: "thread.turn.start" as const,
+      commandId: "cmd-aggregate-file-limit",
+      threadId: "thread-1",
+      message: {
+        messageId: "msg-aggregate-file-limit",
+        role: "user" as const,
+        text: "summarize them",
+      },
+      runtimeMode: "auto-accept-edits" as const,
+      interactionMode: "default" as const,
+      createdAt: "2026-01-01T00:00:00.000Z",
+    };
+    const firstFileAttachment = {
+      type: "file" as const,
+      id: "thread-1-00000000-0000-4000-8000-000000000001",
+      name: "large.txt",
+      mimeType: "text/plain",
+      sizeBytes: 30 * 1024 * 1024,
+    };
+    const secondFileAttachment = {
+      type: "file" as const,
+      id: "thread-1-00000000-0000-4000-8000-000000000002",
+      name: "other-large.txt",
+      mimeType: "text/plain",
+      sizeBytes: 21 * 1024 * 1024,
+    };
+
+    const persistedResult = yield* Effect.exit(
+      decodeThreadTurnStartCommand({
+        ...baseCommand,
+        message: {
+          ...baseCommand.message,
+          attachments: [firstFileAttachment, secondFileAttachment],
+        },
+      }),
+    );
+    const clientResult = yield* Effect.exit(
+      decodeClientOrchestrationCommand({
+        ...baseCommand,
+        message: {
+          ...baseCommand.message,
+          attachments: [firstFileAttachment, secondFileAttachment],
+        },
+      }),
+    );
+
+    assert.strictEqual(persistedResult._tag, "Failure");
+    assert.strictEqual(clientResult._tag, "Failure");
+  }),
+);
+
+it.effect("preserves the existing per-image limits without adding an aggregate cap", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeThreadTurnStartCommand({
+      type: "thread.turn.start",
+      commandId: "cmd-existing-image-limits",
+      threadId: "thread-1",
+      message: {
+        messageId: "msg-existing-image-limits",
+        role: "user",
+        text: "compare these images",
+        attachments: Array.from({ length: 6 }, (_, index) => ({
+          type: "image" as const,
+          id: `thread-1-00000000-0000-4000-8000-00000000000${index}`,
+          name: `image-${index}.png`,
+          mimeType: "image/png",
+          sizeBytes: 10 * 1024 * 1024,
+        })),
+      },
+      runtimeMode: "auto-accept-edits",
+      interactionMode: "default",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    assert.strictEqual(parsed.message.attachments.length, 6);
+  }),
+);
+
+it.effect("accepts a large local file reference without copying its bytes", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeClientOrchestrationCommand({
+      type: "thread.turn.start",
+      commandId: "cmd-local-file",
+      threadId: "thread-1",
+      message: {
+        messageId: "msg-local-file",
+        role: "user",
+        text: "analyze this dataset",
+        attachments: [
+          {
+            type: "file",
+            id: "local-file-1",
+            name: "large.csv",
+            mimeType: "text/csv",
+            sizeBytes: 100 * 1024 * 1024,
+            path: "/Users/david/Downloads/large.csv",
+          },
+        ],
+      },
+      runtimeMode: "auto-accept-edits",
+      interactionMode: "default",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    if (parsed.type !== "thread.turn.start") {
+      assert.fail(`Expected thread.turn.start, got ${parsed.type}`);
+    }
+    const attachment = parsed.message.attachments[0];
+    assert.strictEqual(attachment?.type, "file");
+    assert.isTrue(attachment?.type === "file" && "path" in attachment);
+  }),
+);
+
+// Attachments ride on persisted events and thread streams with no client
+// version negotiation. A type this build does not know must decode instead of
+// failing the whole message.
+it.effect("tolerates attachment types from newer builds when decoding messages", () =>
+  Effect.gen(function* () {
+    const futureAttachment = {
+      type: "somethingnew",
+      id: "thread-1-00000000-0000-4000-8000-000000000003-glb",
+      name: "scene.glb",
+      mimeType: "model/gltf-binary",
+      sizeBytes: 12,
+    };
+
+    const message = yield* decodeOrchestrationMessage({
+      id: "message-1",
+      role: "user",
+      text: "look at this",
+      attachments: [futureAttachment],
+      turnId: null,
+      streaming: false,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.strictEqual(message.attachments?.length, 1);
+    assert.strictEqual(message.attachments?.[0]!.type, "somethingnew");
+
+    const payload = yield* decodeThreadMessageSentPayload({
+      threadId: "thread-1",
+      messageId: "message-1",
+      role: "user",
+      text: "look at this",
+      attachments: [futureAttachment],
+      turnId: null,
+      streaming: false,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.strictEqual(payload.attachments?.[0]!.type, "somethingnew");
+  }),
+);
+
+// The tolerant member must not catch malformed known attachments: a file over
+// the size cap or an image with a bad mime has to fail its own schema, not
+// slide through the open one with those constraints unchecked.
+it.effect("rejects malformed known attachment types instead of tolerating them", () =>
+  Effect.gen(function* () {
+    const base = {
+      id: "thread-1-00000000-0000-4000-8000-000000000003-pdf",
+      name: "report.pdf",
+      mimeType: "application/pdf",
+    };
+    const decode = (attachment: unknown) =>
+      decodeOrchestrationMessage({
+        id: "message-1",
+        role: "user",
+        text: "look at this",
+        attachments: [attachment],
+        turnId: null,
+        streaming: false,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      });
+
+    const oversizedFile = yield* Effect.exit(
+      decode({ ...base, type: "file", sizeBytes: PROVIDER_SEND_TURN_MAX_FILE_BYTES + 1 }),
+    );
+    assert.strictEqual(Exit.isFailure(oversizedFile), true);
+
+    const badMimeImage = yield* Effect.exit(
+      decode({ ...base, type: "image", mimeType: "application/pdf", sizeBytes: 12 }),
+    );
+    assert.strictEqual(Exit.isFailure(badMimeImage), true);
+  }),
+);
+
 it.effect("preserves explicit provider and runtime mode in thread.turn.start", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeThreadTurnStartCommand({
@@ -320,12 +610,20 @@ it.effect("decodes thread.meta-updated payloads with explicit provider", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeThreadMetaUpdatedPayload({
       threadId: "thread-1",
+      regenerateTitle: true,
+      previousTitle: "Previous title",
+      titleRegeneration: {
+        requestId: "cmd-title-regenerate",
+        startedAt: "2026-01-01T00:00:00.000Z",
+      },
       modelSelection: {
         provider: "claudeAgent",
         model: "claude-opus-4-6",
       },
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
+    assert.strictEqual(parsed.previousTitle, "Previous title");
+    assert.strictEqual(parsed.titleRegeneration?.requestId, "cmd-title-regenerate");
     assert.strictEqual(parsed.modelSelection?.instanceId, "claudeAgent");
   }),
 );
@@ -628,6 +926,75 @@ it.effect("accepts a title seed in thread.turn.start", () =>
   }),
 );
 
+it.effect("accepts a title regeneration intent in thread.meta.update", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeOrchestrationCommand({
+      type: "thread.meta.update",
+      commandId: "cmd-title-regenerate",
+      threadId: "thread-1",
+      regenerateTitle: true,
+    });
+    assert.strictEqual(parsed.type, "thread.meta.update");
+    if (parsed.type === "thread.meta.update") {
+      assert.strictEqual(parsed.regenerateTitle, true);
+    }
+  }),
+);
+
+it.effect("accepts a linked pull request in thread.meta.update", () =>
+  Effect.gen(function* () {
+    const linkedPullRequest = {
+      projectId: "project-1",
+      repository: "pingdotgg/t3code",
+      number: 42,
+      url: "https://github.com/pingdotgg/t3code/pull/42",
+    };
+    const parsed = yield* decodeOrchestrationCommand({
+      type: "thread.meta.update",
+      commandId: "cmd-link-pull-request",
+      threadId: "thread-1",
+      linkedPullRequest,
+    });
+
+    assert.strictEqual(parsed.type, "thread.meta.update");
+    if (parsed.type === "thread.meta.update") {
+      assert.deepStrictEqual(parsed.linkedPullRequest, linkedPullRequest);
+    }
+  }),
+);
+
+it.effect("accepts an internal title regeneration completion", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeOrchestrationCommand({
+      type: "thread.title.regeneration.complete",
+      commandId: "cmd-title-regeneration-complete",
+      threadId: "thread-1",
+      requestId: "cmd-title-regenerate",
+      title: "Updated title",
+    });
+    assert.strictEqual(parsed.type, "thread.title.regeneration.complete");
+    if (parsed.type === "thread.title.regeneration.complete") {
+      assert.strictEqual(parsed.requestId, "cmd-title-regenerate");
+      assert.strictEqual(parsed.title, "Updated title");
+    }
+  }),
+);
+
+it.effect("rejects an explicit title combined with title regeneration", () =>
+  Effect.gen(function* () {
+    const result = yield* Effect.exit(
+      decodeOrchestrationCommand({
+        type: "thread.meta.update",
+        commandId: "cmd-title-regenerate-with-title",
+        threadId: "thread-1",
+        title: "Explicit title",
+        regenerateTitle: true,
+      }),
+    );
+    assert.strictEqual(result._tag, "Failure");
+  }),
+);
+
 it.effect("accepts a source proposed plan reference in thread.turn.start", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeThreadTurnStartCommand({
@@ -858,3 +1225,31 @@ it.effect("ModelSelection rejects malformed instance ids", () =>
     assert.strictEqual(result._tag, "Failure");
   }),
 );
+
+it.effect("project favicon overrides accept only supported image files", () =>
+  Effect.gen(function* () {
+    const valid = yield* decodeOrchestrationCommand({
+      type: "project.meta.update",
+      commandId: "cmd-project-favicon",
+      projectId: "project-1",
+      faviconPath: "brand/icon.svg",
+    });
+    assert.strictEqual(valid.type, "project.meta.update");
+
+    const invalid = yield* Effect.exit(
+      decodeOrchestrationCommand({
+        type: "project.meta.update",
+        commandId: "cmd-project-secret",
+        projectId: "project-1",
+        faviconPath: ".env",
+      }),
+    );
+    assert.strictEqual(invalid._tag, "Failure");
+  }),
+);
+
+it("isProviderSendTurnSupportedImageMimeType accepts raster formats and rejects svg", () => {
+  assert.strictEqual(isProviderSendTurnSupportedImageMimeType("image/png"), true);
+  assert.strictEqual(isProviderSendTurnSupportedImageMimeType("IMAGE/JPEG"), true);
+  assert.strictEqual(isProviderSendTurnSupportedImageMimeType("image/svg+xml"), false);
+});

@@ -1,15 +1,10 @@
-import { scopeProjectRef } from "@t3tools/client-runtime/environment";
-import { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
 
-import { useComposerDraftStore } from "../composerDraftStore";
+import { DraftId, useComposerDraftStore } from "../composerDraftStore";
 import { TRITONAI_FIRST_RUN_PROMPT } from "../tritonAiWorkspace";
-import { createNewThreadDraft } from "./useHandleNewThread";
+import { seedNewDraftPrompt } from "./useHandleNewThread";
 
-const PROJECT_REF = scopeProjectRef(
-  EnvironmentId.make("primary"),
-  ProjectId.make("tritonai-onboarding"),
-);
+const DRAFT_ID = DraftId.make("draft-tritonai-onboarding");
 
 function resetComposerDraftStore() {
   useComposerDraftStore.setState({
@@ -22,62 +17,23 @@ function resetComposerDraftStore() {
   });
 }
 
-describe("createNewThreadDraft", () => {
-  beforeEach(resetComposerDraftStore);
+describe("seedNewDraftPrompt", () => {
+  beforeEach(() => {
+    resetComposerDraftStore();
+    useComposerDraftStore.getState().setPrompt(DRAFT_ID, "");
+  });
 
-  it("seeds the onboarding prompt through the canonical new-thread path", () => {
-    const draftId = createNewThreadDraft({
-      projectRef: PROJECT_REF,
-      logicalProjectKey: "tritonai-onboarding",
-      environmentSettings: {
-        defaultThreadEnvMode: "local",
-        newWorktreesStartFromOrigin: false,
-      },
-      options: { newDraftPrompt: TRITONAI_FIRST_RUN_PROMPT },
-    });
+  it("seeds the TritonAI onboarding prompt through the new-thread path", () => {
+    seedNewDraftPrompt(DRAFT_ID, TRITONAI_FIRST_RUN_PROMPT);
 
-    expect(useComposerDraftStore.getState().getComposerDraft(draftId)?.prompt).toBe(
+    expect(useComposerDraftStore.getState().getComposerDraft(DRAFT_ID)?.prompt).toBe(
       TRITONAI_FIRST_RUN_PROMPT,
     );
-    expect(Object.keys(useComposerDraftStore.getState().draftThreadsByThreadKey)).toHaveLength(1);
   });
 
-  it("honors worktree and start-from-origin environment preferences", () => {
-    const draftId = createNewThreadDraft({
-      projectRef: PROJECT_REF,
-      logicalProjectKey: "tritonai-onboarding",
-      environmentSettings: {
-        defaultThreadEnvMode: "worktree",
-        newWorktreesStartFromOrigin: true,
-      },
-    });
+  it("leaves a new draft unchanged when no seed prompt is provided", () => {
+    seedNewDraftPrompt(DRAFT_ID, undefined);
 
-    expect(useComposerDraftStore.getState().getDraftSession(draftId)).toMatchObject({
-      envMode: "worktree",
-      startFromOrigin: true,
-    });
-  });
-
-  it("uses the last selected runtime mode for a fresh draft", () => {
-    useComposerDraftStore.getState().setRuntimeMode(
-      {
-        environmentId: PROJECT_REF.environmentId,
-        threadId: ThreadId.make("existing-thread"),
-      },
-      "full-access",
-    );
-
-    const draftId = createNewThreadDraft({
-      projectRef: PROJECT_REF,
-      logicalProjectKey: "tritonai-onboarding",
-      environmentSettings: {
-        defaultThreadEnvMode: "local",
-        newWorktreesStartFromOrigin: false,
-      },
-    });
-
-    expect(useComposerDraftStore.getState().getDraftSession(draftId)?.runtimeMode).toBe(
-      "full-access",
-    );
+    expect(useComposerDraftStore.getState().getComposerDraft(DRAFT_ID)?.prompt ?? "").toBe("");
   });
 });

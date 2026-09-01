@@ -2,6 +2,13 @@ import * as Schema from "effect/Schema";
 
 import { PortSchema, PositiveInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
+export const DesktopMcpServerConfiguration = Schema.Struct({
+  command: TrimmedNonEmptyString,
+  args: Schema.Array(Schema.String),
+  environment: Schema.Record(Schema.String, Schema.String),
+});
+export type DesktopMcpServerConfiguration = typeof DesktopMcpServerConfiguration.Type;
+
 export const DesktopBackendBootstrap = Schema.Struct({
   // The first key encrypts new server-secret envelopes. Any remaining keys
   // are rotation fallbacks and are used only to decrypt and lazily re-encrypt
@@ -27,6 +34,9 @@ export const DesktopBackendBootstrap = Schema.Struct({
   desktopTelemetryFd: Schema.optionalKey(PositiveInt),
   desktopTelemetryControlFd: Schema.optionalKey(PositiveInt),
   resourceMonitorPath: Schema.optionalKey(TrimmedNonEmptyString),
+  // Local-only process details supplied over the inherited bootstrap pipe.
+  // This is intentionally omitted for WSL and non-desktop server launches.
+  computerUseMcp: Schema.optionalKey(DesktopMcpServerConfiguration),
 });
 
 export type DesktopBackendBootstrap = typeof DesktopBackendBootstrap.Type;

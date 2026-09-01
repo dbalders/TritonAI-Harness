@@ -1,3 +1,4 @@
+import type { EnvironmentConnectionPhase } from "../connection/presentation.ts";
 import type {
   CommandId,
   EnvironmentId,
@@ -7,11 +8,12 @@ import type {
   SourceControlProviderKind,
   SourceControlRepositoryInfo,
 } from "@t3tools/contracts";
+import { isSourceControlProviderReady } from "@t3tools/shared/sourceControl";
 import * as Arr from "effect/Array";
-import * as Option from "effect/Option";
 import * as Order from "effect/Order";
 
 import {
+  appendBrowsePathSegment,
   ensureBrowseDirectoryPath,
   findProjectByPath,
   inferProjectTitleFromPath,
@@ -26,6 +28,12 @@ export type AddProjectRemoteProviderKind = Extract<
   "github" | "gitlab" | "bitbucket" | "azure-devops"
 >;
 export type AddProjectRemoteSource = AddProjectRemoteProviderKind | "url";
+
+export function canCreateProjectInEnvironment(
+  connectionPhase: EnvironmentConnectionPhase | null | undefined,
+): boolean {
+  return connectionPhase === "connected";
+}
 
 export type AddProjectRemoteSourceReadiness = Record<
   AddProjectRemoteSource,
@@ -46,14 +54,6 @@ export type AddProjectCloneFlow =
       readonly repository: SourceControlRepositoryInfo | null;
       readonly remoteUrl: string;
     };
-
-const ADD_PROJECT_REMOTE_SOURCES: ReadonlyArray<AddProjectRemoteSource> = [
-  "url",
-  "github",
-  "gitlab",
-  "bitbucket",
-  "azure-devops",
-];
 
 const ADD_PROJECT_REMOTE_PROVIDER_SOURCES: ReadonlyArray<AddProjectRemoteProviderKind> = [
   "github",
@@ -98,75 +98,123 @@ export function addProjectRemoteSourceProvider(
   return source === "url" ? null : source;
 }
 
-export function sortAddProjectProviderSources(
-  readinessBySource: AddProjectRemoteSourceReadiness,
-): ReadonlyArray<AddProjectRemoteProviderKind> {
-  return Arr.sort(
-    ADD_PROJECT_REMOTE_PROVIDER_SOURCES,
-    Order.mapInput(
-      Order.Struct({
-        ready: Order.flip(Order.Boolean),
-        label: Order.String,
-      }),
-      (source: AddProjectRemoteProviderKind) => ({
-        ready: readinessBySource[source].ready,
-        label: addProjectRemoteSourceLabel(source),
-      }),
-    ),
-  );
+const GITHUB_REPOSITORY_SHORTHAND =
+  /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9._-]+(?:\.git)?$/;
+
+/** Treat the common owner/repository shorthand as a public GitHub HTTPS URL. */
+export function normalizePastedCloneUrl(input: string): string {
+  const trimmed = input.trim();
+  if (!GITHUB_REPOSITORY_SHORTHAND.test(trimmed)) return trimmed;
+  const repository = trimmed.endsWith(".git") ? trimmed : `${trimmed}.git`;
+  return `https://github.com/${repository}`;
 }
 
-export function buildAddProjectRemoteSourceReadiness(
-  discovery: SourceControlDiscoveryResult | null,
-): AddProjectRemoteSourceReadiness {
-  const unavailable = {
-    ready: false,
-    hint: "Provider status unavailable. Open Source Control settings and rescan.",
-  } as const;
-  const readiness: AddProjectRemoteSourceReadiness = {
-    url: { ready: true, hint: null },
-    github: unavailable,
-    gitlab: unavailable,
-    bitbucket: unavailable,
-    "azure-devops": unavailable,
-  };
+/** GitHub defaults to HTTPS; other providers retain their existing SSH default. */
+export function getDefaultCloneUrl(
+  repository: Pick<SourceControlRepositoryInfo, "provider" | "url" | "sshUrl">,
+): string {
+  return repository.provider === "github" ? repository.url : repository.sshUrl;
+}
 
+export function listAddProjectRemoteSources(
+  discovery: SourceControlDiscoveryResult | null,
+): ReadonlyArray<AddProjectRemoteSource> {
   if (!discovery) {
-    return readiness;
+    return ["url"];
   }
 
   const providerByKind = new Map(
     discovery.sourceControlProviders.map((provider) => [provider.kind, provider]),
   );
-  for (const source of ADD_PROJECT_REMOTE_SOURCES) {
-    const kind = addProjectRemoteSourceProvider(source);
-    if (!kind) continue;
-    const provider = providerByKind.get(kind);
-    if (!provider) {
-      readiness[source] = unavailable;
-      continue;
-    }
-    if (provider.status !== "available") {
-      readiness[source] = { ready: false, hint: provider.installHint };
-      continue;
-    }
-    if (provider.auth.status === "unauthenticated") {
-      readiness[source] = {
-        ready: false,
-        hint:
-          Option.getOrNull(provider.auth.detail) ??
-          `${provider.label} is not authenticated. Open Source Control settings for setup guidance.`,
-      };
-      continue;
-    }
-    readiness[source] = { ready: true, hint: null };
-  }
-  return readiness;
+  const readyProviders = ADD_PROJECT_REMOTE_PROVIDER_SOURCES.filter((source) => {
+    const provider = providerByKind.get(source);
+    return provider !== undefined && isSourceControlProviderReady(provider);
+  });
+
+  return [
+    "url",
+    ...Arr.sort(
+      readyProviders,
+      Order.mapInput(Order.String, (source: AddProjectRemoteProviderKind) =>
+        addProjectRemoteSourceLabel(source),
+      ),
+    ),
+  ];
 }
 
 export function getAddProjectInitialQuery(baseDirectory: string | null | undefined): string {
   const trimmed = baseDirectory?.trim() ?? "";
   return trimmed.length === 0 ? "~/" : ensureBrowseDirectoryPath(trimmed);
+}
+
+/**
+ * Folder name `git clone` would pick, from either a looked-up repository or a
+ * pasted clone URL. Providers report `owner/repo`, Azure DevOps reports
+ * `org/project/repo`, and a URL can arrive in any form: `https://host/owner/
+ * repo.git`, `ssh://git@host:22/owner/repo`, `git@host:owner/repo.git`, with
+ * or without a query, a fragment or a trailing slash. The repository is always
+ * the last segment, minus the `.git` suffix.
+ */
+export function getCloneDirectoryName(repositoryOrRemoteUrl: string | null | undefined): string {
+  const withoutQuery = (repositoryOrRemoteUrl ?? "").split(/[?#]/)[0]?.trim() ?? "";
+  const schemeIndex = withoutQuery.indexOf("://");
+  // A remote URL carries a host before the repository path. The host is never
+  // the repository, so a link that stops at the host, or at a port, names
+  // nothing and the destination falls back to the browsed folder.
+  const hasHost = schemeIndex >= 0 || /^[^/\\:]+@[^/\\:]+:/.test(withoutQuery);
+  const pathPart = schemeIndex >= 0 ? withoutQuery.slice(schemeIndex + "://".length) : withoutQuery;
+  const segments = pathPart.split(/[/\\:]+/).filter((segment) => segment.trim().length > 0);
+  if (hasHost && segments.length < 2) {
+    return "";
+  }
+
+  const lastSegment = segments.at(-1)?.trim() ?? "";
+  // A port can only sit directly behind the authority, so it is a port only
+  // when nothing follows it. Deeper segments are path, even when numeric: the
+  // repository in `https://host/acme/123` really is named `123`.
+  if (hasHost && segments.length === 2 && /^\d+$/.test(lastSegment)) {
+    return "";
+  }
+  return lastSegment.endsWith(".git") ? lastSegment.slice(0, -".git".length) : lastSegment;
+}
+
+/**
+ * Clone destination proposed for a directory: the directory the user picked
+ * plus the repository folder inside it. Without a name the directory is the
+ * destination, which is what the raw clone URL flow keeps doing.
+ */
+export function getCloneDestinationPath(
+  directoryPath: string,
+  directoryName: string | null | undefined,
+): string {
+  const name = directoryName?.trim() ?? "";
+  if (name.length === 0) {
+    return directoryPath;
+  }
+  return `${ensureBrowseDirectoryPath(directoryPath)}${name}`;
+}
+
+/**
+ * Destination query after choosing a directory while the clone folder is
+ * pinned in the path input. Selecting an existing directory with the pinned
+ * name uses that directory directly instead of producing `repo/repo`.
+ */
+export function getCloneDestinationBrowsePath(input: {
+  readonly browseDirectoryPath: string;
+  readonly selectedDirectoryName: string;
+  readonly cloneDirectoryName: string;
+  readonly caseSensitive: boolean;
+}): string {
+  const selectedDirectoryPath = appendBrowsePathSegment(
+    input.browseDirectoryPath,
+    input.selectedDirectoryName,
+  );
+  const selectedDirectoryMatches = input.caseSensitive
+    ? input.selectedDirectoryName === input.cloneDirectoryName
+    : input.selectedDirectoryName.toLowerCase() === input.cloneDirectoryName.toLowerCase();
+  return selectedDirectoryMatches
+    ? selectedDirectoryPath
+    : getCloneDestinationPath(selectedDirectoryPath, input.cloneDirectoryName);
 }
 
 export function resolveAddProjectPath(input: {

@@ -3,6 +3,7 @@ import * as Schema from "effect/Schema";
 import { ExecutionEnvironmentDescriptor, ServerSelfUpdateMethod } from "./environment.ts";
 import { ServerAuthDescriptor } from "./auth.ts";
 import {
+  ForwardCompatibleArray,
   IsoDateTime,
   NonNegativeInt,
   PositiveInt,
@@ -16,10 +17,11 @@ import {
   KeybindingWhen,
   ResolvedKeybindingsConfig,
 } from "./keybindings.ts";
-import { EditorId } from "./editor.ts";
+import { EditorId, FileManagerRevealKind, RemoteOpenTarget } from "./editor.ts";
 import { ModelCapabilities } from "./model.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import { ServerSettings } from "./settings.ts";
+import { TritonAiManagedPolicyDiagnostics } from "./tritonaiManagedConfig.ts";
 
 const KeybindingsMalformedConfigIssue = Schema.Struct({
   kind: Schema.Literal("keybindings.malformed-config"),
@@ -38,7 +40,9 @@ export const ServerConfigIssue = Schema.Union([
 ]);
 export type ServerConfigIssue = typeof ServerConfigIssue.Type;
 
-const ServerConfigIssues = Schema.Array(ServerConfigIssue);
+// Issue kinds grow over time; older clients must not fail the whole config
+// decode over a kind they cannot render.
+const ServerConfigIssues = ForwardCompatibleArray(ServerConfigIssue);
 
 export const ServerProviderState = Schema.Literals(["ready", "warning", "error", "disabled"]);
 export type ServerProviderState = typeof ServerProviderState.Type;
@@ -65,6 +69,7 @@ export const ServerProviderModel = Schema.Struct({
   subProvider: Schema.optional(TrimmedNonEmptyString),
   isCustom: Schema.Boolean,
   isDefault: Schema.optional(Schema.Boolean),
+  isLegacy: Schema.optional(Schema.Boolean),
   capabilities: Schema.NullOr(ModelCapabilities),
 });
 export type ServerProviderModel = typeof ServerProviderModel.Type;
@@ -423,7 +428,11 @@ export const ServerProvider = Schema.Struct({
 });
 export type ServerProvider = typeof ServerProvider.Type;
 
-export const ServerProviders = Schema.Array(ServerProvider);
+// Provider status kinds grow over time (ServerProviderState,
+// ServerProviderAuthStatus, ServerProviderVersionAdvisoryStatus,
+// ServerProviderUpdateStatus); an older client must not fail the whole config
+// decode over one provider it cannot render.
+export const ServerProviders = ForwardCompatibleArray(ServerProvider);
 export type ServerProviders = typeof ServerProviders.Type;
 
 /**
@@ -639,6 +648,93 @@ export const ServerSignalProcessResult = Schema.Struct({
 });
 export type ServerSignalProcessResult = typeof ServerSignalProcessResult.Type;
 
+/**
+ * A palette the environment's machine publishes for T3 Code to follow, read
+ * from a theme file next to the rest of the environment's state. Two seed
+ * colors rather than a full palette: clients derive the remaining roles with
+ * the same generator the guided theme editor uses, so a desktop theme carries
+ * over as a coherent T3 Code palette instead of a foreign one.
+ */
+export const EnvironmentThemeColor = Schema.String.check(
+  Schema.isPattern(/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/),
+);
+export type EnvironmentThemeColor = typeof EnvironmentThemeColor.Type;
+
+/**
+ * Matches the client-side theme id rule, so a published id is selectable.
+ * The appearance keywords are excluded outright: a published `dark.json`
+ * would otherwise capture every client whose stored preference is the stock
+ * `"dark"`, retinting people who never chose it.
+ */
+export const EnvironmentThemeId = Schema.String.check(
+  Schema.isPattern(/^(?!(?:system|light|dark)$)[a-z0-9](?:[a-z0-9-]{0,47})$/),
+);
+export type EnvironmentThemeId = typeof EnvironmentThemeId.Type;
+
+/**
+ * Role colors as published. Values are any CSS color the client's theme
+ * parser accepts (exported theme files use oklch), canonicalized client-side;
+ * roles a build does not know are dropped there, so a machine may publish
+ * roles a newer client added without breaking an older one. Keys must still
+ * be role-shaped and values color-sized, so the record stays open to future
+ * vocabulary without being an arbitrary-payload channel.
+ */
+const EnvironmentThemeColors = Schema.Record(
+  Schema.String.check(Schema.isPattern(/^[a-zA-Z][a-zA-Z0-9]{0,63}$/)),
+  TrimmedNonEmptyString.check(Schema.isMaxLength(64)),
+);
+
+const environmentThemeFields = {
+  /**
+   * Standard exported theme files (the Download button's output) carry
+   * `version: 1`; the seeded short form a desktop generates has no version.
+   */
+  version: Schema.optional(Schema.Literal(1)),
+  /** Shown on the theme card, e.g. the desktop theme's own name. */
+  name: TrimmedNonEmptyString.check(Schema.isMaxLength(48)),
+  appearance: Schema.Literals(["light", "dark"]),
+  /**
+   * Seed colors. When present, clients derive the full palette from them with
+   * the guided theme editor's generator and layer `colors` on top; when
+   * absent, `colors` is the palette, as in an exported theme file.
+   */
+  canvas: Schema.optional(EnvironmentThemeColor),
+  accent: Schema.optional(EnvironmentThemeColor),
+  colors: Schema.optional(EnvironmentThemeColors),
+  /** The other appearance's palette, as exported theme files carry it. */
+  variants: Schema.optional(
+    Schema.Struct({
+      light: Schema.optional(EnvironmentThemeColors),
+      dark: Schema.optional(EnvironmentThemeColors),
+    }),
+  ),
+};
+
+/** One published theme file. The id is the filename, not part of the content,
+ * so a file cannot claim another file's identity; an embedded `id` is ignored. */
+export const EnvironmentThemeFile = Schema.Struct(environmentThemeFields);
+export type EnvironmentThemeFile = typeof EnvironmentThemeFile.Type;
+
+export const EnvironmentTheme = Schema.Struct({
+  /** The publishing filename without its extension, stable across recolors. */
+  id: EnvironmentThemeId,
+  ...environmentThemeFields,
+});
+export type EnvironmentTheme = typeof EnvironmentTheme.Type;
+
+/**
+ * Whether a theme file carries anything to render. A file with neither seeds
+ * nor colors would show as the stock palette wearing a name, which reads as a
+ * bug rather than a theme — the CLI and the server watcher both reject it,
+ * through this one predicate so they cannot drift.
+ */
+export function environmentThemeFileHasColors(file: EnvironmentThemeFile): boolean {
+  return (
+    (file.canvas !== undefined && file.accent !== undefined) ||
+    (file.colors !== undefined && Object.keys(file.colors).length > 0)
+  );
+}
+
 export const ServerConfig = Schema.Struct({
   environment: ExecutionEnvironmentDescriptor,
   auth: ServerAuthDescriptor,
@@ -647,13 +743,41 @@ export const ServerConfig = Schema.Struct({
   keybindings: ResolvedKeybindingsConfig,
   issues: ServerConfigIssues,
   providers: ServerProviders,
-  availableEditors: Schema.Array(EditorId),
+  // Editor ids grow over time; drop ones this build does not know rather than
+  // failing the whole config decode.
+  availableEditors: ForwardCompatibleArray(EditorId),
+  /**
+   * SSH hosts this environment advertises for remote open-in-editor links.
+   * Absent on servers that predate the feature; empty when the machine has no
+   * sshd or no advertisable name.
+   */
+  remoteOpenTargets: Schema.optionalKey(ForwardCompatibleArray(RemoteOpenTarget)),
   observability: ServerObservability,
   settings: ServerSettings,
+  managedPolicyDiagnostics: Schema.optionalKey(TritonAiManagedPolicyDiagnostics),
   /** Whether shell subscriptions can emit an opt-in catch-up completion marker. */
   shellResumeCompletionMarker: Schema.optionalKey(Schema.Boolean),
+  /** Whether shell.openInEditor honors `LaunchEditorInput.reveal` for the
+      file-manager editor. */
+  shellRevealInFileManager: Schema.optionalKey(Schema.Boolean),
+  /** File-manager wording clients should use for reveal actions. */
+  shellRevealInFileManagerKind: Schema.optionalKey(FileManagerRevealKind),
   /** Whether thread subscriptions can emit an opt-in catch-up completion marker. */
   threadResumeCompletionMarker: Schema.optionalKey(Schema.Boolean),
+  /**
+   * Whether thread detail reads accept a turn window (`turnLimit`/
+   * `beforeCursor`) and return `page` metadata. Clients must not send window
+   * fields to servers that don't advertise this.
+   */
+  threadSnapshotPagination: Schema.optionalKey(Schema.Boolean),
+  /**
+   * Palettes published by this environment's machine. Never sent in a config
+   * snapshot: the theme stream emits the current set before any change, so a
+   * snapshot carrying it too would hand every subscriber the same array twice
+   * per connect. Clients populate this by projecting `environmentThemesUpdated`,
+   * and it stays absent for subscribers that did not opt in.
+   */
+  environmentThemes: Schema.optional(Schema.Array(EnvironmentTheme)),
 });
 export type ServerConfig = typeof ServerConfig.Type;
 
@@ -707,6 +831,12 @@ export const ServerConfigSettingsUpdatedPayload = Schema.Struct({
 });
 export type ServerConfigSettingsUpdatedPayload = typeof ServerConfigSettingsUpdatedPayload.Type;
 
+export const ServerConfigManagedPolicyDiagnosticsUpdatedPayload = Schema.Struct({
+  diagnostics: TritonAiManagedPolicyDiagnostics,
+});
+export type ServerConfigManagedPolicyDiagnosticsUpdatedPayload =
+  typeof ServerConfigManagedPolicyDiagnosticsUpdatedPayload.Type;
+
 export const ServerConfigStreamSnapshotEvent = Schema.Struct({
   version: Schema.Literal(1),
   type: Schema.Literal("snapshot"),
@@ -738,17 +868,54 @@ export const ServerConfigStreamSettingsUpdatedEvent = Schema.Struct({
 export type ServerConfigStreamSettingsUpdatedEvent =
   typeof ServerConfigStreamSettingsUpdatedEvent.Type;
 
+export const ServerConfigStreamManagedPolicyDiagnosticsUpdatedEvent = Schema.Struct({
+  version: Schema.Literal(1),
+  type: Schema.Literal("managedPolicyDiagnosticsUpdated"),
+  payload: ServerConfigManagedPolicyDiagnosticsUpdatedPayload,
+});
+export type ServerConfigStreamManagedPolicyDiagnosticsUpdatedEvent =
+  typeof ServerConfigStreamManagedPolicyDiagnosticsUpdatedEvent.Type;
+
+export const ServerConfigEnvironmentThemesUpdatedPayload = Schema.Struct({
+  /** The full published set; empty once the machine publishes none. */
+  themes: Schema.Array(EnvironmentTheme),
+});
+export type ServerConfigEnvironmentThemesUpdatedPayload =
+  typeof ServerConfigEnvironmentThemesUpdatedPayload.Type;
+
+export const ServerConfigStreamEnvironmentThemesUpdatedEvent = Schema.Struct({
+  version: Schema.Literal(1),
+  type: Schema.Literal("environmentThemesUpdated"),
+  payload: ServerConfigEnvironmentThemesUpdatedPayload,
+});
+export type ServerConfigStreamEnvironmentThemesUpdatedEvent =
+  typeof ServerConfigStreamEnvironmentThemesUpdatedEvent.Type;
+
 export const ServerConfigStreamEvent = Schema.Union([
   ServerConfigStreamSnapshotEvent,
   ServerConfigStreamKeybindingsUpdatedEvent,
   ServerConfigStreamProviderStatusesEvent,
   ServerConfigStreamSettingsUpdatedEvent,
+  ServerConfigStreamManagedPolicyDiagnosticsUpdatedEvent,
+  ServerConfigStreamEnvironmentThemesUpdatedEvent,
 ]);
 export type ServerConfigStreamEvent = typeof ServerConfigStreamEvent.Type;
+
+/** Terminal selection recorded by the service launcher for one update. */
+export const ServerSelfUpdateOutcome = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  fromVersion: TrimmedNonEmptyString,
+  targetVersion: TrimmedNonEmptyString,
+  status: Schema.Literals(["committed", "rolled-back", "failed"]),
+  reason: Schema.optionalKey(TrimmedNonEmptyString),
+});
+export type ServerSelfUpdateOutcome = typeof ServerSelfUpdateOutcome.Type;
 
 export const ServerLifecycleReadyPayload = Schema.Struct({
   at: IsoDateTime,
   environment: ExecutionEnvironmentDescriptor,
+  /** Present when this process resumed a launcher-managed update. */
+  updateOutcome: Schema.optionalKey(ServerSelfUpdateOutcome),
 });
 export type ServerLifecycleReadyPayload = typeof ServerLifecycleReadyPayload.Type;
 
@@ -826,8 +993,25 @@ export type ServerSelfUpdateInput = typeof ServerSelfUpdateInput.Type;
 export const ServerSelfUpdateResult = Schema.Struct({
   targetVersion: TrimmedNonEmptyString,
   method: ServerSelfUpdateMethod,
+  /** Launcher-generated correlation ID. Absent when talking to older servers. */
+  updateId: Schema.optionalKey(TrimmedNonEmptyString),
 });
 export type ServerSelfUpdateResult = typeof ServerSelfUpdateResult.Type;
+
+export const ServerSelfUpdateProgressStage = Schema.Literals(["downloading", "installing"]);
+export type ServerSelfUpdateProgressStage = typeof ServerSelfUpdateProgressStage.Type;
+
+export const ServerSelfUpdateProgressEvent = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("progress"),
+    stage: ServerSelfUpdateProgressStage,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("complete"),
+    result: ServerSelfUpdateResult,
+  }),
+]);
+export type ServerSelfUpdateProgressEvent = typeof ServerSelfUpdateProgressEvent.Type;
 
 export class ServerSelfUpdateError extends Schema.TaggedErrorClass<ServerSelfUpdateError>()(
   "ServerSelfUpdateError",

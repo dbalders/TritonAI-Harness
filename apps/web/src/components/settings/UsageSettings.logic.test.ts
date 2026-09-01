@@ -162,6 +162,9 @@ describe("usageErrorTitle", () => {
         "The configured TritonAI API key was rejected. Verify TRITONAI_API_KEY on the app server, restart it, and try again.",
       ),
     ).toBe("API key rejected");
+    expect(
+      usageErrorTitle("The configured TritonAI access key was rejected. Replace it and try again."),
+    ).toBe("API key rejected");
   });
 
   it("uses the general title for other upstream failures", () => {

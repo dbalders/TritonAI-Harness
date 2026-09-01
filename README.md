@@ -8,6 +8,8 @@ authenticated Codex, Claude Code, Cursor, Grok Build, and OpenCode providers.
 
 This is not a clean-room rewrite. The repo keeps the upstream T3 Code history and MIT license so the original work stays visible. TritonAI release assets and installer behavior are maintained separately from upstream T3 Code.
 
+TritonAI Harness was created by David Balderston as a UC San Diego-focused distribution of T3 Code and is maintained separately from the upstream project.
+
 ## Installation
 
 Install from the [latest TritonAI-Installer release](https://github.com/dbalders/TritonAI-Installer/releases/latest). That installer sets up TritonAI Harness, the managed Codex backend, TritonAI provider settings, and UCSD skills.
@@ -27,6 +29,7 @@ There is no public docs site yet. Use the markdown files in [docs](./docs).
 - [Getting started](./docs/getting-started/quick-start.md)
 - [Remote access](./docs/user/remote-access.md)
 - [Keeping TritonAI Harness versions in sync](./docs/user/server-updates.md)
+- [Computer use](./docs/user/computer-use.md)
 - [Architecture overview](./docs/architecture/overview.md)
 - [Codex provider guide](./docs/providers/codex.md)
 - [TritonAI downstream notes](./docs/tritonai-downstream.md)

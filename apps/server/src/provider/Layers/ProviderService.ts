@@ -17,8 +17,11 @@ import {
   ProviderRespondToRequestInput,
   ProviderRespondToUserInputInput,
   ProviderSendTurnInput,
+  PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   ProviderSessionStartInput,
   ProviderStopSessionInput,
+  ProviderUploadFeedbackInput,
+  type ChatFileAttachment,
   type ProviderInstanceId,
   type ProviderDriverKind,
   type ProviderRuntimeEvent,
@@ -35,6 +38,8 @@ import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
 import * as Stream from "effect/Stream";
 
+import { resolveAttachmentPath } from "../../attachmentStore.ts";
+import * as ServerConfig from "../../config.ts";
 import {
   increment,
   providerMetricAttributes,
@@ -46,6 +51,7 @@ import {
   withMetrics,
 } from "../../observability/Metrics.ts";
 import { type ProviderAdapterError, ProviderValidationError } from "../Errors.ts";
+import { appendFileAttachmentPrompt } from "../fileAttachmentPrompt.ts";
 import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "../Services/ProviderAdapterRegistry.ts";
 import * as ProviderService from "../Services/ProviderService.ts";
@@ -55,6 +61,7 @@ import * as ProviderEventLoggers from "./ProviderEventLoggers.ts";
 import * as AnalyticsService from "../../telemetry/AnalyticsService.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
+import * as ServerSettings from "../../serverSettings.ts";
 const isModelSelection = Schema.is(ModelSelection);
 
 /**
@@ -64,6 +71,15 @@ const isModelSelection = Schema.is(ModelSelection);
  */
 export interface ProviderServiceLiveOptions {
   readonly canonicalEventLogger?: EventNdjsonLogger;
+  /**
+   * Overrides MCP credential issuance. The real issuer reads a module-global
+   * registry that only a running MCP server installs, which makes the
+   * agent-browser-access gate unobservable from a unit test; this seam lets a
+   * test see whether a credential was requested at all.
+   */
+  readonly issueMcpCredential?: typeof McpSessionRegistry.issueActiveMcpCredential;
+  /** Same seam as `issueMcpCredential`, for observing the deny path's revoke. */
+  readonly revokeMcpCredential?: typeof McpSessionRegistry.revokeActiveMcpThread;
 }
 
 type ProviderServiceMethod<Name extends keyof ProviderService.ProviderService["Service"]> =
@@ -203,6 +219,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   options?: ProviderServiceLiveOptions,
 ) {
   const analytics = yield* Effect.service(AnalyticsService.AnalyticsService);
+  const serverConfig = yield* ServerConfig.ServerConfig;
   const eventLoggers = yield* ProviderEventLoggers.ProviderEventLoggers;
   // Options-provided logger wins (test overrides); otherwise we take whatever
   // the `ProviderEventLoggers` tag exposes — `undefined` means "no canonical
@@ -212,20 +229,56 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
 
   const registry = yield* ProviderAdapterRegistry.ProviderAdapterRegistry;
   const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+  const serverSettings = yield* ServerSettings.ServerSettingsService;
+  const issueMcpCredential =
+    options?.issueMcpCredential ?? McpSessionRegistry.issueActiveMcpCredential;
+  const revokeMcpCredential =
+    options?.revokeMcpCredential ?? McpSessionRegistry.revokeActiveMcpThread;
   const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
+  /**
+   * Attach the `t3-code` MCP server to the session that is about to start.
+   *
+   * This is the only place a credential is minted, so withholding one here is
+   * what disables agent browser access everywhere: every adapter already
+   * treats a missing session as "no MCP server", and the `/mcp` endpoint
+   * accepts nothing but tokens issued from this path.
+   */
+  /**
+   * Deny on an unreadable settings file rather than letting the read failure
+   * escape: adding `ServerSettingsError` to `ProviderServiceError` would widen
+   * a union every caller handles, for a branch that only decides whether one
+   * optional toolset is attached. Denying is the safe direction — an explicit
+   * "off" silently becoming "on" would violate the user's stated choice,
+   * whereas the reverse costs an agent one toolset and is visible immediately.
+   */
+  const agentBrowserAccessEnabled = serverSettings.getSettings.pipe(
+    Effect.map((settings) => settings.enableAgentBrowserAccess),
+    Effect.catch((cause) =>
+      Effect.logWarning(
+        "Could not read server settings; withholding agent browser access for this session.",
+        { cause },
+      ).pipe(Effect.as(false)),
+    ),
+  );
+
   const prepareMcpSession = (threadId: ThreadId, providerInstanceId: ProviderInstanceId) =>
-    McpSessionRegistry.issueActiveMcpCredential({
-      threadId,
-      providerInstanceId,
-      capabilities: McpSessionRegistry.providerSessionCapabilities(),
-    }).pipe(
-      Effect.tap((credential) =>
-        credential
-          ? Effect.sync(() => McpProviderSession.setMcpProviderSession(credential.config))
-          : Effect.void,
-      ),
-    );
+    Effect.gen(function* () {
+      if (!(yield* agentBrowserAccessEnabled)) {
+        yield* revokeMcpCredential(threadId);
+        yield* Effect.sync(() => McpProviderSession.clearMcpProviderSession(threadId));
+        return undefined;
+      }
+      const credential = yield* issueMcpCredential({
+        threadId,
+        providerInstanceId,
+        capabilities: McpSessionRegistry.providerSessionCapabilities(),
+      });
+      if (credential) {
+        yield* Effect.sync(() => McpProviderSession.setMcpProviderSession(credential.config));
+      }
+      return credential;
+    });
   const clearMcpSession = (threadId: ThreadId) =>
     McpSessionRegistry.revokeActiveMcpThread(threadId).pipe(
       Effect.tap(() => Effect.sync(() => McpProviderSession.clearMcpProviderSession(threadId))),
@@ -463,6 +516,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         adapter,
         instanceId,
         threadId: input.threadId,
+        runtimeMode: binding.runtimeMode,
         isActive: true,
       } as const;
     }
@@ -472,6 +526,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         adapter,
         instanceId,
         threadId: input.threadId,
+        runtimeMode: binding.runtimeMode,
         isActive: false,
       } as const;
     }
@@ -484,6 +539,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       adapter: recovered.adapter,
       instanceId,
       threadId: input.threadId,
+      runtimeMode: recovered.session.runtimeMode,
       isActive: true,
     } as const;
   });
@@ -633,6 +689,19 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
             input.modelSelection.model.trim().length > 0,
         });
 
+        // Changing runtime mode restarts the session, so the transition is only
+        // observable here, by diffing against the mode the previous session for
+        // this thread was bound to. Recording it separately is what makes the
+        // "started supervised, switched to full access" funnel answerable.
+        const previousRuntimeMode = persistedBinding?.runtimeMode;
+        if (previousRuntimeMode !== undefined && previousRuntimeMode !== input.runtimeMode) {
+          yield* analytics.record("provider.runtime_mode.changed", {
+            provider: sessionWithInstance.provider,
+            from: previousRuntimeMode,
+            to: input.runtimeMode,
+          });
+        }
+
         return sessionWithInstance;
       }).pipe(
         withMetrics({
@@ -653,21 +722,65 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       payload: rawInput,
     });
 
-    const input = {
-      ...parsed,
-      attachments: parsed.attachments ?? [],
-    };
-    if (!input.input && input.attachments.length === 0) {
+    const attachments = parsed.attachments ?? [];
+    if (!parsed.input && attachments.length === 0) {
       return yield* toValidationError(
         "ProviderService.sendTurn",
         "Either input text or at least one attachment is required",
       );
     }
+
+    // Images remain native provider inputs, but their paths are also useful to
+    // agents that need to copy the original bytes. Generic files are described
+    // once here as untrusted metadata so every provider gets the same bounded,
+    // tool-directed context without eagerly reading file contents.
+    const imagePathLines = attachments.flatMap((attachment) => {
+      if (attachment.type !== "image") return [];
+      const attachmentPath = resolveAttachmentPath({
+        attachmentsDir: serverConfig.attachmentsDir,
+        attachment,
+      });
+      return attachmentPath === null
+        ? []
+        : [`[Attached image "${attachment.name}" is saved at: ${attachmentPath}]`];
+    });
+    const inputTextWithFileContext = appendFileAttachmentPrompt({
+      prompt: parsed.input,
+      attachments: attachments.filter(
+        (attachment): attachment is ChatFileAttachment => attachment.type === "file",
+      ),
+      resolvePath: (attachment) =>
+        resolveAttachmentPath({
+          attachmentsDir: serverConfig.attachmentsDir,
+          attachment,
+        }),
+    });
+    if ((inputTextWithFileContext?.length ?? 0) > PROVIDER_SEND_TURN_MAX_INPUT_CHARS) {
+      return yield* toValidationError(
+        "ProviderService.sendTurn",
+        "The user message plus attachment context exceeds the turn input limit",
+      );
+    }
+    // Preserve the existing image behavior: these bounded, server-generated
+    // path hints remain outside the public user-input character allowance.
+    const inputTextWithAttachmentContext =
+      imagePathLines.length === 0
+        ? inputTextWithFileContext
+        : [inputTextWithFileContext, imagePathLines.join("\n")]
+            .filter((part): part is string => typeof part === "string" && part.length > 0)
+            .join("\n\n");
+
+    const input = {
+      ...parsed,
+      ...(inputTextWithAttachmentContext !== undefined
+        ? { input: inputTextWithAttachmentContext }
+        : {}),
+    };
     yield* Effect.annotateCurrentSpan({
       "provider.operation": "send-turn",
       "provider.thread_id": input.threadId,
       "provider.interaction_mode": input.interactionMode,
-      "provider.attachment_count": input.attachments.length,
+      "provider.attachment_count": attachments.length,
     });
     let metricProvider = "unknown";
     let metricModel = input.modelSelection?.model;
@@ -707,7 +820,11 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         provider: routed.adapter.provider,
         model: input.modelSelection?.model,
         interactionMode: input.interactionMode,
-        attachmentCount: input.attachments.length,
+        // Session-start events alone skew runtime mode toward users who toggle
+        // often, since every toggle restarts the session. Recording it per turn
+        // gives a usage-weighted view and lets it cross with interactionMode.
+        runtimeMode: routed.runtimeMode,
+        attachmentCount: attachments.length,
         hasInput: typeof input.input === "string" && input.input.trim().length > 0,
       });
       return turn;
@@ -1018,6 +1135,47 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     );
   });
 
+  const uploadFeedback: ProviderServiceMethod<"uploadFeedback"> = Effect.fn("uploadFeedback")(
+    function* (rawInput) {
+      const input = yield* decodeInputOrValidationError({
+        operation: "ProviderService.uploadFeedback",
+        schema: ProviderUploadFeedbackInput,
+        payload: rawInput,
+      });
+      let routed = yield* resolveRoutableSession({
+        threadId: input.threadId,
+        operation: "ProviderService.uploadFeedback",
+        allowRecovery: false,
+      });
+      if (routed.adapter.uploadFeedback === undefined) {
+        return yield* toValidationError(
+          "ProviderService.uploadFeedback",
+          `Provider '${routed.adapter.provider}' does not support feedback uploads.`,
+        );
+      }
+      if (!routed.isActive) {
+        routed = yield* resolveRoutableSession({
+          threadId: input.threadId,
+          operation: "ProviderService.uploadFeedback",
+          allowRecovery: true,
+        });
+      }
+      const uploadFeedback = routed.adapter.uploadFeedback;
+      if (uploadFeedback === undefined) {
+        return yield* toValidationError(
+          "ProviderService.uploadFeedback",
+          `Provider '${routed.adapter.provider}' does not support feedback uploads.`,
+        );
+      }
+      yield* Effect.annotateCurrentSpan({
+        "provider.operation": "upload-feedback",
+        "provider.kind": routed.adapter.provider,
+        "provider.thread_id": input.threadId,
+      });
+      return yield* uploadFeedback(input);
+    },
+  );
+
   const runStopAll = Effect.fn("runStopAll")(function* () {
     const threadIds = yield* directory.listThreadIds();
     const currentAdapters = yield* getAdapterEntries;
@@ -1089,6 +1247,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     getCapabilities,
     getInstanceInfo,
     rollbackConversation,
+    uploadFeedback,
     // Each access creates a fresh PubSub subscription so that multiple
     // consumers (ProviderRuntimeIngestion, CheckpointReactor, etc.) each
     // independently receive all runtime events.

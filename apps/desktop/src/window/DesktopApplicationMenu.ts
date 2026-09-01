@@ -1,6 +1,7 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import type * as Electron from "electron";
@@ -10,7 +11,7 @@ import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as ElectronDialog from "../electron/ElectronDialog.ts";
 import * as ElectronMenu from "../electron/ElectronMenu.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
-import * as InstallerUpdates from "../updates/InstallerUpdates.ts";
+import * as DesktopUpdates from "../updates/DesktopUpdates.ts";
 import * as DesktopWindow from "./DesktopWindow.ts";
 
 export class DesktopApplicationMenuActionError extends Schema.TaggedErrorClass<DesktopApplicationMenuActionError>()(
@@ -33,11 +34,12 @@ export class DesktopApplicationMenu extends Context.Service<
 >()("@t3tools/desktop/window/DesktopApplicationMenu") {}
 
 type DesktopApplicationMenuRuntimeServices =
-  | InstallerUpdates.InstallerUpdates
+  | DesktopUpdates.DesktopUpdates
   | DesktopWindow.DesktopWindow
   | ElectronDialog.ElectronDialog;
 
 const { logError: logMenuError } = makeComponentLogger("desktop-menu");
+const { logInfo: logUpdaterInfo } = makeComponentLogger("desktop-updater");
 
 const dispatchMenuAction = Effect.fn("desktop.menu.dispatchMenuAction")(function* (
   action: string,
@@ -46,76 +48,73 @@ const dispatchMenuAction = Effect.fn("desktop.menu.dispatchMenuAction")(function
   yield* desktopWindow.dispatchMenuAction(action);
 });
 
+const zoomMainWindow = Effect.fn("desktop.menu.zoomMainWindow")(function* (
+  direction: DesktopWindow.MainWindowZoomDirection,
+): Effect.fn.Return<void, never, DesktopWindow.DesktopWindow> {
+  const desktopWindow = yield* DesktopWindow.DesktopWindow;
+  yield* desktopWindow.zoomMain(direction);
+});
+
 const checkForUpdatesFromMenu = Effect.gen(function* () {
-  const updates = yield* InstallerUpdates.InstallerUpdates;
+  const updates = yield* DesktopUpdates.DesktopUpdates;
   const electronDialog = yield* ElectronDialog.ElectronDialog;
-  const result = yield* updates.check;
+  const result = yield* updates.check("menu");
   const updateState = result.state;
 
-  if (!updateState.enabled || updateState.status === "disabled") {
-    yield* electronDialog.showMessageBox({
-      type: "info",
-      title: "Updates unavailable",
-      message: "Full TritonAI Installer updates are not available in this build.",
-      ...(updateState.message ? { detail: updateState.message } : {}),
-      buttons: ["OK"],
-    });
-  } else if (updateState.status === "up-to-date") {
+  if (updateState.status === "up-to-date") {
     yield* electronDialog.showMessageBox({
       type: "info",
       title: "You're up to date!",
-      message: updateState.installedVersion
-        ? `TritonAI ${updateState.installedVersion} is currently the newest version available.`
-        : "The latest full TritonAI Installer is already installed.",
+      message: `TritonAI Harness ${updateState.currentVersion} is currently the newest version available.`,
       buttons: ["OK"],
     });
-  } else if (updateState.status === "available") {
-    const version = updateState.availableVersion;
-    const confirmation = yield* electronDialog.showMessageBox({
-      type: "info",
-      title: "TritonAI update available",
-      message: version
-        ? `Full Installer ${version} is available.`
-        : "A newer full TritonAI Installer is available.",
-      detail:
-        "The full Installer updates Harness, Codex, managed skills, and configuration together.",
-      buttons: ["Get Update", "Later"],
-      defaultId: 0,
-      cancelId: 1,
-    });
-    if (confirmation.response !== 0) return;
-
-    const openResult = yield* updates.open;
-    if (openResult.accepted && !openResult.completed) {
-      yield* electronDialog.showMessageBox({
-        type: "warning",
-        title: "Could not open installer download",
-        message: "The full TritonAI Installer download could not be opened.",
-        detail: openResult.state.message ?? "Check your default browser and try again.",
-        buttons: ["OK"],
-      });
-    }
   } else if (updateState.status === "error") {
     yield* electronDialog.showMessageBox({
       type: "warning",
       title: "Update check failed",
-      message: "Could not check for full Installer updates.",
+      message: "Could not check for updates.",
       detail: updateState.message ?? "An unknown error occurred. Please try again later.",
       buttons: ["OK"],
     });
   } else {
+    const version = updateState.availableVersion ?? updateState.downloadedVersion;
     yield* electronDialog.showMessageBox({
       type: "info",
-      title: "Update check in progress",
-      message: "TritonAI is already checking for a full Installer update.",
+      title: updateState.status === "downloaded" ? "Harness update ready" : "Harness update found",
+      message: version
+        ? `TritonAI Harness ${version} is available.`
+        : "A TritonAI Harness update is in progress.",
+      detail:
+        updateState.status === "downloaded"
+          ? "Use the update control in the Harness window to install and restart."
+          : "Use the update control in the Harness window to download or monitor the update.",
       buttons: ["OK"],
     });
   }
 }).pipe(Effect.withSpan("desktop.menu.checkForUpdates"));
 
-const handleCheckForUpdatesMenuClick = checkForUpdatesFromMenu.pipe(
-  Effect.withSpan("desktop.menu.handleCheckForUpdatesClick"),
-);
+const handleCheckForUpdatesMenuClick = Effect.gen(function* () {
+  const updates = yield* DesktopUpdates.DesktopUpdates;
+  const electronDialog = yield* ElectronDialog.ElectronDialog;
+  const disabledReason = yield* updates.disabledReason;
+  if (Option.isSome(disabledReason)) {
+    yield* logUpdaterInfo("manual update check requested, but updates are disabled", {
+      disabledReason: disabledReason.value,
+    });
+    yield* electronDialog.showMessageBox({
+      type: "info",
+      title: "Updates unavailable",
+      message: "Automatic updates are not available right now.",
+      detail: disabledReason.value,
+      buttons: ["OK"],
+    });
+    return;
+  }
+
+  const desktopWindow = yield* DesktopWindow.DesktopWindow;
+  yield* desktopWindow.ensureMain;
+  yield* checkForUpdatesFromMenu;
+}).pipe(Effect.withSpan("desktop.menu.handleCheckForUpdatesClick"));
 
 export const make = Effect.gen(function* () {
   const electronApp = yield* ElectronApp.ElectronApp;
@@ -147,6 +146,9 @@ export const make = Effect.gen(function* () {
     };
     const settingsClick = () => {
       runMenuEffect("open-settings", dispatchMenuAction("open-settings"));
+    };
+    const zoomClick = (direction: DesktopWindow.MainWindowZoomDirection) => () => {
+      runMenuEffect(`zoom-${direction}`, zoomMainWindow(direction));
     };
     const template: Electron.MenuItemConstructorOptions[] = [];
 
@@ -202,10 +204,21 @@ export const make = Effect.gen(function* () {
           { role: "forceReload" },
           { role: "toggleDevTools" },
           { type: "separator" },
-          { role: "resetZoom" },
-          { role: "zoomIn", accelerator: "CmdOrCtrl+=" },
-          { role: "zoomIn", accelerator: "CmdOrCtrl+Plus", visible: false },
-          { role: "zoomOut" },
+          /*
+            Not the zoom roles: those act on the focused webContents, so with
+            an embedded preview WebContentsView focused they zoom the guest
+            page and the app UI appears stuck. These always zoom the main
+            window (see DesktopWindow.zoomMain).
+          */
+          { label: "Actual Size", accelerator: "CmdOrCtrl+0", click: zoomClick("reset") },
+          { label: "Zoom In", accelerator: "CmdOrCtrl+=", click: zoomClick("in") },
+          {
+            label: "Zoom In",
+            accelerator: "CmdOrCtrl+Plus",
+            visible: false,
+            click: zoomClick("in"),
+          },
+          { label: "Zoom Out", accelerator: "CmdOrCtrl+-", click: zoomClick("out") },
           { type: "separator" },
           { role: "togglefullscreen" },
         ],

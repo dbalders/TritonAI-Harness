@@ -162,6 +162,7 @@ interface ProviderSettingsFormProps {
   readonly value: unknown;
   readonly idPrefix: string;
   readonly variant: "card" | "dialog";
+  readonly readOnlyFieldKeys?: ReadonlySet<string> | undefined;
   readonly onChange: (nextConfig: Record<string, unknown> | undefined) => void;
 }
 
@@ -180,6 +181,7 @@ interface ProviderSettingsFieldRowProps {
   readonly value: unknown;
   readonly idPrefix: string;
   readonly variant: ProviderSettingsFormProps["variant"];
+  readonly readOnlyFieldKeys?: ProviderSettingsFormProps["readOnlyFieldKeys"];
   readonly onChange: ProviderSettingsFormProps["onChange"];
 }
 
@@ -188,9 +190,11 @@ function ProviderSettingsFieldRow({
   value,
   idPrefix,
   variant,
+  readOnlyFieldKeys,
   onChange,
 }: ProviderSettingsFieldRowProps) {
   const inputId = `${idPrefix}-${field.key}`;
+  const readOnly = readOnlyFieldKeys?.has(field.key) ?? false;
   const descriptionClassName =
     variant === "card"
       ? "mt-1 block text-xs text-muted-foreground"
@@ -209,6 +213,7 @@ function ProviderSettingsFieldRow({
             {description}
           </div>
           <Switch
+            disabled={readOnly}
             checked={readProviderConfigBoolean(value, field.key, field.defaultBooleanValue)}
             onCheckedChange={(checked) =>
               onChange(nextProviderConfigWithFieldValue(value, field, Boolean(checked)))
@@ -226,6 +231,7 @@ function ProviderSettingsFieldRow({
         <label htmlFor={inputId} className={cn(variant === "card" && "block")}>
           {label}
           <Textarea
+            readOnly={readOnly}
             id={inputId}
             className={cn(variant === "card" && "mt-1.5")}
             value={readProviderConfigString(value, field.key)}
@@ -248,6 +254,7 @@ function ProviderSettingsFieldRow({
         {label}
         {variant === "card" ? (
           <DraftInput
+            readOnly={readOnly}
             id={inputId}
             className="mt-1.5"
             type={type}
@@ -259,6 +266,7 @@ function ProviderSettingsFieldRow({
           />
         ) : (
           <Input
+            readOnly={readOnly}
             id={inputId}
             className="bg-background"
             type={type}
@@ -282,6 +290,7 @@ function ProviderSettingsAdvancedFields({
   value,
   idPrefix,
   variant,
+  readOnlyFieldKeys,
   onChange,
 }: Omit<ProviderSettingsFormProps, "definition"> & {
   readonly fields: ReadonlyArray<ProviderSettingsFieldModel>;
@@ -305,6 +314,7 @@ function ProviderSettingsAdvancedFields({
               value={value}
               idPrefix={idPrefix}
               variant={variant}
+              readOnlyFieldKeys={readOnlyFieldKeys}
               onChange={onChange}
             />
           ))}
@@ -327,6 +337,7 @@ function ProviderSettingsAdvancedFields({
             value={value}
             idPrefix={idPrefix}
             variant={variant}
+            readOnlyFieldKeys={readOnlyFieldKeys}
             onChange={onChange}
           />
         ))}
@@ -340,6 +351,7 @@ export function ProviderSettingsForm({
   value,
   idPrefix,
   variant,
+  readOnlyFieldKeys,
   onChange,
 }: ProviderSettingsFormProps) {
   const fields = useMemo(() => deriveProviderSettingsFields(definition), [definition]);
@@ -359,6 +371,7 @@ export function ProviderSettingsForm({
           value={value}
           idPrefix={idPrefix}
           variant={variant}
+          readOnlyFieldKeys={readOnlyFieldKeys}
           onChange={onChange}
         />
       ))}
@@ -366,6 +379,7 @@ export function ProviderSettingsForm({
         value={value}
         idPrefix={idPrefix}
         variant={variant}
+        readOnlyFieldKeys={readOnlyFieldKeys}
         onChange={onChange}
         fields={advancedFields}
       />

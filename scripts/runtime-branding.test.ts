@@ -36,7 +36,8 @@ it.layer(NodeServices.layer)("runtime branding", (it) => {
       assert.include(appConfig, "BRAND_ASSET_PATHS.developmentIosIconPng");
       assert.include(appConfig, "BRAND_ASSET_PATHS.productionIosIconPng");
       assert.include(brandMark, "assets/dev/tritonai-harness-dev-1024.png");
-      assert.include(brandMark, "assets/prod/tritonai-harness-1024.png");
+      assert.include(brandMark, "assets/prod/tritonai-logo.png");
+      assert.notInclude(brandMark, "assets/prod/tritonai-harness-1024.png");
     }),
   );
 });

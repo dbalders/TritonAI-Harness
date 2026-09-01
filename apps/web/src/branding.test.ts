@@ -1,10 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
-  formatAppDisplayName,
   resolveServerBackedAppDisplayName,
   resolveServerBackedAppStageLabel,
-  resolveSidebarV2Default,
-  resolveSidebarV2Enabled,
 } from "./branding.logic";
 
 const originalWindow = globalThis.window;
@@ -75,15 +72,6 @@ describe("branding", () => {
 });
 
 describe("branding logic", () => {
-  it("omits Alpha and Dev suffixes from the display name", () => {
-    expect(formatAppDisplayName({ baseName: "TritonAI Harness", stageLabel: "Alpha" })).toBe(
-      "TritonAI Harness",
-    );
-    expect(formatAppDisplayName({ baseName: "TritonAI Harness", stageLabel: "Dev" })).toBe(
-      "TritonAI Harness",
-    );
-  });
-
   it("returns Nightly for nightly primary server versions", () => {
     expect(
       resolveServerBackedAppStageLabel({
@@ -96,100 +84,33 @@ describe("branding logic", () => {
   it("updates the display name for nightly primary server versions", () => {
     expect(
       resolveServerBackedAppDisplayName({
-        baseName: "TritonAI Harness",
-        fallbackDisplayName: "TritonAI Harness",
+        baseName: "T3 Code",
+        fallbackDisplayName: "T3 Code (Alpha)",
         fallbackStageLabel: "Alpha",
         primaryServerVersion: "0.0.28-nightly.20260616.12",
       }),
-    ).toBe("TritonAI Harness (Nightly)");
+    ).toBe("T3 Code (Nightly)");
   });
 
   it("keeps the fallback display name for stable primary server versions", () => {
     expect(
       resolveServerBackedAppDisplayName({
-        baseName: "TritonAI Harness",
-        fallbackDisplayName: "TritonAI Harness",
+        baseName: "T3 Code",
+        fallbackDisplayName: "T3 Code (Alpha)",
         fallbackStageLabel: "Alpha",
         primaryServerVersion: "0.0.27",
       }),
-    ).toBe("TritonAI Harness");
+    ).toBe("T3 Code (Alpha)");
   });
 
   it("keeps the fallback display name for malformed nightly primary server versions", () => {
     expect(
       resolveServerBackedAppDisplayName({
-        baseName: "TritonAI Harness",
-        fallbackDisplayName: "TritonAI Harness",
+        baseName: "T3 Code",
+        fallbackDisplayName: "T3 Code (Alpha)",
         fallbackStageLabel: "Alpha",
         primaryServerVersion: "0.0.28-nightly.20260616",
       }),
-    ).toBe("TritonAI Harness");
-  });
-});
-
-describe("resolveSidebarV2Default", () => {
-  it.each(["Nightly", "Dev", "Alpha", "Latest", ""])("enables the beta for %s builds", (stage) => {
-    expect(resolveSidebarV2Default(stage)).toBe(true);
-  });
-});
-
-describe("resolveSidebarV2Enabled", () => {
-  const hydrated = { settingsHydrated: true } as const;
-
-  it.each(["Alpha", "Latest"])(
-    "keeps a legacy opt-in on %s builds even without the companion flag",
-    (stageLabel) => {
-      // `true` was never the schema default, so it can only be an explicit
-      // opt-in from settings written before `sidebarV2ConfiguredByUser` existed.
-      expect(
-        resolveSidebarV2Enabled({
-          ...hydrated,
-          enabled: true,
-          configuredByUser: false,
-          stageLabel,
-        }),
-      ).toBe(true);
-    },
-  );
-
-  it("applies the enabled default when the beta was never configured", () => {
-    expect(
-      resolveSidebarV2Enabled({
-        ...hydrated,
-        enabled: false,
-        configuredByUser: false,
-        stageLabel: "Nightly",
-      }),
-    ).toBe(true);
-    expect(
-      resolveSidebarV2Enabled({
-        ...hydrated,
-        enabled: false,
-        configuredByUser: false,
-        stageLabel: "Latest",
-      }),
-    ).toBe(true);
-  });
-
-  it("honors an explicit opt-out over the stage default", () => {
-    expect(
-      resolveSidebarV2Enabled({
-        ...hydrated,
-        enabled: false,
-        configuredByUser: true,
-        stageLabel: "Nightly",
-      }),
-    ).toBe(false);
-  });
-
-  it("holds v1 until settings hydrate so the sidebar does not remount", () => {
-    expect(
-      resolveSidebarV2Enabled({
-        enabled: true,
-        configuredByUser: true,
-        settingsHydrated: false,
-        stageLabel: "Nightly",
-      }),
-    ).toBe(false);
+    ).toBe("T3 Code (Alpha)");
   });
 });

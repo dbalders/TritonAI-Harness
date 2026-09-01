@@ -62,7 +62,7 @@ export function TritonAiUsageWarning() {
     };
     const openUsage = () => {
       closeToast();
-      void navigate({ to: "/settings/usage" });
+      void navigate({ to: "/usage" });
     };
 
     toastId = toastManager.add(

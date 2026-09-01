@@ -3,13 +3,20 @@ import {
   type ServerConfig,
   type ServerConfigStreamEvent,
   type ServerLifecycleWelcomePayload,
+  type ServerLifecycleStreamReadyEvent,
+  type ServerSelfUpdateProgressEvent,
+  type ServerSelfUpdateResult,
   WS_METHODS,
 } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
@@ -19,13 +26,241 @@ import {
   createEnvironmentRpcCommand,
   createEnvironmentRpcQueryAtomFamily,
   createEnvironmentRpcSubscriptionAtomFamily,
+  createRuntimeCommand,
+  scheduleAtomCommandEffect,
 } from "./runtime.ts";
-import type { EnvironmentRegistry } from "../connection/registry.ts";
+import { EnvironmentRegistry } from "../connection/registry.ts";
 import { EnvironmentSupervisor } from "../connection/supervisor.ts";
 import { safeErrorLogAttributes } from "../errors/safeLog.ts";
 import { EnvironmentCacheStore } from "../platform/persistence.ts";
-import { subscribe, type EnvironmentRpcInput } from "../rpc/client.ts";
+import {
+  isRpcClientError,
+  request,
+  runStream,
+  subscribe,
+  type EnvironmentRpcInput,
+} from "../rpc/client.ts";
 import { followStreamInEnvironment } from "./runtime.ts";
+
+export type ServerUpdateStage = "downloading" | "installing" | "resuming";
+
+export type ServerUpdateState =
+  | { readonly status: "idle" }
+  | {
+      readonly status: "running";
+      readonly stage: ServerUpdateStage;
+      readonly fromVersion: string;
+      readonly targetVersion: string;
+    }
+  | {
+      readonly status: "failed";
+      readonly stage: ServerUpdateStage;
+      readonly fromVersion: string;
+      readonly targetVersion: string;
+      readonly message: string;
+    };
+
+export interface ServerUpdateTarget {
+  readonly environmentId: EnvironmentId;
+  readonly input: EnvironmentRpcInput<typeof WS_METHODS.serverUpdateServer>;
+}
+
+const IDLE_SERVER_UPDATE_STATE: ServerUpdateState = { status: "idle" };
+const EMPTY_SERVER_UPDATE_STATE_ATOM = Atom.make<ServerUpdateState>(IDLE_SERVER_UPDATE_STATE).pipe(
+  Atom.withLabel("environment-data:server:update-state:empty"),
+);
+const serverUpdateStateAtom = Atom.family((environmentId: EnvironmentId) =>
+  Atom.make<ServerUpdateState>(IDLE_SERVER_UPDATE_STATE).pipe(
+    Atom.withLabel(`environment-data:server:update-state:${environmentId}`),
+  ),
+);
+
+export class ServerUpdateResumeTimeoutError extends Schema.TaggedErrorClass<ServerUpdateResumeTimeoutError>()(
+  "ServerUpdateResumeTimeoutError",
+  {
+    environmentId: Schema.String,
+    targetVersion: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `The server did not resume on t3@${this.targetVersion}.`;
+  }
+}
+
+export class ServerUpdateProgressIncompleteError extends Schema.TaggedErrorClass<ServerUpdateProgressIncompleteError>()(
+  "ServerUpdateProgressIncompleteError",
+  {
+    targetVersion: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `The t3@${this.targetVersion} update ended before the server accepted the restart.`;
+  }
+}
+
+export class ServerUpdateTerminalError extends Schema.TaggedErrorClass<ServerUpdateTerminalError>()(
+  "ServerUpdateTerminalError",
+  {
+    targetVersion: Schema.String,
+    status: Schema.Literals(["committed", "rolled-back", "failed"]),
+    reason: Schema.optional(Schema.String),
+  },
+) {
+  override get message(): string {
+    return this.reason ?? `The t3@${this.targetVersion} update ${this.status}.`;
+  }
+}
+
+// Covers the 120-second trial deadline and a final restart of the previous
+// version when the trial rolls back.
+const SERVER_UPDATE_RESUME_TIMEOUT = Duration.minutes(4);
+
+export function matchesServerUpdateReadyEvent(
+  result: ServerSelfUpdateResult,
+  event: ServerLifecycleStreamReadyEvent,
+): boolean {
+  return result.updateId === undefined
+    ? event.payload.environment.serverVersion === result.targetVersion
+    : event.payload.updateOutcome?.id === result.updateId;
+}
+
+export function validateServerUpdateReadyEvent(
+  result: ServerSelfUpdateResult,
+  event: ServerLifecycleStreamReadyEvent,
+): Effect.Effect<void, ServerUpdateTerminalError> {
+  if (result.updateId === undefined) return Effect.void;
+  const outcome = event.payload.updateOutcome;
+  if (
+    outcome?.id === result.updateId &&
+    outcome.status === "committed" &&
+    outcome.targetVersion === result.targetVersion &&
+    event.payload.environment.serverVersion === result.targetVersion
+  ) {
+    return Effect.void;
+  }
+  return Effect.fail(
+    new ServerUpdateTerminalError({
+      targetVersion: result.targetVersion,
+      status: outcome?.status ?? "failed",
+      reason:
+        outcome?.reason ??
+        "The service launcher resumed without committing the requested server version.",
+    }),
+  );
+}
+
+/**
+ * Keeps reconnect attempts ~1s apart for the whole update restart.
+ *
+ * A restart takes the server down for ~15 seconds, but the supervisor's normal
+ * backoff ladder (1/2/4/8/16s) assumes an unexpected failure and lands attempts
+ * at ~3, 5, 9, 17 and 33 seconds — so a 15-second restart is observed as a
+ * 33-second "Resuming". Nudging on every backoff entry (not just the first)
+ * holds the retry cadence flat until the server answers again. The sleep before
+ * each nudge is the pacer: a connection that fails instantly re-enters backoff
+ * immediately and would otherwise spin a tight retry loop.
+ *
+ * A newly restarted server can also reject the first environment credential.
+ * Authentication blocks need the same paced retry during this known restart;
+ * permission and configuration failures remain blocked.
+ *
+ * Callers fork this as a child of the update command so it is interrupted as
+ * soon as the update settles, whether it succeeds, fails, or times out.
+ */
+export function nudgeReconnectDuringUpdateRestart(input: {
+  readonly stateChanges: Stream.Stream<
+    {
+      readonly phase: string;
+      readonly lastFailure?: { readonly reason: string } | null;
+    },
+    unknown
+  >;
+  readonly retryNow: Effect.Effect<void>;
+  readonly interval?: Duration.Duration;
+}): Effect.Effect<void> {
+  return input.stateChanges.pipe(
+    Stream.filter(
+      (state) =>
+        state.phase === "backoff" ||
+        (state.phase === "blocked" && state.lastFailure?.reason === "authentication"),
+    ),
+    Stream.runForEach(() =>
+      Effect.sleep(input.interval ?? Duration.seconds(1)).pipe(Effect.andThen(input.retryNow)),
+    ),
+    Effect.timeoutOption(SERVER_UPDATE_RESUME_TIMEOUT),
+    Effect.ignore,
+  );
+}
+
+export function serverUpdateStateForProgressEvent(
+  fromVersion: string,
+  targetVersion: string,
+  event: ServerSelfUpdateProgressEvent,
+): Extract<ServerUpdateState, { status: "running" }> {
+  return {
+    status: "running",
+    stage: event.type === "complete" ? "resuming" : event.stage,
+    fromVersion,
+    targetVersion,
+  };
+}
+
+export function serverUpdateStateForServerVersion(
+  state: ServerUpdateState,
+  serverVersion: string | null,
+): ServerUpdateState {
+  return state.status === "idle" ||
+    state.status === "running" ||
+    serverVersion === null ||
+    state.fromVersion === serverVersion
+    ? state
+    : IDLE_SERVER_UPDATE_STATE;
+}
+
+function serverUpdateFailureMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "Server update failed.";
+}
+
+function isRpcSocketError(error: unknown): boolean {
+  if (!isRpcClientError(error)) {
+    return false;
+  }
+  switch (error.reason._tag) {
+    case "SocketReadError":
+    case "SocketWriteError":
+    case "SocketCloseError":
+      return true;
+    default:
+      return false;
+  }
+}
+
+export function isLegacyUpdateHandoffLoss(cause: Cause.Cause<unknown>): boolean {
+  if (Cause.hasInterruptsOnly(cause)) {
+    return true;
+  }
+  return (
+    cause.reasons.length > 0 &&
+    cause.reasons.every((reason) => Cause.isFailReason(reason) && isRpcSocketError(reason.error))
+  );
+}
+
+export function resolveServerUpdateProgressResult<E>(
+  targetVersion: string,
+  terminal: Option.Option<ServerSelfUpdateResult>,
+  streamExit: Exit.Exit<void, E>,
+): Effect.Effect<ServerSelfUpdateResult, E | ServerUpdateProgressIncompleteError> {
+  if (
+    Option.isSome(terminal) &&
+    (Exit.isSuccess(streamExit) || isLegacyUpdateHandoffLoss(streamExit.cause))
+  ) {
+    return Effect.succeed(terminal.value);
+  }
+  if (Exit.isFailure(streamExit)) {
+    return Effect.failCause(streamExit.cause);
+  }
+  return Effect.fail(new ServerUpdateProgressIncompleteError({ targetVersion }));
+}
 
 const TRITONAI_USAGE_REFRESH_INTERVAL_MS = 5 * 60_000;
 
@@ -40,12 +275,24 @@ export function applyServerConfigProjection(
   event: ServerConfigStreamEvent,
 ): Option.Option<ServerConfigProjection> {
   switch (event.type) {
-    case "snapshot":
+    case "snapshot": {
+      // A snapshot never carries published themes -- the theme stream owns
+      // them -- so taking it wholesale would clear the set on every reconnect
+      // and repaint anyone wearing one until the follow-up event landed.
+      // Only from a server that still streams them. Reconnecting to one that
+      // predates the feature must drop the set rather than leave a palette on
+      // screen that nothing will ever update again.
+      const carried =
+        event.config.environment.capabilities.environmentThemes === true && Option.isSome(current)
+          ? current.value.config.environmentThemes
+          : undefined;
       return Option.some({
-        config: event.config,
+        config:
+          carried === undefined ? event.config : { ...event.config, environmentThemes: carried },
         latestEvent: event,
-        source: "live",
+        source: "live" as const,
       });
+    }
     case "keybindingsUpdated":
       return Option.map(current, (projection) => ({
         config: {
@@ -74,6 +321,24 @@ export function applyServerConfigProjection(
         latestEvent: event,
         source: "live",
       }));
+    case "managedPolicyDiagnosticsUpdated":
+      return Option.map(current, (projection) => ({
+        config: {
+          ...projection.config,
+          managedPolicyDiagnostics: event.payload.diagnostics,
+        },
+        latestEvent: event,
+        source: "live",
+      }));
+    case "environmentThemesUpdated":
+      return Option.map(current, (projection) => ({
+        config: {
+          ...projection.config,
+          environmentThemes: event.payload.themes.length > 0 ? event.payload.themes : undefined,
+        },
+        latestEvent: event,
+        source: "live",
+      }));
   }
 }
 
@@ -96,8 +361,19 @@ const cachedConfigSnapshotEvent = (config: ServerConfig): ServerConfigStreamEven
  * config carries the provider/model catalogue used by task creation, so it is
  * useful—and safe—to retain after a transport session ends.
  */
+/**
+ * Published themes live only as long as the machine publishes them, so they
+ * must not survive in the config cache: a restart or an offline load would
+ * otherwise hand clients palettes the environment has already dropped.
+ */
+function withoutEnvironmentThemes(config: ServerConfig): ServerConfig {
+  if (config.environmentThemes === undefined) return config;
+  const { environmentThemes: _ephemeral, ...rest } = config;
+  return rest;
+}
+
 export const makeEnvironmentServerConfigState = Effect.fn("EnvironmentServerConfigState.make")(
-  function* () {
+  function* (environmentThemes?: boolean) {
     const supervisor = yield* EnvironmentSupervisor;
     const cache = yield* EnvironmentCacheStore;
     const environmentId = supervisor.target.environmentId;
@@ -113,9 +389,11 @@ export const makeEnvironmentServerConfigState = Effect.fn("EnvironmentServerConf
       ),
     );
     const state = yield* SubscriptionRef.make<Option.Option<ServerConfigProjection>>(
-      Option.map(cachedConfig, (config) => ({
-        config,
-        latestEvent: cachedConfigSnapshotEvent(config),
+      // Stripped on load as well as on save: a cache written by an earlier
+      // build can still carry published themes.
+      Option.map(cachedConfig, (cached) => ({
+        config: withoutEnvironmentThemes(cached),
+        latestEvent: cachedConfigSnapshotEvent(withoutEnvironmentThemes(cached)),
         source: "cache" as const,
       })),
     );
@@ -125,7 +403,7 @@ export const makeEnvironmentServerConfigState = Effect.fn("EnvironmentServerConf
     const persist = Effect.fn("EnvironmentServerConfigState.persist")(function* (
       config: ServerConfig,
     ) {
-      return yield* cache.saveServerConfig(environmentId, config).pipe(
+      return yield* cache.saveServerConfig(environmentId, withoutEnvironmentThemes(config)).pipe(
         Effect.as(true),
         Effect.catch((error) =>
           Effect.logWarning("Could not persist cached server configuration.").pipe(
@@ -156,7 +434,10 @@ export const makeEnvironmentServerConfigState = Effect.fn("EnvironmentServerConf
       Effect.forkScoped,
     );
 
-    yield* subscribe(WS_METHODS.subscribeServerConfig, {}).pipe(
+    yield* subscribe(WS_METHODS.subscribeServerConfig, {
+      managedPolicyDiagnosticsUpdates: true,
+      ...(environmentThemes === true ? { environmentThemes: true } : {}),
+    }).pipe(
       Stream.runForEach((event) =>
         Effect.gen(function* () {
           const next = applyServerConfigProjection(yield* SubscriptionRef.get(state), event);
@@ -186,11 +467,14 @@ export const makeEnvironmentServerConfigState = Effect.fn("EnvironmentServerConf
   },
 );
 
-export function serverConfigStateChanges(environmentId: EnvironmentId) {
+export function serverConfigStateChanges(
+  environmentId: EnvironmentId,
+  environmentThemes?: boolean,
+) {
   return followStreamInEnvironment(
     environmentId,
     Stream.unwrap(
-      makeEnvironmentServerConfigState().pipe(
+      makeEnvironmentServerConfigState(environmentThemes).pipe(
         Effect.map((state) =>
           SubscriptionRef.changes(state).pipe(
             Stream.filterMap((projection) =>
@@ -227,7 +511,13 @@ export function resolveServerConfigValue(
   projection: ServerConfigProjection | null,
   initialConfig: ServerConfig | null,
 ): ServerConfig | null {
-  if (projection?.source === "live") return projection.config;
+  if (
+    projection?.source === "live" &&
+    (initialConfig === null ||
+      projection.config.environment.serverVersion === initialConfig.environment.serverVersion)
+  ) {
+    return projection.config;
+  }
   return initialConfig ?? projection?.config ?? null;
 }
 
@@ -237,16 +527,24 @@ export function createServerEnvironmentAtoms<R, E>(
     readonly initialConfigValueAtom: (
       environmentId: EnvironmentId,
     ) => Atom.Atom<ServerConfig | null>;
+    /**
+     * Whether this surface renders themes the environment publishes. Mobile
+     * keeps its own appearance settings, so it neither asks for the stream nor
+     * receives the payload.
+     */
+    readonly environmentThemes?: boolean;
   },
 ) {
   const configScheduler = createAtomCommandScheduler();
+  // Updates stay serial end-to-end, but only their handoff phase occupies the config lane.
+  const updateScheduler = createAtomCommandScheduler();
   const configConcurrency = {
     mode: "serial" as const,
     key: ({ environmentId }: { readonly environmentId: string }) => environmentId,
   };
   const configProjectionFamily = Atom.family((environmentId: EnvironmentId) =>
     runtime
-      .atom(serverConfigStateChanges(environmentId))
+      .atom(serverConfigStateChanges(environmentId, options.environmentThemes))
       .pipe(
         Atom.setIdleTTL(5 * 60_000),
         Atom.withLabel(`environment-data:server:config-projection:${environmentId}`),
@@ -273,6 +571,175 @@ export function createServerEnvironmentAtoms<R, E>(
       );
     }).pipe(Atom.withLabel(`environment-data:server:config:${environmentId}`));
   });
+  const updateStateValueAtom = Atom.family((environmentId: EnvironmentId) =>
+    Atom.make((get) =>
+      serverUpdateStateForServerVersion(
+        get(serverUpdateStateAtom(environmentId)),
+        get(configValueAtom(environmentId))?.environment.serverVersion ?? null,
+      ),
+    ).pipe(Atom.withLabel(`environment-data:server:update-state-value:${environmentId}`)),
+  );
+  const updateStateAtom = (environmentId: EnvironmentId | null) =>
+    environmentId === null ? EMPTY_SERVER_UPDATE_STATE_ATOM : updateStateValueAtom(environmentId);
+  const updateServer = createRuntimeCommand<
+    EnvironmentRegistry | EnvironmentCacheStore | R,
+    E,
+    ServerUpdateTarget,
+    ServerSelfUpdateResult,
+    unknown
+  >(runtime, {
+    label: "environment-data:server:update-server",
+    scheduler: updateScheduler,
+    concurrency: configConcurrency,
+    execute: (target, atomRegistry) => {
+      const stateAtom = serverUpdateStateAtom(target.environmentId);
+      const targetVersion = target.input.targetVersion;
+      let fromVersion =
+        atomRegistry.get(configValueAtom(target.environmentId))?.environment.serverVersion ??
+        targetVersion;
+      let currentStage: ServerUpdateStage = "downloading";
+      atomRegistry.set(stateAtom, {
+        status: "running",
+        stage: currentStage,
+        fromVersion,
+        targetVersion,
+      });
+
+      return Effect.gen(function* () {
+        const environmentRegistry = yield* EnvironmentRegistry;
+        const result = yield* scheduleAtomCommandEffect(
+          atomRegistry,
+          configScheduler,
+          configConcurrency,
+          target,
+          Effect.gen(function* () {
+            const currentConfig = atomRegistry.get(configValueAtom(target.environmentId));
+            fromVersion = currentConfig?.environment.serverVersion ?? targetVersion;
+            atomRegistry.set(stateAtom, {
+              status: "running",
+              stage: currentStage,
+              fromVersion,
+              targetVersion,
+            });
+
+            const supportsProgress =
+              currentConfig?.environment.capabilities.serverSelfUpdateProgress === true;
+            const updateResult: ServerSelfUpdateResult = supportsProgress
+              ? yield* Effect.gen(function* () {
+                  const terminal = yield* Ref.make<Option.Option<ServerSelfUpdateResult>>(
+                    Option.none(),
+                  );
+                  const streamExit = yield* environmentRegistry
+                    .runStream(
+                      target.environmentId,
+                      runStream(WS_METHODS.serverUpdateServerWithProgress, target.input),
+                    )
+                    .pipe(
+                      Stream.runForEach((event) =>
+                        Effect.sync(() => {
+                          currentStage = event.type === "complete" ? "resuming" : event.stage;
+                          atomRegistry.set(
+                            stateAtom,
+                            serverUpdateStateForProgressEvent(fromVersion, targetVersion, event),
+                          );
+                        }).pipe(
+                          Effect.andThen(
+                            event.type === "complete"
+                              ? Ref.set(terminal, Option.some(event.result))
+                              : Effect.void,
+                          ),
+                        ),
+                      ),
+                      Effect.exit,
+                    );
+                  return yield* resolveServerUpdateProgressResult(
+                    targetVersion,
+                    yield* Ref.get(terminal),
+                    streamExit,
+                  );
+                })
+              : yield* Effect.gen(function* () {
+                  const selfUpdateMethod = currentConfig?.environment.capabilities.serverSelfUpdate;
+                  const exit = yield* environmentRegistry
+                    .run(target.environmentId, request(WS_METHODS.serverUpdateServer, target.input))
+                    .pipe(Effect.exit);
+                  if (Exit.isSuccess(exit)) {
+                    return exit.value;
+                  }
+                  if (
+                    (selfUpdateMethod === "boot-service" || selfUpdateMethod === "respawn") &&
+                    isLegacyUpdateHandoffLoss(exit.cause)
+                  ) {
+                    // Older servers can tear down the transport before their
+                    // unary acknowledgement arrives. Treat only that transport
+                    // loss as a handoff, then prove it by waiting for target ready.
+                    return { targetVersion, method: selfUpdateMethod };
+                  }
+                  return yield* Effect.failCause(exit.cause);
+                });
+
+            currentStage = "resuming";
+            atomRegistry.set(stateAtom, {
+              status: "running",
+              stage: currentStage,
+              fromVersion,
+              targetVersion,
+            });
+            return updateResult;
+          }),
+        );
+
+        // The update restart is intentional and the server stays unreachable
+        // for the whole restart, so hold the retry cadence flat instead of
+        // letting the supervisor climb its backoff ladder.
+        yield* nudgeReconnectDuringUpdateRestart({
+          stateChanges: environmentRegistry.stateChanges(target.environmentId),
+          retryNow: environmentRegistry.retryNow(target.environmentId),
+        }).pipe(Effect.forkChild);
+
+        const resumed = yield* environmentRegistry
+          .followStream(target.environmentId, subscribe(WS_METHODS.subscribeServerLifecycle, {}))
+          .pipe(
+            Stream.filter(
+              (event): event is ServerLifecycleStreamReadyEvent =>
+                event.type === "ready" && matchesServerUpdateReadyEvent(result, event),
+            ),
+            Stream.runHead,
+            Effect.timeoutOption(SERVER_UPDATE_RESUME_TIMEOUT),
+            Effect.map(Option.flatten),
+          );
+        if (Option.isNone(resumed)) {
+          return yield* new ServerUpdateResumeTimeoutError({
+            environmentId: target.environmentId,
+            targetVersion,
+          });
+        }
+        yield* validateServerUpdateReadyEvent(result, resumed.value);
+
+        atomRegistry.set(stateAtom, IDLE_SERVER_UPDATE_STATE);
+        return result;
+      }).pipe(
+        Effect.onExit((exit) =>
+          Effect.sync(() => {
+            if (Exit.isSuccess(exit)) {
+              return;
+            }
+            if (Cause.hasInterruptsOnly(exit.cause)) {
+              atomRegistry.set(stateAtom, IDLE_SERVER_UPDATE_STATE);
+              return;
+            }
+            atomRegistry.set(stateAtom, {
+              status: "failed",
+              stage: currentStage,
+              fromVersion,
+              targetVersion,
+              message: serverUpdateFailureMessage(Cause.squash(exit.cause)),
+            });
+          }),
+        ),
+      );
+    },
+  });
   const settingsValueAtom = Atom.family((environmentId: EnvironmentId) =>
     Atom.make((get) => get(configValueAtom(environmentId))?.settings ?? null).pipe(
       Atom.withLabel(`environment-data:server:settings:${environmentId}`),
@@ -286,6 +753,7 @@ export function createServerEnvironmentAtoms<R, E>(
 
   return {
     configValueAtom,
+    updateStateAtom,
     settingsValueAtom,
     providersValueAtom,
     traceDiagnostics: createEnvironmentRpcQueryAtomFamily(runtime, {
@@ -315,6 +783,13 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.serverGetResourceTelemetryHistory,
       staleTimeMs: 5_000,
     }),
+    // A cold transcript scan is measured in seconds, so keep the result around
+    // long enough that switching windows or re-rendering does not rescan.
+    usageSummary: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:usage-summary",
+      tag: WS_METHODS.serverGetUsageSummary,
+      staleTimeMs: 60_000,
+    }),
     configProjection,
     welcome: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:welcome",
@@ -338,12 +813,7 @@ export function createServerEnvironmentAtoms<R, E>(
       scheduler: configScheduler,
       concurrency: configConcurrency,
     }),
-    updateServer: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:server:update-server",
-      tag: WS_METHODS.serverUpdateServer,
-      scheduler: configScheduler,
-      concurrency: configConcurrency,
-    }),
+    updateServer,
     upsertKeybinding: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:upsert-keybinding",
       tag: WS_METHODS.serverUpsertKeybinding,

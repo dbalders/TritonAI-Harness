@@ -1,4 +1,5 @@
 import "vite-plus/test/config";
+import * as NodeURL from "node:url";
 import { defineConfig, mergeConfig } from "vite-plus";
 
 import baseConfig from "../../vite.config.ts";
@@ -6,22 +7,29 @@ import {
   loadManagedPluginCompositionFromEnvironment,
   readManagedPluginBuildConfiguration,
 } from "../../scripts/lib/managed-plugin-composition.ts";
+import { loadManagedHarnessConfigForBuild } from "../../scripts/lib/managed-harness-config.ts";
 import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
 import packageJson from "./package.json" with { type: "json" };
 
-const bundledPackagePrefixes = [
-  "@pierre/diffs",
-  "@t3tools/",
-  "effect-acp",
-  "effect-codex-app-server",
-];
+// The bundle used to inline only workspace packages, leaving every third-party
+// runtime dep external. External deps must exist on the real filesystem (the WSL
+// backend runs plain `wsl.exe -- node`, which cannot read inside an asar), so the
+// desktop build unpacked `**\/node_modules\/**` wholesale: 13,875 loose files to
+// support 20 native binaries. NSIS install time tracks file count, not bytes.
+//
+// Inverted here — bundle everything except the packages that genuinely cannot be
+// inlined. See scripts/lib/cli-external-packages.ts for what earns an exemption.
+import {
+  isExternalCliDependency,
+  shouldBundleCliDependency,
+} from "../../scripts/lib/cli-external-packages.ts";
 
-export function shouldBundleCliDependency(id: string): boolean {
-  return bundledPackagePrefixes.some((prefix) => id.startsWith(prefix));
-}
+export { shouldBundleCliDependency };
 
 const repoEnv = loadRepoEnv();
+const repoRoot = NodeURL.fileURLToPath(new URL("../..", import.meta.url));
 const cliBuildChannel = packageJson.version.includes("-nightly.") ? "nightly" : "latest";
+const managedHarnessConfig = loadManagedHarnessConfigForBuild(repoRoot);
 const managedPluginBuildInput = loadManagedPluginCompositionFromEnvironment(repoEnv);
 const managedPluginComposition = managedPluginBuildInput?.composition ?? null;
 const managedPluginConfiguration = managedPluginBuildInput
@@ -46,7 +54,14 @@ export default mergeConfig(
       sourcemap: true,
       clean: true,
       deps: {
+        // Both halves are required. `alwaysBundle` forces the JS dependencies in
+        // (declared deps are external by default, which is what this change is
+        // undoing). `neverBundle` forces the native packages out: returning
+        // false from `alwaysBundle` only means "no opinion", so a transitive
+        // dependency would still be bundled — which silently inlined
+        // msgpackr-extract and its loader, losing native acceleration.
         alwaysBundle: shouldBundleCliDependency,
+        neverBundle: (id: string) => isExternalCliDependency(id),
         onlyBundle: false,
       },
       banner: {
@@ -57,6 +72,8 @@ export default mergeConfig(
         __TRITONAI_BUILD_SUPPORTS_INTEGRATION_FIXTURES__: "false",
         __TRITONAI_BUILD_PLUGIN_COMPOSITION__: JSON.stringify(managedPluginComposition),
         __TRITONAI_BUILD_PLUGIN_CONFIGURATION__: JSON.stringify(managedPluginConfiguration),
+        __TRITONAI_BUILD_MANAGED_CONFIG__: JSON.stringify(managedHarnessConfig.config),
+        __TRITONAI_BUILD_MANAGED_CONFIG_DIGEST__: JSON.stringify(managedHarnessConfig.digest),
         __T3CODE_BUILD_RELAY_URL__: JSON.stringify(repoEnv.T3CODE_RELAY_URL?.trim() ?? ""),
         __T3CODE_BUILD_CLERK_PUBLISHABLE_KEY__: JSON.stringify(
           repoEnv.T3CODE_CLERK_PUBLISHABLE_KEY?.trim() ?? "",

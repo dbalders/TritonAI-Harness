@@ -24,8 +24,8 @@ The workflow runs for:
 - a manual dispatch with an explicit version.
 
 It requires a controlled GitHub release for the exact tag to exist as an unpublished draft. The
-draft remains private until all automated Harness checks, Windows packaging, signing, composition,
-and asset validation succeed.
+draft remains private until all automated Harness checks, Windows packaging, selected trust-mode
+verification, composition, and asset validation succeed.
 
 The workflow:
 
@@ -37,7 +37,8 @@ The workflow:
 6. asks the pinned Installer commit to prepare its reviewed production managed-plugin composition;
 7. aligns package versions in the isolated build checkout;
 8. builds the Windows x64 NSIS Harness artifact;
-9. requires and verifies Azure Trusted Signing signatures;
+9. selects signed Windows mode when all Azure inputs exist; with zero Azure inputs, selects unsigned
+   mode only when `TRITONAI_ALLOW_UNSIGNED_WINDOWS_RELEASE=1`; partial Azure configuration fails;
 10. finalizes the managed-plugin composition proof;
 11. uploads the required Windows installer, blockmap, updater metadata, and composition proof;
 12. verifies the release is still a draft and only then publishes it;
@@ -54,8 +55,10 @@ draft before it is published.
 3. Create the exact tag and an unpublished GitHub draft for it.
 4. Attach the verified local assets to the draft.
 5. Push the tag or dispatch the workflow for that version.
-6. Wait for preflight, Windows build, Authenticode, managed-plugin proof, and required-asset checks.
-7. Let the workflow attach Windows assets and publish the draft.
+6. Wait for preflight, Windows build, selected trust-mode boot proof, managed-plugin proof, and required-asset checks.
+7. Let the workflow validate Authenticode publisher identity and timestamps for signed releases, or
+   validate unsigned status for explicitly unsigned releases, then attach Windows assets and publish
+   the draft.
 8. Verify the published release state and downloaded asset identities.
 9. Only then build and publish TritonAI Installer against those exact Harness assets.
 
@@ -74,11 +77,15 @@ Repository variables:
   composition. Each plugin owns and validates its opaque configuration object.
 
 The workflow verifies the plugin checkout resolves to the pinned commit and detaches it before
-building. The final proof manifest is a required release asset.
+building. A preparation job uploads that exact composition before any provider code executes. A
+second, credential-free runner validates the immutable composition and emits a receipt binding its
+source, contents, and exact configuration. The Windows build consumes those two artifacts on a
+third fresh runner, verifies the receipt, and packages the composition without executing provider
+code. The final proof manifest is a required release asset.
 
 ## Windows signing
 
-Stable Windows artifacts require all of:
+Signed Windows artifacts require all of:
 
 - `AZURE_TENANT_ID`
 - `AZURE_CLIENT_ID`
@@ -88,8 +95,13 @@ Stable Windows artifacts require all of:
 - `AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME`
 - `AZURE_TRUSTED_SIGNING_PUBLISHER_NAME`
 
-The build fails closed when any value is missing. After packaging, the workflow verifies every EXE
-with Authenticode and checks the expected publisher identity before uploading it.
+When all seven values exist, the workflow signs the artifact, verifies every EXE with Authenticode,
+checks its timestamp and publisher identity, then installs and boots the exact package. When none
+exist, repository variable `TRITONAI_ALLOW_UNSIGNED_WINDOWS_RELEASE=1` authorizes an explicitly
+unsigned artifact, and the workflow verifies that both the installer and installed executable are
+actually unsigned before boot testing. A partial signing configuration fails closed; without the
+explicit opt-in, zero signing inputs also fail closed. The workflow never silently falls back from
+a broken signed setup to unsigned mode. Unsigned downloads may trigger Microsoft Defender SmartScreen.
 
 ## Required release assets
 

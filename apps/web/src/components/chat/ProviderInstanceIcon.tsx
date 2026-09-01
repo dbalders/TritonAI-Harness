@@ -1,5 +1,11 @@
 import { type CSSProperties, memo } from "react";
-import { type ProviderDriverKind } from "@t3tools/contracts";
+import {
+  TRITONAI_FRONTIER_PROVIDER_INSTANCE_ID,
+  TRITONAI_ONPREM_PROVIDER_INSTANCE_ID,
+  type ProviderDriverKind,
+  type ProviderInstanceId,
+} from "@t3tools/contracts";
+import { CloudyIcon, ServerIcon } from "lucide-react";
 
 import { PROVIDER_ICON_BY_PROVIDER } from "./providerIconUtils";
 import { cn } from "~/lib/utils";
@@ -16,6 +22,7 @@ export function providerInstanceInitials(label: string): string {
 
 export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
   driverKind: ProviderDriverKind;
+  instanceId?: ProviderInstanceId;
   displayName: string;
   accentColor?: string | undefined;
   showBadge?: boolean;
@@ -26,7 +33,13 @@ export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
   statusDotClassName?: string;
   indicatorBackground?: string;
 }) {
-  const Icon = PROVIDER_ICON_BY_PROVIDER[props.driverKind] ?? null;
+  const isOnPrem = String(props.instanceId) === TRITONAI_ONPREM_PROVIDER_INSTANCE_ID;
+  const isFrontier = String(props.instanceId) === TRITONAI_FRONTIER_PROVIDER_INSTANCE_ID;
+  const Icon = isOnPrem
+    ? ServerIcon
+    : isFrontier
+      ? CloudyIcon
+      : (PROVIDER_ICON_BY_PROVIDER[props.driverKind] ?? null);
   const indicatorBackground = props.indicatorBackground ?? "var(--card)";
   const accentStyle = props.accentColor
     ? ({ "--provider-accent": props.accentColor } as CSSProperties)
@@ -59,13 +72,13 @@ export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
           aria-hidden
         />
       ) : null}
-      {props.showBadge ? (
+      {props.showBadge && !isOnPrem && !isFrontier ? (
         <span
           className={cn(
             "pointer-events-none absolute right-0 bottom-0 z-10 flex h-3.5 min-w-3.5 items-center justify-center rounded-full border px-0.5 text-[8px] font-semibold leading-none shadow-sm",
             props.accentColor
               ? "bg-[var(--provider-accent)] text-white"
-              : "bg-muted text-muted-foreground",
+              : "bg-card text-muted-foreground",
             props.badgeClassName,
           )}
           style={{ borderColor: indicatorBackground }}

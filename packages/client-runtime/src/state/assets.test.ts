@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
-import { EnvironmentId } from "@t3tools/contracts";
+import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import * as Layer from "effect/Layer";
 import { Atom } from "effect/unstable/reactivity";
 
@@ -74,6 +74,18 @@ describe("createAssetEnvironmentAtoms", () => {
     ).not.toBe(assets.createUrl(originalTarget));
     expect(
       assets.createUrl({
+        environmentId,
+        input: {
+          resource: {
+            _tag: "project-favicon",
+            cwd: "/repo/original",
+            path: "brand/icon.svg",
+          },
+        },
+      }),
+    ).not.toBe(assets.createUrl(originalTarget));
+    expect(
+      assets.createUrl({
         environmentId: EnvironmentId.make("environment-2"),
         input: originalTarget.input,
       }),
@@ -87,9 +99,10 @@ describe("createAssetEnvironmentAtoms", () => {
     >;
     const assets = createAssetEnvironmentAtoms(runtime);
     const environmentId = EnvironmentId.make("environment-1");
+    const threadId = ThreadId.make("thread-1");
     const resources = [
-      { _tag: "attachment" as const, attachmentId: "attachment-1" },
-      { _tag: "attachment" as const, attachmentId: "attachment-2" },
+      { _tag: "attachment" as const, threadId, attachmentId: "attachment-1" },
+      { _tag: "attachment" as const, threadId, attachmentId: "attachment-2" },
     ];
 
     expect(assets.createUrls({ environmentId, resources })).toBe(

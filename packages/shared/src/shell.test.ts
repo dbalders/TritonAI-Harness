@@ -304,7 +304,7 @@ describe("readEnvironmentFromWindowsShell", () => {
 });
 
 describe("mergePathValues", () => {
-  it("dedupes case-insensitively on Windows while preserving preferred order", () => {
+  it("sanitizes and dedupes Windows entries while preserving preferred order", () => {
     expect(
       mergePathValues(
         'C:\\Users\\testuser\\AppData\\Roaming\\npm;"C:\\Program Files\\nodejs"',
@@ -312,8 +312,18 @@ describe("mergePathValues", () => {
         "win32",
       ),
     ).toBe(
-      'C:\\Users\\testuser\\AppData\\Roaming\\npm;"C:\\Program Files\\nodejs";C:\\Windows\\System32',
+      "C:\\Users\\testuser\\AppData\\Roaming\\npm;C:\\Program Files\\nodejs;C:\\Windows\\System32",
     );
+  });
+
+  it("removes stray quotes from Windows entries", () => {
+    expect(
+      mergePathValues(
+        'C:\\Windows\\System32;C:\\cloudflared.exe;C:";C:\\Program Files\\nodejs',
+        undefined,
+        "win32",
+      ),
+    ).toBe("C:\\Windows\\System32;C:\\cloudflared.exe;C:;C:\\Program Files\\nodejs");
   });
 
   it("dedupes case-sensitively on POSIX", () => {
@@ -336,6 +346,7 @@ describe("resolveKnownWindowsCliDirs", () => {
       "C:\\Users\\testuser\\AppData\\Local\\Programs\\nodejs",
       "C:\\Users\\testuser\\AppData\\Local\\Volta\\bin",
       "C:\\Users\\testuser\\AppData\\Local\\pnpm",
+      "C:\\Users\\testuser\\.local\\bin",
       "C:\\Users\\testuser\\.bun\\bin",
       "C:\\Users\\testuser\\scoop\\shims",
     ]);
@@ -476,6 +487,7 @@ effectIt.layer(NodeServices.layer)("resolveWindowsEnvironment", (it) => {
           "C:\\Users\\testuser\\AppData\\Local\\Programs\\nodejs",
           "C:\\Users\\testuser\\AppData\\Local\\Volta\\bin",
           "C:\\Users\\testuser\\AppData\\Local\\pnpm",
+          "C:\\Users\\testuser\\.local\\bin",
           "C:\\Users\\testuser\\.bun\\bin",
           "C:\\Users\\testuser\\scoop\\shims",
           "C:\\Shell\\Bin",
@@ -524,6 +536,7 @@ effectIt.layer(NodeServices.layer)("resolveWindowsEnvironment", (it) => {
           "C:\\Users\\testuser\\AppData\\Local\\Programs\\nodejs",
           "C:\\Users\\testuser\\AppData\\Local\\Volta\\bin",
           "C:\\Users\\testuser\\AppData\\Local\\pnpm",
+          "C:\\Users\\testuser\\.local\\bin",
           "C:\\Users\\testuser\\.bun\\bin",
           "C:\\Users\\testuser\\scoop\\shims",
           "C:\\Shell\\Bin",
@@ -564,6 +577,7 @@ effectIt.layer(NodeServices.layer)("resolveWindowsEnvironment", (it) => {
       ).toEqual({
         PATH: [
           "C:\\Users\\testuser\\AppData\\Roaming\\npm",
+          "C:\\Users\\testuser\\.local\\bin",
           "C:\\Users\\testuser\\.bun\\bin",
           "C:\\Users\\testuser\\scoop\\shims",
           "C:\\Windows\\System32",

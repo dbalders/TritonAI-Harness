@@ -1,6 +1,6 @@
 import { CheckIcon } from "lucide-react";
 import { type ReactNode, useCallback, useMemo, useRef, useState } from "react";
-import type { EnvironmentId, ServerProvider } from "@t3tools/contracts";
+import type { EnvironmentId, ProviderDriverKind, ServerProvider } from "@t3tools/contracts";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -158,11 +158,13 @@ function EnvironmentUpdateRow({
  */
 export function ProviderUpdateEnvironmentRows({
   onInteract,
+  providerDriver,
 }: {
   /** Called the first time the user triggers an update, so the host can stop refreshing the prompt. */
   readonly onInteract?: () => void;
+  readonly providerDriver?: ProviderDriverKind | undefined;
 }) {
-  const { groups } = useLocalEnvironmentUpdateGroups();
+  const { groups } = useLocalEnvironmentUpdateGroups(providerDriver);
   const updateProvider = useAtomCommand(serverEnvironment.updateProvider, {
     reportFailure: false,
   });

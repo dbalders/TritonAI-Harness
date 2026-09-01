@@ -7,6 +7,7 @@ import {
   getConnectionCatalog,
   setConnectionCatalog,
 } from "./methods/connectionCatalog.ts";
+import { getComputerUseState, setComputerUseEnabled } from "./methods/computerUse.ts";
 import {
   getAdvertisedEndpoints,
   getServerExposureState,
@@ -34,17 +35,23 @@ import {
   setUpdateChannel,
 } from "./methods/updates.ts";
 import {
-  confirm,
   getAppBranding,
   getLocalEnvironmentBootstraps,
   getLocalEnvironmentBearerToken,
+  getSystemLocale,
   getWindowFullscreenState,
   openExternal,
+  probeRemoteEditors,
   pickFolder,
+  pickProjectFavicon,
+  pickThemeFiles,
   setTheme,
   showContextMenu,
 } from "./methods/window.ts";
-import { replaceTritonAiApiKey } from "./methods/tritonAiApiKey.ts";
+import {
+  getTritonAiCredentialStatus,
+  updateTritonAiCredentials,
+} from "./methods/tritonAiApiKey.ts";
 import * as PreviewIpc from "./methods/preview.ts";
 import { getWslState, setWslBackendEnabled, setWslDistro, setWslOnly } from "./methods/wsl.ts";
 
@@ -53,10 +60,12 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* PreviewIpc.installPreviewEventForwarding();
 
   yield* ipc.handleSync(getAppBranding);
+  yield* ipc.handleSync(getSystemLocale);
   yield* ipc.handleSync(getWindowFullscreenState);
   yield* ipc.handleSync(getLocalEnvironmentBootstraps);
   yield* ipc.handle(getLocalEnvironmentBearerToken);
-  yield* ipc.handle(replaceTritonAiApiKey);
+  yield* ipc.handle(getTritonAiCredentialStatus);
+  yield* ipc.handle(updateTritonAiCredentials);
 
   yield* ipc.handle(getClientSettings);
   yield* ipc.handle(setClientSettings);
@@ -78,16 +87,21 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(setTailscaleServeEnabled);
   yield* ipc.handle(getAdvertisedEndpoints);
 
+  yield* ipc.handle(getComputerUseState);
+  yield* ipc.handle(setComputerUseEnabled);
+
   yield* ipc.handle(getWslState);
   yield* ipc.handle(setWslBackendEnabled);
   yield* ipc.handle(setWslDistro);
   yield* ipc.handle(setWslOnly);
 
   yield* ipc.handle(pickFolder);
-  yield* ipc.handle(confirm);
+  yield* ipc.handle(pickProjectFavicon);
+  yield* ipc.handle(pickThemeFiles);
   yield* ipc.handle(setTheme);
   yield* ipc.handle(showContextMenu);
   yield* ipc.handle(openExternal);
+  yield* ipc.handle(probeRemoteEditors);
   yield* ipc.handle(getUpdateState);
   yield* ipc.handle(setUpdateChannel);
   yield* ipc.handle(downloadUpdate);

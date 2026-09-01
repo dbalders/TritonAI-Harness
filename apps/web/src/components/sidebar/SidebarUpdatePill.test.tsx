@@ -1,14 +1,13 @@
-import type { DesktopUpdateState, InstallerUpdateState } from "@t3tools/contracts";
+import type { DesktopUpdateState } from "@t3tools/contracts";
 import { isValidElement, type ReactElement, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const testState = vi.hoisted(() => ({
   desktopUpdate: null as DesktopUpdateState | null,
-  installerUpdate: null as InstallerUpdateState | null,
-  sidebarV2Enabled: true,
-  openInstallerUpdate: vi.fn(),
+  checkForUpdate: vi.fn(),
   downloadUpdate: vi.fn(),
   installUpdate: vi.fn(),
+  confirm: vi.fn(),
   toast: vi.fn(),
 }));
 
@@ -16,6 +15,7 @@ const hooks = vi.hoisted(() => ({
   useCallback<T>(callback: T): T {
     return callback;
   },
+  useEffect(): void {},
   useMemoCache(size: number): unknown[] {
     return Array.from({ length: size }, () => Symbol.for("react.memo_cache_sentinel"));
   },
@@ -32,29 +32,26 @@ vi.mock("react", async (importOriginal) => {
   return {
     ...actual,
     useCallback: hooks.useCallback,
+    useEffect: hooks.useEffect,
     useState: hooks.useState,
   };
 });
 
 vi.mock("react/compiler-runtime", () => ({ c: hooks.useMemoCache }));
 vi.mock("../../env", () => ({ isElectron: true }));
-vi.mock("../../hooks/useSettings", () => ({
-  useClientSettings: (
-    select: (settings: { readonly sidebarV2Enabled: boolean }) => unknown,
-  ): unknown => select({ sidebarV2Enabled: testState.sidebarV2Enabled }),
-}));
 vi.mock("../../state/desktopUpdate", () => ({
   useDesktopUpdateState: () => testState.desktopUpdate,
 }));
-vi.mock("../../state/installerUpdate", () => ({
-  useInstallerUpdateState: () => testState.installerUpdate,
+vi.mock("../../hooks/useMediaQuery", () => ({ useMediaQuery: () => false }));
+vi.mock("../../localApi", () => ({
+  ensureLocalApi: () => ({ dialogs: { confirm: testState.confirm } }),
 }));
 vi.mock("../ui/toast", () => ({
   stackedThreadToast: (toast: unknown) => toast,
   toastManager: { add: testState.toast },
 }));
 
-import { SidebarUpdatePill } from "./SidebarUpdatePill";
+import { SidebarUpdateArchitectureWarningContent, SidebarUpdateControl } from "./SidebarUpdatePill";
 
 const desktopUpdateBase: DesktopUpdateState = {
   enabled: true,
@@ -68,18 +65,6 @@ const desktopUpdateBase: DesktopUpdateState = {
   downloadedVersion: null,
   releaseNotes: [],
   downloadPercent: null,
-  checkedAt: null,
-  message: null,
-  errorContext: null,
-  canRetry: false,
-};
-
-const installerUpdateBase: InstallerUpdateState = {
-  enabled: true,
-  status: "idle",
-  installedVersion: "1.0.0",
-  availableVersion: null,
-  markerStatus: "valid",
   checkedAt: null,
   message: null,
   errorContext: null,
@@ -122,25 +107,29 @@ async function flushPromises(): Promise<void> {
 describe("SidebarUpdatePill", () => {
   beforeEach(() => {
     testState.desktopUpdate = null;
-    testState.installerUpdate = null;
-    testState.sidebarV2Enabled = true;
-    testState.openInstallerUpdate.mockReset();
+    testState.checkForUpdate.mockReset();
     testState.downloadUpdate.mockReset();
     testState.installUpdate.mockReset();
+    testState.confirm.mockReset();
     testState.toast.mockReset();
     Object.defineProperty(globalThis, "window", {
       configurable: true,
       value: {
         desktopBridge: {
-          openInstallerUpdate: testState.openInstallerUpdate,
+          checkForUpdate: testState.checkForUpdate,
           downloadUpdate: testState.downloadUpdate,
           installUpdate: testState.installUpdate,
         },
+        confirm: testState.confirm,
       },
+    });
+    Object.defineProperty(globalThis, "navigator", {
+      configurable: true,
+      value: { platform: "MacIntel" },
     });
   });
 
-  it("renders the native-build warning in the shared Sidebar V2 footer", () => {
+  it("renders the native-build warning for the Harness updater", () => {
     testState.desktopUpdate = {
       ...desktopUpdateBase,
       hostArch: "arm64",
@@ -148,54 +137,82 @@ describe("SidebarUpdatePill", () => {
       runningUnderArm64Translation: true,
     };
 
-    const output = SidebarUpdatePill();
+    const output = SidebarUpdateArchitectureWarningContent();
 
     expect(nodeText(output)).toContain("Intel build on Apple Silicon");
-    expect(nodeText(output)).toContain("Run the next full TritonAI Installer update");
+    expect(nodeText(output)).toContain("The next app update will replace it");
   });
 
-  it("leaves Sidebar V1's existing architecture warning as the only copy", () => {
-    testState.sidebarV2Enabled = false;
-    testState.desktopUpdate = {
-      ...desktopUpdateBase,
-      hostArch: "arm64",
-      appArch: "x64",
-      runningUnderArm64Translation: true,
-    };
-
-    expect(SidebarUpdatePill()).toBeNull();
-  });
-
-  it("opens the full Installer for an available product update", async () => {
+  it("downloads an available Harness update", async () => {
     const availableState = {
-      ...installerUpdateBase,
+      ...desktopUpdateBase,
       status: "available",
       availableVersion: "1.1.0",
     } as const;
-    testState.installerUpdate = availableState;
-    testState.openInstallerUpdate.mockResolvedValue({
+    testState.desktopUpdate = availableState;
+    testState.downloadUpdate.mockResolvedValue({
       accepted: true,
-      completed: true,
+      completed: false,
       state: availableState,
     });
 
-    const output = SidebarUpdatePill();
-    const updateButton = findElement(
-      output,
-      (element) =>
-        element.type === "button" &&
-        String((element.props as { readonly className?: string }).className).includes(
-          "update-main",
-        ),
-    );
+    const output = SidebarUpdateControl();
+    const updateButton = findElement(output, (element) => element.type === "button");
 
     expect(updateButton).not.toBeNull();
-    if (!updateButton) throw new Error("Expected the Installer update button.");
+    if (!updateButton) throw new Error("Expected the Harness update button.");
     (updateButton.props as { readonly onClick: () => void }).onClick();
     await flushPromises();
 
-    expect(testState.openInstallerUpdate).toHaveBeenCalledOnce();
-    expect(testState.downloadUpdate).not.toHaveBeenCalled();
+    expect(testState.downloadUpdate).toHaveBeenCalledOnce();
+    expect(testState.installUpdate).not.toHaveBeenCalled();
+  });
+
+  it("confirms before restarting into a downloaded Harness update", async () => {
+    const downloadedState = {
+      ...desktopUpdateBase,
+      status: "downloaded",
+      availableVersion: "1.1.0",
+      downloadedVersion: "1.1.0",
+    } as const;
+    testState.desktopUpdate = downloadedState;
+    testState.confirm.mockReturnValue(true);
+    testState.installUpdate.mockResolvedValue({
+      accepted: true,
+      completed: true,
+      state: downloadedState,
+    });
+
+    const output = SidebarUpdateControl();
+    const updateButton = findElement(output, (element) => element.type === "button");
+
+    expect(updateButton).not.toBeNull();
+    if (!updateButton) throw new Error("Expected the Harness install button.");
+    (updateButton.props as { readonly onClick: () => void }).onClick();
+    await flushPromises();
+
+    expect(testState.confirm).toHaveBeenCalledOnce();
+    expect(testState.installUpdate).toHaveBeenCalledOnce();
+  });
+
+  it("does not install a downloaded Harness update when confirmation is declined", async () => {
+    testState.desktopUpdate = {
+      ...desktopUpdateBase,
+      status: "downloaded",
+      availableVersion: "1.1.0",
+      downloadedVersion: "1.1.0",
+    } as const;
+    testState.confirm.mockReturnValue(false);
+
+    const output = SidebarUpdateControl();
+    const updateButton = findElement(output, (element) => element.type === "button");
+
+    expect(updateButton).not.toBeNull();
+    if (!updateButton) throw new Error("Expected the Harness install button.");
+    (updateButton.props as { readonly onClick: () => void }).onClick();
+    await flushPromises();
+
+    expect(testState.confirm).toHaveBeenCalledOnce();
     expect(testState.installUpdate).not.toHaveBeenCalled();
   });
 });

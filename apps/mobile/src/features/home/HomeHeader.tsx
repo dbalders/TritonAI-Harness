@@ -8,12 +8,17 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { ControlPillMenu } from "../../components/ControlPill";
 import { SymbolView } from "../../components/AppSymbol";
-import { useThemeColor } from "../../lib/useThemeColor";
+import { HOME_HORIZONTAL_INSET } from "../../lib/layoutMetrics";
+import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { useThreadListV2Enabled } from "../threads/use-thread-list-v2-enabled";
 import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
 import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
-import { createNativeMailSearchToolbarItem } from "../layout/native-mail-search-toolbar";
+import {
+  createNativeMailSearchToolbarItem,
+  NATIVE_MAIL_SEARCH_TOOLBAR_SUPPORTED,
+} from "../layout/native-mail-search-toolbar";
 import type { HomeProjectSortOrder } from "./homeThreadList";
+import { WorkspaceConnectionTitle } from "./WorkspaceConnectionTitle";
 import {
   buildHomeListFilterMenu,
   type HomeListFilterMenuEnvironment,
@@ -40,6 +45,7 @@ export function HomeHeader(props: {
   readonly onProjectChange: (projectKey: string | null) => void;
   readonly onProjectSortOrderChange: (sortOrder: HomeProjectSortOrder) => void;
   readonly onThreadSortOrderChange: (sortOrder: SidebarThreadSortOrder) => void;
+  readonly onOpenEnvironments: () => void;
   readonly onOpenSettings: () => void;
   readonly onStartNewTask: () => void;
 }) {
@@ -58,8 +64,6 @@ function checkedMenuState(checked: boolean) {
 
 function AndroidHomeHeader(props: HomeHeaderProps) {
   const insets = useSafeAreaInsets();
-  const iconColor = useThemeColor("--color-icon");
-  const mutedColor = useThemeColor("--color-foreground-muted");
   // Thread List v2 lays the list out in fixed creation order, so the
   // sort/group filter controls would be silently ignored — hide them and
   // key the "customized" icon state off the environment filter alone.
@@ -191,18 +195,28 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
     <>
       <NativeStackScreenOptions options={{ headerShown: false }} />
       <View
-        className="border-b border-header-border bg-header px-4 pb-3"
+        className="border-b border-header-border bg-header pb-3"
         style={{
+          paddingHorizontal: HOME_HORIZONTAL_INSET,
           paddingTop: Math.max(insets.top, 12),
         }}
       >
         <View className="w-full max-w-[720px] self-center gap-3">
           <View className="flex-row items-center gap-2.5">
-            <View className="flex-1 flex-row items-center gap-2">
-              <RNText className="text-[21px] font-t3-bold tracking-[-0.5px] text-foreground">
-                TritonAI Harness
-              </RNText>
-            </View>
+            {/* Brand slot doubles as the connection status surface: while an
+                environment reconnects, the lockup fades to a status label in
+                place (no layout shift in the list below). */}
+            <WorkspaceConnectionTitle
+              grow
+              onPress={props.onOpenEnvironments}
+              brand={
+                <View className="flex-row items-center gap-2">
+                  <RNText className="text-[21px] font-t3-bold tracking-[-0.5px] text-foreground">
+                    TritonAI Harness
+                  </RNText>
+                </View>
+              }
+            />
 
             <ControlPillMenu
               actions={menuActions}
@@ -221,7 +235,7 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
                       : "line.3.horizontal.decrease.circle"
                   }
                   size={16}
-                  tintColor={iconColor}
+                  tintColorClassName={"accent-icon"}
                   type="monochrome"
                 />
               </Pressable>
@@ -235,12 +249,22 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
               onPress={props.onOpenSettings}
               className="size-11 items-center justify-center rounded-full bg-subtle"
             >
-              <SymbolView name="gearshape" size={18} tintColor={iconColor} type="monochrome" />
+              <SymbolView
+                name="gearshape"
+                size={18}
+                tintColorClassName={"accent-icon"}
+                type="monochrome"
+              />
             </Pressable>
           </View>
 
           <View className="min-h-12 flex-row items-center gap-2.5 rounded-2xl border border-input-border bg-input px-3.5">
-            <SymbolView name="magnifyingglass" size={17} tintColor={mutedColor} type="monochrome" />
+            <SymbolView
+              name="magnifyingglass"
+              size={17}
+              tintColorClassName={"accent-foreground-muted"}
+              type="monochrome"
+            />
             <TextInput
               accessibilityLabel="Search threads"
               autoCapitalize="none"
@@ -259,7 +283,7 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
                 <SymbolView
                   name="xmark.circle.fill"
                   size={17}
-                  tintColor={mutedColor}
+                  tintColorClassName={"accent-foreground-muted"}
                   type="monochrome"
                 />
               </Pressable>
@@ -273,7 +297,7 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
 
 function IosHomeHeader(props: HomeHeaderProps) {
   const searchBarRef = useRef<SearchBarCommands>(null);
-  const iconColor = useThemeColor("--color-icon");
+  const iconColor = useUniwindTheme()["--color-icon"];
   // Thread List v2 lays the list out in fixed creation order, so the
   // sort/group filter controls would be silently ignored — hide them and
   // key the "customized" icon state off the environment filter alone.
@@ -312,9 +336,11 @@ function IosHomeHeader(props: HomeHeaderProps) {
                   }),
                 ]
               : undefined,
-          unstable_headerToolbarItems:
-            Platform.OS === "ios"
-              ? () => [
+          // The keys below are set per-branch (not `undefined`) so a later
+          // reapply cannot clobber options owned by NativeHeaderToolbar.
+          ...(NATIVE_MAIL_SEARCH_TOOLBAR_SUPPORTED
+            ? {
+                unstable_headerToolbarItems: () => [
                   createNativeMailSearchToolbarItem({
                     composeButtonId: "home-new-task",
                     composeSystemImageName: "square.and.pencil",
@@ -327,15 +353,16 @@ function IosHomeHeader(props: HomeHeaderProps) {
                     onSearchTextChange: props.onSearchQueryChange,
                     placeholder: "Search",
                     searchTextChangeId: "home-search-text",
+                    showsSearchDismissButton: true,
                   }),
-                ]
-              : undefined,
-          headerSearchBarOptions:
-            Platform.OS === "ios"
-              ? undefined
-              : {
+                ],
+              }
+            : {
+                // Pre-Liquid-Glass iOS: standard pull-down search in the nav
+                // bar; create + sort live in the plain bottom toolbar below.
+                headerSearchBarOptions: {
                   ref: searchBarRef,
-                  allowToolbarIntegration: true,
+                  autoCapitalize: "none" as const,
                   hideNavigationBar: false,
                   placeholder: "Search",
                   onCancelButtonPress: () => {
@@ -345,21 +372,11 @@ function IosHomeHeader(props: HomeHeaderProps) {
                     props.onSearchQueryChange(event.nativeEvent.text);
                   },
                 },
+              }),
         }}
       />
 
-      {Platform.OS === "ios" ? null : (
-        <NativeHeaderToolbar placement="right">
-          <NativeHeaderToolbar.Button
-            accessibilityLabel="Open settings"
-            icon="gearshape"
-            onPress={props.onOpenSettings}
-            separateBackground
-          />
-        </NativeHeaderToolbar>
-      )}
-
-      {Platform.OS === "ios" ? null : (
+      {NATIVE_MAIL_SEARCH_TOOLBAR_SUPPORTED ? null : (
         <NativeHeaderToolbar placement="bottom">
           <NativeHeaderToolbar.Menu
             accessibilityLabel="Filter and sort threads"
@@ -413,35 +430,37 @@ function IosHomeHeader(props: HomeHeaderProps) {
               </NativeHeaderToolbar.Menu>
             ) : null}
 
-            <NativeHeaderToolbar.Menu title="Sort projects">
-              <NativeHeaderToolbar.Label>Sort projects</NativeHeaderToolbar.Label>
-              {PROJECT_SORT_OPTIONS.map((option) => (
-                <NativeHeaderToolbar.MenuAction
-                  key={option.value}
-                  isOn={props.projectSortOrder === option.value}
-                  onPress={() => props.onProjectSortOrderChange(option.value)}
-                >
-                  <NativeHeaderToolbar.Label>{option.label}</NativeHeaderToolbar.Label>
-                </NativeHeaderToolbar.MenuAction>
-              ))}
-            </NativeHeaderToolbar.Menu>
+            {threadListV2Enabled ? null : (
+              <NativeHeaderToolbar.Menu title="Sort projects">
+                <NativeHeaderToolbar.Label>Sort projects</NativeHeaderToolbar.Label>
+                {PROJECT_SORT_OPTIONS.map((option) => (
+                  <NativeHeaderToolbar.MenuAction
+                    key={option.value}
+                    isOn={props.projectSortOrder === option.value}
+                    onPress={() => props.onProjectSortOrderChange(option.value)}
+                  >
+                    <NativeHeaderToolbar.Label>{option.label}</NativeHeaderToolbar.Label>
+                  </NativeHeaderToolbar.MenuAction>
+                ))}
+              </NativeHeaderToolbar.Menu>
+            )}
 
-            <NativeHeaderToolbar.Menu title="Sort threads">
-              <NativeHeaderToolbar.Label>Sort threads</NativeHeaderToolbar.Label>
-              {THREAD_SORT_OPTIONS.map((option) => (
-                <NativeHeaderToolbar.MenuAction
-                  key={option.value}
-                  isOn={props.threadSortOrder === option.value}
-                  onPress={() => props.onThreadSortOrderChange(option.value)}
-                >
-                  <NativeHeaderToolbar.Label>{option.label}</NativeHeaderToolbar.Label>
-                </NativeHeaderToolbar.MenuAction>
-              ))}
-            </NativeHeaderToolbar.Menu>
+            {threadListV2Enabled ? null : (
+              <NativeHeaderToolbar.Menu title="Sort threads">
+                <NativeHeaderToolbar.Label>Sort threads</NativeHeaderToolbar.Label>
+                {THREAD_SORT_OPTIONS.map((option) => (
+                  <NativeHeaderToolbar.MenuAction
+                    key={option.value}
+                    isOn={props.threadSortOrder === option.value}
+                    onPress={() => props.onThreadSortOrderChange(option.value)}
+                  >
+                    <NativeHeaderToolbar.Label>{option.label}</NativeHeaderToolbar.Label>
+                  </NativeHeaderToolbar.MenuAction>
+                ))}
+              </NativeHeaderToolbar.Menu>
+            )}
           </NativeHeaderToolbar.Menu>
-          <NativeHeaderToolbar.Spacer width={8} sharesBackground={false} />
-          <NativeHeaderToolbar.SearchBarSlot />
-          <NativeHeaderToolbar.Spacer width={8} sharesBackground={false} />
+          <NativeHeaderToolbar.Spacer flexible />
           <NativeHeaderToolbar.Button
             accessibilityLabel="New task"
             icon="square.and.pencil"

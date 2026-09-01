@@ -89,7 +89,10 @@ export function formatUsageLimit(value: number | null, suffix: string): string {
 
 export function usageErrorTitle(error: string): string {
   if (error.startsWith("Usage is not configured.")) return "API key not configured";
-  if (error.startsWith("The configured TritonAI API key was rejected.")) {
+  if (
+    error.startsWith("The configured TritonAI API key was rejected.") ||
+    error.startsWith("The configured TritonAI access key was rejected.")
+  ) {
     return "API key rejected";
   }
   return "Usage could not be loaded";

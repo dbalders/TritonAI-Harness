@@ -1,4 +1,8 @@
-import type { SourceControlProviderInfo, SourceControlProviderKind } from "@t3tools/contracts";
+import type {
+  SourceControlProviderDiscoveryItem,
+  SourceControlProviderInfo,
+  SourceControlProviderKind,
+} from "@t3tools/contracts";
 
 export interface ChangeRequestPresentation {
   readonly icon: "github" | "gitlab" | "azure-devops" | "bitbucket" | "change-request";
@@ -20,6 +24,12 @@ export const DEFAULT_CHANGE_REQUEST_TERMINOLOGY: ChangeRequestTerminology = {
   shortLabel: "PR",
   singular: "pull request",
 };
+
+export function isSourceControlProviderReady(
+  provider: SourceControlProviderDiscoveryItem,
+): boolean {
+  return provider.status === "available" && provider.auth.status === "authenticated";
+}
 
 const GITHUB_CHANGE_REQUEST_PRESENTATION: ChangeRequestPresentation = {
   icon: "github",
@@ -133,19 +143,22 @@ export function getChangeRequestTerminologyForKind(
   };
 }
 
+const SCP_SSH_REMOTE_PATTERN = /^[a-zA-Z0-9._-]+@([^:/]+):/;
+
+export function isSshRemoteUrl(remoteUrl: string): boolean {
+  const trimmed = remoteUrl.trim();
+  return SCP_SSH_REMOTE_PATTERN.test(trimmed) || trimmed.toLowerCase().startsWith("ssh://");
+}
+
 function parseRemoteHost(remoteUrl: string): string | null {
   const trimmed = remoteUrl.trim();
   if (trimmed.length === 0) {
     return null;
   }
 
-  if (trimmed.startsWith("git@")) {
-    const hostWithPath = trimmed.slice("git@".length);
-    const separatorIndex = hostWithPath.search(/[:/]/);
-    if (separatorIndex <= 0) {
-      return null;
-    }
-    return hostWithPath.slice(0, separatorIndex).toLowerCase();
+  const scpMatch = SCP_SSH_REMOTE_PATTERN.exec(trimmed);
+  if (scpMatch?.[1]) {
+    return scpMatch[1].toLowerCase();
   }
 
   try {
@@ -167,20 +180,32 @@ function toBaseUrl(host: string): string {
   return `https://${host}`;
 }
 
+function hasDnsLabel(host: string, label: string): boolean {
+  return host.split(".").includes(label);
+}
+
 function isGitHubHost(host: string): boolean {
-  return host === "github.com" || host.includes("github");
+  return host === "github.com" || hasDnsLabel(host, "github");
 }
 
 function isGitLabHost(host: string): boolean {
-  return host === "gitlab.com" || host.includes("gitlab");
+  return host === "gitlab.com" || hasDnsLabel(host, "gitlab");
 }
 
 function isAzureDevOpsHost(host: string): boolean {
-  return host === "dev.azure.com" || host.endsWith(".visualstudio.com");
+  // `ssh.dev.azure.com` is the default Azure DevOps SSH clone host
+  // (git@ssh.dev.azure.com:v3/org/project/repo), so match any `*.dev.azure.com`
+  // subdomain, not just the bare `dev.azure.com`. Legacy hosts stay under
+  // `.visualstudio.com` (including `vs-ssh.visualstudio.com`).
+  return (
+    host === "dev.azure.com" ||
+    host.endsWith(".dev.azure.com") ||
+    host.endsWith(".visualstudio.com")
+  );
 }
 
 function isBitbucketHost(host: string): boolean {
-  return host === "bitbucket.org" || host.includes("bitbucket");
+  return host === "bitbucket.org" || hasDnsLabel(host, "bitbucket");
 }
 
 export function detectSourceControlProviderFromRemoteUrl(

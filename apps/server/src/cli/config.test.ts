@@ -1,3 +1,5 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 
 import { assert, expect, it } from "@effect/vitest";
@@ -22,6 +24,7 @@ import { resolveServerConfig } from "./config.ts";
 
 const deriveExplicitServerPaths = (baseDir: string, devUrl: URL | undefined) =>
   deriveServerPaths(baseDir, devUrl, { baseDirIsExplicit: true });
+const testSecretStoreKey = Buffer.from("Z".repeat(32)).toString("base64");
 
 const encodeDesktopBootstrap = Schema.encodeEffect(Schema.fromJsonString(DesktopBackendBootstrap));
 const headlessKeyFileSetting = ["TRITONAI", "SECRET", "STORE", "KEY", "FILE"].join("_");
@@ -38,7 +41,7 @@ const encodeSecretStoreKeyring = Schema.encodeEffect(
 const makeDesktopBootstrap = (
   overrides: Partial<DesktopBackendBootstrapValue> = {},
 ): DesktopBackendBootstrapValue => ({
-  secretStoreKeys: ["WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo="],
+  secretStoreKeys: [testSecretStoreKey],
   legacySecretFingerprints: {},
   mode: "desktop",
   noBrowser: true,
@@ -70,8 +73,10 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     const filePath = yield* fs.makeTempFileScoped({ prefix: "t3-bootstrap-", suffix: ".ndjson" });
     const encoded = yield* encodeDesktopBootstrap(payload);
     yield* fs.writeFileString(filePath, `${encoded}\n`);
-    const { fd } = yield* fs.open(filePath, { flag: "r" });
-    return fd;
+    return yield* Effect.acquireRelease(
+      Effect.sync(() => NodeFS.openSync(filePath, "r")),
+      (fd) => Effect.sync(() => NodeFS.closeSync(fd)),
+    );
   });
 
   it.effect("prefers TRITONAI_HOME over the legacy home input when flags are omitted", () =>
@@ -290,7 +295,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         logWebSocketEvents: false,
         tailscaleServeEnabled: false,
         tailscaleServePort: 443,
-        secretStoreKeys: ["WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo="],
+        secretStoreKeys: [testSecretStoreKey],
         legacySecretFingerprints: {},
       });
     }),
@@ -372,7 +377,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         logWebSocketEvents: false,
         tailscaleServeEnabled: false,
         tailscaleServePort: 443,
-        secretStoreKeys: ["WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo="],
+        secretStoreKeys: [testSecretStoreKey],
         legacySecretFingerprints: {},
       });
       assert.equal(join(baseDir, "userdata"), resolved.stateDir);
@@ -504,7 +509,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         logWebSocketEvents: true,
         tailscaleServeEnabled: false,
         tailscaleServePort: 443,
-        secretStoreKeys: ["WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo="],
+        secretStoreKeys: [testSecretStoreKey],
         legacySecretFingerprints: {},
       });
     }),
@@ -658,7 +663,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         yield* encodeSecretStoreKeyring({
           version: 1,
           active: "WVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVk=",
-          previous: ["WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo="],
+          previous: [testSecretStoreKey],
         }),
       );
       yield* fs.chmod(keyFilePath, 0o600);
@@ -694,7 +699,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
 
       expect(resolved.secretStoreKeys).toEqual([
         "WVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVk=",
-        "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo=",
+        testSecretStoreKey,
       ]);
       expect(resolved.secretStoreKeyFilePath).toBe(keyFilePath);
     }).pipe(Effect.scoped),
@@ -712,7 +717,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         keyFilePath,
         yield* encodeSecretStoreKeyring({
           version: 1,
-          active: "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo=",
+          active: testSecretStoreKey,
           previous: [],
         }),
       );
@@ -764,7 +769,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         targetPath,
         yield* encodeSecretStoreKeyring({
           version: 1,
-          active: "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo=",
+          active: testSecretStoreKey,
           previous: [],
         }),
       );
