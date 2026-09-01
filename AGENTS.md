@@ -22,13 +22,13 @@ Lots of apps have gotten bogged down with bad tech decisions and "slop". We have
 
 ### 3. Remote ready
 
-The architecture of TritonAI Harness's websocket layer (`npx t3`) enables a lot of awesome remote features. These have become core to the product. Whether users are connecting directly over their local network, using Tailscale, or using the upstream T3 Connect tunnel implementation included in this repo, we need to make sure new features are properly supported.
+TritonAI Harness inherits its websocket architecture from upstream T3 Code, where the public package exposes it through `npx t3`. TritonAI distributions use the bundled or managed Harness server instead of that upstream package. Whether users are connecting directly over their local network, using Tailscale, or using the upstream T3 Connect tunnel implementation included in this repo, we need to make sure new features are properly supported.
 
 ### 4. Multi-surface
 
 TritonAI Harness has 3 key app surfaces: **web**, **desktop**, and **mobile**.
 
-**Web** includes the locally hosted app through the `npx t3` command. Upstream T3 Code also operates the public-facing `app.t3.codes`; preserve compatibility with that architecture where reasonable without presenting the upstream service as a TritonAI-operated service.
+**Web** includes the locally hosted app served by the Harness server runner. Upstream T3 Code exposes the equivalent surface through `npx t3` and also operates the public-facing `app.t3.codes`; preserve compatibility with that architecture where reasonable without presenting the upstream package or service as TritonAI-operated.
 
 **Desktop** is the main surface most users install first. It's a full Electron app that bundles the server runner as well. The desktop app can also be used as the host server, allowing remote connections from compatible web and mobile clients.
 
