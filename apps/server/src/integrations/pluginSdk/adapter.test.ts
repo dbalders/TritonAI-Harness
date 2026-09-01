@@ -313,10 +313,72 @@ describe("plugin SDK adapter", () => {
         $schema: "https://json-schema.org/draft/2020-12/schema",
         type: "object",
         additionalProperties: false,
+        properties: {
+          pattern: { $ref: "#/properties/metadata/default" },
+          metadata: { type: "object", default: { $dynamicRef: "#" } },
+        },
+      }),
+    ).rejects.toThrow(/may not use \$dynamicRef/u);
+    await expect(
+      load({
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        type: "object",
+        additionalProperties: false,
         $defs: { item: { type: "object" } },
         properties: { pattern: { $ref: "#/$defs/item/" } },
       }),
     ).rejects.toThrow(/does not resolve/u);
+  });
+
+  it("validates every provider result at the SDK boundary", async () => {
+    const invalidResultsSource = `
+export function createIntegrationProvider() {
+  return {
+    id: "${id}",
+    async status() { return { state: "connected", accountLabel: null, grantedCapabilities: ["fixture.read"], message: null, extra: true }; },
+    async prepare() { return "prepared"; },
+    async connect() { return { kind: "connected", flowId: "", message: "Connected." }; },
+    async poll() { return { state: "pending", retryAfterSeconds: 0, message: null }; },
+    async disconnect() { return null; },
+    async invoke(_toolName, input) {
+      if (input.topic === "bigint") return 1n;
+      if (input.topic === "getter") return Object.defineProperty({}, "value", { enumerable: true, get() { return 1; } });
+      const cyclic = {};
+      cyclic.self = cyclic;
+      return cyclic;
+    },
+    async close() { return false; }
+  };
+}
+`;
+    const loaded = await loadPluginSdkIntegration({
+      files: artifact(invalidResultsSource),
+      secrets: secretStore(),
+      configuration: { prefix: "fixture" },
+      expected: { id, version: "1.0.0" },
+      hostNodeVersion: "24.13.1",
+    });
+    const provider = loaded.provider;
+    expect(provider).toBeDefined();
+    if (!provider) throw new Error("Expected an admitted provider.");
+    const signal = new AbortController().signal;
+    const lifecycle = { signal, beginCommit: async () => signal };
+
+    await expect(provider.status({ signal })).rejects.toThrow(/status is invalid/u);
+    await expect(provider.prepare!(lifecycle)).rejects.toThrow(/must be undefined/u);
+    await expect(provider.connect!([], lifecycle)).rejects.toThrow();
+    await expect(provider.poll!("flow-1", lifecycle)).rejects.toThrow();
+    await expect(provider.disconnect!(lifecycle)).rejects.toThrow(/must be undefined/u);
+    await expect(provider.invoke("fixture.records.list", { topic: "bigint" })).rejects.toThrow(
+      /plain JSON values/u,
+    );
+    await expect(provider.invoke("fixture.records.list", { topic: "getter" })).rejects.toThrow(
+      /plain JSON value/u,
+    );
+    await expect(provider.invoke("fixture.records.list", { topic: "cycle" })).rejects.toThrow(
+      /JSON cycle/u,
+    );
+    await expect(provider.close!()).rejects.toThrow(/must be undefined/u);
   });
 
   it("isolates module state by the complete admitted artifact", async () => {

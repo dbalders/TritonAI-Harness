@@ -1,12 +1,13 @@
-import type {
-  IntegrationConnectionSubmission,
+import {
   IntegrationConnectResult,
   IntegrationProviderPollResult,
+  type IntegrationConnectionSubmission,
 } from "@t3tools/contracts";
-import type {
-  JsonObject,
-  JsonSchema as PluginJsonSchema,
-  JsonValue,
+import {
+  type JsonObject,
+  type JsonSchema as PluginJsonSchema,
+  type JsonValue,
+  validateJsonValue,
 } from "@t3tools/shared/pluginSdkContract";
 import {
   type PluginSdkArtifactFile,
@@ -101,6 +102,53 @@ function compileJsonSchema(schema: PluginJsonSchema): Schema.Decoder<unknown> {
   ) as Schema.Decoder<unknown>;
 }
 
+const decodeConnectResult = Schema.decodeUnknownPromise(IntegrationConnectResult);
+const decodePollResult = Schema.decodeUnknownPromise(IntegrationProviderPollResult);
+
+function validateStatusResult(value: unknown): IntegrationProviderStatus {
+  const status = validateJsonValue(value, "Plugin SDK status");
+  if (!isRecord(status) || Object.keys(status).length !== 4) {
+    throw new Error("Plugin SDK status is invalid.");
+  }
+  const accountLabel =
+    typeof status.accountLabel === "string" ? status.accountLabel.trim() : status.accountLabel;
+  const message = typeof status.message === "string" ? status.message.trim() : status.message;
+  if (
+    typeof status.state !== "string" ||
+    !["not_connected", "connecting", "connected", "error"].includes(status.state) ||
+    (accountLabel !== null && (typeof accountLabel !== "string" || accountLabel.length === 0)) ||
+    !Array.isArray(status.grantedCapabilities) ||
+    status.grantedCapabilities.some(
+      (capability) => typeof capability !== "string" || capability.trim().length === 0,
+    ) ||
+    (message !== null && (typeof message !== "string" || message.length === 0))
+  ) {
+    throw new Error("Plugin SDK status is invalid.");
+  }
+  return {
+    state: status.state as IntegrationProviderStatus["state"],
+    accountLabel: accountLabel as string | null,
+    grantedCapabilities: [
+      ...new Set(status.grantedCapabilities.map((capability) => capability.trim())),
+    ],
+    message: message as string | null,
+  };
+}
+
+function validateVoidResult(value: unknown): void {
+  if (value !== undefined) throw new Error("Plugin SDK lifecycle result must be undefined.");
+}
+
+const validateConnectResult = (value: unknown): Promise<IntegrationConnectResult> =>
+  decodeConnectResult(validateJsonValue(value, "Plugin SDK connect result"), {
+    onExcessProperty: "error",
+  });
+
+const validatePollResult = (value: unknown): Promise<IntegrationProviderPollResult> =>
+  decodePollResult(validateJsonValue(value, "Plugin SDK poll result"), {
+    onExcessProperty: "error",
+  });
+
 function secretStore(
   secrets: ServerSecretStore.ServerSecretStore["Service"],
   pluginId: string,
@@ -147,9 +195,12 @@ function invocationContext(
   };
 }
 
-async function invokeBoundary<A>(operation: () => Promise<A>): Promise<A> {
+async function invokeBoundary<A>(
+  operation: () => unknown | Promise<unknown>,
+  validate: (value: unknown) => A | Promise<A>,
+): Promise<A> {
   try {
-    return await operation();
+    return await validate(await operation());
   } catch (error) {
     if (
       isRecord(error) &&
@@ -172,41 +223,55 @@ function adaptProvider(
     id: provider.id,
     tools,
     status: (context) =>
-      invokeBoundary(() =>
-        provider.status({ signal: context?.signal ?? new AbortController().signal }),
+      invokeBoundary(
+        () => provider.status({ signal: context?.signal ?? new AbortController().signal }),
+        validateStatusResult,
       ),
     ...(provider.prepare
-      ? { prepare: (context) => invokeBoundary(() => provider.prepare!(lifecycleContext(context))) }
+      ? {
+          prepare: (context) =>
+            invokeBoundary(() => provider.prepare!(lifecycleContext(context)), validateVoidResult),
+        }
       : {}),
     ...(provider.connect
       ? {
           connect: (capabilities, context, submission) =>
-            invokeBoundary(() =>
-              provider.connect!(capabilities, lifecycleContext(context), submission),
+            invokeBoundary(
+              () => provider.connect!(capabilities, lifecycleContext(context), submission),
+              validateConnectResult,
             ),
         }
       : {}),
     ...(provider.poll
       ? {
           poll: (flowId, context) =>
-            invokeBoundary(() => provider.poll!(flowId, lifecycleContext(context))),
+            invokeBoundary(
+              () => provider.poll!(flowId, lifecycleContext(context)),
+              validatePollResult,
+            ),
         }
       : {}),
     ...(provider.disconnect
       ? {
           disconnect: (context) =>
-            invokeBoundary(() => provider.disconnect!(lifecycleContext(context))),
+            invokeBoundary(
+              () => provider.disconnect!(lifecycleContext(context)),
+              validateVoidResult,
+            ),
         }
       : {}),
     invoke: (toolName, input, context) => {
       if (!isRecord(input)) {
         return Promise.reject(new Error(`Plugin SDK tool ${toolName} input must be an object.`));
       }
-      return invokeBoundary(() =>
-        provider.invoke(toolName, input as JsonObject, invocationContext(context)),
+      return invokeBoundary(
+        () => provider.invoke(toolName, input as JsonObject, invocationContext(context)),
+        (value) => validateJsonValue(value, "Plugin SDK invocation result"),
       );
     },
-    ...(provider.close ? { close: () => invokeBoundary(() => provider.close!()) } : {}),
+    ...(provider.close
+      ? { close: () => invokeBoundary(() => provider.close!(), validateVoidResult) }
+      : {}),
   };
 }
 

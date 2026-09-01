@@ -119,6 +119,7 @@ function assertJson(
   path = "$",
   depth = 0,
   budget = { nodes: 0 },
+  ancestors = new Set<object>(),
 ): asserts value is JsonValue {
   budget.nodes += 1;
   assert(budget.nodes <= MAX_JSON_NODES, `${path} exceeds the JSON node limit.`);
@@ -130,19 +131,50 @@ function assertJson(
   }
   if (Array.isArray(value)) {
     assert(value.length <= 1_024, `${path} exceeds the JSON array limit.`);
-    value.forEach((item, index) => assertJson(item, `${path}[${index}]`, depth + 1, budget));
+    assert(!ancestors.has(value), `${path} contains a JSON cycle.`);
+    ancestors.add(value);
+    assert(
+      Reflect.ownKeys(value).length === value.length + 1,
+      `${path} must be a dense JSON array.`,
+    );
+    for (let index = 0; index < value.length; index += 1) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+      assert(
+        descriptor?.enumerable === true && Object.hasOwn(descriptor, "value"),
+        `${path}[${index}] must be a plain JSON value.`,
+      );
+      assertJson(descriptor.value, `${path}[${index}]`, depth + 1, budget, ancestors);
+    }
+    ancestors.delete(value);
     return;
   }
   assert(isRecord(value), `${path} must contain only plain JSON values.`);
+  assert(!ancestors.has(value), `${path} contains a JSON cycle.`);
+  ancestors.add(value);
   const keys = Object.keys(value);
+  assert(
+    Reflect.ownKeys(value).length === keys.length,
+    `${path} must contain only enumerable string keys.`,
+  );
   assert(keys.length <= 1_024, `${path} exceeds the JSON member limit.`);
   for (const key of keys) {
     assert(
       key.length > 0 && key.length <= 256 && key !== "__proto__",
       `${path} has an invalid key.`,
     );
-    assertJson(value[key], `${path}.${key}`, depth + 1, budget);
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    assert(
+      descriptor?.enumerable === true && Object.hasOwn(descriptor, "value"),
+      `${path}.${key} must be a plain JSON value.`,
+    );
+    assertJson(descriptor.value, `${path}.${key}`, depth + 1, budget, ancestors);
   }
+  ancestors.delete(value);
+}
+
+export function validateJsonValue(value: unknown, label = "JSON value"): JsonValue {
+  assertJson(value, label);
+  return value;
 }
 
 export function canonicalJson(value: JsonValue): string {
@@ -233,8 +265,11 @@ function validateSchema(value: unknown, label: string): JsonSchema {
     }
   };
 
+  const inspected = new Set<object>();
   const inspect = (current: JsonValue, path: string): void => {
     if (!isRecord(current)) return;
+    if (inspected.has(current)) return;
+    inspected.add(current);
     for (const keyword of [
       "$anchor",
       "$dynamicAnchor",
@@ -270,7 +305,7 @@ function validateSchema(value: unknown, label: string): JsonSchema {
     }
     if (current.$ref !== undefined) {
       assert(typeof current.$ref === "string", `${path} has an invalid $ref.`);
-      resolveReference(current.$ref, `${path}.$ref`);
+      inspect(resolveReference(current.$ref, `${path}.$ref`), `${path}.$ref target`);
     }
     visitSubschemas(current as JsonObject, path, inspect);
   };
