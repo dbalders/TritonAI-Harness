@@ -91,7 +91,7 @@ const DEFAULT_MAXIMUM_LIFETIME_MS = 8 * 60 * 60 * 1_000;
 // credential are active. Keeping it stable lets a user activate a plugin without restarting
 // an already-running provider session.
 export const providerSessionCapabilities = (): ReadonlySet<McpInvocationContext.McpCapability> =>
-  new Set<McpInvocationContext.McpCapability>(["preview", "integrations.invoke", "commons.submit"]);
+  new Set<McpInvocationContext.McpCapability>(["preview", "integrations.invoke"]);
 
 const bytesToHex = (bytes: Uint8Array): string =>
   Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");

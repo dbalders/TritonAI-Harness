@@ -24,10 +24,7 @@ import {
   PreviewToolkit,
 } from "./toolkits/preview/tools.ts";
 import { registrationLayer as integrationToolsRegistrationLayer } from "./IntegrationTools.ts";
-import {
-  registrationLayer as tritonAiCommonsToolRegistrationLayer,
-  TRITONAI_COMMONS_SUBMIT_TOOL_NAME,
-} from "./TritonAiCommonsTool.ts";
+import { TRITONAI_COMMONS_SUBMIT_TOOL_NAME } from "./TritonAiCommonsTool.ts";
 
 const unauthorized = HttpServerResponse.jsonUnsafe(
   {
@@ -239,11 +236,9 @@ export const makeLayer = (
   const integrationToolsRegistration = loadRegistry
     ? integrationToolsRegistrationLayer(reservedToolNames, loadRegistry)
     : integrationToolsRegistrationLayer(reservedToolNames);
-  return Layer.mergeAll(
-    PreviewToolkitRegistrationLive,
-    tritonAiCommonsToolRegistrationLayer,
-    integrationToolsRegistration,
-  ).pipe(Layer.provideMerge(McpTransportLive));
+  return Layer.mergeAll(PreviewToolkitRegistrationLive, integrationToolsRegistration).pipe(
+    Layer.provideMerge(McpTransportLive),
+  );
 };
 
 export const layer = makeLayer();

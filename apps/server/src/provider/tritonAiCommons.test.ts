@@ -2,6 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 import type { ServerProviderSkillBundle } from "@t3tools/contracts";
 
 import {
+  isProtectedLocalSkillPathForCommons,
   prepareTritonAiCommonsSubmission,
   submitProviderSkillToTritonAiCommons,
   type CommonsIntegrationRegistry,
@@ -10,6 +11,7 @@ import {
 const GITHUB_MISSING = "GitHub could not find that item, or the signed-in user cannot access it.";
 const TEST_LICENSE =
   "MIT License\n\nCopyright (c) 2026 The Regents of the University of California\n";
+const BASE_SHA = "a".repeat(40);
 const TOOL_NAMES = [
   "github.identity.get",
   "github.repositories.get",
@@ -18,7 +20,9 @@ const TOOL_NAMES = [
   "github.contents.get",
   "github.contents.put",
   "github.pulls.list",
+  "github.pulls.get",
   "github.pulls.create",
+  "github.commits.status.get",
 ];
 
 interface Invocation {
@@ -37,7 +41,7 @@ function localSkill(markdown?: string): ServerProviderSkillBundle {
         path: "SKILL.md",
         content:
           markdown ??
-          `---\nname: local-accessibility-review\ndescription: Review a public webpage for accessibility issues.\nallowed-tools: Read, Bash\nmetadata:\n  author: Local Team\n---\n\n# Accessibility Review\n\nReview the page and report prioritized remediation steps.\n`,
+          `---\nname: local-accessibility-review\ndescription: Review a public webpage for accessibility issues.\nallowed-tools: Read, Bash\n---\n\n# Accessibility Review\n\nReview the page and report prioritized remediation steps.\n`,
       },
       {
         path: "references/checklist.md",
@@ -54,12 +58,15 @@ function registryFixture(options?: {
   readonly forkExists?: boolean;
   readonly wrongFork?: boolean;
   readonly closePullAfterCreation?: boolean;
+  readonly branchExistsWithoutPull?: boolean;
+  readonly pullChangedFilesDelta?: number;
+  readonly staleFork?: boolean;
 }) {
   const calls: Invocation[] = [];
   const login = options?.login ?? "contributor";
   const availableTools = options?.availableTools ?? TOOL_NAMES;
   let forkCreated = false;
-  let branchCreated = false;
+  let branchCreated = options?.branchExistsWithoutPull === true;
   let pullCreated = false;
   const branchFiles = new Map<string, string>();
   const registry: CommonsIntegrationRegistry = {
@@ -86,9 +93,21 @@ function registryFixture(options?: {
           },
         };
       }
+      if (name === "github.commits.status.get") {
+        const { owner, ref } = input as { owner: string; ref: string };
+        if (ref === "main") {
+          return {
+            sha: options?.staleFork === true && owner !== "dbalders" ? "c".repeat(40) : BASE_SHA,
+          };
+        }
+        if (ref.startsWith("tritonai-commons/") && branchCreated) {
+          return { sha: branchFiles.size === 0 ? BASE_SHA : "b".repeat(40) };
+        }
+        throw new Error(GITHUB_MISSING);
+      }
       if (name === "github.contents.get") {
         const { path, ref } = input as { path: string; ref: string };
-        if (path === "LICENSE" && ref === "main") {
+        if (path === "LICENSE" && ref === BASE_SHA) {
           return {
             type: "file",
             encoding: "base64",
@@ -130,12 +149,22 @@ function registryFixture(options?: {
         return pullCreated
           ? [
               {
+                number: 42,
                 html_url: "https://github.com/dbalders/UCSD-Skills-Library/pull/42",
                 draft: false,
                 state: options?.closePullAfterCreation ? "closed" : "open",
               },
             ]
           : [];
+      }
+      if (name === "github.pulls.get") {
+        return {
+          number: 42,
+          html_url: "https://github.com/dbalders/UCSD-Skills-Library/pull/42",
+          draft: false,
+          changed_files: branchFiles.size + (options?.pullChangedFilesDelta ?? 0),
+          base: { sha: BASE_SHA },
+        };
       }
       if (name === "github.pulls.create") {
         pullCreated = true;
@@ -163,15 +192,40 @@ describe("TritonAI Commons local skill submission", () => {
     expect(prepared.bundle.files.find(({ path }) => path === "SKILL.md")?.content).toContain(
       "allowed-tools: Read, Bash",
     );
-    expect(prepared.bundle.files.find(({ path }) => path === "SKILL.md")?.content).toContain(
-      "metadata:\n  author: Local Team",
-    );
     expect(
       prepared.bundle.files.find(({ path }) => path === "references/checklist.md")?.content,
     ).toContain("Keyboard access");
     expect(prepared.bundle.files.find(({ path }) => path === "LICENSE")?.content).toBe(
       TEST_LICENSE,
     );
+  });
+
+  it("rejects unsupported frontmatter instead of opening a review the validator will reject", () => {
+    expect(() =>
+      prepareTritonAiCommonsSubmission({
+        bundle: localSkill(
+          `---\nname: local-accessibility-review\ndescription: Review a public webpage.\ncustom-field: value\n---\n\n# Review\n`,
+        ),
+        githubLogin: "contributor",
+        repositoryLicense: TEST_LICENSE,
+      }),
+    ).toThrow("not supported by TritonAI Commons");
+  });
+
+  it("recognizes protected plugin skill paths case-insensitively on every platform", () => {
+    expect(
+      isProtectedLocalSkillPathForCommons(
+        "C:\\Users\\Contributor\\.CODEX\\plugins\\example\\skills\\demo\\SKILL.md",
+      ),
+    ).toBe(true);
+    expect(
+      isProtectedLocalSkillPathForCommons(
+        "C:\\Users\\Contributor\\.AGENTS\\PLUGINS\\example\\skills\\demo\\SKILL.md",
+      ),
+    ).toBe(true);
+    expect(
+      isProtectedLocalSkillPathForCommons("C:\\Users\\Contributor\\skills\\demo\\SKILL.md"),
+    ).toBe(false);
   });
 
   it("preserves an explicit maintainer from the local skill", () => {
@@ -197,6 +251,22 @@ describe("TritonAI Commons local skill submission", () => {
           files: [
             ...localSkill().files,
             { path: "references/private.md", content: `api_key=${"s".repeat(24)}` },
+          ],
+        },
+        githubLogin: "contributor",
+        repositoryLicense: TEST_LICENSE,
+      }),
+    ).toThrow("hardcoded credential");
+    expect(() =>
+      prepareTritonAiCommonsSubmission({
+        bundle: {
+          ...localSkill(),
+          files: [
+            ...localSkill().files,
+            {
+              path: "references/multiple.md",
+              content: `api_key=REPLACE_ME_WITH_TOKEN\npassword=${"s".repeat(24)}`,
+            },
           ],
         },
         githubLogin: "contributor",
@@ -277,6 +347,11 @@ describe("TritonAI Commons local skill submission", () => {
     });
     expect((pull.input as { body: string }).body).toContain("existing local skill");
     expect((pull.input as { body: string }).body).toContain("later maintainer decision");
+    expect(
+      fixture.calls.find(({ name }) => name === "github.branches.create")?.input,
+    ).toMatchObject({
+      fromRef: BASE_SHA,
+    });
   });
 
   it("creates a contributor fork but branches directly for the repository owner", async () => {
@@ -301,6 +376,19 @@ describe("TritonAI Commons local skill submission", () => {
     });
   });
 
+  it("requires an existing contributor fork to match the exact upstream base", async () => {
+    const fixture = registryFixture({ staleFork: true });
+
+    await expect(
+      submitProviderSkillToTritonAiCommons({
+        bundle: localSkill(),
+        registry: fixture.registry,
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow("not synchronized");
+    expect(fixture.calls.some(({ name }) => name === "github.branches.create")).toBe(false);
+  });
+
   it("reuses the content-addressed branch and existing ready pull request on retry", async () => {
     const fixture = registryFixture();
     const first = await submitProviderSkillToTritonAiCommons({
@@ -318,6 +406,36 @@ describe("TritonAI Commons local skill submission", () => {
     expect(fixture.calls.filter(({ name }) => name === "github.branches.create")).toHaveLength(1);
     expect(fixture.calls.filter(({ name }) => name === "github.pulls.create")).toHaveLength(1);
     expect(fixture.calls.filter(({ name }) => name === "github.contents.put")).toHaveLength(3);
+  });
+
+  it("refuses an unverified pre-existing branch without a pull request", async () => {
+    const fixture = registryFixture({ branchExistsWithoutPull: true });
+
+    await expect(
+      submitProviderSkillToTritonAiCommons({
+        bundle: localSkill(),
+        registry: fixture.registry,
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow("already exists without a verified pull request");
+    expect(fixture.calls.some(({ name }) => name === "github.contents.put")).toBe(false);
+  });
+
+  it("refuses to reuse a pull request with unrelated changed files", async () => {
+    const fixture = registryFixture({ pullChangedFilesDelta: 1 });
+    await submitProviderSkillToTritonAiCommons({
+      bundle: localSkill(),
+      registry: fixture.registry,
+      signal: new AbortController().signal,
+    });
+
+    await expect(
+      submitProviderSkillToTritonAiCommons({
+        bundle: localSkill(),
+        registry: fixture.registry,
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow("unexpected number of changed files");
   });
 
   it("does not report a previously closed pull request as a successful review", async () => {

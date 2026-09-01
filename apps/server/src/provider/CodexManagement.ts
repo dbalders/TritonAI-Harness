@@ -47,6 +47,7 @@ import {
   managedSkillManifestBlocksMutation,
 } from "./managedSkillManifest.ts";
 import { discoverPublicSkillCatalog } from "./publicSkillRepository.ts";
+import { isProtectedLocalSkillPathForCommons } from "./tritonAiCommons.ts";
 import {
   ensureProviderSkillRemovalPathIsSafe,
   providerSkillRemovalIdentityMatches,
@@ -606,13 +607,8 @@ export const loadProviderSkillForCommonsSubmission = Effect.fn(
   if (!path.isAbsolute(skill.path) || path.basename(skill.path) !== "SKILL.md") {
     return yield* commonsError("Only installed SKILL.md-backed skills can be submitted.");
   }
-  const normalizedPath = skill.path.replaceAll("\\", "/");
   const normalizedScope = skill.scope?.trim().toLowerCase();
-  if (
-    normalizedScope === "system" ||
-    normalizedPath.includes("/.codex/plugins/") ||
-    normalizedPath.includes("/.agents/plugins/")
-  ) {
+  if (normalizedScope === "system" || isProtectedLocalSkillPathForCommons(skill.path)) {
     return yield* commonsError("System and app-provided skills cannot be submitted to Commons.");
   }
 

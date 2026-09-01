@@ -1,17 +1,8 @@
 import { expect, it } from "@effect/vitest";
-import { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
-import * as Context from "effect/Context";
-import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
-import { McpSchema, McpServer } from "effect/unstable/ai";
+import { ProviderInstanceId } from "@t3tools/contracts";
 import { vi } from "vite-plus/test";
 
-import * as McpInvocationContext from "./McpInvocationContext.ts";
-import {
-  invokeTritonAiCommonsTool,
-  registrationLayer,
-  TRITONAI_COMMONS_SUBMIT_TOOL_NAME,
-} from "./TritonAiCommonsTool.ts";
+import { invokeTritonAiCommonsTool } from "./TritonAiCommonsTool.ts";
 
 const providerInstanceId = ProviderInstanceId.make("codex");
 const signal = new AbortController().signal;
@@ -81,35 +72,3 @@ it("rejects ambiguous or unconfirmed arguments before the domain service", async
   }
   expect(submit).not.toHaveBeenCalled();
 });
-
-it.effect(
-  "registers a destructive, idempotent tool only for Commons-scoped provider sessions",
-  () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const server = yield* McpServer.McpServer;
-        const registration = server.tools.find(
-          ({ tool }) => tool.name === TRITONAI_COMMONS_SUBMIT_TOOL_NAME,
-        );
-        expect(registration?.tool.annotations).toMatchObject({
-          readOnlyHint: false,
-          destructiveHint: true,
-          idempotentHint: true,
-        });
-        const enabledWhen = Context.getUnsafe(registration!.annotations, McpSchema.EnabledWhen);
-        const allowed = yield* Effect.sync(() => enabledWhen({} as never)).pipe(
-          Effect.provideService(McpInvocationContext.McpInvocationContext, {
-            environmentId: EnvironmentId.make("environment-1"),
-            threadId: ThreadId.make("thread-1"),
-            providerSessionId: "provider-session-1",
-            providerInstanceId,
-            capabilities: new Set<McpInvocationContext.McpCapability>(["commons.submit"]),
-            issuedAt: 1,
-          }),
-        );
-        expect(allowed).toBe(true);
-      }).pipe(
-        Effect.provide(registrationLayer.pipe(Layer.provideMerge(McpServer.McpServer.layer))),
-      ),
-    ),
-);

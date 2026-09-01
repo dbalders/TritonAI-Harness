@@ -24,11 +24,14 @@ const REQUIRED_GITHUB_TOOLS = [
   "github.contents.get",
   "github.contents.put",
   "github.pulls.list",
+  "github.pulls.get",
   "github.pulls.create",
+  "github.commits.status.get",
 ] as const;
 
 const NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
 const FRONTMATTER_KEY_PATTERN = /^[a-z][a-z0-9-]*$/u;
+const ALLOWED_FRONTMATTER = new Set(["name", "description", "maintainer", "allowed-tools"]);
 const FORBIDDEN_FRONTMATTER = new Set([
   "catalog",
   "tier",
@@ -55,7 +58,7 @@ const LEAK_PATTERNS = [
   /-----BEGIN[A-Z ]*PRIVATE KEY-----/u,
 ] as const;
 const CREDENTIAL_ASSIGNMENT =
-  /["']?\b(?:[a-z0-9]+[_-])*(?:api[_-]?key|secret|token|password|passwd|pwd)(?:[_-][a-z0-9]+)*\b["']?\s*[:=]\s*(?:["'][^\n"']{12,}["']|[A-Za-z0-9_./+=:@-]{12,})/iu;
+  /["']?\b(?:[a-z0-9]+[_-])*(?:api[_-]?key|secret|token|password|passwd|pwd)(?:[_-][a-z0-9]+)*\b["']?\s*[:=]\s*(?:["'][^\n"']{12,}["']|[A-Za-z0-9_./+=:@-]{12,})/giu;
 const PLACEHOLDER_MARKERS = [
   "...",
   "changeme",
@@ -152,8 +155,7 @@ function validatePublicBoundary(path: string, content: string): void {
       `${path} appears to contain a secret or credential. Remove it before submitting.`,
     );
   }
-  const assignment = CREDENTIAL_ASSIGNMENT.exec(content);
-  if (assignment) {
+  for (const assignment of content.matchAll(CREDENTIAL_ASSIGNMENT)) {
     const value = assignment[0].slice(assignment[0].search(/[:=]/u) + 1);
     if (!isPlaceholderCredential(value)) {
       throw commonsError(
@@ -161,6 +163,11 @@ function validatePublicBoundary(path: string, content: string): void {
       );
     }
   }
+}
+
+export function isProtectedLocalSkillPathForCommons(skillPath: string): boolean {
+  const normalized = skillPath.replaceAll("\\", "/").toLowerCase();
+  return normalized.includes("/.codex/plugins/") || normalized.includes("/.agents/plugins/");
 }
 
 function parseScalar(value: string, field: string): string {
@@ -226,6 +233,12 @@ function prepareSkillMarkdown(input: {
     if (!FRONTMATTER_KEY_PATTERN.test(key)) {
       throw commonsError(`Frontmatter key '${key}' is not supported.`);
     }
+    if (!ALLOWED_FRONTMATTER.has(key)) {
+      if (FORBIDDEN_FRONTMATTER.has(key)) {
+        throw commonsError(`Remove repository-only frontmatter before submitting: ${key}.`);
+      }
+      throw commonsError(`Frontmatter key '${key}' is not supported by TritonAI Commons.`);
+    }
     if (fields.has(key)) throw commonsError(`Frontmatter key '${key}' must not be repeated.`);
     const rawValue = line.slice(separator + 1);
     fields.set(
@@ -246,12 +259,6 @@ function prepareSkillMarkdown(input: {
   }
   if (!fields.get("description")) {
     throw commonsError("SKILL.md frontmatter must include a description before submission.");
-  }
-  const forbidden = [...fields.keys()].filter((key) => FORBIDDEN_FRONTMATTER.has(key));
-  if (forbidden.length > 0) {
-    throw commonsError(
-      `Remove repository-only frontmatter before submitting: ${forbidden.toSorted().join(", ")}.`,
-    );
   }
   if (!markdown.slice(closing + 5).trim()) {
     throw commonsError("SKILL.md must contain instructions after its frontmatter.");
@@ -442,6 +449,31 @@ async function repositoryMetadata(
   return result;
 }
 
+async function readCommitSha(input: {
+  readonly registry: CommonsIntegrationRegistry;
+  readonly signal: AbortSignal;
+  readonly owner: string;
+  readonly ref: string;
+  readonly allowMissing?: boolean;
+}): Promise<string | undefined> {
+  try {
+    const result = await invokeRead(input.registry, input.signal, "github.commits.status.get", {
+      owner: input.owner,
+      repo: COMMONS_REPOSITORY,
+      ref: input.ref,
+    });
+    if (!isRecord(result)) throw commonsError("GitHub returned invalid commit metadata.");
+    const sha = boundedString(result.sha, "commit SHA", 40);
+    if (!/^[0-9a-f]{40}$/u.test(sha)) {
+      throw commonsError("GitHub returned invalid commit SHA metadata.");
+    }
+    return sha;
+  } catch (error) {
+    if (input.allowMissing === true && isGitHubMissing(error)) return undefined;
+    throw error;
+  }
+}
+
 async function waitForFork(
   registry: CommonsIntegrationRegistry,
   signal: AbortSignal,
@@ -581,25 +613,41 @@ async function ensureSubmissionBranch(input: {
   readonly signal: AbortSignal;
   readonly owner: string;
   readonly branch: string;
-  readonly fromRef: string;
+  readonly baseCommitSha: string;
 }): Promise<void> {
-  // README.md is an upstream-owned sentinel that exists on every supported Commons base.
-  // A deterministic branch lets an interrupted authorization flow resume without creating
-  // unbounded orphan branches.
-  const existing = await readGitHubFile({
+  const existingSha = await readCommitSha({
     registry: input.registry,
     signal: input.signal,
     owner: input.owner,
-    path: "README.md",
     ref: input.branch,
+    allowMissing: true,
   });
-  if (existing) return;
+  if (existingSha !== undefined) {
+    throw commonsError(
+      "The deterministic Commons branch already exists without a verified pull request. Remove that branch on GitHub, then retry; Harness did not reuse or overwrite it.",
+      undefined,
+      "submission_failed",
+    );
+  }
   await invokeWrite(input.registry, input.signal, "github.branches.create", {
     owner: input.owner,
     repo: COMMONS_REPOSITORY,
     branch: input.branch,
-    fromRef: input.fromRef,
+    fromRef: input.baseCommitSha,
   });
+  const createdSha = await readCommitSha({
+    registry: input.registry,
+    signal: input.signal,
+    owner: input.owner,
+    ref: input.branch,
+  });
+  if (createdSha !== input.baseCommitSha) {
+    throw commonsError(
+      "GitHub did not create the Commons branch from the verified upstream commit. No skill files were written.",
+      undefined,
+      "submission_failed",
+    );
+  }
 }
 
 async function putSubmissionFile(input: {
@@ -643,6 +691,11 @@ async function findExistingSubmissionPullRequest(input: {
   readonly signal: AbortSignal;
   readonly head: string;
   readonly base: string;
+  readonly baseCommitSha: string;
+  readonly branchOwner: string;
+  readonly branch: string;
+  readonly skillName: string;
+  readonly files: ReadonlyArray<ServerProviderSkillBundleFile>;
 }): Promise<string | undefined> {
   const value = await invokeRead(input.registry, input.signal, "github.pulls.list", {
     owner: COMMONS_OWNER,
@@ -668,14 +721,55 @@ async function findExistingSubmissionPullRequest(input: {
     }
     return undefined;
   }
-  if (pull.draft === true) {
+  if (typeof pull.number !== "number" || !Number.isSafeInteger(pull.number) || pull.number < 1) {
+    throw commonsError("GitHub returned invalid pull-request number metadata.");
+  }
+  const detailValue = await invokeRead(input.registry, input.signal, "github.pulls.get", {
+    owner: COMMONS_OWNER,
+    repo: COMMONS_REPOSITORY,
+    number: pull.number,
+  });
+  if (!isRecord(detailValue)) throw commonsError("GitHub returned invalid pull-request metadata.");
+  if (detailValue.draft === true) {
     throw commonsError(
       "The resumable Commons pull request is unexpectedly a draft. Open it on GitHub and mark it ready for review before retrying.",
       undefined,
       "submission_failed",
     );
   }
-  const reviewUrl = boundedString(pull.html_url, "pull-request URL");
+  const pullBase = detailValue.base;
+  if (!isRecord(pullBase) || pullBase.sha !== input.baseCommitSha) {
+    throw commonsError(
+      "The existing Commons review is not based on the verified upstream commit. Harness did not reuse it.",
+      undefined,
+      "submission_failed",
+    );
+  }
+  if (detailValue.changed_files !== input.files.length) {
+    throw commonsError(
+      "The existing Commons review contains an unexpected number of changed files. Harness did not reuse or modify it.",
+      undefined,
+      "submission_failed",
+    );
+  }
+  for (const file of input.files) {
+    const path = `community/${input.skillName}/${file.path}`;
+    const existing = await readGitHubFile({
+      registry: input.registry,
+      signal: input.signal,
+      owner: input.branchOwner,
+      path,
+      ref: input.branch,
+    });
+    if (!existing || decodeGitHubTextFile(existing, path) !== file.content) {
+      throw commonsError(
+        `The existing Commons review contains unexpected content at ${path}. Harness did not reuse or modify it.`,
+        undefined,
+        "submission_failed",
+      );
+    }
+  }
+  const reviewUrl = boundedString(detailValue.html_url, "pull-request URL");
   if (!reviewUrl.startsWith("https://github.com/")) {
     throw commonsError("GitHub returned an unsafe pull-request URL.");
   }
@@ -694,12 +788,19 @@ export async function submitProviderSkillToTritonAiCommons(input: {
     const login = boundedString(identityValue.login, "identity login", 100);
     const upstream = await repositoryMetadata(input.registry, input.signal, COMMONS_OWNER);
     const base = boundedString(upstream.default_branch, "default branch", 255);
+    const baseCommitSha = await readCommitSha({
+      registry: input.registry,
+      signal: input.signal,
+      owner: COMMONS_OWNER,
+      ref: base,
+    });
+    if (!baseCommitSha) throw commonsError("GitHub did not return the Commons base commit.");
     const repositoryLicenseFile = await readGitHubFile({
       registry: input.registry,
       signal: input.signal,
       owner: COMMONS_OWNER,
       path: "LICENSE",
-      ref: base,
+      ref: baseCommitSha,
     });
     if (!repositoryLicenseFile) {
       throw commonsError(
@@ -719,7 +820,7 @@ export async function submitProviderSkillToTritonAiCommons(input: {
       signal: input.signal,
       owner: COMMONS_OWNER,
       name,
-      ref: base,
+      ref: baseCommitSha,
     });
 
     let targetOwner = COMMONS_OWNER;
@@ -738,24 +839,48 @@ export async function submitProviderSkillToTritonAiCommons(input: {
       }
       verifyCommonsFork(fork);
       const forkBase = boundedString(fork.default_branch, "fork default branch", 255);
-      await assertSkillIsUnpublished({
+      const forkBaseCommitSha = await readCommitSha({
         registry: input.registry,
         signal: input.signal,
         owner: login,
-        name,
         ref: forkBase,
       });
+      if (forkBaseCommitSha !== baseCommitSha) {
+        throw commonsError(
+          "Your TritonAI Commons fork is not synchronized with the current upstream branch. Use Sync fork on GitHub, then retry; Harness did not create or modify a contribution branch.",
+          undefined,
+          "submission_failed",
+        );
+      }
     }
 
     const branch = `tritonai-commons/${name}-${prepared.digest.slice(0, 16)}`;
-    const target = await repositoryMetadata(input.registry, input.signal, targetOwner);
-    const fromRef = boundedString(target.default_branch, "target default branch", 255);
+    const pullHead = `${login}:${branch}`;
+    const existingReviewUrl = await findExistingSubmissionPullRequest({
+      registry: input.registry,
+      signal: input.signal,
+      head: pullHead,
+      base,
+      baseCommitSha,
+      branchOwner: targetOwner,
+      branch,
+      skillName: name,
+      files: prepared.bundle.files,
+    });
+    if (existingReviewUrl) {
+      return {
+        reviewUrl: existingReviewUrl,
+        branch,
+        path: `community/${name}/SKILL.md`,
+        skillName: name,
+      };
+    }
     await ensureSubmissionBranch({
       registry: input.registry,
       signal: input.signal,
       owner: targetOwner,
       branch,
-      fromRef,
+      baseCommitSha,
     });
     for (const file of prepared.bundle.files) {
       await putSubmissionFile({
@@ -766,21 +891,6 @@ export async function submitProviderSkillToTritonAiCommons(input: {
         skillName: name,
         file,
       });
-    }
-    const pullHead = `${login}:${branch}`;
-    const existingReviewUrl = await findExistingSubmissionPullRequest({
-      registry: input.registry,
-      signal: input.signal,
-      head: pullHead,
-      base,
-    });
-    if (existingReviewUrl) {
-      return {
-        reviewUrl: existingReviewUrl,
-        branch,
-        path: `community/${name}/SKILL.md`,
-        skillName: name,
-      };
     }
     const pullValue = await invokeWrite(input.registry, input.signal, "github.pulls.create", {
       owner: COMMONS_OWNER,
