@@ -154,10 +154,12 @@ Connection results are discriminated by `kind`. The current contract and UI impl
 `kind: "authorization_url"`, with a bounded HTTPS authorization URL, expiry, and polling interval
 for system-browser flows whose local provider owns callback completion; and
 `kind: "api_key"`, with an opaque, length-bounded submission that goes directly to the provider's
-server-side commit boundary. A successful API-key submission returns `kind: "connected"`; the key
-is never included in a result. Other connection experiences must extend the union with
-their own secure submission contract and rendering instead of pretending to use another flow's
-fields or adding ambiguous optional fields.
+server-side commit boundary. Host contract level 2 also lets an API-key flow provide a bounded HTTPS
+setup URL and up to six bounded, plain-text setup steps. The client renders the URL as an explicit
+system-browser button before the secure key field. A successful API-key submission returns
+`kind: "connected"`; the key is never included in a result. Other connection experiences must
+extend the union with their own secure submission contract and rendering instead of pretending to
+use another flow's fields.
 
 Connecting requests only the plugin's enabled capabilities. Enabling an ability whose provider
 grant is missing starts the same explicit authorization flow; the ability remains unavailable until

@@ -95,6 +95,37 @@ describe("PluginsSettings connection action", () => {
     expect(markup).not.toContain("userCode");
   });
 
+  it("walks API-key users through setup with a safe system-browser deep link", () => {
+    const flow = {
+      kind: "api_key",
+      flowId: "flow-api-key",
+      label: "UCSD Kuali Build API key",
+      placeholder: null,
+      message: "Create an API key in your Kuali account, then paste it below.",
+      setupUrl: "https://ucsd.kualibuild.com/build/space/favorites/account/api-keys",
+      setupInstructions: [
+        "Sign in with your UC San Diego account.",
+        "Create an API key and copy it.",
+        "Return here, paste the key, and select Connect.",
+      ],
+    } satisfies IntegrationConnectResult;
+    const markup = renderToStaticMarkup(
+      <IntegrationAuthorizationFlow
+        integrationName="UC San Diego Kuali Build"
+        flow={flow}
+        busy={false}
+        onApiKeySubmit={async () => undefined}
+      />,
+    );
+    expect(markup).toContain("Sign in with your UC San Diego account.");
+    expect(markup).toContain("Create an API key and copy it.");
+    expect(markup).toContain(
+      'href="https://ucsd.kualibuild.com/build/space/favorites/account/api-keys"',
+    );
+    expect(markup).toContain('target="_blank"');
+    expect(markup).toContain("Open API key settings");
+  });
+
   it("persists and expands the enabled-but-unconnected action state", () => {
     expect(integrationNeedsConnectionAction(summary())).toBe(true);
     expect(integrationNeedsConnectionAction(summary({ connectionState: "error" }))).toBe(true);
