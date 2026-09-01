@@ -1,0 +1,27 @@
+diff --git a/typescript/dist/resolve-lib.js b/typescript/dist/resolve-lib.js
+--- a/typescript/dist/resolve-lib.js
++++ b/typescript/dist/resolve-lib.js
+@@ -87,6 +87,16 @@ function libFileName(crateName, platform) {
+     const ext = platform === "darwin" ? "dylib" : "so";
+     return `lib${crateName}.${ext}`;
+ }
++function resolveUnpackedAsarPath(binaryPath) {
++    const pathSegments = binaryPath.split(node_path_1.sep);
++    const asarIndex = pathSegments.findLastIndex((segment) => segment.endsWith(".asar"));
++    if (asarIndex === -1) {
++        return binaryPath;
++    }
++    pathSegments[asarIndex] = `${pathSegments[asarIndex]}.unpacked`;
++    const unpackedPath = pathSegments.join(node_path_1.sep);
++    return (0, node_fs_1.existsSync)(unpackedPath) ? unpackedPath : binaryPath;
++}
+ function resolveLibPath(opts) {
+     if ("override" in opts && opts.override !== undefined) {
+         return resolveOverride(opts.crateName, opts.override);
+@@ -166,5 +176,5 @@ function resolveNpmPackage(crateName, callerUrl, npmPackageBase, tripleStyle) {
+             attempted: [binaryPath],
+         });
+     }
+-    return binaryPath;
++    return resolveUnpackedAsarPath(binaryPath);
+ }
