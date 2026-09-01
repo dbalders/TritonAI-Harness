@@ -85,7 +85,6 @@ export interface GitRemoteStatusDetails {
 export interface GitPreparedCommitContext {
   stagedSummary: string;
   stagedPatch: string;
-  treeHash: string;
 }
 
 export interface ExecuteGitProgress {
@@ -117,7 +116,6 @@ export interface GitCommitOptions {
   readonly progress?: GitCommitProgress;
   readonly stage?: {
     readonly filePaths?: readonly string[];
-    readonly expectedTreeHash?: string;
   };
 }
 

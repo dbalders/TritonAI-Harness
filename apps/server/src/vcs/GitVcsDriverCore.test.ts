@@ -1647,10 +1647,7 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
           assert.equal(yield* git(cwd, ["diff", "--cached", "--name-only"]), "");
 
           const commit = yield* driver.commit(cwd, "Add a", "", {
-            stage: {
-              filePaths: ["a.txt"],
-              expectedTreeHash: context!.treeHash,
-            },
+            stage: { filePaths: ["a.txt"] },
           });
           assert.match(commit.commitSha, /^[a-f0-9]{40}$/);
           assert.equal(yield* git(cwd, ["log", "-1", "--pretty=%s"]), "Add a");
@@ -1670,14 +1667,11 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         yield* writeTextFile(cwd, "selected[1].txt", "literal\n");
         yield* writeTextFile(cwd, "selected1.txt", "pattern match\n");
 
-        const context = yield* driver.prepareCommitContext(cwd, ["selected[1].txt"]);
+        yield* driver.prepareCommitContext(cwd, ["selected[1].txt"]);
 
         assert.equal(yield* git(cwd, ["diff", "--cached", "--name-only"]), "");
         yield* driver.commit(cwd, "Add literal path", "", {
-          stage: {
-            filePaths: ["selected[1].txt"],
-            expectedTreeHash: context!.treeHash,
-          },
+          stage: { filePaths: ["selected[1].txt"] },
         });
         assert.equal(
           yield* git(cwd, ["diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"]),
@@ -1686,83 +1680,6 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
 
         const status = yield* git(cwd, ["status", "--porcelain"]);
         assert.include(status, "?? selected1.txt");
-      }),
-    );
-
-    it.effect("restores the exact index when a commit hook fails", () =>
-      Effect.gen(function* () {
-        const cwd = yield* makeTmpDir();
-        yield* initRepoWithCommit(cwd);
-        const driver = yield* GitVcsDriver.GitVcsDriver;
-        const fileSystem = yield* FileSystem.FileSystem;
-        const pathService = yield* Path.Path;
-
-        yield* writeTextFile(cwd, "README.md", "staged before commit flow\n");
-        yield* git(cwd, ["add", "README.md"]);
-        yield* writeTextFile(cwd, "new-file.txt", "new\n");
-
-        const indexPath = pathService.join(cwd, ".git", "index");
-        const originalIndex = yield* fileSystem.readFile(indexPath);
-        const headBefore = yield* git(cwd, ["rev-parse", "HEAD"]);
-        const context = yield* driver.prepareCommitContext(cwd);
-        assert.deepEqual(
-          Array.from(yield* fileSystem.readFile(indexPath)),
-          Array.from(originalIndex),
-        );
-
-        const hookPath = pathService.join(cwd, ".git", "hooks", "pre-commit");
-        yield* fileSystem.writeFileString(hookPath, "#!/bin/sh\nexit 1\n");
-        yield* fileSystem.chmod(hookPath, 0o755);
-
-        const error = yield* driver
-          .commit(cwd, "This commit should fail", "", {
-            stage: { expectedTreeHash: context!.treeHash },
-          })
-          .pipe(Effect.flip);
-
-        assert.equal(error._tag, "GitCommandError");
-        assert.equal(yield* git(cwd, ["rev-parse", "HEAD"]), headBefore);
-        assert.deepEqual(
-          Array.from(yield* fileSystem.readFile(indexPath)),
-          Array.from(originalIndex),
-        );
-        const status = yield* git(cwd, ["status", "--porcelain"]);
-        assert.include(status, "M  README.md");
-        assert.include(status, "?? new-file.txt");
-      }),
-    );
-
-    it.effect("does not commit changes made after the commit context was prepared", () =>
-      Effect.gen(function* () {
-        const cwd = yield* makeTmpDir();
-        yield* initRepoWithCommit(cwd);
-        const driver = yield* GitVcsDriver.GitVcsDriver;
-        const fileSystem = yield* FileSystem.FileSystem;
-        const pathService = yield* Path.Path;
-
-        yield* writeTextFile(cwd, "README.md", "staged before commit flow\n");
-        yield* git(cwd, ["add", "README.md"]);
-        yield* writeTextFile(cwd, "new-file.txt", "first version\n");
-
-        const indexPath = pathService.join(cwd, ".git", "index");
-        const originalIndex = yield* fileSystem.readFile(indexPath);
-        const headBefore = yield* git(cwd, ["rev-parse", "HEAD"]);
-        const context = yield* driver.prepareCommitContext(cwd);
-        yield* writeTextFile(cwd, "new-file.txt", "changed during generation\n");
-
-        const error = yield* driver
-          .commit(cwd, "Do not commit stale context", "", {
-            stage: { expectedTreeHash: context!.treeHash },
-          })
-          .pipe(Effect.flip);
-
-        assert.equal(error._tag, "GitCommandError");
-        assert.include(error.detail, "working tree changed");
-        assert.equal(yield* git(cwd, ["rev-parse", "HEAD"]), headBefore);
-        assert.deepEqual(
-          Array.from(yield* fileSystem.readFile(indexPath)),
-          Array.from(originalIndex),
-        );
       }),
     );
   });
@@ -1855,10 +1772,8 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
           refName: "feature/push",
         });
         yield* writeTextFile(cwd, "feature.txt", "feature\n");
-        const context = yield* (yield* GitVcsDriver.GitVcsDriver).prepareCommitContext(cwd);
-        yield* (yield* GitVcsDriver.GitVcsDriver).commit(cwd, "Add feature", "", {
-          stage: { expectedTreeHash: context!.treeHash },
-        });
+        yield* git(cwd, ["add", "-A"]);
+        yield* (yield* GitVcsDriver.GitVcsDriver).commit(cwd, "Add feature", "");
 
         const pushed = yield* (yield* GitVcsDriver.GitVcsDriver).pushCurrentBranch(cwd, null);
         assert.deepInclude(pushed, {
@@ -1929,10 +1844,8 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
           yield* git(cwd, ["remote", "add", "origin", remote]);
           yield* git(cwd, ["push", "-u", "origin", "main"]);
           yield* writeTextFile(cwd, "upstream.txt", "upstream\n");
-          const context = yield* driver.prepareCommitContext(cwd);
-          yield* driver.commit(cwd, "Add upstream update", "", {
-            stage: { expectedTreeHash: context!.treeHash },
-          });
+          yield* git(cwd, ["add", "-A"]);
+          yield* driver.commit(cwd, "Add upstream update", "");
 
           const pushed = yield* driver.pushCurrentBranch(cwd, null);
 
@@ -1972,10 +1885,8 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         const devSha = yield* git(cwd, ["rev-parse", "HEAD"]);
         yield* git(cwd, ["checkout", "-b", "feature/x", "origin/dev"]);
         yield* writeTextFile(cwd, "feature.txt", "feature\n");
-        const context = yield* driver.prepareCommitContext(cwd);
-        yield* driver.commit(cwd, "Add feature", "", {
-          stage: { expectedTreeHash: context!.treeHash },
-        });
+        yield* git(cwd, ["add", "-A"]);
+        yield* driver.commit(cwd, "Add feature", "");
 
         const pushed = yield* driver.pushCurrentBranch(cwd, null);
 
@@ -2008,10 +1919,8 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         yield* git(cwd, ["checkout", "-b", "feature/y", "origin/main"]);
         yield* git(cwd, ["config", "branch.feature/y.gh-merge-base", "release/v2"]);
         yield* writeTextFile(cwd, "feature.txt", "feature\n");
-        const context = yield* driver.prepareCommitContext(cwd);
-        yield* driver.commit(cwd, "Add feature", "", {
-          stage: { expectedTreeHash: context!.treeHash },
-        });
+        yield* git(cwd, ["add", "-A"]);
+        yield* driver.commit(cwd, "Add feature", "");
 
         const pushed = yield* driver.pushCurrentBranch(cwd, null);
 
@@ -2048,10 +1957,8 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
           "upstream/effect-atom",
         );
         yield* writeTextFile(cwd, "alias.txt", "alias\n");
-        const context = yield* driver.prepareCommitContext(cwd);
-        yield* driver.commit(cwd, "Add alias update", "", {
-          stage: { expectedTreeHash: context!.treeHash },
-        });
+        yield* git(cwd, ["add", "-A"]);
+        yield* driver.commit(cwd, "Add alias update", "");
 
         const pushed = yield* driver.pushCurrentBranch(cwd, null);
 

@@ -1834,104 +1834,72 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       })),
     );
 
-  const mapGitIndexError =
-    (
-      operation: string,
-      cwd: string,
-      detail: string,
-    ): ((cause: PlatformError.PlatformError) => GitCommandError) =>
-    (cause) =>
-      new GitCommandError({
-        ...gitCommandContext({ operation, cwd, args: ["index"] }),
-        detail,
-        cause,
-      });
-
-  const resolveGitIndexPath = Effect.fn("resolveGitIndexPath")(function* (cwd: string) {
-    const indexPath = yield* runGitStdout("GitVcsDriver.resolveGitIndexPath", cwd, [
-      "rev-parse",
-      "--git-path",
-      "index",
-    ]).pipe(Effect.map((stdout) => stdout.trim()));
-    if (indexPath.length === 0) {
-      return yield* new GitCommandError({
-        ...gitCommandContext({
-          operation: "GitVcsDriver.resolveGitIndexPath",
-          cwd,
-          args: ["rev-parse", "--git-path", "index"],
-        }),
-        detail: "Git returned an empty index path.",
-      });
-    }
-    return path.resolve(cwd, indexPath);
-  });
-
-  const stageCommitChanges = Effect.fn("stageCommitChanges")(function* (
+  const addCommitChanges = Effect.fn("addCommitChanges")(function* (
     cwd: string,
     filePaths: readonly string[] | undefined,
     env: NodeJS.ProcessEnv | undefined,
   ) {
     if (filePaths && filePaths.length > 0) {
-      yield* runGit("GitVcsDriver.stageCommitChanges.reset", cwd, ["reset"], { env }).pipe(
-        Effect.catchTags({
-          GitCommandError: () => Effect.void,
-        }),
-      );
       yield* runGit(
-        "GitVcsDriver.stageCommitChanges.addSelected",
+        "GitVcsDriver.addCommitChanges.addSelected",
         cwd,
         ["--literal-pathspecs", "add", "-A", "--", ...filePaths],
         { env },
       );
     } else {
-      yield* runGit("GitVcsDriver.stageCommitChanges.addAll", cwd, ["add", "-A"], { env });
+      yield* runGit("GitVcsDriver.addCommitChanges.addAll", cwd, ["add", "-A"], { env });
     }
+  });
+
+  const stageCommitChanges = Effect.fn("stageCommitChanges")(function* (
+    cwd: string,
+    filePaths: readonly string[] | undefined,
+  ) {
+    if (filePaths && filePaths.length > 0) {
+      yield* runGit("GitVcsDriver.stageCommitChanges.reset", cwd, ["reset"]).pipe(
+        Effect.catchTags({
+          GitCommandError: () => Effect.void,
+        }),
+      );
+    }
+    yield* addCommitChanges(cwd, filePaths, undefined);
   });
 
   const prepareCommitContext: GitVcsDriver.GitVcsDriver["Service"]["prepareCommitContext"] =
     Effect.fn("prepareCommitContext")(function* (cwd, filePaths) {
       return yield* Effect.scoped(
         Effect.gen(function* () {
-          const indexPath = yield* resolveGitIndexPath(cwd);
           const tempDirectory = yield* fileSystem
             .makeTempDirectoryScoped({ prefix: "t3code-git-index-" })
             .pipe(
               Effect.mapError(
-                mapGitIndexError(
-                  "GitVcsDriver.prepareCommitContext.createTemporaryIndex",
-                  cwd,
-                  "Failed to create a temporary Git index.",
-                ),
+                (cause) =>
+                  new GitCommandError({
+                    ...gitCommandContext({
+                      operation: "GitVcsDriver.prepareCommitContext.createTemporaryIndex",
+                      cwd,
+                      args: ["diff", "--cached"],
+                    }),
+                    detail: "Failed to create a temporary Git index.",
+                    cause,
+                  }),
               ),
             );
           const temporaryIndexPath = path.join(tempDirectory, "index");
-          const indexExists = yield* fileSystem
-            .exists(indexPath)
-            .pipe(
-              Effect.mapError(
-                mapGitIndexError(
-                  "GitVcsDriver.prepareCommitContext.checkIndex",
-                  cwd,
-                  "Failed to inspect the Git index.",
-                ),
-              ),
-            );
-          if (indexExists) {
-            yield* fileSystem
-              .copyFile(indexPath, temporaryIndexPath)
-              .pipe(
-                Effect.mapError(
-                  mapGitIndexError(
-                    "GitVcsDriver.prepareCommitContext.copyIndex",
-                    cwd,
-                    "Failed to copy the Git index.",
-                  ),
-                ),
-              );
-          }
-
           const env = { GIT_INDEX_FILE: temporaryIndexPath } satisfies NodeJS.ProcessEnv;
-          yield* stageCommitChanges(cwd, filePaths, env);
+          const head = yield* executeGit(
+            "GitVcsDriver.prepareCommitContext.resolveHead",
+            cwd,
+            ["rev-parse", "--verify", "HEAD"],
+            { allowNonZeroExit: true },
+          );
+          yield* runGit(
+            "GitVcsDriver.prepareCommitContext.readTree",
+            cwd,
+            head.exitCode === 0 ? ["read-tree", "HEAD"] : ["read-tree", "--empty"],
+            { env },
+          );
+          yield* addCommitChanges(cwd, filePaths, env);
 
           const stagedSummary = yield* runGitStdoutWithOptions(
             "GitVcsDriver.prepareCommitContext.stagedSummary",
@@ -1953,17 +1921,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
               appendTruncationMarker: true,
             },
           );
-          const treeHash = yield* runGitStdoutWithOptions(
-            "GitVcsDriver.prepareCommitContext.writeTree",
-            cwd,
-            ["write-tree"],
-            { env },
-          ).pipe(Effect.map((stdout) => stdout.trim()));
-
           return {
             stagedSummary,
             stagedPatch,
-            treeHash,
           };
         }),
       );
@@ -1990,108 +1950,20 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
             onStderrLine: (line: string) =>
               options.progress?.onOutputLine?.({ stream: "stderr", text: line }) ?? Effect.void,
           };
-    const runCommit = executeGit("GitVcsDriver.commit.commit", cwd, args, {
+    if (options?.stage) {
+      yield* stageCommitChanges(cwd, options.stage.filePaths);
+    }
+
+    yield* executeGit("GitVcsDriver.commit.commit", cwd, args, {
       ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
       ...(progress ? { progress } : {}),
     }).pipe(Effect.asVoid);
-    const readCommitSha = runGitStdout("GitVcsDriver.commit.revParseHead", cwd, [
+    const commitSha = yield* runGitStdout("GitVcsDriver.commit.revParseHead", cwd, [
       "rev-parse",
       "HEAD",
-    ]).pipe(Effect.map((stdout) => ({ commitSha: stdout.trim() })));
+    ]).pipe(Effect.map((stdout) => stdout.trim()));
 
-    if (!options?.stage) {
-      yield* runCommit;
-      return yield* readCommitSha;
-    }
-
-    yield* Effect.scoped(
-      Effect.gen(function* () {
-        const indexPath = yield* resolveGitIndexPath(cwd);
-        const tempDirectory = yield* fileSystem
-          .makeTempDirectoryScoped({ prefix: "t3code-git-index-backup-" })
-          .pipe(
-            Effect.mapError(
-              mapGitIndexError(
-                "GitVcsDriver.commit.createIndexBackup",
-                cwd,
-                "Failed to create a Git index backup directory.",
-              ),
-            ),
-          );
-        const backupIndexPath = path.join(tempDirectory, "index");
-        const indexExisted = yield* fileSystem
-          .exists(indexPath)
-          .pipe(
-            Effect.mapError(
-              mapGitIndexError(
-                "GitVcsDriver.commit.checkIndex",
-                cwd,
-                "Failed to inspect the Git index before committing.",
-              ),
-            ),
-          );
-        if (indexExisted) {
-          yield* fileSystem
-            .copyFile(indexPath, backupIndexPath)
-            .pipe(
-              Effect.mapError(
-                mapGitIndexError(
-                  "GitVcsDriver.commit.backupIndex",
-                  cwd,
-                  "Failed to back up the Git index before committing.",
-                ),
-              ),
-            );
-        }
-
-        const restoreIndex = indexExisted
-          ? fileSystem
-              .copyFile(backupIndexPath, indexPath)
-              .pipe(
-                Effect.mapError(
-                  mapGitIndexError(
-                    "GitVcsDriver.commit.restoreIndex",
-                    cwd,
-                    "The commit failed, and the original Git index could not be restored.",
-                  ),
-                ),
-              )
-          : fileSystem
-              .remove(indexPath, { force: true })
-              .pipe(
-                Effect.mapError(
-                  mapGitIndexError(
-                    "GitVcsDriver.commit.removeCreatedIndex",
-                    cwd,
-                    "The commit failed, and the newly created Git index could not be removed.",
-                  ),
-                ),
-              );
-
-        return yield* Effect.gen(function* () {
-          yield* stageCommitChanges(cwd, options.stage?.filePaths, undefined);
-          const stagedTreeHash = yield* runGitStdout("GitVcsDriver.commit.writeTree", cwd, [
-            "write-tree",
-          ]).pipe(Effect.map((stdout) => stdout.trim()));
-          if (
-            options.stage?.expectedTreeHash !== undefined &&
-            stagedTreeHash !== options.stage.expectedTreeHash
-          ) {
-            return yield* new GitCommandError({
-              ...gitCommandContext({
-                operation: "GitVcsDriver.commit.verifyPreparedTree",
-                cwd,
-                args: ["write-tree"],
-              }),
-              detail:
-                "The working tree changed while the commit message was being prepared. Review the changes and try again.",
-            });
-          }
-          yield* runCommit;
-        }).pipe(Effect.onExit((exit) => (Exit.isFailure(exit) ? restoreIndex : Effect.void)));
-      }),
-    );
-    return yield* readCommitSha;
+    return { commitSha };
   });
 
   const pushCurrentBranch: GitVcsDriver.GitVcsDriver["Service"]["pushCurrentBranch"] = Effect.fn(

@@ -489,7 +489,6 @@ interface CommitAndBranchSuggestion {
   body: string;
   branch?: string | undefined;
   commitMessage: string;
-  preparedTreeHash: string;
 }
 
 function isCommitAction(
@@ -1592,7 +1591,6 @@ export const make = Effect.gen(function* () {
             ? { branch: sanitizeFeatureBranchName(customCommit.subject) }
             : {}),
           commitMessage: formatCommitMessage(customCommit.subject, customCommit.body),
-          preparedTreeHash: context.treeHash,
         };
       }
 
@@ -1615,7 +1613,6 @@ export const make = Effect.gen(function* () {
         body: generated.body,
         ...(generated.branch !== undefined ? { branch: generated.branch } : {}),
         commitMessage: formatCommitMessage(generated.subject, generated.body),
-        preparedTreeHash: context.treeHash,
       };
     },
   );
@@ -1716,10 +1713,7 @@ export const make = Effect.gen(function* () {
     const { commitSha } = yield* gitCore.commit(cwd, suggestion.subject, suggestion.body, {
       timeoutMs: COMMIT_TIMEOUT_MS,
       ...(commitProgress ? { progress: commitProgress } : {}),
-      stage: {
-        ...(filePaths ? { filePaths } : {}),
-        expectedTreeHash: suggestion.preparedTreeHash,
-      },
+      stage: filePaths ? { filePaths } : {},
     });
     if (currentHookName !== null) {
       yield* emit({
