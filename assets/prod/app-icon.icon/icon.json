@@ -6,7 +6,7 @@
     {
       "layers": [
         {
-          "image-name": "tritonai-logo.png",
+          "image-name": "logo.svg",
           "name": "TritonAI Harness",
           "position": {
             "scale": 1,
