@@ -6,6 +6,8 @@ You can think of TritonAI Harness as an open source "bring-your-own-subscription
 
 TritonAI Harness is maintained by David Balderston as a downstream distribution of [T3 Code](https://github.com/pingdotgg/t3code). Preserve upstream-compatible architecture and behavior where practical while keeping intentional TritonAI and UCSD differences explicit.
 
+`TritonAI-Installer` owns installer packaging and managed-machine setup. Do not move installer-owned behavior into this repository.
+
 ## What makes TritonAI Harness special?
 
 TritonAI Harness inherits the product principles that make upstream T3 Code successful. Preserve those strengths while adapting the product deliberately for TritonAI users. Here's a brief list of the things we can never compromise on.
@@ -40,7 +42,7 @@ I like ambitious ideas, simple systems, and software that feels obvious. Do not 
 
 Channel both "measure twice, cut once" and "yagni". Fight scope creep. Try to honor the dev's intent in both a minimal and realistic fashion.
 
-The rest of this document is meant to help you navigate the codebase and make changes effectively. Think of these instructions less as "hard rules", more as "good defaults". The developer's preferences should be able to override anything here.
+The rest of this document is meant to help you navigate the codebase and make changes effectively. Think of these instructions less as "hard rules", more as "good defaults". Developer preferences may override ordinary defaults, but never the safety rules in "The three ways to hurt yourself".
 
 Of note: Contributors may use TritonAI Harness itself to make changes, often while controlling it remotely. This means you should be careful about accessing data, killing dev servers, and other things that may damage the TritonAI Harness instance that the contributor is using.
 
@@ -109,7 +111,7 @@ An empty database is a bad test. Seed your worktree's `.t3` with a copy of real 
 
 - Smallest proof that the change works. `vp test run <files>` for the tests you touched, targeted lint and typecheck for the scope you changed.
 - Test meaningful logic or observable behavior. Do not render components to static markup to assert props or attributes, or add tests that merely assert callback wiring or mirror the implementation.
-- **Do not run repo-wide checks.** No `vp check`, no `vp run -r test`, no `vp run -r typecheck` unless I ask. CI owns the full suite.
+- **Do not run repo-wide tests or typechecks during ordinary validation.** Before committing, run `vp check --fix` for formatting and lint. Do not run `vp run -r test` or `vp run -r typecheck` unless I ask; CI owns the full suite.
 - Backend behavior changes ship with focused tests for that behavior.
 - The server is event-sourced and its async flows emit typed receipts. Wait on receipts and worker drains, never on sleeps or polling. A test that needs a timeout to pass is wrong.
 - Upon request, user-visible frontend changes should get one integrated pass in a real client: `test-t3-app` for web, `test-t3-mobile` for mobile. The primary agent does this once after integrating. Subagents do not launch their own dev servers. Ask permission before doing computer use or spinning up browsers.
