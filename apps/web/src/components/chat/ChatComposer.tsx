@@ -341,13 +341,14 @@ import { insertVoiceTranscript } from "../../voiceInsertion";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 
-const runtimeModeConfig: Record<
+export const runtimeModeConfig: Record<
   RuntimeMode,
   { label: string; description: string; icon: LucideIcon }
 > = {
   "approval-required": {
     label: "Supervised",
-    description: "Ask before commands and file changes.",
+    description:
+      "Where supported, safe read-only commands may run; ask before commands needing more access, file changes, and write tools.",
     icon: LockIcon,
   },
   "auto-accept-edits": {
