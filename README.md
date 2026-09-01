@@ -20,7 +20,7 @@ Do not use the upstream T3 Code npm package for TritonAI Harness. It is not the 
 
 This is still early. Expect bugs.
 
-We are not taking outside PRs right now.
+TritonAI Commons accepts public skill contributions through Harness. Outside product-code PRs are not being accepted right now.
 
 There is no public docs site yet. Use the markdown files in [docs](./docs).
 
@@ -30,6 +30,7 @@ There is no public docs site yet. Use the markdown files in [docs](./docs).
 - [Remote access](./docs/user/remote-access.md)
 - [Keeping TritonAI Harness versions in sync](./docs/user/server-updates.md)
 - [Computer use](./docs/user/computer-use.md)
+- [TritonAI Commons](./docs/user/tritonai-commons.md)
 - [Architecture overview](./docs/architecture/overview.md)
 - [Codex provider guide](./docs/providers/codex.md)
 - [TritonAI downstream notes](./docs/tritonai-downstream.md)

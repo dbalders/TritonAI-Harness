@@ -133,6 +133,23 @@ export const ServerListProviderSkillCatalogResult = Schema.Struct({
 });
 export type ServerListProviderSkillCatalogResult = typeof ServerListProviderSkillCatalogResult.Type;
 
+export const ServerSubmitProviderSkillToTritonAiCommonsInput = Schema.Struct({
+  instanceId: ProviderInstanceId,
+  skillPath: TrimmedNonEmptyString,
+  confirmedPublicShare: Schema.Literal(true),
+});
+export type ServerSubmitProviderSkillToTritonAiCommonsInput =
+  typeof ServerSubmitProviderSkillToTritonAiCommonsInput.Type;
+
+export const ServerSubmitProviderSkillToTritonAiCommonsResult = Schema.Struct({
+  reviewUrl: TrimmedNonEmptyString,
+  branch: TrimmedNonEmptyString,
+  path: TrimmedNonEmptyString,
+  skillName: TrimmedNonEmptyString,
+});
+export type ServerSubmitProviderSkillToTritonAiCommonsResult =
+  typeof ServerSubmitProviderSkillToTritonAiCommonsResult.Type;
+
 export const ServerProviderSkillBundleFile = Schema.Struct({
   path: TrimmedNonEmptyString,
   content: Schema.String,
@@ -206,6 +223,21 @@ export class ServerProviderSkillCatalogError extends Schema.TaggedErrorClass<Ser
 export class ServerProviderSkillInstallError extends Schema.TaggedErrorClass<ServerProviderSkillInstallError>()(
   "ServerProviderSkillInstallError",
   {
+    message: TrimmedNonEmptyString,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
+
+export class ServerTritonAiCommonsError extends Schema.TaggedErrorClass<ServerTritonAiCommonsError>()(
+  "ServerTritonAiCommonsError",
+  {
+    code: Schema.Literals([
+      "invalid_skill",
+      "github_setup_required",
+      "already_exists",
+      "submission_failed",
+      "cancelled",
+    ]),
     message: TrimmedNonEmptyString,
     cause: Schema.optional(Schema.Defect()),
   },

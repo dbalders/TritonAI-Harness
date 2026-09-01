@@ -46,6 +46,7 @@ import {
 import { EmptyIntegrationToolInput } from "../../integrations/IntegrationTool.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import * as PreviewAutomationBroker from "../../mcp/PreviewAutomationBroker.ts";
+import { TRITONAI_COMMONS_SUBMIT_TOOL_NAME } from "../../mcp/TritonAiCommonsTool.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderAdapterValidationError } from "../Errors.ts";
 import type { CodexAdapterShape } from "../Services/CodexAdapter.ts";
@@ -350,7 +351,11 @@ validationLayer("CodexAdapterLive validation", (it) => {
         runtimeMode: "full-access",
       });
 
-      NodeAssert.deepStrictEqual(validationRuntimeFactory.factory.mock.calls[0]?.[0], {
+      const runtimeOptions = validationRuntimeFactory.factory.mock.calls[0]?.[0];
+      NodeAssert.ok(runtimeOptions);
+      const { dynamicTools, invokeDynamicTool, isDynamicToolAvailable, ...transportOptions } =
+        runtimeOptions;
+      NodeAssert.deepStrictEqual(transportOptions, {
         binaryPath: "codex",
         cwd: process.cwd(),
         launchArgs: "",
@@ -360,6 +365,12 @@ validationLayer("CodexAdapterLive validation", (it) => {
         threadId: asThreadId("thread-1"),
         runtimeMode: "full-access",
       });
+      NodeAssert.deepStrictEqual(
+        dynamicTools?.map(({ name }) => name),
+        [TRITONAI_COMMONS_SUBMIT_TOOL_NAME],
+      );
+      NodeAssert.equal(typeof invokeDynamicTool, "function");
+      NodeAssert.equal(isDynamicToolAvailable?.(TRITONAI_COMMONS_SUBMIT_TOOL_NAME), true);
     }),
   );
   it.effect("enables the collaborative browser MCP namespace by default", () =>
@@ -383,7 +394,11 @@ validationLayer("CodexAdapterLive validation", (it) => {
           runtimeMode: "full-access",
         });
 
-        NodeAssert.deepStrictEqual(validationRuntimeFactory.factory.mock.calls[0]?.[0], {
+        const runtimeOptions = validationRuntimeFactory.factory.mock.calls[0]?.[0];
+        NodeAssert.ok(runtimeOptions);
+        const { dynamicTools, invokeDynamicTool, isDynamicToolAvailable, ...transportOptions } =
+          runtimeOptions;
+        NodeAssert.deepStrictEqual(transportOptions, {
           appServerArgs: [
             "-c",
             "mcp_servers.t3-code.url=http://127.0.0.1:43123/mcp",
@@ -401,6 +416,12 @@ validationLayer("CodexAdapterLive validation", (it) => {
           threadId,
           runtimeMode: "full-access",
         });
+        NodeAssert.deepStrictEqual(
+          dynamicTools?.map(({ name }) => name),
+          [TRITONAI_COMMONS_SUBMIT_TOOL_NAME],
+        );
+        NodeAssert.equal(typeof invokeDynamicTool, "function");
+        NodeAssert.equal(isDynamicToolAvailable?.(TRITONAI_COMMONS_SUBMIT_TOOL_NAME), true);
       } finally {
         McpProviderSession.clearMcpProviderSession(threadId);
       }
@@ -447,12 +468,19 @@ validationLayer("CodexAdapterLive validation", (it) => {
             "preview_scroll",
             "preview_evaluate",
             "preview_wait_for",
+            TRITONAI_COMMONS_SUBMIT_TOOL_NAME,
           ],
         );
         NodeAssert.equal(runtimeOptions.dynamicTools?.[0]?.requiresApproval, false);
         NodeAssert.equal(
           runtimeOptions.dynamicTools?.find(({ name }) => name === "preview_click")
             ?.requiresApproval,
+          true,
+        );
+        NodeAssert.equal(
+          runtimeOptions.dynamicTools?.find(
+            ({ name }) => name === TRITONAI_COMMONS_SUBMIT_TOOL_NAME,
+          )?.requiresApproval,
           true,
         );
         NodeAssert.equal(runtimeOptions.isDynamicToolAvailable?.("preview_status"), true);
@@ -477,7 +505,10 @@ validationLayer("CodexAdapterLive validation", (it) => {
       const runtimeOptions = validationRuntimeFactory.factory.mock.calls[0]?.[0];
       NodeAssert.ok(runtimeOptions);
       NodeAssert.deepStrictEqual(runtimeOptions.appServerArgs, ["-c", 'web_search="disabled"']);
-      NodeAssert.equal(runtimeOptions.dynamicTools, undefined);
+      NodeAssert.deepStrictEqual(
+        runtimeOptions.dynamicTools?.map(({ name }) => name),
+        [TRITONAI_COMMONS_SUBMIT_TOOL_NAME],
+      );
       NodeAssert.equal(runtimeOptions.environment, undefined);
     }),
   );
@@ -674,7 +705,10 @@ reconciliationLayer("CodexAdapter integration availability reconciliation", (it)
         yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
         NodeAssert.deepStrictEqual(
           reconciliationRuntimeFactory.lastRuntime?.options.dynamicTools?.map(({ name }) => name),
-          [codexDynamicIntegrationToolName(reconciliationToolName)],
+          [
+            TRITONAI_COMMONS_SUBMIT_TOOL_NAME,
+            codexDynamicIntegrationToolName(reconciliationToolName),
+          ],
         );
 
         reconciliationAvailability.writeAvailable = true;
@@ -683,6 +717,7 @@ reconciliationLayer("CodexAdapter integration availability reconciliation", (it)
         NodeAssert.deepStrictEqual(
           reconciliationRuntimeFactory.lastRuntime?.options.dynamicTools?.map(({ name }) => name),
           [
+            TRITONAI_COMMONS_SUBMIT_TOOL_NAME,
             codexDynamicIntegrationToolName(reconciliationToolName),
             codexDynamicIntegrationToolName(reconciliationWriteToolName),
           ],
@@ -693,7 +728,10 @@ reconciliationLayer("CodexAdapter integration availability reconciliation", (it)
         yield* adapter.sendTurn({ threadId, input: "disable write access", attachments: [] });
         NodeAssert.deepStrictEqual(
           reconciliationRuntimeFactory.lastRuntime?.options.dynamicTools?.map(({ name }) => name),
-          [codexDynamicIntegrationToolName(reconciliationToolName)],
+          [
+            TRITONAI_COMMONS_SUBMIT_TOOL_NAME,
+            codexDynamicIntegrationToolName(reconciliationToolName),
+          ],
         );
       } finally {
         reconciliationAvailability.writeAvailable = false;
@@ -1261,7 +1299,10 @@ reconciliationLayer("CodexAdapter integration availability reconciliation", (it)
       NodeAssert.equal(reconciledOptions?.resumeCursor?.threadId, "provider-thread-1");
       NodeAssert.deepStrictEqual(
         reconciledOptions?.dynamicTools?.map(({ name }) => name),
-        [codexDynamicIntegrationToolName(reconciliationToolName)],
+        [
+          TRITONAI_COMMONS_SUBMIT_TOOL_NAME,
+          codexDynamicIntegrationToolName(reconciliationToolName),
+        ],
       );
     }),
   );
@@ -1281,7 +1322,9 @@ reconciliationLayer("CodexAdapter integration availability reconciliation", (it)
 
       reconciliationAvailability.available = false;
       reconciliationAvailability.generation = 3;
-      const binding = activeRuntime.options.dynamicTools?.[0];
+      const binding = activeRuntime.options.dynamicTools?.find(
+        ({ name }) => name === codexDynamicIntegrationToolName(reconciliationToolName),
+      );
       NodeAssert.equal(activeRuntime.options.isDynamicToolAvailable?.(binding!.name), false);
       yield* Effect.promise(() =>
         NodeAssert.rejects(() =>

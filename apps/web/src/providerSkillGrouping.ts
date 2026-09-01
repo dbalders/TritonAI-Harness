@@ -9,6 +9,17 @@ export function isProviderSkillMutationBlocked(status: ServerManagedSkillsStatus
   return status === "invalid" || status === "unknown";
 }
 
+export function isProviderSkillPublishable(skill: ServerProviderSkill): boolean {
+  const normalizedPath = skill.path.replaceAll("\\", "/");
+  const normalizedScope = skill.scope?.trim().toLowerCase();
+  return (
+    normalizedScope !== "system" &&
+    !normalizedPath.includes("/.codex/plugins/") &&
+    !normalizedPath.includes("/.agents/plugins/") &&
+    normalizedPath.endsWith("/SKILL.md")
+  );
+}
+
 export interface ProviderSkillRow {
   readonly provider: ServerProvider;
   readonly skill: ServerProviderSkill;

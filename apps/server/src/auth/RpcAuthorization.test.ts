@@ -42,6 +42,7 @@ describe("RPC authorization scopes", () => {
       WS_METHODS.serverInstallProviderSkill,
       WS_METHODS.serverRemoveProviderSkill,
       WS_METHODS.serverSetProviderSkillEnabled,
+      WS_METHODS.serverSubmitProviderSkillToTritonAiCommons,
       WS_METHODS.serverInstallPlugin,
       WS_METHODS.serverUninstallPlugin,
       WS_METHODS.serverAddMarketplace,
