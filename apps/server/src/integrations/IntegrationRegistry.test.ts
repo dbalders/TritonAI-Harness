@@ -226,6 +226,23 @@ describe("integration tool result normalization", () => {
     expect(normalizeIntegrationToolResult(escaped)).toBe(INTEGRATION_TOOL_RESULT_OMITTED);
   });
 
+  it("omits direct and nested binary values before they can expand into JSON", () => {
+    const arrayBuffer = new ArrayBuffer(4);
+    const binaryValues = [
+      Buffer.from([1, 2, 3]),
+      arrayBuffer,
+      new Uint8Array(arrayBuffer),
+      new DataView(arrayBuffer),
+    ];
+
+    for (const binary of binaryValues) {
+      expect(normalizeIntegrationToolResult(binary)).toBe(INTEGRATION_TOOL_RESULT_OMITTED);
+      expect(normalizeIntegrationToolResult({ nested: { binary } })).toBe(
+        INTEGRATION_TOOL_RESULT_OMITTED,
+      );
+    }
+  });
+
   it("returns the measured plain snapshot instead of serializing provider objects twice", () => {
     let serializations = 0;
     const providerResult = {

@@ -202,6 +202,10 @@ export const INTEGRATION_TOOL_RESULT_OMITTED = Object.freeze({
   message: "Integration tool completed, but its result was omitted.",
 });
 
+function isBinaryIntegrationToolResultValue(value: unknown): boolean {
+  return Buffer.isBuffer(value) || value instanceof ArrayBuffer || ArrayBuffer.isView(value);
+}
+
 /**
  * Normalize provider output once at the shared registry boundary. The 512 KiB ceiling preserves
  * the ordinary compatibility shape that repeats a 50,000-code-unit, unescaped three-byte UTF-8
@@ -216,11 +220,23 @@ export function normalizeIntegrationToolResult(value: unknown): Record<string, u
       ? value
       : { result: value ?? null };
   let serialized: string | undefined;
+  let containsBinary = false;
   try {
-    serialized = JSON.stringify(candidate);
+    serialized = JSON.stringify(candidate, function (key, item: unknown) {
+      const original = (this as Record<string, unknown>)[key];
+      if (
+        isBinaryIntegrationToolResultValue(original) ||
+        isBinaryIntegrationToolResultValue(item)
+      ) {
+        containsBinary = true;
+        return null;
+      }
+      return item;
+    });
   } catch (error) {
     throw new Error("Integration tool results must be JSON-serializable.", { cause: error });
   }
+  if (containsBinary) return INTEGRATION_TOOL_RESULT_OMITTED;
   if (!serialized) throw new Error("Integration tool results must be JSON-serializable.");
   if (Buffer.byteLength(serialized, "utf8") > MAX_INTEGRATION_TOOL_RESULT_BYTES) {
     return INTEGRATION_TOOL_RESULT_OMITTED;
