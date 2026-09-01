@@ -94,6 +94,7 @@ import { releaseComposerDraftUploads } from "../lib/composerDraftUploads";
 import { readLocalApi } from "../localApi";
 import { getProjectOrderKey, selectProjectGroupingSettings } from "../logicalProject";
 import {
+  buildSidebarProjectPickerEntries,
   buildSidebarProjectSnapshots,
   type SidebarProjectSnapshot,
 } from "../sidebarProjectGrouping";
@@ -102,7 +103,7 @@ import { useThreadSelectionStore } from "../threadSelectionStore";
 import { useThreadActions } from "../hooks/useThreadActions";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { openCommandPalette } from "../commandPaletteBus";
-import { startNewThreadFromContext } from "../lib/chatThreadActions";
+import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
 import { useClientSettings } from "../hooks/useSettings";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useLocalStorage } from "../hooks/useLocalStorage";
@@ -735,6 +736,31 @@ function SidebarNewThreadButton(props: { shortcutLabel: string | null; onClick: 
       <TooltipPopup side="right">
         {props.shortcutLabel ? `New thread (${props.shortcutLabel})` : "New thread"}
       </TooltipPopup>
+    </Tooltip>
+  );
+}
+
+function SidebarProjectNewThreadButton(props: { projectName: string; onClick: () => void }) {
+  const label = `New thread in ${props.projectName}`;
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <button
+            type="button"
+            className="relative inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-sidebar-muted-foreground outline-none transition-colors hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring"
+            onClick={props.onClick}
+            aria-label={label}
+          />
+        }
+      >
+        <SquarePenIcon className="size-4" />
+        <span
+          className="pointer-events-none absolute left-1/2 top-1/2 size-[max(100%,3rem)] -translate-1/2 pointer-fine:hidden"
+          aria-hidden="true"
+        />
+      </TooltipTrigger>
+      <TooltipPopup side="right">{label}</TooltipPopup>
     </Tooltip>
   );
 }
@@ -1982,6 +2008,31 @@ export default function Sidebar() {
     () => sortLogicalProjectsForSidebar(unsortedProjectGroups, threads, sidebarProjectSortOrder),
     [sidebarProjectSortOrder, threads, unsortedProjectGroups],
   );
+  const projectNewThreadTargetByKey = useMemo(() => {
+    const preferredProjectRef = resolveThreadActionProjectRef({
+      activeDraftThread: newThreadContext.activeDraftThread,
+      activeThread: newThreadContext.activeThread ?? undefined,
+      defaultProjectRef: newThreadContext.defaultProjectRef,
+      handleNewThread: newThreadContext.handleNewThread,
+    });
+    return new Map(
+      buildSidebarProjectPickerEntries({
+        groups: projectGroups,
+        preferredProjectRef,
+      }).map(({ group, targetProject }) => [
+        group.projectKey,
+        scopeProjectRef(targetProject.environmentId, targetProject.id),
+      ]),
+    );
+  }, [
+    newThreadContext.activeDraftThread?.environmentId,
+    newThreadContext.activeDraftThread?.projectId,
+    newThreadContext.activeThread?.environmentId,
+    newThreadContext.activeThread?.projectId,
+    newThreadContext.defaultProjectRef?.environmentId,
+    newThreadContext.defaultProjectRef?.projectId,
+    projectGroups,
+  ]);
   const serverConfigs = useAtomValue(environmentServerConfigsAtom);
   // Threads on non-primary environments (T3 Connect, hosted) resolve their
   // provider entry from their own environment's config: default instance ids
@@ -2433,6 +2484,15 @@ export default function Sidebar() {
   // a ref keeps it out of attemptSettle's dependency array.
   const handleNewThreadRef = useRef(newThreadContext.handleNewThread);
   handleNewThreadRef.current = newThreadContext.handleNewThread;
+  const handleNewThreadInProject = useCallback(
+    (projectKey: string) => {
+      const projectRef = projectNewThreadTargetByKey.get(projectKey);
+      if (!projectRef) return;
+      if (isMobile) setOpenMobile(false);
+      void handleNewThreadRef.current(projectRef);
+    },
+    [isMobile, projectNewThreadTargetByKey, setOpenMobile],
+  );
   const settledThreadKeys = useMemo(
     () =>
       new Set(
@@ -3533,18 +3593,15 @@ export default function Sidebar() {
     [isMobile, newThreadContext, projectGroups.length, setOpenMobile],
   );
 
-  // The button mirrors chat.new: in multi-project setups both route through
+  // The global list actions mirror chat.new: in multi-project setups both route through
   // the command palette's "New thread in..." picker, and in single-project
   // setups both create immediately. In multi-project setups the label is only
   // the picker's shortcut: falling back to chat.newLocal would advertise the
   // same shortcut for both the picker and direct create. In single-project
-  // setups both commands create directly, so chat.newLocal is a valid
-  // fallback. The second tooltip line (multi-project only) advertises
-  // shift+click and its keyboard twin chat.newLocal for direct create.
+  // setups both commands create directly, so chat.newLocal is a valid fallback.
   const newThreadShortcutLabel =
     shortcutLabelForCommand(keybindings, "chat.new") ??
     (projectGroups.length <= 1 ? shortcutLabelForCommand(keybindings, "chat.newLocal") : undefined);
-  const newThreadInProjectShortcutLabel = shortcutLabelForCommand(keybindings, "chat.newLocal");
   return (
     <>
       <SidebarChromeHeader isElectron={isElectron} />
@@ -3600,49 +3657,6 @@ export default function Sidebar() {
                     <XIcon className="size-3" />
                   </Button>
                 ) : null}
-              </div>
-              <div className="shrink-0">
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <SidebarMenuButton
-                        size="icon"
-                        type="button"
-                        className="relative focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
-                        onClick={handleNewThreadClick}
-                        disabled={projects.length === 0}
-                        aria-label="New thread"
-                      />
-                    }
-                  >
-                    <SquarePenIcon />
-                    <span
-                      className="pointer-events-none absolute left-1/2 top-1/2 size-[max(100%,3rem)] -translate-1/2 pointer-fine:hidden"
-                      aria-hidden="true"
-                    />
-                  </TooltipTrigger>
-                  <TooltipPopup side="right">
-                    {projectGroups.length > 1 ? (
-                      <span className="flex flex-col gap-0.5">
-                        <span>
-                          {newThreadShortcutLabel
-                            ? `New thread (${newThreadShortcutLabel})`
-                            : "New thread"}
-                        </span>
-                        <span className="text-muted-foreground">
-                          New thread in current project: Shift+click
-                          {newThreadInProjectShortcutLabel
-                            ? ` (${newThreadInProjectShortcutLabel})`
-                            : ""}
-                        </span>
-                      </span>
-                    ) : newThreadShortcutLabel ? (
-                      `New thread (${newThreadShortcutLabel})`
-                    ) : (
-                      "New thread"
-                    )}
-                  </TooltipPopup>
-                </Tooltip>
               </div>
             </div>
             {projectGroups.length > 0 ? (
@@ -4080,12 +4094,19 @@ export default function Sidebar() {
                           <span className="min-w-0 flex-1 truncate text-sm font-medium text-sidebar-foreground">
                             {project?.displayName ?? "Other threads"}
                           </span>
-                          <span className="shrink-0 text-xs text-sidebar-muted-foreground tabular-nums">
-                            <span aria-hidden>{projectThreads.length}</span>
-                            <span className="sr-only">
-                              {`${projectThreads.length} active ${projectThreads.length === 1 ? "thread" : "threads"}`}
+                          {project ? (
+                            <SidebarProjectNewThreadButton
+                              projectName={project.displayName}
+                              onClick={() => handleNewThreadInProject(project.projectKey)}
+                            />
+                          ) : (
+                            <span className="shrink-0 text-xs text-sidebar-muted-foreground tabular-nums">
+                              <span aria-hidden>{projectThreads.length}</span>
+                              <span className="sr-only">
+                                {`${projectThreads.length} active ${projectThreads.length === 1 ? "thread" : "threads"}`}
+                              </span>
                             </span>
-                          </span>
+                          )}
                         </div>
                       </li>,
                     );
