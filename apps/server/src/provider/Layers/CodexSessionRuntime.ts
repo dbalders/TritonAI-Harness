@@ -918,6 +918,13 @@ function serializeDynamicToolResult(value: unknown): string | undefined {
   }
 }
 
+export function dynamicToolResultResponse(
+  value: unknown,
+): EffectCodexSchema.DynamicToolCallResponse | undefined {
+  const serialized = serializeDynamicToolResult(value);
+  return serialized === undefined ? undefined : dynamicToolResponse(true, serialized);
+}
+
 export function isRecoverableThreadResumeError(error: unknown): boolean {
   const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
   if (!message.includes("thread")) {
@@ -2544,8 +2551,8 @@ export const makeCodexSessionRuntime = (
                 toolName: definition.name,
               }).pipe(Effect.as(dynamicToolResponse(false, "Dynamic tool is unavailable."))),
             onSuccess: (value) => {
-              const serialized = serializeDynamicToolResult(value);
-              return serialized === undefined
+              const response = dynamicToolResultResponse(value);
+              return response === undefined
                 ? Effect.logWarning("dynamic tool returned invalid JSON", {
                     toolName: definition.name,
                   }).pipe(
@@ -2553,7 +2560,7 @@ export const makeCodexSessionRuntime = (
                       dynamicToolResponse(false, "Integration plugin result was unavailable."),
                     ),
                   )
-                : Effect.succeed(dynamicToolResponse(true, serialized));
+                : Effect.succeed(response);
             },
           }),
         );

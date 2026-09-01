@@ -139,7 +139,13 @@ connection RPC results, or tool results. API-key entry exists only in the local 
 authenticated request long enough to submit it to the server secret boundary. Provider exceptions
 are private by default; only deliberately sanitized `IntegrationProviderPublicError` messages may
 cross the client boundary. Tool
-results are JSON-normalized and fail closed when they cannot be serialized.
+results are JSON-normalized and fail closed when they cannot be serialized. Normalized results are
+limited to 512 KiB of UTF-8 JSON before they reach a model-facing tool surface; larger results are
+replaced as a whole with a generic result-omitted response and are never partially truncated. The
+response says the tool completed and only its result was omitted, avoiding ambiguous retry signals.
+The ceiling preserves the ordinary compatibility shape that repeats a 50,000-code-unit field with
+unescaped three-byte UTF-8 text and surrounding metadata, which can exceed 256 KiB. Content whose
+JSON escaping expands beyond the ceiling is deliberately replaced by the generic response.
 
 ## Connection flows
 
