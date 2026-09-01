@@ -325,6 +325,8 @@ function installedFiles(artifact: VerifiedPluginSdkArtifact): Readonly<Record<st
 }
 
 async function importPluginModule(moduleUrl: string, timeoutMs: number): Promise<PluginSdkModule> {
+  // Native import is not abortable. This bounds how long admission waits; trusted module evaluation
+  // that began before the timeout can continue until the future process-isolation boundary exists.
   const loaded = await Effect.runPromise(
     Effect.promise(() => import(moduleUrl)).pipe(Effect.timeoutOption(timeoutMs)),
   );
@@ -404,7 +406,12 @@ export async function loadPluginSdkIntegration(input: {
       secrets: secretStore(input.secrets, artifact.sdkManifest.id),
       configuration: configuration as JsonObject,
     });
-    if (isPromiseLike(created) || !isRecord(created)) throw new Error("Invalid provider factory.");
+    if (isPromiseLike(created)) {
+      void Promise.resolve(created).catch(() => undefined);
+      created = undefined;
+      throw new Error("Invalid provider factory.");
+    }
+    if (!isRecord(created)) throw new Error("Invalid provider factory.");
     const provider = admitProvider(created, artifact.sdkManifest.provider);
     return {
       manifest: artifact.manifest,

@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import { describe, expect, it } from "@effect/vitest";
 import * as NodeCrypto from "node:crypto";
+import * as NodeTimersPromises from "node:timers/promises";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { canonicalJson, type JsonValue } from "@t3tools/shared/pluginSdkContract";
@@ -237,6 +238,21 @@ describe("plugin SDK adapter", () => {
         hostNodeVersion: "24.13.1",
       }),
     ).rejects.toBeInstanceOf(PluginSdkQuarantineError);
+
+    await expect(
+      loadPluginSdkIntegration({
+        files: artifact(`
+export async function createIntegrationProvider() {
+  await new Promise((_, reject) => setTimeout(() => reject(new Error("late factory failure")), 0));
+}
+`),
+        secrets: secretStore(),
+        configuration: { prefix: "fixture" },
+        expected: { id, version: "1.0.0" },
+        hostNodeVersion: "24.13.1",
+      }),
+    ).rejects.toBeInstanceOf(PluginSdkQuarantineError);
+    await NodeTimersPromises.setTimeout(10);
 
     for (const entry of [
       `export function createIntegrationProvider() {

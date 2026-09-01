@@ -230,7 +230,9 @@ proves identity, payload integrity, compatibility, and the exact static ESM impo
 not a JavaScript capability sandbox, and `nodeBuiltins` does not police access through Node globals.
 After the complete package bytes pass composition verification, SDK descriptor, compatibility,
 schema, configuration, module, and provider-factory admission failures quarantine only that plugin.
-Package inventory or digest failure remains composition-fatal. Admission cannot preempt hostile or
+Package inventory or digest failure remains composition-fatal. An admission timeout stops waiting
+and quarantines the plugin, but native module import is not abortable: evaluation, timers, or handles
+started before the timeout may continue in the process. Admission also cannot preempt hostile or
 defective synchronous code in the same process;
 accepting untrusted providers requires the planned process-isolation boundary. Secret scoping and
 commit admission are provider contracts enforced at host choke points, not defenses against a
