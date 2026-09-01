@@ -1699,14 +1699,18 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         const indexPath = pathService.join(cwd, ".git", "index");
         const originalIndex = yield* fileSystem.readFile(indexPath);
 
-        const context = yield* driver.prepareCommitContext(cwd);
+        const allFilesContext = yield* driver.prepareCommitContext(cwd);
+        const selectedFileContext = yield* driver.prepareCommitContext(cwd, ["included.generated"]);
 
-        assert.include(context?.stagedSummary ?? "", "included.generated");
+        assert.include(allFilesContext?.stagedSummary ?? "", "included.generated");
+        assert.include(selectedFileContext?.stagedSummary ?? "", "included.generated");
         assert.deepEqual(
           Array.from(yield* fileSystem.readFile(indexPath)),
           Array.from(originalIndex),
         );
-        yield* driver.commit(cwd, "Add generated file", "", { stage: {} });
+        yield* driver.commit(cwd, "Add generated file", "", {
+          stage: { filePaths: ["included.generated"] },
+        });
         assert.equal(
           yield* git(cwd, ["diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"]),
           "included.generated",
