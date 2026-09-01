@@ -111,6 +111,9 @@ An empty database is a bad test. Seed your worktree's `.t3` with a copy of real 
 
 - Smallest proof that the change works. `vp test run <files>` for the tests you touched, targeted lint and typecheck for the scope you changed.
 - **TritonAI completion gate.** Before considering a change complete, run `vp check --fix`, `vp run typecheck`, and `vp test`. Start with focused checks, but do not substitute CI for this local gate.
+- If native mobile code changes, also run `vp run lint:mobile`.
+- For release or packaging changes, run the relevant release smoke checks and record the exact source commit used.
+- Report checks that were not run and why; never imply that skipped checks passed.
 - Test meaningful logic or observable behavior. Do not render components to static markup to assert props or attributes, or add tests that merely assert callback wiring or mirror the implementation.
 - **Do not run additional recursive repo-wide commands.** Do not run `vp run -r test` or `vp run -r typecheck` unless I ask.
 - Backend behavior changes ship with focused tests for that behavior.
