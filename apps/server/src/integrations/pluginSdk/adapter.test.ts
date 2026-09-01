@@ -175,7 +175,7 @@ describe("plugin SDK adapter", () => {
         expected: { id, version: "1.0.0" },
         hostNodeVersion: "24.13.1",
       }),
-    ).rejects.toThrow();
+    ).rejects.toBeInstanceOf(PluginSdkQuarantineError);
     expect((globalThis as { __pluginSdkImported?: boolean }).__pluginSdkImported).toBeUndefined();
 
     const loaded = await loadPluginSdkIntegration({
@@ -224,7 +224,7 @@ describe("plugin SDK adapter", () => {
         expected: { id, version: "1.0.0" },
         hostNodeVersion: "24.13.1",
       }),
-    ).rejects.toThrow(/digest mismatch/u);
+    ).rejects.toBeInstanceOf(PluginSdkQuarantineError);
 
     await expect(
       loadPluginSdkIntegration({
@@ -290,6 +290,27 @@ export function createIntegrationProvider() {
     }
   });
 
+  it("quarantines composition identity and host compatibility failures", async () => {
+    const load = (overrides: {
+      readonly expected?: { readonly id: string; readonly version: string };
+      readonly hostNodeVersion?: string;
+    }) =>
+      loadPluginSdkIntegration({
+        files: artifact(),
+        secrets: secretStore(),
+        configuration: { prefix: "fixture" },
+        expected: overrides.expected ?? { id, version: "1.0.0" },
+        hostNodeVersion: overrides.hostNodeVersion ?? "24.13.1",
+      });
+
+    await expect(
+      load({ expected: { id: "other-plugin", version: "1.0.0" } }),
+    ).rejects.toBeInstanceOf(PluginSdkQuarantineError);
+    await expect(load({ hostNodeVersion: "25.0.0" })).rejects.toBeInstanceOf(
+      PluginSdkQuarantineError,
+    );
+  });
+
   it("requires the manifest's exact skill inventory and frontmatter", async () => {
     const load = (files: ReturnType<typeof artifact>) =>
       loadPluginSdkIntegration({
@@ -299,14 +320,16 @@ export function createIntegrationProvider() {
         expected: { id, version: "1.0.0" },
         hostNodeVersion: "24.13.1",
       });
-    await expect(load(artifact(providerSource, null))).rejects.toThrow(/payload inventory/u);
+    await expect(load(artifact(providerSource, null))).rejects.toBeInstanceOf(
+      PluginSdkQuarantineError,
+    );
     await expect(
       load(
         artifact(providerSource, "# Fixture reader\n", {
           extraPayloads: [["skills/undeclared/SKILL.md", bytes("undeclared\n")]],
         }),
       ),
-    ).rejects.toThrow(/payload inventory/u);
+    ).rejects.toBeInstanceOf(PluginSdkQuarantineError);
     await expect(
       load(
         artifact(providerSource, "# Fixture reader\n", {
@@ -314,7 +337,7 @@ export function createIntegrationProvider() {
             "---\nname: fixture-reader\ndescription: Drifted fixture description.\n---",
         }),
       ),
-    ).rejects.toThrow(/frontmatter does not match/u);
+    ).rejects.toBeInstanceOf(PluginSdkQuarantineError);
   });
 
   it("inspects only schema positions and preserves JSON Pointer tokens", async () => {
@@ -348,7 +371,7 @@ export function createIntegrationProvider() {
           metadata: { type: "object", default: { $dynamicRef: "#" } },
         },
       }),
-    ).rejects.toThrow(/may not use \$dynamicRef/u);
+    ).rejects.toBeInstanceOf(PluginSdkQuarantineError);
     await expect(
       load({
         $schema: "https://json-schema.org/draft/2020-12/schema",
@@ -357,7 +380,7 @@ export function createIntegrationProvider() {
         $defs: { item: { type: "object" } },
         properties: { pattern: { $ref: "#/$defs/item/" } },
       }),
-    ).rejects.toThrow(/does not resolve/u);
+    ).rejects.toBeInstanceOf(PluginSdkQuarantineError);
     await expect(
       load({
         $schema: "https://json-schema.org/draft/2020-12/schema",
@@ -365,7 +388,7 @@ export function createIntegrationProvider() {
         additionalProperties: false,
         properties: { pattern: 1 },
       }),
-    ).rejects.toThrow(/properties\.pattern must be a schema/u);
+    ).rejects.toBeInstanceOf(PluginSdkQuarantineError);
   });
 
   it("validates every provider result at the SDK boundary", async () => {

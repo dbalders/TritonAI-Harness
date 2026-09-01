@@ -228,8 +228,10 @@ the already-verified runtime link is supplied by the host.
 Additive SDK artifacts are curated, fully trusted Harness backend code. Their sealed descriptor
 proves identity, payload integrity, compatibility, and the exact static ESM import inventory; it is
 not a JavaScript capability sandbox, and `nodeBuiltins` does not police access through Node globals.
-Admission quarantines modules whose asynchronous top-level evaluation does not settle, allowing
-later plugins to load. It cannot preempt hostile or defective synchronous code in the same process;
+After the complete package bytes pass composition verification, SDK descriptor, compatibility,
+schema, configuration, module, and provider-factory admission failures quarantine only that plugin.
+Package inventory or digest failure remains composition-fatal. Admission cannot preempt hostile or
+defective synchronous code in the same process;
 accepting untrusted providers requires the planned process-isolation boundary. Secret scoping and
 commit admission are provider contracts enforced at host choke points, not defenses against a
 malicious provider already trusted to execute in the backend realm.

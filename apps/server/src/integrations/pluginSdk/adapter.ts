@@ -80,8 +80,8 @@ interface PluginSdkModule {
 const DEFAULT_ADMISSION_TIMEOUT_MS = 5_000;
 
 export class PluginSdkQuarantineError extends Error {
-  constructor() {
-    super("A plugin SDK provider was quarantined.");
+  constructor(cause?: unknown) {
+    super("A plugin SDK provider was quarantined.", cause === undefined ? undefined : { cause });
     this.name = "PluginSdkQuarantineError";
   }
 }
@@ -362,63 +362,57 @@ export async function loadPluginSdkIntegration(input: {
   if (!Number.isSafeInteger(admissionTimeoutMs) || admissionTimeoutMs <= 0) {
     throw new Error("Plugin SDK admission timeout must be a positive integer.");
   }
-  const artifact = verifyPluginSdkArtifact(
-    input.files,
-    input.hostNodeVersion === undefined ? {} : { hostNodeVersion: input.hostNodeVersion },
-  );
-  if (
-    artifact.sdkManifest.id !== input.expected.id ||
-    artifact.sdkManifest.version !== input.expected.version
-  ) {
-    throw new Error("Plugin SDK artifact identity does not match its composition.");
-  }
-
-  const configurationSchema = compileJsonSchema(artifact.sdkManifest.configurationSchema);
-  const configuration = await Schema.decodeUnknownPromise(configurationSchema)(
-    input.configuration,
-    { errors: "all", onExcessProperty: "error" },
-  );
-  if (!isRecord(configuration)) {
-    throw new Error("Plugin SDK configuration must decode to an object.");
-  }
-  const tools = artifact.sdkManifest.tools.map(
-    (tool): IntegrationProviderTool => ({
-      name: tool.name,
-      description: tool.description,
-      input: compileJsonSchema(tool.inputSchema),
-      readOnly: tool.effect === "read",
-      destructive: tool.destructive,
-      idempotent: tool.idempotent,
-      openWorld: tool.openWorld,
-    }),
-  );
-
-  const moduleUrl = `data:text/javascript;base64,${Buffer.from(artifact.entryBytes).toString("base64")}#artifact-sha256=${artifact.descriptorSha256}`;
-  let loaded: PluginSdkModule;
-  try {
-    loaded = await importPluginModule(moduleUrl, admissionTimeoutMs);
-  } catch {
-    throw new PluginSdkQuarantineError();
-  }
-  if (typeof loaded.createIntegrationProvider !== "function") {
-    throw new PluginSdkQuarantineError();
-  }
   let created: unknown = undefined;
-  let provider: PluginSdkProvider;
   try {
+    const artifact = verifyPluginSdkArtifact(
+      input.files,
+      input.hostNodeVersion === undefined ? {} : { hostNodeVersion: input.hostNodeVersion },
+    );
+    if (
+      artifact.sdkManifest.id !== input.expected.id ||
+      artifact.sdkManifest.version !== input.expected.version
+    ) {
+      throw new Error("Plugin SDK artifact identity does not match its composition.");
+    }
+
+    const configurationSchema = compileJsonSchema(artifact.sdkManifest.configurationSchema);
+    const configuration = await Schema.decodeUnknownPromise(configurationSchema)(
+      input.configuration,
+      { errors: "all", onExcessProperty: "error" },
+    );
+    if (!isRecord(configuration)) {
+      throw new Error("Plugin SDK configuration must decode to an object.");
+    }
+    const tools = artifact.sdkManifest.tools.map(
+      (tool): IntegrationProviderTool => ({
+        name: tool.name,
+        description: tool.description,
+        input: compileJsonSchema(tool.inputSchema),
+        readOnly: tool.effect === "read",
+        destructive: tool.destructive,
+        idempotent: tool.idempotent,
+        openWorld: tool.openWorld,
+      }),
+    );
+
+    const moduleUrl = `data:text/javascript;base64,${Buffer.from(artifact.entryBytes).toString("base64")}#artifact-sha256=${artifact.descriptorSha256}`;
+    const loaded = await importPluginModule(moduleUrl, admissionTimeoutMs);
+    if (typeof loaded.createIntegrationProvider !== "function") {
+      throw new Error("Plugin SDK provider factory is missing.");
+    }
     created = loaded.createIntegrationProvider({
       secrets: secretStore(input.secrets, artifact.sdkManifest.id),
       configuration: configuration as JsonObject,
     });
     if (isPromiseLike(created) || !isRecord(created)) throw new Error("Invalid provider factory.");
-    provider = admitProvider(created, artifact.sdkManifest.provider);
-  } catch {
+    const provider = admitProvider(created, artifact.sdkManifest.provider);
+    return {
+      manifest: artifact.manifest,
+      bundledFiles: installedFiles(artifact),
+      provider: adaptProvider(provider, tools),
+    };
+  } catch (error) {
     await closeRejectedProvider(created, admissionTimeoutMs);
-    throw new PluginSdkQuarantineError();
+    throw new PluginSdkQuarantineError(error);
   }
-  return {
-    manifest: artifact.manifest,
-    bundledFiles: installedFiles(artifact),
-    provider: adaptProvider(provider, tools),
-  };
 }

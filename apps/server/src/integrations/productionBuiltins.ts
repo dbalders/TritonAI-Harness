@@ -478,6 +478,7 @@ async function loadProductionPackage(
   plugin: CompositionPackage,
   secrets: ServerSecretStore.ServerSecretStore["Service"],
   configuration: Readonly<Record<string, unknown>>,
+  sdkHostNodeVersion?: string | null,
 ): Promise<IntegrationPackage> {
   const verifiedFiles = await verifiedPackageFiles(composedPackageRoot, plugin);
   if (hasPluginSdkArtifact(verifiedFiles)) {
@@ -486,6 +487,7 @@ async function loadProductionPackage(
       secrets,
       configuration,
       expected: plugin,
+      ...(sdkHostNodeVersion === undefined ? {} : { hostNodeVersion: sdkHostNodeVersion }),
     });
   }
   const packageManifestFile = verifiedFiles.find(
@@ -558,8 +560,15 @@ export async function loadProductionPackageForTest(
   plugin: CompositionPackage,
   secrets: ServerSecretStore.ServerSecretStore["Service"],
   configuration: Readonly<Record<string, unknown>>,
+  sdkHostNodeVersion?: string | null,
 ): Promise<IntegrationPackage> {
-  return loadProductionPackage(composedPackageRoot, plugin, secrets, configuration);
+  return loadProductionPackage(
+    composedPackageRoot,
+    plugin,
+    secrets,
+    configuration,
+    sdkHostNodeVersion,
+  );
 }
 
 async function loadProductionPackages(
