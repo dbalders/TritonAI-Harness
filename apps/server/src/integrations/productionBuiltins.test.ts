@@ -6,17 +6,21 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 import { EFFECT_HOST_PEER_RANGE } from "@t3tools/shared/pluginHostRuntime";
+import { canonicalJson, type JsonValue } from "@t3tools/shared/pluginSdkContract";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import effectPackageJson from "effect/package.json" with { type: "json" };
 
 import type * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import type { IntegrationPackage } from "./IntegrationRegistry.ts";
 import {
   loadProductionPackageForTest,
   loadProductionPackagesForTest,
   verifyProductionPackageForTest,
   withProductionPackageSnapshotForTest,
 } from "./productionBuiltins.ts";
+import { validateIntegrationManifest } from "./manifest.ts";
+import { PluginSdkQuarantineError } from "./pluginSdk/adapter.ts";
 
 interface TestFile {
   readonly path: string;
@@ -24,6 +28,14 @@ interface TestFile {
   readonly size: number;
   readonly contents: Uint8Array;
 }
+
+// Byte-for-byte from TritonAI-Plugins PR #20 commit 8fca1b7.
+const sdkGoldenRoot = NodePath.join(
+  import.meta.dirname,
+  "pluginSdk",
+  "test-fixtures",
+  "synthetic-api-key",
+);
 
 function sha256(contents: Uint8Array): string {
   return NodeCrypto.createHash("sha256").update(contents).digest("hex");
@@ -46,6 +58,30 @@ function composition(files: ReadonlyArray<TestFile>, id = "future-provider") {
     digest: hash.digest("hex"),
     files: files.map(({ path, sha256, size }) => ({ path, sha256, size })),
   };
+}
+
+async function testFiles(root: string): Promise<ReadonlyArray<TestFile>> {
+  const files: Array<TestFile> = [];
+  async function walk(current: string, relative = ""): Promise<void> {
+    for (const entry of await NodeFSP.readdir(current, { withFileTypes: true })) {
+      const childRelative = relative ? `${relative}/${entry.name}` : entry.name;
+      const child = NodePath.join(current, entry.name);
+      if (entry.isDirectory()) await walk(child, childRelative);
+      else if (entry.isFile()) {
+        const contents = await NodeFSP.readFile(child);
+        files.push({
+          path: childRelative,
+          sha256: sha256(contents),
+          size: contents.byteLength,
+          contents,
+        });
+      } else throw new Error(`Unexpected test fixture entry: ${childRelative}`);
+    }
+  }
+  await walk(root);
+  return files.sort((left, right) =>
+    left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
+  );
 }
 
 async function fixture(
@@ -491,6 +527,120 @@ describe("production built-in package verification", () => {
       await expect(NodeFSP.access(snapshotParent)).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
       await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("quarantines one SDK provider without disabling later production packages", async () => {
+    const retained = { manifest: validateIntegrationManifest(skillsOnlyManifest()) };
+    await expect(
+      loadProductionPackagesForTest([
+        () => Promise.reject(new PluginSdkQuarantineError()),
+        () => Promise.resolve(retained),
+      ]),
+    ).resolves.toEqual([retained]);
+  });
+
+  it("keeps an admitted sealed plugin when later SDK descriptor and configuration admission fail", async () => {
+    const validFiles = await testFiles(sdkGoldenRoot);
+    const artifactDescriptor = validFiles.find(({ path }) => path === "artifact.json");
+    expect(artifactDescriptor?.sha256).toBe(
+      "40944f4fda76fcd05dbb3ced7e035ba7a74dab9221906597df2971f44d38c86a",
+    );
+    const validPlugin = composition(validFiles, "synthetic-api-key");
+    const invalidRoot = await NodeFSP.mkdtemp(
+      NodePath.join(NodeOS.tmpdir(), "tritonai-invalid-sdk-plugin-"),
+    );
+    const configurationRoot = await NodeFSP.mkdtemp(
+      NodePath.join(NodeOS.tmpdir(), "tritonai-invalid-sdk-configuration-"),
+    );
+    let admitted: IntegrationPackage | undefined;
+    try {
+      await NodeFSP.cp(sdkGoldenRoot, invalidRoot, { recursive: true });
+      const descriptorPath = NodePath.join(invalidRoot, "artifact.json");
+      const descriptor = JSON.parse(await NodeFSP.readFile(descriptorPath, "utf8")) as Record<
+        string,
+        unknown
+      >;
+      descriptor.format = "tritonai.plugin-artifact/unsupported";
+      await NodeFSP.writeFile(descriptorPath, `${canonicalJson(descriptor as JsonValue)}\n`);
+      const invalidFiles = await testFiles(invalidRoot);
+      const invalidPlugin = composition(invalidFiles, "synthetic-api-key");
+      await NodeFSP.cp(sdkGoldenRoot, configurationRoot, { recursive: true });
+      const configurationManifestPath = NodePath.join(
+        configurationRoot,
+        ".tritonai-plugin",
+        "plugin.json",
+      );
+      const configurationManifest = JSON.parse(
+        await NodeFSP.readFile(configurationManifestPath, "utf8"),
+      ) as Record<string, unknown>;
+      const requiredConfiguration = {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        type: "object",
+        properties: { requiredValue: { type: "string" } },
+        required: ["requiredValue"],
+        additionalProperties: false,
+      };
+      configurationManifest.configurationSchema = requiredConfiguration;
+      const configurationManifestBytes = Buffer.from(
+        `${canonicalJson(configurationManifest as JsonValue)}\n`,
+      );
+      await NodeFSP.writeFile(configurationManifestPath, configurationManifestBytes);
+      const configurationDescriptorPath = NodePath.join(configurationRoot, "artifact.json");
+      const configurationDescriptor = JSON.parse(
+        await NodeFSP.readFile(configurationDescriptorPath, "utf8"),
+      ) as {
+        configurationSchema: string;
+        files: Array<{ path: string; sha256: string; size: number }>;
+      };
+      configurationDescriptor.configurationSchema = sha256(
+        Buffer.from(canonicalJson(requiredConfiguration as JsonValue)),
+      );
+      const manifestFile = configurationDescriptor.files.find(
+        ({ path }) => path === ".tritonai-plugin/plugin.json",
+      );
+      if (!manifestFile) throw new Error("Golden SDK artifact manifest record is missing.");
+      manifestFile.sha256 = sha256(configurationManifestBytes);
+      manifestFile.size = configurationManifestBytes.byteLength;
+      await NodeFSP.writeFile(
+        configurationDescriptorPath,
+        `${canonicalJson(configurationDescriptor as unknown as JsonValue)}\n`,
+      );
+      const configurationFiles = await testFiles(configurationRoot);
+      const configurationPlugin = composition(configurationFiles, "synthetic-api-key");
+      const descriptorFailure = () =>
+        loadProductionPackageForTest(invalidRoot, invalidPlugin, secretStore(), {}, "24.13.1");
+      const configurationFailure = () =>
+        loadProductionPackageForTest(
+          configurationRoot,
+          configurationPlugin,
+          secretStore(),
+          {},
+          "24.13.1",
+        );
+      await expect(descriptorFailure()).rejects.toBeInstanceOf(PluginSdkQuarantineError);
+      await expect(configurationFailure()).rejects.toBeInstanceOf(PluginSdkQuarantineError);
+
+      const loaded = await loadProductionPackagesForTest([
+        async () => {
+          admitted = await loadProductionPackageForTest(
+            sdkGoldenRoot,
+            validPlugin,
+            secretStore(),
+            {},
+            "24.13.1",
+          );
+          return admitted;
+        },
+        descriptorFailure,
+        configurationFailure,
+      ]);
+      expect(loaded).toHaveLength(1);
+      expect(loaded[0]?.provider?.id).toBe("synthetic-api-key");
+    } finally {
+      await admitted?.provider?.close?.().catch(() => undefined);
+      await NodeFSP.rm(invalidRoot, { recursive: true, force: true });
+      await NodeFSP.rm(configurationRoot, { recursive: true, force: true });
     }
   });
 

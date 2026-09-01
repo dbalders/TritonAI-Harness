@@ -6,6 +6,7 @@ import * as NodeUtil from "node:util";
 
 import { validateIntegrationManifest } from "@t3tools/contracts";
 import { resolvePluginHostRuntimeDependencies } from "@t3tools/shared/pluginHostRuntime";
+import { hasPluginSdkArtifact, verifyPluginSdkArtifact } from "@t3tools/shared/pluginSdkArtifact";
 import effectPackageJson from "effect/package.json" with { type: "json" };
 
 export const MANAGED_PLUGIN_COMPOSITION_KIND = "tritonai-harness-plugin-composition";
@@ -291,6 +292,18 @@ function validatePackage(
   }
   if (digestFileSet(packageRoot, actualFiles) !== digest) {
     throw new Error(`Managed plugin ${id} package digest does not match its composition proof.`);
+  }
+
+  const artifactFiles = actualFiles.map((file) => ({
+    path: file.path,
+    contents: NodeFS.readFileSync(NodePath.join(packageRoot, file.path)),
+  }));
+  if (hasPluginSdkArtifact(artifactFiles)) {
+    const artifact = verifyPluginSdkArtifact(artifactFiles, { hostNodeVersion: null });
+    if (artifact.sdkManifest.id !== id || artifact.sdkManifest.version !== version) {
+      throw new Error(`Managed plugin ${id} SDK artifact does not match its composition proof.`);
+    }
+    return { id, name, version, digest, files: normalizedFiles };
   }
 
   const packageJson = JSON.parse(

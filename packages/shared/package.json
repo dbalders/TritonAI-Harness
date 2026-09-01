@@ -59,6 +59,14 @@
       "types": "./src/pluginHostRuntime.ts",
       "import": "./src/pluginHostRuntime.ts"
     },
+    "./pluginSdkContract": {
+      "types": "./src/pluginSdkContract.ts",
+      "import": "./src/pluginSdkContract.ts"
+    },
+    "./pluginSdkArtifact": {
+      "types": "./src/pluginSdkArtifact.ts",
+      "import": "./src/pluginSdkArtifact.ts"
+    },
     "./Net": {
       "types": "./src/Net.ts",
       "import": "./src/Net.ts"
@@ -249,6 +257,7 @@
     "@noble/hashes": "catalog:",
     "@t3tools/contracts": "workspace:*",
     "effect": "catalog:",
+    "es-module-lexer": "catalog:",
     "jose": "catalog:",
     "yaml": "catalog:"
   },

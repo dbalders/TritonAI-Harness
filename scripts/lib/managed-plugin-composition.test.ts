@@ -44,6 +44,19 @@ describe("managed plugin release composition", () => {
     ]);
   });
 
+  it("admits an exact SDK artifact and rejects unsupported module dependencies", () => {
+    expect(readManagedPluginComposition(makeSdkCompositionFixture())).toMatchObject({
+      packages: [{ id: "fixture-reader", version: "1.0.1" }],
+    });
+    expect(() =>
+      readManagedPluginComposition(
+        makeSdkCompositionFixture(
+          'import "./relative.mjs"; export function createIntegrationProvider() {}',
+        ),
+      ),
+    ).toThrow(/unresolved dependency/iu);
+  });
+
   it("reads only an exact package-keyed generic build configuration", () => {
     const composition = readManagedPluginComposition(makeCompositionFixture());
     const serialized = JSON.stringify({
@@ -414,6 +427,119 @@ function makeCompositionFixture(
           id: pluginId,
           name: `@tritonai/plugin-${pluginId}`,
           version: "1.0.1",
+          digest: digest.digest("hex"),
+          files: described,
+        },
+      ],
+    }),
+  );
+  return sourceRoot;
+}
+
+function canonicalJson(value: unknown): string {
+  const normalize = (current: unknown): unknown => {
+    if (Array.isArray(current)) return current.map(normalize);
+    if (current && typeof current === "object") {
+      return Object.fromEntries(
+        Object.entries(current)
+          .sort(([left], [right]) => left.localeCompare(right))
+          .map(([key, item]) => [key, normalize(item)]),
+      );
+    }
+    return current;
+  };
+  return JSON.stringify(normalize(value));
+}
+
+function makeSdkCompositionFixture(
+  entry = "export function createIntegrationProvider() { return { id: 'fixture-reader' }; }",
+): string {
+  const sourceRoot = makeTemporaryDirectory();
+  const id = "fixture-reader";
+  const version = "1.0.1";
+  const packageRoot = NodePath.join(sourceRoot, "packages", id);
+  const configurationSchema = {
+    $schema: "https://json-schema.org/draft/2020-12/schema",
+    type: "object",
+    properties: {},
+    additionalProperties: false,
+  };
+  const manifest = {
+    apiVersion: "tritonai.plugin/v1",
+    kind: "IntegrationPlugin",
+    manifestVersion: 1,
+    id,
+    name: "Fixture Reader",
+    description: "Exercises exact SDK artifact admission.",
+    version,
+    sdk: { apiMajor: 1, requiredHostContractLevel: 1 },
+    entry: "dist/index.mjs",
+    provider: id,
+    configurationSchema,
+    capabilities: [],
+    tools: [],
+    skills: [],
+  };
+  const payloads = new Map<string, Buffer>([
+    [".tritonai-plugin/plugin.json", Buffer.from(`${canonicalJson(manifest)}\n`)],
+    ["plugin.mjs", Buffer.from(entry)],
+  ]);
+  const artifactFiles = [...payloads]
+    .map(([path, contents]) => ({ path, sha256: sha256(contents), size: contents.byteLength }))
+    .sort((left, right) => left.path.localeCompare(right.path));
+  const descriptor = {
+    artifactVersion: 1,
+    format: "tritonai.plugin-artifact/v1",
+    plugin: { id, version },
+    sdk: { apiMajor: 1, requiredHostContractLevel: 1 },
+    target: {
+      architecture: "any",
+      environments: ["electron-main", "server"],
+      module: "esm",
+      node: ">=24.13.1 <25",
+      nodeBuiltins: [],
+      platform: "any",
+      runtime: "node",
+    },
+    entry: "plugin.mjs",
+    manifest: ".tritonai-plugin/plugin.json",
+    configurationSchema: sha256(Buffer.from(canonicalJson(configurationSchema))),
+    schemas: [],
+    files: artifactFiles,
+  };
+  payloads.set("artifact.json", Buffer.from(`${canonicalJson(descriptor)}\n`));
+  for (const [relativePath, contents] of payloads) {
+    const target = NodePath.join(packageRoot, relativePath);
+    NodeFS.mkdirSync(NodePath.dirname(target), { recursive: true });
+    NodeFS.writeFileSync(target, contents);
+  }
+  const described = [...payloads]
+    .map(([path, contents]) => ({ path, sha256: sha256(contents), size: contents.byteLength }))
+    .sort((left, right) => left.path.localeCompare(right.path));
+  const digest = NodeCrypto.createHash("sha256");
+  for (const file of described) {
+    digest.update(file.path, "utf8");
+    digest.update("\0");
+    digest.update(String(file.size), "utf8");
+    digest.update("\0");
+    digest.update(payloads.get(file.path)!);
+    digest.update("\0");
+  }
+  NodeFS.writeFileSync(
+    NodePath.join(sourceRoot, "manifest.json"),
+    JSON.stringify({
+      version: 1,
+      kind: "tritonai-harness-plugin-composition",
+      source: {
+        repository: "https://github.com/dbalders/TritonAI-Plugins.git",
+        ref: "refs/tags/plugins-v1.0.1",
+        commit: "a".repeat(40),
+      },
+      packages: [
+        {
+          id,
+          name: `@tritonai/plugin-${id}`,
+          version,
           digest: digest.digest("hex"),
           files: described,
         },

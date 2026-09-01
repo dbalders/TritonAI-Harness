@@ -46,6 +46,7 @@ catalog:
   "@types/node": 24.12.4
   "@typescript/native-preview": 7.0.0-dev.20260604.1
   effect: 4.0.0-beta.103
+  es-module-lexer: 2.1.0
   jose: 6.2.2
   typescript: ~6.0.3
   vite: npm:@voidzero-dev/vite-plus-core@0.2.2

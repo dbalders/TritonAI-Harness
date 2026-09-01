@@ -10,12 +10,14 @@ import {
   type PluginPackageRuntimeMetadata,
   resolvePluginHostRuntimeDependencies,
 } from "@t3tools/shared/pluginHostRuntime";
+import { hasPluginSdkArtifact } from "@t3tools/shared/pluginSdkArtifact";
 import effectPackageJson from "effect/package.json" with { type: "json" };
 
 import type * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import type { IntegrationPackage, IntegrationProvider } from "./IntegrationRegistry.ts";
 import { scopeIntegrationSecretStore } from "./IntegrationSecretStore.ts";
 import { validateIntegrationManifest } from "./manifest.ts";
+import { loadPluginSdkIntegration, PluginSdkQuarantineError } from "./pluginSdk/adapter.ts";
 
 declare const __TRITONAI_BUILD_PLUGIN_COMPOSITION__: unknown;
 declare const __TRITONAI_BUILD_PLUGIN_CONFIGURATION__: unknown;
@@ -476,8 +478,18 @@ async function loadProductionPackage(
   plugin: CompositionPackage,
   secrets: ServerSecretStore.ServerSecretStore["Service"],
   configuration: Readonly<Record<string, unknown>>,
+  sdkHostNodeVersion?: string | null,
 ): Promise<IntegrationPackage> {
   const verifiedFiles = await verifiedPackageFiles(composedPackageRoot, plugin);
+  if (hasPluginSdkArtifact(verifiedFiles)) {
+    return loadPluginSdkIntegration({
+      files: verifiedFiles,
+      secrets,
+      configuration,
+      expected: plugin,
+      ...(sdkHostNodeVersion === undefined ? {} : { hostNodeVersion: sdkHostNodeVersion }),
+    });
+  }
   const packageManifestFile = verifiedFiles.find(
     ({ path }) => path === ".tritonai-plugin/plugin.json",
   );
@@ -548,8 +560,15 @@ export async function loadProductionPackageForTest(
   plugin: CompositionPackage,
   secrets: ServerSecretStore.ServerSecretStore["Service"],
   configuration: Readonly<Record<string, unknown>>,
+  sdkHostNodeVersion?: string | null,
 ): Promise<IntegrationPackage> {
-  return loadProductionPackage(composedPackageRoot, plugin, secrets, configuration);
+  return loadProductionPackage(
+    composedPackageRoot,
+    plugin,
+    secrets,
+    configuration,
+    sdkHostNodeVersion,
+  );
 }
 
 async function loadProductionPackages(
@@ -557,7 +576,13 @@ async function loadProductionPackages(
 ): Promise<ReadonlyArray<IntegrationPackage>> {
   const loaded: Array<IntegrationPackage> = [];
   try {
-    for (const load of loaders) loaded.push(await load());
+    for (const load of loaders) {
+      try {
+        loaded.push(await load());
+      } catch (error) {
+        if (!(error instanceof PluginSdkQuarantineError)) throw error;
+      }
+    }
     return loaded;
   } catch (error) {
     await Promise.allSettled(
@@ -577,26 +602,36 @@ export async function loadProductionIntegrations(
   secrets: ServerSecretStore.ServerSecretStore["Service"],
 ): Promise<ReadonlyArray<IntegrationPackage>> {
   if (!buildComposition) return [];
-  if (
-    buildComposition.version !== 1 ||
-    buildComposition.kind !== "tritonai-harness-plugin-composition" ||
-    buildComposition.source.repository !== "https://github.com/dbalders/TritonAI-Plugins.git"
-  ) {
-    throw new Error("Built-in plugin composition has an unsupported contract or provenance.");
+  try {
+    if (
+      buildComposition.version !== 1 ||
+      buildComposition.kind !== "tritonai-harness-plugin-composition" ||
+      buildComposition.source.repository !== "https://github.com/dbalders/TritonAI-Plugins.git"
+    ) {
+      throw new Error("Built-in plugin composition has an unsupported contract or provenance.");
+    }
+    const configuration = validateBuildConfiguration(buildComposition, buildConfiguration);
+    return await loadProductionPackages(
+      buildComposition.packages.map((plugin) => {
+        const composedPackageRoot = NodePath.join(
+          import.meta.dirname,
+          "production-integrations",
+          "packages",
+          plugin.id,
+        );
+        return () =>
+          loadProductionPackage(composedPackageRoot, plugin, secrets, configuration[plugin.id]!);
+      }),
+    );
+  } catch {
+    // Build-time validation should make this unreachable. If signed resources are corrupted or a
+    // proof contract drifts, keep the core product available and disable the complete integration
+    // composition instead of executing a partially trusted set.
+    process.stderr.write(
+      "Managed plugin composition verification failed; integrations are disabled.\n",
+    );
+    return [];
   }
-  const configuration = validateBuildConfiguration(buildComposition, buildConfiguration);
-  return loadProductionPackages(
-    buildComposition.packages.map((plugin) => {
-      const composedPackageRoot = NodePath.join(
-        import.meta.dirname,
-        "production-integrations",
-        "packages",
-        plugin.id,
-      );
-      return () =>
-        loadProductionPackage(composedPackageRoot, plugin, secrets, configuration[plugin.id]!);
-    }),
-  );
 }
 
 export function productionIntegrationCompositionForTest(): ProductionComposition | null {
