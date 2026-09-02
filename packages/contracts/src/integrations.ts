@@ -134,6 +134,15 @@ export const IntegrationApiKeyConnectResult = Schema.Struct({
   label: TrimmedNonEmptyString,
   placeholder: Schema.NullOr(TrimmedNonEmptyString),
   message: TrimmedNonEmptyString,
+  setupUrl: Schema.optional(
+    TrimmedNonEmptyString.check(Schema.isMaxLength(8_192), Schema.isPattern(/^https:\/\/[^\s]+$/)),
+  ),
+  setupInstructions: Schema.optional(
+    Schema.Array(TrimmedNonEmptyString.check(Schema.isMaxLength(500))).check(
+      Schema.isMinLength(1),
+      Schema.isMaxLength(6),
+    ),
+  ),
 });
 export type IntegrationApiKeyConnectResult = typeof IntegrationApiKeyConnectResult.Type;
 

@@ -23,6 +23,8 @@ const apiKeyFlow = {
   label: "API key",
   placeholder: "key_…",
   message: "Enter the service API key.",
+  setupUrl: "https://example.test/account/api-keys",
+  setupInstructions: ["Open API key settings.", "Create and copy a key."],
 };
 
 const authorizationUrlFlow = {
@@ -42,6 +44,16 @@ describe("IntegrationConnectResult", () => {
 
   it("decodes API-key entry and completed connection results", () => {
     expect(decodeConnectResult(apiKeyFlow)).toEqual(apiKeyFlow);
+    expect(() => decodeConnectResult({ ...apiKeyFlow, setupUrl: "http://example.test" })).toThrow();
+    expect(() =>
+      decodeConnectResult({ ...apiKeyFlow, setupInstructions: Array(7).fill("Step") }),
+    ).toThrow();
+    expect(
+      decodeConnectResult({
+        ...apiKeyFlow,
+        setupInstructions: ["Repeat this step.", "Repeat this step."],
+      }),
+    ).toMatchObject({ setupInstructions: ["Repeat this step.", "Repeat this step."] });
     expect(
       decodeConnectResult({ kind: "connected", flowId: "flow-2", message: "Connected." }),
     ).toEqual({ kind: "connected", flowId: "flow-2", message: "Connected." });

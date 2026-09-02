@@ -1,7 +1,8 @@
 import { type IntegrationManifest, validateIntegrationManifest } from "@t3tools/contracts";
 
 export const PLUGIN_SDK_API_MAJOR = 1;
-export const PLUGIN_SDK_HOST_CONTRACT_LEVEL = 1;
+// Level 2 adds bounded API-key setup instructions and an HTTPS setup deep link.
+export const PLUGIN_SDK_HOST_CONTRACT_LEVEL = 2;
 
 const API_VERSION = "tritonai.plugin/v1";
 const MANIFEST_KEYS = new Set([

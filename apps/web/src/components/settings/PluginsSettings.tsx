@@ -276,6 +276,15 @@ function DeviceCodeAuthorization({
   );
 }
 
+function keyedSetupInstructions(instructions: ReadonlyArray<string>) {
+  const occurrences = new Map<string, number>();
+  return instructions.map((instruction) => {
+    const occurrence = occurrences.get(instruction) ?? 0;
+    occurrences.set(instruction, occurrence + 1);
+    return { instruction, key: `${instruction}:${occurrence}` };
+  });
+}
+
 export function IntegrationAuthorizationFlow({
   integrationName,
   flow,
@@ -327,6 +336,23 @@ export function IntegrationAuthorizationFlow({
         >
           <p className="text-sm font-semibold">Connect {integrationName}</p>
           <p className="mt-1 text-xs text-muted-foreground">{flow.message}</p>
+          {flow.setupInstructions ? (
+            <ol className="mt-3 list-decimal space-y-1 pl-5 text-xs text-muted-foreground">
+              {keyedSetupInstructions(flow.setupInstructions).map(({ instruction, key }) => (
+                <li key={key}>{instruction}</li>
+              ))}
+            </ol>
+          ) : null}
+          {flow.setupUrl ? (
+            <Button
+              className="mt-3"
+              size="sm"
+              variant="outline"
+              render={<a href={flow.setupUrl} target="_blank" rel="noreferrer" />}
+            >
+              Open API key settings
+            </Button>
+          ) : null}
           <label className="mt-3 block text-xs font-medium" htmlFor={`${flow.flowId}-api-key`}>
             {flow.label}
           </label>
