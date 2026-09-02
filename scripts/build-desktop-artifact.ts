@@ -2901,11 +2901,11 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   signed: boolean,
   mockUpdates: boolean,
   mockUpdateServerPort: number | undefined,
-  macPasskeySigning:
+  macEntitlements:
     | {
         readonly entitlementsPath: string;
         readonly entitlementsInheritPath: string;
-        readonly provisioningProfilePath: string;
+        readonly provisioningProfilePath?: string;
       }
     | undefined,
   // Windows only, and false when no Linux node-pty prebuild was bundled: the
@@ -2974,11 +2974,13 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
         },
       ],
       ...(signed ? { sign: path.join(repoRoot, "scripts/sign-macos.ts") } : {}),
-      ...(macPasskeySigning
+      ...(macEntitlements
         ? {
-            entitlements: macPasskeySigning.entitlementsPath,
-            entitlementsInherit: macPasskeySigning.entitlementsInheritPath,
-            provisioningProfile: macPasskeySigning.provisioningProfilePath,
+            entitlements: macEntitlements.entitlementsPath,
+            entitlementsInherit: macEntitlements.entitlementsInheritPath,
+            ...(macEntitlements.provisioningProfilePath
+              ? { provisioningProfile: macEntitlements.provisioningProfilePath }
+              : {}),
           }
         : {}),
     };
@@ -4163,19 +4165,28 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
         ),
       }
     : undefined;
-  const macEntitlementsPath = macPasskeySigning
-    ? path.join(stageAppDir, "entitlements.mac.plist")
-    : undefined;
-  const macEntitlementsInheritPath = macPasskeySigning
-    ? path.join(stageAppDir, "entitlements.mac.inherit.plist")
-    : undefined;
-  if (macPasskeySigning && macEntitlementsPath && macEntitlementsInheritPath) {
-    if (!(yield* fs.exists(macPasskeySigning.provisioningProfilePath))) {
+  // The controlled release path keeps an unsigned stage, then reruns Electron
+  // Builder with a Developer ID identity. Keep the base app/helper entitlements
+  // in every macOS stage so that later signing pass cannot silently fall back to
+  // Electron's defaults and lose microphone access.
+  const macEntitlementsPath =
+    options.platform === "mac" ? path.join(stageAppDir, "entitlements.mac.plist") : undefined;
+  const macEntitlementsInheritPath =
+    options.platform === "mac"
+      ? path.join(stageAppDir, "entitlements.mac.inherit.plist")
+      : undefined;
+  if (macEntitlementsPath && macEntitlementsInheritPath) {
+    if (macPasskeySigning && !(yield* fs.exists(macPasskeySigning.provisioningProfilePath))) {
       return yield* new MacProvisioningProfileNotFoundError({
         provisioningProfilePath: macPasskeySigning.provisioningProfilePath,
       });
     }
-    yield* fs.writeFileString(macEntitlementsPath, renderMacPasskeyEntitlements(macPasskeySigning));
+    yield* fs.writeFileString(
+      macEntitlementsPath,
+      macPasskeySigning
+        ? renderMacPasskeyEntitlements(macPasskeySigning)
+        : renderMacInheritedEntitlements(),
+    );
     yield* fs.writeFileString(macEntitlementsInheritPath, renderMacInheritedEntitlements());
   }
 
@@ -4257,11 +4268,13 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       options.signed,
       options.mockUpdates,
       options.mockUpdateServerPort,
-      macPasskeySigning && macEntitlementsPath && macEntitlementsInheritPath
+      macEntitlementsPath && macEntitlementsInheritPath
         ? {
             entitlementsPath: macEntitlementsPath,
             entitlementsInheritPath: macEntitlementsInheritPath,
-            provisioningProfilePath: macPasskeySigning.provisioningProfilePath,
+            ...(macPasskeySigning
+              ? { provisioningProfilePath: macPasskeySigning.provisioningProfilePath }
+              : {}),
           }
         : undefined,
       bundlesWslRuntime({ arch: options.arch, prebuildPath: options.wslPrebuild }),
