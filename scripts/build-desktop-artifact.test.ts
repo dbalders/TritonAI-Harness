@@ -1775,6 +1775,21 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
   );
 
+  it.effect("keeps microphone entitlements in unsigned macOS release stages", () =>
+    Effect.gen(function* () {
+      const config = yield* createBuildConfig("mac", "dmg", "1.2.3", false, false, undefined, {
+        entitlementsPath: "/tmp/entitlements.mac.plist",
+        entitlementsInheritPath: "/tmp/entitlements.mac.inherit.plist",
+      });
+
+      const mac = config.mac as Record<string, unknown>;
+      assert.equal(mac.entitlements, "/tmp/entitlements.mac.plist");
+      assert.equal(mac.entitlementsInherit, "/tmp/entitlements.mac.inherit.plist");
+      assert.notProperty(mac, "provisioningProfile");
+      assert.notProperty(mac, "sign");
+    }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
+  );
+
   it.effect("uses the nightly DMG background for nightly macOS builds", () =>
     Effect.gen(function* () {
       const config = yield* createBuildConfig(

@@ -123,6 +123,9 @@ Before declaring the Harness release ready for Installer consumption:
 1. Confirm the published tag resolves to the frozen Harness commit.
 2. Download every expected asset and record its SHA-256.
 3. Confirm Windows Authenticode identity and macOS codesign, notarization, and Gatekeeper results.
+   For macOS, inspect both the main app and `TritonAI Harness Helper.app` with
+   `codesign -d --entitlements :-` and require
+   `com.apple.security.device.audio-input=true` before notarization.
 4. Confirm the managed-plugin proof names the expected Installer and plugin commits.
 5. Run packaged-app regression with an isolated profile, including first launch, provider startup,
    preview tools, managed plugins, and update presentation.
