@@ -8,6 +8,7 @@ import {
   WRITE_TOOL_ACCESS_ARIA_LABEL,
   WRITE_TOOL_ACCESS_LABEL,
   capabilityAccessStateLabel,
+  capabilityCanBeToggled,
   capabilityUsesWriteTool,
   clearOwnedConnectionAttention,
   integrationConnectAriaLabel,
@@ -243,5 +244,26 @@ describe("PluginsSettings capability access", () => {
         selected,
       ),
     ).toBe("Authorization required");
+  });
+
+  it("leaves provider-authorized access to the sign-in flow", () => {
+    const providerAuthorized = {
+      ...capability,
+      access: "authorization" as const,
+      enabled: true,
+      granted: false,
+    };
+    const connected = summary({
+      ...integration,
+      connectionState: "connected",
+      capabilities: [providerAuthorized],
+    });
+
+    expect(capabilityCanBeToggled(providerAuthorized)).toBe(false);
+    expect(capabilityAccessStateLabel(connected, providerAuthorized)).toBe("Not authorized");
+    expect(integrationNeedsConnectionAction(connected)).toBe(false);
+    expect(
+      integrationNeedsConnectionAction({ ...connected, connectionState: "not_connected" }),
+    ).toBe(true);
   });
 });

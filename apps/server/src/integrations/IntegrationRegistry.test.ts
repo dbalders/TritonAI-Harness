@@ -608,6 +608,86 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
+  it("derives provider-authorized capability availability without exposing a toggle", async () => {
+    const root = await NodeFSP.mkdtemp(
+      NodePath.join(NodeOS.tmpdir(), "tritonai-provider-authorized-access-"),
+    );
+    const manifest: IntegrationManifest = {
+      ...fixtureManifest,
+      id: "provider-authorized-fixture",
+      capabilities: fixtureManifest.capabilities.map((capability) => ({
+        ...capability,
+        access: "authorization",
+      })),
+    };
+    const state: ProviderState = {
+      status: {
+        state: "connected",
+        accountLabel: "Fixture user",
+        grantedCapabilities: [],
+        message: null,
+      },
+      credential: "present",
+      disconnectFails: false,
+    };
+    let registry: RegistryRuntime | null = new RegistryRuntime(root, [
+      packaged(manifest, provider(manifest.provider!, state)),
+    ]);
+
+    try {
+      const installed = await registry.install(manifest.id);
+      expect(installed.integrations[0]?.capabilities).toMatchObject([
+        { access: "authorization", enabled: true, granted: false, available: false },
+      ]);
+      await expect(
+        registry.setCapabilityEnabled(manifest.id, "fixture.read", false),
+      ).rejects.toMatchObject({ code: "invalid_input" });
+      expect((await registry.snapshot()).integrations[0]?.capabilities[0]?.enabled).toBe(true);
+
+      state.status = {
+        ...state.status,
+        grantedCapabilities: ["fixture.read"],
+      };
+      const authorized = await registry.list();
+      expect(authorized.integrations[0]?.capabilities[0]).toMatchObject({
+        enabled: true,
+        granted: true,
+        available: true,
+      });
+      expect(registry.isToolAvailableSync("test.fixture.read")).toBe(true);
+
+      await registry.close();
+      registry = null;
+      await NodeFSP.writeFile(
+        NodePath.join(root, "state.json"),
+        `${JSON.stringify({
+          version: 1,
+          installed: {
+            [manifest.id]: {
+              version: manifest.version,
+              enabled: true,
+              enabledCapabilities: [],
+            },
+          },
+          removing: {},
+        })}\n`,
+      );
+      registry = new RegistryRuntime(root, [
+        packaged(manifest, provider(manifest.provider!, state)),
+      ]);
+      const preservedDenial = await registry.list();
+      expect(preservedDenial.integrations[0]?.capabilities[0]).toMatchObject({
+        enabled: false,
+        granted: true,
+        available: false,
+      });
+      expect(registry.isToolAvailableSync("test.fixture.read")).toBe(false);
+    } finally {
+      await registry?.close();
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("forwards write approval and preserves an admitted write receipt through cancellation", async () => {
     const root = await NodeFSP.mkdtemp(
       NodePath.join(NodeOS.tmpdir(), "tritonai-write-commit-admission-"),

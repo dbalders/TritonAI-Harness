@@ -4,7 +4,7 @@ export interface IntegrationManifestCapability {
   readonly id: string;
   readonly displayName: string;
   readonly description: string;
-  readonly access: "default" | "opt-in";
+  readonly access: "default" | "opt-in" | "authorization";
 }
 
 export interface IntegrationManifestTool {
@@ -149,7 +149,7 @@ export function validateIntegrationManifest(value: unknown): IntegrationManifest
       !isIntegrationId(item.id) ||
       !nonEmpty(item.displayName) ||
       !nonEmpty(item.description) ||
-      (item.access !== "default" && item.access !== "opt-in")
+      (item.access !== "default" && item.access !== "opt-in" && item.access !== "authorization")
     ) {
       throw new Error("Every capability requires a unique id, displayName, and description.");
     }
@@ -202,7 +202,7 @@ export function validateIntegrationManifest(value: unknown): IntegrationManifest
       id: capability.id as string,
       displayName: capability.displayName as string,
       description: capability.description as string,
-      access: capability.access as "default" | "opt-in",
+      access: capability.access as "default" | "opt-in" | "authorization",
     })),
     tools: tools.map((tool) => ({
       name: tool.name as string,

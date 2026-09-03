@@ -17,7 +17,7 @@ export const IntegrationCapability = Schema.Struct({
   id: IntegrationCapabilityId,
   displayName: TrimmedNonEmptyString,
   description: TrimmedNonEmptyString,
-  access: Schema.Literals(["default", "opt-in"]),
+  access: Schema.Literals(["default", "opt-in", "authorization"]),
   enabled: Schema.Boolean,
   granted: Schema.Boolean,
   available: Schema.Boolean,

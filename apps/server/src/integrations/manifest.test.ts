@@ -55,6 +55,18 @@ describe("integration manifest v2", () => {
     expect(validateIntegrationManifest(skillOnlyManifest)).toEqual(skillOnlyManifest);
   });
 
+  it("accepts capabilities chosen during provider authorization", () => {
+    const providerAuthorized = {
+      ...manifest,
+      capabilities: manifest.capabilities.map((capability) => ({
+        ...capability,
+        access: "authorization" as const,
+      })),
+    };
+
+    expect(validateIntegrationManifest(providerAuthorized)).toEqual(providerAuthorized);
+  });
+
   it("does not retain mutable capability references from caller input", () => {
     const toolCapabilities = ["fixture.read"];
     const skillCapabilities = ["fixture.read"];

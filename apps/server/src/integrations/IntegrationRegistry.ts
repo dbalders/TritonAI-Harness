@@ -386,7 +386,10 @@ function selectedCapabilityIds(
   );
   return new Set(
     manifest.capabilities
-      .filter(({ id, access }) => access !== "opt-in" && !disabledCapabilities.has(id))
+      .filter(
+        ({ id, access }) =>
+          access === "authorization" || (access !== "opt-in" && !disabledCapabilities.has(id)),
+      )
       .map(({ id }) => id),
   );
 }
@@ -2408,9 +2411,20 @@ export class RegistryRuntime {
     if (!registered) {
       return Promise.reject(operationError("not_found", `Integration ${id} was not found.`));
     }
-    if (!registered.manifest.capabilities.some(({ id }) => id === capability)) {
+    const registeredCapability = registered.manifest.capabilities.find(
+      ({ id }) => id === capability,
+    );
+    if (!registeredCapability) {
       return Promise.reject(
         operationError("not_found", `Integration capability ${capability} was not found in ${id}.`),
+      );
+    }
+    if (registeredCapability.access === "authorization") {
+      return Promise.reject(
+        operationError(
+          "invalid_input",
+          `Integration capability ${capability} is chosen during provider authorization.`,
+        ),
       );
     }
     const installedForRevocation = ownRecordValue(this.#state.installed, id);
@@ -2423,10 +2437,17 @@ export class RegistryRuntime {
       const { manifest } = integration;
       const installed = ownRecordValue(this.#state.installed, id);
       if (!installed) throw operationError("not_installed", `Integration ${id} is not installed.`);
-      if (!manifest.capabilities.some(({ id }) => id === capability)) {
+      const currentCapability = manifest.capabilities.find(({ id }) => id === capability);
+      if (!currentCapability) {
         throw operationError(
           "not_found",
           `Integration capability ${capability} was not found in ${id}.`,
+        );
+      }
+      if (currentCapability.access === "authorization") {
+        throw operationError(
+          "invalid_input",
+          `Integration capability ${capability} is chosen during provider authorization.`,
         );
       }
       assertCurrentPackageVersion(manifest, installed.version);
