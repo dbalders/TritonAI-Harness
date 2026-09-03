@@ -29,6 +29,9 @@ function QueuedThreadDrain({ threadKey }: { readonly threadKey: string }) {
   const acknowledgementMessageId = useComposerQueueStore(
     (state) => state.dispatchAcknowledgementByThreadKey[threadKey],
   );
+  const previousTurnId = useComposerQueueStore(
+    (state) => state.dispatchPreviousTurnIdByThreadKey[threadKey],
+  );
   const acknowledgementDeadline = useComposerQueueStore(
     (state) => state.dispatchAcknowledgementDeadlineByThreadKey[threadKey],
   );
@@ -54,12 +57,11 @@ function QueuedThreadDrain({ threadKey }: { readonly threadKey: string }) {
     if (dispatchOwner) {
       if (!acknowledgementMessageId || sharedDispatchCount > 0) return;
       const dispatchedEntry = entries.find((entry) => dispatchOwner === `queue:${entry.id}`);
-      const messageTurnId = thread?.messages.find(
-        (message) => message.id === acknowledgementMessageId,
-      )?.turnId;
       const acknowledgement = resolveQueuedAcknowledgement({
         phase,
-        messageTurnId,
+        messageProjected:
+          thread?.messages.some((message) => message.id === acknowledgementMessageId) === true,
+        previousTurnId,
         latestTurn: thread?.latestTurn ?? null,
         deadlineAt: acknowledgementDeadline,
         now: Date.now(),
@@ -115,7 +117,12 @@ function QueuedThreadDrain({ threadKey }: { readonly threadKey: string }) {
       (messageId) => {
         useComposerQueueStore
           .getState()
-          .acknowledgeDispatch(threadKey, nextDispatchOwner, messageId);
+          .acknowledgeDispatch(
+            threadKey,
+            nextDispatchOwner,
+            messageId,
+            thread.latestTurn?.turnId ?? null,
+          );
       },
       (error: unknown) => {
         useComposerQueueStore
@@ -137,6 +144,7 @@ function QueuedThreadDrain({ threadKey }: { readonly threadKey: string }) {
     hasPendingUserInput,
     phase,
     isEnvironmentConnected,
+    previousTurnId,
     sharedDispatchCount,
     thread,
     threadStatus,

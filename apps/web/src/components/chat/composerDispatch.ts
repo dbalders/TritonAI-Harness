@@ -39,22 +39,25 @@ export function queuedDispatchBlocksComposer(input: {
 }
 
 export function isQueuedMessageTurnComplete(input: {
-  readonly messageTurnId: string | null | undefined;
+  readonly messageProjected: boolean;
+  readonly previousTurnId: string | null | undefined;
   readonly latestTurn: {
     readonly turnId: string;
     readonly state: "running" | "interrupted" | "completed" | "error";
   } | null;
 }): boolean {
   return (
-    input.messageTurnId != null &&
-    input.latestTurn?.turnId === input.messageTurnId &&
+    input.messageProjected &&
+    input.latestTurn != null &&
+    input.latestTurn.turnId !== input.previousTurnId &&
     input.latestTurn.state !== "running"
   );
 }
 
 export function resolveQueuedAcknowledgement(input: {
   readonly phase: SessionPhase;
-  readonly messageTurnId: string | null | undefined;
+  readonly messageProjected: boolean;
+  readonly previousTurnId: string | null | undefined;
   readonly latestTurn: {
     readonly turnId: string;
     readonly state: "running" | "interrupted" | "completed" | "error";
@@ -62,9 +65,8 @@ export function resolveQueuedAcknowledgement(input: {
   readonly deadlineAt: number | undefined;
   readonly now: number;
 }): "waiting" | "complete" | "expired" {
-  if (input.messageTurnId != null) {
-    return input.phase === "ready" && isQueuedMessageTurnComplete(input) ? "complete" : "waiting";
-  }
+  if (input.phase !== "ready") return "waiting";
+  if (isQueuedMessageTurnComplete(input)) return "complete";
   return input.deadlineAt !== undefined && input.now >= input.deadlineAt ? "expired" : "waiting";
 }
 

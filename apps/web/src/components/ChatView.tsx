@@ -6824,12 +6824,6 @@ function ChatViewContent(props: ChatViewProps) {
         failure = startResult;
       } else {
         turnStartSucceeded = true;
-        const sharedOwnerId = sendSharedDispatchOwnerRef.current;
-        if (sharedOwnerId) {
-          useComposerQueueStore
-            .getState()
-            .acknowledgeDispatch(routeThreadKey, sharedOwnerId, messageIdForSend);
-        }
         if (attachmentsRequiringUpload.length > 0) {
           releaseDraftAttachments(attachmentsRequiringUpload);
         }

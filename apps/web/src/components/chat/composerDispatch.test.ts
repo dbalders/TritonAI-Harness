@@ -51,25 +51,29 @@ describe("isQueuedMessageTurnComplete", () => {
   it("requires the acknowledged message to belong to the finished latest turn", () => {
     expect(
       isQueuedMessageTurnComplete({
-        messageTurnId: "turn:one",
+        messageProjected: true,
+        previousTurnId: "turn:zero",
         latestTurn: { turnId: "turn:one", state: "completed" },
       }),
     ).toBe(true);
     expect(
       isQueuedMessageTurnComplete({
-        messageTurnId: "turn:one",
+        messageProjected: true,
+        previousTurnId: "turn:zero",
         latestTurn: { turnId: "turn:one", state: "running" },
       }),
     ).toBe(false);
     expect(
       isQueuedMessageTurnComplete({
-        messageTurnId: "turn:one",
-        latestTurn: { turnId: "turn:two", state: "completed" },
+        messageProjected: true,
+        previousTurnId: "turn:one",
+        latestTurn: { turnId: "turn:one", state: "completed" },
       }),
     ).toBe(false);
     expect(
       isQueuedMessageTurnComplete({
-        messageTurnId: null,
+        messageProjected: false,
+        previousTurnId: "turn:zero",
         latestTurn: { turnId: "turn:one", state: "completed" },
       }),
     ).toBe(false);
@@ -89,7 +93,8 @@ describe("resolveQueuedAcknowledgement", () => {
     expect(
       resolveQueuedAcknowledgement({
         phase: "ready",
-        messageTurnId: null,
+        messageProjected: false,
+        previousTurnId: null,
         latestTurn: null,
         deadlineAt: 100,
         now: 100,
@@ -98,7 +103,18 @@ describe("resolveQueuedAcknowledgement", () => {
     expect(
       resolveQueuedAcknowledgement({
         phase: "running",
-        messageTurnId: "turn:one",
+        messageProjected: false,
+        previousTurnId: null,
+        latestTurn: { turnId: "turn:one", state: "running" },
+        deadlineAt: 100,
+        now: 1_000,
+      }),
+    ).toBe("waiting");
+    expect(
+      resolveQueuedAcknowledgement({
+        phase: "running",
+        messageProjected: true,
+        previousTurnId: null,
         latestTurn: { turnId: "turn:one", state: "running" },
         deadlineAt: 100,
         now: 1_000,
@@ -110,7 +126,8 @@ describe("resolveQueuedAcknowledgement", () => {
     expect(
       resolveQueuedAcknowledgement({
         phase: "ready",
-        messageTurnId: "turn:one",
+        messageProjected: true,
+        previousTurnId: "turn:zero",
         latestTurn: { turnId: "turn:one", state: "completed" },
         deadlineAt: 100,
         now: 1_000,
