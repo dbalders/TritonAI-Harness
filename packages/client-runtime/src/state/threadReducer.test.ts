@@ -105,6 +105,155 @@ describe("applyThreadDetailEvent", () => {
     });
   });
 
+  describe("thread goal state", () => {
+    it("projects provider-confirmed goal updates and clears", () => {
+      const goalUpdatedAt = "2026-04-01T01:00:00.000Z";
+      const goal = {
+        objective: "Finish the reconnect work",
+        status: "active" as const,
+        tokenBudget: 20_000,
+        tokensUsed: 1_250,
+        timeUsedSeconds: 90,
+        createdAt: goalUpdatedAt,
+        updatedAt: goalUpdatedAt,
+      };
+      const updated = applyThreadDetailEvent(baseThread, {
+        ...baseEventFields,
+        sequence: 2,
+        occurredAt: goalUpdatedAt,
+        aggregateKind: "thread",
+        aggregateId: baseThread.id,
+        type: "thread.goal-updated",
+        payload: { threadId: baseThread.id, goal },
+      });
+
+      expect(updated.kind).toBe("updated");
+      if (updated.kind !== "updated") return;
+      expect(updated.thread.goal).toEqual(goal);
+
+      const stale = applyThreadDetailEvent(updated.thread, {
+        ...baseEventFields,
+        sequence: 3,
+        occurredAt: "2026-04-01T01:01:00.000Z",
+        aggregateKind: "thread",
+        aggregateId: baseThread.id,
+        type: "thread.goal-updated",
+        payload: {
+          threadId: baseThread.id,
+          goal: {
+            ...goal,
+            objective: "Stale objective",
+            updatedAt: "2026-04-01T00:59:00.000Z",
+          },
+        },
+      });
+      expect(stale.kind).toBe("unchanged");
+
+      const clearedAt = "2026-04-01T02:00:00.000Z";
+      const cleared = applyThreadDetailEvent(updated.thread, {
+        ...baseEventFields,
+        sequence: 4,
+        occurredAt: clearedAt,
+        aggregateKind: "thread",
+        aggregateId: baseThread.id,
+        type: "thread.goal-cleared",
+        payload: { threadId: baseThread.id },
+      });
+
+      expect(cleared.kind).toBe("updated");
+      if (cleared.kind !== "updated") return;
+      expect(cleared.thread.goal).toBeUndefined();
+      expect(cleared.thread.goalRevisionAt).toBe(clearedAt);
+      expect(cleared.thread.goalRevisionSequence).toBe(4);
+      expect(cleared.thread.updatedAt).toBe(clearedAt);
+
+      const staleAfterClear = applyThreadDetailEvent(cleared.thread, {
+        ...baseEventFields,
+        sequence: 5,
+        occurredAt: "2026-04-01T02:01:00.000Z",
+        aggregateKind: "thread",
+        aggregateId: baseThread.id,
+        type: "thread.goal-updated",
+        payload: {
+          threadId: baseThread.id,
+          goal: {
+            ...goal,
+            objective: "Delayed pre-clear goal",
+            updatedAt: "2026-04-01T01:30:00.000Z",
+          },
+        },
+      });
+      expect(staleAfterClear.kind).toBe("unchanged");
+
+      const replacementGoal = {
+        ...goal,
+        objective: "Replacement goal",
+        updatedAt: "2026-04-01T03:00:00.000Z",
+      };
+      const replaced = applyThreadDetailEvent(cleared.thread, {
+        ...baseEventFields,
+        sequence: 6,
+        occurredAt: replacementGoal.updatedAt,
+        aggregateKind: "thread",
+        aggregateId: baseThread.id,
+        type: "thread.goal-updated",
+        payload: { threadId: baseThread.id, goal: replacementGoal },
+      });
+      expect(replaced.kind).toBe("updated");
+      if (replaced.kind !== "updated") return;
+
+      const staleClear = applyThreadDetailEvent(replaced.thread, {
+        ...baseEventFields,
+        sequence: 7,
+        occurredAt: "2026-04-01T02:30:00.000Z",
+        aggregateKind: "thread",
+        aggregateId: baseThread.id,
+        type: "thread.goal-cleared",
+        payload: { threadId: baseThread.id },
+      });
+      expect(staleClear.kind).toBe("unchanged");
+    });
+
+    it("accepts a goal update later in the same second as a clear", () => {
+      const cleared = applyThreadDetailEvent(baseThread, {
+        ...baseEventFields,
+        sequence: 8,
+        occurredAt: "2026-04-01T02:00:00.500Z",
+        aggregateKind: "thread",
+        aggregateId: baseThread.id,
+        type: "thread.goal-cleared",
+        payload: { threadId: baseThread.id },
+      });
+      expect(cleared.kind).toBe("updated");
+      if (cleared.kind !== "updated") return;
+
+      const replacementGoal = {
+        objective: "Same-second replacement",
+        status: "active" as const,
+        tokenBudget: 20_000,
+        tokensUsed: 0,
+        timeUsedSeconds: 0,
+        createdAt: "2026-04-01T02:00:00.000Z",
+        updatedAt: "2026-04-01T02:00:00.000Z",
+      };
+      const replaced = applyThreadDetailEvent(cleared.thread, {
+        ...baseEventFields,
+        sequence: 9,
+        occurredAt: "2026-04-01T02:00:00.800Z",
+        aggregateKind: "thread",
+        aggregateId: baseThread.id,
+        type: "thread.goal-updated",
+        payload: { threadId: baseThread.id, goal: replacementGoal },
+      });
+
+      expect(replaced.kind).toBe("updated");
+      if (replaced.kind !== "updated") return;
+      expect(replaced.thread.goal).toEqual(replacementGoal);
+      expect(replaced.thread.goalRevisionAt).toBe("2026-04-01T02:00:00.000Z");
+      expect(replaced.thread.goalRevisionSequence).toBe(9);
+    });
+  });
+
   describe("thread.deleted", () => {
     it("returns deleted signal", () => {
       const result = applyThreadDetailEvent(baseThread, {

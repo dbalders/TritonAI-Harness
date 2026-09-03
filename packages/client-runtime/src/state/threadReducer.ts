@@ -1,16 +1,18 @@
 import { pipe } from "effect/Function";
 import * as Arr from "effect/Array";
 import * as O from "effect/Order";
-import type {
-  MessageId,
-  OrchestrationCheckpointSummary,
-  OrchestrationEvent,
-  OrchestrationLatestTurn,
-  OrchestrationMessage,
-  OrchestrationSession,
-  OrchestrationThread,
-  OrchestrationThreadActivity,
-  TurnId,
+import {
+  isThreadGoalRevisionNewer,
+  normalizeThreadGoalRevisionAt,
+  type MessageId,
+  type OrchestrationCheckpointSummary,
+  type OrchestrationEvent,
+  type OrchestrationLatestTurn,
+  type OrchestrationMessage,
+  type OrchestrationSession,
+  type OrchestrationThread,
+  type OrchestrationThreadActivity,
+  type TurnId,
 } from "@t3tools/contracts";
 
 export type ThreadDetailReducerResult =
@@ -101,6 +103,9 @@ export function applyThreadDetailEvent(
           activities: [],
           checkpoints: [],
           session: null,
+          goal: undefined,
+          goalRevisionAt: null,
+          goalRevisionSequence: null,
         },
       };
 
@@ -254,6 +259,64 @@ export function applyThreadDetailEvent(
       };
 
     // ── Turn lifecycle ──────────────────────────────────────────────
+    case "thread.goal-set-requested":
+    case "thread.goal-clear-requested":
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          updatedAt: event.payload.createdAt,
+        },
+      };
+
+    case "thread.goal-updated": {
+      const currentRevisionAt = thread.goalRevisionAt ?? thread.goal?.updatedAt ?? null;
+      if (
+        !isThreadGoalRevisionNewer({
+          currentAt: currentRevisionAt,
+          currentSequence: thread.goalRevisionSequence,
+          candidateAt: event.payload.goal.updatedAt,
+          candidateSequence: event.sequence,
+        })
+      ) {
+        return { kind: "unchanged" };
+      }
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          goal: event.payload.goal,
+          goalRevisionAt: normalizeThreadGoalRevisionAt(event.payload.goal.updatedAt),
+          goalRevisionSequence: event.sequence,
+          updatedAt: event.occurredAt,
+        },
+      };
+    }
+
+    case "thread.goal-cleared": {
+      const currentRevisionAt = thread.goalRevisionAt ?? thread.goal?.updatedAt ?? null;
+      if (
+        !isThreadGoalRevisionNewer({
+          currentAt: currentRevisionAt,
+          currentSequence: thread.goalRevisionSequence,
+          candidateAt: event.occurredAt,
+          candidateSequence: event.sequence,
+        })
+      ) {
+        return { kind: "unchanged" };
+      }
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          goal: undefined,
+          goalRevisionAt: normalizeThreadGoalRevisionAt(event.occurredAt),
+          goalRevisionSequence: event.sequence,
+          updatedAt: event.occurredAt,
+        },
+      };
+    }
+
     case "thread.turn-start-requested":
       return {
         kind: "updated",

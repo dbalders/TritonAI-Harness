@@ -20,6 +20,8 @@ import {
   PRIMARY_LOCAL_ENVIRONMENT_ID,
   OrchestrationThreadActivity,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
+  THREAD_GOAL_MAX_OBJECTIVE_CHARS,
+  type ThreadGoal,
   ProviderInteractionMode,
   ProviderDriverKind,
   RuntimeMode,
@@ -91,6 +93,7 @@ import {
   collapseExpandedComposerCursor,
   type ComposerSubmissionIntent,
   parseStandaloneComposerSlashCommand,
+  resolveGoalComposerCommand,
 } from "../composer-logic";
 import {
   derivePendingApprovals,
@@ -276,6 +279,7 @@ import {
 import { terminalEnvironment } from "../state/terminal";
 import { threadEnvironment, useEnvironmentThread } from "../state/threads";
 import {
+  deriveThreadGoal,
   requestOlderThreadTurns,
   threadHasOlderTurns,
 } from "@t3tools/client-runtime/state/threads";
@@ -333,6 +337,7 @@ import {
   shouldOfferResumeCompaction,
 } from "./chat/ContextWindowMeter.logic";
 import { deriveLatestContextWindowSnapshot, formatContextWindowTokens } from "../lib/contextWindow";
+import { GoalProgressRow } from "./chat/GoalProgressRow";
 import {
   DRAFT_HERO_TRANSITION_ANIMATION_ID,
   DRAFT_HERO_TRANSITION_DURATION_MS,
@@ -1403,6 +1408,8 @@ function ChatViewContent(props: ChatViewProps) {
   const setThreadInteractionMode = useAtomCommand(threadEnvironment.setInteractionMode, {
     reportFailure: false,
   });
+  const setThreadGoal = useAtomCommand(threadEnvironment.setGoal, { reportFailure: false });
+  const clearThreadGoal = useAtomCommand(threadEnvironment.clearGoal, { reportFailure: false });
   const startThreadTurn = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
   const createAttachmentAssetUrl = useAtomQueryRunner(assetEnvironment.createUrl, {
     reportFailure: false,
@@ -1721,6 +1728,12 @@ function ChatViewContent(props: ChatViewProps) {
   // depend on which route is mounted.
   const isServerThread = activeServerThread !== null;
   const activeThread = activeServerThread ?? localDraftThread;
+  const activeGoal = useMemo<ThreadGoal | null>(
+    () => (activeThread ? (activeThread.goal ?? deriveThreadGoal(activeThread.activities)) : null),
+    [activeThread],
+  );
+  const [isGoalMutationPending, setIsGoalMutationPending] = useState(false);
+  const goalMutationInFlightRef = useRef(false);
   const threadError = isServerThread
     ? (localServerError ?? activeServerThread?.session?.lastError ?? null)
     : localDraftError;
@@ -3040,6 +3053,7 @@ function ChatViewContent(props: ChatViewProps) {
     const defaultInstanceId = defaultInstanceIdForDriver(selectedProvider);
     return providerStatuses.find((status) => status.instanceId === defaultInstanceId) ?? null;
   }, [activeProviderInstanceId, providerStatuses, selectedProvider]);
+  const canManageActiveGoal = activeProviderStatus?.supportsThreadGoals === true;
   const [resumeCompactionPermanentlyDismissed, setResumeCompactionPermanentlyDismissed] =
     useLocalStorage(
       `t3code:resume-compaction-dismissed:${environmentId}:${activeProviderInstanceId ?? "claudeAgent"}`,
@@ -5680,6 +5694,104 @@ function ChatViewContent(props: ChatViewProps) {
     ],
   );
 
+  const runGoalMutation = useCallback(async (operation: () => Promise<void>) => {
+    if (goalMutationInFlightRef.current) return;
+    goalMutationInFlightRef.current = true;
+    setIsGoalMutationPending(true);
+    try {
+      await operation();
+    } finally {
+      goalMutationInFlightRef.current = false;
+      setIsGoalMutationPending(false);
+    }
+  }, []);
+
+  const performGoalStatusUpdate = useCallback(
+    async (status: "active" | "paused") => {
+      if (!activeThread || !isServerThread || !canManageActiveGoal) return;
+      const result = await setThreadGoal({
+        environmentId,
+        input: { threadId: activeThread.id, status },
+      });
+      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        setThreadError(
+          activeThread.id,
+          error instanceof Error ? error.message : "Failed to update the goal.",
+        );
+      }
+    },
+    [
+      activeThread,
+      canManageActiveGoal,
+      environmentId,
+      isServerThread,
+      setThreadError,
+      setThreadGoal,
+    ],
+  );
+
+  const updateGoalStatus = useCallback(
+    async (status: "active" | "paused") => {
+      if (!activeThread || !isServerThread) return;
+      await runGoalMutation(() => performGoalStatusUpdate(status));
+    },
+    [activeThread, isServerThread, performGoalStatusUpdate, runGoalMutation],
+  );
+
+  const handleResumeGoal = useCallback(async () => {
+    if (!activeGoal || !canManageActiveGoal) return;
+    const localApi = readLocalApi();
+    if (!localApi) return;
+    await runGoalMutation(async () => {
+      const confirmed = await localApi.dialogs.confirm(
+        ["Resume goal?", activeGoal.objective, "Choose Cancel to keep paused."].join("\n\n"),
+      );
+      if (confirmed) await performGoalStatusUpdate("active");
+    });
+  }, [activeGoal, canManageActiveGoal, performGoalStatusUpdate, runGoalMutation]);
+
+  const handleClearGoal = useCallback(async () => {
+    if (!activeThread || !activeGoal || !isServerThread || !canManageActiveGoal) return;
+    const localApi = readLocalApi();
+    if (!localApi) return;
+    await runGoalMutation(async () => {
+      const confirmed = await localApi.dialogs.confirm(
+        ["Clear goal?", activeGoal.objective, "This removes the goal from this thread."].join(
+          "\n\n",
+        ),
+        { variant: "destructive" },
+      );
+      if (!confirmed) return;
+      const result = await clearThreadGoal({
+        environmentId,
+        input: { threadId: activeThread.id },
+      });
+      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        setThreadError(
+          activeThread.id,
+          error instanceof Error ? error.message : "Failed to clear the goal.",
+        );
+      }
+    });
+  }, [
+    activeGoal,
+    activeThread,
+    canManageActiveGoal,
+    clearThreadGoal,
+    environmentId,
+    isServerThread,
+    runGoalMutation,
+    setThreadError,
+  ]);
+
+  const handleEditGoal = useCallback(() => {
+    if (!activeGoal || !canManageActiveGoal) return;
+    composerRef.current?.setGoalMode(true, activeGoal.objective);
+    composerRef.current?.focusAtEnd();
+  }, [activeGoal, canManageActiveGoal, composerRef]);
+
   const onSend = async (
     e?: { preventDefault: () => void },
     submissionIntent: ComposerSubmissionIntent = "foreground",
@@ -5705,7 +5817,8 @@ function ChatViewContent(props: ChatViewProps) {
       isConnecting ||
       threadDetailLoading ||
       sendInFlightRef.current ||
-      feedbackUploadsInFlightRef.current.has(routeThreadKey)
+      feedbackUploadsInFlightRef.current.has(routeThreadKey) ||
+      goalMutationInFlightRef.current
     ) {
       notifyDirectAnnotationAttached();
       return;
@@ -5741,6 +5854,8 @@ function ChatViewContent(props: ChatViewProps) {
       previewAnnotations: sendContextPreviewAnnotations,
       reviewComments: composerReviewComments,
       selectedProvider: ctxSelectedProvider,
+      supportsThreadGoals: ctxSupportsThreadGoals,
+      goalArmed: goalModeArmed,
       selectedModel: ctxSelectedModel,
       selectedProviderModels: ctxSelectedProviderModels,
       selectedPromptEffort: ctxSelectedPromptEffort,
@@ -5889,8 +6004,14 @@ function ChatViewContent(props: ChatViewProps) {
       );
       return;
     }
+    const parsedGoalCommand = ctxSupportsThreadGoals
+      ? resolveGoalComposerCommand(trimmed, { goalArmed: goalModeArmed })
+      : null;
+    const hasGoalComposerIntent =
+      ctxSupportsThreadGoals && (goalModeArmed || parsedGoalCommand !== null);
     if (
       !directAnnotation &&
+      !hasGoalComposerIntent &&
       showPlanFollowUpPrompt &&
       activeProposedPlan &&
       composerImages.length === 0 &&
@@ -5921,14 +6042,15 @@ function ChatViewContent(props: ChatViewProps) {
     }
     // Legacy plan mode: /plan and /default only act when the beta flag is on;
     // otherwise they send as plain text like any other message.
-    const standaloneSlashCommand =
-      settings.planModeEnabled &&
+    const isStandaloneTextCommand =
       composerImages.length === 0 &&
       composerFiles.length === 0 &&
       sendableComposerTerminalContexts.length === 0 &&
       composerElementContexts.length === 0 &&
       composerPreviewAnnotations.length === 0 &&
-      composerReviewComments.length === 0
+      composerReviewComments.length === 0;
+    const standaloneSlashCommand =
+      settings.planModeEnabled && !hasGoalComposerIntent && isStandaloneTextCommand
         ? parseStandaloneComposerSlashCommand(trimmed)
         : null;
     if (standaloneSlashCommand) {
@@ -5936,6 +6058,79 @@ function ChatViewContent(props: ChatViewProps) {
       promptRef.current = "";
       clearComposerDraftContent(composerDraftTarget);
       composerRef.current?.resetCursorState();
+      return;
+    }
+    if (hasGoalComposerIntent && !isStandaloneTextCommand) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "warning",
+          title: "Goals are text only",
+          description: "Remove attachments and context cards before setting or managing a goal.",
+        }),
+      );
+      return;
+    }
+    const goalCommand = isStandaloneTextCommand ? parsedGoalCommand : null;
+    if (goalCommand && goalCommand.type !== "set") {
+      if (!activeGoal) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "info",
+            title: "No active goal",
+            description: "Use /goal followed by an objective to start one.",
+          }),
+        );
+        return;
+      }
+      if (goalCommand.type === "view") {
+        promptRef.current = "";
+        clearComposerDraftContent(composerDraftTarget);
+        composerRef.current?.resetCursorState();
+        toastManager.add(
+          stackedThreadToast({
+            type: "info",
+            title:
+              activeGoal.status === "active"
+                ? "Pursuing goal"
+                : activeGoal.status === "paused"
+                  ? "Paused goal"
+                  : "Current goal",
+            description: activeGoal.objective,
+          }),
+        );
+        return;
+      }
+      if (isGoalMutationPending) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "info",
+            title: "Goal update in progress",
+            description: "Wait for the current goal update to finish, then try again.",
+          }),
+        );
+        return;
+      }
+      promptRef.current = "";
+      clearComposerDraftContent(composerDraftTarget);
+      composerRef.current?.resetCursorState();
+      if (goalCommand.type === "clear") {
+        await handleClearGoal();
+      } else if (goalCommand.type === "pause") {
+        await updateGoalStatus("paused");
+      } else {
+        await handleResumeGoal();
+      }
+      return;
+    }
+    const goalObjective = goalCommand?.type === "set" ? goalCommand.objective : null;
+    if (goalObjective && goalObjective.length > THREAD_GOAL_MAX_OBJECTIVE_CHARS) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "warning",
+          title: "Goal is too long",
+          description: `Keep the objective under ${THREAD_GOAL_MAX_OBJECTIVE_CHARS.toLocaleString()} characters.`,
+        }),
+      );
       return;
     }
     if (!hasSendableContent) {
@@ -5964,6 +6159,16 @@ function ChatViewContent(props: ChatViewProps) {
       );
       return;
     }
+    if (goalObjective && activeGoal) {
+      const localApi = readLocalApi();
+      const confirmed = await localApi?.dialogs.confirm(
+        ["Replace current goal?", activeGoal.objective, `Replace goal with: ${goalObjective}`].join(
+          "\n\n",
+        ),
+        { variant: "destructive" },
+      );
+      if (!confirmed) return;
+    }
     const threadIdForSend = activeThread.id;
     const isFirstMessage = !isServerThread || activeThread.messages.length === 0;
     const baseBranchForWorktree =
@@ -5980,6 +6185,157 @@ function ChatViewContent(props: ChatViewProps) {
       return;
     }
 
+    if (goalObjective) {
+      const createdAt = new Date().toISOString();
+      const title = truncate(goalObjective);
+      const goalModelSelection = createModelSelection(
+        ctxSelectedModelSelection.instanceId,
+        ctxSelectedModel || activeProject.defaultModelSelection?.model || DEFAULT_MODEL,
+        ctxSelectedModelSelection.options,
+      );
+      const bootstrap =
+        isLocalDraftThread || baseBranchForWorktree
+          ? {
+              ...(isLocalDraftThread
+                ? {
+                    createThread: {
+                      projectId: activeProject.id,
+                      title,
+                      modelSelection: goalModelSelection,
+                      runtimeMode,
+                      interactionMode,
+                      branch: activeThreadBranch,
+                      worktreePath: activeThread.worktreePath,
+                      createdAt: activeThread.createdAt,
+                    },
+                  }
+                : {}),
+              ...(baseBranchForWorktree
+                ? {
+                    prepareWorktree: {
+                      projectCwd: activeProject.workspaceRoot,
+                      baseBranch: baseBranchForWorktree,
+                      branch: buildTemporaryWorktreeBranchName(randomHex),
+                      ...(startFromOrigin ? { startFromOrigin: true } : {}),
+                    },
+                    runSetupScript: true,
+                  }
+                : {}),
+            }
+          : undefined;
+
+      sendInFlightRef.current = true;
+      goalMutationInFlightRef.current = true;
+      setIsGoalMutationPending(true);
+      if (isDraftHeroState && activeThreadKey) {
+        let resolveDockStarted: (() => void) | undefined;
+        const dockStarted = new Promise<void>((resolve) => {
+          resolveDockStarted = resolve;
+        });
+        const dockTransition = runMobileComposerTransition(() => {
+          flushSync(() => {
+            captureDraftHeroComposerRect();
+            setDockedDraftHeroThreadKey(activeThreadKey);
+          });
+          resolveDockStarted?.();
+        });
+        void dockTransition.catch(() => resolveDockStarted?.());
+        await dockStarted;
+      }
+      beginLocalDispatch({ preparingWorktree: Boolean(baseBranchForWorktree) });
+      setThreadError(threadIdForSend, null);
+      composerRef.current?.setGoalMode(false);
+      promptRef.current = "";
+      clearComposerDraftContent(composerDraftTarget);
+      composerRef.current?.resetCursorState();
+
+      let failure: AtomCommandResult<unknown, unknown> | null = null;
+      let goalSetSucceeded = false;
+      try {
+        if (isFirstMessage && isServerThread) {
+          const titleResult = await updateThreadMetadata({
+            environmentId,
+            input: { threadId: threadIdForSend, title },
+          });
+          if (titleResult._tag === "Failure") failure = titleResult;
+        }
+        if (failure === null && isServerThread) {
+          const settingsResult = await persistThreadSettingsForNextTurn({
+            threadId: threadIdForSend,
+            createdAt,
+            modelSelection: ctxSelectedModelSelection,
+            runtimeMode,
+            interactionMode,
+          });
+          if (settingsResult._tag === "Failure") failure = settingsResult;
+        }
+        if (failure === null) {
+          const goalResult = await setThreadGoal({
+            environmentId,
+            input: {
+              threadId: threadIdForSend,
+              objective: goalObjective,
+              status: "active",
+              modelSelection: ctxSelectedModelSelection,
+              ...(bootstrap ? { bootstrap } : {}),
+              createdAt,
+            },
+          });
+          if (goalResult._tag === "Failure") {
+            failure = goalResult;
+          } else {
+            goalSetSucceeded = true;
+          }
+        }
+
+        if (failure !== null) {
+          promptRef.current = promptForSend;
+          setComposerDraftPrompt(composerDraftTarget, promptForSend);
+          composerRef.current?.resetCursorState({
+            cursor: collapseExpandedComposerCursor(promptForSend, promptForSend.length),
+            prompt: promptForSend,
+            detectTrigger: true,
+          });
+          composerRef.current?.setGoalMode(goalModeArmed);
+          if (!isAtomCommandInterrupted(failure)) {
+            const error = squashAtomCommandFailure(failure);
+            setThreadError(
+              threadIdForSend,
+              error instanceof Error ? error.message : "Failed to start the goal.",
+            );
+          }
+          setDockedDraftHeroThreadKey((currentThreadKey) =>
+            currentThreadKey === activeThreadKey ? null : currentThreadKey,
+          );
+        }
+      } finally {
+        if (!goalSetSucceeded) {
+          resetLocalDispatch();
+        }
+        goalMutationInFlightRef.current = false;
+        setIsGoalMutationPending(false);
+        sendInFlightRef.current = false;
+      }
+      return;
+    }
+
+    sendInFlightRef.current = true;
+    if (isDraftHeroState && activeThreadKey) {
+      let resolveDockStarted: (() => void) | undefined;
+      const dockStarted = new Promise<void>((resolve) => {
+        resolveDockStarted = resolve;
+      });
+      const dockTransition = runMobileComposerTransition(() => {
+        flushSync(() => {
+          captureDraftHeroComposerRect();
+          setDockedDraftHeroThreadKey(activeThreadKey);
+        });
+        resolveDockStarted?.();
+      });
+      void dockTransition.catch(() => resolveDockStarted?.());
+      await dockStarted;
+    }
+    beginLocalDispatch({ preparingWorktree: Boolean(baseBranchForWorktree) });
     const composerImagesSnapshot = [...composerImages];
     const composerFilesSnapshot = [...composerFiles];
     const composerAttachmentsSnapshot = [...composerImagesSnapshot, ...composerFilesSnapshot];
@@ -7472,6 +7828,17 @@ function ChatViewContent(props: ChatViewProps) {
                         />
                       </div>
                     </div>
+                  ) : null}
+                  {!isDraftHeroState && activeGoal ? (
+                    <GoalProgressRow
+                      goal={activeGoal}
+                      pending={isGoalMutationPending}
+                      actionsEnabled={canManageActiveGoal}
+                      onPause={() => void updateGoalStatus("paused")}
+                      onResume={() => void handleResumeGoal()}
+                      onEdit={handleEditGoal}
+                      onClear={() => void handleClearGoal()}
+                    />
                   ) : null}
                   <div
                     className="relative"

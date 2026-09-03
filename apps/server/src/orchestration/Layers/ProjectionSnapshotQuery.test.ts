@@ -337,6 +337,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           pinOrderKey: "gm",
           titleRegeneration: null,
           deletedAt: null,
+          goalRevisionAt: null,
+          goalRevisionSequence: null,
           messages: [
             {
               id: asMessageId("message-1"),
@@ -463,6 +465,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           pinnedAt: "2026-02-24T00:00:01.000Z",
           pinOrderKey: "gm",
           titleRegeneration: null,
+          goalRevisionAt: null,
+          goalRevisionSequence: null,
           session: {
             threadId: ThreadId.make("thread-1"),
             status: "running",

@@ -240,6 +240,8 @@ describe("ProviderCommandReactor", () => {
     const interruptTurn = vi.fn((_: unknown) => input?.interruptTurnEffect?.() ?? Effect.void);
     const respondToRequest = vi.fn<ProviderServiceShape["respondToRequest"]>(() => Effect.void);
     const respondToUserInput = vi.fn<ProviderServiceShape["respondToUserInput"]>(() => Effect.void);
+    const setThreadGoal = vi.fn<ProviderServiceShape["setThreadGoal"]>(() => Effect.void);
+    const clearThreadGoal = vi.fn<ProviderServiceShape["clearThreadGoal"]>(() => Effect.void);
     const stopSession = vi.fn((stopInput: unknown) =>
       (input?.stopSessionEffect?.() ?? Effect.void).pipe(
         Effect.tap(() =>
@@ -325,6 +327,8 @@ describe("ProviderCommandReactor", () => {
       interruptTurn: interruptTurn as ProviderServiceShape["interruptTurn"],
       respondToRequest: respondToRequest as ProviderServiceShape["respondToRequest"],
       respondToUserInput: respondToUserInput as ProviderServiceShape["respondToUserInput"],
+      setThreadGoal,
+      clearThreadGoal,
       stopSession: stopSession as ProviderServiceShape["stopSession"],
       listSessions: () => Effect.succeed(runtimeSessions),
       getCapabilities: (_provider) =>

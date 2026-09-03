@@ -1,5 +1,7 @@
 import {
   EventId,
+  normalizeThreadGoalRevisionAt,
+  sameThreadGoal,
   type OrchestrationCommand,
   type OrchestrationEvent,
   type OrchestrationReadModel,
@@ -886,6 +888,149 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           interactionMode: command.interactionMode,
           updatedAt: occurredAt,
         },
+      };
+    }
+
+    case "thread.goal.set": {
+      const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
+      if (
+        command.objective === undefined &&
+        command.status === undefined &&
+        command.tokenBudget === undefined
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "A goal update must include an objective, status, or token budget.",
+        });
+      }
+      if (thread.goal === undefined && command.objective === undefined) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "A new goal requires an objective.",
+        });
+      }
+      const goalSetRequestedEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.goal-set-requested",
+        payload: {
+          threadId: command.threadId,
+          ...(command.objective !== undefined ? { objective: command.objective } : {}),
+          ...(command.status !== undefined ? { status: command.status } : {}),
+          ...(command.tokenBudget !== undefined ? { tokenBudget: command.tokenBudget } : {}),
+          ...(command.modelSelection !== undefined
+            ? { modelSelection: command.modelSelection }
+            : {}),
+          createdAt: command.createdAt,
+        },
+      };
+      const lifecycleResetEvents: Array<Omit<OrchestrationEvent, "sequence">> = [];
+      if (thread.settledOverride !== null) {
+        lifecycleResetEvents.push({
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.threadId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.unsettled",
+          payload: {
+            threadId: command.threadId,
+            reason: "activity",
+            updatedAt: command.createdAt,
+          },
+        });
+      }
+      if (thread.snoozedUntil != null) {
+        lifecycleResetEvents.push({
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.threadId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.unsnoozed",
+          payload: {
+            threadId: command.threadId,
+            reason: "activity",
+            updatedAt: command.createdAt,
+          },
+        });
+      }
+      if (lifecycleResetEvents.length === 0) {
+        return goalSetRequestedEvent;
+      }
+      return [...lifecycleResetEvents, goalSetRequestedEvent];
+    }
+
+    case "thread.goal.clear": {
+      yield* requireThread({ readModel, command, threadId: command.threadId });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.goal-clear-requested",
+        payload: { threadId: command.threadId, createdAt: command.createdAt },
+      };
+    }
+
+    case "thread.goal.sync": {
+      const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
+      const rawCurrentRevisionAt = thread.goalRevisionAt ?? thread.goal?.updatedAt ?? null;
+      const currentRevisionAt =
+        rawCurrentRevisionAt === null ? null : normalizeThreadGoalRevisionAt(rawCurrentRevisionAt);
+      const candidateRevisionAt = normalizeThreadGoalRevisionAt(command.goal.updatedAt);
+      const staleOrUnchanged =
+        (currentRevisionAt !== null && currentRevisionAt > candidateRevisionAt) ||
+        (currentRevisionAt === candidateRevisionAt && sameThreadGoal(thread.goal, command.goal));
+      const goalUpdatedEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.goal-updated",
+        payload: { threadId: command.threadId, goal: command.goal },
+      };
+      if (thread.settledOverride === null || staleOrUnchanged) {
+        return goalUpdatedEvent;
+      }
+      const unsettledEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.unsettled",
+        payload: {
+          threadId: command.threadId,
+          reason: "activity",
+          updatedAt: command.createdAt,
+        },
+      };
+      return [unsettledEvent, goalUpdatedEvent];
+    }
+
+    case "thread.goal.sync-clear": {
+      yield* requireThread({ readModel, command, threadId: command.threadId });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.goal-cleared",
+        payload: { threadId: command.threadId },
       };
     }
 

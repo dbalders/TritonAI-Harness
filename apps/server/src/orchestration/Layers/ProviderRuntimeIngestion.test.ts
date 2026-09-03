@@ -109,6 +109,8 @@ function createProviderServiceHarness() {
     respondToRequest: () => unsupported(),
     respondToUserInput: () => unsupported(),
     stopSession: () => unsupported(),
+    setThreadGoal: () => unsupported(),
+    clearThreadGoal: () => unsupported(),
     listSessions: () => Effect.succeed([...runtimeSessions]),
     getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
     getInstanceInfo: (instanceId) => {
@@ -3239,6 +3241,106 @@ describe("ProviderRuntimeIngestion", () => {
       lastUsedTokens: 1075,
       compactsAutomatically: true,
     });
+  });
+
+  it("projects provider goal updates and clears into first-class thread state", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+    const readThread = async () => {
+      const snapshot = await harness.readModel();
+      const thread = snapshot.threads.find((entry) => entry.id === asThreadId("thread-1"));
+      expect(thread).toBeDefined();
+      return thread!;
+    };
+    const goal = {
+      objective: "Finish goal support",
+      status: "active" as const,
+      tokenBudget: 50_000,
+      tokensUsed: 1_234,
+      timeUsedSeconds: 75,
+      createdAt: now,
+      updatedAt: "2026-01-01T00:01:15.000Z",
+    };
+
+    harness.emit({
+      type: "thread.goal.updated",
+      eventId: asEventId("evt-thread-goal-updated"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: goal.updatedAt,
+      threadId: asThreadId("thread-1"),
+      payload: { goal },
+    });
+
+    await harness.drain();
+    let thread = await readThread();
+    expect(thread.goal).toEqual(goal);
+    expect(thread.activities.some((activity) => activity.kind === "goal.updated")).toBe(true);
+
+    harness.emit({
+      type: "thread.goal.cleared",
+      eventId: asEventId("evt-thread-goal-cleared"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:02:00.500Z",
+      threadId: asThreadId("thread-1"),
+      payload: {},
+    });
+
+    await harness.drain();
+    thread = await readThread();
+    expect(thread.goal).toBeUndefined();
+    expect(thread.goalRevisionAt).toBe("2026-01-01T00:02:00.000Z");
+    expect(thread.goalRevisionSequence).toBeGreaterThan(0);
+    expect(thread.activities.some((activity) => activity.kind === "goal.cleared")).toBe(true);
+
+    harness.emit({
+      type: "thread.goal.updated",
+      eventId: asEventId("evt-thread-goal-delayed-update"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:01:30.000Z",
+      threadId: asThreadId("thread-1"),
+      payload: {
+        goal: {
+          ...goal,
+          objective: "Delayed pre-clear goal",
+          updatedAt: "2026-01-01T00:01:30.000Z",
+        },
+      },
+    });
+
+    await harness.drain();
+    thread = await readThread();
+    expect(thread.goal).toBeUndefined();
+
+    const replacementGoal = {
+      ...goal,
+      objective: "Replacement goal",
+      updatedAt: "2026-01-01T00:02:00.000Z",
+    };
+    harness.emit({
+      type: "thread.goal.updated",
+      eventId: asEventId("evt-thread-goal-replacement"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:02:00.800Z",
+      threadId: asThreadId("thread-1"),
+      payload: { goal: replacementGoal },
+    });
+
+    await harness.drain();
+    thread = await readThread();
+    expect(thread.goal).toEqual(replacementGoal);
+
+    harness.emit({
+      type: "thread.goal.cleared",
+      eventId: asEventId("evt-thread-goal-delayed-clear"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:01:59.000Z",
+      threadId: asThreadId("thread-1"),
+      payload: {},
+    });
+
+    await harness.drain();
+    thread = await readThread();
+    expect(thread.goal).toEqual(replacementGoal);
   });
 
   it("projects Codex camelCase token usage payloads into normalized thread activities", async () => {

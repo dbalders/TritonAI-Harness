@@ -23,6 +23,7 @@ import {
   type OrchestrationThreadActivity,
   type OrchestrationThreadShell,
   ModelSelection,
+  ThreadGoal,
   ProjectId,
   ProviderInstanceId,
   ThreadLinkedPullRequest,
@@ -98,6 +99,7 @@ const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
   Struct.assign({
     modelSelection: Schema.fromJsonString(ModelSelection),
     linkedPullRequest: Schema.NullOr(Schema.fromJsonString(ThreadLinkedPullRequest)),
+    goal: Schema.NullOr(Schema.fromJsonString(ThreadGoal)),
   }),
 );
 const ProjectionThreadActivityDbRowSchema = ProjectionThreadActivity.mapFields(
@@ -479,6 +481,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
+          goal_json AS "goal",
+          goal_revision_at AS "goalRevisionAt",
+          goal_revision_sequence AS "goalRevisionSequence",
           deleted_at AS "deletedAt"
         FROM projection_threads
         ORDER BY created_at ASC, thread_id ASC
@@ -517,6 +522,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
+          goal_json AS "goal",
+          goal_revision_at AS "goalRevisionAt",
+          goal_revision_sequence AS "goalRevisionSequence",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE deleted_at IS NULL
@@ -557,6 +565,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
+          goal_json AS "goal",
+          goal_revision_at AS "goalRevisionAt",
+          goal_revision_sequence AS "goalRevisionSequence",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE deleted_at IS NULL
@@ -1001,6 +1012,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
+          goal_json AS "goal",
+          goal_revision_at AS "goalRevisionAt",
+          goal_revision_sequence AS "goalRevisionSequence",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE thread_id = ${threadId}
@@ -1888,6 +1902,9 @@ pending_approval_requests AS (
                 activities: activitiesByThread.get(row.threadId) ?? [],
                 checkpoints: checkpointsByThread.get(row.threadId) ?? [],
                 session: sessionsByThread.get(row.threadId) ?? null,
+                ...(row.goal !== null ? { goal: row.goal } : {}),
+                goalRevisionAt: row.goalRevisionAt ?? null,
+                goalRevisionSequence: row.goalRevisionSequence ?? null,
               }));
 
               const snapshot = {
@@ -2099,6 +2116,9 @@ pending_approval_requests AS (
                   activities: [],
                   checkpoints: [],
                   session: sessionByThread.get(row.threadId) ?? null,
+                  ...(row.goal !== null ? { goal: row.goal } : {}),
+                  goalRevisionAt: row.goalRevisionAt ?? null,
+                  goalRevisionSequence: row.goalRevisionSequence ?? null,
                 });
               }
 
@@ -2234,6 +2254,9 @@ pending_approval_requests AS (
                       pinOrderKey: row.pinOrderKey ?? null,
                       titleRegeneration: mapTitleRegeneration(row),
                       session: sessionByThread.get(row.threadId) ?? null,
+                      ...(row.goal !== null ? { goal: row.goal } : {}),
+                      goalRevisionAt: row.goalRevisionAt ?? null,
+                      goalRevisionSequence: row.goalRevisionSequence ?? null,
                       latestUserMessageAt: row.latestUserMessageAt,
                       hasPendingApprovals: row.pendingApprovalCount > 0,
                       hasPendingUserInput: row.pendingUserInputCount > 0,
@@ -2383,6 +2406,9 @@ pending_approval_requests AS (
                   pinOrderKey: row.pinOrderKey ?? null,
                   titleRegeneration: mapTitleRegeneration(row),
                   session: sessionByThread.get(row.threadId) ?? null,
+                  ...(row.goal !== null ? { goal: row.goal } : {}),
+                  goalRevisionAt: row.goalRevisionAt ?? null,
+                  goalRevisionSequence: row.goalRevisionSequence ?? null,
                   latestUserMessageAt: row.latestUserMessageAt,
                   hasPendingApprovals: row.pendingApprovalCount > 0,
                   hasPendingUserInput: row.pendingUserInputCount > 0,
@@ -2666,6 +2692,9 @@ pending_approval_requests AS (
         pinOrderKey: threadRow.value.pinOrderKey ?? null,
         titleRegeneration: mapTitleRegeneration(threadRow.value),
         session: Option.isSome(sessionRow) ? mapSessionRow(sessionRow.value) : null,
+        ...(threadRow.value.goal !== null ? { goal: threadRow.value.goal } : {}),
+        goalRevisionAt: threadRow.value.goalRevisionAt ?? null,
+        goalRevisionSequence: threadRow.value.goalRevisionSequence ?? null,
         latestUserMessageAt: threadRow.value.latestUserMessageAt,
         hasPendingApprovals: threadRow.value.pendingApprovalCount > 0,
         hasPendingUserInput: threadRow.value.pendingUserInputCount > 0,
@@ -2931,6 +2960,9 @@ pending_approval_requests AS (
           completedAt: row.completedAt,
         })),
         session: Option.isSome(sessionRow) ? mapSessionRow(sessionRow.value) : null,
+        ...(threadRow.value.goal !== null ? { goal: threadRow.value.goal } : {}),
+        goalRevisionAt: threadRow.value.goalRevisionAt ?? null,
+        goalRevisionSequence: threadRow.value.goalRevisionSequence ?? null,
       };
 
       return Option.some(

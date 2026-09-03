@@ -13,6 +13,7 @@ import {
   ProviderItemId,
   type ProviderApprovalDecision,
   type ProviderEvent,
+  type ProviderSetThreadGoalInput,
   type ProviderSession,
   type ProviderTurnStartResult,
   type ProviderUserInputAnswers,
@@ -103,6 +104,7 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
   private currentModel: string | undefined;
   public sessionStatus: ProviderSession["status"] = "ready";
   public activeTurnId: TurnId | undefined;
+  public onStart: (() => Effect.Effect<void>) | undefined;
   public onGetSession: (() => void | Promise<void>) | undefined;
 
   public readonly startImpl = vi.fn(() =>
@@ -157,6 +159,12 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
     Promise.resolve({ threadId: "provider-thread-1" }),
   );
 
+  public readonly setThreadGoalImpl = vi.fn(
+    (_input: Omit<ProviderSetThreadGoalInput, "threadId">): Promise<void> =>
+      Promise.resolve(undefined),
+  );
+
+  public readonly clearThreadGoalImpl = vi.fn((): Promise<void> => Promise.resolve(undefined));
   public readonly respondToRequestImpl = vi.fn(
     (_requestId: ApprovalRequestId, _decision: ProviderApprovalDecision): Promise<void> =>
       Promise.resolve(undefined),
@@ -177,7 +185,14 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
   }
 
   start() {
-    return Effect.promise(() => this.startImpl());
+    const onStart = this.onStart;
+    const startImpl = this.startImpl;
+    return Effect.gen(function* () {
+      if (onStart) {
+        yield* onStart();
+      }
+      return yield* Effect.promise(() => startImpl());
+    });
   }
 
   getSession = Effect.promise(async () => {
@@ -203,6 +218,11 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
     return Effect.promise(() => this.uploadFeedbackImpl(reason));
   }
 
+  setThreadGoal(input: Omit<ProviderSetThreadGoalInput, "threadId">) {
+    return Effect.promise(() => this.setThreadGoalImpl(input));
+  }
+
+  clearThreadGoal = Effect.promise(() => this.clearThreadGoalImpl());
   respondToRequest(requestId: ApprovalRequestId, decision: ProviderApprovalDecision) {
     return Effect.promise(() => this.respondToRequestImpl(requestId, decision));
   }
@@ -224,11 +244,14 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
 
 function makeRuntimeFactory() {
   const runtimes: Array<FakeCodexRuntime> = [];
+  let configureNextRuntime: ((runtime: FakeCodexRuntime) => void) | undefined;
   const factory = vi.fn(
     (
       options: CodexSessionRuntimeOptions,
     ): Effect.Effect<FakeCodexRuntime, CodexErrors.CodexAppServerSpawnError> => {
       const runtime = new FakeCodexRuntime(options);
+      configureNextRuntime?.(runtime);
+      configureNextRuntime = undefined;
       runtimes.push(runtime);
       return Effect.succeed(runtime);
     },
@@ -236,6 +259,9 @@ function makeRuntimeFactory() {
 
   return {
     factory,
+    configureNextRuntime(configure: (runtime: FakeCodexRuntime) => void) {
+      configureNextRuntime = configure;
+    },
     get lastRuntime(): FakeCodexRuntime | undefined {
       return runtimes.at(-1);
     },
@@ -1619,9 +1645,12 @@ const lifecycleLayer = it.layer(
   ),
 );
 
-function startLifecycleRuntime() {
+function startLifecycleRuntime(configureRuntime?: (runtime: FakeCodexRuntime) => void) {
   return Effect.gen(function* () {
     const adapter = yield* CodexAdapter;
+    if (configureRuntime) {
+      lifecycleRuntimeFactory.configureNextRuntime(configureRuntime);
+    }
     yield* adapter.startSession({
       provider: ProviderDriverKind.make("codex"),
       threadId: asThreadId("thread-1"),
@@ -2674,6 +2703,146 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       // waits on virtual time that never advances, and a regression would hang
       // until the suite timeout instead of failing here.
     }).pipe(TestClock.withLive),
+  );
+
+  it.effect("maps Codex goal updates into canonical runtime events", () =>
+    Effect.gen(function* () {
+      const { adapter, runtime } = yield* startLifecycleRuntime();
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      yield* runtime.emit({
+        id: asEventId("evt-codex-goal-updated"),
+        kind: "notification",
+        provider: ProviderDriverKind.make("codex"),
+        threadId: asThreadId("thread-1"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        method: "thread/goal/updated",
+        payload: {
+          threadId: "provider-thread-1",
+          goal: {
+            threadId: "provider-thread-1",
+            objective: "Finish goal support",
+            status: "active",
+            tokenBudget: 50_000,
+            tokensUsed: 1_234,
+            timeUsedSeconds: 75,
+            createdAt: 1_767_225_600,
+            updatedAt: 1_767_225_675,
+          },
+        },
+      } satisfies ProviderEvent);
+
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+      NodeAssert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some" || firstEvent.value.type !== "thread.goal.updated") {
+        return;
+      }
+      NodeAssert.deepEqual(firstEvent.value.payload.goal, {
+        objective: "Finish goal support",
+        status: "active",
+        tokenBudget: 50_000,
+        tokensUsed: 1_234,
+        timeUsedSeconds: 75,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:01:15.000Z",
+      });
+    }),
+  );
+
+  it.effect("maps Codex goal clears into canonical runtime events", () =>
+    Effect.gen(function* () {
+      const { adapter, runtime } = yield* startLifecycleRuntime();
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      yield* runtime.emit({
+        id: asEventId("evt-codex-goal-cleared"),
+        kind: "notification",
+        provider: ProviderDriverKind.make("codex"),
+        threadId: asThreadId("thread-1"),
+        createdAt: "2026-01-01T00:02:00.000Z",
+        method: "thread/goal/cleared",
+        payload: { threadId: "provider-thread-1" },
+      } satisfies ProviderEvent);
+
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+      NodeAssert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some" || firstEvent.value.type !== "thread.goal.cleared") {
+        return;
+      }
+      NodeAssert.deepEqual(firstEvent.value.payload, {});
+    }),
+  );
+
+  it.effect("forwards an existing goal reconciled during startup", () =>
+    Effect.gen(function* () {
+      const startupGoalEvent = {
+        id: asEventId("evt-codex-goal-startup"),
+        kind: "notification",
+        provider: ProviderDriverKind.make("codex"),
+        threadId: asThreadId("thread-1"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        method: "thread/goal/updated",
+        payload: {
+          threadId: "provider-thread-1",
+          goal: {
+            threadId: "provider-thread-1",
+            objective: "Restore the existing goal",
+            status: "paused",
+            tokenBudget: null,
+            tokensUsed: 12,
+            timeUsedSeconds: 30,
+            createdAt: 1_767_225_600,
+            updatedAt: 1_767_225_630,
+          },
+        },
+      } satisfies ProviderEvent;
+      const { adapter } = yield* startLifecycleRuntime((runtime) => {
+        runtime.onStart = () => runtime.emit(startupGoalEvent);
+      });
+
+      const firstEvent = yield* Stream.runHead(adapter.streamEvents);
+      NodeAssert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some" || firstEvent.value.type !== "thread.goal.updated") {
+        return;
+      }
+      NodeAssert.deepEqual(firstEvent.value.payload.goal, {
+        objective: "Restore the existing goal",
+        status: "paused",
+        tokenBudget: null,
+        tokensUsed: 12,
+        timeUsedSeconds: 30,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:30.000Z",
+      });
+    }),
+  );
+
+  it.effect("forwards goal mutations to the Codex runtime", () =>
+    Effect.gen(function* () {
+      const { adapter, runtime } = yield* startLifecycleRuntime();
+      const threadId = asThreadId("thread-1");
+      NodeAssert.ok(adapter.setThreadGoal);
+      NodeAssert.ok(adapter.clearThreadGoal);
+
+      yield* adapter.setThreadGoal({
+        threadId,
+        objective: "Finish native goal support",
+        status: "active",
+        tokenBudget: 50_000,
+      });
+      yield* adapter.clearThreadGoal(threadId);
+
+      NodeAssert.deepEqual(runtime.setThreadGoalImpl.mock.calls, [
+        [
+          {
+            objective: "Finish native goal support",
+            status: "active",
+            tokenBudget: 50_000,
+          },
+        ],
+      ]);
+      NodeAssert.equal(runtime.clearThreadGoalImpl.mock.calls.length, 1);
+    }),
   );
 });
 
