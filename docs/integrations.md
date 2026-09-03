@@ -3,7 +3,8 @@
 TritonAI Harness plugins are versioned, included packages that can bundle Codex skills and a
 host-supplied service backend. The Harness build defines the available catalog; users do not add a
 marketplace or install arbitrary packages. In Settings → Plugins, they can turn each included plugin
-on or off and choose the user-facing abilities exposed by that plugin under **Access**.
+on or off and choose the user-facing abilities exposed by that plugin under **Access**. A provider
+may instead make an ability part of its own sign-in consent flow.
 
 Production connector source and compiled provider entrypoints remain in TritonAI-Plugins. A
 release-only, digest-verified composition is the explicit package allowlist; Harness does not carry
@@ -28,10 +29,14 @@ owns the exact configuration keys, types, formats, and provider construction. A 
 must not export the provider factory.
 
 Capabilities are user-facing ability bundles and the single source of truth for skill and tool
-availability. Each capability declares `access: "default" | "opt-in"`. Tools and skills declare
-their dependencies with `capabilities`. Multiple references use union semantics, so a shared
-dependency remains available while any enabled, granted capability requires it. A skills-only
-package omits `provider` and declares no tools.
+availability. Each capability declares `access: "default" | "opt-in" | "authorization"`.
+`default` abilities start selected, `opt-in` abilities use a Harness Access switch, and
+`authorization` abilities are selected by the provider's sign-in consent rather than a competing
+Harness switch. Tools and skills declare their dependencies with `capabilities`. Multiple
+references use union semantics, so a shared dependency remains available while any enabled,
+granted capability requires it. A skills-only package omits `provider` and declares no tools.
+Provider-authorized capabilities require a provider with a complete connect and disconnect
+lifecycle; stateless and skills-only packages cannot declare them.
 
 Every tool also declares `effect: "read" | "write"`, which must agree with the provider's executable
 metadata. Write tools follow the task's selected runtime mode: supervised modes request approval,
@@ -161,9 +166,13 @@ system-browser button before the secure key field. A successful API-key submissi
 extend the union with their own secure submission contract and rendering instead of pretending to
 use another flow's fields.
 
-Connecting requests only the plugin's enabled capabilities. Enabling an ability whose provider
-grant is missing starts the same explicit authorization flow; the ability remains unavailable until
-both selection persistence and provider authorization succeed. Device-code/native-browser polling and API-key
+Connecting requests the plugin's enabled Harness-managed capabilities plus every
+provider-authorized capability offered by its sign-in flow. Enabling an `opt-in` ability whose
+provider grant is missing starts the same explicit authorization flow; the ability remains
+unavailable until both selection persistence and provider authorization succeed. After an explicit
+sign-in completes, each `authorization` ability becomes selected only when the provider reports
+that the user granted it. A declined optional grant does not create a persistent Harness
+action-required state. Device-code/native-browser polling and API-key
 submission are keyed by plugin and flow ID and cannot overwrite another plugin's flow state;
 polling also honors provider retry delays and expiry.
 
@@ -178,10 +187,12 @@ Disable, disconnect, and internal removal immediately revoke new tool and skill 
 active tool work, and wait for its cleanup before their serialized lifecycle mutation runs. If tool
 work does not drain within the revocation deadline, the provider is faulted and credential or state
 mutation does not begin. Disconnect preserves the installed package and its
-preferences. Removal remains a migration/recovery primitive rather than a public RPC in the fixed
-catalog product. It first disconnects the provider, records a durable recovery phase, moves the
-package to a tombstone, commits removed state, and then cleans the tombstone. Startup completes
-interrupted removals deterministically.
+preferences. Provider-authorized abilities cannot be toggled through the capability RPC; changing
+them requires disconnecting and completing the provider's sign-in flow again. Removal remains a
+migration/recovery primitive rather than a public RPC in the fixed catalog product. It first
+disconnects the provider, records a durable recovery phase, moves the package to a tombstone,
+commits removed state, and then cleans the tombstone. Startup completes interrupted removals
+deterministically.
 
 Provider status checks have a host timeout and receive an abort signal, so one unhealthy provider
 cannot block startup, listing, or task creation indefinitely. Providers may implement `prepare` to
@@ -280,9 +291,10 @@ marketplace.
 
 Settings → Plugins renders one row per included package, keeping a catalog of many plugins
 scannable. The top-level switch remains the master control. Expanding a row shows its connection,
-one **Access** switch per user-facing capability, and read-only derived Tool and Skill status. Write
-abilities are marked as following task access. Enabled plugins with an unresolved connection expand
-automatically and keep a persistent, accessible Connect action visible.
+one **Access** switch per Harness-managed capability, the sign-in ownership of provider-authorized
+capabilities, and read-only derived Tool and Skill status. Write abilities are marked as following
+task access. Enabled plugins with an unresolved connection expand automatically and keep a
+persistent, accessible Connect action visible.
 
 ## Deliberate follow-up work
 

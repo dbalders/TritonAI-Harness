@@ -4,7 +4,7 @@ export interface IntegrationManifestCapability {
   readonly id: string;
   readonly displayName: string;
   readonly description: string;
-  readonly access: "default" | "opt-in";
+  readonly access: "default" | "opt-in" | "authorization";
 }
 
 export interface IntegrationManifestTool {
@@ -139,6 +139,7 @@ export function validateIntegrationManifest(value: unknown): IntegrationManifest
     throw new Error("Integration plugins with tools must declare a provider.");
   }
   const capabilityIds = new Set<string>();
+  let hasProviderAuthorizedCapability = false;
   for (const capability of capabilities) {
     if (!isRecord(capability) || !hasOnlyKeys(capability, CAPABILITY_KEYS)) {
       throw new Error("Invalid or unsupported capability fields.");
@@ -149,12 +150,16 @@ export function validateIntegrationManifest(value: unknown): IntegrationManifest
       !isIntegrationId(item.id) ||
       !nonEmpty(item.displayName) ||
       !nonEmpty(item.description) ||
-      (item.access !== "default" && item.access !== "opt-in")
+      (item.access !== "default" && item.access !== "opt-in" && item.access !== "authorization")
     ) {
       throw new Error("Every capability requires a unique id, displayName, and description.");
     }
     if (capabilityIds.has(item.id)) throw new Error(`Duplicate capability ${item.id}.`);
     capabilityIds.add(item.id);
+    if (item.access === "authorization") hasProviderAuthorizedCapability = true;
+  }
+  if (hasProviderAuthorizedCapability && input.provider === undefined) {
+    throw new Error("Provider-authorized capabilities require a declared provider.");
   }
   for (const [kind, entries] of [
     ["tool", tools],
@@ -202,7 +207,7 @@ export function validateIntegrationManifest(value: unknown): IntegrationManifest
       id: capability.id as string,
       displayName: capability.displayName as string,
       description: capability.description as string,
-      access: capability.access as "default" | "opt-in",
+      access: capability.access as "default" | "opt-in" | "authorization",
     })),
     tools: tools.map((tool) => ({
       name: tool.name as string,

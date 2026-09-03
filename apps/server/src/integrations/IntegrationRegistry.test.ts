@@ -608,6 +608,109 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
+  it("derives provider-authorized capability availability without exposing a toggle", async () => {
+    const root = await NodeFSP.mkdtemp(
+      NodePath.join(NodeOS.tmpdir(), "tritonai-provider-authorized-access-"),
+    );
+    const manifest: IntegrationManifest = {
+      ...fixtureManifest,
+      id: "provider-authorized-fixture",
+      capabilities: fixtureManifest.capabilities.map((capability) => ({
+        ...capability,
+        access: "authorization",
+      })),
+    };
+    const state: ProviderState = {
+      status: {
+        state: "connected",
+        accountLabel: "Fixture user",
+        grantedCapabilities: [],
+        message: null,
+      },
+      credential: "present",
+      disconnectFails: false,
+    };
+    let requestedCapabilities: ReadonlyArray<string> = [];
+    const implementation: IntegrationProvider = {
+      ...provider(manifest.provider!, state),
+      connect: async (capabilities) => {
+        requestedCapabilities = capabilities;
+        state.status = {
+          state: "connected",
+          accountLabel: "Fixture user",
+          grantedCapabilities: ["fixture.read"],
+          message: null,
+        };
+        return { kind: "connected", flowId: "reauthorize", message: "Connected." };
+      },
+    };
+    let registry: RegistryRuntime | null = new RegistryRuntime(root, [
+      packaged(manifest, implementation),
+    ]);
+
+    try {
+      const installed = await registry.install(manifest.id);
+      expect(installed.integrations[0]?.capabilities).toMatchObject([
+        { access: "authorization", enabled: true, granted: false, available: false },
+      ]);
+      await expect(
+        registry.setCapabilityEnabled(manifest.id, "fixture.read", false),
+      ).rejects.toMatchObject({ code: "invalid_input" });
+      expect((await registry.snapshot()).integrations[0]?.capabilities[0]?.enabled).toBe(true);
+
+      state.status = {
+        ...state.status,
+        grantedCapabilities: ["fixture.read"],
+      };
+      const authorized = await registry.list();
+      expect(authorized.integrations[0]?.capabilities[0]).toMatchObject({
+        enabled: true,
+        granted: true,
+        available: true,
+      });
+      expect(registry.isToolAvailableSync("test.fixture.read")).toBe(true);
+
+      await registry.close();
+      registry = null;
+      await NodeFSP.writeFile(
+        NodePath.join(root, "state.json"),
+        `${JSON.stringify({
+          version: 1,
+          installed: {
+            [manifest.id]: {
+              version: manifest.version,
+              enabled: true,
+              disabledSkills: ["fixture-reader"],
+            },
+          },
+          removing: {},
+        })}\n`,
+      );
+      registry = new RegistryRuntime(root, [packaged(manifest, implementation)]);
+      const preservedDenial = await registry.list();
+      expect(preservedDenial.integrations[0]?.capabilities[0]).toMatchObject({
+        enabled: false,
+        granted: true,
+        available: false,
+      });
+      expect(registry.isToolAvailableSync("test.fixture.read")).toBe(false);
+
+      await registry.disconnect(manifest.id);
+      await expect(registry.connect(manifest.id)).resolves.toMatchObject({ kind: "connected" });
+      expect(requestedCapabilities).toEqual(["fixture.read"]);
+      const reauthorized = await registry.list();
+      expect(reauthorized.integrations[0]?.capabilities[0]).toMatchObject({
+        enabled: true,
+        granted: true,
+        available: true,
+      });
+      expect(registry.isToolAvailableSync("test.fixture.read")).toBe(true);
+    } finally {
+      await registry?.close();
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("forwards write approval and preserves an admitted write receipt through cancellation", async () => {
     const root = await NodeFSP.mkdtemp(
       NodePath.join(NodeOS.tmpdir(), "tritonai-write-commit-admission-"),
@@ -1152,6 +1255,20 @@ describe("IntegrationRegistry lifecycle", () => {
       },
     };
     try {
+      const providerAuthorizedManifest: IntegrationManifest = {
+        ...fixtureManifest,
+        capabilities: fixtureManifest.capabilities.map((capability) => ({
+          ...capability,
+          access: "authorization",
+        })),
+      };
+      expect(
+        () =>
+          new RegistryRuntime(NodePath.join(root, "provider-authorized"), [
+            packaged(providerAuthorizedManifest, statelessProvider),
+          ]),
+      ).toThrow(/connect and disconnect for provider-authorized capabilities/u);
+
       const registry = new RegistryRuntime(root, [packaged(fixtureManifest, statelessProvider)]);
       const installed = await registry.install(fixtureManifest.id);
       expect(installed.integrations[0]).toMatchObject({

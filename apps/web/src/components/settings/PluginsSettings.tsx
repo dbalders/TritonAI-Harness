@@ -69,7 +69,7 @@ function connectionVariant(integration: IntegrationSummary) {
 
 export function integrationNeedsConnectionAction(integration: IntegrationSummary): boolean {
   const needsAuthorization = integration.capabilities.some(
-    ({ enabled, granted }) => enabled && !granted,
+    ({ enabled, granted, access }) => enabled && !granted && access !== "authorization",
   );
   return (
     integration.installed &&
@@ -155,11 +155,18 @@ export function capabilityUsesWriteTool(
 export const WRITE_TOOL_ACCESS_LABEL = "Write · follows task access";
 export const WRITE_TOOL_ACCESS_ARIA_LABEL = "Write operation; follows task access mode";
 
+export function capabilityCanBeToggled(
+  capability: IntegrationSummary["capabilities"][number],
+): boolean {
+  return capability.access !== "authorization";
+}
+
 export function capabilityAccessStateLabel(
   integration: IntegrationSummary,
   capability: IntegrationSummary["capabilities"][number],
 ): string {
   if (capability.available) return "Active";
+  if (capability.access === "authorization" && !capability.granted) return "Not authorized";
   if (capability.enabled && !capability.granted && integration.requiresConnection) {
     return "Authorization required";
   }
@@ -648,17 +655,23 @@ function IntegrationCard({
                           {capability.description}
                         </p>
                       </div>
-                      <label className="inline-flex items-center justify-between gap-3 text-xs font-semibold sm:justify-end">
-                        <span>Access</span>
-                        <Switch
-                          checked={capability.enabled}
-                          disabled={busy || !integration.installed || !integration.enabled}
-                          aria-label={`${capability.displayName} access enabled`}
-                          onCheckedChange={(enabled) =>
-                            void onCapabilityEnabled(integration, capability.id, enabled)
-                          }
-                        />
-                      </label>
+                      {capabilityCanBeToggled(capability) ? (
+                        <label className="inline-flex items-center justify-between gap-3 text-xs font-semibold sm:justify-end">
+                          <span>Access</span>
+                          <Switch
+                            checked={capability.enabled}
+                            disabled={busy || !integration.installed || !integration.enabled}
+                            aria-label={`${capability.displayName} access enabled`}
+                            onCheckedChange={(enabled) =>
+                              void onCapabilityEnabled(integration, capability.id, enabled)
+                            }
+                          />
+                        </label>
+                      ) : (
+                        <span className="text-xs font-medium text-muted-foreground">
+                          Chosen during sign-in
+                        </span>
+                      )}
                     </div>
                   );
                 })}
