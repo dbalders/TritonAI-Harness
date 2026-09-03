@@ -671,7 +671,7 @@ function isSymbolicLinkPath(
   );
 }
 
-function readSkillDirectoryBundle(
+export function readProviderSkillDirectoryBundle(
   skillDirectory: string,
 ): Effect.Effect<
   ServerProviderSkillBundleData,
@@ -688,20 +688,20 @@ function readSkillDirectoryBundle(
     if (
       yield* isSymbolicLinkPath(fs, skillDirectory).pipe(
         Effect.mapError((cause) =>
-          installError(`Failed to inspect GitHub skill path '${skillDirectory}'.`, cause),
+          installError(`Failed to inspect skill path '${skillDirectory}'.`, cause),
         ),
       )
     ) {
-      return yield* installError("GitHub skill path must point to a real directory.");
+      return yield* installError("Skill path must point to a real directory.");
     }
     const rootInfo = yield* fs
       .stat(skillDirectory)
       .pipe(Effect.mapError((cause) => installError(`Failed to stat '${skillDirectory}'.`, cause)));
     if (rootInfo.type !== "Directory") {
-      return yield* installError("GitHub skill path must point to a real directory.");
+      return yield* installError("Skill path must point to a real directory.");
     }
 
-    const walk = Effect.fn("readSkillDirectoryBundle.walk")(function* (
+    const walk = Effect.fn("readProviderSkillDirectoryBundle.walk")(function* (
       currentDirectory: string,
       relativePrefix: string,
     ): Effect.fn.Return<void, ServerProviderSkillInstallError, FileSystem.FileSystem | Path.Path> {
@@ -719,7 +719,7 @@ function readSkillDirectoryBundle(
         if (
           yield* isSymbolicLinkPath(fs, absolutePath).pipe(
             Effect.mapError((cause) =>
-              installError(`Failed to inspect GitHub skill path '${absolutePath}'.`, cause),
+              installError(`Failed to inspect skill path '${absolutePath}'.`, cause),
             ),
           )
         )
@@ -847,7 +847,7 @@ function cloneGitHubSkillBundle(
         destination,
         checkoutPath === "." ? undefined : checkoutPath,
       );
-      return yield* readSkillDirectoryBundle(skillDirectory);
+      return yield* readProviderSkillDirectoryBundle(skillDirectory);
     }).pipe(
       Effect.ensuring(
         fs.remove(tempRoot, { recursive: true }).pipe(Effect.catch(() => Effect.void)),

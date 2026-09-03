@@ -775,6 +775,12 @@ export function createServerEnvironmentAtoms<R, E>(
       scheduler: configScheduler,
       concurrency: configConcurrency,
     }),
+    submitProviderSkillToTritonAiCommons: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:submit-provider-skill-to-tritonai-commons",
+      tag: WS_METHODS.serverSubmitProviderSkillToTritonAiCommons,
+      scheduler: configScheduler,
+      concurrency: configConcurrency,
+    }),
     listPlugins: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:list-plugins",
       tag: WS_METHODS.serverListPlugins,

@@ -15,6 +15,7 @@ import {
   ServerProviderSkillInstallError,
   ServerRemoveProviderSkillInput,
   ServerSetProviderSkillEnabledInput,
+  ServerTritonAiCommonsError,
 } from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Effect from "effect/Effect";
@@ -38,6 +39,7 @@ import { mergeProviderInstanceEnvironment } from "./ProviderInstanceEnvironment.
 import {
   discardProviderSkillInstallRollback,
   installProviderSkill,
+  readProviderSkillDirectoryBundle,
   rollbackProviderSkillInstall,
 } from "./installProviderSkill.ts";
 import {
@@ -45,6 +47,8 @@ import {
   managedSkillManifestBlocksMutation,
 } from "./managedSkillManifest.ts";
 import { discoverPublicSkillCatalog } from "./publicSkillRepository.ts";
+import { isProtectedLocalSkillPathForCommons } from "./tritonAiCommons.ts";
+import { listTritonAiCommonsSubmissionReceipts } from "./tritonAiCommonsReceipts.ts";
 import {
   ensureProviderSkillRemovalPathIsSafe,
   providerSkillRemovalIdentityMatches,
@@ -61,6 +65,14 @@ const decodeCodexSettings = Schema.decodeUnknownEffect(CodexSettings);
 const decodeInstallSkillInput = Schema.decodeUnknownEffect(ServerInstallProviderSkillInput);
 const decodeRemoveSkillInput = Schema.decodeUnknownEffect(ServerRemoveProviderSkillInput);
 const decodeSetSkillEnabledInput = Schema.decodeUnknownEffect(ServerSetProviderSkillEnabledInput);
+const decodeSubmitProviderSkillToCommonsInput = Schema.decodeUnknownEffect(
+  Schema.Struct({
+    instanceId: ProviderInstanceId,
+    skillPath: Schema.optionalKey(Schema.String.check(Schema.isNonEmpty())),
+    skillName: Schema.optionalKey(Schema.String.check(Schema.isNonEmpty())),
+    confirmedPublicShare: Schema.Literal(true),
+  }),
+);
 const decodePluginInstallInput = Schema.decodeUnknownEffect(ServerPluginInstallInput);
 const decodePluginUninstallInput = Schema.decodeUnknownEffect(ServerPluginUninstallInput);
 const decodeMarketplaceAddInput = Schema.decodeUnknownEffect(ServerMarketplaceAddInput);
@@ -87,6 +99,14 @@ function skillConfigError(message: string, cause?: unknown) {
 
 function skillInstallError(message: string, cause?: unknown) {
   return new ServerProviderSkillInstallError({
+    message,
+    ...(cause !== undefined ? { cause } : {}),
+  });
+}
+
+function commonsError(message: string, cause?: unknown) {
+  return new ServerTritonAiCommonsError({
+    code: "invalid_skill",
     message,
     ...(cause !== undefined ? { cause } : {}),
   });
@@ -548,7 +568,74 @@ export const installCodexProviderSkill = Effect.fn("installCodexProviderSkill")(
   };
 });
 
+export const loadProviderSkillForCommonsSubmission = Effect.fn(
+  "loadProviderSkillForCommonsSubmission",
+)(function* (input: unknown) {
+  const request = yield* decodeSubmitProviderSkillToCommonsInput(input).pipe(
+    Effect.mapError((cause) =>
+      commonsError(`Commons submission request is invalid: ${schemaIssue(cause)}`, cause),
+    ),
+  );
+  if (Boolean(request.skillPath) === Boolean(request.skillName)) {
+    return yield* commonsError(
+      "Select exactly one installed skill by its exact SKILL.md path or unique skill name.",
+    );
+  }
+  const target = yield* resolveCodexManagementTarget(request.instanceId).pipe(
+    Effect.mapError((cause) => commonsError(cause.message, cause)),
+  );
+  const registry = yield* ProviderRegistry.ProviderRegistry;
+  const providers = yield* registry.getProviders;
+  const candidates =
+    providers
+      .find((provider) => provider.instanceId === target.instanceId)
+      ?.skills.filter((candidate) =>
+        request.skillPath
+          ? candidate.path === request.skillPath
+          : candidate.name === request.skillName,
+      ) ?? [];
+  if (candidates.length > 1) {
+    return yield* commonsError(
+      `More than one installed skill is named '${request.skillName}'. Use Share with UCSD beside the exact skill in Settings > Skills.`,
+    );
+  }
+  const skill = candidates[0];
+  if (!skill) {
+    return yield* commonsError("That skill is no longer installed in this Harness environment.");
+  }
+
+  const path = yield* Path.Path;
+  if (!path.isAbsolute(skill.path) || path.basename(skill.path) !== "SKILL.md") {
+    return yield* commonsError("Only installed SKILL.md-backed skills can be submitted.");
+  }
+  const normalizedScope = skill.scope?.trim().toLowerCase();
+  if (normalizedScope === "system" || isProtectedLocalSkillPathForCommons(skill.path)) {
+    return yield* commonsError("System and app-provided skills cannot be submitted to Commons.");
+  }
+
+  const managed = yield* loadManagedSkillManifest(path.join(target.sharedHomePath, "skills"));
+  if (managedSkillManifestBlocksMutation(managed.status)) {
+    return yield* commonsError(
+      "TritonAI managed-skill ownership could not be verified. Run the Installer to repair it before submitting a skill.",
+    );
+  }
+  if (managed.status === "valid" && managed.skillNames.includes(skill.name)) {
+    return yield* commonsError("TritonAI-managed AI Team skills cannot be submitted to Commons.");
+  }
+
+  const bundle = yield* readProviderSkillDirectoryBundle(path.dirname(skill.path)).pipe(
+    Effect.mapError((cause) => commonsError(cause.message, cause)),
+  );
+  if (bundle.skillId !== skill.name) {
+    return yield* commonsError(
+      "The installed skill name does not match its SKILL.md frontmatter. Fix it before submitting.",
+    );
+  }
+  return { bundle, skillPath: skill.path };
+});
+
 export const listProviderSkillCatalog = Effect.fn("listProviderSkillCatalog")(function* () {
+  const config = yield* ServerConfig.ServerConfig;
   const target = yield* resolveCodexManagementTarget().pipe(Effect.result);
   const path = yield* Path.Path;
   const managed =
@@ -560,16 +647,26 @@ export const listProviderSkillCatalog = Effect.fn("listProviderSkillCatalog")(fu
           warning: "The managed secure skills manifest could not be located.",
         };
   const catalog = yield* discoverPublicSkillCatalog().pipe(Effect.result);
+  const commonsSubmissionRead = yield* listTritonAiCommonsSubmissionReceipts(config.stateDir).pipe(
+    Effect.result,
+  );
+  if (commonsSubmissionRead._tag === "Failure") {
+    yield* Effect.logWarning("could not read TritonAI Commons submission receipts", {
+      cause: commonsSubmissionRead.failure,
+    });
+  }
 
   return {
     managedSkillNames: [...managed.skillNames],
     managedSkillsStatus: managed.status,
+    commonsSubmissions:
+      commonsSubmissionRead._tag === "Success" ? commonsSubmissionRead.success : [],
     ...(managed.warning ? { managedManifestWarning: managed.warning } : {}),
     ...(catalog._tag === "Success"
       ? { catalog: catalog.success }
       : {
           unavailableReason:
-            "The public skills library is unavailable. Check your internet connection and retry.",
+            "TritonAI Commons is unavailable. Check your internet connection and retry.",
         }),
   };
 });

@@ -200,6 +200,9 @@ import {
   ServerProviderSkillRemovalError,
   ServerRemoveProviderSkillInput,
   ServerSetProviderSkillEnabledInput,
+  ServerSubmitProviderSkillToTritonAiCommonsInput,
+  ServerSubmitProviderSkillToTritonAiCommonsResult,
+  ServerTritonAiCommonsError,
   ServerUpsertKeybindingInput,
   ServerUpsertKeybindingResult,
 } from "./server.ts";
@@ -327,6 +330,7 @@ export const WS_METHODS = {
   serverInstallProviderSkill: "server.installProviderSkill",
   serverRemoveProviderSkill: "server.removeProviderSkill",
   serverSetProviderSkillEnabled: "server.setProviderSkillEnabled",
+  serverSubmitProviderSkillToTritonAiCommons: "server.submitProviderSkillToTritonAiCommons",
   serverListPlugins: "server.listPlugins",
   serverInstallPlugin: "server.installPlugin",
   serverUninstallPlugin: "server.uninstallPlugin",
@@ -555,6 +559,15 @@ export const WsServerSetProviderSkillEnabledRpc = Rpc.make(
     payload: ServerSetProviderSkillEnabledInput,
     success: ServerProviderUpdatedPayload,
     error: Schema.Union([ServerProviderSkillConfigError, EnvironmentAuthorizationError]),
+  },
+);
+
+export const WsServerSubmitProviderSkillToTritonAiCommonsRpc = Rpc.make(
+  WS_METHODS.serverSubmitProviderSkillToTritonAiCommons,
+  {
+    payload: ServerSubmitProviderSkillToTritonAiCommonsInput,
+    success: ServerSubmitProviderSkillToTritonAiCommonsResult,
+    error: Schema.Union([ServerTritonAiCommonsError, EnvironmentAuthorizationError]),
   },
 );
 
@@ -1231,6 +1244,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerInstallProviderSkillRpc,
   WsServerRemoveProviderSkillRpc,
   WsServerSetProviderSkillEnabledRpc,
+  WsServerSubmitProviderSkillToTritonAiCommonsRpc,
   WsServerListPluginsRpc,
   WsServerInstallPluginRpc,
   WsServerUninstallPluginRpc,

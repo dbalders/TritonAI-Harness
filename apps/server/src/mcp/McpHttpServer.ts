@@ -24,6 +24,7 @@ import {
   PreviewToolkit,
 } from "./toolkits/preview/tools.ts";
 import { registrationLayer as integrationToolsRegistrationLayer } from "./IntegrationTools.ts";
+import { TRITONAI_COMMONS_SUBMIT_TOOL_NAME } from "./TritonAiCommonsTool.ts";
 
 const unauthorized = HttpServerResponse.jsonUnsafe(
   {
@@ -228,9 +229,13 @@ const McpTransportLive = McpServer.layerHttp({
 export const makeLayer = (
   loadRegistry?: Parameters<typeof integrationToolsRegistrationLayer>[1],
 ) => {
+  const reservedToolNames = new Set([
+    ...Object.keys(PreviewToolkit.tools),
+    TRITONAI_COMMONS_SUBMIT_TOOL_NAME,
+  ]);
   const integrationToolsRegistration = loadRegistry
-    ? integrationToolsRegistrationLayer(new Set(Object.keys(PreviewToolkit.tools)), loadRegistry)
-    : integrationToolsRegistrationLayer(new Set(Object.keys(PreviewToolkit.tools)));
+    ? integrationToolsRegistrationLayer(reservedToolNames, loadRegistry)
+    : integrationToolsRegistrationLayer(reservedToolNames);
   return Layer.mergeAll(PreviewToolkitRegistrationLive, integrationToolsRegistration).pipe(
     Layer.provideMerge(McpTransportLive),
   );

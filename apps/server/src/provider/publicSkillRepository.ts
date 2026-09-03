@@ -278,20 +278,20 @@ function resolveRevision<E>(
       api: true,
       accept: "application/vnd.github+json",
       maxBytes: 256 * 1024,
-      failureMessage: "The public skills repository could not be reached.",
-      tooLargeMessage: "The public skills repository revision response was too large.",
+      failureMessage: "The TritonAI Commons repository could not be reached.",
+      tooLargeMessage: "The TritonAI Commons repository revision response was too large.",
       errorFactory,
     });
     const response = yield* decodeGitHubCommitResponse(raw).pipe(
       Effect.mapError((cause) =>
-        errorFactory("The public skills repository returned invalid revision metadata.", cause),
+        errorFactory("The TritonAI Commons repository returned invalid revision metadata.", cause),
       ),
     );
     const resolvedRevision = response.sha.toLowerCase();
     const tree = response.commit.tree.sha.toLowerCase();
     if (!GIT_SHA_PATTERN.test(resolvedRevision) || !GIT_SHA_PATTERN.test(tree)) {
       return yield* Effect.fail(
-        errorFactory("The public skills repository returned an invalid revision."),
+        errorFactory("The TritonAI Commons repository returned an invalid revision."),
       );
     }
     return { revision: resolvedRevision, tree };
@@ -565,7 +565,7 @@ export const make = Effect.fn("PublicSkillRepository.make")(function* (
     const names = new Set<string>();
 
     if (entrypoints.length > MAX_CATALOG_SKILLS) {
-      return yield* catalogError("The public skills repository contains too many skills.");
+      return yield* catalogError("TritonAI Commons contains too many skills.");
     }
 
     for (const entrypoint of entrypoints) {

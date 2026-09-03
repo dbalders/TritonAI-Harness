@@ -53,6 +53,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.serverInstallProviderSkill]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverRemoveProviderSkill]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverSetProviderSkillEnabled]: AuthOrchestrationOperateScope,
+  [WS_METHODS.serverSubmitProviderSkillToTritonAiCommons]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverListPlugins]: AuthOrchestrationReadScope,
   [WS_METHODS.serverInstallPlugin]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverUninstallPlugin]: AuthOrchestrationOperateScope,

@@ -53,6 +53,11 @@ import * as Integrations from "../../integrations/IntegrationRegistry.ts";
 import { integrationToolJsonSchema } from "../../integrations/IntegrationTool.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import * as PreviewAutomationBroker from "../../mcp/PreviewAutomationBroker.ts";
+import {
+  invokeTritonAiCommonsTool,
+  TRITONAI_COMMONS_SUBMIT_TOOL_NAME,
+  tritonAiCommonsDynamicToolDefinition,
+} from "../../mcp/TritonAiCommonsTool.ts";
 import { encodeCodexConfigString } from "../Drivers/TritonAiCodexConfig.ts";
 
 import {
@@ -1973,6 +1978,14 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           }
           dynamicToolNames.add(binding.name);
         }
+        if (dynamicToolNames.has(TRITONAI_COMMONS_SUBMIT_TOOL_NAME)) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "startSession",
+            issue: `Internal tool ${TRITONAI_COMMONS_SUBMIT_TOOL_NAME} cannot be exposed safely.`,
+          });
+        }
+        dynamicToolNames.add(TRITONAI_COMMONS_SUBMIT_TOOL_NAME);
         for (const binding of dynamicToolBindings) {
           if (!binding.dynamicName || dynamicToolNames.has(binding.dynamicName)) {
             return yield* new ProviderAdapterValidationError({
@@ -1988,6 +2001,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
         );
         const allDynamicToolDefinitions = [
           ...previewDynamicToolBindings,
+          tritonAiCommonsDynamicToolDefinition,
           ...dynamicToolBindings.map((binding) => ({
             name: binding.dynamicName,
             description: binding.description,
@@ -2036,6 +2050,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
             ? {
                 dynamicTools: allDynamicToolDefinitions,
                 isDynamicToolAvailable: (name: string) => {
+                  if (name === TRITONAI_COMMONS_SUBMIT_TOOL_NAME) return true;
                   if (previewDynamicToolNames.has(name)) {
                     const activeMcpSession = McpProviderSession.readMcpProviderSession(
                       input.threadId,
@@ -2056,6 +2071,14 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
                   signal,
                   writeApproved,
                 }) => {
+                  if (name === TRITONAI_COMMONS_SUBMIT_TOOL_NAME) {
+                    return invokeTritonAiCommonsTool({
+                      arguments: toolArguments,
+                      providerInstanceId: boundInstanceId,
+                      signal,
+                      writeApproved: writeApproved === true,
+                    });
+                  }
                   if (
                     previewDynamicToolNames.has(name) &&
                     isCodexPreviewDynamicTool(name) &&

@@ -1,4 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
+import { useNavigate } from "@tanstack/react-router";
 import {
   squashAtomCommandFailure,
   type AtomCommandResult,
@@ -10,6 +11,7 @@ import type {
   ServerProviderSkill,
   ServerProviderSkillCatalog,
   ServerProviderSkillCatalogEntry,
+  ServerSubmitProviderSkillToTritonAiCommonsResult,
 } from "@t3tools/contracts";
 import {
   BookOpenIcon,
@@ -18,6 +20,7 @@ import {
   LinkIcon,
   PlusIcon,
   RefreshCwIcon,
+  SendIcon,
   SparklesIcon,
   Trash2Icon,
   UsersIcon,
@@ -32,10 +35,16 @@ import {
   dedupeProviderSkillRows,
   groupProviderSkills,
   isProviderSkillMutationBlocked,
+  isProviderSkillPublishable,
   type ProviderCatalogSkillItem as CatalogSkillItem,
   type ProviderSkillRow as CodexSkillRow,
 } from "../../providerSkillGrouping";
 import { ensureLocalApi } from "../../localApi";
+import {
+  findTritonAiCommonsFailure,
+  GITHUB_COMMONS_SETUP_CONTINUATION,
+  tritonAiCommonsPublicShareConfirmation,
+} from "../../tritonAiCommonsSubmission";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { primaryServerProvidersAtom, serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -81,20 +90,31 @@ function SkillSettingsRow({
   removalBlocked = false,
   updating,
   removing,
+  submitting = false,
+  submission,
+  submissionError,
   onSetEnabled,
   onRemove,
+  onSubmit,
 }: {
   readonly row: CodexSkillRow;
   readonly managed?: boolean;
   readonly removalBlocked?: boolean;
   readonly updating: boolean;
   readonly removing: boolean;
+  readonly submitting?: boolean;
+  readonly submission?: ServerSubmitProviderSkillToTritonAiCommonsResult;
+  readonly submissionError?: string;
   readonly onSetEnabled: (
     providerInstanceId: ProviderInstanceId,
     skill: ServerProviderSkill,
     enabled: boolean,
   ) => Promise<void>;
   readonly onRemove: (
+    providerInstanceId: ProviderInstanceId,
+    skill: ServerProviderSkill,
+  ) => Promise<void>;
+  readonly onSubmit?: (
     providerInstanceId: ProviderInstanceId,
     skill: ServerProviderSkill,
   ) => Promise<void>;
@@ -121,6 +141,11 @@ function SkillSettingsRow({
               Managed
             </Badge>
           ) : null}
+          {submission ? (
+            <Badge size="sm" variant="success">
+              Shared with UCSD
+            </Badge>
+          ) : null}
         </span>
       }
       description={
@@ -132,6 +157,11 @@ function SkillSettingsRow({
           <code className="block truncate font-mono text-[10px] text-muted-foreground/70">
             {row.skill.path}
           </code>
+          {submissionError ? (
+            <span className="max-w-xl text-xs text-destructive" role="alert">
+              {submissionError}
+            </span>
+          ) : null}
         </div>
       }
       control={
@@ -139,17 +169,37 @@ function SkillSettingsRow({
           <Switch
             checked={row.skill.enabled}
             aria-label={`${displayName} skill enabled`}
-            disabled={updating || removing}
+            disabled={updating || removing || submitting}
             onCheckedChange={(checked) =>
               void onSetEnabled(row.provider.instanceId, row.skill, Boolean(checked))
             }
           />
+          {submission ? (
+            <Button
+              size="xs"
+              variant="outline"
+              onClick={() => void ensureLocalApi().shell.openExternal(submission.reviewUrl)}
+            >
+              Review PR <ExternalLinkIcon className="size-3.5" />
+            </Button>
+          ) : onSubmit ? (
+            <Button
+              size="xs"
+              variant="outline"
+              disabled={updating || removing || submitting}
+              title="Share this local skill folder publicly with the UCSD community"
+              onClick={() => void onSubmit(row.provider.instanceId, row.skill)}
+            >
+              <SendIcon className="size-3.5" />
+              {submitting ? "Sharing..." : "Share with UCSD"}
+            </Button>
+          ) : null}
           {!managed && !removalBlocked ? (
             <Button
               size="icon-xs"
               variant="outline"
               className="text-muted-foreground"
-              disabled={updating || removing}
+              disabled={updating || removing || submitting}
               aria-label={`Remove ${displayName}`}
               onClick={() => void onRemove(row.provider.instanceId, row.skill)}
             >
@@ -192,7 +242,9 @@ function CatalogSkillSettingsRow({
 }) {
   const row = item.installedRow;
   const details = [
-    item.entry.section === "ai-team" ? "AI Team public library" : "Community public library",
+    item.entry.section === "ai-team"
+      ? "TritonAI Commons · AI Team"
+      : "TritonAI Commons · Community",
     item.entry.maintainer ? `Maintained by ${item.entry.maintainer}` : null,
   ].filter(Boolean);
 
@@ -382,6 +434,7 @@ function CatalogSkillSection({
 }
 
 export function SkillsSettingsPanel() {
+  const navigate = useNavigate();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const providers = useAtomValue(primaryServerProvidersAtom);
   const listCatalogCommand = useAtomCommand(serverEnvironment.listProviderSkillCatalog, {
@@ -400,6 +453,22 @@ export function SkillsSettingsPanel() {
     label: "skill enabled",
     reportFailure: false,
   });
+  const submitSkillToCommonsCommand = useAtomCommand(
+    serverEnvironment.submitProviderSkillToTritonAiCommons,
+    { label: "skill submit to commons", reportFailure: false },
+  );
+  const listIntegrationsCommand = useAtomCommand(serverEnvironment.listIntegrations, {
+    label: "commons GitHub setup list",
+    reportFailure: false,
+  });
+  const installIntegrationCommand = useAtomCommand(serverEnvironment.installIntegration, {
+    label: "commons GitHub setup install",
+    reportFailure: false,
+  });
+  const setIntegrationEnabledCommand = useAtomCommand(serverEnvironment.setIntegrationEnabled, {
+    label: "commons GitHub setup enable",
+    reportFailure: false,
+  });
   const [catalog, setCatalog] = useState<ServerProviderSkillCatalog | null>(null);
   const [managedSkillNames, setManagedSkillNames] = useState<ReadonlySet<string>>(new Set());
   const [managedSkillsStatus, setManagedSkillsStatus] =
@@ -412,6 +481,13 @@ export function SkillsSettingsPanel() {
   const [removingSkillKey, setRemovingSkillKey] = useState<string | null>(null);
   const [updatingSkillKey, setUpdatingSkillKey] = useState<string | null>(null);
   const [operationError, setOperationError] = useState<string | null>(null);
+  const [submittingSkillKey, setSubmittingSkillKey] = useState<string | null>(null);
+  const [commonsSubmissionErrors, setCommonsSubmissionErrors] = useState<
+    ReadonlyMap<string, string>
+  >(new Map());
+  const [commonsSubmissions, setCommonsSubmissions] = useState<
+    ReadonlyMap<string, ServerSubmitProviderSkillToTritonAiCommonsResult>
+  >(new Map());
 
   const codexProviders = useMemo(() => providers.filter(isCodexProvider), [providers]);
   const installProvider = codexProviders[0] ?? null;
@@ -466,6 +542,9 @@ export function SkillsSettingsPanel() {
       setCatalog(result.catalog ?? null);
       setManagedSkillNames(new Set(result.managedSkillNames));
       setManagedSkillsStatus(result.managedSkillsStatus);
+      setCommonsSubmissions(
+        new Map(result.commonsSubmissions.map((submission) => [submission.skillPath, submission])),
+      );
       setCatalogError(result.unavailableReason ?? null);
       setManagedManifestWarning(result.managedManifestWarning ?? null);
     } catch (error) {
@@ -596,18 +675,117 @@ export function SkillsSettingsPanel() {
     [primaryEnvironmentId, removeSkillCommand],
   );
 
+  const submitSkillToCommons = useCallback(
+    async (providerInstanceId: ProviderInstanceId, skill: ServerProviderSkill) => {
+      if (!primaryEnvironmentId) return;
+      const displayName = formatProviderSkillDisplayName(skill);
+      const confirmed = await ensureLocalApi().dialogs.confirm(
+        tritonAiCommonsPublicShareConfirmation({ displayName, skillPath: skill.path }),
+      );
+      if (!confirmed) return;
+
+      const key = `${providerInstanceId}:${skill.path || skill.name}`;
+      setSubmittingSkillKey(key);
+      setCommonsSubmissionErrors((current) => {
+        const next = new Map(current);
+        next.delete(skill.path);
+        return next;
+      });
+      try {
+        const commandResult = await submitSkillToCommonsCommand({
+          environmentId: primaryEnvironmentId,
+          input: {
+            instanceId: providerInstanceId,
+            skillPath: skill.path,
+            confirmedPublicShare: true,
+          },
+        });
+        if (commandResult._tag === "Failure") {
+          const commonsFailure = findTritonAiCommonsFailure(commandResult);
+          if (commonsFailure?.code === "github_setup_required") {
+            let integrations = unwrapAtomCommandResult(
+              await listIntegrationsCommand({
+                environmentId: primaryEnvironmentId,
+                input: {},
+              }),
+            );
+            let github = integrations.integrations.find(({ id }) => id === "github");
+            if (!github) {
+              throw new Error(
+                "The bundled GitHub plugin is not available in this Harness build. Update Harness, then retry the share.",
+              );
+            }
+            if (!github.installed) {
+              integrations = unwrapAtomCommandResult(
+                await installIntegrationCommand({
+                  environmentId: primaryEnvironmentId,
+                  input: { id: "github" },
+                }),
+              );
+              github = integrations.integrations.find(({ id }) => id === "github");
+            }
+            if (github && !github.enabled) {
+              unwrapAtomCommandResult(
+                await setIntegrationEnabledCommand({
+                  environmentId: primaryEnvironmentId,
+                  input: { id: "github", enabled: true },
+                }),
+              );
+            }
+            const openSetup = await ensureLocalApi().dialogs.confirm(
+              `${GITHUB_COMMONS_SETUP_CONTINUATION}\n\nOpen the GitHub plugin setup now?`,
+            );
+            setCommonsSubmissionErrors((current) =>
+              new Map(current).set(skill.path, GITHUB_COMMONS_SETUP_CONTINUATION),
+            );
+            if (openSetup) {
+              void navigate({ to: "/settings/plugins", hash: "github-title" });
+            }
+            return;
+          }
+          throw squashAtomCommandFailure(commandResult);
+        }
+        const result = commandResult.value;
+        setCommonsSubmissions((current) => new Map(current).set(skill.path, result));
+        const openReview = await ensureLocalApi().dialogs.confirm(
+          `${displayName} was shared with UCSD. Harness opened a public, ready-for-review pull request and will keep this skill marked as shared.\n\nOpen the pull request now to review it and participate in the submission?`,
+        );
+        if (openReview) {
+          void ensureLocalApi().shell.openExternal(result.reviewUrl);
+        }
+      } catch (error) {
+        setCommonsSubmissionErrors((current) =>
+          new Map(current).set(
+            skill.path,
+            error instanceof Error ? error.message : "Failed to submit this skill to Commons.",
+          ),
+        );
+      } finally {
+        setSubmittingSkillKey((current) => (current === key ? null : current));
+      }
+    },
+    [
+      installIntegrationCommand,
+      listIntegrationsCommand,
+      navigate,
+      primaryEnvironmentId,
+      setIntegrationEnabledCommand,
+      submitSkillToCommonsCommand,
+    ],
+  );
+
   return (
     <SettingsPageContainer>
       {catalogError ? (
         <SettingsSection
-          title="Public Skills Library"
+          title="TritonAI Commons"
           icon={<CloudIcon className="size-3.5" />}
           headerAction={
             <Button
               size="xs"
               variant="outline"
               disabled={catalogLoading}
-              aria-label="Retry loading public skills"
+              aria-label="Retry loading TritonAI Commons"
               onClick={() => void loadCatalog()}
             >
               <RefreshCwIcon className="size-3.5" />
@@ -616,7 +794,7 @@ export function SkillsSettingsPanel() {
           }
         >
           <SettingsRow
-            title="Public skills unavailable"
+            title="TritonAI Commons unavailable"
             description={`${catalogError} Installed skills remain available below.`}
           />
         </SettingsSection>
@@ -631,8 +809,8 @@ export function SkillsSettingsPanel() {
           emptyTitle={catalogLoading ? "Loading AI Team skills" : "No AI Team skills"}
           emptyDescription={
             catalogLoading
-              ? "The public skills library is loading."
-              : "AI Team skills will appear here when the public library is available."
+              ? "TritonAI Commons is loading."
+              : "AI Team skills will appear here when TritonAI Commons is available."
           }
           installDisabled={catalogInstallDisabled}
           installingSkillKey={installingSkillKey}
@@ -653,8 +831,8 @@ export function SkillsSettingsPanel() {
           emptyTitle={catalogLoading ? "Loading community skills" : "No community skills"}
           emptyDescription={
             catalogLoading
-              ? "The public skills library is loading."
-              : "Community-created skills will appear here when the public library is available."
+              ? "TritonAI Commons is loading."
+              : "Community-created skills will appear here when TritonAI Commons is available."
           }
           installDisabled={catalogInstallDisabled}
           installingSkillKey={installingSkillKey}
@@ -716,13 +894,13 @@ export function SkillsSettingsPanel() {
       </SettingsSection>
 
       <SettingsSection
-        title="Other"
+        title="Your Skills"
         icon={<BookOpenIcon className="size-3.5" />}
         headerAction={
           <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-            <span>{rows.length} installed</span>
+            <span>{otherRows.length} local</span>
             {installedCatalogCount > 0 ? (
-              <span>{installedCatalogCount} library/managed</span>
+              <span>{installedCatalogCount} Commons/managed</span>
             ) : null}
             {disabledCount > 0 ? <span>{disabledCount} disabled</span> : null}
           </div>
@@ -749,26 +927,36 @@ export function SkillsSettingsPanel() {
                 <EmptyMedia variant="icon">
                   <BookOpenIcon />
                 </EmptyMedia>
-                <EmptyTitle>No other skills</EmptyTitle>
+                <EmptyTitle>No local skills</EmptyTitle>
                 <EmptyDescription>
-                  Public and managed skills appear in AI Team or Community when their source is
-                  available.
+                  Skills you create or add locally will appear here. Share one with UCSD when it is
+                  ready for the public Community collection.
                 </EmptyDescription>
               </EmptyHeader>
             </Empty>
           </div>
         ) : (
-          otherRows.map((row) => (
-            <SkillSettingsRow
-              key={skillRowKey(row)}
-              row={row}
-              onSetEnabled={setSkillEnabled}
-              onRemove={removeSkill}
-              updating={updatingSkillKey === skillRowKey(row)}
-              removing={removingSkillKey === skillRowKey(row)}
-              removalBlocked={removalBlocked}
-            />
-          ))
+          otherRows.map((row) => {
+            const key = skillRowKey(row);
+            const submission = commonsSubmissions.get(row.skill.path);
+            const submissionError = commonsSubmissionErrors.get(row.skill.path);
+            const canSubmit = isProviderSkillPublishable(row.skill);
+            return (
+              <SkillSettingsRow
+                key={key}
+                row={row}
+                onSetEnabled={setSkillEnabled}
+                onRemove={removeSkill}
+                {...(canSubmit ? { onSubmit: submitSkillToCommons } : {})}
+                updating={updatingSkillKey === key}
+                removing={removingSkillKey === key}
+                submitting={submittingSkillKey === key}
+                {...(submission ? { submission } : {})}
+                {...(submissionError ? { submissionError } : {})}
+                removalBlocked={removalBlocked}
+              />
+            );
+          })
         )}
       </SettingsSection>
 

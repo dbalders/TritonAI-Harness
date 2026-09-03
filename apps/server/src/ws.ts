@@ -98,6 +98,7 @@ import {
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 import * as ProviderService from "./provider/Services/ProviderService.ts";
 import * as CodexManagement from "./provider/CodexManagement.ts";
+import { submitInstalledProviderSkillToTritonAiCommons } from "./provider/TritonAiCommonsAction.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
@@ -1856,6 +1857,12 @@ const makeWsRpcLayer = (
             {
               "rpc.aggregate": "server",
             },
+          ),
+        [WS_METHODS.serverSubmitProviderSkillToTritonAiCommons]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverSubmitProviderSkillToTritonAiCommons,
+            submitInstalledProviderSkillToTritonAiCommons(input),
+            { "rpc.aggregate": "server" },
           ),
         [WS_METHODS.serverListPlugins]: (input) =>
           observeRpcEffect(WS_METHODS.serverListPlugins, CodexManagement.listCodexPlugins(input), {

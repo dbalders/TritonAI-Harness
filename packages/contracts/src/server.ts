@@ -123,6 +123,17 @@ export const ServerProviderSkillCatalog = Schema.Struct({
 });
 export type ServerProviderSkillCatalog = typeof ServerProviderSkillCatalog.Type;
 
+export const ServerTritonAiCommonsSubmissionReceipt = Schema.Struct({
+  reviewUrl: TrimmedNonEmptyString,
+  branch: TrimmedNonEmptyString,
+  path: TrimmedNonEmptyString,
+  skillName: TrimmedNonEmptyString,
+  skillPath: TrimmedNonEmptyString,
+  submittedAt: IsoDateTime,
+});
+export type ServerTritonAiCommonsSubmissionReceipt =
+  typeof ServerTritonAiCommonsSubmissionReceipt.Type;
+
 export const ServerManagedSkillsStatus = Schema.Literals(["absent", "invalid", "unknown", "valid"]);
 export type ServerManagedSkillsStatus = typeof ServerManagedSkillsStatus.Type;
 
@@ -130,10 +141,30 @@ export const ServerListProviderSkillCatalogResult = Schema.Struct({
   catalog: Schema.optional(ServerProviderSkillCatalog),
   managedSkillNames: Schema.Array(TrimmedNonEmptyString),
   managedSkillsStatus: ServerManagedSkillsStatus,
+  commonsSubmissions: Schema.Array(ServerTritonAiCommonsSubmissionReceipt).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
   unavailableReason: Schema.optional(TrimmedNonEmptyString),
   managedManifestWarning: Schema.optional(TrimmedNonEmptyString),
 });
 export type ServerListProviderSkillCatalogResult = typeof ServerListProviderSkillCatalogResult.Type;
+
+export const ServerSubmitProviderSkillToTritonAiCommonsInput = Schema.Struct({
+  instanceId: ProviderInstanceId,
+  skillPath: TrimmedNonEmptyString,
+  confirmedPublicShare: Schema.Literal(true),
+});
+export type ServerSubmitProviderSkillToTritonAiCommonsInput =
+  typeof ServerSubmitProviderSkillToTritonAiCommonsInput.Type;
+
+export const ServerSubmitProviderSkillToTritonAiCommonsResult = Schema.Struct({
+  reviewUrl: TrimmedNonEmptyString,
+  branch: TrimmedNonEmptyString,
+  path: TrimmedNonEmptyString,
+  skillName: TrimmedNonEmptyString,
+});
+export type ServerSubmitProviderSkillToTritonAiCommonsResult =
+  typeof ServerSubmitProviderSkillToTritonAiCommonsResult.Type;
 
 export const ServerProviderSkillBundleFile = Schema.Struct({
   path: TrimmedNonEmptyString,
@@ -208,6 +239,21 @@ export class ServerProviderSkillCatalogError extends Schema.TaggedErrorClass<Ser
 export class ServerProviderSkillInstallError extends Schema.TaggedErrorClass<ServerProviderSkillInstallError>()(
   "ServerProviderSkillInstallError",
   {
+    message: TrimmedNonEmptyString,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
+
+export class ServerTritonAiCommonsError extends Schema.TaggedErrorClass<ServerTritonAiCommonsError>()(
+  "ServerTritonAiCommonsError",
+  {
+    code: Schema.Literals([
+      "invalid_skill",
+      "github_setup_required",
+      "already_exists",
+      "submission_failed",
+      "cancelled",
+    ]),
     message: TrimmedNonEmptyString,
     cause: Schema.optional(Schema.Defect()),
   },
