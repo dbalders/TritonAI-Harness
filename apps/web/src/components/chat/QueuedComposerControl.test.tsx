@@ -37,7 +37,6 @@ describe("QueuedComposerControl", () => {
         canSteer
         onSteer={() => undefined}
         onRemove={() => undefined}
-        onMove={() => undefined}
         onEdit={() => undefined}
       />,
     );
@@ -47,5 +46,6 @@ describe("QueuedComposerControl", () => {
     expect(html).toContain("Steer queued message now");
     expect(html).toContain("Edit queued message");
     expect(html).toContain("Remove queued message");
+    expect(html).not.toContain("Move queued message");
   });
 });

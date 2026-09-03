@@ -4,6 +4,7 @@ import {
   canAutoDrainComposerQueue,
   isQueuedMessageTurnComplete,
   queuedDispatchBlocksComposer,
+  resolveQueuedAcknowledgement,
   resolveComposerDispatchMode,
 } from "./composerDispatch";
 
@@ -80,6 +81,41 @@ describe("queuedDispatchBlocksComposer", () => {
     expect(queuedDispatchBlocksComposer({ phase: "ready", dispatchInFlight: true })).toBe(true);
     expect(queuedDispatchBlocksComposer({ phase: "running", dispatchInFlight: true })).toBe(false);
     expect(queuedDispatchBlocksComposer({ phase: "ready", dispatchInFlight: false })).toBe(false);
+  });
+});
+
+describe("resolveQueuedAcknowledgement", () => {
+  it("expires only a missing projection, not a legitimately long running turn", () => {
+    expect(
+      resolveQueuedAcknowledgement({
+        phase: "ready",
+        messageTurnId: null,
+        latestTurn: null,
+        deadlineAt: 100,
+        now: 100,
+      }),
+    ).toBe("expired");
+    expect(
+      resolveQueuedAcknowledgement({
+        phase: "running",
+        messageTurnId: "turn:one",
+        latestTurn: { turnId: "turn:one", state: "running" },
+        deadlineAt: 100,
+        now: 1_000,
+      }),
+    ).toBe("waiting");
+  });
+
+  it("completes only the acknowledged terminal turn", () => {
+    expect(
+      resolveQueuedAcknowledgement({
+        phase: "ready",
+        messageTurnId: "turn:one",
+        latestTurn: { turnId: "turn:one", state: "completed" },
+        deadlineAt: 100,
+        now: 1_000,
+      }),
+    ).toBe("complete");
   });
 });
 

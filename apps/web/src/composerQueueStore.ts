@@ -17,6 +17,8 @@ import type { ReviewCommentContext } from "./reviewCommentContext";
 
 export type QueuedComposerStatus = "queued" | "dispatching" | "failed";
 
+export const COMPOSER_QUEUE_ACKNOWLEDGEMENT_TIMEOUT_MS = 30_000;
+
 /**
  * A client-owned snapshot of one composer submission. File handles and blob
  * preview URLs deliberately stay in memory: serializing them would turn a
@@ -50,11 +52,11 @@ interface ComposerQueueState {
   readonly entriesByThreadKey: Readonly<Record<string, readonly QueuedComposerEntry[]>>;
   readonly dispatchOwnerByThreadKey: Readonly<Record<string, string>>;
   readonly dispatchAcknowledgementByThreadKey: Readonly<Record<string, MessageId>>;
+  readonly dispatchAcknowledgementDeadlineByThreadKey: Readonly<Record<string, number>>;
   readonly sharedDispatchCountByThreadKey: Readonly<Record<string, number>>;
   enqueue: (threadKey: string, entry: QueuedComposerEntry) => void;
   updatePrompt: (threadKey: string, entryId: string, prompt: string) => void;
   remove: (threadKey: string, entryId: string) => QueuedComposerEntry | null;
-  move: (threadKey: string, entryId: string, offset: -1 | 1) => void;
   markDispatching: (threadKey: string, entryId: string) => boolean;
   complete: (threadKey: string, entryId: string) => void;
   markFailed: (threadKey: string, entryId: string, error: string) => void;
@@ -81,6 +83,7 @@ export const useComposerQueueStore = create<ComposerQueueState>((set, get) => ({
   entriesByThreadKey: {},
   dispatchOwnerByThreadKey: {},
   dispatchAcknowledgementByThreadKey: {},
+  dispatchAcknowledgementDeadlineByThreadKey: {},
   sharedDispatchCountByThreadKey: {},
   enqueue: (threadKey, entry) => {
     if (!threadKey) return;
@@ -116,25 +119,6 @@ export const useComposerQueueStore = create<ComposerQueueState>((set, get) => ({
       ),
     );
     return removed;
-  },
-  move: (threadKey, entryId, offset) => {
-    set((state) => {
-      const entries = [...(state.entriesByThreadKey[threadKey] ?? [])];
-      const index = entries.findIndex((entry) => entry.id === entryId);
-      const nextIndex = index + offset;
-      if (
-        index < 0 ||
-        nextIndex < 0 ||
-        nextIndex >= entries.length ||
-        entries[index]?.status === "dispatching"
-      ) {
-        return state;
-      }
-      const [entry] = entries.splice(index, 1);
-      if (!entry) return state;
-      entries.splice(nextIndex, 0, entry);
-      return replaceThreadEntries(state, threadKey, entries);
-    });
   },
   markDispatching: (threadKey, entryId) => {
     const entries = get().entriesByThreadKey[threadKey] ?? [];
@@ -188,6 +172,10 @@ export const useComposerQueueStore = create<ComposerQueueState>((set, get) => ({
           ...state.dispatchAcknowledgementByThreadKey,
           [threadKey]: messageId,
         },
+        dispatchAcknowledgementDeadlineByThreadKey: {
+          ...state.dispatchAcknowledgementDeadlineByThreadKey,
+          [threadKey]: Date.now() + COMPOSER_QUEUE_ACKNOWLEDGEMENT_TIMEOUT_MS,
+        },
       };
     });
   },
@@ -223,9 +211,17 @@ export const useComposerQueueStore = create<ComposerQueueState>((set, get) => ({
       const dispatchAcknowledgementByThreadKey = {
         ...state.dispatchAcknowledgementByThreadKey,
       };
+      const dispatchAcknowledgementDeadlineByThreadKey = {
+        ...state.dispatchAcknowledgementDeadlineByThreadKey,
+      };
       delete dispatchOwnerByThreadKey[threadKey];
       delete dispatchAcknowledgementByThreadKey[threadKey];
-      return { dispatchOwnerByThreadKey, dispatchAcknowledgementByThreadKey };
+      delete dispatchAcknowledgementDeadlineByThreadKey[threadKey];
+      return {
+        dispatchOwnerByThreadKey,
+        dispatchAcknowledgementByThreadKey,
+        dispatchAcknowledgementDeadlineByThreadKey,
+      };
     });
   },
   clearForTests: () =>
@@ -233,6 +229,7 @@ export const useComposerQueueStore = create<ComposerQueueState>((set, get) => ({
       entriesByThreadKey: {},
       dispatchOwnerByThreadKey: {},
       dispatchAcknowledgementByThreadKey: {},
+      dispatchAcknowledgementDeadlineByThreadKey: {},
       sharedDispatchCountByThreadKey: {},
     }),
 }));

@@ -7007,6 +7007,8 @@ function ChatViewContent(props: ChatViewProps) {
       }
     }
   };
+  const onSendRef = useRef(onSend);
+  onSendRef.current = onSend;
 
   const onSteerQueuedComposerEntry = useCallback(
     (entryId: string) => {
@@ -7018,15 +7020,17 @@ function ChatViewContent(props: ChatViewProps) {
       if (!useComposerQueueStore.getState().markDispatching(routeThreadKey, entryId)) {
         return;
       }
-      void onSend(undefined, "foreground", "steer", undefined, entry).catch((error: unknown) => {
-        useComposerQueueStore
-          .getState()
-          .markFailed(
-            routeThreadKey,
-            entryId,
-            error instanceof Error ? error.message : "Failed to steer queued message.",
-          );
-      });
+      void onSendRef
+        .current(undefined, "foreground", "steer", undefined, entry)
+        .catch((error: unknown) => {
+          useComposerQueueStore
+            .getState()
+            .markFailed(
+              routeThreadKey,
+              entryId,
+              error instanceof Error ? error.message : "Failed to steer queued message.",
+            );
+        });
     },
     [activeThread, isConnecting, isSendBusy, phase, routeThreadKey],
   );
@@ -7037,13 +7041,6 @@ function ChatViewContent(props: ChatViewProps) {
       if (!removed) return;
       releaseDraftAttachments([...removed.images, ...removed.files]);
       for (const image of removed.images) revokeBlobPreviewUrl(image.previewUrl);
-    },
-    [routeThreadKey],
-  );
-
-  const onMoveQueuedComposerEntry = useCallback(
-    (entryId: string, offset: -1 | 1) => {
-      useComposerQueueStore.getState().move(routeThreadKey, entryId, offset);
     },
     [routeThreadKey],
   );
@@ -8151,7 +8148,6 @@ function ChatViewContent(props: ChatViewProps) {
                                   canSteer={phase === "running" && !isSendBusy && !isConnecting}
                                   onSteer={onSteerQueuedComposerEntry}
                                   onRemove={onRemoveQueuedComposerEntry}
-                                  onMove={onMoveQueuedComposerEntry}
                                   onEdit={onEditQueuedComposerEntry}
                                 />
                               ) : null
