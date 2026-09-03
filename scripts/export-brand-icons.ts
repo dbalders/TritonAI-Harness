@@ -252,18 +252,14 @@ const MACOS_EXPORTS = [
     source: BRAND_ASSET_PATHS.developmentIconComposerProject,
     output: BRAND_ASSET_PATHS.developmentDesktopIconPng,
   },
-  {
-    source: BRAND_ASSET_PATHS.productionIconComposerProject,
-    output: BRAND_ASSET_PATHS.productionMacIconPng,
-  },
 ] as const;
 
 const MACOS_EXPORT_CODEX_PROMPT = [
-  "Use [@Computer](plugin://computer-use@openai-bundled) and the Icon Composer app to export the two TritonAI macOS app icons in this repository.",
-  "For each project below, use Platform: macOS pre-Tahoe, Appearance: Default, Size: 1024pt, and Scale: 1×, then save the PNG to the exact destination:",
+  "Use [@Computer](plugin://computer-use@openai-bundled) and the Icon Composer app to export the TritonAI development macOS app icon in this repository.",
+  "Use Platform: macOS pre-Tahoe, Appearance: Default, Size: 1024pt, and Scale: 1×, then save the PNG to the exact destination:",
   ...MACOS_EXPORTS.map((entry) => `- ${entry.source} -> ${entry.output}`),
   "Do not resize, composite, or otherwise post-process the exported PNGs.",
-  "Verify every result is 1024×1024 and has the classic macOS safe area: an 824×824 opaque body inset 100px on every side, with only Icon Composer's native shadow extending beyond it.",
+  "Verify the result is 1024×1024 and has the classic macOS safe area: an 824×824 opaque body inset 100px on every side, with only Icon Composer's native shadow extending beyond it.",
 ];
 
 const RepositoryRoot = Effect.service(Path.Path).pipe(
@@ -622,8 +618,8 @@ const logManualMacOsExportInstructions = Effect.fn("iconExport.logManualMacOsExp
   function* () {
     yield* Console.warn(
       [
-        "macOS icons require Icon Composer's GUI-only pre-Tahoe preset and were not changed.",
-        "Export each source with Platform: macOS pre-Tahoe, Appearance: Default, Size: 1024pt, Scale: 1×:",
+        "The development macOS icon requires Icon Composer's GUI-only pre-Tahoe preset and was not changed.",
+        "Export it with Platform: macOS pre-Tahoe, Appearance: Default, Size: 1024pt, Scale: 1×:",
         ...MACOS_EXPORTS.map((entry) => `- ${entry.source} -> ${entry.output}`),
         "See assets/README.md for the complete workflow.",
         "",
