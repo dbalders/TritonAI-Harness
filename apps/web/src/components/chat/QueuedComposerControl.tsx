@@ -4,7 +4,6 @@ import {
   EllipsisIcon,
   ImageIcon,
   ListOrderedIcon,
-  LoaderCircleIcon,
   PaperclipIcon,
   PencilIcon,
   Trash2Icon,
@@ -30,22 +29,22 @@ export function QueuedComposerControl(props: {
   const [editing, setEditing] = useState<{ readonly id: string; readonly prompt: string } | null>(
     null,
   );
+  const visibleEntries = props.entries.filter((entry) => entry.status !== "dispatching");
 
-  if (props.entries.length === 0) return null;
+  if (visibleEntries.length === 0) return null;
 
   return (
     <ComposerBanner.Attachment>
       <ComposerBanner.Root
         role="region"
-        aria-label={`${props.entries.length} queued message${props.entries.length === 1 ? "" : "s"}`}
+        aria-label={`${visibleEntries.length} queued message${visibleEntries.length === 1 ? "" : "s"}`}
         aria-live="polite"
         data-chat-composer-queued-messages="true"
         className="p-1 pb-[calc(var(--chat-composer-attachment-overlap)+(--spacing(1)))] text-sm/5 [--composer-banner-icon-column:--spacing(6)]"
       >
         <ComposerBanner.Scroll className="max-h-40">
           <ComposerBanner.Children render={<ol />} aria-label="Queued messages" className="gap-0">
-            {props.entries.map((entry) => {
-              const busy = entry.status === "dispatching";
+            {visibleEntries.map((entry) => {
               const failed = entry.status === "failed";
               const isEditing = editing?.id === entry.id;
               const attachmentCount = entry.images.length + entry.files.length;
@@ -56,12 +55,7 @@ export function QueuedComposerControl(props: {
                   className={cn("min-h-8 rounded-lg px-0.5", failed && "bg-destructive/5")}
                 >
                   <ComposerBanner.Icon aria-hidden={false}>
-                    {busy ? (
-                      <LoaderCircleIcon
-                        className="animate-spin"
-                        aria-label="Sending queued message"
-                      />
-                    ) : failed ? (
+                    {failed ? (
                       <TriangleAlertIcon
                         className="text-destructive"
                         aria-label="Queued message failed"
@@ -161,7 +155,7 @@ export function QueuedComposerControl(props: {
                                 type="button"
                                 size="xs"
                                 variant="ghost-muted"
-                                disabled={!props.canSteer || busy}
+                                disabled={!props.canSteer}
                                 className="h-6 gap-1 px-1.5 font-normal"
                                 aria-label={
                                   failed
@@ -186,7 +180,6 @@ export function QueuedComposerControl(props: {
                                 type="button"
                                 size="icon-xs"
                                 variant="ghost-muted"
-                                disabled={busy}
                                 aria-label="Remove queued message"
                                 onClick={() => props.onRemove(entry.id)}
                               />
@@ -198,7 +191,6 @@ export function QueuedComposerControl(props: {
                         </Tooltip>
                         <Menu>
                           <MenuTrigger
-                            disabled={busy}
                             render={
                               <Button
                                 type="button"
