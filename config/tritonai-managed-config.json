@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "policyVersion": 3,
+  "policyVersion": 4,
   "provider": {
     "driver": "codex",
     "managedBinary": true,
@@ -36,19 +36,65 @@
         "id": "api-deepseek-v4-flash",
         "name": "DeepSeek v4 Flash",
         "shortName": "DeepSeek",
-        "route": "on-prem"
+        "route": "on-prem",
+        "capabilities": {
+          "inputModalities": ["text"],
+          "optionDescriptors": [
+            {
+              "id": "reasoningEffort",
+              "label": "Reasoning",
+              "type": "select",
+              "options": [
+                { "id": "minimal", "label": "Minimal" },
+                { "id": "low", "label": "Low" },
+                { "id": "medium", "label": "Medium", "isDefault": true },
+                { "id": "high", "label": "High" }
+              ],
+              "currentValue": "medium"
+            }
+          ]
+        }
       },
       {
         "id": "api-glm-5.3",
         "name": "GLM 5.3",
         "shortName": "GLM",
-        "route": "on-prem"
+        "route": "on-prem",
+        "capabilities": {
+          "inputModalities": ["text"],
+          "optionDescriptors": [
+            {
+              "id": "reasoningEffort",
+              "label": "Reasoning",
+              "type": "select",
+              "options": [{ "id": "high", "label": "High", "isDefault": true }],
+              "currentValue": "high"
+            }
+          ]
+        }
       },
       {
         "id": "api-gemma-4-31b",
         "name": "Gemma 4 31B",
         "shortName": "Gemma",
-        "route": "on-prem"
+        "route": "on-prem",
+        "capabilities": {
+          "inputModalities": ["text", "image"],
+          "optionDescriptors": [
+            {
+              "id": "reasoningEffort",
+              "label": "Reasoning",
+              "type": "select",
+              "options": [
+                { "id": "minimal", "label": "Minimal" },
+                { "id": "low", "label": "Low" },
+                { "id": "medium", "label": "Medium", "isDefault": true },
+                { "id": "high", "label": "High" }
+              ],
+              "currentValue": "medium"
+            }
+          ]
+        }
       },
       {
         "id": "gpt-5.6-luna",

@@ -30,6 +30,9 @@ describe("composer attachment files", () => {
     expect(classifyComposerAttachmentFile({ name: "report.pdf", type: "application/pdf" })).toBe(
       "file",
     );
+    expect(
+      classifyComposerAttachmentFile({ name: "meeting-notes.md", type: "text/markdown" }),
+    ).toBe("file");
   });
 
   it("preserves text paste when an application adds a synthetic generic file", () => {

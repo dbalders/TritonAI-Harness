@@ -88,6 +88,26 @@ describe("TritonAI managed Harness policy", () => {
     ]);
     expect(effective.providerInstances[managedInstanceId]?.config).toMatchObject({
       customModels: ["api-deepseek-v4-flash", "api-glm-5.3", "api-gemma-4-31b"],
+      customModelMetadata: {
+        "api-deepseek-v4-flash": {
+          capabilities: { inputModalities: ["text"] },
+        },
+        "api-glm-5.3": {
+          capabilities: {
+            inputModalities: ["text"],
+            optionDescriptors: [
+              {
+                id: "reasoningEffort",
+                options: [{ id: "high", isDefault: true }],
+                currentValue: "high",
+              },
+            ],
+          },
+        },
+        "api-gemma-4-31b": {
+          capabilities: { inputModalities: ["text", "image"] },
+        },
+      },
     });
     expect(effective.providers.codex.customModels).toEqual([
       "api-deepseek-v4-flash",

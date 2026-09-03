@@ -19,6 +19,49 @@ describe("managed Harness config build input", () => {
     expect(input.digest).toBe(NodeCrypto.createHash("sha256").update(input.source).digest("hex"));
   });
 
+  it("keeps explicit modalities for managed on-prem and image-context models", () => {
+    const input = loadManagedHarnessConfigForBuild(
+      NodeURL.fileURLToPath(new URL("../..", import.meta.url)),
+    );
+    const models = Object.fromEntries(
+      input.config.models.catalog.map((model) => [model.id, model]),
+    );
+
+    expect(models["api-deepseek-v4-flash"]?.capabilities?.inputModalities).toEqual(["text"]);
+    expect(models["api-glm-5.3"]?.capabilities?.inputModalities).toEqual(["text"]);
+    expect(models["api-gemma-4-31b"]?.capabilities?.inputModalities).toEqual(["text", "image"]);
+  });
+
+  it("rejects missing on-prem and image-context modality declarations", () => {
+    const input = loadManagedHarnessConfigForBuild(
+      NodeURL.fileURLToPath(new URL("../..", import.meta.url)),
+    );
+    const missingGlmCapabilities = JSON.parse(input.source) as {
+      models: { catalog: Array<{ id: string; capabilities?: unknown }> };
+    };
+    const glm = missingGlmCapabilities.models.catalog.find((model) => model.id === "api-glm-5.3");
+    delete glm?.capabilities;
+
+    expect(() => parseManagedHarnessConfig(JSON.stringify(missingGlmCapabilities))).toThrow(
+      /api-glm-5\.3.*text input/u,
+    );
+
+    const textOnlyGemma = JSON.parse(input.source) as {
+      models: {
+        catalog: Array<{
+          id: string;
+          capabilities?: { inputModalities?: string[] };
+        }>;
+      };
+    };
+    const gemma = textOnlyGemma.models.catalog.find((model) => model.id === "api-gemma-4-31b");
+    if (gemma?.capabilities) gemma.capabilities.inputModalities = ["text"];
+
+    expect(() => parseManagedHarnessConfig(JSON.stringify(textOnlyGemma))).toThrow(
+      /api-gemma-4-31b.*image input/u,
+    );
+  });
+
   it("rejects unknown fields and missing catalog references", () => {
     expect(() =>
       parseManagedHarnessConfig(

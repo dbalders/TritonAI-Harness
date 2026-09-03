@@ -3,7 +3,11 @@ import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
-import { TritonAiManagedConfig, type TritonAiManagedConfig as Config } from "@t3tools/contracts";
+import {
+  TRITONAI_IMAGE_CONTEXT_MODEL,
+  TritonAiManagedConfig,
+  type TritonAiManagedConfig as Config,
+} from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
 export const MANAGED_HARNESS_CONFIG_RELATIVE_PATH = "config/tritonai-managed-config.json";
@@ -39,6 +43,24 @@ export function parseManagedHarnessConfig(source: string): Config {
         `Managed Harness config route '${route.id}' must contain at least one model.`,
       );
     }
+  }
+  for (const model of config.models.catalog) {
+    if (
+      model.route === config.provider.routes.onPrem.id &&
+      model.capabilities?.inputModalities?.includes("text") !== true
+    ) {
+      throw new Error(
+        `Managed on-prem model '${model.id}' must explicitly declare text input support.`,
+      );
+    }
+  }
+  const imageContextModel = config.models.catalog.find(
+    (model) => model.id === TRITONAI_IMAGE_CONTEXT_MODEL,
+  );
+  if (imageContextModel?.capabilities?.inputModalities?.includes("image") !== true) {
+    throw new Error(
+      `Managed image-context model '${TRITONAI_IMAGE_CONTEXT_MODEL}' must explicitly declare image input support.`,
+    );
   }
   return config;
 }
