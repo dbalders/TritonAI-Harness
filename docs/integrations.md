@@ -164,11 +164,12 @@ system-browser button before the secure key field. A successful API-key submissi
 extend the union with their own secure submission contract and rendering instead of pretending to
 use another flow's fields.
 
-Connecting requests only the plugin's enabled capabilities. Enabling an `opt-in` ability whose
+Connecting requests the plugin's enabled Harness-managed capabilities plus every
+provider-authorized capability offered by its sign-in flow. Enabling an `opt-in` ability whose
 provider grant is missing starts the same explicit authorization flow; the ability remains
-unavailable until both selection persistence and provider authorization succeed. An
-`authorization` ability is requested at sign-in and becomes available only when the provider
-reports that the user granted it; a declined optional grant does not create a persistent Harness
+unavailable until both selection persistence and provider authorization succeed. After an explicit
+sign-in completes, each `authorization` ability becomes selected only when the provider reports
+that the user granted it. A declined optional grant does not create a persistent Harness
 action-required state. Device-code/native-browser polling and API-key
 submission are keyed by plugin and flow ID and cannot overwrite another plugin's flow state;
 polling also honors provider retry delays and expiry.
@@ -185,10 +186,11 @@ active tool work, and wait for its cleanup before their serialized lifecycle mut
 work does not drain within the revocation deadline, the provider is faulted and credential or state
 mutation does not begin. Disconnect preserves the installed package and its
 preferences. Provider-authorized abilities cannot be toggled through the capability RPC; changing
-them requires the provider's sign-in flow. Removal remains a migration/recovery primitive rather
-than a public RPC in the fixed catalog product. It first disconnects the provider, records a durable
-recovery phase, moves the package to a tombstone, commits removed state, and then cleans the
-tombstone. Startup completes interrupted removals deterministically.
+them requires disconnecting and completing the provider's sign-in flow again. Removal remains a
+migration/recovery primitive rather than a public RPC in the fixed catalog product. It first
+disconnects the provider, records a durable recovery phase, moves the package to a tombstone,
+commits removed state, and then cleans the tombstone. Startup completes interrupted removals
+deterministically.
 
 Provider status checks have a host timeout and receive an abort signal, so one unhealthy provider
 cannot block startup, listing, or task creation indefinitely. Providers may implement `prepare` to

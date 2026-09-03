@@ -386,12 +386,19 @@ function selectedCapabilityIds(
   );
   return new Set(
     manifest.capabilities
-      .filter(
-        ({ id, access }) =>
-          access === "authorization" || (access !== "opt-in" && !disabledCapabilities.has(id)),
-      )
+      .filter(({ id, access }) => access !== "opt-in" && !disabledCapabilities.has(id))
       .map(({ id }) => id),
   );
+}
+
+function connectionCapabilityIds(
+  manifest: IntegrationManifest,
+  installed: InstalledIntegrationState,
+): ReadonlyArray<string> {
+  const selected = selectedCapabilityIds(manifest, installed);
+  return manifest.capabilities
+    .filter(({ id, access }) => selected.has(id) || access === "authorization")
+    .map(({ id }) => id);
 }
 
 const EMPTY_STATE: PersistedIntegrationState = {
@@ -1901,6 +1908,43 @@ export class RegistryRuntime {
     };
   }
 
+  async #adoptProviderAuthorizedCapabilities({
+    manifest,
+    provider,
+  }: IntegrationPackage): Promise<void> {
+    const authorizationCapabilities = manifest.capabilities.filter(
+      ({ access }) => access === "authorization",
+    );
+    if (!provider || authorizationCapabilities.length === 0) return;
+    const status = await this.#providerStatus(provider);
+    if (status.state !== "connected") return;
+    const installed = ownRecordValue(this.#state.installed, manifest.id);
+    if (!installed || installed.version !== manifest.version) return;
+    const granted = new Set(status.grantedCapabilities);
+    const selected = new Set(selectedCapabilityIds(manifest, installed));
+    for (const capability of authorizationCapabilities) {
+      if (granted.has(capability.id)) selected.add(capability.id);
+      else selected.delete(capability.id);
+    }
+    const enabledCapabilities = [...selected].toSorted();
+    if (
+      installed.enabledCapabilities &&
+      installed.enabledCapabilities.length === enabledCapabilities.length &&
+      installed.enabledCapabilities.every(
+        (capability, index) => capability === enabledCapabilities[index],
+      )
+    ) {
+      return;
+    }
+    await this.#updateState((state) => ({
+      ...state,
+      installed: {
+        ...state.installed,
+        [manifest.id]: { ...installed, enabledCapabilities },
+      },
+    }));
+  }
+
   async #summarize(
     { manifest, provider }: IntegrationPackage,
     strictSkillSync = false,
@@ -2533,12 +2577,10 @@ export class RegistryRuntime {
       if (!hasConnectionLifecycle(provider)) {
         throw operationError("operation_failed", `${manifest.name} does not require a connection.`);
       }
-      // Provider authorization follows the user's selected Harness abilities. Additive scopes in
-      // an existing token remain inert unless their capability is selected here.
-      const selectedCapabilities = selectedCapabilityIds(manifest, installed);
-      const capabilities = manifest.capabilities
-        .map(({ id: capability }) => capability)
-        .filter((capability) => selectedCapabilities.has(capability));
+      // Harness-managed abilities follow their persisted selection. Provider-authorized abilities
+      // are always offered to a fresh sign-in, then become selected only when that explicit flow
+      // reports the corresponding grant.
+      const capabilities = connectionCapabilityIds(manifest, installed);
       try {
         const result = await this.#providerOperation<IntegrationConnectResult>(
           provider,
@@ -2561,6 +2603,9 @@ export class RegistryRuntime {
           },
           context ? { signal: context.signal } : {},
         );
+        if (result.kind === "connected") {
+          await this.#adoptProviderAuthorizedCapabilities(this.#package(id));
+        }
         await this.#summarize(this.#package(id));
         return result;
       } catch (error) {
@@ -2609,6 +2654,9 @@ export class RegistryRuntime {
             }),
           context ? { signal: context.signal } : {},
         );
+        if (result.state === "connected") {
+          await this.#adoptProviderAuthorizedCapabilities(this.#package(id));
+        }
         return { ...result, integration: await this.#summarize(this.#package(id)) };
       } catch (error) {
         throw operationError(

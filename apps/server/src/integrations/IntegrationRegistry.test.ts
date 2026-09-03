@@ -630,8 +630,22 @@ describe("IntegrationRegistry lifecycle", () => {
       credential: "present",
       disconnectFails: false,
     };
+    let requestedCapabilities: ReadonlyArray<string> = [];
+    const implementation: IntegrationProvider = {
+      ...provider(manifest.provider!, state),
+      connect: async (capabilities) => {
+        requestedCapabilities = capabilities;
+        state.status = {
+          state: "connected",
+          accountLabel: "Fixture user",
+          grantedCapabilities: ["fixture.read"],
+          message: null,
+        };
+        return { kind: "connected", flowId: "reauthorize", message: "Connected." };
+      },
+    };
     let registry: RegistryRuntime | null = new RegistryRuntime(root, [
-      packaged(manifest, provider(manifest.provider!, state)),
+      packaged(manifest, implementation),
     ]);
 
     try {
@@ -666,15 +680,13 @@ describe("IntegrationRegistry lifecycle", () => {
             [manifest.id]: {
               version: manifest.version,
               enabled: true,
-              enabledCapabilities: [],
+              disabledSkills: ["fixture-reader"],
             },
           },
           removing: {},
         })}\n`,
       );
-      registry = new RegistryRuntime(root, [
-        packaged(manifest, provider(manifest.provider!, state)),
-      ]);
+      registry = new RegistryRuntime(root, [packaged(manifest, implementation)]);
       const preservedDenial = await registry.list();
       expect(preservedDenial.integrations[0]?.capabilities[0]).toMatchObject({
         enabled: false,
@@ -682,6 +694,17 @@ describe("IntegrationRegistry lifecycle", () => {
         available: false,
       });
       expect(registry.isToolAvailableSync("test.fixture.read")).toBe(false);
+
+      await registry.disconnect(manifest.id);
+      await expect(registry.connect(manifest.id)).resolves.toMatchObject({ kind: "connected" });
+      expect(requestedCapabilities).toEqual(["fixture.read"]);
+      const reauthorized = await registry.list();
+      expect(reauthorized.integrations[0]?.capabilities[0]).toMatchObject({
+        enabled: true,
+        granted: true,
+        available: true,
+      });
+      expect(registry.isToolAvailableSync("test.fixture.read")).toBe(true);
     } finally {
       await registry?.close();
       await NodeFSP.rm(root, { recursive: true, force: true });
