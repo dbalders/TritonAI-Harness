@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   canAutoDrainComposerQueue,
+  isQueuedMessageAcknowledgementPending,
   resolveComposerDispatchMode,
   resolveQueuedDispatchTarget,
 } from "./composerDispatch";
@@ -54,6 +55,32 @@ describe("resolveQueuedDispatchTarget", () => {
     expect(resolveQueuedDispatchTarget("thread:a", target)).toBe(target);
     expect(resolveQueuedDispatchTarget("thread:b", target)).toBeNull();
     expect(resolveQueuedDispatchTarget("thread:a", null)).toBeNull();
+  });
+});
+
+describe("isQueuedMessageAcknowledgementPending", () => {
+  it("waits for projection only until the acknowledgement deadline", () => {
+    expect(
+      isQueuedMessageAcknowledgementPending({
+        messageProjected: false,
+        expiresAt: 20_000,
+        now: 19_999,
+      }),
+    ).toBe(true);
+    expect(
+      isQueuedMessageAcknowledgementPending({
+        messageProjected: false,
+        expiresAt: 20_000,
+        now: 20_000,
+      }),
+    ).toBe(false);
+    expect(
+      isQueuedMessageAcknowledgementPending({
+        messageProjected: true,
+        expiresAt: 20_000,
+        now: 10_000,
+      }),
+    ).toBe(false);
   });
 });
 

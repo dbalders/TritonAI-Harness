@@ -10,6 +10,14 @@ export function resolveQueuedDispatchTarget<T extends { readonly threadKey: stri
   return target?.threadKey === threadKey ? target : null;
 }
 
+export function isQueuedMessageAcknowledgementPending(input: {
+  readonly messageProjected: boolean;
+  readonly expiresAt: number;
+  readonly now: number;
+}): boolean {
+  return !input.messageProjected && input.now < input.expiresAt;
+}
+
 export function resolveComposerDispatchMode(input: {
   readonly phase: SessionPhase;
   readonly activeTurnDefault: ActiveTurnComposerAction;
