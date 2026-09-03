@@ -168,6 +168,11 @@ const TIMESTAMP_FORMAT_LABELS = {
   "24-hour": "24-hour",
 } as const;
 
+const ACTIVE_TURN_COMPOSER_DEFAULT_LABELS = {
+  steer: "Steer immediately",
+  queue: "Queue for later",
+} as const;
+
 const QUIT_CONFIRMATION_MODE_LABELS: Record<QuitConfirmationMode, string> = {
   direct: "Direct",
   hold: "Hold",
@@ -580,6 +585,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.timestampFormat !== DEFAULT_UNIFIED_SETTINGS.timestampFormat
         ? ["Time format"]
         : []),
+      ...(settings.activeTurnComposerDefault !== DEFAULT_UNIFIED_SETTINGS.activeTurnComposerDefault
+        ? ["Messages during an active turn"]
+        : []),
       ...(settings.sidebarThreadPreviewCount !== DEFAULT_UNIFIED_SETTINGS.sidebarThreadPreviewCount
         ? ["Visible threads"]
         : []),
@@ -646,6 +654,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.browserRecordingFrameRate,
       settings.browserAutoShowFloatingPreview,
       settings.appearanceContrast,
+      settings.activeTurnComposerDefault,
       settings.enableAgentBrowserAccess,
       settings.confirmQuit,
       settings.confirmThreadArchive,
@@ -745,6 +754,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       return;
     }
     updateSettings({
+      activeTurnComposerDefault: DEFAULT_UNIFIED_SETTINGS.activeTurnComposerDefault,
       appearanceContrast: DEFAULT_UNIFIED_SETTINGS.appearanceContrast,
       timestampFormat: DEFAULT_UNIFIED_SETTINGS.timestampFormat,
       wordWrap: DEFAULT_UNIFIED_SETTINGS.wordWrap,
@@ -2143,6 +2153,48 @@ export function GeneralSettingsPanel() {
                 </SelectItem>
                 <SelectItem hideIndicator value="24-hour">
                   {TIMESTAMP_FORMAT_LABELS["24-hour"]}
+                </SelectItem>
+              </SelectPopup>
+            </Select>
+          }
+        />
+
+        <SettingsRow
+          {...searchableSetting("active-turn-message-action")}
+          description="Choose what Enter and the send button do while the agent is working. Cmd/Ctrl+Enter does the other action."
+          resetAction={
+            settings.activeTurnComposerDefault !==
+            DEFAULT_UNIFIED_SETTINGS.activeTurnComposerDefault ? (
+              <SettingResetButton
+                label="active-turn message action"
+                onClick={() =>
+                  updateSettings({
+                    activeTurnComposerDefault: DEFAULT_UNIFIED_SETTINGS.activeTurnComposerDefault,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Select
+              value={settings.activeTurnComposerDefault}
+              onValueChange={(value) => {
+                if (value === "queue" || value === "steer") {
+                  updateSettings({ activeTurnComposerDefault: value });
+                }
+              }}
+            >
+              <SelectTrigger className="w-full sm:w-44" aria-label="Messages during an active turn">
+                <SelectValue>
+                  {ACTIVE_TURN_COMPOSER_DEFAULT_LABELS[settings.activeTurnComposerDefault]}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                <SelectItem hideIndicator value="steer">
+                  {ACTIVE_TURN_COMPOSER_DEFAULT_LABELS.steer}
+                </SelectItem>
+                <SelectItem hideIndicator value="queue">
+                  {ACTIVE_TURN_COMPOSER_DEFAULT_LABELS.queue}
                 </SelectItem>
               </SelectPopup>
             </Select>

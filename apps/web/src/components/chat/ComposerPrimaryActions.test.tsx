@@ -65,7 +65,10 @@ function renderStandaloneStop() {
   );
 }
 
-function renderRunningActions(showSendWhileRunning: boolean, hasSendableContent: boolean) {
+function renderRunningActions(
+  hasSendableContent: boolean,
+  activeTurnAction: "queue" | "steer" = "steer",
+) {
   return renderToStaticMarkup(
     createElement(ComposerPrimaryActions, {
       compact: true,
@@ -79,7 +82,7 @@ function renderRunningActions(showSendWhileRunning: boolean, hasSendableContent:
       isEnvironmentUnavailable: false,
       isPreparingWorktree: false,
       hasSendableContent,
-      showSendWhileRunning,
+      activeTurnAction,
       onPreviousPendingQuestion: () => {},
       onInterrupt: () => {},
       onImplementPlanInNewThread: () => {},
@@ -245,26 +248,30 @@ describe("ComposerPrimaryActions", () => {
     expect(markup).toContain("bg-message-action text-message-action-foreground");
   });
 
-  it("only renders stop while running when Enter-to-send is available", () => {
-    const markup = renderRunningActions(false, true);
+  it("replaces stop with steer while running once the composer has content", () => {
+    const markup = renderRunningActions(true);
 
-    expect(markup).toContain('aria-label="Stop generation"');
-    expect(markup).not.toContain('aria-label="Send message"');
+    expect(markup).not.toContain('aria-label="Stop generation"');
+    expect(markup).toContain('aria-label="Steer active turn"');
   });
 
-  it("renders send alongside stop while running when Enter-to-send is unavailable", () => {
-    const markup = renderRunningActions(true, true);
+  it("keeps the active-turn action as a submit button", () => {
+    const markup = renderRunningActions(true);
 
-    expect(markup).toContain('aria-label="Stop generation"');
-    expect(markup).toContain('aria-label="Send message"');
+    expect(markup).toContain('aria-label="Steer active turn"');
     expect(markup).toContain('type="submit"');
-    expect(markup).toContain("size-9 sm:size-8");
   });
 
   it("keeps stop as the only action while running with an empty composer", () => {
-    const markup = renderRunningActions(true, false);
+    const markup = renderRunningActions(false);
 
     expect(markup).toContain('aria-label="Stop generation"');
-    expect(markup).not.toContain('aria-label="Send message"');
+    expect(markup).not.toContain('aria-label="Steer active turn"');
+  });
+
+  it("labels the active-turn action as queue when configured", () => {
+    const markup = renderRunningActions(true, "queue");
+
+    expect(markup).toContain('aria-label="Queue message"');
   });
 });
