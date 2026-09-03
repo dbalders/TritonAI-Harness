@@ -1327,7 +1327,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                   </span>
                 ) : null}
               </div>
-              <div className="mt-1 flex h-4 min-w-0 items-center gap-2 text-xs">
+              <div className="mt-1 flex h-5 min-w-0 items-center gap-2 text-xs">
                 {topStatus ? (
                   isWokeStatus ? (
                     <button
@@ -1362,42 +1362,47 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                       ) : null}
                     </span>
                   )
-                ) : (
-                  <span className="flex-1" />
-                )}
-                <span className="ml-auto shrink-0 text-secondary-label tabular-nums">
-                  {threadTimeLabel(thread)}
+                ) : null}
+                <span className="group/sidebar-status-slot relative ml-auto flex h-5 min-w-8 shrink-0 items-stretch justify-end">
+                  <span
+                    className={cn(
+                      "pointer-events-none flex items-center self-center justify-self-end text-secondary-label tabular-nums transition-opacity group-has-[:focus-visible]/sidebar-status-slot:absolute group-has-[:focus-visible]/sidebar-status-slot:right-0 group-has-[:focus-visible]/sidebar-status-slot:opacity-0 group-hover/sidebar-row:absolute group-hover/sidebar-row:right-0 group-hover/sidebar-row:opacity-0",
+                      snoozeMenuOpen && "absolute right-0 opacity-0",
+                    )}
+                  >
+                    {threadTimeLabel(thread)}
+                  </span>
+                  {props.settlementSupported || showSnoozeButton ? (
+                    <span
+                      className={cn(
+                        "pointer-events-none absolute inset-y-0 right-0 flex items-stretch opacity-0 transition-opacity has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:static has-[:focus-visible]:opacity-100 group-hover/sidebar-row:pointer-events-auto group-hover/sidebar-row:static group-hover/sidebar-row:opacity-100",
+                        snoozeMenuOpen && "pointer-events-auto static opacity-100",
+                      )}
+                    >
+                      {showSnoozeButton ? (
+                        <SnoozePopoverButton
+                          open={snoozeMenuOpen}
+                          onOpenChange={setSnoozeMenuOpen}
+                          onSnooze={handleSnoozePreset}
+                          timestampFormat={props.timestampFormat}
+                        />
+                      ) : null}
+                      {props.settlementSupported ? (
+                        <button
+                          type="button"
+                          aria-label="Settle thread"
+                          onClick={handleSettleClick}
+                          className="-mr-1 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground"
+                        >
+                          <CheckIcon className="size-3.5" />
+                          Settle
+                        </button>
+                      ) : null}
+                    </span>
+                  ) : null}
                 </span>
               </div>
             </div>
-            {props.settlementSupported || showSnoozeButton ? (
-              <span
-                className={cn(
-                  "pointer-events-none absolute inset-y-0 right-2 flex items-center rounded-md bg-sidebar opacity-0 transition-opacity has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:opacity-100 group-hover/sidebar-row:pointer-events-auto group-hover/sidebar-row:opacity-100",
-                  snoozeMenuOpen && "pointer-events-auto opacity-100",
-                )}
-              >
-                {showSnoozeButton ? (
-                  <SnoozePopoverButton
-                    open={snoozeMenuOpen}
-                    onOpenChange={setSnoozeMenuOpen}
-                    onSnooze={handleSnoozePreset}
-                    timestampFormat={props.timestampFormat}
-                  />
-                ) : null}
-                {props.settlementSupported ? (
-                  <button
-                    type="button"
-                    aria-label="Settle thread"
-                    onClick={handleSettleClick}
-                    className="inline-flex h-7 cursor-pointer items-center gap-1 rounded-md px-1.5 text-xs text-muted-foreground hover:text-foreground"
-                  >
-                    <CheckIcon className="size-3.5" />
-                    Settle
-                  </button>
-                ) : null}
-              </span>
-            ) : null}
             {props.jumpLabel ? <JumpHintBadge label={props.jumpLabel} /> : null}
           </TooltipTrigger>
           {detailsTooltip}
