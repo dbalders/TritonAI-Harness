@@ -1,6 +1,4 @@
 import {
-  ArrowDownIcon,
-  ArrowUpIcon,
   CheckIcon,
   CornerUpRightIcon,
   ImageIcon,
@@ -24,7 +22,6 @@ export function QueuedComposerControl(props: {
   readonly canSteer: boolean;
   readonly onSteer: (entryId: string) => void;
   readonly onRemove: (entryId: string) => void;
-  readonly onMove: (entryId: string, offset: -1 | 1) => void;
   readonly onEdit: (entryId: string, prompt: string) => void;
 }) {
   const [expanded, setExpanded] = useState(true);
@@ -62,7 +59,7 @@ export function QueuedComposerControl(props: {
         </ComposerBanner.Row>
         <ComposerBanner.Scroll className={cn("max-h-40", !expanded && "hidden")}>
           <ComposerBanner.Children render={<ol />} id={listId}>
-            {props.entries.map((entry, index) => {
+            {props.entries.map((entry) => {
               const busy = entry.status === "dispatching";
               const failed = entry.status === "failed";
               const isEditing = editing?.id === entry.id;
@@ -170,40 +167,6 @@ export function QueuedComposerControl(props: {
                       </>
                     ) : (
                       <>
-                        <Tooltip>
-                          <TooltipTrigger
-                            render={
-                              <Button
-                                type="button"
-                                size="icon-xs"
-                                variant="ghost-muted"
-                                disabled={busy || index === 0}
-                                aria-label="Move queued message up"
-                                onClick={() => props.onMove(entry.id, -1)}
-                              />
-                            }
-                          >
-                            <ArrowUpIcon />
-                          </TooltipTrigger>
-                          <TooltipPopup side="top">Move up</TooltipPopup>
-                        </Tooltip>
-                        <Tooltip>
-                          <TooltipTrigger
-                            render={
-                              <Button
-                                type="button"
-                                size="icon-xs"
-                                variant="ghost-muted"
-                                disabled={busy || index === props.entries.length - 1}
-                                aria-label="Move queued message down"
-                                onClick={() => props.onMove(entry.id, 1)}
-                              />
-                            }
-                          >
-                            <ArrowDownIcon />
-                          </TooltipTrigger>
-                          <TooltipPopup side="top">Move down</TooltipPopup>
-                        </Tooltip>
                         <Tooltip>
                           <TooltipTrigger
                             render={

@@ -16,7 +16,7 @@ during an active turn**. New installations default to **Queue for later**. Press
 or `Ctrl+Enter` on Windows and Linux to use the other behavior for one message.
 
 Queued messages stay out of the conversation until they are sent. They appear in an attached drawer
-above the composer in FIFO order. You can queue multiple messages, reorder or remove them, or choose
+above the composer in FIFO order. You can queue multiple messages, remove them, or choose
 **Steer now** to send one into the active turn. After the active turn finishes, Harness sends one
 queued message at a time and waits for that turn to finish before sending the next. A failed queued
 message remains in the drawer with its error so you can retry it as a steer or remove it.

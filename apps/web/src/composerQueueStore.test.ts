@@ -81,11 +81,10 @@ describe("composer queue store", () => {
     });
   });
 
-  it("reorders queued items and completes only the selected item", () => {
+  it("completes only the selected item without disturbing FIFO order", () => {
     const store = useComposerQueueStore.getState();
     store.enqueue("thread:a", entry("one"));
     store.enqueue("thread:a", entry("two"));
-    store.move("thread:a", "two", -1);
     store.complete("thread:a", "two");
 
     expect(
@@ -106,6 +105,9 @@ describe("composer queue store", () => {
     expect(useComposerQueueStore.getState().dispatchAcknowledgementByThreadKey["thread:a"]).toBe(
       "message-one",
     );
+    expect(
+      useComposerQueueStore.getState().dispatchAcknowledgementDeadlineByThreadKey["thread:a"],
+    ).toBeGreaterThan(Date.now());
 
     useComposerQueueStore.getState().releaseDispatch("thread:a", "second");
     expect(useComposerQueueStore.getState().claimDispatch("thread:a", "second")).toBe(false);
@@ -113,6 +115,9 @@ describe("composer queue store", () => {
     useComposerQueueStore.getState().releaseDispatch("thread:a", "first");
     expect(
       useComposerQueueStore.getState().dispatchAcknowledgementByThreadKey["thread:a"],
+    ).toBeUndefined();
+    expect(
+      useComposerQueueStore.getState().dispatchAcknowledgementDeadlineByThreadKey["thread:a"],
     ).toBeUndefined();
     expect(useComposerQueueStore.getState().claimDispatch("thread:a", "second")).toBe(true);
   });

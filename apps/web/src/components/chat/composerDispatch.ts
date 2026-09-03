@@ -52,6 +52,22 @@ export function isQueuedMessageTurnComplete(input: {
   );
 }
 
+export function resolveQueuedAcknowledgement(input: {
+  readonly phase: SessionPhase;
+  readonly messageTurnId: string | null | undefined;
+  readonly latestTurn: {
+    readonly turnId: string;
+    readonly state: "running" | "interrupted" | "completed" | "error";
+  } | null;
+  readonly deadlineAt: number | undefined;
+  readonly now: number;
+}): "waiting" | "complete" | "expired" {
+  if (input.messageTurnId != null) {
+    return input.phase === "ready" && isQueuedMessageTurnComplete(input) ? "complete" : "waiting";
+  }
+  return input.deadlineAt !== undefined && input.now >= input.deadlineAt ? "expired" : "waiting";
+}
+
 export function canAutoDrainComposerQueue(input: {
   readonly phase: SessionPhase;
   readonly isSendBusy: boolean;
