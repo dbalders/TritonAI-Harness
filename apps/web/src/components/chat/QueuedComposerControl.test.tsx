@@ -4,7 +4,11 @@ import { describe, expect, it } from "vite-plus/test";
 import type { QueuedComposerEntry } from "../../composerQueueStore";
 import { QueuedComposerControl } from "./QueuedComposerControl";
 
-const entry = (id: string, prompt: string): QueuedComposerEntry =>
+const entry = (
+  id: string,
+  prompt: string,
+  status: QueuedComposerEntry["status"] = "queued",
+): QueuedComposerEntry =>
   ({
     id,
     createdAt: "2026-09-03T00:00:00.000Z",
@@ -25,7 +29,7 @@ const entry = (id: string, prompt: string): QueuedComposerEntry =>
     goalArmed: false,
     runtimeMode: "full-access",
     interactionMode: "default",
-    status: "queued",
+    status,
     error: null,
   }) as unknown as QueuedComposerEntry;
 
@@ -49,5 +53,38 @@ describe("QueuedComposerControl", () => {
     expect(html).not.toContain("Edit queued message");
     expect(html).not.toContain("Collapse queued messages");
     expect(html).not.toContain("Move queued message");
+  });
+
+  it("shows only messages that are still waiting", () => {
+    const html = renderToStaticMarkup(
+      <QueuedComposerControl
+        entries={[
+          entry("sent", "Already in the transcript", "dispatching"),
+          entry("waiting", "Still waiting"),
+        ]}
+        canSteer
+        onSteer={() => undefined}
+        onRemove={() => undefined}
+        onEdit={() => undefined}
+      />,
+    );
+
+    expect(html).toContain('aria-label="1 queued message"');
+    expect(html).toContain("Still waiting");
+    expect(html).not.toContain("Already in the transcript");
+  });
+
+  it("removes the drawer when the only message has started sending", () => {
+    const html = renderToStaticMarkup(
+      <QueuedComposerControl
+        entries={[entry("sent", "Already in the transcript", "dispatching")]}
+        canSteer
+        onSteer={() => undefined}
+        onRemove={() => undefined}
+        onEdit={() => undefined}
+      />,
+    );
+
+    expect(html).toBe("");
   });
 });
