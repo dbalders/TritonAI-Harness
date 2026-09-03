@@ -92,6 +92,7 @@ function SkillSettingsRow({
   removing,
   submitting = false,
   submission,
+  submissionError,
   onSetEnabled,
   onRemove,
   onSubmit,
@@ -103,6 +104,7 @@ function SkillSettingsRow({
   readonly removing: boolean;
   readonly submitting?: boolean;
   readonly submission?: ServerSubmitProviderSkillToTritonAiCommonsResult;
+  readonly submissionError?: string;
   readonly onSetEnabled: (
     providerInstanceId: ProviderInstanceId,
     skill: ServerProviderSkill,
@@ -139,6 +141,11 @@ function SkillSettingsRow({
               Managed
             </Badge>
           ) : null}
+          {submission ? (
+            <Badge size="sm" variant="success">
+              Shared with UCSD
+            </Badge>
+          ) : null}
         </span>
       }
       description={
@@ -150,6 +157,11 @@ function SkillSettingsRow({
           <code className="block truncate font-mono text-[10px] text-muted-foreground/70">
             {row.skill.path}
           </code>
+          {submissionError ? (
+            <span className="max-w-xl text-xs text-destructive" role="alert">
+              {submissionError}
+            </span>
+          ) : null}
         </div>
       }
       control={
@@ -168,7 +180,7 @@ function SkillSettingsRow({
               variant="outline"
               onClick={() => void ensureLocalApi().shell.openExternal(submission.reviewUrl)}
             >
-              View PR <ExternalLinkIcon className="size-3.5" />
+              Review PR <ExternalLinkIcon className="size-3.5" />
             </Button>
           ) : onSubmit ? (
             <Button
@@ -470,7 +482,9 @@ export function SkillsSettingsPanel() {
   const [updatingSkillKey, setUpdatingSkillKey] = useState<string | null>(null);
   const [operationError, setOperationError] = useState<string | null>(null);
   const [submittingSkillKey, setSubmittingSkillKey] = useState<string | null>(null);
-  const [commonsSubmissionError, setCommonsSubmissionError] = useState<string | null>(null);
+  const [commonsSubmissionErrors, setCommonsSubmissionErrors] = useState<
+    ReadonlyMap<string, string>
+  >(new Map());
   const [commonsSubmissions, setCommonsSubmissions] = useState<
     ReadonlyMap<string, ServerSubmitProviderSkillToTritonAiCommonsResult>
   >(new Map());
@@ -528,6 +542,9 @@ export function SkillsSettingsPanel() {
       setCatalog(result.catalog ?? null);
       setManagedSkillNames(new Set(result.managedSkillNames));
       setManagedSkillsStatus(result.managedSkillsStatus);
+      setCommonsSubmissions(
+        new Map(result.commonsSubmissions.map((submission) => [submission.skillPath, submission])),
+      );
       setCatalogError(result.unavailableReason ?? null);
       setManagedManifestWarning(result.managedManifestWarning ?? null);
     } catch (error) {
@@ -669,7 +686,11 @@ export function SkillsSettingsPanel() {
 
       const key = `${providerInstanceId}:${skill.path || skill.name}`;
       setSubmittingSkillKey(key);
-      setCommonsSubmissionError(null);
+      setCommonsSubmissionErrors((current) => {
+        const next = new Map(current);
+        next.delete(skill.path);
+        return next;
+      });
       try {
         const commandResult = await submitSkillToCommonsCommand({
           environmentId: primaryEnvironmentId,
@@ -714,20 +735,30 @@ export function SkillsSettingsPanel() {
             const openSetup = await ensureLocalApi().dialogs.confirm(
               `${GITHUB_COMMONS_SETUP_CONTINUATION}\n\nOpen the GitHub plugin setup now?`,
             );
+            setCommonsSubmissionErrors((current) =>
+              new Map(current).set(skill.path, GITHUB_COMMONS_SETUP_CONTINUATION),
+            );
             if (openSetup) {
               void navigate({ to: "/settings/plugins", hash: "github-title" });
-            } else {
-              setCommonsSubmissionError(GITHUB_COMMONS_SETUP_CONTINUATION);
             }
             return;
           }
           throw squashAtomCommandFailure(commandResult);
         }
         const result = commandResult.value;
-        setCommonsSubmissions((current) => new Map(current).set(key, result));
+        setCommonsSubmissions((current) => new Map(current).set(skill.path, result));
+        const openReview = await ensureLocalApi().dialogs.confirm(
+          `${displayName} was shared with UCSD. Harness opened a public, ready-for-review pull request and will keep this skill marked as shared.\n\nOpen the pull request now to review it and participate in the submission?`,
+        );
+        if (openReview) {
+          void ensureLocalApi().shell.openExternal(result.reviewUrl);
+        }
       } catch (error) {
-        setCommonsSubmissionError(
-          error instanceof Error ? error.message : "Failed to submit this skill to Commons.",
+        setCommonsSubmissionErrors((current) =>
+          new Map(current).set(
+            skill.path,
+            error instanceof Error ? error.message : "Failed to submit this skill to Commons.",
+          ),
         );
       } finally {
         setSubmittingSkillKey((current) => (current === key ? null : current));
@@ -907,7 +938,8 @@ export function SkillsSettingsPanel() {
         ) : (
           otherRows.map((row) => {
             const key = skillRowKey(row);
-            const submission = commonsSubmissions.get(key);
+            const submission = commonsSubmissions.get(row.skill.path);
+            const submissionError = commonsSubmissionErrors.get(row.skill.path);
             const canSubmit = isProviderSkillPublishable(row.skill);
             return (
               <SkillSettingsRow
@@ -920,18 +952,13 @@ export function SkillsSettingsPanel() {
                 removing={removingSkillKey === key}
                 submitting={submittingSkillKey === key}
                 {...(submission ? { submission } : {})}
+                {...(submissionError ? { submissionError } : {})}
                 removalBlocked={removalBlocked}
               />
             );
           })
         )}
       </SettingsSection>
-
-      {commonsSubmissionError ? (
-        <SettingsSection title="Commons Submission">
-          <SettingsRow title="Sharing with UCSD failed" description={commonsSubmissionError} />
-        </SettingsSection>
-      ) : null}
 
       {managedManifestWarning ? (
         <SettingsSection title="Managed Skills">

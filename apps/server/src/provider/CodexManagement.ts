@@ -48,6 +48,7 @@ import {
 } from "./managedSkillManifest.ts";
 import { discoverPublicSkillCatalog } from "./publicSkillRepository.ts";
 import { isProtectedLocalSkillPathForCommons } from "./tritonAiCommons.ts";
+import { listTritonAiCommonsSubmissionReceipts } from "./tritonAiCommonsReceipts.ts";
 import {
   ensureProviderSkillRemovalPathIsSafe,
   providerSkillRemovalIdentityMatches,
@@ -630,10 +631,11 @@ export const loadProviderSkillForCommonsSubmission = Effect.fn(
       "The installed skill name does not match its SKILL.md frontmatter. Fix it before submitting.",
     );
   }
-  return bundle;
+  return { bundle, skillPath: skill.path };
 });
 
 export const listProviderSkillCatalog = Effect.fn("listProviderSkillCatalog")(function* () {
+  const config = yield* ServerConfig.ServerConfig;
   const target = yield* resolveCodexManagementTarget().pipe(Effect.result);
   const path = yield* Path.Path;
   const managed =
@@ -645,10 +647,20 @@ export const listProviderSkillCatalog = Effect.fn("listProviderSkillCatalog")(fu
           warning: "The managed secure skills manifest could not be located.",
         };
   const catalog = yield* discoverPublicSkillCatalog().pipe(Effect.result);
+  const commonsSubmissionRead = yield* listTritonAiCommonsSubmissionReceipts(config.stateDir).pipe(
+    Effect.result,
+  );
+  if (commonsSubmissionRead._tag === "Failure") {
+    yield* Effect.logWarning("could not read TritonAI Commons submission receipts", {
+      cause: commonsSubmissionRead.failure,
+    });
+  }
 
   return {
     managedSkillNames: [...managed.skillNames],
     managedSkillsStatus: managed.status,
+    commonsSubmissions:
+      commonsSubmissionRead._tag === "Success" ? commonsSubmissionRead.success : [],
     ...(managed.warning ? { managedManifestWarning: managed.warning } : {}),
     ...(catalog._tag === "Success"
       ? { catalog: catalog.success }

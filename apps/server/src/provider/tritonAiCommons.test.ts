@@ -59,6 +59,8 @@ function registryFixture(options?: {
   readonly wrongFork?: boolean;
   readonly closePullAfterCreation?: boolean;
   readonly branchExistsWithoutPull?: boolean;
+  readonly branchFileOverrides?: Readonly<Record<string, string>>;
+  readonly failAfterPutOnceAt?: number;
   readonly pullChangedFilesDelta?: number;
   readonly staleFork?: boolean;
 }) {
@@ -66,8 +68,12 @@ function registryFixture(options?: {
   const login = options?.login ?? "contributor";
   const availableTools = options?.availableTools ?? TOOL_NAMES;
   let forkCreated = false;
-  let branchCreated = options?.branchExistsWithoutPull === true;
   let pullCreated = false;
+  let pullHead: string | undefined;
+  let initialBranch: string | undefined;
+  let putCount = 0;
+  let putFailed = false;
+  const createdBranches = new Set<string>();
   const branchFiles = new Map<string, string>();
   const registry: CommonsIntegrationRegistry = {
     getAvailableToolDefinitionsSync: () => availableTools.map((name) => ({ name })),
@@ -100,8 +106,25 @@ function registryFixture(options?: {
             sha: options?.staleFork === true && owner !== "dbalders" ? "c".repeat(40) : BASE_SHA,
           };
         }
-        if (ref.startsWith("tritonai-commons/") && branchCreated) {
-          return { sha: branchFiles.size === 0 ? BASE_SHA : "b".repeat(40) };
+        if (
+          ref.startsWith("tritonai-commons/") &&
+          options?.branchExistsWithoutPull === true &&
+          (initialBranch === undefined || initialBranch === ref)
+        ) {
+          initialBranch = ref;
+          return {
+            sha:
+              branchFiles.size === 0 && Object.keys(options?.branchFileOverrides ?? {}).length === 0
+                ? BASE_SHA
+                : "b".repeat(40),
+          };
+        }
+        if (createdBranches.has(ref)) {
+          return {
+            sha: [...branchFiles.keys()].some((key) => key.startsWith(`${ref}:`))
+              ? "b".repeat(40)
+              : BASE_SHA,
+          };
         }
         throw new Error(GITHUB_MISSING);
       }
@@ -115,14 +138,20 @@ function registryFixture(options?: {
           };
         }
         if (options?.existingPaths?.has(path)) return { type: "file", sha: "a".repeat(40) };
-        if (path === "README.md" && branchCreated && ref.startsWith("tritonai-commons/")) {
+        if (
+          path === "README.md" &&
+          (ref === initialBranch || createdBranches.has(ref)) &&
+          ref.startsWith("tritonai-commons/")
+        ) {
           return {
             type: "file",
             encoding: "base64",
             content: Buffer.from("# Commons\n").toString("base64"),
           };
         }
-        const content = branchFiles.get(`${ref}:${path}`);
+        const content =
+          branchFiles.get(`${ref}:${path}`) ??
+          (ref === initialBranch ? options?.branchFileOverrides?.[path] : undefined);
         if (content !== undefined) {
           return {
             type: "file",
@@ -137,16 +166,21 @@ function registryFixture(options?: {
         return { id: 2 };
       }
       if (name === "github.branches.create") {
-        branchCreated = true;
+        createdBranches.add((input as { branch: string }).branch);
         return { ref: "created" };
       }
       if (name === "github.contents.put") {
         const values = input as { branch: string; path: string; content: string };
         branchFiles.set(`${values.branch}:${values.path}`, values.content);
+        putCount += 1;
+        if (!putFailed && putCount === options?.failAfterPutOnceAt) {
+          putFailed = true;
+          throw new Error("simulated transient response failure after GitHub accepted the file");
+        }
         return { content: { sha: "b".repeat(40) } };
       }
       if (name === "github.pulls.list") {
-        return pullCreated
+        return pullCreated && (input as { head: string }).head === pullHead
           ? [
               {
                 number: 42,
@@ -158,16 +192,26 @@ function registryFixture(options?: {
           : [];
       }
       if (name === "github.pulls.get") {
+        const pullBranch = pullHead?.slice(pullHead.indexOf(":") + 1) ?? "";
+        const changedPaths = new Set([
+          ...[...branchFiles.keys()]
+            .filter((key) => key.startsWith(`${pullBranch}:`))
+            .map((key) => key.slice(key.indexOf(":") + 1)),
+          ...(pullBranch === initialBranch ? Object.keys(options?.branchFileOverrides ?? {}) : []),
+        ]);
         return {
           number: 42,
           html_url: "https://github.com/dbalders/UCSD-Skills-Library/pull/42",
           draft: false,
-          changed_files: branchFiles.size + (options?.pullChangedFilesDelta ?? 0),
+          changed_files: changedPaths.size + (options?.pullChangedFilesDelta ?? 0),
           base: { sha: BASE_SHA },
         };
       }
       if (name === "github.pulls.create") {
         pullCreated = true;
+        pullHead = (input as { head: string }).head.includes(":")
+          ? (input as { head: string }).head
+          : `${login}:${(input as { head: string }).head}`;
         return { html_url: "https://github.com/dbalders/UCSD-Skills-Library/pull/42" };
       }
       return {};
@@ -408,8 +452,22 @@ describe("TritonAI Commons local skill submission", () => {
     expect(fixture.calls.filter(({ name }) => name === "github.contents.put")).toHaveLength(3);
   });
 
-  it("refuses an unverified pre-existing branch without a pull request", async () => {
+  it("resumes a pristine deterministic branch left by an interrupted submission", async () => {
     const fixture = registryFixture({ branchExistsWithoutPull: true });
+
+    await submitProviderSkillToTritonAiCommons({
+      bundle: localSkill(),
+      registry: fixture.registry,
+      signal: new AbortController().signal,
+    });
+
+    expect(fixture.calls.some(({ name }) => name === "github.branches.create")).toBe(false);
+    expect(fixture.calls.filter(({ name }) => name === "github.contents.put")).toHaveLength(3);
+    expect(fixture.calls.filter(({ name }) => name === "github.pulls.create")).toHaveLength(1);
+  });
+
+  it("resumes matching files after GitHub accepted a write but its response failed", async () => {
+    const fixture = registryFixture({ failAfterPutOnceAt: 1 });
 
     await expect(
       submitProviderSkillToTritonAiCommons({
@@ -417,8 +475,41 @@ describe("TritonAI Commons local skill submission", () => {
         registry: fixture.registry,
         signal: new AbortController().signal,
       }),
-    ).rejects.toThrow("already exists without a verified pull request");
-    expect(fixture.calls.some(({ name }) => name === "github.contents.put")).toBe(false);
+    ).rejects.toThrow("could not submit this skill");
+
+    const result = await submitProviderSkillToTritonAiCommons({
+      bundle: localSkill(),
+      registry: fixture.registry,
+      signal: new AbortController().signal,
+    });
+
+    expect(result.reviewUrl).toContain("/pull/42");
+    expect(result.branch).toMatch(/-retry-1$/u);
+    expect(fixture.calls.filter(({ name }) => name === "github.branches.create")).toHaveLength(2);
+    expect(fixture.calls.filter(({ name }) => name === "github.pulls.create")).toHaveLength(1);
+  });
+
+  it("skips a dirty deterministic branch instead of publishing or overwriting its content", async () => {
+    const fixture = registryFixture({
+      branchExistsWithoutPull: true,
+      branchFileOverrides: {
+        "community/local-accessibility-review/SKILL.md": "unexpected content\n",
+      },
+    });
+
+    const result = await submitProviderSkillToTritonAiCommons({
+      bundle: localSkill(),
+      registry: fixture.registry,
+      signal: new AbortController().signal,
+    });
+
+    expect(result.branch).toMatch(/-retry-1$/u);
+    expect(
+      fixture.calls
+        .filter(({ name }) => name === "github.contents.put")
+        .every(({ input }) => (input as { branch: string }).branch === result.branch),
+    ).toBe(true);
+    expect(fixture.calls.filter(({ name }) => name === "github.pulls.create")).toHaveLength(1);
   });
 
   it("refuses to reuse a pull request with unrelated changed files", async () => {
@@ -428,7 +519,6 @@ describe("TritonAI Commons local skill submission", () => {
       registry: fixture.registry,
       signal: new AbortController().signal,
     });
-
     await expect(
       submitProviderSkillToTritonAiCommons({
         bundle: localSkill(),

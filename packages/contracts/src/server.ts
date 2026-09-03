@@ -121,6 +121,17 @@ export const ServerProviderSkillCatalog = Schema.Struct({
 });
 export type ServerProviderSkillCatalog = typeof ServerProviderSkillCatalog.Type;
 
+export const ServerTritonAiCommonsSubmissionReceipt = Schema.Struct({
+  reviewUrl: TrimmedNonEmptyString,
+  branch: TrimmedNonEmptyString,
+  path: TrimmedNonEmptyString,
+  skillName: TrimmedNonEmptyString,
+  skillPath: TrimmedNonEmptyString,
+  submittedAt: IsoDateTime,
+});
+export type ServerTritonAiCommonsSubmissionReceipt =
+  typeof ServerTritonAiCommonsSubmissionReceipt.Type;
+
 export const ServerManagedSkillsStatus = Schema.Literals(["absent", "invalid", "unknown", "valid"]);
 export type ServerManagedSkillsStatus = typeof ServerManagedSkillsStatus.Type;
 
@@ -128,6 +139,9 @@ export const ServerListProviderSkillCatalogResult = Schema.Struct({
   catalog: Schema.optional(ServerProviderSkillCatalog),
   managedSkillNames: Schema.Array(TrimmedNonEmptyString),
   managedSkillsStatus: ServerManagedSkillsStatus,
+  commonsSubmissions: Schema.Array(ServerTritonAiCommonsSubmissionReceipt).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
   unavailableReason: Schema.optional(TrimmedNonEmptyString),
   managedManifestWarning: Schema.optional(TrimmedNonEmptyString),
 });

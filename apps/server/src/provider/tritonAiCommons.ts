@@ -623,8 +623,9 @@ async function ensureSubmissionBranch(input: {
     allowMissing: true,
   });
   if (existingSha !== undefined) {
+    if (existingSha === input.baseCommitSha) return;
     throw commonsError(
-      "The deterministic Commons branch already exists without a verified pull request. Remove that branch on GitHub, then retry; Harness did not reuse or overwrite it.",
+      "The selected Commons contribution branch changed before Harness could use it. Retry to select a clean branch; no files were overwritten.",
       undefined,
       "submission_failed",
     );
@@ -648,6 +649,11 @@ async function ensureSubmissionBranch(input: {
       "submission_failed",
     );
   }
+}
+
+function submissionBranchCandidates(skillName: string, digest: string): ReadonlyArray<string> {
+  const prefix = `tritonai-commons/${skillName}-${digest.slice(0, 16)}`;
+  return [prefix, ...Array.from({ length: 8 }, (_, index) => `${prefix}-retry-${index + 1}`)];
 }
 
 async function putSubmissionFile(input: {
@@ -854,27 +860,48 @@ export async function submitProviderSkillToTritonAiCommons(input: {
       }
     }
 
-    const branch = `tritonai-commons/${name}-${prepared.digest.slice(0, 16)}`;
-    const pullHead = `${login}:${branch}`;
-    const existingReviewUrl = await findExistingSubmissionPullRequest({
-      registry: input.registry,
-      signal: input.signal,
-      head: pullHead,
-      base,
-      baseCommitSha,
-      branchOwner: targetOwner,
-      branch,
-      skillName: name,
-      files: prepared.bundle.files,
-    });
-    if (existingReviewUrl) {
-      return {
-        reviewUrl: existingReviewUrl,
-        branch,
-        path: `community/${name}/SKILL.md`,
+    let branch: string | undefined;
+    for (const candidate of submissionBranchCandidates(name, prepared.digest)) {
+      const pullHead = `${login}:${candidate}`;
+      const existingReviewUrl = await findExistingSubmissionPullRequest({
+        registry: input.registry,
+        signal: input.signal,
+        head: pullHead,
+        base,
+        baseCommitSha,
+        branchOwner: targetOwner,
+        branch: candidate,
         skillName: name,
-      };
+        files: prepared.bundle.files,
+      });
+      if (existingReviewUrl) {
+        return {
+          reviewUrl: existingReviewUrl,
+          branch: candidate,
+          path: `community/${name}/SKILL.md`,
+          skillName: name,
+        };
+      }
+      const candidateSha = await readCommitSha({
+        registry: input.registry,
+        signal: input.signal,
+        owner: targetOwner,
+        ref: candidate,
+        allowMissing: true,
+      });
+      if (candidateSha === undefined || candidateSha === baseCommitSha) {
+        branch = candidate;
+        break;
+      }
     }
+    if (!branch) {
+      throw commonsError(
+        "Harness found too many interrupted Commons contribution branches for this skill version. Remove the abandoned branches on GitHub, then retry.",
+        undefined,
+        "submission_failed",
+      );
+    }
+    const pullHead = `${login}:${branch}`;
     await ensureSubmissionBranch({
       registry: input.registry,
       signal: input.signal,
