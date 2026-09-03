@@ -5,8 +5,25 @@ composer and shows how many characters need to be removed. Shorten the draft or 
 multiple messages, then send again in the same thread.
 
 On mobile, an empty composer shows an interrupt button while the agent is working. Adding text
-or an attachment replaces it with the send button. This applies to both compact and expanded
-composers.
+or an attachment keeps the interrupt button beside the send button. This applies to both compact
+and expanded composers.
+
+## Queueing and steering an active turn
+
+On web and desktop, a message sent while the agent is working can either **Steer** the active turn
+immediately or **Queue** behind it. Choose the normal behavior under **Settings → General → Messages
+during an active turn**. New installations default to **Queue for later**. Press `Cmd+Enter` on macOS
+or `Ctrl+Enter` on Windows and Linux to use the other behavior for one message.
+
+Queued messages stay out of the conversation until they are sent. They appear in an attached drawer
+above the composer in FIFO order. You can queue multiple messages, remove them, or choose
+**Steer now** to send one into the active turn. After the active turn finishes, Harness sends one
+queued message at a time and waits for that turn to finish before sending the next. A failed queued
+message remains in the drawer with its error so you can retry it as a steer or remove it.
+
+The web and desktop queue belongs to the current app session and keeps draining when you switch to
+another task. Reloading or closing the app clears it; drafts in the composer still use the normal
+persistent draft behavior.
 
 You can attach images up to 10 MB. On servers that support file uploads, you can also
 attach videos, text files, PDFs, ZIP archives, and other files. Each file can be up to the limit advertised

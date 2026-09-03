@@ -178,6 +178,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["timestamp clock locale system browser os 12 hour 24 hour"],
   },
   {
+    id: "active-turn-message-action",
+    title: "Messages during an active turn",
+    to: "/settings/general",
+    searchTerms: ["queue steer composer enter shortcut follow up"],
+  },
+  {
     id: "hide-whitespace-changes",
     title: "Hide whitespace changes",
     to: "/settings/general",

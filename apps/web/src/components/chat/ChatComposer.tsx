@@ -23,6 +23,7 @@ import { serializeComposerFileLink } from "@t3tools/shared/composerTrigger";
 import { createModelSelection, normalizeModelSlug } from "@t3tools/shared/model";
 import {
   memo,
+  type MouseEventHandler,
   type ReactNode,
   useCallback,
   useEffect,
@@ -174,6 +175,7 @@ import {
   submitComposerDraft,
 } from "./composerSubmission";
 import { ComposerPromptLengthValidation } from "./ComposerPromptLengthValidation";
+import { resolveComposerDispatchMode, type ComposerDispatchMode } from "./composerDispatch";
 
 function ComposerVideoThumbnail({ file }: { file: File }) {
   const setVideo = useCallback(
@@ -534,8 +536,9 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   isConnecting: boolean;
   isEnvironmentUnavailable: boolean;
   hasSendableContent: boolean;
+  activeTurnAction: "queue" | "steer";
   preserveComposerFocusOnPointerDown?: boolean;
-  showSendWhileRunning?: boolean;
+  onSubmitMessage: MouseEventHandler<HTMLButtonElement>;
   onPreviousPendingQuestion: () => void;
   onInterrupt: () => void;
   onImplementPlanInNewThread: () => void;
@@ -566,8 +569,9 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
         isEnvironmentUnavailable={props.isEnvironmentUnavailable}
         isPreparingWorktree={props.isPreparingWorktree}
         hasSendableContent={props.hasSendableContent}
+        activeTurnAction={props.activeTurnAction}
         preserveComposerFocusOnPointerDown={props.preserveComposerFocusOnPointerDown ?? false}
-        showSendWhileRunning={props.showSendWhileRunning ?? false}
+        onSubmitMessage={props.onSubmitMessage}
         onPreviousPendingQuestion={props.onPreviousPendingQuestion}
         onInterrupt={props.onInterrupt}
         onImplementPlanInNewThread={props.onImplementPlanInNewThread}
@@ -809,6 +813,7 @@ export interface ChatComposerProps {
   sendDisabledReason: string | null;
   isPreparingWorktree: boolean;
   bannerItems: readonly ComposerBannerStackItem[];
+  queuedMessagesControl?: ReactNode;
   environmentUnavailable: {
     readonly label: string;
     readonly connection: EnvironmentConnectionPresentation;
@@ -869,7 +874,11 @@ export interface ChatComposerProps {
   composerRef: React.RefObject<ChatComposerHandle | null>;
 
   // Callbacks
-  onSend: (e?: { preventDefault: () => void }, intent?: ComposerSubmissionIntent) => void;
+  onSend: (
+    e?: { preventDefault: () => void },
+    intent?: ComposerSubmissionIntent,
+    dispatchMode?: ComposerDispatchMode,
+  ) => void;
   onInterrupt: () => void;
   onImplementPlanInNewThread: () => void;
   onRespondToApproval: (
@@ -2447,7 +2456,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   ]);
 
   const dispatchComposerDraft = useCallback(
-    (event?: { preventDefault: () => void }, intent: ComposerSubmissionIntent = "foreground") => {
+    (
+      event?: { preventDefault: () => void },
+      intent: ComposerSubmissionIntent = "foreground",
+      inverseActiveTurnAction = false,
+    ) => {
       if (noProviderAvailable || isSendDisabled) {
         event?.preventDefault();
         return false;
@@ -2473,7 +2486,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           // ChatView reports its final composed-input preflight through the
           // composer handle before its first asynchronous send step.
           providerInputRejectedRef.current = false;
-          onSend(sendEvent, intent);
+          onSend(
+            sendEvent,
+            intent,
+            resolveComposerDispatchMode({
+              phase,
+              activeTurnDefault: settings.activeTurnComposerDefault,
+              inverseModifier: inverseActiveTurnAction,
+            }),
+          );
           return !providerInputRejectedRef.current;
         },
       });
@@ -2491,7 +2512,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       isSendDisabled,
       noProviderAvailable,
       onSend,
+      phase,
       promptRef,
+      settings.activeTurnComposerDefault,
       shouldBlurMobileComposerOnSubmit,
     ],
   );
@@ -2723,7 +2746,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   );
 
   const submitComposer = useCallback(
-    (event?: { preventDefault: () => void }, intent: ComposerSubmissionIntent = "foreground") => {
+    (
+      event?: { preventDefault: () => void },
+      intent: ComposerSubmissionIntent = "foreground",
+      inverseActiveTurnAction = false,
+    ) => {
       if (voiceStatus === "starting") {
         voiceStartTokenRef.current += 1;
         voiceStartInFlightRef.current = false;
@@ -2751,7 +2778,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         event?.preventDefault();
         return;
       }
-      dispatchComposerDraft(event, intent);
+      dispatchComposerDraft(event, intent, inverseActiveTurnAction);
     },
     [
       clearVoiceReadyTimeout,
@@ -2878,7 +2905,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           })
         : null;
     if (submissionIntent) {
-      submitComposer(undefined, submissionIntent);
+      submitComposer(
+        undefined,
+        submissionIntent,
+        phase === "running" && (event.metaKey || event.ctrlKey),
+      );
       return true;
     }
     return false;
@@ -4030,6 +4061,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     >
       <ComposerBanner.Dock>
         <ComposerBanner.Column>
+          {props.queuedMessagesControl}
           <ComposerBannerStack
             key={activeThreadId}
             className="relative z-0"
@@ -4904,7 +4936,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     isPreparingWorktree={isPreparingWorktree}
                     hasSendableContent={sendHasVoiceAction}
                     preserveComposerFocusOnPointerDown={isMobileViewport}
-                    showSendWhileRunning={isMobileViewport}
+                    activeTurnAction={settings.activeTurnComposerDefault}
+                    onSubmitMessage={(event) => {
+                      if (phase !== "running") return;
+                      event.preventDefault();
+                      submitComposer(event, "foreground", event.metaKey || event.ctrlKey);
+                    }}
                     onPreviousPendingQuestion={onPreviousActivePendingUserInputQuestion}
                     onInterrupt={handleInterruptPrimaryAction}
                     onImplementPlanInNewThread={handleImplementPlanInNewThreadPrimaryAction}

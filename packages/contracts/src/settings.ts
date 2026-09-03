@@ -177,7 +177,14 @@ export const BrowserRecordingFrameRate = Schema.Literals(BROWSER_RECORDING_FRAME
 export type BrowserRecordingFrameRate = typeof BrowserRecordingFrameRate.Type;
 export const DEFAULT_BROWSER_RECORDING_FRAME_RATE: BrowserRecordingFrameRate = 30;
 
+export const ActiveTurnComposerDefault = Schema.Literals(["steer", "queue"]);
+export type ActiveTurnComposerDefault = typeof ActiveTurnComposerDefault.Type;
+export const DEFAULT_ACTIVE_TURN_COMPOSER_DEFAULT: ActiveTurnComposerDefault = "queue";
+
 export const ClientSettingsSchema = Schema.Struct({
+  activeTurnComposerDefault: ActiveTurnComposerDefault.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_ACTIVE_TURN_COMPOSER_DEFAULT)),
+  ),
   appearanceContrast: AppearanceContrast.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_APPEARANCE_CONTRAST)),
   ),
@@ -967,6 +974,7 @@ export const ServerSettingsPatch = Schema.Struct({
 export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;
 
 export const ClientSettingsPatch = Schema.Struct({
+  activeTurnComposerDefault: Schema.optionalKey(ActiveTurnComposerDefault),
   appearanceContrast: Schema.optionalKey(AppearanceContrast),
   browserDefaultViewport: Schema.optionalKey(PreviewViewportSetting),
   browserDefaultZoomFactor: Schema.optionalKey(PreviewZoomFactor),

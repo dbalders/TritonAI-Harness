@@ -1,0 +1,163 @@
+import { beforeEach, describe, expect, it } from "vite-plus/test";
+import { MessageId } from "@t3tools/contracts";
+
+import { useComposerQueueStore, type QueuedComposerEntry } from "./composerQueueStore";
+
+const entry = (id: string): QueuedComposerEntry =>
+  ({
+    id,
+    createdAt: "2026-09-03T00:00:00.000Z",
+    prompt: id,
+    images: [],
+    files: [],
+    terminalContexts: [],
+    elementContexts: [],
+    previewAnnotations: [],
+    reviewComments: [],
+    selectedProvider: "codex",
+    selectedInstanceId: "codex",
+    selectedModel: "gpt-5",
+    selectedProviderModels: [],
+    selectedPromptEffort: null,
+    selectedModelSelection: { instanceId: "codex", model: "gpt-5" },
+    supportsThreadGoals: false,
+    goalArmed: false,
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    status: "queued",
+    error: null,
+  }) as unknown as QueuedComposerEntry;
+
+describe("composer queue store", () => {
+  beforeEach(() => useComposerQueueStore.getState().clearForTests());
+
+  it("keeps FIFO queues isolated by thread", () => {
+    const store = useComposerQueueStore.getState();
+    store.enqueue("thread:a", entry("one"));
+    store.enqueue("thread:a", entry("two"));
+    store.enqueue("thread:b", entry("other"));
+
+    expect(
+      useComposerQueueStore.getState().entriesByThreadKey["thread:a"]?.map((x) => x.id),
+    ).toEqual(["one", "two"]);
+    expect(
+      useComposerQueueStore.getState().entriesByThreadKey["thread:b"]?.map((x) => x.id),
+    ).toEqual(["other"]);
+  });
+
+  it("claims an item once and prevents removing an in-flight item", () => {
+    const store = useComposerQueueStore.getState();
+    store.enqueue("thread:a", entry("one"));
+    store.enqueue("thread:a", entry("two"));
+
+    expect(store.markDispatching("thread:a", "one")).toBe(true);
+    expect(useComposerQueueStore.getState().markDispatching("thread:a", "one")).toBe(false);
+    expect(useComposerQueueStore.getState().markDispatching("thread:a", "two")).toBe(false);
+    expect(useComposerQueueStore.getState().remove("thread:a", "one")).toBeNull();
+  });
+
+  it("edits a queued prompt and clears its previous failure", () => {
+    const store = useComposerQueueStore.getState();
+    store.enqueue("thread:a", entry("one"));
+    store.markFailed("thread:a", "one", "offline");
+    store.updatePrompt("thread:a", "one", "updated prompt");
+
+    expect(useComposerQueueStore.getState().entriesByThreadKey["thread:a"]?.[0]).toMatchObject({
+      prompt: "updated prompt",
+      status: "queued",
+      error: null,
+    });
+  });
+
+  it("leaves failed items visible for explicit retry", () => {
+    const store = useComposerQueueStore.getState();
+    store.enqueue("thread:a", entry("one"));
+    store.markDispatching("thread:a", "one");
+    store.markFailed("thread:a", "one", "offline");
+
+    expect(useComposerQueueStore.getState().entriesByThreadKey["thread:a"]?.[0]).toMatchObject({
+      status: "failed",
+      error: "offline",
+    });
+  });
+
+  it("completes only the selected item without disturbing FIFO order", () => {
+    const store = useComposerQueueStore.getState();
+    store.enqueue("thread:a", entry("one"));
+    store.enqueue("thread:a", entry("two"));
+    store.complete("thread:a", "two");
+
+    expect(
+      useComposerQueueStore.getState().entriesByThreadKey["thread:a"]?.map((item) => item.id),
+    ).toEqual(["one"]);
+  });
+
+  it("serializes dispatch work per thread without blocking other threads", () => {
+    const store = useComposerQueueStore.getState();
+
+    expect(store.claimDispatch("thread:a", "first")).toBe(true);
+    expect(useComposerQueueStore.getState().claimDispatch("thread:a", "second")).toBe(false);
+    expect(useComposerQueueStore.getState().claimDispatch("thread:b", "other")).toBe(true);
+
+    useComposerQueueStore
+      .getState()
+      .acknowledgeDispatch("thread:a", "first", MessageId.make("message-one"), "turn-before");
+    expect(useComposerQueueStore.getState().dispatchAcknowledgementByThreadKey["thread:a"]).toBe(
+      "message-one",
+    );
+    expect(
+      useComposerQueueStore.getState().dispatchAcknowledgementDeadlineByThreadKey["thread:a"],
+    ).toBeGreaterThan(Date.now());
+    expect(useComposerQueueStore.getState().dispatchPreviousTurnIdByThreadKey["thread:a"]).toBe(
+      "turn-before",
+    );
+
+    useComposerQueueStore.getState().releaseDispatch("thread:a", "second");
+    expect(useComposerQueueStore.getState().claimDispatch("thread:a", "second")).toBe(false);
+
+    useComposerQueueStore.getState().releaseDispatch("thread:a", "first");
+    expect(
+      useComposerQueueStore.getState().dispatchAcknowledgementByThreadKey["thread:a"],
+    ).toBeUndefined();
+    expect(
+      useComposerQueueStore.getState().dispatchAcknowledgementDeadlineByThreadKey["thread:a"],
+    ).toBeUndefined();
+    expect(
+      useComposerQueueStore.getState().dispatchPreviousTurnIdByThreadKey["thread:a"],
+    ).toBeUndefined();
+    expect(useComposerQueueStore.getState().claimDispatch("thread:a", "second")).toBe(true);
+  });
+
+  it("retains the queue barrier until shared steers settle", () => {
+    const store = useComposerQueueStore.getState();
+    expect(store.claimDispatch("thread:a", "queue:one")).toBe(true);
+    store.acknowledgeDispatch(
+      "thread:a",
+      "queue:one",
+      MessageId.make("message-one"),
+      "turn-before",
+    );
+
+    expect(store.beginSharedDispatch("thread:a", "queue:one")).toBe(true);
+    expect(store.beginSharedDispatch("thread:a", "wrong-owner")).toBe(false);
+    store.acknowledgeDispatch(
+      "thread:a",
+      "queue:one",
+      MessageId.make("steer-message"),
+      "turn-current",
+    );
+    store.releaseDispatch("thread:a", "queue:one");
+
+    expect(useComposerQueueStore.getState().dispatchOwnerByThreadKey["thread:a"]).toBe("queue:one");
+    expect(useComposerQueueStore.getState().dispatchAcknowledgementByThreadKey["thread:a"]).toBe(
+      "message-one",
+    );
+    expect(useComposerQueueStore.getState().dispatchPreviousTurnIdByThreadKey["thread:a"]).toBe(
+      "turn-before",
+    );
+
+    store.endSharedDispatch("thread:a", "queue:one");
+    store.releaseDispatch("thread:a", "queue:one");
+    expect(useComposerQueueStore.getState().dispatchOwnerByThreadKey["thread:a"]).toBeUndefined();
+  });
+});
