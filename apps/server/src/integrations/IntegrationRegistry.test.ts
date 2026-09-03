@@ -1255,6 +1255,20 @@ describe("IntegrationRegistry lifecycle", () => {
       },
     };
     try {
+      const providerAuthorizedManifest: IntegrationManifest = {
+        ...fixtureManifest,
+        capabilities: fixtureManifest.capabilities.map((capability) => ({
+          ...capability,
+          access: "authorization",
+        })),
+      };
+      expect(
+        () =>
+          new RegistryRuntime(NodePath.join(root, "provider-authorized"), [
+            packaged(providerAuthorizedManifest, statelessProvider),
+          ]),
+      ).toThrow(/connect and disconnect for provider-authorized capabilities/u);
+
       const registry = new RegistryRuntime(root, [packaged(fixtureManifest, statelessProvider)]);
       const installed = await registry.install(fixtureManifest.id);
       expect(installed.integrations[0]).toMatchObject({

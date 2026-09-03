@@ -35,6 +35,8 @@ availability. Each capability declares `access: "default" | "opt-in" | "authoriz
 Harness switch. Tools and skills declare their dependencies with `capabilities`. Multiple
 references use union semantics, so a shared dependency remains available while any enabled,
 granted capability requires it. A skills-only package omits `provider` and declares no tools.
+Provider-authorized capabilities require a provider with a complete connect and disconnect
+lifecycle; stateless and skills-only packages cannot declare them.
 
 Every tool also declares `effect: "read" | "write"`, which must agree with the provider's executable
 metadata. Write tools follow the task's selected runtime mode: supervised modes request approval,

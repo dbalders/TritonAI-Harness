@@ -139,6 +139,7 @@ export function validateIntegrationManifest(value: unknown): IntegrationManifest
     throw new Error("Integration plugins with tools must declare a provider.");
   }
   const capabilityIds = new Set<string>();
+  let hasProviderAuthorizedCapability = false;
   for (const capability of capabilities) {
     if (!isRecord(capability) || !hasOnlyKeys(capability, CAPABILITY_KEYS)) {
       throw new Error("Invalid or unsupported capability fields.");
@@ -155,6 +156,10 @@ export function validateIntegrationManifest(value: unknown): IntegrationManifest
     }
     if (capabilityIds.has(item.id)) throw new Error(`Duplicate capability ${item.id}.`);
     capabilityIds.add(item.id);
+    if (item.access === "authorization") hasProviderAuthorizedCapability = true;
+  }
+  if (hasProviderAuthorizedCapability && input.provider === undefined) {
+    throw new Error("Provider-authorized capabilities require a declared provider.");
   }
   for (const [kind, entries] of [
     ["tool", tools],

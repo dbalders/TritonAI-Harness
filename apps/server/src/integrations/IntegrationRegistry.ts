@@ -824,6 +824,14 @@ export class RegistryRuntime {
           `Provider ${provider.id} must implement connect and disconnect to recover write admission faults.`,
         );
       }
+      if (
+        manifest.capabilities.some(({ access }) => access === "authorization") &&
+        !hasConnectionLifecycle(provider)
+      ) {
+        throw new Error(
+          `Provider ${provider.id} must implement connect and disconnect for provider-authorized capabilities.`,
+        );
+      }
       if ([...this.#catalog.values()].some((entry) => entry.provider?.id === provider.id)) {
         throw new Error(`Integration provider ${provider.id} is already registered.`);
       }
