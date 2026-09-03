@@ -1,4 +1,5 @@
 import type {
+  MessageId,
   ModelSelection,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -47,6 +48,9 @@ export interface QueuedComposerEntry {
 
 interface ComposerQueueState {
   readonly entriesByThreadKey: Readonly<Record<string, readonly QueuedComposerEntry[]>>;
+  readonly dispatchOwnerByThreadKey: Readonly<Record<string, string>>;
+  readonly dispatchAcknowledgementByThreadKey: Readonly<Record<string, MessageId>>;
+  readonly sharedDispatchCountByThreadKey: Readonly<Record<string, number>>;
   enqueue: (threadKey: string, entry: QueuedComposerEntry) => void;
   updatePrompt: (threadKey: string, entryId: string, prompt: string) => void;
   remove: (threadKey: string, entryId: string) => QueuedComposerEntry | null;
@@ -54,6 +58,11 @@ interface ComposerQueueState {
   markDispatching: (threadKey: string, entryId: string) => boolean;
   complete: (threadKey: string, entryId: string) => void;
   markFailed: (threadKey: string, entryId: string, error: string) => void;
+  claimDispatch: (threadKey: string, ownerId: string) => boolean;
+  acknowledgeDispatch: (threadKey: string, ownerId: string, messageId: MessageId) => void;
+  beginSharedDispatch: (threadKey: string, ownerId: string) => boolean;
+  endSharedDispatch: (threadKey: string, ownerId: string) => void;
+  releaseDispatch: (threadKey: string, ownerId: string) => void;
   clearForTests: () => void;
 }
 
@@ -70,6 +79,9 @@ function replaceThreadEntries(
 
 export const useComposerQueueStore = create<ComposerQueueState>((set, get) => ({
   entriesByThreadKey: {},
+  dispatchOwnerByThreadKey: {},
+  dispatchAcknowledgementByThreadKey: {},
+  sharedDispatchCountByThreadKey: {},
   enqueue: (threadKey, entry) => {
     if (!threadKey) return;
     set((state) =>
@@ -161,5 +173,66 @@ export const useComposerQueueStore = create<ComposerQueueState>((set, get) => ({
       ),
     );
   },
-  clearForTests: () => set({ entriesByThreadKey: {} }),
+  claimDispatch: (threadKey, ownerId) => {
+    if (get().dispatchOwnerByThreadKey[threadKey] !== undefined) return false;
+    set((state) => ({
+      dispatchOwnerByThreadKey: { ...state.dispatchOwnerByThreadKey, [threadKey]: ownerId },
+    }));
+    return true;
+  },
+  acknowledgeDispatch: (threadKey, ownerId, messageId) => {
+    set((state) => {
+      if (state.dispatchOwnerByThreadKey[threadKey] !== ownerId) return state;
+      return {
+        dispatchAcknowledgementByThreadKey: {
+          ...state.dispatchAcknowledgementByThreadKey,
+          [threadKey]: messageId,
+        },
+      };
+    });
+  },
+  beginSharedDispatch: (threadKey, ownerId) => {
+    if (get().dispatchOwnerByThreadKey[threadKey] !== ownerId) return false;
+    set((state) => ({
+      sharedDispatchCountByThreadKey: {
+        ...state.sharedDispatchCountByThreadKey,
+        [threadKey]: (state.sharedDispatchCountByThreadKey[threadKey] ?? 0) + 1,
+      },
+    }));
+    return true;
+  },
+  endSharedDispatch: (threadKey, ownerId) => {
+    set((state) => {
+      if (state.dispatchOwnerByThreadKey[threadKey] !== ownerId) return state;
+      const sharedDispatchCountByThreadKey = { ...state.sharedDispatchCountByThreadKey };
+      const nextCount = (sharedDispatchCountByThreadKey[threadKey] ?? 0) - 1;
+      if (nextCount > 0) sharedDispatchCountByThreadKey[threadKey] = nextCount;
+      else delete sharedDispatchCountByThreadKey[threadKey];
+      return { sharedDispatchCountByThreadKey };
+    });
+  },
+  releaseDispatch: (threadKey, ownerId) => {
+    set((state) => {
+      if (
+        state.dispatchOwnerByThreadKey[threadKey] !== ownerId ||
+        (state.sharedDispatchCountByThreadKey[threadKey] ?? 0) > 0
+      ) {
+        return state;
+      }
+      const dispatchOwnerByThreadKey = { ...state.dispatchOwnerByThreadKey };
+      const dispatchAcknowledgementByThreadKey = {
+        ...state.dispatchAcknowledgementByThreadKey,
+      };
+      delete dispatchOwnerByThreadKey[threadKey];
+      delete dispatchAcknowledgementByThreadKey[threadKey];
+      return { dispatchOwnerByThreadKey, dispatchAcknowledgementByThreadKey };
+    });
+  },
+  clearForTests: () =>
+    set({
+      entriesByThreadKey: {},
+      dispatchOwnerByThreadKey: {},
+      dispatchAcknowledgementByThreadKey: {},
+      sharedDispatchCountByThreadKey: {},
+    }),
 }));

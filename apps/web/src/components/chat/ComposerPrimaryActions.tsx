@@ -296,6 +296,14 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
     </Tooltip>
   );
 
-  if (isRunning && !hasSendableContent) return renderStopGenerationButton(false);
+  if (isRunning) {
+    if (!hasSendableContent) return renderStopGenerationButton(false);
+    return (
+      <div className={cn("flex items-center", compact ? "gap-1.5" : "gap-2")}>
+        {renderStopGenerationButton(false)}
+        {sendButton}
+      </div>
+    );
+  }
   return sendButton;
 });

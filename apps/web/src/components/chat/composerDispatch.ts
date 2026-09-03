@@ -1,21 +1,22 @@
+import type { ProviderDriverKind, ServerProvider } from "@t3tools/contracts";
+import { applyClaudePromptEffortPrefix, resolvePromptInjectedEffort } from "@t3tools/shared/model";
+
+import { getProviderModelCapabilities } from "../../providerModels";
 import type { SessionPhase } from "../../types";
 
 export type ActiveTurnComposerAction = "queue" | "steer";
 export type ComposerDispatchMode = "auto" | ActiveTurnComposerAction;
 
-export function resolveQueuedDispatchTarget<T extends { readonly threadKey: string }>(
-  threadKey: string,
-  target: T | null,
-): T | null {
-  return target?.threadKey === threadKey ? target : null;
-}
-
-export function isQueuedMessageAcknowledgementPending(input: {
-  readonly messageProjected: boolean;
-  readonly expiresAt: number;
-  readonly now: number;
-}): boolean {
-  return !input.messageProjected && input.now < input.expiresAt;
+export function formatOutgoingPrompt(params: {
+  provider: ProviderDriverKind;
+  model: string | null;
+  models: ReadonlyArray<ServerProvider["models"][number]>;
+  effort: string | null;
+  text: string;
+}): string {
+  const caps = getProviderModelCapabilities(params.models, params.model, params.provider);
+  const promptEffort = resolvePromptInjectedEffort(caps, params.effort);
+  return applyClaudePromptEffortPrefix(params.text, promptEffort);
 }
 
 export function resolveComposerDispatchMode(input: {
@@ -26,6 +27,29 @@ export function resolveComposerDispatchMode(input: {
   if (input.phase !== "running") return "auto";
   if (!input.inverseModifier) return input.activeTurnDefault;
   return input.activeTurnDefault === "queue" ? "steer" : "queue";
+}
+
+export function queuedDispatchBlocksComposer(input: {
+  readonly phase: SessionPhase;
+  readonly dispatchInFlight: boolean;
+}): boolean {
+  // Once the queued turn is running, keep its acknowledgement barrier without
+  // disabling the active-turn Queue and Steer actions.
+  return input.dispatchInFlight && input.phase !== "running";
+}
+
+export function isQueuedMessageTurnComplete(input: {
+  readonly messageTurnId: string | null | undefined;
+  readonly latestTurn: {
+    readonly turnId: string;
+    readonly state: "running" | "interrupted" | "completed" | "error";
+  } | null;
+}): boolean {
+  return (
+    input.messageTurnId != null &&
+    input.latestTurn?.turnId === input.messageTurnId &&
+    input.latestTurn.state !== "running"
+  );
 }
 
 export function canAutoDrainComposerQueue(input: {
