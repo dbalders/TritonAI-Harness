@@ -299,6 +299,7 @@ import { QueuedComposerControl } from "./chat/QueuedComposerControl";
 import {
   canAutoDrainComposerQueue,
   type ComposerDispatchMode,
+  isQueuedMessageAcknowledgementPending,
   resolveQueuedDispatchTarget,
 } from "./chat/composerDispatch";
 import { DraftHeroHeadline } from "./chat/DraftHeroHeadline";
@@ -447,6 +448,7 @@ const EMPTY_PROVIDERS: ServerProvider[] = [];
 const EMPTY_PROVIDER_SKILLS: ServerProvider["skills"] = [];
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
 const EMPTY_QUEUED_COMPOSER_ENTRIES: readonly QueuedComposerEntry[] = [];
+const QUEUED_MESSAGE_ACKNOWLEDGEMENT_TIMEOUT_MS = 10_000;
 function useDraftHeroLayoutTransition(isDraftHeroState: boolean) {
   const transitionGroupRef = useRef<HTMLDivElement | null>(null);
   const composerAnchorRef = useRef<HTMLDivElement | null>(null);
@@ -1546,7 +1548,11 @@ function ChatViewContent(props: ChatViewProps) {
   const composerFilesRef = useRef<ComposerFileAttachment[]>([]);
   const composerTerminalContextsRef = useRef<TerminalContextDraft[]>([]);
   const composerElementContextsRef = useRef<ElementContextDraft[]>([]);
-  const queuedDrainAwaitingMessageByThreadRef = useRef(new Map<string, MessageId>());
+  const queuedDrainAwaitingMessageByThreadRef = useRef(
+    new Map<string, { readonly messageId: MessageId; readonly expiresAt: number }>(),
+  );
+  const queuedDrainWakeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [queuedDrainWakeTick, setQueuedDrainWakeTick] = useState(0);
   const queuedSendRef = useRef<{
     readonly threadKey: string;
     readonly send: (entry: QueuedComposerEntry, mode: ComposerDispatchMode) => Promise<void>;
@@ -1564,6 +1570,29 @@ function ChatViewContent(props: ChatViewProps) {
     videoPreviewAbortControllerRef.current = null;
   }, []);
   const [openingVideoAttachmentId, setOpeningVideoAttachmentId] = useState<string | null>(null);
+
+  const scheduleQueuedDrainWake = useCallback((expiresAt: number) => {
+    if (queuedDrainWakeTimeoutRef.current !== null) {
+      clearTimeout(queuedDrainWakeTimeoutRef.current);
+    }
+    queuedDrainWakeTimeoutRef.current = setTimeout(
+      () => {
+        queuedDrainWakeTimeoutRef.current = null;
+        setQueuedDrainWakeTick((tick) => tick + 1);
+      },
+      Math.max(0, expiresAt - Date.now()),
+    );
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (queuedDrainWakeTimeoutRef.current !== null) {
+        clearTimeout(queuedDrainWakeTimeoutRef.current);
+      }
+    },
+    [],
+  );
+
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [expandedImage, setExpandedImage] = useState<ExpandedImagePreview | null>(null);
   useEffect(() => {
@@ -5954,7 +5983,9 @@ function ChatViewContent(props: ChatViewProps) {
         composerPreviewAnnotations.length +
         composerReviewComments.length,
     });
+    const interpretLiveComposerControls = queuedEntry === undefined;
     const feedbackCommand =
+      interpretLiveComposerControls &&
       ctxSelectedProvider === "codex" &&
       composerImages.length === 0 &&
       composerFiles.length === 0 &&
@@ -6050,12 +6081,16 @@ function ChatViewContent(props: ChatViewProps) {
       );
       return;
     }
-    const parsedGoalCommand = ctxSupportsThreadGoals
-      ? resolveGoalComposerCommand(trimmed, { goalArmed: goalModeArmed })
-      : null;
+    const parsedGoalCommand =
+      interpretLiveComposerControls && ctxSupportsThreadGoals
+        ? resolveGoalComposerCommand(trimmed, { goalArmed: goalModeArmed })
+        : null;
     const hasGoalComposerIntent =
-      ctxSupportsThreadGoals && (goalModeArmed || parsedGoalCommand !== null);
+      interpretLiveComposerControls &&
+      ctxSupportsThreadGoals &&
+      (goalModeArmed || parsedGoalCommand !== null);
     if (
+      interpretLiveComposerControls &&
       !directAnnotation &&
       !hasGoalComposerIntent &&
       showPlanFollowUpPrompt &&
@@ -6096,7 +6131,10 @@ function ChatViewContent(props: ChatViewProps) {
       composerPreviewAnnotations.length === 0 &&
       composerReviewComments.length === 0;
     const standaloneSlashCommand =
-      settings.planModeEnabled && !hasGoalComposerIntent && isStandaloneTextCommand
+      interpretLiveComposerControls &&
+      settings.planModeEnabled &&
+      !hasGoalComposerIntent &&
+      isStandaloneTextCommand
         ? parseStandaloneComposerSlashCommand(trimmed)
         : null;
     if (standaloneSlashCommand) {
@@ -6913,7 +6951,12 @@ function ChatViewContent(props: ChatViewProps) {
     } else if (queuedEntry && turnStartSucceeded) {
       useComposerQueueStore.getState().complete(routeThreadKey, queuedEntry.id);
       if (phase !== "running") {
-        queuedDrainAwaitingMessageByThreadRef.current.set(routeThreadKey, messageIdForSend);
+        const expiresAt = Date.now() + QUEUED_MESSAGE_ACKNOWLEDGEMENT_TIMEOUT_MS;
+        queuedDrainAwaitingMessageByThreadRef.current.set(routeThreadKey, {
+          messageId: messageIdForSend,
+          expiresAt,
+        });
+        scheduleQueuedDrainWake(expiresAt);
       }
     }
     sendInFlightRef.current = false;
@@ -6939,16 +6982,27 @@ function ChatViewContent(props: ChatViewProps) {
 
   useEffect(() => {
     if (phase === "running") return;
-    const awaitingMessageId = queuedDrainAwaitingMessageByThreadRef.current.get(routeThreadKey);
-    let awaitingPreviousMessageAcknowledgement = awaitingMessageId !== undefined;
-    if (awaitingMessageId) {
+    const awaitingMessage = queuedDrainAwaitingMessageByThreadRef.current.get(routeThreadKey);
+    let awaitingPreviousMessageAcknowledgement = awaitingMessage !== undefined;
+    if (awaitingMessage) {
+      const messageProjected =
+        activeThread?.messages.some((message) => message.id === awaitingMessage.messageId) ?? false;
+      if (phase !== "ready") return;
       if (
-        phase !== "ready" ||
-        !activeThread?.messages.some((message) => message.id === awaitingMessageId)
+        isQueuedMessageAcknowledgementPending({
+          messageProjected,
+          expiresAt: awaitingMessage.expiresAt,
+          now: Date.now(),
+        })
       ) {
+        scheduleQueuedDrainWake(awaitingMessage.expiresAt);
         return;
       }
       queuedDrainAwaitingMessageByThreadRef.current.delete(routeThreadKey);
+      if (queuedDrainWakeTimeoutRef.current !== null) {
+        clearTimeout(queuedDrainWakeTimeoutRef.current);
+        queuedDrainWakeTimeoutRef.current = null;
+      }
       awaitingPreviousMessageAcknowledgement = false;
     }
     const next = queuedComposerEntries[0];
@@ -6989,7 +7043,9 @@ function ChatViewContent(props: ChatViewProps) {
     isSendBusy,
     phase,
     queuedComposerEntries,
+    queuedDrainWakeTick,
     routeThreadKey,
+    scheduleQueuedDrainWake,
     threadDetailLoading,
   ]);
 

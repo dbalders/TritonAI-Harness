@@ -21,8 +21,9 @@ above the composer in FIFO order. You can queue multiple messages, reorder or re
 queued message at a time and waits for that turn to finish before sending the next. A failed queued
 message remains in the drawer with its error so you can retry it as a steer or remove it.
 
-The web and desktop queue belongs to the current app session. Reloading or closing the app clears it;
-drafts in the composer still use the normal persistent draft behavior.
+The web and desktop queue belongs to the current app session and drains while its task is open.
+Switching tasks pauses that queue until you return. Reloading or closing the app clears it; drafts in
+the composer still use the normal persistent draft behavior.
 
 You can attach images up to 10 MB. On servers that support file uploads, you can also
 attach videos, text files, PDFs, ZIP archives, and other files. Each file can be up to the limit advertised
