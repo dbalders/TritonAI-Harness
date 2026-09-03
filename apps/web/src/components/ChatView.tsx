@@ -7096,7 +7096,15 @@ function ChatViewContent(props: ChatViewProps) {
 
   const onSteerQueuedComposerEntry = useCallback(
     (entryId: string) => {
-      if (phase !== "running" || isSendBusy || isConnecting || !activeThread) return;
+      if (
+        phase !== "running" ||
+        isSendBusy ||
+        isConnecting ||
+        activeEnvironmentUnavailable ||
+        !activeThread
+      ) {
+        return;
+      }
       const entry = (
         useComposerQueueStore.getState().entriesByThreadKey[routeThreadKey] ?? []
       ).find((candidate) => candidate.id === entryId);
@@ -7116,7 +7124,7 @@ function ChatViewContent(props: ChatViewProps) {
             );
         });
     },
-    [activeThread, isConnecting, isSendBusy, phase, routeThreadKey],
+    [activeEnvironmentUnavailable, activeThread, isConnecting, isSendBusy, phase, routeThreadKey],
   );
 
   const onRemoveQueuedComposerEntry = useCallback(
@@ -8264,7 +8272,12 @@ function ChatViewContent(props: ChatViewProps) {
                               isServerThread ? (
                                 <QueuedComposerControl
                                   entries={queuedComposerEntries}
-                                  canSteer={phase === "running" && !isSendBusy && !isConnecting}
+                                  canSteer={
+                                    phase === "running" &&
+                                    !isSendBusy &&
+                                    !isConnecting &&
+                                    !activeEnvironmentUnavailable
+                                  }
                                   onSteer={onSteerQueuedComposerEntry}
                                   onRemove={onRemoveQueuedComposerEntry}
                                   onEdit={onEditQueuedComposerEntry}
