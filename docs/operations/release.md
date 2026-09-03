@@ -33,8 +33,9 @@ The workflow:
 2. verifies the controlled release is still a draft;
 3. runs `vp check`, typecheck, and the full test suite;
 4. builds a Linux `node-pty` binary for the packaged Windows WSL backend;
-5. validates the pinned Installer composition commit and managed-plugin ref/commit;
-6. asks the pinned Installer commit to prepare its reviewed production managed-plugin composition;
+5. validates the pinned Installer composition-producer commit;
+6. asks that Installer commit to resolve and prepare its reviewed, digest-bound production
+   managed-plugin catalog;
 7. aligns package versions in the isolated build checkout;
 8. builds the Windows x64 NSIS Harness artifact;
 9. selects signed Windows mode when all Azure inputs exist; with zero Azure inputs, selects unsigned
@@ -70,18 +71,20 @@ fail closed if the controlled release is no longer a draft.
 Repository variables:
 
 - `TRITONAI_INSTALLER_COMPOSITION_COMMIT`: exact 40-character Installer commit that produces the
-  managed-plugin composition.
-- `TRITONAI_PLUGINS_REF`: explicit branch or tag ref in `dbalders/TritonAI-Plugins`.
-- `TRITONAI_PLUGINS_COMMIT`: exact commit resolved by that ref.
+  managed-plugin composition. Its reviewed catalog supplies the exact Plugins ref, commit, package
+  selection, versions, and digests.
 - `TRITONAI_PLUGIN_CONFIGURATION_JSON`: bounded JSON object keyed by every package ID in the selected
   composition. Each plugin owns and validates its opaque configuration object.
 
-The workflow verifies the plugin checkout resolves to the pinned commit and detaches it before
-building. A preparation job uploads that exact composition before any provider code executes. A
-second, credential-free runner validates the immutable composition and emits a receipt binding its
-source, contents, and exact configuration. The Windows build consumes those two artifacts on a
-third fresh runner, verifies the receipt, and packages the composition without executing provider
-code. The final proof manifest is a required release asset.
+The pinned Installer catalog is the only production plugin selection authority. Its preparation
+step verifies that the catalog's Plugins ref resolves to the catalog's exact commit before staging
+the approved bytes. A preparation job uploads that exact composition before any provider code
+executes. A second, credential-free runner validates the immutable composition and emits a receipt
+binding its source, contents, and exact configuration. The Windows build consumes those two
+artifacts on a third fresh runner, verifies the receipt, and packages the composition without
+executing provider code. The final proof manifest is a required release asset. Because the
+composition is embedded in each Harness artifact, users who update Harness directly receive the
+same managed plugins without running TritonAI Installer.
 
 ## Windows signing
 
@@ -138,8 +141,8 @@ Only after these checks should the Installer vendor and publish the Harness asse
 
 - **Draft gate fails:** confirm the exact tag has an existing unpublished release and that nobody
   published it early.
-- **Plugin pin check fails:** verify all three downstream pin variables are exact and that the ref
-  resolves to the stated plugin commit.
+- **Plugin pin check fails:** verify the Installer composition commit is exact and that its catalog
+  Plugins ref still resolves to the catalog's stated commit.
 - **Windows signing fails:** verify every Azure value and the expected publisher Common Name.
 - **WSL backend artifact is missing:** rerun the Linux `node-pty` prerequisite and do not bypass the
   Windows build dependency.
