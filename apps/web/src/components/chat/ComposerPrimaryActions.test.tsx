@@ -248,10 +248,10 @@ describe("ComposerPrimaryActions", () => {
     expect(markup).toContain("bg-message-action text-message-action-foreground");
   });
 
-  it("replaces stop with steer while running once the composer has content", () => {
+  it("keeps stop beside steer while running once the composer has content", () => {
     const markup = renderRunningActions(true);
 
-    expect(markup).not.toContain('aria-label="Stop generation"');
+    expect(markup).toContain('aria-label="Stop generation"');
     expect(markup).toContain('aria-label="Steer active turn"');
   });
 
@@ -272,6 +272,7 @@ describe("ComposerPrimaryActions", () => {
   it("labels the active-turn action as queue when configured", () => {
     const markup = renderRunningActions(true, "queue");
 
+    expect(markup).toContain('aria-label="Stop generation"');
     expect(markup).toContain('aria-label="Queue message"');
   });
 });

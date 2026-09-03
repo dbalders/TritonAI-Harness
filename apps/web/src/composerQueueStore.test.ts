@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "vite-plus/test";
+import { MessageId } from "@t3tools/contracts";
 
 import { useComposerQueueStore, type QueuedComposerEntry } from "./composerQueueStore";
 
@@ -90,5 +91,49 @@ describe("composer queue store", () => {
     expect(
       useComposerQueueStore.getState().entriesByThreadKey["thread:a"]?.map((item) => item.id),
     ).toEqual(["one"]);
+  });
+
+  it("serializes dispatch work per thread without blocking other threads", () => {
+    const store = useComposerQueueStore.getState();
+
+    expect(store.claimDispatch("thread:a", "first")).toBe(true);
+    expect(useComposerQueueStore.getState().claimDispatch("thread:a", "second")).toBe(false);
+    expect(useComposerQueueStore.getState().claimDispatch("thread:b", "other")).toBe(true);
+
+    useComposerQueueStore
+      .getState()
+      .acknowledgeDispatch("thread:a", "first", MessageId.make("message-one"));
+    expect(useComposerQueueStore.getState().dispatchAcknowledgementByThreadKey["thread:a"]).toBe(
+      "message-one",
+    );
+
+    useComposerQueueStore.getState().releaseDispatch("thread:a", "second");
+    expect(useComposerQueueStore.getState().claimDispatch("thread:a", "second")).toBe(false);
+
+    useComposerQueueStore.getState().releaseDispatch("thread:a", "first");
+    expect(
+      useComposerQueueStore.getState().dispatchAcknowledgementByThreadKey["thread:a"],
+    ).toBeUndefined();
+    expect(useComposerQueueStore.getState().claimDispatch("thread:a", "second")).toBe(true);
+  });
+
+  it("retains the queue barrier until shared steers settle", () => {
+    const store = useComposerQueueStore.getState();
+    expect(store.claimDispatch("thread:a", "queue:one")).toBe(true);
+    store.acknowledgeDispatch("thread:a", "queue:one", MessageId.make("message-one"));
+
+    expect(store.beginSharedDispatch("thread:a", "queue:one")).toBe(true);
+    expect(store.beginSharedDispatch("thread:a", "wrong-owner")).toBe(false);
+    store.acknowledgeDispatch("thread:a", "queue:one", MessageId.make("steer-message"));
+    store.releaseDispatch("thread:a", "queue:one");
+
+    expect(useComposerQueueStore.getState().dispatchOwnerByThreadKey["thread:a"]).toBe("queue:one");
+    expect(useComposerQueueStore.getState().dispatchAcknowledgementByThreadKey["thread:a"]).toBe(
+      "steer-message",
+    );
+
+    store.endSharedDispatch("thread:a", "queue:one");
+    store.releaseDispatch("thread:a", "queue:one");
+    expect(useComposerQueueStore.getState().dispatchOwnerByThreadKey["thread:a"]).toBeUndefined();
   });
 });

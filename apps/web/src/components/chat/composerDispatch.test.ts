@@ -2,9 +2,9 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   canAutoDrainComposerQueue,
-  isQueuedMessageAcknowledgementPending,
+  isQueuedMessageTurnComplete,
+  queuedDispatchBlocksComposer,
   resolveComposerDispatchMode,
-  resolveQueuedDispatchTarget,
 } from "./composerDispatch";
 
 describe("resolveComposerDispatchMode", () => {
@@ -46,41 +46,40 @@ describe("resolveComposerDispatchMode", () => {
   });
 });
 
-describe("resolveQueuedDispatchTarget", () => {
-  const send = async () => {};
-
-  it("returns only the dispatch target bound to the routed thread", () => {
-    const target = { threadKey: "thread:a", send };
-
-    expect(resolveQueuedDispatchTarget("thread:a", target)).toBe(target);
-    expect(resolveQueuedDispatchTarget("thread:b", target)).toBeNull();
-    expect(resolveQueuedDispatchTarget("thread:a", null)).toBeNull();
-  });
-});
-
-describe("isQueuedMessageAcknowledgementPending", () => {
-  it("waits for projection only until the acknowledgement deadline", () => {
+describe("isQueuedMessageTurnComplete", () => {
+  it("requires the acknowledged message to belong to the finished latest turn", () => {
     expect(
-      isQueuedMessageAcknowledgementPending({
-        messageProjected: false,
-        expiresAt: 20_000,
-        now: 19_999,
+      isQueuedMessageTurnComplete({
+        messageTurnId: "turn:one",
+        latestTurn: { turnId: "turn:one", state: "completed" },
       }),
     ).toBe(true);
     expect(
-      isQueuedMessageAcknowledgementPending({
-        messageProjected: false,
-        expiresAt: 20_000,
-        now: 20_000,
+      isQueuedMessageTurnComplete({
+        messageTurnId: "turn:one",
+        latestTurn: { turnId: "turn:one", state: "running" },
       }),
     ).toBe(false);
     expect(
-      isQueuedMessageAcknowledgementPending({
-        messageProjected: true,
-        expiresAt: 20_000,
-        now: 10_000,
+      isQueuedMessageTurnComplete({
+        messageTurnId: "turn:one",
+        latestTurn: { turnId: "turn:two", state: "completed" },
       }),
     ).toBe(false);
+    expect(
+      isQueuedMessageTurnComplete({
+        messageTurnId: null,
+        latestTurn: { turnId: "turn:one", state: "completed" },
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("queuedDispatchBlocksComposer", () => {
+  it("keeps the acknowledgement barrier without disabling active-turn actions", () => {
+    expect(queuedDispatchBlocksComposer({ phase: "ready", dispatchInFlight: true })).toBe(true);
+    expect(queuedDispatchBlocksComposer({ phase: "running", dispatchInFlight: true })).toBe(false);
+    expect(queuedDispatchBlocksComposer({ phase: "ready", dispatchInFlight: false })).toBe(false);
   });
 });
 
