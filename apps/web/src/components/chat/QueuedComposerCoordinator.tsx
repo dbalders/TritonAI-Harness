@@ -14,13 +14,17 @@ import { revokeBlobPreviewUrl } from "../ChatView.logic";
 import { canAutoDrainComposerQueue, resolveQueuedAcknowledgement } from "./composerDispatch";
 import { dispatchQueuedComposerEntry } from "./dispatchQueuedComposerEntry";
 
+const EMPTY_QUEUED_COMPOSER_ENTRIES = [] as const;
+
 function QueuedThreadDrain({ threadKey }: { readonly threadKey: string }) {
   const threadRef = parseScopedThreadKey(threadKey);
   const thread = useThreadDetail(threadRef);
   const threadStatus = useThreadStatus(threadRef);
   const preparedConnection = usePreparedConnection(threadRef?.environmentId ?? null);
   const isEnvironmentConnected = Option.isSome(preparedConnection);
-  const entries = useComposerQueueStore((state) => state.entriesByThreadKey[threadKey] ?? []);
+  const entries = useComposerQueueStore(
+    (state) => state.entriesByThreadKey[threadKey] ?? EMPTY_QUEUED_COMPOSER_ENTRIES,
+  );
   const dispatchOwner = useComposerQueueStore((state) => state.dispatchOwnerByThreadKey[threadKey]);
   const acknowledgementMessageId = useComposerQueueStore(
     (state) => state.dispatchAcknowledgementByThreadKey[threadKey],
