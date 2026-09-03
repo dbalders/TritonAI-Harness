@@ -508,6 +508,16 @@ try {
   );
   assertContains(
     releaseWorkflow,
+    "prepare-plugins-vendor.js --production",
+    "Harness releases must use the pinned Installer catalog as the production plugin authority.",
+  );
+  assertDoesNotMatch(
+    releaseWorkflow,
+    /vars\.TRITONAI_PLUGINS_(?:REF|COMMIT)/u,
+    "Harness releases must not override the pinned Installer plugin catalog with duplicate repository variables.",
+  );
+  assertContains(
+    releaseWorkflow,
     "--plugin-validation-receipt",
     "The release build must verify its exact managed plugin validation receipt.",
   );

@@ -135,13 +135,9 @@ jobs:
         shell: bash
         env:
           INSTALLER_COMMIT: ${{ vars.TRITONAI_INSTALLER_COMPOSITION_COMMIT }}
-          PLUGINS_REF: ${{ vars.TRITONAI_PLUGINS_REF }}
-          PLUGINS_COMMIT: ${{ vars.TRITONAI_PLUGINS_COMMIT }}
         run: |
           set -euo pipefail
           [[ "$INSTALLER_COMMIT" =~ ^[a-f0-9]{40}$ ]]
-          [[ "$PLUGINS_COMMIT" =~ ^[a-f0-9]{40}$ ]]
-          [[ "$PLUGINS_REF" =~ ^refs/(heads|tags)/[A-Za-z0-9][A-Za-z0-9._/-]{0,180}$ ]]
 
       - name: Checkout pinned composition producer
         uses: actions/checkout@v6
@@ -152,29 +148,6 @@ jobs:
           persist-credentials: false
           path: .release-input/installer
 
-      - name: Checkout pinned plugin source
-        uses: actions/checkout@v6
-        with:
-          repository: dbalders/TritonAI-Plugins
-          ref: ${{ vars.TRITONAI_PLUGINS_REF }}
-          fetch-depth: 0
-          persist-credentials: false
-          path: .release-input/plugins
-
-      - name: Verify and detach pinned plugin source
-        shell: bash
-        working-directory: .release-input/plugins
-        env:
-          PLUGINS_REF: ${{ vars.TRITONAI_PLUGINS_REF }}
-          PLUGINS_COMMIT: ${{ vars.TRITONAI_PLUGINS_COMMIT }}
-        run: |
-          set -euo pipefail
-          actual_commit="$(git rev-parse HEAD)"
-          resolved_commit="$(git rev-parse "${PLUGINS_REF}^{commit}")"
-          [[ "$actual_commit" == "$PLUGINS_COMMIT" ]]
-          [[ "$resolved_commit" == "$PLUGINS_COMMIT" ]]
-          git checkout --detach "$PLUGINS_COMMIT"
-
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@v1
         with:
@@ -184,10 +157,6 @@ jobs:
 
       - name: Prepare pinned managed plugin composition
         shell: bash
-        env:
-          TRITONAI_PLUGINS_REF: ${{ vars.TRITONAI_PLUGINS_REF }}
-          TRITONAI_PLUGINS_COMMIT: ${{ vars.TRITONAI_PLUGINS_COMMIT }}
-          TRITONAI_PLUGINS_SOURCE: ${{ github.workspace }}/.release-input/plugins
         run: |
           set -euo pipefail
           npm --prefix .release-input/installer ci --ignore-scripts
