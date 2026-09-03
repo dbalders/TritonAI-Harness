@@ -101,13 +101,16 @@ describe("composer queue store", () => {
 
     useComposerQueueStore
       .getState()
-      .acknowledgeDispatch("thread:a", "first", MessageId.make("message-one"));
+      .acknowledgeDispatch("thread:a", "first", MessageId.make("message-one"), "turn-before");
     expect(useComposerQueueStore.getState().dispatchAcknowledgementByThreadKey["thread:a"]).toBe(
       "message-one",
     );
     expect(
       useComposerQueueStore.getState().dispatchAcknowledgementDeadlineByThreadKey["thread:a"],
     ).toBeGreaterThan(Date.now());
+    expect(useComposerQueueStore.getState().dispatchPreviousTurnIdByThreadKey["thread:a"]).toBe(
+      "turn-before",
+    );
 
     useComposerQueueStore.getState().releaseDispatch("thread:a", "second");
     expect(useComposerQueueStore.getState().claimDispatch("thread:a", "second")).toBe(false);
@@ -119,22 +122,38 @@ describe("composer queue store", () => {
     expect(
       useComposerQueueStore.getState().dispatchAcknowledgementDeadlineByThreadKey["thread:a"],
     ).toBeUndefined();
+    expect(
+      useComposerQueueStore.getState().dispatchPreviousTurnIdByThreadKey["thread:a"],
+    ).toBeUndefined();
     expect(useComposerQueueStore.getState().claimDispatch("thread:a", "second")).toBe(true);
   });
 
   it("retains the queue barrier until shared steers settle", () => {
     const store = useComposerQueueStore.getState();
     expect(store.claimDispatch("thread:a", "queue:one")).toBe(true);
-    store.acknowledgeDispatch("thread:a", "queue:one", MessageId.make("message-one"));
+    store.acknowledgeDispatch(
+      "thread:a",
+      "queue:one",
+      MessageId.make("message-one"),
+      "turn-before",
+    );
 
     expect(store.beginSharedDispatch("thread:a", "queue:one")).toBe(true);
     expect(store.beginSharedDispatch("thread:a", "wrong-owner")).toBe(false);
-    store.acknowledgeDispatch("thread:a", "queue:one", MessageId.make("steer-message"));
+    store.acknowledgeDispatch(
+      "thread:a",
+      "queue:one",
+      MessageId.make("steer-message"),
+      "turn-current",
+    );
     store.releaseDispatch("thread:a", "queue:one");
 
     expect(useComposerQueueStore.getState().dispatchOwnerByThreadKey["thread:a"]).toBe("queue:one");
     expect(useComposerQueueStore.getState().dispatchAcknowledgementByThreadKey["thread:a"]).toBe(
-      "steer-message",
+      "message-one",
+    );
+    expect(useComposerQueueStore.getState().dispatchPreviousTurnIdByThreadKey["thread:a"]).toBe(
+      "turn-before",
     );
 
     store.endSharedDispatch("thread:a", "queue:one");

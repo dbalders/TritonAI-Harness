@@ -44,8 +44,10 @@ describe("QueuedComposerControl", () => {
     expect(html).toContain("2 queued messages");
     expect(html.indexOf("First queued prompt")).toBeLessThan(html.indexOf("Second queued prompt"));
     expect(html).toContain("Steer queued message now");
-    expect(html).toContain("Edit queued message");
+    expect(html).toContain("Queued message actions");
     expect(html).toContain("Remove queued message");
+    expect(html).not.toContain("Edit queued message");
+    expect(html).not.toContain("Collapse queued messages");
     expect(html).not.toContain("Move queued message");
   });
 });

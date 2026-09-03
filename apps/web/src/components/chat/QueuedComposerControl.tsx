@@ -1,19 +1,22 @@
 import {
   CheckIcon,
   CornerUpRightIcon,
+  EllipsisIcon,
   ImageIcon,
   ListOrderedIcon,
   LoaderCircleIcon,
   PaperclipIcon,
   PencilIcon,
+  Trash2Icon,
   TriangleAlertIcon,
   XIcon,
 } from "lucide-react";
-import { useId, useState } from "react";
+import { useState } from "react";
 
 import type { QueuedComposerEntry } from "../../composerQueueStore";
 import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ComposerBanner } from "./ComposerBanner";
 
@@ -24,11 +27,9 @@ export function QueuedComposerControl(props: {
   readonly onRemove: (entryId: string) => void;
   readonly onEdit: (entryId: string, prompt: string) => void;
 }) {
-  const [expanded, setExpanded] = useState(true);
   const [editing, setEditing] = useState<{ readonly id: string; readonly prompt: string } | null>(
     null,
   );
-  const listId = useId();
 
   if (props.entries.length === 0) return null;
 
@@ -39,26 +40,10 @@ export function QueuedComposerControl(props: {
         aria-label={`${props.entries.length} queued message${props.entries.length === 1 ? "" : "s"}`}
         aria-live="polite"
         data-chat-composer-queued-messages="true"
+        className="p-1 pb-[calc(var(--chat-composer-attachment-overlap)+(--spacing(1)))] text-sm/5 [--composer-banner-icon-column:--spacing(6)]"
       >
-        <ComposerBanner.Row
-          render={<button type="button" />}
-          aria-label={expanded ? "Collapse queued messages" : "Expand queued messages"}
-          aria-expanded={expanded}
-          aria-controls={listId}
-          onPointerDown={(event) => event.preventDefault()}
-          onClick={() => setExpanded((value) => !value)}
-        >
-          <ComposerBanner.Icon>
-            <ListOrderedIcon />
-          </ComposerBanner.Icon>
-          <ComposerBanner.Content className="text-muted-foreground">Queued</ComposerBanner.Content>
-          <ComposerBanner.Actions>
-            <ComposerBanner.Count>{props.entries.length}</ComposerBanner.Count>
-            <ComposerBanner.ToggleIcon expanded={expanded} />
-          </ComposerBanner.Actions>
-        </ComposerBanner.Row>
-        <ComposerBanner.Scroll className={cn("max-h-40", !expanded && "hidden")}>
-          <ComposerBanner.Children render={<ol />} id={listId}>
+        <ComposerBanner.Scroll className="max-h-40">
+          <ComposerBanner.Children render={<ol />} aria-label="Queued messages" className="gap-0">
             {props.entries.map((entry) => {
               const busy = entry.status === "dispatching";
               const failed = entry.status === "failed";
@@ -68,7 +53,7 @@ export function QueuedComposerControl(props: {
                 <ComposerBanner.Row
                   render={<li />}
                   key={entry.id}
-                  className={cn("rounded-sm", failed && "bg-destructive/5")}
+                  className={cn("min-h-8 rounded-lg px-0.5", failed && "bg-destructive/5")}
                 >
                   <ComposerBanner.Icon aria-hidden={false}>
                     {busy ? (
@@ -91,9 +76,11 @@ export function QueuedComposerControl(props: {
                           aria-label={`${attachmentCount} attachment${attachmentCount === 1 ? "" : "s"}`}
                         />
                       )
-                    ) : null}
+                    ) : (
+                      <ListOrderedIcon aria-label="Queued message" />
+                    )}
                   </ComposerBanner.Icon>
-                  <ComposerBanner.Content className="text-foreground/80">
+                  <ComposerBanner.Content className="text-foreground">
                     {entry.images.slice(0, 3).map((image) => (
                       <img
                         key={image.id}
@@ -172,26 +159,10 @@ export function QueuedComposerControl(props: {
                             render={
                               <Button
                                 type="button"
-                                size="icon-xs"
-                                variant="ghost-muted"
-                                disabled={busy}
-                                aria-label="Edit queued message"
-                                onClick={() => setEditing({ id: entry.id, prompt: entry.prompt })}
-                              />
-                            }
-                          >
-                            <PencilIcon />
-                          </TooltipTrigger>
-                          <TooltipPopup side="top">Edit text</TooltipPopup>
-                        </Tooltip>
-                        <Tooltip>
-                          <TooltipTrigger
-                            render={
-                              <Button
-                                type="button"
-                                size="icon-xs"
+                                size="xs"
                                 variant="ghost-muted"
                                 disabled={!props.canSteer || busy}
+                                className="h-6 gap-1 px-1.5 font-normal"
                                 aria-label={
                                   failed
                                     ? "Retry queued message as steer"
@@ -201,7 +172,8 @@ export function QueuedComposerControl(props: {
                               />
                             }
                           >
-                            <CornerUpRightIcon />
+                            <CornerUpRightIcon className="size-3" />
+                            {failed ? "Retry" : "Steer"}
                           </TooltipTrigger>
                           <TooltipPopup side="top">
                             {failed ? "Retry as steer" : "Steer now"}
@@ -220,10 +192,33 @@ export function QueuedComposerControl(props: {
                               />
                             }
                           >
-                            <XIcon />
+                            <Trash2Icon />
                           </TooltipTrigger>
                           <TooltipPopup side="top">Remove</TooltipPopup>
                         </Tooltip>
+                        <Menu>
+                          <MenuTrigger
+                            disabled={busy}
+                            render={
+                              <Button
+                                type="button"
+                                size="icon-xs"
+                                variant="ghost-muted"
+                                aria-label="Queued message actions"
+                              />
+                            }
+                          >
+                            <EllipsisIcon />
+                          </MenuTrigger>
+                          <MenuPopup align="end">
+                            <MenuItem
+                              onClick={() => setEditing({ id: entry.id, prompt: entry.prompt })}
+                            >
+                              <PencilIcon />
+                              Edit text
+                            </MenuItem>
+                          </MenuPopup>
+                        </Menu>
                       </>
                     )}
                   </ComposerBanner.Actions>

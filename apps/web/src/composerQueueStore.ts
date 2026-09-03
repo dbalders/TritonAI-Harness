@@ -52,6 +52,7 @@ interface ComposerQueueState {
   readonly entriesByThreadKey: Readonly<Record<string, readonly QueuedComposerEntry[]>>;
   readonly dispatchOwnerByThreadKey: Readonly<Record<string, string>>;
   readonly dispatchAcknowledgementByThreadKey: Readonly<Record<string, MessageId>>;
+  readonly dispatchPreviousTurnIdByThreadKey: Readonly<Record<string, string | null>>;
   readonly dispatchAcknowledgementDeadlineByThreadKey: Readonly<Record<string, number>>;
   readonly sharedDispatchCountByThreadKey: Readonly<Record<string, number>>;
   enqueue: (threadKey: string, entry: QueuedComposerEntry) => void;
@@ -61,7 +62,12 @@ interface ComposerQueueState {
   complete: (threadKey: string, entryId: string) => void;
   markFailed: (threadKey: string, entryId: string, error: string) => void;
   claimDispatch: (threadKey: string, ownerId: string) => boolean;
-  acknowledgeDispatch: (threadKey: string, ownerId: string, messageId: MessageId) => void;
+  acknowledgeDispatch: (
+    threadKey: string,
+    ownerId: string,
+    messageId: MessageId,
+    previousTurnId: string | null,
+  ) => void;
   beginSharedDispatch: (threadKey: string, ownerId: string) => boolean;
   endSharedDispatch: (threadKey: string, ownerId: string) => void;
   releaseDispatch: (threadKey: string, ownerId: string) => void;
@@ -83,6 +89,7 @@ export const useComposerQueueStore = create<ComposerQueueState>((set, get) => ({
   entriesByThreadKey: {},
   dispatchOwnerByThreadKey: {},
   dispatchAcknowledgementByThreadKey: {},
+  dispatchPreviousTurnIdByThreadKey: {},
   dispatchAcknowledgementDeadlineByThreadKey: {},
   sharedDispatchCountByThreadKey: {},
   enqueue: (threadKey, entry) => {
@@ -164,13 +171,22 @@ export const useComposerQueueStore = create<ComposerQueueState>((set, get) => ({
     }));
     return true;
   },
-  acknowledgeDispatch: (threadKey, ownerId, messageId) => {
+  acknowledgeDispatch: (threadKey, ownerId, messageId, previousTurnId) => {
     set((state) => {
-      if (state.dispatchOwnerByThreadKey[threadKey] !== ownerId) return state;
+      if (
+        state.dispatchOwnerByThreadKey[threadKey] !== ownerId ||
+        state.dispatchAcknowledgementByThreadKey[threadKey] !== undefined
+      ) {
+        return state;
+      }
       return {
         dispatchAcknowledgementByThreadKey: {
           ...state.dispatchAcknowledgementByThreadKey,
           [threadKey]: messageId,
+        },
+        dispatchPreviousTurnIdByThreadKey: {
+          ...state.dispatchPreviousTurnIdByThreadKey,
+          [threadKey]: previousTurnId,
         },
         dispatchAcknowledgementDeadlineByThreadKey: {
           ...state.dispatchAcknowledgementDeadlineByThreadKey,
@@ -211,15 +227,20 @@ export const useComposerQueueStore = create<ComposerQueueState>((set, get) => ({
       const dispatchAcknowledgementByThreadKey = {
         ...state.dispatchAcknowledgementByThreadKey,
       };
+      const dispatchPreviousTurnIdByThreadKey = {
+        ...state.dispatchPreviousTurnIdByThreadKey,
+      };
       const dispatchAcknowledgementDeadlineByThreadKey = {
         ...state.dispatchAcknowledgementDeadlineByThreadKey,
       };
       delete dispatchOwnerByThreadKey[threadKey];
       delete dispatchAcknowledgementByThreadKey[threadKey];
+      delete dispatchPreviousTurnIdByThreadKey[threadKey];
       delete dispatchAcknowledgementDeadlineByThreadKey[threadKey];
       return {
         dispatchOwnerByThreadKey,
         dispatchAcknowledgementByThreadKey,
+        dispatchPreviousTurnIdByThreadKey,
         dispatchAcknowledgementDeadlineByThreadKey,
       };
     });
@@ -229,6 +250,7 @@ export const useComposerQueueStore = create<ComposerQueueState>((set, get) => ({
       entriesByThreadKey: {},
       dispatchOwnerByThreadKey: {},
       dispatchAcknowledgementByThreadKey: {},
+      dispatchPreviousTurnIdByThreadKey: {},
       dispatchAcknowledgementDeadlineByThreadKey: {},
       sharedDispatchCountByThreadKey: {},
     }),
