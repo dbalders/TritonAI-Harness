@@ -295,6 +295,12 @@ import {
 import { environmentShell } from "../state/shell";
 import { readPreparedConnection } from "../state/session";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
+import { QueuedComposerControl } from "./chat/QueuedComposerControl";
+import {
+  canAutoDrainComposerQueue,
+  type ComposerDispatchMode,
+  resolveQueuedDispatchTarget,
+} from "./chat/composerDispatch";
 import { DraftHeroHeadline } from "./chat/DraftHeroHeadline";
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
@@ -432,6 +438,7 @@ import {
   serverUpdateGuidance,
 } from "../versionSkew";
 import { resolveAssetUrl, useAssetUrls } from "../assets/assetUrls";
+import { useComposerQueueStore, type QueuedComposerEntry } from "../composerQueueStore";
 
 const ATTACHMENT_ONLY_BOOTSTRAP_PROMPT =
   "[User attached one or more files without additional text. Inspect the attached files and respond using the conversation context.]";
@@ -439,6 +446,7 @@ const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
 const EMPTY_PROVIDERS: ServerProvider[] = [];
 const EMPTY_PROVIDER_SKILLS: ServerProvider["skills"] = [];
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
+const EMPTY_QUEUED_COMPOSER_ENTRIES: readonly QueuedComposerEntry[] = [];
 function useDraftHeroLayoutTransition(isDraftHeroState: boolean) {
   const transitionGroupRef = useRef<HTMLDivElement | null>(null);
   const composerAnchorRef = useRef<HTMLDivElement | null>(null);
@@ -1522,6 +1530,9 @@ function ChatViewContent(props: ChatViewProps) {
     (store) => store.setInteractionMode,
   );
   const clearComposerDraftContent = useComposerDraftStore((store) => store.clearComposerContent);
+  const queuedComposerEntries = useComposerQueueStore(
+    (store) => store.entriesByThreadKey[routeThreadKey] ?? EMPTY_QUEUED_COMPOSER_ENTRIES,
+  );
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
   const getDraftSessionByLogicalProjectKey = useComposerDraftStore(
     (store) => store.getDraftSessionByLogicalProjectKey,
@@ -1535,6 +1546,11 @@ function ChatViewContent(props: ChatViewProps) {
   const composerFilesRef = useRef<ComposerFileAttachment[]>([]);
   const composerTerminalContextsRef = useRef<TerminalContextDraft[]>([]);
   const composerElementContextsRef = useRef<ElementContextDraft[]>([]);
+  const queuedDrainAwaitingMessageByThreadRef = useRef(new Map<string, MessageId>());
+  const queuedSendRef = useRef<{
+    readonly threadKey: string;
+    readonly send: (entry: QueuedComposerEntry, mode: ComposerDispatchMode) => Promise<void>;
+  } | null>(null);
   const localComposerRef = useRef<ChatComposerHandle | null>(null);
   const composerRef = useComposerHandleContext() ?? localComposerRef;
   const [isWorkspaceFileDragActive, setIsWorkspaceFileDragActive] = useState(false);
@@ -5795,12 +5811,18 @@ function ChatViewContent(props: ChatViewProps) {
   const onSend = async (
     e?: { preventDefault: () => void },
     submissionIntent: ComposerSubmissionIntent = "foreground",
+    dispatchMode: ComposerDispatchMode = "auto",
     directAnnotation?: {
       annotation: PreviewAnnotationPayload;
       image: ComposerImageAttachment | null;
     },
+    queuedEntry?: QueuedComposerEntry,
   ) => {
     e?.preventDefault();
+    const failQueuedEntry = (message: string) => {
+      if (!queuedEntry) return;
+      useComposerQueueStore.getState().markFailed(routeThreadKey, queuedEntry.id, message);
+    };
     const notifyDirectAnnotationAttached = () => {
       if (!directAnnotation) return;
       toastManager.add(
@@ -5821,6 +5843,7 @@ function ChatViewContent(props: ChatViewProps) {
       goalMutationInFlightRef.current
     ) {
       notifyDirectAnnotationAttached();
+      failQueuedEntry("The thread is not ready to send this queued message.");
       return;
     }
     if (activeEnvironmentUnavailable) {
@@ -5831,6 +5854,7 @@ function ChatViewContent(props: ChatViewProps) {
           description: "Reconnecting to the environment. Try again once it is connected.",
         }),
       );
+      failQueuedEntry("The environment is disconnected.");
       return;
     }
     if (activePendingProgress) {
@@ -5839,13 +5863,33 @@ function ChatViewContent(props: ChatViewProps) {
         return;
       }
       onAdvanceActivePendingUserInput();
+      failQueuedEntry("Answer the pending question before sending this queued message.");
       return;
     }
-    const sendCtx = composerRef.current?.getSendContext();
-    if (!sendCtx?.providerAvailable) {
+    const liveSendCtx = composerRef.current?.getSendContext();
+    if (!liveSendCtx?.providerAvailable) {
       notifyDirectAnnotationAttached();
+      failQueuedEntry("The selected provider is unavailable.");
       return;
     }
+    const sendCtx = queuedEntry
+      ? {
+          ...liveSendCtx,
+          images: [...queuedEntry.images],
+          files: [...queuedEntry.files],
+          terminalContexts: [...queuedEntry.terminalContexts],
+          elementContexts: [...queuedEntry.elementContexts],
+          previewAnnotations: [...queuedEntry.previewAnnotations],
+          reviewComments: [...queuedEntry.reviewComments],
+          selectedProvider: queuedEntry.selectedProvider,
+          supportsThreadGoals: queuedEntry.supportsThreadGoals,
+          goalArmed: queuedEntry.goalArmed,
+          selectedModel: queuedEntry.selectedModel,
+          selectedProviderModels: [...queuedEntry.selectedProviderModels],
+          selectedPromptEffort: queuedEntry.selectedPromptEffort,
+          selectedModelSelection: queuedEntry.selectedModelSelection,
+        }
+      : liveSendCtx;
     const {
       images: sendContextImages,
       files: composerFiles,
@@ -5893,7 +5937,9 @@ function ChatViewContent(props: ChatViewProps) {
             },
           ]
         : sendContextPreviewAnnotations;
-    const promptForSend = promptRef.current;
+    const promptForSend = queuedEntry?.prompt ?? promptRef.current;
+    const runtimeModeForSend = queuedEntry?.runtimeMode ?? runtimeMode;
+    const interactionModeForSend = queuedEntry?.interactionMode ?? interactionMode;
     const {
       trimmedPrompt: trimmed,
       sendableTerminalContexts: sendableComposerTerminalContexts,
@@ -6147,6 +6193,7 @@ function ChatViewContent(props: ChatViewProps) {
           }),
         );
       }
+      failQueuedEntry("The queued message no longer has sendable content.");
       return;
     }
     if (!activeProject) {
@@ -6157,6 +6204,40 @@ function ChatViewContent(props: ChatViewProps) {
           description: "This draft no longer points to an available project.",
         }),
       );
+      failQueuedEntry("The thread no longer points to an available project.");
+      return;
+    }
+    if (dispatchMode === "queue" && phase === "running" && !queuedEntry && !hasGoalComposerIntent) {
+      useComposerQueueStore.getState().enqueue(routeThreadKey, {
+        id: `queued-${randomHex(12)}`,
+        createdAt: new Date().toISOString(),
+        prompt: promptForSend,
+        images: [...composerImages],
+        files: [...composerFiles],
+        terminalContexts: [...sendableComposerTerminalContexts],
+        elementContexts: [...composerElementContexts],
+        previewAnnotations: [...composerPreviewAnnotations],
+        reviewComments: [...composerReviewComments],
+        selectedProvider: ctxSelectedProvider,
+        selectedInstanceId: ctxSelectedModelSelection.instanceId,
+        selectedModel: ctxSelectedModel,
+        selectedProviderModels: [...ctxSelectedProviderModels],
+        selectedPromptEffort: ctxSelectedPromptEffort,
+        selectedModelSelection: ctxSelectedModelSelection,
+        supportsThreadGoals: ctxSupportsThreadGoals,
+        goalArmed: goalModeArmed,
+        runtimeMode,
+        interactionMode,
+        status: "queued",
+        error: null,
+      });
+      promptRef.current = "";
+      composerImagesRef.current = [];
+      composerFilesRef.current = [];
+      composerTerminalContextsRef.current = [];
+      composerElementContextsRef.current = [];
+      clearComposerDraftContent(composerDraftTarget);
+      composerRef.current?.resetCursorState();
       return;
     }
     if (goalObjective && activeGoal) {
@@ -6202,8 +6283,8 @@ function ChatViewContent(props: ChatViewProps) {
                       projectId: activeProject.id,
                       title,
                       modelSelection: goalModelSelection,
-                      runtimeMode,
-                      interactionMode,
+                      runtimeMode: runtimeModeForSend,
+                      interactionMode: interactionModeForSend,
                       branch: activeThreadBranch,
                       worktreePath: activeThread.worktreePath,
                       createdAt: activeThread.createdAt,
@@ -6264,8 +6345,8 @@ function ChatViewContent(props: ChatViewProps) {
             threadId: threadIdForSend,
             createdAt,
             modelSelection: ctxSelectedModelSelection,
-            runtimeMode,
-            interactionMode,
+            runtimeMode: runtimeModeForSend,
+            interactionMode: interactionModeForSend,
           });
           if (settingsResult._tag === "Failure") failure = settingsResult;
         }
@@ -6363,6 +6444,7 @@ function ChatViewContent(props: ChatViewProps) {
       text: messageTextForSend || ATTACHMENT_ONLY_BOOTSTRAP_PROMPT,
     });
     if (composerRef.current?.validateProviderInput(outgoingMessageText) === false) {
+      failQueuedEntry("The queued message is not valid for the selected provider.");
       return;
     }
 
@@ -6387,6 +6469,7 @@ function ChatViewContent(props: ChatViewProps) {
     if (attachmentCapabilitiesBeforeUpload.fileBlockReason !== null) {
       sendInFlightRef.current = false;
       setThreadError(threadIdForSend, attachmentCapabilitiesBeforeUpload.fileBlockReason);
+      failQueuedEntry(attachmentCapabilitiesBeforeUpload.fileBlockReason);
       return;
     }
     const turnUsesAttachmentUploads = attachmentCapabilitiesBeforeUpload.supportsAttachmentUploads;
@@ -6407,11 +6490,13 @@ function ChatViewContent(props: ChatViewProps) {
       if (attachmentCapabilitiesAfterUpload.fileBlockReason !== null) {
         sendInFlightRef.current = false;
         setThreadError(threadIdForSend, attachmentCapabilitiesAfterUpload.fileBlockReason);
+        failQueuedEntry(attachmentCapabilitiesAfterUpload.fileBlockReason);
         return;
       }
       if (getUploadedAttachments({ environmentId, images: attachmentsRequiringUpload }) === null) {
         sendInFlightRef.current = false;
         setThreadError(threadIdForSend, "Retry or remove failed uploads before sending.");
+        failQueuedEntry("Retry or remove failed uploads before sending.");
         return;
       }
     }
@@ -6448,6 +6533,7 @@ function ChatViewContent(props: ChatViewProps) {
       setDockedDraftHeroThreadKey((currentThreadKey) =>
         currentThreadKey === activeThreadKey ? null : currentThreadKey,
       );
+      failQueuedEntry(attachmentCapabilitiesBeforeDispatch.fileBlockReason);
       return;
     }
     beginLocalDispatch({
@@ -6556,10 +6642,12 @@ function ChatViewContent(props: ChatViewProps) {
         }),
       );
     }
-    promptRef.current = "";
-    clearComposerDraftContent(composerDraftTarget);
-    composerFilesRef.current = [];
-    composerRef.current?.resetCursorState();
+    if (!queuedEntry) {
+      promptRef.current = "";
+      clearComposerDraftContent(composerDraftTarget);
+      composerFilesRef.current = [];
+      composerRef.current?.resetCursorState();
+    }
 
     let firstComposerImageName: string | null = null;
     if (composerImagesSnapshot.length > 0) {
@@ -6612,8 +6700,8 @@ function ChatViewContent(props: ChatViewProps) {
         ...(localCheckoutBranchMismatch
           ? { branch: localCheckoutBranchMismatch.currentBranch }
           : {}),
-        runtimeMode,
-        interactionMode,
+        runtimeMode: runtimeModeForSend,
+        interactionMode: interactionModeForSend,
       });
       if (settingsResult._tag === "Failure") {
         failure = settingsResult;
@@ -6643,8 +6731,8 @@ function ChatViewContent(props: ChatViewProps) {
                       projectId: activeProject.id,
                       title,
                       modelSelection: threadCreateModelSelection,
-                      runtimeMode,
-                      interactionMode,
+                      runtimeMode: runtimeModeForSend,
+                      interactionMode: interactionModeForSend,
                       branch: activeThreadBranch,
                       worktreePath: activeThread.worktreePath,
                       createdAt: activeThread.createdAt,
@@ -6683,8 +6771,8 @@ function ChatViewContent(props: ChatViewProps) {
           },
           modelSelection: ctxSelectedModelSelection,
           titleSeed: title,
-          runtimeMode,
-          interactionMode,
+          runtimeMode: runtimeModeForSend,
+          interactionMode: interactionModeForSend,
           ...(bootstrap ? { bootstrap } : {}),
           createdAt: messageCreatedAt,
         },
@@ -6751,7 +6839,19 @@ function ChatViewContent(props: ChatViewProps) {
     }
 
     if (failure !== null) {
-      if (
+      if (queuedEntry) {
+        setOptimisticUserMessages((existing) => {
+          return existing.filter((message) => message.id !== messageIdForSend);
+        });
+        const queuedError = squashAtomCommandFailure(failure);
+        useComposerQueueStore
+          .getState()
+          .markFailed(
+            routeThreadKey,
+            queuedEntry.id,
+            queuedError instanceof Error ? queuedError.message : "Failed to send queued message.",
+          );
+      } else if (
         promptRef.current.length === 0 &&
         composerImagesRef.current.length === 0 &&
         composerFilesRef.current.length === 0 &&
@@ -6810,6 +6910,11 @@ function ChatViewContent(props: ChatViewProps) {
           error instanceof Error ? error.message : "Failed to send message.",
         );
       }
+    } else if (queuedEntry && turnStartSucceeded) {
+      useComposerQueueStore.getState().complete(routeThreadKey, queuedEntry.id);
+      if (phase !== "running") {
+        queuedDrainAwaitingMessageByThreadRef.current.set(routeThreadKey, messageIdForSend);
+      }
     }
     sendInFlightRef.current = false;
     if (!turnStartSucceeded) {
@@ -6819,6 +6924,125 @@ function ChatViewContent(props: ChatViewProps) {
       resetLocalDispatch();
     }
   };
+
+  useLayoutEffect(() => {
+    const target = {
+      threadKey: routeThreadKey,
+      send: (entry: QueuedComposerEntry, mode: ComposerDispatchMode) =>
+        onSend(undefined, "foreground", mode, undefined, entry),
+    };
+    queuedSendRef.current = target;
+    return () => {
+      if (queuedSendRef.current === target) queuedSendRef.current = null;
+    };
+  });
+
+  useEffect(() => {
+    if (phase === "running") return;
+    const awaitingMessageId = queuedDrainAwaitingMessageByThreadRef.current.get(routeThreadKey);
+    let awaitingPreviousMessageAcknowledgement = awaitingMessageId !== undefined;
+    if (awaitingMessageId) {
+      if (
+        phase !== "ready" ||
+        !activeThread?.messages.some((message) => message.id === awaitingMessageId)
+      ) {
+        return;
+      }
+      queuedDrainAwaitingMessageByThreadRef.current.delete(routeThreadKey);
+      awaitingPreviousMessageAcknowledgement = false;
+    }
+    const next = queuedComposerEntries[0];
+    if (
+      !canAutoDrainComposerQueue({
+        phase,
+        isSendBusy,
+        isConnecting,
+        isThreadDetailLoading: threadDetailLoading,
+        hasPendingUserInput: activePendingProgress !== null,
+        awaitingPreviousMessageAcknowledgement,
+        firstEntryStatus: next?.status ?? null,
+      }) ||
+      !next
+    ) {
+      return;
+    }
+    const dispatchTarget = resolveQueuedDispatchTarget(routeThreadKey, queuedSendRef.current);
+    if (
+      !dispatchTarget ||
+      !useComposerQueueStore.getState().markDispatching(routeThreadKey, next.id)
+    ) {
+      return;
+    }
+    void dispatchTarget.send(next, "auto").catch((error: unknown) => {
+      useComposerQueueStore
+        .getState()
+        .markFailed(
+          routeThreadKey,
+          next.id,
+          error instanceof Error ? error.message : "Failed to send queued message.",
+        );
+    });
+  }, [
+    activePendingProgress,
+    activeThread,
+    isConnecting,
+    isSendBusy,
+    phase,
+    queuedComposerEntries,
+    routeThreadKey,
+    threadDetailLoading,
+  ]);
+
+  const onSteerQueuedComposerEntry = useCallback(
+    (entryId: string) => {
+      if (phase !== "running" || isSendBusy || isConnecting) return;
+      const entry = (
+        useComposerQueueStore.getState().entriesByThreadKey[routeThreadKey] ?? []
+      ).find((candidate) => candidate.id === entryId);
+      if (!entry) return;
+      const dispatchTarget = resolveQueuedDispatchTarget(routeThreadKey, queuedSendRef.current);
+      if (
+        !dispatchTarget ||
+        !useComposerQueueStore.getState().markDispatching(routeThreadKey, entryId)
+      ) {
+        return;
+      }
+      void dispatchTarget.send(entry, "steer").catch((error: unknown) => {
+        useComposerQueueStore
+          .getState()
+          .markFailed(
+            routeThreadKey,
+            entryId,
+            error instanceof Error ? error.message : "Failed to steer queued message.",
+          );
+      });
+    },
+    [isConnecting, isSendBusy, phase, routeThreadKey],
+  );
+
+  const onRemoveQueuedComposerEntry = useCallback(
+    (entryId: string) => {
+      const removed = useComposerQueueStore.getState().remove(routeThreadKey, entryId);
+      if (!removed) return;
+      releaseDraftAttachments([...removed.images, ...removed.files]);
+      for (const image of removed.images) revokeBlobPreviewUrl(image.previewUrl);
+    },
+    [routeThreadKey],
+  );
+
+  const onMoveQueuedComposerEntry = useCallback(
+    (entryId: string, offset: -1 | 1) => {
+      useComposerQueueStore.getState().move(routeThreadKey, entryId, offset);
+    },
+    [routeThreadKey],
+  );
+
+  const onEditQueuedComposerEntry = useCallback(
+    (entryId: string, prompt: string) => {
+      useComposerQueueStore.getState().updatePrompt(routeThreadKey, entryId, prompt);
+    },
+    [routeThreadKey],
+  );
 
   const onInterrupt = async () => {
     if (!activeThread) return;
@@ -7534,7 +7758,7 @@ function ChatViewContent(props: ChatViewProps) {
           configuredUrls={configuredPreviewUrls}
           visible
           onSendAnnotation={(annotation, image) => {
-            void onSend(undefined, "foreground", { annotation, image });
+            void onSend(undefined, "foreground", "auto", { annotation, image });
           }}
         />
       </Suspense>
@@ -7880,6 +8104,18 @@ function ChatViewContent(props: ChatViewProps) {
                                   : null
                             }
                             isPreparingWorktree={isPreparingWorktree}
+                            queuedMessagesControl={
+                              isServerThread ? (
+                                <QueuedComposerControl
+                                  entries={queuedComposerEntries}
+                                  canSteer={phase === "running" && !isSendBusy && !isConnecting}
+                                  onSteer={onSteerQueuedComposerEntry}
+                                  onRemove={onRemoveQueuedComposerEntry}
+                                  onMove={onMoveQueuedComposerEntry}
+                                  onEdit={onEditQueuedComposerEntry}
+                                />
+                              ) : null
+                            }
                             bannerItems={composerBannerItems}
                             environmentUnavailable={activeEnvironmentUnavailableState}
                             activePendingApproval={activePendingApproval}
