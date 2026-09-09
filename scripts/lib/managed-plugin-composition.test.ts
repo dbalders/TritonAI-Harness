@@ -27,6 +27,44 @@ afterEach(() => {
 });
 
 describe("managed plugin release composition", () => {
+  it.each(["refs/heads/main", "refs/tags/plugins-v1.0.1", "a".repeat(40)])(
+    "accepts an exact release source selected by %s",
+    (ref) => {
+      const sourceRoot = makeCompositionFixture();
+      const manifestPath = NodePath.join(sourceRoot, "manifest.json");
+      const manifest = JSON.parse(NodeFS.readFileSync(manifestPath, "utf8"));
+      manifest.source.ref = ref;
+      NodeFS.writeFileSync(manifestPath, JSON.stringify(manifest));
+
+      expect(readManagedPluginComposition(sourceRoot).source).toMatchObject({
+        ref,
+        commit: "a".repeat(40),
+      });
+    },
+  );
+
+  it.each([
+    "main",
+    "a".repeat(7),
+    "A".repeat(40),
+    "refs/heads/../main",
+    "refs/heads/main@{1}",
+    "refs/heads//main",
+    "refs/heads/main;echo unsafe",
+    "a".repeat(40) + "^",
+    "b".repeat(40),
+  ])("rejects an unsafe or inconsistent release source ref %s", (ref) => {
+    const sourceRoot = makeCompositionFixture();
+    const manifestPath = NodePath.join(sourceRoot, "manifest.json");
+    const manifest = JSON.parse(NodeFS.readFileSync(manifestPath, "utf8"));
+    manifest.source.ref = ref;
+    NodeFS.writeFileSync(manifestPath, JSON.stringify(manifest));
+
+    expect(() => readManagedPluginComposition(sourceRoot)).toThrow(
+      /safe Git ref|must match its pinned commit/u,
+    );
+  });
+
   it("accepts a novel plugin only when the exact release composition selects it", () => {
     const composition = readManagedPluginComposition(
       makeCompositionFixture(
