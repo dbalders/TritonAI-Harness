@@ -13,6 +13,7 @@ import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { vi } from "vite-plus/test";
+import { parse as parseYaml } from "yaml";
 
 import {
   ancestorNodeModulesPaths,
@@ -692,6 +693,33 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       [],
     );
   });
+
+  it.effect("enables Windows native deployment from either Mac host architecture", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const repoRoot = yield* path.fromFileUrl(new URL("..", import.meta.url));
+      const source = yield* fs.readFileString(path.join(repoRoot, "pnpm-workspace.yaml"));
+      const workspace = parseYaml(source) as {
+        supportedArchitectures: Parameters<
+          typeof findMissingRuntimeDeploymentArchitectures
+        >[0]["configured"];
+      };
+
+      for (const hostArch of ["arm64", "x64"] as const) {
+        assert.deepStrictEqual(
+          findMissingRuntimeDeploymentArchitectures({
+            configured: workspace.supportedArchitectures,
+            hostPlatform: "darwin",
+            hostArch,
+            targetPlatform: "win",
+            targetArch: "x64",
+          }),
+          [],
+        );
+      }
+    }),
+  );
 
   it("stages pnpm 11 allowBuilds and patchedDependencies in the workspace yaml", () => {
     assert.deepStrictEqual(
