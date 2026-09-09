@@ -371,7 +371,7 @@ export function readManagedPluginComposition(sourceRoot: string): ManagedPluginC
   }
   if (
     typeof value.source.ref !== "string" ||
-    !SAFE_REF.test(value.source.ref) ||
+    (!SAFE_REF.test(value.source.ref) && !COMMIT.test(value.source.ref)) ||
     value.source.ref.includes("..") ||
     value.source.ref.includes("@{") ||
     value.source.ref.includes("//") ||
@@ -379,6 +379,9 @@ export function readManagedPluginComposition(sourceRoot: string): ManagedPluginC
     !COMMIT.test(value.source.commit)
   ) {
     throw new Error("Managed plugin composition must pin a safe Git ref and full commit SHA.");
+  }
+  if (COMMIT.test(value.source.ref) && value.source.ref !== value.source.commit) {
+    throw new Error("Managed plugin composition SHA ref must match its pinned commit.");
   }
   if (!Array.isArray(value.packages) || value.packages.length === 0) {
     throw new Error("Managed plugin composition must select at least one production package.");

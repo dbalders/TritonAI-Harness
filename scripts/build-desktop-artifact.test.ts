@@ -12,6 +12,7 @@ import * as Path from "effect/Path";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { vi } from "vite-plus/test";
 
 import {
   ancestorNodeModulesPaths,
@@ -199,6 +200,9 @@ it("builds the server from the frozen managed plugin snapshot and validated conf
       TRITONAI_PLUGIN_COMPOSITION_SOURCE: "/moving/source",
       TRITONAI_PLUGIN_CONFIGURATION_JSON: '{"stale":true}',
       AZURE_CLIENT_SECRET: "must-not-reach-the-source-build",
+      ELECTRON_RUN_AS_NODE: "1",
+      Electron_Run_As_Node: "1",
+      electron_run_as_node: "1",
       KEEP_ME: "yes",
     },
     {
@@ -213,6 +217,9 @@ it("builds the server from the frozen managed plugin snapshot and validated conf
     '{"microsoft-365":{"clientId":"public-client"}}',
   );
   assert.notProperty(environment, "AZURE_CLIENT_SECRET");
+  assert.notProperty(environment, "ELECTRON_RUN_AS_NODE");
+  assert.notProperty(environment, "Electron_Run_As_Node");
+  assert.notProperty(environment, "electron_run_as_node");
   assert.equal(environment.KEEP_ME, "yes");
 });
 
@@ -1180,13 +1187,22 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     return Effect.scoped(
       Effect.gen(function* () {
         const path = yield* Path.Path;
+        yield* Effect.addFinalizer(() => Effect.sync(() => vi.unstubAllEnvs()));
+        vi.stubEnv("Electron_Run_As_Node", "1");
+        vi.stubEnv("Electron_No_Asar", "1");
+        vi.stubEnv("Node_Options", "--require=ambient-hook.cjs");
+        vi.stubEnv("Node_Path", "/ambient/node_modules");
         const fixture = yield* makeWindowsPayloadFixture({ copyUnpackedNatives: true });
-        yield* validateWindowsPackagedPayload({
+        const result = yield* validateWindowsPackagedPayload({
           stageDistDir: fixture.stageDistDir,
           appExecutableName: fixture.appExecutableName,
           targetArch: "x64",
         });
 
+        assert.deepStrictEqual(result.runtimeChecks, {
+          windowsPrimaryNativeLoad: "passed",
+          sidecarSelfContainment: "passed",
+        });
         const primaryProbe = commands.find(
           (command) => command.options.env?.ELECTRON_RUN_AS_NODE === "1",
         );
@@ -1211,51 +1227,25 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         );
         assert.equal(primaryProbe.options.cwd, fixture.packagedAppDir);
         assert.equal(primaryProbe.options.env?.NODE_PATH, "");
-      }),
-    ).pipe(
-      Effect.provide(
-        Layer.mergeAll(
-          spawnerLayer,
-          Layer.succeed(HostProcessPlatform, "win32"),
-          Layer.succeed(HostProcessArchitecture, "x64"),
-        ),
-      ),
-    );
-  });
-
-  it.effect("skips the primary native probe for cross-architecture Windows payloads", () => {
-    const commands: Array<{
-      readonly command: string;
-      readonly options: {
-        readonly env?: Readonly<Record<string, string | undefined>>;
-      };
-    }> = [];
-    const spawnerLayer = Layer.succeed(
-      ChildProcessSpawner.ChildProcessSpawner,
-      ChildProcessSpawner.make((command) => {
-        commands.push(command as unknown as (typeof commands)[number]);
-        return Effect.succeed(mockProcess(0));
-      }),
-    );
-
-    return Effect.scoped(
-      Effect.gen(function* () {
-        const fixture = yield* makeWindowsPayloadFixture({ copyUnpackedNatives: true });
-        yield* validateWindowsPackagedPayload({
-          stageDistDir: fixture.stageDistDir,
-          appExecutableName: fixture.appExecutableName,
-          targetArch: "arm64",
-        });
-
-        assert.isFalse(
-          commands.some((command) => command.options.env?.ELECTRON_RUN_AS_NODE === "1"),
+        assert.deepStrictEqual(
+          Object.keys(primaryProbe.options.env ?? {})
+            .filter((key) =>
+              ["ELECTRON_RUN_AS_NODE", "ELECTRON_NO_ASAR", "NODE_OPTIONS", "NODE_PATH"].includes(
+                key.toUpperCase(),
+              ),
+            )
+            .sort(),
+          ["ELECTRON_RUN_AS_NODE", "NODE_PATH"],
         );
-        assert.isTrue(
-          commands.some(
-            (command) =>
-              command.command === process.execPath && command.options.env?.NODE_PATH === "",
+        const sidecarProbe = commands.find((command) => command.args.includes("--version"));
+        if (sidecarProbe === undefined) return assert.fail("Server sidecar probe was not spawned");
+        assert.deepStrictEqual(
+          Object.keys(sidecarProbe.options.env ?? {}).filter((key) =>
+            ["ELECTRON_RUN_AS_NODE", "NODE_OPTIONS", "NODE_PATH"].includes(key.toUpperCase()),
           ),
+          ["NODE_PATH"],
         );
+        assert.equal(sidecarProbe.options.env?.NODE_PATH, "");
       }),
     ).pipe(
       Effect.provide(
@@ -1267,6 +1257,64 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       ),
     );
   });
+
+  for (const { hostPlatform, hostArch, targetArch, sidecarCheck } of [
+    { hostPlatform: "win32", hostArch: "x64", targetArch: "arm64", sidecarCheck: "skipped" },
+    { hostPlatform: "darwin", hostArch: "arm64", targetArch: "x64", sidecarCheck: "skipped" },
+    { hostPlatform: "darwin", hostArch: "x64", targetArch: "x64", sidecarCheck: "skipped" },
+    { hostPlatform: "linux", hostArch: "arm64", targetArch: "x64", sidecarCheck: "skipped" },
+    { hostPlatform: "linux", hostArch: "x64", targetArch: "x64", sidecarCheck: "passed" },
+  ] as const) {
+    it.effect(`reports Windows/${targetArch} runtime checks on ${hostPlatform}/${hostArch}`, () => {
+      const commands: Array<{
+        readonly command: string;
+        readonly options: {
+          readonly env?: Readonly<Record<string, string | undefined>>;
+        };
+      }> = [];
+      const spawnerLayer = Layer.succeed(
+        ChildProcessSpawner.ChildProcessSpawner,
+        ChildProcessSpawner.make((command) => {
+          commands.push(command as unknown as (typeof commands)[number]);
+          return Effect.succeed(mockProcess(0));
+        }),
+      );
+
+      return Effect.scoped(
+        Effect.gen(function* () {
+          const fixture = yield* makeWindowsPayloadFixture({ copyUnpackedNatives: true });
+          const result = yield* validateWindowsPackagedPayload({
+            stageDistDir: fixture.stageDistDir,
+            appExecutableName: fixture.appExecutableName,
+            targetArch,
+          });
+
+          assert.deepStrictEqual(result.runtimeChecks, {
+            windowsPrimaryNativeLoad: "skipped",
+            sidecarSelfContainment: sidecarCheck,
+          });
+          assert.isFalse(
+            commands.some((command) => command.options.env?.ELECTRON_RUN_AS_NODE === "1"),
+          );
+          assert.equal(
+            commands.some(
+              (command) =>
+                command.command === process.execPath && command.options.env?.NODE_PATH === "",
+            ),
+            sidecarCheck === "passed",
+          );
+        }),
+      ).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            spawnerLayer,
+            Layer.succeed(HostProcessPlatform, hostPlatform),
+            Layer.succeed(HostProcessArchitecture, hostArch),
+          ),
+        ),
+      );
+    });
+  }
 
   it.effect("rejects a cross-architecture Windows payload without its primary executable", () =>
     Effect.scoped(
@@ -1391,7 +1439,11 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           stageDistDir: fixture.stageDistDir,
           appExecutableName: fixture.appExecutableName,
           targetArch: "x64",
-        }).pipe(Effect.flip);
+        }).pipe(
+          Effect.provideService(HostProcessPlatform, "linux"),
+          Effect.provideService(HostProcessArchitecture, "x64"),
+          Effect.flip,
+        );
 
         assert.instanceOf(error, BundleNotSelfContainedError);
         assert.include(error.output, "t3code-deliberately-missing-package");

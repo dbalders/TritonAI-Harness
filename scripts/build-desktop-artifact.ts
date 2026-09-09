@@ -1047,6 +1047,13 @@ export const RUNTIME_DEPLOY_ARGS = [
   "--frozen-lockfile",
 ] as const;
 
+function removeEnvironmentKeys(environment: NodeJS.ProcessEnv, names: ReadonlyArray<string>): void {
+  const excluded = new Set(names.map((name) => name.toUpperCase()));
+  for (const key of Object.keys(environment)) {
+    if (excluded.has(key.toUpperCase())) delete environment[key];
+  }
+}
+
 export function createDesktopSourceBuildEnvironment(
   baseEnv: NodeJS.ProcessEnv,
   managedPluginInput: {
@@ -1055,6 +1062,7 @@ export function createDesktopSourceBuildEnvironment(
   } | null,
 ): NodeJS.ProcessEnv {
   const buildEnvironment: NodeJS.ProcessEnv = { ...baseEnv };
+  removeEnvironmentKeys(buildEnvironment, ["ELECTRON_RUN_AS_NODE"]);
   if (managedPluginInput) {
     buildEnvironment[PRODUCTION_PLUGIN_SOURCE_ENV] = managedPluginInput.sourceRoot;
     buildEnvironment[PRODUCTION_PLUGIN_CONFIGURATION_ENV] =
@@ -2275,7 +2283,13 @@ export const copyDirectoryPreservingSymlinks = Effect.fn("copyDirectoryPreservin
 );
 
 const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBundleIsSelfContained")(
-  function* (input: { readonly asarPath: string; readonly verbose: boolean }) {
+  function* (input: {
+    readonly asarPath: string;
+    readonly targetArch: typeof BuildArch.Type;
+    readonly verbose: boolean;
+  }) {
+    const hostPlatform = yield* HostProcessPlatform;
+    const hostArchitecture = yield* HostProcessArchitecture;
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
 
@@ -2296,6 +2310,19 @@ const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBundleIsSel
     // is hoisted and should be physical. A future package-manager layout change
     // must not let the probe resolve through the build tree.
     yield* copyDirectoryPreservingSymlinks(extractedApp, probeApp);
+
+    // The Windows sidecar includes Windows and WSL natives only. Keep archive
+    // extraction and link validation above, but execute its module graph only
+    // on a host that can load one of those native dependency sets.
+    if (
+      (hostPlatform !== "win32" && hostPlatform !== "linux") ||
+      hostArchitecture !== input.targetArch
+    ) {
+      yield* Effect.log(
+        `[desktop-artifact] Skipped server sidecar runtime check on ${hostPlatform}/${hostArchitecture}; requires win32/${input.targetArch} or linux/${input.targetArch}.`,
+      );
+      return "skipped" as const;
+    }
 
     // Guard the guard: if anything above the probe provides a node_modules, a
     // missing dependency would resolve there and the check would pass while the
@@ -2323,6 +2350,9 @@ const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBundleIsSel
     // by the WSL preflight probe at runtime, while ffi-rs, @ff-labs/fff-node
     // and the bun adapters are covered by the shared runtime-external closure
     // and emitted-bundle checks.
+    const probeEnv: NodeJS.ProcessEnv = { ...process.env };
+    removeEnvironmentKeys(probeEnv, ["NODE_OPTIONS", "ELECTRON_RUN_AS_NODE", "NODE_PATH"]);
+    probeEnv.NODE_PATH = "";
     yield* runCommand(
       ChildProcess.make(
         process.execPath,
@@ -2338,7 +2368,7 @@ const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBundleIsSel
           // NODE_PATH would let a createRequire call inside the bundle resolve
           // a missing external from outside the packaged tree, which is the
           // whole thing this is trying to rule out.
-          env: { ...process.env, NODE_PATH: "" },
+          env: probeEnv,
         },
       ),
       {
@@ -2367,6 +2397,7 @@ const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBundleIsSel
         ),
       ),
     );
+    return "passed" as const;
   },
 );
 
@@ -3450,7 +3481,12 @@ export const verifyWindowsPrimaryFffNativeLoad = Effect.fn(
       output: "The unpacked application does not contain its expected primary executable.",
     });
   }
-  if (hostPlatform !== "win32" || hostArchitecture !== input.targetArch) return;
+  if (hostPlatform !== "win32" || hostArchitecture !== input.targetArch) {
+    yield* Effect.log(
+      `[desktop-artifact] Skipped Windows primary runtime check on ${hostPlatform}/${hostArchitecture}; requires Windows/${input.targetArch}.`,
+    );
+    return "skipped" as const;
+  }
 
   const probeRoot = yield* fs.makeTempDirectoryScoped({
     prefix: "t3code-windows-primary-native-probe-",
@@ -3460,8 +3496,12 @@ export const verifyWindowsPrimaryFffNativeLoad = Effect.fn(
     "node_modules/@ff-labs/fff-node/dist/src/index.js",
   );
   const probeEnv = { ...process.env };
-  delete probeEnv.ELECTRON_NO_ASAR;
-  delete probeEnv.NODE_OPTIONS;
+  removeEnvironmentKeys(probeEnv, [
+    "ELECTRON_NO_ASAR",
+    "ELECTRON_RUN_AS_NODE",
+    "NODE_OPTIONS",
+    "NODE_PATH",
+  ]);
 
   yield* runCommand(
     ChildProcess.make(
@@ -3510,6 +3550,7 @@ export const verifyWindowsPrimaryFffNativeLoad = Effect.fn(
         ),
     }),
   );
+  return "passed" as const;
 });
 
 export const validateWindowsPackagedPayload = Effect.fn(
@@ -3721,7 +3762,7 @@ export const validateWindowsPackagedPayload = Effect.fn(
     });
   }
 
-  yield* verifyWindowsPrimaryFffNativeLoad({
+  const windowsPrimaryNativeLoad = yield* verifyWindowsPrimaryFffNativeLoad({
     packagedAppDir,
     asarPath,
     appExecutableName: input.appExecutableName,
@@ -3729,15 +3770,21 @@ export const validateWindowsPackagedPayload = Effect.fn(
     verbose: input.verbose ?? false,
   });
 
-  yield* verifyPackagedBundleIsSelfContained({
+  const sidecarSelfContainment = yield* verifyPackagedBundleIsSelfContained({
     asarPath,
+    targetArch: input.targetArch,
     verbose: input.verbose ?? false,
   });
 
   yield* Effect.log(
-    `[desktop-artifact] Validated Windows payload (${String(fileCount)} files, ${String(unpackedFiles.length)} sidecar natives).`,
+    `[desktop-artifact] Validated Windows payload structure (${String(fileCount)} files, ${String(unpackedFiles.length)} sidecar natives); runtime checks: Windows primary ${windowsPrimaryNativeLoad}, server sidecar ${sidecarSelfContainment}.`,
   );
-  return { packagedAppDir, fileCount, unpackedFiles } as const;
+  return {
+    packagedAppDir,
+    fileCount,
+    unpackedFiles,
+    runtimeChecks: { windowsPrimaryNativeLoad, sidecarSelfContainment },
+  } as const;
 });
 
 const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
@@ -4350,6 +4397,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const buildEnv: NodeJS.ProcessEnv = {
     ...process.env,
   };
+  removeEnvironmentKeys(buildEnv, ["ELECTRON_RUN_AS_NODE"]);
   buildEnv.npm_config_user_agent = resolvePackageManagerUserAgent(rootPackageJson.packageManager);
   for (const [key, value] of Object.entries(buildEnv)) {
     if (value === "") {
