@@ -194,4 +194,4 @@ peerDependencyRules:
 supportedArchitectures:
   cpu: [current, x64]
   libc: [current, glibc]
-  os: [current, linux]
+  os: [current, linux, win32]

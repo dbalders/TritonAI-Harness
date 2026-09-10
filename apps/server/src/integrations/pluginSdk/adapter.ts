@@ -30,7 +30,7 @@ import {
   type IntegrationProviderStatus,
 } from "../IntegrationRegistry.ts";
 import { scopeIntegrationSecretStore } from "../IntegrationSecretStore.ts";
-import type { IntegrationProviderTool } from "../IntegrationTool.ts";
+import { EmptyIntegrationToolInput, type IntegrationProviderTool } from "../IntegrationTool.ts";
 
 interface PluginSdkOperationContext {
   readonly signal: AbortSignal;
@@ -99,6 +99,19 @@ function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
 }
 
 function compileJsonSchema(schema: PluginJsonSchema): Schema.Decoder<unknown> {
+  // Effect's empty Struct loses the object-only and excess-property constraints.
+  // Limit this workaround to the exact contract so other schema constraints survive.
+  if (
+    schema.type === "object" &&
+    schema.additionalProperties === false &&
+    isRecord(schema.properties) &&
+    Object.keys(schema.properties).length === 0 &&
+    Object.keys(schema).every((key) =>
+      ["$schema", "type", "properties", "additionalProperties"].includes(key),
+    )
+  ) {
+    return EmptyIntegrationToolInput;
+  }
   return SchemaRepresentation.fromJsonSchemaDocument(
     JsonSchema.fromSchemaDraft2020_12(schema as JsonSchema.JsonSchema),
   ) as Schema.Decoder<unknown>;

@@ -1,13 +1,17 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import { describe, expect, it } from "@effect/vitest";
 import * as NodeCrypto from "node:crypto";
+import * as NodeFSP from "node:fs/promises";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 import * as NodeTimersPromises from "node:timers/promises";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { canonicalJson, type JsonValue } from "@t3tools/shared/pluginSdkContract";
 
 import type * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
-import { decodeIntegrationToolInput } from "../IntegrationTool.ts";
+import { createRegistryRuntime } from "../IntegrationRegistry.ts";
+import { decodeIntegrationToolInput, integrationToolJsonSchema } from "../IntegrationTool.ts";
 import { loadPluginSdkIntegration, PluginSdkQuarantineError } from "./adapter.ts";
 
 const id = "fixture-reader";
@@ -23,6 +27,12 @@ const configurationSchema = {
   type: "object",
   properties: { prefix: { type: "string", maxLength: 16 } },
   required: ["prefix"],
+  additionalProperties: false,
+} as const;
+const emptyObjectSchema = {
+  $schema: "https://json-schema.org/draft/2020-12/schema",
+  type: "object",
+  properties: {},
   additionalProperties: false,
 } as const;
 const manifest = {
@@ -97,12 +107,18 @@ function artifact(
   skillBody: string | null = "# Fixture reader\n",
   options: {
     readonly configurationSchema?: JsonValue;
+    readonly inputSchema?: JsonValue;
     readonly skillFrontmatter?: string;
     readonly extraPayloads?: ReadonlyArray<readonly [string, Uint8Array]>;
   } = {},
 ) {
   const artifactConfigurationSchema = options.configurationSchema ?? configurationSchema;
-  const artifactManifest = { ...manifest, configurationSchema: artifactConfigurationSchema };
+  const artifactInputSchema = options.inputSchema ?? inputSchema;
+  const artifactManifest = {
+    ...manifest,
+    configurationSchema: artifactConfigurationSchema,
+    tools: manifest.tools.map((tool) => ({ ...tool, inputSchema: artifactInputSchema })),
+  };
   const manifestBytes = bytes(`${canonicalJson(artifactManifest as unknown as JsonValue)}\n`);
   const payloads = new Map([
     [".tritonai-plugin/plugin.json", manifestBytes],
@@ -140,7 +156,7 @@ function artifact(
     schemas: [
       {
         tool: "fixture.records.list",
-        sha256: sha256(canonicalJson(inputSchema as unknown as JsonValue)),
+        sha256: sha256(canonicalJson(artifactInputSchema)),
       },
     ],
     files,
@@ -198,6 +214,14 @@ describe("plugin SDK adapter", () => {
       decodeIntegrationToolInput(loaded.provider!.tools[0]!, { topic: "alpha", extra: true }),
     ).rejects.toThrow();
     await expect(
+      decodeIntegrationToolInput(loaded.provider!.tools[0]!, { topic: "alpha" }),
+    ).resolves.toEqual({ topic: "alpha" });
+    for (const invalid of [{}, [], { topic: "" }]) {
+      await expect(
+        decodeIntegrationToolInput(loaded.provider!.tools[0]!, invalid),
+      ).rejects.toThrow();
+    }
+    await expect(
       loaded.provider?.invoke(
         "fixture.records.list",
         { topic: "alpha" },
@@ -209,6 +233,57 @@ describe("plugin SDK adapter", () => {
       "skills/fixture-reader/SKILL.md",
     ]);
     await loaded.provider?.close?.();
+  });
+
+  it("registers strict empty-object SDK tools without widening their input contract", async () => {
+    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-sdk-empty-input-"));
+    try {
+      const loaded = await loadPluginSdkIntegration({
+        files: artifact(providerSource, "# Fixture reader\n", { inputSchema: emptyObjectSchema }),
+        secrets: secretStore(),
+        configuration: { prefix: "fixture" },
+        expected: { id, version: "1.0.0" },
+        hostNodeVersion: "24.13.1",
+      });
+      const registry = await createRegistryRuntime(root, [loaded]);
+      try {
+        expect(
+          (await registry.snapshot()).integrations.map((integration) => integration.id),
+        ).toEqual([id]);
+        const tool = registry.toolDefinitions()[0]!;
+        expect(integrationToolJsonSchema(tool)).toEqual({
+          type: "object",
+          additionalProperties: false,
+        });
+        await expect(decodeIntegrationToolInput(tool, {})).resolves.toEqual({});
+        for (const invalid of [[], { extra: true }]) {
+          await expect(decodeIntegrationToolInput(tool, invalid)).rejects.toThrow();
+        }
+      } finally {
+        await registry.close();
+      }
+    } finally {
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects arrays and extra fields in strict empty-object SDK configuration", async () => {
+    const load = (configuration: Readonly<Record<string, unknown>>) =>
+      loadPluginSdkIntegration({
+        files: artifact(providerSource, "# Fixture reader\n", {
+          configurationSchema: emptyObjectSchema,
+        }),
+        secrets: secretStore(),
+        configuration,
+        expected: { id, version: "1.0.0" },
+        hostNodeVersion: "24.13.1",
+      });
+    const loaded = await load({});
+    await loaded.provider?.close?.();
+    await expect(load({ extra: true })).rejects.toBeInstanceOf(PluginSdkQuarantineError);
+    await expect(load([] as unknown as Readonly<Record<string, unknown>>)).rejects.toBeInstanceOf(
+      PluginSdkQuarantineError,
+    );
   });
 
   it("fails integrity before import and quarantines provider factory failures", async () => {
