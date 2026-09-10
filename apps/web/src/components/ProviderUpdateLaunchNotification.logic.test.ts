@@ -287,7 +287,7 @@ describe("provider update launch notification logic", () => {
     expect(view).toMatchObject({
       phase: "initial",
       type: "warning",
-      title: "Update Available: TritonAI v1.1.0",
+      title: "Update Available: TritonAI Engine v1.1.0",
       description: "Install the update now or review provider settings.",
     });
   });
@@ -301,7 +301,9 @@ describe("provider update launch notification logic", () => {
       oneClickProviders: [],
     });
 
-    expect(view.description).toBe("TritonAI and Cursor can be updated from provider settings.");
+    expect(view.description).toBe(
+      "TritonAI Engine and Cursor can be updated from provider settings.",
+    );
   });
 
   it("uses server update state for running progress", () => {
@@ -385,7 +387,7 @@ describe("provider update launch notification logic", () => {
     expect(view).toMatchObject({
       phase: "failed",
       type: "error",
-      title: "TritonAI v1.1.0 update failed",
+      title: "TritonAI Engine v1.1.0 update failed",
       description: "command failed",
     });
   });
@@ -464,7 +466,7 @@ describe("provider update launch notification logic", () => {
     expect(view).toMatchObject({
       phase: "succeeded",
       type: "success",
-      title: "TritonAI updated: v1.1.0",
+      title: "TritonAI Engine updated: v1.1.0",
       description: "New sessions will use the updated provider.",
     });
   });
@@ -520,7 +522,7 @@ describe("provider update launch notification logic", () => {
     expect(view).toMatchObject({
       tone: "loading",
       title: "Updating 2 providers",
-      description: "TritonAI and Cursor updates are in progress.",
+      description: "TritonAI Engine and Cursor updates are in progress.",
     });
   });
 
@@ -541,8 +543,8 @@ describe("provider update launch notification logic", () => {
     expect(view).toMatchObject({
       key: "loading:codex:running",
       tone: "loading",
-      title: "Updating TritonAI",
-      description: "TritonAI update in progress.",
+      title: "Updating TritonAI Engine",
+      description: "TritonAI Engine update in progress.",
     });
   });
 
@@ -595,7 +597,7 @@ describe("provider update launch notification logic", () => {
     expect(view).toMatchObject({
       key: "succeeded:codex:2026-04-23T10:00:00.000Z:Provider updated.",
       tone: "success",
-      title: "TritonAI updated: v1.1.0",
+      title: "TritonAI Engine updated: v1.1.0",
       description: "New sessions will use the updated provider.",
       dismissAfterVisibleMs: 3_000,
     });
@@ -679,7 +681,7 @@ describe("provider update launch notification logic", () => {
     expect(successView).toMatchObject({
       key: "succeeded:codex:2026-04-23T10:01:00.000Z:Provider updated.",
       tone: "success",
-      title: "TritonAI updated: v1.2.0",
+      title: "TritonAI Engine updated: v1.2.0",
     });
 
     const failureView = getProviderUpdateSidebarPillView(providers, {
@@ -1125,7 +1127,7 @@ describe("provider update launch notification logic", () => {
           pill: null,
           isPending: false,
         }),
-      ).toMatchObject({ kind: "idle", text: "TritonAI" });
+      ).toMatchObject({ kind: "idle", text: "TritonAI Engine" });
     });
   });
 });

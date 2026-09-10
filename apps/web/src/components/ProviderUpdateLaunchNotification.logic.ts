@@ -1,9 +1,9 @@
 import {
   defaultInstanceIdForDriver,
-  PROVIDER_DISPLAY_NAMES,
+  PROVIDER_DISPLAY_NAMES as DEFAULT_PROVIDER_DISPLAY_NAMES,
   type EnvironmentId,
   type ExecutionEnvironmentPlatformOs,
-  type ProviderDriverKind,
+  ProviderDriverKind,
   type ProviderInstanceId,
   type ServerProvider,
 } from "@t3tools/contracts";
@@ -58,6 +58,12 @@ interface ProviderUpdateSidebarPillOptions {
 }
 
 const PROVIDER_UPDATE_SUCCESS_VISIBLE_MS = 3_000;
+
+// Distinguish the Codex runtime update from a TritonAI app update.
+const PROVIDER_DISPLAY_NAMES: typeof DEFAULT_PROVIDER_DISPLAY_NAMES = {
+  ...DEFAULT_PROVIDER_DISPLAY_NAMES,
+  [ProviderDriverKind.make("codex")]: "TritonAI Engine",
+};
 
 function formatVersion(value: string): string {
   return value.startsWith("v") ? value : `v${value}`;
