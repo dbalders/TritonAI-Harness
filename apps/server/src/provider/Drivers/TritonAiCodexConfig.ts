@@ -49,5 +49,8 @@ export function makeTritonAiCodexConfigArgs(env: NodeJS.ProcessEnv = process.env
     `${providerKey}.stream_idle_timeout_ms=300000`,
     "--config",
     "features.multi_agent=false",
+    // Preserve Harness's planning tool after Codex 0.152 changed its default.
+    "--config",
+    "tools.update_plan.enabled=true",
   ];
 }

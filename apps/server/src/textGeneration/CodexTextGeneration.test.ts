@@ -301,6 +301,7 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGeneration", (it) => {
           body: "\n- added migration\n- updated tests\n",
         }),
         requireTritonAiProviderConfig: true,
+        requireArg: "tools.update_plan.enabled=true",
         stdinMustNotContain: "branch must be a short semantic git branch fragment",
       },
       (textGeneration) =>
