@@ -61,6 +61,7 @@ import {
 import { createStdioMcpServerArgs, makeCodexAdapter } from "./CodexAdapter.ts";
 import {
   CodexImageContextAnalysisError,
+  makeCodexImageContextAnalyzer,
   type CodexImageContextAnalyzer,
 } from "./CodexImageContext.ts";
 const decodeCodexSettings = Schema.decodeSync(CodexSettings);
@@ -3374,6 +3375,96 @@ it.effect("keeps raw images for native and unknown modality models", () => {
     Effect.ensuring(Effect.sync(() => NodeFS.rmSync(baseDir, { recursive: true, force: true }))),
   );
 });
+
+it.effect.each([true, false])(
+  "waits for complete image recovery before sending the main turn (recovery succeeds: %s)",
+  (recoverySucceeds) => {
+    const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "codex-image-recovery-"));
+    const runtimeFactory = makeRuntimeFactory();
+    const secondStarted = Promise.withResolvers<void>();
+    const secondResponse = Promise.withResolvers<Response>();
+    const response = (images: ReadonlyArray<{ description: string; visibleText: string }>) =>
+      new Response(
+        JSON.stringify({ choices: [{ message: { content: JSON.stringify({ images }) } }] }),
+      );
+    const fetchMock = vi.fn(async (_url: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      const body = String(init?.body);
+      if ((body.match(/data:image\/png;base64,/g) ?? []).length === 2) {
+        return response([{ description: "Ambiguous batch output", visibleText: "" }]);
+      }
+      if (body.includes("recovery-first.png")) {
+        return response([{ description: "First recovered image", visibleText: "First text" }]);
+      }
+      secondStarted.resolve();
+      return secondResponse.promise;
+    });
+    const analyzer: CodexImageContextAnalyzer = (input) =>
+      makeCodexImageContextAnalyzer(
+        { TRITONAI_API_KEY: "test-key" },
+        fetchMock as unknown as typeof fetch,
+      ).pipe(
+        Effect.flatMap((analyze) => analyze(input)),
+        Effect.provide(NodeServices.layer),
+      );
+    const layer = makeImageContextAdapterLayer({ baseDir, runtimeFactory, analyzer });
+
+    return Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const { attachmentsDir } = yield* ServerConfig;
+      const threadId = asThreadId("thread-image-recovery");
+      const attachments = [imageAttachment("recovery-first"), imageAttachment("recovery-second")];
+      for (const attachment of attachments) {
+        NodeFS.writeFileSync(NodePath.join(attachmentsDir, `${attachment.id}.png`), "image");
+      }
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId,
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("codex"),
+          "text-only-model",
+          [],
+        ),
+        runtimeMode: "full-access",
+      });
+      const runtime = runtimeFactory.lastRuntime;
+      NodeAssert.ok(runtime);
+      runtime.sendTurnImpl.mockClear();
+
+      const fiber = yield* adapter
+        .sendTurn({ threadId, input: "Compare these screenshots", attachments })
+        .pipe(Effect.result, Effect.forkChild);
+      yield* Effect.promise(() => secondStarted.promise);
+      NodeAssert.equal(runtime.sendTurnImpl.mock.calls.length, 0);
+      secondResponse.resolve(
+        response(
+          recoverySucceeds
+            ? [{ description: "Second recovered image", visibleText: "Second text" }]
+            : [],
+        ),
+      );
+      const result = yield* Fiber.join(fiber);
+      NodeAssert.equal(fetchMock.mock.calls.length, 3);
+      if (recoverySucceeds) {
+        NodeAssert.equal(result._tag, "Success");
+        NodeAssert.equal(runtime.sendTurnImpl.mock.calls.length, 1);
+        const turn = runtime.sendTurnImpl.mock.calls[0]![0];
+        NodeAssert.match(turn.input ?? "", /Compare these screenshots/);
+        NodeAssert.match(turn.input ?? "", /UNTRUSTED USER-DERIVED DATA/);
+        NodeAssert.match(turn.input ?? "", /First recovered image[\s\S]*Second recovered image/);
+        NodeAssert.doesNotMatch(turn.input ?? "", /Ambiguous batch output/);
+        NodeAssert.equal(Object.hasOwn(turn, "attachments"), false);
+      } else {
+        NodeAssert.equal(result._tag, "Failure");
+        NodeAssert.match(result.failure.message, /main turn was not sent/i);
+        NodeAssert.match(result.failure.message, /recovery-second.png/);
+        NodeAssert.equal(runtime.sendTurnImpl.mock.calls.length, 0);
+      }
+    }).pipe(
+      Effect.provide(layer),
+      Effect.ensuring(Effect.sync(() => NodeFS.rmSync(baseDir, { recursive: true, force: true }))),
+    );
+  },
+);
 
 it.effect("does not send the main turn when image analysis fails", () => {
   const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "codex-image-failure-"));
