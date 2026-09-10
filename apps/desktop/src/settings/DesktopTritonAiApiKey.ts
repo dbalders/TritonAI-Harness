@@ -214,7 +214,14 @@ export function credentialStatus(
     usesSharedKey,
     onPremConfigured: usesSharedKey || normalized?.onPremApiKey !== undefined,
     frontierConfigured: usesSharedKey || normalized?.frontierApiKey !== undefined,
+    onPremKeyLastFour: credentialLastFour(routeCredential(normalized, "on-prem")),
+    frontierKeyLastFour: credentialLastFour(routeCredential(normalized, "frontier")),
   };
+}
+
+function credentialLastFour(apiKey: string | undefined): string | null {
+  // Never return an entire key, even if a legacy or malformed value is unusually short.
+  return apiKey !== undefined && apiKey.length > 4 ? apiKey.slice(-4) : null;
 }
 
 function routeCredential(

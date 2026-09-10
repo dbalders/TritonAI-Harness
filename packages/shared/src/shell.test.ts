@@ -1,3 +1,8 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeChildProcess from "node:child_process";
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it as effectIt } from "@effect/vitest";
 import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
@@ -85,7 +90,7 @@ describe("readPathFromLoginShell", () => {
     expect(args?.[1]).toContain("printenv PATH || true");
     expect(args?.[1]).toContain("__T3CODE_ENV_PATH_START__");
     expect(args?.[1]).toContain("__T3CODE_ENV_PATH_END__");
-    expect(options).toEqual({ encoding: "utf8", timeout: 5000 });
+    expect(options).toEqual({ encoding: "utf8", timeout: 5000, killSignal: "SIGKILL" });
   });
 });
 
@@ -122,6 +127,22 @@ describe("readPathFromLaunchctl", () => {
 });
 
 describe("readEnvironmentFromLoginShell", () => {
+  it.skipIf(!NodeFS.existsSync("/bin/sh"))("terminates a shell that ignores SIGTERM", () => {
+    const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-login-shell-timeout-"));
+    const shell = NodePath.join(directory, "shell");
+    // Exit on its own if termination regresses, so a failed test cannot leave a hung probe.
+    NodeFS.writeFileSync(shell, "#!/bin/sh\ntrap '' TERM\nsleep 1\n", { mode: 0o700 });
+    try {
+      expect(() =>
+        readEnvironmentFromLoginShell(shell, ["PATH"], (file, args, options) =>
+          NodeChildProcess.execFileSync(file, args, { ...options, timeout: 100 }),
+        ),
+      ).toThrowError(expect.objectContaining({ code: "ETIMEDOUT", signal: "SIGKILL" }));
+    } finally {
+      NodeFS.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("extracts multiple environment variables from a login shell command", () => {
     const execFile = vi.fn<
       (

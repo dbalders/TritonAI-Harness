@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Duration from "effect/Duration";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -37,13 +38,15 @@ function makeHttpClientLayer(
 function makeBackendPoolLayer(
   baseUrl: string,
   options?: {
-    readonly env?: Record<string, string>;
+    readonly env?: Record<string, string | undefined>;
     readonly onStop?: () => Effect.Effect<void>;
     readonly onStart?: () => Effect.Effect<void>;
+    readonly onWaitForReady?: (timeout: Duration.Duration) => Effect.Effect<boolean>;
     readonly desiredRunning?: boolean;
     readonly additionalBackends?: ReadonlyArray<{
       readonly onStop?: () => Effect.Effect<void>;
       readonly onStart?: () => Effect.Effect<void>;
+      readonly onWaitForReady?: (timeout: Duration.Duration) => Effect.Effect<boolean>;
       readonly desiredRunning?: boolean;
     }>;
   },
@@ -55,6 +58,7 @@ function makeBackendPoolLayer(
   const makeBackend = (backendOptions?: {
     readonly onStop?: () => Effect.Effect<void>;
     readonly onStart?: () => Effect.Effect<void>;
+    readonly onWaitForReady?: (timeout: Duration.Duration) => Effect.Effect<boolean>;
     readonly desiredRunning?: boolean;
   }) =>
     ({
@@ -64,6 +68,8 @@ function makeBackendPoolLayer(
       } as DesktopBackendManager.DesktopBackendSnapshot),
       stop: () => backendOptions?.onStop?.() ?? Effect.void,
       start: backendOptions?.onStart?.() ?? Effect.void,
+      waitForReady: (timeout: Duration.Duration) =>
+        backendOptions?.onWaitForReady?.(timeout) ?? Effect.succeed(true),
     }) as DesktopBackendManager.DesktopBackendInstance;
   const primary = makeBackend(options);
   const backends = [
@@ -98,7 +104,7 @@ function makeEnvironmentLayer(homeDirectory: string) {
 }
 
 describe("TritonAI credential IPC", () => {
-  it.effect("reports configured routes without returning key values", () =>
+  it.effect("reports only the last four characters of each configured key", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const homeDirectory = yield* fileSystem.makeTempDirectoryScoped({
@@ -107,8 +113,8 @@ describe("TritonAI credential IPC", () => {
       const environmentLayer = makeEnvironmentLayer(homeDirectory);
       const backendPoolLayer = makeBackendPoolLayer("https://configured.tritonai.example/v1", {
         env: {
-          TRITONAI_ONPREM_API_KEY: "on-prem-secret",
-          TRITONAI_FRONTIER_API_KEY: "frontier-secret",
+          TRITONAI_ONPREM_API_KEY: "on-prem-secret-1234",
+          TRITONAI_FRONTIER_API_KEY: "frontier-secret-abcd",
         },
       });
       const result = yield* getTritonAiCredentialStatus
@@ -122,6 +128,8 @@ describe("TritonAI credential IPC", () => {
         usesSharedKey: false,
         onPremConfigured: true,
         frontierConfigured: true,
+        onPremKeyLastFour: "1234",
+        frontierKeyLastFour: "abcd",
       });
       assert.notProperty(result, "sharedApiKey");
       assert.notProperty(result, "onPremApiKey");
@@ -140,6 +148,12 @@ describe("TritonAI credential IPC", () => {
       const backendPoolLayer = makeBackendPoolLayer("https://configured.tritonai.example/v1", {
         onStop: () => Effect.sync(() => backendLifecycle.push("stop")),
         onStart: () => Effect.sync(() => backendLifecycle.push("start")),
+        onWaitForReady: (timeout) =>
+          Effect.sync(() => {
+            assert.equal(Duration.toMillis(timeout), 20_000);
+            backendLifecycle.push("ready");
+            return true;
+          }),
       });
       const validationLayer = makeHttpClientLayer((request) =>
         Effect.sync(() => {
@@ -165,24 +179,28 @@ describe("TritonAI credential IPC", () => {
           usesSharedKey: true,
           onPremConfigured: true,
           frontierConfigured: true,
+          onPremKeyLastFour: "-key",
+          frontierKeyLastFour: "-key",
         },
       });
       const stored = yield* DesktopTritonAiApiKey.readTritonAiCredentialOverride.pipe(
         Effect.provide(environmentLayer),
       );
       assert.deepEqual(Option.getOrUndefined(stored), { sharedApiKey: "replacement-key" });
-      assert.deepEqual(backendLifecycle, ["stop", "start"]);
+      assert.deepEqual(backendLifecycle, ["stop", "start", "ready"]);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("auto-assigns two keys to on-prem and frontier routes", () =>
+  it.effect("keeps saved keys when runtime readiness times out", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const homeDirectory = yield* fileSystem.makeTempDirectoryScoped({
         prefix: "tritonai-api-key-ipc-test-",
       });
       const environmentLayer = makeEnvironmentLayer(homeDirectory);
-      const backendPoolLayer = makeBackendPoolLayer("https://configured.tritonai.example/v1");
+      const backendPoolLayer = makeBackendPoolLayer("https://configured.tritonai.example/v1", {
+        onWaitForReady: () => Effect.succeed(false),
+      });
       const validationLayer = makeHttpClientLayer((request) =>
         Effect.succeed(
           jsonResponse(request, {
@@ -212,6 +230,17 @@ describe("TritonAI credential IPC", () => {
       assert.deepEqual(Option.getOrUndefined(stored), {
         onPremApiKey: "on-prem-key",
         frontierApiKey: "frontier-key",
+      });
+      assert.deepEqual(result, {
+        status: "saved",
+        credentials: {
+          ready: false,
+          usesSharedKey: false,
+          onPremConfigured: true,
+          frontierConfigured: true,
+          onPremKeyLastFour: "-key",
+          frontierKeyLastFour: "-key",
+        },
       });
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
@@ -254,8 +283,8 @@ describe("TritonAI credential IPC", () => {
         prefix: "tritonai-api-key-ipc-test-",
       });
       const environmentLayer = makeEnvironmentLayer(homeDirectory);
-      const currentLocal = "current-on-prem-key";
-      const currentFrontier = "current-frontier-key";
+      const currentLocal = "current-on-prem-1111";
+      const currentFrontier = "current-frontier-2222";
       const backendPoolLayer = makeBackendPoolLayer("https://configured.tritonai.example/v1", {
         env: {
           TRITONAI_ONPREM_API_KEY: currentLocal,
@@ -269,7 +298,7 @@ describe("TritonAI credential IPC", () => {
           }),
         ),
       );
-      const candidate = "new-all-access-key";
+      const candidate = "new-all-access-3333";
 
       const result = yield* updateTritonAiCredentials
         .handler({ route: "on-prem", apiKey: candidate })
@@ -286,6 +315,35 @@ describe("TritonAI credential IPC", () => {
       assert.deepEqual(Option.getOrUndefined(stored), {
         onPremApiKey: candidate,
         frontierApiKey: currentFrontier,
+      });
+      assert.deepEqual(result, {
+        status: "saved",
+        credentials: {
+          ready: true,
+          usesSharedKey: false,
+          onPremConfigured: true,
+          frontierConfigured: true,
+          onPremKeyLastFour: "3333",
+          frontierKeyLastFour: "2222",
+        },
+      });
+
+      // Read status again using the persisted credentials loaded by a fresh backend.
+      const reloadedPoolLayer = makeBackendPoolLayer("https://configured.tritonai.example/v1", {
+        env: DesktopTritonAiApiKey.credentialEnvironmentPatch(Option.getOrThrow(stored)),
+      });
+      const reloadedStatus = yield* getTritonAiCredentialStatus
+        .handler(undefined)
+        .pipe(
+          Effect.provide(Layer.mergeAll(environmentLayer, NodeServices.layer, reloadedPoolLayer)),
+        );
+      assert.deepEqual(reloadedStatus, {
+        ready: true,
+        usesSharedKey: false,
+        onPremConfigured: true,
+        frontierConfigured: true,
+        onPremKeyLastFour: "3333",
+        frontierKeyLastFour: "2222",
       });
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
@@ -355,6 +413,8 @@ describe("TritonAI credential IPC", () => {
           usesSharedKey: false,
           onPremConfigured: false,
           frontierConfigured: true,
+          onPremKeyLastFour: null,
+          frontierKeyLastFour: "-key",
         },
       });
       assert.deepEqual(Option.getOrUndefined(stored), {
