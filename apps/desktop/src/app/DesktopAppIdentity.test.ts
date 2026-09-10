@@ -199,9 +199,7 @@ describe("DesktopAppIdentity", () => {
         assert.equal(calls.setAboutPanelOptions[0]?.applicationName, "TritonAI Harness");
         assert.equal(calls.setAboutPanelOptions[0]?.applicationVersion, "1.2.3");
         assert.equal(calls.setAboutPanelOptions[0]?.version, "0123456789ab");
-        // Packaged: the bundle's own icon stands, so a custom one the user
-        // attached survives.
-        assert.deepEqual(calls.setDockIcon, []);
+        assert.deepEqual(calls.setDockIcon, ["/icon.png"]);
       }),
       {
         calls,
@@ -215,7 +213,7 @@ describe("DesktopAppIdentity", () => {
     );
   });
 
-  it.effect("sets the dock icon only when running unpackaged", () => {
+  it.effect("also sets the dock icon when running unpackaged", () => {
     const calls: ElectronAppCalls = {
       setAboutPanelOptions: [],
       setDockIcon: [],

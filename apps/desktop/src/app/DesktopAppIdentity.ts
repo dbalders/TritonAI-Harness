@@ -134,10 +134,9 @@ export const make = Effect.gen(function* () {
       yield* electronApp.setDesktopName(environment.linuxDesktopEntryName);
     }
 
-    // Unpackaged runs only. A packaged bundle already carries its icon in
-    // Info.plist, so setting the dock tile again changes nothing except to
-    // overwrite a custom icon the user attached to the app themselves.
-    if (environment.platform === "darwin" && !environment.isPackaged) {
+    // Keep TritonAI's circular artwork at full size in packaged apps too;
+    // macOS can inset the bundle's ICNS icon inside a rounded background.
+    if (environment.platform === "darwin") {
       const iconPaths = yield* assets.iconPaths;
       yield* Option.match(iconPaths.png, {
         onNone: () => Effect.void,
