@@ -34,7 +34,15 @@ import {
   RefreshCwIcon,
   TerminalIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 
 import { isDesktopLocalConnectionTarget } from "../../connection/desktopLocal";
 import { isElectron } from "../../env";
@@ -77,6 +85,10 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { AddProviderInstanceDialog } from "./AddProviderInstanceDialog";
 import { ProviderInstanceCard } from "./ProviderInstanceCard";
+import {
+  TritonAiCredentialUpdateContext,
+  TritonAiCredentialUpdateProvider,
+} from "./TritonAiCredentialUpdateContext";
 import { DRIVER_OPTIONS, getDriverOption } from "./providerDriverMeta";
 import { providerSettingsTabClassName } from "./providerSettingsTabs";
 import { searchableSetting } from "./settingsSearch";
@@ -178,6 +190,33 @@ function EnvironmentUnavailableRow({
   readonly access: Exclude<ProviderEnvironmentAccess, { kind: "editable" | "read-only" }>;
   readonly deviceTabs?: ReactNode;
 }) {
+  const credentialUpdate = useContext(TritonAiCredentialUpdateContext);
+  const keyUpdatePhase =
+    environment.entry.target._tag === "PrimaryConnectionTarget"
+      ? credentialUpdate?.phase
+      : undefined;
+  if (keyUpdatePhase && keyUpdatePhase !== "idle") {
+    const waiting = keyUpdatePhase !== "timed-out";
+    return (
+      <SettingsSection {...searchableSetting("providers")}>
+        {deviceTabs}
+        <div role={waiting ? "status" : "alert"} aria-live="polite">
+          <SettingsRow
+            title={
+              waiting
+                ? "Updating access and reconnecting…"
+                : "Access saved; reconnection is taking longer than expected"
+            }
+            description={
+              waiting
+                ? "The local runtime is restarting to apply your access settings. Your settings will return automatically."
+                : "Your access settings were saved, but the local runtime has not reconnected yet. We’re still trying to connect."
+            }
+          />
+        </div>
+      </SettingsSection>
+    );
+  }
   const isLoading = access.kind === "loading";
   const title = isLoading
     ? "Loading provider settings"
@@ -201,9 +240,11 @@ function EnvironmentUnavailableRow({
 
 export function ProviderSettingsPanel() {
   return (
-    <SettingsPageContainer className="gap-8">
-      <ProviderSettingsPanelContent />
-    </SettingsPageContainer>
+    <TritonAiCredentialUpdateProvider>
+      <SettingsPageContainer className="gap-8">
+        <ProviderSettingsPanelContent />
+      </SettingsPageContainer>
+    </TritonAiCredentialUpdateProvider>
   );
 }
 

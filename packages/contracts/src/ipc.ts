@@ -193,6 +193,8 @@ export const DesktopTritonAiCredentialStatusSchema = Schema.Struct({
   usesSharedKey: Schema.Boolean,
   onPremConfigured: Schema.Boolean,
   frontierConfigured: Schema.Boolean,
+  onPremKeyLastFour: Schema.NullOr(Schema.String),
+  frontierKeyLastFour: Schema.NullOr(Schema.String),
 });
 export type DesktopTritonAiCredentialStatus = typeof DesktopTritonAiCredentialStatusSchema.Type;
 

@@ -6,6 +6,7 @@ import {
   UCSD_AI_BASE_URL_ENV,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Duration from "effect/Duration";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
@@ -166,6 +167,13 @@ export const updateTritonAiCredentials = makeIpcMethod({
       ({ backend, shouldRestart }) => (shouldRestart ? backend.start : Effect.void),
       { discard: true },
     );
-    return result satisfies DesktopTritonAiCredentialsUpdateResult;
+    const shouldWaitForPrimary = restartableBackends.some(
+      ({ backend, shouldRestart }) => backend === primary && shouldRestart,
+    );
+    const ready = shouldWaitForPrimary ? yield* primary.waitForReady(Duration.seconds(20)) : false;
+    return {
+      ...result,
+      credentials: { ...result.credentials, ready },
+    } satisfies DesktopTritonAiCredentialsUpdateResult;
   }),
 });

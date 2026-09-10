@@ -2,11 +2,12 @@ import type {
   DesktopTritonAiCredentialRoute,
   DesktopTritonAiCredentialStatus,
 } from "@t3tools/contracts";
-import { useState } from "react";
+import { useContext, useState } from "react";
 
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { TritonAiCredentialUpdateContext } from "./TritonAiCredentialUpdateContext";
 
 export function TritonAiRouteCredentialControl(props: {
   readonly route: DesktopTritonAiCredentialRoute;
@@ -15,16 +16,21 @@ export function TritonAiRouteCredentialControl(props: {
   readonly onRetryStatus: () => void;
   readonly onStatusChange: (status: DesktopTritonAiCredentialStatus) => void;
 }) {
+  const credentialUpdate = useContext(TritonAiCredentialUpdateContext);
   const [isEditing, setIsEditing] = useState(false);
   const [apiKey, setApiKey] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const isBusy =
+    isSaving || credentialUpdate?.phase === "saving" || credentialUpdate?.phase === "reconnecting";
   const desktopBridge = window.desktopBridge;
   if (!desktopBridge) return null;
 
   const routeLabel = props.route === "on-prem" ? "On-prem" : "Frontier";
   const otherRouteLabel = props.route === "on-prem" ? "frontier" : "on-prem";
+  const keyLastFour =
+    props.route === "on-prem" ? props.status?.onPremKeyLastFour : props.status?.frontierKeyLastFour;
   const configured =
     props.status === null || !props.status.ready
       ? null
@@ -42,12 +48,14 @@ export function TritonAiRouteCredentialControl(props: {
 
   const save = async () => {
     const replacement = apiKey.trim();
-    if (!replacement || isSaving) return;
+    if (!replacement || isBusy) return;
     setIsSaving(true);
     setError(null);
     setMessage(null);
     try {
-      const result = await desktopBridge.updateTritonAiCredentials({
+      const result = await (
+        credentialUpdate?.updateCredentials ?? desktopBridge.updateTritonAiCredentials
+      )({
         route: props.route,
         apiKey: replacement,
       });
@@ -71,13 +79,15 @@ export function TritonAiRouteCredentialControl(props: {
   };
 
   const remove = async () => {
-    if (isSaving || !configured) return;
+    if (isBusy || !configured) return;
     if (!window.confirm(`Remove the saved ${routeLabel} access key?`)) return;
     setIsSaving(true);
     setError(null);
     setMessage(null);
     try {
-      const result = await desktopBridge.updateTritonAiCredentials({
+      const result = await (
+        credentialUpdate?.updateCredentials ?? desktopBridge.updateTritonAiCredentials
+      )({
         route: props.route,
         remove: true,
       });
@@ -109,12 +119,17 @@ export function TritonAiRouteCredentialControl(props: {
             <Badge variant={configured ? "success" : "secondary"} size="sm">
               {configured === null ? "Checking…" : configured ? "Configured" : "Not configured"}
             </Badge>
+            {configured && keyLastFour ? (
+              <span className="text-xs text-muted-foreground">
+                Ends in <code className="font-mono text-foreground">{keyLastFour}</code>
+              </span>
+            ) : null}
           </div>
           <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{statusDescription}</p>
         </div>
         <div className="flex items-center gap-2">
           {configured ? (
-            <Button type="button" size="sm" variant="ghost" disabled={isSaving} onClick={remove}>
+            <Button type="button" size="sm" variant="ghost" disabled={isBusy} onClick={remove}>
               Remove key
             </Button>
           ) : null}
@@ -122,7 +137,7 @@ export function TritonAiRouteCredentialControl(props: {
             type="button"
             size="sm"
             variant="outline"
-            disabled={isSaving || configured === null}
+            disabled={isBusy || configured === null}
             onClick={() => {
               setIsEditing((editing) => !editing);
               setApiKey("");
@@ -153,7 +168,7 @@ export function TritonAiRouteCredentialControl(props: {
               spellCheck={false}
               value={apiKey}
               placeholder="Enter access key"
-              disabled={isSaving}
+              disabled={isBusy}
               onChange={(event) => {
                 setApiKey(event.target.value);
                 setError(null);
@@ -164,7 +179,7 @@ export function TritonAiRouteCredentialControl(props: {
           <p className="text-[11px] leading-relaxed text-muted-foreground">
             TritonAI will verify access to {props.route} models. Only this connection changes.
           </p>
-          <Button type="submit" size="sm" disabled={!apiKey.trim() || isSaving}>
+          <Button type="submit" size="sm" disabled={!apiKey.trim() || isBusy}>
             {isSaving ? "Checking access…" : "Check access & save"}
           </Button>
         </form>

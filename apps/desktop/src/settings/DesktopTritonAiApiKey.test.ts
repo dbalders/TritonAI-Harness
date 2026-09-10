@@ -39,6 +39,30 @@ const withKeyStore = <A, E, R>(
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer));
 
 describe("DesktopTritonAiApiKey", () => {
+  it("reports the normalized shared key suffix for both routes", () => {
+    assert.deepEqual(
+      DesktopTritonAiApiKey.credentialStatus({ sharedApiKey: " shared-key-aB12 \n" }),
+      {
+        ready: true,
+        usesSharedKey: true,
+        onPremConfigured: true,
+        frontierConfigured: true,
+        onPremKeyLastFour: "aB12",
+        frontierKeyLastFour: "aB12",
+      },
+    );
+  });
+
+  it("omits suffixes for missing keys and never reveals an entire short key", () => {
+    for (const key of [undefined, "", "a", "abcd"]) {
+      const status = DesktopTritonAiApiKey.credentialStatus(
+        key === undefined ? null : { onPremApiKey: key },
+      );
+      assert.isNull(status.onPremKeyLastFour);
+      assert.isNull(status.frontierKeyLastFour);
+    }
+  });
+
   it("resolves model validation against the configured TritonAI endpoint", () => {
     assert.equal(
       DesktopTritonAiApiKey.resolveTritonAiModelsEndpoint("https://configured.tritonai.example/v1"),

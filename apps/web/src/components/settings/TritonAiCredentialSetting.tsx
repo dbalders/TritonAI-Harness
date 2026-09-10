@@ -1,9 +1,10 @@
 import type { DesktopTritonAiCredentialStatus } from "@t3tools/contracts";
-import { useEffect, useState } from "react";
+import { useContext, useEffect, useState } from "react";
 
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { TritonAiCredentialUpdateContext } from "./TritonAiCredentialUpdateContext";
 import { SettingsSection } from "./settingsLayout";
 
 const EMPTY_STATUS: DesktopTritonAiCredentialStatus = {
@@ -11,6 +12,8 @@ const EMPTY_STATUS: DesktopTritonAiCredentialStatus = {
   usesSharedKey: false,
   onPremConfigured: false,
   frontierConfigured: false,
+  onPremKeyLastFour: null,
+  frontierKeyLastFour: null,
 };
 
 function AccessStatusRow({
@@ -18,11 +21,13 @@ function AccessStatusRow({
   examples,
   configured,
   ready,
+  keyLastFour,
 }: {
   label: string;
   examples: string;
   configured: boolean;
   ready: boolean;
+  keyLastFour: string | null;
 }) {
   return (
     <div className="flex items-center justify-between gap-4 rounded-lg border border-border/70 bg-muted/20 px-3 py-2.5">
@@ -30,14 +35,22 @@ function AccessStatusRow({
         <p className="text-xs font-medium text-foreground">{label}</p>
         <p className="mt-0.5 truncate text-[11px] text-muted-foreground/75">{examples}</p>
       </div>
-      <Badge variant={ready && configured ? "success" : "secondary"} size="sm">
-        {ready ? (configured ? "Configured" : "Not configured") : "Checking…"}
-      </Badge>
+      <div className="flex shrink-0 flex-col items-end gap-1">
+        <Badge variant={ready && configured ? "success" : "secondary"} size="sm">
+          {ready ? (configured ? "Configured" : "Not configured") : "Checking…"}
+        </Badge>
+        {ready && configured && keyLastFour ? (
+          <span className="text-xs text-muted-foreground">
+            Ends in <code className="font-mono text-foreground">{keyLastFour}</code>
+          </span>
+        ) : null}
+      </div>
     </div>
   );
 }
 
 export function TritonAiCredentialSetting() {
+  const credentialUpdate = useContext(TritonAiCredentialUpdateContext);
   const desktopBridge = window.desktopBridge;
   const [credentials, setCredentials] = useState(EMPTY_STATUS);
   const [primaryApiKey, setPrimaryApiKey] = useState("");
@@ -78,10 +91,9 @@ export function TritonAiCredentialSetting() {
     setSaveError(null);
     setSaveMessage(null);
     try {
-      const result = await desktopBridge.updateTritonAiCredentials([
-        primaryReplacement,
-        ...(secondKeyVisible ? [secondaryReplacement] : []),
-      ]);
+      const result = await (
+        credentialUpdate?.updateCredentials ?? desktopBridge.updateTritonAiCredentials
+      )([primaryReplacement, ...(secondKeyVisible ? [secondaryReplacement] : [])]);
       if (result.status === "error") {
         setIsSaving(false);
         setSaveError(result.message);
@@ -122,8 +134,8 @@ export function TritonAiCredentialSetting() {
             ) : null}
           </div>
           <p className="mt-1 max-w-2xl text-xs leading-relaxed text-muted-foreground/80">
-            Saved keys are never displayed. TritonAI Harness checks new keys and automatically uses
-            each one for the model groups it can access.
+            Only the last four characters of saved keys are displayed. TritonAI Harness checks new
+            keys and automatically uses each one for the model groups it can access.
           </p>
         </div>
 
@@ -132,12 +144,14 @@ export function TritonAiCredentialSetting() {
             label="On-prem models"
             examples="DeepSeek, GLM, and Gemma"
             configured={credentials.onPremConfigured}
+            keyLastFour={credentials.onPremKeyLastFour}
             ready={credentials.ready}
           />
           <AccessStatusRow
             label="Frontier models"
             examples="GPT-5.6 and Claude"
             configured={credentials.frontierConfigured}
+            keyLastFour={credentials.frontierKeyLastFour}
             ready={credentials.ready}
           />
         </div>
