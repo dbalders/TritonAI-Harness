@@ -10,6 +10,11 @@ Common reasons:
 - switch to another account when one account hits limits
 - keep one shared Codex history instead of maintaining two separate Codex setups
 
+## Engine Updates
+
+TritonAI Harness keeps Codex's planning tool enabled when starting the engine, including after
+engine updates. You do not need to change your Codex configuration to keep planning available.
+
 ## Attach Images To A Text-Only Model
 
 When a managed model accepts only text, TritonAI analyzes attached images and passes their
