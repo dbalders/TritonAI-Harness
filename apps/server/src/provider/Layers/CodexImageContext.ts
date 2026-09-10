@@ -69,7 +69,14 @@ export class CodexImageContextAnalysisError extends Schema.TaggedErrorClass<Code
     return `Image analysis failed: ${this.detail}`;
   }
 }
-const isCodexImageContextAnalysisError = Schema.is(CodexImageContextAnalysisError);
+
+class ImageContextOutputError extends Schema.TaggedErrorClass<ImageContextOutputError>()(
+  "ImageContextOutputError",
+  {
+    detail: Schema.String,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
 
 class ImageContextResponseLimitError extends Error {}
 
@@ -227,9 +234,10 @@ export const makeCodexImageContextAnalyzer = Effect.fn("makeCodexImageContextAna
         input.images,
         (image) =>
           fileSystem.readFile(image.path).pipe(
-            Effect.map(
-              (bytes) => `data:${image.mimeType};base64,${Buffer.from(bytes).toString("base64")}`,
-            ),
+            Effect.map((bytes) => ({
+              ...image,
+              url: `data:${image.mimeType};base64,${Buffer.from(bytes).toString("base64")}`,
+            })),
             Effect.mapError(
               (cause) =>
                 new CodexImageContextAnalysisError({
@@ -240,99 +248,133 @@ export const makeCodexImageContextAnalyzer = Effect.fn("makeCodexImageContextAna
           ),
         { concurrency: 1 },
       );
-      const requestBody = yield* encodeJsonString({
-        model: TRITONAI_IMAGE_CONTEXT_MODEL,
-        messages: [
-          {
-            role: "user",
-            content: [
-              { type: "text", text: buildImageContextPrompt(input.images) },
-              ...encodedImages.map((imageUrl) => ({
-                type: "image_url",
-                image_url: { url: imageUrl },
-              })),
-            ],
-          },
-        ],
-        response_format: {
-          type: "json_schema",
-          json_schema: {
-            name: "tritonai_image_context",
-            strict: true,
-            schema: toJsonSchemaObject(ImageContextOutput),
-          },
-        },
-        reasoning_effort: "low",
-      }).pipe(
-        Effect.mapError(
-          (cause) =>
-            new CodexImageContextAnalysisError({
-              detail: "Could not encode the image analysis request.",
-              cause,
-            }),
-        ),
-      );
-
-      const response = yield* Effect.tryPromise({
-        try: async (effectSignal) => {
-          const result = await requestFetch(endpoint, {
-            method: "POST",
-            headers: {
-              ...makeTritonAiClientHeaders(),
-              Accept: "application/json",
-              Authorization: `Bearer ${apiKey}`,
-              "Content-Type": "application/json",
+      const requestAnalysis = Effect.fn("CodexImageContext.requestAnalysis")(function* (
+        images: ReadonlyArray<CodexImageContextInputImage & { readonly url: string }>,
+      ) {
+        const outputSchema = Schema.Struct({
+          images: Schema.Array(ImageContextItem).check(
+            Schema.isLengthBetween(images.length, images.length),
+          ),
+        });
+        const requestBody = yield* encodeJsonString({
+          model: TRITONAI_IMAGE_CONTEXT_MODEL,
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: buildImageContextPrompt(images) },
+                ...images.map((image) => ({
+                  type: "image_url",
+                  image_url: { url: image.url },
+                })),
+              ],
             },
-            body: requestBody,
-            signal: effectSignal,
+          ],
+          response_format: {
+            type: "json_schema",
+            json_schema: {
+              name: "tritonai_image_context",
+              strict: true,
+              schema: toJsonSchemaObject(outputSchema),
+            },
+          },
+          reasoning_effort: "low",
+        }).pipe(
+          Effect.mapError(
+            (cause) =>
+              new CodexImageContextAnalysisError({
+                detail: "Could not encode the image analysis request.",
+                cause,
+              }),
+          ),
+        );
+
+        const response = yield* Effect.tryPromise({
+          try: async (effectSignal) => {
+            const result = await requestFetch(endpoint, {
+              method: "POST",
+              headers: {
+                ...makeTritonAiClientHeaders(),
+                Accept: "application/json",
+                Authorization: `Bearer ${apiKey}`,
+                "Content-Type": "application/json",
+              },
+              body: requestBody,
+              signal: effectSignal,
+            });
+            if (!result.ok) {
+              void result.body?.cancel().catch(() => undefined);
+              return { status: result.status, body: "" };
+            }
+            return { status: result.status, body: await readBoundedResponseText(result) };
+          },
+          catch: requestFailure,
+        });
+
+        if (response.status < 200 || response.status >= 300) {
+          return yield* new CodexImageContextAnalysisError({
+            detail: `${TRITONAI_IMAGE_CONTEXT_MODEL} returned HTTP ${response.status}.`,
           });
-          if (!result.ok) {
-            void result.body?.cancel().catch(() => undefined);
-            return { status: result.status, body: "" };
-          }
-          return { status: result.status, body: await readBoundedResponseText(result) };
-        },
-        catch: requestFailure,
-      });
+        }
 
-      if (response.status < 200 || response.status >= 300) {
-        return yield* new CodexImageContextAnalysisError({
-          detail: `${TRITONAI_IMAGE_CONTEXT_MODEL} returned HTTP ${response.status}.`,
-        });
-      }
-
-      const completion = yield* decodeImageContextChatCompletionResponse(response.body).pipe(
-        Effect.mapError(
-          (cause) =>
-            new CodexImageContextAnalysisError({
-              detail: `${TRITONAI_IMAGE_CONTEXT_MODEL} returned an invalid response.`,
-              cause,
-            }),
-        ),
-      );
-      const content = completion.choices[0]?.message.content;
-      if (!content) {
-        return yield* new CodexImageContextAnalysisError({
-          detail: `${TRITONAI_IMAGE_CONTEXT_MODEL} returned an empty response.`,
-        });
-      }
-      const decoded = yield* decodeImageContextOutput(content).pipe(
-        Effect.mapError((cause) =>
-          isCodexImageContextAnalysisError(cause)
-            ? cause
-            : new CodexImageContextAnalysisError({
+        const completion = yield* decodeImageContextChatCompletionResponse(response.body).pipe(
+          Effect.mapError(
+            (cause) =>
+              new ImageContextOutputError({
+                detail: `${TRITONAI_IMAGE_CONTEXT_MODEL} returned an invalid response.`,
+                cause,
+              }),
+          ),
+        );
+        const content = completion.choices[0]?.message.content;
+        if (!content) {
+          return yield* new ImageContextOutputError({
+            detail: `${TRITONAI_IMAGE_CONTEXT_MODEL} returned an empty response.`,
+          });
+        }
+        const decoded = yield* decodeImageContextOutput(content).pipe(
+          Effect.mapError(
+            (cause) =>
+              new ImageContextOutputError({
                 detail: `${TRITONAI_IMAGE_CONTEXT_MODEL} returned invalid structured output.`,
                 cause,
               }),
-        ),
-      );
+          ),
+        );
 
-      if (decoded.images.length !== input.images.length) {
-        return yield* new CodexImageContextAnalysisError({
-          detail: `${TRITONAI_IMAGE_CONTEXT_MODEL} returned ${decoded.images.length} result(s) for ${input.images.length} image(s).`,
-        });
-      }
-      return decoded.images;
+        if (decoded.images.length !== images.length) {
+          return yield* new ImageContextOutputError({
+            detail: `${TRITONAI_IMAGE_CONTEXT_MODEL} returned ${decoded.images.length} result(s) for ${images.length} image(s).`,
+          });
+        }
+        return decoded.images;
+      });
+
+      return yield* requestAnalysis(encodedImages).pipe(
+        Effect.catchTag("ImageContextOutputError", (error) => {
+          if (encodedImages.length === 1) {
+            return Effect.fail(
+              new CodexImageContextAnalysisError({ detail: error.detail, cause: error }),
+            );
+          }
+          // A partial batch cannot be mapped safely to attachments. Reanalyze every
+          // image once, with bounded concurrency; forEach preserves attachment order.
+          return Effect.forEach(
+            encodedImages,
+            (image, index) =>
+              requestAnalysis([image]).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new CodexImageContextAnalysisError({
+                      detail: `Could not analyze attachment ${index + 1} (${JSON.stringify(image.name)}) after retrying images individually. ${cause.detail}`,
+                      cause,
+                    }),
+                ),
+              ),
+            { concurrency: 2 },
+          ).pipe(Effect.map((results) => results.flat()));
+        }),
+      );
     });
 
     const cancellableAnalysis = input.signal

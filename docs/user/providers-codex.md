@@ -10,6 +10,15 @@ Common reasons:
 - switch to another account when one account hits limits
 - keep one shared Codex history instead of maintaining two separate Codex setups
 
+## Attach Images To A Text-Only Model
+
+When a managed model accepts only text, TritonAI analyzes attached images and passes their
+descriptions and visible text to the model. If a group of images produces incomplete or malformed
+analysis, TritonAI automatically retries each image separately before sending your message.
+
+If an image still cannot be analyzed, the message stays unsent and the error identifies the failed
+attachment. Stop cancels image analysis as well as the pending message.
+
 ## Work Toward A Persistent Goal
 
 In a Codex thread, type `/goal` and choose the Goal command. The composer enters Goal mode, shows a
