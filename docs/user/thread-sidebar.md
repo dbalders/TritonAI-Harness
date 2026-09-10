@@ -44,3 +44,11 @@ taking up space in every row.
 
 Unsent drafts appear in a separate **Draft threads** section above Active threads. The section is
 hidden when there are no saved drafts, keeping draft work distinct from submitted threads.
+
+On web and desktop, active threads keep full-contrast titles. Settled and snoozed threads
+use muted titles so your active work is easier to find.
+
+A green **Done** indicator means a response finished since you last viewed that thread.
+It stays visible while you are in another thread, browser tab, or window, and clears when
+you return to the thread in the foreground. **Approval**, **Input**, and **Failed** labels
+identify work that needs your attention.

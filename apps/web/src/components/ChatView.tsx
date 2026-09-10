@@ -223,6 +223,7 @@ import {
 import { useNowMinute } from "../hooks/useNowMinute";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
 import { useThreadActions } from "../hooks/useThreadActions";
+import { trackThreadReadState } from "../threadReadState";
 import { resolveAppModelSelectionForInstance } from "../modelSelection";
 import { confirmTerminalClose, isTerminalCloseConfirmPending } from "../lib/terminalCloseConfirm";
 import { getTerminalFocusOwner } from "../lib/terminalFocus";
@@ -1912,22 +1913,23 @@ function ChatViewContent(props: ChatViewProps) {
   const activeRunningTurnId =
     (activeThread?.session?.status === "running" ? activeThread.session.activeTurnId : null) ??
     (activeLatestTurn?.state === "running" ? activeLatestTurn.turnId : null);
-  // Reading a finished thread clears the sidebar's Done badge. The visit is
-  // stamped at the turn's completion time — not now/updatedAt — so it clears
-  // exactly the completion the user is looking at: a wake or completion that
-  // lands later still gets its signal (markThreadVisited never moves the
-  // timestamp backwards).
+  // Establish a visit before the first completion, then acknowledge only
+  // the server state actually shown in the foreground chat.
   useEffect(() => {
-    const completedAt = serverThread?.latestTurn?.completedAt;
-    if (!serverThread?.id || !completedAt) return;
-    markThreadVisited(
-      scopedThreadKey(scopeThreadRef(serverThread.environmentId, serverThread.id)),
-      completedAt,
-    );
+    if (!serverThread) return;
+    return trackThreadReadState({
+      threadKey: scopedThreadKey(scopeThreadRef(serverThread.environmentId, serverThread.id)),
+      createdAt: serverThread.createdAt,
+      startedAt: serverThread.latestTurn?.startedAt,
+      completedAt: serverThread.latestTurn?.completedAt,
+      markVisited: markThreadVisited,
+    });
   }, [
     markThreadVisited,
     serverThread?.environmentId,
     serverThread?.id,
+    serverThread?.createdAt,
+    serverThread?.latestTurn?.startedAt,
     serverThread?.latestTurn?.completedAt,
   ]);
   useEffect(() => {
