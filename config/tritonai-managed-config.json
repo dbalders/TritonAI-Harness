@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "policyVersion": 4,
+  "policyVersion": 5,
   "provider": {
     "driver": "codex",
     "managedBinary": true,
@@ -27,6 +27,7 @@
     "default": "api-glm-5.3",
     "restrictedFallback": "api-glm-5.3",
     "replacements": {
+      "api-gemma-4-31b": "onyx-muse-glimmer-30b",
       "api-glm-5.2": "api-glm-5.3",
       "gpt-5.5": "gpt-5.6-sol",
       "claude-opus-4-8": "claude-opus-5"
@@ -74,9 +75,9 @@
         }
       },
       {
-        "id": "api-gemma-4-31b",
-        "name": "Gemma 4 31B",
-        "shortName": "Gemma",
+        "id": "onyx-muse-glimmer-30b",
+        "name": "Glimmer 30B",
+        "shortName": "Glimmer",
         "route": "on-prem",
         "capabilities": {
           "inputModalities": ["text", "image"],

@@ -1,10 +1,16 @@
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import * as NodeSqliteClient from "./NodeSqliteClient.ts";
-import { migrateManagedProviderInstanceReferences } from "./ManagedProviderInstanceReferences.ts";
+import {
+  migrateManagedModelReferences,
+  migrateManagedProviderInstanceReferences,
+} from "./ManagedProviderInstanceReferences.ts";
+
+const encodePayload = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
 
@@ -332,5 +338,68 @@ routeLayer("managed provider route split", (it) => {
         { instanceId: nextInstanceId },
       ]);
     }),
+  );
+});
+
+layer("managed model replacements", (it) => {
+  it.effect(
+    "replaces Gemma in persisted state and replay events without changing personal providers",
+    () =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        for (const [table, column, selectionPath] of [
+          ["projection_projects", "default_model_selection_json", "$"],
+          ["projection_threads", "model_selection_json", "$"],
+          ["provider_session_runtime", "runtime_payload_json", "$.modelSelection"],
+          ["orchestration_events", "payload_json", "$.modelSelection"],
+        ] as const) {
+          yield* sql`CREATE TABLE ${sql(table)} (${sql(column)} TEXT)`;
+          for (const instanceId of ["codex", "personal", null]) {
+            const selection = {
+              ...(instanceId ? { instanceId } : {}),
+              provider: "codex",
+              model: "api-gemma-4-31b",
+              options: [],
+            };
+            const payload =
+              selectionPath === "$"
+                ? selection
+                : {
+                    modelSelection: selection,
+                    defaultModelSelection: selection,
+                  };
+            yield* sql`INSERT INTO ${sql(table)} (${sql(column)}) VALUES (${encodePayload(payload)})`;
+          }
+        }
+        yield* sql`ALTER TABLE provider_session_runtime ADD COLUMN provider_instance_id TEXT`;
+        yield* sql`UPDATE provider_session_runtime SET provider_instance_id = json_extract(runtime_payload_json, '$.modelSelection.instanceId'), runtime_payload_json = json_set(runtime_payload_json, '$.model', 'api-gemma-4-31b', '$.provider', 'codex')`;
+        for (let pass = 0; pass < 2; pass++) {
+          yield* migrateManagedModelReferences("codex", {
+            "api-gemma-4-31b": "onyx-muse-glimmer-30b",
+          });
+        }
+        const runtimeModels = yield* sql<{
+          model: string;
+        }>`SELECT json_extract(runtime_payload_json, '$.model') AS model FROM provider_session_runtime ORDER BY rowid`;
+        assert.deepStrictEqual(
+          runtimeModels.map((row) => row.model),
+          ["onyx-muse-glimmer-30b", "api-gemma-4-31b", "onyx-muse-glimmer-30b"],
+        );
+        for (const [table, column, selectionPath] of [
+          ["projection_projects", "default_model_selection_json", "$"],
+          ["projection_threads", "model_selection_json", "$"],
+          ["provider_session_runtime", "runtime_payload_json", "$.modelSelection"],
+          ["orchestration_events", "payload_json", "$.modelSelection"],
+          ["orchestration_events", "payload_json", "$.defaultModelSelection"],
+        ] as const) {
+          const rows = yield* sql<{
+            model: string;
+          }>`SELECT json_extract(${sql(column)}, ${`${selectionPath}.model`}) AS model FROM ${sql(table)} ORDER BY rowid`;
+          assert.deepStrictEqual(
+            rows.map((row) => row.model),
+            ["onyx-muse-glimmer-30b", "api-gemma-4-31b", "onyx-muse-glimmer-30b"],
+          );
+        }
+      }),
   );
 });

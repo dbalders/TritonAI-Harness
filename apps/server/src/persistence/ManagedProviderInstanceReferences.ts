@@ -221,11 +221,66 @@ export const migrateManagedProviderInstanceReferences = Effect.fn(
   }
 });
 
+/** Replace retired managed on-prem models even when only the app is updated. */
+export const migrateManagedModelReferences = Effect.fn("migrateManagedModelReferences")(function* (
+  instanceId: string,
+  replacements: Readonly<Record<string, string>>,
+) {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql.withTransaction(
+    Effect.gen(function* () {
+      for (const [previousModel, nextModel] of Object.entries(replacements)) {
+        yield* sql`
+          UPDATE provider_session_runtime
+          SET runtime_payload_json = json_set(runtime_payload_json, '$.model', ${nextModel})
+          WHERE (provider_instance_id = ${instanceId} OR (
+            provider_instance_id IS NULL AND
+            COALESCE(json_extract(runtime_payload_json, '$.providerInstanceId'),
+              json_extract(runtime_payload_json, '$.modelSelection.instanceId'),
+              json_extract(runtime_payload_json, '$.provider')) = ${instanceId}
+          ))
+            AND json_valid(runtime_payload_json)
+            AND json_extract(runtime_payload_json, '$.model') = ${previousModel}
+        `;
+        for (const [table, column, selectionPath] of [
+          ["projection_projects", "default_model_selection_json", "$"],
+          ["projection_threads", "model_selection_json", "$"],
+          ["provider_session_runtime", "runtime_payload_json", "$.modelSelection"],
+          ["orchestration_events", "payload_json", "$.defaultModelSelection"],
+          ["orchestration_events", "payload_json", "$.modelSelection"],
+        ] as const) {
+          const modelPath = `${selectionPath}.model`;
+          const instancePath = `${selectionPath}.instanceId`;
+          yield* sql`
+          UPDATE ${sql(table)}
+          SET ${sql(column)} = json_set(${sql(column)}, ${modelPath}, ${nextModel})
+          WHERE json_valid(${sql(column)})
+            AND (json_extract(${sql(column)}, ${instancePath}) = ${instanceId}
+              OR (json_extract(${sql(column)}, ${instancePath}) IS NULL
+                AND json_extract(${sql(column)}, ${`${selectionPath}.provider`}) = ${instanceId}))
+            AND json_extract(${sql(column)}, ${modelPath}) = ${previousModel}
+        `;
+        }
+      }
+    }),
+  );
+});
+
 /** Run the idempotent reference migration after settings and SQLite are ready. */
 export const layer = Layer.effectDiscard(
   Effect.gen(function* () {
     const settings = yield* ServerSettingsService;
     yield* settings.start;
+    yield* migrateManagedModelReferences(
+      managedConfig.provider.routes.onPrem.instanceId,
+      Object.fromEntries(
+        Object.entries(managedConfig.models.replacements).filter(([, target]) =>
+          managedConfig.models.catalog.some(
+            (model) => model.id === target && model.route === "on-prem",
+          ),
+        ),
+      ),
+    );
     yield* migrateManagedProviderInstanceReferences(getManagedProviderInstanceRenames(), {
       previousInstanceId: managedConfig.provider.routes.onPrem.instanceId,
       nextInstanceId: managedConfig.provider.routes.frontier.instanceId,

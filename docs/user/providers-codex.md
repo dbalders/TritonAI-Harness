@@ -197,3 +197,7 @@ Use a totally separate `CODEX_HOME path` only when you want a separate Codex wor
 
 That means separate sessions and less account switching inside old threads. Most dual-account users
 should use the shared-home plus shadow-home setup instead.
+
+## Managed model updates
+
+When a managed TritonAI update replaces Gemma with Glimmer, saved managed project and task selections move to Glimmer automatically. Glimmer also handles image reading for text-only models. Personal provider configurations are preserved.

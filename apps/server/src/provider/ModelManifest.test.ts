@@ -11,6 +11,8 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
+import managedConfigJson from "../../../../config/tritonai-managed-config.json" with { type: "json" };
+
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import {
@@ -39,6 +41,14 @@ const model = (overrides: Partial<ServerProviderModel>): ServerProviderModel => 
 });
 
 describe("classifyModels", () => {
+  it("keeps managed catalog entries current when a refreshed upstream manifest omits them", () => {
+    const models = managedConfigJson.models.catalog.map((entry) =>
+      model({ slug: entry.id, isLegacy: true }),
+    );
+    const manifest: ModelManifestData = { version: 1, currentModels: { codex: [] } };
+    assert.isTrue(classifyModels(models, manifest, CODEX).every((entry) => !entry.isLegacy));
+  });
+
   it("flags non-current models, clears stale flags, and skips custom models", () => {
     const manifest: ModelManifestData = {
       version: 1,

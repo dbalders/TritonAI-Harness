@@ -87,7 +87,7 @@ describe("TritonAI managed Harness policy", () => {
       },
     ]);
     expect(effective.providerInstances[managedInstanceId]?.config).toMatchObject({
-      customModels: ["api-deepseek-v4-flash", "api-glm-5.3", "api-gemma-4-31b"],
+      customModels: ["api-deepseek-v4-flash", "api-glm-5.3", "onyx-muse-glimmer-30b"],
       customModelMetadata: {
         "api-deepseek-v4-flash": {
           capabilities: { inputModalities: ["text"] },
@@ -104,7 +104,7 @@ describe("TritonAI managed Harness policy", () => {
             ],
           },
         },
-        "api-gemma-4-31b": {
+        "onyx-muse-glimmer-30b": {
           capabilities: { inputModalities: ["text", "image"] },
         },
       },
@@ -112,7 +112,7 @@ describe("TritonAI managed Harness policy", () => {
     expect(effective.providers.codex.customModels).toEqual([
       "api-deepseek-v4-flash",
       "api-glm-5.3",
-      "api-gemma-4-31b",
+      "onyx-muse-glimmer-30b",
     ]);
     expect(effective.providerInstances[frontierInstanceId]).toMatchObject({
       driver: "codex",
@@ -162,6 +162,28 @@ describe("TritonAI managed Harness policy", () => {
     });
     expect(retiredGlm.textGenerationModelSelection.model).toBe("api-glm-5.3");
     expect(retiredGlm.textGenerationModelSelection.instanceId).toBe(managedInstanceId);
+
+    const personalGemma = {
+      instanceId: ProviderInstanceId.make("personal"),
+      model: "api-gemma-4-31b",
+    };
+    const personalSettings = applyManagedHarnessPolicy({
+      ...DEFAULT_SERVER_SETTINGS,
+      textGenerationModelSelection: personalGemma,
+      sourceControlWriterModelSelection: personalGemma,
+    });
+    expect(personalSettings.textGenerationModelSelection).toEqual(personalGemma);
+    expect(personalSettings.sourceControlWriterModelSelection).toEqual(personalGemma);
+
+    const retiredGemma = applyManagedHarnessPolicy({
+      ...DEFAULT_SERVER_SETTINGS,
+      textGenerationModelSelection: {
+        instanceId: managedInstanceId,
+        model: "api-gemma-4-31b",
+      },
+    });
+    expect(retiredGemma.textGenerationModelSelection.model).toBe("onyx-muse-glimmer-30b");
+    expect(retiredGemma.textGenerationModelSelection.instanceId).toBe(managedInstanceId);
 
     const retiredConfig: TritonAiManagedConfig = {
       ...managedConfig,

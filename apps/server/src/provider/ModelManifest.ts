@@ -32,6 +32,7 @@ import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import { ServerConfig } from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { hasValidClaudeManifestAdapters } from "./ClaudeModelManifest.ts";
+import managedConfigJson from "../../../../config/tritonai-managed-config.json" with { type: "json" };
 import bundledManifestJson from "./model-manifest.json" with { type: "json" };
 import type { ServerProviderDraft } from "./providerSnapshot.ts";
 
@@ -227,7 +228,10 @@ export function classifyModels(
 ): ReadonlyArray<ServerProviderModel> {
   return models.map((model) => {
     if (model.isCustom) return model;
-    if (isLegacyModel(manifest, driverKind, model.slug)) {
+    const isManagedCurrent =
+      driverKind === managedConfigJson.provider.driver &&
+      managedConfigJson.models.catalog.some((entry) => entry.id === model.slug);
+    if (!isManagedCurrent && isLegacyModel(manifest, driverKind, model.slug)) {
       return model.isLegacy ? model : { ...model, isLegacy: true };
     }
     if (!model.isLegacy) return model;
