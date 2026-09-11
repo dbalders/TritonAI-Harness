@@ -2295,14 +2295,23 @@ export default function Sidebar() {
     return routeThread === undefined ? [] : [routeThread];
   }, [routeThreadKey, snoozedShelfExpanded, snoozedThreads]);
 
+  const visibleGroupedActiveThreads = useMemo(
+    () =>
+      activeThreadGroups.flatMap((group) =>
+        collapsedProjectKeys.includes(group.project?.projectKey ?? "active-project-fallback")
+          ? []
+          : group.threads,
+      ),
+    [activeThreadGroups, collapsedProjectKeys],
+  );
   const orderedThreads = useMemo(
     () => [
       ...pinnedThreads,
-      ...groupedActiveThreads,
+      ...visibleGroupedActiveThreads,
       ...visibleSnoozedThreads,
       ...renderedSettledThreads,
     ],
-    [pinnedThreads, groupedActiveThreads, visibleSnoozedThreads, renderedSettledThreads],
+    [pinnedThreads, visibleGroupedActiveThreads, visibleSnoozedThreads, renderedSettledThreads],
   );
   const orderedThreadKeys = useMemo(
     () =>
