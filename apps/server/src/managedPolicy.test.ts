@@ -163,6 +163,18 @@ describe("TritonAI managed Harness policy", () => {
     expect(retiredGlm.textGenerationModelSelection.model).toBe("api-glm-5.3");
     expect(retiredGlm.textGenerationModelSelection.instanceId).toBe(managedInstanceId);
 
+    const personalGemma = {
+      instanceId: ProviderInstanceId.make("personal"),
+      model: "api-gemma-4-31b",
+    };
+    const personalSettings = applyManagedHarnessPolicy({
+      ...DEFAULT_SERVER_SETTINGS,
+      textGenerationModelSelection: personalGemma,
+      sourceControlWriterModelSelection: personalGemma,
+    });
+    expect(personalSettings.textGenerationModelSelection).toEqual(personalGemma);
+    expect(personalSettings.sourceControlWriterModelSelection).toEqual(personalGemma);
+
     const retiredGemma = applyManagedHarnessPolicy({
       ...DEFAULT_SERVER_SETTINGS,
       textGenerationModelSelection: {

@@ -354,8 +354,13 @@ layer("managed model replacements", (it) => {
           ["orchestration_events", "payload_json", "$.modelSelection"],
         ] as const) {
           yield* sql`CREATE TABLE ${sql(table)} (${sql(column)} TEXT)`;
-          for (const instanceId of ["codex", "personal"]) {
-            const selection = { instanceId, model: "api-gemma-4-31b", options: [] };
+          for (const instanceId of ["codex", "personal", null]) {
+            const selection = {
+              ...(instanceId ? { instanceId } : {}),
+              provider: "codex",
+              model: "api-gemma-4-31b",
+              options: [],
+            };
             const payload =
               selectionPath === "$"
                 ? selection
@@ -367,7 +372,7 @@ layer("managed model replacements", (it) => {
           }
         }
         yield* sql`ALTER TABLE provider_session_runtime ADD COLUMN provider_instance_id TEXT`;
-        yield* sql`UPDATE provider_session_runtime SET provider_instance_id = json_extract(runtime_payload_json, '$.modelSelection.instanceId'), runtime_payload_json = json_set(runtime_payload_json, '$.model', 'api-gemma-4-31b')`;
+        yield* sql`UPDATE provider_session_runtime SET provider_instance_id = json_extract(runtime_payload_json, '$.modelSelection.instanceId'), runtime_payload_json = json_set(runtime_payload_json, '$.model', 'api-gemma-4-31b', '$.provider', 'codex')`;
         for (let pass = 0; pass < 2; pass++) {
           yield* migrateManagedModelReferences("codex", {
             "api-gemma-4-31b": "onyx-muse-glimmer-30b",
@@ -378,7 +383,7 @@ layer("managed model replacements", (it) => {
         }>`SELECT json_extract(runtime_payload_json, '$.model') AS model FROM provider_session_runtime ORDER BY rowid`;
         assert.deepStrictEqual(
           runtimeModels.map((row) => row.model),
-          ["onyx-muse-glimmer-30b", "api-gemma-4-31b"],
+          ["onyx-muse-glimmer-30b", "api-gemma-4-31b", "onyx-muse-glimmer-30b"],
         );
         for (const [table, column, selectionPath] of [
           ["projection_projects", "default_model_selection_json", "$"],
@@ -392,7 +397,7 @@ layer("managed model replacements", (it) => {
           }>`SELECT json_extract(${sql(column)}, ${`${selectionPath}.model`}) AS model FROM ${sql(table)} ORDER BY rowid`;
           assert.deepStrictEqual(
             rows.map((row) => row.model),
-            ["onyx-muse-glimmer-30b", "api-gemma-4-31b"],
+            ["onyx-muse-glimmer-30b", "api-gemma-4-31b", "onyx-muse-glimmer-30b"],
           );
         }
       }),

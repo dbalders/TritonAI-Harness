@@ -260,6 +260,12 @@ function resolveManagedSelection(
   selectionWasPersisted: boolean,
   availableModels: ManagedConfig["models"]["catalog"],
 ): ServerSettings["textGenerationModelSelection"] {
+  if (
+    selectionWasPersisted &&
+    selection.instanceId !== config.provider.routes.onPrem.instanceId &&
+    selection.instanceId !== config.provider.routes.frontier.instanceId
+  )
+    return selection;
   const catalog = new Set(availableModels.map((model) => model.id));
   const selectedModel = selectionWasPersisted ? selection.model : config.models.default;
   const configuredReplacement = Object.hasOwn(config.models.replacements, selectedModel)

@@ -233,7 +233,12 @@ export const migrateManagedModelReferences = Effect.fn("migrateManagedModelRefer
         yield* sql`
           UPDATE provider_session_runtime
           SET runtime_payload_json = json_set(runtime_payload_json, '$.model', ${nextModel})
-          WHERE provider_instance_id = ${instanceId}
+          WHERE (provider_instance_id = ${instanceId} OR (
+            provider_instance_id IS NULL AND
+            COALESCE(json_extract(runtime_payload_json, '$.providerInstanceId'),
+              json_extract(runtime_payload_json, '$.modelSelection.instanceId'),
+              json_extract(runtime_payload_json, '$.provider')) = ${instanceId}
+          ))
             AND json_valid(runtime_payload_json)
             AND json_extract(runtime_payload_json, '$.model') = ${previousModel}
         `;
@@ -250,7 +255,9 @@ export const migrateManagedModelReferences = Effect.fn("migrateManagedModelRefer
           UPDATE ${sql(table)}
           SET ${sql(column)} = json_set(${sql(column)}, ${modelPath}, ${nextModel})
           WHERE json_valid(${sql(column)})
-            AND json_extract(${sql(column)}, ${instancePath}) = ${instanceId}
+            AND (json_extract(${sql(column)}, ${instancePath}) = ${instanceId}
+              OR (json_extract(${sql(column)}, ${instancePath}) IS NULL
+                AND json_extract(${sql(column)}, ${`${selectionPath}.provider`}) = ${instanceId}))
             AND json_extract(${sql(column)}, ${modelPath}) = ${previousModel}
         `;
         }
