@@ -19,8 +19,10 @@ import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
+import * as Electron from "electron";
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
+import { requestComputerUsePermissions } from "./requestPermissions.ts";
 
 const CUA_DRIVER_PATH_ENV = "TRITONAI_CUA_DRIVER_PATH";
 const CUA_DRIVER_HOME_DIRNAME = "cua-driver-home";
@@ -139,8 +141,20 @@ export const make = Effect.gen(function* () {
     request: boolean,
   ) {
     if (environment.platform !== "darwin") return null;
-    return yield* Effect.try({
-      try: request ? requestMacOSPermissions : currentMacOsPermissionStatus,
+    return yield* Effect.tryPromise({
+      try: () =>
+        request
+          ? requestComputerUsePermissions({
+              requestNativePermissions: requestMacOSPermissions,
+              requestScreenCapture: () =>
+                Electron.desktopCapturer.getSources({
+                  types: ["screen"],
+                  thumbnailSize: { width: 1, height: 1 },
+                  fetchWindowIcons: false,
+                }),
+              readPermissions: currentMacOsPermissionStatus,
+            })
+          : Promise.resolve(currentMacOsPermissionStatus()),
       catch: (cause) => new DesktopComputerUseRuntimeError({ operation: "permissions", cause }),
     });
   });

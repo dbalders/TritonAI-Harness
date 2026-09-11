@@ -1,3 +1,4 @@
+import { computerUseActivity } from "./computerUseActivity";
 import {
   type ChatFileAttachment,
   type EnvironmentId,
@@ -62,6 +63,7 @@ import {
 import ChatMarkdown, { ChatMarkdownAssetImage } from "../ChatMarkdown";
 import {
   BotIcon,
+  MonitorIcon,
   CheckIcon,
   ChevronDownIcon,
   ChevronRightIcon,
@@ -1521,6 +1523,7 @@ function LiveActivityContent({
 
 function LiveWorkEntryTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "work-live" }> }) {
   const ctx = use(TimelineRowCtx);
+  if (computerUseActivity(row.entry)) return <ComputerUseActivityRow workEntry={row.entry} />;
   const label = liveWorkEntryLabel(row.entry, ctx.workspaceRoot, row.active);
   const failed = workEntryDisplayIndicatesToolFailure(row.entry);
 
@@ -2415,6 +2418,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   isExpandedToolGroupEntry: boolean;
 }) {
   const { workEntry, workspaceRoot, isExpandedToolGroupEntry } = props;
+  if (computerUseActivity(workEntry)) return <ComputerUseActivityRow workEntry={workEntry} />;
   // Before any hooks: spawn CTA rows render their own component.
   if (workEntry.agentSpawn) {
     return <AgentSpawnCtaRow workEntry={workEntry} />;
@@ -2425,6 +2429,66 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
       workspaceRoot={workspaceRoot}
       isExpandedToolGroupEntry={isExpandedToolGroupEntry}
     />
+  );
+});
+
+const ComputerUseActivityRow = memo(function ComputerUseActivityRow({
+  workEntry,
+}: {
+  workEntry: TimelineWorkEntry;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const activity = computerUseActivity(workEntry);
+  const failed = workEntryDisplayIndicatesToolFailure(workEntry);
+  const active = workEntry.toolLifecycleStatus === "inProgress";
+  const status = failed
+    ? "Failed"
+    : active
+      ? "In progress"
+      : workEntry.toolLifecycleStatus === "declined"
+        ? "Declined"
+        : workEntry.toolLifecycleStatus === "stopped"
+          ? "Stopped"
+          : "Completed";
+  if (!activity) return null;
+  return (
+    <div className="my-1 overflow-hidden rounded-lg border border-info-foreground/25 bg-info-foreground/5">
+      <button
+        type="button"
+        aria-expanded={expanded}
+        onClick={() => setExpanded(!expanded)}
+        className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <MonitorIcon className="size-4 shrink-0 text-info-foreground" aria-hidden />
+        <span className="min-w-0 flex-1">
+          <span className="block font-medium">
+            Computer use{" "}
+            <span className="font-normal text-muted-foreground">· {activity.action}</span>
+          </span>
+          {activity.session && (
+            <span className="block truncate text-xs text-muted-foreground">{activity.session}</span>
+          )}
+        </span>
+        <span className={cn("text-xs", failed ? "text-destructive" : "text-muted-foreground")}>
+          {status}
+        </span>
+        <ChevronDownIcon
+          className={cn("size-3.5 shrink-0 text-muted-foreground", expanded && "rotate-180")}
+          aria-hidden
+        />
+      </button>
+      {failed && (
+        <p className="px-3 pb-2 text-xs text-destructive">
+          Computer use could not complete this action. Check the error below; permissions are in
+          Settings → General → Computer use.
+        </p>
+      )}
+      {expanded && (
+        <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words border-t border-border/50 px-3 py-2 text-xs text-muted-foreground">
+          {buildToolCallExpandedBody(workEntry, undefined)}
+        </pre>
+      )}
+    </div>
   );
 });
 

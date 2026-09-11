@@ -1,3 +1,4 @@
+import { computerUseActivity } from "./computerUseActivity";
 import * as Equal from "effect/Equal";
 import { renderCodexDirectivesForCopy } from "@t3tools/client-runtime/codex-markdown-directives";
 import {
@@ -467,7 +468,11 @@ function deriveTurnFolds(input: {
       // Agent-spawn CTA rows never fold: workflows outlive their launching
       // turn (dynamic spawns, background execution), and folding the CTA
       // when the turn settles makes a still-running fleet invisible.
-      if (entry.kind === "work" && entry.entry.agentSpawn !== undefined) {
+      // Computer-use calls also stay visible as a record of desktop actions.
+      if (
+        entry.kind === "work" &&
+        (entry.entry.agentSpawn !== undefined || computerUseActivity(entry.entry))
+      ) {
         continue;
       }
       hiddenEntryIds.add(entry.id);
@@ -679,7 +684,11 @@ export function deriveMessagesTimelineRows(input: {
     }
 
     if (timelineEntry.kind === "work") {
-      if (timelineEntry.entry.agentSpawn !== undefined || timelineEntry.entry.tone === "error") {
+      if (
+        timelineEntry.entry.agentSpawn !== undefined ||
+        timelineEntry.entry.tone === "error" ||
+        computerUseActivity(timelineEntry.entry)
+      ) {
         nextRows.push({
           kind: "work",
           id: timelineEntry.id,
@@ -698,6 +707,7 @@ export function deriveMessagesTimelineRows(input: {
           !nextEntry ||
           nextEntry.kind !== "work" ||
           nextEntry.entry.agentSpawn !== undefined ||
+          computerUseActivity(nextEntry.entry) !== null ||
           nextEntry.entry.tone === "error" ||
           activeWorkEntryIds.has(nextEntry.id) ||
           collapsedEntryIds.has(nextEntry.id) ||

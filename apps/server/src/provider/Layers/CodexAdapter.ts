@@ -349,7 +349,9 @@ function toCanonicalItemType(raw: string | undefined | null): CanonicalItemType 
 
 function itemTitle(itemType: CanonicalItemType, item?: CodexLifecycleItem): string | undefined {
   if (itemType === "mcp_tool_call" && item?.type === "mcpToolCall") {
-    return `${item.server} · ${item.tool}`;
+    return item.server === "cua-driver"
+      ? `Computer use · ${item.tool.replaceAll("_", " ")}`
+      : `${item.server} · ${item.tool}`;
   }
   if (itemType === "dynamic_tool_call" && item && "tool" in item) {
     return `Integration plugin · ${String(item.tool)}`;
@@ -2076,6 +2078,9 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
               }
             : options?.environment;
         const runtimeInput: CodexSessionRuntimeOptions = {
+          ...(serverConfig.computerUseState === undefined
+            ? {}
+            : { computerUseState: serverConfig.computerUseState }),
           threadId: input.threadId,
           providerInstanceId: boundInstanceId,
           cwd: input.cwd ?? process.cwd(),
