@@ -40,6 +40,7 @@ import {
   CircleDashedIcon,
   ClockIcon,
   FolderIcon,
+  FolderOpenIcon,
   FolderPlusIcon,
   GitBranchIcon,
   MessageSquareIcon,
@@ -1191,7 +1192,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     <span
       className={cn(
         "min-w-0 flex-1 text-sm transition-opacity motion-reduce:transition-none",
-        shouldRecede ? "font-normal" : "font-medium",
+        isUnread ? "font-medium" : "font-normal",
         variant !== "slim" || props.isActive || isSelected || isUnread || isWoke
           ? "truncate text-sidebar-foreground"
           : "truncate text-sidebar-muted-foreground group-hover/sidebar-row:text-sidebar-foreground",
@@ -1262,126 +1263,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       />
     )
   ) : null;
-
-  if (variant === "grouped") {
-    return (
-      <li
-        data-thread-item
-        className="list-none py-0.5 [content-visibility:auto] [contain-intrinsic-size:auto_60px]"
-      >
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <div
-                role="button"
-                tabIndex={0}
-                data-testid="sidebar-row-grouped"
-                aria-busy={isRegeneratingTitle || undefined}
-                className={cn(
-                  rowSurfaceClassName,
-                  "flex min-h-14 items-center pe-[var(--sidebar-row-content-inset)] py-2 ps-[calc(var(--sidebar-row-content-inset)+1.25rem)]",
-                )}
-                onClick={handleClick}
-                onDoubleClick={handleDoubleClick}
-                onKeyDown={handleKeyDown}
-                onContextMenu={handleContextMenu}
-              />
-            }
-          >
-            <div className="min-w-0 flex-1">
-              <div className="flex min-w-0 items-center gap-1.5">
-                {title}
-                {terminalStatusIcon}
-                {prBadge}
-                {isRegeneratingTitle ? (
-                  <span role="status" className="sr-only">
-                    Regenerating title
-                  </span>
-                ) : null}
-              </div>
-              <div className="mt-1 flex h-5 min-w-0 items-center gap-2 text-xs">
-                {topStatus ? (
-                  isWokeStatus ? (
-                    <button
-                      type="button"
-                      aria-label="Dismiss Woke notification"
-                      onClick={handleAcknowledgeWokeClick}
-                      className={cn(
-                        "inline-flex cursor-pointer items-center gap-1 rounded-sm font-medium outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring",
-                        topStatus.className,
-                      )}
-                    >
-                      <AlarmClockIcon aria-hidden className="size-3 shrink-0" />
-                      <span role="status">{topStatus.label}</span>
-                    </button>
-                  ) : (
-                    <span
-                      className={cn(
-                        "inline-flex items-center gap-1 font-medium",
-                        topStatus.className,
-                      )}
-                    >
-                      {topStatus.icon === "working" ? (
-                        <CircleDashedIcon aria-hidden className="size-3 shrink-0" />
-                      ) : topStatus.icon === "done" ? (
-                        <CircleCheckIcon aria-hidden className="size-3 shrink-0" />
-                      ) : null}
-                      <span role="status">{topStatus.label}</span>
-                      {status === "working" ? (
-                        <span aria-hidden>
-                          <WorkingDuration startedAt={resolveWorkingStartedAt(thread)} />
-                        </span>
-                      ) : null}
-                    </span>
-                  )
-                ) : null}
-                <span className="group/sidebar-status-slot relative ml-auto flex h-5 min-w-8 shrink-0 items-stretch justify-end">
-                  <span
-                    className={cn(
-                      "pointer-events-none flex items-center self-center justify-self-end text-secondary-label tabular-nums transition-opacity group-has-[:focus-visible]/sidebar-status-slot:absolute group-has-[:focus-visible]/sidebar-status-slot:right-0 group-has-[:focus-visible]/sidebar-status-slot:opacity-0 group-hover/sidebar-row:absolute group-hover/sidebar-row:right-0 group-hover/sidebar-row:opacity-0",
-                      snoozeMenuOpen && "absolute right-0 opacity-0",
-                    )}
-                  >
-                    {threadTimeLabel(thread)}
-                  </span>
-                  {props.settlementSupported || showSnoozeButton ? (
-                    <span
-                      className={cn(
-                        "pointer-events-none absolute inset-y-0 right-0 flex items-stretch opacity-0 transition-opacity has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:static has-[:focus-visible]:opacity-100 group-hover/sidebar-row:pointer-events-auto group-hover/sidebar-row:static group-hover/sidebar-row:opacity-100",
-                        snoozeMenuOpen && "pointer-events-auto static opacity-100",
-                      )}
-                    >
-                      {showSnoozeButton ? (
-                        <SnoozePopoverButton
-                          open={snoozeMenuOpen}
-                          onOpenChange={setSnoozeMenuOpen}
-                          onSnooze={handleSnoozePreset}
-                          timestampFormat={props.timestampFormat}
-                        />
-                      ) : null}
-                      {props.settlementSupported ? (
-                        <button
-                          type="button"
-                          aria-label="Settle thread"
-                          onClick={handleSettleClick}
-                          className="-mr-1 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground"
-                        >
-                          <CheckIcon className="size-3.5" />
-                          Settle
-                        </button>
-                      ) : null}
-                    </span>
-                  ) : null}
-                </span>
-              </div>
-            </div>
-            {props.jumpLabel ? <JumpHintBadge label={props.jumpLabel} /> : null}
-          </TooltipTrigger>
-          {detailsTooltip}
-        </Tooltip>
-      </li>
-    );
-  }
 
   if (variant === "slim") {
     return (
@@ -1544,7 +1425,10 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       }
       {...(sortable?.listeners ?? {})}
       className={cn(
-        "list-none py-0.5 [content-visibility:auto] [contain-intrinsic-size:auto_64px]",
+        "w-full min-w-0 list-none py-0.5 [content-visibility:auto]",
+        variant === "grouped"
+          ? "[contain-intrinsic-size:auto_40px]"
+          : "[contain-intrinsic-size:auto_64px]",
         sortable?.isDragging && "z-20 opacity-80",
       )}
     >
@@ -1554,7 +1438,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
             <div
               role="button"
               tabIndex={0}
-              data-testid="sidebar-row-card"
+              data-testid={variant === "grouped" ? "sidebar-row-grouped" : "sidebar-row-card"}
               aria-busy={isRegeneratingTitle || undefined}
               className={rowSurfaceClassName}
               onClick={handleClick}
@@ -1564,25 +1448,40 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
             />
           }
         >
-          <div className="relative z-10 h-[3.75rem] px-[var(--sidebar-row-content-inset)] py-[var(--sidebar-content-inset)]">
+          <div
+            className={cn(
+              "relative z-10 px-[var(--sidebar-row-content-inset)] py-[var(--sidebar-content-inset)]",
+              variant === "grouped" && "ps-[calc(var(--sidebar-row-content-inset)+1.25rem)]",
+            )}
+          >
             <div className="flex h-5 min-w-0 items-center gap-1.5">
-              <ProjectFavicon
-                environmentId={thread.environmentId}
-                cwd={props.projectCwd ?? ""}
-                faviconPath={props.projectFaviconPath}
-                className="size-4 shrink-0"
-              />
-              {props.projectTitle ? (
-                <span
-                  className={cn(
-                    "min-w-0 flex-1 truncate text-secondary-label text-xs",
-                    shouldRecede ? "font-normal" : "font-medium",
+              {variant !== "grouped" ? (
+                <>
+                  <ProjectFavicon
+                    environmentId={thread.environmentId}
+                    cwd={props.projectCwd ?? ""}
+                    faviconPath={props.projectFaviconPath}
+                    className="size-4 shrink-0"
+                  />
+                  {props.projectTitle ? (
+                    <span className="min-w-0 flex-1 truncate text-xs font-medium text-sidebar-muted-foreground">
+                      {props.projectTitle}
+                    </span>
+                  ) : (
+                    <span className="flex-1" />
                   )}
-                >
-                  {props.projectTitle}
-                </span>
+                </>
               ) : (
-                <span className="flex-1" />
+                <>
+                  {title}
+                  {terminalStatusIcon}
+                  {prBadge}
+                  {isRegeneratingTitle ? (
+                    <span role="status" className="sr-only">
+                      Regenerating title
+                    </span>
+                  ) : null}
+                </>
               )}
               {pinIndicator}
               {/* The visible state owns this slot's width: status at rest,
@@ -1692,16 +1591,18 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                 ) : null}
               </span>
             </div>
-            <div className="mt-1 flex min-w-0 items-center gap-1.5">
-              {title}
-              {terminalStatusIcon}
-              {prBadge}
-              {isRegeneratingTitle ? (
-                <span role="status" className="sr-only">
-                  Regenerating title
-                </span>
-              ) : null}
-            </div>
+            {variant !== "grouped" ? (
+              <div className="mt-1 flex min-w-0 items-center gap-1.5">
+                {title}
+                {terminalStatusIcon}
+                {prBadge}
+                {isRegeneratingTitle ? (
+                  <span role="status" className="sr-only">
+                    Regenerating title
+                  </span>
+                ) : null}
+              </div>
+            ) : null}
           </div>
           {props.jumpLabel ? <JumpHintBadge label={props.jumpLabel} /> : null}
         </TooltipTrigger>
@@ -2059,6 +1960,11 @@ export default function Sidebar() {
   // Project scope: one menu above the list. Scoping filters the list without
   // making the header width depend on the number or length of project names.
   const [projectScopeKey, setProjectScopeKey] = useState<string | null>(null);
+  const [collapsedProjectKeys, setCollapsedProjectKeys] = useLocalStorage(
+    "t3code:sidebar-v2:collapsed-projects",
+    [] as string[],
+    Schema.Array(Schema.String),
+  );
   // {value, label} items let Base UI drive the combobox selection contract
   // while the popup search filters the same collection.
   const projectScopeItems = useMemo(
@@ -2389,14 +2295,23 @@ export default function Sidebar() {
     return routeThread === undefined ? [] : [routeThread];
   }, [routeThreadKey, snoozedShelfExpanded, snoozedThreads]);
 
+  const visibleGroupedActiveThreads = useMemo(
+    () =>
+      activeThreadGroups.flatMap((group) =>
+        collapsedProjectKeys.includes(group.project?.projectKey ?? "active-project-fallback")
+          ? []
+          : group.threads,
+      ),
+    [activeThreadGroups, collapsedProjectKeys],
+  );
   const orderedThreads = useMemo(
     () => [
       ...pinnedThreads,
-      ...groupedActiveThreads,
+      ...visibleGroupedActiveThreads,
       ...visibleSnoozedThreads,
       ...renderedSettledThreads,
     ],
-    [pinnedThreads, groupedActiveThreads, visibleSnoozedThreads, renderedSettledThreads],
+    [pinnedThreads, visibleGroupedActiveThreads, visibleSnoozedThreads, renderedSettledThreads],
   );
   const orderedThreadKeys = useMemo(
     () =>
@@ -4020,6 +3935,8 @@ export default function Sidebar() {
                     groupIndex,
                     { project, threads: projectThreads },
                   ] of activeThreadGroups.entries()) {
+                    const groupKey = project?.projectKey ?? "active-project-fallback";
+                    const isExpanded = !collapsedProjectKeys.includes(groupKey);
                     items.push(
                       <li
                         key={
@@ -4034,20 +3951,34 @@ export default function Sidebar() {
                         )}
                       >
                         <div className="flex min-w-0 items-center gap-2">
-                          {project ? (
-                            <ProjectFavicon
-                              environmentId={project.environmentId}
-                              cwd={project.workspaceRoot}
-                              faviconPath={project.faviconPath}
-                              className="size-4 shrink-0"
-                              fallbackIcon={FolderIcon}
-                            />
-                          ) : (
-                            <FolderIcon className="size-4 shrink-0" />
-                          )}
-                          <span className="min-w-0 flex-1 truncate text-sm font-medium text-sidebar-foreground">
-                            {project?.displayName ?? "Other threads"}
-                          </span>
+                          <button
+                            type="button"
+                            aria-expanded={isExpanded}
+                            aria-label={`${isExpanded ? "Collapse" : "Expand"} ${project?.displayName ?? "Other threads"}`}
+                            onClick={() =>
+                              setCollapsedProjectKeys((keys) =>
+                                keys.includes(groupKey)
+                                  ? keys.filter((key) => key !== groupKey)
+                                  : [...keys, groupKey],
+                              )
+                            }
+                            className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-sm text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          >
+                            {isExpanded ? (
+                              <FolderOpenIcon
+                                aria-hidden
+                                className="size-4 shrink-0 text-sidebar-muted-foreground"
+                              />
+                            ) : (
+                              <FolderIcon
+                                aria-hidden
+                                className="size-4 shrink-0 text-sidebar-muted-foreground"
+                              />
+                            )}
+                            <span className="min-w-0 flex-1 truncate text-sm font-medium text-sidebar-muted-foreground">
+                              {project?.displayName ?? "Other threads"}
+                            </span>
+                          </button>
                           {project ? (
                             <SidebarProjectNewThreadButton
                               projectName={project.displayName}
@@ -4064,8 +3995,10 @@ export default function Sidebar() {
                         </div>
                       </li>,
                     );
-                    for (const thread of projectThreads) {
-                      items.push(renderThreadRow(thread, "active"));
+                    if (isExpanded) {
+                      for (const thread of projectThreads) {
+                        items.push(renderThreadRow(thread, "active"));
+                      }
                     }
                   }
                   // Snoozed shelf: between the inbox and Settled — out of the
