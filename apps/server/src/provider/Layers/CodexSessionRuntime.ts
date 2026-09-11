@@ -1,6 +1,7 @@
 import {
   ApprovalRequestId,
   DEFAULT_MODEL,
+  type DesktopComputerUseState,
   EventId,
   ProviderDriverKind,
   ProviderItemId,
@@ -65,7 +66,10 @@ const RECOVERABLE_THREAD_RESUME_ERROR_SNIPPETS = [
   "no rollout found",
 ];
 
-export function hasConfiguredMcpServer(appServerArgs: ReadonlyArray<string> | undefined): boolean {
+export function hasConfiguredMcpServer(
+  appServerArgs: ReadonlyArray<string> | undefined,
+  name?: string,
+): boolean {
   const configuredServers = new Set<string>();
   const disabledServers = new Set<string>();
 
@@ -84,7 +88,20 @@ export function hasConfiguredMcpServer(appServerArgs: ReadonlyArray<string> | un
     }
   }
 
-  return configuredServers.values().some((serverName) => !disabledServers.has(serverName));
+  return configuredServers
+    .values()
+    .some(
+      (serverName) =>
+        !disabledServers.has(serverName) && (name === undefined || serverName === name),
+    );
+}
+
+export function computerUseStateForSession(
+  state: DesktopComputerUseState | undefined,
+  appServerArgs: ReadonlyArray<string> | undefined,
+): DesktopComputerUseState | undefined {
+  if (!state || hasConfiguredMcpServer(appServerArgs, "cua-driver")) return state;
+  return { ...state, running: false };
 }
 
 export const CodexResumeCursorSchema = Schema.Struct({
@@ -256,6 +273,7 @@ export interface CodexSessionRuntimeOptions {
   readonly serviceTier?: CodexServiceTier | undefined;
   readonly resumeCursor?: CodexResumeCursor;
   readonly appServerArgs?: ReadonlyArray<string>;
+  readonly computerUseState?: DesktopComputerUseState | undefined;
   readonly dynamicTools?: ReadonlyArray<CodexDynamicToolDefinition>;
   readonly isDynamicToolAvailable?: (name: string) => boolean;
   readonly invokeDynamicTool?: (input: CodexDynamicToolInvocation) => Promise<unknown>;
@@ -795,6 +813,7 @@ function buildCodexCollaborationMode(input: {
   readonly model?: string;
   readonly effort?: EffectCodexSchema.V2TurnStartParams__ReasoningEffort;
   readonly browserToolsAvailable?: boolean;
+  readonly computerUseState?: DesktopComputerUseState | undefined;
 }): EffectCodexSchema.V2TurnStartParams__CollaborationMode | undefined {
   if (input.interactionMode === undefined) {
     return undefined;
@@ -810,6 +829,7 @@ function buildCodexCollaborationMode(input: {
         input.interactionMode,
         { model, reasoningEffort },
         input.browserToolsAvailable ?? true,
+        input.computerUseState,
       ),
     },
   };
@@ -830,6 +850,7 @@ export function buildTurnStartParams(input: {
   readonly pluginSkills?: ReadonlyArray<CodexPluginSkillDefinition>;
   /** Defaults to true so callers that predate the agent-access gate are unchanged. */
   readonly browserToolsAvailable?: boolean;
+  readonly computerUseState?: DesktopComputerUseState | undefined;
 }): Effect.Effect<
   CodexTurnStartParamsWithCollaborationMode,
   CodexErrors.CodexAppServerProtocolParseError
@@ -862,6 +883,7 @@ export function buildTurnStartParams(input: {
     ...(input.model ? { model: input.model } : {}),
     ...(input.effort ? { effort: input.effort } : {}),
     browserToolsAvailable: input.browserToolsAvailable ?? true,
+    computerUseState: input.computerUseState,
   });
 
   return decodeCodexTurnStartParamsWithCollaborationMode({
@@ -2783,7 +2805,11 @@ export const makeCodexSessionRuntime = (
               // Derived from the session's own MCP configuration rather than the
               // setting, so the prompt describes the tools this turn actually
               // has even if the setting changed after the session started.
-              browserToolsAvailable: hasConfiguredMcpServer(options.appServerArgs),
+              browserToolsAvailable: hasConfiguredMcpServer(options.appServerArgs, "t3-code"),
+              computerUseState: computerUseStateForSession(
+                options.computerUseState,
+                options.appServerArgs,
+              ),
             });
           let params: CodexTurnStartParamsWithCollaborationMode | null = null;
           let pluginSkillLease: CodexPluginSkillLease | null = null;

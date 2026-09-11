@@ -291,6 +291,98 @@ describe("resolveAssistantMessageCopyState", () => {
 });
 
 describe("deriveMessagesTimelineRows", () => {
+  it.each([false, true])(
+    "keeps consecutive and mixed computer-use calls out of the live aggregate (mixed=%s)",
+    (mixed) => {
+      const createdAt = "2026-09-10T23:20:00Z";
+      const ids = mixed ? ["capture", "shell", "click", "shell-last"] : ["capture", "click"];
+      const rows = deriveMessagesTimelineRows({
+        timelineEntries: ids.map((id) => ({
+          id,
+          kind: "work" as const,
+          createdAt,
+          entry: {
+            id,
+            createdAt,
+            turnId: TurnId.make("active-cua"),
+            label: id,
+            tone: "tool" as const,
+            itemType: "mcp_tool_call" as const,
+            toolLifecycleStatus: "inProgress" as const,
+            toolData: { server: id.startsWith("shell") ? "other" : "cua-driver", tool: id },
+          },
+        })),
+        isWorking: true,
+        activeTurnStartedAt: createdAt,
+        turnDiffSummaryByAssistantMessageId: new Map(),
+        revertTurnCountByUserMessageId: new Map(),
+      });
+      for (const id of ["capture", "click"]) {
+        expect(
+          rows.some(
+            (row) =>
+              row.kind === "work" &&
+              row.groupedEntries.length === 1 &&
+              row.groupedEntries[0]?.id === id,
+          ),
+        ).toBe(true);
+        expect(
+          rows.some(
+            (row) =>
+              row.kind === "work-live" && row.groupedEntries.some((entry) => entry.id === id),
+          ),
+        ).toBe(false);
+      }
+    },
+  );
+
+  it("keeps computer-use activity visible after a turn finishes", () => {
+    const turnId = TurnId.make("computer-use-turn");
+    const createdAt = "2026-09-10T23:20:00Z";
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        {
+          id: "capture",
+          kind: "work",
+          createdAt,
+          entry: {
+            id: "capture",
+            createdAt,
+            turnId,
+            label: "Computer use",
+            tone: "tool",
+            itemType: "mcp_tool_call",
+            toolLifecycleStatus: "completed",
+            toolData: { server: "cua-driver", tool: "capture_screen" },
+          },
+        },
+        {
+          id: "final",
+          kind: "message",
+          createdAt: "2026-09-10T23:21:00Z",
+          message: {
+            id: MessageId.make("final"),
+            role: "assistant",
+            text: "Finished",
+            turnId,
+            createdAt: "2026-09-10T23:21:00Z",
+            updatedAt: "2026-09-10T23:21:00Z",
+            streaming: false,
+          },
+        },
+      ],
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+    expect(
+      rows.some(
+        (row) => row.kind === "work" && row.groupedEntries.some((entry) => entry.id === "capture"),
+      ),
+    ).toBe(true);
+  });
+
   it("only enables assistant copy for the terminal assistant message in a turn", () => {
     const rows = deriveMessagesTimelineRows({
       timelineEntries: [

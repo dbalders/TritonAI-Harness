@@ -580,6 +580,7 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
     DesktopBackendManager.DesktopBackendStartConfig,
     never,
     | DesktopComputerUse.DesktopComputerUse
+    | DesktopAppSettings.DesktopAppSettings
     | DesktopEnvironment.DesktopEnvironment
     | DesktopServerExposure.DesktopServerExposure
     | FileSystem.FileSystem
@@ -595,6 +596,16 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
     );
     const computerUse = yield* DesktopComputerUse.DesktopComputerUse;
     const computerUseMcp = yield* computerUse.currentMcpConfiguration;
+    const appSettings = yield* DesktopAppSettings.DesktopAppSettings;
+    const computerUseState = yield* computerUse
+      .getState((yield* appSettings.get).computerUseEnabled)
+      .pipe(
+        Effect.catch((error) =>
+          Effect.logWarning("Could not read computer-use startup status", error).pipe(
+            Effect.as(undefined),
+          ),
+        ),
+      );
 
     const bootstrap = {
       mode: "desktop" as const,
@@ -614,6 +625,7 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
         onSome: (resourceMonitorPath) => ({ resourceMonitorPath }),
       }),
       ...(computerUseMcp === undefined ? {} : { computerUseMcp }),
+      ...(computerUseState === undefined ? {} : { computerUseState }),
       ...buildObservabilityFragment(input.observabilitySettings),
     };
 
@@ -1016,6 +1028,7 @@ export const make = Effect.gen(function* () {
     );
     return yield* resolvePrimaryStartConfig({ ...shared, resourceMonitorPath }).pipe(
       Effect.provideService(DesktopComputerUse.DesktopComputerUse, computerUse),
+      Effect.provideService(DesktopAppSettings.DesktopAppSettings, settings),
       Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
       Effect.provideService(DesktopServerExposure.DesktopServerExposure, serverExposure),
       Effect.provideService(FileSystem.FileSystem, fileSystem),

@@ -43,7 +43,10 @@ export const setComputerUseEnabled = makeIpcMethod({
     const permissionsReady =
       state.accessibilityPermission !== false && state.screenRecordingPermission !== false;
 
-    if (change.changed && (!enabled || (state.available && permissionsReady))) {
+    if (
+      (!enabled && change.changed) ||
+      (enabled && state.available && permissionsReady && !state.running)
+    ) {
       yield* lifecycle.relaunch(`computerUseEnabled=${enabled}`, { waitForIpcResponse: true });
     }
 

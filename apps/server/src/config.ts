@@ -14,7 +14,7 @@ import * as Layer from "effect/Layer";
 import * as LogLevel from "effect/LogLevel";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import type { DesktopMcpServerConfiguration } from "@t3tools/contracts";
+import type { DesktopComputerUseState, DesktopMcpServerConfiguration } from "@t3tools/contracts";
 
 import { sweepStalePendingAttachments } from "./attachmentStore.ts";
 
@@ -88,6 +88,7 @@ export class ServerConfig extends Context.Service<
     readonly desktopTelemetryControlFd?: number | undefined;
     readonly resourceMonitorPath?: string | undefined;
     readonly computerUseMcp?: DesktopMcpServerConfiguration | undefined;
+    readonly computerUseState?: DesktopComputerUseState | undefined;
     readonly autoBootstrapProjectFromCwd: boolean;
     readonly logWebSocketEvents: boolean;
     readonly tailscaleServeEnabled: boolean;

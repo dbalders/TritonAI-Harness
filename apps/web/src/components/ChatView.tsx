@@ -1,4 +1,10 @@
 import {
+  computerUsePrompt,
+  isComputerUseRequest,
+  isBareComputerUseRequest,
+  readComputerUseStateWithTimeout,
+} from "../computerUse";
+import {
   type ApprovalRequestId,
   type ChatFileAttachment,
   DEFAULT_MODEL,
@@ -18,6 +24,7 @@ import {
   type TurnId,
   type KeybindingCommand,
   PRIMARY_LOCAL_ENVIRONMENT_ID,
+  describeComputerUseReadiness,
   OrchestrationThreadActivity,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   THREAD_GOAL_MAX_OBJECTIVE_CHARS,
@@ -5794,6 +5801,14 @@ function ChatViewContent(props: ChatViewProps) {
     composerRef.current?.focusAtEnd();
   }, [activeGoal, canManageActiveGoal, composerRef]);
 
+  const [computerUseNotice, setComputerUseNotice] = useState<{
+    label: string;
+    detail: string;
+  } | null>(null);
+  useEffect(() => {
+    setComputerUseNotice(null);
+  }, [routeThreadKey]);
+
   const onSend = async (
     e?: { preventDefault: () => void },
     submissionIntent: ComposerSubmissionIntent = "foreground",
@@ -5897,7 +5912,7 @@ function ChatViewContent(props: ChatViewProps) {
         : sendContextPreviewAnnotations;
     const promptForSend = promptRef.current;
     const {
-      trimmedPrompt: trimmed,
+      trimmedPrompt: rawTrimmed,
       sendableTerminalContexts: sendableComposerTerminalContexts,
       expiredTerminalContextCount,
       hasSendableContent,
@@ -5910,6 +5925,79 @@ function ChatViewContent(props: ChatViewProps) {
         composerPreviewAnnotations.length +
         composerReviewComments.length,
     });
+    const trimmed = computerUsePrompt(rawTrimmed);
+    if (isComputerUseRequest(rawTrimmed) && !directAnnotation) {
+      if (ctxSelectedProvider !== "codex") {
+        setComputerUseNotice({
+          label: "Computer use needs Codex",
+          detail:
+            "Choose the Codex provider to use desktop apps. Other providers do not support computer use yet.",
+        });
+        return;
+      }
+      const bridge = window.desktopBridge;
+      // This bridge describes this desktop, not a different connected host.
+      // Other clients use the target backend's status in the agent instructions.
+      if (bridge && activeDesktopLocalBackendId === PRIMARY_LOCAL_ENVIRONMENT_ID) {
+        const primaryUsesWsl = bridge
+          .getLocalEnvironmentBootstraps()
+          .some(
+            (environment) =>
+              environment.id === PRIMARY_LOCAL_ENVIRONMENT_ID && environment.runningDistro,
+          );
+        if (primaryUsesWsl) {
+          setComputerUseNotice({
+            label: "Computer use unavailable in WSL",
+            detail: "Choose this computer's native desktop environment to use desktop apps.",
+          });
+          return;
+        }
+        const draftBeforeCheck = useComposerDraftStore
+          .getState()
+          .getComposerDraft(composerDraftTarget);
+        const composerBeforeCheck = composerRef.current;
+        sendInFlightRef.current = true;
+        try {
+          const readiness = describeComputerUseReadiness(
+            await readComputerUseStateWithTimeout(() => bridge.getComputerUseState()),
+          );
+          if (
+            promptRef.current !== promptForSend ||
+            composerRef.current !== composerBeforeCheck ||
+            useComposerDraftStore.getState().getComposerDraft(composerDraftTarget) !==
+              draftBeforeCheck
+          )
+            return;
+          if (!readiness.ready) {
+            setComputerUseNotice({
+              label: `Computer use · ${readiness.label}`,
+              detail: readiness.detail,
+            });
+            return;
+          }
+          if (isBareComputerUseRequest(rawTrimmed)) {
+            setComputerUseNotice({
+              label: "Computer use · Ready",
+              detail:
+                "Add what you want to do after /computer-use, for example: open Notes and create a note.",
+            });
+            return;
+          }
+        } catch (cause) {
+          setComputerUseNotice({
+            label: "Could not check computer use",
+            detail:
+              cause instanceof Error
+                ? cause.message
+                : "Open Settings > General to check permissions.",
+          });
+          return;
+        } finally {
+          sendInFlightRef.current = false;
+        }
+      }
+    }
+    setComputerUseNotice(null);
     const feedbackCommand =
       ctxSelectedProvider === "codex" &&
       composerImages.length === 0 &&
@@ -7811,6 +7899,36 @@ function ChatViewContent(props: ChatViewProps) {
                 className="w-full ps-[calc(env(safe-area-inset-left)+0.75rem)] pe-[calc(env(safe-area-inset-right)+0.75rem)] sm:ps-[calc(env(safe-area-inset-left)+1.25rem)] sm:pe-[calc(env(safe-area-inset-right)+1.25rem)]"
               >
                 <div className="group/composer-stack pointer-events-auto relative z-10">
+                  {computerUseNotice && (
+                    <div
+                      role="status"
+                      className="mb-2 rounded-xl border border-info-foreground/25 bg-popover p-3 text-sm shadow-sm"
+                    >
+                      <p className="font-medium">{computerUseNotice.label}</p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {computerUseNotice.detail}
+                      </p>
+                      <div className="mt-2 flex gap-2">
+                        <Button
+                          size="xs"
+                          variant="outline"
+                          onClick={() =>
+                            void navigate({ to: "/settings/general", hash: "computer-use" })
+                          }
+                        >
+                          Computer use settings
+                        </Button>
+                        <Button
+                          size="xs"
+                          variant="ghost"
+                          onClick={() => setComputerUseNotice(null)}
+                        >
+                          Dismiss
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+
                   {isDraftHeroState ? (
                     <div className="absolute inset-x-0 bottom-full z-0">
                       <div

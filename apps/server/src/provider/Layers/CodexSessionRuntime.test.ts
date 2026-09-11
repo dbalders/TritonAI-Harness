@@ -27,6 +27,7 @@ import {
   dynamicToolInvocationAllowed,
   dynamicToolResultResponse,
   hasConfiguredMcpServer,
+  computerUseStateForSession,
   isRecoverableThreadResumeError,
   makeMemoryConsolidationNotificationFilter,
   openCodexThread,
@@ -615,6 +616,30 @@ describe("Codex MCP elicitation approvals", () => {
 });
 
 describe("buildCodexDeveloperInstructions", () => {
+  it("tells the agent which desktop permission is missing", () => {
+    const instructions = buildCodexDeveloperInstructions(
+      "default",
+      { model: "test", reasoningEffort: "medium" },
+      false,
+      {
+        enabled: true,
+        available: true,
+        running: false,
+        accessibilityPermission: true,
+        screenRecordingPermission: false,
+      },
+    );
+    NodeAssert.match(instructions, /Desktop startup status: Needs permissions/);
+    NodeAssert.match(instructions, /Allow Screen Recording in System Settings/);
+    NodeAssert.match(instructions, /Do not claim the app is missing/);
+    NodeAssert.doesNotMatch(instructions, /preview_open/);
+  });
+  it("does not mistake the desktop driver for the browser connection", () => {
+    const args = ['mcp_servers.cua-driver.command="cua-driver"'];
+    NodeAssert.equal(hasConfiguredMcpServer(args), true);
+    NodeAssert.equal(hasConfiguredMcpServer(args, "t3-code"), false);
+  });
+
   it("appends runtime info after the mode instructions", () => {
     const instructions = buildCodexDeveloperInstructions("default", {
       model: "gpt-5.3-codex",
@@ -783,6 +808,40 @@ describe("T3 browser developer instructions", () => {
       buildCodexDeveloperInstructions("default", runtime, false),
       /preview_open/,
     );
+  });
+});
+
+describe("computerUseStateForSession", () => {
+  const ready = {
+    enabled: true,
+    available: true,
+    running: true,
+    accessibilityPermission: true,
+    screenRecordingPermission: true,
+  };
+  it("requires the session driver before advertising Ready", () => {
+    for (const args of [
+      undefined,
+      ['mcp_servers.t3-code.url="http://localhost/mcp"'],
+      ['mcp_servers.cua-driver.command="cua-driver"', "mcp_servers.cua-driver.enabled=false"],
+    ]) {
+      const state = computerUseStateForSession(ready, args);
+      NodeAssert.equal(state?.running, false);
+      NodeAssert.match(
+        buildCodexDeveloperInstructions(
+          "default",
+          { model: "test", reasoningEffort: "medium" },
+          false,
+          state,
+        ),
+        /Desktop startup status: Restart required/,
+      );
+    }
+    NodeAssert.deepStrictEqual(
+      computerUseStateForSession(ready, ['mcp_servers.cua-driver.command="cua-driver"']),
+      ready,
+    );
+    NodeAssert.equal(computerUseStateForSession(undefined, undefined), undefined);
   });
 });
 

@@ -1,6 +1,7 @@
 import * as Schema from "effect/Schema";
 
 import { PortSchema, PositiveInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { DesktopComputerUseStateSchema } from "./ipc.ts";
 
 export const DesktopMcpServerConfiguration = Schema.Struct({
   command: TrimmedNonEmptyString,
@@ -37,6 +38,7 @@ export const DesktopBackendBootstrap = Schema.Struct({
   // Local-only process details supplied over the inherited bootstrap pipe.
   // This is intentionally omitted for WSL and non-desktop server launches.
   computerUseMcp: Schema.optionalKey(DesktopMcpServerConfiguration),
+  computerUseState: Schema.optionalKey(DesktopComputerUseStateSchema),
 });
 
 export type DesktopBackendBootstrap = typeof DesktopBackendBootstrap.Type;

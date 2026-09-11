@@ -118,6 +118,34 @@ describe("computer use IPC", () => {
     }).pipe(Effect.provide(layer));
   });
 
+  it.effect("restarts an already-enabled driver after the missing grants are supplied", () => {
+    const relaunches: Array<{ reason: string; waitForIpcResponse: boolean }> = [];
+    return Effect.gen(function* () {
+      const state = yield* invokeSetComputerUseEnabled(true);
+      assert.equal(state.enabled, true);
+      assert.equal(relaunches.length, 1);
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          DesktopAppSettings.layerTest({
+            ...DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS,
+            computerUseEnabled: true,
+          }),
+          DesktopComputerUse.layerTest({
+            state: {
+              available: true,
+              running: false,
+              accessibilityPermission: true,
+              screenRecordingPermission: true,
+            },
+          }),
+          makeLifecycleLayer(relaunches),
+          unusedLifecycleRuntimeLayer,
+        ),
+      ),
+    );
+  });
+
   it.effect("relaunches to remove an active driver when the user opts out", () => {
     let permissionRequests = 0;
     const relaunches: Array<{ reason: string; waitForIpcResponse: boolean }> = [];

@@ -582,6 +582,7 @@ export const resolveServerConfig = (
       desktopTelemetryControlFd,
       resourceMonitorPath,
       computerUseMcp,
+      computerUseState: bootstrap?.computerUseState,
       autoBootstrapProjectFromCwd,
       logWebSocketEvents,
       tailscaleServeEnabled,

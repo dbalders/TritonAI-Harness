@@ -1,4 +1,9 @@
-import { TRITONAI_APP_BASE_NAME, type ProviderInteractionMode } from "@t3tools/contracts";
+import {
+  TRITONAI_APP_BASE_NAME,
+  describeComputerUseReadiness,
+  type DesktopComputerUseState,
+  type ProviderInteractionMode,
+} from "@t3tools/contracts";
 
 const T3_CODE_BROWSER_TOOL_INSTRUCTIONS = `
 
@@ -14,6 +19,8 @@ Do not switch to global browser skills, Chrome, Node REPL browser automation, st
 const TRITONAI_COMPUTER_USE_INSTRUCTIONS = `
 
 ## TritonAI Harness computer use
+
+Users invoke computer use in plain language or with /computer-use; it is a built-in capability, not a $ skill. When the user specifically asks for computer use, prefer the cua-driver tools over browser-only automation or shell scripts.
 
 When the cua-driver MCP tools are available and a task requires native desktop interaction, use them instead of claiming that local app control is unavailable. Start one named session with start_session, pass that same session name to every subsequent tool call, and always finish with end_session. Prefer accessibility elements and window-scoped capture over raw coordinates. Observe before acting, verify the result after each meaningful action, and do not bypass approval or permission failures. The visible agent cursor belongs to the named session; do not move the user's physical pointer.
 `;
@@ -198,12 +205,23 @@ export function buildCodexDeveloperInstructions(
    * setting, so the prompt cannot claim tools the turn doesn't have.
    */
   browserToolsAvailable = true,
+  computerUseState?: DesktopComputerUseState,
 ): string {
   const base =
     interactionMode === "plan"
       ? codexPlanModeDeveloperInstructions(browserToolsAvailable)
       : codexDefaultModeDeveloperInstructions(browserToolsAvailable);
+  const computerUseStatus = computerUseState
+    ? describeComputerUseReadiness(computerUseState)
+    : {
+        ready: false,
+        label: "Unavailable in this environment",
+        detail:
+          "Computer use requires the local TritonAI Harness desktop backend and the Codex provider. Remote, WSL, and browser-only environments do not receive host desktop access.",
+      };
   return `${base}
+
+<computer_use_status>Desktop startup status: ${computerUseStatus.label}. ${computerUseStatus.detail} ${computerUseStatus.ready ? "If a computer-use call fails, report the actual error and direct the user to Settings > General > Computer use." : "If asked to use computer use, explain this blocker and direct the user to Settings > General > Computer use. Do not claim the app is missing, silently substitute shell/browser automation, or attempt to grant permissions yourself. Permission changes require restarting Harness before this environment reconnects."}</computer_use_status>
 
 <runtime_info>In case you're asked: you are running in ${TRITONAI_APP_BASE_NAME} through the Codex harness, as ${toSingleLine(runtime.model)} with ${toSingleLine(runtime.reasoningEffort)} reasoning effort. No need to mention this otherwise.</runtime_info>`;
 }
