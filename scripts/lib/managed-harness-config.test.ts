@@ -29,7 +29,10 @@ describe("managed Harness config build input", () => {
 
     expect(models["api-deepseek-v4-flash"]?.capabilities?.inputModalities).toEqual(["text"]);
     expect(models["api-glm-5.3"]?.capabilities?.inputModalities).toEqual(["text"]);
-    expect(models["api-gemma-4-31b"]?.capabilities?.inputModalities).toEqual(["text", "image"]);
+    expect(models["onyx-muse-glimmer-30b"]?.capabilities?.inputModalities).toEqual([
+      "text",
+      "image",
+    ]);
   });
 
   it("rejects missing on-prem and image-context modality declarations", () => {
@@ -46,7 +49,7 @@ describe("managed Harness config build input", () => {
       /api-glm-5\.3.*text input/u,
     );
 
-    const textOnlyGemma = JSON.parse(input.source) as {
+    const textOnlyGlimmer = JSON.parse(input.source) as {
       models: {
         catalog: Array<{
           id: string;
@@ -54,11 +57,13 @@ describe("managed Harness config build input", () => {
         }>;
       };
     };
-    const gemma = textOnlyGemma.models.catalog.find((model) => model.id === "api-gemma-4-31b");
-    if (gemma?.capabilities) gemma.capabilities.inputModalities = ["text"];
+    const glimmer = textOnlyGlimmer.models.catalog.find(
+      (model) => model.id === "onyx-muse-glimmer-30b",
+    );
+    if (glimmer?.capabilities) glimmer.capabilities.inputModalities = ["text"];
 
-    expect(() => parseManagedHarnessConfig(JSON.stringify(textOnlyGemma))).toThrow(
-      /api-gemma-4-31b.*image input/u,
+    expect(() => parseManagedHarnessConfig(JSON.stringify(textOnlyGlimmer))).toThrow(
+      /onyx-muse-glimmer-30b.*image input/u,
     );
   });
 

@@ -17,6 +17,7 @@ a capability combination that does not already exist.
 `currentModels.claudeAgent` is retained as a frozen compatibility field for releases that predate
 catalog discovery. New Claude models do not need to be added there. Codex still discovers models
 from its app server and uses `currentModels.codex` only as a legacy-classification overlay.
+Models in the managed TritonAI catalog remain current even when an upstream manifest omits them.
 
 Claude model entries support:
 
