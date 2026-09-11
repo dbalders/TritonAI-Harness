@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vite-plus/test";
-import { computerUsePrompt, isComputerUseRequest } from "./computerUse";
+import { describe, expect, it, vi } from "vite-plus/test";
+import {
+  computerUsePrompt,
+  isComputerUseRequest,
+  readComputerUseStateWithTimeout,
+} from "./computerUse";
 import { computerUseActivity } from "./components/chat/computerUseActivity";
 
 describe("computer use requests", () => {
@@ -34,5 +38,34 @@ describe("computer use requests", () => {
         },
       }),
     ).toEqual({ action: "Capture screen", session: "Notes" });
+  });
+});
+
+describe("computer-use readiness deadline", () => {
+  it("releases a stalled check and permits a subsequent successful check", async () => {
+    vi.useFakeTimers();
+    try {
+      const stalled = readComputerUseStateWithTimeout(() => new Promise<never>(() => {}));
+      const rejected = expect(stalled).rejects.toThrow("status check timed out");
+      await vi.advanceTimersByTimeAsync(5_000);
+      await rejected;
+      await expect(readComputerUseStateWithTimeout(() => Promise.resolve("ready"))).resolves.toBe(
+        "ready",
+      );
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it("preserves IPC errors and removes the deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      await expect(
+        readComputerUseStateWithTimeout(() => Promise.reject(new Error("disconnected"))),
+      ).rejects.toThrow("disconnected");
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

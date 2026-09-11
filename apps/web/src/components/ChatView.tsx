@@ -1,4 +1,8 @@
-import { computerUsePrompt, isComputerUseRequest } from "../computerUse";
+import {
+  computerUsePrompt,
+  isComputerUseRequest,
+  readComputerUseStateWithTimeout,
+} from "../computerUse";
 import {
   type ApprovalRequestId,
   type ChatFileAttachment,
@@ -5953,7 +5957,9 @@ function ChatViewContent(props: ChatViewProps) {
         const composerBeforeCheck = composerRef.current;
         sendInFlightRef.current = true;
         try {
-          const readiness = describeComputerUseReadiness(await bridge.getComputerUseState());
+          const readiness = describeComputerUseReadiness(
+            await readComputerUseStateWithTimeout(() => bridge.getComputerUseState()),
+          );
           if (
             promptRef.current !== promptForSend ||
             composerRef.current !== composerBeforeCheck ||
