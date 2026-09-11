@@ -4,8 +4,12 @@ export function isComputerUseRequest(text: string): boolean {
   );
 }
 
+export function isBareComputerUseRequest(text: string): boolean {
+  return /^\s*\/computer-use\s*$/i.test(text);
+}
+
 export function computerUsePrompt(text: string): string {
-  if (/^\s*\/computer-use\s*$/i.test(text))
+  if (isBareComputerUseRequest(text))
     return "Check whether computer use is ready in this environment and explain any setup needed.";
   return text.replace(/^\s*\/computer-use(?:\s+|$)/i, "Use computer use to ");
 }

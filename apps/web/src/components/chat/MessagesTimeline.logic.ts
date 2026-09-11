@@ -588,6 +588,7 @@ export function deriveMessagesTimelineRows(input: {
       !entryBelongsToActiveTurn(entry, index) ||
       entry.kind !== "work" ||
       entry.entry.agentSpawn !== undefined ||
+      computerUseActivity(entry.entry) !== null ||
       entry.entry.tone === "error"
     ) {
       break;

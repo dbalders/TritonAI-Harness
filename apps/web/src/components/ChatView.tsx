@@ -1,6 +1,7 @@
 import {
   computerUsePrompt,
   isComputerUseRequest,
+  isBareComputerUseRequest,
   readComputerUseStateWithTimeout,
 } from "../computerUse";
 import {
@@ -5974,7 +5975,7 @@ function ChatViewContent(props: ChatViewProps) {
             });
             return;
           }
-          if (/^\/computer-use\s*$/i.test(rawTrimmed)) {
+          if (isBareComputerUseRequest(rawTrimmed)) {
             setComputerUseNotice({
               label: "Computer use · Ready",
               detail:
