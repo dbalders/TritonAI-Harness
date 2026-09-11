@@ -47,8 +47,17 @@ hidden when there are no saved drafts, keeping draft work distinct from submitte
 
 On web and desktop, active threads keep full-contrast titles. Settled and snoozed threads
 use muted titles so your active work is easier to find.
+Project folder labels use medium gray. Thread titles use regular weight, with medium weight
+reserved for unread replies.
 
 A green **Done** indicator means a response finished since you last viewed that thread.
 It stays visible while you are in another thread, browser tab, or window, and clears when
 you return to the thread in the foreground. **Approval**, **Input**, and **Failed** labels
 identify work that needs your attention.
+
+Grouped threads on web and desktop use one compact row: the title on the left and status or
+timestamp on the right. Snooze and Settle replace that status on hover or keyboard focus.
+The project appears once in the folder heading, with no provider footer.
+
+Click a project folder heading to collapse or expand its threads. The sidebar remembers collapsed
+folders on this device. Hover actions fit within the sidebar width and truncate long titles.
