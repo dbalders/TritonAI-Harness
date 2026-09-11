@@ -8,11 +8,17 @@ export function watchComputerUseState(input: {
 }) {
   let stopped = false;
   let inFlight = false;
+  let refreshQueued = false;
   let waitingForPermissions = true;
   let timer: ReturnType<typeof setTimeout> | undefined;
 
   const refresh = async () => {
-    if (stopped || inFlight) return;
+    if (stopped) return;
+    if (inFlight) {
+      refreshQueued = true;
+      return;
+    }
+    refreshQueued = false;
     clearTimeout(timer);
     inFlight = true;
     try {
@@ -27,7 +33,9 @@ export function watchComputerUseState(input: {
       if (!stopped) input.onError(cause);
     } finally {
       inFlight = false;
-      if (!stopped && waitingForPermissions && document.visibilityState === "visible") {
+      if (!stopped && refreshQueued && document.visibilityState === "visible") {
+        void refresh();
+      } else if (!stopped && waitingForPermissions && document.visibilityState === "visible") {
         timer = setTimeout(() => void refresh(), 1_000);
       }
     }

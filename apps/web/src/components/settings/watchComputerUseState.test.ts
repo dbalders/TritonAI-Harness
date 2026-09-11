@@ -77,6 +77,22 @@ describe("computer-use permission observation", () => {
     expect(onState).toHaveBeenLastCalledWith(granted);
   });
 
+  it("queues a focus refresh even when the active read returns fully granted", async () => {
+    let finish!: (state: DesktopComputerUseState) => void;
+    const read = vi
+      .fn()
+      .mockImplementationOnce(
+        () => new Promise<DesktopComputerUseState>((resolve) => (finish = resolve)),
+      )
+      .mockResolvedValue(missing);
+    watch(read);
+    windowTarget.dispatchEvent(new Event("focus"));
+    finish(granted);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(onState).toHaveBeenLastCalledWith(missing);
+  });
+
   it("serializes slow checks across timer, focus, and manual refresh requests", async () => {
     let finish!: (state: DesktopComputerUseState) => void;
     const read = vi.fn(() => new Promise<DesktopComputerUseState>((resolve) => (finish = resolve)));
@@ -86,9 +102,7 @@ describe("computer-use permission observation", () => {
     await vi.advanceTimersByTimeAsync(5_000);
     expect(read).toHaveBeenCalledTimes(1);
     finish(missing);
-    await vi.advanceTimersByTimeAsync(999);
-    expect(read).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(0);
     expect(read).toHaveBeenCalledTimes(2);
   });
 

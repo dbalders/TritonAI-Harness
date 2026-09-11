@@ -5947,10 +5947,20 @@ function ChatViewContent(props: ChatViewProps) {
           });
           return;
         }
+        const draftBeforeCheck = useComposerDraftStore
+          .getState()
+          .getComposerDraft(composerDraftTarget);
+        const composerBeforeCheck = composerRef.current;
         sendInFlightRef.current = true;
         try {
           const readiness = describeComputerUseReadiness(await bridge.getComputerUseState());
-          if (promptRef.current !== promptForSend) return;
+          if (
+            promptRef.current !== promptForSend ||
+            composerRef.current !== composerBeforeCheck ||
+            useComposerDraftStore.getState().getComposerDraft(composerDraftTarget) !==
+              draftBeforeCheck
+          )
+            return;
           if (!readiness.ready) {
             setComputerUseNotice({
               label: `Computer use · ${readiness.label}`,
