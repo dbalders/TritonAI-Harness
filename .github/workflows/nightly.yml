@@ -70,12 +70,13 @@ jobs:
           node scripts/resolve-nightly-release.ts --date "$(date -u +%Y%m%d)" --run-number "$GITHUB_RUN_NUMBER" --sha "$GITHUB_SHA" --prepare --github-output
   quality:
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 15
     needs:
       - preflight
     if: needs.preflight.outputs.build == 'true'
     steps:
-      - name: Checkout exact source
+      - &a2
+        name: Checkout exact source
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.preflight.outputs.ref }}
@@ -84,22 +85,19 @@ jobs:
             /*
             !/.repos/
           sparse-checkout-cone-mode: false
-      - name: Setup Vite+
+      - &a3
+        name: Setup Vite+
         uses: voidzero-dev/setup-vp@v1
         with:
           node-version-file: package.json
           cache: true
           run-install: true
-      - name: Ensure Electron
-        run: vp run --filter @t3tools/desktop ensure:electron
       - name: Check
         run: vp check
       - name: Typecheck
         run: vp run typecheck
       - name: Nightly publication guards
         run: node --test .github/scripts/*nightly*.test.cjs
-      - name: Test
-        run: vp run test
   prepare_managed_plugins:
     name: Prepare immutable managed plugin composition
     needs:
@@ -702,6 +700,8 @@ jobs:
       - quality
       - build
       - mac
+      - test
+      - test_server
     if: needs.preflight.outputs.build == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -731,3 +731,36 @@ jobs:
           path: release-assets/*
           if-no-files-found: error
           retention-days: 3
+  test:
+    name: Test non-server packages
+    needs:
+      - preflight
+    if: needs.preflight.outputs.build == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - *a2
+      - *a3
+      - name: Ensure Electron
+        run: vp run --filter @t3tools/desktop ensure:electron
+      - name: Test
+        run: vp run --parallel --concurrency-limit 4 --filter '!t3' --filter '!@t3tools/monorepo' test
+  test_server:
+    name: Test server shard ${{ matrix.shard }}
+    needs:
+      - preflight
+    if: needs.preflight.outputs.build == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard:
+          - 1
+          - 2
+          - 3
+    steps:
+      - *a2
+      - *a3
+      - name: Test
+        run: vp run --filter t3 test --shard ${{ matrix.shard }}/${{ strategy.job-total }}
