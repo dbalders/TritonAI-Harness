@@ -6,6 +6,13 @@ import {
 import { DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts/settings";
 import { describe, expect, it } from "vite-plus/test";
 
+import { resolveSidebarStageBackdropVariant } from "../components/SidebarStageBackdrop";
+import {
+  getThemeDefinition,
+  resolveThemeHalf,
+  themeAllowsSidebarArtwork,
+  UCSD_THEME_ID,
+} from "../themePalette";
 import { mergeEnvironmentSettings, resolveEnvironmentIdentificationMode } from "./useSettings";
 
 describe("resolveEnvironmentIdentificationMode", () => {
@@ -48,6 +55,25 @@ describe("resolveEnvironmentIdentificationMode", () => {
       }),
     ).toBe("artwork");
   });
+
+  it.each(["light", "dark"] as const)(
+    "shows the nightly sky with the UC San Diego theme in %s appearance",
+    (appearance) => {
+      const activeTheme = resolveThemeHalf(
+        "system",
+        { light: UCSD_THEME_ID, dark: UCSD_THEME_ID },
+        appearance,
+      );
+      const mode = resolveEnvironmentIdentificationMode({
+        mode: DEFAULT_CLIENT_SETTINGS.environmentIdentificationMode,
+        settingsHydrated: true,
+        paletteThemeActive: getThemeDefinition(activeTheme) !== null,
+        paletteThemeAllowsArtwork: themeAllowsSidebarArtwork(activeTheme),
+      });
+
+      expect(resolveSidebarStageBackdropVariant("Nightly", mode === "artwork")).toBe("nightly");
+    },
+  );
 });
 
 describe("mergeEnvironmentSettings", () => {
