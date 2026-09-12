@@ -23,7 +23,7 @@ concurrency:
   group: harness-nightly
   cancel-in-progress: false
 env:
-  NIGHTLY_INSTALLER_COMMIT: 77cb551a19402148323a5c6269f9ffd61c151948
+  NIGHTLY_INSTALLER_COMMIT: 6446f32aac5e48d5a54a04bc8a8d5936a4f9b971
 jobs:
   preflight:
     runs-on: ubuntu-24.04
@@ -430,7 +430,7 @@ jobs:
           AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
           AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME }}
           AZURE_TRUSTED_SIGNING_PUBLISHER_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_PUBLISHER_NAME }}
-          T3CODE_DESKTOP_REUSE_RESOURCE_MONITOR: "${{ steps.resource_monitor_cache.outputs.cache-hit == 'true' }}"
+          T3CODE_DESKTOP_REUSE_RESOURCE_MONITOR: ${{ steps.resource_monitor_cache.outputs.cache-hit == 'true' }}
           UCSD_AI_BASE_URL: ${{ secrets.NIGHTLY_UCSD_AI_BASE_URL }}
         run: |
           args=(
@@ -490,6 +490,13 @@ jobs:
             $verification.AllowUnsigned = $true
           }
           ./scripts/verify-windows-packaged-boot.ps1 @verification
+      - name: Record verified Windows trust mode
+        shell: bash
+        env:
+          NIGHTLY_VERSION: ${{ needs.preflight.outputs.version }}
+          SOURCE_SHA: ${{ needs.preflight.outputs.ref }}
+          WINDOWS_SIGNED: ${{ steps.windows_signing.outputs.signed }}
+        run: 'node -e ''require("fs").writeFileSync("release/harness-win-verification.json", JSON.stringify({version: process.env.NIGHTLY_VERSION, sourceCommit: process.env.SOURCE_SHA, packagedBoot: true, signingMode: process.env.WINDOWS_SIGNED === "true" ? "signed" : "unsigned"}, null, 2))'''
       - name: Finalize managed plugin proof
         if: ${{ matrix.platform == 'win' }}
         shell: bash
@@ -534,6 +541,8 @@ jobs:
           #     mv "$manifest" "${manifest%.yml}-win-${{ matrix.arch }}.yml"
           #   done
           # fi
+
+          cp release/harness-win-verification.json release-publish/
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7
         with:
@@ -657,16 +666,15 @@ jobs:
     name: Publish nightly only
     needs:
       - preflight
-      - quality
-      - build
-      - mac
+      - verify
     if: needs.preflight.outputs.publish == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: write
     steps:
-      - name: Checkout exact source
+      - &a1
+        name: Checkout exact source
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.preflight.outputs.ref }}
@@ -675,6 +683,32 @@ jobs:
             /*
             !/.repos/
           sparse-checkout-cone-mode: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: verified-nightly-release
+          path: release-assets
+      - name: Publish verified nightly prerelease
+        uses: actions/github-script@v8
+        env:
+          NIGHTLY_TAG: ${{ needs.preflight.outputs.tag }}
+          NIGHTLY_NAME: ${{ needs.preflight.outputs.name }}
+          SOURCE_SHA: ${{ needs.preflight.outputs.ref }}
+        with:
+          script: await require('./.github/scripts/publish-nightly.cjs')({github, context});
+  verify:
+    name: Verify both nightly artifact sets
+    needs:
+      - preflight
+      - quality
+      - build
+      - mac
+    if: needs.preflight.outputs.build == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - *a1
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@v1
         with:
@@ -691,11 +725,9 @@ jobs:
           NIGHTLY_VERSION: ${{ needs.preflight.outputs.version }}
           SOURCE_SHA: ${{ needs.preflight.outputs.ref }}
         run: node scripts/validate-nightly-assets.cjs release-assets "$NIGHTLY_VERSION" "$SOURCE_SHA"
-      - name: Publish verified nightly prerelease
-        uses: actions/github-script@v8
-        env:
-          NIGHTLY_TAG: ${{ needs.preflight.outputs.tag }}
-          NIGHTLY_NAME: ${{ needs.preflight.outputs.name }}
-          SOURCE_SHA: ${{ needs.preflight.outputs.ref }}
+      - uses: actions/upload-artifact@v7
         with:
-          script: await require('./.github/scripts/publish-nightly.cjs')({github, context});
+          name: verified-nightly-release
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 3

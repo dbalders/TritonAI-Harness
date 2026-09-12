@@ -24,6 +24,9 @@ module.exports = async function publishNightly({ github, context }) {
   } catch (error) {
     if (error.status !== 404) throw error;
   }
+  const windows = JSON.parse(
+    fs.readFileSync(path.join(directory, "harness-win-verification.json")),
+  );
   const { data: release } = await github.rest.repos.createRelease({
     ...context.repo,
     tag_name: tag,
@@ -32,7 +35,7 @@ module.exports = async function publishNightly({ github, context }) {
     draft: true,
     prerelease: true,
     make_latest: "false",
-    body: `Nightly build from ${sha}.\n\nmacOS Apple Silicon: Developer ID signed, notarized, and packaged-boot verified.\nWindows x64: explicitly unsigned, installed and boot verified on the hosted runner.\nBoth platforms include the validated managed-plugin composition.\n\nThis is an opt-in testing prerelease. Production 0.3.4 has not been released.\n\nSource commit: ${sha}`,
+    body: `Nightly build from ${sha}.\n\nmacOS Apple Silicon: Developer ID signed, notarized, and packaged-boot verified.\nWindows x64: ${windows.signingMode}, installed and boot verified on the hosted runner.\nBoth platforms include the validated managed-plugin composition.\n\nThis is an opt-in testing prerelease. Stable releases are unchanged.\n\nSource commit: ${sha}`,
   });
   for (const name of files) {
     const data = fs.readFileSync(path.join(directory, name));

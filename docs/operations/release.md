@@ -45,9 +45,9 @@ The workflow:
 12. verifies the release is still a draft and only then publishes it;
 13. updates version metadata on `main` and announces the release after publication succeeds.
 
-The standard public GitHub runner workflow does not build macOS Harness assets. Verified macOS
-assets are produced through the controlled local signed/notarized release path and attached to the
-draft before it is published.
+The stable release workflow keeps its controlled local macOS packaging path. The separate
+`nightly.yml` workflow builds macOS and Windows on standard GitHub-hosted runners; it cannot
+publish a stable release or update stable version metadata.
 
 ## Local source staging and release scope
 
@@ -68,8 +68,9 @@ ZIP payloads, packaged boot, and final composition proofs. A retained stage is n
 source-preparation command. Normal artifact builds retain their existing behavior. Use matching
 Harness and Installer revisions when adopting this split.
 
-Harness nightlies and full releases, with Installer only on full releases, are the intended
-cadence. This local split does not change the hosted workflow or add nightly scheduling.
+Harness has a separate nightly workflow. Installer remains a full-release-only product. The
+local release runner still defaults to full stable releases; nightly CI reuses its pinned Mac
+finalizer without invoking Installer app packaging.
 
 ## Nightly identity and artwork
 
@@ -95,9 +96,78 @@ See [nightly artwork source and exports](../../assets/nightly/README.md).
 
 Manual release dispatch also classifies nightly versions as the nightly channel, keeps them
 as prereleases, and never promotes them to latest or writes their version onto stable main.
-The scheduled hosted Mac/Windows nightly workflow is still a separate, pending change; this
-preparation command and channel contract are ready for it. The current local Installer runner
-still accepts stable versions only and is not the nightly entry point.
+The dedicated hosted workflow below supplies scheduling and nightly publication. The current
+local Installer runner still accepts stable versions only; its Mac finalizer separately accepts
+dated nightly versions for use by CI.
+
+## Hosted nightly workflow
+
+`.github/workflows/nightly.yml` uses standard `macos-15`, `windows-2025`, and `ubuntu-24.04`
+runners. It has no stable channel input, no npm publication, no Installer build, and no stable
+version commit step. Publication rejects non-nightly tags and non-default branches, always sets
+`prerelease=true` and `make_latest=false`, and verifies that GitHub's stable latest release did
+not change. The native publication tests explicitly reject `v0.3.4`.
+
+Manual proof run (builds and verifies both platforms without publishing):
+
+```sh
+gh workflow run nightly.yml --ref main -f publish=false
+```
+
+Manual nightly publication after the proof is healthy:
+
+```sh
+gh workflow run nightly.yml --ref main -f publish=true
+```
+
+The daily check is at **08:17 UTC**: about **01:17 Pacific daylight time / 00:17 Pacific standard
+time**. GitHub can delay scheduled jobs. Scheduled builds require repository variable
+`TRITONAI_NIGHTLY_ENABLED=1`; unset it or set it to `0` to pause them. An unchanged source commit
+is skipped based on the last published nightly's resolved tag commit. Manual runs can rebuild
+an unchanged commit. Pushes to the implementation branch run verification only.
+
+Naming follows upstream T3 Code: `vNEXT_PATCH-nightly.YYYYMMDD.RUN_NUMBER`, with UTC date and the
+GitHub run number. Because downstream package metadata can lag publication, CI uses the latest
+published stable release as the baseline before calling the existing nightly resolver. For
+example, stable `v0.3.3` produces `v0.3.4-nightly.20260912.42`, never stable `v0.3.4`.
+
+### Nightly inputs
+
+The workflow pins its Installer-owned composition producer and Mac finalizer with the exact
+`NIGHTLY_INSTALLER_COMMIT` constant. That commit's reviewed plugin catalog supplies package IDs,
+versions, and digests. Preparation happens before provider validation; validation runs on a
+separate runner without signing or publication credentials. Packaging consumes that immutable
+snapshot and its validation receipt. This does not change stable release repository variables.
+
+Required repository secrets (values are never committed):
+
+- `NIGHTLY_PLUGIN_CONFIGURATION_JSON`: exact configuration for the pinned plugin catalog.
+- `NIGHTLY_UCSD_AI_BASE_URL`: managed API base URL.
+- `NIGHTLY_MAC_CERTIFICATE`: base64-encoded Developer ID PKCS#12 identity.
+- `NIGHTLY_MAC_CERTIFICATE_PASSWORD`: PKCS#12 password.
+- `NIGHTLY_DEVELOPER_ID_APPLICATION`: expected Developer ID Application signer.
+- `NIGHTLY_APPLE_API_KEY`, `NIGHTLY_APPLE_API_KEY_ID`, `NIGHTLY_APPLE_API_ISSUER`: notarization key and identifiers.
+
+Mac signing uses a temporary runner keychain, removes signing inputs afterward, and verifies
+signatures, notarization, Gatekeeper, plugin payloads, and isolated packaged-app boot before
+upload. Windows retains its signed/unsigned mode checks; absent Azure configuration selects the
+explicit unsigned nightly mode and is recorded in the release verification report and notes.
+Partial Azure configuration fails. Stable Windows signing policy is unchanged.
+
+Both platform jobs must pass along with quality checks before the read-only artifact gate
+verifies exact filenames, byte sizes, hashes, nightly updater metadata, matching plugin
+compositions, and platform reports. Only then can the publisher create a draft, upload assets,
+and publish the nightly. Actions artifacts expire after three days. Failed publication leaves
+a private nightly draft; inspect it before removing that failed draft and rerunning. Published
+nightlies are never overwritten by the publisher.
+
+### First hosted proof
+
+[Run 34678772820](https://github.com/dbalders/TritonAI-Harness/actions/runs/34678772820) proved the
+unsigned Mac ARM64 package on a standard hosted runner: approximately 5m09s total, including a
+3m28s artifact build. This is not a signed/full-release benchmark. Initial checkout failed due
+to an unmapped vendored gitlink; the root `.gitmodules` mapping fixes credential cleanup without
+modifying the vendored source or retaining checkout credentials.
 
 ## Draft-first publication sequence
 

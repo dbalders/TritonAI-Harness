@@ -22,6 +22,7 @@ function validateNightlyAssets(root, version, sourceSha) {
     "tritonai-plugin-composition-mac-arm64.json",
     "tritonai-plugin-composition-win-x64.json",
     "harness-mac-verification.json",
+    "harness-win-verification.json",
   ].sort();
   assert.deepEqual(
     fs.readdirSync(root).sort(),
@@ -68,6 +69,11 @@ function validateNightlyAssets(root, version, sourceSha) {
     compositions[1],
     "Both platforms must ship the same managed plugin composition.",
   );
+  const windows = JSON.parse(read("harness-win-verification.json"));
+  assert.equal(windows.version, version);
+  assert.equal(windows.sourceCommit, sourceSha);
+  assert.equal(windows.packagedBoot, true);
+  assert(["signed", "unsigned"].includes(windows.signingMode));
   const report = JSON.parse(read("harness-mac-verification.json"));
   assert.equal(report.version, version);
   assert.equal(report.sourceCommit, sourceSha);

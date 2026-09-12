@@ -44,6 +44,12 @@ function fixture(t) {
     ...composition,
     artifacts: [artifacts[`${win}.exe`]],
   });
+  save("harness-win-verification.json", {
+    version,
+    sourceCommit: sha,
+    packagedBoot: true,
+    signingMode: "unsigned",
+  });
   const report = {
     version,
     sourceCommit: sha,
