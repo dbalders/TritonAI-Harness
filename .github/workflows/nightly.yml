@@ -6,6 +6,7 @@ on:
     branches: [codex/build-speed]
     paths:
       - .github/workflows/nightly.yml
+      - .gitmodules
 
 permissions:
   contents: read
