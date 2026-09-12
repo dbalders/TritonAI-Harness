@@ -23,6 +23,7 @@ import * as DesktopState from "../app/DesktopState.ts";
 import * as DesktopUpdates from "./DesktopUpdates.ts";
 
 interface UpdatesHarnessOptions {
+  readonly appVersion?: string;
   readonly checkForUpdates?: Effect.Effect<
     void,
     ElectronUpdater.ElectronUpdaterCheckForUpdatesError
@@ -38,6 +39,13 @@ const flushCallbacks = Effect.yieldNow;
 
 function makeHarness(options: UpdatesHarnessOptions = {}) {
   let checkCount = 0;
+  let channel = "latest";
+  let allowPrerelease = false;
+  const channelChecks: Array<{
+    channel: string;
+    allowPrerelease: boolean;
+    allowDowngrade: boolean;
+  }> = [];
   let allowDowngrade = false;
   let fullChangelog = false;
   const nativeUpdaterEvents: Array<boolean | "download"> = [];
@@ -72,8 +80,14 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
       Effect.sync(() => {
         nativeUpdaterEvents.push(value);
       }),
-    setChannel: () => Effect.void,
-    setAllowPrerelease: () => Effect.void,
+    setChannel: (value) =>
+      Effect.sync(() => {
+        channel = value;
+      }),
+    setAllowPrerelease: (value) =>
+      Effect.sync(() => {
+        allowPrerelease = value;
+      }),
     allowDowngrade: Effect.sync(() => allowDowngrade),
     setAllowDowngrade: (value) =>
       Effect.sync(() => {
@@ -86,6 +100,7 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
     setDisableDifferentialDownload: () => options.setDisableDifferentialDownload ?? Effect.void,
     checkForUpdates: Effect.sync(() => {
       checkCount += 1;
+      channelChecks.push({ channel, allowPrerelease, allowDowngrade });
     }).pipe(Effect.andThen(options.checkForUpdates ?? Effect.void)),
     downloadUpdate: Effect.sync(() => {
       nativeUpdaterEvents.push("download");
@@ -141,7 +156,7 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
     homeDirectory: `/tmp/t3-desktop-updates-home-${process.pid}`,
     platform: "darwin",
     processArch: "x64",
-    appVersion: "1.2.3",
+    appVersion: options.appVersion ?? "1.2.3",
     appPath: "/repo",
     isPackaged: true,
     resourcesPath: "/missing/resources",
@@ -219,6 +234,7 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
     layer,
     nativeUpdaterEvents: () => nativeUpdaterEvents,
     checkCount: () => checkCount,
+    channelChecks: () => channelChecks,
     feedUrls: () => feedUrls,
     fullChangelog: () => fullChangelog,
     listenerCount: () =>
@@ -751,6 +767,40 @@ describe("DesktopUpdates", () => {
       }),
     ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
   });
+
+  for (const appVersion of ["0.3.3", "0.3.4-nightly.20260912.10"]) {
+    it.effect(
+      `switches both release tracks from ${appVersion} with downgrade checks enabled`,
+      () => {
+        const harness = makeHarness({ appVersion });
+        return Effect.scoped(
+          Effect.gen(function* () {
+            const updates = yield* DesktopUpdates.DesktopUpdates;
+            const settings = yield* DesktopAppSettings.DesktopAppSettings;
+            yield* updates.configure;
+            const initialChannel = (yield* updates.getState).channel;
+            const channels =
+              initialChannel === "latest"
+                ? (["nightly", "latest"] as const)
+                : (["latest", "nightly"] as const);
+            for (const channel of channels) {
+              const state = yield* updates.setChannel(channel);
+              assert.equal(state.channel, channel);
+              assert.equal((yield* settings.get).updateChannel, channel);
+              assert.equal((yield* settings.get).updateChannelConfiguredByUser, true);
+              assert.deepEqual(harness.channelChecks().at(-1), {
+                channel,
+                allowPrerelease: channel === "nightly",
+                // Returning from 0.3.4-nightly to stable 0.3.3 must be permitted.
+                allowDowngrade: true,
+              });
+            }
+            assert.equal(harness.channelChecks().length, 2);
+          }),
+        ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+      },
+    );
+  }
 
   it.effect("persists channel changes through the settings service", () => {
     const harness = makeHarness();
