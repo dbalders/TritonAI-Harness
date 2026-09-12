@@ -20,6 +20,7 @@ import { clerkFrontendApiHostnameFromPublishableKey } from "@t3tools/shared/rela
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import extractZip from "extract-zip";
 import rootPackageJson from "../package.json" with { type: "json" };
+import webPackageJson from "../apps/web/package.json" with { type: "json" };
 import desktopPackageJson from "../apps/desktop/package.json" with { type: "json" };
 import desktopRuntimePackageJson from "../apps/desktop-runtime/package.json" with { type: "json" };
 import serverPackageJson from "../apps/server/package.json" with { type: "json" };
@@ -2893,6 +2894,28 @@ export function resolveDesktopUpdateChannel(version: string): "latest" | "nightl
   return /-nightly\.\d{8}\.\d+$/.test(version) ? "nightly" : "latest";
 }
 
+export class NightlySourceVersionMismatchError extends Schema.TaggedErrorClass<NightlySourceVersionMismatchError>()(
+  "NightlySourceVersionMismatchError",
+  { artifactVersion: Schema.String, packageVersions: Schema.Record(Schema.String, Schema.String) },
+) {
+  override get message() {
+    return `Nightly artifact ${this.artifactVersion} requires matching desktop, server, and web package versions. Run scripts/resolve-nightly-release.ts --prepare in the isolated build checkout before compilation.`;
+  }
+}
+
+export const assertNightlySourceVersions = Effect.fn("assertNightlySourceVersions")(function* (
+  artifactVersion: string,
+  packageVersions: Readonly<Record<string, string>>,
+) {
+  const versions = [artifactVersion, ...Object.values(packageVersions)];
+  if (
+    versions.some((version) => resolveDesktopUpdateChannel(version) === "nightly") &&
+    !versions.every((version) => version === artifactVersion)
+  ) {
+    return yield* new NightlySourceVersionMismatchError({ artifactVersion, packageVersions });
+  }
+});
+
 function isDesktopPreviewVersion(version: string): boolean {
   return /-pr\./.test(version);
 }
@@ -3829,6 +3852,11 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   }
 
   const appVersion = options.version ?? serverPackageJson.version;
+  yield* assertNightlySourceVersions(appVersion, {
+    desktop: desktopPackageJson.version,
+    server: serverPackageJson.version,
+    web: webPackageJson.version,
+  });
   yield* assertDesktopUpdatePublishConfiguration({
     platform: options.platform,
     updateChannel: resolveDesktopUpdateChannel(appVersion),

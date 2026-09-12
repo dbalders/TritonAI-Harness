@@ -10,6 +10,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { Command, Flag } from "effect/unstable/cli";
+import { updateReleasePackageVersions } from "./update-release-package-versions.ts";
 
 export interface NightlyReleaseMetadata {
   readonly baseVersion: string;
@@ -143,6 +144,17 @@ export const readDesktopBaseVersion = Effect.fn("readDesktopBaseVersion")(functi
   return yield* resolveNightlyTargetVersion(packageJson.version);
 });
 
+// A release name alone cannot enable nightly UI. Stamp every runtime package
+// before compilation so desktop branding, server identity, and web assets agree.
+export const prepareNightlyRelease = Effect.fn("prepareNightlyRelease")(function* (
+  metadata: NightlyReleaseMetadata,
+  rootDir?: string,
+) {
+  const path = yield* Path.Path;
+  const workspaceRoot = rootDir ? path.resolve(rootDir) : yield* RepoRoot;
+  yield* updateReleasePackageVersions(metadata.version, { rootDir: workspaceRoot });
+});
+
 export const writeNightlyReleaseOutput = Effect.fn("writeNightlyReleaseOutput")(function* (
   metadata: NightlyReleaseMetadata,
   writeGithubOutput: boolean,
@@ -150,6 +162,7 @@ export const writeNightlyReleaseOutput = Effect.fn("writeNightlyReleaseOutput")(
   const fs = yield* FileSystem.FileSystem;
 
   const entries = [
+    ["release_channel", "nightly"],
     ["base_version", metadata.baseVersion],
     ["version", metadata.version],
     ["tag", metadata.tag],
@@ -198,6 +211,12 @@ const command = Command.make(
       Flag.withSchema(ShaSchema),
       Flag.withDescription("Commit sha for the nightly build."),
     ),
+    prepare: Flag.boolean("prepare").pipe(
+      Flag.withDescription(
+        "Write the nightly version into all release packages before compiling an isolated checkout.",
+      ),
+      Flag.withDefault(false),
+    ),
     githubOutput: Flag.boolean("github-output").pipe(
       Flag.withDescription("Write values to GITHUB_OUTPUT instead of stdout."),
       Flag.withDefault(false),
@@ -207,9 +226,12 @@ const command = Command.make(
       Flag.optional,
     ),
   },
-  ({ date, runNumber, sha, githubOutput, root }) =>
+  ({ date, runNumber, sha, prepare, githubOutput, root }) =>
     readDesktopBaseVersion(Option.getOrUndefined(root)).pipe(
       Effect.map((baseVersion) => resolveNightlyReleaseMetadata(baseVersion, date, runNumber, sha)),
+      Effect.tap((metadata) =>
+        prepare ? prepareNightlyRelease(metadata, Option.getOrUndefined(root)) : Effect.void,
+      ),
       Effect.flatMap((metadata) => writeNightlyReleaseOutput(metadata, githubOutput)),
     ),
 ).pipe(Command.withDescription("Resolve nightly release version metadata."));

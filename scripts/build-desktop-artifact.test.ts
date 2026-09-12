@@ -63,6 +63,7 @@ import {
   resolveDesktopProductName,
   resolveDesktopRuntimeDependencies,
   resolveDesktopUpdateChannel,
+  assertNightlySourceVersions,
   resolveDesktopWebAssetBrand,
   resolveFffNativeDependencies,
   resolveFfiRsNativeArtifacts,
@@ -369,6 +370,32 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.equal(resolveDesktopUpdateChannel("0.0.17-nightly.20260413.42"), "nightly");
     assert.equal(resolveDesktopUpdateChannel("0.0.17"), "latest");
   });
+
+  it.effect(
+    "rejects a nightly label over stable sources and mismatched nightly source packages",
+    () =>
+      Effect.gen(function* () {
+        const nightly = "0.3.4-nightly.20260912.1";
+        yield* assertNightlySourceVersions(nightly, {
+          desktop: nightly,
+          server: nightly,
+          web: nightly,
+        });
+        yield* assertNightlySourceVersions("0.3.4", {
+          desktop: "0.3.3",
+          server: "0.3.4",
+          web: "0.3.3",
+        });
+        for (const [artifact, packages] of [
+          [nightly, { desktop: "0.3.3", server: "0.3.3", web: "0.3.3" }],
+          [nightly, { desktop: nightly, server: nightly, web: "0.3.3" }],
+          ["0.3.4", { desktop: nightly, server: nightly, web: nightly }],
+        ] as const) {
+          const error = yield* Effect.flip(assertNightlySourceVersions(artifact, packages));
+          assert.equal(error._tag, "NightlySourceVersionMismatchError");
+        }
+      }),
+  );
 
   it("switches desktop packaging product names to nightly for nightly builds", () => {
     assert.equal(resolveDesktopProductName("0.0.17"), "TritonAI Harness");

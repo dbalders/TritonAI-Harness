@@ -71,6 +71,34 @@ Harness and Installer revisions when adopting this split.
 Harness nightlies and full releases, with Installer only on full releases, are the intended
 cadence. This local split does not change the hosted workflow or add nightly scheduling.
 
+## Nightly identity and artwork
+
+Nightly candidates must use `BASE-nightly.YYYYMMDD.RUN` in every releasable package before
+compilation. A GitHub prerelease flag or a nightly release title alone does not select the
+runtime stage. In a fresh isolated checkout, prepare them with:
+
+```sh
+node scripts/resolve-nightly-release.ts --date 20260912 --run-number 1 --sha COMMIT_SHA --prepare --github-output
+```
+
+Omit `--github-output` outside Actions. The command derives the next patch version from the
+checked-out desktop package, writes it to desktop/server/web/contracts manifests, and emits
+`release_channel=nightly`, `version`, and `tag`. Run preparation once per fresh checkout and
+use the emitted version throughout packaging. The artifact builder rejects mixed stable and
+nightly source versions so a nightly package cannot silently ship stable server/sidebar branding.
+
+The existing Nightly runtime stage selects the starry sidebar header (with environment
+identification set to its default Artwork mode), the Nightly app name, and nightly updates.
+Explicit user settings that hide artwork remain respected. Nightly asset paths now select the
+TritonAI starry logo, while stable and development assets keep their respective designs.
+See [nightly artwork source and exports](../../assets/nightly/README.md).
+
+Manual release dispatch also classifies nightly versions as the nightly channel, keeps them
+as prereleases, and never promotes them to latest or writes their version onto stable main.
+The scheduled hosted Mac/Windows nightly workflow is still a separate, pending change; this
+preparation command and channel contract are ready for it. The current local Installer runner
+still accepts stable versions only and is not the nightly entry point.
+
 ## Draft-first publication sequence
 
 1. Freeze the intended Harness commit and artifact contract.
