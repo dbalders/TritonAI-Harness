@@ -1,0 +1,59 @@
+name: Nightly
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/build-speed]
+    paths:
+      - .github/workflows/nightly.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: harness-nightly
+  cancel-in-progress: false
+
+jobs:
+  mac_proof:
+    name: Hosted Mac nightly packaging proof
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: false
+      - name: Install frozen desktop dependencies
+        run: vp install --frozen-lockfile --filter=@t3tools/desktop... --filter=t3... --filter=@t3tools/scripts...
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+      - name: Prepare nightly version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          stable="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)"
+          [[ "$stable" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          node scripts/update-release-package-versions.ts "${stable#v}"
+          node scripts/resolve-nightly-release.ts --date "$(date -u +%Y%m%d)" --run-number "$GITHUB_RUN_NUMBER" --sha "$GITHUB_SHA" --prepare
+      - name: Build unsigned nightly test ZIP
+        run: node scripts/build-desktop-artifact.ts --platform mac --target zip --arch arm64
+      - uses: actions/upload-artifact@v7
+        with:
+          name: nightly-mac-proof
+          path: |
+            release/*.zip
+            release/*.blockmap
+            release/nightly-mac.yml
+          if-no-files-found: error
+          retention-days: 3
