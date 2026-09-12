@@ -2547,6 +2547,40 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     );
   });
 
+  it.effect("allows source staging only for a retained, externally finalized Mac ZIP", () =>
+    Effect.gen(function* () {
+      const input = {
+        platform: Option.some("mac" as const),
+        target: Option.some("zip"),
+        arch: Option.some("arm64" as const),
+        buildVersion: Option.none<string>(),
+        outputDir: Option.none<string>(),
+        skipBuild: Option.none<boolean>(),
+        pluginConfigurationPrevalidated: Option.none<boolean>(),
+        pluginValidationReceipt: Option.none<string>(),
+        keepStage: Option.some(true),
+        stageOnly: Option.some(true),
+        signed: Option.some(false),
+        verbose: Option.none<boolean>(),
+        mockUpdates: Option.some(false),
+        mockUpdateServerPort: Option.none<number>(),
+        wslPrebuild: Option.none<string>(),
+      };
+      assert.equal((yield* resolveBuildOptions(input)).stageOnly, true);
+      for (const invalid of [
+        { keepStage: Option.some(false) },
+        { arch: Option.some("x64" as const) },
+        { signed: Option.some(true) },
+        { target: Option.some("dmg") },
+        { mockUpdates: Option.some(true) },
+        { platform: Option.some("win" as const) },
+      ]) {
+        const error = yield* Effect.flip(resolveBuildOptions({ ...input, ...invalid }));
+        assert.equal(error._tag, "InvalidDesktopStageOnlyOptionsError");
+      }
+    }),
+  );
+
   it.effect("resolves default platform and architecture from host references", () =>
     Effect.gen(function* () {
       const resolved = yield* resolveBuildOptions({
@@ -2559,6 +2593,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         pluginConfigurationPrevalidated: Option.none(),
         pluginValidationReceipt: Option.none(),
         keepStage: Option.none(),
+        stageOnly: Option.none(),
         signed: Option.none(),
         verbose: Option.none(),
         mockUpdates: Option.none(),
@@ -2601,6 +2636,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
             pluginConfigurationPrevalidated: Option.none(),
             pluginValidationReceipt: Option.none(),
             keepStage: Option.none(),
+            stageOnly: Option.none(),
             signed: Option.none(),
             verbose: Option.none(),
             mockUpdates: Option.none(),
@@ -2627,6 +2663,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         pluginConfigurationPrevalidated: Option.some(false),
         pluginValidationReceipt: Option.none(),
         keepStage: Option.some(false),
+        stageOnly: Option.some(false),
         signed: Option.some(false),
         verbose: Option.some(false),
         mockUpdates: Option.some(false),
@@ -2640,6 +2677,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
                 T3CODE_DESKTOP_SKIP_BUILD: "true",
                 T3CODE_DESKTOP_PLUGIN_CONFIGURATION_PREVALIDATED: "true",
                 T3CODE_DESKTOP_KEEP_STAGE: "true",
+                T3CODE_DESKTOP_STAGE_ONLY: "true",
                 T3CODE_DESKTOP_SIGNED: "true",
                 T3CODE_DESKTOP_VERBOSE: "true",
                 T3CODE_DESKTOP_MOCK_UPDATES: "true",
@@ -2652,6 +2690,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.equal(resolved.skipBuild, false);
       assert.equal(resolved.pluginConfigurationPrevalidated, false);
       assert.equal(resolved.keepStage, false);
+      assert.equal(resolved.stageOnly, false);
       assert.equal(resolved.signed, false);
       assert.equal(resolved.verbose, false);
       assert.equal(resolved.mockUpdates, false);

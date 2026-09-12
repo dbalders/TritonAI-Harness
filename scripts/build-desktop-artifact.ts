@@ -177,6 +177,7 @@ interface BuildCliInput {
   readonly pluginConfigurationPrevalidated: Option.Option<boolean>;
   readonly pluginValidationReceipt: Option.Option<string>;
   readonly keepStage: Option.Option<boolean>;
+  readonly stageOnly: Option.Option<boolean>;
   readonly signed: Option.Option<boolean>;
   readonly verbose: Option.Option<boolean>;
   readonly mockUpdates: Option.Option<boolean>;
@@ -1011,6 +1012,7 @@ interface ResolvedBuildOptions {
   readonly pluginConfigurationPrevalidated: boolean;
   readonly pluginValidationReceipt: string | undefined;
   readonly keepStage: boolean;
+  readonly stageOnly: boolean;
   readonly signed: boolean;
   readonly verbose: boolean;
   readonly mockUpdates: boolean;
@@ -1942,6 +1944,15 @@ export const resolveAzureTrustedSigningConfiguration = Effect.fn(
   };
 });
 
+export class InvalidDesktopStageOnlyOptionsError extends Schema.TaggedErrorClass<InvalidDesktopStageOnlyOptionsError>()(
+  "InvalidDesktopStageOnlyOptionsError",
+  {},
+) {
+  override get message() {
+    return "--stage-only requires --platform mac --arch arm64 --target zip --keep-stage without --signed or --mock-updates. The release finalizer must package and verify the retained stage.";
+  }
+}
+
 const BuildEnvConfig = Config.all({
   platform: Config.schema(BuildPlatform, "T3CODE_DESKTOP_PLATFORM").pipe(Config.option),
   target: Config.string("T3CODE_DESKTOP_TARGET").pipe(Config.option),
@@ -1955,6 +1966,7 @@ const BuildEnvConfig = Config.all({
   pluginValidationReceipt: Config.string("T3CODE_DESKTOP_PLUGIN_VALIDATION_RECEIPT").pipe(
     Config.option,
   ),
+  stageOnly: Config.boolean("T3CODE_DESKTOP_STAGE_ONLY").pipe(Config.withDefault(false)),
   keepStage: Config.boolean("T3CODE_DESKTOP_KEEP_STAGE").pipe(Config.withDefault(false)),
   signed: Config.boolean("T3CODE_DESKTOP_SIGNED").pipe(Config.withDefault(false)),
   verbose: Config.boolean("T3CODE_DESKTOP_VERBOSE").pipe(Config.withDefault(false)),
@@ -2048,10 +2060,22 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
     Option.getOrUndefined(input.pluginValidationReceipt) ??
     Option.getOrUndefined(env.pluginValidationReceipt);
   const keepStage = resolveBooleanFlag(input.keepStage, env.keepStage);
+  const stageOnly = resolveBooleanFlag(input.stageOnly, env.stageOnly);
   const signed = resolveBooleanFlag(input.signed, env.signed);
   const verbose = resolveBooleanFlag(input.verbose, env.verbose);
 
   const mockUpdates = resolveBooleanFlag(input.mockUpdates, env.mockUpdates);
+  if (
+    stageOnly &&
+    (platform !== "mac" ||
+      arch !== "arm64" ||
+      target !== "zip" ||
+      !keepStage ||
+      signed ||
+      mockUpdates)
+  ) {
+    return yield* new InvalidDesktopStageOnlyOptionsError({});
+  }
   const configuredMockUpdateServerPort = Option.getOrUndefined(env.mockUpdateServerPort);
   const mockUpdateServerPort =
     Option.getOrUndefined(input.mockUpdateServerPort) ??
@@ -2076,6 +2100,7 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
     pluginConfigurationPrevalidated,
     pluginValidationReceipt,
     keepStage,
+    stageOnly,
     signed,
     verbose,
     mockUpdates,
@@ -4391,6 +4416,29 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     });
   }
 
+  if (options.stageOnly) {
+    // Source staging is complete. Only the release finalizer may turn this into
+    // distributable artifacts; no unsigned packaging pass is needed first.
+    yield* fs.makeDirectory(options.outputDir, { recursive: true });
+    const inputPath = path.join(
+      options.outputDir,
+      managedPluginProofInputFileName("mac", options.arch),
+    );
+    yield* fs.remove(
+      path.join(options.outputDir, managedPluginProofFileName("mac", options.arch)),
+      { force: true },
+    );
+    yield* fs.remove(inputPath, { force: true });
+    if (pluginComposition) {
+      const compositionJson = yield* encodeJsonString(pluginComposition);
+      yield* fs.writeFileString(inputPath, `${compositionJson}\n`);
+    }
+    yield* Effect.log(
+      `[desktop-artifact] Source stage ready for release finalization: ${stageAppDir}`,
+    );
+    return;
+  }
+
   // electron-builder treats several set-but-empty variables (e.g. CSC_LINK="")
   // as enabled, so copy the host env and scrub empty values instead of relying
   // on `extendEnv` merging.
@@ -4641,6 +4689,12 @@ const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
   pluginValidationReceipt: Flag.string("plugin-validation-receipt").pipe(
     Flag.withDescription(
       "Receipt binding an isolated validation job to the exact composition and configuration.",
+    ),
+    Flag.optional,
+  ),
+  stageOnly: Flag.boolean("stage-only").pipe(
+    Flag.withDescription(
+      "Prepare a retained Mac ZIP source stage for a separate signing finalizer; emits no artifacts (env: T3CODE_DESKTOP_STAGE_ONLY).",
     ),
     Flag.optional,
   ),

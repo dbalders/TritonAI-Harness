@@ -49,6 +49,28 @@ The standard public GitHub runner workflow does not build macOS Harness assets. 
 assets are produced through the controlled local signed/notarized release path and attached to the
 draft before it is published.
 
+## Local source staging and release scope
+
+The Installer repository's `release:local` command supports `--scope harness` for Harness-only
+candidates and defaults to `--scope full` for Harness plus Installer. Harness-only preparation
+still consumes the pinned Installer-owned plugin catalog and composition producer, but skips
+Installer dependencies, app compilation, tests, packaging, and secure skills checkout.
+
+On macOS that runner invokes this repository's artifact builder with `--platform mac --target zip
+--arch arm64 --keep-stage --stage-only`. This prepares source and runtime dependencies plus the
+managed-plugin composition input proof; it returns before Electron Builder and emits no release
+artifacts. The matching local finalizer packages/signs the retained stage once, then runs
+`scripts/verify-macos-desktop-package.ts` against the signed app to enforce the same update-config
+and native-binary checks as ordinary artifact builds. It still verifies signed/notarized DMG and
+ZIP payloads, packaged boot, and final composition proofs. A retained stage is not release proof.
+
+`--stage-only` requires a retained Mac arm64 ZIP stage with signing and mock updates disabled in the
+source-preparation command. Normal artifact builds retain their existing behavior. Use matching
+Harness and Installer revisions when adopting this split.
+
+Harness nightlies and full releases, with Installer only on full releases, are the intended
+cadence. This local split does not change the hosted workflow or add nightly scheduling.
+
 ## Draft-first publication sequence
 
 1. Freeze the intended Harness commit and artifact contract.
