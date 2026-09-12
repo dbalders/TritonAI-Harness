@@ -83,14 +83,14 @@ describe("brand-assets", () => {
     expect(resolveWebAssetBrandForPackageVersion("0.0.29-nightly.20260723.882")).toBe("nightly");
   });
 
-  it("keeps TritonAI icon families selected for every release channel", () => {
+  it("selects TritonAI icon families for every release channel", () => {
     expect([
       BRAND_ASSET_PATHS.developmentIconComposerProject,
       BRAND_ASSET_PATHS.nightlyIconComposerProject,
       BRAND_ASSET_PATHS.productionIconComposerProject,
     ]).toEqual([
       "assets/dev/app-icon.icon",
-      "assets/prod/app-icon.icon",
+      "assets/nightly/app-icon.icon",
       "assets/prod/app-icon.icon",
     ]);
     expect(BRAND_ASSET_PATHS.developmentDesktopIconPng).toBe(
@@ -98,6 +98,9 @@ describe("brand-assets", () => {
     );
     expect(BRAND_ASSET_PATHS.nightlyMacIconPng).toBe("assets/prod/tritonai-harness-1024.png");
     expect(BRAND_ASSET_PATHS.productionMacIconPng).toBe("assets/prod/tritonai-harness-1024.png");
+    expect(BRAND_ASSET_PATHS.nightlyIosIconPng).toBe("assets/nightly/nightly-ios-1024.png");
+    expect(BRAND_ASSET_PATHS.nightlyLinuxIconPng).toBe("assets/nightly/nightly-universal-1024.png");
+    expect(BRAND_ASSET_PATHS.nightlyWebFaviconIco).toBe("assets/nightly/nightly-web-favicon.ico");
     expect(BRAND_ASSET_PATHS.developmentIosIconPng).not.toBe(
       BRAND_ASSET_PATHS.developmentDesktopIconPng,
     );
