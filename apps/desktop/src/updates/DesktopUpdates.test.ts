@@ -6,6 +6,7 @@ import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
@@ -768,37 +769,42 @@ describe("DesktopUpdates", () => {
     ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
   });
 
-  for (const appVersion of ["0.3.3", "0.3.4-nightly.20260912.10"]) {
-    it.effect(
-      `switches both release tracks from ${appVersion} with downgrade checks enabled`,
-      () => {
-        const harness = makeHarness({ appVersion });
-        return Effect.scoped(
-          Effect.gen(function* () {
-            const updates = yield* DesktopUpdates.DesktopUpdates;
-            const settings = yield* DesktopAppSettings.DesktopAppSettings;
-            yield* updates.configure;
-            const initialChannel = (yield* updates.getState).channel;
-            const channels =
-              initialChannel === "latest"
-                ? (["nightly", "latest"] as const)
-                : (["latest", "nightly"] as const);
-            for (const channel of channels) {
-              const state = yield* updates.setChannel(channel);
-              assert.equal(state.channel, channel);
-              assert.equal((yield* settings.get).updateChannel, channel);
-              assert.equal((yield* settings.get).updateChannelConfiguredByUser, true);
-              assert.deepEqual(harness.channelChecks().at(-1), {
-                channel,
-                allowPrerelease: channel === "nightly",
-                // Returning from 0.3.4-nightly to stable 0.3.3 must be permitted.
-                allowDowngrade: true,
-              });
-            }
-            assert.equal(harness.channelChecks().length, 2);
-          }),
-        ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
-      },
+  for (const { appVersion, initialChannel, channels } of [
+    { appVersion: "0.3.3", initialChannel: "latest", channels: ["nightly", "latest"] },
+    {
+      appVersion: "0.3.4-nightly.20260912.10",
+      initialChannel: "nightly",
+      channels: ["latest", "nightly"],
+    },
+  ] as const) {
+    it.effect(`switches both release tracks from ${appVersion} with downgrade checks enabled`, () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "t3-desktop-update-tracks-",
+        });
+        const harness = makeHarness({ appVersion, env: { T3CODE_HOME: baseDir } });
+        yield* Effect.gen(function* () {
+          const updates = yield* DesktopUpdates.DesktopUpdates;
+          const settings = yield* DesktopAppSettings.DesktopAppSettings;
+          yield* updates.configure;
+          assert.equal((yield* updates.getState).channel, initialChannel);
+          for (const channel of channels) {
+            const state = yield* updates.setChannel(channel);
+            assert.equal(state.channel, channel);
+            const persistedSettings = yield* settings.load;
+            assert.equal(persistedSettings.updateChannel, channel);
+            assert.equal(persistedSettings.updateChannelConfiguredByUser, true);
+            assert.deepEqual(harness.channelChecks().at(-1), {
+              channel,
+              allowPrerelease: channel === "nightly",
+              // Returning from 0.3.4-nightly to stable 0.3.3 must be permitted.
+              allowDowngrade: true,
+            });
+          }
+          assert.equal(harness.channelChecks().length, 2);
+        }).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
   }
 
