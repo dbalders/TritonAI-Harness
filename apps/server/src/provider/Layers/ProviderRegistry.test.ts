@@ -70,6 +70,30 @@ process.env.T3CODE_CURSOR_ENABLED = "1";
 
 // ── Test helpers ────────────────────────────────────────────────────
 
+// Registry change notifications follow persistence. Wait for that observable
+// completion instead of advancing a fake clock while real filesystem I/O runs.
+const publishAndAwaitRegistryChange = (
+  registry: ProviderRegistry.ProviderRegistryShape,
+  changes: PubSub.PubSub<ServerProvider>,
+  provider: ServerProvider,
+) =>
+  Effect.gen(function* () {
+    const observed = yield* registry.streamChanges.pipe(
+      Stream.filter((providers) =>
+        providers.some(
+          (current) =>
+            current.instanceId === provider.instanceId && current.checkedAt === provider.checkedAt,
+        ),
+      ),
+      Stream.take(1),
+      Stream.runDrain,
+      // Subscribe before publishing; a normally scheduled fiber can miss it.
+      Effect.forkScoped({ startImmediately: true }),
+    );
+    yield* PubSub.publish(changes, provider);
+    yield* Fiber.join(observed);
+  });
+
 const encoder = new TextEncoder();
 const TEST_EPOCH = DateTime.makeUnsafe("1970-01-01T00:00:00.000Z");
 
@@ -1341,18 +1365,8 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             assert.deepStrictEqual((yield* registry.getProviders)[0]?.models, [
               ...initialProvider.models,
             ]);
-            yield* PubSub.publish(changes, refreshedProvider);
-
-            let cachedProvider = yield* readProviderStatusCache(filePath);
-            for (
-              let attempt = 0;
-              attempt < 50 && cachedProvider?.checkedAt !== refreshedProvider.checkedAt;
-              attempt += 1
-            ) {
-              yield* TestClock.adjust("10 millis");
-              yield* Effect.yieldNow;
-              cachedProvider = yield* readProviderStatusCache(filePath);
-            }
+            yield* publishAndAwaitRegistryChange(registry, changes, refreshedProvider);
+            const cachedProvider = yield* readProviderStatusCache(filePath);
 
             assert.deepStrictEqual(cachedProvider, {
               ...refreshedProvider,
@@ -1467,33 +1481,18 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
                 instanceId: openCodeInstanceId,
               });
 
-              yield* PubSub.publish(changes, authoritativeProvider);
+              yield* publishAndAwaitRegistryChange(registry, changes, authoritativeProvider);
+              const authoritativeCache = yield* readProviderStatusCache(filePath);
+              assert.deepStrictEqual(authoritativeCache?.models, [
+                authoritativeProvider.models[0]!,
+              ]);
+              assert.equal(authoritativeCache?.checkedAt, authoritativeProvider.checkedAt);
 
-              let cachedProvider = yield* readProviderStatusCache(filePath);
-              for (
-                let attempt = 0;
-                attempt < 50 && cachedProvider?.checkedAt !== authoritativeProvider.checkedAt;
-                attempt += 1
-              ) {
-                yield* TestClock.adjust("10 millis");
-                yield* Effect.yieldNow;
-                cachedProvider = yield* readProviderStatusCache(filePath);
-              }
+              yield* publishAndAwaitRegistryChange(registry, changes, failedProvider);
+              const failedCache = yield* readProviderStatusCache(filePath);
+              assert.deepStrictEqual(failedCache?.models, [authoritativeProvider.models[0]!]);
+              assert.equal(failedCache?.checkedAt, failedProvider.checkedAt);
 
-              assert.deepStrictEqual(cachedProvider?.models, [authoritativeProvider.models[0]!]);
-
-              yield* PubSub.publish(changes, failedProvider);
-              for (
-                let attempt = 0;
-                attempt < 50 && cachedProvider?.checkedAt !== failedProvider.checkedAt;
-                attempt += 1
-              ) {
-                yield* TestClock.adjust("10 millis");
-                yield* Effect.yieldNow;
-                cachedProvider = yield* readProviderStatusCache(filePath);
-              }
-
-              assert.deepStrictEqual(cachedProvider?.models, [authoritativeProvider.models[0]!]);
               assert.deepStrictEqual((yield* registry.getProviders)[0]?.models, [
                 authoritativeProvider.models[0]!,
               ]);
