@@ -127,10 +127,16 @@ try {
     throw "Installed Harness exited during the $HealthyRuntimeSeconds-second packaged runtime probe (exit code $($app.ExitCode))."
   }
 
-  $logRoot = Join-Path $runtimeHome "userdata\logs"
-  if (-not (Test-Path -LiteralPath $logRoot -PathType Container)) {
-    throw "Installed Harness did not create its runtime log directory: $logRoot"
+  $logRoots = @(
+    foreach ($relativePath in @("userdata\logs", "nightly\userdata\logs")) {
+      $candidate = Join-Path $runtimeHome $relativePath
+      if (Test-Path -LiteralPath $candidate -PathType Container) { $candidate }
+    }
+  )
+  if ($logRoots.Count -ne 1) {
+    throw "Installed Harness did not create exactly one runtime log directory under $runtimeHome."
   }
+  $logRoot = $logRoots[0]
 
   $fatalPattern = "Cannot find module|MODULE_NOT_FOUND|The local Harness service failed [0-9]+ times|ffi-rs.*(missing|failed|error)|Managed plugin composition verification failed"
   $fatalMatches = @(
