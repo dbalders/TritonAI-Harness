@@ -18,7 +18,7 @@ import * as Path from "effect/Path";
 
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopConfig from "./DesktopConfig.ts";
-import { resolveDesktopStateDir } from "./DesktopStatePaths.ts";
+import { resolveDesktopBaseDir, resolveDesktopStateDir } from "./DesktopStatePaths.ts";
 import { isNightlyDesktopVersion } from "../updates/updateChannels.ts";
 
 export interface MakeDesktopEnvironmentInput {
@@ -165,14 +165,14 @@ const make = Effect.fn("desktop.environment.make")(function* (
         ? path.join(homeDirectory, "Library", "Application Support")
         : Option.getOrElse(config.xdgConfigHome, () => path.join(homeDirectory, ".config"));
   const identity = resolveTritonAiDesktopIdentity(isDevelopment ? "" : input.appVersion);
-  const configuredBaseDir = Option.map(config.t3Home, (baseDir) =>
-    !isDevelopment && isNightlyDesktopVersion(input.appVersion)
-      ? path.join(baseDir, "nightly")
-      : baseDir,
-  );
-  const baseDir = Option.getOrElse(configuredBaseDir, () =>
-    path.join(homeDirectory, identity.homeDirName),
-  );
+  const configuredBaseDir = config.t3Home;
+  const baseDir = resolveDesktopBaseDir({
+    homeDirectory,
+    joinPath: path.join,
+    t3Home: configuredBaseDir,
+    isDevelopment,
+    appVersion: input.appVersion,
+  });
   const rootDir = path.resolve(input.dirname, "../../..");
   const appRoot = input.isPackaged ? input.appPath : rootDir;
   const serverRoot =

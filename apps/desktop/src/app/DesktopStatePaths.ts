@@ -1,3 +1,4 @@
+import { isTritonAiNightlyVersion, resolveTritonAiDesktopIdentity } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 
 export type JoinPath = (first: string, ...segments: string[]) => string;
@@ -14,10 +15,17 @@ export function resolveDesktopBaseDir(input: {
   readonly homeDirectory: string;
   readonly joinPath: JoinPath;
   readonly t3Home: Option.Option<string>;
+  readonly isDevelopment: boolean;
+  readonly appVersion: string;
 }): string {
-  return Option.getOrElse(normalizeConfiguredBaseDir(input.t3Home), () =>
-    input.joinPath(input.homeDirectory, ".t3"),
-  );
+  const version = input.isDevelopment ? "" : input.appVersion;
+  const configured = normalizeConfiguredBaseDir(input.t3Home);
+  if (Option.isSome(configured)) {
+    return isTritonAiNightlyVersion(version)
+      ? input.joinPath(configured.value, "nightly")
+      : configured.value;
+  }
+  return input.joinPath(input.homeDirectory, resolveTritonAiDesktopIdentity(version).homeDirName);
 }
 
 export function resolveDesktopStateDir(input: {

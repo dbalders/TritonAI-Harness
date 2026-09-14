@@ -6,6 +6,7 @@ import * as Option from "effect/Option";
 
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 import * as DesktopConfig from "./DesktopConfig.ts";
+import { resolveEarlyLinuxElectronOptions } from "./DesktopEarlyElectronStartup.ts";
 
 const defaultInput = {
   dirname: "/repo/apps/desktop/dist-electron",
@@ -35,6 +36,40 @@ const makeEnvironment = (
   DesktopEnvironment.DesktopEnvironment.pipe(Effect.provide(makeEnvironmentLayer(overrides, env)));
 
 describe("DesktopEnvironment", () => {
+  for (const appVersion of ["0.3.4", "0.3.4-nightly.20260912.12"]) {
+    it.effect(`reads the same Linux settings before and after startup for ${appVersion}`, () =>
+      Effect.gen(function* () {
+        for (const env of [
+          {},
+          { TRITONAI_HOME: "/custom/preferred", T3CODE_HOME: "/custom/legacy" },
+          { TRITONAI_HOME: "  ", T3CODE_HOME: " /custom/legacy " },
+          { VITE_DEV_SERVER_URL: "http://localhost:5173" },
+          { VITE_DEV_SERVER_URL: "http://localhost:5173", TRITONAI_HOME: "/custom/dev" },
+        ]) {
+          const environment = yield* makeEnvironment(
+            { platform: "linux", isPackaged: true, appVersion },
+            env,
+          );
+          let settingsPath: string | undefined;
+          const early = resolveEarlyLinuxElectronOptions({
+            env,
+            appVersion,
+            homeDirectory: environment.homeDirectory,
+            joinPath: environment.path.join,
+            readFileString: (path) => {
+              settingsPath = path;
+              return JSON.stringify({ linuxPasswordStore: "kwallet6" });
+            },
+          });
+
+          assert.equal(settingsPath, environment.desktopSettingsPath);
+          assert.equal(early.passwordStore, "kwallet6");
+          assert.equal(early.linuxWmClass, environment.linuxWmClass);
+        }
+      }),
+    );
+  }
+
   for (const platform of ["win32", "darwin", "linux"] as const) {
     it.effect(`isolates stable and Nightly profiles on ${platform}`, () =>
       Effect.gen(function* () {
