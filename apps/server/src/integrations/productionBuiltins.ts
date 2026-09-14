@@ -578,6 +578,7 @@ export async function loadProductionPackageForTest(
 
 async function loadProductionPackages(
   loaders: ReadonlyArray<() => Promise<IntegrationPackage>>,
+  bootReportPath?: string,
 ): Promise<ReadonlyArray<IntegrationPackage>> {
   const loaded: Array<IntegrationPackage> = [];
   try {
@@ -587,6 +588,19 @@ async function loadProductionPackages(
       } catch (error) {
         if (!(error instanceof PluginSdkQuarantineError)) throw error;
       }
+    }
+    if (bootReportPath) {
+      // The desktop only persists child stderr on failure. The packaged-boot verifier
+      // requests a private receipt instead; reporting must never disable healthy providers.
+      await NodeFSP.writeFile(
+        bootReportPath,
+        JSON.stringify({
+          version: 1,
+          pid: process.pid,
+          pluginIds: loaded.map(({ manifest }) => manifest.id),
+        }),
+        { mode: 0o600 },
+      ).catch(() => undefined);
     }
     return loaded;
   } catch (error) {
@@ -599,8 +613,9 @@ async function loadProductionPackages(
 
 export async function loadProductionPackagesForTest(
   loaders: ReadonlyArray<() => Promise<IntegrationPackage>>,
+  bootReportPath?: string,
 ): Promise<ReadonlyArray<IntegrationPackage>> {
-  return loadProductionPackages(loaders);
+  return loadProductionPackages(loaders, bootReportPath);
 }
 
 export async function loadProductionIntegrations(
@@ -627,9 +642,7 @@ export async function loadProductionIntegrations(
         return () =>
           loadProductionPackage(composedPackageRoot, plugin, secrets, configuration[plugin.id]!);
       }),
-    );
-    process.stderr.write(
-      `Managed plugins loaded: ${packages.map((plugin) => plugin.manifest.id).join(",")}\n`,
+      process.env.TRITONAI_PLUGIN_BOOT_REPORT_PATH,
     );
     return packages;
   } catch {

@@ -17,6 +17,29 @@ interface RuntimeSnapshot {
 
 const snapshots = new Map<string, { ready: Promise<RuntimeSnapshot>; users: number }>();
 
+export async function removeStaleProductionRuntimes(
+  temporaryRoot = NodeOS.tmpdir(),
+): Promise<void> {
+  for (const entry of await NodeFSP.readdir(temporaryRoot, { withFileTypes: true })) {
+    const match = /^tritonai-plugin-runtime-([1-9][0-9]*)-[a-z0-9]{6}$/i.exec(entry.name);
+    if (!match || !entry.isDirectory() || entry.isSymbolicLink()) continue;
+    const pid = Number(match[1]);
+    if (!Number.isSafeInteger(pid) || pid === process.pid) continue;
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ESRCH") continue;
+      const directory = NodePath.join(temporaryRoot, entry.name);
+      const stat = await NodeFSP.lstat(directory).catch(() => undefined);
+      if (!stat?.isDirectory() || stat.isSymbolicLink()) continue;
+      if (process.getuid && stat.uid !== process.getuid()) continue;
+      // Only an absent owner permits removal. Permission errors and reused PIDs
+      // conservatively retain the copy, protecting simultaneous app instances.
+      await NodeFSP.rm(directory, { recursive: true, force: true }).catch(() => undefined);
+    }
+  }
+}
+
 async function copyRuntimeTree(source: string, target: string): Promise<void> {
   const pending = [{ source, target }];
   while (pending.length > 0) {
@@ -54,8 +77,9 @@ async function materializeRuntime(manifestPath: string): Promise<RuntimeSnapshot
   // host runtime's installed dependency closure, once per backend, rather than unpacking
   // thousands of files in the installer or copying them for every plugin.
   const sourceModules = NodePath.dirname(NodePath.dirname(manifestPath));
+  await removeStaleProductionRuntimes().catch(() => undefined);
   const directory = await NodeFSP.mkdtemp(
-    NodePath.join(NodeOS.tmpdir(), "tritonai-plugin-runtime-"),
+    NodePath.join(NodeOS.tmpdir(), `tritonai-plugin-runtime-${process.pid}-`),
   );
   const targetModules = NodePath.join(directory, "node_modules");
   try {

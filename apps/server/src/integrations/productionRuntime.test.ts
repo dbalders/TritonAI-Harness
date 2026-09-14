@@ -1,12 +1,13 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFSP from "node:fs/promises";
+import * as NodeChildProcess from "node:child_process";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 
 import { describe, expect, it } from "@effect/vitest";
 
-import { acquireProductionRuntime } from "./productionRuntime.ts";
+import { acquireProductionRuntime, removeStaleProductionRuntimes } from "./productionRuntime.ts";
 
 const dependency = { name: "effect", version: "4.0.0-beta.103", declaration: "peer" } as const;
 
@@ -52,6 +53,27 @@ async function fixture(archive = "server.asar") {
 }
 
 describe("packaged production plugin runtime", () => {
+  it("reaps a terminated owner's copy while preserving live owners and unrelated directories", async () => {
+    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-reaper-test-"));
+    const child = NodeChildProcess.spawnSync(process.execPath, ["-e", ""], { stdio: "ignore" });
+    expect(child.status).toBe(0);
+    const stale = NodePath.join(root, `tritonai-plugin-runtime-${child.pid}-aBc123`);
+    const live = NodePath.join(root, `tritonai-plugin-runtime-${process.pid}-dEf456`);
+    const unrelated = NodePath.join(root, "tritonai-plugin-runtime-unknown");
+    try {
+      for (const directory of [stale, live, unrelated]) {
+        await NodeFSP.mkdir(directory);
+        await NodeFSP.writeFile(NodePath.join(directory, "runtime.js"), "fixture");
+      }
+      await removeStaleProductionRuntimes(root);
+      await expect(NodeFSP.access(stale)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(NodeFSP.access(NodePath.join(live, "runtime.js"))).resolves.toBeUndefined();
+      await expect(NodeFSP.access(NodePath.join(unrelated, "runtime.js"))).resolves.toBeUndefined();
+    } finally {
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("materializes the archived dependency closure once and retains it until the last provider closes", async () => {
     const files = await fixture();
     try {

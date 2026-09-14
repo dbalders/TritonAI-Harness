@@ -97,7 +97,10 @@ Assert-TritonAIArtifactTrust -ExecutablePath $appPath
 $runtimeHome = Join-Path $env:RUNNER_TEMP "tritonai-packaged-boot-$PID"
 New-Item -ItemType Directory -Path $runtimeHome -Force | Out-Null
 $previousRuntimeHome = $env:TRITONAI_HOME
+$previousPluginBootReport = $env:TRITONAI_PLUGIN_BOOT_REPORT_PATH
 $env:TRITONAI_HOME = $runtimeHome
+$pluginBootReport = Join-Path $runtimeHome "plugins-$([guid]::NewGuid().ToString('N')).json"
+$env:TRITONAI_PLUGIN_BOOT_REPORT_PATH = $pluginBootReport
 $app = $null
 
 try {
@@ -150,14 +153,15 @@ try {
 
   if ($ExpectedPluginIds.Count -gt 0) {
     $expected = ($ExpectedPluginIds | Sort-Object -Unique) -join ","
-    $loadedCompositions = @(
-      Get-ChildItem -LiteralPath $logRoot -File -Recurse |
-        Select-String -Pattern "Managed plugins loaded: ([a-z0-9.,-]+)" |
-        ForEach-Object { (($_.Matches[0].Groups[1].Value -split ",") | Sort-Object -Unique) -join "," }
-    )
-    if ($loadedCompositions -notcontains $expected) {
+    if (-not (Test-Path -LiteralPath $pluginBootReport -PathType Leaf)) {
+      throw "Installed Harness did not report its loaded managed plugins."
+    }
+    $report = Get-Content -LiteralPath $pluginBootReport -Raw | ConvertFrom-Json
+    $loaded = ($report.pluginIds | Sort-Object -Unique) -join ","
+    if ($report.version -ne 1 -or $loaded -ne $expected) {
       throw "Installed Harness did not load the expected managed plugins: $expected"
     }
+    Get-Process -Id $report.pid -ErrorAction Stop | Out-Null
   }
 
   Write-Host "Installed, signature-verified, opened, and sustained TritonAI Harness from $appPath."
@@ -166,5 +170,6 @@ try {
     Invoke-TritonAIProcessTreeTermination -Process $app
   }
   $env:TRITONAI_HOME = $previousRuntimeHome
+  $env:TRITONAI_PLUGIN_BOOT_REPORT_PATH = $previousPluginBootReport
   Remove-Item -LiteralPath $runtimeHome -Recurse -Force -ErrorAction SilentlyContinue
 }
