@@ -264,6 +264,7 @@ function iconResizeSpawnerLayer(
 const makeWindowsPayloadFixture = Effect.fn("test.makeWindowsPayloadFixture")(function* (input: {
   readonly copyUnpackedNatives: boolean;
   readonly serverEntrySource?: string;
+  readonly pluginRuntimeVersion?: string;
   readonly wslRuntime?: "valid" | "forbidden" | "bad-digest";
 }) {
   const fs = yield* FileSystem.FileSystem;
@@ -278,6 +279,18 @@ const makeWindowsPayloadFixture = Effect.fn("test.makeWindowsPayloadFixture")(fu
   yield* fs.makeDirectory(path.dirname(nativePath), { recursive: true });
   yield* fs.writeFileString(serverEntryPath, input.serverEntrySource ?? "console.log('server');\n");
   yield* fs.writeFileString(nativePath, "native-binary");
+  if (input.pluginRuntimeVersion !== undefined) {
+    const effectRoot = path.join(sourceDir, "node_modules/effect");
+    yield* fs.makeDirectory(path.join(effectRoot, "dist"), { recursive: true });
+    yield* fs.writeFileString(
+      path.join(effectRoot, "package.json"),
+      `{"name":"effect","version":"${input.pluginRuntimeVersion}"}`,
+    );
+    yield* fs.writeFileString(
+      path.join(effectRoot, "dist/index.js"),
+      "export const Effect = {};\n",
+    );
+  }
 
   const generatedAsarPath = path.join(tempDir, WINDOWS_SERVER_ASAR_RESOURCE);
   yield* packWindowsServerAsar({ sourceDir, asarPath: generatedAsarPath, arch: "x64" });
@@ -1161,6 +1174,33 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         });
 
         assert.equal(result.packagedAppDir, fixture.packagedAppDir);
+      }),
+    ),
+  );
+
+  it.effect("requires the matching plugin host runtime in the final Windows archive", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        for (const pluginRuntimeVersion of [undefined, "4.0.0-beta.78", "4.0.0-beta.103"]) {
+          const fixture = yield* makeWindowsPayloadFixture({
+            copyUnpackedNatives: true,
+            ...(pluginRuntimeVersion ? { pluginRuntimeVersion } : {}),
+          });
+          const check = validateWindowsPackagedPayload({
+            stageDistDir: fixture.stageDistDir,
+            appExecutableName: fixture.appExecutableName,
+            targetArch: "x64",
+            managedPluginRuntimeVersion: "4.0.0-beta.103",
+          });
+          if (pluginRuntimeVersion === "4.0.0-beta.103") {
+            const result = yield* check;
+            assert.isBelow(result.fileCount, WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT);
+          } else {
+            const error = yield* check.pipe(Effect.flip);
+            assert.instanceOf(error, WindowsPackagedPayloadValidationError);
+            assert.equal(error.reason, "sidecar-invalid");
+          }
+        }
       }),
     ),
   );

@@ -6,6 +6,8 @@ param(
 
   [switch]$AllowUnsigned,
 
+  [string[]]$ExpectedPluginIds = @(),
+
   [int]$WindowTimeoutSeconds = 45,
   [int]$HealthyRuntimeSeconds = 20
 )
@@ -130,7 +132,7 @@ try {
     throw "Installed Harness did not create its runtime log directory: $logRoot"
   }
 
-  $fatalPattern = "Cannot find module|MODULE_NOT_FOUND|The local Harness service failed [0-9]+ times|ffi-rs.*(missing|failed|error)"
+  $fatalPattern = "Cannot find module|MODULE_NOT_FOUND|The local Harness service failed [0-9]+ times|ffi-rs.*(missing|failed|error)|Managed plugin composition verification failed"
   $fatalMatches = @(
     Get-ChildItem -LiteralPath $logRoot -File -Recurse -ErrorAction SilentlyContinue |
       Select-String -Pattern $fatalPattern -ErrorAction SilentlyContinue
@@ -138,6 +140,18 @@ try {
   if ($fatalMatches.Count -gt 0) {
     $details = ($fatalMatches | Select-Object -First 10 | ForEach-Object { $_.Line.Trim() }) -join "`n"
     throw "Installed Harness logged a fatal packaged-runtime failure:`n$details"
+  }
+
+  if ($ExpectedPluginIds.Count -gt 0) {
+    $expected = ($ExpectedPluginIds | Sort-Object -Unique) -join ","
+    $loadedCompositions = @(
+      Get-ChildItem -LiteralPath $logRoot -File -Recurse |
+        Select-String -Pattern "Managed plugins loaded: ([a-z0-9.,-]+)" |
+        ForEach-Object { (($_.Matches[0].Groups[1].Value -split ",") | Sort-Object -Unique) -join "," }
+    )
+    if ($loadedCompositions -notcontains $expected) {
+      throw "Installed Harness did not load the expected managed plugins: $expected"
+    }
   }
 
   Write-Host "Installed, signature-verified, opened, and sustained TritonAI Harness from $appPath."

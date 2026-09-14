@@ -481,6 +481,7 @@ jobs:
           }
           $verification = @{
             InstallerPath = $artifact[0].FullName
+            ExpectedPluginIds = @((Get-Content .release-input/installer/vendor/plugins/manifest.json -Raw | ConvertFrom-Json).packages.id)
           }
           if ("${{ steps.windows_signing.outputs.signed }}" -eq "true") {
             $verification.ExpectedPublisherName = $env:AZURE_TRUSTED_SIGNING_PUBLISHER_NAME
