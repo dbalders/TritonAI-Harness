@@ -9,3 +9,18 @@ TritonAI uses separate update paths so routine changes do not require rerunning 
 - **Managed Node.js runtime:** use the full TritonAI Installer when Node must change or when the managed runtime needs repair.
 
 If a Codex update cannot run on the current managed Node.js version, no staged update is activated. Run the latest full Installer to update or repair the managed runtime, then retry from Harness.
+
+## Stable and Nightly
+
+Stable and Nightly are separate desktop apps. You can install, run, update, and uninstall either
+without replacing the other. **Settings > About** shows the installed app's update track:
+stable receives stable releases, and Nightly receives Nightly releases.
+
+Nightly starts with its own chats, settings, sign-in sessions, and local server data. It does not
+copy or move your stable profile. Shared project folders and external services remain shared when
+you choose to use them from both apps.
+
+Older Nightly installers used the stable installation identity. If one already replaced or
+partially removed stable, installing a corrected Nightly build does not restore stable's application
+files. Keep your existing data and reinstall stable separately; do not delete all TritonAI profiles
+or uninstall TritonAI Installer as a Nightly setup step.

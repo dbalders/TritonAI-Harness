@@ -169,6 +169,7 @@ interface PackagedWslHarnessContext {
 const withPackagedWslHarness = <A, E, R>(
   input: {
     readonly archiveHash: string;
+    readonly appVersion?: string;
     readonly wsl: (
       context: PackagedWslHarnessContext,
     ) => DesktopWslEnvironment.DesktopWslEnvironmentTestStub;
@@ -240,6 +241,7 @@ const withPackagedWslHarness = <A, E, R>(
           Layer.provideMerge(
             makeEnvironmentLayer(baseDir, {
               appPath: baseDir,
+              appVersion: input.appVersion ?? "1.2.3",
               platform: "win32",
               resourcesPath: baseDir,
             }),
@@ -345,6 +347,28 @@ describe("DesktopBackendConfiguration", () => {
 
         assert.equal(wsl.bootstrap.desktopBootstrapToken, primary.bootstrap.desktopBootstrapToken);
       }),
+    ),
+  );
+
+  it.effect("uses Nightly's distro-local home and credential inventory for WSL", () =>
+    withPackagedWslHarness(
+      {
+        archiveHash: "a".repeat(64),
+        appVersion: "0.3.4-nightly.20260912.12",
+        wsl: () => ({
+          readSecretFiles: (_distro, development, appVersion) => {
+            assert.isFalse(development);
+            assert.equal(appVersion, "0.3.4-nightly.20260912.12");
+            return { ok: true, files: [] };
+          },
+        }),
+      },
+      () =>
+        Effect.gen(function* () {
+          const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+          const wsl = yield* configuration.resolveWsl({ port: 5000, distro: null });
+          assert.equal(wsl.bootstrap.t3Home, "~/.tritonai-harness-nightly");
+        }),
     ),
   );
 

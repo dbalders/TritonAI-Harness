@@ -3,20 +3,45 @@ import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import { beforeEach, vi } from "vite-plus/test";
 
-const { handleMock, netFetchMock, unhandleMock } = vi.hoisted(() => ({
+const { handleMock, netFetchMock, unhandleMock, registerPrivilegesMock } = vi.hoisted(() => ({
   handleMock: vi.fn(),
+  registerPrivilegesMock: vi.fn(),
   netFetchMock: vi.fn(),
   unhandleMock: vi.fn(),
 }));
 
 vi.mock("electron", () => ({
   net: { fetch: netFetchMock },
-  protocol: { handle: handleMock, unhandle: unhandleMock },
+  protocol: {
+    handle: handleMock,
+    unhandle: unhandleMock,
+    registerSchemesAsPrivileged: registerPrivilegesMock,
+  },
 }));
 
 import * as ElectronProtocol from "./ElectronProtocol.ts";
 
 describe("ElectronProtocol", () => {
+  it("uses distinct production origins while preserving development's origin", () => {
+    assert.equal(ElectronProtocol.getDesktopUrl(false, "0.3.3"), "t3code://app/");
+    assert.equal(
+      ElectronProtocol.getDesktopUrl(false, "0.3.4-nightly.20260912.12"),
+      "tritonai-harness-nightly://app/",
+    );
+    assert.equal(
+      ElectronProtocol.getDesktopUrl(true, "0.3.4-nightly.20260912.12"),
+      "t3code-dev://app/",
+    );
+  });
+  it("registers Nightly as a secure standard origin before Electron is ready", () => {
+    ElectronProtocol.registerDesktopSchemePrivilegesSync();
+    const registrations = registerPrivilegesMock.mock.calls.at(-1)?.[0];
+    assert.deepInclude(registrations, {
+      scheme: "tritonai-harness-nightly",
+      privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true },
+    });
+  });
+
   beforeEach(() => {
     handleMock.mockReset();
     netFetchMock.mockReset();

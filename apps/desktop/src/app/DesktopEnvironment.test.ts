@@ -35,6 +35,39 @@ const makeEnvironment = (
   DesktopEnvironment.DesktopEnvironment.pipe(Effect.provide(makeEnvironmentLayer(overrides, env)));
 
 describe("DesktopEnvironment", () => {
+  for (const platform of ["win32", "darwin", "linux"] as const) {
+    it.effect(`isolates stable and Nightly profiles on ${platform}`, () =>
+      Effect.gen(function* () {
+        const stable = yield* makeEnvironment({ platform, isPackaged: true });
+        const nightly = yield* makeEnvironment({
+          platform,
+          isPackaged: true,
+          appVersion: "0.3.4-nightly.20260912.12",
+        });
+        assert.equal(stable.baseDir, "/Users/alice/.tritonai-harness");
+        assert.equal(nightly.baseDir, "/Users/alice/.tritonai-harness-nightly");
+        assert.equal(stable.appUserModelId, "edu.ucsd.tritonai.harness");
+        assert.equal(nightly.appUserModelId, "edu.ucsd.tritonai.harness.nightly");
+        for (const key of [
+          "stateDir",
+          "desktopSettingsPath",
+          "clientSettingsPath",
+          "savedEnvironmentRegistryPath",
+          "serverSettingsPath",
+          "logDir",
+          "userDataDirName",
+          "legacyUserDataDirName",
+          "linuxDesktopEntryName",
+          "linuxWmClass",
+        ] as const) {
+          assert.notEqual(stable[key], nightly[key], key);
+        }
+        assert.equal(nightly.defaultDesktopSettings.updateChannel, "nightly");
+        assert.equal(stable.defaultDesktopSettings.updateChannel, "latest");
+      }),
+    );
+  }
+
   it.effect("prefers TRITONAI_HOME over the legacy home input", () =>
     Effect.gen(function* () {
       const environment = yield* makeEnvironment(

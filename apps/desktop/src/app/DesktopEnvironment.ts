@@ -5,7 +5,7 @@ import type {
   DesktopRuntimeInfo,
 } from "@t3tools/contracts";
 import {
-  DEFAULT_TRITONAI_HOME_DIRNAME,
+  resolveTritonAiDesktopIdentity,
   TRITONAI_APP_BASE_NAME,
   TRITONAI_APP_ID_BASE,
 } from "@t3tools/contracts";
@@ -164,9 +164,10 @@ const make = Effect.fn("desktop.environment.make")(function* (
       : input.platform === "darwin"
         ? path.join(homeDirectory, "Library", "Application Support")
         : Option.getOrElse(config.xdgConfigHome, () => path.join(homeDirectory, ".config"));
+  const identity = resolveTritonAiDesktopIdentity(isDevelopment ? "" : input.appVersion);
   const configuredBaseDir = config.t3Home;
   const baseDir = Option.getOrElse(configuredBaseDir, () =>
-    path.join(homeDirectory, DEFAULT_TRITONAI_HOME_DIRNAME),
+    path.join(homeDirectory, identity.homeDirName),
   );
   const rootDir = path.resolve(input.dirname, "../../..");
   const appRoot = input.isPackaged ? input.appPath : rootDir;
@@ -185,8 +186,12 @@ const make = Effect.fn("desktop.environment.make")(function* (
     joinPath: path.join,
     t3Home: configuredBaseDir,
   });
-  const userDataDirName = isDevelopment ? "tritonai-harness-dev" : "tritonai-harness";
-  const legacyUserDataDirName = isDevelopment ? "T3 Code (Dev)" : "T3 Code (Alpha)";
+  const userDataDirName = isDevelopment ? "tritonai-harness-dev" : identity.packageName;
+  const legacyUserDataDirName = isDevelopment
+    ? "T3 Code (Dev)"
+    : isNightlyDesktopVersion(input.appVersion)
+      ? identity.packageName
+      : "T3 Code (Alpha)";
   const linuxApplicationsDir = path.join(
     Option.getOrElse(config.xdgDataHome, () => path.join(homeDirectory, ".local", "share")),
     "applications",
@@ -231,12 +236,12 @@ const make = Effect.fn("desktop.environment.make")(function* (
     branding,
     displayName,
     appUserModelId: Option.getOrElse(config.appUserModelIdOverride, () =>
-      isDevelopment ? `${TRITONAI_APP_ID_BASE}.dev` : TRITONAI_APP_ID_BASE,
+      isDevelopment ? `${TRITONAI_APP_ID_BASE}.dev` : identity.appId,
     ),
     linuxDesktopEntryName: isDevelopment
       ? "tritonai-harness-dev.desktop"
-      : "tritonai-harness.desktop",
-    linuxWmClass: isDevelopment ? "tritonai-harness-dev" : "tritonai-harness",
+      : `${identity.packageName}.desktop`,
+    linuxWmClass: isDevelopment ? "tritonai-harness-dev" : identity.packageName,
     linuxApplicationsDir,
     appImagePath: config.appImagePath,
     userDataDirName,

@@ -1897,6 +1897,44 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
   );
 
+  for (const platform of ["win", "mac"] as const) {
+    it.effect(
+      `keeps stable packaging compatible and gives Nightly a separate identity on ${platform}`,
+      () =>
+        Effect.gen(function* () {
+          const stable = yield* createBuildConfig(
+            platform,
+            platform === "win" ? "nsis" : "dmg",
+            "0.3.3",
+            false,
+            false,
+            undefined,
+            undefined,
+          );
+          const nightly = yield* createBuildConfig(
+            platform,
+            platform === "win" ? "nsis" : "dmg",
+            "0.3.4-nightly.20260912.12",
+            false,
+            false,
+            undefined,
+            undefined,
+          );
+          assert.equal(stable.appId, "edu.ucsd.tritonai.harness");
+          assert.equal(nightly.appId, "edu.ucsd.tritonai.harness.nightly");
+          assert.deepEqual(stable.extraMetadata, { name: "tritonai-harness" });
+          assert.deepEqual(nightly.extraMetadata, { name: "tritonai-harness-nightly" });
+          assert.equal(stable.productName, "TritonAI Harness");
+          assert.equal(nightly.productName, "TritonAI Harness (Nightly)");
+          if (platform === "mac") {
+            assert.deepEqual((nightly.mac as Record<string, unknown>).protocols, [
+              { name: "TritonAI Harness", schemes: ["tritonai-harness-nightly"] },
+            ]);
+          }
+        }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
+    );
+  }
+
   it.effect("uses the nightly DMG background for nightly macOS builds", () =>
     Effect.gen(function* () {
       const config = yield* createBuildConfig(

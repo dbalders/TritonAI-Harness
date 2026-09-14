@@ -1,3 +1,4 @@
+import { resolveTritonAiDesktopIdentity } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -145,6 +146,7 @@ export class DesktopWslEnvironment extends Context.Service<
     readonly readSecretFiles: (
       distro: string | null,
       development: boolean,
+      appVersion?: string,
     ) => Effect.Effect<ReadWslSecretFilesResult>;
     readonly prepareRuntime: (
       distro: string | null,
@@ -1154,10 +1156,14 @@ const getUserHomeImpl = (
     Effect.orElseSucceed(() => Option.none<string>()),
   );
 
-export const buildWslSecretFileInventoryScript = (development: boolean): string => {
+export const buildWslSecretFileInventoryScript = (
+  development: boolean,
+  appVersion = "",
+): string => {
+  const homeDirName = resolveTritonAiDesktopIdentity(development ? "" : appVersion).homeDirName;
   const stateDirectory = development ? "dev" : "userdata";
   return `set -o pipefail
-secret_dir="$HOME/.tritonai-harness/${stateDirectory}/secrets"
+secret_dir="$HOME/${homeDirName}/${stateDirectory}/secrets"
 if [ ! -d "$secret_dir" ]; then exit 0; fi
 find "$secret_dir" -maxdepth 1 -name '*.bin' -print0 |
 while IFS= read -r -d '' secret_file; do
@@ -1174,10 +1180,11 @@ done
 const readWslSecretFilesImpl = (
   distro: string | null,
   development: boolean,
+  appVersion = "",
 ): Effect.Effect<ReadWslSecretFilesResult, never, ChildProcessSpawner.ChildProcessSpawner> =>
   runWslShell(
     distro,
-    buildWslSecretFileInventoryScript(development),
+    buildWslSecretFileInventoryScript(development, appVersion),
     SECRET_FILE_READ_TIMEOUT,
   ).pipe(
     Effect.map((result): ReadWslSecretFilesResult => {
@@ -1220,6 +1227,7 @@ export interface DesktopWslEnvironmentTestStub {
   readonly readSecretFiles?: (
     distro: string | null,
     development: boolean,
+    appVersion?: string,
   ) => ReadWslSecretFilesResult;
   readonly prepareRuntime?: (
     distro: string | null,
@@ -1249,8 +1257,10 @@ export const layerTest = (stub: DesktopWslEnvironmentTestStub = {}) => {
         Effect.succeed(stub.windowsToWslPath?.(distro, windowsPath) ?? Option.none()),
       getUserHome: (distro) => Effect.succeed(stub.getUserHome?.(distro) ?? Option.none<string>()),
       getDistroIp: (distro) => Effect.succeed(stub.getDistroIp?.(distro) ?? Option.none<string>()),
-      readSecretFiles: (distro, development) =>
-        Effect.succeed(stub.readSecretFiles?.(distro, development) ?? { ok: true, files: [] }),
+      readSecretFiles: (distro, development, appVersion) =>
+        Effect.succeed(
+          stub.readSecretFiles?.(distro, development, appVersion) ?? { ok: true, files: [] },
+        ),
       prepareRuntime: (distro, archive) =>
         Effect.succeed(
           stub.prepareRuntime?.(distro, archive) ?? {
@@ -1327,8 +1337,8 @@ export const layer = Layer.effect(
     const getDistroIp = (distro: string | null) =>
       provideSpawner(getDistroIpImpl(distro)).pipe(Effect.withSpan("desktop.wsl.getDistroIp"));
 
-    const readSecretFiles = (distro: string | null, development: boolean) =>
-      provideSpawner(readWslSecretFilesImpl(distro, development)).pipe(
+    const readSecretFiles = (distro: string | null, development: boolean, appVersion = "") =>
+      provideSpawner(readWslSecretFilesImpl(distro, development, appVersion)).pipe(
         Effect.withSpan("desktop.wsl.readSecretFiles"),
       );
 
