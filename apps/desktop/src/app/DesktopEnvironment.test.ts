@@ -82,6 +82,33 @@ describe("DesktopEnvironment", () => {
     }),
   );
 
+  for (const homeVariable of ["TRITONAI_HOME", "T3CODE_HOME"]) {
+    it.effect(`isolates Nightly state when both apps inherit ${homeVariable}`, () =>
+      Effect.gen(function* () {
+        const env = { [homeVariable]: " /tmp/shared-home " };
+        const stable = yield* makeEnvironment({ isPackaged: true }, env);
+        const nightly = yield* makeEnvironment(
+          { isPackaged: true, appVersion: "0.3.4-nightly.20260912.12" },
+          env,
+        );
+
+        assert.equal(stable.baseDir, "/tmp/shared-home");
+        assert.equal(stable.stateDir, "/tmp/shared-home/userdata");
+        assert.equal(nightly.baseDir, "/tmp/shared-home/nightly");
+        assert.equal(nightly.stateDir, "/tmp/shared-home/nightly/userdata");
+        for (const key of [
+          "desktopSettingsPath",
+          "clientSettingsPath",
+          "savedEnvironmentRegistryPath",
+          "serverSettingsPath",
+          "logDir",
+        ] as const) {
+          assert.notEqual(stable[key], nightly[key], key);
+        }
+      }),
+    );
+  }
+
   it.effect("derives state paths and development identity inside Effect", () =>
     Effect.gen(function* () {
       const environment = yield* makeEnvironment(

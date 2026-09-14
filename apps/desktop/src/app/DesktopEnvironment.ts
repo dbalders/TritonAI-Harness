@@ -165,7 +165,11 @@ const make = Effect.fn("desktop.environment.make")(function* (
         ? path.join(homeDirectory, "Library", "Application Support")
         : Option.getOrElse(config.xdgConfigHome, () => path.join(homeDirectory, ".config"));
   const identity = resolveTritonAiDesktopIdentity(isDevelopment ? "" : input.appVersion);
-  const configuredBaseDir = config.t3Home;
+  const configuredBaseDir = Option.map(config.t3Home, (baseDir) =>
+    !isDevelopment && isNightlyDesktopVersion(input.appVersion)
+      ? path.join(baseDir, "nightly")
+      : baseDir,
+  );
   const baseDir = Option.getOrElse(configuredBaseDir, () =>
     path.join(homeDirectory, identity.homeDirName),
   );

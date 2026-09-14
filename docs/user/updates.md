@@ -20,6 +20,9 @@ Nightly starts with its own chats, settings, sign-in sessions, and local server 
 copy or move your stable profile. Shared project folders and external services remain shared when
 you choose to use them from both apps.
 
+If you configured a custom data home with `TRITONAI_HOME` or `T3CODE_HOME`, Nightly uses a `nightly`
+subfolder there so the two apps still keep separate data.
+
 Older Nightly installers used the stable installation identity. If one already replaced or
 partially removed stable, installing a corrected Nightly build does not restore stable's application
 files. Keep your existing data and reinstall stable separately; do not delete all TritonAI profiles

@@ -11,9 +11,10 @@ and the per-user install directory and updater cache from the package name. Chan
 Nightly uses `~/.tritonai-harness-nightly` for backend state and a separate Electron profile,
 single-instance lock, and `tritonai-harness-nightly://app` renderer/OAuth origin. It never adopts
 stable's legacy Electron profile. WSL expands the same Nightly home inside its selected distro.
-Explicit `TRITONAI_HOME`/`T3CODE_HOME` overrides retain their existing meaning; operators must choose
-separate overrides if they run both apps. Project files and external provider installations are
-outside the profile-isolation boundary.
+For an explicit `TRITONAI_HOME`/`T3CODE_HOME`, stable retains the configured directory and Nightly
+uses its `nightly` subdirectory. A shared machine-level override therefore keeps their backend
+state separate. Development overrides retain their existing meaning. Project files and external
+provider installations are outside the profile-isolation boundary.
 
 Packaged apps ignore saved cross-track preferences and reject cross-track updater IPC requests.
 Unpackaged mock-update tooling retains channel switching. The desktop About panel displays the

@@ -727,6 +727,16 @@ export const make = Effect.gen(function* () {
             yield* logUpdaterWarning("ignoring downloaded update from another track", {
               version: info.version,
             });
+            const checkedAt = yield* currentIsoTimestamp;
+            yield* setState(
+              reduceDesktopUpdateStateOnCheckFailure(
+                createBaseUpdateState(state.channel, state.enabled, environment),
+                "The downloaded update belongs to the other app. Check for updates again.",
+                checkedAt,
+              ),
+            );
+            yield* Ref.set(lastLoggedDownloadMilestoneRef, -1);
+            yield* electronUpdater.setAutoInstallOnAppQuit(false);
             return;
           }
           yield* setState(reduceDesktopUpdateStateOnDownloadComplete(state, info.version));

@@ -800,12 +800,29 @@ describe("DesktopUpdates", () => {
             });
             yield* flushCallbacks;
             assert.isNull((yield* updates.getState).availableVersion);
+            harness.emit("download-progress", { percent: 50 });
+            yield* flushCallbacks;
+            assert.equal((yield* updates.getState).status, "downloading");
             harness.emit("update-downloaded", {
               version: otherChannel === "nightly" ? "0.3.5-nightly.20260914.1" : "0.3.5",
             });
             yield* flushCallbacks;
-            assert.notEqual((yield* updates.getState).status, "downloaded");
+            const rejectedState = yield* updates.getState;
+            assert.equal(rejectedState.status, "error");
+            assert.equal(rejectedState.errorContext, "check");
+            assert.isTrue(rejectedState.canRetry);
+            assert.isNull(rejectedState.downloadPercent);
+            assert.isNull(rejectedState.downloadedVersion);
+            assert.equal(harness.nativeUpdaterEvents().at(-1), false);
             assert.isFalse((yield* updates.install).accepted);
+            assert.isTrue((yield* updates.check("manual")).checked);
+            const nextVersion = channel === "nightly" ? "0.3.5-nightly.20260914.2" : "0.3.5";
+            harness.emit("update-available", { version: nextVersion });
+            yield* flushCallbacks;
+            assert.isTrue((yield* updates.download).accepted);
+            harness.emit("update-downloaded", { version: nextVersion });
+            yield* flushCallbacks;
+            assert.equal((yield* updates.getState).downloadedVersion, nextVersion);
           }).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
         }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
