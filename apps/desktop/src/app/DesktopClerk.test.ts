@@ -210,25 +210,36 @@ describe("DesktopClerk", () => {
   });
 
   it.each([
-    { isDevelopment: true, scheme: "t3code-dev" },
-    { isDevelopment: false, scheme: "t3code" },
-  ])("configures the SDK with the $scheme renderer origin", ({ isDevelopment, scheme }) => {
-    const bridge = { cleanup: vi.fn(), isPrimaryInstance: true };
-    storageMock.mockReturnValue(storageAdapter);
-    createClerkBridgeMock.mockReturnValue(bridge);
+    { isDevelopment: true, scheme: "t3code-dev", appVersion: "0.3.4-nightly.20260912.12" },
+    { isDevelopment: false, scheme: "t3code", appVersion: "0.3.3" },
+    {
+      isDevelopment: false,
+      scheme: "tritonai-harness-nightly",
+      appVersion: "0.3.4-nightly.20260912.12",
+    },
+  ])(
+    "configures the SDK with the $scheme renderer origin",
+    ({ isDevelopment, scheme, appVersion }) => {
+      const bridge = { cleanup: vi.fn(), isPrimaryInstance: true };
+      storageMock.mockReturnValue(storageAdapter);
+      createClerkBridgeMock.mockReturnValue(bridge);
 
-    assert.equal(DesktopClerk.createDesktopClerkBridge("/tmp/t3-state", isDevelopment), bridge);
-    assert.deepEqual(storageMock.mock.calls, [[{ path: "/tmp/t3-state" }]]);
-    assert.deepEqual(createClerkBridgeMock.mock.calls, [
-      [
-        {
-          storage: storageAdapter,
-          passkeys: true,
-          renderer: { scheme, host: "app" },
-        },
-      ],
-    ]);
-    storageMock.mockClear();
-    createClerkBridgeMock.mockClear();
-  });
+      assert.equal(
+        DesktopClerk.createDesktopClerkBridge("/tmp/t3-state", isDevelopment, appVersion),
+        bridge,
+      );
+      assert.deepEqual(storageMock.mock.calls, [[{ path: "/tmp/t3-state" }]]);
+      assert.deepEqual(createClerkBridgeMock.mock.calls, [
+        [
+          {
+            storage: storageAdapter,
+            passkeys: true,
+            renderer: { scheme, host: "app" },
+          },
+        ],
+      ]);
+      storageMock.mockClear();
+      createClerkBridgeMock.mockClear();
+    },
+  );
 });

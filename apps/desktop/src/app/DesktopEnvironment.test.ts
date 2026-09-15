@@ -6,6 +6,7 @@ import * as Option from "effect/Option";
 
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 import * as DesktopConfig from "./DesktopConfig.ts";
+import { resolveEarlyLinuxElectronOptions } from "./DesktopEarlyElectronStartup.ts";
 
 const defaultInput = {
   dirname: "/repo/apps/desktop/dist-electron",
@@ -35,6 +36,73 @@ const makeEnvironment = (
   DesktopEnvironment.DesktopEnvironment.pipe(Effect.provide(makeEnvironmentLayer(overrides, env)));
 
 describe("DesktopEnvironment", () => {
+  for (const appVersion of ["0.3.4", "0.3.4-nightly.20260912.12"]) {
+    it.effect(`reads the same Linux settings before and after startup for ${appVersion}`, () =>
+      Effect.gen(function* () {
+        for (const env of [
+          {},
+          { TRITONAI_HOME: "/custom/preferred", T3CODE_HOME: "/custom/legacy" },
+          { TRITONAI_HOME: "  ", T3CODE_HOME: " /custom/legacy " },
+          { VITE_DEV_SERVER_URL: "http://localhost:5173" },
+          { VITE_DEV_SERVER_URL: "http://localhost:5173", TRITONAI_HOME: "/custom/dev" },
+        ]) {
+          const environment = yield* makeEnvironment(
+            { platform: "linux", isPackaged: true, appVersion },
+            env,
+          );
+          let settingsPath: string | undefined;
+          const early = resolveEarlyLinuxElectronOptions({
+            env,
+            appVersion,
+            homeDirectory: environment.homeDirectory,
+            joinPath: environment.path.join,
+            readFileString: (path) => {
+              settingsPath = path;
+              return JSON.stringify({ linuxPasswordStore: "kwallet6" });
+            },
+          });
+
+          assert.equal(settingsPath, environment.desktopSettingsPath);
+          assert.equal(early.passwordStore, "kwallet6");
+          assert.equal(early.linuxWmClass, environment.linuxWmClass);
+        }
+      }),
+    );
+  }
+
+  for (const platform of ["win32", "darwin", "linux"] as const) {
+    it.effect(`isolates stable and Nightly profiles on ${platform}`, () =>
+      Effect.gen(function* () {
+        const stable = yield* makeEnvironment({ platform, isPackaged: true });
+        const nightly = yield* makeEnvironment({
+          platform,
+          isPackaged: true,
+          appVersion: "0.3.4-nightly.20260912.12",
+        });
+        assert.equal(stable.baseDir, "/Users/alice/.tritonai-harness");
+        assert.equal(nightly.baseDir, "/Users/alice/.tritonai-harness-nightly");
+        assert.equal(stable.appUserModelId, "edu.ucsd.tritonai.harness");
+        assert.equal(nightly.appUserModelId, "edu.ucsd.tritonai.harness.nightly");
+        for (const key of [
+          "stateDir",
+          "desktopSettingsPath",
+          "clientSettingsPath",
+          "savedEnvironmentRegistryPath",
+          "serverSettingsPath",
+          "logDir",
+          "userDataDirName",
+          "legacyUserDataDirName",
+          "linuxDesktopEntryName",
+          "linuxWmClass",
+        ] as const) {
+          assert.notEqual(stable[key], nightly[key], key);
+        }
+        assert.equal(nightly.defaultDesktopSettings.updateChannel, "nightly");
+        assert.equal(stable.defaultDesktopSettings.updateChannel, "latest");
+      }),
+    );
+  }
+
   it.effect("prefers TRITONAI_HOME over the legacy home input", () =>
     Effect.gen(function* () {
       const environment = yield* makeEnvironment(
@@ -48,6 +116,33 @@ describe("DesktopEnvironment", () => {
       assert.equal(environment.baseDir, "/tmp/tritonai");
     }),
   );
+
+  for (const homeVariable of ["TRITONAI_HOME", "T3CODE_HOME"]) {
+    it.effect(`isolates Nightly state when both apps inherit ${homeVariable}`, () =>
+      Effect.gen(function* () {
+        const env = { [homeVariable]: " /tmp/shared-home " };
+        const stable = yield* makeEnvironment({ isPackaged: true }, env);
+        const nightly = yield* makeEnvironment(
+          { isPackaged: true, appVersion: "0.3.4-nightly.20260912.12" },
+          env,
+        );
+
+        assert.equal(stable.baseDir, "/tmp/shared-home");
+        assert.equal(stable.stateDir, "/tmp/shared-home/userdata");
+        assert.equal(nightly.baseDir, "/tmp/shared-home/nightly");
+        assert.equal(nightly.stateDir, "/tmp/shared-home/nightly/userdata");
+        for (const key of [
+          "desktopSettingsPath",
+          "clientSettingsPath",
+          "savedEnvironmentRegistryPath",
+          "serverSettingsPath",
+          "logDir",
+        ] as const) {
+          assert.notEqual(stable[key], nightly[key], key);
+        }
+      }),
+    );
+  }
 
   it.effect("derives state paths and development identity inside Effect", () =>
     Effect.gen(function* () {

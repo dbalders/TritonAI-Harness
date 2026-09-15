@@ -13,7 +13,12 @@ import {
   type DirectoryRecord,
 } from "@electron/asar";
 
-import { TRITONAI_APP_BASE_NAME, TRITONAI_APP_ID_BASE } from "@t3tools/contracts";
+import {
+  TRITONAI_APP_BASE_NAME,
+  TRITONAI_APP_ID_BASE,
+  resolveTritonAiDesktopIdentity,
+  isTritonAiNightlyVersion,
+} from "@t3tools/contracts";
 import { fromYaml } from "@t3tools/shared/schemaYaml";
 import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { clerkFrontendApiHostnameFromPublishableKey } from "@t3tools/shared/relayAuth";
@@ -2891,7 +2896,7 @@ export const assertDesktopUpdatePublishConfiguration = Effect.fn(
 });
 
 export function resolveDesktopUpdateChannel(version: string): "latest" | "nightly" {
-  return /-nightly\.\d{8}\.\d+$/.test(version) ? "nightly" : "latest";
+  return isTritonAiNightlyVersion(version) ? "nightly" : "latest";
 }
 
 export class NightlySourceVersionMismatchError extends Schema.TaggedErrorClass<NightlySourceVersionMismatchError>()(
@@ -2993,8 +2998,9 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   wslRuntimeBundled = false,
 ) {
   const buildConfig: Record<string, unknown> = {
-    appId: DESKTOP_APP_ID,
+    appId: resolveTritonAiDesktopIdentity(version).appId,
     productName: resolveDesktopProductName(version),
+    extraMetadata: { name: resolveTritonAiDesktopIdentity(version).packageName },
     artifactName: "TritonAI-Harness-${version}-${arch}.${ext}",
     electronLanguages: [...DESKTOP_ELECTRON_LANGUAGES],
     // electron-builder's default app matcher excludes several package file types,
@@ -3049,7 +3055,8 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       protocols: [
         {
           name: TRITONAI_APP_BASE_NAME,
-          schemes: ["t3code", "t3code-dev"],
+          schemes:
+            updateChannel === "nightly" ? ["tritonai-harness-nightly"] : ["t3code", "t3code-dev"],
         },
       ],
       ...(signed ? { sign: path.join(repoRoot, "scripts/sign-macos.ts") } : {}),
@@ -3091,7 +3098,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   if (platform === "linux") {
     buildConfig.linux = {
       target: [target],
-      executableName: "tritonai-harness",
+      executableName: resolveTritonAiDesktopIdentity(version).packageName,
       icon: "icons",
       category: "Development",
       // electron-builder turns these into MimeType=x-scheme-handler/<scheme>;
@@ -3100,12 +3107,13 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       protocols: [
         {
           name: TRITONAI_APP_BASE_NAME,
-          schemes: ["t3code", "t3code-dev"],
+          schemes:
+            updateChannel === "nightly" ? ["tritonai-harness-nightly"] : ["t3code", "t3code-dev"],
         },
       ],
       desktop: {
         entry: {
-          StartupWMClass: "tritonai-harness",
+          StartupWMClass: resolveTritonAiDesktopIdentity(version).packageName,
         },
       },
     };
@@ -4259,6 +4267,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const macPasskeySigning = configuredMacPasskeySigning
     ? {
         ...configuredMacPasskeySigning,
+        appId: resolveTritonAiDesktopIdentity(appVersion).appId,
         provisioningProfilePath: path.resolve(
           repoRoot,
           configuredMacPasskeySigning.provisioningProfilePath,
@@ -4352,7 +4361,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       ? path.join(stageAppDir, WINDOWS_SERVER_RESOURCE_SOURCE_DIR, WINDOWS_SERVER_ASAR_RESOURCE)
       : undefined;
   const stagePackageJson: StagePackageJson = {
-    name: "tritonai-harness",
+    name: resolveTritonAiDesktopIdentity(appVersion).packageName,
     version: appVersion,
     buildVersion: appVersion,
     t3codeCommitHash: commitHash,

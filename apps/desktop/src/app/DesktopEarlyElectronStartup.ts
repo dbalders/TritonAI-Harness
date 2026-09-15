@@ -1,3 +1,4 @@
+import { resolveTritonAiDesktopIdentity } from "@t3tools/contracts";
 import { fromLenientJson } from "@t3tools/shared/schemaJson";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -17,6 +18,7 @@ import {
 
 interface EarlyDesktopSettingsInput {
   readonly env: NodeJS.ProcessEnv;
+  readonly appVersion: string;
   readonly homeDirectory: string;
   readonly joinPath: JoinPath;
   readonly readFileString: (path: string) => string;
@@ -44,20 +46,21 @@ const decodeEarlyDesktopSettingsJson = Schema.decodeSync(EarlyDesktopSettingsJso
 const isDevelopmentEnvironment = (env: NodeJS.ProcessEnv): boolean =>
   trimNonEmpty(env.VITE_DEV_SERVER_URL) !== null;
 
-function resolveEarlyDesktopSettingsPath(input: {
-  readonly env: NodeJS.ProcessEnv;
-  readonly homeDirectory: string;
-  readonly joinPath: JoinPath;
-}): string {
-  const t3Home = Option.fromUndefinedOr(input.env.T3CODE_HOME);
+function resolveEarlyDesktopSettingsPath(input: EarlyDesktopSettingsInput): string {
+  const t3Home = Option.fromUndefinedOr(
+    trimNonEmpty(input.env.TRITONAI_HOME) ?? trimNonEmpty(input.env.T3CODE_HOME) ?? undefined,
+  );
+  const isDevelopment = isDevelopmentEnvironment(input.env);
   const baseDir = resolveDesktopBaseDir({
     homeDirectory: input.homeDirectory,
     joinPath: input.joinPath,
     t3Home,
+    isDevelopment,
+    appVersion: input.appVersion,
   });
   const stateDir = resolveDesktopStateDir({
     baseDir,
-    isDevelopment: isDevelopmentEnvironment(input.env),
+    isDevelopment,
     joinPath: input.joinPath,
     t3Home,
   });
@@ -81,7 +84,9 @@ export function resolveEarlyLinuxElectronOptions(
 ): EarlyLinuxElectronOptions {
   const preference = resolveEarlyLinuxPasswordStorePreference(input);
   return {
-    linuxWmClass: isDevelopmentEnvironment(input.env) ? "t3code-dev" : "t3code",
+    linuxWmClass: isDevelopmentEnvironment(input.env)
+      ? "tritonai-harness-dev"
+      : resolveTritonAiDesktopIdentity(input.appVersion).packageName,
     passwordStore: resolveLinuxPasswordStoreSwitch({
       preference,
       env: input.env,

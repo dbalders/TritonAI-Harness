@@ -79,6 +79,15 @@ export class DesktopUpdateActionInProgressError extends Schema.TaggedErrorClass<
   }
 }
 
+export class DesktopUpdateTrackMismatchError extends Schema.TaggedErrorClass<DesktopUpdateTrackMismatchError>()(
+  "DesktopUpdateTrackMismatchError",
+  { requestedChannel: DesktopUpdateChannelSchema },
+) {
+  override get message(): string {
+    return "Stable and Nightly are separate apps. Install the other app to use its update track.";
+  }
+}
+
 export class DesktopUpdateChannelPersistenceError extends Schema.TaggedErrorClass<DesktopUpdateChannelPersistenceError>()(
   "DesktopUpdateChannelPersistenceError",
   {
@@ -144,6 +153,7 @@ export type DesktopUpdateConfigureError = never;
 export const DesktopUpdateSetChannelError = Schema.Union([
   DesktopUpdateActionInProgressError,
   DesktopUpdateChannelPersistenceError,
+  DesktopUpdateTrackMismatchError,
 ]);
 export type DesktopUpdateSetChannelError = typeof DesktopUpdateSetChannelError.Type;
 export const isDesktopUpdateSetChannelError = Schema.is(DesktopUpdateSetChannelError);
@@ -255,6 +265,9 @@ export const make = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const fileSystem = yield* FileSystem.FileSystem;
   const desktopSettings = yield* DesktopAppSettings.DesktopAppSettings;
+
+  const installedChannel = resolveDefaultDesktopUpdateChannel(environment.appVersion);
+  const hasFixedUpdateTrack = environment.isPackaged && !environment.isDevelopment;
 
   const appUpdateYmlConfigRef = yield* Ref.make<Option.Option<AppUpdateYmlConfig>>(Option.none());
   const activeUpdateActionRef = yield* Ref.make<Option.Option<UpdateAction>>(Option.none());
@@ -710,6 +723,22 @@ export const make = Effect.gen(function* () {
       Effect.flatMap(
         Effect.fn("desktop.updates.applyUpdateDownloaded")(function* (info) {
           const state = yield* Ref.get(updateStateRef);
+          if (resolveDefaultDesktopUpdateChannel(info.version) !== state.channel) {
+            yield* logUpdaterWarning("ignoring downloaded update from another track", {
+              version: info.version,
+            });
+            const checkedAt = yield* currentIsoTimestamp;
+            yield* setState(
+              reduceDesktopUpdateStateOnCheckFailure(
+                createBaseUpdateState(state.channel, state.enabled, environment),
+                "The downloaded update belongs to the other app. Check for updates again.",
+                checkedAt,
+              ),
+            );
+            yield* Ref.set(lastLoggedDownloadMilestoneRef, -1);
+            yield* electronUpdater.setAutoInstallOnAppQuit(false);
+            return;
+          }
           yield* setState(reduceDesktopUpdateStateOnDownloadComplete(state, info.version));
           yield* logUpdaterInfo("update downloaded", { version: info.version });
         }),
@@ -749,7 +778,8 @@ export const make = Effect.gen(function* () {
 
       const settings = yield* desktopSettings.get;
       const enabled = yield* shouldEnableAutoUpdates;
-      yield* setState(createBaseUpdateState(settings.updateChannel, enabled, environment));
+      const channel = hasFixedUpdateTrack ? installedChannel : settings.updateChannel;
+      yield* setState(createBaseUpdateState(channel, enabled, environment));
       if (!enabled) {
         return;
       }
@@ -757,7 +787,7 @@ export const make = Effect.gen(function* () {
 
       yield* electronUpdater.setAutoDownload(false);
       yield* electronUpdater.setAutoInstallOnAppQuit(false);
-      yield* applyAutoUpdaterChannel(settings.updateChannel);
+      yield* applyAutoUpdaterChannel(channel);
       yield* electronUpdater.setDisableDifferentialDownload(
         isArm64HostRunningIntelBuild(environment.runtimeInfo),
       );
@@ -797,6 +827,9 @@ export const make = Effect.gen(function* () {
       nextChannel: DesktopUpdateChannel,
     ) {
       yield* Effect.annotateCurrentSpan({ channel: nextChannel });
+      if (hasFixedUpdateTrack && nextChannel !== installedChannel) {
+        return yield* new DesktopUpdateTrackMismatchError({ requestedChannel: nextChannel });
+      }
       const activeAction = yield* tryStartChannelChange;
       if (Option.isSome(activeAction)) {
         return yield* new DesktopUpdateActionInProgressError({

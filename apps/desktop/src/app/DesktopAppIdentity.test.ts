@@ -156,6 +156,22 @@ describe("DesktopAppIdentity", () => {
     ),
   );
 
+  it.effect("never adopts the stable legacy profile for Nightly", () =>
+    withIdentity(
+      Effect.gen(function* () {
+        const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
+        assert.equal(
+          yield* identity.resolveUserDataPath,
+          "/Users/alice/Library/Application Support/tritonai-harness-nightly",
+        );
+      }),
+      {
+        legacyPathExists: true,
+        environment: { appVersion: "0.3.4-nightly.20260912.12", isPackaged: true },
+      },
+    ),
+  );
+
   it.effect("preserves failures while inspecting the legacy userData path", () => {
     const legacyPath = "/Users/alice/Library/Application Support/T3 Code (Alpha)";
     const cause = PlatformError.systemError({

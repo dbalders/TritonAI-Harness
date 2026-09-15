@@ -184,6 +184,17 @@ describe("buildWslNodeEnvPreamble", () => {
 });
 
 describe("parseWslSecretFileInventory", () => {
+  it("inventories credentials from the same channel home as the WSL backend", () => {
+    expect(buildWslSecretFileInventoryScript(false, "0.3.3")).toContain(
+      "$HOME/.tritonai-harness/userdata/secrets",
+    );
+    expect(buildWslSecretFileInventoryScript(false, "0.3.4-nightly.20260912.12")).toContain(
+      "$HOME/.tritonai-harness-nightly/userdata/secrets",
+    );
+    expect(buildWslSecretFileInventoryScript(true, "0.3.4-nightly.20260912.12")).toContain(
+      "$HOME/.tritonai-harness/dev/secrets",
+    );
+  });
   it("includes symlinked .bin entries so the fail-closed type check can reject them", () => {
     const script = buildWslSecretFileInventoryScript(false);
 
