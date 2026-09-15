@@ -94,6 +94,15 @@ Explicit user settings that hide artwork remain respected. Nightly asset paths n
 TritonAI starry logo, while stable and development assets keep their respective designs.
 See [nightly artwork source and exports](../../assets/nightly/README.md).
 
+macOS Nightly must retain the historical `edu.ucsd.tritonai.harness` bundle ID.
+Squirrel.Mac checks the replacement against the installed app's signing requirement,
+so changing that ID breaks updates from earlier Nightly installations. Windows keeps
+its separate `.nightly` app ID; the Nightly package name and data directory remain
+separate on both platforms. Nightly `20260915.16` shipped the incompatible macOS ID;
+users who manually installed that build need a separate recovery path. Validate
+Mac release changes with an actual previous-version download, install, and relaunch,
+in addition to packaged boot checks.
+
 Manual release dispatch also classifies nightly versions as the nightly channel, keeps them
 as prereleases, and never promotes them to latest or writes their version onto stable main.
 The dedicated hosted workflow below supplies scheduling and nightly publication. The current
