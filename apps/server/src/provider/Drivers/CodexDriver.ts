@@ -47,6 +47,7 @@ import { makeCodexTextGeneration } from "../../textGeneration/CodexTextGeneratio
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import { ServerConfig } from "../../config.ts";
 import * as ProcessRunner from "../../processRunner.ts";
+import { expandHomePath } from "../../pathExpansion.ts";
 import * as PreviewAutomationBroker from "../../mcp/PreviewAutomationBroker.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderDriverError } from "../Errors.ts";
@@ -81,6 +82,7 @@ import {
   resolveCodexHomeLayout,
 } from "./CodexHomeLayout.ts";
 import { materializeTritonAiCodexModelCatalog } from "./CodexModelCatalog.ts";
+import { resolveManagedCodexBinary } from "../managedCodexRuntime.ts";
 const decodeCodexSettings = Schema.decodeSync(CodexSettings);
 
 const DRIVER_KIND = ProviderDriverKind.make("codex");
@@ -237,8 +239,28 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
         String(instanceId),
       );
       const configuredHomePath = config.homePath.trim();
+      const binaryPath = enabled
+        ? yield* resolveManagedCodexBinary({
+            binaryPath: expandHomePath(config.binaryPath),
+            homeDirectory: expandHomePath("~"),
+            platform: hostPlatform,
+            environment: processEnv,
+            run: processRunner.run,
+          }).pipe(
+            Effect.mapError(
+              (cause) =>
+                new ProviderDriverError({
+                  driver: DRIVER_KIND,
+                  instanceId,
+                  detail: cause.message,
+                  cause,
+                }),
+            ),
+          )
+        : config.binaryPath;
       const managedConfig = {
         ...config,
+        binaryPath,
         homePath:
           configuredHomePath.length > 0
             ? config.homePath

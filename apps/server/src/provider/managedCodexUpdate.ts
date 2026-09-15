@@ -4,6 +4,13 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
+import {
+  withManagedCodexLock,
+  recoverManagedCodexTransaction,
+  writeManagedCodexTransaction,
+  cleanupFailedCodexStage,
+} from "./managedCodexTransaction.ts";
+
 import type { ProcessRunInput, ProcessRunOutput, ProcessRunner } from "../processRunner.ts";
 import {
   makeProviderMaintenanceCapabilities,
@@ -16,6 +23,11 @@ const MANAGED_CODEX_ROOT_MARKER = "/.agents/ucsd/runtime/codex/";
 const MANAGED_CODEX_DIRECTORY = /^openai-codex-[a-z0-9][a-z0-9._-]*$/u;
 const MANAGED_CODEX_UPDATE_COMMAND = "managed-codex-update";
 const MANAGED_CODEX_UPDATE_LOCK = "tritonai-managed-codex";
+const decodeBundledCatalog = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(
+    Schema.Struct({ models: Schema.Array(Schema.Struct({ slug: Schema.String })) }),
+  ),
+);
 const CODEX_VERSION = /(?:codex-cli|codex)\s+(\d+\.\d+\.\d+(?:-[a-z0-9.-]+)?)/iu;
 
 export function isTritonAiManagedCodexMaintenanceCapabilities(
@@ -38,6 +50,8 @@ export class ManagedCodexUpdateError extends Schema.TaggedErrorClass<ManagedCode
     cause: Schema.optional(Schema.Defect()),
   },
 ) {}
+
+const isManagedCodexUpdateError = Schema.is(ManagedCodexUpdateError);
 
 function updateError(message: string, cause?: unknown): ManagedCodexUpdateError {
   return new ManagedCodexUpdateError({
@@ -139,6 +153,40 @@ function commandOutput(result: ProcessRunOutput): string {
   return `${result.stdout}\n${result.stderr}`;
 }
 
+const verifyCodexProtocol = Effect.fn("managedCodexUpdate.verifyCodexProtocol")(function* (
+  run: ManagedCodexCommandRunner,
+  binaryPath: string,
+  recoveryMessage: string,
+) {
+  const bundled = yield* runCheckedCommand(
+    run,
+    {
+      command: binaryPath,
+      args: ["debug", "models", "--bundled"],
+      timeout: "30 seconds",
+      maxOutputBytes: 16 * 1024 * 1024,
+    },
+    `Codex cannot read its model catalog. ${recoveryMessage}`,
+  );
+  const catalog = yield* decodeBundledCatalog(bundled.stdout).pipe(
+    Effect.mapError((cause) =>
+      updateError(`Codex returned an incompatible model catalog. ${recoveryMessage}`, cause),
+    ),
+  );
+  if (catalog.models.length === 0)
+    return yield* updateError(`The Codex model catalog is empty. ${recoveryMessage}`);
+  yield* runCheckedCommand(
+    run,
+    {
+      command: binaryPath,
+      args: ["app-server", "--help"],
+      timeout: "30 seconds",
+      maxOutputBytes: 64 * 1024,
+    },
+    `Codex does not support app-server. ${recoveryMessage}`,
+  );
+});
+
 export const updateTritonAiManagedCodex = Effect.fn(
   "managedCodexUpdate.updateTritonAiManagedCodex",
 )(function* (input: { readonly binaryPath: string; readonly run: ManagedCodexCommandRunner }) {
@@ -151,125 +199,138 @@ export const updateTritonAiManagedCodex = Effect.fn(
 
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  if (!(yield* fs.exists(installation.binaryPath))) {
-    return yield* updateError("The managed Codex launcher is missing.");
-  }
-  const installationIsSymlink = yield* fs.readLink(installation.installRoot).pipe(
-    Effect.as(true),
-    Effect.orElseSucceed(() => false),
-  );
-  const launcherIsSymlink = yield* fs.readLink(installation.binaryPath).pipe(
-    Effect.as(true),
-    Effect.orElseSucceed(() => false),
-  );
-  if (installationIsSymlink || launcherIsSymlink) {
-    return yield* updateError("The managed Codex runtime must not be a symbolic link.");
-  }
-
   const runtimeRoot = path.dirname(installation.installRoot);
-  const installationName = path.basename(installation.installRoot);
-  const stagingContainer = yield* fs.makeTempDirectoryScoped({
-    directory: runtimeRoot,
-    prefix: ".tritonai-codex-stage.",
-  });
-  const backupContainer = yield* fs.makeTempDirectoryScoped({
-    directory: runtimeRoot,
-    prefix: ".tritonai-codex-backup.",
-  });
-  const stagedInstallRoot = path.join(stagingContainer, installationName);
-  const stagedBinaryPath = path.join(stagedInstallRoot, ...installation.binaryRelativeSegments);
-  const backupInstallRoot = path.join(backupContainer, installationName);
+  return yield* withManagedCodexLock(
+    runtimeRoot,
+    Effect.gen(function* () {
+      yield* recoverManagedCodexTransaction(runtimeRoot);
+      if (!(yield* fs.exists(installation.binaryPath))) {
+        return yield* updateError("The managed Codex launcher is missing.");
+      }
+      const installationIsSymlink = yield* fs.readLink(installation.installRoot).pipe(
+        Effect.as(true),
+        Effect.orElseSucceed(() => false),
+      );
+      const launcherIsSymlink = yield* fs.readLink(installation.binaryPath).pipe(
+        Effect.as(true),
+        Effect.orElseSucceed(() => false),
+      );
+      if (installationIsSymlink || launcherIsSymlink) {
+        return yield* updateError("The managed Codex runtime must not be a symbolic link.");
+      }
 
-  yield* runCheckedCommand(
-    input.run,
-    {
-      command: "npm",
-      args: [
-        "install",
-        "-g",
-        "--prefix",
-        stagedInstallRoot,
-        "--no-fund",
-        "--no-audit",
-        "@openai/codex@latest",
-      ],
-      timeout: "4 minutes",
-      maxOutputBytes: 64 * 1024,
-      outputMode: "truncate",
-      truncatedMarker: "\n[output truncated]",
-    },
-    "The managed Codex package could not be staged.",
-  );
-  if (!(yield* fs.exists(stagedBinaryPath))) {
-    return yield* updateError("The staged Codex package did not contain its launcher.");
-  }
+      const installationName = path.basename(installation.installRoot);
+      const stagingContainer = yield* fs.makeTempDirectory({
+        directory: runtimeRoot,
+        prefix: ".tritonai-codex-stage.",
+      });
+      const backupContainer = yield* fs.makeTempDirectory({
+        directory: runtimeRoot,
+        prefix: ".tritonai-codex-backup.",
+      });
+      const stagedInstallRoot = path.join(stagingContainer, installationName);
+      const stagedBinaryPath = path.join(stagedInstallRoot, ...installation.binaryRelativeSegments);
+      const backupInstallRoot = path.join(backupContainer, installationName);
 
-  const stagedVersionResult = yield* runCheckedCommand(
-    input.run,
-    {
-      command: stagedBinaryPath,
-      args: ["--version"],
-      timeout: "30 seconds",
-      maxOutputBytes: 8 * 1024,
-      outputMode: "truncate",
-    },
-    "The staged Codex package failed verification.",
-  );
-  const stagedVersion = parseCodexCliVersion(commandOutput(stagedVersionResult));
-  if (!stagedVersion) {
-    return yield* updateError("The staged Codex package returned an invalid version.");
-  }
-
-  // npm's generated launcher follows ambient PATH. Retain the Installer's
-  // launcher so the activated package remains pinned to the managed Node runtime.
-  yield* fs.remove(stagedBinaryPath, { force: true });
-  yield* fs.copyFile(installation.binaryPath, stagedBinaryPath);
-  if (!installation.windows) yield* fs.chmod(stagedBinaryPath, 0o755);
-
-  let backedUp = false;
-  let activated = false;
-  const activate = Effect.gen(function* () {
-    yield* fs.rename(installation.installRoot, backupInstallRoot);
-    backedUp = true;
-    yield* fs.rename(stagedInstallRoot, installation.installRoot);
-    activated = true;
-    const activeVersionResult = yield* runCheckedCommand(
-      input.run,
-      {
-        command: installation.binaryPath,
-        args: ["--version"],
-        timeout: "30 seconds",
-        maxOutputBytes: 8 * 1024,
-        outputMode: "truncate",
-      },
-      "The activated Codex package failed verification.",
-    );
-    const activeVersion = parseCodexCliVersion(commandOutput(activeVersionResult));
-    if (activeVersion !== stagedVersion) {
-      return yield* updateError("The activated Codex package did not match the staged version.");
-    }
-    return activeVersion;
-  });
-
-  return yield* activate.pipe(
-    Effect.catch((cause) =>
-      Effect.gen(function* () {
-        if (activated) {
-          yield* fs
-            .remove(installation.installRoot, { recursive: true, force: true })
-            .pipe(
-              Effect.mapError((rollbackCause) => updateError("Rollback failed.", rollbackCause)),
-            );
+      return yield* Effect.gen(function* () {
+        yield* runCheckedCommand(
+          input.run,
+          {
+            command: "npm",
+            args: [
+              "install",
+              "-g",
+              "--prefix",
+              stagedInstallRoot,
+              "--no-fund",
+              "--no-audit",
+              "@openai/codex@latest",
+            ],
+            timeout: "4 minutes",
+            maxOutputBytes: 64 * 1024,
+            outputMode: "truncate",
+            truncatedMarker: "\n[output truncated]",
+          },
+          "The managed Codex package could not be staged.",
+        );
+        if (!(yield* fs.exists(stagedBinaryPath))) {
+          return yield* updateError("The staged Codex package did not contain its launcher.");
         }
-        if (backedUp) {
-          yield* fs
-            .rename(backupInstallRoot, installation.installRoot)
-            .pipe(
-              Effect.mapError((rollbackCause) => updateError("Rollback failed.", rollbackCause)),
-            );
+
+        const stagedVersionResult = yield* runCheckedCommand(
+          input.run,
+          {
+            command: stagedBinaryPath,
+            args: ["--version"],
+            timeout: "30 seconds",
+            maxOutputBytes: 8 * 1024,
+            outputMode: "truncate",
+          },
+          "The staged Codex package failed verification.",
+        );
+        const stagedVersion = parseCodexCliVersion(commandOutput(stagedVersionResult));
+        if (!stagedVersion) {
+          return yield* updateError("The staged Codex package returned an invalid version.");
         }
-        return yield* updateError("The managed Codex update was rolled back.", cause);
-      }),
+
+        yield* verifyCodexProtocol(
+          input.run,
+          stagedBinaryPath,
+          "The current runtime is unchanged.",
+        );
+
+        // npm's generated launcher follows ambient PATH. Retain the Installer's
+        // launcher so the activated package remains pinned to the managed Node runtime.
+        yield* fs.remove(stagedBinaryPath, { force: true });
+        yield* fs.copyFile(installation.binaryPath, stagedBinaryPath);
+        if (!installation.windows) yield* fs.chmod(stagedBinaryPath, 0o755);
+
+        const transaction = {
+          schemaVersion: 1 as const,
+          targetName: installationName,
+          stageName: path.basename(stagingContainer),
+          backupName: path.basename(backupContainer),
+          committed: false,
+        };
+        yield* writeManagedCodexTransaction(runtimeRoot, transaction);
+        yield* fs.rename(installation.installRoot, backupInstallRoot);
+        yield* fs.rename(stagedInstallRoot, installation.installRoot);
+        const activeVersionResult = yield* runCheckedCommand(
+          input.run,
+          {
+            command: installation.binaryPath,
+            args: ["--version"],
+            timeout: "30 seconds",
+            maxOutputBytes: 8 * 1024,
+            outputMode: "truncate",
+          },
+          "The activated Codex package failed verification; the previous runtime will be restored.",
+        );
+        const activeVersion = parseCodexCliVersion(commandOutput(activeVersionResult));
+        if (activeVersion !== stagedVersion) {
+          return yield* updateError(
+            "The activated Codex package did not match the staged version; the previous runtime will be restored.",
+          );
+        }
+        yield* verifyCodexProtocol(
+          input.run,
+          installation.binaryPath,
+          "The previous runtime will be restored.",
+        );
+        yield* writeManagedCodexTransaction(runtimeRoot, { ...transaction, committed: true });
+        yield* recoverManagedCodexTransaction(runtimeRoot);
+        return activeVersion;
+      }).pipe(
+        Effect.onExit((exit) =>
+          cleanupFailedCodexStage(exit, runtimeRoot, stagingContainer, backupContainer).pipe(
+            Effect.orDie,
+          ),
+        ),
+      );
+    }),
+  ).pipe(
+    Effect.mapError((cause) =>
+      isManagedCodexUpdateError(cause) ? cause : updateError(cause.message, cause),
     ),
   );
 });

@@ -93,10 +93,6 @@ export const managedConfigDigest = loadedManagedConfig.digest;
 
 let migrationStatus: TritonAiManagedPolicyDiagnostics["migrationStatus"] = "not-needed";
 let managedProviderInstanceRenames: Readonly<Record<string, string>> = {};
-let managedRuntimeAnchor = {
-  binaryPath: DEFAULT_SERVER_SETTINGS.providers.codex.binaryPath,
-  homePath: DEFAULT_TRITONAI_CODEX_HOME_PATH,
-};
 let secureSkillsDiagnostics: Pick<
   TritonAiManagedPolicyDiagnostics,
   | "secureSkillsStatus"
@@ -289,14 +285,39 @@ function resolveManagedSelection(
   };
 }
 
+function managedRuntimeFromDocument(input: unknown, defaultHomePath: string) {
+  const root = record(input);
+  const marker = record(root?.[MANAGED_POLICY_MARKER_KEY]);
+  const migrated = marker?.migrationVersion === MANAGED_POLICY_MIGRATION_VERSION;
+  const provider = record(record(root?.providers)?.codex);
+  const instance = record(record(record(root?.providerInstances)?.codex)?.config);
+  const nonempty = (...values: unknown[]) =>
+    values.find((value): value is string => typeof value === "string" && value.trim().length > 0);
+  return {
+    binaryPath:
+      nonempty(
+        ...(migrated ? [marker.codexBinaryPath] : [instance?.binaryPath, provider?.binaryPath]),
+      ) ?? DEFAULT_SERVER_SETTINGS.providers.codex.binaryPath,
+    homePath:
+      nonempty(...(migrated ? [marker.codexHomePath] : [instance?.homePath, provider?.homePath])) ??
+      defaultHomePath,
+  };
+}
+
 export function applyManagedHarnessPolicy(
   persisted: ServerSettings,
   config: ManagedConfig = managedConfig,
   options: {
     readonly textGenerationSelectionWasPersisted?: boolean;
     readonly credentialEnvironment?: NodeJS.ProcessEnv;
+    readonly rawSettingsDocument?: unknown;
+    readonly defaultCodexHomePath?: string;
   } = {},
 ): ServerSettings {
+  const managedRuntimeAnchor = managedRuntimeFromDocument(
+    options.rawSettingsDocument,
+    options.defaultCodexHomePath ?? DEFAULT_TRITONAI_CODEX_HOME_PATH,
+  );
   const availableRouteIds = options.credentialEnvironment
     ? availableManagedRouteIds(config, options.credentialEnvironment)
     : new Set(managedRoutes(config).map((route) => route.id));
@@ -462,6 +483,7 @@ export interface LegacyManagedSettingsMigrationResult {
  */
 export function migrateLegacyInstallerManagedSettings(
   input: unknown,
+  defaultCodexHomePath = DEFAULT_TRITONAI_CODEX_HOME_PATH,
 ): LegacyManagedSettingsMigrationResult {
   const root = record(input);
   if (!root) {
@@ -471,16 +493,6 @@ export function migrateLegacyInstallerManagedSettings(
   const marker = record(root[MANAGED_POLICY_MARKER_KEY]);
   if (marker?.migrationVersion === MANAGED_POLICY_MIGRATION_VERSION) {
     managedProviderInstanceRenames = providerInstanceReferenceRenamesFromMarker(marker);
-    managedRuntimeAnchor = {
-      binaryPath:
-        typeof marker.codexBinaryPath === "string" && marker.codexBinaryPath.trim()
-          ? marker.codexBinaryPath
-          : DEFAULT_SERVER_SETTINGS.providers.codex.binaryPath,
-      homePath:
-        typeof marker.codexHomePath === "string" && marker.codexHomePath.trim()
-          ? marker.codexHomePath
-          : DEFAULT_TRITONAI_CODEX_HOME_PATH,
-    };
     migrationStatus = "completed";
     return { document: input, migrated: false };
   }
@@ -503,25 +515,7 @@ export function migrateLegacyInstallerManagedSettings(
   managedProviderInstanceRenames = providerInstanceReferenceRenames;
   const providers = record(next.providers);
   const codexProvider = record(providers?.codex);
-  const instancesBeforeMigration = record(next.providerInstances);
-  const codexInstanceBeforeMigration = record(instancesBeforeMigration?.codex);
-  const codexConfigBeforeMigration = record(codexInstanceBeforeMigration?.config);
-  managedRuntimeAnchor = {
-    binaryPath:
-      typeof codexConfigBeforeMigration?.binaryPath === "string" &&
-      codexConfigBeforeMigration.binaryPath.trim()
-        ? codexConfigBeforeMigration.binaryPath
-        : typeof codexProvider?.binaryPath === "string" && codexProvider.binaryPath.trim()
-          ? codexProvider.binaryPath
-          : DEFAULT_SERVER_SETTINGS.providers.codex.binaryPath,
-    homePath:
-      typeof codexConfigBeforeMigration?.homePath === "string" &&
-      codexConfigBeforeMigration.homePath.trim()
-        ? codexConfigBeforeMigration.homePath
-        : typeof codexProvider?.homePath === "string" && codexProvider.homePath.trim()
-          ? codexProvider.homePath
-          : DEFAULT_TRITONAI_CODEX_HOME_PATH,
-  };
+  const managedRuntimeAnchor = managedRuntimeFromDocument(root, defaultCodexHomePath);
   for (const key of ["enabled", "binaryPath", "homePath", "customModels", "customModelMetadata"]) {
     delete codexProvider?.[key];
   }

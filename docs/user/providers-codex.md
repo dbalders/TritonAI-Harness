@@ -12,6 +12,23 @@ Common reasons:
 
 ## Engine Updates
 
+Stable and Nightly can use the same Codex installation. If a new profile cannot find Codex,
+Harness automatically looks for a working copy installed by TritonAI Installer. It also recovers
+when an older Installer-managed executable is no longer available. Your custom executable choice
+and profile settings are preserved.
+
+If no working copy is available, the provider message asks you to install or repair Codex with
+TritonAI Installer. Restart Harness after repairing the installation.
+
+New Stable and Nightly profiles keep their Codex data separately. Existing saved Codex homes are
+preserved so older chats keep access to their history; an already shared home stays shared.
+
+The Codex engine installation remains shared. Updating it affects the apps that use that installation.
+Harness and Installer prevent simultaneous engine updates. Updates check the replacement before
+committing and restore the previous engine if verification fails. If an update is interrupted,
+restart Harness or rerun Installer to recover it. Keep both apps and Installer current so they
+participate in the same update coordination.
+
 TritonAI Harness keeps Codex's planning tool enabled when starting the engine, including after
 engine updates. You do not need to change your Codex configuration to keep planning available.
 

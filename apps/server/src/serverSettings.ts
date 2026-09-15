@@ -475,9 +475,10 @@ const make = (
   credentialEnvironment: NodeJS.ProcessEnv = process.env,
 ) =>
   Effect.gen(function* () {
-    const { settingsPath } = yield* ServerConfig.ServerConfig;
+    const { settingsPath, baseDir } = yield* ServerConfig.ServerConfig;
     const fs = yield* FileSystem.FileSystem;
     const pathService = yield* Path.Path;
+    const defaultCodexHomePath = pathService.join(baseDir, "codex");
     const secretStore = yield* ServerSecretStore.ServerSecretStore;
     const sql = yield* SqlClient.SqlClient;
     const writeSemaphore = yield* Semaphore.make(1);
@@ -500,6 +501,8 @@ const make = (
                 textGenerationSelectionWasPersisted:
                   rawSettingsHasTextGenerationSelection(rawDocument),
                 credentialEnvironment,
+                rawSettingsDocument: rawDocument,
+                defaultCodexHomePath,
               }),
             ),
           )
@@ -952,7 +955,7 @@ const make = (
         return restoreProviderHistory(DEFAULT_SERVER_SETTINGS);
       }
       const migration = managedPolicyEnabled
-        ? migrateLegacyInstallerManagedSettings(parsed.value)
+        ? migrateLegacyInstallerManagedSettings(parsed.value, defaultCodexHomePath)
         : { document: parsed.value, migrated: false };
       yield* Ref.set(rawDocumentRef, migration.document);
       const decoded = decodeServerSettingsExit(migration.document);
