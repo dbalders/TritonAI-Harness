@@ -9,6 +9,7 @@ import { beforeEach, describe, expect, it } from "vite-plus/test";
 
 import {
   applyManagedHarnessPolicy,
+  createManagedProfileSettings,
   getManagedProviderInstanceRenames,
   managedConfig,
   migrateLegacyInstallerManagedSettings,
@@ -132,18 +133,16 @@ describe("TritonAI managed Harness policy", () => {
     });
   });
 
-  it("keeps fresh profile homes independent even when migrations interleave", () => {
+  it("keeps fresh profile homes independent across settings documents", () => {
     const stableHome = "/profiles/stable/codex";
     const nightlyHome = "/profiles/nightly/codex";
-    const stable = migrateLegacyInstallerManagedSettings({}, stableHome);
-    const nightly = migrateLegacyInstallerManagedSettings({}, nightlyHome);
+    const stable = createManagedProfileSettings(stableHome);
+    const nightly = createManagedProfileSettings(nightlyHome);
     const stableSettings = applyManagedHarnessPolicy(DEFAULT_SERVER_SETTINGS, managedConfig, {
-      rawSettingsDocument: stable.document,
-      defaultCodexHomePath: stableHome,
+      rawSettingsDocument: stable,
     });
     const nightlySettings = applyManagedHarnessPolicy(DEFAULT_SERVER_SETTINGS, managedConfig, {
-      rawSettingsDocument: nightly.document,
-      defaultCodexHomePath: nightlyHome,
+      rawSettingsDocument: nightly,
     });
     expect(stableSettings.providers.codex.homePath).toBe(stableHome);
     expect(nightlySettings.providers.codex.homePath).toBe(nightlyHome);
@@ -151,8 +150,7 @@ describe("TritonAI managed Harness policy", () => {
       homePath: nightlyHome,
     });
     const missingFile = applyManagedHarnessPolicy(DEFAULT_SERVER_SETTINGS, managedConfig, {
-      rawSettingsDocument: {},
-      defaultCodexHomePath: "/profiles/third/codex",
+      rawSettingsDocument: createManagedProfileSettings("/profiles/third/codex"),
     });
     expect(missingFile.providers.codex.homePath).toBe("/profiles/third/codex");
     expect(missingFile.providers.codex.binaryPath).toBe("codex");
@@ -160,13 +158,11 @@ describe("TritonAI managed Harness policy", () => {
 
   it("preserves explicit and previously saved Codex homes without moving history", () => {
     for (const savedHome of ["/custom/history", DEFAULT_TRITONAI_CODEX_HOME_PATH]) {
-      const migrated = migrateLegacyInstallerManagedSettings(
-        { providers: { codex: { homePath: savedHome, binaryPath: "/custom/codex" } } },
-        "/nightly/codex",
-      );
+      const migrated = migrateLegacyInstallerManagedSettings({
+        providers: { codex: { homePath: savedHome, binaryPath: "/custom/codex" } },
+      });
       const effective = applyManagedHarnessPolicy(DEFAULT_SERVER_SETTINGS, managedConfig, {
         rawSettingsDocument: migrated.document,
-        defaultCodexHomePath: "/nightly/codex",
       });
       expect(effective.providers.codex.homePath).toBe(savedHome);
       expect(effective.providers.codex.binaryPath).toBe("/custom/codex");

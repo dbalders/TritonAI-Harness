@@ -311,12 +311,11 @@ export function applyManagedHarnessPolicy(
     readonly textGenerationSelectionWasPersisted?: boolean;
     readonly credentialEnvironment?: NodeJS.ProcessEnv;
     readonly rawSettingsDocument?: unknown;
-    readonly defaultCodexHomePath?: string;
   } = {},
 ): ServerSettings {
   const managedRuntimeAnchor = managedRuntimeFromDocument(
     options.rawSettingsDocument,
-    options.defaultCodexHomePath ?? DEFAULT_TRITONAI_CODEX_HOME_PATH,
+    DEFAULT_TRITONAI_CODEX_HOME_PATH,
   );
   const availableRouteIds = options.credentialEnvironment
     ? availableManagedRouteIds(config, options.credentialEnvironment)
@@ -471,6 +470,17 @@ export function rawSettingsHasTextGenerationSelection(raw: unknown): boolean {
   return Object.hasOwn(record(raw) ?? {}, "textGenerationModelSelection");
 }
 
+/** Record a profile's runtime without treating its existing thread identities as legacy data. */
+export function createManagedProfileSettings(codexHomePath: string) {
+  return {
+    [MANAGED_POLICY_MARKER_KEY]: {
+      migrationVersion: MANAGED_POLICY_MIGRATION_VERSION,
+      codexBinaryPath: DEFAULT_SERVER_SETTINGS.providers.codex.binaryPath,
+      codexHomePath,
+    },
+  };
+}
+
 export interface LegacyManagedSettingsMigrationResult {
   readonly document: unknown;
   readonly migrated: boolean;
@@ -483,7 +493,6 @@ export interface LegacyManagedSettingsMigrationResult {
  */
 export function migrateLegacyInstallerManagedSettings(
   input: unknown,
-  defaultCodexHomePath = DEFAULT_TRITONAI_CODEX_HOME_PATH,
 ): LegacyManagedSettingsMigrationResult {
   const root = record(input);
   if (!root) {
@@ -515,7 +524,7 @@ export function migrateLegacyInstallerManagedSettings(
   managedProviderInstanceRenames = providerInstanceReferenceRenames;
   const providers = record(next.providers);
   const codexProvider = record(providers?.codex);
-  const managedRuntimeAnchor = managedRuntimeFromDocument(root, defaultCodexHomePath);
+  const managedRuntimeAnchor = managedRuntimeFromDocument(root, DEFAULT_TRITONAI_CODEX_HOME_PATH);
   for (const key of ["enabled", "binaryPath", "homePath", "customModels", "customModelMetadata"]) {
     delete codexProvider?.[key];
   }

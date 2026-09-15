@@ -27,11 +27,14 @@ Discovery does not import another profile's settings or alter its data, credenti
 The Installer remains responsible for installing and repairing the runtime; discovery does not
 download packages or persist a fallback path that could become stale after another installation.
 
-New managed profiles default their Codex home to `<profile base>/codex`, including profiles with
-no settings file, an empty file object, or a custom base directory. Runtime identity comes from
-that profile's persisted document rather than a process-global migration side effect. Saved
-Codex home paths remain authoritative: this does not move existing sessions or silently split
-an intentionally shared history. A legacy profile that already saved a shared Codex home keeps it.
+New managed profiles with no settings file or Codex conversation history default their Codex home
+to `<profile base>/codex`, including custom base directories. Initial settings persist that home
+in the policy marker before conversations can start.
+Runtime identity comes from that profile's document rather than a process-global migration side effect.
+Existing settings files retain their saved Codex home or the historical implicit
+`~/.tritonai-harness/codex` home. An empty or malformed existing file is treated conservatively as
+legacy state, as is a profile with Codex conversation history but no settings file. This does not
+move existing sessions or silently split shared history.
 
 The Codex engine installation remains shared by profiles that resolve to the same executable.
 Updating that engine changes the version used by those profiles; profile isolation does not

@@ -15,6 +15,7 @@ import {
   DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER,
   DEFAULT_MODEL_BY_PROVIDER,
   DEFAULT_SERVER_SETTINGS,
+  DEFAULT_TRITONAI_CODEX_HOME_PATH,
   type ModelSelection,
   type ProviderInstanceConfig,
   type ProviderInstanceEnvironmentVariable,
@@ -55,6 +56,7 @@ import {
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import {
   applyManagedHarnessPolicy,
+  createManagedProfileSettings,
   migrateLegacyInstallerManagedSettings,
   rawSettingsHasTextGenerationSelection,
   stripManagedFieldsForPersistence,
@@ -502,7 +504,6 @@ const make = (
                   rawSettingsHasTextGenerationSelection(rawDocument),
                 credentialEnvironment,
                 rawSettingsDocument: rawDocument,
-                defaultCodexHomePath,
               }),
             ),
           )
@@ -912,13 +913,13 @@ const make = (
           provider_name AS "providerName",
           provider_instance_id AS "providerInstanceId"
         FROM projection_thread_sessions
-        WHERE provider_name IN ('cursor', 'grok', 'opencode')
+        WHERE provider_name IN ('codex', 'cursor', 'grok', 'opencode')
         UNION
         SELECT DISTINCT
           provider_name AS "providerName",
           provider_instance_id AS "providerInstanceId"
         FROM provider_session_runtime
-        WHERE provider_name IN ('cursor', 'grok', 'opencode')
+        WHERE provider_name IN ('codex', 'cursor', 'grok', 'opencode')
       `.pipe(
         Effect.mapError(
           (cause) =>
@@ -931,12 +932,31 @@ const make = (
       );
       const restoreProviderHistory = (settings: ServerSettings) =>
         foldProviderInstanceEnabledFlags(
-          restoreUsedProviders(settings, persisted, providerHistory),
+          restoreUsedProviders(
+            settings,
+            persisted,
+            providerHistory.filter(({ providerName }) => providerName !== "codex"),
+          ),
         );
 
       if (!(yield* readConfigExists)) {
-        yield* Ref.set(rawDocumentRef, {});
-        return restoreProviderHistory(DEFAULT_SERVER_SETTINGS);
+        const restoredSettings = restoreProviderHistory(DEFAULT_SERVER_SETTINGS);
+        if (managedPolicyEnabled) {
+          const hasCodexHistory = providerHistory.some(
+            ({ providerName }) => providerName === "codex",
+          );
+          const initialDocument = migrateLegacyInstallerManagedSettings(
+            createManagedProfileSettings(
+              hasCodexHistory ? DEFAULT_TRITONAI_CODEX_HOME_PATH : defaultCodexHomePath,
+            ),
+          ).document;
+          yield* Ref.set(rawDocumentRef, initialDocument);
+          // Record the home before the first conversation so reopening cannot reclassify it as legacy.
+          yield* writeSettingsAtomically(restoredSettings);
+        } else {
+          yield* Ref.set(rawDocumentRef, {});
+        }
+        return restoredSettings;
       }
 
       const raw = yield* readRawConfig;
@@ -955,7 +975,7 @@ const make = (
         return restoreProviderHistory(DEFAULT_SERVER_SETTINGS);
       }
       const migration = managedPolicyEnabled
-        ? migrateLegacyInstallerManagedSettings(parsed.value, defaultCodexHomePath)
+        ? migrateLegacyInstallerManagedSettings(parsed.value)
         : { document: parsed.value, migrated: false };
       yield* Ref.set(rawDocumentRef, migration.document);
       const decoded = decodeServerSettingsExit(migration.document);

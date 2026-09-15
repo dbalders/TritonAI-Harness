@@ -20,8 +20,9 @@ and profile settings are preserved.
 If no working copy is available, the provider message asks you to install or repair Codex with
 TritonAI Installer. Restart Harness after repairing the installation.
 
-New Stable and Nightly profiles keep their Codex data separately. Existing saved Codex homes are
-preserved so older chats keep access to their history; an already shared home stays shared.
+New Stable and Nightly profiles keep their Codex data separately. Existing profiles retain their
+saved Codex home or historical default so older chats keep access to their history; an already
+shared home stays shared.
 
 The Codex engine installation remains shared. Updating it affects the apps that use that installation.
 
