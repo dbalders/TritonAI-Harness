@@ -8,6 +8,7 @@ import * as NodeModule from "node:module";
 import {
   createPackageWithOptions,
   extractAll,
+  extractFile,
   getRawHeader,
   statFile,
   type DirectoryRecord,
@@ -110,6 +111,9 @@ const RepoRoot = Effect.service(Path.Path).pipe(
   Effect.flatMap((path) => path.fromFileUrl(new URL("..", import.meta.url))),
 );
 const encodeJsonString = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
+const decodePluginRuntimeManifest = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Schema.Struct({ name: Schema.String, version: Schema.String })),
+);
 const decodeWorkspaceConfig = Schema.decodeEffect(fromYaml(WorkspaceConfig));
 const decodeNodePtyManifest = Schema.decodeUnknownEffect(
   Schema.fromJsonString(Schema.Struct({ version: Schema.String })),
@@ -3372,6 +3376,7 @@ export const stageWindowsServerSidecar = Effect.fn("stageWindowsServerSidecar")(
   readonly arch: typeof BuildArch.Type;
   readonly appVersion: string;
   readonly runtimeExternalDependencies: Record<string, string>;
+  readonly pluginRuntimeDependencies?: Record<string, string>;
   readonly fffNodeVersion: string;
   readonly allowBuilds: Record<string, boolean>;
   readonly patchedDependencies: Record<string, string>;
@@ -3391,6 +3396,7 @@ export const stageWindowsServerSidecar = Effect.fn("stageWindowsServerSidecar")(
 
   const sidecarDependencies = {
     ...input.runtimeExternalDependencies,
+    ...input.pluginRuntimeDependencies,
     // The sidecar serves two processes: the Windows primary loads win32
     // natives, and the WSL backend loads the matching Linux natives (fff via
     // ffi-rs) from the extracted copy of this same tree.
@@ -3616,6 +3622,7 @@ export const validateWindowsPackagedPayload = Effect.fn(
   readonly appExecutableName: string;
   readonly targetArch: typeof BuildArch.Type;
   readonly expectWslRuntime?: boolean;
+  readonly managedPluginRuntimeVersion?: string;
   readonly fileLimit?: number;
   readonly verbose?: boolean;
 }) {
@@ -3666,6 +3673,17 @@ export const validateWindowsPackagedPayload = Effect.fn(
       // POSIX separators work on Linux/macOS but fail on Windows even when the
       // entry is present in the archive.
       statFile(asarPath, path.join("apps", "server", "dist", "bin.mjs"));
+      if (input.managedPluginRuntimeVersion !== undefined) {
+        const runtime = decodePluginRuntimeManifest(
+          extractFile(asarPath, path.join("node_modules", "effect", "package.json")).toString(
+            "utf8",
+          ),
+        );
+        if (runtime.name !== "effect" || runtime.version !== input.managedPluginRuntimeVersion) {
+          throw new Error("Windows managed plugin host runtime does not match the build.");
+        }
+        statFile(asarPath, path.join("node_modules", "effect", "dist", "index.js"));
+      }
       return [...collectUnpackedAsarFiles(getRawHeader(asarPath).header)].sort();
     },
     catch: (cause) =>
@@ -4437,6 +4455,11 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       arch: options.arch,
       appVersion,
       runtimeExternalDependencies: resolvedServerRuntimeExternalDependencies,
+      // Providers are imported after build and need the host peer on disk even though
+      // the CLI itself inlines Effect. Keep it archived with its dependency closure.
+      pluginRuntimeDependencies: pluginComposition
+        ? { effect: resolvedServerDependencies.effect! }
+        : {},
       fffNodeVersion: serverPackageJson.dependencies["@ff-labs/fff-node"],
       allowBuilds: workspaceAllowBuilds,
       patchedDependencies: workspacePatchedDependencies,
@@ -4571,6 +4594,9 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       stageDistDir,
       appExecutableName: `${resolveDesktopProductName(appVersion)}.exe`,
       targetArch: options.arch,
+      ...(pluginComposition
+        ? { managedPluginRuntimeVersion: resolvedServerDependencies.effect! }
+        : {}),
       expectWslRuntime: bundlesWslRuntime({
         arch: options.arch,
         prebuildPath: options.wslPrebuild,

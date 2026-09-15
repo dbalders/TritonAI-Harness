@@ -530,6 +530,38 @@ describe("production built-in package verification", () => {
     }
   });
 
+  it("reports only admitted providers and tolerates an unwritable boot receipt", async () => {
+    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-boot-report-"));
+    const retained = { manifest: validateIntegrationManifest(skillsOnlyManifest()) };
+    const reportPath = NodePath.join(root, "boot.json");
+    try {
+      await expect(
+        loadProductionPackagesForTest(
+          [() => Promise.reject(new PluginSdkQuarantineError()), () => Promise.resolve(retained)],
+          reportPath,
+        ),
+      ).resolves.toEqual([retained]);
+      expect(JSON.parse(await NodeFSP.readFile(reportPath, "utf8"))).toEqual({
+        version: 1,
+        pid: process.pid,
+        pluginIds: [retained.manifest.id],
+      });
+      await expect(
+        loadProductionPackagesForTest([() => Promise.resolve(retained)], root),
+      ).resolves.toEqual([retained]);
+      await NodeFSP.unlink(reportPath);
+      await expect(
+        loadProductionPackagesForTest(
+          [() => Promise.resolve(retained), () => Promise.reject(new Error("startup failed"))],
+          reportPath,
+        ),
+      ).rejects.toThrow("startup failed");
+      await expect(NodeFSP.access(reportPath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("quarantines one SDK provider without disabling later production packages", async () => {
     const retained = { manifest: validateIntegrationManifest(skillsOnlyManifest()) };
     await expect(
