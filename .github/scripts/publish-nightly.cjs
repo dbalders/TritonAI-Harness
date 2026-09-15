@@ -27,6 +27,13 @@ module.exports = async function publishNightly({ github, context }) {
   const windows = JSON.parse(
     fs.readFileSync(path.join(directory, "harness-win-verification.json")),
   );
+  const { data: notes } = await github.rest.repos.generateReleaseNotes({
+    ...context.repo,
+    tag_name: tag,
+    target_commitish: sha,
+    previous_tag_name: process.env.PREVIOUS_NIGHTLY_TAG || stableBefore.tag_name,
+  });
+  if (!notes.body?.trim()) throw new Error("Generated nightly release notes are empty.");
   const { data: release } = await github.rest.repos.createRelease({
     ...context.repo,
     tag_name: tag,
@@ -35,7 +42,7 @@ module.exports = async function publishNightly({ github, context }) {
     draft: true,
     prerelease: true,
     make_latest: "false",
-    body: `Nightly build from ${sha}.\n\nmacOS Apple Silicon: Developer ID signed, notarized, and packaged-boot verified.\nWindows x64: ${windows.signingMode}, installed and boot verified on the hosted runner.\nBoth platforms include the validated managed-plugin composition.\n\nThis is an opt-in testing prerelease. Stable releases are unchanged.\n\nSource commit: ${sha}`,
+    body: `This is an opt-in nightly testing prerelease.\n\n${notes.body}\n\n## Platform notes\n\nmacOS: available for Apple Silicon Macs.\nWindows: available for x64 PCs.${windows.signingMode === "unsigned" ? " The Windows installer is unsigned, so Microsoft Defender SmartScreen may show a warning." : ""}\n\nSource commit: ${sha}`,
   });
   for (const name of files) {
     const data = fs.readFileSync(path.join(directory, name));

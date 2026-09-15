@@ -35,11 +35,13 @@ jobs:
       ref: ${{ steps.resolve.outputs.ref }}
       publish: ${{ steps.resolve.outputs.publish }}
       build: ${{ steps.resolve.outputs.build }}
+      previous_tag: ${{ steps.previous_release.outputs.previous_tag }}
       stable_version: ${{ steps.resolve.outputs.stable_version }}
     steps:
       - name: Checkout exact source
         uses: actions/checkout@v6
         with:
+          fetch-depth: 0
           ref: ${{ github.sha }}
           persist-credentials: false
           sparse-checkout: |-
@@ -68,6 +70,12 @@ jobs:
           set -euo pipefail
           node scripts/update-release-package-versions.ts "$STABLE_VERSION"
           node scripts/resolve-nightly-release.ts --date "$(date -u +%Y%m%d)" --run-number "$GITHUB_RUN_NUMBER" --sha "$GITHUB_SHA" --prepare --github-output
+      - name: Resolve previous nightly for release notes
+        id: previous_release
+        if: steps.resolve.outputs.build == 'true'
+        env:
+          NIGHTLY_TAG: ${{ steps.version.outputs.tag }}
+        run: node scripts/resolve-previous-release-tag.ts --channel nightly --current-tag "$NIGHTLY_TAG" --github-output
   quality:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -691,6 +699,7 @@ jobs:
         env:
           NIGHTLY_TAG: ${{ needs.preflight.outputs.tag }}
           NIGHTLY_NAME: ${{ needs.preflight.outputs.name }}
+          PREVIOUS_NIGHTLY_TAG: ${{ needs.preflight.outputs.previous_tag }}
           SOURCE_SHA: ${{ needs.preflight.outputs.ref }}
         with:
           script: await require('./.github/scripts/publish-nightly.cjs')({github, context});
