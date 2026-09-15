@@ -2,8 +2,6 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { ProviderDriverKind } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
-import * as Deferred from "effect/Deferred";
-import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import { ChildProcessSpawner } from "effect/unstable/process";
@@ -60,7 +58,6 @@ const makeFixture = Effect.fn("managedCodexUpdate.test.makeFixture")(function* (
 const makeFakeRunner = Effect.fn("managedCodexUpdate.test.makeFakeRunner")(function* (options?: {
   readonly failNpm?: boolean;
   readonly failActivatedVerification?: boolean;
-  readonly incompatibleCatalog?: boolean;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -91,9 +88,6 @@ const makeFakeRunner = Effect.fn("managedCodexUpdate.test.makeFakeRunner")(funct
       ) {
         return failure("active verification failed");
       }
-      if (input.args[0] === "debug")
-        return success(options?.incompatibleCatalog ? "{}" : '{"models":[{"slug":"gpt-5.2"}]}');
-      if (input.args[0] === "app-server") return success("app-server help");
       return success(`codex-cli ${version.trim()}`);
     }).pipe(Effect.orDie);
   return run;
@@ -180,7 +174,6 @@ it.layer(NodeServices.layer)("managed Codex update transaction", (it) => {
         yield* fixture.fs.readFileString(fixture.path.join(fixture.installRoot, "version.txt")),
       ).toBe("0.147.0");
       expect((yield* fixture.fs.readDirectory(fixture.runtimeRoot)).toSorted()).toEqual([
-        ".tritonai-codex.lock.sqlite",
         "openai-codex-0.146.0",
       ]);
     }).pipe(Effect.scoped),
@@ -194,13 +187,12 @@ it.layer(NodeServices.layer)("managed Codex update transaction", (it) => {
         run: yield* makeFakeRunner({ failActivatedVerification: true }),
       }).pipe(Effect.scoped, Effect.flip);
 
-      expect(error.message).toContain("previous runtime will be restored");
+      expect(error.message).toContain("rolled back");
       expect(yield* fixture.fs.readFileString(fixture.binaryPath)).toContain("managed launcher");
       expect(
         yield* fixture.fs.readFileString(fixture.path.join(fixture.installRoot, "version.txt")),
       ).toBe("0.146.0");
       expect((yield* fixture.fs.readDirectory(fixture.runtimeRoot)).toSorted()).toEqual([
-        ".tritonai-codex.lock.sqlite",
         "openai-codex-0.146.0",
       ]);
     }).pipe(Effect.scoped),
@@ -219,46 +211,5 @@ it.layer(NodeServices.layer)("managed Codex update transaction", (it) => {
         yield* fixture.fs.readFileString(fixture.path.join(fixture.installRoot, "version.txt")),
       ).toBe("0.146.0");
     }).pipe(Effect.scoped),
-  );
-  it.effect("restores the previous engine when the new model protocol is incompatible", () =>
-    Effect.gen(function* () {
-      const fixture = yield* makeFixture();
-      const error = yield* updateTritonAiManagedCodex({
-        binaryPath: fixture.binaryPath,
-        run: yield* makeFakeRunner({ incompatibleCatalog: true }),
-      }).pipe(Effect.flip);
-      expect(error.message).toContain("incompatible model catalog");
-      expect(
-        yield* fixture.fs.readFileString(fixture.path.join(fixture.installRoot, "version.txt")),
-      ).toBe("0.146.0");
-      expect(
-        yield* fixture.fs.exists(
-          fixture.path.join(fixture.runtimeRoot, ".tritonai-codex-update.json"),
-        ),
-      ).toBe(false);
-    }),
-  );
-
-  it.effect("restores the engine and releases the shared lock when activation is interrupted", () =>
-    Effect.gen(function* () {
-      const fixture = yield* makeFixture();
-      const activated = yield* Deferred.make<void>();
-      const fakeRun = yield* makeFakeRunner();
-      const run: ProcessRunner["Service"]["run"] = (input) =>
-        input.command === fixture.binaryPath
-          ? Deferred.succeed(activated, undefined).pipe(Effect.andThen(Effect.never))
-          : fakeRun(input);
-      const fiber = yield* updateTritonAiManagedCodex({ binaryPath: fixture.binaryPath, run }).pipe(
-        Effect.forkChild,
-      );
-      yield* Deferred.await(activated);
-      yield* Fiber.interrupt(fiber);
-      expect(
-        yield* fixture.fs.readFileString(fixture.path.join(fixture.installRoot, "version.txt")),
-      ).toBe("0.146.0");
-      expect(
-        yield* updateTritonAiManagedCodex({ binaryPath: fixture.binaryPath, run: fakeRun }),
-      ).toBe("0.147.0");
-    }),
   );
 });

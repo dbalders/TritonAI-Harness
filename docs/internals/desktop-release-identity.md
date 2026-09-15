@@ -33,16 +33,9 @@ that profile's persisted document rather than a process-global migration side ef
 Codex home paths remain authoritative: this does not move existing sessions or silently split
 an intentionally shared history. A legacy profile that already saved a shared Codex home keeps it.
 
-Harness engine updates and TritonAI Installer coordinate through an exclusive SQLite transaction
-on `.tritonai-codex.lock.sqlite` in the shared runtime root. The OS releases the lock on process
-exit; the lock file is never deleted. A competing operation fails with a retry message.
-The updater validates the staged engine's version, model catalog, and app-server support before
-activation, then verifies the activated managed launcher before committing. A durable
-`.tritonai-codex-update.json` journal retains the old runtime until that commit. Cancellation
-rolls back; the next Harness startup or Installer run recovers a process crash. Recovery failures
-preserve the journal and backup. Installer-owned interrupted transactions are repaired by rerunning
-Installer. Both apps still share the engine version; protocol checks are not a promise of arbitrary
-future engine compatibility. Older releases must be upgraded to participate in this lock protocol.
+The Codex engine installation remains shared by profiles that resolve to the same executable.
+Updating that engine changes the version used by those profiles; profile isolation does not
+provide independent engine versions.
 
 Packaged apps ignore saved cross-track preferences and reject cross-track updater IPC requests.
 Unpackaged mock-update tooling retains channel switching. The desktop About panel displays the

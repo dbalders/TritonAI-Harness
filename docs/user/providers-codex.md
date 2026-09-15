@@ -24,10 +24,6 @@ New Stable and Nightly profiles keep their Codex data separately. Existing saved
 preserved so older chats keep access to their history; an already shared home stays shared.
 
 The Codex engine installation remains shared. Updating it affects the apps that use that installation.
-Harness and Installer prevent simultaneous engine updates. Updates check the replacement before
-committing and restore the previous engine if verification fails. If an update is interrupted,
-restart Harness or rerun Installer to recover it. Keep both apps and Installer current so they
-participate in the same update coordination.
 
 TritonAI Harness keeps Codex's planning tool enabled when starting the engine, including after
 engine updates. You do not need to change your Codex configuration to keep planning available.

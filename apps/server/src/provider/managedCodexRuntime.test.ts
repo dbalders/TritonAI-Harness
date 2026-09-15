@@ -20,11 +20,6 @@ import {
 } from "../processRunner.ts";
 import { resolveManagedCodexBinary } from "./managedCodexRuntime.ts";
 import { materializeTritonAiCodexModelCatalog } from "./Drivers/CodexModelCatalog.ts";
-import {
-  writeManagedCodexTransaction,
-  MANAGED_CODEX_JOURNAL_FILE,
-} from "./managedCodexTransaction.ts";
-
 const encodePackage = Schema.encodeSync(
   Schema.fromJsonString(Schema.Struct({ name: Schema.String, version: Schema.String })),
 );
@@ -91,31 +86,6 @@ const fixture = Effect.fn("managedCodexRuntime.test.fixture")(function* (
 });
 
 it.layer(NodeServices.layer)("managed Codex runtime discovery", (it) => {
-  it.effect("recovers an interrupted engine replacement before starting the provider", () =>
-    Effect.gen(function* () {
-      const f = yield* fixture();
-      const installed = yield* f.install("0.146.0");
-      const targetName = "openai-codex-0.146.0";
-      const backupName = ".tritonai-codex-backup.test";
-      const stageName = ".tritonai-codex-stage.test";
-      yield* f.fs.makeDirectory(f.path.join(f.runtimeRoot, backupName));
-      yield* f.fs.makeDirectory(f.path.join(f.runtimeRoot, stageName));
-      yield* writeManagedCodexTransaction(f.runtimeRoot, {
-        schemaVersion: 1,
-        targetName,
-        backupName,
-        stageName,
-        committed: false,
-      });
-      yield* f.fs.rename(
-        f.path.join(f.runtimeRoot, targetName),
-        f.path.join(f.runtimeRoot, backupName, targetName),
-      );
-      assert.equal(yield* f.resolve(installed.binaryPath), installed.binaryPath);
-      assert.isTrue(yield* f.fs.exists(installed.packageRoot));
-      assert.isFalse(yield* f.fs.exists(f.path.join(f.runtimeRoot, MANAGED_CODEX_JOURNAL_FILE)));
-    }),
-  );
   it.effect("boots a fresh profile with no settings and no codex on PATH", () =>
     Effect.gen(function* () {
       const f = yield* fixture();

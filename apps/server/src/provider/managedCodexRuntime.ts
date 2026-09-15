@@ -4,11 +4,6 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
-import {
-  withManagedCodexLock,
-  recoverManagedCodexTransaction,
-  MANAGED_CODEX_JOURNAL_FILE,
-} from "./managedCodexTransaction.ts";
 import type { ProcessRunner } from "../processRunner.ts";
 import {
   parseCodexCliVersion,
@@ -62,15 +57,6 @@ export const resolveManagedCodexBinary = Effect.fn("resolveManagedCodexBinary")(
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const runtimeRoot = path.join(input.homeDirectory, ".agents", "ucsd", "runtime", "codex");
-  const roots = new Set([
-    runtimeRoot,
-    ...(configuredInstallation ? [path.dirname(configuredInstallation.installRoot)] : []),
-  ]);
-  for (const root of roots) {
-    if (yield* fs.exists(path.join(root, MANAGED_CODEX_JOURNAL_FILE))) {
-      yield* withManagedCodexLock(root, recoverManagedCodexTransaction(root));
-    }
-  }
   if (yield* workingVersion(requested)) return requested;
   const entries = yield* fs.readDirectory(runtimeRoot).pipe(Effect.orElseSucceed(() => []));
   const candidates: Array<{ binaryPath: string; version: string }> = [];
