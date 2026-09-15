@@ -15,7 +15,7 @@ Pinned threads still move to **Settled** when they become inactive. They also mo
 request merges if **Auto-settle merged threads** is enabled.
 
 Each environment owns its automatic settlement settings. The server checks them even when no web,
-desktop, or mobile client is connected. By default, it settles threads after three days without
+desktop, or mobile client is connected. By default, it settles threads after fourteen days without
 activity and when their pull request merges. An eligible idle thread also settles when its pull
 request closes. An open pull request blocks inactivity settlement. Active work, pending input, and
 live background work keep the thread active. TritonAI Harness settles from a closed or merged pull request

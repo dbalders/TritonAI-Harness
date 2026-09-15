@@ -80,12 +80,12 @@ function makeThread(
     worktreePath: null,
     latestTurn: null,
     createdAt: "2026-08-01T00:00:00.000Z",
-    updatedAt: "2026-08-20T00:00:00.000Z",
+    updatedAt: "2026-08-01T00:00:00.000Z",
     archivedAt: null,
     settledOverride: null,
     settledAt: null,
     session: null,
-    latestUserMessageAt: "2026-08-20T00:00:00.000Z",
+    latestUserMessageAt: "2026-08-01T00:00:00.000Z",
     hasPendingApprovals: false,
     hasPendingUserInput: false,
     hasActionableProposedPlan: false,
@@ -359,7 +359,7 @@ describe("ThreadSettlementReactor", () => {
         const fixture = yield* makeHarness({
           snapshot: makeSnapshot([
             makeThread("at-boundary", {
-              latestUserMessageAt: "2026-08-25T12:00:00.000Z",
+              latestUserMessageAt: "2026-08-14T12:00:00.000Z",
             }),
             makeThread("open-pr", {
               branch: "saved-feature",
