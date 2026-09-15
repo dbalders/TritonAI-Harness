@@ -113,7 +113,7 @@ candidate_zip="/absolute/path/to/TritonAI-Harness-VERSION-arm64.zip"
 candidate_dir="$(mktemp -d)"
 ditto -x -k "$candidate_zip" "$candidate_dir"
 candidate_app="$candidate_dir/TritonAI Harness (Nightly).app"
-requirement="$(codesign -d -r- "$reference_app" 2>/dev/null | sed -n 's/^designated => //p')"
+requirement="$(codesign -d -r- "$reference_app" 2>&1 | sed -n 's/^designated => //p')"
 test -n "$requirement" || exit 1
 codesign --verify --deep --strict "$candidate_app" &&
   codesign --verify --strict "-R=$requirement" "$candidate_app"
