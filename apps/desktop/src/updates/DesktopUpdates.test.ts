@@ -793,7 +793,7 @@ describe("DesktopUpdates", () => {
             assert.deepEqual(harness.channelChecks().at(-1), {
               channel,
               allowPrerelease: channel === "nightly",
-              allowDowngrade: channel === "nightly",
+              allowDowngrade: false,
             });
             harness.emit("update-available", {
               version: otherChannel === "nightly" ? "0.3.5-nightly.20260914.1" : "0.3.5",

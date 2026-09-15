@@ -17,6 +17,8 @@ state separate. Development overrides retain their existing meaning. Project fil
 provider installations are outside the profile-isolation boundary.
 
 Packaged apps ignore saved cross-track preferences and reject cross-track updater IPC requests.
+Routine checks allow newer releases only, including Nightly; a stale feed must not offer an
+older build as an update.
 Unpackaged mock-update tooling retains channel switching. The desktop About panel displays the
 installed track; the hosted web channel selector remains independent.
 
