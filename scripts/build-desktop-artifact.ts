@@ -3002,7 +3002,9 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   wslRuntimeBundled = false,
 ) {
   const buildConfig: Record<string, unknown> = {
-    appId: resolveTritonAiDesktopIdentity(version).appId,
+    // Squirrel.Mac validates updates against the installed app's signing identity.
+    // Keep the original bundle ID so existing Nightly installs can update.
+    appId: platform === "mac" ? DESKTOP_APP_ID : resolveTritonAiDesktopIdentity(version).appId,
     productName: resolveDesktopProductName(version),
     extraMetadata: { name: resolveTritonAiDesktopIdentity(version).packageName },
     artifactName: "TritonAI-Harness-${version}-${arch}.${ext}",
@@ -4285,7 +4287,6 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const macPasskeySigning = configuredMacPasskeySigning
     ? {
         ...configuredMacPasskeySigning,
-        appId: resolveTritonAiDesktopIdentity(appVersion).appId,
         provisioningProfilePath: path.resolve(
           repoRoot,
           configuredMacPasskeySigning.provisioningProfilePath,
