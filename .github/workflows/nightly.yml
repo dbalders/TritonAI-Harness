@@ -23,7 +23,7 @@ concurrency:
   group: harness-nightly
   cancel-in-progress: false
 env:
-  NIGHTLY_INSTALLER_COMMIT: 7b56e964d1b82d9bcd707202878a5b95ab8e5f81
+  NIGHTLY_INSTALLER_COMMIT: b1d707fbfe8f44d7f035cd506aaa6afcd8a27480
 jobs:
   preflight:
     runs-on: ubuntu-24.04
