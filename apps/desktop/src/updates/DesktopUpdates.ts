@@ -354,14 +354,12 @@ export const make = Effect.gen(function* () {
     const allowsPrerelease = channel === "nightly";
     yield* electronUpdater.setChannel(channel);
     yield* electronUpdater.setAllowPrerelease(allowsPrerelease);
-    // Selecting a channel enables downgrades inside electron-updater. Ordinary
-    // checks must only move forward; explicit channel changes scope their own override.
-    yield* electronUpdater.setAllowDowngrade(false);
+    yield* electronUpdater.setAllowDowngrade(allowsPrerelease);
     yield* electronUpdater.setFullChangelog(allowsPrerelease);
     yield* logUpdaterInfo("using update channel", {
       channel,
       allowPrerelease: allowsPrerelease,
-      allowDowngrade: false,
+      allowDowngrade: allowsPrerelease,
       fullChangelog: allowsPrerelease,
     });
   });
@@ -543,8 +541,8 @@ export const make = Effect.gen(function* () {
         (instance) => instance.stop({ timeout: Duration.seconds(5) }),
         { concurrency: "unbounded" },
       );
-      // The updater closes windows only after it accepts installation. Keeping
-      // them alive makes synchronous or native failures visible and retryable.
+      // Let the updater own window closure. On failure, restarting the primary
+      // backend recreates the main window through its existing readiness callback.
       yield* electronUpdater.quitAndInstall({
         isSilent: true,
         isForceRunAfter: true,

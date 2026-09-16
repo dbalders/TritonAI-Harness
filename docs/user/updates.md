@@ -17,7 +17,7 @@ stable receives stable releases, and Nightly receives Nightly releases.
 
 On macOS, existing releases share part of the system updater. Finish updating one app before
 starting an update in the other. Once an update is ready, install it before checking for another.
-Nightly updates move forward in version; routine checks do not downgrade the app.
+Nightly can update to an older Nightly version when that is the version offered by its feed.
 
 macOS validates downloaded updates before offering restart. If installation fails before the
 updater closes the app, its window remains open and its local server restarts so you can retry.

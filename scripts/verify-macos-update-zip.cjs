@@ -4,6 +4,31 @@ const extractZip = require("extract-zip");
 const NodeFS = require("node:fs");
 const NodePath = require("node:path");
 
+// The main app and Electron helper programs live in Contents/MacOS. These
+// additional packaged programs are launched from resources/frameworks instead.
+// Identify them by role even when every execute bit has been lost. Unused
+// node-pty prebuilds are resources; the selected build/Release helper is executed.
+const packagedExecutables = new Set([
+  "Contents/Resources/cua-driver/cua-driver",
+  "Contents/Resources/resource-monitor/t3-resource-monitor",
+  "Contents/Resources/app.asar.unpacked/node_modules/node-pty/build/Release/spawn-helper",
+]);
+function isPackagedExecutable(relative) {
+  // Generic ZIP extraction exposes Apple's resource-fork metadata as ._* files.
+  // Those are readable data alongside the actual executable, not programs.
+  if (NodePath.posix.basename(relative).startsWith("._")) return false;
+  return (
+    /(?:^|\/)Contents\/MacOS\//.test(relative) ||
+    packagedExecutables.has(relative) ||
+    /^Contents\/Frameworks\/Squirrel\.framework\/Versions\/[^/]+\/Resources\/ShipIt$/.test(
+      relative,
+    ) ||
+    /^Contents\/Frameworks\/Electron Framework\.framework\/Versions\/[^/]+\/Helpers\/chrome_crashpad_handler$/.test(
+      relative,
+    )
+  );
+}
+
 // ShipIt may install as root. The build user's ability to launch the app does
 // not prove that the installed bundle will be accessible to its actual users.
 function assertMacosBundlePermissions(appPath) {
@@ -16,8 +41,10 @@ function assertMacosBundlePermissions(appPath) {
     const info = NodeFS.lstatSync(entry);
     // Framework links point into directories checked by the same traversal.
     if (info.isSymbolicLink()) continue;
-    const executable = info.isDirectory() || (info.mode & 0o111) !== 0;
-    const required = executable ? 0o005 : 0o004;
+    const relative = NodePath.relative(appPath, entry).split(NodePath.sep).join("/");
+    const executable =
+      info.isDirectory() || (info.mode & 0o111) !== 0 || isPackagedExecutable(relative);
+    const required = executable ? 0o555 : 0o444;
     if ((info.mode & required) !== required) {
       const mode = (info.mode & 0o777).toString(8);
       throw new Error(

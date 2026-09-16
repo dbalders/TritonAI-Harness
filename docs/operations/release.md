@@ -205,21 +205,25 @@ compositions, and platform reports. Only then can the publisher create a draft, 
 and publish the nightly. The publisher verifies uploaded asset names, sizes, completion state,
 and SHA-256 digests against the validated local bytes, then verifies the Git tag before making
 the draft public. A missing tag is created at the verified source commit; an existing tag at
-another commit is rejected. Actions artifacts expire after three days. Failed publication leaves
-a private nightly draft; inspect it before removing that failed draft and rerunning. Published
-nightlies are never overwritten by the publisher.
+another commit is rejected. Actions artifacts expire after three days. Failure before publication
+leaves a private nightly draft; inspect it before removing that failed draft and rerunning.
+Failure in a post-publication check can leave the release public: verify the actual release and
+feed state before taking recovery action. Published nightlies are never overwritten by the publisher.
 
 ### Desktop update failure boundaries
 
-Ordinary Stable and Nightly checks disable downgrades after selecting the updater channel
-(the upstream channel setter otherwise enables them). Only unpackaged mock tooling retains
-an explicit channel-switch override.
+Nightly checks allow downgrades within the Nightly track so its feed can offer an older release.
+Stable checks disable downgrades. Packaged apps stay on their installed track; unpackaged mock
+tooling retains an explicit channel-switch override. Account for older-version selection when
+withdrawing a Nightly release or repairing its feed.
 
 On macOS, a completed ZIP transfer is not installation readiness. The desktop waits for the
 native Squirrel `update-downloaded` acknowledgement before offering restart. Further checks
 are deferred while that native installer is staged, so a refresh cannot invalidate it.
 Installation stops running backends but leaves windows intact for the updater to close.
-An install failure restores those backends and makes the failure visible in the existing window.
+An install failure restores those backends. The primary backend's readiness callback recreates
+the main window if the native updater already closed it. Native failure after window closure,
+including subsequent window-close and quit behavior, still requires an installed-app fault test.
 
 macOS Stable and legacy Nightly still share the native ShipIt bundle identity and cache.
 Separate JavaScript updater caches and profiles do not isolate that native installer. Do not

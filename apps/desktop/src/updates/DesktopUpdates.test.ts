@@ -841,6 +841,37 @@ describe("DesktopUpdates", () => {
     );
   }
 
+  it.effect("accepts an older Nightly offered by its own feed", () => {
+    const olderVersion = "0.3.4-nightly.20260915.17";
+    let installs = 0;
+    const harness = makeHarness({
+      appVersion: "0.3.4-nightly.20260916.20",
+      quitAndInstall: Effect.sync(() => {
+        installs += 1;
+      }),
+    });
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+        yield* updates.check("manual");
+        assert.deepEqual(harness.channelChecks().at(-1), {
+          channel: "nightly",
+          allowPrerelease: true,
+          allowDowngrade: true,
+        });
+        harness.emit("update-available", { version: olderVersion });
+        yield* flushCallbacks;
+        assert.equal((yield* updates.getState).availableVersion, olderVersion);
+        harness.emit("update-downloaded", { version: olderVersion });
+        yield* flushCallbacks;
+        assert.equal((yield* updates.getState).downloadedVersion, olderVersion);
+        assert.isTrue((yield* updates.install).accepted);
+        assert.equal(installs, 1);
+      }),
+    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+  });
+
   for (const { appVersion, channel, otherChannel } of [
     { appVersion: "0.3.3", channel: "latest", otherChannel: "nightly" },
     { appVersion: "0.3.4-nightly.20260912.12", channel: "nightly", otherChannel: "latest" },
@@ -867,7 +898,7 @@ describe("DesktopUpdates", () => {
             assert.deepEqual(harness.channelChecks().at(-1), {
               channel,
               allowPrerelease: channel === "nightly",
-              allowDowngrade: false,
+              allowDowngrade: channel === "nightly",
             });
             harness.emit("update-available", {
               version: otherChannel === "nightly" ? "0.3.5-nightly.20260914.1" : "0.3.5",

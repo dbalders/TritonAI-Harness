@@ -16,10 +16,17 @@ function fixture(t) {
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const app = path.join(root, "Test.app");
   const contents = path.join(app, "Contents");
-  fs.mkdirSync(contents, { recursive: true });
+  const macos = path.join(contents, "MacOS");
+  fs.mkdirSync(macos, { recursive: true });
   fs.chmodSync(app, 0o755);
   fs.chmodSync(contents, 0o755);
-  const executable = path.join(contents, "executable");
+  fs.chmodSync(macos, 0o755);
+  fs.writeFileSync(
+    path.join(contents, "Info.plist"),
+    "<plist><dict><key>CFBundleExecutable</key><string>Test</string></dict></plist>",
+    { mode: 0o644 },
+  );
+  const executable = path.join(macos, "Test");
   const resource = path.join(contents, "resource");
   fs.writeFileSync(executable, "test");
   fs.chmodSync(executable, 0o755);
@@ -34,7 +41,7 @@ const hostPlatform = process.platform;
 const posix = { skip: hostPlatform === "win32" };
 test("accepts readable resources and framework-style relative links", posix, (t) => {
   const { app, contents } = fixture(t);
-  fs.symlinkSync("executable", path.join(contents, "Current"));
+  fs.symlinkSync("MacOS/Test", path.join(contents, "Current"));
   assert.doesNotThrow(() => assertMacosBundlePermissions(app));
 });
 
@@ -48,6 +55,48 @@ for (const field of ["app", "contents", "executable", "resource"]) {
       /inaccessible after an administrator update/,
     );
   });
+}
+
+test("rejects a main executable that lost every execute bit", posix, (t) => {
+  const { app, executable } = fixture(t);
+  fs.chmodSync(executable, 0o644);
+  assert.throws(() => assertMacosBundlePermissions(app), /has mode 644/);
+});
+
+for (const relative of [
+  "Contents/Frameworks/Test Helper.app/Contents/MacOS/Test Helper",
+  "Contents/Frameworks/Squirrel.framework/Versions/A/Resources/ShipIt",
+  "Contents/Frameworks/Electron Framework.framework/Versions/A/Helpers/chrome_crashpad_handler",
+  "Contents/Resources/cua-driver/cua-driver",
+  "Contents/Resources/resource-monitor/t3-resource-monitor",
+  "Contents/Resources/app.asar.unpacked/node_modules/node-pty/build/Release/spawn-helper",
+]) {
+  test(`rejects lost execute bits on packaged program ${relative}`, posix, (t) => {
+    const { app } = fixture(t);
+    const executable = path.join(app, relative);
+    fs.mkdirSync(path.dirname(executable), { recursive: true, mode: 0o755 });
+    fs.writeFileSync(executable, "program", { mode: 0o755 });
+    assert.doesNotThrow(() => assertMacosBundlePermissions(app));
+    fs.chmodSync(executable, 0o644);
+    assert.throws(() => assertMacosBundlePermissions(app), /has mode 644/);
+  });
+}
+
+for (const [field, mode] of [
+  ["app", 0o705],
+  ["executable", 0o705],
+  ["resource", 0o604],
+  ["resource", 0o044],
+]) {
+  test(
+    `rejects ${field} mode ${mode.toString(8)} even when other access is allowed`,
+    posix,
+    (t) => {
+      const bundle = fixture(t);
+      fs.chmodSync(bundle[field], mode);
+      assert.throws(() => assertMacosBundlePermissions(bundle.app), /inaccessible/);
+    },
+  );
 }
 
 test(
