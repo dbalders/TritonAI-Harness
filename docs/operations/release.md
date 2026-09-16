@@ -37,9 +37,8 @@ The workflow:
 6. asks that Installer commit to resolve and prepare its reviewed, digest-bound production
    managed-plugin catalog;
 7. aligns package versions in the isolated build checkout;
-8. builds the Windows x64 NSIS Harness artifact;
-9. selects signed Windows mode when all Azure inputs exist; with zero Azure inputs, selects unsigned
-   mode only when `TRITONAI_ALLOW_UNSIGNED_WINDOWS_RELEASE=1`; partial Azure configuration fails;
+8. authenticates the Windows runner through GitHub OIDC;
+9. builds and signs the Windows x64 NSIS Harness artifact, then verifies its publisher and timestamp;
 10. finalizes the managed-plugin composition proof;
 11. uploads the required Windows installer, blockmap, updater metadata, and composition proof;
 12. downloads the final draft assets and verifies both updater manifests, artifact hashes,
@@ -188,9 +187,9 @@ Required repository secrets (values are never committed):
 
 Mac signing uses a temporary runner keychain, removes signing inputs afterward, and verifies
 signatures, notarization, Gatekeeper, plugin payloads, and isolated packaged-app boot before
-upload. Windows retains its signed/unsigned mode checks; absent Azure configuration selects the
-explicit unsigned nightly mode and is recorded in the release verification report and notes.
-Partial Azure configuration fails. Stable Windows signing policy is unchanged.
+upload. Windows nightlies require Azure OIDC authentication, signed artifacts, matching publisher,
+and an Authenticode timestamp. Missing configuration or signing failures stop the build.
+Stable Windows releases use the same OIDC signing policy.
 
 The notarization key is created with a private umask in a subshell; app packaging
 runs with `022`. The extracted signed updater ZIP must be readable
@@ -247,10 +246,9 @@ modifying the vendored source or retaining checkout credentials.
 3. Create the exact tag and an unpublished GitHub draft for it.
 4. Attach the verified local assets to the draft.
 5. Push the tag or dispatch the workflow for that version.
-6. Wait for preflight, Windows build, selected trust-mode boot proof, managed-plugin proof, and required-asset checks.
-7. Let the workflow validate Authenticode publisher identity and timestamps for signed releases, or
-   validate unsigned status for explicitly unsigned releases, then attach Windows assets and publish
-   the draft.
+6. Wait for preflight, signed Windows build, installed-app boot proof, managed-plugin proof, and required-asset checks.
+7. Let the workflow validate Authenticode publisher identity and timestamps, then attach verified
+   Windows assets and publish the draft.
 8. Verify the published release state and downloaded asset identities.
 9. Only then build and publish TritonAI Installer against those exact Harness assets.
 
@@ -279,23 +277,49 @@ same managed plugins without running TritonAI Installer.
 
 ## Windows signing
 
-Signed Windows artifacts require all of:
+### Stable and nightly GitHub OIDC setup
 
-- `AZURE_TENANT_ID`
-- `AZURE_CLIENT_ID`
-- `AZURE_CLIENT_SECRET`
-- `AZURE_TRUSTED_SIGNING_ENDPOINT`
-- `AZURE_TRUSTED_SIGNING_ACCOUNT_NAME`
-- `AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME`
-- `AZURE_TRUSTED_SIGNING_PUBLISHER_NAME`
+Both stable and nightly Windows jobs use the `windows-signing` GitHub environment and `azure/login`.
+Create an Entra app registration and service principal dedicated to Harness releases, then add
+an OIDC federated credential with issuer `https://token.actions.githubusercontent.com`, audience
+`api://AzureADTokenExchange`, and subject
+`repo:dbalders/TritonAI-Harness:environment:windows-signing`.
+Assign that service principal **Artifact Signing Certificate Profile Signer** at this resource:
 
-When all seven values exist, the workflow signs the artifact, verifies every EXE with Authenticode,
-checks its timestamp and publisher identity, then installs and boots the exact package. When none
-exist, repository variable `TRITONAI_ALLOW_UNSIGNED_WINDOWS_RELEASE=1` authorizes an explicitly
-unsigned artifact, and the workflow verifies that both the installer and installed executable are
-actually unsigned before boot testing. A partial signing configuration fails closed; without the
-explicit opt-in, zero signing inputs also fail closed. The workflow never silently falls back from
-a broken signed setup to unsigned mode. Unsigned downloads may trigger Microsoft Defender SmartScreen.
+```text
+/subscriptions/3e0cad08-e45d-4882-a3aa-c1504d4e5017/resourceGroups/TritonAI/providers/Microsoft.CodeSigning/codeSigningAccounts/ucsd-tritonai-signing/certificateProfiles/tritonai-public
+```
+
+Create the `windows-signing` environment in GitHub Settings > Environments. Allow deployments from `main` and release tags matching `v*.*.*` (configure separate branch and tag rules); temporarily permit the reviewed signing branch for the first non-publishing test,
+then remove that exception. Configure these environment variables:
+
+| Variable                                         | Value                                         |
+| ------------------------------------------------ | --------------------------------------------- |
+| `AZURE_CLIENT_ID`                                | Application ID of the dedicated Entra app     |
+| `AZURE_TENANT_ID`                                | `8a198873-4fec-4e76-8182-ca479edbbd60`        |
+| `AZURE_SUBSCRIPTION_ID`                          | `3e0cad08-e45d-4882-a3aa-c1504d4e5017`        |
+| `AZURE_TRUSTED_SIGNING_ENDPOINT`                 | `https://wus2.codesigning.azure.net/`         |
+| `AZURE_TRUSTED_SIGNING_ACCOUNT_NAME`             | `ucsd-tritonai-signing`                       |
+| `AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME` | `tritonai-public`                             |
+| `AZURE_TRUSTED_SIGNING_PUBLISHER_NAME`           | `The Regents of the University of California` |
+
+No client secret is needed. The packager uses `AZURE_TRUSTED_SIGNING_USE_AZURE_CLI=true`
+to accept the authenticated runner session. Signing still fails if that session cannot sign.
+Electron Builder signs during packaging, before generating updater hashes and blockmaps.
+The runner checks signatures and timestamps, installs and boots the package, and the final
+nightly artifact gate rejects unsigned Windows reports. Stable publication depends on the successful
+signed Windows build and its installed-app verification.
+
+First dispatch `nightly.yml` from the reviewed branch with `publish=false`. Confirm the Windows
+signing, Authenticode, installed-app boot, and final artifact gates pass. Only then merge and
+allow scheduled publication. Local tests cannot establish Azure permissions or Windows trust.
+
+Stable tag-triggered runs require the tag rule on the environment; allowing `main` alone does not
+allow tag deployments. Manual stable runs retain their controlled draft and tagged-source checks.
+Do not dispatch the stable workflow as a dry run: it publishes the controlled release after its
+gates pass. Use the non-publishing nightly proof first; validate stable signing during an authorized
+controlled release. The shared packager still supports client-secret authentication for local callers,
+but neither GitHub release workflow uses it or permits unsigned fallback.
 
 ## Required release assets
 

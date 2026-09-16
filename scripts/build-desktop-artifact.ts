@@ -1900,6 +1900,9 @@ function getPatchedDependencyPackageName(patchKey: string): string {
 }
 
 const AzureTrustedSigningEnvironmentConfig = Config.all({
+  useAzureCli: Config.boolean("AZURE_TRUSTED_SIGNING_USE_AZURE_CLI").pipe(
+    Config.withDefault(false),
+  ),
   tenantId: Config.string("AZURE_TENANT_ID").pipe(Config.option),
   clientId: Config.string("AZURE_CLIENT_ID").pipe(Config.option),
   clientAuthenticationValue: Config.string("AZURE_CLIENT_SECRET").pipe(Config.option),
@@ -1932,7 +1935,11 @@ export const resolveAzureTrustedSigningConfiguration = Effect.fn(
     ["AZURE_TRUSTED_SIGNING_PUBLISHER_NAME", environment.publisherName],
   ] as const;
   const missingVariables = required
-    .filter(([, value]) => !Option.getOrUndefined(value)?.trim())
+    .filter(
+      ([name, value]) =>
+        !(name === "AZURE_CLIENT_SECRET" && environment.useAzureCli) &&
+        !Option.getOrUndefined(value)?.trim(),
+    )
     .map(([name]) => name);
   if (missingVariables.length > 0) {
     return yield* new MissingAzureTrustedSigningConfigurationError({ missingVariables });

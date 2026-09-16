@@ -48,7 +48,7 @@ function fixture(t) {
     version,
     sourceCommit: sha,
     packagedBoot: true,
-    signingMode: "unsigned",
+    signingMode: "signed",
   });
   const report = {
     version,
@@ -93,4 +93,15 @@ test("rejects stable metadata, missing platforms, and failed notarization or boo
   fs.unlinkSync(path.join(f.root, "latest.yml"));
   fs.unlinkSync(path.join(f.root, `${f.win}.exe`));
   assert.throws(() => validateNightlyAssets(f.root, f.version, f.sha));
+});
+
+test("rejects an unsigned Windows nightly", (t) => {
+  const f = fixture(t);
+  f.save("harness-win-verification.json", {
+    version: f.version,
+    sourceCommit: f.sha,
+    packagedBoot: true,
+    signingMode: "unsigned",
+  });
+  assert.throws(() => validateNightlyAssets(f.root, f.version, f.sha), /must be signed/);
 });

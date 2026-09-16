@@ -29,6 +29,10 @@ foreach ($ArtifactPath in $Paths) {
     throw "Authenticode signature for $ArtifactPath has no signer certificate."
   }
 
+  if ($null -eq $Signature.TimeStamperCertificate) {
+    throw "Authenticode signature for $ArtifactPath has no trusted timestamp."
+  }
+
   $PublisherName = $Signature.SignerCertificate.GetNameInfo(
     [System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName,
     $false
