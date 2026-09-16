@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const crypto = require("node:crypto");
 const publish = require("./publish-nightly.cjs");
 
 function fixture(t) {
@@ -62,7 +63,12 @@ function fixture(t) {
       return { data: release };
     },
     uploadReleaseAsset: async (args) => {
-      release.assets.push({ name: args.name });
+      release.assets.push({
+        name: args.name,
+        state: "uploaded",
+        size: args.data.length,
+        digest: `sha256:${crypto.createHash("sha256").update(args.data).digest("hex")}`,
+      });
     },
     getRelease: async () => ({ data: release }),
     updateRelease: async (args) => {
@@ -71,7 +77,24 @@ function fixture(t) {
     },
     getCommit: async () => ({ data: { sha: context.sha } }),
   };
-  return { github: { rest: { repos } }, context, calls, release };
+  const tagCreations = [];
+  return {
+    github: {
+      rest: {
+        repos,
+        git: {
+          getRef: async () => ({ data: { object: { sha: context.sha, type: "commit" } } }),
+          createRef: async (args) => {
+            tagCreations.push(args);
+          },
+        },
+      },
+    },
+    context,
+    calls,
+    release,
+    tagCreations,
+  };
 }
 
 test("creates a nightly draft, uploads all assets, then publishes without stable promotion", async (t) => {
@@ -103,6 +126,85 @@ test("failed upload leaves the nightly draft unpublished", async (t) => {
   assert.equal(f.calls.length, 1);
   assert.equal(f.release.draft, true);
 });
+
+test("an existing tag pointing at unverified code stays unpublished", async (t) => {
+  const f = fixture(t);
+  f.github.rest.repos.getCommit = async () => ({ data: { sha: "b".repeat(40) } });
+  await assert.rejects(publish(f), /tag differs/);
+  assert.equal(f.calls.length, 0);
+});
+
+test("leaves a missing tag absent until the verified draft is published", async (t) => {
+  const f = fixture(t);
+  f.github.rest.git.getRef = async () => {
+    throw Object.assign(new Error("absent"), { status: 404 });
+  };
+  f.github.rest.repos.getCommit = async () => {
+    assert.equal(f.release.draft, false, "drafts do not need a public tag");
+    return { data: { sha: f.context.sha } };
+  };
+  await publish(f);
+  assert.deepEqual(f.tagCreations, []);
+  assert.equal(f.calls[1][1].target_commitish, f.context.sha);
+});
+
+test("failed uploads do not expose a bare nightly tag in the updater feed", async (t) => {
+  const f = fixture(t);
+  f.github.rest.git.getRef = async () => {
+    throw Object.assign(new Error("absent"), { status: 404 });
+  };
+  f.github.rest.repos.uploadReleaseAsset = async () => {
+    throw new Error("upload failed");
+  };
+  await assert.rejects(publish(f), /upload failed/);
+  assert.equal(f.release.draft, true);
+  assert.deepEqual(f.tagCreations, []);
+});
+
+test("a draft with a changed source stays unpublished even without a tag", async (t) => {
+  const f = fixture(t);
+  f.github.rest.git.getRef = async () => {
+    throw Object.assign(new Error("absent"), { status: 404 });
+  };
+  f.github.rest.repos.getRelease = async () => {
+    f.release.target_commitish = "b".repeat(40);
+    return { data: f.release };
+  };
+  await assert.rejects(publish(f), /draft failed final verification/);
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.release.draft, true);
+  assert.deepEqual(f.tagCreations, []);
+});
+
+test("a tag changed during upload leaves the draft unpublished", async (t) => {
+  const f = fixture(t);
+  let reads = 0;
+  f.github.rest.repos.getCommit = async () => ({
+    data: { sha: ++reads === 1 ? f.context.sha : "b".repeat(40) },
+  });
+  await assert.rejects(publish(f), /draft tag differs/);
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.release.draft, true);
+});
+
+for (const [field, value] of [
+  ["name", "unexpected.zip"],
+  ["size", 0],
+  ["digest", "sha256:wrong"],
+  ["digest", undefined],
+  ["state", "starter"],
+]) {
+  test(`an uploaded asset with incorrect ${field} stays unpublished (${value})`, async (t) => {
+    const f = fixture(t);
+    f.github.rest.repos.getRelease = async () => {
+      f.release.assets[0][field] = value;
+      return { data: f.release };
+    };
+    await assert.rejects(publish(f), /asset failed integrity/);
+    assert.equal(f.calls.length, 1);
+    assert.equal(f.release.draft, true);
+  });
+}
 
 test("includes generated PR notes before platform details", async (t) => {
   const f = fixture(t);

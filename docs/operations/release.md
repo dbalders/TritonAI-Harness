@@ -42,7 +42,8 @@ The workflow:
    mode only when `TRITONAI_ALLOW_UNSIGNED_WINDOWS_RELEASE=1`; partial Azure configuration fails;
 10. finalizes the managed-plugin composition proof;
 11. uploads the required Windows installer, blockmap, updater metadata, and composition proof;
-12. verifies the release is still a draft and only then publishes it;
+12. downloads the final draft assets and verifies both updater manifests, artifact hashes,
+    matching plugin composition, Mac ZIP permissions, and the source tag before publication;
 13. updates version metadata on `main` and announces the release after publication succeeds.
 
 The stable release workflow keeps its controlled local macOS packaging path. The separate
@@ -125,9 +126,8 @@ second requirement check with `code failed to satisfy specified code requirement
 A compatible replacement must pass both. This fixture does not replace the subsequent
 in-app download, quit, installation, and relaunch test.
 
-Manual release dispatch also classifies nightly versions as the nightly channel, keeps them
-as prereleases, and never promotes them to latest or writes their version onto stable main.
-The dedicated hosted workflow below supplies scheduling and nightly publication. The current
+Manual dispatch of the stable release workflow rejects Nightly versions. The dedicated hosted
+workflow below owns scheduling and nightly publication. The current
 local Installer runner still accepts stable versions only; its Mac finalizer separately accepts
 dated nightly versions for use by CI.
 
@@ -138,6 +138,13 @@ runners. It has no stable channel input, no npm publication, no Installer build,
 version commit step. Publication rejects non-nightly tags and non-default branches, always sets
 `prerelease=true` and `make_latest=false`, and verifies that GitHub's stable latest release did
 not change. The native publication tests explicitly reject `v0.3.4`.
+
+Nightly publication leaves a new tag absent until the fully verified draft is published.
+It checks the draft's exact source SHA and revalidates any existing tag after uploads.
+Creating a bare Nightly tag early exposes it in GitHub's Atom feed while its draft update
+assets still return 404. Withdrawing an already published Nightly to draft can leave the
+same broken feed entry; do not treat that action alone as a completed rollback. Verify
+the public feed and manifest URLs after any release withdrawal.
 
 Manual proof run (builds and verifies both platforms without publishing):
 
@@ -185,12 +192,45 @@ upload. Windows retains its signed/unsigned mode checks; absent Azure configurat
 explicit unsigned nightly mode and is recorded in the release verification report and notes.
 Partial Azure configuration fails. Stable Windows signing policy is unchanged.
 
+The notarization key is created with a private umask in a subshell; app packaging
+runs with `022`. The extracted signed updater ZIP must be readable
+by other users, with traversable directories and runnable executables. Otherwise
+an administrator-owned installation can appear empty and fail to relaunch even
+though signing and a boot test under the build account passed. This gate does
+not remove ShipIt or suppress administrator authorization for protected installs.
+
 Both platform jobs must pass along with quality checks before the read-only artifact gate
 verifies exact filenames, byte sizes, hashes, nightly updater metadata, matching plugin
 compositions, and platform reports. Only then can the publisher create a draft, upload assets,
-and publish the nightly. Actions artifacts expire after three days. Failed publication leaves
-a private nightly draft; inspect it before removing that failed draft and rerunning. Published
-nightlies are never overwritten by the publisher.
+and publish the nightly. The publisher verifies uploaded asset names, sizes, completion state,
+and SHA-256 digests against the validated local bytes, then verifies the Git tag before making
+the draft public. A missing tag is created at the verified source commit; an existing tag at
+another commit is rejected. Actions artifacts expire after three days. Failure before publication
+leaves a private nightly draft; inspect it before removing that failed draft and rerunning.
+Failure in a post-publication check can leave the release public: verify the actual release and
+feed state before taking recovery action. Published nightlies are never overwritten by the publisher.
+
+### Desktop update failure boundaries
+
+Nightly checks allow downgrades within the Nightly track so its feed can offer an older release.
+Stable checks disable downgrades. Packaged apps stay on their installed track; unpackaged mock
+tooling retains an explicit channel-switch override. Account for older-version selection when
+withdrawing a Nightly release or repairing its feed.
+
+On macOS, a completed ZIP transfer is not installation readiness. The desktop waits for the
+native Squirrel `update-downloaded` acknowledgement before offering restart. Further checks
+are deferred while that native installer is staged, so a refresh cannot invalidate it.
+Installation stops running backends but leaves windows intact for the updater to close.
+An install failure restores those backends. The primary backend's readiness callback recreates
+the main window if the native updater already closed it. Native failure after window closure,
+including subsequent window-close and quit behavior, still requires an installed-app fault test.
+
+macOS Stable and legacy Nightly still share the native ShipIt bundle identity and cache.
+Separate JavaScript updater caches and profiles do not isolate that native installer. Do not
+claim concurrent native updates are proven safe. Changing the bundle ID directly breaks the
+legacy downloader, which matches both bundle ID and signing requirements. An automatic bridge
+migration must be validated before changing this packaging contract; a direct installer probe
+does not prove the complete download, quit, replacement, and relaunch sequence.
 
 ### First hosted proof
 

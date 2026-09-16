@@ -12,9 +12,16 @@ If a Codex update cannot run on the current managed Node.js version, no staged u
 
 ## Stable and Nightly
 
-Stable and Nightly are separate desktop apps. You can install, run, update, and uninstall either
-without replacing the other. **Settings > About** shows the installed app's update track:
+Stable and Nightly have separate desktop apps and data profiles. **Settings > About** shows the installed app's update track:
 stable receives stable releases, and Nightly receives Nightly releases.
+
+On macOS, existing releases share part of the system updater. Finish updating one app before
+starting an update in the other. Once an update is ready, install it before checking for another.
+Nightly can update to an older Nightly version when that is the version offered by its feed.
+
+macOS validates downloaded updates before offering restart. If installation fails before the
+updater closes the app, its window remains open and its local server restarts so you can retry.
+An administrator-owned installation may still require macOS authorization to replace it.
 
 Nightly starts with its own chats, settings, sign-in sessions, and local server data. It does not
 copy or move your stable profile. Shared project folders and external services remain shared when

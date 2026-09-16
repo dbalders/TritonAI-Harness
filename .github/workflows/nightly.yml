@@ -104,8 +104,8 @@ jobs:
         run: vp check
       - name: Typecheck
         run: vp run typecheck
-      - name: Nightly publication guards
-        run: node --test .github/scripts/*nightly*.test.cjs
+      - name: Release publication guards
+        run: node --test .github/scripts/*nightly*.test.cjs .github/scripts/controlled-release-assets.test.cjs
   prepare_managed_plugins:
     name: Prepare immutable managed plugin composition
     needs:
@@ -648,9 +648,11 @@ jobs:
         run: |-
           set -euo pipefail
           export APPLE_API_KEY="$RUNNER_TEMP/AuthKey.p8"
-          umask 077
-          printf "%s" "$APPLE_API_KEY_CONTENT" > "$APPLE_API_KEY"
+          # Keep the key private without making the distributed app owner-only.
+          (umask 077; printf "%s" "$APPLE_API_KEY_CONTENT" > "$APPLE_API_KEY")
+          umask 022
           node .release-input/installer/scripts/local-release-mac.cjs "$GITHUB_WORKSPACE" "$RUNNER_TEMP/nightly-stage" "$NIGHTLY_VERSION" "$GITHUB_WORKSPACE/release"
+          node scripts/verify-macos-update-zip.cjs "$GITHUB_WORKSPACE/release/TritonAI-Harness-$NIGHTLY_VERSION-arm64.zip"
       - name: Remove signing inputs
         if: always()
         run: |-

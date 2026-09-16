@@ -62,8 +62,8 @@ jobs:
           fi
 
           if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-nightly\.[0-9]{8}\.[0-9]+$ ]]; then
-            echo "release_channel=nightly" >> "$GITHUB_OUTPUT"
-            echo "name=TritonAI Harness Nightly $version" >> "$GITHUB_OUTPUT"
+            echo "Nightly releases must use the nightly workflow." >&2
+            exit 1
           elif [[ "$version" == *-nightly* ]]; then
             echo "Nightly versions must use VERSION-nightly.YYYYMMDD.RUN." >&2
             exit 1
@@ -124,6 +124,9 @@ jobs:
 
       - name: Test
         run: vp run test
+
+      - name: Release publication guards
+        run: node --test .github/scripts/*nightly*.test.cjs .github/scripts/controlled-release-assets.test.cjs
 
   prepare_managed_plugins:
     name: Prepare immutable managed plugin composition
@@ -609,6 +612,14 @@ jobs:
     permissions:
       contents: write
     steps:
+      - id: app_token
+        name: Mint release app token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
       - name: Checkout
         uses: actions/checkout@v6
         with:
@@ -702,6 +713,19 @@ jobs:
           done
 
           gh release upload "$RELEASE_TAG" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --clobber
+
+      - name: Verify final controlled release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app_token.outputs.token }}
+          RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir verified-release-assets
+          node scripts/verify-controlled-release-assets.cjs verified-release-assets "$RELEASE_VERSION"
+          tag_commit="$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq .sha)"
+          test "$tag_commit" = "$(git rev-parse HEAD)"
 
       - name: Publish controlled release
         shell: bash

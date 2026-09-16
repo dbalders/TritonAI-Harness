@@ -271,6 +271,9 @@ export const make = Effect.gen(function* () {
 
   const appUpdateYmlConfigRef = yield* Ref.make<Option.Option<AppUpdateYmlConfig>>(Option.none());
   const activeUpdateActionRef = yield* Ref.make<Option.Option<UpdateAction>>(Option.none());
+  const stoppedForInstallRef = yield* Ref.make<
+    ReadonlyArray<DesktopBackendPool.DesktopBackendInstance>
+  >([]);
   const updaterConfiguredRef = yield* Ref.make(false);
   const lastLoggedDownloadMilestoneRef = yield* Ref.make(-1);
   const updateStateRef = yield* Ref.make<DesktopUpdateState>(
@@ -372,7 +375,10 @@ export const make = Effect.gen(function* () {
     if (!(yield* Ref.get(updaterConfiguredRef))) return false;
 
     const state = yield* Ref.get(updateStateRef);
-    if (state.status === "downloading") {
+    if (
+      state.status === "downloading" ||
+      (environment.platform === "darwin" && state.downloadedVersion !== null)
+    ) {
       yield* logUpdaterInfo("skipping update check while update is active", {
         reason,
         status: state.status,
@@ -476,10 +482,25 @@ export const make = Effect.gen(function* () {
     );
   }).pipe(Effect.withSpan("desktop.updates.downloadAvailableUpdate"));
 
-  const resetInstallAction = Effect.all(
-    [finishUpdateAction("install"), Ref.set(desktopState.quitting, false)],
-    { discard: true },
-  );
+  const resetInstallAction = Effect.gen(function* () {
+    const stopped = yield* Ref.getAndSet(stoppedForInstallRef, []);
+    yield* Ref.set(desktopState.updaterQuitAllowed, false);
+    yield* Ref.set(desktopState.quitting, false);
+    yield* Effect.forEach(
+      stopped,
+      (instance) =>
+        instance.start.pipe(
+          Effect.catchCause((cause) =>
+            logUpdaterError("failed to restart backend after update failure", {
+              backendId: instance.id,
+              cause,
+            }),
+          ),
+        ),
+      { concurrency: "unbounded", discard: true },
+    );
+    yield* finishUpdateAction("install");
+  });
 
   const installDownloadedUpdate = Effect.gen(function* () {
     const state = yield* Ref.get(updateStateRef);
@@ -511,12 +532,17 @@ export const make = Effect.gen(function* () {
       // SIGTERM + grace. Stops run concurrently with the same 5s
       // budget the primary had on its own.
       const instances = yield* pool.list;
+      const running = yield* Effect.filter(instances, (instance) =>
+        instance.snapshot.pipe(Effect.map((snapshot) => snapshot.desiredRunning)),
+      );
+      yield* Ref.set(stoppedForInstallRef, running);
       yield* Effect.forEach(
         instances,
         (instance) => instance.stop({ timeout: Duration.seconds(5) }),
         { concurrency: "unbounded" },
       );
-      yield* electronWindow.destroyAll;
+      // Let the updater own window closure. On failure, restarting the primary
+      // backend recreates the main window through its existing readiness callback.
       yield* electronUpdater.quitAndInstall({
         isSilent: true,
         isForceRunAfter: true,
@@ -653,8 +679,7 @@ export const make = Effect.gen(function* () {
       cause,
     });
     if (Option.isSome(activeAction) && activeAction.value === "install") {
-      yield* finishUpdateAction("install");
-      yield* Ref.set(desktopState.quitting, false);
+      yield* resetInstallAction;
       yield* updateState((current) =>
         reduceDesktopUpdateStateOnInstallFailure(current, error.message),
       );
