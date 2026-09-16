@@ -32,11 +32,13 @@ function makeHarness(options?: {
   getMode?: () => Promise<QuitConfirmationMode>;
 }) {
   const notifications: Array<QuitShortcutHintEvent> = [];
+  const concealWindow = vi.fn();
   const quit = vi.fn();
   const handler = makeQuitShortcutHandler({
     platform: options?.platform ?? "darwin",
     getMode: options?.getMode ?? (() => Promise.resolve(options?.mode ?? "hold")),
     notify: (event) => notifications.push(event),
+    concealWindow,
     quit,
   });
   const preventDefault = vi.fn();
@@ -57,7 +59,7 @@ function makeHarness(options?: {
       await send(makeInput({ isAutoRepeat: true, ...repeatOverrides }));
     }
   };
-  return { notifications, quit, preventDefault, send, holdFor };
+  return { notifications, concealWindow, quit, preventDefault, send, holdFor };
 }
 
 describe("makeQuitShortcutHandler", () => {
@@ -82,10 +84,11 @@ describe("makeQuitShortcutHandler", () => {
     expect(harness.notifications).toEqual([HOLD_DOWN, UP]);
   });
 
-  it("quits after a completed hold is released", async () => {
+  it("conceals a completed hold, then quits after release", async () => {
     const harness = makeHarness();
     await harness.send(makeInput({}));
     await harness.holdFor(QUIT_HOLD_DURATION_MS + 200);
+    expect(harness.concealWindow).toHaveBeenCalledTimes(1);
     expect(harness.quit).not.toHaveBeenCalled();
     await harness.send(makeInput({ type: "keyUp", key: "Meta", meta: false }));
     expect(harness.quit).not.toHaveBeenCalled();
@@ -100,11 +103,45 @@ describe("makeQuitShortcutHandler", () => {
     await harness.holdFor(QUIT_HOLD_DURATION_MS + 200);
     await harness.send(makeInput({ type: "keyUp", key: "Meta", meta: false }));
     harness.preventDefault.mockClear();
-    await harness.send(makeInput({ meta: false, isAutoRepeat: true }));
-    expect(harness.preventDefault).toHaveBeenCalledTimes(1);
-    vi.advanceTimersByTime(QUIT_HOLD_RELEASE_GRACE_MS * 2);
+    // Repeats without the modifier prove Q is still down, so they hold the
+    // quit back for as long as they keep arriving.
+    await harness.holdFor(QUIT_HOLD_RELEASE_GRACE_MS * 2, { meta: false });
+    expect(harness.preventDefault).toHaveBeenCalled();
     expect(harness.quit).not.toHaveBeenCalled();
     await harness.send(makeInput({ type: "keyUp", meta: false }));
+    expect(harness.quit).toHaveBeenCalledTimes(1);
+  });
+
+  it("quits after a completed hold when macOS drops both key releases", async () => {
+    const harness = makeHarness();
+    await harness.send(makeInput({}));
+    await harness.holdFor(QUIT_HOLD_DURATION_MS + 200);
+
+    expect(harness.concealWindow).toHaveBeenCalledTimes(1);
+    expect(harness.quit).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(QUIT_HOLD_RELEASE_GRACE_MS);
+
+    expect(harness.quit).toHaveBeenCalledTimes(1);
+    expect(harness.notifications).toEqual([HOLD_DOWN, UP]);
+  });
+
+  it("waits for slow repeats to stop before quitting", async () => {
+    const harness = makeHarness();
+    await harness.send(makeInput({}));
+
+    vi.advanceTimersByTime(300);
+    await harness.send(makeInput({ isAutoRepeat: true }));
+    vi.advanceTimersByTime(900);
+    await harness.send(makeInput({ isAutoRepeat: true }));
+
+    vi.advanceTimersByTime(QUIT_HOLD_RELEASE_GRACE_MS);
+    expect(harness.quit).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(300);
+    await harness.send(makeInput({ isAutoRepeat: true }));
+    vi.advanceTimersByTime(1_799);
+    expect(harness.quit).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
     expect(harness.quit).toHaveBeenCalledTimes(1);
   });
 
@@ -115,6 +152,7 @@ describe("makeQuitShortcutHandler", () => {
     await harness.send(makeInput({ type: "keyUp" }));
     expect(harness.notifications).toEqual([HOLD_DOWN, UP]);
     vi.advanceTimersByTime((QUIT_HOLD_DURATION_MS + QUIT_HOLD_RELEASE_GRACE_MS) * 2);
+    expect(harness.concealWindow).not.toHaveBeenCalled();
     expect(harness.quit).not.toHaveBeenCalled();
   });
 
@@ -130,6 +168,7 @@ describe("makeQuitShortcutHandler", () => {
   it("quits without showing a hint in direct mode", async () => {
     const harness = makeHarness({ mode: "direct" });
     await harness.send(makeInput({}));
+    expect(harness.concealWindow).not.toHaveBeenCalled();
     expect(harness.quit).toHaveBeenCalledTimes(1);
     expect(harness.notifications).toEqual([]);
   });
