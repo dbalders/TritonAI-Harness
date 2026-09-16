@@ -15,7 +15,7 @@ const bundledCatalog = JSON.stringify({
       description: "Bundled model",
       priority: 29,
       visibility: "list",
-      base_instructions: "You are GPT-5.2.",
+      base_instructions: "You are GPT-5.2 running in the Codex CLI.\n\nKeep changes focused.",
       model_messages: { instructions_template: "Use GPT-5.2 instructions." },
       input_modalities: ["text", "image"],
       context_window: 123_000,
@@ -64,7 +64,15 @@ describe("CodexModelCatalog", () => {
     const glm = result.models.find((model) => model.slug === "api-glm-5.3");
     NodeAssert.deepStrictEqual(glm?.input_modalities, ["text"]);
     NodeAssert.equal(glm?.visibility, "hide");
-    NodeAssert.equal(glm?.base_instructions, "You are GPT-5.2.");
+    NodeAssert.match(
+      String(glm?.base_instructions),
+      /^You are a coding assistant running in TritonAI Harness\./,
+    );
+    NodeAssert.doesNotMatch(String(glm?.base_instructions), /GPT-5\.2/);
+    NodeAssert.match(String(glm?.base_instructions), /Keep changes focused\.$/);
+    NodeAssert.match(String(glm?.base_instructions), /current turn's runtime information/);
+    NodeAssert.match(String(glm?.base_instructions), /cannot verify the selected model/);
+    NodeAssert.deepStrictEqual(result.models[0], JSON.parse(bundledCatalog).models[0]);
     NodeAssert.equal(glm?.default_reasoning_level, null);
     NodeAssert.deepStrictEqual(glm?.supported_reasoning_levels, []);
     NodeAssert.equal(glm?.shell_type, "default");
@@ -80,6 +88,7 @@ describe("CodexModelCatalog", () => {
 
     const glimmer = result.models.find((model) => model.slug === "api-muse-glimmer-30b");
     NodeAssert.deepStrictEqual(glimmer?.input_modalities, ["text", "image"]);
+    NodeAssert.equal(glimmer?.base_instructions, glm?.base_instructions);
   });
 
   it("updates explicit modalities for a model already in the bundled catalog", () => {
@@ -132,6 +141,26 @@ describe("CodexModelCatalog", () => {
 
     const managedModel = result.models.find((model) => model.slug === "gpt-5.5");
     NodeAssert.equal(managedModel?.supports_search_tool, false);
+  });
+
+  it("uses generic identity with a fallback template or missing instructions", () => {
+    for (const baseInstructions of ["You are Another-Model.\n\nUse tools carefully.", undefined]) {
+      const result = JSON.parse(
+        buildTritonAiCodexModelCatalog(
+          JSON.stringify({
+            models: [{ slug: "future-template", base_instructions: baseInstructions }],
+          }),
+          {
+            "custom-model": { name: "Custom", capabilities: { inputModalities: ["text"] } },
+          },
+        ),
+      ) as { models: Array<Record<string, unknown>> };
+      const managed = result.models.find((model) => model.slug === "custom-model");
+      NodeAssert.match(String(managed?.base_instructions), /^You are a coding assistant/);
+      NodeAssert.doesNotMatch(String(managed?.base_instructions), /Another-Model|undefined/);
+      if (baseInstructions)
+        NodeAssert.match(String(managed?.base_instructions), /Use tools carefully\.$/);
+    }
   });
 
   it("rejects malformed bundled catalog output", () => {
