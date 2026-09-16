@@ -181,9 +181,9 @@ Required repository secrets (values are never committed):
 
 Mac signing uses a temporary runner keychain, removes signing inputs afterward, and verifies
 signatures, notarization, Gatekeeper, plugin payloads, and isolated packaged-app boot before
-upload. Windows retains its signed/unsigned mode checks; absent Azure configuration selects the
-explicit unsigned nightly mode and is recorded in the release verification report and notes.
-Partial Azure configuration fails. Stable Windows signing policy is unchanged.
+upload. Windows nightlies require Azure OIDC authentication, signed artifacts, matching publisher,
+and an Authenticode timestamp. Missing configuration or signing failures stop the build.
+Stable Windows signing policy is unchanged.
 
 Both platform jobs must pass along with quality checks before the read-only artifact gate
 verifies exact filenames, byte sizes, hashes, nightly updater metadata, matching plugin
@@ -239,7 +239,46 @@ same managed plugins without running TritonAI Installer.
 
 ## Windows signing
 
-Signed Windows artifacts require all of:
+### Nightly GitHub OIDC setup
+
+The nightly Windows job uses the `windows-signing` GitHub environment and `azure/login`.
+Create an Entra app registration and service principal dedicated to Harness releases, then add
+an OIDC federated credential with issuer `https://token.actions.githubusercontent.com`, audience
+`api://AzureADTokenExchange`, and subject
+`repo:dbalders/TritonAI-Harness:environment:windows-signing`.
+Assign that service principal **Artifact Signing Certificate Profile Signer** at this resource:
+
+```text
+/subscriptions/3e0cad08-e45d-4882-a3aa-c1504d4e5017/resourceGroups/TritonAI/providers/Microsoft.CodeSigning/codeSigningAccounts/ucsd-tritonai-signing/certificateProfiles/tritonai-public
+```
+
+Create the `windows-signing` environment in GitHub Settings > Environments. Restrict deployments
+to `main`; temporarily permit the reviewed signing branch for the first non-publishing test,
+then remove that exception. Configure these environment variables:
+
+| Variable                                         | Value                                         |
+| ------------------------------------------------ | --------------------------------------------- |
+| `AZURE_CLIENT_ID`                                | Application ID of the dedicated Entra app     |
+| `AZURE_TENANT_ID`                                | `8a198873-4fec-4e76-8182-ca479edbbd60`        |
+| `AZURE_SUBSCRIPTION_ID`                          | `3e0cad08-e45d-4882-a3aa-c1504d4e5017`        |
+| `AZURE_TRUSTED_SIGNING_ENDPOINT`                 | `https://wus2.codesigning.azure.net/`         |
+| `AZURE_TRUSTED_SIGNING_ACCOUNT_NAME`             | `ucsd-tritonai-signing`                       |
+| `AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME` | `tritonai-public`                             |
+| `AZURE_TRUSTED_SIGNING_PUBLISHER_NAME`           | `The Regents of the University of California` |
+
+No client secret is needed. The packager uses `AZURE_TRUSTED_SIGNING_USE_AZURE_CLI=true`
+to accept the authenticated runner session. Signing still fails if that session cannot sign.
+Electron Builder signs during packaging, before generating updater hashes and blockmaps.
+The runner checks signatures and timestamps, installs and boots the package, and the final
+nightly artifact gate rejects unsigned Windows reports.
+
+First dispatch `nightly.yml` from the reviewed branch with `publish=false`. Confirm the Windows
+signing, Authenticode, installed-app boot, and final artifact gates pass. Only then merge and
+allow scheduled publication. Local tests cannot establish Azure permissions or Windows trust.
+
+### Existing stable/client-secret setup
+
+Signed Windows artifacts using the existing client-secret path require all of:
 
 - `AZURE_TENANT_ID`
 - `AZURE_CLIENT_ID`

@@ -73,7 +73,7 @@ function validateNightlyAssets(root, version, sourceSha) {
   assert.equal(windows.version, version);
   assert.equal(windows.sourceCommit, sourceSha);
   assert.equal(windows.packagedBoot, true);
-  assert(["signed", "unsigned"].includes(windows.signingMode));
+  assert.equal(windows.signingMode, "signed", "Nightly Windows artifacts must be signed.");
   const report = JSON.parse(read("harness-mac-verification.json"));
   assert.equal(report.version, version);
   assert.equal(report.sourceCommit, sourceSha);

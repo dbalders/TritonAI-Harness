@@ -2075,6 +2075,30 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     ),
   );
 
+  it.effect("accepts an Azure CLI session without a client secret", () =>
+    Effect.gen(function* () {
+      const config = yield* resolveAzureTrustedSigningConfiguration();
+      assert.equal(config.certificateProfileName, "tritonai-public");
+      assert.equal(config.timestampDigest, "SHA256");
+    }).pipe(
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromEnv({
+            env: {
+              AZURE_TRUSTED_SIGNING_USE_AZURE_CLI: "true",
+              AZURE_TENANT_ID: "tenant",
+              AZURE_CLIENT_ID: "client",
+              AZURE_TRUSTED_SIGNING_ENDPOINT: "https://wus2.codesigning.azure.net/",
+              AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: "ucsd-tritonai-signing",
+              AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME: "tritonai-public",
+              AZURE_TRUSTED_SIGNING_PUBLISHER_NAME: "The Regents of the University of California",
+            },
+          }),
+        ),
+      ),
+    ),
+  );
+
   it.effect("rejects non-HTTPS Azure Trusted Signing endpoints", () =>
     Effect.gen(function* () {
       const error = yield* resolveAzureTrustedSigningConfiguration().pipe(Effect.flip);
