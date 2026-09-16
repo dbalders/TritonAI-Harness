@@ -88,7 +88,7 @@ describe("TritonAI managed Harness policy", () => {
       },
     ]);
     expect(effective.providerInstances[managedInstanceId]?.config).toMatchObject({
-      customModels: ["api-deepseek-v4-flash", "api-glm-5.3", "onyx-muse-glimmer-30b"],
+      customModels: ["api-deepseek-v4-flash", "api-glm-5.3", "api-muse-glimmer-30b"],
       customModelMetadata: {
         "api-deepseek-v4-flash": {
           capabilities: { inputModalities: ["text"] },
@@ -105,7 +105,7 @@ describe("TritonAI managed Harness policy", () => {
             ],
           },
         },
-        "onyx-muse-glimmer-30b": {
+        "api-muse-glimmer-30b": {
           capabilities: { inputModalities: ["text", "image"] },
         },
       },
@@ -113,7 +113,7 @@ describe("TritonAI managed Harness policy", () => {
     expect(effective.providers.codex.customModels).toEqual([
       "api-deepseek-v4-flash",
       "api-glm-5.3",
-      "onyx-muse-glimmer-30b",
+      "api-muse-glimmer-30b",
     ]);
     expect(effective.providerInstances[frontierInstanceId]).toMatchObject({
       driver: "codex",
@@ -219,8 +219,18 @@ describe("TritonAI managed Harness policy", () => {
         model: "api-gemma-4-31b",
       },
     });
-    expect(retiredGemma.textGenerationModelSelection.model).toBe("onyx-muse-glimmer-30b");
+    expect(retiredGemma.textGenerationModelSelection.model).toBe("api-muse-glimmer-30b");
     expect(retiredGemma.textGenerationModelSelection.instanceId).toBe(managedInstanceId);
+
+    const renamedGlimmer = applyManagedHarnessPolicy({
+      ...DEFAULT_SERVER_SETTINGS,
+      textGenerationModelSelection: {
+        instanceId: managedInstanceId,
+        model: "onyx-muse-glimmer-30b",
+      },
+    });
+    expect(renamedGlimmer.textGenerationModelSelection.model).toBe("api-muse-glimmer-30b");
+    expect(renamedGlimmer.textGenerationModelSelection.instanceId).toBe(managedInstanceId);
 
     const retiredConfig: TritonAiManagedConfig = {
       ...managedConfig,
