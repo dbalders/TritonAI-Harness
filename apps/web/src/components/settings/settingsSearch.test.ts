@@ -136,9 +136,11 @@ describe("searchSettings", () => {
       canManageLocalBackend: false,
       isWslSettingsRowVisible: false,
       hasThreadAutoSettlement: false,
+      hasStageArtwork: false,
     });
 
     const gatedIds = new Set<string>([
+      "environment-identification",
       "follow-change-request-templates",
       "git-fetch-interval",
       "network-access",
@@ -164,8 +166,12 @@ describe("searchSettings", () => {
       canManageLocalBackend: false,
       isWslSettingsRowVisible: false,
       hasThreadAutoSettlement: true,
+      hasStageArtwork: true,
     });
 
+    expect(searchSettings("header artwork", available).map((item) => item.id)).toContain(
+      "environment-identification",
+    );
     expect(searchSettings("auto-settle", available).map((item) => item.id)).toEqual([
       "auto-settle-inactive-threads",
       "auto-settle-merged-threads",

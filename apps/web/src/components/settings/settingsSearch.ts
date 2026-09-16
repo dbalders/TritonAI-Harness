@@ -42,6 +42,7 @@ export interface SettingsSearchAvailability {
   readonly canManageLocalBackend: boolean;
   readonly isWslSettingsRowVisible: boolean;
   readonly hasThreadAutoSettlement: boolean;
+  readonly hasStageArtwork: boolean;
 }
 
 /**
@@ -100,9 +101,11 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "environment-identification",
-    title: "Environment identification",
+    title: "Show header artwork",
     to: "/settings/appearance",
-    searchTerms: ["dev nightly artwork pill label hide none"],
+    searchTerms: [
+      "dev nightly header artwork stars starry decoration environment identification pill label hide",
+    ],
     // The setting is stage-dependent, so its parent section is the stable destination.
     targetId: "appearance",
   },
@@ -471,6 +474,7 @@ export function filterAvailableSettingsSearchItems(
   const items: ReadonlyArray<SettingsSearchItem> = SETTINGS_SEARCH_ITEMS;
   return items.filter(
     (item) =>
+      (item.id !== "environment-identification" || availability.hasStageArtwork) &&
       (!item.cloudOnly || availability.hasCloudPublicConfig) &&
       (!item.primaryOnly || availability.hasPrimaryEnvironment) &&
       (!item.providerSettingsOnly || availability.hasProviderSettingsEnvironment) &&
