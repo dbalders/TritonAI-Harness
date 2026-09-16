@@ -1,3 +1,7 @@
+import {
+  resolveSidebarStageBackdropVariant,
+  useEnvironmentStageLabel,
+} from "../SidebarStageBackdrop";
 import { useMemo } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import { AuthAccessWriteScope } from "@t3tools/contracts";
@@ -14,6 +18,7 @@ import { isProviderSettingsEnvironmentAvailable } from "./ProviderSettingsPanel.
 import { filterAvailableSettingsSearchItems } from "./settingsSearch";
 
 export function useAvailableSettingsSearchItems() {
+  const stageLabel = useEnvironmentStageLabel();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const { environments } = useEnvironments();
   const primarySessionState = usePrimarySessionState();
@@ -28,6 +33,7 @@ export function useAvailableSettingsSearchItems() {
   return useMemo(
     () =>
       filterAvailableSettingsSearchItems({
+        hasStageArtwork: resolveSidebarStageBackdropVariant(stageLabel) !== null,
         hasCloudPublicConfig: hasCloudPublicConfig(),
         hasPrimaryEnvironment: primaryEnvironmentId !== null,
         hasProviderSettingsEnvironment: environments.some((environment) =>
@@ -45,6 +51,7 @@ export function useAvailableSettingsSearchItems() {
           primaryServerConfig?.environment.capabilities.threadAutoSettlement === true,
       }),
     [
+      stageLabel,
       canManageLocalBackend,
       desktopWsl.data,
       desktopWsl.error,

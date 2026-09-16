@@ -18,7 +18,6 @@ import {
   SidebarStageBackdrop,
   useEnvironmentStageLabel,
 } from "../SidebarStageBackdrop";
-import { Badge } from "../ui/badge";
 import {
   SidebarFooter,
   SidebarHeader,
@@ -43,10 +42,7 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
     stageLabel,
     environmentIdentificationMode === "artwork",
   );
-  const pillLabel =
-    environmentIdentificationMode === "pill"
-      ? resolveEnvironmentIdentificationPillLabel(stageLabel)
-      : null;
+  const pillLabel = resolveEnvironmentIdentificationPillLabel(stageLabel);
 
   return (
     <SidebarHeader
@@ -66,14 +62,15 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
       />
       <SidebarBrand onBackdrop={backdropVariant !== null} />
       {pillLabel ? (
-        <Badge
-          className="relative z-10 ml-1 rounded-full px-1.5 text-muted-foreground"
+        <span
+          className={cn(
+            "relative z-10 ml-1 text-xs",
+            backdropVariant ? "text-white/85" : "text-muted-foreground",
+          )}
           data-environment-identification="pill"
-          size="sm"
-          variant="secondary"
         >
-          {pillLabel}
-        </Badge>
+          ({pillLabel})
+        </span>
       ) : null}
     </SidebarHeader>
   );
