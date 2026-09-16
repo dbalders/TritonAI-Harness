@@ -31,7 +31,8 @@ engine updates. You do not need to change your Codex configuration to keep plann
 
 ## Model Identity
 
-Managed models use a generic TritonAI Harness assistant identity. When asked which model is
+Custom models added to the Codex catalog use a generic TritonAI Harness assistant identity.
+Native Codex model entries retain their own instructions. When asked which model is
 selected, the assistant uses the current turn's model information rather than guessing from
 its training or earlier replies. This identifies the selected model, not independent proof
 of which backend the provider served.
