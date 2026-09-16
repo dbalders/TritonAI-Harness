@@ -31,7 +31,7 @@ function managedBaseInstructions(template: JsonObject): string {
   const instructions =
     typeof template.base_instructions === "string" ? template.base_instructions : "";
   // Keep the bundled agent guidance, but not the template model's opening identity.
-  const guidance = instructions.replace(/^You are [^\n]*?(?:\.(?=\s|$)|$)\s*/u, "");
+  const guidance = instructions.replace(/^You are [^\n]*?(?:\.(?=\s|$)|\r?\n|$)\s*/u, "");
   return `You are a coding assistant running in TritonAI Harness.
 
 If asked which model is selected, use the current turn's runtime information. If it is unavailable, say you cannot verify the selected model. Do not infer model identity from training, earlier messages, or the Codex runtime name.

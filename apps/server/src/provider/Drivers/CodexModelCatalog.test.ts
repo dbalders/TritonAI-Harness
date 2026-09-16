@@ -144,7 +144,12 @@ describe("CodexModelCatalog", () => {
   });
 
   it("uses generic identity with a fallback template or missing instructions", () => {
-    for (const baseInstructions of ["You are Another-Model.\n\nUse tools carefully.", undefined]) {
+    for (const baseInstructions of [
+      "You are Another-Model.\n\nUse tools carefully.",
+      "You are Another-Model\n\nUse tools carefully.",
+      "You are Another-Model\r\n\r\nUse tools carefully.",
+      undefined,
+    ]) {
       const result = JSON.parse(
         buildTritonAiCodexModelCatalog(
           JSON.stringify({
