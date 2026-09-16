@@ -21,3 +21,16 @@ The verifier supplies a unique `TRITONAI_PLUGIN_BOOT_REPORT_PATH`; after provide
 the backend writes only its PID and loaded plugin IDs there. The verifier requires the exact
 composition and a live reporting process. This does not depend on healthy child stderr being
 persisted, and a report-write failure does not disable the application's providers.
+
+## Effect schema identity across runtime copies
+
+The bundled server and external provider packages execute separate copies of Effect. Effect
+4.0.0-beta.103 introduced an unchanged-input parser result whose identity must match across
+those copies. Without that identity, the host can treat the parser sentinel as a tool argument:
+valid calendar timestamps and other constrained inputs fail validation before provider invocation.
+
+The pinned Effect patch shares the missing-input symbol and unchanged-input result within the
+process. Both the server bundle and packaged peer runtime must be rebuilt with the patch;
+replacing only one copy is insufficient. The cross-runtime input-contract test checks valid
+values, absent optional fields, and rejection of invalid and excess fields. Preserve that test
+when upgrading or removing the dependency patch.
