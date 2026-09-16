@@ -9,6 +9,7 @@ import { beforeEach, describe, expect, it } from "vite-plus/test";
 
 import {
   applyManagedHarnessPolicy,
+  createManagedProfileSettings,
   getManagedProviderInstanceRenames,
   managedConfig,
   migrateLegacyInstallerManagedSettings,
@@ -130,6 +131,42 @@ describe("TritonAI managed Harness policy", () => {
         },
       ],
     });
+  });
+
+  it("keeps fresh profile homes independent across settings documents", () => {
+    const stableHome = "/profiles/stable/codex";
+    const nightlyHome = "/profiles/nightly/codex";
+    const stable = createManagedProfileSettings(stableHome);
+    const nightly = createManagedProfileSettings(nightlyHome);
+    const stableSettings = applyManagedHarnessPolicy(DEFAULT_SERVER_SETTINGS, managedConfig, {
+      rawSettingsDocument: stable,
+    });
+    const nightlySettings = applyManagedHarnessPolicy(DEFAULT_SERVER_SETTINGS, managedConfig, {
+      rawSettingsDocument: nightly,
+    });
+    expect(stableSettings.providers.codex.homePath).toBe(stableHome);
+    expect(nightlySettings.providers.codex.homePath).toBe(nightlyHome);
+    expect(nightlySettings.providerInstances[frontierInstanceId]?.config).toMatchObject({
+      homePath: nightlyHome,
+    });
+    const missingFile = applyManagedHarnessPolicy(DEFAULT_SERVER_SETTINGS, managedConfig, {
+      rawSettingsDocument: createManagedProfileSettings("/profiles/third/codex"),
+    });
+    expect(missingFile.providers.codex.homePath).toBe("/profiles/third/codex");
+    expect(missingFile.providers.codex.binaryPath).toBe("codex");
+  });
+
+  it("preserves explicit and previously saved Codex homes without moving history", () => {
+    for (const savedHome of ["/custom/history", DEFAULT_TRITONAI_CODEX_HOME_PATH]) {
+      const migrated = migrateLegacyInstallerManagedSettings({
+        providers: { codex: { homePath: savedHome, binaryPath: "/custom/codex" } },
+      });
+      const effective = applyManagedHarnessPolicy(DEFAULT_SERVER_SETTINGS, managedConfig, {
+        rawSettingsDocument: migrated.document,
+      });
+      expect(effective.providers.codex.homePath).toBe(savedHome);
+      expect(effective.providers.codex.binaryPath).toBe("/custom/codex");
+    }
   });
 
   it("uses defaults only for absent selections and fallbacks for retired selections", () => {

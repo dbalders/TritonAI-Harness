@@ -19,6 +19,7 @@ import {
 } from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
@@ -32,6 +33,8 @@ import type * as CodexSchema from "effect-codex-app-server/schema";
 import * as ServerConfig from "../config.ts";
 import { buildCodexInitializeParams } from "./Layers/CodexProvider.ts";
 import { expandHomePath } from "../pathExpansion.ts";
+import * as ProcessRunner from "../processRunner.ts";
+import { resolveManagedCodexBinary } from "./managedCodexRuntime.ts";
 import { materializeCodexShadowHome, resolveCodexHomeLayout } from "./Drivers/CodexHomeLayout.ts";
 import { makeTritonAiCodexConfigArgs } from "./Drivers/TritonAiCodexConfig.ts";
 import { resolveCodexAppServerCommand } from "./Drivers/CodexAppServerCommand.ts";
@@ -314,7 +317,7 @@ function withCodexClient<A>(
 ): Effect.Effect<
   A,
   ServerPluginOperationError,
-  ChildProcessSpawner.ChildProcessSpawner | Scope.Scope
+  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path | Scope.Scope
 > {
   return Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -323,8 +326,16 @@ function withCodexClient<A>(
       ...target.environment,
       CODEX_HOME: resolvedHomePath,
     };
+    const processRunner = yield* ProcessRunner.make();
+    const binaryPath = yield* resolveManagedCodexBinary({
+      binaryPath: expandHomePath(target.binaryPath),
+      homeDirectory: expandHomePath("~"),
+      platform: yield* HostProcessPlatform,
+      environment,
+      run: processRunner.run,
+    }).pipe(Effect.mapError((cause) => codexOperationError(operation, cause)));
     const spawnCommand = yield* resolveCodexAppServerCommand(
-      target.binaryPath,
+      binaryPath,
       ["app-server", ...makeTritonAiCodexConfigArgs(environment)],
       {
         env: environment,
