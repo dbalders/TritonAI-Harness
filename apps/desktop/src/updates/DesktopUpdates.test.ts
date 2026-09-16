@@ -24,6 +24,7 @@ import * as DesktopState from "../app/DesktopState.ts";
 import * as DesktopUpdates from "./DesktopUpdates.ts";
 
 interface UpdatesHarnessOptions {
+  readonly platform?: NodeJS.Platform;
   readonly appVersion?: string;
   readonly isPackaged?: boolean;
   readonly checkForUpdates?: Effect.Effect<
@@ -34,6 +35,8 @@ interface UpdatesHarnessOptions {
   readonly setUpdateChannelError?: DesktopAppSettings.DesktopSettingsWriteError;
   readonly setDisableDifferentialDownload?: Effect.Effect<void>;
   readonly stopBackend?: Effect.Effect<void>;
+  readonly startBackend?: Effect.Effect<void>;
+  readonly quitAndInstall?: Effect.Effect<void, ElectronUpdater.ElectronUpdaterQuitAndInstallError>;
   readonly env?: Record<string, string | undefined>;
 }
 
@@ -41,6 +44,7 @@ const flushCallbacks = Effect.yieldNow;
 
 function makeHarness(options: UpdatesHarnessOptions = {}) {
   let checkCount = 0;
+  let destroyedWindows = 0;
   let channel = "latest";
   let allowPrerelease = false;
   const channelChecks: Array<{
@@ -85,6 +89,8 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
     setChannel: (value) =>
       Effect.sync(() => {
         channel = value;
+        // electron-updater's channel setter implicitly enables downgrades.
+        allowDowngrade = true;
       }),
     setAllowPrerelease: (value) =>
       Effect.sync(() => {
@@ -107,7 +113,7 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
     downloadUpdate: Effect.sync(() => {
       nativeUpdaterEvents.push("download");
     }),
-    quitAndInstall: () => Effect.void,
+    quitAndInstall: () => options.quitAndInstall ?? Effect.void,
     on: (eventName, listener) =>
       Effect.acquireRelease(
         Effect.sync(() => {
@@ -132,18 +138,20 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
       Effect.sync(() => {
         sentStates.push(state as DesktopUpdateState);
       }),
-    destroyAll: Effect.void,
+    destroyAll: Effect.sync(() => {
+      destroyedWindows += 1;
+    }),
     syncAllAppearance: () => Effect.void,
   } satisfies ElectronWindow.ElectronWindow["Service"]);
 
   const stubBackendInstance: DesktopBackendPool.DesktopBackendInstance = {
     id: DesktopBackendPool.PRIMARY_INSTANCE_ID,
     label: Effect.succeed("Windows"),
-    start: Effect.void,
+    start: options.startBackend ?? Effect.void,
     stop: () => options.stopBackend ?? Effect.void,
     currentConfig: Effect.succeed(Option.none()),
     snapshot: Effect.succeed({
-      desiredRunning: false,
+      desiredRunning: true,
       ready: false,
       activePid: Option.none(),
       restartAttempt: 0,
@@ -156,7 +164,7 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
   const environmentLayer = DesktopEnvironment.layer({
     dirname: "/repo/apps/desktop/src",
     homeDirectory: `/tmp/t3-desktop-updates-home-${process.pid}`,
-    platform: "darwin",
+    platform: options.platform ?? "darwin",
     processArch: "x64",
     appVersion: options.appVersion ?? "1.2.3",
     appPath: "/repo",
@@ -236,6 +244,7 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
     layer,
     nativeUpdaterEvents: () => nativeUpdaterEvents,
     checkCount: () => checkCount,
+    destroyedWindows: () => destroyedWindows,
     channelChecks: () => channelChecks,
     feedUrls: () => feedUrls,
     fullChangelog: () => fullChangelog,
@@ -383,7 +392,7 @@ describe("DesktopUpdates", () => {
   });
 
   it.effect("checks for newer releases after an update has been downloaded", () => {
-    const harness = makeHarness();
+    const harness = makeHarness({ platform: "win32" });
 
     return Effect.scoped(
       Effect.gen(function* () {
@@ -492,6 +501,7 @@ describe("DesktopUpdates", () => {
         const checkStarted = yield* Deferred.make<void>();
         const releaseCheck = yield* Deferred.make<void>();
         const harness = makeHarness({
+          platform: "win32",
           checkForUpdates: Deferred.succeed(checkStarted, undefined).pipe(
             Effect.andThen(Deferred.await(releaseCheck)),
           ),
@@ -762,10 +772,72 @@ describe("DesktopUpdates", () => {
         assert.equal(failedState.errorContext, "install");
         assert.equal(failedState.message, "Desktop update install action failed unexpectedly.");
 
-        assert.isTrue((yield* updates.check("manual")).checked);
+        assert.isFalse((yield* updates.check("manual")).checked);
       }),
     ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
   });
+
+  it.effect("keeps the staged macOS installer intact across manual and scheduled checks", () => {
+    const harness = makeHarness();
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+        harness.emit("update-downloaded", { version: "1.2.4" });
+        yield* flushCallbacks;
+        assert.isFalse((yield* updates.check("manual")).checked);
+        assert.isFalse((yield* updates.check("poll")).checked);
+        assert.equal(harness.checkCount(), 0);
+        assert.equal((yield* updates.getState).downloadedVersion, "1.2.4");
+      }),
+    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+  });
+
+  for (const asynchronous of [false, true]) {
+    it.effect(
+      `keeps windows and restarts backends after ${asynchronous ? "native" : "synchronous"} install failure`,
+      () => {
+        let running = true;
+        const harness = makeHarness({
+          startBackend: Effect.sync(() => {
+            running = true;
+          }),
+          stopBackend: Effect.sync(() => {
+            running = false;
+          }),
+          quitAndInstall: asynchronous
+            ? Effect.void
+            : Effect.fail(
+                new ElectronUpdater.ElectronUpdaterQuitAndInstallError({
+                  channel: "latest",
+                  isSilent: true,
+                  isForceRunAfter: true,
+                  cause: new Error("installer rejected"),
+                }),
+              ),
+        });
+        return Effect.scoped(
+          Effect.gen(function* () {
+            const updates = yield* DesktopUpdates.DesktopUpdates;
+            const state = yield* DesktopState.DesktopState;
+            yield* updates.configure;
+            harness.emit("update-downloaded", { version: "1.2.4" });
+            yield* flushCallbacks;
+            yield* updates.install;
+            if (asynchronous) {
+              assert.isFalse(running);
+              harness.emit("error", new Error("native install failed"));
+              yield* flushCallbacks;
+            }
+            assert.equal(harness.destroyedWindows(), 0);
+            assert.isTrue(running);
+            assert.isFalse(yield* Ref.get(state.quitting));
+            assert.equal((yield* updates.getState).errorContext, "install");
+          }),
+        ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+      },
+    );
+  }
 
   for (const { appVersion, channel, otherChannel } of [
     { appVersion: "0.3.3", channel: "latest", otherChannel: "nightly" },
@@ -793,7 +865,7 @@ describe("DesktopUpdates", () => {
             assert.deepEqual(harness.channelChecks().at(-1), {
               channel,
               allowPrerelease: channel === "nightly",
-              allowDowngrade: channel === "nightly",
+              allowDowngrade: false,
             });
             harness.emit("update-available", {
               version: otherChannel === "nightly" ? "0.3.5-nightly.20260914.1" : "0.3.5",

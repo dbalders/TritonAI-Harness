@@ -5,7 +5,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { parse } from "yaml";
 
 it.layer(NodeServices.layer)("release workflow channel", (it) => {
-  it.effect("classifies stable and nightly dispatches and rejects malformed nightly versions", () =>
+  it.effect("accepts controlled stable dispatches and rejects every nightly version", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -20,7 +20,8 @@ it.layer(NodeServices.layer)("release workflow channel", (it) => {
       const root = yield* fs.makeTempDirectoryScoped({ prefix: "nightly-channel-" });
       for (const [version, channel, prerelease, latest] of [
         ["0.3.4", "stable", "false", "true"],
-        ["0.3.4-nightly.20260912.1", "nightly", "true", "false"],
+        ["0.3.4-rc.1", "stable", "true", "false"],
+        ["0.3.4-nightly.20260912.1", null, null, null],
         ["0.3.4-nightly.20260912", null, null, null],
       ] as const) {
         const output = path.join(root, version);

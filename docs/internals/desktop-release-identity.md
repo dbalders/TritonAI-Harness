@@ -1,8 +1,17 @@
 # Desktop release identity
 
 Stable retains `edu.ucsd.tritonai.harness` and package name `tritonai-harness` for upgrade compatibility.
-Nightly uses `edu.ucsd.tritonai.harness.nightly` and `tritonai-harness-nightly`.
-The shared TritonAI identity resolver drives packaging and runtime identity.
+Nightly uses package name `tritonai-harness-nightly` and a distinct Windows application ID,
+`edu.ucsd.tritonai.harness.nightly`. macOS packaging currently retains the historical
+`edu.ucsd.tritonai.harness` bundle ID so legacy Squirrel installations can accept updates.
+The shared identity resolver drives runtime identity; macOS packaging overrides its bundle ID.
+
+The macOS exception also shares Squirrel's ShipIt job label and state-file directory between
+Stable and Nightly. Profile isolation does not provide native-updater isolation. Automatic
+migration to a distinct Nightly bundle ID requires a compatible bridge: the legacy downloader
+selects an app by bundle ID before checking its signing requirement. Re-signing a different
+bundle ID with the legacy code-signing identifier alone cannot pass that download step.
+No automatic identity migration is implemented in the current desktop code.
 
 Electron Builder derives the NSIS application GUID and uninstall registration from `appId`,
 and the per-user install directory and updater cache from the package name. Changing only
@@ -47,7 +56,7 @@ installed track; the hosted web channel selector remains independent.
 This is an intentional TritonAI distribution difference from upstream T3 Code, which currently
 shares stable/Nightly package identity and profile paths. It uses the existing packaging,
 environment, protocol, and updater boundaries; future upstream syncs must preserve these values.
-Legacy Nightly installs are not automatically migrated or uninstalled because their shared registry
+Legacy Windows Nightly installs are not automatically migrated or uninstalled because their shared registry
 entry and data cannot safely be distinguished from stable. Native Windows validation should cover
 stable installed/running, first Nightly install, Nightly-to-Nightly upgrade, same-version reinstall,
 and either app's uninstall while preserving the other app and its profile.
