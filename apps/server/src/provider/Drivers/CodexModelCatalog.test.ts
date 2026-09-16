@@ -49,7 +49,7 @@ describe("CodexModelCatalog", () => {
           name: "GLM 5.3",
           capabilities: { inputModalities: ["text"] },
         },
-        "onyx-muse-glimmer-30b": {
+        "api-muse-glimmer-30b": {
           name: "Glimmer 30B",
           capabilities: { inputModalities: ["text", "image"] },
         },
@@ -59,7 +59,7 @@ describe("CodexModelCatalog", () => {
 
     NodeAssert.deepStrictEqual(
       result.models.map((model) => model.slug),
-      ["gpt-5.2", "gpt-5.5", "api-glm-5.3", "onyx-muse-glimmer-30b"],
+      ["gpt-5.2", "gpt-5.5", "api-glm-5.3", "api-muse-glimmer-30b"],
     );
     const glm = result.models.find((model) => model.slug === "api-glm-5.3");
     NodeAssert.deepStrictEqual(glm?.input_modalities, ["text"]);
@@ -78,7 +78,7 @@ describe("CodexModelCatalog", () => {
     NodeAssert.equal(glm?.max_context_window, 124_000);
     NodeAssert.deepStrictEqual(glm?.truncation_policy, { mode: "tokens", limit: 12_345 });
 
-    const glimmer = result.models.find((model) => model.slug === "onyx-muse-glimmer-30b");
+    const glimmer = result.models.find((model) => model.slug === "api-muse-glimmer-30b");
     NodeAssert.deepStrictEqual(glimmer?.input_modalities, ["text", "image"]);
   });
 

@@ -4,7 +4,7 @@
     "codex": [
       "api-deepseek-v4-flash",
       "api-glm-5.3",
-      "onyx-muse-glimmer-30b",
+      "api-muse-glimmer-30b",
       "gpt-5.6-luna",
       "gpt-5.6-terra",
       "gpt-5.6-sol",

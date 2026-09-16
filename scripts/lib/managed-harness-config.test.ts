@@ -29,7 +29,7 @@ describe("managed Harness config build input", () => {
 
     expect(models["api-deepseek-v4-flash"]?.capabilities?.inputModalities).toEqual(["text"]);
     expect(models["api-glm-5.3"]?.capabilities?.inputModalities).toEqual(["text"]);
-    expect(models["onyx-muse-glimmer-30b"]?.capabilities?.inputModalities).toEqual([
+    expect(models["api-muse-glimmer-30b"]?.capabilities?.inputModalities).toEqual([
       "text",
       "image",
     ]);
@@ -58,12 +58,12 @@ describe("managed Harness config build input", () => {
       };
     };
     const glimmer = textOnlyGlimmer.models.catalog.find(
-      (model) => model.id === "onyx-muse-glimmer-30b",
+      (model) => model.id === "api-muse-glimmer-30b",
     );
     if (glimmer?.capabilities) glimmer.capabilities.inputModalities = ["text"];
 
     expect(() => parseManagedHarnessConfig(JSON.stringify(textOnlyGlimmer))).toThrow(
-      /onyx-muse-glimmer-30b.*image input/u,
+      /api-muse-glimmer-30b.*image input/u,
     );
   });
 
