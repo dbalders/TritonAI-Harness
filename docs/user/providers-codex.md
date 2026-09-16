@@ -29,6 +29,16 @@ The Codex engine installation remains shared. Updating it affects the apps that 
 TritonAI Harness keeps Codex's planning tool enabled when starting the engine, including after
 engine updates. You do not need to change your Codex configuration to keep planning available.
 
+## Subagents
+
+TritonAI models can delegate work to up to five subagents per parent thread. Open the
+right panel and choose **Agents** to follow their status, activity, model, and token usage.
+Stop interrupts the parent and its active children.
+
+The limit applies to each parent thread, not the whole TritonAI service. Several simultaneous
+threads still share your service's request limits, so reduce parallel work if you receive
+“Too Many Requests.”
+
 ## Attach Images To A Text-Only Model
 
 When a managed model accepts only text, TritonAI analyzes attached images and passes their
