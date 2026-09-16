@@ -134,19 +134,46 @@ test("an existing tag pointing at unverified code stays unpublished", async (t) 
   assert.equal(f.calls.length, 0);
 });
 
-test("creates a missing tag at the tested commit before publishing its draft", async (t) => {
+test("leaves a missing tag absent until the verified draft is published", async (t) => {
   const f = fixture(t);
   f.github.rest.git.getRef = async () => {
     throw Object.assign(new Error("absent"), { status: 404 });
   };
   f.github.rest.repos.getCommit = async () => {
-    if (f.tagCreations.length === 0) throw Object.assign(new Error("absent"), { status: 404 });
+    assert.equal(f.release.draft, false, "drafts do not need a public tag");
     return { data: { sha: f.context.sha } };
   };
   await publish(f);
-  assert.deepEqual(f.tagCreations, [
-    { ...f.context.repo, ref: `refs/tags/${process.env.NIGHTLY_TAG}`, sha: f.context.sha },
-  ]);
+  assert.deepEqual(f.tagCreations, []);
+  assert.equal(f.calls[1][1].target_commitish, f.context.sha);
+});
+
+test("failed uploads do not expose a bare nightly tag in the updater feed", async (t) => {
+  const f = fixture(t);
+  f.github.rest.git.getRef = async () => {
+    throw Object.assign(new Error("absent"), { status: 404 });
+  };
+  f.github.rest.repos.uploadReleaseAsset = async () => {
+    throw new Error("upload failed");
+  };
+  await assert.rejects(publish(f), /upload failed/);
+  assert.equal(f.release.draft, true);
+  assert.deepEqual(f.tagCreations, []);
+});
+
+test("a draft with a changed source stays unpublished even without a tag", async (t) => {
+  const f = fixture(t);
+  f.github.rest.git.getRef = async () => {
+    throw Object.assign(new Error("absent"), { status: 404 });
+  };
+  f.github.rest.repos.getRelease = async () => {
+    f.release.target_commitish = "b".repeat(40);
+    return { data: f.release };
+  };
+  await assert.rejects(publish(f), /draft failed final verification/);
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.release.draft, true);
+  assert.deepEqual(f.tagCreations, []);
 });
 
 test("a tag changed during upload leaves the draft unpublished", async (t) => {

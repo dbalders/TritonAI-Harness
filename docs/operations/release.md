@@ -139,6 +139,13 @@ version commit step. Publication rejects non-nightly tags and non-default branch
 `prerelease=true` and `make_latest=false`, and verifies that GitHub's stable latest release did
 not change. The native publication tests explicitly reject `v0.3.4`.
 
+Nightly publication leaves a new tag absent until the fully verified draft is published.
+It checks the draft's exact source SHA and revalidates any existing tag after uploads.
+Creating a bare Nightly tag early exposes it in GitHub's Atom feed while its draft update
+assets still return 404. Withdrawing an already published Nightly to draft can leave the
+same broken feed entry; do not treat that action alone as a completed rollback. Verify
+the public feed and manifest URLs after any release withdrawal.
+
 Manual proof run (builds and verifies both platforms without publishing):
 
 ```sh
