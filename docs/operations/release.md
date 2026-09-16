@@ -37,8 +37,8 @@ The workflow:
 6. asks that Installer commit to resolve and prepare its reviewed, digest-bound production
    managed-plugin catalog;
 7. aligns package versions in the isolated build checkout;
-8. builds the Windows x64 NSIS Harness artifact;
-9. authenticates through GitHub OIDC and requires signed Windows artifacts with valid publisher and timestamp;
+8. authenticates the Windows runner through GitHub OIDC;
+9. builds and signs the Windows x64 NSIS Harness artifact, then verifies its publisher and timestamp;
 10. finalizes the managed-plugin composition proof;
 11. uploads the required Windows installer, blockmap, updater metadata, and composition proof;
 12. verifies the release is still a draft and only then publishes it;
@@ -206,10 +206,9 @@ modifying the vendored source or retaining checkout credentials.
 3. Create the exact tag and an unpublished GitHub draft for it.
 4. Attach the verified local assets to the draft.
 5. Push the tag or dispatch the workflow for that version.
-6. Wait for preflight, Windows build, selected trust-mode boot proof, managed-plugin proof, and required-asset checks.
-7. Let the workflow validate Authenticode publisher identity and timestamps for signed releases, or
-   validate unsigned status for explicitly unsigned releases, then attach Windows assets and publish
-   the draft.
+6. Wait for preflight, signed Windows build, installed-app boot proof, managed-plugin proof, and required-asset checks.
+7. Let the workflow validate Authenticode publisher identity and timestamps, then attach verified
+   Windows assets and publish the draft.
 8. Verify the published release state and downloaded asset identities.
 9. Only then build and publish TritonAI Installer against those exact Harness assets.
 
