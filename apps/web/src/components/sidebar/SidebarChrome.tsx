@@ -47,7 +47,7 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
   return (
     <SidebarHeader
       className={cn(
-        "@container/sidebar-header relative h-[var(--workspace-topbar-height)] shrink-0 flex-row items-center px-3 py-0 md:px-0",
+        "@container/sidebar-header relative h-[var(--workspace-topbar-height)] shrink-0 flex-row items-center gap-1 px-3 py-0 md:px-0",
         isElectron && "drag-region",
       )}
     >
@@ -64,7 +64,7 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
       {pillLabel ? (
         <span
           className={cn(
-            "relative z-10 ml-1 text-xs",
+            "relative z-10 text-xs",
             backdropVariant ? "text-white/85" : "text-muted-foreground",
           )}
           data-environment-identification="pill"
