@@ -27,6 +27,18 @@ function explicitInputModalities(
   return modalities && modalities.length > 0 ? modalities : undefined;
 }
 
+function managedBaseInstructions(template: JsonObject): string {
+  const instructions =
+    typeof template.base_instructions === "string" ? template.base_instructions : "";
+  // Keep the bundled agent guidance, but not the template model's opening identity.
+  const guidance = instructions.replace(/^You are [^\n]*?(?:\.(?=\s|$)|\r?\n|$)\s*/u, "");
+  return `You are a coding assistant running in TritonAI Harness.
+
+If asked which model is selected, use the current turn's runtime information. If it is unavailable, say you cannot verify the selected model. Do not infer model identity from training, earlier messages, or the Codex runtime name.
+
+${guidance}`.trimEnd();
+}
+
 function managedModelFromTemplate(input: {
   readonly template: JsonObject;
   readonly slug: string;
@@ -36,6 +48,7 @@ function managedModelFromTemplate(input: {
 }): JsonObject {
   return {
     ...input.template,
+    base_instructions: managedBaseInstructions(input.template),
     slug: input.slug,
     display_name: input.name,
     description: `${input.name} routed through TritonAI.`,

@@ -29,6 +29,17 @@ The Codex engine installation remains shared. Updating it affects the apps that 
 TritonAI Harness keeps Codex's planning tool enabled when starting the engine, including after
 engine updates. You do not need to change your Codex configuration to keep planning available.
 
+## Model Identity
+
+Custom models added to the Codex catalog use a generic TritonAI Harness assistant identity.
+Native Codex model entries retain their own instructions. When asked which model is
+selected, the assistant uses the current turn's model information rather than guessing from
+its training or earlier replies. This identifies the selected model, not independent proof
+of which backend the provider served.
+
+Older conversations can retain instructions that incorrectly identify the assistant as GPT-5.2.
+After updating and restarting Harness, start a new conversation to use the corrected base instructions.
+
 ## Attach Images To A Text-Only Model
 
 When a managed model accepts only text, TritonAI analyzes attached images and passes their

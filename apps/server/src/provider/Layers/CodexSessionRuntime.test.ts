@@ -677,6 +677,9 @@ describe("buildCodexDeveloperInstructions", () => {
     });
 
     NodeAssert.notEqual(first, second);
+    NodeAssert.match(second, /report the model in this current-turn runtime information/);
+    NodeAssert.match(second, /not an identity from earlier messages or inherited instructions/);
+    NodeAssert.match(second, /not independent verification of the upstream backend/);
   });
 
   it("flattens multiline metadata into single-line runtime info", () => {
