@@ -13,6 +13,18 @@ function verifyControlledReleaseAssets(root, version) {
   const channel = "latest";
   const mac = `TritonAI-Harness-${version}-arm64`;
   const win = `TritonAI-Harness-${version}-x64`;
+  const expectedAssets = [
+    ...[`${mac}.dmg`, `${mac}.zip`, `${win}.exe`].flatMap((name) => [name, `${name}.blockmap`]),
+    `${channel}-mac.yml`,
+    `${channel}.yml`,
+    "tritonai-plugin-composition-mac-arm64.json",
+    "tritonai-plugin-composition-win-x64.json",
+  ];
+  assert.deepEqual(
+    fs.readdirSync(root).sort(),
+    expectedAssets.sort(),
+    "Controlled release assets must match the exact expected set; remove stale or unexpected draft assets before publication.",
+  );
   const read = (name) => {
     assert.equal(path.basename(name), name, "Release assets must be flat file names.");
     const file = path.join(root, name);

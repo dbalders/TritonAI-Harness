@@ -61,6 +61,17 @@ test("blocks missing platform assets", (t) => {
   fs.unlinkSync(path.join(f.root, `${f.win}.exe`));
   assert.throws(() => verifyControlledReleaseAssets(f.root, f.version));
 });
+for (const staleAsset of [
+  "nightly-mac.yml",
+  "TritonAI-Harness-0.3.3-x64.exe",
+  "unexpected-build-output.json",
+]) {
+  test(`blocks an additional draft asset: ${staleAsset}`, (t) => {
+    const f = fixture(t);
+    fs.writeFileSync(path.join(f.root, staleAsset), "stale draft content");
+    assert.throws(() => verifyControlledReleaseAssets(f.root, f.version), /exact expected set/);
+  });
+}
 test("blocks a feed pointing at another version or the Nightly track", (t) => {
   const f = fixture(t);
   assert.throws(
