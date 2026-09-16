@@ -823,6 +823,7 @@ describe("DesktopUpdates", () => {
             yield* updates.configure;
             harness.emit("update-downloaded", { version: "1.2.4" });
             yield* flushCallbacks;
+            yield* Ref.set(state.updaterQuitAllowed, true);
             yield* updates.install;
             if (asynchronous) {
               assert.isFalse(running);
@@ -832,6 +833,7 @@ describe("DesktopUpdates", () => {
             assert.equal(harness.destroyedWindows(), 0);
             assert.isTrue(running);
             assert.isFalse(yield* Ref.get(state.quitting));
+            assert.isFalse(yield* Ref.get(state.updaterQuitAllowed));
             assert.equal((yield* updates.getState).errorContext, "install");
           }),
         ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));

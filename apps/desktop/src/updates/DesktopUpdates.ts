@@ -486,6 +486,7 @@ export const make = Effect.gen(function* () {
 
   const resetInstallAction = Effect.gen(function* () {
     const stopped = yield* Ref.getAndSet(stoppedForInstallRef, []);
+    yield* Ref.set(desktopState.updaterQuitAllowed, false);
     yield* Ref.set(desktopState.quitting, false);
     yield* Effect.forEach(
       stopped,
