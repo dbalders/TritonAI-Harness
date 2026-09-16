@@ -90,6 +90,7 @@ describe("integration provider tool contracts", () => {
         decodeIntegrationToolInput(foreign, { start: "x".repeat(65) }),
       ).rejects.toBeDefined();
       await expect(decodeIntegrationToolInput(foreign, { limit: 26 })).rejects.toBeDefined();
+      await expect(decodeIntegrationToolInput(foreign, null)).rejects.toBeDefined();
       await expect(
         decodeIntegrationToolInput(foreign, { ...input, extra: true }),
       ).rejects.toBeDefined();
