@@ -1,3 +1,4 @@
+import { isTritonAiNightlyVersion } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -11,17 +12,22 @@ import * as Electron from "electron";
 export const DESKTOP_HOST = "app";
 export const DESKTOP_PRODUCTION_SCHEME = "t3code";
 export const DESKTOP_DEVELOPMENT_SCHEME = "t3code-dev";
+export const DESKTOP_NIGHTLY_SCHEME = "tritonai-harness-nightly";
 
-export function getDesktopScheme(isDevelopment: boolean): string {
-  return isDevelopment ? DESKTOP_DEVELOPMENT_SCHEME : DESKTOP_PRODUCTION_SCHEME;
+export function getDesktopScheme(isDevelopment: boolean, appVersion = ""): string {
+  return isDevelopment
+    ? DESKTOP_DEVELOPMENT_SCHEME
+    : isTritonAiNightlyVersion(appVersion)
+      ? DESKTOP_NIGHTLY_SCHEME
+      : DESKTOP_PRODUCTION_SCHEME;
 }
 
-export function getDesktopOrigin(isDevelopment: boolean): string {
-  return `${getDesktopScheme(isDevelopment)}://${DESKTOP_HOST}`;
+export function getDesktopOrigin(isDevelopment: boolean, appVersion = ""): string {
+  return `${getDesktopScheme(isDevelopment, appVersion)}://${DESKTOP_HOST}`;
 }
 
-export function getDesktopUrl(isDevelopment: boolean): string {
-  return `${getDesktopOrigin(isDevelopment)}/`;
+export function getDesktopUrl(isDevelopment: boolean, appVersion = ""): string {
+  return `${getDesktopOrigin(isDevelopment, appVersion)}/`;
 }
 
 export class ElectronProtocolRegistrationError extends Schema.TaggedErrorClass<ElectronProtocolRegistrationError>()(
@@ -122,6 +128,15 @@ export function registerDesktopSchemePrivilegesSync(): void {
     },
     {
       scheme: DESKTOP_DEVELOPMENT_SCHEME,
+      privileges: {
+        standard: true,
+        secure: true,
+        supportFetchAPI: true,
+        corsEnabled: true,
+      },
+    },
+    {
+      scheme: DESKTOP_NIGHTLY_SCHEME,
       privileges: {
         standard: true,
         secure: true,

@@ -80,6 +80,7 @@ describe("brand-assets", () => {
 
   it("maps package versions to web asset brands", () => {
     expect(resolveWebAssetBrandForPackageVersion("0.0.29")).toBe("production");
+    expect(resolveWebAssetBrandForPackageVersion("0.0.29-nightly.20260723")).toBe("production");
     expect(resolveWebAssetBrandForPackageVersion("0.0.29-nightly.20260723.882")).toBe("nightly");
   });
 
@@ -90,13 +91,15 @@ describe("brand-assets", () => {
       BRAND_ASSET_PATHS.productionIconComposerProject,
     ]).toEqual([
       "assets/dev/app-icon.icon",
-      "assets/prod/app-icon.icon",
+      "assets/nightly/tritonai-app-icon.icon",
       "assets/prod/app-icon.icon",
     ]);
     expect(BRAND_ASSET_PATHS.developmentDesktopIconPng).toBe(
       "assets/dev/tritonai-harness-dev-1024.png",
     );
-    expect(BRAND_ASSET_PATHS.nightlyMacIconPng).toBe("assets/prod/tritonai-harness-1024.png");
+    expect(BRAND_ASSET_PATHS.nightlyMacIconPng).toBe(
+      "assets/nightly/tritonai-harness-nightly-1024.png",
+    );
     expect(BRAND_ASSET_PATHS.productionMacIconPng).toBe("assets/prod/tritonai-harness-1024.png");
     expect(BRAND_ASSET_PATHS.developmentIosIconPng).not.toBe(
       BRAND_ASSET_PATHS.developmentDesktopIconPng,

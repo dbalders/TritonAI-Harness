@@ -142,7 +142,7 @@ export function TritonAiCredentialSetting() {
         <div className="grid max-w-2xl gap-2 sm:grid-cols-2">
           <AccessStatusRow
             label="On-prem models"
-            examples="DeepSeek, GLM, and Gemma"
+            examples="DeepSeek, GLM, and Glimmer"
             configured={credentials.onPremConfigured}
             keyLastFour={credentials.onPremKeyLastFour}
             ready={credentials.ready}

@@ -671,7 +671,7 @@ function mapCollabAgentEvent(
           type: "task.started",
           payload: {
             taskId,
-            description: title,
+            description: typeof payload.description === "string" ? payload.description : title,
             title,
             ...linkage,
             ...(typeof payload.parentThreadId === "string"
@@ -852,7 +852,8 @@ function mapCollabAgentEvent(
       const looseSummary =
         (typeof item?.command === "string" ? item.command : undefined) ??
         (typeof item?.title === "string" ? item.title : undefined) ??
-        (typeof item?.query === "string" ? item.query : undefined);
+        (typeof item?.query === "string" ? item.query : undefined) ??
+        (typeof item?.text === "string" ? item.text : undefined);
       const canonical = toCanonicalItemType(itemTypeRaw);
       const summary = looseSummary ?? canonical.replaceAll("_", " ");
       return [
@@ -873,7 +874,16 @@ function mapCollabAgentEvent(
         {
           ...base,
           type: "task.updated",
-          payload: { taskId, status: "interrupted", ...linkage },
+          payload: {
+            taskId,
+            status:
+              payload.status === "completed"
+                ? "completed"
+                : payload.status === "failed"
+                  ? "failed"
+                  : "interrupted",
+            ...linkage,
+          },
         },
       ];
     default:

@@ -13,6 +13,7 @@ describe("DesktopEarlyElectronStartup", () => {
   it("reads the persisted linux password-store preference before Electron is ready", () => {
     const preference = resolveEarlyLinuxPasswordStorePreference({
       env: { T3CODE_HOME: "/home/user/.t3-test" },
+      appVersion: "0.3.4",
       homeDirectory: "/home/user",
       joinPath,
       readFileString: (path) => {
@@ -27,6 +28,7 @@ describe("DesktopEarlyElectronStartup", () => {
   it("accepts JSONC in the early desktop settings file", () => {
     const preference = resolveEarlyLinuxPasswordStorePreference({
       env: { T3CODE_HOME: "/home/user/.t3-test" },
+      appVersion: "0.3.4",
       homeDirectory: "/home/user",
       joinPath,
       readFileString: () => `{
@@ -41,6 +43,7 @@ describe("DesktopEarlyElectronStartup", () => {
   it("falls back to auto when the early settings document is missing or invalid", () => {
     const preference = resolveEarlyLinuxPasswordStorePreference({
       env: {},
+      appVersion: "0.3.4",
       homeDirectory: "/home/user",
       joinPath,
       readFileString: () => {
@@ -54,6 +57,7 @@ describe("DesktopEarlyElectronStartup", () => {
   it("preserves absolute root paths when resolving early settings", () => {
     const preference = resolveEarlyLinuxPasswordStorePreference({
       env: { T3CODE_HOME: "/" },
+      appVersion: "0.3.4",
       homeDirectory: "/home/user",
       joinPath,
       readFileString: (path) => {
@@ -72,6 +76,7 @@ describe("DesktopEarlyElectronStartup", () => {
         XDG_CURRENT_DESKTOP: "niri",
         VITE_DEV_SERVER_URL: "http://127.0.0.1:5173",
       },
+      appVersion: "0.3.4",
       homeDirectory: "/home/user",
       joinPath,
       readFileString: (path) => {
@@ -81,20 +86,21 @@ describe("DesktopEarlyElectronStartup", () => {
     });
 
     assert.deepEqual(options, {
-      linuxWmClass: "t3code-dev",
+      linuxWmClass: "tritonai-harness-dev",
       passwordStore: "gnome-libsecret",
     });
   });
 
-  it("keeps implicit development state under ~/.t3/dev when T3CODE_HOME is unset", () => {
+  it("keeps implicit development state under ~/.tritonai-harness/dev when T3CODE_HOME is unset", () => {
     const preference = resolveEarlyLinuxPasswordStorePreference({
       env: {
         VITE_DEV_SERVER_URL: "http://127.0.0.1:5173",
       },
+      appVersion: "0.3.4",
       homeDirectory: "/home/user",
       joinPath,
       readFileString: (path) => {
-        assert.equal(path, "/home/user/.t3/dev/desktop-settings.json");
+        assert.equal(path, "/home/user/.tritonai-harness/dev/desktop-settings.json");
         return JSON.stringify({ linuxPasswordStore: "kwallet" });
       },
     });
@@ -108,10 +114,11 @@ describe("DesktopEarlyElectronStartup", () => {
         T3CODE_HOME: "   ",
         VITE_DEV_SERVER_URL: "http://127.0.0.1:5173",
       },
+      appVersion: "0.3.4",
       homeDirectory: "/home/user",
       joinPath,
       readFileString: (path) => {
-        assert.equal(path, "/home/user/.t3/dev/desktop-settings.json");
+        assert.equal(path, "/home/user/.tritonai-harness/dev/desktop-settings.json");
         return JSON.stringify({ linuxPasswordStore: "gnome-libsecret" });
       },
     });

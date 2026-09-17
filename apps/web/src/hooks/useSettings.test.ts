@@ -6,6 +6,7 @@ import {
 import { DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts/settings";
 import { describe, expect, it } from "vite-plus/test";
 
+import { resolveSidebarStageBackdropVariant } from "../components/SidebarStageBackdrop";
 import { mergeEnvironmentSettings, resolveEnvironmentIdentificationMode } from "./useSettings";
 
 describe("resolveEnvironmentIdentificationMode", () => {
@@ -18,35 +19,19 @@ describe("resolveEnvironmentIdentificationMode", () => {
     );
   });
 
-  it("uses a pill instead of artwork with a palette theme", () => {
-    expect(
-      resolveEnvironmentIdentificationMode({
-        mode: "artwork",
-        settingsHydrated: true,
-        paletteThemeActive: true,
-      }),
-    ).toBe("pill");
-  });
+  it.each(["artwork", "pill", "none"] as const)(
+    "preserves the saved %s preference after hydration",
+    (mode) => {
+      expect(resolveEnvironmentIdentificationMode({ mode, settingsHydrated: true })).toBe(mode);
+    },
+  );
 
-  it("respects none with a palette theme", () => {
-    expect(
-      resolveEnvironmentIdentificationMode({
-        mode: "none",
-        settingsHydrated: true,
-        paletteThemeActive: true,
-      }),
-    ).toBe("none");
-  });
-
-  it("keeps artwork when the palette theme opts into it", () => {
-    expect(
-      resolveEnvironmentIdentificationMode({
-        mode: "artwork",
-        settingsHydrated: true,
-        paletteThemeActive: true,
-        paletteThemeAllowsArtwork: true,
-      }),
-    ).toBe("artwork");
+  it.each(["Nightly", "Dev"])("shows %s artwork by default", (stage) => {
+    const mode = resolveEnvironmentIdentificationMode({
+      mode: DEFAULT_CLIENT_SETTINGS.environmentIdentificationMode,
+      settingsHydrated: true,
+    });
+    expect(resolveSidebarStageBackdropVariant(stage, mode === "artwork")).toBe(stage.toLowerCase());
   });
 });
 

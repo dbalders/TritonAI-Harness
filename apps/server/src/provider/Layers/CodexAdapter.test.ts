@@ -1664,6 +1664,40 @@ function startLifecycleRuntime(configureRuntime?: (runtime: FakeCodexRuntime) =>
 }
 
 lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
+  it.effect("shows legacy agent prompts, results, and successful closure", () =>
+    Effect.gen(function* () {
+      const { adapter, runtime } = yield* startLifecycleRuntime();
+      const collected = yield* adapter.streamEvents.pipe(
+        Stream.take(3),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      for (const [method, payload] of [
+        ["collabAgent/started", { description: "Check the task queue" }],
+        ["collabAgent/item", { item: { type: "agentMessage", text: "ALPHA" } }],
+        ["collabAgent/closed", { status: "completed" }],
+      ] as const) {
+        yield* runtime.emit({
+          id: asEventId(method),
+          kind: "notification",
+          provider: ProviderDriverKind.make("codex"),
+          createdAt: "2026-01-01T00:00:00.000Z",
+          method,
+          threadId: asThreadId("thread-1"),
+          payload: { agentThreadId: "legacy-child", nickname: "Euclid", ...payload },
+        });
+      }
+      const events = Array.from(yield* Fiber.join(collected));
+      NodeAssert.equal(events[0]?.type, "task.started");
+      NodeAssert.equal(
+        (events[0]?.payload as { description?: string }).description,
+        "Check the task queue",
+      );
+      NodeAssert.equal((events[1]?.payload as { summary?: string }).summary, "ALPHA");
+      NodeAssert.equal((events[2]?.payload as { status?: string }).status, "completed");
+    }),
+  );
+
   it.effect("carries child model metadata through every task event", () =>
     Effect.gen(function* () {
       const { adapter, runtime } = yield* startLifecycleRuntime();

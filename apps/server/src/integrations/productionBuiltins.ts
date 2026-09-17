@@ -18,6 +18,7 @@ import type { IntegrationPackage, IntegrationProvider } from "./IntegrationRegis
 import { scopeIntegrationSecretStore } from "./IntegrationSecretStore.ts";
 import { validateIntegrationManifest } from "./manifest.ts";
 import { loadPluginSdkIntegration, PluginSdkQuarantineError } from "./pluginSdk/adapter.ts";
+import { acquireProductionRuntime, type ProductionRuntimeLease } from "./productionRuntime.ts";
 
 declare const __TRITONAI_BUILD_PLUGIN_COMPOSITION__: unknown;
 declare const __TRITONAI_BUILD_PLUGIN_CONFIGURATION__: unknown;
@@ -262,57 +263,42 @@ function validateProviderlessRuntimeMetadata(
   }
 }
 
-async function resolveRuntimeDependencyRoot(
-  dependency: ReturnType<typeof resolvePluginHostRuntimeDependencies>[number],
-): Promise<string> {
-  const resolvedManifest = NodeURL.fileURLToPath(
-    import.meta.resolve(`${dependency.name}/package.json`),
-  );
-  const asarSegment = `${NodePath.sep}app.asar${NodePath.sep}`;
-  const unpackedManifest = resolvedManifest.includes(asarSegment)
-    ? resolvedManifest.replace(asarSegment, `${NodePath.sep}app.asar.unpacked${NodePath.sep}`)
-    : resolvedManifest;
-  const manifestPath = await NodeFSP.access(unpackedManifest)
-    .then(() => unpackedManifest)
-    .catch(() => resolvedManifest);
-  const packageRoot = await NodeFSP.realpath(NodePath.dirname(manifestPath));
-  const stat = await NodeFSP.lstat(packageRoot);
-  if (!stat.isDirectory() || stat.isSymbolicLink()) {
-    throw new Error(
-      `Built-in plugin runtime dependency is not a real directory: ${dependency.name}.`,
-    );
-  }
-  const packageJson = JSON.parse(await NodeFSP.readFile(manifestPath, "utf8")) as {
-    readonly name?: unknown;
-    readonly version?: unknown;
-  };
-  if (packageJson.name !== dependency.name || packageJson.version !== dependency.version) {
-    throw new Error(
-      `Built-in plugin runtime dependency version does not match: ${dependency.name}.`,
-    );
-  }
-  return packageRoot;
-}
-
 async function linkSnapshotRuntimeDependencies(
   snapshotParent: string,
   plugin: CompositionPackage,
   verifiedFiles: ReadonlyArray<DescribedCompositionFile>,
-): Promise<void> {
+): Promise<() => Promise<void>> {
   const dependencies = runtimeDependencies(plugin, verifiedFiles);
-  if (dependencies.length === 0) return;
+  const leases: Array<ProductionRuntimeLease> = [];
+  const release = async () => {
+    const results = await Promise.allSettled(leases.map((lease) => lease.release()));
+    const failure = results.find((result) => result.status === "rejected");
+    if (failure?.status === "rejected") throw failure.reason;
+  };
+  if (dependencies.length === 0) return release;
   const nodeModulesRoot = NodePath.join(snapshotParent, "node_modules");
   await NodeFSP.mkdir(nodeModulesRoot, { mode: 0o700 });
   const createdDirectories = new Set([nodeModulesRoot]);
-  for (const dependency of dependencies) {
-    const linkPath = NodePath.join(nodeModulesRoot, ...dependency.name.split("/"));
-    const linkParent = NodePath.dirname(linkPath);
-    await NodeFSP.mkdir(linkParent, { recursive: true, mode: 0o700 });
-    createdDirectories.add(linkParent);
-    await NodeFSP.symlink(await resolveRuntimeDependencyRoot(dependency), linkPath, "junction");
-  }
-  for (const directory of [...createdDirectories].toSorted().toReversed()) {
-    await NodeFSP.chmod(directory, 0o500);
+  try {
+    for (const dependency of dependencies) {
+      const linkPath = NodePath.join(nodeModulesRoot, ...dependency.name.split("/"));
+      const linkParent = NodePath.dirname(linkPath);
+      await NodeFSP.mkdir(linkParent, { recursive: true, mode: 0o700 });
+      createdDirectories.add(linkParent);
+      const lease = await acquireProductionRuntime(
+        NodeURL.fileURLToPath(import.meta.resolve(`${dependency.name}/package.json`)),
+        dependency,
+      );
+      leases.push(lease);
+      await NodeFSP.symlink(lease.root, linkPath, "junction");
+    }
+    for (const directory of [...createdDirectories].toSorted().toReversed()) {
+      await NodeFSP.chmod(directory, 0o500);
+    }
+    return release;
+  } catch (error) {
+    await release();
+    throw error;
   }
 }
 
@@ -332,14 +318,20 @@ async function removeProductionPackageSnapshot(snapshotRoot: string): Promise<vo
   await NodeFSP.rm(snapshotParent, { recursive: true, force: true });
 }
 
+interface ProductionPackageSnapshot {
+  readonly root: string;
+  readonly close: () => Promise<void>;
+}
+
 async function materializeProductionPackageSnapshot(
   plugin: CompositionPackage,
   verifiedFiles: ReadonlyArray<DescribedCompositionFile>,
-): Promise<string> {
+): Promise<ProductionPackageSnapshot> {
   const snapshotParent = await NodeFSP.mkdtemp(
     NodePath.join(NodeOS.tmpdir(), "tritonai-production-plugin-"),
   );
   const snapshotRoot = NodePath.join(snapshotParent, plugin.id);
+  let releaseRuntime: (() => Promise<void>) | undefined;
   try {
     await NodeFSP.mkdir(snapshotRoot, { mode: 0o700 });
     for (const file of verifiedFiles) {
@@ -351,12 +343,25 @@ async function materializeProductionPackageSnapshot(
     const snapshotFiles = await describePackageFiles(snapshotRoot);
     verifyDescribedPackage(plugin, snapshotFiles);
     await sealSnapshotDirectory(snapshotRoot);
-    await linkSnapshotRuntimeDependencies(snapshotParent, plugin, verifiedFiles);
+    releaseRuntime = await linkSnapshotRuntimeDependencies(snapshotParent, plugin, verifiedFiles);
     await NodeFSP.chmod(snapshotParent, 0o500);
-    return snapshotRoot;
+    return {
+      root: snapshotRoot,
+      close: async () => {
+        try {
+          await removeProductionPackageSnapshot(snapshotRoot);
+        } finally {
+          await releaseRuntime?.();
+        }
+      },
+    };
   } catch (error) {
-    await makeSnapshotDirectoriesWritable(snapshotParent).catch(() => undefined);
-    await NodeFSP.rm(snapshotParent, { recursive: true, force: true });
+    try {
+      await makeSnapshotDirectoriesWritable(snapshotParent).catch(() => undefined);
+      await NodeFSP.rm(snapshotParent, { recursive: true, force: true });
+    } finally {
+      await releaseRuntime?.();
+    }
     throw error;
   }
 }
@@ -367,11 +372,11 @@ async function withProductionPackageSnapshot<T>(
   use: (snapshotRoot: string, verifiedFiles: ReadonlyArray<DescribedCompositionFile>) => Promise<T>,
 ): Promise<T> {
   const verifiedFiles = await verifiedPackageFiles(composedPackageRoot, plugin);
-  const snapshotRoot = await materializeProductionPackageSnapshot(plugin, verifiedFiles);
+  const snapshot = await materializeProductionPackageSnapshot(plugin, verifiedFiles);
   try {
-    return await use(snapshotRoot, verifiedFiles);
+    return await use(snapshot.root, verifiedFiles);
   } finally {
-    await removeProductionPackageSnapshot(snapshotRoot);
+    await snapshot.close();
   }
 }
 
@@ -397,7 +402,7 @@ function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
 
 function retainSnapshotUntilProviderClose(
   provider: IntegrationProvider,
-  snapshotRoot: string,
+  snapshot: ProductionPackageSnapshot,
 ): IntegrationProvider {
   const originalClose =
     typeof provider.close === "function" ? provider.close.bind(provider) : undefined;
@@ -418,7 +423,7 @@ function retainSnapshotUntilProviderClose(
       let snapshotCleanupFailed = false;
       let snapshotCleanupError: unknown;
       try {
-        await removeProductionPackageSnapshot(snapshotRoot);
+        await snapshot.close();
       } catch (error) {
         snapshotCleanupFailed = true;
         snapshotCleanupError = error;
@@ -516,10 +521,10 @@ async function loadProductionPackage(
     return { manifest: packageManifest, bundledFiles };
   }
 
-  const packageRoot = await materializeProductionPackageSnapshot(plugin, verifiedFiles);
+  const snapshot = await materializeProductionPackageSnapshot(plugin, verifiedFiles);
   let retainSnapshot = false;
   try {
-    const moduleUrl = NodeURL.pathToFileURL(NodePath.join(packageRoot, "dist", "index.js")).href;
+    const moduleUrl = NodeURL.pathToFileURL(NodePath.join(snapshot.root, "dist", "index.js")).href;
     const loaded = (await import(moduleUrl)) as IntegrationPluginModule;
     const exportedManifest = validateIntegrationManifest(loaded.manifest);
     if (!NodeUtil.isDeepStrictEqual(exportedManifest, packageManifest)) {
@@ -546,12 +551,12 @@ async function loadProductionPackage(
     }
     const provider = retainSnapshotUntilProviderClose(
       created as unknown as IntegrationProvider,
-      packageRoot,
+      snapshot,
     );
     retainSnapshot = true;
     return { manifest: packageManifest, bundledFiles, provider };
   } finally {
-    if (!retainSnapshot) await removeProductionPackageSnapshot(packageRoot);
+    if (!retainSnapshot) await snapshot.close();
   }
 }
 
@@ -573,6 +578,7 @@ export async function loadProductionPackageForTest(
 
 async function loadProductionPackages(
   loaders: ReadonlyArray<() => Promise<IntegrationPackage>>,
+  bootReportPath?: string,
 ): Promise<ReadonlyArray<IntegrationPackage>> {
   const loaded: Array<IntegrationPackage> = [];
   try {
@@ -582,6 +588,19 @@ async function loadProductionPackages(
       } catch (error) {
         if (!(error instanceof PluginSdkQuarantineError)) throw error;
       }
+    }
+    if (bootReportPath) {
+      // The desktop only persists child stderr on failure. The packaged-boot verifier
+      // requests a private receipt instead; reporting must never disable healthy providers.
+      await NodeFSP.writeFile(
+        bootReportPath,
+        JSON.stringify({
+          version: 1,
+          pid: process.pid,
+          pluginIds: loaded.map(({ manifest }) => manifest.id),
+        }),
+        { mode: 0o600 },
+      ).catch(() => undefined);
     }
     return loaded;
   } catch (error) {
@@ -594,8 +613,9 @@ async function loadProductionPackages(
 
 export async function loadProductionPackagesForTest(
   loaders: ReadonlyArray<() => Promise<IntegrationPackage>>,
+  bootReportPath?: string,
 ): Promise<ReadonlyArray<IntegrationPackage>> {
-  return loadProductionPackages(loaders);
+  return loadProductionPackages(loaders, bootReportPath);
 }
 
 export async function loadProductionIntegrations(
@@ -611,7 +631,7 @@ export async function loadProductionIntegrations(
       throw new Error("Built-in plugin composition has an unsupported contract or provenance.");
     }
     const configuration = validateBuildConfiguration(buildComposition, buildConfiguration);
-    return await loadProductionPackages(
+    const packages = await loadProductionPackages(
       buildComposition.packages.map((plugin) => {
         const composedPackageRoot = NodePath.join(
           import.meta.dirname,
@@ -622,7 +642,9 @@ export async function loadProductionIntegrations(
         return () =>
           loadProductionPackage(composedPackageRoot, plugin, secrets, configuration[plugin.id]!);
       }),
+      process.env.TRITONAI_PLUGIN_BOOT_REPORT_PATH,
     );
+    return packages;
   } catch {
     // Build-time validation should make this unreachable. If signed resources are corrupted or a
     // proof contract drifts, keep the core product available and disable the complete integration

@@ -37,17 +37,207 @@ The workflow:
 6. asks that Installer commit to resolve and prepare its reviewed, digest-bound production
    managed-plugin catalog;
 7. aligns package versions in the isolated build checkout;
-8. builds the Windows x64 NSIS Harness artifact;
-9. selects signed Windows mode when all Azure inputs exist; with zero Azure inputs, selects unsigned
-   mode only when `TRITONAI_ALLOW_UNSIGNED_WINDOWS_RELEASE=1`; partial Azure configuration fails;
+8. authenticates the Windows runner through GitHub OIDC;
+9. builds and signs the Windows x64 NSIS Harness artifact, then verifies its publisher and timestamp;
 10. finalizes the managed-plugin composition proof;
 11. uploads the required Windows installer, blockmap, updater metadata, and composition proof;
-12. verifies the release is still a draft and only then publishes it;
+12. downloads the final draft assets and verifies both updater manifests, artifact hashes,
+    matching plugin composition, Mac ZIP permissions, and the source tag before publication;
 13. updates version metadata on `main` and announces the release after publication succeeds.
 
-The standard public GitHub runner workflow does not build macOS Harness assets. Verified macOS
-assets are produced through the controlled local signed/notarized release path and attached to the
-draft before it is published.
+The stable release workflow keeps its controlled local macOS packaging path. The separate
+`nightly.yml` workflow builds macOS and Windows on standard GitHub-hosted runners; it cannot
+publish a stable release or update stable version metadata.
+
+## Local source staging and release scope
+
+The Installer repository's `release:local` command supports `--scope harness` for Harness-only
+candidates and defaults to `--scope full` for Harness plus Installer. Harness-only preparation
+still consumes the pinned Installer-owned plugin catalog and composition producer, but skips
+Installer dependencies, app compilation, tests, packaging, and secure skills checkout.
+
+On macOS that runner invokes this repository's artifact builder with `--platform mac --target zip
+--arch arm64 --keep-stage --stage-only`. This prepares source and runtime dependencies plus the
+managed-plugin composition input proof; it returns before Electron Builder and emits no release
+artifacts. The matching local finalizer packages/signs the retained stage once, then runs
+`scripts/verify-macos-desktop-package.ts` against the signed app to enforce the same update-config
+and native-binary checks as ordinary artifact builds. It still verifies signed/notarized DMG and
+ZIP payloads, packaged boot, and final composition proofs. A retained stage is not release proof.
+
+`--stage-only` requires a retained Mac arm64 ZIP stage with signing and mock updates disabled in the
+source-preparation command. Normal artifact builds retain their existing behavior. Use matching
+Harness and Installer revisions when adopting this split.
+
+Harness has a separate nightly workflow. Installer remains a full-release-only product. The
+local release runner still defaults to full stable releases; nightly CI reuses its pinned Mac
+finalizer without invoking Installer app packaging.
+
+## Nightly identity and artwork
+
+Nightly candidates must use `BASE-nightly.YYYYMMDD.RUN` in every releasable package before
+compilation. A GitHub prerelease flag or a nightly release title alone does not select the
+runtime stage. In a fresh isolated checkout, prepare them with:
+
+```sh
+node scripts/resolve-nightly-release.ts --date 20260912 --run-number 1 --sha COMMIT_SHA --prepare --github-output
+```
+
+Omit `--github-output` outside Actions. The command derives the next patch version from the
+checked-out desktop package, writes it to desktop/server/web/contracts manifests, and emits
+`release_channel=nightly`, `version`, and `tag`. Run preparation once per fresh checkout and
+use the emitted version throughout packaging. The artifact builder rejects mixed stable and
+nightly source versions so a nightly package cannot silently ship stable server/sidebar branding.
+
+The existing Nightly runtime stage selects the starry sidebar header (with environment
+identification set to its default Artwork mode), the Nightly app name, and nightly updates.
+Explicit user settings that hide artwork remain respected. Nightly asset paths now select the
+TritonAI starry logo, while stable and development assets keep their respective designs.
+See [nightly artwork source and exports](../../assets/nightly/README.md).
+
+macOS Nightly must retain the historical `edu.ucsd.tritonai.harness` bundle ID.
+Squirrel.Mac checks the replacement against the installed app's signing requirement,
+so changing that ID breaks updates from earlier Nightly installations. Windows keeps
+its separate `.nightly` app ID; the Nightly package name and data directory remain
+separate on both platforms. Nightly `20260915.16` shipped the incompatible macOS ID;
+users who manually installed that build need a separate recovery path. Validate
+Mac release changes with an actual previous-version download, install, and relaunch,
+in addition to packaged boot checks.
+
+Before replacing an older installed Nightly, verify the signed updater ZIP against
+that app's actual designated requirement. This read-only fixture checks the same
+signing identity boundary used by Squirrel.Mac, including the signing team:
+
+```sh
+reference_app="/Applications/TritonAI Harness (Nightly).app"
+candidate_zip="/absolute/path/to/TritonAI-Harness-VERSION-arm64.zip"
+candidate_dir="$(mktemp -d)"
+ditto -x -k "$candidate_zip" "$candidate_dir"
+candidate_app="$candidate_dir/TritonAI Harness (Nightly).app"
+requirement="$(codesign -d -r- "$reference_app" 2>&1 | sed -n 's/^designated => //p')"
+test -n "$requirement" || exit 1
+codesign --verify --deep --strict "$candidate_app" &&
+  codesign --verify --strict "-R=$requirement" "$candidate_app"
+```
+
+Use an untouched `20260912.12` installation as the reference for this regression.
+The published `20260915.16` ZIP passes the first signature check but fails the
+second requirement check with `code failed to satisfy specified code requirement(s)`.
+A compatible replacement must pass both. This fixture does not replace the subsequent
+in-app download, quit, installation, and relaunch test.
+
+Manual dispatch of the stable release workflow rejects Nightly versions. The dedicated hosted
+workflow below owns scheduling and nightly publication. The current
+local Installer runner still accepts stable versions only; its Mac finalizer separately accepts
+dated nightly versions for use by CI.
+
+## Hosted nightly workflow
+
+`.github/workflows/nightly.yml` uses standard `macos-15`, `windows-2025`, and `ubuntu-24.04`
+runners. It has no stable channel input, no npm publication, no Installer build, and no stable
+version commit step. Publication rejects non-nightly tags and non-default branches, always sets
+`prerelease=true` and `make_latest=false`, and verifies that GitHub's stable latest release did
+not change. The native publication tests explicitly reject `v0.3.4`.
+
+Nightly publication leaves a new tag absent until the fully verified draft is published.
+It checks the draft's exact source SHA and revalidates any existing tag after uploads.
+Creating a bare Nightly tag early exposes it in GitHub's Atom feed while its draft update
+assets still return 404. Withdrawing an already published Nightly to draft can leave the
+same broken feed entry; do not treat that action alone as a completed rollback. Verify
+the public feed and manifest URLs after any release withdrawal.
+
+Manual proof run (builds and verifies both platforms without publishing):
+
+```sh
+gh workflow run nightly.yml --ref main -f publish=false
+```
+
+Manual nightly publication after the proof is healthy:
+
+```sh
+gh workflow run nightly.yml --ref main -f publish=true
+```
+
+The daily check is at **08:17 UTC**: about **01:17 Pacific daylight time / 00:17 Pacific standard
+time**. GitHub can delay scheduled jobs. Scheduled builds require repository variable
+`TRITONAI_NIGHTLY_ENABLED=1`; unset it or set it to `0` to pause them. An unchanged source commit
+is skipped based on the last published nightly's resolved tag commit. Manual runs can rebuild
+an unchanged commit. Pushes to the implementation branch run verification only.
+
+Naming follows upstream T3 Code: `vNEXT_PATCH-nightly.YYYYMMDD.RUN_NUMBER`, with UTC date and the
+GitHub run number. Because downstream package metadata can lag publication, CI uses the latest
+published stable release as the baseline before calling the existing nightly resolver. For
+example, stable `v0.3.3` produces `v0.3.4-nightly.20260912.42`, never stable `v0.3.4`.
+
+### Nightly inputs
+
+The workflow pins its Installer-owned composition producer and Mac finalizer with the exact
+`NIGHTLY_INSTALLER_COMMIT` constant. That commit's reviewed plugin catalog supplies package IDs,
+versions, and digests. Preparation happens before provider validation; validation runs on a
+separate runner without signing or publication credentials. Packaging consumes that immutable
+snapshot and its validation receipt. This does not change stable release repository variables.
+
+Required repository secrets (values are never committed):
+
+- `NIGHTLY_PLUGIN_CONFIGURATION_JSON`: exact configuration for the pinned plugin catalog.
+- `NIGHTLY_UCSD_AI_BASE_URL`: managed API base URL.
+- `NIGHTLY_MAC_CERTIFICATE`: base64-encoded Developer ID PKCS#12 identity.
+- `NIGHTLY_MAC_CERTIFICATE_PASSWORD`: PKCS#12 password.
+- `NIGHTLY_DEVELOPER_ID_APPLICATION`: expected Developer ID Application signer.
+- `NIGHTLY_APPLE_API_KEY`, `NIGHTLY_APPLE_API_KEY_ID`, `NIGHTLY_APPLE_API_ISSUER`: notarization key and identifiers.
+
+Mac signing uses a temporary runner keychain, removes signing inputs afterward, and verifies
+signatures, notarization, Gatekeeper, plugin payloads, and isolated packaged-app boot before
+upload. Windows nightlies require Azure OIDC authentication, signed artifacts, matching publisher,
+and an Authenticode timestamp. Missing configuration or signing failures stop the build.
+Stable Windows releases use the same OIDC signing policy.
+
+The notarization key is created with a private umask in a subshell; app packaging
+runs with `022`. The extracted signed updater ZIP must be readable
+by other users, with traversable directories and runnable executables. Otherwise
+an administrator-owned installation can appear empty and fail to relaunch even
+though signing and a boot test under the build account passed. This gate does
+not remove ShipIt or suppress administrator authorization for protected installs.
+
+Both platform jobs must pass along with quality checks before the read-only artifact gate
+verifies exact filenames, byte sizes, hashes, nightly updater metadata, matching plugin
+compositions, and platform reports. Only then can the publisher create a draft, upload assets,
+and publish the nightly. The publisher verifies uploaded asset names, sizes, completion state,
+and SHA-256 digests against the validated local bytes, then verifies the Git tag before making
+the draft public. A missing tag is created at the verified source commit; an existing tag at
+another commit is rejected. Actions artifacts expire after three days. Failure before publication
+leaves a private nightly draft; inspect it before removing that failed draft and rerunning.
+Failure in a post-publication check can leave the release public: verify the actual release and
+feed state before taking recovery action. Published nightlies are never overwritten by the publisher.
+
+### Desktop update failure boundaries
+
+Nightly checks allow downgrades within the Nightly track so its feed can offer an older release.
+Stable checks disable downgrades. Packaged apps stay on their installed track; unpackaged mock
+tooling retains an explicit channel-switch override. Account for older-version selection when
+withdrawing a Nightly release or repairing its feed.
+
+On macOS, a completed ZIP transfer is not installation readiness. The desktop waits for the
+native Squirrel `update-downloaded` acknowledgement before offering restart. Further checks
+are deferred while that native installer is staged, so a refresh cannot invalidate it.
+Installation stops running backends but leaves windows intact for the updater to close.
+An install failure restores those backends. The primary backend's readiness callback recreates
+the main window if the native updater already closed it. Native failure after window closure,
+including subsequent window-close and quit behavior, still requires an installed-app fault test.
+
+macOS Stable and legacy Nightly still share the native ShipIt bundle identity and cache.
+Separate JavaScript updater caches and profiles do not isolate that native installer. Do not
+claim concurrent native updates are proven safe. Changing the bundle ID directly breaks the
+legacy downloader, which matches both bundle ID and signing requirements. An automatic bridge
+migration must be validated before changing this packaging contract; a direct installer probe
+does not prove the complete download, quit, replacement, and relaunch sequence.
+
+### First hosted proof
+
+[Run 34678772820](https://github.com/dbalders/TritonAI-Harness/actions/runs/34678772820) proved the
+unsigned Mac ARM64 package on a standard hosted runner: approximately 5m09s total, including a
+3m28s artifact build. This is not a signed/full-release benchmark. Initial checkout failed due
+to an unmapped vendored gitlink; the root `.gitmodules` mapping fixes credential cleanup without
+modifying the vendored source or retaining checkout credentials.
 
 ## Draft-first publication sequence
 
@@ -56,10 +246,9 @@ draft before it is published.
 3. Create the exact tag and an unpublished GitHub draft for it.
 4. Attach the verified local assets to the draft.
 5. Push the tag or dispatch the workflow for that version.
-6. Wait for preflight, Windows build, selected trust-mode boot proof, managed-plugin proof, and required-asset checks.
-7. Let the workflow validate Authenticode publisher identity and timestamps for signed releases, or
-   validate unsigned status for explicitly unsigned releases, then attach Windows assets and publish
-   the draft.
+6. Wait for preflight, signed Windows build, installed-app boot proof, managed-plugin proof, and required-asset checks.
+7. Let the workflow validate Authenticode publisher identity and timestamps, then attach verified
+   Windows assets and publish the draft.
 8. Verify the published release state and downloaded asset identities.
 9. Only then build and publish TritonAI Installer against those exact Harness assets.
 
@@ -88,23 +277,49 @@ same managed plugins without running TritonAI Installer.
 
 ## Windows signing
 
-Signed Windows artifacts require all of:
+### Stable and nightly GitHub OIDC setup
 
-- `AZURE_TENANT_ID`
-- `AZURE_CLIENT_ID`
-- `AZURE_CLIENT_SECRET`
-- `AZURE_TRUSTED_SIGNING_ENDPOINT`
-- `AZURE_TRUSTED_SIGNING_ACCOUNT_NAME`
-- `AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME`
-- `AZURE_TRUSTED_SIGNING_PUBLISHER_NAME`
+Both stable and nightly Windows jobs use the `windows-signing` GitHub environment and `azure/login`.
+Create an Entra app registration and service principal dedicated to Harness releases, then add
+an OIDC federated credential with issuer `https://token.actions.githubusercontent.com`, audience
+`api://AzureADTokenExchange`, and subject
+`repo:dbalders/TritonAI-Harness:environment:windows-signing`.
+Assign that service principal **Artifact Signing Certificate Profile Signer** at this resource:
 
-When all seven values exist, the workflow signs the artifact, verifies every EXE with Authenticode,
-checks its timestamp and publisher identity, then installs and boots the exact package. When none
-exist, repository variable `TRITONAI_ALLOW_UNSIGNED_WINDOWS_RELEASE=1` authorizes an explicitly
-unsigned artifact, and the workflow verifies that both the installer and installed executable are
-actually unsigned before boot testing. A partial signing configuration fails closed; without the
-explicit opt-in, zero signing inputs also fail closed. The workflow never silently falls back from
-a broken signed setup to unsigned mode. Unsigned downloads may trigger Microsoft Defender SmartScreen.
+```text
+/subscriptions/3e0cad08-e45d-4882-a3aa-c1504d4e5017/resourceGroups/TritonAI/providers/Microsoft.CodeSigning/codeSigningAccounts/ucsd-tritonai-signing/certificateProfiles/tritonai-public
+```
+
+Create the `windows-signing` environment in GitHub Settings > Environments. Allow deployments from `main` and release tags matching `v*.*.*` (configure separate branch and tag rules); temporarily permit the reviewed signing branch for the first non-publishing test,
+then remove that exception. Configure these environment variables:
+
+| Variable                                         | Value                                         |
+| ------------------------------------------------ | --------------------------------------------- |
+| `AZURE_CLIENT_ID`                                | Application ID of the dedicated Entra app     |
+| `AZURE_TENANT_ID`                                | `8a198873-4fec-4e76-8182-ca479edbbd60`        |
+| `AZURE_SUBSCRIPTION_ID`                          | `3e0cad08-e45d-4882-a3aa-c1504d4e5017`        |
+| `AZURE_TRUSTED_SIGNING_ENDPOINT`                 | `https://wus2.codesigning.azure.net/`         |
+| `AZURE_TRUSTED_SIGNING_ACCOUNT_NAME`             | `ucsd-tritonai-signing`                       |
+| `AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME` | `tritonai-public`                             |
+| `AZURE_TRUSTED_SIGNING_PUBLISHER_NAME`           | `The Regents of the University of California` |
+
+No client secret is needed. The packager uses `AZURE_TRUSTED_SIGNING_USE_AZURE_CLI=true`
+to accept the authenticated runner session. Signing still fails if that session cannot sign.
+Electron Builder signs during packaging, before generating updater hashes and blockmaps.
+The runner checks signatures and timestamps, installs and boots the package, and the final
+nightly artifact gate rejects unsigned Windows reports. Stable publication depends on the successful
+signed Windows build and its installed-app verification.
+
+First dispatch `nightly.yml` from the reviewed branch with `publish=false`. Confirm the Windows
+signing, Authenticode, installed-app boot, and final artifact gates pass. Only then merge and
+allow scheduled publication. Local tests cannot establish Azure permissions or Windows trust.
+
+Stable tag-triggered runs require the tag rule on the environment; allowing `main` alone does not
+allow tag deployments. Manual stable runs retain their controlled draft and tagged-source checks.
+Do not dispatch the stable workflow as a dry run: it publishes the controlled release after its
+gates pass. Use the non-publishing nightly proof first; validate stable signing during an authorized
+controlled release. The shared packager still supports client-secret authentication for local callers,
+but neither GitHub release workflow uses it or permits unsigned fallback.
 
 ## Required release assets
 

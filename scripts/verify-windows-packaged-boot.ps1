@@ -6,6 +6,8 @@ param(
 
   [switch]$AllowUnsigned,
 
+  [string[]]$ExpectedPluginIds = @(),
+
   [int]$WindowTimeoutSeconds = 45,
   [int]$HealthyRuntimeSeconds = 20
 )
@@ -95,7 +97,10 @@ Assert-TritonAIArtifactTrust -ExecutablePath $appPath
 $runtimeHome = Join-Path $env:RUNNER_TEMP "tritonai-packaged-boot-$PID"
 New-Item -ItemType Directory -Path $runtimeHome -Force | Out-Null
 $previousRuntimeHome = $env:TRITONAI_HOME
+$previousPluginBootReport = $env:TRITONAI_PLUGIN_BOOT_REPORT_PATH
 $env:TRITONAI_HOME = $runtimeHome
+$pluginBootReport = Join-Path $runtimeHome "plugins-$([guid]::NewGuid().ToString('N')).json"
+$env:TRITONAI_PLUGIN_BOOT_REPORT_PATH = $pluginBootReport
 $app = $null
 
 try {
@@ -125,12 +130,18 @@ try {
     throw "Installed Harness exited during the $HealthyRuntimeSeconds-second packaged runtime probe (exit code $($app.ExitCode))."
   }
 
-  $logRoot = Join-Path $runtimeHome "userdata\logs"
-  if (-not (Test-Path -LiteralPath $logRoot -PathType Container)) {
-    throw "Installed Harness did not create its runtime log directory: $logRoot"
+  $logRoots = @(
+    foreach ($relativePath in @("userdata\logs", "nightly\userdata\logs")) {
+      $candidate = Join-Path $runtimeHome $relativePath
+      if (Test-Path -LiteralPath $candidate -PathType Container) { $candidate }
+    }
+  )
+  if ($logRoots.Count -ne 1) {
+    throw "Installed Harness did not create exactly one runtime log directory under $runtimeHome."
   }
+  $logRoot = $logRoots[0]
 
-  $fatalPattern = "Cannot find module|MODULE_NOT_FOUND|The local Harness service failed [0-9]+ times|ffi-rs.*(missing|failed|error)"
+  $fatalPattern = "Cannot find module|MODULE_NOT_FOUND|The local Harness service failed [0-9]+ times|ffi-rs.*(missing|failed|error)|Managed plugin composition verification failed"
   $fatalMatches = @(
     Get-ChildItem -LiteralPath $logRoot -File -Recurse -ErrorAction SilentlyContinue |
       Select-String -Pattern $fatalPattern -ErrorAction SilentlyContinue
@@ -140,11 +151,25 @@ try {
     throw "Installed Harness logged a fatal packaged-runtime failure:`n$details"
   }
 
+  if ($ExpectedPluginIds.Count -gt 0) {
+    $expected = ($ExpectedPluginIds | Sort-Object -Unique) -join ","
+    if (-not (Test-Path -LiteralPath $pluginBootReport -PathType Leaf)) {
+      throw "Installed Harness did not report its loaded managed plugins."
+    }
+    $report = Get-Content -LiteralPath $pluginBootReport -Raw | ConvertFrom-Json
+    $loaded = ($report.pluginIds | Sort-Object -Unique) -join ","
+    if ($report.version -ne 1 -or $loaded -ne $expected) {
+      throw "Installed Harness did not load the expected managed plugins: $expected"
+    }
+    Get-Process -Id $report.pid -ErrorAction Stop | Out-Null
+  }
+
   Write-Host "Installed, signature-verified, opened, and sustained TritonAI Harness from $appPath."
 } finally {
   if ($null -ne $app) {
     Invoke-TritonAIProcessTreeTermination -Process $app
   }
   $env:TRITONAI_HOME = $previousRuntimeHome
+  $env:TRITONAI_PLUGIN_BOOT_REPORT_PATH = $previousPluginBootReport
   Remove-Item -LiteralPath $runtimeHome -Recurse -Force -ErrorAction SilentlyContinue
 }

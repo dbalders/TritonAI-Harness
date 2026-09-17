@@ -4,7 +4,8 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 
-import { autoUpdater } from "electron-updater";
+import { autoUpdater, MacUpdater } from "electron-updater";
+import { autoUpdater as nativeAutoUpdater } from "electron";
 
 type AutoUpdater = typeof autoUpdater;
 
@@ -133,7 +134,38 @@ export const make = ElectronUpdater.of({
   downloadUpdate: Effect.suspend(() => {
     const channel = autoUpdater.channel;
     return Effect.tryPromise({
-      try: () => autoUpdater.downloadUpdate(),
+      try: async (signal) => {
+        if (!(autoUpdater instanceof MacUpdater)) return autoUpdater.downloadUpdate();
+        // electron-updater finishes when the ZIP has been served, before Squirrel
+        // has validated and staged it. Keep the action pending until native readiness.
+        let cleanup = () => {};
+        const ready = new Promise<void>((resolve, reject) => {
+          const onReady = () => resolve();
+          const onError = (error: Error) => reject(error);
+          const onAbort = () => reject(signal.reason);
+          nativeAutoUpdater.once("update-downloaded", onReady);
+          nativeAutoUpdater.once("error", onError);
+          signal.addEventListener("abort", onAbort, { once: true });
+          cleanup = () => {
+            nativeAutoUpdater.removeListener("update-downloaded", onReady);
+            nativeAutoUpdater.removeListener("error", onError);
+            signal.removeEventListener("abort", onAbort);
+          };
+          if (signal.aborted) onAbort();
+        });
+        try {
+          await Promise.all([
+            ready,
+            Promise.resolve().then(() => {
+              signal.throwIfAborted();
+              return autoUpdater.downloadUpdate();
+            }),
+          ]);
+          return [];
+        } finally {
+          cleanup();
+        }
+      },
       catch: (cause) => new ElectronUpdaterDownloadUpdateError({ channel, cause }),
     }).pipe(Effect.asVoid);
   }),
@@ -157,6 +189,32 @@ export const make = ElectronUpdater.of({
       removeListener: (eventName: string, listener: (...args: Array<unknown>) => void) => void;
     };
     const untypedListener = listener as unknown as (...args: Array<unknown>) => void;
+    if (eventName === "update-downloaded" && autoUpdater instanceof MacUpdater) {
+      return Effect.acquireRelease(
+        Effect.sync(() => {
+          let pending: Array<unknown> | undefined;
+          const onDownloaded = (...args: Array<unknown>) => {
+            pending = args;
+          };
+          const onError = () => {
+            pending = undefined;
+          };
+          const onReady = () => {
+            if (pending) untypedListener(...pending);
+            pending = undefined;
+          };
+          eventTarget.on(eventName, onDownloaded);
+          nativeAutoUpdater.on("update-downloaded", onReady);
+          nativeAutoUpdater.on("error", onError);
+          return () => {
+            eventTarget.removeListener(eventName, onDownloaded);
+            nativeAutoUpdater.removeListener("update-downloaded", onReady);
+            nativeAutoUpdater.removeListener("error", onError);
+          };
+        }),
+        (cleanup) => Effect.sync(cleanup),
+      ).pipe(Effect.asVoid);
+    }
     return Effect.acquireRelease(
       Effect.sync(() => {
         eventTarget.on(eventName, untypedListener);

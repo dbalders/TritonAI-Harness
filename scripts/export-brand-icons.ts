@@ -16,6 +16,8 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { BRAND_ASSET_PATHS, DEVELOPMENT_PUBLIC_ICON_OVERRIDES } from "./lib/brand-assets.ts";
 import { encodePngIco, readPngDimensions, WINDOWS_ICON_SIZES } from "./lib/icon-export.ts";
 
+import { renderNightlyIconAssets } from "./lib/nightly-icon-export.ts";
+
 const DESIGN_GENERATION = 26;
 const ICON_COMPOSER_EXECUTABLE_PARTS = [
   "Contents",
@@ -215,20 +217,6 @@ const ICON_VARIANTS = [
       favicon32: BRAND_ASSET_PATHS.developmentWebFavicon32Png,
       faviconIco: BRAND_ASSET_PATHS.developmentWebFaviconIco,
       windowsIco: BRAND_ASSET_PATHS.developmentWindowsIconIco,
-    },
-  },
-  {
-    label: "preview",
-    source: BRAND_ASSET_PATHS.nightlyIconComposerProject,
-    outputs: {
-      ios: BRAND_ASSET_PATHS.nightlyIosIconPng,
-      macos: BRAND_ASSET_PATHS.nightlyMacIconPng,
-      universal: BRAND_ASSET_PATHS.nightlyLinuxIconPng,
-      appleTouch: BRAND_ASSET_PATHS.nightlyWebAppleTouchIconPng,
-      favicon16: BRAND_ASSET_PATHS.nightlyWebFavicon16Png,
-      favicon32: BRAND_ASSET_PATHS.nightlyWebFavicon32Png,
-      faviconIco: BRAND_ASSET_PATHS.nightlyWebFaviconIco,
-      windowsIco: BRAND_ASSET_PATHS.nightlyWindowsIconIco,
     },
   },
   {
@@ -725,6 +713,7 @@ const isCurrent = Effect.fn("iconExport.isCurrent")(function* (
 export const exportBrandIcons = Effect.fn("exportBrandIcons")(function* (checkOnly: boolean) {
   const fs = yield* FileSystem.FileSystem;
   const repositoryRoot = yield* RepositoryRoot;
+  const path = yield* Path.Path;
   const tool = yield* resolveIconComposerTool();
   const temporaryDirectory = yield* fs
     .makeTempDirectoryScoped({
@@ -744,7 +733,14 @@ export const exportBrandIcons = Effect.fn("exportBrandIcons")(function* (checkOn
     `Exporting icons with Icon Composer ${tool.version}, design generation ${DESIGN_GENERATION}.`,
   );
 
-  const generated = new Map<string, Buffer>();
+  // Nightly uses the approved raster master, retaining its circular silhouette.
+  const nightlyMaster = yield* fs.readFile(
+    path.join(repositoryRoot, BRAND_ASSET_PATHS.nightlyMacIconPng),
+  );
+  const generated = yield* Effect.try({
+    try: () => renderNightlyIconAssets(Buffer.from(nightlyMaster)),
+    catch: (cause) => new IconExportEncodingError({ variant: "nightly", cause }),
+  });
   for (const variant of ICON_VARIANTS) {
     yield* Console.log(`Rendering ${variant.label} from ${variant.source}...`);
     const variantAssets = yield* renderVariant(

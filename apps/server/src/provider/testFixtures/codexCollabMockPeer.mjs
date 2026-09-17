@@ -98,6 +98,8 @@ rl.on("line", (line) => {
             ...fixture.responses.threadStart.thread,
             id: threadId,
             sessionId: threadId,
+            agentNickname: childSnapshot.nickname ?? null,
+            agentRole: childSnapshot.role ?? null,
           },
         },
       });

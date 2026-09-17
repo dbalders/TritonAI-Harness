@@ -63,6 +63,7 @@ import {
   resolveDesktopProductName,
   resolveDesktopRuntimeDependencies,
   resolveDesktopUpdateChannel,
+  assertNightlySourceVersions,
   resolveDesktopWebAssetBrand,
   resolveFffNativeDependencies,
   resolveFfiRsNativeArtifacts,
@@ -263,6 +264,7 @@ function iconResizeSpawnerLayer(
 const makeWindowsPayloadFixture = Effect.fn("test.makeWindowsPayloadFixture")(function* (input: {
   readonly copyUnpackedNatives: boolean;
   readonly serverEntrySource?: string;
+  readonly pluginRuntimeVersion?: string;
   readonly wslRuntime?: "valid" | "forbidden" | "bad-digest";
 }) {
   const fs = yield* FileSystem.FileSystem;
@@ -277,6 +279,18 @@ const makeWindowsPayloadFixture = Effect.fn("test.makeWindowsPayloadFixture")(fu
   yield* fs.makeDirectory(path.dirname(nativePath), { recursive: true });
   yield* fs.writeFileString(serverEntryPath, input.serverEntrySource ?? "console.log('server');\n");
   yield* fs.writeFileString(nativePath, "native-binary");
+  if (input.pluginRuntimeVersion !== undefined) {
+    const effectRoot = path.join(sourceDir, "node_modules/effect");
+    yield* fs.makeDirectory(path.join(effectRoot, "dist"), { recursive: true });
+    yield* fs.writeFileString(
+      path.join(effectRoot, "package.json"),
+      `{"name":"effect","version":"${input.pluginRuntimeVersion}"}`,
+    );
+    yield* fs.writeFileString(
+      path.join(effectRoot, "dist/index.js"),
+      "export const Effect = {};\n",
+    );
+  }
 
   const generatedAsarPath = path.join(tempDir, WINDOWS_SERVER_ASAR_RESOURCE);
   yield* packWindowsServerAsar({ sourceDir, asarPath: generatedAsarPath, arch: "x64" });
@@ -369,6 +383,32 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.equal(resolveDesktopUpdateChannel("0.0.17-nightly.20260413.42"), "nightly");
     assert.equal(resolveDesktopUpdateChannel("0.0.17"), "latest");
   });
+
+  it.effect(
+    "rejects a nightly label over stable sources and mismatched nightly source packages",
+    () =>
+      Effect.gen(function* () {
+        const nightly = "0.3.4-nightly.20260912.1";
+        yield* assertNightlySourceVersions(nightly, {
+          desktop: nightly,
+          server: nightly,
+          web: nightly,
+        });
+        yield* assertNightlySourceVersions("0.3.4", {
+          desktop: "0.3.3",
+          server: "0.3.4",
+          web: "0.3.3",
+        });
+        for (const [artifact, packages] of [
+          [nightly, { desktop: "0.3.3", server: "0.3.3", web: "0.3.3" }],
+          [nightly, { desktop: nightly, server: nightly, web: "0.3.3" }],
+          ["0.3.4", { desktop: nightly, server: nightly, web: nightly }],
+        ] as const) {
+          const error = yield* Effect.flip(assertNightlySourceVersions(artifact, packages));
+          assert.equal(error._tag, "NightlySourceVersionMismatchError");
+        }
+      }),
+  );
 
   it("switches desktop packaging product names to nightly for nightly builds", () => {
     assert.equal(resolveDesktopProductName("0.0.17"), "TritonAI Harness");
@@ -1138,6 +1178,33 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     ),
   );
 
+  it.effect("requires the matching plugin host runtime in the final Windows archive", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        for (const pluginRuntimeVersion of [undefined, "4.0.0-beta.78", "4.0.0-beta.103"]) {
+          const fixture = yield* makeWindowsPayloadFixture({
+            copyUnpackedNatives: true,
+            ...(pluginRuntimeVersion ? { pluginRuntimeVersion } : {}),
+          });
+          const check = validateWindowsPackagedPayload({
+            stageDistDir: fixture.stageDistDir,
+            appExecutableName: fixture.appExecutableName,
+            targetArch: "x64",
+            managedPluginRuntimeVersion: "4.0.0-beta.103",
+          });
+          if (pluginRuntimeVersion === "4.0.0-beta.103") {
+            const result = yield* check;
+            assert.isBelow(result.fileCount, WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT);
+          } else {
+            const error = yield* check.pipe(Effect.flip);
+            assert.instanceOf(error, WindowsPackagedPayloadValidationError);
+            assert.equal(error.reason, "sidecar-invalid");
+          }
+        }
+      }),
+    ),
+  );
+
   it.effect("rejects a Windows package missing its expected WSL runtime", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -1870,6 +1937,45 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
   );
 
+  for (const platform of ["win", "mac"] as const) {
+    it.effect(`preserves update-compatible app IDs and separate Nightly names on ${platform}`, () =>
+      Effect.gen(function* () {
+        const stable = yield* createBuildConfig(
+          platform,
+          platform === "win" ? "nsis" : "dmg",
+          "0.3.3",
+          false,
+          false,
+          undefined,
+          undefined,
+        );
+        const nightly = yield* createBuildConfig(
+          platform,
+          platform === "win" ? "nsis" : "dmg",
+          "0.3.4-nightly.20260912.12",
+          false,
+          false,
+          undefined,
+          undefined,
+        );
+        assert.equal(stable.appId, "edu.ucsd.tritonai.harness");
+        assert.equal(
+          nightly.appId,
+          platform === "mac" ? "edu.ucsd.tritonai.harness" : "edu.ucsd.tritonai.harness.nightly",
+        );
+        assert.deepEqual(stable.extraMetadata, { name: "tritonai-harness" });
+        assert.deepEqual(nightly.extraMetadata, { name: "tritonai-harness-nightly" });
+        assert.equal(stable.productName, "TritonAI Harness");
+        assert.equal(nightly.productName, "TritonAI Harness (Nightly)");
+        if (platform === "mac") {
+          assert.deepEqual((nightly.mac as Record<string, unknown>).protocols, [
+            { name: "TritonAI Harness", schemes: ["tritonai-harness-nightly"] },
+          ]);
+        }
+      }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
+    );
+  }
+
   it.effect("uses the nightly DMG background for nightly macOS builds", () =>
     Effect.gen(function* () {
       const config = yield* createBuildConfig(
@@ -1962,6 +2068,30 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
               AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: "ucsd-tritonai",
               AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME: "tritonai-release",
               AZURE_TRUSTED_SIGNING_PUBLISHER_NAME: "University of California San Diego",
+            },
+          }),
+        ),
+      ),
+    ),
+  );
+
+  it.effect("accepts an Azure CLI session without a client secret", () =>
+    Effect.gen(function* () {
+      const config = yield* resolveAzureTrustedSigningConfiguration();
+      assert.equal(config.certificateProfileName, "tritonai-public");
+      assert.equal(config.timestampDigest, "SHA256");
+    }).pipe(
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromEnv({
+            env: {
+              AZURE_TRUSTED_SIGNING_USE_AZURE_CLI: "true",
+              AZURE_TENANT_ID: "tenant",
+              AZURE_CLIENT_ID: "client",
+              AZURE_TRUSTED_SIGNING_ENDPOINT: "https://wus2.codesigning.azure.net/",
+              AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: "ucsd-tritonai-signing",
+              AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME: "tritonai-public",
+              AZURE_TRUSTED_SIGNING_PUBLISHER_NAME: "The Regents of the University of California",
             },
           }),
         ),
@@ -2547,6 +2677,40 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     );
   });
 
+  it.effect("allows source staging only for a retained, externally finalized Mac ZIP", () =>
+    Effect.gen(function* () {
+      const input = {
+        platform: Option.some("mac" as const),
+        target: Option.some("zip"),
+        arch: Option.some("arm64" as const),
+        buildVersion: Option.none<string>(),
+        outputDir: Option.none<string>(),
+        skipBuild: Option.none<boolean>(),
+        pluginConfigurationPrevalidated: Option.none<boolean>(),
+        pluginValidationReceipt: Option.none<string>(),
+        keepStage: Option.some(true),
+        stageOnly: Option.some(true),
+        signed: Option.some(false),
+        verbose: Option.none<boolean>(),
+        mockUpdates: Option.some(false),
+        mockUpdateServerPort: Option.none<number>(),
+        wslPrebuild: Option.none<string>(),
+      };
+      assert.equal((yield* resolveBuildOptions(input)).stageOnly, true);
+      for (const invalid of [
+        { keepStage: Option.some(false) },
+        { arch: Option.some("x64" as const) },
+        { signed: Option.some(true) },
+        { target: Option.some("dmg") },
+        { mockUpdates: Option.some(true) },
+        { platform: Option.some("win" as const) },
+      ]) {
+        const error = yield* Effect.flip(resolveBuildOptions({ ...input, ...invalid }));
+        assert.equal(error._tag, "InvalidDesktopStageOnlyOptionsError");
+      }
+    }),
+  );
+
   it.effect("resolves default platform and architecture from host references", () =>
     Effect.gen(function* () {
       const resolved = yield* resolveBuildOptions({
@@ -2559,6 +2723,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         pluginConfigurationPrevalidated: Option.none(),
         pluginValidationReceipt: Option.none(),
         keepStage: Option.none(),
+        stageOnly: Option.none(),
         signed: Option.none(),
         verbose: Option.none(),
         mockUpdates: Option.none(),
@@ -2601,6 +2766,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
             pluginConfigurationPrevalidated: Option.none(),
             pluginValidationReceipt: Option.none(),
             keepStage: Option.none(),
+            stageOnly: Option.none(),
             signed: Option.none(),
             verbose: Option.none(),
             mockUpdates: Option.none(),
@@ -2627,6 +2793,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         pluginConfigurationPrevalidated: Option.some(false),
         pluginValidationReceipt: Option.none(),
         keepStage: Option.some(false),
+        stageOnly: Option.some(false),
         signed: Option.some(false),
         verbose: Option.some(false),
         mockUpdates: Option.some(false),
@@ -2640,6 +2807,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
                 T3CODE_DESKTOP_SKIP_BUILD: "true",
                 T3CODE_DESKTOP_PLUGIN_CONFIGURATION_PREVALIDATED: "true",
                 T3CODE_DESKTOP_KEEP_STAGE: "true",
+                T3CODE_DESKTOP_STAGE_ONLY: "true",
                 T3CODE_DESKTOP_SIGNED: "true",
                 T3CODE_DESKTOP_VERBOSE: "true",
                 T3CODE_DESKTOP_MOCK_UPDATES: "true",
@@ -2652,6 +2820,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.equal(resolved.skipBuild, false);
       assert.equal(resolved.pluginConfigurationPrevalidated, false);
       assert.equal(resolved.keepStage, false);
+      assert.equal(resolved.stageOnly, false);
       assert.equal(resolved.signed, false);
       assert.equal(resolved.verbose, false);
       assert.equal(resolved.mockUpdates, false);

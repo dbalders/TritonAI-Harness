@@ -200,10 +200,17 @@ describe("ClientSettings sidebar", () => {
 });
 
 describe("ServerSettings thread settlement", () => {
-  it("defaults merge settlement on and inactivity settlement to three days", () => {
+  it("defaults merge settlement on and inactivity settlement to fourteen days", () => {
     const settings = decodeServerSettings({});
-    expect(settings.sidebarAutoSettleAfterDays).toBe(3);
+    expect(settings.sidebarAutoSettleAfterDays).toBe(14);
     expect(settings.sidebarAutoSettleOnMerge).toBe(true);
+  });
+
+  it("preserves a custom inactivity settlement threshold", () => {
+    expect(decodeServerSettings({ sidebarAutoSettleAfterDays: 30 })).toMatchObject({
+      sidebarAutoSettleAfterDays: 30,
+      sidebarAutoSettleOnMerge: true,
+    });
   });
 
   it("allows both automatic rules to be disabled", () => {

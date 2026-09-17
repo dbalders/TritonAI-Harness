@@ -79,6 +79,15 @@ export class DesktopUpdateActionInProgressError extends Schema.TaggedErrorClass<
   }
 }
 
+export class DesktopUpdateTrackMismatchError extends Schema.TaggedErrorClass<DesktopUpdateTrackMismatchError>()(
+  "DesktopUpdateTrackMismatchError",
+  { requestedChannel: DesktopUpdateChannelSchema },
+) {
+  override get message(): string {
+    return "Stable and Nightly are separate apps. Install the other app to use its update track.";
+  }
+}
+
 export class DesktopUpdateChannelPersistenceError extends Schema.TaggedErrorClass<DesktopUpdateChannelPersistenceError>()(
   "DesktopUpdateChannelPersistenceError",
   {
@@ -144,6 +153,7 @@ export type DesktopUpdateConfigureError = never;
 export const DesktopUpdateSetChannelError = Schema.Union([
   DesktopUpdateActionInProgressError,
   DesktopUpdateChannelPersistenceError,
+  DesktopUpdateTrackMismatchError,
 ]);
 export type DesktopUpdateSetChannelError = typeof DesktopUpdateSetChannelError.Type;
 export const isDesktopUpdateSetChannelError = Schema.is(DesktopUpdateSetChannelError);
@@ -256,8 +266,14 @@ export const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const desktopSettings = yield* DesktopAppSettings.DesktopAppSettings;
 
+  const installedChannel = resolveDefaultDesktopUpdateChannel(environment.appVersion);
+  const hasFixedUpdateTrack = environment.isPackaged && !environment.isDevelopment;
+
   const appUpdateYmlConfigRef = yield* Ref.make<Option.Option<AppUpdateYmlConfig>>(Option.none());
   const activeUpdateActionRef = yield* Ref.make<Option.Option<UpdateAction>>(Option.none());
+  const stoppedForInstallRef = yield* Ref.make<
+    ReadonlyArray<DesktopBackendPool.DesktopBackendInstance>
+  >([]);
   const updaterConfiguredRef = yield* Ref.make(false);
   const lastLoggedDownloadMilestoneRef = yield* Ref.make(-1);
   const updateStateRef = yield* Ref.make<DesktopUpdateState>(
@@ -359,7 +375,10 @@ export const make = Effect.gen(function* () {
     if (!(yield* Ref.get(updaterConfiguredRef))) return false;
 
     const state = yield* Ref.get(updateStateRef);
-    if (state.status === "downloading") {
+    if (
+      state.status === "downloading" ||
+      (environment.platform === "darwin" && state.downloadedVersion !== null)
+    ) {
       yield* logUpdaterInfo("skipping update check while update is active", {
         reason,
         status: state.status,
@@ -463,10 +482,25 @@ export const make = Effect.gen(function* () {
     );
   }).pipe(Effect.withSpan("desktop.updates.downloadAvailableUpdate"));
 
-  const resetInstallAction = Effect.all(
-    [finishUpdateAction("install"), Ref.set(desktopState.quitting, false)],
-    { discard: true },
-  );
+  const resetInstallAction = Effect.gen(function* () {
+    const stopped = yield* Ref.getAndSet(stoppedForInstallRef, []);
+    yield* Ref.set(desktopState.updaterQuitAllowed, false);
+    yield* Ref.set(desktopState.quitting, false);
+    yield* Effect.forEach(
+      stopped,
+      (instance) =>
+        instance.start.pipe(
+          Effect.catchCause((cause) =>
+            logUpdaterError("failed to restart backend after update failure", {
+              backendId: instance.id,
+              cause,
+            }),
+          ),
+        ),
+      { concurrency: "unbounded", discard: true },
+    );
+    yield* finishUpdateAction("install");
+  });
 
   const installDownloadedUpdate = Effect.gen(function* () {
     const state = yield* Ref.get(updateStateRef);
@@ -498,12 +532,17 @@ export const make = Effect.gen(function* () {
       // SIGTERM + grace. Stops run concurrently with the same 5s
       // budget the primary had on its own.
       const instances = yield* pool.list;
+      const running = yield* Effect.filter(instances, (instance) =>
+        instance.snapshot.pipe(Effect.map((snapshot) => snapshot.desiredRunning)),
+      );
+      yield* Ref.set(stoppedForInstallRef, running);
       yield* Effect.forEach(
         instances,
         (instance) => instance.stop({ timeout: Duration.seconds(5) }),
         { concurrency: "unbounded" },
       );
-      yield* electronWindow.destroyAll;
+      // Let the updater own window closure. On failure, restarting the primary
+      // backend recreates the main window through its existing readiness callback.
       yield* electronUpdater.quitAndInstall({
         isSilent: true,
         isForceRunAfter: true,
@@ -640,8 +679,7 @@ export const make = Effect.gen(function* () {
       cause,
     });
     if (Option.isSome(activeAction) && activeAction.value === "install") {
-      yield* finishUpdateAction("install");
-      yield* Ref.set(desktopState.quitting, false);
+      yield* resetInstallAction;
       yield* updateState((current) =>
         reduceDesktopUpdateStateOnInstallFailure(current, error.message),
       );
@@ -710,6 +748,22 @@ export const make = Effect.gen(function* () {
       Effect.flatMap(
         Effect.fn("desktop.updates.applyUpdateDownloaded")(function* (info) {
           const state = yield* Ref.get(updateStateRef);
+          if (resolveDefaultDesktopUpdateChannel(info.version) !== state.channel) {
+            yield* logUpdaterWarning("ignoring downloaded update from another track", {
+              version: info.version,
+            });
+            const checkedAt = yield* currentIsoTimestamp;
+            yield* setState(
+              reduceDesktopUpdateStateOnCheckFailure(
+                createBaseUpdateState(state.channel, state.enabled, environment),
+                "The downloaded update belongs to the other app. Check for updates again.",
+                checkedAt,
+              ),
+            );
+            yield* Ref.set(lastLoggedDownloadMilestoneRef, -1);
+            yield* electronUpdater.setAutoInstallOnAppQuit(false);
+            return;
+          }
           yield* setState(reduceDesktopUpdateStateOnDownloadComplete(state, info.version));
           yield* logUpdaterInfo("update downloaded", { version: info.version });
         }),
@@ -749,7 +803,8 @@ export const make = Effect.gen(function* () {
 
       const settings = yield* desktopSettings.get;
       const enabled = yield* shouldEnableAutoUpdates;
-      yield* setState(createBaseUpdateState(settings.updateChannel, enabled, environment));
+      const channel = hasFixedUpdateTrack ? installedChannel : settings.updateChannel;
+      yield* setState(createBaseUpdateState(channel, enabled, environment));
       if (!enabled) {
         return;
       }
@@ -757,7 +812,7 @@ export const make = Effect.gen(function* () {
 
       yield* electronUpdater.setAutoDownload(false);
       yield* electronUpdater.setAutoInstallOnAppQuit(false);
-      yield* applyAutoUpdaterChannel(settings.updateChannel);
+      yield* applyAutoUpdaterChannel(channel);
       yield* electronUpdater.setDisableDifferentialDownload(
         isArm64HostRunningIntelBuild(environment.runtimeInfo),
       );
@@ -797,6 +852,9 @@ export const make = Effect.gen(function* () {
       nextChannel: DesktopUpdateChannel,
     ) {
       yield* Effect.annotateCurrentSpan({ channel: nextChannel });
+      if (hasFixedUpdateTrack && nextChannel !== installedChannel) {
+        return yield* new DesktopUpdateTrackMismatchError({ requestedChannel: nextChannel });
+      }
       const activeAction = yield* tryStartChannelChange;
       if (Option.isSome(activeAction)) {
         return yield* new DesktopUpdateActionInProgressError({

@@ -5,15 +5,20 @@ import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 import * as PlatformError from "effect/PlatformError";
 
 import {
   readDesktopBaseVersion,
+  prepareNightlyRelease,
   resolveNightlyBaseVersion,
   resolveNightlyReleaseMetadata,
   resolveNightlyTargetVersion,
   writeNightlyReleaseOutput,
 } from "./resolve-nightly-release.ts";
+
+const encodeFixture = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
+const decodeFixture = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
 
 it("strips prerelease and build metadata when deriving the nightly base version", () => {
   assert.equal(resolveNightlyBaseVersion("0.0.17"), "0.0.17");
@@ -118,5 +123,50 @@ it.layer(NodeServices.layer)("readDesktopBaseVersion", (it) => {
       assert.ok(error.cause !== undefined);
       assert.notInclude(error.message, String((error.cause as Error).message));
     }),
+  );
+});
+
+it.layer(NodeServices.layer)("prepareNightlyRelease", (it) => {
+  it.effect(
+    "stamps desktop, server, web, and contracts consistently without touching the stable source",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "nightly-prepare-" });
+        const files = [
+          "apps/desktop/package.json",
+          "apps/server/package.json",
+          "apps/web/package.json",
+          "packages/contracts/package.json",
+        ];
+        for (const file of files) {
+          yield* fs.makeDirectory(path.dirname(path.join(root, file)), { recursive: true });
+          yield* fs.writeFileString(
+            path.join(root, file),
+            yield* encodeFixture({
+              name: file,
+              version: "0.3.3",
+              private: true,
+            }),
+          );
+        }
+        const metadata = resolveNightlyReleaseMetadata(
+          yield* readDesktopBaseVersion(root),
+          "20260912",
+          1,
+          "abcdef123456",
+        );
+        yield* prepareNightlyRelease(metadata, root);
+        for (const file of files) {
+          const manifest = yield* decodeFixture(yield* fs.readFileString(path.join(root, file)));
+          assert.deepEqual(manifest, {
+            name: file,
+            version: "0.3.4-nightly.20260912.1",
+            private: true,
+          });
+        }
+        assert.equal(metadata.tag, "v0.3.4-nightly.20260912.1");
+      }),
   );
 });

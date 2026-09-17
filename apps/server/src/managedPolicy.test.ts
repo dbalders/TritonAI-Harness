@@ -9,6 +9,7 @@ import { beforeEach, describe, expect, it } from "vite-plus/test";
 
 import {
   applyManagedHarnessPolicy,
+  createManagedProfileSettings,
   getManagedProviderInstanceRenames,
   managedConfig,
   migrateLegacyInstallerManagedSettings,
@@ -87,7 +88,7 @@ describe("TritonAI managed Harness policy", () => {
       },
     ]);
     expect(effective.providerInstances[managedInstanceId]?.config).toMatchObject({
-      customModels: ["api-deepseek-v4-flash", "api-glm-5.3", "api-gemma-4-31b"],
+      customModels: ["api-deepseek-v4-flash", "api-glm-5.3", "api-muse-glimmer-30b"],
       customModelMetadata: {
         "api-deepseek-v4-flash": {
           capabilities: { inputModalities: ["text"] },
@@ -104,7 +105,7 @@ describe("TritonAI managed Harness policy", () => {
             ],
           },
         },
-        "api-gemma-4-31b": {
+        "api-muse-glimmer-30b": {
           capabilities: { inputModalities: ["text", "image"] },
         },
       },
@@ -112,7 +113,7 @@ describe("TritonAI managed Harness policy", () => {
     expect(effective.providers.codex.customModels).toEqual([
       "api-deepseek-v4-flash",
       "api-glm-5.3",
-      "api-gemma-4-31b",
+      "api-muse-glimmer-30b",
     ]);
     expect(effective.providerInstances[frontierInstanceId]).toMatchObject({
       driver: "codex",
@@ -130,6 +131,42 @@ describe("TritonAI managed Harness policy", () => {
         },
       ],
     });
+  });
+
+  it("keeps fresh profile homes independent across settings documents", () => {
+    const stableHome = "/profiles/stable/codex";
+    const nightlyHome = "/profiles/nightly/codex";
+    const stable = createManagedProfileSettings(stableHome);
+    const nightly = createManagedProfileSettings(nightlyHome);
+    const stableSettings = applyManagedHarnessPolicy(DEFAULT_SERVER_SETTINGS, managedConfig, {
+      rawSettingsDocument: stable,
+    });
+    const nightlySettings = applyManagedHarnessPolicy(DEFAULT_SERVER_SETTINGS, managedConfig, {
+      rawSettingsDocument: nightly,
+    });
+    expect(stableSettings.providers.codex.homePath).toBe(stableHome);
+    expect(nightlySettings.providers.codex.homePath).toBe(nightlyHome);
+    expect(nightlySettings.providerInstances[frontierInstanceId]?.config).toMatchObject({
+      homePath: nightlyHome,
+    });
+    const missingFile = applyManagedHarnessPolicy(DEFAULT_SERVER_SETTINGS, managedConfig, {
+      rawSettingsDocument: createManagedProfileSettings("/profiles/third/codex"),
+    });
+    expect(missingFile.providers.codex.homePath).toBe("/profiles/third/codex");
+    expect(missingFile.providers.codex.binaryPath).toBe("codex");
+  });
+
+  it("preserves explicit and previously saved Codex homes without moving history", () => {
+    for (const savedHome of ["/custom/history", DEFAULT_TRITONAI_CODEX_HOME_PATH]) {
+      const migrated = migrateLegacyInstallerManagedSettings({
+        providers: { codex: { homePath: savedHome, binaryPath: "/custom/codex" } },
+      });
+      const effective = applyManagedHarnessPolicy(DEFAULT_SERVER_SETTINGS, managedConfig, {
+        rawSettingsDocument: migrated.document,
+      });
+      expect(effective.providers.codex.homePath).toBe(savedHome);
+      expect(effective.providers.codex.binaryPath).toBe("/custom/codex");
+    }
   });
 
   it("uses defaults only for absent selections and fallbacks for retired selections", () => {
@@ -162,6 +199,38 @@ describe("TritonAI managed Harness policy", () => {
     });
     expect(retiredGlm.textGenerationModelSelection.model).toBe("api-glm-5.3");
     expect(retiredGlm.textGenerationModelSelection.instanceId).toBe(managedInstanceId);
+
+    const personalGemma = {
+      instanceId: ProviderInstanceId.make("personal"),
+      model: "api-gemma-4-31b",
+    };
+    const personalSettings = applyManagedHarnessPolicy({
+      ...DEFAULT_SERVER_SETTINGS,
+      textGenerationModelSelection: personalGemma,
+      sourceControlWriterModelSelection: personalGemma,
+    });
+    expect(personalSettings.textGenerationModelSelection).toEqual(personalGemma);
+    expect(personalSettings.sourceControlWriterModelSelection).toEqual(personalGemma);
+
+    const retiredGemma = applyManagedHarnessPolicy({
+      ...DEFAULT_SERVER_SETTINGS,
+      textGenerationModelSelection: {
+        instanceId: managedInstanceId,
+        model: "api-gemma-4-31b",
+      },
+    });
+    expect(retiredGemma.textGenerationModelSelection.model).toBe("api-muse-glimmer-30b");
+    expect(retiredGemma.textGenerationModelSelection.instanceId).toBe(managedInstanceId);
+
+    const renamedGlimmer = applyManagedHarnessPolicy({
+      ...DEFAULT_SERVER_SETTINGS,
+      textGenerationModelSelection: {
+        instanceId: managedInstanceId,
+        model: "onyx-muse-glimmer-30b",
+      },
+    });
+    expect(renamedGlimmer.textGenerationModelSelection.model).toBe("api-muse-glimmer-30b");
+    expect(renamedGlimmer.textGenerationModelSelection.instanceId).toBe(managedInstanceId);
 
     const retiredConfig: TritonAiManagedConfig = {
       ...managedConfig,

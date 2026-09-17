@@ -46,7 +46,7 @@ function completionResponse(content: string, status = 200): Response {
 }
 
 it.layer(testLayer)("CodexImageContext", (it) => {
-  it.effect("uses a non-agentic managed Gemma request for batched image analysis", () =>
+  it.effect("uses a non-agentic managed Glimmer request for batched image analysis", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const directory = yield* fileSystem.makeTempDirectoryScoped({

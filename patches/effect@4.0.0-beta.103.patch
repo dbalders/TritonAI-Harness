@@ -326,3 +326,24 @@ index b536d0a..12ffac0 100644
  /**
   * Represents optional client protocol hooks that run when a transport connects
   * and disconnects.
+diff --git a/dist/internal/schema/parser.js b/dist/internal/schema/parser.js
+--- a/dist/internal/schema/parser.js
++++ b/dist/internal/schema/parser.js
+@@ -4 +4 @@
+-export const missing = /*#__PURE__*/Symbol();
++export const missing = /*#__PURE__*/Symbol.for("effect/SchemaParser/missing");
+@@ -10 +10,2 @@
+-export const sameExit = /*#__PURE__*/succeed(missing);
++// Schemas cross the bundled host and external plugin runtime boundary.
++export const sameExit = globalThis[Symbol.for("effect/SchemaParser/sameExit/beta.103")] ??= succeed(missing);
+diff --git a/src/internal/schema/parser.ts b/src/internal/schema/parser.ts
+--- a/src/internal/schema/parser.ts
++++ b/src/internal/schema/parser.ts
+@@ -5 +5 @@
+-export const missing = Symbol()
++export const missing = Symbol.for("effect/SchemaParser/missing")
+@@ -17 +17,3 @@
+-export const sameExit: Success<unknown> = succeed(missing)
++// Schemas cross the bundled host and external plugin runtime boundary.
++export const sameExit: Success<unknown> =
++  (globalThis as typeof globalThis & { [key: symbol]: Success<unknown> })[Symbol.for("effect/SchemaParser/sameExit/beta.103")] ??= succeed(missing)

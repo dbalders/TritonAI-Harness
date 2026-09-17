@@ -1475,6 +1475,7 @@ function themeActionColors(
 export const UCSD_THEME: ThemeDefinition = {
   id: UCSD_THEME_ID,
   label: UCSD_THEME_LABEL,
+  sidebarArtwork: true,
   appearance: "light",
   colors: {
     ...createManagedThemeColors("light", "#f7f9fb", "#00629b"),

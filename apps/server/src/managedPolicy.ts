@@ -93,10 +93,6 @@ export const managedConfigDigest = loadedManagedConfig.digest;
 
 let migrationStatus: TritonAiManagedPolicyDiagnostics["migrationStatus"] = "not-needed";
 let managedProviderInstanceRenames: Readonly<Record<string, string>> = {};
-let managedRuntimeAnchor = {
-  binaryPath: DEFAULT_SERVER_SETTINGS.providers.codex.binaryPath,
-  homePath: DEFAULT_TRITONAI_CODEX_HOME_PATH,
-};
 let secureSkillsDiagnostics: Pick<
   TritonAiManagedPolicyDiagnostics,
   | "secureSkillsStatus"
@@ -260,6 +256,12 @@ function resolveManagedSelection(
   selectionWasPersisted: boolean,
   availableModels: ManagedConfig["models"]["catalog"],
 ): ServerSettings["textGenerationModelSelection"] {
+  if (
+    selectionWasPersisted &&
+    selection.instanceId !== config.provider.routes.onPrem.instanceId &&
+    selection.instanceId !== config.provider.routes.frontier.instanceId
+  )
+    return selection;
   const catalog = new Set(availableModels.map((model) => model.id));
   const selectedModel = selectionWasPersisted ? selection.model : config.models.default;
   const configuredReplacement = Object.hasOwn(config.models.replacements, selectedModel)
@@ -283,14 +285,38 @@ function resolveManagedSelection(
   };
 }
 
+function managedRuntimeFromDocument(input: unknown, defaultHomePath: string) {
+  const root = record(input);
+  const marker = record(root?.[MANAGED_POLICY_MARKER_KEY]);
+  const migrated = marker?.migrationVersion === MANAGED_POLICY_MIGRATION_VERSION;
+  const provider = record(record(root?.providers)?.codex);
+  const instance = record(record(record(root?.providerInstances)?.codex)?.config);
+  const nonempty = (...values: unknown[]) =>
+    values.find((value): value is string => typeof value === "string" && value.trim().length > 0);
+  return {
+    binaryPath:
+      nonempty(
+        ...(migrated ? [marker.codexBinaryPath] : [instance?.binaryPath, provider?.binaryPath]),
+      ) ?? DEFAULT_SERVER_SETTINGS.providers.codex.binaryPath,
+    homePath:
+      nonempty(...(migrated ? [marker.codexHomePath] : [instance?.homePath, provider?.homePath])) ??
+      defaultHomePath,
+  };
+}
+
 export function applyManagedHarnessPolicy(
   persisted: ServerSettings,
   config: ManagedConfig = managedConfig,
   options: {
     readonly textGenerationSelectionWasPersisted?: boolean;
     readonly credentialEnvironment?: NodeJS.ProcessEnv;
+    readonly rawSettingsDocument?: unknown;
   } = {},
 ): ServerSettings {
+  const managedRuntimeAnchor = managedRuntimeFromDocument(
+    options.rawSettingsDocument,
+    DEFAULT_TRITONAI_CODEX_HOME_PATH,
+  );
   const availableRouteIds = options.credentialEnvironment
     ? availableManagedRouteIds(config, options.credentialEnvironment)
     : new Set(managedRoutes(config).map((route) => route.id));
@@ -444,6 +470,17 @@ export function rawSettingsHasTextGenerationSelection(raw: unknown): boolean {
   return Object.hasOwn(record(raw) ?? {}, "textGenerationModelSelection");
 }
 
+/** Record a profile's runtime without treating its existing thread identities as legacy data. */
+export function createManagedProfileSettings(codexHomePath: string) {
+  return {
+    [MANAGED_POLICY_MARKER_KEY]: {
+      migrationVersion: MANAGED_POLICY_MIGRATION_VERSION,
+      codexBinaryPath: DEFAULT_SERVER_SETTINGS.providers.codex.binaryPath,
+      codexHomePath,
+    },
+  };
+}
+
 export interface LegacyManagedSettingsMigrationResult {
   readonly document: unknown;
   readonly migrated: boolean;
@@ -465,16 +502,6 @@ export function migrateLegacyInstallerManagedSettings(
   const marker = record(root[MANAGED_POLICY_MARKER_KEY]);
   if (marker?.migrationVersion === MANAGED_POLICY_MIGRATION_VERSION) {
     managedProviderInstanceRenames = providerInstanceReferenceRenamesFromMarker(marker);
-    managedRuntimeAnchor = {
-      binaryPath:
-        typeof marker.codexBinaryPath === "string" && marker.codexBinaryPath.trim()
-          ? marker.codexBinaryPath
-          : DEFAULT_SERVER_SETTINGS.providers.codex.binaryPath,
-      homePath:
-        typeof marker.codexHomePath === "string" && marker.codexHomePath.trim()
-          ? marker.codexHomePath
-          : DEFAULT_TRITONAI_CODEX_HOME_PATH,
-    };
     migrationStatus = "completed";
     return { document: input, migrated: false };
   }
@@ -497,25 +524,7 @@ export function migrateLegacyInstallerManagedSettings(
   managedProviderInstanceRenames = providerInstanceReferenceRenames;
   const providers = record(next.providers);
   const codexProvider = record(providers?.codex);
-  const instancesBeforeMigration = record(next.providerInstances);
-  const codexInstanceBeforeMigration = record(instancesBeforeMigration?.codex);
-  const codexConfigBeforeMigration = record(codexInstanceBeforeMigration?.config);
-  managedRuntimeAnchor = {
-    binaryPath:
-      typeof codexConfigBeforeMigration?.binaryPath === "string" &&
-      codexConfigBeforeMigration.binaryPath.trim()
-        ? codexConfigBeforeMigration.binaryPath
-        : typeof codexProvider?.binaryPath === "string" && codexProvider.binaryPath.trim()
-          ? codexProvider.binaryPath
-          : DEFAULT_SERVER_SETTINGS.providers.codex.binaryPath,
-    homePath:
-      typeof codexConfigBeforeMigration?.homePath === "string" &&
-      codexConfigBeforeMigration.homePath.trim()
-        ? codexConfigBeforeMigration.homePath
-        : typeof codexProvider?.homePath === "string" && codexProvider.homePath.trim()
-          ? codexProvider.homePath
-          : DEFAULT_TRITONAI_CODEX_HOME_PATH,
-  };
+  const managedRuntimeAnchor = managedRuntimeFromDocument(root, DEFAULT_TRITONAI_CODEX_HOME_PATH);
   for (const key of ["enabled", "binaryPath", "homePath", "customModels", "customModelMetadata"]) {
     delete codexProvider?.[key];
   }

@@ -8,18 +8,25 @@ import * as NodeModule from "node:module";
 import {
   createPackageWithOptions,
   extractAll,
+  extractFile,
   getRawHeader,
   statFile,
   type DirectoryRecord,
 } from "@electron/asar";
 
-import { TRITONAI_APP_BASE_NAME, TRITONAI_APP_ID_BASE } from "@t3tools/contracts";
+import {
+  TRITONAI_APP_BASE_NAME,
+  TRITONAI_APP_ID_BASE,
+  resolveTritonAiDesktopIdentity,
+  isTritonAiNightlyVersion,
+} from "@t3tools/contracts";
 import { fromYaml } from "@t3tools/shared/schemaYaml";
 import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { clerkFrontendApiHostnameFromPublishableKey } from "@t3tools/shared/relayAuth";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import extractZip from "extract-zip";
 import rootPackageJson from "../package.json" with { type: "json" };
+import webPackageJson from "../apps/web/package.json" with { type: "json" };
 import desktopPackageJson from "../apps/desktop/package.json" with { type: "json" };
 import desktopRuntimePackageJson from "../apps/desktop-runtime/package.json" with { type: "json" };
 import serverPackageJson from "../apps/server/package.json" with { type: "json" };
@@ -104,6 +111,9 @@ const RepoRoot = Effect.service(Path.Path).pipe(
   Effect.flatMap((path) => path.fromFileUrl(new URL("..", import.meta.url))),
 );
 const encodeJsonString = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
+const decodePluginRuntimeManifest = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Schema.Struct({ name: Schema.String, version: Schema.String })),
+);
 const decodeWorkspaceConfig = Schema.decodeEffect(fromYaml(WorkspaceConfig));
 const decodeNodePtyManifest = Schema.decodeUnknownEffect(
   Schema.fromJsonString(Schema.Struct({ version: Schema.String })),
@@ -177,6 +187,7 @@ interface BuildCliInput {
   readonly pluginConfigurationPrevalidated: Option.Option<boolean>;
   readonly pluginValidationReceipt: Option.Option<string>;
   readonly keepStage: Option.Option<boolean>;
+  readonly stageOnly: Option.Option<boolean>;
   readonly signed: Option.Option<boolean>;
   readonly verbose: Option.Option<boolean>;
   readonly mockUpdates: Option.Option<boolean>;
@@ -1011,6 +1022,7 @@ interface ResolvedBuildOptions {
   readonly pluginConfigurationPrevalidated: boolean;
   readonly pluginValidationReceipt: string | undefined;
   readonly keepStage: boolean;
+  readonly stageOnly: boolean;
   readonly signed: boolean;
   readonly verbose: boolean;
   readonly mockUpdates: boolean;
@@ -1888,6 +1900,9 @@ function getPatchedDependencyPackageName(patchKey: string): string {
 }
 
 const AzureTrustedSigningEnvironmentConfig = Config.all({
+  useAzureCli: Config.boolean("AZURE_TRUSTED_SIGNING_USE_AZURE_CLI").pipe(
+    Config.withDefault(false),
+  ),
   tenantId: Config.string("AZURE_TENANT_ID").pipe(Config.option),
   clientId: Config.string("AZURE_CLIENT_ID").pipe(Config.option),
   clientAuthenticationValue: Config.string("AZURE_CLIENT_SECRET").pipe(Config.option),
@@ -1920,7 +1935,11 @@ export const resolveAzureTrustedSigningConfiguration = Effect.fn(
     ["AZURE_TRUSTED_SIGNING_PUBLISHER_NAME", environment.publisherName],
   ] as const;
   const missingVariables = required
-    .filter(([, value]) => !Option.getOrUndefined(value)?.trim())
+    .filter(
+      ([name, value]) =>
+        !(name === "AZURE_CLIENT_SECRET" && environment.useAzureCli) &&
+        !Option.getOrUndefined(value)?.trim(),
+    )
     .map(([name]) => name);
   if (missingVariables.length > 0) {
     return yield* new MissingAzureTrustedSigningConfigurationError({ missingVariables });
@@ -1942,6 +1961,15 @@ export const resolveAzureTrustedSigningConfiguration = Effect.fn(
   };
 });
 
+export class InvalidDesktopStageOnlyOptionsError extends Schema.TaggedErrorClass<InvalidDesktopStageOnlyOptionsError>()(
+  "InvalidDesktopStageOnlyOptionsError",
+  {},
+) {
+  override get message() {
+    return "--stage-only requires --platform mac --arch arm64 --target zip --keep-stage without --signed or --mock-updates. The release finalizer must package and verify the retained stage.";
+  }
+}
+
 const BuildEnvConfig = Config.all({
   platform: Config.schema(BuildPlatform, "T3CODE_DESKTOP_PLATFORM").pipe(Config.option),
   target: Config.string("T3CODE_DESKTOP_TARGET").pipe(Config.option),
@@ -1955,6 +1983,7 @@ const BuildEnvConfig = Config.all({
   pluginValidationReceipt: Config.string("T3CODE_DESKTOP_PLUGIN_VALIDATION_RECEIPT").pipe(
     Config.option,
   ),
+  stageOnly: Config.boolean("T3CODE_DESKTOP_STAGE_ONLY").pipe(Config.withDefault(false)),
   keepStage: Config.boolean("T3CODE_DESKTOP_KEEP_STAGE").pipe(Config.withDefault(false)),
   signed: Config.boolean("T3CODE_DESKTOP_SIGNED").pipe(Config.withDefault(false)),
   verbose: Config.boolean("T3CODE_DESKTOP_VERBOSE").pipe(Config.withDefault(false)),
@@ -2048,10 +2077,22 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
     Option.getOrUndefined(input.pluginValidationReceipt) ??
     Option.getOrUndefined(env.pluginValidationReceipt);
   const keepStage = resolveBooleanFlag(input.keepStage, env.keepStage);
+  const stageOnly = resolveBooleanFlag(input.stageOnly, env.stageOnly);
   const signed = resolveBooleanFlag(input.signed, env.signed);
   const verbose = resolveBooleanFlag(input.verbose, env.verbose);
 
   const mockUpdates = resolveBooleanFlag(input.mockUpdates, env.mockUpdates);
+  if (
+    stageOnly &&
+    (platform !== "mac" ||
+      arch !== "arm64" ||
+      target !== "zip" ||
+      !keepStage ||
+      signed ||
+      mockUpdates)
+  ) {
+    return yield* new InvalidDesktopStageOnlyOptionsError({});
+  }
   const configuredMockUpdateServerPort = Option.getOrUndefined(env.mockUpdateServerPort);
   const mockUpdateServerPort =
     Option.getOrUndefined(input.mockUpdateServerPort) ??
@@ -2076,6 +2117,7 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
     pluginConfigurationPrevalidated,
     pluginValidationReceipt,
     keepStage,
+    stageOnly,
     signed,
     verbose,
     mockUpdates,
@@ -2865,8 +2907,30 @@ export const assertDesktopUpdatePublishConfiguration = Effect.fn(
 });
 
 export function resolveDesktopUpdateChannel(version: string): "latest" | "nightly" {
-  return /-nightly\.\d{8}\.\d+$/.test(version) ? "nightly" : "latest";
+  return isTritonAiNightlyVersion(version) ? "nightly" : "latest";
 }
+
+export class NightlySourceVersionMismatchError extends Schema.TaggedErrorClass<NightlySourceVersionMismatchError>()(
+  "NightlySourceVersionMismatchError",
+  { artifactVersion: Schema.String, packageVersions: Schema.Record(Schema.String, Schema.String) },
+) {
+  override get message() {
+    return `Nightly artifact ${this.artifactVersion} requires matching desktop, server, and web package versions. Run scripts/resolve-nightly-release.ts --prepare in the isolated build checkout before compilation.`;
+  }
+}
+
+export const assertNightlySourceVersions = Effect.fn("assertNightlySourceVersions")(function* (
+  artifactVersion: string,
+  packageVersions: Readonly<Record<string, string>>,
+) {
+  const versions = [artifactVersion, ...Object.values(packageVersions)];
+  if (
+    versions.some((version) => resolveDesktopUpdateChannel(version) === "nightly") &&
+    !versions.every((version) => version === artifactVersion)
+  ) {
+    return yield* new NightlySourceVersionMismatchError({ artifactVersion, packageVersions });
+  }
+});
 
 function isDesktopPreviewVersion(version: string): boolean {
   return /-pr\./.test(version);
@@ -2945,8 +3009,11 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   wslRuntimeBundled = false,
 ) {
   const buildConfig: Record<string, unknown> = {
-    appId: DESKTOP_APP_ID,
+    // Squirrel.Mac validates updates against the installed app's signing identity.
+    // Keep the original bundle ID so existing Nightly installs can update.
+    appId: platform === "mac" ? DESKTOP_APP_ID : resolveTritonAiDesktopIdentity(version).appId,
     productName: resolveDesktopProductName(version),
+    extraMetadata: { name: resolveTritonAiDesktopIdentity(version).packageName },
     artifactName: "TritonAI-Harness-${version}-${arch}.${ext}",
     electronLanguages: [...DESKTOP_ELECTRON_LANGUAGES],
     // electron-builder's default app matcher excludes several package file types,
@@ -3001,7 +3068,8 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       protocols: [
         {
           name: TRITONAI_APP_BASE_NAME,
-          schemes: ["t3code", "t3code-dev"],
+          schemes:
+            updateChannel === "nightly" ? ["tritonai-harness-nightly"] : ["t3code", "t3code-dev"],
         },
       ],
       ...(signed ? { sign: path.join(repoRoot, "scripts/sign-macos.ts") } : {}),
@@ -3043,7 +3111,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   if (platform === "linux") {
     buildConfig.linux = {
       target: [target],
-      executableName: "tritonai-harness",
+      executableName: resolveTritonAiDesktopIdentity(version).packageName,
       icon: "icons",
       category: "Development",
       // electron-builder turns these into MimeType=x-scheme-handler/<scheme>;
@@ -3052,12 +3120,13 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       protocols: [
         {
           name: TRITONAI_APP_BASE_NAME,
-          schemes: ["t3code", "t3code-dev"],
+          schemes:
+            updateChannel === "nightly" ? ["tritonai-harness-nightly"] : ["t3code", "t3code-dev"],
         },
       ],
       desktop: {
         entry: {
-          StartupWMClass: "tritonai-harness",
+          StartupWMClass: resolveTritonAiDesktopIdentity(version).packageName,
         },
       },
     };
@@ -3316,6 +3385,7 @@ export const stageWindowsServerSidecar = Effect.fn("stageWindowsServerSidecar")(
   readonly arch: typeof BuildArch.Type;
   readonly appVersion: string;
   readonly runtimeExternalDependencies: Record<string, string>;
+  readonly pluginRuntimeDependencies?: Record<string, string>;
   readonly fffNodeVersion: string;
   readonly allowBuilds: Record<string, boolean>;
   readonly patchedDependencies: Record<string, string>;
@@ -3335,6 +3405,7 @@ export const stageWindowsServerSidecar = Effect.fn("stageWindowsServerSidecar")(
 
   const sidecarDependencies = {
     ...input.runtimeExternalDependencies,
+    ...input.pluginRuntimeDependencies,
     // The sidecar serves two processes: the Windows primary loads win32
     // natives, and the WSL backend loads the matching Linux natives (fff via
     // ffi-rs) from the extracted copy of this same tree.
@@ -3560,6 +3631,7 @@ export const validateWindowsPackagedPayload = Effect.fn(
   readonly appExecutableName: string;
   readonly targetArch: typeof BuildArch.Type;
   readonly expectWslRuntime?: boolean;
+  readonly managedPluginRuntimeVersion?: string;
   readonly fileLimit?: number;
   readonly verbose?: boolean;
 }) {
@@ -3610,6 +3682,17 @@ export const validateWindowsPackagedPayload = Effect.fn(
       // POSIX separators work on Linux/macOS but fail on Windows even when the
       // entry is present in the archive.
       statFile(asarPath, path.join("apps", "server", "dist", "bin.mjs"));
+      if (input.managedPluginRuntimeVersion !== undefined) {
+        const runtime = decodePluginRuntimeManifest(
+          extractFile(asarPath, path.join("node_modules", "effect", "package.json")).toString(
+            "utf8",
+          ),
+        );
+        if (runtime.name !== "effect" || runtime.version !== input.managedPluginRuntimeVersion) {
+          throw new Error("Windows managed plugin host runtime does not match the build.");
+        }
+        statFile(asarPath, path.join("node_modules", "effect", "dist", "index.js"));
+      }
       return [...collectUnpackedAsarFiles(getRawHeader(asarPath).header)].sort();
     },
     catch: (cause) =>
@@ -3804,6 +3887,11 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   }
 
   const appVersion = options.version ?? serverPackageJson.version;
+  yield* assertNightlySourceVersions(appVersion, {
+    desktop: desktopPackageJson.version,
+    server: serverPackageJson.version,
+    web: webPackageJson.version,
+  });
   yield* assertDesktopUpdatePublishConfiguration({
     platform: options.platform,
     updateChannel: resolveDesktopUpdateChannel(appVersion),
@@ -4299,7 +4387,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       ? path.join(stageAppDir, WINDOWS_SERVER_RESOURCE_SOURCE_DIR, WINDOWS_SERVER_ASAR_RESOURCE)
       : undefined;
   const stagePackageJson: StagePackageJson = {
-    name: "tritonai-harness",
+    name: resolveTritonAiDesktopIdentity(appVersion).packageName,
     version: appVersion,
     buildVersion: appVersion,
     t3codeCommitHash: commitHash,
@@ -4375,6 +4463,11 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       arch: options.arch,
       appVersion,
       runtimeExternalDependencies: resolvedServerRuntimeExternalDependencies,
+      // Providers are imported after build and need the host peer on disk even though
+      // the CLI itself inlines Effect. Keep it archived with its dependency closure.
+      pluginRuntimeDependencies: pluginComposition
+        ? { effect: resolvedServerDependencies.effect! }
+        : {},
       fffNodeVersion: serverPackageJson.dependencies["@ff-labs/fff-node"],
       allowBuilds: workspaceAllowBuilds,
       patchedDependencies: workspacePatchedDependencies,
@@ -4389,6 +4482,29 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
 
       verbose: options.verbose,
     });
+  }
+
+  if (options.stageOnly) {
+    // Source staging is complete. Only the release finalizer may turn this into
+    // distributable artifacts; no unsigned packaging pass is needed first.
+    yield* fs.makeDirectory(options.outputDir, { recursive: true });
+    const inputPath = path.join(
+      options.outputDir,
+      managedPluginProofInputFileName("mac", options.arch),
+    );
+    yield* fs.remove(
+      path.join(options.outputDir, managedPluginProofFileName("mac", options.arch)),
+      { force: true },
+    );
+    yield* fs.remove(inputPath, { force: true });
+    if (pluginComposition) {
+      const compositionJson = yield* encodeJsonString(pluginComposition);
+      yield* fs.writeFileString(inputPath, `${compositionJson}\n`);
+    }
+    yield* Effect.log(
+      `[desktop-artifact] Source stage ready for release finalization: ${stageAppDir}`,
+    );
+    return;
   }
 
   // electron-builder treats several set-but-empty variables (e.g. CSC_LINK="")
@@ -4486,6 +4602,9 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       stageDistDir,
       appExecutableName: `${resolveDesktopProductName(appVersion)}.exe`,
       targetArch: options.arch,
+      ...(pluginComposition
+        ? { managedPluginRuntimeVersion: resolvedServerDependencies.effect! }
+        : {}),
       expectWslRuntime: bundlesWslRuntime({
         arch: options.arch,
         prebuildPath: options.wslPrebuild,
@@ -4641,6 +4760,12 @@ const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
   pluginValidationReceipt: Flag.string("plugin-validation-receipt").pipe(
     Flag.withDescription(
       "Receipt binding an isolated validation job to the exact composition and configuration.",
+    ),
+    Flag.optional,
+  ),
+  stageOnly: Flag.boolean("stage-only").pipe(
+    Flag.withDescription(
+      "Prepare a retained Mac ZIP source stage for a separate signing finalizer; emits no artifacts (env: T3CODE_DESKTOP_STAGE_ONLY).",
     ),
     Flag.optional,
   ),

@@ -1,5 +1,9 @@
 # Organizing threads
 
+On web and desktop, nightly builds show a starry header at the top of the sidebar, including with
+the UC San Diego theme in light or dark appearance. In **Settings → Appearance → Environment
+identification**, choose **Artwork** for the header, **Pill** for a small label, or **None** to hide it.
+
 Pin a thread from its context menu to keep it in the pinned section above your active work.
 `mod+shift+p` pins or unpins the thread you have open. Pinned threads are shown independently of
 their project, including when you connect to more than one environment.
@@ -11,7 +15,7 @@ Pinned threads still move to **Settled** when they become inactive. They also mo
 request merges if **Auto-settle merged threads** is enabled.
 
 Each environment owns its automatic settlement settings. The server checks them even when no web,
-desktop, or mobile client is connected. By default, it settles threads after three days without
+desktop, or mobile client is connected. By default, it settles threads after fourteen days without
 activity and when their pull request merges. An eligible idle thread also settles when its pull
 request closes. An open pull request blocks inactivity settlement. Active work, pending input, and
 live background work keep the thread active. TritonAI Harness settles from a closed or merged pull request
@@ -47,8 +51,17 @@ hidden when there are no saved drafts, keeping draft work distinct from submitte
 
 On web and desktop, active threads keep full-contrast titles. Settled and snoozed threads
 use muted titles so your active work is easier to find.
+Project folder labels use medium gray. Thread titles use regular weight, with medium weight
+reserved for unread replies.
 
 A green **Done** indicator means a response finished since you last viewed that thread.
 It stays visible while you are in another thread, browser tab, or window, and clears when
 you return to the thread in the foreground. **Approval**, **Input**, and **Failed** labels
 identify work that needs your attention.
+
+Grouped threads on web and desktop use one compact row: the title on the left and status or
+timestamp on the right. Snooze and Settle replace that status on hover or keyboard focus.
+The project appears once in the folder heading, with no provider footer.
+
+Click a project folder heading to collapse or expand its threads. The sidebar remembers collapsed
+folders on this device. Hover actions fit within the sidebar width and truncate long titles.

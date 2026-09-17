@@ -177,6 +177,28 @@ describe("DesktopLinuxUrlHandler", () => {
     });
   });
 
+  it.effect("keeps stable and Nightly sign-in handler files separate", () => {
+    const recorded = emptyRecording();
+    return Effect.gen(function* () {
+      yield* runRegister(recorded);
+      yield* runRegister(recorded, {
+        environment: {
+          appVersion: "0.3.4-nightly.20260912.12",
+          appImagePath: Option.some("/home/alice/Applications/TritonAI-Nightly.AppImage"),
+        },
+      });
+      assert.equal(recorded.files.length, 2);
+      assert.notEqual(recorded.files[0]?.path, recorded.files[1]?.path);
+      assert.include(recorded.files[0]?.content, "MimeType=x-scheme-handler/t3code;");
+      assert.include(
+        recorded.files[1]?.content,
+        "MimeType=x-scheme-handler/tritonai-harness-nightly;",
+      );
+      assert.equal(recorded.commands[0]?.args[1], "t3code-url-handler.desktop");
+      assert.equal(recorded.commands[1]?.args[1], "tritonai-harness-nightly-url-handler.desktop");
+    });
+  });
+
   it.effect("falls back to the process executable outside an AppImage", () => {
     const recorded = emptyRecording();
 

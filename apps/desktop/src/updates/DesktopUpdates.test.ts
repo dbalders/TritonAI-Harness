@@ -6,6 +6,7 @@ import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
@@ -23,6 +24,9 @@ import * as DesktopState from "../app/DesktopState.ts";
 import * as DesktopUpdates from "./DesktopUpdates.ts";
 
 interface UpdatesHarnessOptions {
+  readonly platform?: NodeJS.Platform;
+  readonly appVersion?: string;
+  readonly isPackaged?: boolean;
   readonly checkForUpdates?: Effect.Effect<
     void,
     ElectronUpdater.ElectronUpdaterCheckForUpdatesError
@@ -31,6 +35,8 @@ interface UpdatesHarnessOptions {
   readonly setUpdateChannelError?: DesktopAppSettings.DesktopSettingsWriteError;
   readonly setDisableDifferentialDownload?: Effect.Effect<void>;
   readonly stopBackend?: Effect.Effect<void>;
+  readonly startBackend?: Effect.Effect<void>;
+  readonly quitAndInstall?: Effect.Effect<void, ElectronUpdater.ElectronUpdaterQuitAndInstallError>;
   readonly env?: Record<string, string | undefined>;
 }
 
@@ -38,6 +44,14 @@ const flushCallbacks = Effect.yieldNow;
 
 function makeHarness(options: UpdatesHarnessOptions = {}) {
   let checkCount = 0;
+  let destroyedWindows = 0;
+  let channel = "latest";
+  let allowPrerelease = false;
+  const channelChecks: Array<{
+    channel: string;
+    allowPrerelease: boolean;
+    allowDowngrade: boolean;
+  }> = [];
   let allowDowngrade = false;
   let fullChangelog = false;
   const nativeUpdaterEvents: Array<boolean | "download"> = [];
@@ -72,8 +86,16 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
       Effect.sync(() => {
         nativeUpdaterEvents.push(value);
       }),
-    setChannel: () => Effect.void,
-    setAllowPrerelease: () => Effect.void,
+    setChannel: (value) =>
+      Effect.sync(() => {
+        channel = value;
+        // electron-updater's channel setter implicitly enables downgrades.
+        allowDowngrade = true;
+      }),
+    setAllowPrerelease: (value) =>
+      Effect.sync(() => {
+        allowPrerelease = value;
+      }),
     allowDowngrade: Effect.sync(() => allowDowngrade),
     setAllowDowngrade: (value) =>
       Effect.sync(() => {
@@ -86,11 +108,12 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
     setDisableDifferentialDownload: () => options.setDisableDifferentialDownload ?? Effect.void,
     checkForUpdates: Effect.sync(() => {
       checkCount += 1;
+      channelChecks.push({ channel, allowPrerelease, allowDowngrade });
     }).pipe(Effect.andThen(options.checkForUpdates ?? Effect.void)),
     downloadUpdate: Effect.sync(() => {
       nativeUpdaterEvents.push("download");
     }),
-    quitAndInstall: () => Effect.void,
+    quitAndInstall: () => options.quitAndInstall ?? Effect.void,
     on: (eventName, listener) =>
       Effect.acquireRelease(
         Effect.sync(() => {
@@ -115,18 +138,20 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
       Effect.sync(() => {
         sentStates.push(state as DesktopUpdateState);
       }),
-    destroyAll: Effect.void,
+    destroyAll: Effect.sync(() => {
+      destroyedWindows += 1;
+    }),
     syncAllAppearance: () => Effect.void,
   } satisfies ElectronWindow.ElectronWindow["Service"]);
 
   const stubBackendInstance: DesktopBackendPool.DesktopBackendInstance = {
     id: DesktopBackendPool.PRIMARY_INSTANCE_ID,
     label: Effect.succeed("Windows"),
-    start: Effect.void,
+    start: options.startBackend ?? Effect.void,
     stop: () => options.stopBackend ?? Effect.void,
     currentConfig: Effect.succeed(Option.none()),
     snapshot: Effect.succeed({
-      desiredRunning: false,
+      desiredRunning: true,
       ready: false,
       activePid: Option.none(),
       restartAttempt: 0,
@@ -139,11 +164,11 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
   const environmentLayer = DesktopEnvironment.layer({
     dirname: "/repo/apps/desktop/src",
     homeDirectory: `/tmp/t3-desktop-updates-home-${process.pid}`,
-    platform: "darwin",
+    platform: options.platform ?? "darwin",
     processArch: "x64",
-    appVersion: "1.2.3",
+    appVersion: options.appVersion ?? "1.2.3",
     appPath: "/repo",
-    isPackaged: true,
+    isPackaged: options.isPackaged ?? true,
     resourcesPath: "/missing/resources",
     runningUnderArm64Translation: false,
   }).pipe(
@@ -219,6 +244,8 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
     layer,
     nativeUpdaterEvents: () => nativeUpdaterEvents,
     checkCount: () => checkCount,
+    destroyedWindows: () => destroyedWindows,
+    channelChecks: () => channelChecks,
     feedUrls: () => feedUrls,
     fullChangelog: () => fullChangelog,
     listenerCount: () =>
@@ -323,14 +350,13 @@ describe("DesktopUpdates", () => {
   });
 
   it.effect("enables nightly full changelog release notes and broadcasts summaries", () => {
-    const harness = makeHarness();
+    const harness = makeHarness({ appVersion: "1.2.3-nightly.20260709.765" });
 
     return Effect.scoped(
       Effect.gen(function* () {
         const updates = yield* DesktopUpdates.DesktopUpdates;
         yield* updates.configure;
 
-        yield* updates.setChannel("nightly");
         assert.equal(harness.fullChangelog(), true);
 
         harness.emit("update-available", {
@@ -366,7 +392,7 @@ describe("DesktopUpdates", () => {
   });
 
   it.effect("checks for newer releases after an update has been downloaded", () => {
-    const harness = makeHarness();
+    const harness = makeHarness({ platform: "win32" });
 
     return Effect.scoped(
       Effect.gen(function* () {
@@ -475,6 +501,7 @@ describe("DesktopUpdates", () => {
         const checkStarted = yield* Deferred.make<void>();
         const releaseCheck = yield* Deferred.make<void>();
         const harness = makeHarness({
+          platform: "win32",
           checkForUpdates: Deferred.succeed(checkStarted, undefined).pipe(
             Effect.andThen(Deferred.await(releaseCheck)),
           ),
@@ -677,8 +704,7 @@ describe("DesktopUpdates", () => {
         assert.equal(failedState.errorContext, "download");
         assert.equal(failedState.message, "Desktop update download action failed unexpectedly.");
 
-        const changedState = yield* updates.setChannel("nightly");
-        assert.equal(changedState.channel, "nightly");
+        assert.isTrue((yield* updates.check("manual")).checked);
       }),
     ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
   });
@@ -746,14 +772,169 @@ describe("DesktopUpdates", () => {
         assert.equal(failedState.errorContext, "install");
         assert.equal(failedState.message, "Desktop update install action failed unexpectedly.");
 
-        const changedState = yield* updates.setChannel("nightly");
-        assert.equal(changedState.channel, "nightly");
+        assert.isFalse((yield* updates.check("manual")).checked);
       }),
     ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
   });
 
-  it.effect("persists channel changes through the settings service", () => {
+  it.effect("keeps the staged macOS installer intact across manual and scheduled checks", () => {
     const harness = makeHarness();
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+        harness.emit("update-downloaded", { version: "1.2.4" });
+        yield* flushCallbacks;
+        assert.isFalse((yield* updates.check("manual")).checked);
+        assert.isFalse((yield* updates.check("poll")).checked);
+        assert.equal(harness.checkCount(), 0);
+        assert.equal((yield* updates.getState).downloadedVersion, "1.2.4");
+      }),
+    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+  });
+
+  for (const asynchronous of [false, true]) {
+    it.effect(
+      `keeps windows and restarts backends after ${asynchronous ? "native" : "synchronous"} install failure`,
+      () => {
+        let running = true;
+        const harness = makeHarness({
+          startBackend: Effect.sync(() => {
+            running = true;
+          }),
+          stopBackend: Effect.sync(() => {
+            running = false;
+          }),
+          quitAndInstall: asynchronous
+            ? Effect.void
+            : Effect.fail(
+                new ElectronUpdater.ElectronUpdaterQuitAndInstallError({
+                  channel: "latest",
+                  isSilent: true,
+                  isForceRunAfter: true,
+                  cause: new Error("installer rejected"),
+                }),
+              ),
+        });
+        return Effect.scoped(
+          Effect.gen(function* () {
+            const updates = yield* DesktopUpdates.DesktopUpdates;
+            const state = yield* DesktopState.DesktopState;
+            yield* updates.configure;
+            harness.emit("update-downloaded", { version: "1.2.4" });
+            yield* flushCallbacks;
+            yield* Ref.set(state.updaterQuitAllowed, true);
+            yield* updates.install;
+            if (asynchronous) {
+              assert.isFalse(running);
+              harness.emit("error", new Error("native install failed"));
+              yield* flushCallbacks;
+            }
+            assert.equal(harness.destroyedWindows(), 0);
+            assert.isTrue(running);
+            assert.isFalse(yield* Ref.get(state.quitting));
+            assert.isFalse(yield* Ref.get(state.updaterQuitAllowed));
+            assert.equal((yield* updates.getState).errorContext, "install");
+          }),
+        ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+      },
+    );
+  }
+
+  it.effect("accepts an older Nightly offered by its own feed", () => {
+    const olderVersion = "0.3.4-nightly.20260915.17";
+    let installs = 0;
+    const harness = makeHarness({
+      appVersion: "0.3.4-nightly.20260916.20",
+      quitAndInstall: Effect.sync(() => {
+        installs += 1;
+      }),
+    });
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        yield* updates.configure;
+        yield* updates.check("manual");
+        assert.deepEqual(harness.channelChecks().at(-1), {
+          channel: "nightly",
+          allowPrerelease: true,
+          allowDowngrade: true,
+        });
+        harness.emit("update-available", { version: olderVersion });
+        yield* flushCallbacks;
+        assert.equal((yield* updates.getState).availableVersion, olderVersion);
+        harness.emit("update-downloaded", { version: olderVersion });
+        yield* flushCallbacks;
+        assert.equal((yield* updates.getState).downloadedVersion, olderVersion);
+        assert.isTrue((yield* updates.install).accepted);
+        assert.equal(installs, 1);
+      }),
+    ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+  });
+
+  for (const { appVersion, channel, otherChannel } of [
+    { appVersion: "0.3.3", channel: "latest", otherChannel: "nightly" },
+    { appVersion: "0.3.4-nightly.20260912.12", channel: "nightly", otherChannel: "latest" },
+  ] as const) {
+    it.effect(
+      `keeps ${appVersion} on its installed track despite saved preferences or IPC requests`,
+      () =>
+        Effect.gen(function* () {
+          const fileSystem = yield* FileSystem.FileSystem;
+          const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+            prefix: "t3-update-tracks-",
+          });
+          const harness = makeHarness({ appVersion, env: { T3CODE_HOME: baseDir } });
+          yield* Effect.gen(function* () {
+            const updates = yield* DesktopUpdates.DesktopUpdates;
+            const settings = yield* DesktopAppSettings.DesktopAppSettings;
+            yield* settings.setUpdateChannel(otherChannel);
+            yield* updates.configure;
+            assert.equal((yield* updates.getState).channel, channel);
+            const error = yield* updates.setChannel(otherChannel).pipe(Effect.flip);
+            assert.instanceOf(error, DesktopUpdates.DesktopUpdateTrackMismatchError);
+            assert.isTrue(DesktopUpdates.isDesktopUpdateSetChannelError(error));
+            yield* updates.check("manual");
+            assert.deepEqual(harness.channelChecks().at(-1), {
+              channel,
+              allowPrerelease: channel === "nightly",
+              allowDowngrade: channel === "nightly",
+            });
+            harness.emit("update-available", {
+              version: otherChannel === "nightly" ? "0.3.5-nightly.20260914.1" : "0.3.5",
+            });
+            yield* flushCallbacks;
+            assert.isNull((yield* updates.getState).availableVersion);
+            harness.emit("download-progress", { percent: 50 });
+            yield* flushCallbacks;
+            assert.equal((yield* updates.getState).status, "downloading");
+            harness.emit("update-downloaded", {
+              version: otherChannel === "nightly" ? "0.3.5-nightly.20260914.1" : "0.3.5",
+            });
+            yield* flushCallbacks;
+            const rejectedState = yield* updates.getState;
+            assert.equal(rejectedState.status, "error");
+            assert.equal(rejectedState.errorContext, "check");
+            assert.isTrue(rejectedState.canRetry);
+            assert.isNull(rejectedState.downloadPercent);
+            assert.isNull(rejectedState.downloadedVersion);
+            assert.equal(harness.nativeUpdaterEvents().at(-1), false);
+            assert.isFalse((yield* updates.install).accepted);
+            assert.isTrue((yield* updates.check("manual")).checked);
+            const nextVersion = channel === "nightly" ? "0.3.5-nightly.20260914.2" : "0.3.5";
+            harness.emit("update-available", { version: nextVersion });
+            yield* flushCallbacks;
+            assert.isTrue((yield* updates.download).accepted);
+            harness.emit("update-downloaded", { version: nextVersion });
+            yield* flushCallbacks;
+            assert.equal((yield* updates.getState).downloadedVersion, nextVersion);
+          }).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
+        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
+  }
+
+  it.effect("persists channel changes through the settings service", () => {
+    const harness = makeHarness({ isPackaged: false });
 
     return Effect.scoped(
       Effect.gen(function* () {
@@ -808,13 +989,13 @@ describe("DesktopUpdates", () => {
           const checkFiber = yield* updates.check("manual").pipe(Effect.forkScoped);
           yield* Deferred.await(checkStarted);
 
-          const exit = yield* Effect.exit(updates.setChannel("nightly"));
+          const exit = yield* Effect.exit(updates.setChannel("latest"));
           assert.equal(exit._tag, "Failure");
           if (exit._tag === "Failure") {
             const error = Cause.squash(exit.cause);
             assert.instanceOf(error, DesktopUpdates.DesktopUpdateActionInProgressError);
             assert.equal(error.action, "check");
-            assert.equal(error.requestedChannel, "nightly");
+            assert.equal(error.requestedChannel, "latest");
           }
 
           yield* Deferred.succeed(releaseCheck, undefined);
@@ -829,6 +1010,7 @@ describe("DesktopUpdates", () => {
       const channelChangeStarted = yield* Deferred.make<void>();
       const releaseChannelChange = yield* Deferred.make<void>();
       const harness = makeHarness({
+        isPackaged: false,
         beforeSetUpdateChannel: Deferred.succeed(channelChangeStarted, undefined).pipe(
           Effect.andThen(Deferred.await(releaseChannelChange)),
         ),
@@ -850,7 +1032,7 @@ describe("DesktopUpdates", () => {
           const state = yield* Fiber.join(channelFiber);
 
           assert.equal(state.channel, "nightly");
-          assert.equal(harness.checkCount(), 1);
+          assert.equal(harness.checkCount(), 0);
         }),
       ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
     }),
@@ -863,7 +1045,7 @@ describe("DesktopUpdates", () => {
       path: "/tmp/settings.json",
       cause: diskFailure,
     });
-    const harness = makeHarness({ setUpdateChannelError: settingsFailure });
+    const harness = makeHarness({ isPackaged: false, setUpdateChannelError: settingsFailure });
 
     return Effect.scoped(
       Effect.gen(function* () {
@@ -881,8 +1063,8 @@ describe("DesktopUpdates", () => {
         assert.notInclude(error.message, diskFailure.message);
 
         const checkResult = yield* updates.check("manual");
-        assert.isTrue(checkResult.checked);
-        assert.equal(harness.checkCount(), 1);
+        assert.isFalse(checkResult.checked);
+        assert.equal(harness.checkCount(), 0);
       }),
     ).pipe(Effect.provide(Layer.merge(TestClock.layer(), harness.layer)));
   });

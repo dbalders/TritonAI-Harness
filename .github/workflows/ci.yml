@@ -51,6 +51,9 @@ jobs:
       - name: Typecheck
         run: vpr typecheck
 
+      - name: Release publication guards
+        run: node --test .github/scripts/*nightly*.test.cjs .github/scripts/controlled-release-assets.test.cjs
+
       - name: Build desktop pipeline
         run: vp run build:desktop
 

@@ -221,15 +221,19 @@ try {
     },
   );
 
-  NodeFS.rmSync(NodePath.resolve(tempRoot, "pnpm-lock.yaml"), { force: true });
-
+  // Match the release workflow: refresh the existing lockfile after the version bump
+  // so pinned dependencies and their version-specific patches stay aligned.
   NodeChildProcess.execFileSync("vp", ["install", "--lockfile-only", "--ignore-scripts"], {
     cwd: tempRoot,
     stdio: "inherit",
   });
 
   const lockfile = NodeFS.readFileSync(NodePath.resolve(tempRoot, "pnpm-lock.yaml"), "utf8");
-  assertContains(lockfile, "lockfileVersion:", "Expected pnpm-lock.yaml to be regenerated.");
+  assertContains(
+    lockfile,
+    "lockfileVersion:",
+    "Expected pnpm-lock.yaml after the version refresh.",
+  );
 
   for (const relativePath of [
     "apps/server/package.json",
@@ -478,13 +482,23 @@ try {
   );
   assertContains(
     releaseWorkflow,
-    "steps.windows_signing.outputs.signed",
-    "Windows releases must select signed or unsigned mode explicitly.",
+    "environment: windows-signing",
+    "Windows releases must use the protected signing environment.",
   );
   assertContains(
     releaseWorkflow,
-    "TRITONAI_ALLOW_UNSIGNED_WINDOWS_RELEASE",
-    "Unsigned Windows releases must require an explicit repository opt-in.",
+    "AZURE_TRUSTED_SIGNING_USE_AZURE_CLI",
+    "Windows releases must support Azure OIDC login.",
+  );
+  assertContains(
+    releaseWorkflow,
+    "args+=(--signed)",
+    "Windows release packaging must require signing.",
+  );
+  assertDoesNotMatch(
+    releaseWorkflow,
+    /TRITONAI_ALLOW_UNSIGNED_WINDOWS_RELEASE|AZURE_CLIENT_SECRET|AllowUnsigned/,
+    "Windows release workflows must not fall back to unsigned builds or client secrets.",
   );
   assertContains(
     releaseWorkflow,

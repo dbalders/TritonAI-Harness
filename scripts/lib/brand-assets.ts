@@ -13,15 +13,15 @@ export const BRAND_ASSET_PATHS = {
   productionWebFavicon32Png: "assets/prod/tritonai-harness-web-favicon-32x32.png",
   productionWebAppleTouchIconPng: "assets/prod/tritonai-harness-web-apple-touch-180.png",
 
-  nightlyIconComposerProject: "assets/prod/app-icon.icon",
-  nightlyIosIconPng: "assets/prod/tritonai-harness-ios-1024.png",
-  nightlyMacIconPng: "assets/prod/tritonai-harness-1024.png",
-  nightlyLinuxIconPng: "assets/prod/tritonai-harness-universal-1024.png",
-  nightlyWindowsIconIco: "assets/prod/tritonai-harness-windows.ico",
-  nightlyWebFaviconIco: "assets/prod/tritonai-harness-web-favicon.ico",
-  nightlyWebFavicon16Png: "assets/prod/tritonai-harness-web-favicon-16x16.png",
-  nightlyWebFavicon32Png: "assets/prod/tritonai-harness-web-favicon-32x32.png",
-  nightlyWebAppleTouchIconPng: "assets/prod/tritonai-harness-web-apple-touch-180.png",
+  nightlyIconComposerProject: "assets/nightly/tritonai-app-icon.icon",
+  nightlyIosIconPng: "assets/nightly/tritonai-harness-nightly-ios-1024.png",
+  nightlyMacIconPng: "assets/nightly/tritonai-harness-nightly-1024.png",
+  nightlyLinuxIconPng: "assets/nightly/tritonai-harness-nightly-universal-1024.png",
+  nightlyWindowsIconIco: "assets/nightly/tritonai-harness-nightly-windows.ico",
+  nightlyWebFaviconIco: "assets/nightly/tritonai-harness-nightly-web-favicon.ico",
+  nightlyWebFavicon16Png: "assets/nightly/tritonai-harness-nightly-web-favicon-16x16.png",
+  nightlyWebFavicon32Png: "assets/nightly/tritonai-harness-nightly-web-favicon-32x32.png",
+  nightlyWebAppleTouchIconPng: "assets/nightly/tritonai-harness-nightly-web-apple-touch-180.png",
 
   developmentDesktopIconPng: "assets/dev/tritonai-harness-dev-1024.png",
   developmentWindowsIconIco: "assets/dev/tritonai-harness-dev-windows.ico",
@@ -42,7 +42,7 @@ export function resolveWebAssetBrandForChannel(channel: WebAssetChannel): WebAss
 }
 
 export function resolveWebAssetBrandForPackageVersion(version: string): WebAssetBrand {
-  return version.includes("-nightly.") ? "nightly" : "production";
+  return /-nightly\.\d{8}\.\d+$/.test(version) ? "nightly" : "production";
 }
 
 export interface IconOverride {

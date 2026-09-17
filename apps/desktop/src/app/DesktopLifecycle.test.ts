@@ -144,68 +144,78 @@ describe("DesktopLifecycle", () => {
     });
   }
 
-  it.effect("destroys windows before waiting for backend shutdown", () =>
-    Effect.gen(function* () {
-      const appListeners = new Map<string, (...args: readonly unknown[]) => void>();
-      const shutdownRequested = yield* Deferred.make<void>();
-      const allowShutdown = yield* Deferred.make<void>();
-      const quitRequested = yield* Deferred.make<void>();
-      const events: string[] = [];
-
-      const quit = Effect.sync(() => {
-        events.push("quit");
-      }).pipe(Effect.andThen(Deferred.succeed(quitRequested, undefined)), Effect.asVoid);
-      const destroyAll = Effect.sync(() => {
-        events.push("destroy");
-      });
-      const flushMainWindowBounds = Effect.sync(() => {
-        events.push("flush");
-      });
-
-      const desktopShutdownLayer = Layer.succeed(DesktopShutdown.DesktopShutdown, {
-        request: Effect.sync(() => {
-          events.push("request");
-        }).pipe(Effect.andThen(Deferred.succeed(shutdownRequested, undefined)), Effect.asVoid),
-        awaitRequest: Deferred.await(shutdownRequested),
-        markComplete: Deferred.succeed(allowShutdown, undefined).pipe(Effect.asVoid),
-        awaitComplete: Deferred.await(allowShutdown),
-        isComplete: Deferred.isDone(allowShutdown),
-      });
-
-      const environmentLayer = Layer.succeed(DesktopEnvironment.DesktopEnvironment, {
-        platform: "darwin",
-        isDevelopment: false,
-      } as DesktopEnvironment.DesktopEnvironment["Service"]);
-
-      const layer = DesktopLifecycle.layer.pipe(
-        Layer.provideMerge(makeElectronAppLayer(appListeners, quit)),
-        Layer.provideMerge(electronThemeLayer),
-        Layer.provideMerge(makeElectronWindowLayer(destroyAll)),
-        Layer.provideMerge(makeDesktopWindowLayer({ flushMainWindowBounds })),
-        Layer.provideMerge(environmentLayer),
-        Layer.provideMerge(desktopShutdownLayer),
-        Layer.provideMerge(DesktopState.layer),
-      );
-
-      yield* Effect.scoped(
+  for (const recoveredUpdate of [false, true]) {
+    it.effect(
+      `waits for backend shutdown${recoveredUpdate ? " after a recovered update failure" : " on ordinary quit"}`,
+      () =>
         Effect.gen(function* () {
-          const lifecycle = yield* DesktopLifecycle.DesktopLifecycle;
-          yield* lifecycle.register;
+          const appListeners = new Map<string, (...args: readonly unknown[]) => void>();
+          const shutdownRequested = yield* Deferred.make<void>();
+          const allowShutdown = yield* Deferred.make<void>();
+          const quitRequested = yield* Deferred.make<void>();
+          const events: string[] = [];
 
-          const event = { preventDefault: () => undefined } as Electron.Event;
-          appListeners.get("before-quit")?.(event);
+          const quit = Effect.sync(() => {
+            events.push("quit");
+          }).pipe(Effect.andThen(Deferred.succeed(quitRequested, undefined)), Effect.asVoid);
+          const destroyAll = Effect.sync(() => {
+            events.push("destroy");
+          });
+          const flushMainWindowBounds = Effect.sync(() => {
+            events.push("flush");
+          });
 
-          yield* Deferred.await(shutdownRequested);
-          const eventsBeforeCleanup = [...events];
-          yield* Deferred.succeed(allowShutdown, undefined);
-          yield* Deferred.await(quitRequested);
+          const desktopShutdownLayer = Layer.succeed(DesktopShutdown.DesktopShutdown, {
+            request: Effect.sync(() => {
+              events.push("request");
+            }).pipe(Effect.andThen(Deferred.succeed(shutdownRequested, undefined)), Effect.asVoid),
+            awaitRequest: Deferred.await(shutdownRequested),
+            markComplete: Deferred.succeed(allowShutdown, undefined).pipe(Effect.asVoid),
+            awaitComplete: Deferred.await(allowShutdown),
+            isComplete: Deferred.isDone(allowShutdown),
+          });
 
-          assert.deepEqual(eventsBeforeCleanup, ["flush", "destroy", "request"]);
-          assert.deepEqual(events, ["flush", "destroy", "request", "quit"]);
+          const environmentLayer = Layer.succeed(DesktopEnvironment.DesktopEnvironment, {
+            platform: "darwin",
+            isDevelopment: false,
+          } as DesktopEnvironment.DesktopEnvironment["Service"]);
+
+          const layer = DesktopLifecycle.layer.pipe(
+            Layer.provideMerge(makeElectronAppLayer(appListeners, quit)),
+            Layer.provideMerge(electronThemeLayer),
+            Layer.provideMerge(makeElectronWindowLayer(destroyAll)),
+            Layer.provideMerge(makeDesktopWindowLayer({ flushMainWindowBounds })),
+            Layer.provideMerge(environmentLayer),
+            Layer.provideMerge(desktopShutdownLayer),
+            Layer.provideMerge(DesktopState.layer),
+          );
+
+          yield* Effect.scoped(
+            Effect.gen(function* () {
+              const lifecycle = yield* DesktopLifecycle.DesktopLifecycle;
+              yield* lifecycle.register;
+              if (recoveredUpdate) {
+                appListeners.get("before-quit-for-update")?.();
+                const state = yield* DesktopState.DesktopState;
+                yield* Ref.set(state.updaterQuitAllowed, false);
+                yield* Ref.set(state.quitting, false);
+              }
+
+              const event = { preventDefault: () => undefined } as Electron.Event;
+              appListeners.get("before-quit")?.(event);
+
+              yield* Deferred.await(shutdownRequested);
+              const eventsBeforeCleanup = [...events];
+              yield* Deferred.succeed(allowShutdown, undefined);
+              yield* Deferred.await(quitRequested);
+
+              assert.deepEqual(eventsBeforeCleanup, ["flush", "destroy", "request"]);
+              assert.deepEqual(events, ["flush", "destroy", "request", "quit"]);
+            }),
+          ).pipe(Effect.provide(layer));
         }),
-      ).pipe(Effect.provide(layer));
-    }),
-  );
+    );
+  }
 
   it.effect("ignores app activation while quitting", () =>
     Effect.gen(function* () {

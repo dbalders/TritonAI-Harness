@@ -12,8 +12,43 @@ Common reasons:
 
 ## Engine Updates
 
+Stable and Nightly can use the same Codex installation. If a new profile cannot find Codex,
+Harness automatically looks for a working copy installed by TritonAI Installer. It also recovers
+when an older Installer-managed executable is no longer available. Your custom executable choice
+and profile settings are preserved.
+
+If no working copy is available, the provider message asks you to install or repair Codex with
+TritonAI Installer. Restart Harness after repairing the installation.
+
+New Stable and Nightly profiles keep their Codex data separately. Existing profiles retain their
+saved Codex home or historical default so older chats keep access to their history; an already
+shared home stays shared.
+
+The Codex engine installation remains shared. Updating it affects the apps that use that installation.
+
 TritonAI Harness keeps Codex's planning tool enabled when starting the engine, including after
 engine updates. You do not need to change your Codex configuration to keep planning available.
+
+## Subagents
+
+TritonAI models can delegate work to up to five subagents per parent thread. Open the
+right panel and choose **Agents** to follow their status, activity, model, and token usage.
+Stop interrupts the parent and its active children.
+
+The limit applies to each parent thread, not the whole TritonAI service. Several simultaneous
+threads still share your service's request limits, so reduce parallel work if you receive
+“Too Many Requests.”
+
+## Model Identity
+
+Custom models added to the Codex catalog use a generic TritonAI Harness assistant identity.
+Native Codex model entries retain their own instructions. When asked which model is
+selected, the assistant uses the current turn's model information rather than guessing from
+its training or earlier replies. This identifies the selected model, not independent proof
+of which backend the provider served.
+
+Older conversations can retain instructions that incorrectly identify the assistant as GPT-5.2.
+After updating and restarting Harness, start a new conversation to use the corrected base instructions.
 
 ## Attach Images To A Text-Only Model
 
@@ -197,3 +232,7 @@ Use a totally separate `CODEX_HOME path` only when you want a separate Codex wor
 
 That means separate sessions and less account switching inside old threads. Most dual-account users
 should use the shared-home plus shadow-home setup instead.
+
+## Managed model updates
+
+When a managed TritonAI update replaces Gemma with Glimmer, saved managed project and task selections move to Glimmer automatically. Glimmer also handles image reading for text-only models. Personal provider configurations are preserved.

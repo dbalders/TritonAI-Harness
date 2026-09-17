@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   DEFAULT_TRITONAI_CODEX_MODEL,
+  DEFAULT_TRITONAI_CODEX_HOME_PATH,
   DEFAULT_SERVER_SETTINGS,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -15,6 +16,7 @@ import * as Duration from "effect/Duration";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -23,6 +25,7 @@ import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as ServerConfig from "./config.ts";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
 import * as ServerSettingsModule from "./serverSettings.ts";
+import { getManagedProviderInstanceRenames } from "./managedPolicy.ts";
 
 const encodeUnknownJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 
@@ -1355,6 +1358,77 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         "sk-or-secret",
       );
     }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
+  for (const [label, document] of [
+    ["empty", "{}"],
+    ["legacy", '{"addProjectBaseDirectory":"~/ExistingProjects"}'],
+    ["marked without a home", '{"tritonAiManagedPolicy":{"migrationVersion":2}}'],
+    ["malformed", "{invalid"],
+    ["non-object", "null"],
+  ] as const) {
+    it.effect(`preserves the historical Codex home for an existing ${label} settings file`, () =>
+      Effect.gen(function* () {
+        const config = yield* ServerConfig.ServerConfig;
+        const fs = yield* FileSystem.FileSystem;
+        const settings = yield* ServerSettingsModule.ServerSettingsService;
+        yield* fs.writeFileString(config.settingsPath, document);
+        const effective = yield* settings.getSettings;
+        assert.equal(effective.providers.codex.homePath, DEFAULT_TRITONAI_CODEX_HOME_PATH);
+        assert.deepInclude(
+          effective.providerInstances[ProviderInstanceId.make("codex_frontier")]?.config,
+          {
+            homePath: DEFAULT_TRITONAI_CODEX_HOME_PATH,
+          },
+        );
+      }).pipe(Effect.provide(makeManagedServerSettingsLayer())),
+    );
+  }
+
+  it.effect("preserves the historical Codex home when only conversation history exists", () =>
+    Effect.gen(function* () {
+      const config = yield* ServerConfig.ServerConfig;
+      const fs = yield* FileSystem.FileSystem;
+      const settings = yield* ServerSettingsModule.ServerSettingsService;
+      assert.isFalse(yield* fs.exists(config.settingsPath));
+      yield* recordProviderUsage("codex", "codex_frontier");
+      assert.equal(
+        (yield* settings.getSettings).providers.codex.homePath,
+        DEFAULT_TRITONAI_CODEX_HOME_PATH,
+      );
+      assert.deepEqual(getManagedProviderInstanceRenames(), {});
+    }).pipe(Effect.provide(makeManagedServerSettingsLayer())),
+  );
+
+  it.effect(
+    "retains a new profile's Codex home after conversations, settings saves and reopening",
+    () =>
+      Effect.gen(function* () {
+        const config = yield* ServerConfig.ServerConfig;
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const settings = yield* ServerSettingsModule.ServerSettingsService;
+        const expectedHome = path.join(config.baseDir, "codex");
+        assert.isFalse(yield* fs.exists(config.settingsPath));
+        assert.equal((yield* settings.getSettings).providers.codex.homePath, expectedHome);
+        assert.isTrue(yield* fs.exists(config.settingsPath));
+        yield* recordProviderUsage("codex");
+        const reopen = Effect.gen(function* () {
+          const freshSettings = yield* ServerSettingsModule.ServerSettingsService;
+          return yield* freshSettings.getSettings;
+        }).pipe(
+          Effect.provide(
+            Layer.fresh(
+              ServerSettingsModule.layerManagedTest({ TRITONAI_API_KEY: "managed-test-key" }),
+            ),
+          ),
+        );
+        assert.equal((yield* reopen).providers.codex.homePath, expectedHome);
+        yield* settings.updateSettings({ addProjectBaseDirectory: "~/NewProjects" });
+        const reopened = yield* reopen;
+        assert.equal(reopened.providers.codex.homePath, expectedHome);
+        assert.equal(reopened.addProjectBaseDirectory, "~/NewProjects");
+      }).pipe(Effect.provide(makeManagedServerSettingsLayer())),
   );
 
   it.effect("keeps managed values effective while preserving the raw user document", () =>
