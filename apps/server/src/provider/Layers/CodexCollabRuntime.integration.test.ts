@@ -13,7 +13,12 @@ import * as NodePath from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
-import { type ProviderApprovalDecision, type ProviderEvent, ThreadId } from "@t3tools/contracts";
+import {
+  type ProviderApprovalDecision,
+  type ProviderEvent,
+  ThreadId,
+  TurnId,
+} from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -129,6 +134,29 @@ function capturedSpawnedThread(childId = CHILD_A) {
   };
 }
 
+function legacySpawn(childId = CHILD_A) {
+  return {
+    method: "item/completed",
+    params: {
+      threadId: ROOT,
+      turnId: "parent-turn",
+      completedAtMs: 1,
+      item: {
+        type: "collabAgentToolCall",
+        id: `spawn-${childId}`,
+        tool: "spawnAgent",
+        status: "completed",
+        senderThreadId: ROOT,
+        receiverThreadIds: [childId],
+        prompt: "Check the task queue",
+        model: "glm-5.3-flash-test",
+        reasoningEffort: "medium",
+        agentsStates: { [childId]: { status: "pendingInit", message: null } },
+      },
+    },
+  };
+}
+
 function childSettings(threadId: string, model: string, effort: string) {
   return {
     method: "thread/settings/updated",
@@ -160,75 +188,242 @@ const scriptPath = NodePath.join(import.meta.dirname, "../testFixtures/.collab-s
 const peerPath = NodePath.join(import.meta.dirname, "../testFixtures/codexCollabMockPeer.sh");
 
 describe("CodexSessionRuntime collab integration", () => {
-  it.effect("looks up child model metadata once after activity registration", () =>
+  it.effect("registers legacy spawn results and routes child lifecycle to the Agents surface", () =>
     Effect.gen(function* () {
+      const turn = { ...wireFixture.responses.turnStart.turn, id: "legacy-child-turn" };
+      const spawn = legacySpawn();
       const script = {
         rootThreadId: ROOT,
-        recordRequests: true,
         notifications: [
-          capturedStartedActivity(),
-          capturedStartedActivity(),
+          // Failed spawns and root ids must never create phantom agent rows.
           {
-            ...capturedStartedActivity(CHILD_B),
+            ...spawn,
             params: {
-              ...capturedStartedActivity(CHILD_B).params,
-              item: { ...capturedStartedActivity(CHILD_B).params.item, kind: "interacted" },
+              ...spawn.params,
+              item: { ...spawn.params.item, status: "failed", receiverThreadIds: [] },
             },
           },
-          { method: "thread/closed", params: { threadId: CHILD_B } },
-          capturedSpawnedThread(ROOT),
+          legacySpawn(ROOT),
+          spawn,
+          spawn,
+          { method: "turn/started", params: { threadId: CHILD_A, turn } },
+          {
+            ...legacySpawn("nested-child"),
+            params: {
+              ...legacySpawn("nested-child").params,
+              threadId: CHILD_A,
+              turnId: "child-owned-turn",
+              item: { ...legacySpawn("nested-child").params.item, senderThreadId: CHILD_A },
+            },
+          },
+          {
+            method: "thread/tokenUsage/updated",
+            params: {
+              threadId: CHILD_A,
+              turnId: turn.id,
+              tokenUsage: {
+                total: {
+                  totalTokens: 30,
+                  inputTokens: 20,
+                  cachedInputTokens: 0,
+                  outputTokens: 10,
+                  reasoningOutputTokens: 0,
+                },
+                last: {
+                  totalTokens: 30,
+                  inputTokens: 20,
+                  cachedInputTokens: 0,
+                  outputTokens: 10,
+                  reasoningOutputTokens: 0,
+                },
+                modelContextWindow: 272000,
+              },
+            },
+          },
+          {
+            method: "item/completed",
+            params: {
+              threadId: CHILD_A,
+              turnId: turn.id,
+              completedAtMs: 2,
+              item: {
+                type: "agentMessage",
+                id: "child-answer",
+                text: "ALPHA",
+                phase: null,
+                memoryCitation: null,
+              },
+            },
+          },
+          {
+            method: "turn/completed",
+            params: { threadId: CHILD_A, turn: { ...turn, status: "completed" } },
+          },
+          {
+            ...spawn,
+            params: {
+              ...spawn.params,
+              item: {
+                ...spawn.params.item,
+                tool: "closeAgent",
+                agentsStates: { [CHILD_A]: { status: "completed", message: "ALPHA" } },
+              },
+            },
+          },
+          { method: "thread/closed", params: { threadId: CHILD_A } },
+          legacySpawn(CHILD_B),
+          {
+            method: "error",
+            params: {
+              threadId: CHILD_B,
+              turnId: "child-b-turn",
+              willRetry: false,
+              error: {
+                message: "429 Too Many Requests",
+                codexErrorInfo: "other",
+                additionalDetails: null,
+              },
+            },
+          },
         ],
-        childResumeSnapshots: {
-          [CHILD_A]: { model: "gpt-5.6-luna", reasoningEffort: "low" },
-        },
       };
       // @effect-diagnostics-next-line preferSchemaOverJson:off
       NodeFS.writeFileSync(scriptPath, JSON.stringify(script), "utf8");
-      NodeFS.rmSync(`${scriptPath}.requests`, { force: true });
       yield* Effect.addFinalizer(() =>
-        Effect.sync(() => {
-          NodeFS.rmSync(scriptPath, { force: true });
-          NodeFS.rmSync(`${scriptPath}.requests`, { force: true });
-        }),
+        Effect.sync(() => NodeFS.rmSync(scriptPath, { force: true })),
       );
-
       const runtime = yield* makeCodexSessionRuntime({
-        threadId: ThreadId.make("thread-collab-model-activity"),
+        threadId: ThreadId.make("thread-legacy-collab"),
         binaryPath: peerPath,
         cwd: "/tmp",
         runtimeMode: "full-access",
         environment: { ...process.env, T3_CODEX_COLLAB_SCRIPT: scriptPath },
       });
-      const metadataFiber = yield* runtime.events.pipe(
-        Stream.filter(
-          (event) =>
-            event.method === "collabAgent/metadataUpdated" &&
-            (event.payload as { agentThreadId?: string }).agentThreadId === CHILD_A,
-        ),
-        Stream.take(1),
+      const collected = yield* runtime.events.pipe(
+        Stream.takeUntil((event) => event.method === "turn/completed"),
         Stream.runCollect,
         Effect.forkScoped,
       );
-
-      const session = yield* runtime.start();
-      assert.equal(session.model, "gpt-5.6-sol");
-      yield* runtime.sendTurn({ input: "start one child" });
-      const metadataEvents = Array.from(yield* Fiber.join(metadataFiber));
-      assert.deepInclude(metadataEvents[0]?.payload, {
-        agentThreadId: CHILD_A,
-        model: "gpt-5.6-luna",
-        effort: "low",
+      yield* runtime.start();
+      yield* runtime.sendTurn({ input: "test legacy agents" });
+      const events = Array.from(yield* Fiber.join(collected));
+      const starts = events.filter((event) => event.method === "collabAgent/started");
+      assert.equal(starts.length, 3);
+      // The wire's origin differs from the mock's active parent turn, and a
+      // nested spawn has its own child turn. Both belong to the origin turn.
+      assert.deepEqual(
+        starts.map((event) => event.turnId),
+        [TurnId.make("parent-turn"), TurnId.make("parent-turn"), TurnId.make("parent-turn")],
+      );
+      assert.deepInclude(starts[1]?.payload, {
+        agentThreadId: "nested-child",
+        parentThreadId: CHILD_A,
       });
-      assert.deepEqual(readRecordedRequests(), [
-        {
-          method: "thread/resume",
-          params: { threadId: CHILD_A, excludeTurns: true },
-        },
-      ]);
-
+      assert.deepInclude(starts[0]?.payload, {
+        agentThreadId: CHILD_A,
+        model: "glm-5.3-flash-test",
+        effort: "medium",
+        description: "Check the task queue",
+      });
+      assert.includeMembers(
+        events.map((event) => event.method),
+        [
+          "collabAgent/turnStarted",
+          "collabAgent/tokenUsage",
+          "collabAgent/item",
+          "collabAgent/turnCompleted",
+          "collabAgent/statusChanged",
+        ],
+      );
+      assert.isFalse(
+        events.some((event) => event.method === "error"),
+        "child errors must not fail the parent",
+      );
+      assert.equal(events.filter((event) => event.method === "turn/completed").length, 1);
+      const closed = events.filter((event) => event.method === "collabAgent/closed");
+      assert.equal(closed.length, 1);
+      assert.deepInclude(closed[0]?.payload, { agentThreadId: CHILD_A, status: "completed" });
       yield* runtime.close;
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
+
+  for (const registration of ["activity", "legacy"] as const) {
+    it.effect(`looks up child identity and model once after ${registration} registration`, () =>
+      Effect.gen(function* () {
+        const script = {
+          rootThreadId: ROOT,
+          recordRequests: true,
+          notifications: [
+            registration === "legacy" ? legacySpawn() : capturedStartedActivity(),
+            registration === "legacy" ? legacySpawn() : capturedStartedActivity(),
+            {
+              ...capturedStartedActivity(CHILD_B),
+              params: {
+                ...capturedStartedActivity(CHILD_B).params,
+                item: { ...capturedStartedActivity(CHILD_B).params.item, kind: "interacted" },
+              },
+            },
+            { method: "thread/closed", params: { threadId: CHILD_B } },
+            capturedSpawnedThread(ROOT),
+          ],
+          childResumeSnapshots: {
+            [CHILD_A]: {
+              model: "gpt-5.6-luna",
+              reasoningEffort: "low",
+              nickname: "Lagrange",
+              role: "worker",
+            },
+          },
+        };
+        // @effect-diagnostics-next-line preferSchemaOverJson:off
+        NodeFS.writeFileSync(scriptPath, JSON.stringify(script), "utf8");
+        NodeFS.rmSync(`${scriptPath}.requests`, { force: true });
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            NodeFS.rmSync(scriptPath, { force: true });
+            NodeFS.rmSync(`${scriptPath}.requests`, { force: true });
+          }),
+        );
+
+        const runtime = yield* makeCodexSessionRuntime({
+          threadId: ThreadId.make("thread-collab-model-activity"),
+          binaryPath: peerPath,
+          cwd: "/tmp",
+          runtimeMode: "full-access",
+          environment: { ...process.env, T3_CODEX_COLLAB_SCRIPT: scriptPath },
+        });
+        const metadataFiber = yield* runtime.events.pipe(
+          Stream.filter(
+            (event) =>
+              event.method === "collabAgent/metadataUpdated" &&
+              (event.payload as { agentThreadId?: string }).agentThreadId === CHILD_A,
+          ),
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.forkScoped,
+        );
+
+        const session = yield* runtime.start();
+        assert.equal(session.model, "gpt-5.6-sol");
+        yield* runtime.sendTurn({ input: "start one child" });
+        const metadataEvents = Array.from(yield* Fiber.join(metadataFiber));
+        assert.deepInclude(metadataEvents[0]?.payload, {
+          agentThreadId: CHILD_A,
+          model: registration === "legacy" ? "glm-5.3-flash-test" : "gpt-5.6-luna",
+          effort: registration === "legacy" ? "medium" : "low",
+          ...(registration === "legacy" ? { nickname: "Lagrange", role: "worker" } : {}),
+        });
+        assert.deepEqual(readRecordedRequests(), [
+          {
+            method: "thread/resume",
+            params: { threadId: CHILD_A, excludeTurns: true },
+          },
+        ]);
+
+        yield* runtime.close;
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    );
+  }
 
   it.effect("keeps child settings and reroutes newer than the resume snapshot", () =>
     Effect.gen(function* () {
@@ -493,7 +688,7 @@ describe("CodexSessionRuntime collab integration", () => {
       const turnStartedA = byIndex.find((entry) => isTurnStarted(entry, CHILD_A));
       const turnStartedB = byIndex.find((entry) => isTurnStarted(entry, CHILD_B));
       const registrationA = byIndex.find((entry) => isRegistration(entry, CHILD_A));
-      const registrationB = byIndex.find((entry) => isRegistration(entry, CHILD_B));
+      const registrationB = legacySpawn(CHILD_B);
       const rootThreadStarted = byIndex.find((entry) => entry.method === "thread/started");
       assert.isDefined(turnStartedA);
       assert.isDefined(turnStartedB);

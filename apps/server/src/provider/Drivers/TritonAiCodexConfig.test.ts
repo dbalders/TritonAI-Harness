@@ -39,7 +39,8 @@ describe("TritonAiCodexConfig", () => {
       `model_providers.ucsd.http_headers={"X-TritonAI-Client"="harness","X-TritonAI-Client-Version"="${TRITONAI_CLIENT_VERSION}"}`,
       "model_providers.ucsd.requires_openai_auth=false",
       "model_providers.ucsd.stream_idle_timeout_ms=300000",
-      "features.multi_agent=false",
+      "features.multi_agent=true",
+      "agents.max_threads=5",
       "tools.update_plan.enabled=true",
     ]);
   });
