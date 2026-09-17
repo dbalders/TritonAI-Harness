@@ -96,7 +96,7 @@ describe("TritonAI managed Harness policy", () => {
             optionDescriptors: [
               {
                 id: "reasoningEffort",
-                options: [{ id: "low" }, { id: "high", isDefault: true }, { id: "max" }],
+                options: [{ id: "low" }, { id: "high", isDefault: true }, { id: "xhigh" }],
                 currentValue: "high",
               },
             ],

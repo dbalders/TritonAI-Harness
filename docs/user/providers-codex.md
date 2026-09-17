@@ -13,7 +13,7 @@ Common reasons:
 ## Managed Models
 
 GLM 5.3 Flash is the default on-prem model and supports text and image input. Choose Low, High
-(the default), or Max reasoning. GLM 5.3 and Glimmer remain available. DeepSeek has been removed from the managed catalog; saved managed
+(the default), or Extra High reasoning. GLM 5.3 and Glimmer remain available. DeepSeek has been removed from the managed catalog; saved managed
 DeepSeek selections fall back to GLM 5.3 Flash. Existing selections of other available models
 are preserved.
 

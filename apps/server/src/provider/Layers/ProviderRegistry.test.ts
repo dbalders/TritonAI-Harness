@@ -392,7 +392,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               options: [
                 { id: "low", label: "Low" },
                 { id: "high", label: "High", isDefault: true },
-                { id: "max", label: "Max" },
+                { id: "xhigh", label: "Extra High" },
               ],
               currentValue: "high",
             },

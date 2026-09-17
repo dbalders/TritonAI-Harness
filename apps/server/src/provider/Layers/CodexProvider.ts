@@ -136,7 +136,7 @@ const DEFAULT_TRITONAI_REASONING_EFFORT = "high";
 const TRITONAI_REASONING_EFFORT_OPTIONS = [
   { id: "low", label: "Low" },
   { id: DEFAULT_TRITONAI_REASONING_EFFORT, label: "High", isDefault: true },
-  { id: "max", label: "Max" },
+  { id: "xhigh", label: "Extra High" },
 ] as const;
 
 function reasoningEffortLabel(reasoningEffort: string): string {
