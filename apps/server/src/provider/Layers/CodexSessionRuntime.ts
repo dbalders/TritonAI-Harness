@@ -1794,11 +1794,11 @@ export const makeCodexSessionRuntime = (
         ) {
           const item = notification.params.item;
           const rootId = currentProviderThreadId(yield* Ref.get(sessionRef));
+          const spawningChild = (yield* Ref.get(collabChildAgentsRef)).get(item.senderThreadId);
           if (
             item.tool === "spawnAgent" &&
             item.status === "completed" &&
-            (item.senderThreadId === rootId ||
-              (yield* Ref.get(collabChildAgentsRef)).has(item.senderThreadId))
+            (item.senderThreadId === rootId || spawningChild)
           ) {
             for (const childId of item.receiverThreadIds) {
               if (childId === rootId || childId === item.senderThreadId) continue;
@@ -1811,7 +1811,12 @@ export const makeCodexSessionRuntime = (
                 agentPath: undefined,
                 depth: undefined,
                 parentThreadId: item.senderThreadId,
-                spawnTurnId: (yield* Ref.get(sessionRef)).activeTurnId ?? undefined,
+                // Use event provenance, not the mutable active turn. Nested
+                // agents stay grouped with their parent's root turn.
+                spawnTurnId:
+                  item.senderThreadId === rootId
+                    ? TurnId.make(notification.params.turnId)
+                    : spawningChild?.spawnTurnId,
               };
               yield* Ref.update(collabChildAgentsRef, (current) =>
                 new Map(current).set(childId, state),

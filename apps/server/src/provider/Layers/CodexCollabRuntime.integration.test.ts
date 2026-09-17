@@ -203,6 +203,15 @@ describe("CodexSessionRuntime collab integration", () => {
           spawn,
           { method: "turn/started", params: { threadId: CHILD_A, turn } },
           {
+            ...legacySpawn("nested-child"),
+            params: {
+              ...legacySpawn("nested-child").params,
+              threadId: CHILD_A,
+              turnId: "child-owned-turn",
+              item: { ...legacySpawn("nested-child").params.item, senderThreadId: CHILD_A },
+            },
+          },
+          {
             method: "thread/tokenUsage/updated",
             params: {
               threadId: CHILD_A,
@@ -294,7 +303,17 @@ describe("CodexSessionRuntime collab integration", () => {
       yield* runtime.sendTurn({ input: "test legacy agents" });
       const events = Array.from(yield* Fiber.join(collected));
       const starts = events.filter((event) => event.method === "collabAgent/started");
-      assert.equal(starts.length, 2);
+      assert.equal(starts.length, 3);
+      // The wire's origin differs from the mock's active parent turn, and a
+      // nested spawn has its own child turn. Both belong to the origin turn.
+      assert.deepEqual(
+        starts.map((event) => event.turnId),
+        ["parent-turn", "parent-turn", "parent-turn"],
+      );
+      assert.deepInclude(starts[1]?.payload, {
+        agentThreadId: "nested-child",
+        parentThreadId: CHILD_A,
+      });
       assert.deepInclude(starts[0]?.payload, {
         agentThreadId: CHILD_A,
         model: "glm-5.3-flash-test",
