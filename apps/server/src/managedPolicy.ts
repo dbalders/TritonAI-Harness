@@ -286,7 +286,7 @@ function resolveManagedSelection(
     ...selection,
     instanceId: ProviderInstanceId.make(route.instanceId),
     model,
-    ...(model !== selectedModel
+    ...(model !== selectedModel || managedModel?.capabilities?.optionDescriptors !== undefined
       ? {
           options:
             buildProviderOptionSelectionsFromDescriptors(

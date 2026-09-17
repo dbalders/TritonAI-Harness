@@ -184,7 +184,10 @@ describe("TritonAI managed Harness policy", () => {
     ["api-deepseek-v4-flash", "low", "low"],
     ["api-deepseek-v4-flash", "high", "high"],
     ["glm-5.3-flash-test", "medium", "high"],
-  ])("normalizes reasoning when replacing %s at %s", (model, effort, expected) => {
+    ["api-glm-5.3-flash", "max", "high"],
+    ["api-glm-5.3-flash", "xhigh", "xhigh"],
+    ["api-glm-5.3-flash", "low", "low"],
+  ])("normalizes managed reasoning for %s at %s", (model, effort, expected) => {
     const selection = {
       instanceId: managedInstanceId,
       model,
