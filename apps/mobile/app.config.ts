@@ -75,7 +75,7 @@ const VARIANT_CONFIG = {
   development: {
     appName: "TritonAI Harness Dev",
     scheme: "t3code-dev",
-    iosBundleIdentifier: "com.t3tools.t3code.dev",
+    iosBundleIdentifier: "edu.ucsd.tritonai.harness.dev",
     androidPackage: "com.t3tools.t3code.dev",
     relyingParty: "clerk.t3.codes",
     assets: DEVELOPMENT_ASSETS,
@@ -83,7 +83,7 @@ const VARIANT_CONFIG = {
   preview: {
     appName: "TritonAI Harness Preview",
     scheme: "t3code-preview",
-    iosBundleIdentifier: "com.t3tools.t3code.preview",
+    iosBundleIdentifier: "edu.ucsd.tritonai.harness.preview",
     androidPackage: "com.t3tools.t3code.preview",
     relyingParty: "clerk.t3.codes",
     assets: PREVIEW_ASSETS,
@@ -91,7 +91,7 @@ const VARIANT_CONFIG = {
   production: {
     appName: "TritonAI Harness",
     scheme: "t3code",
-    iosBundleIdentifier: "com.t3tools.t3code",
+    iosBundleIdentifier: "edu.ucsd.tritonai.harness",
     androidPackage: "com.t3tools.t3code",
     relyingParty: "clerk.t3.codes",
     assets: RELEASE_ASSETS,
@@ -226,7 +226,8 @@ const config: ExpoConfig = {
   userInterfaceStyle: "automatic",
   updates: {
     enabled: repoEnv.T3CODE_MOBILE_UPDATES_ENABLED !== "0",
-    url: "https://u.expo.dev/d763fcb8-d37c-41ea-a773-b54a0ab4a454",
+    url: "https://u.expo.dev/dec81a5b-db3d-4de0-a00c-532e6e456a98",
+    requestHeaders: { "expo-channel-name": APP_VARIANT },
     checkAutomatically: "ON_LOAD",
     fallbackToCacheTimeout: 0,
   },
@@ -237,10 +238,11 @@ const config: ExpoConfig = {
     // showcase capture build requires full screen (see infoPlist below).
     requireFullScreen: process.env.T3_SHOWCASE_CAPTURE_BUILD === "1",
     bundleIdentifier: iosBundleIdentifier,
-    // Pin code signing to the T3 Tools team so non-interactive `expo run:ios`
+    // Pin code signing to the UCSD team so non-interactive `expo run:ios`
     // does not fall back to a personal team (which cannot sign app groups,
     // Sign in with Apple, or push notification entitlements).
-    appleTeamId: "ARK85ZXQ4Z",
+    appleTeamId: "G789749RTK",
+    buildNumber: "2",
     associatedDomains: [
       `applinks:${variant.relyingParty}`,
       `webcredentials:${variant.relyingParty}`,
@@ -454,10 +456,10 @@ const config: ExpoConfig = {
       tracesToken: repoEnv.EXPO_PUBLIC_OTLP_TRACES_TOKEN ?? null,
     },
     eas: {
-      projectId: "d763fcb8-d37c-41ea-a773-b54a0ab4a454",
+      projectId: "dec81a5b-db3d-4de0-a00c-532e6e456a98",
     },
   },
-  owner: "pingdotgg",
+  owner: "dbalders",
 };
 
 export default config;
