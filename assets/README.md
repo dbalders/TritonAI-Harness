@@ -1,6 +1,8 @@
 # Brand icons
 
-Production uses `prod/app-icon.icon` as its Icon Composer source. Development and nightly
+Production uses `prod/app-icon.icon` for its generated iOS, Linux, Windows, and web assets.
+The separate production macOS master is `prod/tritonai-harness-1024.png`;
+`icons:export` intentionally leaves it unchanged. Development and nightly
 use approved circular raster masters:
 
 - `dev/tritonai-harness-dev-1024.png` — Aurora: white trident over navy and teal waves.
@@ -15,7 +17,8 @@ master with the old pre-Tahoe rounded-square export.
 
 Production exporting requires Icon Composer 2 or newer on macOS. The exporter pins
 design generation 26. `ICON_COMPOSER_TOOL` can select a specific `ictool` executable.
-The production macOS PNG remains the original full-size circular TritonAI mark.
+The production macOS master must remain the original full-size circular TritonAI mark
+with transparent corners. Do not replace it with an inset Icon Composer macOS export.
 
 Do not edit generated PNG/ICO renditions directly; update the appropriate master.
 

@@ -76,7 +76,7 @@ it.layer(NodeServices.layer)("development artwork", (it) => {
       for (const [file, bytes] of outputs)
         expect(Buffer.from(yield* fs.readFile(path.join(root, file))).equals(bytes)).toBe(true);
       const ios = PNG.sync.read(outputs.get(BRAND_ASSET_PATHS.developmentIosIconPng)!);
-      for (let i = 3; i < ios.data.length; i += 4) expect(ios.data[i]).toBe(255);
+      expect(ios.data.every((value, index) => index % 4 !== 3 || value === 255)).toBe(true);
       for (const override of DEVELOPMENT_PUBLIC_ICON_OVERRIDES)
         expect(
           Buffer.from(yield* fs.readFile(path.join(root, override.targetRelativePath))).equals(
