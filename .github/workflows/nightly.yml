@@ -427,7 +427,7 @@ jobs:
           vp run dist:desktop:artifact "${args[@]}"
       - name: Verify Windows Authenticode signatures
         if: matrix.platform == 'win'
-        shell: powershell
+        shell: pwsh
         env:
           AZURE_TRUSTED_SIGNING_PUBLISHER_NAME: ${{ vars.AZURE_TRUSTED_SIGNING_PUBLISHER_NAME }}
         run: |
@@ -440,7 +440,7 @@ jobs:
             -EncodedPaths $encodedArtifacts
       - name: Install and boot the Windows package
         if: matrix.platform == 'win'
-        shell: powershell
+        shell: pwsh
         env:
           AZURE_TRUSTED_SIGNING_PUBLISHER_NAME: ${{ vars.AZURE_TRUSTED_SIGNING_PUBLISHER_NAME }}
         run: |
