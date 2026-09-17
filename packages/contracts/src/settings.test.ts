@@ -235,11 +235,11 @@ describe("ServerSettings thread settlement", () => {
 });
 
 describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
-  it("defaults text generation to the TritonAI Codex route at low reasoning effort", () => {
+  it("defaults text generation to the TritonAI Codex route at high reasoning effort", () => {
     expect(DEFAULT_SERVER_SETTINGS.textGenerationModelSelection).toEqual({
       instanceId: ProviderInstanceId.make("codex"),
-      model: "api-deepseek-v4-flash",
-      options: [{ id: "reasoningEffort", value: "low" }],
+      model: "api-glm-5.3-flash",
+      options: [{ id: "reasoningEffort", value: "high" }],
     });
   });
 

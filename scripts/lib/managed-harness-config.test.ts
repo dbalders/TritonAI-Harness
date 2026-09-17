@@ -27,7 +27,7 @@ describe("managed Harness config build input", () => {
       input.config.models.catalog.map((model) => [model.id, model]),
     );
 
-    expect(models["api-deepseek-v4-flash"]?.capabilities?.inputModalities).toEqual(["text"]);
+    expect(models["api-glm-5.3-flash"]?.capabilities?.inputModalities).toEqual(["text", "image"]);
     expect(models["api-glm-5.3"]?.capabilities?.inputModalities).toEqual(["text"]);
     expect(models["api-muse-glimmer-30b"]?.capabilities?.inputModalities).toEqual([
       "text",

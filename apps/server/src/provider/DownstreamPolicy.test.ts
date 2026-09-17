@@ -102,12 +102,12 @@ describe("downstream provider and integration policy", () => {
     expect(TRITONAI_APP_ID_BASE).toBe("edu.ucsd.tritonai.harness");
     expect(TRITONAI_CONNECT_NAME).toBe("TritonAI Connect");
     expect(DEFAULT_TRITONAI_AI_BASE_URL).toBe("https://tritonai-api.ucsd.edu/v1");
-    expect(DEFAULT_TRITONAI_CODEX_MODEL).toBe("api-deepseek-v4-flash");
+    expect(DEFAULT_TRITONAI_CODEX_MODEL).toBe("api-glm-5.3-flash");
     expect(DEFAULT_SERVER_SETTINGS.enableProviderUpdateChecks).toBe(false);
     expect(DEFAULT_SERVER_SETTINGS.textGenerationModelSelection).toEqual({
       instanceId: "codex",
       model: DEFAULT_TRITONAI_CODEX_MODEL,
-      options: [{ id: "reasoningEffort", value: "low" }],
+      options: [{ id: "reasoningEffort", value: "high" }],
     });
     expect(DEFAULT_SERVER_SETTINGS.providers.codex).toMatchObject({
       enabled: true,
@@ -115,8 +115,8 @@ describe("downstream provider and integration policy", () => {
     });
     expect(reasoning).toMatchObject({
       type: "select",
-      currentValue: "medium",
-      options: expect.arrayContaining([{ id: "medium", label: "Medium", isDefault: true }]),
+      currentValue: "high",
+      options: expect.arrayContaining([{ id: "high", label: "High", isDefault: true }]),
     });
   });
 });

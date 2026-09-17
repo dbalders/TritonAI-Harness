@@ -88,10 +88,19 @@ describe("TritonAI managed Harness policy", () => {
       },
     ]);
     expect(effective.providerInstances[managedInstanceId]?.config).toMatchObject({
-      customModels: ["api-deepseek-v4-flash", "api-glm-5.3", "api-muse-glimmer-30b"],
+      customModels: ["api-glm-5.3-flash", "api-glm-5.3", "api-muse-glimmer-30b"],
       customModelMetadata: {
-        "api-deepseek-v4-flash": {
-          capabilities: { inputModalities: ["text"] },
+        "api-glm-5.3-flash": {
+          capabilities: {
+            inputModalities: ["text", "image"],
+            optionDescriptors: [
+              {
+                id: "reasoningEffort",
+                options: [{ id: "low" }, { id: "high", isDefault: true }, { id: "xhigh" }],
+                currentValue: "high",
+              },
+            ],
+          },
         },
         "api-glm-5.3": {
           capabilities: {
@@ -111,7 +120,7 @@ describe("TritonAI managed Harness policy", () => {
       },
     });
     expect(effective.providers.codex.customModels).toEqual([
-      "api-deepseek-v4-flash",
+      "api-glm-5.3-flash",
       "api-glm-5.3",
       "api-muse-glimmer-30b",
     ]);
@@ -169,6 +178,35 @@ describe("TritonAI managed Harness policy", () => {
     }
   });
 
+  it.each([
+    ["api-deepseek-v4-flash", "minimal", "high"],
+    ["api-deepseek-v4-flash", "medium", "high"],
+    ["api-deepseek-v4-flash", "low", "low"],
+    ["api-deepseek-v4-flash", "high", "high"],
+    ["glm-5.3-flash-test", "medium", "high"],
+    ["api-glm-5.3-flash", "max", "high"],
+    ["api-glm-5.3-flash", "xhigh", "xhigh"],
+    ["api-glm-5.3-flash", "low", "low"],
+  ])("normalizes managed reasoning for %s at %s", (model, effort, expected) => {
+    const selection = {
+      instanceId: managedInstanceId,
+      model,
+      options: [{ id: "reasoningEffort", value: effort }],
+    };
+    const effective = applyManagedHarnessPolicy({
+      ...DEFAULT_SERVER_SETTINGS,
+      textGenerationModelSelection: selection,
+      sourceControlWriterModelSelection: selection,
+    });
+    const expectedSelection = {
+      instanceId: managedInstanceId,
+      model: "api-glm-5.3-flash",
+      options: [{ id: "reasoningEffort", value: expected }],
+    };
+    expect(effective.textGenerationModelSelection).toEqual(expectedSelection);
+    expect(effective.sourceControlWriterModelSelection).toEqual(expectedSelection);
+  });
+
   it("uses defaults only for absent selections and fallbacks for retired selections", () => {
     const retained = applyManagedHarnessPolicy(
       {
@@ -189,6 +227,21 @@ describe("TritonAI managed Harness policy", () => {
     });
     expect(absent.textGenerationModelSelection.model).toBe(managedConfig.models.default);
     expect(absent.textGenerationModelSelection.instanceId).toBe(managedInstanceId);
+
+    const retiredDeepSeek = applyManagedHarnessPolicy({
+      ...DEFAULT_SERVER_SETTINGS,
+      textGenerationModelSelection: {
+        instanceId: managedInstanceId,
+        model: "api-deepseek-v4-flash",
+      },
+      sourceControlWriterModelSelection: {
+        instanceId: managedInstanceId,
+        model: "api-deepseek-v4-flash",
+      },
+    });
+    expect(retiredDeepSeek.textGenerationModelSelection.model).toBe("api-glm-5.3-flash");
+    expect(retiredDeepSeek.sourceControlWriterModelSelection?.model).toBe("api-glm-5.3-flash");
+    expect(retiredDeepSeek.providers.codex.customModels).not.toContain("api-deepseek-v4-flash");
 
     const retiredGlm = applyManagedHarnessPolicy({
       ...DEFAULT_SERVER_SETTINGS,
@@ -245,12 +298,20 @@ describe("TritonAI managed Harness policy", () => {
         textGenerationModelSelection: {
           instanceId: ProviderInstanceId.make("codex"),
           model: "retired-model",
+          options: [
+            { id: "reasoningEffort", value: "xhigh" },
+            { id: "serviceTier", value: "fast" },
+          ],
         },
       },
       retiredConfig,
     );
     expect(retired.textGenerationModelSelection.model).toBe("gpt-5.6-sol");
     expect(retired.textGenerationModelSelection.instanceId).toBe(frontierInstanceId);
+    expect(retired.textGenerationModelSelection.options).toEqual([
+      { id: "reasoningEffort", value: "xhigh" },
+      { id: "serviceTier", value: "fast" },
+    ]);
 
     const inheritedKey = applyManagedHarnessPolicy({
       ...DEFAULT_SERVER_SETTINGS,

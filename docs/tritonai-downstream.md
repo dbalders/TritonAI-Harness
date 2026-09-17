@@ -70,7 +70,7 @@ The response must be JSON:
 }
 ```
 
-For now, keep DeepSeek as the review model if your Codex config exposes it. Do not add non-Codex review commands or provider assumptions to this path.
+For now, use GLM 5.3 Flash as the review model if your Codex config exposes it. Do not add non-Codex review commands or provider assumptions to this path.
 
 ## Release Control
 
