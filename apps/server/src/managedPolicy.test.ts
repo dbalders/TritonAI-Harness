@@ -298,12 +298,20 @@ describe("TritonAI managed Harness policy", () => {
         textGenerationModelSelection: {
           instanceId: ProviderInstanceId.make("codex"),
           model: "retired-model",
+          options: [
+            { id: "reasoningEffort", value: "xhigh" },
+            { id: "serviceTier", value: "fast" },
+          ],
         },
       },
       retiredConfig,
     );
     expect(retired.textGenerationModelSelection.model).toBe("gpt-5.6-sol");
     expect(retired.textGenerationModelSelection.instanceId).toBe(frontierInstanceId);
+    expect(retired.textGenerationModelSelection.options).toEqual([
+      { id: "reasoningEffort", value: "xhigh" },
+      { id: "serviceTier", value: "fast" },
+    ]);
 
     const inheritedKey = applyManagedHarnessPolicy({
       ...DEFAULT_SERVER_SETTINGS,
