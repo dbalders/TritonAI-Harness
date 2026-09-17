@@ -14,6 +14,10 @@ import {
   type TritonAiManagedPolicyDiagnostics,
   UCSD_AI_BASE_URL_ENV,
 } from "@t3tools/contracts";
+import {
+  buildProviderOptionSelectionsFromDescriptors,
+  getProviderOptionDescriptors,
+} from "@t3tools/shared/model";
 import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
@@ -282,6 +286,17 @@ function resolveManagedSelection(
     ...selection,
     instanceId: ProviderInstanceId.make(route.instanceId),
     model,
+    ...(model !== selectedModel
+      ? {
+          options:
+            buildProviderOptionSelectionsFromDescriptors(
+              getProviderOptionDescriptors({
+                caps: managedModel?.capabilities ?? {},
+                selections: selection.options,
+              }),
+            ) ?? [],
+        }
+      : {}),
   };
 }
 

@@ -178,6 +178,32 @@ describe("TritonAI managed Harness policy", () => {
     }
   });
 
+  it.each([
+    ["api-deepseek-v4-flash", "minimal", "high"],
+    ["api-deepseek-v4-flash", "medium", "high"],
+    ["api-deepseek-v4-flash", "low", "low"],
+    ["api-deepseek-v4-flash", "high", "high"],
+    ["glm-5.3-flash-test", "medium", "high"],
+  ])("normalizes reasoning when replacing %s at %s", (model, effort, expected) => {
+    const selection = {
+      instanceId: managedInstanceId,
+      model,
+      options: [{ id: "reasoningEffort", value: effort }],
+    };
+    const effective = applyManagedHarnessPolicy({
+      ...DEFAULT_SERVER_SETTINGS,
+      textGenerationModelSelection: selection,
+      sourceControlWriterModelSelection: selection,
+    });
+    const expectedSelection = {
+      instanceId: managedInstanceId,
+      model: "api-glm-5.3-flash",
+      options: [{ id: "reasoningEffort", value: expected }],
+    };
+    expect(effective.textGenerationModelSelection).toEqual(expectedSelection);
+    expect(effective.sourceControlWriterModelSelection).toEqual(expectedSelection);
+  });
+
   it("uses defaults only for absent selections and fallbacks for retired selections", () => {
     const retained = applyManagedHarnessPolicy(
       {

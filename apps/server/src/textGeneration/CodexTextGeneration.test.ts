@@ -394,14 +394,14 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGeneration", (it) => {
     ),
   );
 
-  it.effect("defaults git text generation codex effort to low", () =>
+  it.effect("defaults git text generation codex effort to high", () =>
     withFakeCodexEnv(
       {
         output: JSON.stringify({
           subject: "Add important change",
           body: "",
         }),
-        requireReasoningEffort: "low",
+        requireReasoningEffort: "high",
       },
       (textGeneration) =>
         textGeneration.generateCommitMessage({
