@@ -22,9 +22,9 @@ const PROJECT_DEFAULT_SELECTION: ModelSelection = {
   instanceId: ProviderInstanceId.make("codex"),
   model: "project-default",
 };
-const CARRIED_SELECTION: ModelSelection = {
+const LAST_SELECTED_MODEL: ModelSelection = {
   instanceId: ProviderInstanceId.make("codex"),
-  model: "carried-model",
+  model: "flash",
 };
 
 function createContext(overrides: Partial<ChatThreadActionContext> = {}): ChatThreadActionContext {
@@ -54,35 +54,29 @@ describe("chatThreadActions", () => {
     expect(hasExplicitComposerModelSelection({ ...draft, activeProvider: null })).toBe(false);
   });
 
-  it("does not carry a non-explicit model from the destination draft back into itself", () => {
+  it("uses provider defaults only before any manual choice or project override", () => {
     expect(
       resolveNewThreadModelSelectionOverride({
         projectDefaultSelection: null,
-        carrySelection: CARRIED_SELECTION,
-        carrySourceDraftId: "draft-a",
-        destinationDraftId: "draft-a",
+        lastSelectedModel: null,
       }),
     ).toBeNull();
   });
 
-  it("still carries models between different threads when the project has no default", () => {
+  it("uses the last explicit model selection for unpinned projects", () => {
     expect(
       resolveNewThreadModelSelectionOverride({
         projectDefaultSelection: null,
-        carrySelection: CARRIED_SELECTION,
-        carrySourceDraftId: "draft-a",
-        destinationDraftId: "draft-b",
+        lastSelectedModel: LAST_SELECTED_MODEL,
       }),
-    ).toEqual(CARRIED_SELECTION);
+    ).toEqual(LAST_SELECTED_MODEL);
   });
 
-  it("keeps the project default above any carried selection", () => {
+  it("keeps an intentional project override above the last manual choice", () => {
     expect(
       resolveNewThreadModelSelectionOverride({
         projectDefaultSelection: PROJECT_DEFAULT_SELECTION,
-        carrySelection: CARRIED_SELECTION,
-        carrySourceDraftId: "draft-a",
-        destinationDraftId: "draft-b",
+        lastSelectedModel: LAST_SELECTED_MODEL,
       }),
     ).toEqual(PROJECT_DEFAULT_SELECTION);
   });

@@ -168,6 +168,7 @@ type NewTaskFlowContextValue = {
   readonly modelOptions: ReadonlyArray<ModelOption>;
   readonly selectedModel: ModelSelection | null;
   readonly selectedModelOption: ModelOption | null;
+  readonly modelFallbackNotice: string | null;
   readonly selectedProviderStatus: ServerProvider | null;
   readonly providerGroups: ReadonlyArray<ProviderGroup>;
   readonly filteredBranches: ReadonlyArray<VcsRef>;
@@ -478,6 +479,18 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
         option.selection.instanceId === selectedModel.instanceId &&
         option.selection.model === selectedModel.model,
     ) ?? null;
+  const requestedModel =
+    selectedProjectDraft.modelSelection ??
+    selectedProject?.defaultModelSelection ??
+    storedStickyModelSelection;
+  const modelFallbackNotice =
+    selectedEnvironmentServerConfig &&
+    requestedModel &&
+    selectedModel &&
+    (requestedModel.instanceId !== selectedModel.instanceId ||
+      requestedModel.model !== selectedModel.model)
+      ? `${requestedModel.model} is unavailable for this new task. Using ${selectedModelOption?.label ?? selectedModel.model}. Your remembered choice has not changed.`
+      : null;
   const selectedProviderStatus = useMemo(
     () =>
       selectedEnvironmentServerConfig?.providers.find(
@@ -1082,6 +1095,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       modelOptions,
       selectedModel,
       selectedModelOption,
+      modelFallbackNotice,
       selectedProviderStatus,
       providerGroups,
       filteredBranches,
@@ -1143,6 +1157,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       selectedModel,
       selectedModelKey,
       selectedModelOption,
+      modelFallbackNotice,
       selectedProjectDraftKey,
       selectedProviderStatus,
       setSelectedModelOptions,

@@ -416,7 +416,15 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
 
   // ----- default model -----
   const storedSelection = representative.defaultModelSelection;
-  const resolvedSelection = resolveDefaultProviderModelSelection(serverProviders, storedSelection);
+  const lastSelectedModel = useComposerDraftStore((store) =>
+    store.stickyActiveProvider
+      ? (store.stickyModelSelectionByProvider[store.stickyActiveProvider] ?? null)
+      : null,
+  );
+  const resolvedSelection = resolveDefaultProviderModelSelection(
+    serverProviders,
+    storedSelection ?? lastSelectedModel,
+  );
   const resolvedInstanceId = resolvedSelection?.instanceId ?? null;
   const resolvedModel = resolvedSelection?.model ?? null;
   const instanceEntries = useMemo(
@@ -832,7 +840,7 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
         <SettingsSection title="New threads">
           <SettingsRow
             title="Model"
-            description="New threads in this project start with this model. Applies to every checkout in this group."
+            description="Remember your last model choice, or always start with a specific model in this project."
             resetAction={
               storedSelection !== null ? (
                 <SettingResetButton
@@ -844,39 +852,64 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
             control={
               resolvedSelection && activeEntry ? (
                 <div className="flex flex-wrap items-center justify-end gap-1.5">
-                  <ProviderModelPicker
-                    activeInstanceId={resolvedSelection.instanceId}
-                    model={resolvedSelection.model}
-                    lockedProvider={null}
-                    instanceEntries={instanceEntries}
-                    modelOptionsByInstance={modelOptionsByInstance}
-                    triggerVariant="outline"
-                    triggerClassName="min-w-0 max-w-none shrink-0 text-foreground/90 hover:text-foreground"
-                    onInstanceModelChange={(instanceId, model) => {
-                      setDefaultModel(createModelSelection(instanceId, model));
+                  <Select
+                    value={storedSelection ? "fixed" : "last-selected"}
+                    onValueChange={(value) => {
+                      setDefaultModel(value === "fixed" ? resolvedSelection : null);
                     }}
-                  />
-                  <TraitsPicker
-                    provider={activeEntry.driverKind as ProviderDriverKind}
-                    models={activeEntry.models}
-                    model={resolvedSelection.model}
-                    prompt=""
-                    onPromptChange={() => {}}
-                    modelOptions={resolvedSelection.options ?? []}
-                    allowPromptInjectedEffort={false}
-                    planModeEnabled={settings.planModeEnabled}
-                    triggerVariant="outline"
-                    triggerClassName="min-w-0 max-w-none shrink-0 text-foreground/90 hover:text-foreground"
-                    onModelOptionsChange={(nextOptions) => {
-                      setDefaultModel(
-                        createModelSelection(
-                          resolvedSelection.instanceId,
-                          resolvedSelection.model,
-                          nextOptions,
-                        ),
-                      );
-                    }}
-                  />
+                  >
+                    <SelectTrigger aria-label="New-thread model preference">
+                      <SelectValue>
+                        {storedSelection ? "Always start with" : "Use last selected model"}
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectPopup align="end" alignItemWithTrigger={false}>
+                      <SelectItem value="last-selected">Use last selected model</SelectItem>
+                      <SelectItem value="fixed">Always start with</SelectItem>
+                    </SelectPopup>
+                  </Select>
+                  {storedSelection ? (
+                    <>
+                      <ProviderModelPicker
+                        activeInstanceId={resolvedSelection.instanceId}
+                        model={resolvedSelection.model}
+                        lockedProvider={null}
+                        instanceEntries={instanceEntries}
+                        modelOptionsByInstance={modelOptionsByInstance}
+                        triggerVariant="outline"
+                        triggerClassName="min-w-0 max-w-none shrink-0 text-foreground/90 hover:text-foreground"
+                        onInstanceModelChange={(instanceId, model) => {
+                          setDefaultModel(createModelSelection(instanceId, model));
+                        }}
+                      />
+                      <TraitsPicker
+                        provider={activeEntry.driverKind as ProviderDriverKind}
+                        models={activeEntry.models}
+                        model={resolvedSelection.model}
+                        prompt=""
+                        onPromptChange={() => {}}
+                        modelOptions={resolvedSelection.options ?? []}
+                        allowPromptInjectedEffort={false}
+                        planModeEnabled={settings.planModeEnabled}
+                        triggerVariant="outline"
+                        triggerClassName="min-w-0 max-w-none shrink-0 text-foreground/90 hover:text-foreground"
+                        onModelOptionsChange={(nextOptions) => {
+                          setDefaultModel(
+                            createModelSelection(
+                              resolvedSelection.instanceId,
+                              resolvedSelection.model,
+                              nextOptions,
+                            ),
+                          );
+                        }}
+                      />
+                    </>
+                  ) : (
+                    <span className="text-sm text-muted-foreground">
+                      {activeEntry.models.find((model) => model.slug === resolvedSelection.model)
+                        ?.name ?? resolvedSelection.model}
+                    </span>
+                  )}
                 </div>
               ) : (
                 <span className="text-sm text-muted-foreground">No providers available</span>

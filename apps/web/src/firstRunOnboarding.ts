@@ -147,9 +147,6 @@ export function TritonAiFirstRunOnboardingBootstrap(props: { pathname: string })
   const onboardingCompleted = usePrimarySettings(
     (settings) => settings.tritonAiFirstRunOnboardingCompleted,
   );
-  const defaultModelSelection = usePrimarySettings(
-    (settings) => settings.textGenerationModelSelection,
-  );
   const projects = useProjects();
   const primaryThreadRefs = useEnvironmentThreadRefs(primaryEnvironmentId);
   const primaryShellState = useAtomValue(
@@ -219,7 +216,7 @@ export function TritonAiFirstRunOnboardingBootstrap(props: { pathname: string })
               title: inferProjectTitleFromPath(workspacePath) || ONBOARDING_PROJECT_TITLE,
               workspaceRoot: workspacePath,
               createWorkspaceRootIfMissing: true,
-              defaultModelSelection,
+              defaultModelSelection: null,
             },
           });
 
@@ -265,7 +262,6 @@ export function TritonAiFirstRunOnboardingBootstrap(props: { pathname: string })
     composerDraftsHydrated,
     createNewThread,
     createProject,
-    defaultModelSelection,
     draftStateSummary.composerDraftCount,
     draftStateSummary.draftThreadCount,
     onboardingCompleted,
