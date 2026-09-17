@@ -104,9 +104,9 @@ export function useNewThreadHandler() {
         setModelSelection,
       } = useComposerDraftStore.getState();
       const currentRouteTarget = getCurrentRouteTarget();
-      // A new thread carries the user's working mode from the thread being
-      // viewed. The target project's configured model still wins; runtime and
-      // interaction modes carry independently. Branch, worktree, and env mode
+      // Runtime and interaction modes carry from the viewed thread. Models
+      // come from explicit project defaults or the last manual model choice.
+      // Branch, worktree, and env mode
       // come from configured defaults unless the caller passes them explicitly.
       const carrySourceShell =
         currentRouteTarget?.kind === "server"
@@ -123,12 +123,6 @@ export function useNewThreadHandler() {
               : currentRouteTarget.draftId,
           )
         : null;
-      const composerActiveProvider = carrySourceComposer?.activeProvider ?? null;
-      const composerModelSelection = composerActiveProvider
-        ? (carrySourceComposer?.modelSelectionByProvider[composerActiveProvider] ?? null)
-        : null;
-      const carryModelSelection =
-        composerModelSelection ?? carrySourceShell?.modelSelection ?? null;
       const carryRuntimeMode =
         carrySourceComposer?.runtimeMode ??
         carrySourceShell?.runtimeMode ??
@@ -144,14 +138,15 @@ export function useNewThreadHandler() {
           candidate.id === projectRef.projectId &&
           candidate.environmentId === projectRef.environmentId,
       );
-      const resolveModelSelectionOverride = (destinationDraftId: DraftId) =>
-        resolveNewThreadModelSelectionOverride({
+      const resolveModelSelectionOverride = () => {
+        const state = useComposerDraftStore.getState();
+        return resolveNewThreadModelSelectionOverride({
           projectDefaultSelection: project?.defaultModelSelection ?? null,
-          carrySelection: carryModelSelection,
-          carrySourceDraftId:
-            currentRouteTarget?.kind === "draft" ? currentRouteTarget.draftId : null,
-          destinationDraftId,
+          lastSelectedModel: state.stickyActiveProvider
+            ? (state.stickyModelSelectionByProvider[state.stickyActiveProvider] ?? null)
+            : null,
         });
+      };
       // The shared resolver owns the priority order. The t3.json read is
       // skipped entirely when a higher-priority source decides, and its
       // query atom caches per project after the first call.
@@ -272,8 +267,8 @@ export function useNewThreadHandler() {
           }
           // Model intent: an explicit human pick always stands. Seeds and
           // legacy entries alike re-resolve here — sticky first, mirroring
-          // the mint-fresh path, then the project default or carried
-          // selection on top. This runs even when the draft is already open:
+          // the mint-fresh path, then the project default on top. This also
+          // runs when the draft is already open:
           // without it, a changed pin could never reach the draft the user
           // is looking at, because explicit picks are the only thing the
           // flag protects.
@@ -281,9 +276,7 @@ export function useNewThreadHandler() {
           const storedDraftHasExplicitModelPick = hasExplicitComposerModelSelection(storedDraft);
           if (!storedDraftHasExplicitModelPick) {
             applyStickyState(emptyStoredDraftThread.draftId);
-            const modelSelectionOverride = resolveModelSelectionOverride(
-              emptyStoredDraftThread.draftId,
-            );
+            const modelSelectionOverride = resolveModelSelectionOverride();
             if (modelSelectionOverride) {
               // This is a complete snapshot: absent options mean "no options",
               // not "keep the stale draft's options".
@@ -417,10 +410,9 @@ export function useNewThreadHandler() {
           ...(carryInteractionMode ? { interactionMode: carryInteractionMode } : {}),
         });
         applyStickyState(draftId);
-        const modelSelectionOverride = resolveModelSelectionOverride(draftId);
+        const modelSelectionOverride = resolveModelSelectionOverride();
         if (modelSelectionOverride) {
-          // Project defaults and carried selections both outrank global sticky
-          // state. The project default wins when both are present.
+          // A project override wins without changing the remembered choice.
           setModelSelection(draftId, modelSelectionOverride, { replaceOptions: true });
         }
         seedNewDraftPrompt(draftId, options?.newDraftPrompt);

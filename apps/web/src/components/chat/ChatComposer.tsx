@@ -3442,7 +3442,30 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const toggleTasksDrawer = useCallback(() => {
     setIsTasksDrawerOpen((open) => !open);
   }, []);
-  const hasBannerItems = props.bannerItems.length > 0;
+  const requestedDraftModel = composerDraft.activeProvider
+    ? composerDraft.modelSelectionByProvider[composerDraft.activeProvider]
+    : activeProjectDefaultModelSelection;
+  const modelFallbackNotice: ComposerBannerStackItem | null =
+    props.isLocalDraftThread &&
+    !noProviderAvailable &&
+    requestedDraftModel?.model &&
+    (requestedDraftModel.instanceId !== selectedInstanceId ||
+      (normalizeModelSlug(requestedDraftModel.model, selectedProvider) ??
+        requestedDraftModel.model) !==
+        (normalizeModelSlug(selectedModel, selectedProvider) ?? selectedModel))
+      ? {
+          id: "new-thread-model-fallback",
+          variant: "warning",
+          icon: null,
+          title: `${requestedDraftModel.model} is unavailable here. Using ${selectedProviderModels.find((model) => model.slug === selectedModel)?.name ?? selectedModel}.`,
+          description:
+            "Your remembered model choice has not changed. You can choose another model below.",
+        }
+      : null;
+  const composerBannerItems = modelFallbackNotice
+    ? [modelFallbackNotice, ...props.bannerItems]
+    : props.bannerItems;
+  const hasBannerItems = composerBannerItems.length > 0;
   const hasBlockingComposerTopDrawer =
     activePendingApproval !== null || pendingUserInputs.length > 0;
   const showInlineTasksBadge =
@@ -3489,8 +3512,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       }
     : null;
   const bannerStackItems = activityStackItem
-    ? [activityStackItem, ...props.bannerItems]
-    : props.bannerItems;
+    ? [activityStackItem, ...composerBannerItems]
+    : composerBannerItems;
   useEffect(() => {
     if (activeTasksProgress === null || activeTaskSteps === null) {
       setIsTasksDrawerOpen(false);

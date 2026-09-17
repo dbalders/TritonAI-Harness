@@ -7482,7 +7482,12 @@ function ChatViewContent(props: ChatViewProps) {
         nextModelSelection,
         { explicit: true },
       );
-      setStickyComposerModelSelection(nextModelSelection);
+      const selectedDraft = useComposerDraftStore
+        .getState()
+        .getComposerDraft(scopeThreadRef(activeThread.environmentId, activeThread.id));
+      setStickyComposerModelSelection(
+        selectedDraft?.modelSelectionByProvider[instanceId] ?? nextModelSelection,
+      );
       scheduleComposerFocus();
     },
     [

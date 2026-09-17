@@ -46,14 +46,9 @@ export function resolveNewDraftStartFromOrigin(input: {
 
 export function resolveNewThreadModelSelectionOverride(input: {
   readonly projectDefaultSelection: ModelSelection | null;
-  readonly carrySelection: ModelSelection | null;
-  readonly carrySourceDraftId: string | null;
-  readonly destinationDraftId: string;
+  readonly lastSelectedModel: ModelSelection | null;
 }): ModelSelection | null {
-  return (
-    input.projectDefaultSelection ??
-    (input.carrySourceDraftId === input.destinationDraftId ? null : input.carrySelection)
-  );
+  return input.projectDefaultSelection ?? input.lastSelectedModel;
 }
 
 export function hasExplicitComposerModelSelection(

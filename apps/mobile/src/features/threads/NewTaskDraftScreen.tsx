@@ -1220,6 +1220,11 @@ export function NewTaskDraftScreen(props: {
         </View>
       ) : null}
       <View className="pb-1">{workspaceControls}</View>
+      {flow.modelFallbackNotice ? (
+        <Text accessibilityRole="alert" className="px-2 pb-2 text-sm text-muted-foreground">
+          {flow.modelFallbackNotice}
+        </Text>
+      ) : null}
 
       <ComposerSurface
         style={{

@@ -2092,6 +2092,30 @@ describe("composerDraftStore sticky composer settings", () => {
     expect(useComposerDraftStore.getState().stickyActiveProvider).toBe("codex");
   });
 
+  it("keeps the manual choice when opening an old thread or seeding a project override", () => {
+    const store = useComposerDraftStore.getState();
+    const remembered = modelSelection(CODEX_DRIVER, "flash", { reasoningEffort: "high" });
+    const oldThread = scopeThreadRef(TEST_ENVIRONMENT_ID, ThreadId.make("old-glm-thread"));
+    const pinnedDraft = DraftId.make("pinned-glm-project");
+    const freshDraft = DraftId.make("fresh-flash-draft");
+
+    store.setStickyModelSelection(remembered);
+    store.setModelSelection(oldThread, modelSelection(CODEX_DRIVER, "glm"));
+    store.getComposerDraft(oldThread);
+    store.applyStickyState(pinnedDraft);
+    store.setModelSelection(pinnedDraft, modelSelection(CODEX_DRIVER, "glm"), {
+      replaceOptions: true,
+    });
+    store.applyStickyState(freshDraft);
+
+    expect(store.getComposerDraft(freshDraft)?.modelSelectionByProvider[CODEX_INSTANCE]).toEqual(
+      remembered,
+    );
+    expect(useComposerDraftStore.getState().stickyModelSelectionByProvider[CODEX_INSTANCE]).toEqual(
+      remembered,
+    );
+  });
+
   it("normalizes empty sticky model options by dropping selection options", () => {
     const store = useComposerDraftStore.getState();
 
