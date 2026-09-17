@@ -39,6 +39,17 @@ The limit applies to each parent thread, not the whole TritonAI service. Several
 threads still share your service's request limits, so reduce parallel work if you receive
 “Too Many Requests.”
 
+## Model Identity
+
+Custom models added to the Codex catalog use a generic TritonAI Harness assistant identity.
+Native Codex model entries retain their own instructions. When asked which model is
+selected, the assistant uses the current turn's model information rather than guessing from
+its training or earlier replies. This identifies the selected model, not independent proof
+of which backend the provider served.
+
+Older conversations can retain instructions that incorrectly identify the assistant as GPT-5.2.
+After updating and restarting Harness, start a new conversation to use the corrected base instructions.
+
 ## Attach Images To A Text-Only Model
 
 When a managed model accepts only text, TritonAI analyzes attached images and passes their
