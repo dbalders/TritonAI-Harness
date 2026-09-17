@@ -13,7 +13,12 @@ import * as NodePath from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
-import { type ProviderApprovalDecision, type ProviderEvent, ThreadId } from "@t3tools/contracts";
+import {
+  type ProviderApprovalDecision,
+  type ProviderEvent,
+  ThreadId,
+  TurnId,
+} from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -308,7 +313,7 @@ describe("CodexSessionRuntime collab integration", () => {
       // nested spawn has its own child turn. Both belong to the origin turn.
       assert.deepEqual(
         starts.map((event) => event.turnId),
-        ["parent-turn", "parent-turn", "parent-turn"],
+        [TurnId.make("parent-turn"), TurnId.make("parent-turn"), TurnId.make("parent-turn")],
       );
       assert.deepInclude(starts[1]?.payload, {
         agentThreadId: "nested-child",
