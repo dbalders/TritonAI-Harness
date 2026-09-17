@@ -4688,7 +4688,9 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     const executablePathsJson = yield* encodeJsonString(executableArtifacts);
     const encodedExecutablePaths = Buffer.from(executablePathsJson, "utf8").toString("base64");
     const verificationScript = path.join(repoRoot, "scripts/verify-windows-authenticode.ps1");
-    const powershell = yield* resolveSpawnCommand("powershell.exe", [
+    // Signing already requires PowerShell 7. Keep verification on the same host:
+    // Windows PowerShell 5.1 can inherit incompatible PS7 modules through Node.
+    const powershell = yield* resolveSpawnCommand("pwsh.exe", [
       "-NoProfile",
       "-NonInteractive",
       "-ExecutionPolicy",
