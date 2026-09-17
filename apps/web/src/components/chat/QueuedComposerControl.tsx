@@ -10,9 +10,9 @@ import {
   TriangleAlertIcon,
   XIcon,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
-import type { QueuedComposerEntry } from "../../composerQueueStore";
+import { useComposerQueueStore, type QueuedComposerEntry } from "../../composerQueueStore";
 import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
@@ -20,6 +20,8 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ComposerBanner } from "./ComposerBanner";
 
 export function QueuedComposerControl(props: {
+  readonly threadKey: string;
+  readonly canRetry?: boolean;
   readonly entries: readonly QueuedComposerEntry[];
   readonly canSteer: boolean;
   readonly onSteer: (entryId: string) => void;
@@ -29,6 +31,11 @@ export function QueuedComposerControl(props: {
   const [editing, setEditing] = useState<{ readonly id: string; readonly prompt: string } | null>(
     null,
   );
+  useEffect(() => {
+    if (!editing) return;
+    const entryId = editing.id;
+    return () => useComposerQueueStore.getState().cancelEditing(props.threadKey, entryId);
+  }, [editing?.id, props.threadKey]);
   const visibleEntries = props.entries.filter((entry) => entry.status !== "dispatching");
 
   if (visibleEntries.length === 0) return null;
@@ -45,6 +52,7 @@ export function QueuedComposerControl(props: {
         <ComposerBanner.Scroll className="max-h-40">
           <ComposerBanner.Children render={<ol />} aria-label="Queued messages" className="gap-0">
             {visibleEntries.map((entry) => {
+              const confirming = entry.status === "confirming";
               const failed = entry.status === "failed";
               const isEditing = editing?.id === entry.id;
               const attachmentCount = entry.images.length + entry.files.length;
@@ -89,12 +97,12 @@ export function QueuedComposerControl(props: {
                         value={editing.prompt}
                         aria-label="Queued message text"
                         className="h-7 min-w-0 flex-1 rounded-md border border-input bg-background px-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                        onChange={(event) =>
-                          setEditing((current) =>
-                            current ? { ...current, prompt: event.currentTarget.value } : null,
-                          )
-                        }
+                        onChange={(event) => {
+                          const prompt = event.currentTarget.value;
+                          setEditing((current) => (current ? { ...current, prompt } : null));
+                        }}
                         onKeyDown={(event) => {
+                          if (event.nativeEvent.isComposing) return;
                           if (event.key === "Escape") setEditing(null);
                           if (
                             event.key === "Enter" &&
@@ -121,7 +129,11 @@ export function QueuedComposerControl(props: {
                     )}
                   </ComposerBanner.Content>
                   <ComposerBanner.Actions>
-                    {isEditing ? (
+                    {confirming ? (
+                      <span className="px-2 text-xs text-muted-foreground">
+                        Confirming delivery
+                      </span>
+                    ) : isEditing ? (
                       <>
                         <Button
                           type="button"
@@ -155,12 +167,10 @@ export function QueuedComposerControl(props: {
                                 type="button"
                                 size="xs"
                                 variant="ghost-muted"
-                                disabled={!props.canSteer}
+                                disabled={!props.canSteer && !(failed && props.canRetry)}
                                 className="h-6 gap-1 px-1.5 font-normal"
                                 aria-label={
-                                  failed
-                                    ? "Retry queued message as steer"
-                                    : "Steer queued message now"
+                                  failed ? "Retry queued message" : "Steer queued message now"
                                 }
                                 onClick={() => props.onSteer(entry.id)}
                               />
@@ -170,7 +180,7 @@ export function QueuedComposerControl(props: {
                             {failed ? "Retry" : "Steer"}
                           </TooltipTrigger>
                           <TooltipPopup side="top">
-                            {failed ? "Retry as steer" : "Steer now"}
+                            {failed ? "Retry message" : "Steer now"}
                           </TooltipPopup>
                         </Tooltip>
                         <Tooltip>
@@ -204,7 +214,15 @@ export function QueuedComposerControl(props: {
                           </MenuTrigger>
                           <MenuPopup align="end">
                             <MenuItem
-                              onClick={() => setEditing({ id: entry.id, prompt: entry.prompt })}
+                              onClick={() => {
+                                if (
+                                  useComposerQueueStore
+                                    .getState()
+                                    .beginEditing(props.threadKey, entry.id)
+                                ) {
+                                  setEditing({ id: entry.id, prompt: entry.prompt });
+                                }
+                              }}
                             >
                               <PencilIcon />
                               Edit text

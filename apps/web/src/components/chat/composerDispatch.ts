@@ -32,10 +32,14 @@ export function resolveComposerDispatchMode(input: {
 export function queuedDispatchBlocksComposer(input: {
   readonly phase: SessionPhase;
   readonly dispatchInFlight: boolean;
+  readonly firstEntryStatus?: import("../../composerQueueStore").QueuedComposerStatus | undefined;
 }): boolean {
   // Once the queued turn is running, keep its acknowledgement barrier without
   // disabling the active-turn Queue and Steer actions.
-  return input.dispatchInFlight && input.phase !== "running";
+  return (
+    (input.dispatchInFlight && input.phase !== "running") ||
+    (input.phase === "ready" && input.firstEntryStatus === "queued")
+  );
 }
 
 export function isQueuedMessageTurnComplete(input: {
@@ -65,7 +69,7 @@ export function resolveQueuedAcknowledgement(input: {
   readonly deadlineAt: number | undefined;
   readonly now: number;
 }): "waiting" | "complete" | "expired" {
-  if (input.phase !== "ready") return "waiting";
+  if (input.phase === "running" || input.phase === "connecting") return "waiting";
   if (isQueuedMessageTurnComplete(input)) return "complete";
   return input.deadlineAt !== undefined && input.now >= input.deadlineAt ? "expired" : "waiting";
 }
@@ -77,7 +81,7 @@ export function canAutoDrainComposerQueue(input: {
   readonly isThreadDetailLoading: boolean;
   readonly hasPendingUserInput: boolean;
   readonly awaitingPreviousMessageAcknowledgement: boolean;
-  readonly firstEntryStatus: "queued" | "dispatching" | "failed" | null;
+  readonly firstEntryStatus: import("../../composerQueueStore").QueuedComposerStatus | null;
 }): boolean {
   return (
     input.phase === "ready" &&

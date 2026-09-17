@@ -81,6 +81,36 @@ describe("isQueuedMessageTurnComplete", () => {
 });
 
 describe("queuedDispatchBlocksComposer", () => {
+  it("allows recovery of a failed FIFO head regardless of waiting entries behind it", () => {
+    expect(
+      queuedDispatchBlocksComposer({
+        phase: "ready",
+        dispatchInFlight: false,
+        firstEntryStatus: "failed",
+      }),
+    ).toBe(false);
+    expect(
+      queuedDispatchBlocksComposer({
+        phase: "ready",
+        dispatchInFlight: false,
+        firstEntryStatus: "editing",
+      }),
+    ).toBe(false);
+    expect(
+      queuedDispatchBlocksComposer({
+        phase: "ready",
+        dispatchInFlight: false,
+        firstEntryStatus: "queued",
+      }),
+    ).toBe(true);
+    expect(
+      queuedDispatchBlocksComposer({
+        phase: "ready",
+        dispatchInFlight: true,
+        firstEntryStatus: "confirming",
+      }),
+    ).toBe(true);
+  });
   it("keeps the acknowledgement barrier without disabling active-turn actions", () => {
     expect(queuedDispatchBlocksComposer({ phase: "ready", dispatchInFlight: true })).toBe(true);
     expect(queuedDispatchBlocksComposer({ phase: "running", dispatchInFlight: true })).toBe(false);
@@ -121,6 +151,33 @@ describe("resolveQueuedAcknowledgement", () => {
       }),
     ).toBe("waiting");
   });
+
+  it.each(["interrupted", "error"] as const)(
+    "releases an acknowledged %s turn without restarting the queue",
+    (state) => {
+      expect(
+        resolveQueuedAcknowledgement({
+          phase: "disconnected",
+          messageProjected: true,
+          previousTurnId: "before",
+          latestTurn: { turnId: "queued", state },
+          deadlineAt: 100,
+          now: 200,
+        }),
+      ).toBe("complete");
+      expect(
+        canAutoDrainComposerQueue({
+          phase: "disconnected",
+          isSendBusy: false,
+          isConnecting: false,
+          isThreadDetailLoading: false,
+          hasPendingUserInput: false,
+          awaitingPreviousMessageAcknowledgement: false,
+          firstEntryStatus: "queued",
+        }),
+      ).toBe(false);
+    },
+  );
 
   it("completes only the acknowledged terminal turn", () => {
     expect(

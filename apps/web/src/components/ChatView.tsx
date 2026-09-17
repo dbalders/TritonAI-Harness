@@ -300,6 +300,8 @@ import { environmentShell } from "../state/shell";
 import { readPreparedConnection } from "../state/session";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
 import { QueuedComposerControl } from "./chat/QueuedComposerControl";
+import { buildQueuedComposerPrompt } from "./chat/queuedComposerPrompt";
+import { steerQueuedComposerEntry } from "./chat/steerQueuedComposerEntry";
 import {
   type ComposerDispatchMode,
   formatOutgoingPrompt,
@@ -2605,12 +2607,13 @@ function ChatViewContent(props: ChatViewProps) {
     activePendingUserInput: activePendingUserInput?.requestId ?? null,
     threadError,
   });
-  const queuedEntriesAwaitingReadyThread =
-    phase === "ready" && queuedComposerEntries.some((entry) => entry.status !== "failed");
   const isSendBusy =
     localIsSendBusy ||
-    queuedEntriesAwaitingReadyThread ||
-    queuedDispatchBlocksComposer({ phase, dispatchInFlight: queuedDispatchInFlight });
+    queuedDispatchBlocksComposer({
+      phase,
+      dispatchInFlight: queuedDispatchInFlight,
+      firstEntryStatus: queuedComposerEntries[0]?.status,
+    });
   const isWorking = phase === "running" || isSendBusy || isConnecting || isRevertingCheckpoint;
   const activeWorkStartedAt = deriveActiveWorkStartedAt(
     activeLatestTurn,
@@ -6032,10 +6035,11 @@ function ChatViewContent(props: ChatViewProps) {
             await readComputerUseStateWithTimeout(() => bridge.getComputerUseState()),
           );
           if (
-            promptRef.current !== promptForSend ||
-            composerRef.current !== composerBeforeCheck ||
-            useComposerDraftStore.getState().getComposerDraft(composerDraftTarget) !==
-              draftBeforeCheck
+            !queuedEntry &&
+            (promptRef.current !== promptForSend ||
+              composerRef.current !== composerBeforeCheck ||
+              useComposerDraftStore.getState().getComposerDraft(composerDraftTarget) !==
+                draftBeforeCheck)
           )
             return;
           if (!readiness.ready) {
@@ -6331,7 +6335,7 @@ function ChatViewContent(props: ChatViewProps) {
       return;
     }
     if (dispatchMode === "queue" && phase === "running" && !queuedEntry && !hasGoalComposerIntent) {
-      useComposerQueueStore.getState().enqueue(routeThreadKey, {
+      const entry: QueuedComposerEntry = {
         id: `queued-${randomHex(12)}`,
         createdAt: new Date().toISOString(),
         prompt: promptForSend,
@@ -6353,7 +6357,10 @@ function ChatViewContent(props: ChatViewProps) {
         interactionMode,
         status: "queued",
         error: null,
-      });
+      };
+      if (composerRef.current?.validateProviderInput(buildQueuedComposerPrompt(entry)) === false)
+        return;
+      useComposerQueueStore.getState().enqueue(routeThreadKey, entry);
       promptRef.current = "";
       composerImagesRef.current = [];
       composerFilesRef.current = [];
@@ -7097,7 +7104,7 @@ function ChatViewContent(props: ChatViewProps) {
   const onSteerQueuedComposerEntry = useCallback(
     (entryId: string) => {
       if (
-        phase !== "running" ||
+        (phase !== "running" && phase !== "ready" && phase !== "disconnected") ||
         isSendBusy ||
         isConnecting ||
         activeEnvironmentUnavailable ||
@@ -7105,24 +7112,19 @@ function ChatViewContent(props: ChatViewProps) {
       ) {
         return;
       }
-      const entry = (
-        useComposerQueueStore.getState().entriesByThreadKey[routeThreadKey] ?? []
-      ).find((candidate) => candidate.id === entryId);
-      if (!entry) return;
-      if (!useComposerQueueStore.getState().markDispatching(routeThreadKey, entryId)) {
-        return;
-      }
-      void onSendRef
-        .current(undefined, "foreground", "steer", undefined, entry)
-        .catch((error: unknown) => {
-          useComposerQueueStore
-            .getState()
-            .markFailed(
-              routeThreadKey,
-              entryId,
-              error instanceof Error ? error.message : "Failed to steer queued message.",
-            );
-        });
+      void steerQueuedComposerEntry({
+        threadKey: routeThreadKey,
+        entryId,
+        mode: phase === "running" ? "steer" : "turn",
+        send: (entry) =>
+          onSendRef.current(
+            undefined,
+            "foreground",
+            phase === "running" ? "steer" : "auto",
+            undefined,
+            entry,
+          ),
+      });
     },
     [activeEnvironmentUnavailable, activeThread, isConnecting, isSendBusy, phase, routeThreadKey],
   );
@@ -8271,7 +8273,15 @@ function ChatViewContent(props: ChatViewProps) {
                             queuedMessagesControl={
                               isServerThread ? (
                                 <QueuedComposerControl
+                                  key={routeThreadKey}
+                                  threadKey={routeThreadKey}
                                   entries={queuedComposerEntries}
+                                  canRetry={
+                                    (phase === "ready" || phase === "disconnected") &&
+                                    !isSendBusy &&
+                                    !isConnecting &&
+                                    !activeEnvironmentUnavailable
+                                  }
                                   canSteer={
                                     phase === "running" &&
                                     !isSendBusy &&

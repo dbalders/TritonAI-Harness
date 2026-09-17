@@ -5,21 +5,20 @@ import {
   squashAtomCommandFailure,
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
-import type { MessageId } from "@t3tools/contracts";
+import { PRIMARY_LOCAL_ENVIRONMENT_ID, type MessageId } from "@t3tools/contracts";
+import { assertQueuedComputerUseReady } from "./queuedComputerUsePreflight";
+import { environmentPresentations } from "../../state/presentation";
+import { desktopLocalBackendId } from "../../connection/desktopLocal";
 import { truncate } from "@t3tools/shared/String";
 
 import type { QueuedComposerEntry } from "../../composerQueueStore";
-import { appendElementContextsToPrompt } from "../../lib/elementContext";
 import {
   awaitAttachmentUploads,
   getUploadedAttachments,
   releaseDraftAttachments,
   startAttachmentUpload,
 } from "../../lib/attachmentUploadQueue";
-import { appendPreviewAnnotationPrompt } from "../../lib/previewAnnotation";
-import { appendTerminalContextsToPrompt } from "../../lib/terminalContext";
 import { newMessageId } from "../../lib/utils";
-import { appendReviewCommentsToPrompt } from "../../reviewCommentContext";
 import { appAtomRegistry } from "../../rpc/atomRegistry";
 import { environmentServerConfigsAtom } from "../../state/server";
 import { threadEnvironment } from "../../state/threads";
@@ -29,10 +28,9 @@ import {
   resolveThreadMetadataUpdateForNextTurn,
 } from "../ChatView.logic";
 import { fileAttachmentCapabilityBlockReason } from "./composerAttachmentFiles";
-import { formatOutgoingPrompt } from "./composerDispatch";
 
-const ATTACHMENT_ONLY_PROMPT =
-  "[User attached one or more files without additional text. Inspect the attached files and respond using the conversation context.]";
+import { buildQueuedComposerPrompt } from "./queuedComposerPrompt";
+import { getComposerPromptLengthValidationMessage } from "./composerSubmission";
 
 function failureMessage(result: AtomCommandResult<unknown, unknown>): string {
   const error = result._tag === "Failure" ? squashAtomCommandFailure(result) : null;
@@ -47,7 +45,7 @@ export async function dispatchQueuedComposerEntry(input: {
   const environmentId = thread.environmentId;
   const threadRef = scopeThreadRef(environmentId, thread.id);
   const attachments = [...entry.images, ...entry.files];
-  const { trimmedPrompt, sendableTerminalContexts, hasSendableContent } = deriveComposerSendState({
+  const { trimmedPrompt, hasSendableContent } = deriveComposerSendState({
     prompt: entry.prompt,
     imageCount: attachments.length,
     terminalContexts: entry.terminalContexts,
@@ -57,6 +55,10 @@ export async function dispatchQueuedComposerEntry(input: {
   if (!hasSendableContent) {
     throw new Error("The queued message no longer has sendable content.");
   }
+
+  const outgoingText = buildQueuedComposerPrompt(entry);
+  const validationMessage = getComposerPromptLengthValidationMessage(outgoingText);
+  if (validationMessage) throw new Error(validationMessage);
 
   const config = appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId) ?? null;
   const supportsAttachmentUploads = config?.environment.capabilities.attachmentUploads === true;
@@ -86,9 +88,6 @@ export async function dispatchQueuedComposerEntry(input: {
   const turnAttachments = await Promise.all(
     attachments.map(async (attachment) => {
       if (attachment.type === "file" && attachment.path != null) {
-        if (attachment.file === null) {
-          throw new Error(`File '${attachment.name}' must be attached again.`);
-        }
         return {
           type: "file" as const,
           id: attachment.id,
@@ -116,22 +115,33 @@ export async function dispatchQueuedComposerEntry(input: {
     }),
   );
 
-  const messageWithContexts = appendElementContextsToPrompt(
-    appendTerminalContextsToPrompt(entry.prompt, sendableTerminalContexts),
-    entry.elementContexts,
-  );
-  const messageWithAnnotations = entry.previewAnnotations.reduce(
-    (text, annotation) => appendPreviewAnnotationPrompt(text, annotation),
-    messageWithContexts,
-  );
-  const messageText = appendReviewCommentsToPrompt(messageWithAnnotations, entry.reviewComments);
-  const outgoingText = formatOutgoingPrompt({
+  const target = appAtomRegistry.get(environmentPresentations.presentationAtom(environmentId))
+    ?.entry.target;
+  const localBackendId =
+    target?._tag === "PrimaryConnectionTarget"
+      ? PRIMARY_LOCAL_ENVIRONMENT_ID
+      : target
+        ? desktopLocalBackendId(target)
+        : null;
+  const bridge = typeof window === "undefined" ? undefined : window.desktopBridge;
+  await assertQueuedComputerUseReady({
+    prompt: entry.prompt,
     provider: entry.selectedProvider,
-    model: entry.selectedModel,
-    models: entry.selectedProviderModels,
-    effort: entry.selectedPromptEffort,
-    text: messageText || ATTACHMENT_ONLY_PROMPT,
+    localDesktop: Boolean(bridge && localBackendId === PRIMARY_LOCAL_ENVIRONMENT_ID),
+    usesWsl: Boolean(
+      bridge
+        ?.getLocalEnvironmentBootstraps()
+        .some(
+          (environment) =>
+            environment.id === PRIMARY_LOCAL_ENVIRONMENT_ID && environment.runningDistro,
+        ),
+    ),
+    readState: () => {
+      if (!bridge) throw new Error("Desktop connection unavailable.");
+      return bridge.getComputerUseState();
+    },
   });
+
   const createdAt = new Date().toISOString();
   const metadataUpdate = resolveThreadMetadataUpdateForNextTurn({
     currentModelSelection: thread.modelSelection,

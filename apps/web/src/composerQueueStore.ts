@@ -8,6 +8,7 @@ import type {
   ServerProvider,
 } from "@t3tools/contracts";
 import { create } from "zustand";
+import { getQueuedComposerValidationMessage } from "./components/chat/queuedComposerPrompt";
 
 import type { ComposerFileAttachment, ComposerImageAttachment } from "./composerDraftStore";
 import type { TerminalContextDraft } from "./lib/terminalContext";
@@ -15,7 +16,7 @@ import type { ElementContextDraft } from "./lib/elementContext";
 import type { PreviewAnnotationPayload } from "@t3tools/contracts";
 import type { ReviewCommentContext } from "./reviewCommentContext";
 
-export type QueuedComposerStatus = "queued" | "dispatching" | "failed";
+export type QueuedComposerStatus = "queued" | "editing" | "dispatching" | "confirming" | "failed";
 
 export const COMPOSER_QUEUE_ACKNOWLEDGEMENT_TIMEOUT_MS = 30_000;
 
@@ -56,9 +57,12 @@ interface ComposerQueueState {
   readonly dispatchAcknowledgementDeadlineByThreadKey: Readonly<Record<string, number>>;
   readonly sharedDispatchCountByThreadKey: Readonly<Record<string, number>>;
   enqueue: (threadKey: string, entry: QueuedComposerEntry) => void;
+  beginEditing: (threadKey: string, entryId: string) => boolean;
+  cancelEditing: (threadKey: string, entryId: string) => void;
+  markConfirming: (threadKey: string, entryId: string, error: string) => void;
   updatePrompt: (threadKey: string, entryId: string, prompt: string) => void;
   remove: (threadKey: string, entryId: string) => QueuedComposerEntry | null;
-  markDispatching: (threadKey: string, entryId: string) => boolean;
+  markDispatching: (threadKey: string, entryId: string, mode?: "turn" | "steer") => boolean;
   complete: (threadKey: string, entryId: string) => void;
   markFailed: (threadKey: string, entryId: string, error: string) => void;
   claimDispatch: (threadKey: string, ownerId: string) => boolean;
@@ -101,23 +105,73 @@ export const useComposerQueueStore = create<ComposerQueueState>((set, get) => ({
       ]),
     );
   },
+  beginEditing: (threadKey, entryId) => {
+    const entry = get().entriesByThreadKey[threadKey]?.find((item) => item.id === entryId);
+    if (!entry || (entry.status !== "queued" && entry.status !== "failed")) return false;
+    set((state) =>
+      replaceThreadEntries(
+        state,
+        threadKey,
+        (state.entriesByThreadKey[threadKey] ?? []).map((item) =>
+          item.id === entryId ? { ...item, status: "editing" } : item,
+        ),
+      ),
+    );
+    return true;
+  },
+  cancelEditing: (threadKey, entryId) => {
+    set((state) =>
+      replaceThreadEntries(
+        state,
+        threadKey,
+        (state.entriesByThreadKey[threadKey] ?? []).map((item) =>
+          item.id === entryId && item.status === "editing"
+            ? { ...item, status: item.error ? "failed" : "queued" }
+            : item,
+        ),
+      ),
+    );
+  },
+  markConfirming: (threadKey, entryId, error) => {
+    if (
+      get().entriesByThreadKey[threadKey]?.find((item) => item.id === entryId)?.status ===
+      "confirming"
+    )
+      return;
+    set((state) =>
+      replaceThreadEntries(
+        state,
+        threadKey,
+        (state.entriesByThreadKey[threadKey] ?? []).map((item) =>
+          item.id === entryId ? { ...item, status: "confirming", error } : item,
+        ),
+      ),
+    );
+  },
   updatePrompt: (threadKey, entryId, prompt) => {
     set((state) =>
       replaceThreadEntries(
         state,
         threadKey,
-        (state.entriesByThreadKey[threadKey] ?? []).map((entry) =>
-          entry.id === entryId && entry.status !== "dispatching"
-            ? { ...entry, prompt, status: "queued", error: null }
-            : entry,
-        ),
+        (state.entriesByThreadKey[threadKey] ?? []).map((entry) => {
+          if (
+            entry.id !== entryId ||
+            entry.status === "dispatching" ||
+            entry.status === "confirming"
+          )
+            return entry;
+          const updated = { ...entry, prompt };
+          const error = getQueuedComposerValidationMessage(updated);
+          return { ...updated, status: error ? ("failed" as const) : ("queued" as const), error };
+        }),
       ),
     );
   },
   remove: (threadKey, entryId) => {
     const entries = get().entriesByThreadKey[threadKey] ?? [];
     const removed = entries.find((entry) => entry.id === entryId) ?? null;
-    if (!removed || removed.status === "dispatching") return null;
+    if (!removed || removed.status === "dispatching" || removed.status === "confirming")
+      return null;
     set((state) =>
       replaceThreadEntries(
         state,
@@ -127,10 +181,23 @@ export const useComposerQueueStore = create<ComposerQueueState>((set, get) => ({
     );
     return removed;
   },
-  markDispatching: (threadKey, entryId) => {
+  markDispatching: (threadKey, entryId, mode = "turn") => {
     const entries = get().entriesByThreadKey[threadKey] ?? [];
     const entry = entries.find((candidate) => candidate.id === entryId);
-    if (!entry || entries.some((candidate) => candidate.status === "dispatching")) return false;
+    if (!entry || (entry.status !== "queued" && entry.status !== "failed")) return false;
+    const state = get();
+    const acknowledgedOwner =
+      mode === "steer" && state.dispatchAcknowledgementByThreadKey[threadKey]
+        ? state.dispatchOwnerByThreadKey[threadKey]
+        : undefined;
+    if (
+      entries.some(
+        (candidate) =>
+          (candidate.status === "dispatching" || candidate.status === "confirming") &&
+          acknowledgedOwner !== `queue:${candidate.id}`,
+      )
+    )
+      return false;
     set((state) =>
       replaceThreadEntries(
         state,

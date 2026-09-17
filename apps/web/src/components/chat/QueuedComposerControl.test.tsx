@@ -37,6 +37,7 @@ describe("QueuedComposerControl", () => {
   it("renders multiple queued messages in order with explicit actions", () => {
     const html = renderToStaticMarkup(
       <QueuedComposerControl
+        threadKey="test:thread"
         entries={[entry("one", "First queued prompt"), entry("two", "Second queued prompt")]}
         canSteer
         onSteer={() => undefined}
@@ -58,6 +59,7 @@ describe("QueuedComposerControl", () => {
   it("shows only messages that are still waiting", () => {
     const html = renderToStaticMarkup(
       <QueuedComposerControl
+        threadKey="test:thread"
         entries={[
           entry("sent", "Already in the transcript", "dispatching"),
           entry("waiting", "Still waiting"),
@@ -77,6 +79,7 @@ describe("QueuedComposerControl", () => {
   it("removes the drawer when the only message has started sending", () => {
     const html = renderToStaticMarkup(
       <QueuedComposerControl
+        threadKey="test:thread"
         entries={[entry("sent", "Already in the transcript", "dispatching")]}
         canSteer
         onSteer={() => undefined}

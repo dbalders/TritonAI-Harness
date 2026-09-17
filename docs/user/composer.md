@@ -19,7 +19,7 @@ Queued messages stay out of the conversation until they are sent. They appear in
 above the composer in FIFO order. You can queue multiple messages, remove them, or choose
 **Steer now** to send one into the active turn. After the active turn finishes, Harness sends one
 queued message at a time and waits for that turn to finish before sending the next. A failed queued
-message remains in the drawer with its error so you can retry it as a steer or remove it.
+message remains in the drawer with its error so you can retry it (as a new turn while idle or a steer while running) or remove it. Editing pauses delivery of that message until you save or cancel. Messages already accepted by the server remain non-retryable while delivery confirmation is pending, preventing duplicate submissions.
 
 The web and desktop queue belongs to the current app session and keeps draining when you switch to
 another task. Reloading or closing the app clears it; drafts in the composer still use the normal

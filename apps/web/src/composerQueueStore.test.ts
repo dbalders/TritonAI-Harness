@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it } from "vite-plus/test";
-import { MessageId } from "@t3tools/contracts";
+import { MessageId, PROVIDER_SEND_TURN_MAX_INPUT_CHARS } from "@t3tools/contracts";
 
 import { useComposerQueueStore, type QueuedComposerEntry } from "./composerQueueStore";
+import { steerQueuedComposerEntry } from "./components/chat/steerQueuedComposerEntry";
+import { getQueuedComposerValidationMessage } from "./components/chat/queuedComposerPrompt";
 
 const entry = (id: string): QueuedComposerEntry =>
   ({
@@ -30,6 +32,65 @@ const entry = (id: string): QueuedComposerEntry =>
 
 describe("composer queue store", () => {
   beforeEach(() => useComposerQueueStore.getState().clearForTests());
+
+  it("reserves edits across turn completion and restores the queue on save or cancel", () => {
+    const store = useComposerQueueStore.getState();
+    store.enqueue("thread:a", entry("one"));
+    expect(store.beginEditing("thread:a", "one")).toBe(true);
+    expect(store.markDispatching("thread:a", "one")).toBe(false);
+    expect(store.markDispatching("thread:a", "one", "steer")).toBe(false);
+    store.updatePrompt("thread:a", "one", "edited");
+    expect(useComposerQueueStore.getState().entriesByThreadKey["thread:a"]?.[0]).toMatchObject({
+      prompt: "edited",
+      status: "queued",
+    });
+    store.beginEditing("thread:a", "one");
+    store.cancelEditing("thread:a", "one");
+    expect(store.markDispatching("thread:a", "one")).toBe(true);
+  });
+
+  it("prevents duplicate retries while an accepted submission awaits projection", () => {
+    const store = useComposerQueueStore.getState();
+    store.enqueue("thread:a", entry("one"));
+    store.claimDispatch("thread:a", "queue:one");
+    store.markDispatching("thread:a", "one");
+    store.acknowledgeDispatch("thread:a", "queue:one", MessageId.make("accepted"), null);
+    store.markConfirming("thread:a", "one", "Waiting for confirmation");
+    expect(store.markDispatching("thread:a", "one", "steer")).toBe(false);
+    expect(store.beginEditing("thread:a", "one")).toBe(false);
+    expect(store.remove("thread:a", "one")).toBeNull();
+    store.updatePrompt("thread:a", "one", "changed");
+    expect(useComposerQueueStore.getState().entriesByThreadKey["thread:a"]?.[0]).toMatchObject({
+      status: "confirming",
+      prompt: "one",
+    });
+    expect(store.claimDispatch("thread:a", "another")).toBe(false);
+    // The original message remains identifiable when its delayed projection arrives.
+    expect(useComposerQueueStore.getState().dispatchAcknowledgementByThreadKey["thread:a"]).toBe(
+      "accepted",
+    );
+    store.complete("thread:a", "one");
+    store.releaseDispatch("thread:a", "queue:one");
+    expect(store.claimDispatch("thread:a", "another")).toBe(true);
+  });
+
+  it("retries a failed entry as a normal turn while idle", async () => {
+    const store = useComposerQueueStore.getState();
+    store.enqueue("thread:a", entry("one"));
+    store.markFailed("thread:a", "one", "offline");
+    let sent = false;
+    await steerQueuedComposerEntry({
+      threadKey: "thread:a",
+      entryId: "one",
+      mode: "turn",
+      send: async (queued) => {
+        sent = true;
+        store.complete("thread:a", queued.id);
+      },
+    });
+    expect(sent).toBe(true);
+    expect(useComposerQueueStore.getState().entriesByThreadKey["thread:a"]).toBeUndefined();
+  });
 
   it("keeps FIFO queues isolated by thread", () => {
     const store = useComposerQueueStore.getState();
@@ -159,5 +220,78 @@ describe("composer queue store", () => {
     store.endSharedDispatch("thread:a", "queue:one");
     store.releaseDispatch("thread:a", "queue:one");
     expect(useComposerQueueStore.getState().dispatchOwnerByThreadKey["thread:a"]).toBeUndefined();
+  });
+});
+
+describe("queued submission recovery", () => {
+  beforeEach(() => useComposerQueueStore.getState().clearForTests());
+
+  it("steers a second entry while preserving the first queued turn barrier", async () => {
+    const store = useComposerQueueStore.getState();
+    store.enqueue("a", entry("one"));
+    store.enqueue("a", entry("two"));
+    store.claimDispatch("a", "queue:one");
+    store.markDispatching("a", "one");
+    store.acknowledgeDispatch("a", "queue:one", MessageId.make("message-one"), "before");
+    const sent: string[] = [];
+    await steerQueuedComposerEntry({
+      threadKey: "a",
+      entryId: "two",
+      send: async (item) => {
+        sent.push(item.id);
+        expect(store.beginSharedDispatch("a", "queue:one")).toBe(true);
+        expect(store.markDispatching("a", "one", "steer")).toBe(false);
+        store.complete("a", item.id);
+        store.endSharedDispatch("a", "queue:one");
+      },
+    });
+    expect(sent).toEqual(["two"]);
+    expect(useComposerQueueStore.getState().entriesByThreadKey.a?.map((x) => x.id)).toEqual([
+      "one",
+    ]);
+    expect(useComposerQueueStore.getState().dispatchOwnerByThreadKey.a).toBe("queue:one");
+  });
+
+  it("restores a computer-use entry when preflight returns without sending", async () => {
+    const store = useComposerQueueStore.getState();
+    store.enqueue("a", { ...entry("one"), prompt: "/computer-use inspect the test window" });
+    await steerQueuedComposerEntry({ threadKey: "a", entryId: "one", send: async () => {} });
+    expect(useComposerQueueStore.getState().entriesByThreadKey.a?.[0]?.status).toBe("failed");
+    expect(store.remove("a", "one")?.id).toBe("one");
+  });
+
+  it("keeps a rejected edited message visible and recovers after shortening it", () => {
+    const store = useComposerQueueStore.getState();
+    store.enqueue("a", entry("one"));
+    store.updatePrompt("a", "one", "x".repeat(PROVIDER_SEND_TURN_MAX_INPUT_CHARS + 1));
+    expect(useComposerQueueStore.getState().entriesByThreadKey.a?.[0]).toMatchObject({
+      status: "failed",
+      error: expect.stringContaining("120,000-character limit"),
+    });
+    store.updatePrompt("a", "one", "Shortened follow-up");
+    expect(useComposerQueueStore.getState().entriesByThreadKey.a?.[0]).toMatchObject({
+      status: "queued",
+      error: null,
+    });
+  });
+
+  it("validates the composed review context, not only the visible prompt", () => {
+    const item = {
+      ...entry("one"),
+      reviewComments: [
+        {
+          id: "review",
+          sectionId: "s",
+          sectionTitle: "Review",
+          filePath: "example.ts",
+          startIndex: 0,
+          endIndex: 1,
+          rangeLabel: "1",
+          text: "Fix this",
+          diff: "x".repeat(PROVIDER_SEND_TURN_MAX_INPUT_CHARS),
+        },
+      ],
+    };
+    expect(getQueuedComposerValidationMessage(item)).toContain("120,000-character limit");
   });
 });

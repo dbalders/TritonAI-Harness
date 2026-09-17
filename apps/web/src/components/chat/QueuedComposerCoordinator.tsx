@@ -76,13 +76,13 @@ function QueuedThreadDrain({ threadKey }: { readonly threadKey: string }) {
         if (dispatchedEntry) {
           useComposerQueueStore
             .getState()
-            .markFailed(
+            .markConfirming(
               threadKey,
               dispatchedEntry.id,
-              `The message was accepted but was not confirmed within ${COMPOSER_QUEUE_ACKNOWLEDGEMENT_TIMEOUT_MS / 1_000} seconds. Check the task before retrying.`,
+              `The message was accepted but was not confirmed within ${COMPOSER_QUEUE_ACKNOWLEDGEMENT_TIMEOUT_MS / 1_000} seconds. Waiting for the task to reconnect and confirm delivery; retry is disabled to prevent duplicate work.`,
             );
         }
-        useComposerQueueStore.getState().releaseDispatch(threadKey, dispatchOwner);
+        return;
       } else {
         return;
       }
