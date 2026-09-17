@@ -381,7 +381,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             throw new Error(`Expected ${DEFAULT_TRITONAI_CODEX_MODEL} to be available.`);
           }
 
-          assert.strictEqual(model.name, "DeepSeek v4 Flash");
+          assert.strictEqual(model.name, "GLM 5.3 Flash");
           assert.strictEqual(model.isCustom, false);
           assert.strictEqual(status.requiresNewThreadForModelChange, true);
           assert.deepStrictEqual(model.capabilities?.optionDescriptors, [
@@ -390,12 +390,11 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               label: "Reasoning",
               type: "select",
               options: [
-                { id: "minimal", label: "Minimal" },
                 { id: "low", label: "Low" },
-                { id: "medium", label: "Medium", isDefault: true },
-                { id: "high", label: "High" },
+                { id: "high", label: "High", isDefault: true },
+                { id: "max", label: "Max" },
               ],
-              currentValue: "medium",
+              currentValue: "high",
             },
           ]);
         }),
@@ -726,7 +725,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           models: [
             {
               slug: DEFAULT_TRITONAI_CODEX_MODEL,
-              name: "DeepSeek v4 Flash",
+              name: "GLM 5.3 Flash",
               isCustom: true,
               capabilities: createModelCapabilities({
                 optionDescriptors: [],
@@ -750,7 +749,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           models: [
             {
               slug: DEFAULT_TRITONAI_CODEX_MODEL,
-              name: "DeepSeek v4 Flash",
+              name: "GLM 5.3 Flash",
               isCustom: true,
               capabilities: null,
             },
@@ -760,7 +759,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
         assert.deepStrictEqual(mergeProviderSnapshot(previousProvider, refreshedProvider).models, [
           {
             slug: DEFAULT_TRITONAI_CODEX_MODEL,
-            name: "DeepSeek v4 Flash",
+            name: "GLM 5.3 Flash",
             isCustom: true,
             capabilities: null,
           },

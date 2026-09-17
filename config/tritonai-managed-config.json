@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "policyVersion": 5,
+  "policyVersion": 6,
   "provider": {
     "driver": "codex",
     "managedBinary": true,
@@ -24,35 +24,36 @@
     }
   },
   "models": {
-    "default": "api-glm-5.3",
-    "restrictedFallback": "api-glm-5.3",
+    "default": "api-glm-5.3-flash",
+    "restrictedFallback": "api-glm-5.3-flash",
     "replacements": {
       "api-gemma-4-31b": "api-muse-glimmer-30b",
       "onyx-muse-glimmer-30b": "api-muse-glimmer-30b",
       "api-glm-5.2": "api-glm-5.3",
       "gpt-5.5": "gpt-5.6-sol",
-      "claude-opus-4-8": "claude-opus-5"
+      "claude-opus-4-8": "claude-opus-5",
+      "api-deepseek-v4-flash": "api-glm-5.3-flash",
+      "glm-5.3-flash-test": "api-glm-5.3-flash"
     },
     "catalog": [
       {
-        "id": "api-deepseek-v4-flash",
-        "name": "DeepSeek v4 Flash",
-        "shortName": "DeepSeek",
+        "id": "api-glm-5.3-flash",
+        "name": "GLM 5.3 Flash",
+        "shortName": "Flash",
         "route": "on-prem",
         "capabilities": {
-          "inputModalities": ["text"],
+          "inputModalities": ["text", "image"],
           "optionDescriptors": [
             {
               "id": "reasoningEffort",
               "label": "Reasoning",
               "type": "select",
               "options": [
-                { "id": "minimal", "label": "Minimal" },
                 { "id": "low", "label": "Low" },
-                { "id": "medium", "label": "Medium", "isDefault": true },
-                { "id": "high", "label": "High" }
+                { "id": "high", "label": "High", "isDefault": true },
+                { "id": "max", "label": "Max" }
               ],
-              "currentValue": "medium"
+              "currentValue": "high"
             }
           ]
         }

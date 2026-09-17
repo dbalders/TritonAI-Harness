@@ -108,13 +108,13 @@ describe("CodexModelCatalog", () => {
 
       const result = JSON.parse(
         buildTritonAiCodexModelCatalog(JSON.stringify(catalog), {
-          "api-deepseek-v4-flash": {
-            name: "DeepSeek v4 Flash",
+          "api-glm-5.3-flash": {
+            name: "GLM 5.3 Flash",
             capabilities: { inputModalities: ["text"] },
           },
         }),
       ) as { models: Array<Record<string, unknown>> };
-      const managedModel = result.models.find((model) => model.slug === "api-deepseek-v4-flash");
+      const managedModel = result.models.find((model) => model.slug === "api-glm-5.3-flash");
 
       NodeAssert.equal(managedModel?.supports_search_tool, false);
     }

@@ -88,10 +88,19 @@ describe("TritonAI managed Harness policy", () => {
       },
     ]);
     expect(effective.providerInstances[managedInstanceId]?.config).toMatchObject({
-      customModels: ["api-deepseek-v4-flash", "api-glm-5.3", "api-muse-glimmer-30b"],
+      customModels: ["api-glm-5.3-flash", "api-glm-5.3", "api-muse-glimmer-30b"],
       customModelMetadata: {
-        "api-deepseek-v4-flash": {
-          capabilities: { inputModalities: ["text"] },
+        "api-glm-5.3-flash": {
+          capabilities: {
+            inputModalities: ["text", "image"],
+            optionDescriptors: [
+              {
+                id: "reasoningEffort",
+                options: [{ id: "low" }, { id: "high", isDefault: true }, { id: "max" }],
+                currentValue: "high",
+              },
+            ],
+          },
         },
         "api-glm-5.3": {
           capabilities: {
@@ -111,7 +120,7 @@ describe("TritonAI managed Harness policy", () => {
       },
     });
     expect(effective.providers.codex.customModels).toEqual([
-      "api-deepseek-v4-flash",
+      "api-glm-5.3-flash",
       "api-glm-5.3",
       "api-muse-glimmer-30b",
     ]);
@@ -189,6 +198,21 @@ describe("TritonAI managed Harness policy", () => {
     });
     expect(absent.textGenerationModelSelection.model).toBe(managedConfig.models.default);
     expect(absent.textGenerationModelSelection.instanceId).toBe(managedInstanceId);
+
+    const retiredDeepSeek = applyManagedHarnessPolicy({
+      ...DEFAULT_SERVER_SETTINGS,
+      textGenerationModelSelection: {
+        instanceId: managedInstanceId,
+        model: "api-deepseek-v4-flash",
+      },
+      sourceControlWriterModelSelection: {
+        instanceId: managedInstanceId,
+        model: "api-deepseek-v4-flash",
+      },
+    });
+    expect(retiredDeepSeek.textGenerationModelSelection.model).toBe("api-glm-5.3-flash");
+    expect(retiredDeepSeek.sourceControlWriterModelSelection?.model).toBe("api-glm-5.3-flash");
+    expect(retiredDeepSeek.providers.codex.customModels).not.toContain("api-deepseek-v4-flash");
 
     const retiredGlm = applyManagedHarnessPolicy({
       ...DEFAULT_SERVER_SETTINGS,

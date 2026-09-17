@@ -90,7 +90,7 @@ it("uses configured model visibility without a Harness allowlist", () => {
   assert.strictEqual(models[0]?.shortName, "Configured");
 });
 
-it("falls back to DeepSeek when no models are configured", () => {
+it("falls back to GLM 5.3 Flash when no models are configured", () => {
   const models = curateVisibleCodexModels([], []);
 
   assert.deepStrictEqual(
@@ -102,11 +102,11 @@ it("falls back to DeepSeek when no models are configured", () => {
 
 it("preserves default capabilities when metadata only changes presentation", () => {
   const models = curateVisibleCodexModels([], [DEFAULT_TRITONAI_CODEX_MODEL], {
-    [DEFAULT_TRITONAI_CODEX_MODEL]: { name: "Managed DeepSeek" },
+    [DEFAULT_TRITONAI_CODEX_MODEL]: { name: "Managed Flash" },
   });
 
-  assert.strictEqual(models[0]?.name, "Managed DeepSeek");
-  assert.strictEqual(models[0]?.shortName, "DeepSeek");
+  assert.strictEqual(models[0]?.name, "Managed Flash");
+  assert.strictEqual(models[0]?.shortName, "Flash");
   assert.ok(models[0]?.capabilities?.optionDescriptors?.length);
 });
 

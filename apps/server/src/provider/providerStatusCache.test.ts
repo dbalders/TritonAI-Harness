@@ -189,7 +189,7 @@ it.layer(NodeServices.layer)("providerStatusCache", (it) => {
       models: [
         {
           slug: DEFAULT_TRITONAI_CODEX_MODEL,
-          name: "DeepSeek v4 Flash",
+          name: "GLM 5.3 Flash",
           isCustom: true,
           capabilities: emptyCapabilities,
         },
@@ -206,7 +206,7 @@ it.layer(NodeServices.layer)("providerStatusCache", (it) => {
       models: [
         {
           slug: DEFAULT_TRITONAI_CODEX_MODEL,
-          name: "DeepSeek v4 Flash",
+          name: "GLM 5.3 Flash",
           isCustom: true,
           capabilities: null,
         },

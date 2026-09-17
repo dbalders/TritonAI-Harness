@@ -160,7 +160,7 @@ describe("TritonAI credential IPC", () => {
           assert.equal(request.url, "https://configured.tritonai.example/v1/models");
           assert.equal(request.headers.authorization, "Bearer replacement-key");
           return jsonResponse(request, {
-            data: [{ id: "api-deepseek-v4-flash" }, { id: "gpt-5.6-sol" }],
+            data: [{ id: "api-glm-5.3-flash" }, { id: "gpt-5.6-sol" }],
           });
         }),
       );
@@ -208,7 +208,7 @@ describe("TritonAI credential IPC", () => {
               {
                 id: (request.headers.authorization ?? "").includes("frontier-key")
                   ? "gpt-5.6-sol"
-                  : "api-deepseek-v4-flash",
+                  : "api-glm-5.3-flash",
               },
             ],
           }),
@@ -294,7 +294,7 @@ describe("TritonAI credential IPC", () => {
       const validationLayer = makeHttpClientLayer((request) =>
         Effect.succeed(
           jsonResponse(request, {
-            data: [{ id: "api-deepseek-v4-flash" }, { id: "gpt-5.6-sol" }],
+            data: [{ id: "api-glm-5.3-flash" }, { id: "gpt-5.6-sol" }],
           }),
         ),
       );
@@ -445,7 +445,7 @@ describe("TritonAI credential IPC", () => {
       const validationLayer = makeHttpClientLayer((request) =>
         Effect.succeed(
           jsonResponse(request, {
-            data: [{ id: "api-deepseek-v4-flash" }, { id: "gpt-5.6-sol" }],
+            data: [{ id: "api-glm-5.3-flash" }, { id: "gpt-5.6-sol" }],
           }),
         ),
       );

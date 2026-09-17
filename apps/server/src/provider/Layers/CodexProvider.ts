@@ -97,7 +97,7 @@ export function curateVisibleCodexModels(
           ? {
               ...model,
               name: DEFAULT_TRITONAI_CODEX_MODEL_DISPLAY_NAME,
-              shortName: "DeepSeek",
+              shortName: "Flash",
               isCustom: false,
               capabilities: tritonAiCodexCapabilities(model.capabilities),
             }
@@ -132,12 +132,11 @@ const REASONING_EFFORT_LABELS: Readonly<Record<string, string>> = {
 };
 
 const DEFAULT_SERVICE_TIER_ID = "default";
-const DEFAULT_TRITONAI_REASONING_EFFORT = "medium";
+const DEFAULT_TRITONAI_REASONING_EFFORT = "high";
 const TRITONAI_REASONING_EFFORT_OPTIONS = [
-  { id: "minimal", label: "Minimal" },
   { id: "low", label: "Low" },
-  { id: DEFAULT_TRITONAI_REASONING_EFFORT, label: "Medium", isDefault: true },
-  { id: "high", label: "High" },
+  { id: DEFAULT_TRITONAI_REASONING_EFFORT, label: "High", isDefault: true },
+  { id: "max", label: "Max" },
 ] as const;
 
 function reasoningEffortLabel(reasoningEffort: string): string {

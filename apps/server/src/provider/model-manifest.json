@@ -2,7 +2,7 @@
   "version": 1,
   "currentModels": {
     "codex": [
-      "api-deepseek-v4-flash",
+      "api-glm-5.3-flash",
       "api-glm-5.3",
       "api-muse-glimmer-30b",
       "gpt-5.6-luna",

@@ -10,6 +10,13 @@ Common reasons:
 - switch to another account when one account hits limits
 - keep one shared Codex history instead of maintaining two separate Codex setups
 
+## Managed Models
+
+GLM 5.3 Flash is the default on-prem model and supports text and image input. Choose Low, High
+(the default), or Max reasoning. GLM 5.3 and Glimmer remain available. DeepSeek has been removed from the managed catalog; saved managed
+DeepSeek selections fall back to GLM 5.3 Flash. Existing selections of other available models
+are preserved.
+
 ## Engine Updates
 
 Stable and Nightly can use the same Codex installation. If a new profile cannot find Codex,
