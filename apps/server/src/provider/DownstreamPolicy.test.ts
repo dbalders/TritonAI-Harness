@@ -107,7 +107,7 @@ describe("downstream provider and integration policy", () => {
     expect(DEFAULT_SERVER_SETTINGS.textGenerationModelSelection).toEqual({
       instanceId: "codex",
       model: DEFAULT_TRITONAI_CODEX_MODEL,
-      options: [{ id: "reasoningEffort", value: "low" }],
+      options: [{ id: "reasoningEffort", value: "high" }],
     });
     expect(DEFAULT_SERVER_SETTINGS.providers.codex).toMatchObject({
       enabled: true,
