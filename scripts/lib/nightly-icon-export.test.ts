@@ -72,6 +72,14 @@ it.layer(NodeServices.layer)("development artwork", (it) => {
         [1023, 1023],
       ] as const)
         expect(image.data[(y * 1024 + x) * 4 + 3]).toBe(0);
+      // Allow the raster master's narrow antialiased rim, but reject the old 100px inset.
+      for (const [x, y] of [
+        [512, 8],
+        [8, 512],
+        [1015, 512],
+        [512, 1015],
+      ] as const)
+        expect(image.data[(y * 1024 + x) * 4 + 3]).toBeGreaterThanOrEqual(250);
       const outputs = renderDevelopmentIconAssets(master);
       for (const [file, bytes] of outputs)
         expect(Buffer.from(yield* fs.readFile(path.join(root, file))).equals(bytes)).toBe(true);
