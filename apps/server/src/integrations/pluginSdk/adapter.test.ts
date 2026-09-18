@@ -181,6 +181,62 @@ function secretStore(): ServerSecretStore.ServerSecretStore["Service"] {
 }
 
 describe("plugin SDK adapter", () => {
+  it("preserves Unicode patterns when decoding plugin tool arguments", async () => {
+    const loaded = await loadPluginSdkIntegration({
+      files: artifact(providerSource, "# Fixture reader\n", {
+        inputSchema: {
+          ...inputSchema,
+          properties: {
+            topic: { type: "string", pattern: "^[^\\p{Cc}\\s]+$" },
+          },
+        },
+      }),
+      secrets: secretStore(),
+      configuration: { prefix: "fixture" },
+      expected: { id, version: "1.0.0" },
+      hostNodeVersion: "24.13.1",
+    });
+    try {
+      const tool = loaded.provider!.tools[0]!;
+      // The n8n project ID that failed host validation despite satisfying the plugin contract.
+      for (const topic of ["ElsCzc5cQpan2Ucb", "日本語", "😀"]) {
+        await expect(decodeIntegrationToolInput(tool, { topic })).resolves.toEqual({ topic });
+      }
+      for (const topic of ["", "has space", "tab\t", "control\u0085", "null\u0000"]) {
+        await expect(decodeIntegrationToolInput(tool, { topic })).rejects.toThrow();
+      }
+    } finally {
+      await loaded.provider?.close?.();
+    }
+  });
+
+  it("uses Unicode matching for plugin patternProperties", async () => {
+    const loaded = await loadPluginSdkIntegration({
+      files: artifact(providerSource, "# Fixture reader\n", {
+        inputSchema: {
+          type: "object",
+          patternProperties: { "^\\p{L}+$": { type: "string" } },
+          properties: {},
+          $schema: "https://json-schema.org/draft/2020-12/schema",
+          additionalProperties: false,
+        },
+      }),
+      secrets: secretStore(),
+      configuration: { prefix: "fixture" },
+      expected: { id, version: "1.0.0" },
+      hostNodeVersion: "24.13.1",
+    });
+    try {
+      const tool = loaded.provider!.tools[0]!;
+      await expect(decodeIntegrationToolInput(tool, { 日本語: "value" })).resolves.toEqual({
+        日本語: "value",
+      });
+      await expect(decodeIntegrationToolInput(tool, { 日本語: 123 })).rejects.toThrow();
+    } finally {
+      await loaded.provider?.close?.();
+    }
+  });
+
   it("validates schemas before import and adapts exact verified bytes", async () => {
     delete (globalThis as { __pluginSdkImported?: boolean }).__pluginSdkImported;
     const trackedEntry = `globalThis.__pluginSdkImported = true;\n${providerSource}`;
