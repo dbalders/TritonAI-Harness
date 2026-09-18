@@ -347,3 +347,45 @@ diff --git a/src/internal/schema/parser.ts b/src/internal/schema/parser.ts
 +// Schemas cross the bundled host and external plugin runtime boundary.
 +export const sameExit: Success<unknown> =
 +  (globalThis as typeof globalThis & { [key: symbol]: Success<unknown> })[Symbol.for("effect/SchemaParser/sameExit/beta.103")] ??= succeed(missing)
+diff --git a/dist/internal/schema/fromJsonSchemaDocument.js b/dist/internal/schema/fromJsonSchemaDocument.js
+--- a/dist/internal/schema/fromJsonSchemaDocument.js
++++ b/dist/internal/schema/fromJsonSchemaDocument.js
+@@ -631,7 +631,7 @@
+     if (typeof schema.pattern === "string") {
+       checks.push(jsonSchemaFilter("effect/schema/isPattern", {
+         source: schema.pattern,
+-        flags: ""
++        flags: "u"
+       }));
+     }
+     return checks;
+@@ -676,7 +676,7 @@
+             _tag: "String",
+             checks: [jsonSchemaFilter("effect/schema/isPattern", {
+               source: pattern,
+-              flags: ""
++              flags: "u"
+             })]
+           },
+           type: recur(value, [...path, "patternProperties", pattern])
+diff --git a/src/internal/schema/fromJsonSchemaDocument.ts b/src/internal/schema/fromJsonSchemaDocument.ts
+--- a/src/internal/schema/fromJsonSchemaDocument.ts
++++ b/src/internal/schema/fromJsonSchemaDocument.ts
+@@ -793,7 +793,7 @@
+     addNumberCheck(checks, schema.minLength, "effect/schema/isMinLength", "minLength")
+     addNumberCheck(checks, schema.maxLength, "effect/schema/isMaxLength", "maxLength")
+     if (typeof schema.pattern === "string") {
+-      checks.push(jsonSchemaFilter("effect/schema/isPattern", { source: schema.pattern, flags: "" }))
++      checks.push(jsonSchemaFilter("effect/schema/isPattern", { source: schema.pattern, flags: "u" }))
+     }
+     return checks
+   }
+@@ -854,7 +854,7 @@
+         signatures.push({
+           parameter: {
+             _tag: "String",
+-            checks: [jsonSchemaFilter("effect/schema/isPattern", { source: pattern, flags: "" })]
++            checks: [jsonSchemaFilter("effect/schema/isPattern", { source: pattern, flags: "u" })]
+           },
+           type: recur(value, [...path, "patternProperties", pattern])
+         })
