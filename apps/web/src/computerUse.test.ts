@@ -91,6 +91,15 @@ describe("computer-use stale observations", () => {
     },
   );
 
+  it.each(["image", "resource", "resource_link"])(
+    "preserves failures that include a stale message and a %s block",
+    (type) => {
+      expect(
+        activity({ result: { content: [{ type: "text", text: stale }, { type }] } })?.refreshNeeded,
+      ).toBe(false);
+    },
+  );
+
   it("preserves real failures and does not infer refreshes from input or successful output", () => {
     expect(
       activity({ result: { content: "Accessibility permission denied" } })?.refreshNeeded,

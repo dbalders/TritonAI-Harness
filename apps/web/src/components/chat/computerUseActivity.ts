@@ -62,6 +62,7 @@ export function computerUseActivity(
     data.status === "failed" &&
     data.error == null &&
     messages.length === 1 &&
+    (!Array.isArray(content) || content.length === 1) &&
     messages[0]?.trim() === "element_token is stale; call get_window_state again to refresh";
   return { action, session, refreshNeeded };
 }
