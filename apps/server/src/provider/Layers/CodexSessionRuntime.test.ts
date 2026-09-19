@@ -616,13 +616,15 @@ describe("Codex MCP elicitation approvals", () => {
 });
 
 describe("buildCodexDeveloperInstructions", () => {
-  it("does not send unsupported environments to desktop permission settings", () => {
+  it("does not diagnose missing desktop status as a permission or environment failure", () => {
     const instructions = buildCodexDeveloperInstructions(
       "default",
       { model: "test", reasoningEffort: "medium" },
       false,
     );
-    NodeAssert.match(instructions, /this environment cannot access the host desktop/);
+    NodeAssert.match(instructions, /Desktop startup status: Unknown/);
+    NodeAssert.match(instructions, /failed desktop status check/);
+    NodeAssert.match(instructions, /check Computer use readiness and retry/);
     NodeAssert.doesNotMatch(instructions, /Settings > General > Computer use/);
   });
 
