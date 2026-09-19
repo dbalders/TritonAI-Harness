@@ -240,4 +240,19 @@ describe("TritonAI image request budget", () => {
     await response.text();
     expect(received[0]?.url).toBe("/v1/responses");
   });
+  it("merges configured query parameters with request-specific overrides", async () => {
+    const { upstreamBaseUrl, received } = await fixture();
+    const proxy = await startTritonAiImageProxy(
+      `${upstreamBaseUrl}?tenant=campus&api-version=config`,
+      {},
+    );
+    cleanup.push(proxy.close);
+    const response = await fetch(`${proxy.baseUrl}/responses?api-version=request&trace=test`, {
+      method: "POST",
+      body: '{"input":"hello"}',
+    });
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(received[0]?.url).toBe("/v1/responses?tenant=campus&api-version=request&trace=test");
+  });
 });

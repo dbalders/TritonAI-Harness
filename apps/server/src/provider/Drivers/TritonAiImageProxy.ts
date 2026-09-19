@@ -86,7 +86,9 @@ export async function startTritonAiImageProxy(
       const suffix = localUrl.pathname.slice(prefix.length);
       const target = new URL(upstream);
       target.pathname = upstream.pathname.replace(/\/$/, "") + suffix;
-      target.search = localUrl.search || upstream.search;
+      for (const [key, value] of localUrl.searchParams) {
+        target.searchParams.set(key, value);
+      }
       const headers = { ...request.headers, host: target.host };
       delete headers.connection;
       let body: Buffer | undefined;

@@ -1552,7 +1552,7 @@ export const makeCodexSessionRuntime = (
       (proxy) => Effect.promise(() => proxy.close()),
     );
     const providerEnv = { ...env, [UCSD_AI_BASE_URL_ENV]: imageProxy.baseUrl };
-    const inheritedEnv = options.environment === undefined ? process.env : env;
+    const inheritedEnv: NodeJS.ProcessEnv = options.environment === undefined ? process.env : env;
     const noProxy = [inheritedEnv.no_proxy || inheritedEnv.NO_PROXY, "127.0.0.1", "localhost"]
       .filter(Boolean)
       .join(",");
