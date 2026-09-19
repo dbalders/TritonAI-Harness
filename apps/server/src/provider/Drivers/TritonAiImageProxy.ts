@@ -3,7 +3,9 @@ import * as NodeHttp from "node:http";
 import * as NodeCrypto from "node:crypto";
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
+import { EnvHttpProxyAgent } from "@effect/platform-node/Undici";
 import * as Effect from "effect/Effect";
+import * as Predicate from "effect/Predicate";
 import {
   Headers,
   HttpBody,
@@ -18,16 +20,12 @@ const MAX_IMAGES = 3;
 const OMITTED_IMAGE =
   "[Earlier image omitted from this request; use the latest screenshots below.]";
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 /** Bound model-visible images without changing the stored transcript or tool-call pairing. */
 export function limitTritonAiRequestImages(body: unknown): void {
-  if (!isRecord(body) || !Array.isArray(body.input)) return;
+  if (!Predicate.isObject(body) || !Array.isArray(body.input)) return;
   const images: Array<{ parts: unknown[]; index: number }> = [];
   for (const item of body.input) {
-    if (!isRecord(item)) continue;
+    if (!Predicate.isObject(item)) continue;
     const parts =
       item.type === "function_call_output" || item.type === "custom_tool_call_output"
         ? item.output
@@ -35,7 +33,7 @@ export function limitTritonAiRequestImages(body: unknown): void {
     if (!Array.isArray(parts)) continue;
     for (let index = 0; index < parts.length; index++) {
       const part: unknown = parts[index];
-      if (isRecord(part) && part.type === "input_image") images.push({ parts, index });
+      if (Predicate.isObject(part) && part.type === "input_image") images.push({ parts, index });
     }
   }
   for (const { parts, index } of images.slice(0, Math.max(0, images.length - MAX_IMAGES))) {
@@ -50,16 +48,19 @@ export const makeTritonAiImageProxy = Effect.fn("makeTritonAiImageProxy")(functi
 ) {
   const upstream = yield* Effect.try(() => new URL(upstreamBaseUrl));
   const allProxy = environment.all_proxy || environment.ALL_PROXY;
-  const agents = yield* NodeHttpClient.makeAgent({
-    keepAlive: true,
-    proxyEnv: {
-      http_proxy: environment.http_proxy || environment.HTTP_PROXY || allProxy,
-      https_proxy: environment.https_proxy || environment.HTTPS_PROXY || allProxy,
-      no_proxy: environment.no_proxy || environment.NO_PROXY,
-    },
-  });
-  const client = yield* NodeHttpClient.makeNodeHttp.pipe(
-    Effect.provideService(NodeHttpClient.HttpAgent, agents),
+  const dispatcher = yield* Effect.acquireRelease(
+    Effect.try(
+      () =>
+        new EnvHttpProxyAgent({
+          httpProxy: environment.http_proxy || environment.HTTP_PROXY || allProxy || "",
+          httpsProxy: environment.https_proxy || environment.HTTPS_PROXY || allProxy || "",
+          noProxy: environment.no_proxy || environment.NO_PROXY || "",
+        }),
+    ),
+    (agent) => Effect.promise(() => agent.destroy()),
+  );
+  const client = yield* NodeHttpClient.makeUndici.pipe(
+    Effect.provideService(NodeHttpClient.Dispatcher, dispatcher),
   );
   const prefix = `/${NodeCrypto.randomUUID()}`;
   const server = yield* NodeHttpServer.make(NodeHttp.createServer, {
