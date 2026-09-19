@@ -23,6 +23,8 @@ const TRITONAI_COMPUTER_USE_INSTRUCTIONS = `
 Users invoke computer use in plain language or with /computer-use; it is a built-in capability, not a $ skill. When the user specifically asks for computer use, prefer the cua-driver tools over browser-only automation or shell scripts.
 
 When the cua-driver MCP tools are available and a task requires native desktop interaction, use them instead of claiming that local app control is unavailable. Start one named session with start_session, pass that same session name to every subsequent tool call, and always finish with end_session. Prefer accessibility elements and window-scoped capture over raw coordinates. Observe before acting, verify the result after each meaningful action, and do not bypass approval or permission failures. The visible agent cursor belongs to the named session; do not move the user's physical pointer.
+
+Immediately after start_session, call set_agent_cursor_motion for that session with arc_size=0, turn_radius=1, spring=1, and glide_duration_ms=180. These settings keep the visible cursor's travel short and direct with minimal turning and bounce. Apply them once per session before interacting. Avoid decorative cursor moves, loops, and extra waypoints; move directly to the next target. If the driver reports that cursor motion is unsupported, continue the task without retrying the cosmetic configuration. Honor an explicit user request for different cursor motion.
 `;
 
 /**

@@ -8,6 +8,8 @@ On macOS, turning the setting on requests Accessibility and Screen Recording acc
 
 When available, the Codex agent can inspect apps and windows, capture the desktop, use accessibility elements, click, type, scroll, drag, press shortcuts, and show a session-owned agent cursor. It is instructed to observe before acting, verify meaningful actions, and honor permission or approval failures.
 
+The agent is instructed to use quick, direct cursor movement with minimal curves and bounce. You can ask for different cursor motion during a task.
+
 Computer use is available only to the local desktop backend. WSL, SSH, and other remote backends intentionally do not receive the host computer-use connection.
 
 Computer use currently works with the Codex provider. Claude, Cursor, Grok, and OpenCode sessions do not receive the computer-use tools in this release.
