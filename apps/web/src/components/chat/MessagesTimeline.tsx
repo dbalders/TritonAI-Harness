@@ -2439,17 +2439,19 @@ const ComputerUseActivityRow = memo(function ComputerUseActivityRow({
 }) {
   const [expanded, setExpanded] = useState(false);
   const activity = computerUseActivity(workEntry);
-  const failed = workEntryDisplayIndicatesToolFailure(workEntry);
+  const failed = !activity?.refreshNeeded && workEntryDisplayIndicatesToolFailure(workEntry);
   const active = workEntry.toolLifecycleStatus === "inProgress";
-  const status = failed
-    ? "Failed"
-    : active
-      ? "In progress"
-      : workEntry.toolLifecycleStatus === "declined"
-        ? "Declined"
-        : workEntry.toolLifecycleStatus === "stopped"
-          ? "Stopped"
-          : "Completed";
+  const status = activity?.refreshNeeded
+    ? "Window changed"
+    : failed
+      ? "Failed"
+      : active
+        ? "In progress"
+        : workEntry.toolLifecycleStatus === "declined"
+          ? "Declined"
+          : workEntry.toolLifecycleStatus === "stopped"
+            ? "Stopped"
+            : "Completed";
   if (!activity) return null;
   return (
     <div className="my-1 overflow-hidden rounded-lg border border-info-foreground/25 bg-info-foreground/5">
@@ -2479,8 +2481,7 @@ const ComputerUseActivityRow = memo(function ComputerUseActivityRow({
       </button>
       {failed && (
         <p className="px-3 pb-2 text-xs text-destructive">
-          Computer use could not complete this action. Check the error below; permissions are in
-          Settings → General → Computer use.
+          Computer use could not complete this action. Expand this step for details.
         </p>
       )}
       {expanded && (

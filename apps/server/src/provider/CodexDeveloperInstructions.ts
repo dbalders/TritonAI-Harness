@@ -22,7 +22,7 @@ const TRITONAI_COMPUTER_USE_INSTRUCTIONS = `
 
 Users invoke computer use in plain language or with /computer-use; it is a built-in capability, not a $ skill. When the user specifically asks for computer use, prefer the cua-driver tools over browser-only automation or shell scripts.
 
-When the cua-driver MCP tools are available and a task requires native desktop interaction, use them instead of claiming that local app control is unavailable. Start one named session with start_session, pass that same session name to every subsequent tool call, and always finish with end_session. Prefer accessibility elements and window-scoped capture over raw coordinates. Observe before acting, verify the result after each meaningful action, and do not bypass approval or permission failures. The visible agent cursor belongs to the named session; do not move the user's physical pointer.
+When the cua-driver MCP tools are available and a task requires native desktop interaction, use them instead of claiming that local app control is unavailable. Start one named session with start_session, pass that same session name to every subsequent tool call, and always finish with end_session. Prefer accessibility elements and window-scoped capture over raw coordinates. Observe before acting, verify the result after each meaningful action, and do not bypass approval or permission failures. If an action returns "element_token is stale; call get_window_state again to refresh", treat it as a normal observation step: call get_window_state for the same window and session, locate the intended control again, and retry with the fresh element token. Never reuse the stale token or guess a replacement. Do not ask the user to fix permissions or report an error for this routine refresh. If fresh observations repeatedly cannot resolve the target, explain the blocker and ask for help only when needed. The visible agent cursor belongs to the named session; do not move the user's physical pointer.
 `;
 
 /**
@@ -215,13 +215,13 @@ export function buildCodexDeveloperInstructions(
     ? describeComputerUseReadiness(computerUseState)
     : {
         ready: false,
-        label: "Unavailable in this environment",
+        label: "Unknown",
         detail:
-          "Computer use requires the local TritonAI Harness desktop backend and the Codex provider. Remote, WSL, and browser-only environments do not receive host desktop access.",
+          "No desktop startup status was reported. This can mean an unsupported environment or a failed desktop status check. Computer use requires the local TritonAI Harness desktop backend and the Codex provider; remote, WSL, and browser-only environments do not receive host desktop access.",
       };
   return `${base}
 
-<computer_use_status>Desktop startup status: ${computerUseStatus.label}. ${computerUseStatus.detail} ${computerUseStatus.ready ? "If a computer-use call fails, report the actual error and direct the user to Settings > General > Computer use." : "If asked to use computer use, explain this blocker and direct the user to Settings > General > Computer use. Do not claim the app is missing, silently substitute shell/browser automation, or attempt to grant permissions yourself. Permission changes require restarting Harness before this environment reconnects."}</computer_use_status>
+<computer_use_status>Desktop startup status: ${computerUseStatus.label}. ${computerUseStatus.detail} ${computerUseStatus.ready ? "Refresh stale UI references and continue as described above. For other failures, report the actual blocker; direct the user to Settings > General > Computer use only for an actual permission or setup problem." : !computerUseState ? "If asked to use computer use, use the desktop tools if they are available. Otherwise explain that readiness is unknown: on the local desktop, ask the user to check Computer use readiness and retry; in remote, WSL, or browser-only environments, explain that host desktop access is unavailable. Do not infer a permission failure or unsupported environment from missing status alone, silently substitute shell/browser automation, or attempt to grant permissions yourself." : "If asked to use computer use, explain this blocker and direct the user to Settings > General > Computer use. Do not claim the app is missing, silently substitute shell/browser automation, or attempt to grant permissions yourself. Permission changes require restarting Harness before this environment reconnects."}</computer_use_status>
 
 <runtime_info>In case you're asked: you are running in ${TRITONAI_APP_BASE_NAME} through the Codex harness, as ${toSingleLine(runtime.model)} with ${toSingleLine(runtime.reasoningEffort)} reasoning effort. When asked which model is selected, report the model in this current-turn runtime information, not an identity from earlier messages or inherited instructions. This is the selected model ID, not independent verification of the upstream backend. No need to mention this otherwise.</runtime_info>`;
 }
