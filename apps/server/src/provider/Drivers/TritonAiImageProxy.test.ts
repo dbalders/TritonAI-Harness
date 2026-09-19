@@ -1,5 +1,5 @@
 // Real HTTP requests exercise the filter independently of Codex's wire protocol.
-// @effect-diagnostics nodeBuiltinImport:off globalFetch:off
+// @effect-diagnostics nodeBuiltinImport:off globalFetch:off globalFetchInEffect:off preferSchemaOverJson:off
 import * as NodeHttp from "node:http";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
