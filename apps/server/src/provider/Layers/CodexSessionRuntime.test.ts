@@ -616,6 +616,16 @@ describe("Codex MCP elicitation approvals", () => {
 });
 
 describe("buildCodexDeveloperInstructions", () => {
+  it("does not send unsupported environments to desktop permission settings", () => {
+    const instructions = buildCodexDeveloperInstructions(
+      "default",
+      { model: "test", reasoningEffort: "medium" },
+      false,
+    );
+    NodeAssert.match(instructions, /this environment cannot access the host desktop/);
+    NodeAssert.doesNotMatch(instructions, /Settings > General > Computer use/);
+  });
+
   it("tells the agent which desktop permission is missing", () => {
     const instructions = buildCodexDeveloperInstructions(
       "default",
