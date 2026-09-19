@@ -21,6 +21,20 @@ const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 const decodeClaudeSettings = Schema.decodeUnknownSync(ClaudeSettings);
 
+describe("ClientSettings active-turn composer action", () => {
+  it("defaults to queue and accepts either action in patches", () => {
+    expect(decodeClientSettings({}).activeTurnComposerDefault).toBe("queue");
+    expect(
+      decodeClientSettingsPatch({ activeTurnComposerDefault: "steer" }).activeTurnComposerDefault,
+    ).toBe("steer");
+  });
+
+  it("rejects unknown active-turn actions", () => {
+    expect(() => decodeClientSettings({ activeTurnComposerDefault: "restart" })).toThrow();
+    expect(() => decodeClientSettingsPatch({ activeTurnComposerDefault: "restart" })).toThrow();
+  });
+});
+
 describe("ClaudeSettings auto-compaction", () => {
   it("uses Claude's default threshold when no override is configured", () => {
     expect(decodeClaudeSettings({}).autoCompactWindow).toBe("");
