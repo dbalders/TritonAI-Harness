@@ -43,7 +43,7 @@ describe("computer use requests", () => {
           arguments: { session_name: "Notes" },
         },
       }),
-    ).toEqual({ action: "Capture screen", session: "Notes" });
+    ).toEqual({ action: "Capture screen", session: "Notes", refreshNeeded: false });
   });
 });
 
@@ -73,5 +73,57 @@ describe("computer-use readiness deadline", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("computer-use stale observations", () => {
+  const stale = "element_token is stale; call get_window_state again to refresh";
+  const activity = (data: Record<string, unknown>) =>
+    computerUseActivity({
+      itemType: "mcp_tool_call",
+      toolData: { server: "cua-driver", tool: "click", status: "failed", error: null, ...data },
+    });
+
+  it.each([stale, [{ type: "text", text: stale }]])(
+    "recognizes the driver's stale reference response: %j",
+    (content) => {
+      expect(activity({ result: { content } })?.refreshNeeded).toBe(true);
+    },
+  );
+
+  it.each(["image", "resource", "resource_link"])(
+    "preserves failures that include a stale message and a %s block",
+    (type) => {
+      expect(
+        activity({ result: { content: [{ type: "text", text: stale }, { type }] } })?.refreshNeeded,
+      ).toBe(false);
+    },
+  );
+
+  it("preserves real failures and does not infer refreshes from input or successful output", () => {
+    expect(
+      activity({ result: { content: "Accessibility permission denied" } })?.refreshNeeded,
+    ).toBe(false);
+    expect(activity({ arguments: { text: stale } })?.refreshNeeded).toBe(false);
+    expect(activity({ status: "completed", result: { content: stale } })?.refreshNeeded).toBe(
+      false,
+    );
+    expect(
+      activity({ error: { message: "Connection lost" }, result: { content: stale } })
+        ?.refreshNeeded,
+    ).toBe(false);
+    expect(
+      activity({
+        result: {
+          content: [
+            { type: "text", text: stale },
+            { type: "text", text: "Permission denied" },
+          ],
+        },
+      })?.refreshNeeded,
+    ).toBe(false);
+    expect(activity({ result: { content: [{ type: "image", text: stale }] } })?.refreshNeeded).toBe(
+      false,
+    );
   });
 });
