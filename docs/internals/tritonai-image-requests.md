@@ -1,27 +1,20 @@
 # TritonAI image request budget
 
-Codex owns the conversation history and resends earlier image-bearing tool results in
-Responses API requests. Limiting screenshots returned by a single computer-use call does
-not bound the image count across that history. TritonAI's gateway can reject requests
-containing more than four images. Harness caps requests at three to leave one image of headroom.
+Codex resends screenshots retained in conversation history. Its image-budget feature controls
+image resolution, not a per-request image count, and the app-server API does not expose a
+history-editing hook. Until Codex supports this limit, a request filter avoids maintaining a
+custom Codex build.
 
-`TritonAiImageProxy` is a session-scoped loopback HTTP transport between the managed
-Codex app-server and the configured TritonAI API. It replaces all but the three newest
-image parts in Responses and compaction requests with text markers. User attachments,
-function tool results, and custom tool results share the budget. It retains message order,
-text, and call IDs, and never rewrites Codex's persisted history. Resumed conversations
-and child agents using the session's provider configuration receive the same protection.
+`TritonAiImageProxy` keeps the three newest images across user messages and tool outputs in
+Responses and compaction requests. It replaces older images with text markers, preserving
+call IDs, other content, and the saved conversation. Three leaves one image of headroom below
+the gateway's reported four-image limit.
 
-The transport preserves upstream status codes, headers, and streaming bytes. It decodes
-compressed request bodies before pruning, binds only to loopback with an unpredictable
-path, forwards to a fixed configured upstream, and closes with the runtime scope.
-WebSocket transport is disabled for these sessions so requests cannot bypass pruning.
-The upstream hop uses session-specific HTTP(S) proxy environment settings (including
-`ALL_PROXY` fallback and `NO_PROXY` exclusions). The Codex child bypasses outbound
-proxies for the local transport address.
-Provider probes and standalone text generation keep their existing direct API path.
+Effect's existing Node HTTP client and scoped server own forwarding, streaming, cancellation,
+and cleanup. The filter uses the session's HTTP(S) proxy settings and preserves API query
+parameters. Codex bypasses outbound proxies for the loopback connection. Its custom-provider
+requests use JSON; launch overrides disable compression and WebSockets to keep this contract
+explicit. Provider probes and standalone text generation keep their direct API path.
 
-This is intentionally downstream: upstream T3 Code does not impose TritonAI's gateway
-image limit. Integration requires only the Codex session launch boundary; provider-neutral
-orchestration, desktop tools, and upstream Codex itself remain unchanged. Future upstream
-syncs should retain this boundary until Codex exposes a configurable image-count budget.
+This downstream integration is confined to Codex session launch. Remove it when upstream
+Codex offers a configurable image-count limit; no provider-neutral orchestration change is needed.

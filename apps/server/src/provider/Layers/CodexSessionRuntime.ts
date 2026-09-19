@@ -48,7 +48,7 @@ import {
   makeTritonAiCodexConfigArgs,
   resolveTritonAiCodexBaseUrl,
 } from "../Drivers/TritonAiCodexConfig.ts";
-import { startTritonAiImageProxy } from "../Drivers/TritonAiImageProxy.ts";
+import { makeTritonAiImageProxy } from "../Drivers/TritonAiImageProxy.ts";
 const decodeV2TurnStartResponse = Schema.decodeUnknownEffect(EffectCodexSchema.V2TurnStartResponse);
 
 const PROVIDER = ProviderDriverKind.make("codex");
@@ -1536,22 +1536,19 @@ export const makeCodexSessionRuntime = (
       ...options.environment,
       ...(resolvedHomePath ? { CODEX_HOME: resolvedHomePath } : {}),
     };
-    const imageProxy = yield* Effect.acquireRelease(
-      Effect.tryPromise({
-        try: () =>
-          startTritonAiImageProxy(
-            resolveTritonAiCodexBaseUrl(env),
-            options.environment === undefined ? { ...process.env, ...env } : env,
-          ),
-        catch: (cause) =>
+    const imageProxyUrl = yield* makeTritonAiImageProxy(
+      resolveTritonAiCodexBaseUrl(env),
+      options.environment === undefined ? { ...process.env, ...env } : env,
+    ).pipe(
+      Effect.mapError(
+        (cause) =>
           new CodexErrors.CodexAppServerSpawnError({
-            command: "TritonAI image request transport",
+            command: "TritonAI image request filter",
             cause,
           }),
-      }),
-      (proxy) => Effect.promise(() => proxy.close()),
+      ),
     );
-    const providerEnv = { ...env, [UCSD_AI_BASE_URL_ENV]: imageProxy.baseUrl };
+    const providerEnv = { ...env, [UCSD_AI_BASE_URL_ENV]: imageProxyUrl };
     const inheritedEnv: NodeJS.ProcessEnv = options.environment === undefined ? process.env : env;
     const noProxy = [inheritedEnv.no_proxy || inheritedEnv.NO_PROXY, "127.0.0.1", "localhost"]
       .filter(Boolean)
@@ -1566,6 +1563,8 @@ export const makeCodexSessionRuntime = (
         ...makeTritonAiCodexConfigArgs(providerEnv),
         "--config",
         "model_providers.ucsd.supports_websockets=false",
+        "--config",
+        "features.enable_request_compression=false",
       ],
       { env: childEnv, extendEnv },
     );
