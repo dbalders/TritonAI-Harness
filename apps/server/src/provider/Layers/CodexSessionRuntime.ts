@@ -18,6 +18,7 @@ import {
   RuntimeMode,
   ThreadId,
   TurnId,
+  UCSD_AI_BASE_URL_ENV,
 } from "@t3tools/contracts";
 import { normalizeModelSlug } from "@t3tools/shared/model";
 import * as NodeCrypto from "node:crypto";
@@ -43,7 +44,11 @@ import { codexSessionAppServerArgs } from "./codexLaunchArgs.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
 import { buildCodexDeveloperInstructions } from "../CodexDeveloperInstructions.ts";
 import { resolveCodexAppServerCommand } from "../Drivers/CodexAppServerCommand.ts";
-import { makeTritonAiCodexConfigArgs } from "../Drivers/TritonAiCodexConfig.ts";
+import {
+  makeTritonAiCodexConfigArgs,
+  resolveTritonAiCodexBaseUrl,
+} from "../Drivers/TritonAiCodexConfig.ts";
+import { makeTritonAiImageProxy } from "../Drivers/TritonAiImageProxy.ts";
 const decodeV2TurnStartResponse = Schema.decodeUnknownEffect(EffectCodexSchema.V2TurnStartResponse);
 
 const PROVIDER = ProviderDriverKind.make("codex");
@@ -1531,12 +1536,38 @@ export const makeCodexSessionRuntime = (
       ...options.environment,
       ...(resolvedHomePath ? { CODEX_HOME: resolvedHomePath } : {}),
     };
+    const inheritedEnv: NodeJS.ProcessEnv =
+      options.environment === undefined ? { ...process.env, ...env } : env;
+    const imageProxyUrl = yield* makeTritonAiImageProxy(
+      resolveTritonAiCodexBaseUrl(inheritedEnv),
+      inheritedEnv,
+    ).pipe(
+      Effect.mapError(
+        (cause) =>
+          new CodexErrors.CodexAppServerSpawnError({
+            command: "TritonAI image request filter",
+            cause,
+          }),
+      ),
+    );
+    const providerEnv = { ...env, [UCSD_AI_BASE_URL_ENV]: imageProxyUrl };
+    const noProxy = [inheritedEnv.no_proxy || inheritedEnv.NO_PROXY, "127.0.0.1", "localhost"]
+      .filter(Boolean)
+      .join(",");
+    const childEnv = { ...env, NO_PROXY: noProxy, no_proxy: noProxy };
     const extendEnv = options.environment === undefined;
     const appServerArgs = [...codexSessionAppServerArgs(options.appServerArgs, options.launchArgs)];
     const spawnCommand = yield* resolveCodexAppServerCommand(
       options.binaryPath,
-      [...appServerArgs, ...makeTritonAiCodexConfigArgs(env)],
-      { env, extendEnv },
+      [
+        ...appServerArgs,
+        ...makeTritonAiCodexConfigArgs(providerEnv),
+        "--config",
+        "model_providers.ucsd.supports_websockets=false",
+        "--config",
+        "features.enable_request_compression=false",
+      ],
+      { env: childEnv, extendEnv },
     );
     const child = yield* spawner
       .spawn(
