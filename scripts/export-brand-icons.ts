@@ -16,7 +16,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { BRAND_ASSET_PATHS, DEVELOPMENT_PUBLIC_ICON_OVERRIDES } from "./lib/brand-assets.ts";
 import { encodePngIco, readPngDimensions, WINDOWS_ICON_SIZES } from "./lib/icon-export.ts";
 
-import { renderNightlyIconAssets } from "./lib/nightly-icon-export.ts";
+import { renderDevelopmentIconAssets, renderNightlyIconAssets } from "./lib/nightly-icon-export.ts";
 
 const DESIGN_GENERATION = 26;
 const ICON_COMPOSER_EXECUTABLE_PARTS = [
@@ -206,20 +206,6 @@ export class IconExportAssetsStaleError extends Schema.TaggedErrorClass<IconExpo
 
 const ICON_VARIANTS = [
   {
-    label: "development",
-    source: BRAND_ASSET_PATHS.developmentIconComposerProject,
-    outputs: {
-      ios: BRAND_ASSET_PATHS.developmentIosIconPng,
-      macos: BRAND_ASSET_PATHS.developmentDesktopIconPng,
-      universal: BRAND_ASSET_PATHS.developmentUniversalIconPng,
-      appleTouch: BRAND_ASSET_PATHS.developmentWebAppleTouchIconPng,
-      favicon16: BRAND_ASSET_PATHS.developmentWebFavicon16Png,
-      favicon32: BRAND_ASSET_PATHS.developmentWebFavicon32Png,
-      faviconIco: BRAND_ASSET_PATHS.developmentWebFaviconIco,
-      windowsIco: BRAND_ASSET_PATHS.developmentWindowsIconIco,
-    },
-  },
-  {
     label: "production",
     source: BRAND_ASSET_PATHS.productionIconComposerProject,
     outputs: {
@@ -234,21 +220,6 @@ const ICON_VARIANTS = [
     },
   },
 ] as const satisfies ReadonlyArray<IconVariant>;
-
-const MACOS_EXPORTS = [
-  {
-    source: BRAND_ASSET_PATHS.developmentIconComposerProject,
-    output: BRAND_ASSET_PATHS.developmentDesktopIconPng,
-  },
-] as const;
-
-const MACOS_EXPORT_CODEX_PROMPT = [
-  "Use [@Computer](plugin://computer-use@openai-bundled) and the Icon Composer app to export the TritonAI development macOS app icon in this repository.",
-  "Use Platform: macOS pre-Tahoe, Appearance: Default, Size: 1024pt, and Scale: 1×, then save the PNG to the exact destination:",
-  ...MACOS_EXPORTS.map((entry) => `- ${entry.source} -> ${entry.output}`),
-  "Do not resize, composite, or otherwise post-process the exported PNGs.",
-  "Verify the result is 1024×1024 and has the classic macOS safe area: an 824×824 opaque body inset 100px on every side, with only Icon Composer's native shadow extending beyond it.",
-];
 
 const RepositoryRoot = Effect.service(Path.Path).pipe(
   Effect.flatMap((path) => path.fromFileUrl(new URL("..", import.meta.url))),
@@ -602,24 +573,6 @@ const renderVariant = Effect.fn("iconExport.renderVariant")(function* (
   ]);
 });
 
-const logManualMacOsExportInstructions = Effect.fn("iconExport.logManualMacOsExportInstructions")(
-  function* () {
-    yield* Console.warn(
-      [
-        "The development macOS icon requires Icon Composer's GUI-only pre-Tahoe preset and was not changed.",
-        "Export it with Platform: macOS pre-Tahoe, Appearance: Default, Size: 1024pt, Scale: 1×:",
-        ...MACOS_EXPORTS.map((entry) => `- ${entry.source} -> ${entry.output}`),
-        "See assets/README.md for the complete workflow.",
-        "",
-        "Copy/paste this prompt into Codex to perform the native exports:",
-        "---",
-        ...MACOS_EXPORT_CODEX_PROMPT,
-        "---",
-      ].join("\n"),
-    );
-  },
-);
-
 const writeAtomically = Effect.fn("iconExport.writeAtomically")(function* (
   repositoryRoot: string,
   relativePath: string,
@@ -741,6 +694,14 @@ export const exportBrandIcons = Effect.fn("exportBrandIcons")(function* (checkOn
     try: () => renderNightlyIconAssets(Buffer.from(nightlyMaster)),
     catch: (cause) => new IconExportEncodingError({ variant: "nightly", cause }),
   });
+  const developmentMaster = yield* fs.readFile(
+    path.join(repositoryRoot, BRAND_ASSET_PATHS.developmentDesktopIconPng),
+  );
+  const developmentAssets = yield* Effect.try({
+    try: () => renderDevelopmentIconAssets(Buffer.from(developmentMaster)),
+    catch: (cause) => new IconExportEncodingError({ variant: "development", cause }),
+  });
+  for (const [relativePath, contents] of developmentAssets) generated.set(relativePath, contents);
   for (const variant of ICON_VARIANTS) {
     yield* Console.log(`Rendering ${variant.label} from ${variant.source}...`);
     const variantAssets = yield* renderVariant(
@@ -777,7 +738,6 @@ export const exportBrandIcons = Effect.fn("exportBrandIcons")(function* (checkOn
       });
     }
     yield* Console.log(`All ${generated.size} generated icon assets are current.`);
-    yield* logManualMacOsExportInstructions();
     return;
   }
 
@@ -787,7 +747,6 @@ export const exportBrandIcons = Effect.fn("exportBrandIcons")(function* (checkOn
     { concurrency: 1, discard: true },
   );
   yield* Console.log(`Updated ${generated.size} generated icon assets.`);
-  yield* logManualMacOsExportInstructions();
 });
 
 export const exportBrandIconsCommand = Command.make(

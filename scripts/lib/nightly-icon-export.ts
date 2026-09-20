@@ -59,3 +59,23 @@ export function renderNightlyIconAssets(master: Buffer): Map<string, Buffer> {
     [BRAND_ASSET_PATHS.nightlyWebAppleTouchIconPng, resizeNightlyIcon(source, 180, true)],
   ]);
 }
+
+// Development shares nightly's circular raster export treatment.
+export function renderDevelopmentIconAssets(master: Buffer): Map<string, Buffer> {
+  const source = PNG.sync.read(master);
+  if (source.width !== 1024 || source.height !== 1024)
+    throw new Error("Development icon master must be 1024x1024.");
+  const ico = encodePngIco(
+    WINDOWS_ICON_SIZES.map((size) => ({ size, contents: resizeNightlyIcon(source, size) })),
+  );
+  return new Map([
+    [BRAND_ASSET_PATHS.developmentIosIconPng, resizeNightlyIcon(source, 1024, true)],
+    [BRAND_ASSET_PATHS.developmentUniversalIconPng, master],
+    [BRAND_ASSET_PATHS.developmentWindowsIconIco, ico],
+    [BRAND_ASSET_PATHS.developmentWebFaviconIco, ico],
+    [BRAND_ASSET_PATHS.developmentWebFavicon16Png, resizeNightlyIcon(source, 16)],
+    [BRAND_ASSET_PATHS.developmentWebFavicon32Png, resizeNightlyIcon(source, 32)],
+    [BRAND_ASSET_PATHS.developmentWebAppleTouchIconPng, resizeNightlyIcon(source, 180, true)],
+    ["assets/dev/app-icon.icon/Assets/logo.png", resizeNightlyIcon(source, 1024, true)],
+  ]);
+}
