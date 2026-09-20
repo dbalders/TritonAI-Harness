@@ -16,6 +16,8 @@ Computer use is a provider-shaped feature. The initial release makes these expli
 
 Do not pass the desktop contract to another adapter until that provider's transport, environment propagation, instructions, approvals, cancellation, and shutdown cleanup have dedicated tests.
 
+Codex's computer-use instructions configure each named session with `set_agent_cursor_motion`: `arc_size=0`, `turn_radius=1`, `spring=1`, and `glide_duration_ms=180`. Cua Driver 0.19.3 uses a minimum-turning-radius path on macOS, so reducing `arc_size` alone does not remove broad turns; the one-point turning radius and critically damped spring minimize detours and bounce. The duration controls cursor animation, not drag input timing. This is an agent-applied session preference, not a global driver policy; unsupported overlays may skip it. Keep it in the existing TritonAI instruction block to avoid changing the driver or shared parent architecture.
+
 ## Development and packaging
 
 Development builds may set `TRITONAI_CUA_DRIVER_PATH` to an absolute path to a compatible `cua-driver` executable. Packaged builds ignore this override and always resolve the bundled executable from Electron's resources directory.

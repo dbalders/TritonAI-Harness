@@ -616,6 +616,38 @@ describe("Codex MCP elicitation approvals", () => {
 });
 
 describe("buildCodexDeveloperInstructions", () => {
+  it.each(["default", "plan"] as const)(
+    "supplies session cursor defaults and user overrides in %s mode without browser tools",
+    (mode) => {
+      const instructions = buildCodexDeveloperInstructions(
+        mode,
+        { model: "test", reasoningEffort: "medium" },
+        false,
+        {
+          enabled: true,
+          available: true,
+          running: true,
+          accessibilityPermission: true,
+          screenRecordingPermission: true,
+        },
+      );
+
+      NodeAssert.match(instructions, /after start_session, call set_agent_cursor_motion/);
+      NodeAssert.match(instructions, /for that session before interacting/);
+      NodeAssert.match(
+        instructions,
+        /arc_size=0, turn_radius=1, spring=1, and glide_duration_ms=180 as defaults/,
+      );
+      NodeAssert.match(instructions, /substituting any explicitly user-requested motion values/);
+      NodeAssert.match(instructions, /call again only if the user later requests a motion change/);
+      NodeAssert.match(
+        instructions,
+        /cursor motion is unsupported, continue the task without retrying/,
+      );
+      NodeAssert.doesNotMatch(instructions, /preview_open/);
+    },
+  );
+
   it("does not diagnose missing desktop status as a permission or environment failure", () => {
     const instructions = buildCodexDeveloperInstructions(
       "default",
