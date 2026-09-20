@@ -5,10 +5,10 @@ image resolution, not a per-request image count, and the app-server API does not
 history-editing hook. Until Codex supports this limit, a request filter avoids maintaining a
 custom Codex build.
 
-`TritonAiImageProxy` keeps the three newest images across user messages and tool outputs in
+`TritonAiImageProxy` keeps the four newest images across user messages and tool outputs in
 Responses and compaction requests. It replaces older images with text markers, preserving
-call IDs, other content, and the saved conversation. Three leaves one image of headroom below
-the gateway's reported four-image limit.
+call IDs, other content, and the saved conversation. The cap matches the gateway's reported
+four-image limit.
 
 Effect's existing Node HTTP client and scoped server own forwarding, streaming, cancellation,
 and cleanup. The filter uses the session's HTTP(S) proxy settings and preserves API query

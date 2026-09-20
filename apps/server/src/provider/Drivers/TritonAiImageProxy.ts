@@ -15,8 +15,8 @@ import {
   HttpServerResponse,
 } from "effect/unstable/http";
 
-// Leave one image of headroom below the gateway's four-image limit.
-const MAX_IMAGES = 3;
+// Match the gateway's four-image limit.
+const MAX_IMAGES = 4;
 const OMITTED_IMAGE =
   "[Earlier image omitted from this request; use the latest screenshots below.]";
 

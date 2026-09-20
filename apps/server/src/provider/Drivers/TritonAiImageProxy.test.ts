@@ -72,7 +72,7 @@ const fixture = Effect.fn(function* (status = 200, holdOpen = false) {
 });
 
 describe("TritonAI image request budget", () => {
-  it("shares three image slots across attachments and tool outputs without losing text or call IDs", () => {
+  it("shares four image slots across attachments and tool outputs without losing text or call IDs", () => {
     const body = {
       input: [
         { role: "user", content: [{ type: "input_text", text: "Inspect this" }, image(0)] },
@@ -102,12 +102,7 @@ describe("TritonAI image request budget", () => {
         {
           type: "custom_tool_call_output",
           call_id: "second",
-          output: [
-            { type: "input_text", text: expect.stringContaining("omitted") },
-            image(3),
-            image(4),
-            { type: "input_image", file_id: "latest" },
-          ],
+          output: [image(2), image(3), image(4), { type: "input_image", file_id: "latest" }],
         },
       ],
     });
@@ -117,7 +112,7 @@ describe("TritonAI image request budget", () => {
     for (const body of [
       { input: "hello" },
       {
-        input: [{ content: [image(0), image(1), image(2)] }],
+        input: [{ content: [image(0), image(1), image(2), image(3)] }],
         tools: [{ parameters: { type: "input_image" } }],
       },
     ]) {
@@ -141,9 +136,9 @@ describe("TritonAI image request budget", () => {
           "data: first\n\ndata: [DONE]\n\n",
         );
         expect(f.received[0]?.headers.authorization).toBe("Bearer test-only");
-        expect(JSON.stringify(f.received[0]?.body).match(/input_image/g)).toHaveLength(3);
-        expect(JSON.stringify(f.received[0]?.body)).not.toContain("/5.png");
-        for (const id of [6, 7, 8])
+        expect(JSON.stringify(f.received[0]?.body).match(/input_image/g)).toHaveLength(4);
+        expect(JSON.stringify(f.received[0]?.body)).not.toContain("/4.png");
+        for (const id of [5, 6, 7, 8])
           expect(JSON.stringify(f.received[0]?.body)).toContain(`/${id}.png`);
       }).pipe(Effect.scoped),
     );
@@ -190,7 +185,7 @@ describe("TritonAI image request budget", () => {
         expect(response.status).toBe(200);
         yield* Effect.promise(() => response.text());
         expect(f.received[0]?.url).toBe("http://upstream.invalid/v1/responses");
-        expect(JSON.stringify(f.received[0]?.body).match(/input_image/g)).toHaveLength(3);
+        expect(JSON.stringify(f.received[0]?.body).match(/input_image/g)).toHaveLength(4);
       }).pipe(Effect.scoped),
     );
   }

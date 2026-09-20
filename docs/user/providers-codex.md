@@ -59,12 +59,12 @@ After updating and restarting Harness, start a new conversation to use the corre
 
 ## Computer-Use Screenshots
 
-TritonAI sends the three most recent images in each Codex request, including screenshots
+TritonAI sends the four most recent images in each Codex request, including screenshots
 returned by computer-use tools. Older images are replaced with text markers in the request
 so extended sessions stay within the API's image limit. Conversation text and tool results
 remain available, and the saved conversation keeps the original images. Ask the assistant
 to capture the screen again if it needs to inspect an older state. Image attachments share
-this three-image budget with screenshots.
+this four-image budget with screenshots.
 
 ## Attach Images To A Text-Only Model
 
