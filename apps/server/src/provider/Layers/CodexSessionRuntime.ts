@@ -1536,9 +1536,11 @@ export const makeCodexSessionRuntime = (
       ...options.environment,
       ...(resolvedHomePath ? { CODEX_HOME: resolvedHomePath } : {}),
     };
+    const inheritedEnv: NodeJS.ProcessEnv =
+      options.environment === undefined ? { ...process.env, ...env } : env;
     const imageProxyUrl = yield* makeTritonAiImageProxy(
-      resolveTritonAiCodexBaseUrl(env),
-      options.environment === undefined ? { ...process.env, ...env } : env,
+      resolveTritonAiCodexBaseUrl(inheritedEnv),
+      inheritedEnv,
     ).pipe(
       Effect.mapError(
         (cause) =>
@@ -1549,7 +1551,6 @@ export const makeCodexSessionRuntime = (
       ),
     );
     const providerEnv = { ...env, [UCSD_AI_BASE_URL_ENV]: imageProxyUrl };
-    const inheritedEnv: NodeJS.ProcessEnv = options.environment === undefined ? process.env : env;
     const noProxy = [inheritedEnv.no_proxy || inheritedEnv.NO_PROXY, "127.0.0.1", "localhost"]
       .filter(Boolean)
       .join(",");

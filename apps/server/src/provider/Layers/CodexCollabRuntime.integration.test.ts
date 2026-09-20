@@ -7,10 +7,12 @@
  * test can't reach: ordering between the legacy receiver-turn suppressor and
  * v2 interception, registration state, and synthetic event emission.
  */
-// @effect-diagnostics nodeBuiltinImport:off
+// @effect-diagnostics nodeBuiltinImport:off globalFetch:off globalFetchInEffect:off
 import * as NodeFS from "node:fs";
+import * as NodeHttp from "node:http";
 import * as NodePath from "node:path";
 
+import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import {
@@ -24,7 +26,8 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import { assert, describe } from "vite-plus/test";
+import { HttpServer, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
+import { assert, describe, vi } from "vite-plus/test";
 
 import wireFixture from "../testFixtures/codexMultiAgentWire.json" with { type: "json" };
 import { makeCodexSessionRuntime } from "./CodexSessionRuntime.ts";
@@ -40,6 +43,17 @@ const decodeMcpElicitationResponse = Schema.decodeUnknownEffect(
     }),
   ),
 );
+
+const decodeMockLaunch = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(
+    Schema.Struct({
+      args: Schema.Array(Schema.String),
+      noProxy: Schema.String,
+      lowerNoProxy: Schema.String,
+    }),
+  ),
+);
+const decodeConfigString = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.String));
 
 /**
  * The captured sequence, extended with the shapes the live capture didn't
@@ -188,6 +202,94 @@ const scriptPath = NodePath.join(import.meta.dirname, "../testFixtures/.collab-s
 const peerPath = NodePath.join(import.meta.dirname, "../testFixtures/codexCollabMockPeer.sh");
 
 describe("CodexSessionRuntime collab integration", () => {
+  for (const inheritEnvironment of [true, false]) {
+    it.effect(
+      `routes through the image filter with ${inheritEnvironment ? "inherited" : "explicit"} environment`,
+      () =>
+        Effect.gen(function* () {
+          const gateway = yield* NodeHttpServer.make(NodeHttp.createServer, {
+            host: "127.0.0.1",
+            port: 0,
+          });
+          yield* gateway.serve(
+            Effect.gen(function* () {
+              const request = yield* HttpServerRequest.HttpServerRequest;
+              return HttpServerResponse.jsonUnsafe({ url: request.url, body: yield* request.json });
+            }),
+          );
+          const proxyUrl = HttpServer.formatAddress(gateway.address);
+          const environment = {
+            T3_CODEX_COLLAB_SCRIPT: scriptPath,
+            UCSD_AI_BASE_URL: "http://configured.invalid/v1?tenant=test",
+            http_proxy: proxyUrl,
+            https_proxy: proxyUrl,
+            no_proxy: "127.0.0.1,inherited.example",
+          };
+          yield* Effect.addFinalizer(() =>
+            Effect.sync(() => {
+              vi.unstubAllEnvs();
+              NodeFS.rmSync(scriptPath, { force: true });
+              NodeFS.rmSync(`${scriptPath}.launch`, { force: true });
+            }),
+          );
+          for (const [key, value] of Object.entries(environment)) vi.stubEnv(key, value);
+          // @effect-diagnostics-next-line preferSchemaOverJson:off
+          NodeFS.writeFileSync(scriptPath, JSON.stringify({ recordLaunch: true }), "utf8");
+          const runtime = yield* makeCodexSessionRuntime({
+            threadId: ThreadId.make("thread-image-proxy"),
+            binaryPath: peerPath,
+            cwd: "/tmp",
+            runtimeMode: "full-access",
+            ...(inheritEnvironment ? {} : { environment: { ...process.env, ...environment } }),
+          });
+          yield* runtime.start();
+          const launch = yield* decodeMockLaunch(
+            NodeFS.readFileSync(`${scriptPath}.launch`, "utf8"),
+          );
+          assert.include(launch.args, "model_providers.ucsd.supports_websockets=false");
+          assert.include(launch.args, "features.enable_request_compression=false");
+          assert.equal(launch.noProxy, launch.lowerNoProxy);
+          assert.includeMembers(launch.noProxy.split(","), [
+            "inherited.example",
+            "127.0.0.1",
+            "localhost",
+          ]);
+          const baseUrlConfig = launch.args.find((arg) =>
+            arg.startsWith("model_providers.ucsd.base_url="),
+          );
+          assert.isDefined(baseUrlConfig);
+          const baseUrl = yield* decodeConfigString(
+            baseUrlConfig!.slice("model_providers.ucsd.base_url=".length),
+          );
+          assert.equal(new URL(baseUrl).hostname, "127.0.0.1");
+          const response = yield* Effect.promise(() =>
+            fetch(`${baseUrl}/responses`, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              // @effect-diagnostics-next-line preferSchemaOverJson:off
+              body: JSON.stringify({
+                input: [
+                  {
+                    role: "user",
+                    content: ["old", "1", "2", "3", "4"].map((image_url) => ({
+                      type: "input_image",
+                      image_url,
+                    })),
+                  },
+                ],
+              }),
+            }),
+          );
+          assert.equal(response.status, 200);
+          const result = yield* Effect.promise(() => response.text());
+          assert.include(result, "http://configured.invalid/v1/responses?tenant=test");
+          assert.notInclude(result, '"image_url":"old"');
+          assert.lengthOf(result.match(/input_image/g) ?? [], 4);
+          yield* runtime.close;
+        }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    );
+  }
+
   it.effect("registers legacy spawn results and routes child lifecycle to the Agents surface", () =>
     Effect.gen(function* () {
       const turn = { ...wireFixture.responses.turnStart.turn, id: "legacy-child-turn" };

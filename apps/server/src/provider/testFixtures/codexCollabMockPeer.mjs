@@ -14,6 +14,16 @@ const fixture = JSON.parse(
   NodeFS.readFileSync(NodePath.join(here, "codexMultiAgentWire.json"), "utf8"),
 );
 const script = JSON.parse(NodeFS.readFileSync(process.env.T3_CODEX_COLLAB_SCRIPT, "utf8"));
+if (script.recordLaunch) {
+  NodeFS.writeFileSync(
+    `${process.env.T3_CODEX_COLLAB_SCRIPT}.launch`,
+    JSON.stringify({
+      args: process.argv.slice(2),
+      noProxy: process.env.NO_PROXY,
+      lowerNoProxy: process.env.no_proxy,
+    }),
+  );
+}
 
 const write = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
 let turnStartCount = 0;
