@@ -111,7 +111,8 @@ jobs:
     name: Preflight
     needs: [resolve_release]
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    # This job runs the full serial suite, unlike the sharded PR/nightly checks.
+    timeout-minutes: 25
     permissions:
       contents: read
     outputs:
