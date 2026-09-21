@@ -40,6 +40,8 @@ const readCommandLookupEnv = CommandLookupEnvConfig.pipe(Effect.orElseSucceed(()
 export interface ProviderMaintenanceCapabilities {
   readonly provider: ProviderDriverKind;
   readonly packageName: string | null;
+  /** Undefined uses upstream latest; null disables managed updates. */
+  readonly approvedVersion?: string | null;
   readonly update: ProviderMaintenanceCommandAction | null;
 }
 
@@ -413,27 +415,38 @@ export function createProviderVersionAdvisory(input: {
 }): ServerProviderVersionAdvisory {
   const capabilities =
     input.maintenanceCapabilities ?? makeManualProviderMaintenanceCapabilities(input.driver);
-  const latestVersion = input.latestVersion ?? null;
+  const approved = capabilities.approvedVersion;
+  const latestVersion =
+    approved === undefined
+      ? (input.latestVersion ?? null)
+      : approved !== null && input.latestVersion === approved
+        ? approved
+        : null;
   const advisory = deriveVersionAdvisory({
     currentVersion: input.currentVersion,
     latestVersion,
   });
 
+  const canUpdate =
+    capabilities.update !== null && (approved === undefined || advisory.status === "behind_latest");
   return {
     status: advisory.status,
     currentVersion: input.currentVersion,
     latestVersion,
-    updateCommand: capabilities.update?.command ?? null,
-    canUpdate: capabilities.update !== null,
+    updateCommand: canUpdate ? (capabilities.update?.command ?? null) : null,
+    canUpdate,
     checkedAt: input.checkedAt ?? null,
     message: advisory.message,
   };
 }
 
-const fetchNpmLatestVersion = Effect.fn("fetchNpmLatestVersion")(function* (packageName: string) {
+const fetchNpmLatestVersion = Effect.fn("fetchNpmLatestVersion")(function* (
+  packageName: string,
+  target = "latest",
+) {
   const client = yield* HttpClient.HttpClient;
   const request = HttpClientRequest.get(
-    `https://registry.npmjs.org/${encodeURIComponent(packageName)}/latest`,
+    `https://registry.npmjs.org/${encodeURIComponent(packageName)}/${encodeURIComponent(target)}`,
   ).pipe(HttpClientRequest.setHeader("accept", "application/json"));
   const response = yield* client.execute(request).pipe(
     Effect.timeoutOption(LATEST_VERSION_TIMEOUT_MS),
@@ -457,19 +470,22 @@ export const resolveLatestProviderVersion = Effect.fn("resolveLatestProviderVers
   maintenanceCapabilities: ProviderMaintenanceCapabilities,
 ) {
   const packageName = maintenanceCapabilities.packageName;
-  if (!packageName) {
+  if (!packageName || maintenanceCapabilities.approvedVersion === null) {
     return null;
   }
 
+  const target = maintenanceCapabilities.approvedVersion ?? "latest";
+  const cacheKey = target === "latest" ? packageName : `${packageName}@${target}`;
   const latestVersionCache = yield* ProviderVersionCache;
-  const cached = latestVersionCache.get(packageName);
+  const cached = latestVersionCache.get(cacheKey);
   const now = DateTime.toEpochMillis(yield* DateTime.now);
   if (cached && cached.expiresAt > now) {
     return cached.version;
   }
 
-  const version = yield* fetchNpmLatestVersion(packageName);
-  latestVersionCache.set(packageName, {
+  const fetched = yield* fetchNpmLatestVersion(packageName, target);
+  const version = target === "latest" || fetched === target ? fetched : null;
+  latestVersionCache.set(cacheKey, {
     expiresAt: now + LATEST_VERSION_CACHE_TTL_MS,
     version,
   });

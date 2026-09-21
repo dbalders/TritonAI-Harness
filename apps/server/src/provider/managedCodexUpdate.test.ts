@@ -15,6 +15,7 @@ import {
   isTritonAiManagedCodexMaintenanceCapabilities,
   makeTritonAiManagedCodexMaintenanceResolver,
   parseCodexCliVersion,
+  ManagedCodexApprovedVersion,
   resolveTritonAiManagedCodexInstallation,
   updateTritonAiManagedCodex,
 } from "./managedCodexUpdate.ts";
@@ -64,6 +65,8 @@ const makeFakeRunner = Effect.fn("managedCodexUpdate.test.makeFakeRunner")(funct
   const run: ProcessRunner["Service"]["run"] = (input) =>
     Effect.gen(function* () {
       if (input.command === "npm") {
+        expect(input.args.some((arg) => /^@openai\/codex@0\.15[12]\.0$/.test(arg))).toBe(true);
+        expect(input.args).not.toContain("@openai/codex@latest");
         if (options?.failNpm) return failure("npm failed");
         const prefixIndex = input.args.indexOf("--prefix");
         const prefix = input.args[prefixIndex + 1];
@@ -72,7 +75,7 @@ const makeFakeRunner = Effect.fn("managedCodexUpdate.test.makeFakeRunner")(funct
         yield* fs.makeDirectory(path.dirname(stagedBinary), { recursive: true });
         yield* fs.writeFileString(stagedBinary, "#!/usr/bin/env node\n");
         yield* fs.chmod(stagedBinary, 0o755);
-        yield* fs.writeFileString(path.join(prefix, "version.txt"), "0.147.0");
+        yield* fs.writeFileString(path.join(prefix, "version.txt"), "0.151.0");
         return success("installed");
       }
 
@@ -84,7 +87,7 @@ const makeFakeRunner = Effect.fn("managedCodexUpdate.test.makeFakeRunner")(funct
       if (
         options?.failActivatedVerification &&
         !normalizeCommandPath(input.command).includes("/.tritonai-codex-stage.") &&
-        version.trim() === "0.147.0"
+        version.trim() === "0.151.0"
       ) {
         return failure("active verification failed");
       }
@@ -122,7 +125,7 @@ it("recognizes only TritonAI managed Codex launcher paths", () => {
 });
 
 it("parses Codex CLI version output", () => {
-  expect(parseCodexCliVersion("codex-cli 0.147.0\n")).toBe("0.147.0");
+  expect(parseCodexCliVersion("codex-cli 0.151.0\n")).toBe("0.151.0");
   expect(parseCodexCliVersion("not a version")).toBeNull();
 });
 
@@ -168,11 +171,11 @@ it.layer(NodeServices.layer)("managed Codex update transaction", (it) => {
         run: yield* makeFakeRunner(),
       }).pipe(Effect.scoped);
 
-      expect(version).toBe("0.147.0");
+      expect(version).toBe("0.151.0");
       expect(yield* fixture.fs.readFileString(fixture.binaryPath)).toContain("managed launcher");
       expect(
         yield* fixture.fs.readFileString(fixture.path.join(fixture.installRoot, "version.txt")),
-      ).toBe("0.147.0");
+      ).toBe("0.151.0");
       expect((yield* fixture.fs.readDirectory(fixture.runtimeRoot)).toSorted()).toEqual([
         "openai-codex-0.146.0",
       ]);
@@ -207,6 +210,56 @@ it.layer(NodeServices.layer)("managed Codex update transaction", (it) => {
       }).pipe(Effect.scoped, Effect.flip);
 
       expect(error.message).toContain("could not be staged");
+      expect(
+        yield* fixture.fs.readFileString(fixture.path.join(fixture.installRoot, "version.txt")),
+      ).toBe("0.146.0");
+    }).pipe(Effect.scoped),
+  );
+});
+
+it.layer(NodeServices.layer)("approved managed engine policy", (it) => {
+  for (const installed of ["0.151.0", "0.155.1"]) {
+    it.effect(`rejects direct updates from ${installed} without running npm`, () =>
+      Effect.gen(function* () {
+        const fixture = yield* makeFixture();
+        yield* fixture.fs.writeFileString(
+          fixture.path.join(fixture.installRoot, "version.txt"),
+          installed,
+        );
+        const error = yield* updateTritonAiManagedCodex({
+          binaryPath: fixture.binaryPath,
+          run: (input) => {
+            expect(input.command).not.toBe("npm");
+            return Effect.succeed(success(`codex-cli ${installed}`));
+          },
+        }).pipe(Effect.flip);
+        expect(error.message).toContain("meets or exceeds");
+        expect(yield* fixture.fs.readDirectory(fixture.runtimeRoot)).toEqual([
+          "openai-codex-0.146.0",
+        ]);
+      }).pipe(Effect.scoped),
+    );
+  }
+  for (const approved of [null, "latest", "0.155.1 || true"]) {
+    it.effect(`fails closed for policy ${String(approved)}`, () =>
+      Effect.gen(function* () {
+        const fixture = yield* makeFixture();
+        const error = yield* updateTritonAiManagedCodex({
+          binaryPath: fixture.binaryPath,
+          run: () => Effect.die("must not run a command"),
+        }).pipe(Effect.provideService(ManagedCodexApprovedVersion, approved), Effect.flip);
+        expect(error.message).toContain("No valid approved");
+      }).pipe(Effect.scoped),
+    );
+  }
+  it.effect("rejects a staged package that differs from the approved pin", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture();
+      const error = yield* updateTritonAiManagedCodex({
+        binaryPath: fixture.binaryPath,
+        run: yield* makeFakeRunner(),
+      }).pipe(Effect.provideService(ManagedCodexApprovedVersion, "0.152.0"), Effect.flip);
+      expect(error.message).toContain("approved version");
       expect(
         yield* fixture.fs.readFileString(fixture.path.join(fixture.installRoot, "version.txt")),
       ).toBe("0.146.0");

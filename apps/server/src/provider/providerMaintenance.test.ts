@@ -8,6 +8,7 @@ import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@t3
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
+import { HttpClientResponse } from "effect/unstable/http";
 import { HttpClient } from "effect/unstable/http";
 import {
   createProviderVersionAdvisory,
@@ -598,4 +599,61 @@ it.layer(NodeServices.layer)("providerMaintenance", (it) => {
       update: null,
     });
   });
+});
+
+it.layer(NodeServices.layer)("approved provider updates", (it) => {
+  const capabilities = { ...packageToolUpdate.resolve(), approvedVersion: "0.151.0" };
+  for (const currentVersion of ["0.146.0", "0.151.0", "0.155.1"]) {
+    it(`caps the advisory for ${currentVersion}`, () => {
+      const advisory = createProviderVersionAdvisory({
+        driver: driver("codex"),
+        currentVersion,
+        latestVersion: "0.151.0",
+        maintenanceCapabilities: capabilities,
+      });
+      expect(advisory.canUpdate).toBe(currentVersion === "0.146.0");
+      expect(advisory.status).toBe(currentVersion === "0.146.0" ? "behind_latest" : "current");
+      const unapproved = createProviderVersionAdvisory({
+        driver: driver("codex"),
+        currentVersion,
+        latestVersion: "0.155.1",
+        maintenanceCapabilities: capabilities,
+      });
+      expect(unapproved.canUpdate).toBe(false);
+      expect(unapproved.latestVersion).toBeNull();
+    });
+  }
+  for (const responseVersion of ["0.151.0", "0.155.1"]) {
+    it.effect(`queries the exact pin and validates response ${responseVersion}`, () =>
+      resolveLatestProviderVersion(capabilities).pipe(
+        Effect.provideService(ProviderVersionCache, new Map()),
+        Effect.provideService(
+          HttpClient.HttpClient,
+          HttpClient.make((request) => {
+            expect(request.url).toBe(
+              "https://registry.npmjs.org/%40example%2Fpackage-tool/0.151.0",
+            );
+            return Effect.succeed(
+              HttpClientResponse.fromWeb(
+                request,
+                new Response(JSON.stringify({ version: responseVersion })),
+              ),
+            );
+          }),
+        ),
+        Effect.map((version) =>
+          expect(version).toBe(responseVersion === "0.151.0" ? responseVersion : null),
+        ),
+      ),
+    );
+  }
+  it.effect("missing policy never falls through to latest", () =>
+    resolveLatestProviderVersion({ ...capabilities, approvedVersion: null }).pipe(
+      Effect.provideService(
+        HttpClient.HttpClient,
+        HttpClient.make(() => Effect.die("must not fetch")),
+      ),
+      Effect.map((version) => expect(version).toBeNull()),
+    ),
+  );
 });
