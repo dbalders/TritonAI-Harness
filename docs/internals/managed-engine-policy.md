@@ -1,0 +1,7 @@
+# Managed Codex approval policy
+
+`config/tritonai-managed-config.json` owns `provider.approvedCodexVersion`, an exact stable version. The initial value preserves the Installer's existing 0.151.0 approval. The signed Harness configuration identity covers this field. Missing fields disable managed updates for compatibility; invalid fields fail configuration validation.
+
+Managed runtime maintenance carries this version through npm checks, cache keys, and advisories. Only an exact registry response can make it available. Notifications on all clients use the server advisory. The update command independently reads the approved policy and installed binary version before staging the exact npm package; equal/newer installations are rejected without staging or downgrading. Staged and activated versions must match the approval. Personal/custom installations retain upstream maintenance behavior.
+
+The Installer consumes a generated snapshot from an explicit Harness commit via `scripts/sync-approved-codex-policy.ts`; its `CODEX_CLI_VERSION` is derived from that snapshot. To change approval, edit this policy, validate and commit it, regenerate the Installer snapshot from that commit, and review both changes. Publish Harness before releasing an Installer that consumes it. Existing Installers keep their provisioned version until upgraded; updated Harness releases can advance older runtimes to their approved version. Older Harness releases lack this cap, so update Harness first. No network policy is trusted at runtime and npm latest never grants approval.

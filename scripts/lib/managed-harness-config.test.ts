@@ -148,3 +148,24 @@ describe("managed Harness config build input", () => {
     ).toThrow(/frontier/i);
   });
 });
+
+it("rejects invalid engine approvals and accepts missing approval for fail-closed compatibility", () => {
+  const input = loadManagedHarnessConfigForBuild(
+    NodeURL.fileURLToPath(new URL("../..", import.meta.url)),
+  );
+  for (const approvedCodexVersion of ["latest", "^0.151.0", "0.151.0;echo unsafe", "01.151.0"]) {
+    expect(() =>
+      parseManagedHarnessConfig(
+        JSON.stringify({
+          ...input.config,
+          provider: { ...input.config.provider, approvedCodexVersion },
+        }),
+      ),
+    ).toThrow();
+  }
+  const { approvedCodexVersion: _approval, ...provider } = input.config.provider;
+  expect(
+    parseManagedHarnessConfig(JSON.stringify({ ...input.config, provider })).provider
+      .approvedCodexVersion,
+  ).toBeUndefined();
+});

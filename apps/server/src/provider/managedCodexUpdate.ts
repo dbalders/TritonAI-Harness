@@ -1,4 +1,7 @@
 import { ProviderDriverKind } from "@t3tools/contracts";
+import { compareSemverVersions } from "@t3tools/shared/semver";
+import { managedConfig } from "../managedPolicy.ts";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -16,12 +19,19 @@ const MANAGED_CODEX_ROOT_MARKER = "/.agents/ucsd/runtime/codex/";
 const MANAGED_CODEX_DIRECTORY = /^openai-codex-[a-z0-9][a-z0-9._-]*$/u;
 const MANAGED_CODEX_UPDATE_COMMAND = "managed-codex-update";
 const MANAGED_CODEX_UPDATE_LOCK = "tritonai-managed-codex";
+export const ManagedCodexApprovedVersion = Context.Reference<string | null>(
+  "@t3tools/server/ManagedCodexApprovedVersion",
+  {
+    defaultValue: () => managedConfig.provider.approvedCodexVersion ?? null,
+  },
+);
+
 const CODEX_VERSION = /(?:codex-cli|codex)\s+(\d+\.\d+\.\d+(?:-[a-z0-9.-]+)?)/iu;
 
 export function isTritonAiManagedCodexMaintenanceCapabilities(
   capabilities: ProviderMaintenanceCapabilities,
 ): boolean {
-  return capabilities.update?.lockKey === MANAGED_CODEX_UPDATE_LOCK;
+  return capabilities.approvedVersion !== undefined;
 }
 
 export interface TritonAiManagedCodexInstallation {
@@ -92,21 +102,24 @@ export function makeTritonAiManagedCodexMaintenanceResolver(input: {
         .filter((candidate): candidate is string => typeof candidate === "string")
         .map(resolveTritonAiManagedCodexInstallation)
         .find((candidate) => candidate !== null);
-      if (!managedInstallation || input.serverEntryPath.trim().length === 0) {
+      if (!managedInstallation) {
         return input.fallback.resolve(options);
       }
 
-      return makeProviderMaintenanceCapabilities({
-        provider: input.provider,
-        packageName: input.packageName,
-        updateExecutable: input.executablePath,
-        updateArgs: [
-          input.serverEntryPath,
-          MANAGED_CODEX_UPDATE_COMMAND,
-          managedInstallation.binaryPath,
-        ],
-        updateLockKey: MANAGED_CODEX_UPDATE_LOCK,
-      });
+      return {
+        ...makeProviderMaintenanceCapabilities({
+          provider: input.provider,
+          packageName: input.packageName,
+          updateExecutable: input.serverEntryPath.trim() ? input.executablePath : null,
+          updateArgs: [
+            input.serverEntryPath,
+            MANAGED_CODEX_UPDATE_COMMAND,
+            managedInstallation.binaryPath,
+          ],
+          updateLockKey: MANAGED_CODEX_UPDATE_LOCK,
+        }),
+        approvedVersion: managedConfig.provider.approvedCodexVersion ?? null,
+      };
     },
   };
 }
@@ -166,6 +179,29 @@ export const updateTritonAiManagedCodex = Effect.fn(
     return yield* updateError("The managed Codex runtime must not be a symbolic link.");
   }
 
+  const approvedVersion = yield* ManagedCodexApprovedVersion;
+  if (!approvedVersion || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u.test(approvedVersion)) {
+    return yield* updateError("No valid approved Codex version is configured.");
+  }
+  const currentResult = yield* runCheckedCommand(
+    input.run,
+    {
+      command: installation.binaryPath,
+      args: ["--version"],
+      timeout: "30 seconds",
+      maxOutputBytes: 8 * 1024,
+      outputMode: "truncate",
+    },
+    "The installed Codex version could not be verified.",
+  );
+  const currentVersion = parseCodexCliVersion(commandOutput(currentResult));
+  if (!currentVersion) return yield* updateError("The installed Codex version is invalid.");
+  if (compareSemverVersions(currentVersion, approvedVersion) >= 0) {
+    return yield* updateError(
+      "The installed Codex version already meets or exceeds the approved version.",
+    );
+  }
+
   const runtimeRoot = path.dirname(installation.installRoot);
   const installationName = path.basename(installation.installRoot);
   const stagingContainer = yield* fs.makeTempDirectoryScoped({
@@ -191,7 +227,7 @@ export const updateTritonAiManagedCodex = Effect.fn(
         stagedInstallRoot,
         "--no-fund",
         "--no-audit",
-        "@openai/codex@latest",
+        `@openai/codex@${approvedVersion}`,
       ],
       timeout: "4 minutes",
       maxOutputBytes: 64 * 1024,
@@ -216,8 +252,8 @@ export const updateTritonAiManagedCodex = Effect.fn(
     "The staged Codex package failed verification.",
   );
   const stagedVersion = parseCodexCliVersion(commandOutput(stagedVersionResult));
-  if (!stagedVersion) {
-    return yield* updateError("The staged Codex package returned an invalid version.");
+  if (stagedVersion !== approvedVersion) {
+    return yield* updateError("The staged Codex package did not match the approved version.");
   }
 
   // npm's generated launcher follows ambient PATH. Retain the Installer's

@@ -26,6 +26,9 @@ export const TritonAiManagedConfig = Schema.Struct({
     driver: Schema.Literal("codex"),
     managedBinary: Schema.Literal(true),
     managedHome: Schema.Literal(true),
+    approvedCodexVersion: Schema.optionalKey(
+      Schema.String.check(Schema.isPattern(/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u)),
+    ),
     baseUrl: ManagedHttpsUrl,
     sharedApiKeyEnvironmentVariable: Schema.Literal("TRITONAI_API_KEY"),
     apiKeySourceEnvironmentVariable: Schema.Literal("TRITONAI_API_KEY_SOURCE"),

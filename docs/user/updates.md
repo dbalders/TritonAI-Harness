@@ -40,3 +40,5 @@ or uninstall TritonAI Installer as a Nightly setup step.
 The development app now uses a white trident over teal Aurora waves, matching the circular main and nightly icons.
 
 In web and desktop, **Settings > Appearance > Show header artwork** controls the decorative Nightly and Dev artwork. It is on by default. Turn it off for a plain header; the **(Nightly)** or **(Dev)** label stays visible. Your choice is saved and can be changed at any time. The artwork preference applies to every theme. Stable builds hide the artwork, environment label, and artwork setting, including its search result.
+
+UCSD-managed Codex engine updates follow the version approved in your Harness release. A newer upstream Codex release alone does not trigger an update. Harness offers an engine update only when the approved version is available and newer than your installed engine; it never downgrades a newer installation. If approval information is unavailable, managed engine updates stay disabled. Personal and custom provider updates retain their usual behavior.
