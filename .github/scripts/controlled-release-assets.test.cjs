@@ -95,3 +95,65 @@ test("controlled release verifies downloaded draft bytes before publishing", () 
   assert.match(steps[verify].run, /verify-controlled-release-assets/);
   assert.match(steps[verify].run, /git rev-parse HEAD/);
 });
+
+test("controlled releases publish only after an explicit manual opt-in", () => {
+  const workflow = parse(fs.readFileSync(path.resolve(".github/workflows/release.yml"), "utf8"));
+  assert.equal(workflow.concurrency["cancel-in-progress"], false);
+  assert.equal(workflow.concurrency.queue, "max");
+  assert.equal(workflow.on.workflow_dispatch.inputs.publish.type, "boolean");
+  assert.equal(workflow.on.workflow_dispatch.inputs.publish.default, false);
+  const publish = workflow.jobs.release.steps.find(
+    (step) => step.name === "Publish controlled release",
+  );
+  const draft = workflow.jobs.release.steps.find(
+    (step) => step.name === "Report draft ready for testing",
+  );
+  const evaluate = (expression, eventName, input) => {
+    const condition = expression.replace(/^\s*\$\{\{\s*|\s*\}\}\s*$/g, "");
+    return new Function(
+      "github",
+      "inputs",
+      "needs",
+      "failure",
+      "cancelled",
+      "always",
+      `return (${condition});`,
+    )(
+      { event_name: eventName },
+      input === undefined ? {} : { publish: input },
+      {
+        preflight: { result: "success", outputs: { release_channel: "stable" } },
+        release: { result: "success" },
+        finalize: { result: "success" },
+      },
+      () => false,
+      () => false,
+      () => true,
+    );
+  };
+  for (const [eventName, input, expected] of [
+    ["push", undefined, false],
+    ["push", true, false],
+    ["workflow_dispatch", undefined, false],
+    ["workflow_dispatch", false, false],
+    ["workflow_dispatch", true, true],
+  ]) {
+    for (const condition of [
+      publish.if,
+      workflow.jobs.finalize.if,
+      workflow.jobs.announce_discord.if,
+    ]) {
+      assert.equal(
+        evaluate(condition, eventName, input),
+        expected,
+        `${eventName}/${input}: ${condition}`,
+      );
+    }
+    assert.equal(evaluate(draft.if, eventName, input), !expected);
+  }
+  // Draft mode must still verify the actual downloaded release bytes.
+  const verify = workflow.jobs.release.steps.find(
+    (step) => step.name === "Verify final controlled release assets",
+  );
+  assert.equal(verify.if, undefined);
+});

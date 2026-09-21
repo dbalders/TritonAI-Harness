@@ -24,8 +24,9 @@ The workflow runs for:
 - a manual dispatch with an explicit version.
 
 It requires a controlled GitHub release for the exact tag to exist as an unpublished draft. The
-draft remains private until all automated Harness checks, Windows packaging, selected trust-mode
-verification, composition, and asset validation succeed.
+draft remains unpublished after all automated Harness checks, Windows packaging, signing
+verification, composition, and asset validation succeed. Tag pushes always leave a draft. Manual
+runs default to `publish=false`; only an explicit `publish=true` publishes after validation.
 
 The workflow:
 
@@ -43,7 +44,8 @@ The workflow:
 11. uploads the required Windows installer, blockmap, updater metadata, and composition proof;
 12. downloads the final draft assets and verifies both updater manifests, artifact hashes,
     matching plugin composition, Mac ZIP permissions, and the source tag before publication;
-13. updates version metadata on `main` and announces the release after publication succeeds.
+13. leaves the verified draft available for testing by default; when explicitly dispatched with
+    `publish=true`, publishes it, updates version metadata on `main`, and announces the release.
 
 The stable release workflow keeps its controlled local macOS packaging path. The separate
 `nightly.yml` workflow builds macOS and Windows on standard GitHub-hosted runners; it cannot
@@ -248,12 +250,51 @@ modifying the vendored source or retaining checkout credentials.
 5. Push the tag or dispatch the workflow for that version.
 6. Wait for preflight, signed Windows build, installed-app boot proof, managed-plugin proof, and required-asset checks.
 7. Let the workflow validate Authenticode publisher identity and timestamps, then attach verified
-   Windows assets and publish the draft.
-8. Verify the published release state and downloaded asset identities.
+   Windows assets while leaving the release as a draft.
+8. Test those exact assets, explicitly publish the existing draft, and verify the published release
+   state and downloaded asset identities.
 9. Only then build and publish TritonAI Installer against those exact Harness assets.
 
 Do not publish the draft manually while the workflow is running. Both preflight and the release job
 fail closed if the controlled release is no longer a draft.
+
+### Build a draft, then promote the tested files
+
+After preparing the tag, draft, and local macOS assets above, dispatch:
+
+```sh
+gh workflow run release.yml --ref main -f version=0.3.4 -F publish=false
+```
+
+Wait for the workflow to succeed before downloading the draft assets with an authenticated
+GitHub account. Install the Windows EXE over the previous stable installation to test the manual
+upgrade path. An unpublished draft is not available to the normal public automatic updater;
+that flow needs a separate test feed or a published release.
+
+After testing, a maintainer or an explicitly authorized AI can promote the existing draft in
+GitHub's release editor or with the CLI. Do not rerun packaging to promote a candidate: that would
+replace the tested bytes. Freeze the draft during promotion: wait for every build/upload run to
+finish and coordinate with other maintainers so nobody edits its tag or assets until publication
+and downloaded-hash verification finish. GitHub does not provide an atomic compare-and-publish
+operation; a script alone cannot prevent a concurrent authorized editor from replacing assets.
+Before promotion, confirm the successful build's source SHA matches the
+tag, the release is still a draft, and its assets have not changed since testing. Download them
+again into an empty directory, compare the recorded test hashes, and run
+`node scripts/verify-controlled-release-assets.cjs DIRECTORY 0.3.4` from the tagged checkout.
+Then publish the stable release:
+
+```sh
+gh release edit v0.3.4 --repo dbalders/TritonAI-Harness --draft=false --prerelease=false --latest
+```
+
+Manual promotion does not execute this workflow's version-finalization or Discord jobs. Reconcile
+release package versions through a PR if needed. Only build and publish TritonAI Installer after
+Harness publication and asset verification.
+
+For a release already authorized for immediate publication, manually dispatch with `-F publish=true`.
+That run rebuilds Windows, validates the complete asset set, publishes, finalizes versions, and
+announces. It is not the promotion command for files already tested. Draft mode uses the same
+signing and validation gates as immediate publication.
 
 ## Required downstream release pins
 
@@ -316,9 +357,9 @@ allow scheduled publication. Local tests cannot establish Azure permissions or W
 
 Stable tag-triggered runs require the tag rule on the environment; allowing `main` alone does not
 allow tag deployments. Manual stable runs retain their controlled draft and tagged-source checks.
-Do not dispatch the stable workflow as a dry run: it publishes the controlled release after its
-gates pass. Use the non-publishing nightly proof first; validate stable signing during an authorized
-controlled release. The shared packager still supports client-secret authentication for local callers,
+The stable workflow defaults to a draft build and does not publish unless a manual dispatch sets
+`publish=true`. Both modes validate stable signing against the controlled release. The shared
+packager still supports client-secret authentication for local callers,
 but neither GitHub release workflow uses it or permits unsigned fallback.
 
 ## Required release assets
@@ -331,8 +372,8 @@ The release job refuses publication unless every required Windows pattern matche
 - `tritonai-plugin-composition-*.json`
 
 Local macOS assets and checksums must already match the frozen artifact contract. A workflow success
-proves the automated Windows lane and publication transition; it does not by itself prove
-installation or runtime behavior on either platform.
+proves the automated Windows lane and asset validation (plus publication when explicitly selected);
+it does not by itself prove the full upgrade path or runtime behavior on either platform.
 
 ## Release validation
 
