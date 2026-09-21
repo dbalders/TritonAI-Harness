@@ -30,6 +30,9 @@ permissions:
 jobs:
   preflight:
     name: Preflight
+    # GitHub hides unpublished drafts from tokens without repository write access.
+    permissions:
+      contents: write
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
@@ -45,6 +48,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          persist-credentials: false
           sparse-checkout: |
             /*
             !/.repos/

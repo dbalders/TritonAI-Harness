@@ -100,6 +100,8 @@ test("controlled releases publish only after an explicit manual opt-in", () => {
   const workflow = parse(fs.readFileSync(path.resolve(".github/workflows/release.yml"), "utf8"));
   assert.equal(workflow.concurrency["cancel-in-progress"], false);
   assert.equal(workflow.concurrency.queue, "max");
+  assert.equal(workflow.jobs.preflight.permissions.contents, "write");
+  assert.equal(workflow.jobs.preflight.steps[0].with["persist-credentials"], false);
   assert.equal(workflow.on.workflow_dispatch.inputs.publish.type, "boolean");
   assert.equal(workflow.on.workflow_dispatch.inputs.publish.default, false);
   const publish = workflow.jobs.release.steps.find(
