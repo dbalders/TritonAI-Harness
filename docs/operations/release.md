@@ -273,7 +273,11 @@ that flow needs a separate test feed or a published release.
 
 After testing, a maintainer or an explicitly authorized AI can promote the existing draft in
 GitHub's release editor or with the CLI. Do not rerun packaging to promote a candidate: that would
-replace the tested bytes. Before promotion, confirm the successful build's source SHA matches the
+replace the tested bytes. Freeze the draft during promotion: wait for every build/upload run to
+finish and coordinate with other maintainers so nobody edits its tag or assets until publication
+and downloaded-hash verification finish. GitHub does not provide an atomic compare-and-publish
+operation; a script alone cannot prevent a concurrent authorized editor from replacing assets.
+Before promotion, confirm the successful build's source SHA matches the
 tag, the release is still a draft, and its assets have not changed since testing. Download them
 again into an empty directory, compare the recorded test hashes, and run
 `node scripts/verify-controlled-release-assets.cjs DIRECTORY 0.3.4` from the tagged checkout.
