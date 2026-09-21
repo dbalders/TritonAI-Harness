@@ -14,7 +14,7 @@ it.layer(NodeServices.layer)("release workflow channel", (it) => {
         new URL("../.github/workflows/release.yml", import.meta.url),
       );
       const workflow = parse(yield* fs.readFileString(workflowPath));
-      const script = workflow.jobs.preflight.steps.find(
+      const script = workflow.jobs.resolve_release.steps.find(
         (step: { id?: string }) => step.id === "release_meta",
       ).run;
       const root = yield* fs.makeTempDirectoryScoped({ prefix: "nightly-channel-" });
