@@ -361,7 +361,12 @@ then remove that exception. Configure these environment variables:
 No client secret is needed. The packager uses `AZURE_TRUSTED_SIGNING_USE_AZURE_CLI=true`
 to accept the authenticated runner session. Signing still fails if that session cannot sign.
 Electron Builder signs during packaging, before generating updater hashes and blockmaps.
-The runner checks signatures and timestamps, installs and boots the package, and the final
+The runner checks signatures and timestamps, installs the package, runs a silent update over
+that installation, and boots the upgraded app. A fresh install alone does not exercise the
+old uninstaller. The native directory-swap regression can also be run on Windows with
+`./scripts/verify-windows-upgrade-directory-swap.ps1 -MakensisPath <path-to-makensis.exe>`;
+it uses disposable payloads and covers legacy, completed, and interrupted installations.
+The final
 nightly artifact gate rejects unsigned Windows reports. Stable publication depends on the successful
 signed Windows build and its installed-app verification.
 

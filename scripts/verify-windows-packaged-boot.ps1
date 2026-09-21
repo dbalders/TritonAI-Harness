@@ -94,6 +94,26 @@ if (-not (Test-Path -LiteralPath $completionMarker -PathType Leaf)) {
 
 Assert-TritonAIArtifactTrust -ExecutablePath $appPath
 
+# A fresh install never executes the old uninstaller. Exercise that path before
+# booting, including the updater's inherited application working directory.
+# Previously the parent setup retained that directory handle and prevented the
+# child uninstaller from renaming the installation to its rollback directory.
+$upgrade = Start-Process -FilePath $resolvedInstaller `
+  -ArgumentList "/S", "--updated" `
+  -WorkingDirectory $appCandidates[0].DirectoryName -PassThru
+if (-not $upgrade.WaitForExit(180000)) {
+  Invoke-TritonAIProcessTreeTermination -Process $upgrade
+  throw "Packaged Harness upgrade did not finish within 180 seconds."
+}
+if ($upgrade.ExitCode -ne 0) {
+  throw "Packaged Harness upgrade failed with exit code $($upgrade.ExitCode)."
+}
+if (-not (Test-Path -LiteralPath $appPath -PathType Leaf) -or
+    -not (Test-Path -LiteralPath $completionMarker -PathType Leaf)) {
+  throw "Packaged Harness upgrade did not leave a complete installation."
+}
+Assert-TritonAIArtifactTrust -ExecutablePath $appPath
+
 $runtimeHome = Join-Path $env:RUNNER_TEMP "tritonai-packaged-boot-$PID"
 New-Item -ItemType Directory -Path $runtimeHome -Force | Out-Null
 $previousRuntimeHome = $env:TRITONAI_HOME
@@ -164,7 +184,7 @@ try {
     Get-Process -Id $report.pid -ErrorAction Stop | Out-Null
   }
 
-  Write-Host "Installed, signature-verified, opened, and sustained TritonAI Harness from $appPath."
+  Write-Host "Installed, upgraded, signature-verified, opened, and sustained TritonAI Harness from $appPath."
 } finally {
   if ($null -ne $app) {
     Invoke-TritonAIProcessTreeTermination -Process $app

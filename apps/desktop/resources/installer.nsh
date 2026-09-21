@@ -78,8 +78,14 @@
 # install. Only the marker written at the end of customInstall proves the new
 # app is complete; executable extraction can finish before the rest of the app.
 !macro customInit
+  # electron-builder's .onInit sets the parent's working directory to $INSTDIR.
+  # On Windows that holds a non-delete-shared directory handle while ExecWait
+  # runs the old uninstaller, so its directory swap fails with a sharing
+  # violation even after the app exits. Release it before any recovery or
+  # uninstall work; changing only the child's working directory is too late.
+  SetOutPath "$TEMP"
+
   ${if} ${FileExists} "$INSTDIR.old\${TRITONAI_APP_EXECUTABLE_FILENAME}"
-    SetOutPath "$TEMP"
     ${if} ${FileExists} "$INSTDIR\${TRITONAI_INSTALL_COMPLETE_MARKER}"
       DetailPrint "Removing a completed ${PRODUCT_NAME} upgrade backup..."
       RMDir /r /REBOOTOK "$INSTDIR.old"
