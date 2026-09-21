@@ -190,3 +190,10 @@ test("stable drafts require both hosted platforms with matching configuration", 
   assert.match(upload.with.path, /release\/latest-mac\.yml/);
   assert.doesNotMatch(upload.with.path, /nightly-mac|harness-mac-verification/);
 });
+
+test("Windows release collection excludes build diagnostics", () => {
+  const workflow = parse(fs.readFileSync(path.resolve(".github/workflows/release.yml"), "utf8"));
+  const collect = workflow.jobs.build.steps.find((step) => step.name === "Collect release assets");
+  assert(collect.run.includes('"release/latest.yml"'));
+  assert(!collect.run.includes('"release/*.yml"'));
+});

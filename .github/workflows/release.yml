@@ -557,7 +557,7 @@ jobs:
           for pattern in \
             "release/*.exe" \
             "release/*.blockmap" \
-            "release/*.yml" \
+            "release/latest.yml" \
             "release/tritonai-plugin-composition-*.json"; do
             for file in $pattern; do
               cp "$file" release-publish/
