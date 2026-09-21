@@ -11,6 +11,16 @@ on:
         description: "Release version (for example 1.2.3 or v1.2.3)"
         required: true
         type: string
+      publish:
+        description: "Publish immediately after validation (otherwise leave a draft for testing)"
+        required: false
+        default: false
+        type: boolean
+
+# Keep uploads and publication from racing another controlled release run.
+concurrency:
+  group: controlled-release
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -562,7 +572,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    name: Complete controlled GitHub Release
+    name: Prepare controlled GitHub Release
     needs: [preflight, build]
     if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.build.result == 'success' }}
     runs-on: ubuntu-24.04
@@ -685,7 +695,17 @@ jobs:
           tag_commit="$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq .sha)"
           test "$tag_commit" = "$(git rev-parse HEAD)"
 
+      - name: Report draft ready for testing
+        if: github.event_name != 'workflow_dispatch' || inputs.publish != true
+        env:
+          RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
+        run: |
+          echo "### $RELEASE_TAG is ready for testing" >> "$GITHUB_STEP_SUMMARY"
+          echo "The verified assets remain in an unpublished draft. Download and test these exact files, then publish the existing draft without rebuilding." >> "$GITHUB_STEP_SUMMARY"
+          echo "Stable users will not receive this draft through automatic updates." >> "$GITHUB_STEP_SUMMARY"
+
       - name: Publish controlled release
+        if: github.event_name == 'workflow_dispatch' && inputs.publish == true
         shell: bash
         env:
           GH_TOKEN: ${{ steps.app_token.outputs.token }}
@@ -718,7 +738,7 @@ jobs:
 
   finalize:
     name: Finalize release
-    if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.release.result == 'success' && needs.preflight.outputs.release_channel == 'stable' }}
+    if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.release.result == 'success' && needs.preflight.outputs.release_channel == 'stable' && github.event_name == 'workflow_dispatch' && inputs.publish == true }}
     needs: [preflight, release]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -799,6 +819,7 @@ jobs:
     name: Announce release on Discord
     if: |
       always() && !cancelled() &&
+      github.event_name == 'workflow_dispatch' && inputs.publish == true &&
       needs.preflight.result == 'success' &&
       needs.release.result == 'success' &&
       (needs.finalize.result == 'success' || needs.finalize.result == 'skipped')
