@@ -28,8 +28,11 @@ permissions:
   id-token: none
 
 jobs:
-  preflight:
-    name: Preflight
+  resolve_release:
+    name: Resolve controlled draft
+    # GitHub hides unpublished drafts from tokens without repository write access.
+    permissions:
+      contents: write
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
@@ -41,15 +44,6 @@ jobs:
       make_latest: ${{ steps.release_meta.outputs.make_latest }}
       ref: ${{ steps.release_meta.outputs.ref }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-          sparse-checkout: |
-            /*
-            !/.repos/
-          sparse-checkout-cone-mode: false
-
       - id: release_meta
         name: Resolve release version
         shell: bash
@@ -113,9 +107,32 @@ jobs:
             exit 1
           fi
 
-      - name: Check out controlled release tag
-        if: github.event_name == 'workflow_dispatch'
-        run: git switch --detach "${{ steps.release_meta.outputs.ref }}"
+  preflight:
+    name: Preflight
+    needs: [resolve_release]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      release_channel: ${{ needs.resolve_release.outputs.release_channel }}
+      version: ${{ needs.resolve_release.outputs.version }}
+      tag: ${{ needs.resolve_release.outputs.tag }}
+      release_name: ${{ needs.resolve_release.outputs.release_name }}
+      is_prerelease: ${{ needs.resolve_release.outputs.is_prerelease }}
+      make_latest: ${{ needs.resolve_release.outputs.make_latest }}
+      ref: ${{ needs.resolve_release.outputs.ref }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve_release.outputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
 
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@v1
