@@ -223,7 +223,7 @@ jobs:
       - name: Execute managed plugin configuration validation
         env:
           TRITONAI_PLUGIN_COMPOSITION_SOURCE: ${{ github.workspace }}/.release-input/installer/vendor/plugins
-          TRITONAI_PLUGIN_CONFIGURATION_JSON: ${{ vars.TRITONAI_PLUGIN_CONFIGURATION_JSON }}
+          TRITONAI_PLUGIN_CONFIGURATION_JSON: ${{ secrets.NIGHTLY_PLUGIN_CONFIGURATION_JSON }}
         run: |
           node scripts/validate-managed-plugin-configuration.ts \
             --receipt .release-input/managed-plugin-validation-receipt.json
@@ -301,11 +301,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # macOS arm64 release assets are built, signed, notarized, and
-          # published through the controlled local release path before the tag
-          # triggers this workflow. Standard GitHub macOS runners cannot package
-          # this dependency graph reliably, and paid runners are intentionally
-          # not used by this public downstream repository.
+          # macOS arm64 uses the hosted signed/notarized job below.
           - label: Windows x64
             runner: windows-2025
             platform: win
@@ -453,7 +449,8 @@ jobs:
         shell: bash
         env:
           TRITONAI_PLUGIN_COMPOSITION_SOURCE: ${{ github.workspace }}/.release-input/installer/vendor/plugins
-          TRITONAI_PLUGIN_CONFIGURATION_JSON: ${{ vars.TRITONAI_PLUGIN_CONFIGURATION_JSON }}
+          TRITONAI_PLUGIN_CONFIGURATION_JSON: ${{ secrets.NIGHTLY_PLUGIN_CONFIGURATION_JSON }}
+          UCSD_AI_BASE_URL: ${{ secrets.NIGHTLY_UCSD_AI_BASE_URL }}
           T3CODE_CLERK_PASSKEY_RP_DOMAINS: ${{ vars.CLERK_PASSKEY_RP_DOMAINS }}
           AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
           AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
@@ -572,10 +569,124 @@ jobs:
           path: release-publish/*
           if-no-files-found: error
 
+  mac:
+    name: Build signed macOS release
+    needs:
+      - preflight
+      - validate_managed_plugins
+    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.validate_managed_plugins.result == 'success' }}
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.preflight.outputs.ref }}
+          persist-credentials: false
+          sparse-checkout: |-
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+      - name: Checkout pinned finalizer
+        uses: actions/checkout@v6
+        with:
+          repository: dbalders/TritonAI-Installer
+          ref: ${{ vars.TRITONAI_INSTALLER_COMPOSITION_COMMIT }}
+          persist-credentials: false
+          path: .release-input/installer
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: false
+      - name: Install frozen desktop dependencies
+        run: vp install --frozen-lockfile --filter=@t3tools/desktop... --filter=t3... --filter=@t3tools/scripts...
+      - name: Cache native monitor
+        id: resource_monitor_cache
+        uses: actions/cache@v6
+        with:
+          path: native/resource-monitor/target/aarch64-apple-darwin/release/t3-resource-monitor
+          key: resource-monitor-aarch64-apple-darwin-${{ hashFiles('native/resource-monitor/Cargo.lock', 'native/resource-monitor/Cargo.toml', 'native/resource-monitor/src/**') }}
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.resource_monitor_cache.outputs.cache-hit != 'true'
+        with:
+          targets: aarch64-apple-darwin
+      - uses: actions/download-artifact@v7
+        with:
+          name: managed-plugin-composition
+          path: .release-input/installer/vendor/plugins
+      - uses: actions/download-artifact@v7
+        with:
+          name: managed-plugin-validation-receipt
+          path: .release-input
+      - name: Stamp release runtime versions
+        env:
+          RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+        run: node scripts/update-release-package-versions.ts "$RELEASE_VERSION"
+      - name: Prepare source once
+        env:
+          TRITONAI_PLUGIN_COMPOSITION_SOURCE: ${{ github.workspace }}/.release-input/installer/vendor/plugins
+          TRITONAI_PLUGIN_CONFIGURATION_JSON: ${{ secrets.NIGHTLY_PLUGIN_CONFIGURATION_JSON }}
+          UCSD_AI_BASE_URL: ${{ secrets.NIGHTLY_UCSD_AI_BASE_URL }}
+          T3CODE_DESKTOP_REUSE_RESOURCE_MONITOR: ${{ steps.resource_monitor_cache.outputs.cache-hit == 'true' }}
+        run: |-
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/release-stage"
+          TMPDIR="$RUNNER_TEMP/release-stage/" node scripts/build-desktop-artifact.ts --platform mac --target zip --arch arm64 --keep-stage --stage-only --plugin-configuration-prevalidated --plugin-validation-receipt "$GITHUB_WORKSPACE/.release-input/managed-plugin-validation-receipt.json"
+      - name: Import release signing identity
+        env:
+          CERTIFICATE: ${{ secrets.NIGHTLY_MAC_CERTIFICATE }}
+          CERTIFICATE_PASSWORD: ${{ secrets.NIGHTLY_MAC_CERTIFICATE_PASSWORD }}
+        run: |-
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/release.keychain-db"
+          password="$(openssl rand -hex 24)"
+          printf "%s" "$CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/release.p12"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/release.p12" -P "$CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$keychain"
+          security set-key-partition-list -S apple-tool:,apple: -k "$password" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain"
+          rm "$RUNNER_TEMP/release.p12"
+      - name: Sign, notarize, and verify packaged app
+        env:
+          DEVELOPER_ID_APPLICATION: ${{ secrets.NIGHTLY_DEVELOPER_ID_APPLICATION }}
+          APPLE_API_KEY_CONTENT: ${{ secrets.NIGHTLY_APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.NIGHTLY_APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.NIGHTLY_APPLE_API_ISSUER }}
+          RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+        run: |-
+          set -euo pipefail
+          export APPLE_API_KEY="$RUNNER_TEMP/AuthKey.p8"
+          # Keep the key private without making the distributed app owner-only.
+          (umask 077; printf "%s" "$APPLE_API_KEY_CONTENT" > "$APPLE_API_KEY")
+          umask 022
+          node .release-input/installer/scripts/local-release-mac.cjs "$GITHUB_WORKSPACE" "$RUNNER_TEMP/release-stage" "$RELEASE_VERSION" "$GITHUB_WORKSPACE/release"
+          node scripts/verify-macos-update-zip.cjs "$GITHUB_WORKSPACE/release/TritonAI-Harness-$RELEASE_VERSION-arm64.zip"
+      - name: Remove signing inputs
+        if: always()
+        run: |-
+          security delete-keychain "$RUNNER_TEMP/release.keychain-db" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP/AuthKey.p8" "$RUNNER_TEMP/release.p12"
+      - name: Upload verified Mac artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: desktop-mac-arm64
+          path: |-
+            release/*.dmg
+            release/*.zip
+            release/*.blockmap
+            release/latest-mac.yml
+            release/tritonai-plugin-composition-mac-arm64.json
+          if-no-files-found: error
+          retention-days: 14
+
   release:
     name: Prepare controlled GitHub Release
-    needs: [preflight, build]
-    if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.build.result == 'success' }}
+    needs: [preflight, build, mac]
+    if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.build.result == 'success' && needs.mac.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -657,7 +768,7 @@ jobs:
             exit 1
           fi
 
-      - name: Attach Windows release assets
+      - name: Attach verified release assets
         shell: bash
         env:
           GH_TOKEN: ${{ steps.app_token.outputs.token }}
@@ -666,6 +777,8 @@ jobs:
           set -euo pipefail
 
           required_patterns=(
+            "release-assets/*.dmg"
+            "release-assets/*.zip"
             "release-assets/*.exe"
             "release-assets/*.blockmap"
             "release-assets/*.yml"

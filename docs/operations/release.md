@@ -24,7 +24,7 @@ The workflow runs for:
 - a manual dispatch with an explicit version.
 
 It requires a controlled GitHub release for the exact tag to exist as an unpublished draft. The
-draft remains unpublished after all automated Harness checks, Windows packaging, signing
+draft remains unpublished after all automated Harness checks, Mac and Windows packaging, signing
 verification, composition, and asset validation succeed. Tag pushes always leave a draft. Manual
 runs default to `publish=false`; only an explicit `publish=true` publishes after validation.
 
@@ -40,16 +40,20 @@ The workflow:
 7. aligns package versions in the isolated build checkout;
 8. authenticates the Windows runner through GitHub OIDC;
 9. builds and signs the Windows x64 NSIS Harness artifact, then verifies its publisher and timestamp;
-10. finalizes the managed-plugin composition proof;
-11. uploads the required Windows installer, blockmap, updater metadata, and composition proof;
-12. downloads the final draft assets and verifies both updater manifests, artifact hashes,
+10. builds, signs, notarizes, and boot-verifies macOS arm64 on a hosted Mac runner using the
+    same pinned Installer finalizer and immutable plugin composition as Windows;
+11. finalizes the managed-plugin composition proofs;
+12. uploads the Mac DMG/updater ZIP, Windows installer, blockmaps, updater metadata, and
+    composition proofs;
+13. downloads the final draft assets and verifies both updater manifests, artifact hashes,
     matching plugin composition, Mac ZIP permissions, and the source tag before publication;
-13. leaves the verified draft available for testing by default; when explicitly dispatched with
+14. leaves the verified draft available for testing by default; when explicitly dispatched with
     `publish=true`, publishes it, updates version metadata on `main`, and announces the release.
 
-The stable release workflow keeps its controlled local macOS packaging path. The separate
-`nightly.yml` workflow builds macOS and Windows on standard GitHub-hosted runners; it cannot
-publish a stable release or update stable version metadata.
+Stable and nightly workflows both build macOS and Windows on standard GitHub-hosted runners.
+Stable uses the same signing credentials, plugin configuration, and managed API URL as nightly,
+but stamps the stable version and produces stable app identity and update manifests. The
+separate `nightly.yml` workflow cannot publish a stable release or update stable version metadata.
 
 ## Local source staging and release scope
 
@@ -244,13 +248,13 @@ modifying the vendored source or retaining checkout credentials.
 ## Draft-first publication sequence
 
 1. Freeze the intended Harness commit and artifact contract.
-2. Produce, sign, notarize, and validate required local macOS assets.
-3. Create the exact tag and an unpublished GitHub draft for it.
-4. Attach the verified local assets to the draft.
-5. Push the tag or dispatch the workflow for that version.
-6. Wait for preflight, signed Windows build, installed-app boot proof, managed-plugin proof, and required-asset checks.
+2. Confirm the signing credentials, managed configuration, and pinned Installer commit.
+3. Create an unpublished GitHub draft targeting the frozen commit.
+4. Push the exact tag or create it through the GitHub API after the draft exists.
+5. Dispatch the workflow for that version if tag creation did not already start it.
+6. Wait for preflight, signed Mac and Windows builds, installed-app boot proof, managed-plugin proof, and required-asset checks.
 7. Let the workflow validate Authenticode publisher identity and timestamps, then attach verified
-   Windows assets while leaving the release as a draft.
+   Mac and Windows assets while leaving the release as a draft.
 8. Test those exact assets, explicitly publish the existing draft, and verify the published release
    state and downloaded asset identities.
 9. Only then build and publish TritonAI Installer against those exact Harness assets.
@@ -260,7 +264,7 @@ fail closed if the controlled release is no longer a draft.
 
 ### Build a draft, then promote the tested files
 
-After preparing the tag, draft, and local macOS assets above, dispatch:
+After preparing the tag and draft above, dispatch:
 
 ```sh
 gh workflow run release.yml --ref main -f version=0.3.4 -F publish=false
@@ -292,7 +296,7 @@ release package versions through a PR if needed. Only build and publish TritonAI
 Harness publication and asset verification.
 
 For a release already authorized for immediate publication, manually dispatch with `-F publish=true`.
-That run rebuilds Windows, validates the complete asset set, publishes, finalizes versions, and
+That run rebuilds both platforms, validates the complete asset set, publishes, finalizes versions, and
 announces. It is not the promotion command for files already tested. Draft mode uses the same
 signing and validation gates as immediate publication.
 
@@ -303,8 +307,18 @@ Repository variables:
 - `TRITONAI_INSTALLER_COMPOSITION_COMMIT`: exact 40-character Installer commit that produces the
   managed-plugin composition. Its reviewed catalog supplies the exact Plugins ref, commit, package
   selection, versions, and digests.
-- `TRITONAI_PLUGIN_CONFIGURATION_JSON`: bounded JSON object keyed by every package ID in the selected
+  Shared stable/nightly repository secrets:
+
+- `NIGHTLY_PLUGIN_CONFIGURATION_JSON`: bounded JSON object keyed by every package ID in the selected
   composition. Each plugin owns and validates its opaque configuration object.
+- `NIGHTLY_UCSD_AI_BASE_URL`: managed API base URL.
+- `NIGHTLY_MAC_CERTIFICATE`, `NIGHTLY_MAC_CERTIFICATE_PASSWORD`, and
+  `NIGHTLY_DEVELOPER_ID_APPLICATION`: Developer ID signing identity.
+- `NIGHTLY_APPLE_API_KEY`, `NIGHTLY_APPLE_API_KEY_ID`, and `NIGHTLY_APPLE_API_ISSUER`: notarization
+  credentials. The historical secret names are shared; they do not select the runtime release track.
+
+For promotion from a tested nightly, pin `TRITONAI_INSTALLER_COMPOSITION_COMMIT` to that nightly’s
+`NIGHTLY_INSTALLER_COMMIT` so both platform builds use the same catalog and Mac finalizer.
 
 The pinned Installer catalog is the only production plugin selection authority. Its preparation
 step verifies that the catalog's Plugins ref resolves to the catalog's exact commit before staging
@@ -364,15 +378,17 @@ but neither GitHub release workflow uses it or permits unsigned fallback.
 
 ## Required release assets
 
-The release job refuses publication unless every required Windows pattern matches:
+The release job refuses publication unless every required platform pattern matches:
 
+- `*.dmg`
+- `*.zip`
 - `*.exe`
 - `*.blockmap`
 - updater `*.yml`
 - `tritonai-plugin-composition-*.json`
 
-Local macOS assets and checksums must already match the frozen artifact contract. A workflow success
-proves the automated Windows lane and asset validation (plus publication when explicitly selected);
+Both platforms must match the frozen artifact contract. A workflow success
+proves the automated build and boot checks and asset validation (plus publication when explicitly selected);
 it does not by itself prove the full upgrade path or runtime behavior on either platform.
 
 ## Release validation

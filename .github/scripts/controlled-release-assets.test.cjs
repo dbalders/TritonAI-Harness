@@ -157,3 +157,23 @@ test("controlled releases publish only after an explicit manual opt-in", () => {
   );
   assert.equal(verify.if, undefined);
 });
+
+test("stable drafts require both hosted platforms with matching configuration", () => {
+  const workflow = parse(fs.readFileSync(path.resolve(".github/workflows/release.yml"), "utf8"));
+  assert(workflow.jobs.release.needs.includes("mac"));
+  assert.match(workflow.jobs.release.if, /needs\.mac\.result == 'success'/);
+  const mac = workflow.jobs.mac;
+  assert.equal(mac["runs-on"], "macos-15");
+  const prepare = mac.steps.find((step) => step.name === "Prepare source once");
+  const windows = workflow.jobs.build.steps.find((step) => step.id === "build_desktop");
+  for (const key of ["TRITONAI_PLUGIN_CONFIGURATION_JSON", "UCSD_AI_BASE_URL"]) {
+    assert.equal(prepare.env[key], windows.env[key]);
+  }
+  const sign = mac.steps.find((step) => step.name === "Sign, notarize, and verify packaged app");
+  assert.match(sign.run, /local-release-mac\.cjs/);
+  assert.match(sign.run, /verify-macos-update-zip\.cjs/);
+  assert.equal(sign.env.RELEASE_VERSION, "${{ needs.preflight.outputs.version }}");
+  const upload = mac.steps.find((step) => step.name === "Upload verified Mac artifacts");
+  assert.match(upload.with.path, /release\/latest-mac\.yml/);
+  assert.doesNotMatch(upload.with.path, /nightly-mac|harness-mac-verification/);
+});
