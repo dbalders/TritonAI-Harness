@@ -91,6 +91,13 @@ test("controlled release verifies downloaded draft bytes before publishing", () 
   const publish = steps.findIndex((step) => step.name === "Publish controlled release");
   assert(verify > 0 && verify < publish);
   assert(steps.slice(0, verify).some((step) => step.id === "app_token"));
+  for (const name of [
+    "Verify controlled draft gate",
+    "Attach verified release assets",
+    "Verify final controlled release assets",
+  ]) {
+    assert.equal(steps.find((step) => step.name === name).env.GH_TOKEN, "${{ github.token }}");
+  }
   assert.match(steps[verify].run, /gh release download/);
   assert.match(steps[verify].run, /verify-controlled-release-assets/);
   assert.match(steps[verify].run, /git rev-parse HEAD/);
@@ -144,6 +151,7 @@ test("controlled releases publish only after an explicit manual opt-in", () => {
     ["workflow_dispatch", true, true],
   ]) {
     for (const condition of [
+      workflow.jobs.release.steps.find((step) => step.id === "app_token").if,
       publish.if,
       workflow.jobs.finalize.if,
       workflow.jobs.announce_discord.if,
@@ -181,4 +189,11 @@ test("stable drafts require both hosted platforms with matching configuration", 
   const upload = mac.steps.find((step) => step.name === "Upload verified Mac artifacts");
   assert.match(upload.with.path, /release\/latest-mac\.yml/);
   assert.doesNotMatch(upload.with.path, /nightly-mac|harness-mac-verification/);
+});
+
+test("Windows release collection excludes build diagnostics", () => {
+  const workflow = parse(fs.readFileSync(path.resolve(".github/workflows/release.yml"), "utf8"));
+  const collect = workflow.jobs.build.steps.find((step) => step.name === "Collect release assets");
+  assert(collect.run.includes('"release/latest.yml"'));
+  assert(!collect.run.includes('"release/*.yml"'));
 });

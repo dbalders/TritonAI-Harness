@@ -557,7 +557,7 @@ jobs:
           for pattern in \
             "release/*.exe" \
             "release/*.blockmap" \
-            "release/*.yml" \
+            "release/latest.yml" \
             "release/tritonai-plugin-composition-*.json"; do
             for file in $pattern; do
               cp "$file" release-publish/
@@ -712,6 +712,7 @@ jobs:
     steps:
       - id: app_token
         name: Mint release app token
+        if: github.event_name == 'workflow_dispatch' && inputs.publish == true
         uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
         with:
           app-id: ${{ secrets.RELEASE_APP_ID }}
@@ -722,6 +723,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.preflight.outputs.ref }}
+          persist-credentials: false
           sparse-checkout: |
             /*
             !/.repos/
@@ -775,7 +777,7 @@ jobs:
       - name: Verify controlled draft gate
         shell: bash
         env:
-          GH_TOKEN: ${{ steps.app_token.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
         run: |
           set -euo pipefail
@@ -789,7 +791,7 @@ jobs:
       - name: Attach verified release assets
         shell: bash
         env:
-          GH_TOKEN: ${{ steps.app_token.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
         run: |
           set -euo pipefail
@@ -817,7 +819,7 @@ jobs:
       - name: Verify final controlled release assets
         shell: bash
         env:
-          GH_TOKEN: ${{ steps.app_token.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
           RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
         run: |
