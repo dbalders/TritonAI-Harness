@@ -10,6 +10,8 @@ TritonAI uses separate update paths so routine changes do not require rerunning 
 
 If a Codex update cannot run on the current managed Node.js version, no staged update is activated. Run the latest full Installer to update or repair the managed runtime, then retry from Harness.
 
+Windows loads the credentials saved by TritonAI Installer when you open Harness directly or restart after an update. Credentials saved in Harness settings take precedence.
+
 ## Stable and Nightly
 
 Stable and Nightly have separate desktop apps and data profiles. **Settings > About** shows the installed app's update track:

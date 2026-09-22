@@ -88,8 +88,6 @@ const emptyBackendObservabilitySettings: BackendObservabilitySettings = {
   otlpMetricsUrl: Option.none(),
 };
 
-const UCSD_ENV_FILE_PATH = [".agents", "ucsd", "env"] as const;
-
 const TRITONAI_CREDENTIAL_ENV_NAMES = new Set([
   TRITONAI_API_KEY_ENV,
   TRITONAI_ONPREM_API_KEY_ENV,
@@ -141,10 +139,25 @@ function parseShellExportLine(line: string): readonly [string, string] | null {
   return [match[1], value] as const;
 }
 
+// The Installer writes literal assignments on Windows. Do not evaluate PowerShell
+// or import its PATH expression; provider runtime discovery owns executable paths.
+function parsePowerShellEnvironmentLine(line: string): readonly [string, string] | null {
+  const match = line.match(/^\$env:([A-Za-z_][A-Za-z0-9_]*)\s*=\s*'((?:[^']|'')*)'$/iu);
+  return match?.[1] === undefined || match[2] === undefined
+    ? null
+    : [match[1].toUpperCase(), match[2].replaceAll("''", "'")];
+}
+
 const readUcsdEnvironmentFile = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
-  const envFilePath = environment.path.join(environment.homeDirectory, ...UCSD_ENV_FILE_PATH);
+  const isWindows = environment.platform === "win32";
+  const envFilePath = environment.path.join(
+    environment.homeDirectory,
+    ".agents",
+    "ucsd",
+    isWindows ? "env.ps1" : "env",
+  );
   const contents = yield* fileSystem.readFileString(envFilePath).pipe(
     Effect.map(Option.some),
     Effect.catchTags({
@@ -166,7 +179,9 @@ const readUcsdEnvironmentFile = Effect.gen(function* () {
   return Object.fromEntries(
     contents.value
       .split(/\r?\n/u)
-      .map((line) => parseShellExportLine(line.trim()))
+      .map((line) =>
+        (isWindows ? parsePowerShellEnvironmentLine : parseShellExportLine)(line.trim()),
+      )
       .filter((entry): entry is readonly [string, string] => entry !== null),
   );
 });
