@@ -137,6 +137,7 @@ const withHarness = <A, E, R>(
     | FileSystem.FileSystem
     | DesktopBackendConfiguration.DesktopBackendConfiguration
   >,
+  platform: NodeJS.Platform = "darwin",
 ) =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
@@ -151,7 +152,7 @@ const withHarness = <A, E, R>(
           Layer.provideMerge(DesktopAppSettings.layerTest()),
           Layer.provideMerge(DesktopWslEnvironment.layerTest()),
           Layer.provideMerge(DesktopWslServerTree.layerTest()),
-          Layer.provideMerge(makeEnvironmentLayer(baseDir)),
+          Layer.provideMerge(makeEnvironmentLayer(baseDir, { platform })),
         ),
       ),
     );
@@ -960,6 +961,75 @@ describe("DesktopBackendConfiguration", () => {
     }),
   );
 
+  it.effect("Windows startup reads Installer literals without running its launcher", () =>
+    Effect.gen(function* () {
+      const names = ["TRITONAI_API_KEY", "UCSD_AI_BASE_URL"] as const;
+      const previous = names.map((name) => process.env[name]);
+      try {
+        process.env.TRITONAI_API_KEY = "stale-shared-key";
+        process.env.UCSD_AI_BASE_URL = "https://user.example/v1";
+        yield* withHarness(
+          Effect.gen(function* () {
+            const fs = yield* FileSystem.FileSystem;
+            const environment = yield* DesktopEnvironment.DesktopEnvironment;
+            const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+            const directory = environment.path.join(environment.homeDirectory, ".agents", "ucsd");
+            yield* fs.makeDirectory(directory, { recursive: true });
+            yield* fs.writeFileString(
+              environment.path.join(directory, "env"),
+              "export TRITONAI_API_KEY='wrong-platform-key'\n",
+            );
+            yield* fs.writeFileString(
+              environment.path.join(directory, "env.ps1"),
+              [
+                "$env:PATH = 'C:\\managed;' + $env:PATH",
+                "$env:UCSD_AI_BASE_URL = 'https://installer.example/v1'",
+                "$env:TRITONAI_HOME = 'C:\\wrong-profile'",
+                "Remove-Item Env:TRITONAI_API_KEY -ErrorAction SilentlyContinue",
+                "$env:TRITONAI_ONPREM_API_KEY = 'test-onprem'",
+                "$env:TRITONAI_FRONTIER_API_KEY = 'test-frontier'",
+                "$env:UCSD_LITERAL = 'Triton''s $literal `value C:\\config'",
+                "$env:UCSD_EXPRESSION = $(throw 'must not execute')",
+                "$env:UCSD_TRAILING = 'value'; throw 'must not execute'",
+              ].join("\r\n"),
+            );
+            // Direct startup and subsequent backend resolution use the same file.
+            for (let attempt = 0; attempt < 2; attempt++) {
+              const config = yield* configuration.resolvePrimary;
+              assert.equal(config.env.TRITONAI_ONPREM_API_KEY, "test-onprem");
+              assert.equal(config.env.TRITONAI_FRONTIER_API_KEY, "test-frontier");
+              assert.isUndefined(config.env.TRITONAI_API_KEY);
+              assert.isUndefined(config.env.UCSD_AI_BASE_URL);
+              assert.isTrue(config.extendEnv);
+              assert.isUndefined(config.env.PATH);
+              assert.isUndefined(config.env.TRITONAI_HOME);
+              assert.equal(config.bootstrap.t3Home, environment.baseDir);
+              assert.equal(config.env.UCSD_LITERAL, "Triton's $literal `value C:\\config");
+              assert.isUndefined(config.env.UCSD_EXPRESSION);
+              assert.isUndefined(config.env.UCSD_TRAILING);
+            }
+            yield* fs.writeFileString(
+              environment.path.join(directory, "env.ps1"),
+              "$env:TRITONAI_API_KEY = 'installed-shared-key'\n",
+            );
+            const shared = yield* configuration.resolvePrimary;
+            assert.equal(shared.env.TRITONAI_API_KEY, "installed-shared-key");
+            assert.isUndefined(shared.env.TRITONAI_ONPREM_API_KEY);
+            assert.isUndefined(shared.env.TRITONAI_FRONTIER_API_KEY);
+            yield* DesktopTritonAiApiKey.replaceTritonAiApiKey("desktop-override");
+            const overridden = yield* configuration.resolvePrimary;
+            assert.equal(overridden.env.TRITONAI_API_KEY, "desktop-override");
+            assert.isUndefined(overridden.env.TRITONAI_ONPREM_API_KEY);
+            assert.isUndefined(overridden.env.TRITONAI_FRONTIER_API_KEY);
+          }),
+          "win32",
+        );
+      } finally {
+        names.forEach((name, index) => restoreEnv(name, previous[index]));
+      }
+    }),
+  );
+
   it.effect("resolvePrimary clears an inherited shared key for split installer credentials", () =>
     Effect.gen(function* () {
       const previousSharedKey = process.env.TRITONAI_API_KEY;
@@ -1257,13 +1327,13 @@ describe("DesktopBackendConfiguration", () => {
       const baseDir = yield* fileSystem.makeTempDirectoryScoped({
         prefix: "t3-desktop-backend-config-test-",
       });
-      const envFile = path.join(baseDir, ".agents", "ucsd", "env");
+      const envFile = path.join(baseDir, ".agents", "ucsd", "env.ps1");
       yield* fileSystem.makeDirectory(path.dirname(envFile), { recursive: true });
       yield* fileSystem.writeFileString(
         envFile,
         [
-          "export TRITONAI_API_KEY='installer-triton-key'",
-          "export UCSD_AI_BASE_URL=https://installer.example.edu/v1",
+          "$env:TRITONAI_API_KEY = 'installer-triton-key'",
+          "$env:UCSD_AI_BASE_URL = 'https://installer.example.edu/v1'",
           "",
         ].join("\n"),
       );
