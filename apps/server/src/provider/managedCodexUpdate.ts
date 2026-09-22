@@ -265,12 +265,28 @@ export const updateTritonAiManagedCodex = Effect.fn(
         times: 40,
       }),
     );
-  const makeTemporaryDirectory = (prefix: string) =>
-    Effect.acquireRelease(fs.makeTempDirectory({ directory: runtimeRoot, prefix }), (directory) =>
-      retryFileOperation(fs.remove(directory, { recursive: true, force: true })).pipe(Effect.orDie),
+  let backedUp = false;
+  let activated = false;
+  let verified = false;
+  const makeTemporaryDirectory = Effect.fn("managedCodexUpdate.makeTemporaryDirectory")(function* (
+    prefix: string,
+    shouldRemove = () => true,
+  ) {
+    return yield* Effect.acquireRelease(
+      fs.makeTempDirectory({ directory: runtimeRoot, prefix }),
+      (directory) =>
+        shouldRemove()
+          ? retryFileOperation(fs.remove(directory, { recursive: true, force: true })).pipe(
+              Effect.orDie,
+            )
+          : Effect.void,
     );
+  });
   const stagingContainer = yield* makeTemporaryDirectory(".tritonai-codex-stage.");
-  const backupContainer = yield* makeTemporaryDirectory(".tritonai-codex-backup.");
+  const backupContainer = yield* makeTemporaryDirectory(
+    ".tritonai-codex-backup.",
+    () => !backedUp || verified,
+  );
   const stagedInstallRoot = path.join(stagingContainer, installationName);
   const stagedBinaryPath = path.join(stagedInstallRoot, ...installation.binaryRelativeSegments);
   const backupInstallRoot = path.join(backupContainer, installationName);
@@ -334,8 +350,6 @@ export const updateTritonAiManagedCodex = Effect.fn(
   yield* fs.copyFile(installation.binaryPath, stagedBinaryPath);
   if (!installation.windows) yield* fs.chmod(stagedBinaryPath, 0o755);
 
-  let backedUp = false;
-  let activated = false;
   const activate = Effect.gen(function* () {
     yield* retryFileOperation(fs.rename(installation.installRoot, backupInstallRoot));
     backedUp = true;
@@ -356,6 +370,7 @@ export const updateTritonAiManagedCodex = Effect.fn(
     if (activeVersion !== stagedVersion) {
       return yield* updateError("The activated Codex package did not match the staged version.");
     }
+    verified = true;
     return activeVersion;
   });
 
@@ -366,13 +381,24 @@ export const updateTritonAiManagedCodex = Effect.fn(
           yield* retryFileOperation(
             fs.remove(installation.installRoot, { recursive: true, force: true }),
           ).pipe(
-            Effect.mapError((rollbackCause) => updateError("Rollback failed.", rollbackCause)),
+            Effect.mapError((rollbackCause) =>
+              updateError(
+                `Rollback failed. The previous engine is retained at ${backupInstallRoot}.`,
+                rollbackCause,
+              ),
+            ),
           );
         }
         if (backedUp) {
           yield* retryFileOperation(fs.rename(backupInstallRoot, installation.installRoot)).pipe(
-            Effect.mapError((rollbackCause) => updateError("Rollback failed.", rollbackCause)),
+            Effect.mapError((rollbackCause) =>
+              updateError(
+                `Rollback failed. The previous engine is retained at ${backupInstallRoot}.`,
+                rollbackCause,
+              ),
+            ),
           );
+          backedUp = false;
         }
         return yield* updateError("The managed Codex update was rolled back.", cause);
       }),

@@ -279,11 +279,12 @@ it.layer(NodeServices.layer)("Windows managed engine updates", (it) => {
       "temporary lock",
       "persistent lock",
       "unrelated error",
+      "rollback removal lock",
+      "rollback restoration lock",
     ]) {
-      const failActivation = scenario === "verification failure";
-      const shouldFail = ["verification failure", "persistent lock", "unrelated error"].includes(
-        scenario,
-      );
+      const rollbackFailure = scenario.startsWith("rollback");
+      const failActivation = scenario === "verification failure" || rollbackFailure;
+      const shouldFail = scenario !== "success" && scenario !== "temporary lock";
       it.effect(`${layout}: ${scenario}`, () =>
         Effect.gen(function* () {
           const fixture = yield* makeFixture();
@@ -345,6 +346,18 @@ it.layer(NodeServices.layer)("Windows managed engine updates", (it) => {
             ...fs,
             rename: (source, destination) =>
               Effect.gen(function* () {
+                if (
+                  scenario === "rollback restoration lock" &&
+                  source.includes(".tritonai-codex-backup.")
+                ) {
+                  yield* Deferred.succeed(lockObserved, undefined);
+                  return yield* PlatformError.systemError({
+                    _tag: "Unknown",
+                    module: "FileSystem",
+                    method: "rename",
+                    cause: Object.assign(new Error("locked backup"), { code: "EPERM" }),
+                  });
+                }
                 if (source.includes(".tritonai-codex-stage.") && destination === installRoot) {
                   activationAttempts++;
                   if (
@@ -365,6 +378,19 @@ it.layer(NodeServices.layer)("Windows managed engine updates", (it) => {
                 }
                 return yield* fs.rename(source, destination);
               }),
+            remove: (target, options) =>
+              Effect.gen(function* () {
+                if (scenario === "rollback removal lock" && target === installRoot) {
+                  yield* Deferred.succeed(lockObserved, undefined);
+                  return yield* PlatformError.systemError({
+                    _tag: "Unknown",
+                    module: "FileSystem",
+                    method: "remove",
+                    cause: Object.assign(new Error("locked active engine"), { code: "EPERM" }),
+                  });
+                }
+                return yield* fs.remove(target, options);
+              }),
           });
           const fiber = yield* updateTritonAiManagedCodex({ binaryPath, run }).pipe(
             Effect.provideService(FileSystem.FileSystem, testFs),
@@ -382,9 +408,21 @@ it.layer(NodeServices.layer)("Windows managed engine updates", (it) => {
           );
           expect(installs).toBe(1);
           expect(result._tag).toBe(shouldFail ? "Failure" : "Success");
-          expect(yield* fs.readFileString(activeEntry)).toBe(shouldFail ? "0.146.0" : "0.151.0");
-          expect(yield* fs.readFileString(binaryPath)).toBe(launcher);
-          expect(yield* fs.readDirectory(runtimeRoot)).toEqual(["openai-codex-0.146.0"]);
+          if (rollbackFailure) {
+            const entries = yield* fs.readDirectory(runtimeRoot);
+            const backup = entries.find((entry) => entry.startsWith(".tritonai-codex-backup."));
+            expect(backup).toBeDefined();
+            const savedRoot = path.join(runtimeRoot, backup!, "openai-codex-0.146.0");
+            expect(yield* fs.readFileString(path.join(savedRoot, ...entrySegments))).toBe(
+              "0.146.0",
+            );
+            expect(yield* fs.readFileString(path.join(savedRoot, "codex.cmd"))).toBe(launcher);
+            if (result._tag === "Failure") expect(result.failure.message).toContain(savedRoot);
+          } else {
+            expect(yield* fs.readFileString(activeEntry)).toBe(shouldFail ? "0.146.0" : "0.151.0");
+            expect(yield* fs.readFileString(binaryPath)).toBe(launcher);
+            expect(yield* fs.readDirectory(runtimeRoot)).toEqual(["openai-codex-0.146.0"]);
+          }
         }).pipe(Effect.scoped),
       );
     }
