@@ -15,6 +15,32 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
+# Use the same pinned NSIS toolset as the package build. Both release and
+# nightly already invoke this verifier, so recovery cases are automated too.
+$nsisToolFile = [IO.Path]::GetTempFileName()
+$previousNsisDir = $env:NSISDIR
+try {
+  $resolveNsis = @'
+const { createRequire } = require('node:module');
+const fs = require('node:fs');
+const desktopRequire = createRequire(process.argv[1]);
+const builderRequire = createRequire(desktopRequire.resolve('electron-builder/package.json'));
+builderRequire('app-builder-lib/out/toolsets/windows').getMakeNsisPath()
+  .then(tool => fs.writeFileSync(process.argv[2], JSON.stringify(tool)))
+  .catch(error => { console.error(error); process.exitCode = 1; });
+'@
+  & node -e $resolveNsis (Join-Path $PSScriptRoot "..\apps\desktop\package.json") $nsisToolFile
+  if ($LASTEXITCODE -ne 0) { throw "Could not resolve the packaging NSIS compiler." }
+  $nsisTool = Get-Content -LiteralPath $nsisToolFile -Raw | ConvertFrom-Json
+  if ($nsisTool.PSObject.Properties.Name -contains "env") {
+    $env:NSISDIR = $nsisTool.env.NSISDIR
+  }
+  & (Join-Path $PSScriptRoot "verify-windows-upgrade-directory-swap.ps1") -MakensisPath $nsisTool.path
+} finally {
+  $env:NSISDIR = $previousNsisDir
+  Remove-Item -LiteralPath $nsisToolFile -Force
+}
+
 if ($AllowUnsigned -and -not [string]::IsNullOrWhiteSpace($ExpectedPublisherName)) {
   throw "Choose exactly one Windows trust mode: ExpectedPublisherName or AllowUnsigned."
 }
@@ -94,6 +120,26 @@ if (-not (Test-Path -LiteralPath $completionMarker -PathType Leaf)) {
 
 Assert-TritonAIArtifactTrust -ExecutablePath $appPath
 
+# A fresh install never executes the old uninstaller. Exercise that path before
+# booting, including the updater's inherited application working directory.
+# Previously the parent setup retained that directory handle and prevented the
+# child uninstaller from renaming the installation to its rollback directory.
+$upgrade = Start-Process -FilePath $resolvedInstaller `
+  -ArgumentList "/S", "--updated" `
+  -WorkingDirectory $appCandidates[0].DirectoryName -PassThru
+if (-not $upgrade.WaitForExit(180000)) {
+  Invoke-TritonAIProcessTreeTermination -Process $upgrade
+  throw "Packaged Harness upgrade did not finish within 180 seconds."
+}
+if ($upgrade.ExitCode -ne 0) {
+  throw "Packaged Harness upgrade failed with exit code $($upgrade.ExitCode)."
+}
+if (-not (Test-Path -LiteralPath $appPath -PathType Leaf) -or
+    -not (Test-Path -LiteralPath $completionMarker -PathType Leaf)) {
+  throw "Packaged Harness upgrade did not leave a complete installation."
+}
+Assert-TritonAIArtifactTrust -ExecutablePath $appPath
+
 $runtimeHome = Join-Path $env:RUNNER_TEMP "tritonai-packaged-boot-$PID"
 New-Item -ItemType Directory -Path $runtimeHome -Force | Out-Null
 $previousRuntimeHome = $env:TRITONAI_HOME
@@ -164,7 +210,7 @@ try {
     Get-Process -Id $report.pid -ErrorAction Stop | Out-Null
   }
 
-  Write-Host "Installed, signature-verified, opened, and sustained TritonAI Harness from $appPath."
+  Write-Host "Installed, upgraded, signature-verified, opened, and sustained TritonAI Harness from $appPath."
 } finally {
   if ($null -ne $app) {
     Invoke-TritonAIProcessTreeTermination -Process $app
