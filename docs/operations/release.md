@@ -363,7 +363,8 @@ to accept the authenticated runner session. Signing still fails if that session 
 Electron Builder signs during packaging, before generating updater hashes and blockmaps.
 The runner checks signatures and timestamps, installs the package, runs a silent update over
 that installation, and boots the upgraded app. A fresh install alone does not exercise the
-old uninstaller. The native directory-swap regression can also be run on Windows with
+old uninstaller. Release and nightly verification also run the native directory-swap
+regression with the packaging compiler. It can be run separately on Windows with
 `./scripts/verify-windows-upgrade-directory-swap.ps1 -MakensisPath <path-to-makensis.exe>`;
 it uses disposable payloads and covers legacy, completed, and interrupted installations.
 The final

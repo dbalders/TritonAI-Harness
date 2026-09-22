@@ -15,6 +15,32 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
+# Use the same pinned NSIS toolset as the package build. Both release and
+# nightly already invoke this verifier, so recovery cases are automated too.
+$nsisToolFile = [IO.Path]::GetTempFileName()
+$previousNsisDir = $env:NSISDIR
+try {
+  $resolveNsis = @'
+const { createRequire } = require('node:module');
+const fs = require('node:fs');
+const desktopRequire = createRequire(process.argv[1]);
+const builderRequire = createRequire(desktopRequire.resolve('electron-builder/package.json'));
+builderRequire('app-builder-lib/out/toolsets/windows').getMakeNsisPath()
+  .then(tool => fs.writeFileSync(process.argv[2], JSON.stringify(tool)))
+  .catch(error => { console.error(error); process.exitCode = 1; });
+'@
+  & node -e $resolveNsis (Join-Path $PSScriptRoot "..\apps\desktop\package.json") $nsisToolFile
+  if ($LASTEXITCODE -ne 0) { throw "Could not resolve the packaging NSIS compiler." }
+  $nsisTool = Get-Content -LiteralPath $nsisToolFile -Raw | ConvertFrom-Json
+  if ($nsisTool.PSObject.Properties.Name -contains "env") {
+    $env:NSISDIR = $nsisTool.env.NSISDIR
+  }
+  & (Join-Path $PSScriptRoot "verify-windows-upgrade-directory-swap.ps1") -MakensisPath $nsisTool.path
+} finally {
+  $env:NSISDIR = $previousNsisDir
+  Remove-Item -LiteralPath $nsisToolFile -Force
+}
+
 if ($AllowUnsigned -and -not [string]::IsNullOrWhiteSpace($ExpectedPublisherName)) {
   throw "Choose exactly one Windows trust mode: ExpectedPublisherName or AllowUnsigned."
 }
