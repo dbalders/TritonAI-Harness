@@ -5,6 +5,8 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import type * as PlatformError from "effect/PlatformError";
+import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 
 import type { ProcessRunInput, ProcessRunOutput, ProcessRunner } from "../processRunner.ts";
@@ -152,6 +154,44 @@ function commandOutput(result: ProcessRunOutput): string {
   return `${result.stdout}\n${result.stderr}`;
 }
 
+const resolveWindowsManagedTools = Effect.fn("managedCodexUpdate.resolveWindowsManagedTools")(
+  function* (installation: TritonAiManagedCodexInstallation) {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const launcher = yield* fs.readFileString(installation.binaryPath);
+    // Read the Installer's pinned paths as data; never execute environment scripts.
+    const nodeRelative = /^set "NODE_BIN=%SCRIPT_DIR%([^"\r\n]+)"\r?$/mu.exec(launcher)?.[1];
+    const entryRelative =
+      /^"%NODE_BIN%" "%SCRIPT_DIR%((?:lib\\)?node_modules\\@openai\\codex\\bin\\codex\.js)" %\*\r?$/mu.exec(
+        launcher,
+      )?.[1];
+    if (!nodeRelative || !entryRelative) {
+      return yield* updateError(
+        "The managed Windows launcher is unsupported. Repair it with TritonAI Installer.",
+      );
+    }
+    const nodeBinary = path.resolve(installation.installRoot, ...nodeRelative.split("\\"));
+    const nodeHome = path.dirname(nodeBinary);
+    const expectedNodeRoot = path.join(
+      path.dirname(path.dirname(installation.installRoot)),
+      "node",
+    );
+    const npmCli = path.join(nodeHome, "node_modules", "npm", "bin", "npm-cli.js");
+    if (
+      path.dirname(nodeHome) !== expectedNodeRoot ||
+      !/^node-v\d+\.\d+\.\d+-win-(?:x64|arm64)$/u.test(path.basename(nodeHome)) ||
+      path.basename(nodeBinary) !== "node.exe" ||
+      !(yield* fs.exists(nodeBinary)) ||
+      !(yield* fs.exists(npmCli))
+    ) {
+      return yield* updateError(
+        "The managed Node.js/npm runtime is missing. Repair it with TritonAI Installer.",
+      );
+    }
+    return { nodeBinary, npmCli, entrySegments: entryRelative.split("\\") };
+  },
+);
+
 export const updateTritonAiManagedCodex = Effect.fn(
   "managedCodexUpdate.updateTritonAiManagedCodex",
 )(function* (input: { readonly binaryPath: string; readonly run: ManagedCodexCommandRunner }) {
@@ -203,15 +243,50 @@ export const updateTritonAiManagedCodex = Effect.fn(
   }
 
   const runtimeRoot = path.dirname(installation.installRoot);
+  const windowsTools = installation.windows
+    ? yield* resolveWindowsManagedTools(installation)
+    : null;
   const installationName = path.basename(installation.installRoot);
-  const stagingContainer = yield* fs.makeTempDirectoryScoped({
-    directory: runtimeRoot,
-    prefix: ".tritonai-codex-stage.",
+  // Windows can briefly retain an executable's file mapping after --version exits.
+  const retryFileOperation = <A>(operation: Effect.Effect<A, PlatformError.PlatformError>) =>
+    operation.pipe(
+      Effect.retry({
+        while: (error) => {
+          const cause = error.reason.cause;
+          return (
+            installation.windows &&
+            typeof cause === "object" &&
+            cause !== null &&
+            "code" in cause &&
+            ["EPERM", "EACCES", "EBUSY"].includes(String(cause.code))
+          );
+        },
+        schedule: Schedule.spaced("250 millis"),
+        times: 40,
+      }),
+    );
+  let backedUp = false;
+  let activated = false;
+  let verified = false;
+  const makeTemporaryDirectory = Effect.fn("managedCodexUpdate.makeTemporaryDirectory")(function* (
+    prefix: string,
+    shouldRemove = () => true,
+  ) {
+    return yield* Effect.acquireRelease(
+      fs.makeTempDirectory({ directory: runtimeRoot, prefix }),
+      (directory) =>
+        shouldRemove()
+          ? retryFileOperation(fs.remove(directory, { recursive: true, force: true })).pipe(
+              Effect.orDie,
+            )
+          : Effect.void,
+    );
   });
-  const backupContainer = yield* fs.makeTempDirectoryScoped({
-    directory: runtimeRoot,
-    prefix: ".tritonai-codex-backup.",
-  });
+  const stagingContainer = yield* makeTemporaryDirectory(".tritonai-codex-stage.");
+  const backupContainer = yield* makeTemporaryDirectory(
+    ".tritonai-codex-backup.",
+    () => !backedUp || verified,
+  );
   const stagedInstallRoot = path.join(stagingContainer, installationName);
   const stagedBinaryPath = path.join(stagedInstallRoot, ...installation.binaryRelativeSegments);
   const backupInstallRoot = path.join(backupContainer, installationName);
@@ -219,8 +294,9 @@ export const updateTritonAiManagedCodex = Effect.fn(
   yield* runCheckedCommand(
     input.run,
     {
-      command: "npm",
+      command: windowsTools?.nodeBinary ?? "npm",
       args: [
+        ...(windowsTools ? [windowsTools.npmCli] : []),
         "install",
         "-g",
         "--prefix",
@@ -240,11 +316,23 @@ export const updateTritonAiManagedCodex = Effect.fn(
     return yield* updateError("The staged Codex package did not contain its launcher.");
   }
 
+  // Installer archives use lib/node_modules even on Windows. npm's Windows
+  // prefix uses node_modules; retain the layout expected by the pinned launcher.
+  if (windowsTools?.entrySegments[0] === "lib") {
+    yield* fs.makeDirectory(path.join(stagedInstallRoot, "lib"), { recursive: true });
+    yield* fs.rename(
+      path.join(stagedInstallRoot, "node_modules"),
+      path.join(stagedInstallRoot, "lib", "node_modules"),
+    );
+  }
+
   const stagedVersionResult = yield* runCheckedCommand(
     input.run,
     {
-      command: stagedBinaryPath,
-      args: ["--version"],
+      command: windowsTools?.nodeBinary ?? stagedBinaryPath,
+      args: windowsTools
+        ? [path.join(stagedInstallRoot, ...windowsTools.entrySegments), "--version"]
+        : ["--version"],
       timeout: "30 seconds",
       maxOutputBytes: 8 * 1024,
       outputMode: "truncate",
@@ -262,12 +350,10 @@ export const updateTritonAiManagedCodex = Effect.fn(
   yield* fs.copyFile(installation.binaryPath, stagedBinaryPath);
   if (!installation.windows) yield* fs.chmod(stagedBinaryPath, 0o755);
 
-  let backedUp = false;
-  let activated = false;
   const activate = Effect.gen(function* () {
-    yield* fs.rename(installation.installRoot, backupInstallRoot);
+    yield* retryFileOperation(fs.rename(installation.installRoot, backupInstallRoot));
     backedUp = true;
-    yield* fs.rename(stagedInstallRoot, installation.installRoot);
+    yield* retryFileOperation(fs.rename(stagedInstallRoot, installation.installRoot));
     activated = true;
     const activeVersionResult = yield* runCheckedCommand(
       input.run,
@@ -284,6 +370,7 @@ export const updateTritonAiManagedCodex = Effect.fn(
     if (activeVersion !== stagedVersion) {
       return yield* updateError("The activated Codex package did not match the staged version.");
     }
+    verified = true;
     return activeVersion;
   });
 
@@ -291,18 +378,27 @@ export const updateTritonAiManagedCodex = Effect.fn(
     Effect.catch((cause) =>
       Effect.gen(function* () {
         if (activated) {
-          yield* fs
-            .remove(installation.installRoot, { recursive: true, force: true })
-            .pipe(
-              Effect.mapError((rollbackCause) => updateError("Rollback failed.", rollbackCause)),
-            );
+          yield* retryFileOperation(
+            fs.remove(installation.installRoot, { recursive: true, force: true }),
+          ).pipe(
+            Effect.mapError((rollbackCause) =>
+              updateError(
+                `Rollback failed. The previous engine is retained at ${backupInstallRoot}.`,
+                rollbackCause,
+              ),
+            ),
+          );
         }
         if (backedUp) {
-          yield* fs
-            .rename(backupInstallRoot, installation.installRoot)
-            .pipe(
-              Effect.mapError((rollbackCause) => updateError("Rollback failed.", rollbackCause)),
-            );
+          yield* retryFileOperation(fs.rename(backupInstallRoot, installation.installRoot)).pipe(
+            Effect.mapError((rollbackCause) =>
+              updateError(
+                `Rollback failed. The previous engine is retained at ${backupInstallRoot}.`,
+                rollbackCause,
+              ),
+            ),
+          );
+          backedUp = false;
         }
         return yield* updateError("The managed Codex update was rolled back.", cause);
       }),

@@ -12,6 +12,8 @@ If a Codex update cannot run on the current managed Node.js version, no staged u
 
 Windows loads the credentials saved by TritonAI Installer when you open Harness directly or restart after an update. Credentials saved in Harness settings take precedence.
 
+On Windows, managed engine updates use the Node.js and npm installed by TritonAI Installer, including when Harness is opened directly. You do not need to add them to your system PATH. Updates allow a short retry period when Windows temporarily locks engine files during verification.
+
 ## Stable and Nightly
 
 Stable and Nightly have separate desktop apps and data profiles. **Settings > About** shows the installed app's update track:
