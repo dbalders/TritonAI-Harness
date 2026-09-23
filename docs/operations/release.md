@@ -440,8 +440,9 @@ finished. Do not edit the signed bundle's `app-update.yml` to redirect updates.
 
 If an “add a new helper tool” prompt appears, cancel it during diagnosis. Record the launch method,
 actual target in `~/Library/Caches/edu.ucsd.tritonai.harness.ShipIt/ShipItState.plist`, and ShipIt and
-macOS authorization logs. Repeat a direct-executable test through LaunchServices before attributing
-the prompt to packaging or ownership. A controlled 0.3.3 → 0.3.4 validation completed with a per-user
+macOS authorization logs. If the app was launched by executing its binary directly, quit it and
+repeat the update using the documented `open -a` command before attributing the prompt to packaging
+or ownership. A controlled 0.3.3 → 0.3.4 validation completed with a per-user
 ShipIt job and no helper prompt after this launch change, using the same signed update payload.
 That result does not guarantee prompt-free updates under every installation policy. Do not change
 permissions, TCC, or signature checks to make a release test pass.
