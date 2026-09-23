@@ -203,17 +203,17 @@ or RP-domain configuration is missing. The generated main-app entitlements inclu
 
 The normal `dev:desktop` launcher is unsigned and cannot complete macOS passkey ceremonies. For
 renderer HMR, build and install a signed app first, run the renderer dev server, then launch the
-installed app executable with `VITE_DEV_SERVER_URL` and `T3CODE_PORT` set. Rebuild the signed app
+installed app through LaunchServices with `VITE_DEV_SERVER_URL` and `T3CODE_PORT` set. Rebuild the signed app
 after native dependency, main-process, preload, entitlement, provisioning, or signing changes;
 renderer-only changes can reuse the installed app.
 
 For the default development ports, run `pnpm dev:web` in one terminal and launch the installed
-binary from another:
+app from another after quitting any existing instance:
 
 ```sh
-VITE_DEV_SERVER_URL=http://127.0.0.1:5733 \
-T3CODE_PORT=13773 \
-  "/Applications/TritonAI Harness.app/Contents/MacOS/TritonAI Harness"
+/usr/bin/open -a "/Applications/TritonAI Harness.app" \
+  --env VITE_DEV_SERVER_URL=http://127.0.0.1:5733 \
+  --env T3CODE_PORT=13773
 ```
 
 After changing Associated Domains, bump the build version before rebuilding; macOS may otherwise

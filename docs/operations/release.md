@@ -415,6 +415,37 @@ Before declaring the Harness release ready for Installer consumption:
 
 Only after these checks should the Installer vendor and publish the Harness assets.
 
+## macOS in-app update validation
+
+Launch the installed app through Finder, Dock, or LaunchServices for update UAT. Do not run
+`Contents/MacOS/TritonAI Harness` directly to represent a normal user launch. Squirrel checks
+whether the running process can write to its app bundle and parent directory before choosing
+between a per-user ShipIt job and privileged helper authorization. File ownership and a
+writability check from a separate shell process do not establish what the app process sees.
+
+For a local feed serving the exact signed release assets, quit the installed app first and pass
+the test variables only to the new LaunchServices process (replace the port with the feed's port):
+
+```sh
+/usr/bin/open -a "/Applications/TritonAI Harness.app" \
+  --env T3CODE_DESKTOP_MOCK_UPDATES=true \
+  --env T3CODE_DESKTOP_MOCK_UPDATE_SERVER_PORT=18448
+```
+
+Confirm the feed metadata and ZIP checksum match the intended release. Download, install, and
+restart through the app UI. Verify the installed version and signature, successful ShipIt
+installation/relaunch, and preservation of the original draft and configuration. Quit and reopen
+normally after testing if the current process still uses the test feed; stop the local feed when
+finished. Do not edit the signed bundle's `app-update.yml` to redirect updates.
+
+If an “add a new helper tool” prompt appears, cancel it during diagnosis. Record the launch method,
+actual target in `~/Library/Caches/edu.ucsd.tritonai.harness.ShipIt/ShipItState.plist`, and ShipIt and
+macOS authorization logs. Repeat a direct-executable test through LaunchServices before attributing
+the prompt to packaging or ownership. A controlled 0.3.3 → 0.3.4 validation completed with a per-user
+ShipIt job and no helper prompt after this launch change, using the same signed update payload.
+That result does not guarantee prompt-free updates under every installation policy. Do not change
+permissions, TCC, or signature checks to make a release test pass.
+
 ## Troubleshooting
 
 - **Draft gate fails:** confirm the exact tag has an existing unpublished release and that nobody

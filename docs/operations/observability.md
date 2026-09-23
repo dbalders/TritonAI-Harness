@@ -141,15 +141,17 @@ node --run dev:desktop
 
 Packaged desktop app:
 
-Launch the actual app executable from the same shell so the desktop app and embedded backend inherit `T3CODE_OTLP_*`.
+Pass `T3CODE_OTLP_*` to the desktop app so its embedded backend inherits the same settings.
+On macOS, quit the installed app first, then launch its bundle through LaunchServices with
+`open --env`. An already-running instance will not receive new launch environment variables.
 
 macOS app bundle example:
 
 ```bash
-T3CODE_OTLP_TRACES_URL=http://localhost:4318/v1/traces \
-T3CODE_OTLP_METRICS_URL=http://localhost:4318/v1/metrics \
-T3CODE_OTLP_SERVICE_NAME=tritonai-harness-desktop \
-"/Applications/TritonAI Harness.app/Contents/MacOS/TritonAI Harness"
+/usr/bin/open -a "/Applications/TritonAI Harness.app" \
+  --env T3CODE_OTLP_TRACES_URL=http://localhost:4318/v1/traces \
+  --env T3CODE_OTLP_METRICS_URL=http://localhost:4318/v1/metrics \
+  --env T3CODE_OTLP_SERVICE_NAME=tritonai-harness-desktop
 ```
 
 Direct binary example:
