@@ -317,7 +317,8 @@ jobs:
         run: brew bundle install --file apps/mobile/Brewfile
 
       - name: Lint mobile native sources
-        run: vp run lint:mobile
+        # The filtered install does not include other apps' Vite config dependencies.
+        run: node scripts/mobile-native-static-check.ts
 
   release_smoke:
     name: Release Smoke
