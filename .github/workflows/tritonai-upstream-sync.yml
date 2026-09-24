@@ -80,7 +80,7 @@ jobs:
           TRITONAI_SYNC_UPSTREAM_REMOTE: upstream
           TRITONAI_SYNC_UPSTREAM_URL: https://github.com/pingdotgg/t3code.git
           TRITONAI_SYNC_UPSTREAM_BRANCH: main
-          TRITONAI_SYNC_CHECKS: ${{ vars.TRITONAI_SYNC_CHECKS || 'vp check && vp run typecheck && vp test' }}
+          TRITONAI_SYNC_CHECKS: ${{ vars.TRITONAI_SYNC_CHECKS || 'vp check && vp run typecheck && vp run test' }}
           TRITONAI_SYNC_AGENT_COMMAND: ${{ secrets.TRITONAI_SYNC_AGENT_COMMAND }}
           TRITONAI_SYNC_AGENT_CAN_EDIT: ${{ vars.TRITONAI_SYNC_AGENT_CAN_EDIT || '0' }}
           TRITONAI_SYNC_AGENT_SECRET_ENV_ALLOWLIST: ${{ vars.TRITONAI_SYNC_AGENT_SECRET_ENV_ALLOWLIST || 'CODEX_HOME,TRITONAI_HOME,TRITONAI_API_KEY' }}
