@@ -234,18 +234,18 @@ jobs:
               "--ignore-blank-lines",
               `${baseSha}...${resolvedHeadSha}`,
             ];
+            // Upstream imports can exceed Node's default 1 MiB stdout buffer.
+            const diffOptions = { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 };
 
             const totalChangedLines = sumNumstat(
               execFileSync(
                 "git",
                 diffArgs,
-                { encoding: "utf8" },
+                diffOptions,
               ),
             );
             const nonTestChangedLines = sumNumstat(
-              execFileSync("git", [...diffArgs, "--", ".", ...testExcludePathspecs], {
-                encoding: "utf8",
-              }),
+              execFileSync("git", [...diffArgs, "--", ".", ...testExcludePathspecs], diffOptions),
             );
             const testChangedLines = Math.max(0, totalChangedLines - nonTestChangedLines);
 
