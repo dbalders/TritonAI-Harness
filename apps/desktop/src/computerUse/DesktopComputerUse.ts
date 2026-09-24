@@ -1,16 +1,5 @@
-import { currentMacOsPermissionStatus } from "@trycua/cua-driver";
-import {
-  EmbeddedCuaDriverHost,
-  EmbeddedDriverHostOptions,
-  EmbeddedPermissionMode,
-  type EmbeddedDriverConnection,
-} from "@trycua/cua-driver/embedded";
-import {
-  hasRequiredMacOSPermissions,
-  openMacOSScreenRecordingSettings,
-  requestMacOSPermissions,
-  type MacOSPermissionStatus,
-} from "@trycua/cua-driver/electron";
+import type { EmbeddedCuaDriverHost, EmbeddedDriverConnection } from "@trycua/cua-driver/embedded";
+import type { MacOSPermissionStatus } from "@trycua/cua-driver/electron";
 import type { DesktopComputerUseState, DesktopMcpServerConfiguration } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -68,16 +57,19 @@ export function resolveCuaDriverBinaryPath(
   return environment.path.join(environment.resourcesPath, "cua-driver", executableName);
 }
 
-export function createCuaDriverHostOptions(input: {
-  readonly binaryPath: string;
-  readonly driverHomeDirectory: string;
-  readonly hostBundleId: string;
-  readonly inheritStderr: boolean;
-}) {
-  return EmbeddedDriverHostOptions.new({
+export function createCuaDriverHostOptions(
+  input: {
+    readonly binaryPath: string;
+    readonly driverHomeDirectory: string;
+    readonly hostBundleId: string;
+    readonly inheritStderr: boolean;
+  },
+  embedded: typeof import("@trycua/cua-driver/embedded"),
+) {
+  return embedded.EmbeddedDriverHostOptions.new({
     binaryPath: input.binaryPath,
     hostBundleId: input.hostBundleId,
-    permissionMode: EmbeddedPermissionMode.Standard,
+    permissionMode: embedded.EmbeddedPermissionMode.Standard,
     approveSessionPolicy: false,
     dangerouslyBypassApprovals: false,
     // Embedded mode reserves driver-control environment variables, including
@@ -127,6 +119,14 @@ export class DesktopComputerUse extends Context.Service<
 >()("@t3tools/desktop/computerUse/DesktopComputerUse") {}
 
 const make = Effect.gen(function* () {
+  // The native SDK exposes only ESM entrypoints; keep import() in the CJS main bundle.
+  const [driver, embedded, permissions] = yield* Effect.promise(() =>
+    Promise.all([
+      import("@trycua/cua-driver"),
+      import("@trycua/cua-driver/embedded"),
+      import("@trycua/cua-driver/electron"),
+    ]),
+  );
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const fileSystem = yield* FileSystem.FileSystem;
   const connectionRef = yield* Ref.make<EmbeddedDriverConnection | undefined>(undefined);
@@ -145,16 +145,16 @@ const make = Effect.gen(function* () {
       try: () =>
         request
           ? requestComputerUsePermissions({
-              requestNativePermissions: requestMacOSPermissions,
+              requestNativePermissions: permissions.requestMacOSPermissions,
               requestScreenCapture: () =>
                 Electron.desktopCapturer.getSources({
                   types: ["screen"],
                   thumbnailSize: { width: 1, height: 1 },
                   fetchWindowIcons: false,
                 }),
-              readPermissions: currentMacOsPermissionStatus,
+              readPermissions: driver.currentMacOsPermissionStatus,
             })
-          : Promise.resolve(currentMacOsPermissionStatus()),
+          : Promise.resolve(driver.currentMacOsPermissionStatus()),
       catch: (cause) => new DesktopComputerUseRuntimeError({ operation: "permissions", cause }),
     });
   });
@@ -184,7 +184,7 @@ const make = Effect.gen(function* () {
     const permissionStatus = yield* readPermissionStatus(true);
     if (permissionStatus !== null && !permissionStatus.screenRecording) {
       yield* Effect.tryPromise({
-        try: openMacOSScreenRecordingSettings,
+        try: permissions.openMacOSScreenRecordingSettings,
         catch: (cause) => new DesktopComputerUseRuntimeError({ operation: "open-settings", cause }),
       });
     }
@@ -206,7 +206,7 @@ const make = Effect.gen(function* () {
 
       if (
         environment.platform === "darwin" &&
-        !hasRequiredMacOSPermissions({
+        !permissions.hasRequiredMacOSPermissions({
           accessibility: state.accessibilityPermission === true,
           screenRecording: state.screenRecordingPermission === true,
         })
@@ -227,13 +227,16 @@ const make = Effect.gen(function* () {
         ),
       );
 
-      const host = EmbeddedCuaDriverHost.withOptions(
-        createCuaDriverHostOptions({
-          binaryPath,
-          driverHomeDirectory,
-          hostBundleId: environment.appUserModelId,
-          inheritStderr: environment.isDevelopment,
-        }),
+      const host = embedded.EmbeddedCuaDriverHost.withOptions(
+        createCuaDriverHostOptions(
+          {
+            binaryPath,
+            driverHomeDirectory,
+            hostBundleId: environment.appUserModelId,
+            inheritStderr: environment.isDevelopment,
+          },
+          embedded,
+        ),
       ) as EmbeddedHost;
 
       const connection = yield* Effect.acquireRelease(
