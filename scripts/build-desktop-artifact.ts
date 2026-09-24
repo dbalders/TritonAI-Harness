@@ -1765,6 +1765,20 @@ export function resolveCuaDriverNativeDependencies(
   );
 }
 
+// cua-driver loads its native library through @ubjs/node, whose workspace patch
+// redirects that load to app.asar.unpacked. Stage patches only apply to direct
+// dependencies, so declare the patched version directly wherever cua-driver is
+// installed from inside app.asar.
+export function resolveCuaDriverPatchedLoaderDependencies(
+  patchedDependencies: Record<string, string>,
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.keys(patchedDependencies)
+      .filter((patchKey) => getPatchedDependencyPackageName(patchKey) === "@ubjs/node")
+      .map((patchKey) => ["@ubjs/node", patchKey.slice("@ubjs/node@".length)]),
+  );
+}
+
 function recordsEqual(left: Record<string, string>, right: Record<string, string>): boolean {
   const leftEntries = Object.entries(left).sort(([a], [b]) => a.localeCompare(b));
   const rightEntries = Object.entries(right).sort(([a], [b]) => a.localeCompare(b));
@@ -4825,6 +4839,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
             options.arch,
             desktopPackageJson.dependencies["@trycua/cua-driver"],
           ),
+          ...resolveCuaDriverPatchedLoaderDependencies(workspacePatchedDependencies),
         }
       : {
           ...resolveMergedStageDependencies({

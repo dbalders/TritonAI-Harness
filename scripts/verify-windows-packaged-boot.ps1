@@ -148,9 +148,29 @@ $env:TRITONAI_HOME = $runtimeHome
 $pluginBootReport = Join-Path $runtimeHome "plugins-$([guid]::NewGuid().ToString('N')).json"
 $env:TRITONAI_PLUGIN_BOOT_REPORT_PATH = $pluginBootReport
 $app = $null
+$appStdout = Join-Path $runtimeHome "app-stdout.log"
+$appStderr = Join-Path $runtimeHome "app-stderr.log"
+
+# The runtime home is deleted in finally, so print what the app left behind
+# when it exits early; otherwise the failure is only an exit code.
+function Write-TritonAIBootDiagnostics {
+  $files = @($appStdout, $appStderr) + @(
+    Get-ChildItem -LiteralPath $runtimeHome -Recurse -File -Filter *.log -ErrorAction SilentlyContinue |
+      Where-Object { $_.FullName -ne $appStdout -and $_.FullName -ne $appStderr } |
+      ForEach-Object { $_.FullName }
+  )
+  foreach ($file in $files) {
+    if (Test-Path -LiteralPath $file -PathType Leaf) {
+      Write-Host "::group::$file"
+      Get-Content -LiteralPath $file -Tail 200 | Write-Host
+      Write-Host "::endgroup::"
+    }
+  }
+}
 
 try {
-  $app = Start-Process -FilePath $appPath -PassThru
+  $app = Start-Process -FilePath $appPath -PassThru `
+    -RedirectStandardOutput $appStdout -RedirectStandardError $appStderr
   $deadline = (Get-Date).AddSeconds($WindowTimeoutSeconds)
   $windowVisible = $false
 
@@ -158,6 +178,7 @@ try {
     Start-Sleep -Milliseconds 500
     $app.Refresh()
     if ($app.HasExited) {
+      Write-TritonAIBootDiagnostics
       throw "Installed Harness exited before opening a window (exit code $($app.ExitCode))."
     }
     if ($app.MainWindowHandle -ne 0) {
@@ -173,6 +194,7 @@ try {
   Start-Sleep -Seconds $HealthyRuntimeSeconds
   $app.Refresh()
   if ($app.HasExited) {
+    Write-TritonAIBootDiagnostics
     throw "Installed Harness exited during the $HealthyRuntimeSeconds-second packaged runtime probe (exit code $($app.ExitCode))."
   }
 
