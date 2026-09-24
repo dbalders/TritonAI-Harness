@@ -26,7 +26,7 @@
     "@trycua/cua-driver": "0.19.3",
     "dbus-next": "0.10.2",
     "effect": "catalog:",
-    "electron": "44.1.0",
+    "electron": "44.4.5",
     "electron-store": "^8.2.0",
     "electron-updater": "^6.6.2",
     "ffi-rs": "1.3.2",
