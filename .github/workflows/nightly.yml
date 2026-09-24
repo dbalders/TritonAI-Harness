@@ -233,7 +233,7 @@ jobs:
         with:
           name: managed-plugin-composition
           path: .release-input/installer/vendor/plugins
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
       - name: Build matching managed WSL runtime
         shell: bash
         env:
@@ -319,7 +319,7 @@ jobs:
           key: resource-monitor-${{ matrix.rust_target }}-${{ hashFiles('native/resource-monitor/Cargo.lock', 'native/resource-monitor/Cargo.toml', 'native/resource-monitor/src/**') }}
       - name: Setup Rust
         if: steps.resource_monitor_cache.outputs.cache-hit != 'true'
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           targets: ${{ matrix.rust_target }}
       - name: Download exact validated managed plugin composition
@@ -565,7 +565,7 @@ jobs:
         with:
           path: native/resource-monitor/target/aarch64-apple-darwin/release/t3-resource-monitor
           key: resource-monitor-aarch64-apple-darwin-${{ hashFiles('native/resource-monitor/Cargo.lock', 'native/resource-monitor/Cargo.toml', 'native/resource-monitor/src/**') }}
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         if: steps.resource_monitor_cache.outputs.cache-hit != 'true'
         with:
           targets: aarch64-apple-darwin

@@ -15,8 +15,11 @@ export VP_BIN_DIR="$HOME/.local/share/vite-plus/bin"
 export VP_DATA_DIR="$HOME/.local/share/vite-plus"
 export VP_CACHE_DIR="$HOME/.cache/vite-plus"
 installer=$(mktemp)
-curl -fsSL https://vite.plus -o "$installer"
-VP_NODE_MANAGER=no bash "$installer"
+trap 'rm -f "$installer"' EXIT
+# Vite+ v0.3.0: review the installer bytes before changing this source or digest.
+curl -fsSL https://raw.githubusercontent.com/voidzero-dev/vite-plus/b2d15e3899dcc8adedfd45d98de9d30046a624f4/packages/cli/install.sh -o "$installer"
+printf '%s  %s\n' '3dd88cedb6d9b2665c305eda5413971417c8f183a819386148131b66a2cc6b2e' "$installer" | sha256sum --check --status
+VP_VERSION=0.3.0 VP_NODE_MANAGER=no bash "$installer"
 rm -f "$installer"
 
 # Non-login lifecycle shells never source the profile the installer edits,
