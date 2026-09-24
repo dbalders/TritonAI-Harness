@@ -74,6 +74,11 @@ concurrency:
 jobs:
   production:
     name: EAS Production ${{ github.event_name == 'push' && 'auto' || inputs.mode }}
+    # TritonAI: app.config.ts still targets upstream T3's Expo project, which
+    # our EXPO_TOKEN cannot access. Merges skip the automatic release until
+    # TritonAI owns the EAS project (#129) and sets TRITONAI_MOBILE_EAS_ENABLED=1.
+    # Manual dispatch still runs, so misconfiguration surfaces loudly there.
+    if: github.event_name != 'push' || vars.TRITONAI_MOBILE_EAS_ENABLED == '1'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
