@@ -253,17 +253,19 @@ it("records the merge base and upstream commit count in the report", () => {
   }
 });
 
-it("refuses to run when the PR merge method is squash", () => {
-  const fixture = createFixture();
-  try {
-    const result = runSync(fixture, 0, { TRITONAI_SYNC_PR_MERGE_METHOD: "squash" });
-    assert.equal(result.status, 1);
-    assert.match(result.stderr, /squash is not allowed/u);
-    assert.ok(!NodeFS.existsSync(NodePath.join(fixture.trace, "install.json")));
-  } finally {
-    NodeFS.rmSync(fixture.root, { recursive: true, force: true });
-  }
-});
+for (const method of ["squash", "rebase"]) {
+  it(`refuses to run when the PR merge method is ${method}`, () => {
+    const fixture = createFixture();
+    try {
+      const result = runSync(fixture, 0, { TRITONAI_SYNC_PR_MERGE_METHOD: method });
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /squash and rebase are not allowed/u);
+      assert.ok(!NodeFS.existsSync(NodePath.join(fixture.trace, "install.json")));
+    } finally {
+      NodeFS.rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+}
 
 it("fails closed before checks and review when the merged worktree install fails", () => {
   const fixture = createFixture();

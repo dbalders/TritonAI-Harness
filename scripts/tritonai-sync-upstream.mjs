@@ -258,7 +258,7 @@ ${riskLines}
 
 ## Merging
 
-Merge this PR with a **merge commit**. Do not squash: squashing removes the upstream commits from ancestry and breaks every later sync.
+Merge this PR with a **merge commit**. Do not squash or rebase: both remove the original upstream commits from ancestry and break every later sync.
 
 ## Labels
 
@@ -353,17 +353,18 @@ function createPullRequest({ branch, title, body, labels, cwd }) {
   }
 }
 
-const ALLOWED_PR_MERGE_METHODS = ["merge", "rebase"];
+const ALLOWED_PR_MERGE_METHODS = ["merge"];
 
-// Squash-merging an upstream sync PR drops the upstream commits from git
-// ancestry. The next sync then merges against a stale merge base and reports
-// every already-integrated upstream commit as a conflict.
+// Only a true merge commit keeps the upstream commits in git ancestry. Squash
+// replaces them with one new commit and rebase rewrites their SHAs, so either
+// leaves the next sync merging against a stale merge base and reporting every
+// already-integrated upstream commit as a conflict.
 function resolvePrMergeMethod() {
   const method = process.env.TRITONAI_SYNC_PR_MERGE_METHOD ?? "merge";
   if (!ALLOWED_PR_MERGE_METHODS.includes(method)) {
     throw new Error(
       `TRITONAI_SYNC_PR_MERGE_METHOD must be one of ${ALLOWED_PR_MERGE_METHODS.join(", ")}; got "${method}". ` +
-        "Upstream sync PRs must keep upstream commits in ancestry, so squash is not allowed.",
+        "Upstream sync PRs must keep upstream commits in ancestry, so squash and rebase are not allowed.",
     );
   }
   return method;

@@ -96,7 +96,7 @@ Without `TRITONAI_SYNC_AGENT_COMMAND` on the hosted runner the review phase repo
 
 The sync script decides what to merge from git ancestry: `git merge-base upstream/main main`. That only works if every previous upstream integration is still an ancestor of `main`.
 
-- **Never squash-merge a `sync/*` PR.** Squashing replaces the upstream commits with one new commit, so the next sync merges against a merge base from before the squash and reports every already-integrated upstream commit as a conflict. The script refuses to run when `TRITONAI_SYNC_PR_MERGE_METHOD` is `squash`, and every generated PR body repeats this rule.
+- **Merge `sync/*` PRs with a merge commit only.** Squashing replaces the upstream commits with one new commit and rebasing rewrites their SHAs. Either way the original upstream commits never become ancestors of `main`, so the next sync merges against a stale merge base and reports every already-integrated upstream commit as a conflict. The script refuses to run unless `TRITONAI_SYNC_PR_MERGE_METHOD` is `merge`, and every generated PR body repeats this rule.
 - **Every sync PR report includes `mergeBase`, `mergeBaseDate`, and `upstreamCommitsToMerge`.** If the merge base date is older than the last integrated upstream tag, or the commit count is far larger than upstream's activity since that tag, ancestry has been broken and must be repaired before merging.
 - **Repairing broken ancestry.** When an upstream tag's content has already been integrated by hand (or by a squash), record that fact with an empty merge commit on `main` so git agrees:
 
