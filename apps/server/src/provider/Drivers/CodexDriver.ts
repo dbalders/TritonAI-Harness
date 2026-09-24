@@ -267,7 +267,7 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
                 }),
             ),
           )
-        : config.binaryPath;
+        : expandHomePath(config.binaryPath);
       const managedConfig = {
         ...config,
         binaryPath,
@@ -296,10 +296,12 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
             }),
         ),
       );
+      // Keep the resolved executable from `managedConfig`: a bare `codex`
+      // resolves to the TritonAI-managed runtime above, and every spawn below
+      // (catalog read, status probe, app-server) must use that result.
       const effectiveConfig = {
         ...managedConfig,
         enabled,
-        binaryPath: expandHomePath(config.binaryPath),
         homePath: homeLayout.effectiveHomePath ?? "",
       } satisfies CodexSettings;
       const modelCatalogPath = yield* materializeTritonAiCodexModelCatalog({

@@ -32,8 +32,12 @@ const { EditorTokenizer } = (await import(/* @vite-ignore */ tokenizerUrl.href))
 };
 
 const workerModule = import.meta.resolve("@pierre/diffs/worker/worker.js");
+// The stale-response race depends on line-count divergence, not file size. A
+// larger fixture only multiplies the real worker's full-file tokenization,
+// which pushed these cases to the 15s timeout under parallel CI load.
+const lineCount = 300;
 const source = Array.from(
-  { length: 7_000 },
+  { length: lineCount },
   (_, index) =>
     `export const section${index} = <p>Long wrapped source line ${index} for the file editor.</p>;`,
 ).join("\n");
@@ -46,7 +50,7 @@ const options = {
   disableFileHeader: true,
 } as const;
 const range: RenderRange = {
-  startingLine: 6_950,
+  startingLine: lineCount - 50,
   totalLines: 150,
   bufferBefore: 0,
   bufferAfter: 0,
@@ -240,7 +244,7 @@ describe("editable file highlighting", () => {
       expect(renderContents()).toContain("EDITED_MARKER");
       const firstLines = renderer.renderFile(file, { ...range, startingLine: 0, totalLines: 20 });
       expect(renderer.renderFullHTML(firstLines!)).toContain('style="color:');
-      expect(document.lineCount).toBe(7_000 + count);
+      expect(document.lineCount).toBe(lineCount + count);
     },
   );
 
@@ -249,7 +253,7 @@ describe("editable file highlighting", () => {
     append(" EDITED_MARKER");
     oldResponse.deliver();
     expect(renderContents()).toContain("EDITED_MARKER");
-    expect(document.lineCount).toBe(7_000);
+    expect(document.lineCount).toBe(lineCount);
     (await nextResponse()).deliver();
     expect(renderContents()).toContain("EDITED_MARKER");
   });

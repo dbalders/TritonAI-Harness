@@ -315,7 +315,7 @@ function managedRuntimeFromDocument(input: unknown, defaultHomePath: string) {
       ) ?? DEFAULT_SERVER_SETTINGS.providers.codex.binaryPath,
     homePath:
       nonempty(...(migrated ? [marker.codexHomePath] : [instance?.homePath, provider?.homePath])) ??
-      defaultHomePath,
+      (migrated ? DEFAULT_TRITONAI_CODEX_HOME_PATH : defaultHomePath),
   };
 }
 
@@ -326,11 +326,13 @@ export function applyManagedHarnessPolicy(
     readonly textGenerationSelectionWasPersisted?: boolean;
     readonly credentialEnvironment?: NodeJS.ProcessEnv;
     readonly rawSettingsDocument?: unknown;
+    /** Codex home for an unstamped document without one; see `migrateLegacyInstallerManagedSettings`. */
+    readonly defaultCodexHomePath?: string;
   } = {},
 ): ServerSettings {
   const managedRuntimeAnchor = managedRuntimeFromDocument(
     options.rawSettingsDocument,
-    DEFAULT_TRITONAI_CODEX_HOME_PATH,
+    options.defaultCodexHomePath ?? DEFAULT_TRITONAI_CODEX_HOME_PATH,
   );
   const availableRouteIds = options.credentialEnvironment
     ? availableManagedRouteIds(config, options.credentialEnvironment)
@@ -508,7 +510,17 @@ export interface LegacyManagedSettingsMigrationResult {
  */
 export function migrateLegacyInstallerManagedSettings(
   input: unknown,
+  options: {
+    /**
+     * Codex home for a profile that never saved one. Pre-marker builds used
+     * the profile's own `<baseDir>/codex`, so the anchor must land there and
+     * not on the production default, or a nightly/dev profile starts sharing
+     * the production Codex home. Already stamped markers are never rewritten.
+     */
+    readonly defaultCodexHomePath?: string;
+  } = {},
 ): LegacyManagedSettingsMigrationResult {
+  const defaultCodexHomePath = options.defaultCodexHomePath ?? DEFAULT_TRITONAI_CODEX_HOME_PATH;
   const root = record(input);
   if (!root) {
     managedProviderInstanceRenames = {};
@@ -539,7 +551,7 @@ export function migrateLegacyInstallerManagedSettings(
   managedProviderInstanceRenames = providerInstanceReferenceRenames;
   const providers = record(next.providers);
   const codexProvider = record(providers?.codex);
-  const managedRuntimeAnchor = managedRuntimeFromDocument(root, DEFAULT_TRITONAI_CODEX_HOME_PATH);
+  const managedRuntimeAnchor = managedRuntimeFromDocument(root, defaultCodexHomePath);
   for (const key of ["enabled", "binaryPath", "homePath", "customModels", "customModelMetadata"]) {
     delete codexProvider?.[key];
   }

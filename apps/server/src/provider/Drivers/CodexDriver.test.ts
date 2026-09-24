@@ -8,6 +8,7 @@ import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { HttpClient } from "effect/unstable/http";
@@ -50,6 +51,10 @@ const testLayer = ServerConfig.layerTest(process.cwd(), {
 
 // The `#!/bin/sh` stub below cannot be resolved as an executable on Windows.
 const windowsHost = HostProcessPlatform.defaultValue() === "win32";
+
+const encodeCodexPackage = Schema.encodeSync(
+  Schema.fromJsonString(Schema.Struct({ name: Schema.String, version: Schema.String })),
+);
 
 const noSpawn = ChildProcessSpawner.make(() =>
   Effect.die("Disabled Codex must not spawn a process"),
@@ -95,6 +100,65 @@ it.layer(testLayer)("CodexDriver", (it) => {
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, noSpawn),
         Effect.scoped,
       ),
+  );
+
+  it.effect.skipIf(windowsHost)(
+    "spawns the TritonAI-managed runtime when the configured command is a bare codex",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const tempDir = yield* fs
+          .makeTempDirectoryScoped({ prefix: "t3-codex-driver-managed-" })
+          .pipe(Effect.flatMap(fs.realPath));
+        const installRoot = NodePath.join(
+          tempDir,
+          ".agents",
+          "ucsd",
+          "runtime",
+          "codex",
+          "openai-codex-0.146.0",
+        );
+        const managedBinaryPath = NodePath.join(installRoot, "bin", "codex");
+        const packageRoot = NodePath.join(installRoot, "lib", "node_modules", "@openai", "codex");
+        yield* fs.makeDirectory(NodePath.dirname(managedBinaryPath), { recursive: true });
+        yield* fs.makeDirectory(packageRoot, { recursive: true });
+        yield* fs.writeFileString(
+          NodePath.join(packageRoot, "package.json"),
+          encodeCodexPackage({ name: "@openai/codex", version: "0.151.0" }),
+        );
+        yield* fs.writeFileString(
+          managedBinaryPath,
+          '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "codex-cli 0.151.0"; exit 0; fi\nexit 1\n',
+        );
+        yield* fs.chmod(managedBinaryPath, 0o755);
+
+        // The resolver scans `~/.agents/ucsd/runtime/codex`; point `~` at the fixture.
+        const originalHome = process.env.HOME;
+        process.env.HOME = tempDir;
+        const instance = yield* CodexDriver.create({
+          instanceId: ProviderInstanceId.make("codex-managed"),
+          displayName: "Codex test",
+          enabled: true,
+          // No `codex` on PATH, exactly like a managed machine.
+          environment: [{ name: "PATH", value: "/usr/bin:/bin", sensitive: false }],
+          config: {
+            ...CodexDriver.defaultConfig(),
+            binaryPath: "codex",
+            homePath: NodePath.join(tempDir, "codex-home"),
+          },
+        }).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (originalHome === undefined) delete process.env.HOME;
+              else process.env.HOME = originalHome;
+            }),
+          ),
+        );
+
+        const capabilities = yield* instance.snapshot.resolveMaintenance();
+        expect(capabilities.approvedVersion).not.toBeUndefined();
+        expect(capabilities.update?.args).toContain(managedBinaryPath);
+      }).pipe(Effect.scoped),
   );
 
   it.effect("stays manual-only when the configured executable does not exist", () =>

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vite-plus/test";
+import { describe, expect, it, onTestFinished, vi } from "vite-plus/test";
 
 import type { ReviewRenderableLineRow } from "./reviewModel";
 import {
@@ -48,6 +48,14 @@ describe("highlightSourceFile", () => {
   });
 
   it("initializes source and snippet highlighting without a warmup", async () => {
+    // Shiki gives up on a line after 500ms of wall-clock time, and the first
+    // line also pays for compiling the fresh grammar. On a loaded CI runner that
+    // cold line came back as one plain token. Freeze Date so this test checks
+    // initialization, not runner speed.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     vi.resetModules();
     const highlighter = await import("./shikiReviewHighlighter");
     const source = "const answer: number = 42;";

@@ -1528,30 +1528,50 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 
+  // Pre-marker builds ran an unsaved Codex home at the profile's own
+  // `<baseDir>/codex`; the anchor must land there so a nightly or dev profile
+  // keeps its history instead of moving onto the production home.
   for (const [label, document] of [
     ["empty", "{}"],
     ["legacy", '{"addProjectBaseDirectory":"~/ExistingProjects"}'],
-    ["marked without a home", '{"tritonAiManagedPolicy":{"migrationVersion":2}}'],
     ["malformed", "{invalid"],
     ["non-object", "null"],
   ] as const) {
-    it.effect(`preserves the historical Codex home for an existing ${label} settings file`, () =>
+    it.effect(`preserves the profile's Codex home for an existing ${label} settings file`, () =>
       Effect.gen(function* () {
         const config = yield* ServerConfig.ServerConfig;
         const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
         const settings = yield* ServerSettingsModule.ServerSettingsService;
         yield* fs.writeFileString(config.settingsPath, document);
         const effective = yield* settings.getSettings;
-        assert.equal(effective.providers.codex.homePath, DEFAULT_TRITONAI_CODEX_HOME_PATH);
+        const profileHome = path.join(config.baseDir, "codex");
+        assert.equal(effective.providers.codex.homePath, profileHome);
         assert.deepInclude(
           effective.providerInstances[ProviderInstanceId.make("codex_frontier")]?.config,
-          {
-            homePath: DEFAULT_TRITONAI_CODEX_HOME_PATH,
-          },
+          { homePath: profileHome },
         );
       }).pipe(Effect.provide(makeManagedServerSettingsLayer())),
     );
   }
+
+  it.effect("keeps the production Codex home for a stamped marker without one", () =>
+    Effect.gen(function* () {
+      const config = yield* ServerConfig.ServerConfig;
+      const fs = yield* FileSystem.FileSystem;
+      const settings = yield* ServerSettingsModule.ServerSettingsService;
+      yield* fs.writeFileString(
+        config.settingsPath,
+        '{"tritonAiManagedPolicy":{"migrationVersion":2}}',
+      );
+      const effective = yield* settings.getSettings;
+      assert.equal(effective.providers.codex.homePath, DEFAULT_TRITONAI_CODEX_HOME_PATH);
+      assert.deepInclude(
+        effective.providerInstances[ProviderInstanceId.make("codex_frontier")]?.config,
+        { homePath: DEFAULT_TRITONAI_CODEX_HOME_PATH },
+      );
+    }).pipe(Effect.provide(makeManagedServerSettingsLayer())),
+  );
 
   it.effect("preserves the historical Codex home when only conversation history exists", () =>
     Effect.gen(function* () {
