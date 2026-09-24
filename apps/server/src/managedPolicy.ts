@@ -93,7 +93,7 @@ function loadManagedConfig(): { readonly config: ManagedConfig; readonly digest:
 
 const loadedManagedConfig = loadManagedConfig();
 export const managedConfig = loadedManagedConfig.config;
-export const managedConfigDigest = loadedManagedConfig.digest;
+const managedConfigDigest = loadedManagedConfig.digest;
 
 let migrationStatus: TritonAiManagedPolicyDiagnostics["migrationStatus"] = "not-needed";
 let managedProviderInstanceRenames: Readonly<Record<string, string>> = {};

@@ -21,7 +21,7 @@ export function resolveTritonAiDesktopIdentity(version: string) {
   };
 }
 
-export const DEFAULT_TRITONAI_HOME_PATH = `~/${DEFAULT_TRITONAI_HOME_DIRNAME}`;
+const DEFAULT_TRITONAI_HOME_PATH = `~/${DEFAULT_TRITONAI_HOME_DIRNAME}`;
 export const DEFAULT_TRITONAI_CODEX_HOME_PATH = `${DEFAULT_TRITONAI_HOME_PATH}/codex`;
 
 export const TRITONAI_API_KEY_ENV = "TRITONAI_API_KEY";

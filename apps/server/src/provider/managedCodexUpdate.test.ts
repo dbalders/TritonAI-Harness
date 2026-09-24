@@ -12,7 +12,8 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 
 import type { ProcessRunOutput, ProcessRunner } from "../processRunner.ts";
 import {
-  makePackageManagedProviderMaintenanceResolver,
+  makeProviderMaintenanceCapabilities,
+  type ProviderMaintenanceResolutionContext,
   normalizeCommandPath,
 } from "./providerMaintenance.ts";
 import {
@@ -133,38 +134,58 @@ it("parses Codex CLI version output", () => {
   expect(parseCodexCliVersion("not a version")).toBeNull();
 });
 
-it("routes managed launchers through the Harness updater and preserves parent fallback", () => {
-  const provider = ProviderDriverKind.make("codex");
-  const fallback = makePackageManagedProviderMaintenanceResolver({
-    provider,
-    npmPackageName: "@openai/codex",
-    homebrewFormula: "codex",
-    nativeUpdate: null,
-  });
-  const resolver = makeTritonAiManagedCodexMaintenanceResolver({
-    provider,
-    packageName: "@openai/codex",
-    fallback,
-    executablePath: "/Applications/TritonAI Harness.app/Contents/MacOS/TritonAI Harness",
-    serverEntryPath: "/app/apps/server/dist/bin.mjs",
-  });
-  const binaryPath = "/Users/test/.agents/ucsd/runtime/codex/openai-codex-0.146.0/bin/codex";
-
-  expect(resolver.resolve({ binaryPath }).update).toMatchObject({
-    executable: "/Applications/TritonAI Harness.app/Contents/MacOS/TritonAI Harness",
-    args: ["/app/apps/server/dist/bin.mjs", "managed-codex-update", binaryPath],
-    lockKey: "tritonai-managed-codex",
-  });
-  const aliasResolution = resolver.resolve({
-    binaryPath: "codex",
-    resolvedCommandPath: binaryPath,
-  });
-  expect(isTritonAiManagedCodexMaintenanceCapabilities(aliasResolution)).toBe(true);
-  expect(resolver.resolve({ binaryPath: "/opt/homebrew/bin/codex" }).update).toMatchObject({
-    executable: "brew",
-    args: ["upgrade", "codex"],
-  });
-});
+it.effect(
+  "routes managed launchers through the Harness updater and preserves parent fallback",
+  () =>
+    Effect.gen(function* () {
+      const provider = ProviderDriverKind.make("codex");
+      const fallbackCapabilities = makeProviderMaintenanceCapabilities({
+        provider,
+        packageName: "@openai/codex",
+        updateExecutable: "brew",
+        updateArgs: ["upgrade", "codex"],
+        updateLockKey: "homebrew-codex",
+      });
+      const fallbackContexts: Array<ProviderMaintenanceResolutionContext | null> = [];
+      const resolver = makeTritonAiManagedCodexMaintenanceResolver({
+        provider,
+        packageName: "@openai/codex",
+        fallback: {
+          resolve: (context) =>
+            Effect.sync(() => {
+              fallbackContexts.push(context);
+              return fallbackCapabilities;
+            }),
+        },
+        executablePath: "/Applications/TritonAI Harness.app/Contents/MacOS/TritonAI Harness",
+        serverEntryPath: "/app/apps/server/dist/bin.mjs",
+      });
+      const binaryPath = "/Users/test/.agents/ucsd/runtime/codex/openai-codex-0.146.0/bin/codex";
+      const context: ProviderMaintenanceResolutionContext = {
+        binaryPath,
+        resolvedCommandPath: binaryPath,
+        realCommandPath: binaryPath,
+        env: {},
+        platform: "darwin",
+      };
+      expect((yield* resolver.resolve(context)).update).toMatchObject({
+        executable: "/Applications/TritonAI Harness.app/Contents/MacOS/TritonAI Harness",
+        args: ["/app/apps/server/dist/bin.mjs", "managed-codex-update", binaryPath],
+        lockKey: "tritonai-managed-codex",
+      });
+      const aliasResolution = yield* resolver.resolve({ ...context, binaryPath: "codex" });
+      expect(isTritonAiManagedCodexMaintenanceCapabilities(aliasResolution)).toBe(true);
+      expect(fallbackContexts).toEqual([]);
+      const homebrewContext = {
+        ...context,
+        binaryPath: "/opt/homebrew/bin/codex",
+        resolvedCommandPath: "/opt/homebrew/bin/codex",
+        realCommandPath: "/opt/homebrew/Cellar/codex/0.151.0/bin/codex",
+      };
+      expect(yield* resolver.resolve(homebrewContext)).toBe(fallbackCapabilities);
+      expect(fallbackContexts).toEqual([homebrewContext]);
+    }).pipe(Effect.provide(NodeServices.layer)),
+);
 
 it.layer(NodeServices.layer)("managed Codex update transaction", (it) => {
   it.effect("stages, verifies, atomically activates, and retains the managed launcher", () =>

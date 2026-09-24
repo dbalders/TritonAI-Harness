@@ -27,8 +27,8 @@ export function TritonAiRouteCredentialControl(props: {
   const desktopBridge = window.desktopBridge;
   if (!desktopBridge) return null;
 
-  const routeLabel = props.route === "on-prem" ? "On-prem" : "Frontier";
-  const otherRouteLabel = props.route === "on-prem" ? "frontier" : "on-prem";
+  const routeLabel = props.route === "on-prem" ? "On-prem" : "Cloud";
+  const otherRouteLabel = props.route === "on-prem" ? "cloud" : "on-prem";
   const keyLastFour =
     props.route === "on-prem" ? props.status?.onPremKeyLastFour : props.status?.frontierKeyLastFour;
   const configured =
@@ -177,7 +177,8 @@ export function TritonAiRouteCredentialControl(props: {
             />
           </label>
           <p className="text-[11px] leading-relaxed text-muted-foreground">
-            TritonAI will verify access to {props.route} models. Only this connection changes.
+            TritonAI will verify access to {routeLabel.toLowerCase()} models. Only this connection
+            changes.
           </p>
           <Button type="submit" size="sm" disabled={!apiKey.trim() || isBusy}>
             {isSaving ? "Checking access…" : "Check access & save"}

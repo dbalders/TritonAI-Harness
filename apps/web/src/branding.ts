@@ -10,6 +10,8 @@ function readInjectedDesktopAppBranding(): DesktopAppBranding | null {
 }
 
 const injectedDesktopAppBranding = readInjectedDesktopAppBranding();
+// Harness setup belongs to the Installer; all clients open the workspace directly.
+export const WELCOME_WIZARD_ENABLED = false;
 const hostedAppChannel = import.meta.env.VITE_HOSTED_APP_CHANNEL?.trim().toLowerCase();
 
 export const HOSTED_APP_CHANNEL =

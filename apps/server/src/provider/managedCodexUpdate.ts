@@ -43,7 +43,7 @@ export interface TritonAiManagedCodexInstallation {
   readonly windows: boolean;
 }
 
-export class ManagedCodexUpdateError extends Schema.TaggedErrorClass<ManagedCodexUpdateError>()(
+export class ManagedCodexUpdateError extends Schema.TaggedError<ManagedCodexUpdateError>()(
   "ManagedCodexUpdateError",
   {
     message: Schema.String,
@@ -108,7 +108,7 @@ export function makeTritonAiManagedCodexMaintenanceResolver(input: {
         return input.fallback.resolve(options);
       }
 
-      return {
+      return Effect.succeed({
         ...makeProviderMaintenanceCapabilities({
           provider: input.provider,
           packageName: input.packageName,
@@ -121,7 +121,7 @@ export function makeTritonAiManagedCodexMaintenanceResolver(input: {
           updateLockKey: MANAGED_CODEX_UPDATE_LOCK,
         }),
         approvedVersion: managedConfig.provider.approvedCodexVersion ?? null,
-      };
+      });
     },
   };
 }

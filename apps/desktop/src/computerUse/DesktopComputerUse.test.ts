@@ -3,7 +3,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeAssert from "node:assert/strict";
 import * as NodePath from "node:path";
 import { it } from "@effect/vitest";
-import { EmbeddedCuaDriverHost } from "@trycua/cua-driver/embedded";
+import * as CuaEmbedded from "@trycua/cua-driver/embedded";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Schema from "effect/Schema";
@@ -76,16 +76,19 @@ it.effect("constructs an embedded host with isolated telemetry and update policy
       update_check_enabled: false,
     });
 
-    const options = createCuaDriverHostOptions({
-      binaryPath: "/tmp/cua-driver",
-      driverHomeDirectory,
-      hostBundleId: "edu.ucsd.tritonai.harness.test",
-      inheritStderr: false,
-    });
+    const options = createCuaDriverHostOptions(
+      {
+        binaryPath: "/tmp/cua-driver",
+        driverHomeDirectory,
+        hostBundleId: "edu.ucsd.tritonai.harness.test",
+        inheritStderr: false,
+      },
+      CuaEmbedded,
+    );
     NodeAssert.deepEqual(options.environment, [{ name: "HOME", value: driverHomeDirectory }]);
 
-    const host = EmbeddedCuaDriverHost.withOptions(options) as ReturnType<
-      typeof EmbeddedCuaDriverHost.withOptions
+    const host = CuaEmbedded.EmbeddedCuaDriverHost.withOptions(options) as ReturnType<
+      typeof CuaEmbedded.EmbeddedCuaDriverHost.withOptions
     > & {
       readonly uniffiDestroy?: () => void;
     };

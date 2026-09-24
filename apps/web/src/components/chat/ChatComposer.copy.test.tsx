@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { runtimeModeConfig } from "./ChatComposer";
+import { runtimeModeConfig } from "./runtimeModeConfig";
 
 describe("runtime mode copy", () => {
   it("describes the Supervised permission boundary without promising every command asks", () => {

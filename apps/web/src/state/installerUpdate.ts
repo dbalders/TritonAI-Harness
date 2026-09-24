@@ -15,7 +15,7 @@ function getInstallerUpdateBridge(): InstallerUpdateBridge | undefined {
   return typeof window === "undefined" ? undefined : window.desktopBridge;
 }
 
-export function createInstallerUpdateStateAtom(getBridge: () => InstallerUpdateBridge | undefined) {
+function createInstallerUpdateStateAtom(getBridge: () => InstallerUpdateBridge | undefined) {
   const updates = Stream.callback<InstallerUpdateState | null>((queue) =>
     Effect.gen(function* () {
       const bridge = getBridge();

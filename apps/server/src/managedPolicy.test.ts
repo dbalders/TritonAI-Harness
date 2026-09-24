@@ -126,7 +126,7 @@ describe("TritonAI managed Harness policy", () => {
     ]);
     expect(effective.providerInstances[frontierInstanceId]).toMatchObject({
       driver: "codex",
-      displayName: "Frontier models",
+      displayName: "Cloud models",
       enabled: true,
       config: {
         customModels: ["gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "claude-opus-5"],

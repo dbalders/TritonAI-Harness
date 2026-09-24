@@ -177,7 +177,7 @@ export const IntegrationPollResult = Schema.Struct({
 });
 export type IntegrationPollResult = typeof IntegrationPollResult.Type;
 
-export class IntegrationOperationError extends Schema.TaggedErrorClass<IntegrationOperationError>()(
+export class IntegrationOperationError extends Schema.TaggedError<IntegrationOperationError>()(
   "IntegrationOperationError",
   {
     code: Schema.Literals([

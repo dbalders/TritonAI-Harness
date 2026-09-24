@@ -14,11 +14,11 @@ import {
   type VerifiedPluginSdkArtifact,
   verifyPluginSdkArtifact,
 } from "@t3tools/shared/pluginSdkArtifact";
+import { Ajv2020 } from "ajv/dist/2020.js";
 import * as Effect from "effect/Effect";
-import * as JsonSchema from "effect/JsonSchema";
+import type * as JsonSchema from "effect/JsonSchema";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import * as SchemaRepresentation from "effect/SchemaRepresentation";
 
 import type * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
 import {
@@ -30,7 +30,8 @@ import {
   type IntegrationProviderStatus,
 } from "../IntegrationRegistry.ts";
 import { scopeIntegrationSecretStore } from "../IntegrationSecretStore.ts";
-import { EmptyIntegrationToolInput, type IntegrationProviderTool } from "../IntegrationTool.ts";
+import { importPluginModule as importDiskPluginModule } from "../importPluginModule.ts";
+import type { IntegrationProviderTool } from "../IntegrationTool.ts";
 
 interface PluginSdkOperationContext {
   readonly signal: AbortSignal;
@@ -99,22 +100,28 @@ function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
 }
 
 function compileJsonSchema(schema: PluginJsonSchema): Schema.Decoder<unknown> {
-  // Effect's empty Struct loses the object-only and excess-property constraints.
-  // Limit this workaround to the exact contract so other schema constraints survive.
-  if (
-    schema.type === "object" &&
-    schema.additionalProperties === false &&
-    isRecord(schema.properties) &&
-    Object.keys(schema.properties).length === 0 &&
-    Object.keys(schema).every((key) =>
-      ["$schema", "type", "properties", "additionalProperties"].includes(key),
-    )
-  ) {
-    return EmptyIntegrationToolInput;
+  // Plugin contracts are draft-2020-12 JSON Schema. Validate that exact document:
+  // Effect's best-effort importer cannot represent all patternProperties scopes.
+  const validator = new Ajv2020({
+    allErrors: true,
+    strict: true,
+    strictTypes: false,
+    strictTuples: false,
+    strictRequired: false,
+    allowMatchingProperties: true,
+  });
+  const validate = validator.compile(schema);
+  if ("$async" in validate && validate.$async) {
+    throw new Error("Plugin schemas must validate synchronously.");
   }
-  return SchemaRepresentation.fromJsonSchemaDocument(
-    JsonSchema.fromSchemaDraft2020_12(schema as JsonSchema.JsonSchema),
-  ) as Schema.Decoder<unknown>;
+  // Any keeps this JSON-native check on the encoded side of Effect's codec;
+  // Unknown would derive a separate JSON codec and drop the advertised check.
+  return Schema.Any.check(
+    Schema.makeFilter<unknown>(
+      (input) => validate(input) || validator.errorsText(validate.errors, { separator: "; " }),
+      { toJsonSchema: () => schema as JsonSchema.JsonSchema },
+    ),
+  );
 }
 
 const decodeConnectResult = Schema.decodeUnknownPromise(IntegrationConnectResult);
@@ -341,7 +348,7 @@ async function importPluginModule(moduleUrl: string, timeoutMs: number): Promise
   // Native import is not abortable. This bounds how long admission waits; trusted module evaluation
   // that began before the timeout can continue until the future process-isolation boundary exists.
   const loaded = await Effect.runPromise(
-    Effect.promise(() => import(moduleUrl)).pipe(Effect.timeoutOption(timeoutMs)),
+    Effect.promise(() => importDiskPluginModule(moduleUrl)).pipe(Effect.timeoutOption(timeoutMs)),
   );
   return Option.match(loaded, {
     onNone: () => {
@@ -398,17 +405,15 @@ export async function loadPluginSdkIntegration(input: {
     if (!isRecord(configuration)) {
       throw new Error("Plugin SDK configuration must decode to an object.");
     }
-    const tools = artifact.sdkManifest.tools.map(
-      (tool): IntegrationProviderTool => ({
-        name: tool.name,
-        description: tool.description,
-        input: compileJsonSchema(tool.inputSchema),
-        readOnly: tool.effect === "read",
-        destructive: tool.destructive,
-        idempotent: tool.idempotent,
-        openWorld: tool.openWorld,
-      }),
-    );
+    const tools = artifact.sdkManifest.tools.map((tool): IntegrationProviderTool => ({
+      name: tool.name,
+      description: tool.description,
+      input: compileJsonSchema(tool.inputSchema),
+      readOnly: tool.effect === "read",
+      destructive: tool.destructive,
+      idempotent: tool.idempotent,
+      openWorld: tool.openWorld,
+    }));
 
     const moduleUrl = `data:text/javascript;base64,${Buffer.from(artifact.entryBytes).toString("base64")}#artifact-sha256=${artifact.descriptorSha256}`;
     const loaded = await importPluginModule(moduleUrl, admissionTimeoutMs);

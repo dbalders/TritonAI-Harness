@@ -8,6 +8,7 @@ import * as NodeTimersPromises from "node:timers/promises";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { canonicalJson, type JsonValue } from "@t3tools/shared/pluginSdkContract";
+import { verifyPluginSdkArtifact } from "@t3tools/shared/pluginSdkArtifact";
 
 import type * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
 import { createRegistryRuntime } from "../IntegrationRegistry.ts";
@@ -106,6 +107,7 @@ function artifact(
   entry = providerSource,
   skillBody: string | null = "# Fixture reader\n",
   options: {
+    readonly nodeRange?: string;
     readonly configurationSchema?: JsonValue;
     readonly inputSchema?: JsonValue;
     readonly skillFrontmatter?: string;
@@ -145,7 +147,7 @@ function artifact(
       architecture: "any",
       environments: ["electron-main", "server"],
       module: "esm",
-      node: ">=24.13.1 <25",
+      node: options.nodeRange ?? ">=24.13.1 <25",
       nodeBuiltins: [],
       platform: "any",
       runtime: "node",
@@ -181,6 +183,31 @@ function secretStore(): ServerSecretStore.ServerSecretStore["Service"] {
 }
 
 describe("plugin SDK adapter", () => {
+  it.each([
+    [">=24.13.1 <25", "24.13.1", true],
+    [">=24.13.1 <25", "24.21.0", true],
+    [">=24.13.1 <25", "26.8.2", false],
+    [">=24.13.1 <25 || >=26.8.2 <27", "24.13.1", true],
+    [">=24.13.1 <25 || >=26.8.2 <27", "26.8.2", true],
+    [">=24.13.1 <25 || >=26.8.2 <27", "26.9.0", true],
+    [">=24.13.1 <25 || >=26.8.2 <27", "24.13.0", false],
+    [">=24.13.1 <25 || >=26.8.2 <27", "25.0.0", false],
+    [">=24.13.1 <25 || >=26.8.2 <27", "26.8.1", false],
+    [">=24.13.1 <25 || >=26.8.2 <27", "26.8.2-rc.1", false],
+    [">=24.13.1 <25 || >=26.8.2 <27", "27.0.0", false],
+    [">=24.13.1", "26.8.2", false],
+  ] as const)(
+    "enforces the artifact runtime target %s on Node %s",
+    (nodeRange, hostNodeVersion, supported) => {
+      const verify = () =>
+        verifyPluginSdkArtifact(artifact(providerSource, "# Fixture reader\n", { nodeRange }), {
+          hostNodeVersion,
+        });
+      if (supported) expect(verify().descriptor.target.node).toBe(nodeRange);
+      else expect(verify).toThrow(/runtime target|requires Node/u);
+    },
+  );
+
   it("preserves Unicode patterns when decoding plugin tool arguments", async () => {
     const loaded = await loadPluginSdkIntegration({
       files: artifact(providerSource, "# Fixture reader\n", {
@@ -232,9 +259,36 @@ describe("plugin SDK adapter", () => {
         日本語: "value",
       });
       await expect(decodeIntegrationToolInput(tool, { 日本語: 123 })).rejects.toThrow();
+      await expect(decodeIntegrationToolInput(tool, { "123": "value" })).rejects.toThrow();
+      await expect(decodeIntegrationToolInput(tool, [])).rejects.toThrow();
     } finally {
       await loaded.provider?.close?.();
     }
+  });
+
+  it.each([
+    { ...inputSchema, properties: { topic: { type: "string", minLength: -1 } } },
+    { ...inputSchema, $async: true },
+  ])("quarantines invalid or asynchronous schemas before importing the plugin", async (schema) => {
+    delete (globalThis as { __pluginSdkInvalidSchemaImported?: boolean })
+      .__pluginSdkInvalidSchemaImported;
+    await expect(
+      loadPluginSdkIntegration({
+        files: artifact(
+          `globalThis.__pluginSdkInvalidSchemaImported = true;\n${providerSource}`,
+          "# Fixture reader\n",
+          { inputSchema: schema },
+        ),
+        secrets: secretStore(),
+        configuration: { prefix: "fixture" },
+        expected: { id, version: "1.0.0" },
+        hostNodeVersion: "24.13.1",
+      }),
+    ).rejects.toBeInstanceOf(PluginSdkQuarantineError);
+    expect(
+      (globalThis as { __pluginSdkInvalidSchemaImported?: boolean })
+        .__pluginSdkInvalidSchemaImported,
+    ).toBeUndefined();
   });
 
   it("validates schemas before import and adapts exact verified bytes", async () => {
@@ -259,6 +313,7 @@ describe("plugin SDK adapter", () => {
       hostNodeVersion: "24.13.1",
     });
     expect(loaded.manifest.apiVersion).toBe("tritonai.harness/v2");
+    expect(integrationToolJsonSchema(loaded.provider!.tools[0]!)).toEqual(inputSchema);
     expect(loaded.provider?.tools[0]).toMatchObject({
       name: "fixture.records.list",
       readOnly: true,
@@ -307,10 +362,7 @@ describe("plugin SDK adapter", () => {
           (await registry.snapshot()).integrations.map((integration) => integration.id),
         ).toEqual([id]);
         const tool = registry.toolDefinitions()[0]!;
-        expect(integrationToolJsonSchema(tool)).toEqual({
-          type: "object",
-          additionalProperties: false,
-        });
+        expect(integrationToolJsonSchema(tool)).toEqual(emptyObjectSchema);
         await expect(decodeIntegrationToolInput(tool, {})).resolves.toEqual({});
         for (const invalid of [[], { extra: true }]) {
           await expect(decodeIntegrationToolInput(tool, invalid)).rejects.toThrow();

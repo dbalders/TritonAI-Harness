@@ -11,6 +11,7 @@ import serverPackageJson from "../../apps/server/package.json" with { type: "jso
 
 import {
   CLI_RUNTIME_EXTERNAL_PREFIXES,
+  findEsmImportsOfExternalPackages,
   findInlinedExternalPackages,
   selectCliRuntimeExternalDependencies,
   shouldBundleCliDependency,
@@ -32,7 +33,13 @@ const decodeManifest = Schema.decodeUnknownSync(Schema.fromJsonString(PackageMan
 
 describe("shouldBundleCliDependency", () => {
   it("bundles ordinary runtime dependencies", () => {
-    for (const id of ["effect", "@effect/platform", "hono", "@t3tools/shared/hostProcess"]) {
+    for (const id of [
+      "@effect/platform",
+      "effect-acp/client",
+      "effect-codex-app-server/client",
+      "hono",
+      "@t3tools/shared/hostProcess",
+    ]) {
       assert.strictEqual(shouldBundleCliDependency(id), true, id);
     }
   });
@@ -43,6 +50,9 @@ describe("shouldBundleCliDependency", () => {
 
   it("leaves native addons and their dlopen wrappers external", () => {
     for (const id of [
+      "effect",
+      "effect/Effect",
+      "effect/Schema",
       "node-pty",
       "ffi-rs",
       "@yuuang/ffi-rs-win32-x64-msvc",
@@ -53,11 +63,6 @@ describe("shouldBundleCliDependency", () => {
     ]) {
       assert.strictEqual(shouldBundleCliDependency(id), false, id);
     }
-  });
-
-  it("leaves bun-only entry points external", () => {
-    assert.strictEqual(shouldBundleCliDependency("@effect/platform-bun"), false);
-    assert.strictEqual(shouldBundleCliDependency("@effect/sql-sqlite-bun"), false);
   });
 
   // The real package is `node-gyp-build-optional-packages`, reached by prefix.
@@ -72,13 +77,13 @@ describe("selectCliRuntimeExternalDependencies", () => {
   it("keeps only runtime-external dependency roots for the Windows sidecar", () => {
     assert.deepStrictEqual(
       selectCliRuntimeExternalDependencies({
-        "@effect/platform-bun": "1.0.0",
         "@ff-labs/fff-node": "2.0.0",
         effect: "3.0.0",
         "node-pty": "4.0.0",
       }),
       {
         "@ff-labs/fff-node": "2.0.0",
+        effect: "3.0.0",
         "node-pty": "4.0.0",
       },
     );
@@ -87,7 +92,7 @@ describe("selectCliRuntimeExternalDependencies", () => {
   it("selects every external root declared by the server", () => {
     assert.deepStrictEqual(
       Object.keys(selectCliRuntimeExternalDependencies(serverPackageJson.dependencies)).sort(),
-      ["@ff-labs/fff-node", "ffi-rs", "node-pty"],
+      ["@ff-labs/fff-node", "effect", "ffi-rs", "node-pty"],
     );
   });
 });
@@ -153,21 +158,26 @@ it.layer(NodeServices.layer)("external package dependency closure", (it) => {
   const isRuntimeExternal = (name: string) =>
     CLI_RUNTIME_EXTERNAL_PREFIXES.some((prefix) => name.startsWith(prefix));
 
-  it.effect("finds the runtime-external packages on disk", () =>
-    Effect.gen(function* () {
-      const installed = yield* readInstalledPackages;
-      const found = [...installed.keys()].filter(isRuntimeExternal);
+  // A cold walk of the pnpm store can exceed the root timeout when the Windows
+  // lane runs four filesystem-heavy workspace suites at once.
+  it.effect(
+    "finds the runtime-external packages on disk",
+    () =>
+      Effect.gen(function* () {
+        const installed = yield* readInstalledPackages;
+        const found = [...installed.keys()].filter(isRuntimeExternal);
 
-      // Without this the closure check below can pass vacuously: if nothing is
-      // read, nothing is checked. These are the packages whose closure actually
-      // broke WSL, so require them by name.
-      for (const required of ["node-pty", "node-gyp-build-optional-packages", "detect-libc"]) {
-        assert.ok(
-          found.includes(required),
-          `expected ${required} in the pnpm store; the closure check is only meaningful if it can read these (found ${found.length})`,
-        );
-      }
-    }),
+        // Without this the closure check below can pass vacuously: if nothing is
+        // read, nothing is checked. These are the packages whose closure actually
+        // broke WSL, so require them by name.
+        for (const required of ["node-pty", "node-gyp-build-optional-packages", "detect-libc"]) {
+          assert.ok(
+            found.includes(required),
+            `expected ${required} in the pnpm store; the closure check is only meaningful if it can read these (found ${found.length})`,
+          );
+        }
+      }),
+    120_000,
   );
 
   it.effect("keeps every runtime dependency of an external package external too", () =>
@@ -239,7 +249,7 @@ var x = 1;
 
   it("ignores packages that are meant to be bundled", () => {
     const source =
-      region("../../node_modules/.pnpm/effect@4.0.0/node_modules/effect/dist/index.js") +
+      region("../../node_modules/.pnpm/hono@4.0.0/node_modules/hono/dist/index.js") +
       region("../../src/server/main.ts");
     const result = findInlinedExternalPackages(source);
 
@@ -254,25 +264,63 @@ var x = 1;
   // failure this whole change prevents.
   it("reports the packages that were inlined, not just the violations", () => {
     const source =
-      region("../../node_modules/.pnpm/effect@4.0.0/node_modules/effect/dist/index.js") +
+      region("../../node_modules/.pnpm/hono@4.0.0/node_modules/hono/dist/index.js") +
       region("../../node_modules/.pnpm/yaml@2.4.0/node_modules/yaml/dist/index.js") +
       region("../../src/server/main.ts");
     const result = findInlinedExternalPackages(source);
 
-    assert.deepStrictEqual(result.inlinedPackages, ["effect", "yaml"]);
+    assert.deepStrictEqual(result.inlinedPackages, ["hono", "yaml"]);
     assert.deepStrictEqual(result.inlined, []);
   });
 
   it("does not report the pnpm store directory as a package", () => {
     const result = findInlinedExternalPackages(
-      region("../../node_modules/.pnpm/effect@4.0.0/node_modules/effect/dist/index.js"),
+      region("../../node_modules/.pnpm/hono@4.0.0/node_modules/hono/dist/index.js"),
     );
-    assert.deepStrictEqual(result.inlinedPackages, ["effect"]);
+    assert.deepStrictEqual(result.inlinedPackages, ["hono"]);
   });
 
   it("reports no regions when the marker format is absent", () => {
     const result = findInlinedExternalPackages("var x = 1; // node_modules/detect-libc/lib.js");
     assert.strictEqual(result.regionCount, 0);
     assert.deepStrictEqual(result.inlined, []);
+  });
+});
+
+// The single-executable build can only `import` built-ins. A file-backed
+// import of an external package passes every bundler check and the regular
+// `node dist/bin.mjs` path, then fails inside the executable, so the scan
+// reads the emitted module graph instead.
+describe("findEsmImportsOfExternalPackages", () => {
+  it("flags static and dynamic imports of file-backed packages", () => {
+    const source = [
+      'import { FileFinder } from "@ff-labs/fff-node";',
+      'import * as fs from "fs";',
+      'import { createRequire } from "node:module";',
+      'const pty = () => import("node-pty");',
+      'const data = () => import("@ff-labs/fff-bin-linux-x64-gnu", { with: { type: "json" } });',
+      'const lazy = () => import(/* @vite-ignore */ "ffi-rs");',
+      'const local = () => import("./chunk-abc.mjs");',
+    ].join("\n");
+
+    assert.deepStrictEqual(findEsmImportsOfExternalPackages(source), [
+      "@ff-labs/fff-bin-linux-x64-gnu",
+      "@ff-labs/fff-node",
+      "ffi-rs",
+      "node-pty",
+    ]);
+  });
+
+  it("flags side-effect imports and re-exports too", () => {
+    const source = ['import "msgpackr-extract";', 'export { load } from "ffi-rs";'].join("\n");
+    assert.deepStrictEqual(findEsmImportsOfExternalPackages(source), [
+      "ffi-rs",
+      "msgpackr-extract",
+    ]);
+  });
+
+  it("does not mistake createRequire calls for imports", () => {
+    const source = 'const { FileFinder } = createRequire(import.meta.url)("@ff-labs/fff-node");';
+    assert.deepStrictEqual(findEsmImportsOfExternalPackages(source), []);
   });
 });

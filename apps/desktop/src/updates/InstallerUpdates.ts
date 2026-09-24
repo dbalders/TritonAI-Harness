@@ -21,7 +21,7 @@ import * as ElectronShell from "../electron/ElectronShell.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as IpcChannels from "../ipc/channels.ts";
 
-export const INSTALLER_VERSION_MARKER_RELATIVE_PATH = [
+const INSTALLER_VERSION_MARKER_RELATIVE_PATH = [
   ".agents",
   "ucsd",
   "state",
@@ -37,7 +37,7 @@ const INSTALLER_UPDATE_POLL_INTERVAL = Duration.hours(6);
 const STABLE_VERSION_PATTERN = /^\d+\.\d+\.\d+$/;
 const decodeUnknownJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
 
-class InstallerReleaseFetchError extends Schema.TaggedErrorClass<InstallerReleaseFetchError>()(
+class InstallerReleaseFetchError extends Schema.TaggedError<InstallerReleaseFetchError>()(
   "InstallerReleaseFetchError",
   { cause: Schema.Defect() },
 ) {}
@@ -91,7 +91,7 @@ export interface InstallerVersionMarkerReadResult {
   readonly version: string | null;
 }
 
-export function normalizeStableInstallerVersion(value: unknown): string | null {
+function normalizeStableInstallerVersion(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const normalized = value.trim().replace(/^v/i, "");
   return STABLE_VERSION_PATTERN.test(normalized) ? normalized : null;
@@ -161,7 +161,7 @@ export function expectedInstallerAssetName(
   return INSTALLER_ASSET_NAME_BY_TARGET[installerTargetKey(platform, arch)]!(normalizedVersion);
 }
 
-export function isSupportedInstallerTarget(platform: NodeJS.Platform, arch: string): boolean {
+function isSupportedInstallerTarget(platform: NodeJS.Platform, arch: string): boolean {
   return installerTargetKey(platform, arch) in INSTALLER_ASSET_NAME_BY_TARGET;
 }
 
@@ -424,7 +424,7 @@ export class InstallerUpdates extends Context.Service<
   }
 >()("@t3tools/desktop/updates/InstallerUpdates") {}
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const electronShell = yield* ElectronShell.ElectronShell;
   const electronWindow = yield* ElectronWindow.ElectronWindow;

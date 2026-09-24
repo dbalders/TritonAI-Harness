@@ -27,9 +27,16 @@ interface EarlyDesktopSettingsInput {
 type EarlyLinuxElectronOptionsInput = EarlyDesktopSettingsInput;
 
 export interface EarlyLinuxElectronOptions {
+  readonly isDevelopment: boolean;
   readonly linuxWmClass: string;
+  readonly linuxDesktopEntryName: string;
   readonly passwordStore: LinuxPasswordStoreSwitch | null;
 }
+
+const resolveLinuxDesktopEntryName = (isDevelopment: boolean, appVersion = ""): string =>
+  isDevelopment
+    ? "tritonai-harness-dev.desktop"
+    : `${resolveTritonAiDesktopIdentity(appVersion).packageName}.desktop`;
 
 const trimNonEmpty = (value: string | undefined): string | null => {
   const trimmed = value?.trim();
@@ -83,10 +90,13 @@ export function resolveEarlyLinuxElectronOptions(
   input: EarlyLinuxElectronOptionsInput,
 ): EarlyLinuxElectronOptions {
   const preference = resolveEarlyLinuxPasswordStorePreference(input);
+  const isDevelopment = isDevelopmentEnvironment(input.env);
   return {
+    isDevelopment,
     linuxWmClass: isDevelopmentEnvironment(input.env)
       ? "tritonai-harness-dev"
       : resolveTritonAiDesktopIdentity(input.appVersion).packageName,
+    linuxDesktopEntryName: resolveLinuxDesktopEntryName(isDevelopment, input.appVersion),
     passwordStore: resolveLinuxPasswordStoreSwitch({
       preference,
       env: input.env,

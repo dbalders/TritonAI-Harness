@@ -1,6 +1,7 @@
 import type { ProviderInstanceEnvironment } from "@t3tools/contracts";
 
 const CODEX_NETWORK_SANDBOX_MARKER_NAME = "CODEX_SANDBOX_NETWORK_DISABLED";
+import { expandHomePath } from "../pathExpansion.ts";
 
 export function mergeProviderInstanceEnvironment(
   environment: ProviderInstanceEnvironment | undefined,
@@ -21,7 +22,12 @@ export function mergeProviderInstanceEnvironment(
         }
       }
     }
-    next[variable.name] = variable.value;
+    // Child processes do not apply shell expansion to environment values.
+    next[variable.name] =
+      variable.name.toUpperCase() === "CODEX_HOME" ||
+      variable.name.toUpperCase() === "CLAUDE_CONFIG_DIR"
+        ? expandHomePath(variable.value)
+        : variable.value;
   }
   return next;
 }

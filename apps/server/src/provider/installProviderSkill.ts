@@ -9,7 +9,6 @@ import {
   type ServerProviderSkillBundle as ServerProviderSkillBundleData,
   ServerProviderSkillInstallError,
   type ServerProvider,
-  type ServerProviderSkill,
   type ServerProviderSkillBundleFile,
 } from "@t3tools/contracts";
 import { fromYaml } from "@t3tools/shared/schemaYaml";
@@ -1268,47 +1267,6 @@ export function discardProviderSkillInstallRollback(
           installError(`Failed to clean up ${rollback.backupRootPath}.`, cause),
         ),
       );
-  });
-}
-
-export function mergeInstalledProviderSkill(input: {
-  readonly providers: ReadonlyArray<ServerProvider>;
-  readonly instanceId: ProviderInstanceId;
-  readonly skillName: string;
-  readonly skillPath: string;
-}): ReadonlyArray<ServerProvider> {
-  return input.providers.map((provider) => {
-    if (provider.instanceId !== input.instanceId) {
-      return provider;
-    }
-
-    const alreadyPresent = provider.skills.some(
-      (skill) => skill.path === input.skillPath || skill.name === input.skillName,
-    );
-    const installedSkill: ServerProviderSkill = {
-      name: input.skillName,
-      path: input.skillPath,
-      enabled: true,
-      scope: "user",
-    };
-
-    return {
-      ...provider,
-      skills: (alreadyPresent
-        ? provider.skills.map((skill) =>
-            skill.path === input.skillPath || skill.name === input.skillName
-              ? {
-                  ...skill,
-                  name: input.skillName,
-                  path: input.skillPath,
-                  enabled: true,
-                  scope: skill.scope ?? "user",
-                }
-              : skill,
-          )
-        : [...provider.skills, installedSkill]
-      ).toSorted((left, right) => left.name.localeCompare(right.name)),
-    };
   });
 }
 

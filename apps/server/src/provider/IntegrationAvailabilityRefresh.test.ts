@@ -32,6 +32,7 @@ describe("IntegrationAvailabilityRefresh", () => {
             if (attempts === 1) throw new Error("temporary refresh failure");
             return [];
           }),
+        refreshWorkspaceSnapshot: () => Effect.succeed([]),
         refresh: () => Effect.succeed([]),
         getProviderMaintenanceCapabilitiesForInstance: () => Effect.die("unused"),
         setProviderMaintenanceActionState: () => Effect.die("unused"),
@@ -81,6 +82,7 @@ describe("IntegrationAvailabilityRefresh", () => {
             if (attempts === 1) await firstRefresh.promise;
             return [];
           }),
+        refreshWorkspaceSnapshot: () => Effect.succeed([]),
         refresh: () => Effect.succeed([]),
         getProviderMaintenanceCapabilitiesForInstance: () => Effect.die("unused"),
         setProviderMaintenanceActionState: () => Effect.die("unused"),
@@ -123,6 +125,7 @@ describe("IntegrationAvailabilityRefresh", () => {
             Effect.andThen(Effect.never),
             Effect.onInterrupt(() => Effect.sync(() => (interruptions += 1))),
           ),
+        refreshWorkspaceSnapshot: () => Effect.succeed([]),
         refresh: () => Effect.succeed([]),
         getProviderMaintenanceCapabilitiesForInstance: () => Effect.die("unused"),
         setProviderMaintenanceActionState: () => Effect.die("unused"),
@@ -175,6 +178,7 @@ describe("IntegrationAvailabilityRefresh", () => {
                 siblingFinished.resolve();
                 return [];
               }),
+        refreshWorkspaceSnapshot: () => Effect.succeed([]),
         refresh: () => Effect.succeed([]),
         getProviderMaintenanceCapabilitiesForInstance: () => Effect.die("unused"),
         setProviderMaintenanceActionState: () => Effect.die("unused"),
@@ -241,6 +245,7 @@ describe("IntegrationAvailabilityRefresh", () => {
                 }
                 return [];
               }),
+        refreshWorkspaceSnapshot: () => Effect.succeed([]),
         refresh: () => Effect.succeed([]),
         getProviderMaintenanceCapabilitiesForInstance: () => Effect.die("unused"),
         setProviderMaintenanceActionState: () => Effect.die("unused"),
@@ -284,6 +289,7 @@ describe("IntegrationAvailabilityRefresh", () => {
             refreshed.push(instanceId);
             return [];
           }),
+        refreshWorkspaceSnapshot: () => Effect.succeed([]),
         refresh: () => Effect.succeed([]),
         getProviderMaintenanceCapabilitiesForInstance: () => Effect.die("unused"),
         setProviderMaintenanceActionState: () => Effect.die("unused"),
@@ -330,6 +336,7 @@ describe("IntegrationAvailabilityRefresh", () => {
             refreshedSkills.set(instanceId, skillAvailable ? ["microsoft-365-read"] : []);
             return [];
           }),
+        refreshWorkspaceSnapshot: () => Effect.succeed([]),
         refresh: () => Effect.succeed([]),
         getProviderMaintenanceCapabilitiesForInstance: () => Effect.die("unused"),
         setProviderMaintenanceActionState: () => Effect.die("unused"),

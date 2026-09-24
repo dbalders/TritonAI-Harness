@@ -1,8 +1,11 @@
 import { isTritonAiNightlyVersion } from "@t3tools/contracts";
+import Mime from "@effect/platform-node/Mime";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as NodeTimersPromises from "node:timers/promises";
+import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
@@ -10,9 +13,9 @@ import * as Scope from "effect/Scope";
 import * as Electron from "electron";
 
 export const DESKTOP_HOST = "app";
-export const DESKTOP_PRODUCTION_SCHEME = "t3code";
-export const DESKTOP_DEVELOPMENT_SCHEME = "t3code-dev";
-export const DESKTOP_NIGHTLY_SCHEME = "tritonai-harness-nightly";
+const DESKTOP_PRODUCTION_SCHEME = "t3code";
+const DESKTOP_DEVELOPMENT_SCHEME = "t3code-dev";
+const DESKTOP_NIGHTLY_SCHEME = "tritonai-harness-nightly";
 
 export function getDesktopScheme(isDevelopment: boolean, appVersion = ""): string {
   return isDevelopment
@@ -22,7 +25,7 @@ export function getDesktopScheme(isDevelopment: boolean, appVersion = ""): strin
       : DESKTOP_PRODUCTION_SCHEME;
 }
 
-export function getDesktopOrigin(isDevelopment: boolean, appVersion = ""): string {
+function getDesktopOrigin(isDevelopment: boolean, appVersion = ""): string {
   return `${getDesktopScheme(isDevelopment, appVersion)}://${DESKTOP_HOST}`;
 }
 
@@ -30,7 +33,7 @@ export function getDesktopUrl(isDevelopment: boolean, appVersion = ""): string {
   return `${getDesktopOrigin(isDevelopment, appVersion)}/`;
 }
 
-export class ElectronProtocolRegistrationError extends Schema.TaggedErrorClass<ElectronProtocolRegistrationError>()(
+export class ElectronProtocolRegistrationError extends Schema.TaggedError<ElectronProtocolRegistrationError>()(
   "ElectronProtocolRegistrationError",
   {
     scheme: Schema.String,
@@ -42,7 +45,7 @@ export class ElectronProtocolRegistrationError extends Schema.TaggedErrorClass<E
   }
 }
 
-export class ElectronProtocolUnregistrationError extends Schema.TaggedErrorClass<ElectronProtocolUnregistrationError>()(
+export class ElectronProtocolUnregistrationError extends Schema.TaggedError<ElectronProtocolUnregistrationError>()(
   "ElectronProtocolUnregistrationError",
   {
     scheme: Schema.String,
@@ -54,12 +57,12 @@ export class ElectronProtocolUnregistrationError extends Schema.TaggedErrorClass
   }
 }
 
-export interface DesktopProtocolRegistrationInput {
+// The scheme either proxies to a dev server (`targetOrigin`) or serves the
+// built client from disk (`assetDirectory`).
+export type DesktopProtocolRegistrationInput = {
   readonly scheme: string;
-  readonly targetOrigin: URL;
-  readonly backendOrigin: URL;
   readonly clerkFrontendApiHostname: string | undefined;
-}
+} & ({ readonly targetOrigin: URL } | { readonly assetDirectory: string });
 
 export class ElectronProtocol extends Context.Service<
   ElectronProtocol,
@@ -93,11 +96,13 @@ export function makeDesktopContentSecurityPolicy(input: DesktopProtocolRegistrat
     `script-src ${scriptSources.join(" ")}`,
     `connect-src ${connectSources.join(" ")}`,
     `img-src 'self' ${input.scheme}: blob: data: http: https:`,
-    `media-src 'self' ${input.scheme}: blob:`,
+    `media-src 'self' ${input.scheme}: blob: http: https:`,
     "style-src 'self' 'unsafe-inline'",
     `font-src 'self' ${input.scheme}: data:`,
     "worker-src 'self' blob:",
-    "frame-src 'self' https://challenges.cloudflare.com",
+    // Document viewers use local Blob URLs and signed assets from runtime environments.
+    // HTML viewers retain their own sandbox; the renderer's script policy stays unchanged.
+    "frame-src 'self' blob: http: https:",
     "form-action 'self'",
   ].join("; ");
 }
@@ -124,6 +129,7 @@ export function registerDesktopSchemePrivilegesSync(): void {
         secure: true,
         supportFetchAPI: true,
         corsEnabled: true,
+        stream: true,
       },
     },
     {
@@ -133,6 +139,7 @@ export function registerDesktopSchemePrivilegesSync(): void {
         secure: true,
         supportFetchAPI: true,
         corsEnabled: true,
+        stream: true,
       },
     },
     {
@@ -142,6 +149,7 @@ export function registerDesktopSchemePrivilegesSync(): void {
         secure: true,
         supportFetchAPI: true,
         corsEnabled: true,
+        stream: true,
       },
     },
   ]);
@@ -200,6 +208,45 @@ async function proxyRequest(
 
 const TRANSIENT_FETCH_RETRY_DELAYS_MS = [0, 50, 150] as const;
 
+// Serves the packaged web client without a backend: files resolve within the
+// asset directory, and any other path falls back to index.html so the SPA
+// router handles it, except for asset-shaped misses (`/missing.js`) which 404.
+const serveDesktopAsset = Effect.fn("desktop.protocol.serveAsset")(function* (
+  request: Request,
+  assetDirectory: string,
+) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const url = new URL(request.url);
+  if (url.host !== DESKTOP_HOST) return new Response(null, { status: 404 });
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    return new Response(null, { status: 405 });
+  }
+  const pathname = yield* Effect.try(() => decodeURIComponent(url.pathname)).pipe(
+    Effect.orElseSucceed(() => null),
+  );
+  if (pathname === null || pathname.includes("\0")) return new Response(null, { status: 400 });
+  const root = path.resolve(assetDirectory);
+  const assetPath = path.resolve(root, `.${pathname}`);
+  if (assetPath !== root && !assetPath.startsWith(root + path.sep)) {
+    return new Response(null, { status: 404 });
+  }
+  const stat = yield* fileSystem.stat(assetPath).pipe(Effect.orElseSucceed(() => null));
+  let filePath = assetPath;
+  if (stat?.type !== "File") {
+    const wantsHtml = request.headers.get("accept")?.includes("text/html") ?? false;
+    if (path.extname(assetPath) !== "" && !wantsHtml) {
+      return new Response(null, { status: 404 });
+    }
+    filePath = path.join(root, "index.html");
+  }
+  const contents = yield* fileSystem.readFile(filePath).pipe(Effect.orElseSucceed(() => null));
+  if (contents === null) return new Response(null, { status: 404 });
+  return new Response(request.method === "HEAD" ? null : new Uint8Array(contents), {
+    headers: { "content-type": Mime.getType(filePath) ?? "application/octet-stream" },
+  });
+});
+
 async function fetchWithTransientRetry(url: string, init: RequestInit): Promise<Response> {
   let lastError: unknown;
 
@@ -218,8 +265,11 @@ async function fetchWithTransientRetry(url: string, init: RequestInit): Promise<
   throw lastError;
 }
 
+/** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
   const registered = yield* Ref.make(false);
+  const context = yield* Effect.context<FileSystem.FileSystem | Path.Path>();
+  const runPromise = Effect.runPromiseWith(context);
 
   const registerDesktopProtocol = Effect.fn("desktop.electron.protocol.registerDesktopProtocol")(
     function* (input: DesktopProtocolRegistrationInput) {
@@ -230,9 +280,15 @@ export const make = Effect.gen(function* () {
       yield* Effect.acquireRelease(
         Effect.try({
           try: () => {
-            Electron.protocol.handle(input.scheme, (request) =>
-              proxyRequest(request, input.targetOrigin, contentSecurityPolicy),
-            );
+            Electron.protocol.handle(input.scheme, async (request) => {
+              if ("assetDirectory" in input) {
+                return withContentSecurityPolicy(
+                  await runPromise(serveDesktopAsset(request, input.assetDirectory)),
+                  contentSecurityPolicy,
+                );
+              }
+              return proxyRequest(request, input.targetOrigin, contentSecurityPolicy);
+            });
           },
           catch: (cause) => new ElectronProtocolRegistrationError({ scheme: input.scheme, cause }),
         }).pipe(Effect.andThen(Ref.set(registered, true))),

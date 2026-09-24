@@ -12,7 +12,7 @@ export interface VersionMismatch {
   readonly hint: string;
 }
 
-export const VERSION_MISMATCH_DISMISSALS_STORAGE_KEY = "t3code:version-mismatch-dismissals:v1";
+const VERSION_MISMATCH_DISMISSALS_STORAGE_KEY = "t3code:version-mismatch-dismissals:v1";
 
 // Runtime failures retain their identity until the next attempt. Dismiss only
 // that attempt, across chat remounts, without clearing the error in Settings.
@@ -108,12 +108,24 @@ export function resolveServerSelfUpdateCapability(
 /** One sentence explaining the safe downstream response to version skew. */
 export function serverUpdateGuidance(
   capability: ServerSelfUpdateCapability | null,
-  serverLabel: string,
+  serverLabel: string = "server",
 ): string {
   if (capability === "desktop-managed") {
     return `The ${serverLabel} is run by the TritonAI Harness desktop app on its machine — update the desktop app there to sync them.`;
   }
   return `Automatic updates are unavailable for the ${serverLabel}; update it through its approved TritonAI Harness distribution.`;
+}
+
+export function supportsDesktopAppUpdate(
+  _serverConfig: Pick<ServerConfig, "environment"> | null | undefined,
+): boolean {
+  return false;
+}
+
+export function supportsServerUpdateThreadContinuation(
+  _serverConfig: Pick<ServerConfig, "environment"> | null | undefined,
+): boolean {
+  return false;
 }
 
 export function buildVersionMismatchDismissalKey(

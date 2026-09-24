@@ -19,6 +19,7 @@ import {
   resolveServerSelfUpdateCapability,
   resolveVersionMismatch,
   serverUpdateGuidance,
+  supportsDesktopAppUpdate,
 } from "./versionSkew";
 
 const MISMATCH_HINT =

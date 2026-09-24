@@ -3,7 +3,9 @@ import * as Schema from "effect/Schema";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
-import { derivePendingApprovals } from "../../session-logic";
+import { derivePendingRequests } from "@t3tools/client-runtime/pending-requests";
+const derivePendingApprovals = (activities: ReadonlyArray<OrchestrationThreadActivity>) =>
+  derivePendingRequests(activities).approvals;
 import { ComposerPendingApprovalPanel } from "./ComposerPendingApprovalPanel";
 
 const decodeProjectedActivity = Schema.decodeUnknownSync(

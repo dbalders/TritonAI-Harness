@@ -967,7 +967,7 @@ it.layer(NodeServices.layer)("ServerSecretStore.layer", (it) => {
       const secretStore = yield* ServerSecretStore.ServerSecretStore;
       yield* secretStore.set("session-signing-key", Uint8Array.from([1, 2, 3]));
       assert.isTrue(
-        chmodCalls.some((call) => call.mode === 0o700 && call.path.endsWith("/secrets")),
+        chmodCalls.some((call) => call.mode === 0o700 && /[\\/]secrets$/.test(call.path)),
       );
       assert.isAtLeast(chmodCalls.filter((call) => call.mode === 0o600).length, 2);
     }).pipe(

@@ -6,12 +6,12 @@ This automation keeps the TritonAI Harness downstream branch close to upstream `
 
 - `scripts/tritonai-sync-upstream.mjs`
 - `.github/workflows/tritonai-upstream-sync.yml`
-- `bun run tritonai:sync:check`
-- `bun run tritonai:sync:review`
-- `bun run tritonai:sync:pr`
-- `bun run tritonai:sync:auto`
+- `vp run tritonai:sync:check`
+- `vp run tritonai:sync:review`
+- `vp run tritonai:sync:pr`
+- `vp run tritonai:sync:auto`
 - `scripts/tritonai-release-sync.mjs`
-- `bun run tritonai:release-sync:pr`
+- `vp run tritonai:release-sync:pr`
 
 The upstream sync script creates generated `sync/upstream-*` branches in a temporary worktree. The parent release sync script uses generated `sync/release-*` branches so release PRs cannot overwrite ordinary upstream sync PRs.
 
@@ -20,20 +20,20 @@ The upstream sync script creates generated `sync/upstream-*` branches in a tempo
 For a no-model dry check:
 
 ```sh
-bun run tritonai:sync:check
+vp run tritonai:sync:check
 ```
 
 For Codex review:
 
 ```sh
 export TRITONAI_SYNC_AGENT_COMMAND='codex exec "$(cat "$TRITONAI_SYNC_AGENT_PROMPT_FILE")" > "$TRITONAI_SYNC_AGENT_RESPONSE_FILE"'
-bun run tritonai:sync:review
+vp run tritonai:sync:review
 ```
 
 For PR creation:
 
 ```sh
-bun run tritonai:sync:pr
+vp run tritonai:sync:pr
 ```
 
 The agent command receives:

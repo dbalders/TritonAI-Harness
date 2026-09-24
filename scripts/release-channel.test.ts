@@ -5,6 +5,35 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { parse } from "yaml";
 
 it.layer(NodeServices.layer)("release workflow channel", (it) => {
+  it.effect("uses one immutable composition producer for stable and nightly builds", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const pins: string[] = [];
+      for (const name of ["release", "nightly"]) {
+        const workflowPath = yield* path.fromFileUrl(
+          new URL(`../.github/workflows/${name}.yml`, import.meta.url),
+        );
+        const workflow = parse(yield* fs.readFileString(workflowPath));
+        const pin = workflow.env.TRITONAI_INSTALLER_COMPOSITION_COMMIT;
+        assert.match(pin, /^[a-f0-9]{40}$/);
+        pins.push(pin);
+        const producerCheckouts = Object.values<{
+          steps?: { with?: { repository?: string; ref?: string } }[];
+        }>(workflow.jobs).flatMap((job) =>
+          (job.steps ?? []).filter(
+            (step) => step.with?.repository === "dbalders/TritonAI-Installer",
+          ),
+        );
+        assert.isAbove(producerCheckouts.length, 0);
+        for (const step of producerCheckouts) {
+          assert.equal(step.with?.ref, "${{ env.TRITONAI_INSTALLER_COMPOSITION_COMMIT }}");
+        }
+      }
+      assert.equal(pins[0], pins[1]);
+    }),
+  );
+
   it.effect("accepts controlled stable dispatches and rejects every nightly version", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

@@ -57,6 +57,12 @@ it.effect("records canonical thread creation and turn completion without identif
           OrchestrationEngineService,
           OrchestrationEngineService.of({
             readEvents: () => Stream.empty,
+            readThreadEvents: () => Stream.empty,
+            getThreadReplayStats: () =>
+              Effect.succeed({ eventCount: 0, payloadBytes: 0, hasCreateEvent: false }),
+            subscribeDomainEvents: PubSub.subscribe(domainEvents).pipe(
+              Effect.map(Stream.fromSubscription),
+            ),
             dispatch: () => Effect.die("dispatch is not used by this test"),
             latestSequence: Effect.succeed(0),
             streamDomainEvents: Stream.fromPubSub(domainEvents),

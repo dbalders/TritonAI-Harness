@@ -33,6 +33,7 @@ const thread: OrchestrationThread = {
   settledOverride: null,
   settledAt: null,
   messages: [],
+  pullRequests: [],
   proposedPlans: [],
   activities: [],
   checkpoints: [],

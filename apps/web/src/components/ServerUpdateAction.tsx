@@ -61,12 +61,43 @@ export function ServerUpdateAction({
   readonly selfUpdate: ServerSelfUpdateCapability | null;
   readonly targetVersion: string;
   readonly label?: string;
+  readonly desktopAppUpdate?: boolean;
+  readonly threadContinuation?: boolean;
+  readonly appearance?: "button" | "icon";
+  readonly variant?: string;
+  readonly size?: string;
+  readonly className?: string;
 }) {
   return (
     <span className="text-muted-foreground text-xs">
       {selfUpdate === "desktop-managed"
         ? "Update the TritonAI Harness desktop app on that machine to update this server."
         : "Automatic server updates are unavailable in TritonAI Harness."}
+    </span>
+  );
+}
+
+export interface ServerUpdateTarget {
+  readonly environmentId: EnvironmentId;
+  readonly serverLabel: string;
+  readonly selfUpdate: ServerSelfUpdateCapability | null;
+  readonly targetVersion: string;
+  readonly desktopAppUpdate?: boolean;
+  readonly threadContinuation?: boolean;
+  readonly continueThreadsAfterServerUpdate?: boolean;
+}
+
+/** Managed distributions are updated on the host through the approved Harness updater. */
+export function ServerUpdatesAction(_props: {
+  readonly targets: ReadonlyArray<ServerUpdateTarget>;
+  readonly label?: string;
+  readonly variant?: string;
+  readonly size?: string;
+  readonly className?: string;
+}) {
+  return (
+    <span className="text-muted-foreground text-xs">
+      Update each machine through its approved TritonAI Harness distribution.
     </span>
   );
 }

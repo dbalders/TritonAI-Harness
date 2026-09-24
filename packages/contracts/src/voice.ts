@@ -67,7 +67,7 @@ export const ServerVoiceTranscribeResult = Schema.Struct({
 });
 export type ServerVoiceTranscribeResult = typeof ServerVoiceTranscribeResult.Type;
 
-export class ServerVoiceTranscriptionError extends Schema.TaggedErrorClass<ServerVoiceTranscriptionError>()(
+export class ServerVoiceTranscriptionError extends Schema.TaggedError<ServerVoiceTranscriptionError>()(
   "ServerVoiceTranscriptionError",
   {
     code: TrimmedNonEmptyString,

@@ -1,27 +1,23 @@
 import { describe, expect, it } from "vite-plus/test";
-import {
-  DEFAULT_MODEL,
-  ProviderDriverKind,
-  ProviderInstanceId,
-  type ModelCapabilities,
-} from "@t3tools/contracts";
+import { ProviderDriverKind, ProviderInstanceId, type ModelCapabilities } from "@t3tools/contracts";
 
 import {
   applyClaudePromptEffortPrefix,
+  buildExplicitProviderOptionSelectionsFromDescriptors,
   buildProviderOptionSelectionsFromDescriptors,
   createModelCapabilities,
   createModelSelection,
   getModelSelectionBooleanOptionValue,
   getModelSelectionStringOptionValue,
   getProviderOptionDescriptors,
+  readCustomModelEntries,
+  toCustomModelSetting,
   getProviderOptionBooleanSelectionValue,
   getProviderOptionStringSelectionValue,
   isClaudeUltrathinkPrompt,
   modelCapabilitiesAreExplicitlyTextOnly,
   normalizeModelSlug,
-  resolveModelSlugForProvider,
   resolveSelectableModel,
-  trimOrNull,
 } from "./model.ts";
 
 const codexCaps: ModelCapabilities = createModelCapabilities({
@@ -96,26 +92,6 @@ describe("modelCapabilitiesAreExplicitlyTextOnly", () => {
   });
 });
 
-describe("resolveModelSlugForProvider", () => {
-  it("returns defaults when the model is missing", () => {
-    expect(resolveModelSlugForProvider(ProviderDriverKind.make("codex"), undefined)).toBe(
-      DEFAULT_MODEL,
-    );
-    expect(resolveModelSlugForProvider(ProviderDriverKind.make("ollama"), undefined)).toBe(
-      DEFAULT_MODEL,
-    );
-    expect(resolveModelSlugForProvider(ProviderDriverKind.make("grok"), undefined)).toBe(
-      "grok-build",
-    );
-  });
-
-  it("preserves normalized unknown models", () => {
-    expect(
-      resolveModelSlugForProvider(ProviderDriverKind.make("codex"), "custom/internal-model"),
-    ).toBe("custom/internal-model");
-  });
-});
-
 describe("resolveSelectableModel", () => {
   it("resolves exact slugs, labels, and aliases", () => {
     const options = [
@@ -148,11 +124,6 @@ describe("misc helpers", () => {
     expect(applyClaudePromptEffortPrefix("Ultrathink:\nInvestigate", "ultrathink")).toBe(
       "Ultrathink:\nInvestigate",
     );
-  });
-
-  it("trims strings to null", () => {
-    expect(trimOrNull("  hi  ")).toBe("hi");
-    expect(trimOrNull("   ")).toBeNull();
   });
 });
 
@@ -219,6 +190,22 @@ describe("descriptor helpers", () => {
     ]);
   });
 
+  it("builds dispatch options only from explicit selections", () => {
+    const descriptors = getProviderOptionDescriptors({
+      caps: codexCaps,
+      selections: [{ id: "fastMode", value: true }],
+    });
+
+    expect(buildExplicitProviderOptionSelectionsFromDescriptors(descriptors, undefined)).toBe(
+      undefined,
+    );
+    expect(
+      buildExplicitProviderOptionSelectionsFromDescriptors(descriptors, [
+        { id: "fastMode", value: true },
+      ]),
+    ).toEqual([{ id: "fastMode", value: true }]);
+  });
+
   it("stores option selection arrays in model selections", () => {
     expect(
       createModelSelection(ProviderInstanceId.make("codex"), "gpt-5.4", [
@@ -281,5 +268,75 @@ describe("applyClaudePromptEffortPrefix", () => {
     expect(applyClaudePromptEffortPrefix("/home/theo/app.ts crashed on load", "ultrathink")).toBe(
       "Ultrathink:\n/home/theo/app.ts crashed on load",
     );
+  });
+});
+
+describe("readCustomModelEntries", () => {
+  const capabilities: ModelCapabilities = {
+    optionDescriptors: [
+      {
+        id: "effort",
+        label: "Reasoning",
+        type: "select",
+        options: [{ id: "high", label: "High", isDefault: true }],
+        currentValue: "high",
+      },
+    ],
+  };
+
+  it("resolves bare slugs and entries, trimming and deduplicating on slug", () => {
+    expect(
+      readCustomModelEntries([
+        " bare ",
+        { slug: "named", name: " Named ", capabilities },
+        "bare",
+        { slug: "named", name: "Second" },
+        "",
+        { name: "no slug" },
+        42,
+      ]),
+    ).toEqual([
+      { slug: "bare", name: "bare", capabilities: null },
+      { slug: "named", name: "Named", capabilities },
+    ]);
+  });
+
+  it("drops unparseable capabilities but keeps the entry", () => {
+    expect(
+      readCustomModelEntries([{ slug: "x", capabilities: { optionDescriptors: "nope" } }]),
+    ).toEqual([{ slug: "x", name: "x", capabilities: null }]);
+    expect(readCustomModelEntries("not a list")).toEqual([]);
+  });
+
+  it("writes the compact stored shape back", () => {
+    expect(toCustomModelSetting({ slug: "x", name: "x", capabilities: null })).toBe("x");
+    expect(
+      toCustomModelSetting({ slug: "x", name: "x", capabilities: { optionDescriptors: [] } }),
+    ).toBe("x");
+    expect(toCustomModelSetting({ slug: "x", name: "X", capabilities })).toEqual({
+      slug: "x",
+      name: "X",
+      capabilities,
+    });
+  });
+});
+
+describe("custom model modality round trips", () => {
+  it("retains image support even without custom option descriptors", () => {
+    const [model] = readCustomModelEntries([
+      { slug: "campus-vision", capabilities: { inputModalities: ["text", "image"] } },
+    ]);
+    expect(model).toBeDefined();
+    expect(modelCapabilitiesAreExplicitlyTextOnly(model!.capabilities)).toBe(false);
+    const [restored] = readCustomModelEntries([toCustomModelSetting(model!)]);
+    expect(restored?.capabilities?.inputModalities).toEqual(["text", "image"]);
+  });
+
+  it("retains explicit text-only routing through custom model settings", () => {
+    const [model] = readCustomModelEntries([
+      { slug: "campus-text", capabilities: { inputModalities: ["text"] } },
+    ]);
+    const [restored] = readCustomModelEntries([toCustomModelSetting(model!)]);
+    expect(modelCapabilitiesAreExplicitlyTextOnly(restored?.capabilities)).toBe(true);
   });
 });

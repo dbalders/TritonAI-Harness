@@ -1,4 +1,5 @@
 import { PreviewAutomationSnapshot, PreviewAutomationUnavailableError } from "@t3tools/contracts";
+import * as Layer from "effect/Layer";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -9,7 +10,10 @@ import { Tool } from "effect/unstable/ai";
 import * as McpInvocationContext from "../../mcp/McpInvocationContext.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import * as PreviewAutomationBroker from "../../mcp/PreviewAutomationBroker.ts";
-import { PreviewToolkitHandlersLive } from "../../mcp/toolkits/preview/handlers.ts";
+import {
+  PreviewStandardToolkitHandlersLive,
+  PreviewSnapshotToolkitHandlersLive,
+} from "../../mcp/toolkits/preview/handlers.ts";
 import { PreviewToolkit } from "../../mcp/toolkits/preview/tools.ts";
 
 export interface CodexPreviewDynamicToolDefinition {
@@ -19,7 +23,7 @@ export interface CodexPreviewDynamicToolDefinition {
   readonly requiresApproval: boolean;
 }
 
-export class CodexPreviewDynamicToolNotFoundError extends Schema.TaggedErrorClass<CodexPreviewDynamicToolNotFoundError>()(
+export class CodexPreviewDynamicToolNotFoundError extends Schema.TaggedError<CodexPreviewDynamicToolNotFoundError>()(
   "CodexPreviewDynamicToolNotFoundError",
   { toolName: Schema.String },
 ) {
@@ -28,7 +32,7 @@ export class CodexPreviewDynamicToolNotFoundError extends Schema.TaggedErrorClas
   }
 }
 
-export class CodexPreviewDynamicToolInvocationError extends Schema.TaggedErrorClass<CodexPreviewDynamicToolInvocationError>()(
+export class CodexPreviewDynamicToolInvocationError extends Schema.TaggedError<CodexPreviewDynamicToolInvocationError>()(
   "CodexPreviewDynamicToolInvocationError",
   { toolName: Schema.String, cause: Schema.Defect() },
 ) {
@@ -143,7 +147,9 @@ export const invokeAuthorizedCodexPreviewDynamicTool = Effect.fn(
     );
     return yield* resultStream.pipe(Stream.run(Sink.last()), Effect.flatMap(Effect.fromOption));
   }).pipe(
-    Effect.provide(PreviewToolkitHandlersLive),
+    Effect.provide(
+      Layer.mergeAll(PreviewStandardToolkitHandlersLive, PreviewSnapshotToolkitHandlersLive),
+    ),
     Effect.provideService(PreviewAutomationBroker.PreviewAutomationBroker, input.broker),
     Effect.provideService(McpInvocationContext.McpInvocationContext, input.invocationScope),
     Effect.mapError(

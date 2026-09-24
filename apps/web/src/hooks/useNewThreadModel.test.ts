@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import {
+  DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
   ProjectId,
   ProviderInstanceId,
@@ -21,12 +22,24 @@ vi.mock("react", async (importOriginal) => ({
 }));
 vi.mock("@effect/atom-react", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@effect/atom-react")>()),
-  useAtomValue: () => ({ defaultThreadEnvMode: "local", newWorktreesStartFromOrigin: false }),
+  useAtomValue: () =>
+    new Map([
+      [
+        "env",
+        {
+          settings: {
+            ...DEFAULT_SERVER_SETTINGS,
+            defaultThreadEnvMode: "local",
+            newWorktreesStartFromOrigin: false,
+          },
+        },
+      ],
+    ]),
 }));
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@tanstack/react-router")>()),
   useRouter: () => ({
-    state: { matches: [{ params: harness.params }] },
+    state: { matches: [{ params: harness.params }], location: { href: "/thread/old-glm" } },
     navigate: harness.navigate,
   }),
 }));
@@ -37,7 +50,7 @@ vi.mock("./useSettings", () => ({
   }),
 }));
 vi.mock("../state/entities", () => ({
-  useProjects: () => [
+  readProjects: () => [
     {
       id: "project",
       environmentId: "env",

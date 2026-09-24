@@ -25,7 +25,7 @@ export class AnalyticsReactor extends Context.Service<
   }
 >()("t3/telemetry/AnalyticsReactor") {}
 
-export const makeAnalyticsReactor = Effect.gen(function* () {
+const makeAnalyticsReactor = Effect.gen(function* () {
   const analytics = yield* AnalyticsService;
   const orchestrationEngine = yield* OrchestrationEngineService;
   const providerService = yield* ProviderService;

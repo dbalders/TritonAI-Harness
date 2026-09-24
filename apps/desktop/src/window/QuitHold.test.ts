@@ -97,6 +97,81 @@ describe("makeQuitShortcutHandler", () => {
     expect(harness.notifications).toEqual([HOLD_DOWN, UP]);
   });
 
+  it("keeps a concealed hold committed when another key is pressed", async () => {
+    const harness = makeHarness();
+    await harness.send(makeInput({}));
+    await harness.holdFor(QUIT_HOLD_DURATION_MS);
+
+    await harness.send(makeInput({ key: "Shift", shift: true }));
+    expect(harness.concealWindow).toHaveBeenCalledTimes(1);
+    expect(harness.quit).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(QUIT_HOLD_RELEASE_GRACE_MS);
+    expect(harness.quit).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a concealed hold committed through a fresh Cmd+Q press", async () => {
+    const harness = makeHarness();
+    await harness.send(makeInput({}));
+    await harness.holdFor(QUIT_HOLD_DURATION_MS);
+
+    await harness.send(makeInput({}));
+    expect(harness.concealWindow).toHaveBeenCalledTimes(1);
+    expect(harness.quit).not.toHaveBeenCalled();
+
+    await harness.send(makeInput({ type: "keyUp" }));
+    expect(harness.quit).toHaveBeenCalledTimes(1);
+  });
+
+  it("quits when a completed hold goes quiet without release events", async () => {
+    const harness = makeHarness();
+    await harness.send(makeInput({}));
+    await harness.holdFor(QUIT_HOLD_DURATION_MS + QUIT_HOLD_RELEASE_GRACE_MS * 2);
+
+    // If neither keyUp reaches the handler, continued repeats must keep the
+    // app alive. Once they stop, the quiet period is the release signal.
+    expect(harness.quit).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(QUIT_HOLD_RELEASE_GRACE_MS);
+
+    expect(harness.quit).toHaveBeenCalledTimes(1);
+    expect(harness.notifications).toEqual([HOLD_DOWN, UP]);
+  });
+
+  it("waits for slow repeats to stop before quitting", async () => {
+    const harness = makeHarness();
+    await harness.send(makeInput({}));
+
+    vi.advanceTimersByTime(300);
+    await harness.send(makeInput({ isAutoRepeat: true }));
+    vi.advanceTimersByTime(900);
+    await harness.send(makeInput({ isAutoRepeat: true }));
+
+    vi.advanceTimersByTime(QUIT_HOLD_RELEASE_GRACE_MS);
+    expect(harness.quit).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(300);
+    await harness.send(makeInput({ isAutoRepeat: true }));
+    vi.advanceTimersByTime(1_799);
+    expect(harness.quit).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(harness.quit).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the initial repeat delay when the first repeat completes the hold", async () => {
+    const harness = makeHarness();
+    await harness.send(makeInput({}));
+
+    vi.advanceTimersByTime(QUIT_HOLD_DURATION_MS + 100);
+    await harness.send(makeInput({ isAutoRepeat: true }));
+
+    vi.advanceTimersByTime(QUIT_HOLD_RELEASE_GRACE_MS);
+    expect(harness.quit).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1_999);
+    expect(harness.quit).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(harness.quit).toHaveBeenCalledTimes(1);
+  });
+
   it("waits for Q release when Cmd is released first", async () => {
     const harness = makeHarness();
     await harness.send(makeInput({}));
@@ -143,6 +218,26 @@ describe("makeQuitShortcutHandler", () => {
     expect(harness.quit).not.toHaveBeenCalled();
     vi.advanceTimersByTime(1);
     expect(harness.quit).toHaveBeenCalledTimes(1);
+  });
+
+  it("commits a concealed hold when the last Q repeat is never released", async () => {
+    // macOS can drop the final Q keyUp. The quit must land on its own once
+    // repeats stop, rather than sitting armed until an unrelated key arrives.
+    const harness = makeHarness();
+    await harness.send(makeInput({}));
+    await harness.holdFor(QUIT_HOLD_DURATION_MS + 200);
+    await harness.send(makeInput({ type: "keyUp", key: "Meta", meta: false }));
+    await harness.send(makeInput({ meta: false, isAutoRepeat: true }));
+
+    vi.advanceTimersByTime(QUIT_HOLD_RELEASE_GRACE_MS);
+    expect(harness.quit).toHaveBeenCalledTimes(1);
+
+    // A lone Cmd tap afterwards must not quit a second time.
+    harness.quit.mockClear();
+    await harness.send(makeInput({ key: "Meta" }));
+    await harness.send(makeInput({ type: "keyUp", key: "Meta", meta: false }));
+    vi.advanceTimersByTime(QUIT_HOLD_RELEASE_GRACE_MS * 4);
+    expect(harness.quit).not.toHaveBeenCalled();
   });
 
   it("does not quit when the hold stops before the duration", async () => {
@@ -211,24 +306,31 @@ describe("makeQuitShortcutHandler", () => {
     expect(harness.notifications).toEqual([]);
   });
 
-  it("honors a quick double press when both key releases beat their mode reads", async () => {
-    const resolvers: Array<(mode: QuitConfirmationMode) => void> = [];
-    const harness = makeHarness({
-      getMode: () => new Promise((resolve) => resolvers.push(resolve)),
-    });
-    await harness.send(makeInput({}));
-    await harness.send(makeInput({ type: "keyUp" }));
-    vi.advanceTimersByTime(QUIT_DOUBLE_PRESS_MS - 100);
-    await harness.send(makeInput({}));
-    await harness.send(makeInput({ type: "keyUp" }));
+  it.each(["direct", "hold", "double-click"] as const)(
+    "quits on a quick second press without waiting for a pending %s mode read",
+    async (mode) => {
+      const resolvers: Array<(mode: QuitConfirmationMode) => void> = [];
+      const harness = makeHarness({
+        getMode: () => new Promise((resolve) => resolvers.push(resolve)),
+      });
+      await harness.send(makeInput({}));
+      await harness.send(makeInput({ type: "keyUp" }));
+      vi.advanceTimersByTime(QUIT_DOUBLE_PRESS_MS - 100);
+      await harness.send(makeInput({}));
 
-    resolvers[1]?.("double-click");
-    await Promise.resolve();
-    await Promise.resolve();
+      expect(harness.quit).toHaveBeenCalledTimes(1);
+      expect(harness.notifications).toEqual([]);
 
-    expect(harness.quit).toHaveBeenCalledTimes(1);
-    expect(harness.notifications).toEqual([]);
-  });
+      await harness.send(makeInput({ type: "keyUp" }));
+
+      resolvers[0]?.(mode);
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(harness.quit).toHaveBeenCalledTimes(1);
+      expect(harness.notifications).toEqual([]);
+    },
+  );
 
   it("discards a stale mode resolution from a superseded press", async () => {
     // Press #1's mode is still pending when the user releases and
@@ -262,6 +364,7 @@ describe("makeQuitShortcutHandler", () => {
     await harness.send(makeInput({}));
     vi.advanceTimersByTime(QUIT_DOUBLE_PRESS_MS - 100);
     await harness.send(makeInput({}));
+    expect(harness.concealWindow).not.toHaveBeenCalled();
     expect(harness.quit).toHaveBeenCalledTimes(1);
     expect(harness.notifications).toEqual([DOUBLE_CLICK_DOWN, UP]);
   });
@@ -326,12 +429,44 @@ describe("makeQuitShortcutHandler", () => {
     expect(harness.notifications).toEqual([DOUBLE_CLICK_DOWN, UP, DOUBLE_CLICK_DOWN]);
   });
 
-  it("does not treat two quick presses as a quit in hold mode", async () => {
+  it("quits on a quick second press in hold mode", async () => {
     const harness = makeHarness();
     await harness.send(makeInput({}));
     await harness.send(makeInput({ type: "keyUp" }));
     vi.advanceTimersByTime(QUIT_DOUBLE_PRESS_MS - 100);
     await harness.send(makeInput({}));
+    expect(harness.quit).toHaveBeenCalledTimes(1);
+    expect(harness.notifications).toEqual([HOLD_DOWN, UP]);
+  });
+
+  it("quits on a quick second press in hold mode when the first release is unseen", async () => {
+    const harness = makeHarness();
+    await harness.send(makeInput({}));
+    vi.advanceTimersByTime(QUIT_DOUBLE_PRESS_MS - 100);
+    await harness.send(makeInput({}));
+
+    expect(harness.concealWindow).not.toHaveBeenCalled();
+    expect(harness.quit).toHaveBeenCalledTimes(1);
+    expect(harness.notifications).toEqual([HOLD_DOWN, UP]);
+  });
+
+  it("does not count auto-repeat as a second press", async () => {
+    const harness = makeHarness();
+    await harness.send(makeInput({}));
+    await harness.holdFor(QUIT_DOUBLE_PRESS_MS - 100);
+
+    expect(harness.quit).not.toHaveBeenCalled();
+    expect(harness.notifications).toEqual([HOLD_DOWN]);
+  });
+
+  it("does not count a released tap after another shortcut interrupts it", async () => {
+    const harness = makeHarness();
+    await harness.send(makeInput({}));
+    await harness.send(makeInput({ type: "keyUp" }));
+    await harness.send(makeInput({ key: "c" }));
+    vi.advanceTimersByTime(100);
+    await harness.send(makeInput({}));
+
     expect(harness.quit).not.toHaveBeenCalled();
     expect(harness.notifications).toEqual([HOLD_DOWN, UP, HOLD_DOWN]);
   });

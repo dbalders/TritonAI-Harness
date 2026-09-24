@@ -1,69 +1,24 @@
 import type { DesktopUpdateState } from "@t3tools/contracts";
-import { isValidElement, type ReactElement, type ReactNode } from "react";
-import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
-const testState = vi.hoisted(() => ({
-  desktopUpdate: null as DesktopUpdateState | null,
-  checkForUpdate: vi.fn(),
-  downloadUpdate: vi.fn(),
-  installUpdate: vi.fn(),
-  confirm: vi.fn(),
-  toast: vi.fn(),
-}));
+import {
+  handleSidebarUpdateReleaseNotesPopoverOpenChange,
+  openSidebarUpdateReleaseNotesPopoverOnForwardTab,
+  shouldUseSidebarUpdateReleaseNotesPopover,
+} from "./SidebarUpdatePill";
 
-const hooks = vi.hoisted(() => ({
-  useCallback<T>(callback: T): T {
-    return callback;
-  },
-  useEffect(): void {},
-  useMemoCache(size: number): unknown[] {
-    return Array.from({ length: size }, () => Symbol.for("react.memo_cache_sentinel"));
-  },
-  useState<T>(initialValue: T | (() => T)): [T, (nextValue: T) => void] {
-    return [
-      typeof initialValue === "function" ? (initialValue as () => T)() : initialValue,
-      vi.fn(),
-    ];
-  },
-}));
-
-vi.mock("react", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("react")>();
-  return {
-    ...actual,
-    useCallback: hooks.useCallback,
-    useEffect: hooks.useEffect,
-    useState: hooks.useState,
-  };
-});
-
-vi.mock("react/compiler-runtime", () => ({ c: hooks.useMemoCache }));
-vi.mock("../../env", () => ({ isElectron: true }));
-vi.mock("../../state/desktopUpdate", () => ({
-  useDesktopUpdateState: () => testState.desktopUpdate,
-}));
-vi.mock("../../hooks/useMediaQuery", () => ({ useMediaQuery: () => false }));
-vi.mock("../../localApi", () => ({
-  ensureLocalApi: () => ({ dialogs: { confirm: testState.confirm } }),
-}));
-vi.mock("../ui/toast", () => ({
-  stackedThreadToast: (toast: unknown) => toast,
-  toastManager: { add: testState.toast },
-}));
-
-import { SidebarUpdateArchitectureWarningContent, SidebarUpdateControl } from "./SidebarUpdatePill";
-
-const desktopUpdateBase: DesktopUpdateState = {
+const nightlyState: DesktopUpdateState = {
   enabled: true,
-  status: "idle",
-  channel: "latest",
-  currentVersion: "1.0.0",
-  hostArch: "x64",
-  appArch: "x64",
+  status: "available",
+  channel: "nightly",
+  currentVersion: "0.0.35",
+  hostArch: "arm64",
+  appArch: "arm64",
   runningUnderArm64Translation: false,
-  availableVersion: null,
+  availableVersion: "0.0.36-nightly.3",
   downloadedVersion: null,
-  releaseNotes: [],
+  releaseNotes: [{ version: "0.0.36-nightly.3", items: ["Newest change"], totalItems: 1 }],
+  omittedReleaseCount: 0,
   downloadPercent: null,
   checkedAt: null,
   message: null,
@@ -71,148 +26,61 @@ const desktopUpdateBase: DesktopUpdateState = {
   canRetry: false,
 };
 
-function nodeText(node: ReactNode): string {
-  if (typeof node === "string" || typeof node === "number") return String(node);
-  if (Array.isArray(node)) return node.map(nodeText).join("");
-  if (!isValidElement(node)) return "";
-  return nodeText((node.props as { readonly children?: ReactNode }).children);
-}
-
-function findElement(
-  node: ReactNode,
-  predicate: (element: ReactElement) => boolean,
-): ReactElement | null {
-  if (Array.isArray(node)) {
-    for (const child of node) {
-      const match = findElement(child, predicate);
-      if (match) return match;
-    }
-    return null;
-  }
-  if (!isValidElement(node)) return null;
-  if (predicate(node)) return node;
-  const props = node.props as {
-    readonly children?: ReactNode;
-    readonly render?: ReactNode;
-  };
-  return findElement(props.children, predicate) ?? findElement(props.render, predicate);
-}
-
-async function flushPromises(): Promise<void> {
-  await Promise.resolve();
-  await Promise.resolve();
-  await Promise.resolve();
-}
-
-describe("SidebarUpdatePill", () => {
-  beforeEach(() => {
-    testState.desktopUpdate = null;
-    testState.checkForUpdate.mockReset();
-    testState.downloadUpdate.mockReset();
-    testState.installUpdate.mockReset();
-    testState.confirm.mockReset();
-    testState.toast.mockReset();
-    Object.defineProperty(globalThis, "window", {
-      configurable: true,
-      value: {
-        desktopBridge: {
-          checkForUpdate: testState.checkForUpdate,
-          downloadUpdate: testState.downloadUpdate,
-          installUpdate: testState.installUpdate,
-        },
-        confirm: testState.confirm,
-      },
-    });
-    Object.defineProperty(globalThis, "navigator", {
-      configurable: true,
-      value: { platform: "MacIntel" },
-    });
+describe("sidebar update release notes popover", () => {
+  it("uses the popover only for visible nightly release notes", () => {
+    expect(shouldUseSidebarUpdateReleaseNotesPopover(true, nightlyState)).toBe(true);
+    expect(shouldUseSidebarUpdateReleaseNotesPopover(false, nightlyState)).toBe(false);
+    expect(
+      shouldUseSidebarUpdateReleaseNotesPopover(true, {
+        ...nightlyState,
+        channel: "latest",
+      }),
+    ).toBe(false);
+    expect(
+      shouldUseSidebarUpdateReleaseNotesPopover(true, {
+        ...nightlyState,
+        releaseNotes: [],
+      }),
+    ).toBe(false);
   });
 
-  it("renders the native-build warning for the Harness updater", () => {
-    testState.desktopUpdate = {
-      ...desktopUpdateBase,
-      hostArch: "arm64",
-      appArch: "x64",
-      runningUnderArm64Translation: true,
-    };
+  it("cancels trigger presses without canceling other open reasons", () => {
+    const cancelTriggerPress = vi.fn();
+    const cancelHover = vi.fn();
 
-    const output = SidebarUpdateArchitectureWarningContent();
-
-    expect(nodeText(output)).toContain("Intel build on Apple Silicon");
-    expect(nodeText(output)).toContain("The next app update will replace it");
-  });
-
-  it("downloads an available Harness update", async () => {
-    const availableState = {
-      ...desktopUpdateBase,
-      status: "available",
-      availableVersion: "1.1.0",
-    } as const;
-    testState.desktopUpdate = availableState;
-    testState.downloadUpdate.mockResolvedValue({
-      accepted: true,
-      completed: false,
-      state: availableState,
+    handleSidebarUpdateReleaseNotesPopoverOpenChange(true, {
+      reason: "trigger-press",
+      cancel: cancelTriggerPress,
+    });
+    handleSidebarUpdateReleaseNotesPopoverOpenChange(true, {
+      reason: "trigger-hover",
+      cancel: cancelHover,
     });
 
-    const output = SidebarUpdateControl();
-    const updateButton = findElement(output, (element) => element.type === "button");
-
-    expect(updateButton).not.toBeNull();
-    if (!updateButton) throw new Error("Expected the Harness update button.");
-    (updateButton.props as { readonly onClick: () => void }).onClick();
-    await flushPromises();
-
-    expect(testState.downloadUpdate).toHaveBeenCalledOnce();
-    expect(testState.installUpdate).not.toHaveBeenCalled();
+    expect(cancelTriggerPress).toHaveBeenCalledOnce();
+    expect(cancelHover).not.toHaveBeenCalled();
   });
 
-  it("confirms before restarting into a downloaded Harness update", async () => {
-    const downloadedState = {
-      ...desktopUpdateBase,
-      status: "downloaded",
-      availableVersion: "1.1.0",
-      downloadedVersion: "1.1.0",
-    } as const;
-    testState.desktopUpdate = downloadedState;
-    testState.confirm.mockReturnValue(true);
-    testState.installUpdate.mockResolvedValue({
-      accepted: true,
-      completed: true,
-      state: downloadedState,
-    });
+  it("promotes forward Tab without preventing native navigation", () => {
+    const open = vi.fn();
+    const preventDefault = vi.fn();
+    const event = { key: "Tab", shiftKey: false, preventDefault };
 
-    const output = SidebarUpdateControl();
-    const updateButton = findElement(output, (element) => element.type === "button");
+    openSidebarUpdateReleaseNotesPopoverOnForwardTab(event, { open }, "nightly-release-notes");
 
-    expect(updateButton).not.toBeNull();
-    if (!updateButton) throw new Error("Expected the Harness install button.");
-    (updateButton.props as { readonly onClick: () => void }).onClick();
-    await flushPromises();
-
-    expect(testState.confirm).toHaveBeenCalledOnce();
-    expect(testState.installUpdate).toHaveBeenCalledOnce();
+    expect(open).toHaveBeenCalledWith("nightly-release-notes");
+    expect(preventDefault).not.toHaveBeenCalled();
   });
 
-  it("does not install a downloaded Harness update when confirmation is declined", async () => {
-    testState.desktopUpdate = {
-      ...desktopUpdateBase,
-      status: "downloaded",
-      availableVersion: "1.1.0",
-      downloadedVersion: "1.1.0",
-    } as const;
-    testState.confirm.mockReturnValue(false);
+  it("does not promote backward Tab", () => {
+    const open = vi.fn();
 
-    const output = SidebarUpdateControl();
-    const updateButton = findElement(output, (element) => element.type === "button");
+    openSidebarUpdateReleaseNotesPopoverOnForwardTab(
+      { key: "Tab", shiftKey: true },
+      { open },
+      "nightly-release-notes",
+    );
 
-    expect(updateButton).not.toBeNull();
-    if (!updateButton) throw new Error("Expected the Harness install button.");
-    (updateButton.props as { readonly onClick: () => void }).onClick();
-    await flushPromises();
-
-    expect(testState.confirm).toHaveBeenCalledOnce();
-    expect(testState.installUpdate).not.toHaveBeenCalled();
+    expect(open).not.toHaveBeenCalled();
   });
 });

@@ -58,7 +58,7 @@ const DesktopTritonAiApiKeyWriteOperation = Schema.Literals([
   "replace-key-file",
 ]);
 
-export class DesktopTritonAiApiKeyInputError extends Schema.TaggedErrorClass<DesktopTritonAiApiKeyInputError>()(
+export class DesktopTritonAiApiKeyInputError extends Schema.TaggedError<DesktopTritonAiApiKeyInputError>()(
   "DesktopTritonAiApiKeyInputError",
   {},
 ) {
@@ -67,7 +67,7 @@ export class DesktopTritonAiApiKeyInputError extends Schema.TaggedErrorClass<Des
   }
 }
 
-export class DesktopTritonAiApiKeyWriteError extends Schema.TaggedErrorClass<DesktopTritonAiApiKeyWriteError>()(
+export class DesktopTritonAiApiKeyWriteError extends Schema.TaggedError<DesktopTritonAiApiKeyWriteError>()(
   "DesktopTritonAiApiKeyWriteError",
   {
     operation: DesktopTritonAiApiKeyWriteOperation,
@@ -80,7 +80,7 @@ export class DesktopTritonAiApiKeyWriteError extends Schema.TaggedErrorClass<Des
   }
 }
 
-export class DesktopTritonAiApiKeyRejectedError extends Schema.TaggedErrorClass<DesktopTritonAiApiKeyRejectedError>()(
+export class DesktopTritonAiApiKeyRejectedError extends Schema.TaggedError<DesktopTritonAiApiKeyRejectedError>()(
   "DesktopTritonAiApiKeyRejectedError",
   { status: Schema.Int },
 ) {
@@ -102,7 +102,7 @@ const DesktopTritonAiApiKeyValidationFailureReason = Schema.Literals([
   "no-frontier-access",
 ]);
 
-export class DesktopTritonAiApiKeyValidationError extends Schema.TaggedErrorClass<DesktopTritonAiApiKeyValidationError>()(
+export class DesktopTritonAiApiKeyValidationError extends Schema.TaggedError<DesktopTritonAiApiKeyValidationError>()(
   "DesktopTritonAiApiKeyValidationError",
   {
     reason: DesktopTritonAiApiKeyValidationFailureReason,
@@ -130,7 +130,7 @@ export class DesktopTritonAiApiKeyValidationError extends Schema.TaggedErrorClas
       case "no-on-prem-access":
         return "This key is active, but it does not include access to on-prem models.";
       case "no-frontier-access":
-        return "This key is active, but it does not include access to frontier models.";
+        return "This key is active, but it does not include access to cloud models.";
     }
   }
 }
@@ -157,14 +157,14 @@ export function normalizeReplacementApiKey(raw: unknown): string | null {
   return apiKey;
 }
 
-export function normalizeReplacementApiKeys(raw: unknown): ReadonlyArray<string> | null {
+function normalizeReplacementApiKeys(raw: unknown): ReadonlyArray<string> | null {
   if (!Array.isArray(raw) || raw.length < 1 || raw.length > MAX_API_KEYS) return null;
   const normalized = raw.map(normalizeReplacementApiKey);
   if (normalized.some((apiKey) => apiKey === null)) return null;
   return [...new Set(normalized as ReadonlyArray<string>)];
 }
 
-export function normalizeCredentialBundle(
+function normalizeCredentialBundle(
   input: TritonAiCredentialBundle,
 ): TritonAiCredentialBundle | null {
   const sharedApiKey = normalizeReplacementApiKey(input.sharedApiKey);
@@ -535,16 +535,7 @@ export const replaceTritonAiCredentials = Effect.fn("desktop.tritonAiApiKey.repl
   },
 );
 
-// Compatibility wrappers retain the old one-key storage API for migrations and focused callers.
-export const readTritonAiApiKeyOverride = readTritonAiCredentialOverride.pipe(
-  Effect.map(
-    Option.map(
-      (credentials) =>
-        credentials.sharedApiKey ?? credentials.onPremApiKey ?? credentials.frontierApiKey ?? "",
-    ),
-  ),
-);
-
+// Retain the one-key replacement API for migration callers.
 export const replaceTritonAiApiKey = Effect.fn("desktop.tritonAiApiKey.replace")(function* (
   rawApiKey: unknown,
 ) {

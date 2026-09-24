@@ -2,6 +2,7 @@
 import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
+import * as NodeModule from "node:module";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 import * as NodeUtil from "node:util";
@@ -19,6 +20,7 @@ import { scopeIntegrationSecretStore } from "./IntegrationSecretStore.ts";
 import { validateIntegrationManifest } from "./manifest.ts";
 import { loadPluginSdkIntegration, PluginSdkQuarantineError } from "./pluginSdk/adapter.ts";
 import { acquireProductionRuntime, type ProductionRuntimeLease } from "./productionRuntime.ts";
+import { importPluginModule } from "./importPluginModule.ts";
 
 declare const __TRITONAI_BUILD_PLUGIN_COMPOSITION__: unknown;
 declare const __TRITONAI_BUILD_PLUGIN_CONFIGURATION__: unknown;
@@ -286,7 +288,7 @@ async function linkSnapshotRuntimeDependencies(
       await NodeFSP.mkdir(linkParent, { recursive: true, mode: 0o700 });
       createdDirectories.add(linkParent);
       const lease = await acquireProductionRuntime(
-        NodeURL.fileURLToPath(import.meta.resolve(`${dependency.name}/package.json`)),
+        NodeModule.createRequire(import.meta.url).resolve(`${dependency.name}/package.json`),
         dependency,
       );
       leases.push(lease);
@@ -525,7 +527,7 @@ async function loadProductionPackage(
   let retainSnapshot = false;
   try {
     const moduleUrl = NodeURL.pathToFileURL(NodePath.join(snapshot.root, "dist", "index.js")).href;
-    const loaded = (await import(moduleUrl)) as IntegrationPluginModule;
+    const loaded = (await importPluginModule(moduleUrl)) as IntegrationPluginModule;
     const exportedManifest = validateIntegrationManifest(loaded.manifest);
     if (!NodeUtil.isDeepStrictEqual(exportedManifest, packageManifest)) {
       throw new Error(`Built-in plugin ${plugin.id} exports do not match its composed manifest.`);

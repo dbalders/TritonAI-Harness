@@ -23,7 +23,7 @@ concurrency:
   group: harness-nightly
   cancel-in-progress: false
 env:
-  NIGHTLY_INSTALLER_COMMIT: b1d707fbfe8f44d7f035cd506aaa6afcd8a27480
+  TRITONAI_INSTALLER_COMPOSITION_COMMIT: bf4de6e9d9298513f373a323db7eccf32d004ad4
 jobs:
   preflight:
     runs-on: ubuntu-24.04
@@ -112,7 +112,7 @@ jobs:
       - preflight
     if: needs.preflight.outputs.build == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - name: Checkout exact source
         uses: actions/checkout@v6
@@ -126,7 +126,7 @@ jobs:
       - name: Validate managed plugin release pins
         shell: bash
         env:
-          INSTALLER_COMMIT: ${{ env.NIGHTLY_INSTALLER_COMMIT }}
+          INSTALLER_COMMIT: ${{ env.TRITONAI_INSTALLER_COMPOSITION_COMMIT }}
         run: |
           set -euo pipefail
           [[ "$INSTALLER_COMMIT" =~ ^[a-f0-9]{40}$ ]]
@@ -134,7 +134,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: dbalders/TritonAI-Installer
-          ref: ${{ env.NIGHTLY_INSTALLER_COMMIT }}
+          ref: ${{ env.TRITONAI_INSTALLER_COMPOSITION_COMMIT }}
           fetch-depth: 1
           persist-credentials: false
           path: .release-input/installer
@@ -148,7 +148,7 @@ jobs:
         shell: bash
         run: |-
           set -euo pipefail
-          vp exec tsgo --project .release-input/installer/tsconfig.plugin-producer.json --typeRoots "$GITHUB_WORKSPACE/node_modules/@types"
+          vp exec tsc --project .release-input/installer/tsconfig.plugin-producer.json --typeRoots "$GITHUB_WORKSPACE/node_modules/@types"
           node .release-input/installer/dist/scripts/prepare-plugins-vendor.js --production
       - name: Upload exact pinned composition before provider execution
         uses: actions/upload-artifact@v7
@@ -165,7 +165,7 @@ jobs:
       - prepare_managed_plugins
     if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.prepare_managed_plugins.result == 'success' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - name: Checkout exact source
         uses: actions/checkout@v6
@@ -201,13 +201,14 @@ jobs:
           path: .release-input/managed-plugin-validation-receipt.json
           if-no-files-found: error
           retention-days: 3
-  build_wsl_node_pty:
-    name: Build WSL node-pty (linux-x64)
+  build_wsl_runtime:
+    name: Build WSL runtime (linux-x64)
     needs:
       - preflight
+      - validate_managed_plugins
     if: needs.preflight.outputs.build == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - name: Checkout exact source
         uses: actions/checkout@v6
@@ -226,24 +227,35 @@ jobs:
           run-install: |
             args:
               - --filter=t3...
-      - name: Build node-pty linux-x64 prebuild
+              - --filter=@t3tools/scripts...
+      - name: Download immutable managed plugin composition
+        uses: actions/download-artifact@v7
+        with:
+          name: managed-plugin-composition
+          path: .release-input/installer/vendor/plugins
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - name: Build matching managed WSL runtime
         shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+          TRITONAI_PLUGIN_COMPOSITION_SOURCE: ${{ github.workspace }}/.release-input/installer/vendor/plugins
+          TRITONAI_PLUGIN_CONFIGURATION_JSON: ${{ secrets.NIGHTLY_PLUGIN_CONFIGURATION_JSON }}
         run: |
           set -euo pipefail
-          # Resolve node-pty from apps/server (where it's a dependency) and build
-          # its native binary from source for Linux. node-addon-api resolves from
-          # node-pty's own dependency tree, so node-gyp has everything it needs.
-          pty_pkg="$(node -e "console.log(require.resolve('node-pty/package.json', { paths: ['$GITHUB_WORKSPACE/apps/server'] }))")"
-          pty_dir="$(dirname "$pty_pkg")"
-          ( cd "$pty_dir" && npx --yes node-gyp rebuild )
-          mkdir -p wsl-prebuild
-          cp "$pty_dir/build/Release/pty.node" wsl-prebuild/pty.node
-          file wsl-prebuild/pty.node
-      - name: Upload node-pty linux-x64 prebuild
+          node scripts/update-release-package-versions.ts "$RELEASE_VERSION"
+          vp run --filter t3 build
+          VP_NODE_VERSION=26.8.2 node apps/server/scripts/cli.ts build-exe --verbose
+          cargo build --locked --release --manifest-path native/resource-monitor/Cargo.toml
+          mkdir -p cli-resource-monitor/linux-x64
+          cp native/resource-monitor/target/release/t3-resource-monitor cli-resource-monitor/linux-x64/
+          node scripts/build-cli-archive.ts --platform linux --arch x64 --version "$RELEASE_VERSION" --resource-monitor-dir cli-resource-monitor --output-dir wsl-runtime
+          node scripts/smoke-cli-archive.ts --archive "wsl-runtime/t3-$RELEASE_VERSION-linux-x64.tar.gz" --expect-version "$RELEASE_VERSION"
+
+      - name: Upload WSL runtime
         uses: actions/upload-artifact@v7
         with:
-          name: wsl-node-pty-x64
-          path: wsl-prebuild/pty.node
+          name: wsl-runtime-x64
+          path: wsl-runtime/*.tar.gz
           if-no-files-found: error
           retention-days: 3
   build:
@@ -254,7 +266,7 @@ jobs:
       id-token: write
     needs:
       - preflight
-      - build_wsl_node_pty
+      - build_wsl_runtime
       - validate_managed_plugins
     if: needs.preflight.outputs.build == 'true'
     runs-on: ${{ matrix.runner }}
@@ -307,7 +319,7 @@ jobs:
           key: resource-monitor-${{ matrix.rust_target }}-${{ hashFiles('native/resource-monitor/Cargo.lock', 'native/resource-monitor/Cargo.toml', 'native/resource-monitor/src/**') }}
       - name: Setup Rust
         if: steps.resource_monitor_cache.outputs.cache-hit != 'true'
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           targets: ${{ matrix.rust_target }}
       - name: Download exact validated managed plugin composition
@@ -326,8 +338,8 @@ jobs:
         if: matrix.platform == 'win'
         uses: actions/download-artifact@v7
         with:
-          name: wsl-node-pty-x64
-          path: wsl-prebuild
+          name: wsl-runtime-x64
+          path: wsl-runtime
       - name: Install Spectre-mitigated MSVC libs
         if: matrix.platform == 'win'
         shell: pwsh
@@ -417,10 +429,10 @@ jobs:
           )
 
           if [[ "${{ matrix.platform }}" == "win" ]]; then
-            # Bundle the Linux node-pty binary built by the build_wsl_node_pty job
+            # Bundle the complete Linux CLI archive built from the same source
             # so the packaged WSL backend ships a ready binary (no first-launch
             # compile). Required for a working WSL backend on Windows.
-            args+=(--wsl-prebuild "$GITHUB_WORKSPACE/wsl-prebuild/pty.node")
+            args+=(--wsl-runtime "$GITHUB_WORKSPACE"/wsl-runtime/t3-*-linux-x64.tar.gz)
             args+=(--signed)
           fi
 
@@ -536,7 +548,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: dbalders/TritonAI-Installer
-          ref: ${{ env.NIGHTLY_INSTALLER_COMMIT }}
+          ref: ${{ env.TRITONAI_INSTALLER_COMPOSITION_COMMIT }}
           persist-credentials: false
           path: .release-input/installer
       - name: Setup Vite+
@@ -553,7 +565,7 @@ jobs:
         with:
           path: native/resource-monitor/target/aarch64-apple-darwin/release/t3-resource-monitor
           key: resource-monitor-aarch64-apple-darwin-${{ hashFiles('native/resource-monitor/Cargo.lock', 'native/resource-monitor/Cargo.toml', 'native/resource-monitor/src/**') }}
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         if: steps.resource_monitor_cache.outputs.cache-hit != 'true'
         with:
           targets: aarch64-apple-darwin

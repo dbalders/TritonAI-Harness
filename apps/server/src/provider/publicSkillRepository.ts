@@ -24,7 +24,7 @@ import * as SchemaIssue from "effect/SchemaIssue";
 import * as Stream from "effect/Stream";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
-export const PUBLIC_SKILLS_REPOSITORY_URL = "https://github.com/dbalders/UCSD-Skills-Library";
+const PUBLIC_SKILLS_REPOSITORY_URL = "https://github.com/dbalders/UCSD-Skills-Library";
 const PUBLIC_SKILLS_API_URL = "https://api.github.com/repos/dbalders/UCSD-Skills-Library";
 const PUBLIC_SKILLS_RAW_URL = "https://raw.githubusercontent.com/dbalders/UCSD-Skills-Library";
 const PUBLIC_SKILLS_DEFAULT_BRANCH = "main";
@@ -708,8 +708,6 @@ export const make = Effect.fn("PublicSkillRepository.make")(function* (
 
   return PublicSkillRepository.of({ discoverCatalog, loadBundle });
 });
-
-export const layer = Layer.effect(PublicSkillRepository, make());
 
 const defaultRepository = Effect.runSync(Effect.cached(make()));
 

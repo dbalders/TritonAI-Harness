@@ -1,0 +1,10 @@
+--- a/package.json
++++ b/package.json
+@@ -123,6 +123,7 @@
+   "types": "./lib/index.d.ts",
+   "exports": {
+     ".": {
++      "types": "./lib/index.d.ts",
+       "import": "./dist/index.mjs",
+       "require": "./dist/index.cjs"
+     }

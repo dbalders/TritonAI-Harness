@@ -140,7 +140,7 @@ export interface AnalyticsServiceOptions {
   readonly shutdownTimeoutMs?: number;
 }
 
-export function serverOsFromNodePlatform(platform: string): ClientOs {
+function serverOsFromNodePlatform(platform: string): ClientOs {
   switch (platform) {
     case "darwin":
       return "macOS";
@@ -159,7 +159,7 @@ function positiveMilliseconds(value: number | undefined, fallback: number): numb
   return value !== undefined && Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
-export const makeWithOptions = (options: AnalyticsServiceOptions = {}) =>
+const makeWithOptions = (options: AnalyticsServiceOptions = {}) =>
   Effect.gen(function* () {
     const telemetryConfig = yield* TelemetryEnvConfig;
     const httpClient = yield* HttpClient.HttpClient;
@@ -330,7 +330,7 @@ export const makeWithOptions = (options: AnalyticsServiceOptions = {}) =>
     return AnalyticsService.of({ record, flush });
   });
 
-export const make = makeWithOptions();
+const make = makeWithOptions();
 
 export const layer = Layer.effect(AnalyticsService, make);
 
