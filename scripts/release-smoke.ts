@@ -434,7 +434,7 @@ try {
   );
   assertContains(
     upstreamSyncWorkflow,
-    "uses: voidzero-dev/setup-vp@v1",
+    "uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb",
     "Upstream sync must install the workspace Vite+ toolchain.",
   );
   assertContains(
