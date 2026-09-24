@@ -8,7 +8,7 @@ import * as Electron from "electron";
 
 const CONFIRM_BUTTON_INDEX = 1;
 
-export class ElectronDialogPickFolderError extends Schema.TaggedErrorClass<ElectronDialogPickFolderError>()(
+export class ElectronDialogPickFolderError extends Schema.TaggedError<ElectronDialogPickFolderError>()(
   "ElectronDialogPickFolderError",
   {
     ownerWindowId: Schema.NullOr(Schema.Number),
@@ -23,7 +23,7 @@ export class ElectronDialogPickFolderError extends Schema.TaggedErrorClass<Elect
   }
 }
 
-export class ElectronDialogPickFilesError extends Schema.TaggedErrorClass<ElectronDialogPickFilesError>()(
+export class ElectronDialogPickFilesError extends Schema.TaggedError<ElectronDialogPickFilesError>()(
   "ElectronDialogPickFilesError",
   {
     ownerWindowId: Schema.NullOr(Schema.Number),
@@ -38,7 +38,7 @@ export class ElectronDialogPickFilesError extends Schema.TaggedErrorClass<Electr
   }
 }
 
-export class ElectronDialogConfirmError extends Schema.TaggedErrorClass<ElectronDialogConfirmError>()(
+export class ElectronDialogConfirmError extends Schema.TaggedError<ElectronDialogConfirmError>()(
   "ElectronDialogConfirmError",
   {
     ownerWindowId: Schema.NullOr(Schema.Number),
@@ -52,7 +52,7 @@ export class ElectronDialogConfirmError extends Schema.TaggedErrorClass<Electron
   }
 }
 
-export class ElectronDialogShowMessageBoxError extends Schema.TaggedErrorClass<ElectronDialogShowMessageBoxError>()(
+export class ElectronDialogShowMessageBoxError extends Schema.TaggedError<ElectronDialogShowMessageBoxError>()(
   "ElectronDialogShowMessageBoxError",
   {
     type: Schema.NullOr(Schema.Literals(["none", "info", "error", "question", "warning"])),
@@ -69,7 +69,7 @@ export class ElectronDialogShowMessageBoxError extends Schema.TaggedErrorClass<E
   }
 }
 
-export class ElectronDialogShowErrorBoxError extends Schema.TaggedErrorClass<ElectronDialogShowErrorBoxError>()(
+export class ElectronDialogShowErrorBoxError extends Schema.TaggedError<ElectronDialogShowErrorBoxError>()(
   "ElectronDialogShowErrorBoxError",
   {
     titleLength: Schema.Number,
@@ -90,7 +90,6 @@ export const ElectronDialogError = Schema.Union([
   ElectronDialogShowErrorBoxError,
 ]);
 export type ElectronDialogError = typeof ElectronDialogError.Type;
-export const isElectronDialogError = Schema.is(ElectronDialogError);
 
 export interface ElectronDialogPickFolderInput {
   readonly owner: Option.Option<Electron.BrowserWindow>;
@@ -128,6 +127,7 @@ export class ElectronDialog extends Context.Service<
   }
 >()("@t3tools/desktop/electron/ElectronDialog") {}
 
+/** @public Service construction is part of the canonical Effect module API. */
 export const make = ElectronDialog.of({
   pickFolder: Effect.fn("desktop.electron.dialog.pickFolder")(function* (input) {
     const ownerWindowId = Option.match(input.owner, {

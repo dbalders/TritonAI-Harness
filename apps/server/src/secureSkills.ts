@@ -54,7 +54,7 @@ const decodeFeed = Schema.decodeUnknownEffect(SecureSkillFeed);
 const decodeUnknownJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
 const encodeManagedSkillManifest = Schema.encodeEffect(Schema.fromJsonString(ManagedSkillManifest));
 
-export class SecureSkillsSyncError extends Schema.TaggedErrorClass<SecureSkillsSyncError>()(
+export class SecureSkillsSyncError extends Schema.TaggedError<SecureSkillsSyncError>()(
   "SecureSkillsSyncError",
   { message: Schema.String, cause: Schema.optional(Schema.Defect()) },
 ) {}
@@ -244,7 +244,7 @@ export const readSecureSkillsResponseBody = Effect.fn("readSecureSkillsResponseB
   });
 });
 
-export const pollSecureSkillsOnce = Effect.fn("pollSecureSkillsOnce")(function* (options?: {
+const pollSecureSkillsOnce = Effect.fn("pollSecureSkillsOnce")(function* (options?: {
   readonly fetch?: FetchLike;
   readonly apiKey?: string;
 }) {

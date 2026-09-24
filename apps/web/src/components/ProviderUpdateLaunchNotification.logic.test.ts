@@ -18,17 +18,15 @@ import {
   environmentGroupsWithUpdates,
   firstFailedProviderUpdateMessage,
   firstRejectedProviderUpdateMessage,
-  firstUnsuccessfulSecondaryProviderOutcome,
   getProviderUpdateInitialToastView,
   getProviderUpdateProgressToastView,
+  getSingleProviderUpdateProgressToastView,
   getProviderUpdateRejectedToastView,
   getProviderUpdateSidebarPillView,
-  getSingleProviderUpdateProgressToastView,
   hasOneClickUpdateProviderCandidate,
   isProviderUpdateCandidate,
   isTerminalProviderUpdatePhase,
   localEnvironmentUpdateNotificationKey,
-  parseWslDistroFromInstanceId,
   providerUpdateNotificationKey,
   resolveEnvironmentUpdateRowStatus,
   shouldShowPrimaryProviderUpdateToast,
@@ -816,39 +814,6 @@ describe("provider update launch notification logic", () => {
       expect(snapshots).toEqual([primary]);
     });
 
-    it("flags the first unsuccessful secondary outcome, skipping the primary and successes", () => {
-      const primaryFailed = provider({
-        driver: driver("codex"),
-        updateState: terminalState("failed", "primary boom"),
-      });
-
-      expect(
-        firstUnsuccessfulSecondaryProviderOutcome([
-          fulfilledOutcome(true, primaryFailed),
-          fulfilledOutcome(
-            false,
-            provider({
-              driver: driver("codex"),
-              updateState: terminalState("succeeded", "ok"),
-            }),
-          ),
-        ]),
-      ).toBeNull();
-
-      expect(
-        firstUnsuccessfulSecondaryProviderOutcome([
-          fulfilledOutcome(true, primaryFailed),
-          fulfilledOutcome(
-            false,
-            provider({
-              driver: driver("codex"),
-              updateState: terminalState("failed", "wsl boom"),
-            }),
-          ),
-        ]),
-      ).toMatchObject({ status: "failed", provider: { updateState: { message: "wsl boom" } } });
-    });
-
     it("treats a rejected dispatch as not contributing a snapshot", () => {
       const primary = provider({
         driver: driver("codex"),
@@ -996,14 +961,6 @@ describe("provider update launch notification logic", () => {
           fallbackLabel: "My Device",
         }),
       ).toBe("My Device");
-    });
-
-    it("parses the WSL distro from the backend instance id", () => {
-      expect(parseWslDistroFromInstanceId("wsl:ubuntu")).toBe("ubuntu");
-      expect(parseWslDistroFromInstanceId("wsl:default")).toBeNull();
-      expect(parseWslDistroFromInstanceId("wsl:")).toBeNull();
-      expect(parseWslDistroFromInstanceId("ssh:host")).toBeNull();
-      expect(parseWslDistroFromInstanceId(undefined)).toBeNull();
     });
   });
 

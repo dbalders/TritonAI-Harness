@@ -10,7 +10,7 @@ import * as Schema from "effect/Schema";
 const DEFAULT_RETRY_COUNT = 200;
 const DEFAULT_RETRY_DELAY = "25 millis";
 
-export class SqliteProcessLockError extends Schema.TaggedErrorClass<SqliteProcessLockError>()(
+export class SqliteProcessLockError extends Schema.TaggedError<SqliteProcessLockError>()(
   "SqliteProcessLockError",
   {
     resource: Schema.String,
@@ -22,7 +22,7 @@ export class SqliteProcessLockError extends Schema.TaggedErrorClass<SqliteProces
   }
 }
 
-export class SqliteProcessLockTimeoutError extends Schema.TaggedErrorClass<SqliteProcessLockTimeoutError>()(
+export class SqliteProcessLockTimeoutError extends Schema.TaggedError<SqliteProcessLockTimeoutError>()(
   "SqliteProcessLockTimeoutError",
   {
     resource: Schema.String,

@@ -58,7 +58,7 @@ export interface CodexImageContextAnalysisInput {
   readonly signal?: AbortSignal;
 }
 
-export class CodexImageContextAnalysisError extends Schema.TaggedErrorClass<CodexImageContextAnalysisError>()(
+export class CodexImageContextAnalysisError extends Schema.TaggedError<CodexImageContextAnalysisError>()(
   "CodexImageContextAnalysisError",
   {
     detail: Schema.String,
@@ -70,7 +70,7 @@ export class CodexImageContextAnalysisError extends Schema.TaggedErrorClass<Code
   }
 }
 
-class ImageContextOutputError extends Schema.TaggedErrorClass<ImageContextOutputError>()(
+class ImageContextOutputError extends Schema.TaggedError<ImageContextOutputError>()(
   "ImageContextOutputError",
   {
     detail: Schema.String,

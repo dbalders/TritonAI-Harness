@@ -23,6 +23,7 @@ const makeEnvironment = (overrides: Record<string, unknown> = {}) =>
     isPackaged: true,
     isDevelopment: false,
     displayName: "T3 Code (Alpha)",
+    linuxDesktopEntryName: "tritonai-harness.desktop",
     linuxWmClass: "t3code",
     linuxApplicationsDir: "/home/alice/.local/share/applications",
     appImagePath: Option.some("/home/alice/Applications/T3-Code.AppImage"),
@@ -51,6 +52,7 @@ const makeHandlerLayer = (
     readonly environment?: Record<string, unknown>;
     readonly xdgMimeExitCode?: number;
     readonly writeError?: PlatformError.PlatformError;
+    readonly existingEntry?: string;
   } = {},
 ) =>
   DesktopLinuxUrlHandler.layer.pipe(
@@ -58,6 +60,7 @@ const makeHandlerLayer = (
       Layer.mergeAll(
         Layer.succeed(DesktopEnvironment.DesktopEnvironment, makeEnvironment(input.environment)),
         FileSystem.layerNoop({
+          readFileString: () => Effect.succeed(input.existingEntry ?? ""),
           makeDirectory: (path) =>
             Effect.sync(() => {
               recorded.directories.push(path);
@@ -128,7 +131,7 @@ describe("DesktopLinuxUrlHandler", () => {
     const writeError = new DesktopLinuxUrlHandler.DesktopLinuxUrlHandlerRegistrationError({
       step: "write-desktop-entry",
       scheme: "t3code",
-      desktopEntryPath: "/home/alice/.local/share/applications/t3code-url-handler.desktop",
+      desktopEntryPath: "/home/alice/.local/share/applications/tritonai-harness.desktop",
       cause: new Error("boom"),
     });
     assert.equal(
@@ -137,7 +140,7 @@ describe("DesktopLinuxUrlHandler", () => {
     );
     assert.equal(
       writeError.desktopEntryPath,
-      "/home/alice/.local/share/applications/t3code-url-handler.desktop",
+      "/home/alice/.local/share/applications/tritonai-harness.desktop",
     );
 
     const exitError = new DesktopLinuxUrlHandler.DesktopLinuxUrlHandlerRegistrationError({
@@ -161,7 +164,7 @@ describe("DesktopLinuxUrlHandler", () => {
       assert.equal(recorded.files.length, 1);
       assert.equal(
         recorded.files[0]?.path,
-        "/home/alice/.local/share/applications/t3code-url-handler.desktop",
+        "/home/alice/.local/share/applications/tritonai-harness.desktop",
       );
       assert.include(
         recorded.files[0]?.content,
@@ -171,7 +174,7 @@ describe("DesktopLinuxUrlHandler", () => {
       assert.deepEqual(recorded.commands, [
         {
           command: "xdg-mime",
-          args: ["default", "t3code-url-handler.desktop", "x-scheme-handler/t3code"],
+          args: ["default", "tritonai-harness.desktop", "x-scheme-handler/t3code"],
         },
       ]);
     });
@@ -184,6 +187,7 @@ describe("DesktopLinuxUrlHandler", () => {
       yield* runRegister(recorded, {
         environment: {
           appVersion: "0.3.4-nightly.20260912.12",
+          linuxDesktopEntryName: "tritonai-harness-nightly.desktop",
           appImagePath: Option.some("/home/alice/Applications/TritonAI-Nightly.AppImage"),
         },
       });
@@ -194,8 +198,8 @@ describe("DesktopLinuxUrlHandler", () => {
         recorded.files[1]?.content,
         "MimeType=x-scheme-handler/tritonai-harness-nightly;",
       );
-      assert.equal(recorded.commands[0]?.args[1], "t3code-url-handler.desktop");
-      assert.equal(recorded.commands[1]?.args[1], "tritonai-harness-nightly-url-handler.desktop");
+      assert.equal(recorded.commands[0]?.args[1], "tritonai-harness.desktop");
+      assert.equal(recorded.commands[1]?.args[1], "tritonai-harness-nightly.desktop");
     });
   });
 
@@ -212,19 +216,43 @@ describe("DesktopLinuxUrlHandler", () => {
     });
   });
 
-  it.effect("does nothing on other platforms or unpackaged builds", () => {
+  it.effect("does not rewrite the pre-ready entry while the portal can be reading it", () => {
+    const recorded = emptyRecording();
+
+    return Effect.gen(function* () {
+      yield* runRegister(recorded, {
+        existingEntry: DesktopLinuxUrlHandler.renderUrlHandlerDesktopEntry({
+          displayName: "T3 Code (Alpha)",
+          execTarget: "/home/alice/Applications/T3-Code.AppImage",
+          scheme: "t3code",
+        }),
+      });
+
+      assert.deepEqual(recorded.files, []);
+      assert.deepEqual(recorded.directories, []);
+      assert.equal(recorded.commands.length, 1);
+    });
+  });
+
+  it.effect("writes the portal identity without claiming the URL scheme in development", () => {
     const nonLinux = emptyRecording();
     const unpackaged = emptyRecording();
 
     return Effect.gen(function* () {
       yield* runRegister(nonLinux, { environment: { platform: "darwin" } });
-      yield* runRegister(unpackaged, { environment: { isPackaged: false } });
+      yield* runRegister(unpackaged, {
+        environment: {
+          isPackaged: false,
+          linuxDesktopEntryName: "tritonai-harness-dev.desktop",
+        },
+      });
 
-      for (const recorded of [nonLinux, unpackaged]) {
-        assert.deepEqual(recorded.directories, []);
-        assert.deepEqual(recorded.files, []);
-        assert.deepEqual(recorded.commands, []);
-      }
+      assert.deepEqual(nonLinux.files, []);
+      assert.equal(
+        unpackaged.files[0]?.path,
+        "/home/alice/.local/share/applications/tritonai-harness-dev.desktop",
+      );
+      assert.deepEqual(unpackaged.commands, []);
     });
   });
 
@@ -240,7 +268,7 @@ describe("DesktopLinuxUrlHandler", () => {
           module: "FileSystem",
           method: "writeFileString",
           description: "read-only filesystem",
-          pathOrDescriptor: "/home/alice/.local/share/applications/t3code-url-handler.desktop",
+          pathOrDescriptor: "/home/alice/.local/share/applications/tritonai-harness.desktop",
         }),
       });
 

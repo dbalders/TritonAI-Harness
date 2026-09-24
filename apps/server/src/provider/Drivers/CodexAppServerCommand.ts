@@ -177,7 +177,7 @@ function nativeCodexCandidates(
   ];
 }
 
-export function resolveNativeWindowsCodex(
+function resolveNativeWindowsCodex(
   command: string,
   architecture: NodeJS.Architecture,
   env: NodeJS.ProcessEnv,

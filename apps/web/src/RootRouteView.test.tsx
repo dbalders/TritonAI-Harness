@@ -1,3 +1,16 @@
+vi.mock("./components/desktop/SnapShotCoordinator", () => ({ SnapShotCoordinator: () => null }));
+vi.mock("./components/ProjectCloneToastCoordinator", () => ({
+  ProjectCloneToastCoordinator: () => null,
+}));
+vi.mock("./components/desktop/DesktopAppActivationCoordinator", () => ({
+  DesktopAppActivationCoordinator: () => null,
+}));
+vi.mock("./components/onboarding/FirstRunGate", () => ({
+  FirstRunGate: ({ children }: { children: React.ReactNode }) => children,
+}));
+vi.mock("./components/ThreadNotificationCoordinator", () => ({
+  ThreadNotificationCoordinator: () => null,
+}));
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, it, vi } from "vite-plus/test";
 

@@ -38,7 +38,7 @@ describe("integration provider tool contracts", () => {
     expect(integrationToolJsonSchema(definition)).toMatchObject({
       type: "object",
       properties: {
-        limit: { type: "integer", allOf: [{ minimum: 1, maximum: 25 }] },
+        limit: { type: "integer", minimum: 1, maximum: 25 },
       },
       additionalProperties: false,
     });

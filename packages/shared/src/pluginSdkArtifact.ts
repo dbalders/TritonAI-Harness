@@ -30,11 +30,14 @@ const DESCRIPTOR_KEYS = new Set([
   "schemas",
   "files",
 ]);
+const NODE24_TARGET = ">=24.13.1 <25";
+const NODE24_AND_NODE26_TARGET = ">=24.13.1 <25 || >=26.8.2 <27";
+type NodeRuntimeTarget = typeof NODE24_TARGET | typeof NODE24_AND_NODE26_TARGET;
 const TARGET = {
   architecture: "any",
   environments: ["electron-main", "server"],
   module: "esm",
-  node: ">=24.13.1 <25",
+  node: NODE24_TARGET,
   platform: "any",
   runtime: "node",
 } as const;
@@ -55,7 +58,10 @@ export interface PluginSdkArtifactDescriptor {
   readonly format: "tritonai.plugin-artifact/v1";
   readonly plugin: { readonly id: string; readonly version: string };
   readonly sdk: { readonly apiMajor: 1; readonly requiredHostContractLevel: number };
-  readonly target: typeof TARGET & { readonly nodeBuiltins: ReadonlyArray<string> };
+  readonly target: Omit<typeof TARGET, "node"> & {
+    readonly node: NodeRuntimeTarget;
+    readonly nodeBuiltins: ReadonlyArray<string>;
+  };
   readonly entry: typeof ENTRY_PATH;
   readonly manifest: typeof MANIFEST_PATH;
   readonly configurationSchema: string;
@@ -126,11 +132,17 @@ function assertSafePaths(paths: ReadonlyArray<string>): void {
   }
 }
 
-function nodeVersionSupported(version: string): boolean {
-  const match = /^(\d+)\.(\d+)\.(\d+)(?:-|$)/u.exec(version);
+function nodeVersionSupported(version: string, target: NodeRuntimeTarget): boolean {
+  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u.exec(version);
   if (!match) return false;
   const [major, minor, patch] = match.slice(1).map(Number) as [number, number, number];
-  return major === 24 && (minor > 13 || (minor === 13 && patch >= 1));
+  if (![major, minor, patch].every(Number.isSafeInteger)) return false;
+  if (major === 24) return minor > 13 || (minor === 13 && patch >= 1);
+  return (
+    target === NODE24_AND_NODE26_TARGET &&
+    major === 26 &&
+    (minor > 8 || (minor === 8 && patch >= 2))
+  );
 }
 
 // This inventories static ESM imports for reviewed application code. It is not a capability
@@ -223,6 +235,7 @@ export function verifyPluginSdkArtifact(
   const target = descriptor.target;
   assert(
     isRecord(target) &&
+      (target.node === NODE24_TARGET || target.node === NODE24_AND_NODE26_TARGET) &&
       canonicalJson({
         architecture: target.architecture,
         environments: target.environments,
@@ -230,7 +243,7 @@ export function verifyPluginSdkArtifact(
         node: target.node,
         platform: target.platform,
         runtime: target.runtime,
-      }) === canonicalJson(TARGET) &&
+      }) === canonicalJson({ ...TARGET, node: target.node }) &&
       Array.isArray(target.nodeBuiltins) &&
       target.nodeBuiltins.every(
         (specifier) => typeof specifier === "string" && specifier.startsWith("node:"),
@@ -243,8 +256,8 @@ export function verifyPluginSdkArtifact(
   const hostNodeVersion =
     options.hostNodeVersion === undefined ? process.versions.node : options.hostNodeVersion;
   assert(
-    hostNodeVersion === null || nodeVersionSupported(hostNodeVersion),
-    "Plugin SDK artifact requires Node 24.13.1 or newer within Node 24.",
+    hostNodeVersion === null || nodeVersionSupported(hostNodeVersion, target.node),
+    `Plugin SDK artifact requires Node ${target.node}.`,
   );
   assert(
     descriptor.entry === ENTRY_PATH && descriptor.manifest === MANIFEST_PATH,
@@ -332,7 +345,7 @@ export function verifyPluginSdkArtifact(
     format: "tritonai.plugin-artifact/v1",
     plugin: { id: sdkManifest.id, version: sdkManifest.version },
     sdk: sdkManifest.sdk,
-    target: { ...TARGET, nodeBuiltins: module.nodeBuiltins },
+    target: { ...TARGET, node: target.node, nodeBuiltins: module.nodeBuiltins },
     entry: ENTRY_PATH,
     manifest: MANIFEST_PATH,
     configurationSchema: sha256(canonicalJson(sdkManifest.configurationSchema)),

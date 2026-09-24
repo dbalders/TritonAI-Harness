@@ -130,7 +130,7 @@ const backendProcessContextSchema = {
   httpBaseUrl: Schema.URL,
 };
 
-export class BackendReadinessTimeoutError extends Schema.TaggedErrorClass<BackendReadinessTimeoutError>()(
+export class BackendReadinessTimeoutError extends Schema.TaggedError<BackendReadinessTimeoutError>()(
   "BackendReadinessTimeoutError",
   {
     ...backendProcessContextSchema,
@@ -144,7 +144,7 @@ export class BackendReadinessTimeoutError extends Schema.TaggedErrorClass<Backen
   }
 }
 
-export class BackendProcessBootstrapEncodeError extends Schema.TaggedErrorClass<BackendProcessBootstrapEncodeError>()(
+export class BackendProcessBootstrapEncodeError extends Schema.TaggedError<BackendProcessBootstrapEncodeError>()(
   "BackendProcessBootstrapEncodeError",
   {
     ...backendProcessContextSchema,
@@ -156,7 +156,7 @@ export class BackendProcessBootstrapEncodeError extends Schema.TaggedErrorClass<
   }
 }
 
-export class BackendProcessSpawnError extends Schema.TaggedErrorClass<BackendProcessSpawnError>()(
+export class BackendProcessSpawnError extends Schema.TaggedError<BackendProcessSpawnError>()(
   "BackendProcessSpawnError",
   {
     ...backendProcessContextSchema,
@@ -168,7 +168,7 @@ export class BackendProcessSpawnError extends Schema.TaggedErrorClass<BackendPro
   }
 }
 
-export class BackendProcessOutputReadError extends Schema.TaggedErrorClass<BackendProcessOutputReadError>()(
+export class BackendProcessOutputReadError extends Schema.TaggedError<BackendProcessOutputReadError>()(
   "BackendProcessOutputReadError",
   {
     ...backendProcessContextSchema,
@@ -182,7 +182,7 @@ export class BackendProcessOutputReadError extends Schema.TaggedErrorClass<Backe
   }
 }
 
-export class BackendProcessOutputHandlingError extends Schema.TaggedErrorClass<BackendProcessOutputHandlingError>()(
+export class BackendProcessOutputHandlingError extends Schema.TaggedError<BackendProcessOutputHandlingError>()(
   "BackendProcessOutputHandlingError",
   {
     ...backendProcessContextSchema,
@@ -201,7 +201,7 @@ export type BackendProcessOutputError =
   | BackendProcessOutputReadError
   | BackendProcessOutputHandlingError;
 
-export class BackendProcessExitStatusError extends Schema.TaggedErrorClass<BackendProcessExitStatusError>()(
+export class BackendProcessExitStatusError extends Schema.TaggedError<BackendProcessExitStatusError>()(
   "BackendProcessExitStatusError",
   {
     ...backendProcessContextSchema,
@@ -681,15 +681,13 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
     Ref.update(state, withActiveRun(runId, f));
 
   const snapshot = Ref.get(state).pipe(
-    Effect.map(
-      (current): DesktopBackendSnapshot => ({
-        desiredRunning: current.desiredRunning,
-        ready: current.ready,
-        activePid: activePid(current.active),
-        restartAttempt: current.restartAttempt,
-        restartScheduled: Option.isSome(current.restartFiber),
-      }),
-    ),
+    Effect.map((current): DesktopBackendSnapshot => ({
+      desiredRunning: current.desiredRunning,
+      ready: current.ready,
+      activePid: activePid(current.active),
+      restartAttempt: current.restartAttempt,
+      restartScheduled: Option.isSome(current.restartFiber),
+    })),
   );
   const currentConfig = Ref.get(state).pipe(Effect.map((current) => current.config));
 

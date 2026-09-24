@@ -14,17 +14,11 @@ import {
   updateTritonAiManagedCodex,
 } from "../provider/managedCodexUpdate.ts";
 
-export const managedCodexUpdateCommand: Command.Command<
-  "managed-codex-update",
-  { readonly binaryPath: string },
-  {},
-  ManagedCodexUpdateError | PlatformError.PlatformError,
-  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path | Scope.Scope
-> = Command.make(managedCodexUpdateCommandName, {
+export const managedCodexUpdateCommand = Command.make(managedCodexUpdateCommandName, {
   binaryPath: Argument.string("binary-path"),
 }).pipe(
   Command.withDescription("Update the TritonAI-managed Codex runtime."),
-  Command.withHidden,
+  Command.unlisted,
   Command.withHandler(({ binaryPath }) =>
     Effect.gen(function* () {
       const processRunner = yield* ProcessRunner.make();

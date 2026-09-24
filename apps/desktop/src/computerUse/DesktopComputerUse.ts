@@ -43,7 +43,7 @@ type EmbeddedHost = ReturnType<typeof EmbeddedCuaDriverHost.withOptions> & {
   readonly uniffiDestroy?: () => void;
 };
 
-class DesktopComputerUseRuntimeError extends Schema.TaggedErrorClass<DesktopComputerUseRuntimeError>()(
+class DesktopComputerUseRuntimeError extends Schema.TaggedError<DesktopComputerUseRuntimeError>()(
   "DesktopComputerUseRuntimeError",
   {
     operation: Schema.Literals([
@@ -126,7 +126,7 @@ export class DesktopComputerUse extends Context.Service<
   }
 >()("@t3tools/desktop/computerUse/DesktopComputerUse") {}
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const fileSystem = yield* FileSystem.FileSystem;
   const connectionRef = yield* Ref.make<EmbeddedDriverConnection | undefined>(undefined);

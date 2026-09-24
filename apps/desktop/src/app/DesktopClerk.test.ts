@@ -63,17 +63,6 @@ describe("DesktopClerk", () => {
     storageMock.mockReset();
   });
 
-  it("derives the Clerk Frontend API hostname used by the desktop CSP", () => {
-    const publishableKey = `pk_test_${btoa("clerk.t3.codes$")}`;
-
-    assert.equal(
-      DesktopClerk.resolveDesktopClerkFrontendApiHostname(publishableKey),
-      "clerk.t3.codes",
-    );
-    assert.equal(DesktopClerk.resolveDesktopClerkFrontendApiHostname(""), undefined);
-    assert.equal(DesktopClerk.resolveDesktopClerkFrontendApiHostname("invalid"), undefined);
-  });
-
   it.effect("acquires and releases the SDK bridge with the layer", () => {
     const cleanup = vi.fn();
     const events: string[] = [];

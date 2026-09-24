@@ -94,7 +94,7 @@ function createFixture(): Fixture {
   git(repo, "switch", "main");
 
   writeExecutable(
-    NodePath.join(fakeBin, "corepack"),
+    NodePath.join(fakeBin, "vp"),
     `#!/usr/bin/env node
 const fs = require("node:fs");
 const path = require("node:path");
@@ -115,7 +115,7 @@ const record = {
 };
 fs.writeFileSync(path.join(trace, "install.json"), JSON.stringify(record));
 fs.appendFileSync(path.join(trace, "order"), "install\\n");
-const expected = ["pnpm", "install", "--frozen-lockfile"];
+const expected = ["install", "--frozen-lockfile"];
 if (JSON.stringify(record.args) !== JSON.stringify(expected) || record.hadNodeModules ||
     !record.lockfileIsUpstream || !record.packageIsUpstream || record.agentCommandWasPresent ||
     record.awsKeyWasPresent || record.secretWasPresent) {
@@ -214,7 +214,7 @@ it("installs a clean merged worktree before checks and review", () => {
     const install = JSON.parse(
       NodeFS.readFileSync(NodePath.join(fixture.trace, "install.json"), "utf8"),
     ) as InstallTrace;
-    assert.deepStrictEqual(install.args, ["pnpm", "install", "--frozen-lockfile"]);
+    assert.deepStrictEqual(install.args, ["install", "--frozen-lockfile"]);
     assert.equal(install.hadNodeModules, false);
     assert.equal(install.packageIsUpstream, true);
     assert.equal(install.lockfileIsUpstream, true);

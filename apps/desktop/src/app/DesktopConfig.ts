@@ -1,4 +1,5 @@
 import { LEGACY_T3CODE_HOME_ENV, TRITONAI_HOME_ENV } from "@t3tools/contracts";
+import { OtlpHeadersFromString, OtlpProtocol } from "@t3tools/shared/observability";
 import * as Config from "effect/Config";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Option from "effect/Option";
@@ -55,6 +56,10 @@ export const DesktopConfig = Config.all({
   otlpTracesUrl: trimmedString("T3CODE_OTLP_TRACES_URL"),
   otlpExportIntervalMs: Config.int("T3CODE_OTLP_EXPORT_INTERVAL_MS").pipe(
     Config.withDefault(10_000),
+  ),
+  otlpHeaders: Config.schema(OtlpHeadersFromString, "T3CODE_OTLP_HEADERS").pipe(Config.option),
+  otlpProtocol: Config.schema(OtlpProtocol, "T3CODE_OTLP_PROTOCOL").pipe(
+    Config.withDefault("http/json"),
   ),
   appImagePath: trimmedString("APPIMAGE"),
   disableAutoUpdate: optionalBoolean("T3CODE_DISABLE_AUTO_UPDATE"),

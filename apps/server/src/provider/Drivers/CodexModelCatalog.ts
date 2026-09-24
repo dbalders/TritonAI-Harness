@@ -151,7 +151,7 @@ export function buildTritonAiCodexModelCatalog(
   return `${JSON.stringify({ ...parsed, models: mergedModels }, null, 2)}\n`;
 }
 
-export class CodexModelCatalogError extends Schema.TaggedErrorClass<CodexModelCatalogError>()(
+export class CodexModelCatalogError extends Schema.TaggedError<CodexModelCatalogError>()(
   "CodexModelCatalogError",
   {
     operation: Schema.Literals(["readBundledCatalog", "buildCatalog", "writeCatalog"]),

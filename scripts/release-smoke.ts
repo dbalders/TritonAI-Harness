@@ -434,12 +434,12 @@ try {
   );
   assertContains(
     upstreamSyncWorkflow,
-    "corepack enable pnpm",
-    "Upstream sync must enable the package.json-pinned pnpm through Corepack.",
+    "uses: voidzero-dev/setup-vp@v1",
+    "Upstream sync must install the workspace Vite+ toolchain.",
   );
   assertContains(
     upstreamSyncWorkflow,
-    "pnpm install --frozen-lockfile",
+    "vp install --frozen-lockfile",
     "Upstream sync must install from the frozen pnpm lockfile.",
   );
   const upstreamSyncScript = NodeFS.readFileSync(
@@ -448,7 +448,7 @@ try {
   );
   assertContains(
     upstreamSyncScript,
-    '["pnpm", "install", "--frozen-lockfile"]',
+    'run("vp", ["install", "--frozen-lockfile"]',
     "The merged upstream worktree must install from its own frozen pnpm lockfile.",
   );
   assertInOrder(
@@ -507,7 +507,7 @@ try {
   );
   assertContains(
     releaseWorkflow,
-    "needs: [preflight, build_wsl_node_pty, validate_managed_plugins]",
+    "needs: [preflight, build_wsl_runtime, validate_managed_plugins]",
     "Release artifact builds must depend on isolated managed plugin validation.",
   );
   assertContains(

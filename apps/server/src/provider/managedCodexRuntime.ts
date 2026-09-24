@@ -16,7 +16,7 @@ const decodePackage = Schema.decodeUnknownEffect(
   ),
 );
 
-export class ManagedCodexRuntimeError extends Schema.TaggedErrorClass<ManagedCodexRuntimeError>()(
+export class ManagedCodexRuntimeError extends Schema.TaggedError<ManagedCodexRuntimeError>()(
   "ManagedCodexRuntimeError",
   { binaryPath: Schema.String },
 ) {

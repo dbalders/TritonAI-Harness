@@ -2,7 +2,7 @@ export const EFFECT_HOST_PEER_RANGE = ">=4.0.0-beta.78 <4.0.0";
 
 const MINIMUM_EFFECT_BETA = 78;
 const LEGACY_EFFECT_BUILD_VERSION = "4.0.0-beta.78";
-const EFFECT_BETA_VERSION = /^4\.0\.0-beta\.(\d+)$/u;
+const EFFECT_PRERELEASE_VERSION = /^4\.0\.0-(beta|rc)\.(0|[1-9]\d*)$/u;
 
 export interface PluginPackageRuntimeMetadata {
   readonly dependencies?: unknown;
@@ -26,12 +26,11 @@ function dependencyRecord(value: unknown, label: string): Readonly<Record<string
   return value as Readonly<Record<string, unknown>>;
 }
 
-function effectBetaNumber(version: unknown): number | null {
-  if (typeof version !== "string") return null;
-  const match = EFFECT_BETA_VERSION.exec(version);
-  if (!match?.[1]) return null;
-  const beta = Number(match[1]);
-  return Number.isSafeInteger(beta) ? beta : null;
+function isSupportedEffectHostVersion(version: string): boolean {
+  const match = EFFECT_PRERELEASE_VERSION.exec(version);
+  if (!match) return false;
+  const revision = Number(match[2]);
+  return Number.isSafeInteger(revision) && (match[1] === "rc" || revision >= MINIMUM_EFFECT_BETA);
 }
 
 /**
@@ -46,8 +45,7 @@ export function resolvePluginHostRuntimeDependencies(
   packageJson: PluginPackageRuntimeMetadata,
   hostEffectVersion: string,
 ): ReadonlyArray<PluginHostRuntimeDependency> {
-  const hostBeta = effectBetaNumber(hostEffectVersion);
-  if (hostBeta === null || hostBeta < MINIMUM_EFFECT_BETA) {
+  if (!isSupportedEffectHostVersion(hostEffectVersion)) {
     throw new Error(
       `Harness Effect ${hostEffectVersion} is outside the managed plugin host-runtime contract.`,
     );
@@ -69,8 +67,8 @@ export function resolvePluginHostRuntimeDependencies(
 
   const dependencies = dependencyRecord(packageJson.dependencies, "dependencies");
   const peerDependencies = dependencyRecord(packageJson.peerDependencies, "peerDependencies");
-  const dependencyNames = Object.keys(dependencies).toSorted();
-  const peerNames = Object.keys(peerDependencies).toSorted();
+  const dependencyNames = Object.keys(dependencies).sort();
+  const peerNames = Object.keys(peerDependencies).sort();
 
   if (dependencyNames.length === 1 && dependencyNames[0] === "effect" && peerNames.length === 0) {
     if (dependencies.effect !== LEGACY_EFFECT_BUILD_VERSION) {

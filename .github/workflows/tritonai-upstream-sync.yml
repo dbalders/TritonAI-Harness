@@ -57,19 +57,15 @@ jobs:
           git fetch --prune origin +refs/heads/vendor/t3code-main:refs/remotes/origin/vendor/t3code-main || true
           git push origin refs/remotes/upstream/main:refs/heads/vendor/t3code-main --force-with-lease
 
-      - name: Setup Bun runtime
-        uses: oven-sh/setup-bun@v2
-
-      - name: Setup Node
-        uses: actions/setup-node@v6
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
         with:
           node-version-file: package.json
+          cache: true
+          run-install: false
 
-      - name: Enable pnpm
-        run: corepack enable pnpm
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+      - name: Install frozen dependencies
+        run: vp install --frozen-lockfile
 
       - name: Sync and review upstream
         env:
@@ -84,7 +80,7 @@ jobs:
           TRITONAI_SYNC_UPSTREAM_REMOTE: upstream
           TRITONAI_SYNC_UPSTREAM_URL: https://github.com/pingdotgg/t3code.git
           TRITONAI_SYNC_UPSTREAM_BRANCH: main
-          TRITONAI_SYNC_CHECKS: ${{ vars.TRITONAI_SYNC_CHECKS || 'bun run typecheck && bun run test' }}
+          TRITONAI_SYNC_CHECKS: ${{ vars.TRITONAI_SYNC_CHECKS || 'vp check && vp run typecheck && vp test' }}
           TRITONAI_SYNC_AGENT_COMMAND: ${{ secrets.TRITONAI_SYNC_AGENT_COMMAND }}
           TRITONAI_SYNC_AGENT_CAN_EDIT: ${{ vars.TRITONAI_SYNC_AGENT_CAN_EDIT || '0' }}
           TRITONAI_SYNC_AGENT_SECRET_ENV_ALLOWLIST: ${{ vars.TRITONAI_SYNC_AGENT_SECRET_ENV_ALLOWLIST || 'CODEX_HOME,TRITONAI_HOME,TRITONAI_API_KEY' }}

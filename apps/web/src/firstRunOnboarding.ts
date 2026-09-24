@@ -47,14 +47,6 @@ const EMPTY_SHELL_STATE: EnvironmentShellState = {
 };
 const EMPTY_SHELL_STATE_ATOM = Atom.make(EMPTY_SHELL_STATE);
 
-export {
-  TRITONAI_FIRST_RUN_PROMPT,
-  TRITONAI_FIRST_RUN_WORKSPACE,
-  isTritonAiCodeBrand,
-  isTritonAiWorkspacePath,
-  resolveTritonAiFirstRunWorkspacePath,
-};
-
 export function hasPriorProjectOrConversationState(input: {
   projectCount: number;
   nonOnboardingProjectCount: number;

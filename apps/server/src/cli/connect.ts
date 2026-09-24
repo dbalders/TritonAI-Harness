@@ -19,7 +19,6 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as References from "effect/References";
 import * as Schema from "effect/Schema";
-import * as Terminal from "effect/Terminal";
 import { Command, Flag, GlobalFlag, Prompt } from "effect/unstable/cli";
 import {
   FetchHttpClient,
@@ -33,6 +32,7 @@ import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as CliState from "../cloud/CliState.ts";
 import * as CliTokenManager from "../cloud/CliTokenManager.ts";
+import { filterRelayResponse } from "../cloud/relayResponse.ts";
 import {
   CLOUD_LINKED_USER_ID,
   isAgentActivityPublishingEnabledValue,
@@ -56,13 +56,14 @@ const jsonFlag = Flag.boolean("json").pipe(
 const isCloudCliTokenManagerError = Schema.is(CliTokenManager.CloudCliTokenManagerError);
 
 const headlessFlag = Flag.boolean("headless").pipe(
-  Flag.withDescription("Authorize without a local browser using out-of-band OAuth."),
+  Flag.withDescription("Authorize without a local browser using the OAuth device flow."),
   Flag.withDefault(false),
 );
 
 /**
  * Inside an SSH session there is no local browser to complete the loopback
- * OAuth callback, so out-of-band OAuth is the only flow that can work.
+ * OAuth callback, so the device authorization grant is the only flow that
+ * can work.
  */
 export const headlessSessionConfig = Config.all({
   sshConnection: Config.string("SSH_CONNECTION").pipe(Config.option),
@@ -71,20 +72,21 @@ export const headlessSessionConfig = Config.all({
   Config.map(({ sshConnection, sshTty }) => Option.isSome(sshConnection) || Option.isSome(sshTty)),
 );
 
-const promptForOutOfBandOAuthCode = Effect.fn("cloud.cli.prompt_for_out_of_band_oauth_code")(
-  function* ({ authorizeUrl, validate }: CliTokenManager.OutOfBandOAuthPromptInput) {
-    yield* Console.log(formatHeadlessAuthorizationPrompt(authorizeUrl));
-    return yield* Prompt.run(Prompt.text({ message: "Authorization code", validate }));
-  },
-);
+const showDeviceAuthorizationPrompt = (prompt: CliTokenManager.DeviceAuthorizationPrompt) =>
+  Console.log(formatDeviceAuthorizationPrompt(prompt));
 
-export function formatHeadlessAuthorizationPrompt(authorizeUrl: string): string {
+function formatDeviceAuthorizationPrompt(
+  prompt: CliTokenManager.DeviceAuthorizationPrompt,
+): string {
+  const minutes = Math.max(1, Math.round(Duration.toMinutes(prompt.expiresIn)));
   return [
     "Headless authorization",
     "Open this URL on a device with a browser:",
-    `  ${authorizeUrl}`,
+    `  ${prompt.verificationUriComplete ?? prompt.verificationUri}`,
     "",
-    "After signing in, return here and enter the code shown in your browser.",
+    `Confirm this code when asked: ${prompt.userCode}`,
+    "",
+    `Waiting for approval (expires in ${minutes} min). Press Ctrl+C to cancel.`,
   ].join("\n");
 }
 
@@ -102,7 +104,7 @@ const authorizeCli = Effect.fn("cloud.cli.authorize")(function* (options: {
     yield* Console.log("\nHeadless mode enabled. A new authorization link is ready below.");
   }
   // A stored credential whose refresh fails (revoked, expired grant) must
-  // fall through to a fresh out-of-band authorization, not dead-end the command.
+  // fall through to a fresh device authorization, not dead-end the command.
   const existing = yield* tokens.getExisting.pipe(
     Effect.catchTag("CloudCliCredentialRefreshError", () =>
       Console.log(
@@ -113,13 +115,11 @@ const authorizeCli = Effect.fn("cloud.cli.authorize")(function* (options: {
   if (Option.isSome(existing)) {
     return existing.value.identity ?? null;
   }
-  const { token, identity } = yield* CliTokenManager.outOfBandOAuthLogin(
-    promptForOutOfBandOAuthCode,
+  const { token, identity } = yield* CliTokenManager.deviceAuthorizationLogin(
+    showDeviceAuthorizationPrompt,
   ).pipe(
     Effect.mapError((cause) =>
-      // Ctrl-C / EOF at the prompt is a QuitError; let it propagate so the CLI
-      // cancels quietly instead of dumping an authorization error.
-      Terminal.isQuitError(cause) || isCloudCliTokenManagerError(cause)
+      isCloudCliTokenManagerError(cause)
         ? cause
         : new CliTokenManager.CloudCliAuthorizationError({ cause }),
     ),
@@ -134,10 +134,6 @@ function bytesToString(value: Uint8Array): string {
 
 function stringToBytes(value: string): Uint8Array {
   return new TextEncoder().encode(value);
-}
-
-export function isPublishAgentActivityEnabledValue(value: string | null): boolean {
-  return isAgentActivityPublishingEnabledValue(value);
 }
 
 interface CloudCliStatus {
@@ -201,6 +197,8 @@ function formatCloudStatus(status: CloudCliStatus, options?: { readonly json?: b
     `  Relay: ${status.relayUrl ?? "not provisioned"}`,
     `  Publish agent activity: ${status.publishAgentActivity ? "enabled" : "disabled"}`,
     ...formatRelayClientStatus(status.relayClient),
+    "",
+    "This is saved setup, not a live connection check. Check the background service with `t3 service status`.",
     ...(nextStep ? ["", `Next: ${nextStep}`] : []),
   ].join("\n");
 }
@@ -339,7 +337,7 @@ const unlinkRelayEnvironment = Effect.fn("cloud.cli.unlink_relay_environment")(f
   ).pipe(
     HttpClientRequest.bearerToken(token.value.accessToken),
     httpClient.execute,
-    Effect.flatMap(HttpClientResponse.filterStatusOk),
+    Effect.flatMap(filterRelayResponse),
     Effect.flatMap(HttpClientResponse.schemaBodyJson(RelayOkResponse)),
     withRelayClientTracing,
   );
@@ -451,7 +449,7 @@ const runCloudCommand = Effect.fn("cloud.cli.run_cloud_command")(function* <A, E
 
 const connectedAs = (identity: string | null): string => (identity ? ` as ${identity}` : "");
 
-export function formatRelayClientReady(version: string): string {
+function formatRelayClientReady(version: string): string {
   return `✓ Relay client ready · cloudflared ${version}`;
 }
 
@@ -560,7 +558,7 @@ const connectStatusCommand = Command.make("status", {
           linked: Option.isSome(cloudUserId),
           cloudUserId: Option.isSome(cloudUserId) ? bytesToString(cloudUserId.value) : null,
           relayUrl: Option.isSome(relayUrl) ? bytesToString(relayUrl.value) : null,
-          publishAgentActivity: isPublishAgentActivityEnabledValue(
+          publishAgentActivity: isAgentActivityPublishingEnabledValue(
             Option.isSome(publishAgentActivity) ? bytesToString(publishAgentActivity.value) : null,
           ),
           relayClient: executable,
@@ -679,8 +677,9 @@ export const connectCommand = Command.make("connect", {
         // Show which account was linked so an unexpected identity (an
         // authorization code for a different account) is visible before the
         // machine is brought online.
-        yield* Console.log(`✓ Connected${connectedAs(linked.identity)}`);
+        yield* Console.log(`✓ Authorized${connectedAs(linked.identity)}`);
 
+        const serveCommand = yield* resolveCliCommand("serve");
         yield* Console.log(
           "\nNext\n  Start the TritonAI Harness server through its approved managed installation to make this machine reachable.",
         );

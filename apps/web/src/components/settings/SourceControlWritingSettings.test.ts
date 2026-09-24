@@ -37,8 +37,28 @@ vi.mock("@effect/atom-react", () => ({
 
 vi.mock("../../hooks/useSettings", () => ({
   usePrimarySettings: () => componentState.settings,
+  usePrimarySettingsAvailable: () => true,
   useUpdatePrimarySettings: () => componentState.updateSettings,
 }));
+
+vi.mock("./useScopedSettings", () => ({
+  useScopedSettings: () => componentState.settings,
+  useUpdateScopedSettings: () => componentState.updateSettings,
+  useScopedSettingsMixed: () => false,
+  useClearScopedSettings: () => vi.fn(),
+  useClearProjectOverrides: () => vi.fn(),
+  useScopedSettingSource: () => ({ kind: "environment" }),
+}));
+vi.mock("./SettingsScopeContext", () => ({
+  useSettingsScope: () => ({
+    environment: { environmentId: "env", serverConfig: { providers: componentState.providers } },
+    connectedEnvironments: [{}],
+    targets: [{ settings: componentState.settings }],
+  }),
+  useOptionalSettingsScope: () => null,
+}));
+vi.mock("./useScopedModelAvailability", () => ({ useScopedModelDisabledReason: () => undefined }));
+vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn() }));
 
 vi.mock("../chat/ProviderModelPicker", async () => {
   const { createElement: createMockElement } = await import("react");

@@ -74,7 +74,7 @@ export interface McpSessionRegistryOptions {
  *
  * The bound matters because `/mcp` is mounted outside the environment auth
  * stack and is reachable on whatever host the server binds to, so this token is
- * the only thing guarding the preview toolkit on a remote-reachable server.
+ * the only thing guarding the `t3-code` toolkits on a remote-reachable server.
  */
 const DEFAULT_LIVENESS_WINDOW_MS = 30 * 60 * 1_000;
 
@@ -152,7 +152,10 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
         threadId: ThreadId.make(request.threadId),
         providerSessionId,
         providerInstanceId: ProviderInstanceId.make(request.providerInstanceId),
-        capabilities: new Set(request.capabilities),
+        capabilities: new Set<McpInvocationContext.McpCapability>([
+          "pull-requests",
+          ...request.capabilities,
+        ]),
         issuedAt,
         expiresAt,
       };
@@ -169,6 +172,7 @@ const makeWithOptions = Effect.fn("McpSessionRegistry.make")(function* (
           providerInstanceId: scope.providerInstanceId,
           endpoint,
           authorizationHeader: `Bearer ${rawToken}`,
+          capabilities: scope.capabilities,
         },
         expiresAt,
       };

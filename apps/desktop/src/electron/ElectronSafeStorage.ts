@@ -9,7 +9,7 @@ const electronSafeStorageErrorFields = {
   cause: Schema.Defect(),
 };
 
-export class ElectronSafeStorageAvailabilityError extends Schema.TaggedErrorClass<ElectronSafeStorageAvailabilityError>()(
+export class ElectronSafeStorageAvailabilityError extends Schema.TaggedError<ElectronSafeStorageAvailabilityError>()(
   "ElectronSafeStorageAvailabilityError",
   {
     ...electronSafeStorageErrorFields,
@@ -20,7 +20,7 @@ export class ElectronSafeStorageAvailabilityError extends Schema.TaggedErrorClas
   }
 }
 
-export class ElectronSafeStorageEncryptError extends Schema.TaggedErrorClass<ElectronSafeStorageEncryptError>()(
+export class ElectronSafeStorageEncryptError extends Schema.TaggedError<ElectronSafeStorageEncryptError>()(
   "ElectronSafeStorageEncryptError",
   {
     ...electronSafeStorageErrorFields,
@@ -31,7 +31,7 @@ export class ElectronSafeStorageEncryptError extends Schema.TaggedErrorClass<Ele
   }
 }
 
-export class ElectronSafeStorageDecryptError extends Schema.TaggedErrorClass<ElectronSafeStorageDecryptError>()(
+export class ElectronSafeStorageDecryptError extends Schema.TaggedError<ElectronSafeStorageDecryptError>()(
   "ElectronSafeStorageDecryptError",
   {
     ...electronSafeStorageErrorFields,
@@ -48,7 +48,6 @@ export const ElectronSafeStorageError = Schema.Union([
   ElectronSafeStorageDecryptError,
 ]);
 export type ElectronSafeStorageError = typeof ElectronSafeStorageError.Type;
-export const isElectronSafeStorageError = Schema.is(ElectronSafeStorageError);
 
 export type ElectronSafeStorageBackend =
   | "basic_text"
@@ -75,7 +74,7 @@ export class ElectronSafeStorage extends Context.Service<
   }
 >()("@t3tools/desktop/electron/ElectronSafeStorage") {}
 
-export const make = ElectronSafeStorage.of({
+const make = ElectronSafeStorage.of({
   isEncryptionAvailable: Effect.try({
     try: () => Electron.safeStorage.isEncryptionAvailable(),
     catch: (cause) => new ElectronSafeStorageAvailabilityError({ cause }),

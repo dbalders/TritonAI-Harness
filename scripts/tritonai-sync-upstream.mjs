@@ -11,7 +11,7 @@ const DEFAULT_UPSTREAM_BRANCH = "main";
 const DEFAULT_DOWNSTREAM_REMOTE = "origin";
 const DEFAULT_DOWNSTREAM_BRANCH = "main";
 const DEFAULT_SYNC_BRANCH_PREFIX = "sync/upstream-";
-const DEFAULT_CHECKS = "bun run typecheck && bun run test";
+const DEFAULT_CHECKS = "vp check && vp run typecheck && vp test";
 const DEFAULT_SECRET_ALLOWLIST = "CODEX_HOME,TRITONAI_HOME,TRITONAI_API_KEY";
 const VALIDATION_ENV_ALLOWLIST = [
   "CI",
@@ -433,7 +433,7 @@ function main() {
     NodeFS.mkdirSync(validationHome);
     NodeFS.writeFileSync(NodePath.join(validationHome, ".npmrc"), "");
     const checkEnv = makeValidationEnv({ home: validationHome });
-    const installResult = run("corepack", ["pnpm", "install", "--frozen-lockfile"], {
+    const installResult = run("vp", ["install", "--frozen-lockfile"], {
       cwd: worktree,
       env: checkEnv,
       check: false,

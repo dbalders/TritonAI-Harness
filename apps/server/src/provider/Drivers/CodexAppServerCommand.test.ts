@@ -39,7 +39,7 @@ function windowsRuntime(
 }
 
 describe("resolveCodexAppServerCommand", () => {
-  effectIt("launches the Installer's x64 native Codex payload without a shell", () =>
+  effectIt.effect("launches the Installer's x64 native Codex payload without a shell", () =>
     Effect.gen(function* () {
       const shim =
         "C:\\Users\\tester\\.agents\\ucsd\\runtime\\codex\\openai-codex-0.144.3\\codex.cmd";
@@ -71,7 +71,7 @@ describe("resolveCodexAppServerCommand", () => {
     }),
   );
 
-  effectIt("selects the arm64 native package and preserves a pnpm marker", () =>
+  effectIt.effect("selects the arm64 native package and preserves a pnpm marker", () =>
     Effect.gen(function* () {
       const shim = "C:\\Tools\\codex.cmd";
       const native =
@@ -107,7 +107,7 @@ describe("resolveCodexAppServerCommand", () => {
     }),
   );
 
-  effectIt("uses inherited package-manager metadata and removes conflicting markers", () =>
+  effectIt.effect("uses inherited package-manager metadata and removes conflicting markers", () =>
     Effect.gen(function* () {
       const shim = "C:\\Tools\\codex.cmd";
       const native =
@@ -138,7 +138,7 @@ describe("resolveCodexAppServerCommand", () => {
     }),
   );
 
-  effectIt("resolves the native payload behind a project-local npm shim", () =>
+  effectIt.effect("resolves the native payload behind a project-local npm shim", () =>
     Effect.gen(function* () {
       const shim = "C:\\project\\node_modules\\.bin\\codex.cmd";
       const native =
@@ -157,7 +157,7 @@ describe("resolveCodexAppServerCommand", () => {
     }),
   );
 
-  effectIt("falls back to the Windows command shim when the native payload is missing", () =>
+  effectIt.effect("falls back to the Windows command shim when the native payload is missing", () =>
     Effect.gen(function* () {
       const shim = "C:\\Program Files\\Codex\\codex.cmd";
       const resolved = yield* resolveCodexAppServerCommand(shim, ["app-server", "value & calc"], {
@@ -172,7 +172,7 @@ describe("resolveCodexAppServerCommand", () => {
     }),
   );
 
-  effectIt("leaves an explicitly configured Windows executable unchanged", () =>
+  effectIt.effect("leaves an explicitly configured Windows executable unchanged", () =>
     Effect.gen(function* () {
       const executable = "C:\\Custom\\codex.exe";
       const resolved = yield* resolveCodexAppServerCommand(executable, ["app-server"], {
@@ -189,7 +189,7 @@ describe("resolveCodexAppServerCommand", () => {
     }),
   );
 
-  effectIt("leaves non-Windows launch behavior unchanged", () =>
+  effectIt.effect("leaves non-Windows launch behavior unchanged", () =>
     Effect.gen(function* () {
       const environment = { PATH: "/usr/local/bin:/usr/bin" };
       const resolved = yield* resolveCodexAppServerCommand("codex", ["app-server"], {

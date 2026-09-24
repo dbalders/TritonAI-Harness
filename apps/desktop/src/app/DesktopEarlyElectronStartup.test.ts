@@ -86,7 +86,9 @@ describe("DesktopEarlyElectronStartup", () => {
     });
 
     assert.deepEqual(options, {
+      isDevelopment: true,
       linuxWmClass: "tritonai-harness-dev",
+      linuxDesktopEntryName: "tritonai-harness-dev.desktop",
       passwordStore: "gnome-libsecret",
     });
   });

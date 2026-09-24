@@ -59,7 +59,7 @@ export interface VoiceAudioSignal {
   readonly activeDurationSeconds: number;
 }
 
-export class VoiceInputSilenceError extends Error {
+class VoiceInputSilenceError extends Error {
   constructor() {
     super("No speech was detected.");
     this.name = "VoiceInputSilenceError";

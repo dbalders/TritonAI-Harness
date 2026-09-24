@@ -41,6 +41,8 @@ beforeEach(() => {
     projectExpandedById: {},
     projectOrder: [],
     pinnedProjectOrder: [],
+    sidebarProjectScopeKey: null,
+    pullRequestMergeMethod: "squash",
     threadLastVisitedAtById: {},
     threadChangedFilesExpandedById: {},
     defaultAdvertisedEndpointKey: null,

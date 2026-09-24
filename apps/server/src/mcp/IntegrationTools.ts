@@ -10,12 +10,12 @@ import type { IntegrationProviderTool } from "../integrations/IntegrationRegistr
 import { integrationToolJsonSchema } from "../integrations/IntegrationTool.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 
-class IntegrationToolInvocationError extends Schema.TaggedErrorClass<IntegrationToolInvocationError>()(
+class IntegrationToolInvocationError extends Schema.TaggedError<IntegrationToolInvocationError>()(
   "IntegrationToolInvocationError",
   { cause: Schema.Defect() },
 ) {}
 
-class IntegrationToolRegistrationError extends Schema.TaggedErrorClass<IntegrationToolRegistrationError>()(
+class IntegrationToolRegistrationError extends Schema.TaggedError<IntegrationToolRegistrationError>()(
   "IntegrationToolRegistrationError",
   { toolName: Schema.String },
 ) {

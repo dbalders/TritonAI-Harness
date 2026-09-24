@@ -123,6 +123,7 @@ export type BrowserDefaultSettings = Pick<
   | "browserDefaultZoomFactor"
   | "browserDefaultAppearance"
   | "browserRecordingFrameRate"
+  | "browserLinkTarget"
   | "browserAutoShowFloatingPreview"
 >;
 
@@ -133,7 +134,7 @@ export type BrowserDefaultSettings = Pick<
  * reports every stored viewport as changed — including one that matches the
  * default.
  */
-export function isSamePreviewViewport(
+function isSamePreviewViewport(
   left: PreviewViewportSetting,
   right: PreviewViewportSetting,
 ): boolean {
@@ -162,6 +163,9 @@ export function getChangedBrowserSettingLabels(settings: BrowserDefaultSettings)
       : []),
     ...(settings.browserRecordingFrameRate !== DEFAULT_UNIFIED_SETTINGS.browserRecordingFrameRate
       ? ["Recording frame rate"]
+      : []),
+    ...(settings.browserLinkTarget !== DEFAULT_UNIFIED_SETTINGS.browserLinkTarget
+      ? ["Open links in"]
       : []),
     ...(settings.browserAutoShowFloatingPreview !==
     DEFAULT_UNIFIED_SETTINGS.browserAutoShowFloatingPreview

@@ -47,7 +47,7 @@ function voiceError(input: {
   });
 }
 
-export function trimTrailingSlash(value: string): string {
+function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/u, "");
 }
 

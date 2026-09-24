@@ -49,7 +49,7 @@ export const ServerTritonAiUsageErrorCode = Schema.Literals([
 ]);
 export type ServerTritonAiUsageErrorCode = typeof ServerTritonAiUsageErrorCode.Type;
 
-export class ServerTritonAiUsageError extends Schema.TaggedErrorClass<ServerTritonAiUsageError>()(
+export class ServerTritonAiUsageError extends Schema.TaggedError<ServerTritonAiUsageError>()(
   "ServerTritonAiUsageError",
   {
     code: ServerTritonAiUsageErrorCode,

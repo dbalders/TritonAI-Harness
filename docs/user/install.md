@@ -52,7 +52,7 @@ yay -S t3code-nightly-bin
 ### Windows Subsystem for Linux
 
 When the desktop app runs a WSL backend, it installs the matching server runtime into
-`~/.t3/wsl-runtime` inside the selected distro. The first launch after installing or updating
+`~/.tritonai-harness/wsl-runtime` inside the selected distro. The first launch after installing or updating
 TritonAI Harness may take a little longer while that release's runtime is extracted. Later launches reuse the
 Linux-local copy so startup does not depend on reading application files through `/mnt/c`. After a
 successful launch, T3 Code keeps the current runtime and one previous runtime for rollback and

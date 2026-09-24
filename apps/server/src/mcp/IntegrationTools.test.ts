@@ -18,6 +18,19 @@ import {
 } from "./IntegrationTools.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 
+const client = McpSchema.McpServerClient.of({
+  clientId: 1,
+  clientCapabilities: {},
+  clientInfo: { name: "integration-mcp-test", version: "1.0.0" },
+  protocolVersion: "2025-06-18",
+  initializePayload: {
+    protocolVersion: "2025-06-18",
+    capabilities: {},
+    clientInfo: { name: "integration-mcp-test", version: "1.0.0" },
+  },
+  getClient: Effect.die("unused"),
+});
+
 const invocation = (
   capabilities: McpInvocationContext.McpInvocationScope["capabilities"],
 ): McpInvocationContext.McpInvocationScope => ({
@@ -215,7 +228,7 @@ it.effect("preserves bounded results and reports omitted results as completed MC
         .callTool({ name: "fixture.read", arguments: {} })
         .pipe(
           Effect.provideService(McpInvocationContext.McpInvocationContext, authorized),
-          Effect.provideService(McpSchema.McpServerClient, {} as never),
+          Effect.provideService(McpSchema.McpServerClient, client),
         );
       expect(bounded.isError).toBe(false);
       expect(bounded.structuredContent).toEqual({ records: [{ id: "record-1" }] });
@@ -225,7 +238,7 @@ it.effect("preserves bounded results and reports omitted results as completed MC
         .callTool({ name: "fixture.read", arguments: {} })
         .pipe(
           Effect.provideService(McpInvocationContext.McpInvocationContext, authorized),
-          Effect.provideService(McpSchema.McpServerClient, {} as never),
+          Effect.provideService(McpSchema.McpServerClient, client),
         );
       expect(omitted.isError).toBe(false);
       expect(omitted.structuredContent).toEqual(Integrations.INTEGRATION_TOOL_RESULT_OMITTED);
@@ -259,12 +272,11 @@ it.effect("hides integration tools from MCP credentials without integration acce
             McpInvocationContext.McpInvocationContext,
             invocation(new Set(["preview"])),
           ),
-          Effect.provideService(McpSchema.McpServerClient, {} as never),
+          Effect.provideService(McpSchema.McpServerClient, client),
+          Effect.flip,
         );
-      expect(result).toMatchObject({
-        isError: true,
-        structuredContent: { error: "integration_tool_unavailable" },
-      });
+      expect(result).toBeInstanceOf(McpSchema.InvalidParams);
+      expect(result.message).toContain("not found");
     }).pipe(Effect.provide(testLayer)),
   ),
 );
@@ -333,12 +345,11 @@ it.effect("hides and rejects an unavailable tool despite read authorization", ()
         .callTool({ name: "fixture.read", arguments: {} })
         .pipe(
           Effect.provideService(McpInvocationContext.McpInvocationContext, authorized),
-          Effect.provideService(McpSchema.McpServerClient, {} as never),
+          Effect.provideService(McpSchema.McpServerClient, client),
+          Effect.flip,
         );
-      expect(result).toMatchObject({
-        isError: true,
-        structuredContent: { error: "integration_tool_unavailable" },
-      });
+      expect(result).toBeInstanceOf(McpSchema.InvalidParams);
+      expect(result.message).toContain("not found");
       expect(availabilityChecks).toBe(2);
     }).pipe(
       Effect.provide(
