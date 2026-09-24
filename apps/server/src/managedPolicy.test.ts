@@ -165,6 +165,28 @@ describe("TritonAI managed Harness policy", () => {
     expect(missingFile.providers.codex.binaryPath).toBe("codex");
   });
 
+  it("anchors an unsaved Codex home to the profile's own directory, not production", () => {
+    const migrated = migrateLegacyInstallerManagedSettings(
+      { providers: { codex: { binaryPath: "codex" } } },
+      { defaultCodexHomePath: "/profiles/nightly/codex" },
+    );
+    expect(migrated.migrated).toBe(true);
+    expect(migrated.document).toMatchObject({
+      tritonAiManagedPolicy: { codexHomePath: "/profiles/nightly/codex" },
+    });
+    const effective = applyManagedHarnessPolicy(DEFAULT_SERVER_SETTINGS, managedConfig, {
+      rawSettingsDocument: migrated.document,
+    });
+    expect(effective.providers.codex.homePath).toBe("/profiles/nightly/codex");
+
+    // A stamped marker keeps its home even when the profile default differs.
+    const stamped = migrateLegacyInstallerManagedSettings(migrated.document, {
+      defaultCodexHomePath: "/profiles/other/codex",
+    });
+    expect(stamped.migrated).toBe(false);
+    expect(stamped.document).toBe(migrated.document);
+  });
+
   it("preserves explicit and previously saved Codex homes without moving history", () => {
     for (const savedHome of ["/custom/history", DEFAULT_TRITONAI_CODEX_HOME_PATH]) {
       const migrated = migrateLegacyInstallerManagedSettings({
