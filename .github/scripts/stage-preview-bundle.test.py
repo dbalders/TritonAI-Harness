@@ -69,6 +69,16 @@ class StagePreviewBundleTests(unittest.TestCase):
                     self.stage()
                 self.assertFalse(self.destination.exists())
 
+    def test_rejects_file_directory_collisions_before_writing(self):
+        for directory in ["server/dist/a/b", "server/dist/A/b", "server/dist/A/"]:
+            entries = [("server/dist/a", b"file"), (directory, b"child")]
+            for ordered in [entries, list(reversed(entries))]:
+                with self.subTest(entries=ordered):
+                    self.bundle(ordered)
+                    with self.assertRaises(ValueError):
+                        self.stage()
+                    self.assertFalse(self.destination.exists())
+
     def test_requires_entry_points(self):
         self.bundle(missing="desktop/dist-electron/main.cjs")
         with self.assertRaises(ValueError):

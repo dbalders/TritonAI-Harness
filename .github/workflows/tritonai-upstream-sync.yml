@@ -58,7 +58,7 @@ jobs:
           git push origin refs/remotes/upstream/main:refs/heads/vendor/t3code-main --force-with-lease
 
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@v1
+        uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
         with:
           node-version-file: package.json
           cache: true

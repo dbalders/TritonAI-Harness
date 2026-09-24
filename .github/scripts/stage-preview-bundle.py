@@ -30,6 +30,8 @@ def stage_bundle(archive: Path, destination: Path):
             raise ValueError("Expanded preview bundle is too large")
         seen = set()
         files = set()
+        file_paths = set()
+        directory_paths = set()
         for entry in entries:
             name = entry.filename.removesuffix("/")
             parts = name.split("/")
@@ -54,8 +56,18 @@ def stage_bundle(archive: Path, destination: Path):
             if name.casefold() in seen:
                 raise ValueError(f"Duplicate preview path: {name!r}")
             seen.add(name.casefold())
+            path = name.casefold()
+            parents = {"/".join(parts[:index]).casefold() for index in range(1, len(parts))}
+            if parents & file_paths or (entry.is_dir() and path in file_paths):
+                raise ValueError(f"Preview directory conflicts with a file: {name!r}")
+            if not entry.is_dir() and path in directory_paths:
+                raise ValueError(f"Preview file conflicts with a directory: {name!r}")
+            directory_paths.update(parents)
+            if entry.is_dir():
+                directory_paths.add(path)
             if not entry.is_dir():
                 files.add(name)
+                file_paths.add(path)
         if not REQUIRED_FILES <= files:
             raise ValueError("Preview bundle is missing required entry points")
         # Validate all names before writing anything. This is a fresh directory

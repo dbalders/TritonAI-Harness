@@ -68,9 +68,12 @@ jobs:
       # so file-scoped runs call `vp test run` inside the package instead.
       - name: Test
         shell: pwsh
+        env:
+          TEST_PACKAGE: ${{ inputs.package }}
+          TEST_FILES: ${{ inputs.files }}
         run: |
-          $package = '${{ inputs.package }}'
-          $files = '${{ inputs.files }}'
+          $package = $env:TEST_PACKAGE
+          $files = $env:TEST_FILES
           if ($package -eq '') {
             vp run --parallel --concurrency-limit 4 --filter '!t3' --filter '!@t3tools/monorepo' test
           } elseif ($files -eq '') {

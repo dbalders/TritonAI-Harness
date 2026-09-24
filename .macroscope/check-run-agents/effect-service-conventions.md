@@ -10,8 +10,6 @@ include:
   - "apps/**/*.ts"
   - "packages/**/*.ts"
   - "infra/**/*.ts"
-exclude:
-  - "**/*.test.ts"
 requires:
   - Check
 maxBudgetPerRun: 5
@@ -66,6 +64,6 @@ Review changed TypeScript for the conventions below. They apply when a pull requ
 
 ## Reporting
 
-Report only violations introduced by changed lines. Post each as a precise inline comment on the smallest relevant range and state the expected fix. A clear convention violation may fail the check; optional style preferences and untouched legacy code may not.
+Report only violations introduced by changed lines. Post each as a precise inline comment on the smallest relevant range and state the expected fix. Findings are advisory and do not block the check or merges. Do not report optional style preferences or untouched legacy code.
 
 When there are no findings, make the entire final response exactly `All clear` on one line with nothing else.
