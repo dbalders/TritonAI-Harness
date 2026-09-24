@@ -126,7 +126,7 @@ For authorized mobile verification, a missing or outdated native client is a bui
 
 - Never make a PR unless the developer explicitly asks you to do so.
 - Conventional commit titles, plain language: `fix(web): new threads no longer spike CPU`.
-- Body: the problem in a sentence or two, then how you fixed it.
+- Body: the problem in a sentence or two, then how you fixed it. End with a compact attribution footer naming the implementation model and harness. List review models separately when known; use `mixed` or `unknown` when attribution is incomplete, and never guess.
 - UI changes need before/after images. Motion or timing needs a short video.
 - Upload PR evidence to GitHub. Never commit PR-only screenshots or assets such as `.github/pr-assets/`.
 - One concern per PR. If the description says "also", split it.
