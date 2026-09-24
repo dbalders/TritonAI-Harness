@@ -48,6 +48,7 @@ import {
   ClockIcon,
   EyeIcon,
   FolderIcon,
+  FolderOpenIcon,
   GitBranchIcon,
   MessageCircleQuestionIcon,
   PinIcon,
@@ -1608,7 +1609,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     )
   ) : null;
 
-  if (variant === "slim") {
+  if (variant === "slim" || variant === "grouped") {
     return (
       <li
         data-thread-item
@@ -1627,9 +1628,13 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                 ref={rowRef}
                 role="button"
                 tabIndex={0}
-                data-testid="sidebar-row-slim"
+                data-testid={variant === "grouped" ? "sidebar-row-grouped" : "sidebar-row-slim"}
                 aria-busy={isRegeneratingTitle || undefined}
-                className={cn(rowSurfaceClassName, "flex h-9 items-center gap-2.5 px-2.5")}
+                className={cn(
+                  rowSurfaceClassName,
+                  "flex h-9 items-center gap-2.5 px-2.5",
+                  variant === "grouped" && "pl-9",
+                )}
                 onClick={handleClick}
                 onDoubleClick={handleDoubleClick}
                 onKeyDown={handleKeyDown}
@@ -1642,11 +1647,14 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
             <span
               className={cn(
                 "shrink-0 transition-opacity",
+                variant === "grouped" && "hidden",
                 (!props.isActive || variantAction === "unsettle") &&
                   "opacity-40 grayscale group-focus-within/sidebar-row:opacity-100 group-focus-within/sidebar-row:grayscale-0 group-hover/sidebar-row:opacity-100 group-hover/sidebar-row:grayscale-0",
               )}
             >
-              {props.project ? <ProjectFavicon project={props.project} className="size-4" /> : null}
+              {variant !== "grouped" && props.project ? (
+                <ProjectFavicon project={props.project} className="size-4" />
+              ) : null}
             </span>
             {draftIndicator}
             {title}
@@ -1781,7 +1789,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
               ref={rowRef}
               role="button"
               tabIndex={0}
-              data-testid={variant === "grouped" ? "sidebar-row-grouped" : "sidebar-row-card"}
+              data-testid="sidebar-row-card"
               aria-busy={isRegeneratingTitle || undefined}
               className={rowSurfaceClassName}
               onClick={handleClick}
@@ -1794,7 +1802,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
           <div
             className={cn(
               "relative z-10 px-[var(--sidebar-row-content-inset)] py-[var(--sidebar-content-inset)]",
-              variant === "grouped" && "ps-[calc(var(--sidebar-row-content-inset)+1.25rem)]",
             )}
           >
             <div className="flex h-5 min-w-0 items-center gap-1.5">
@@ -2425,6 +2432,11 @@ export default function Sidebar() {
   // The selection lives in the persisted UI store next to the other sidebar
   // project preferences, so routes that unmount the sidebar (Settings) and
   // app restarts keep it.
+  const [collapsedProjectKeys, setCollapsedProjectKeys] = useLocalStorage(
+    "t3code:sidebar-v2:collapsed-projects",
+    [] as string[],
+    Schema.Array(Schema.String),
+  );
   const projectScopeKey = useUiStateStore((store) => store.sidebarProjectScopeKey);
   const setProjectScopeKey = useUiStateStore((store) => store.setSidebarProjectScopeKey);
   // {value, label} items let Base UI drive the combobox selection contract
@@ -2693,7 +2705,8 @@ export default function Sidebar() {
   }, [nowMinute, optimisticDrop, scopedProjectKeys, serverConfigs, snoozeWakeTick, threads]);
 
   const activeThreadGroups = useMemo(
-    () => groupThreadsByProjectForSidebar(projectGroups, activeThreads),
+    () =>
+      groupThreadsByProjectForSidebar(projectGroups, activeThreads, { preserveThreadOrder: true }),
     [activeThreads, projectGroups],
   );
   const groupedActiveThreads = useMemo(
@@ -2824,9 +2837,24 @@ export default function Sidebar() {
     return routeThread === undefined ? EMPTY_THREADS : [routeThread];
   }, [routeThreadKey, snoozedShelfExpanded, snoozedThreads]);
 
+  const visibleGroupedActiveThreads = useMemo(
+    () =>
+      activeThreadGroups.flatMap((group) =>
+        collapsedProjectKeys.includes(group.project?.projectKey ?? "active-project-fallback")
+          ? []
+          : group.threads,
+      ),
+    [activeThreadGroups, collapsedProjectKeys],
+  );
+
   const orderedThreads = useMemo(
-    () => [...pinnedThreads, ...activeThreads, ...visibleSnoozedThreads, ...renderedSettledThreads],
-    [pinnedThreads, activeThreads, visibleSnoozedThreads, renderedSettledThreads],
+    () => [
+      ...pinnedThreads,
+      ...visibleGroupedActiveThreads,
+      ...visibleSnoozedThreads,
+      ...renderedSettledThreads,
+    ],
+    [pinnedThreads, visibleGroupedActiveThreads, visibleSnoozedThreads, renderedSettledThreads],
   );
   const orderedThreadKeys = useMemo(
     () =>
@@ -3271,10 +3299,10 @@ export default function Sidebar() {
   );
   const activeKeys = useMemo(
     () =>
-      activeThreads.map((thread) =>
+      groupedActiveThreads.map((thread) =>
         scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
       ),
-    [activeThreads],
+    [groupedActiveThreads],
   );
   useEffect(() => {
     if (optimisticDrop === null) return;
@@ -3438,7 +3466,7 @@ export default function Sidebar() {
     const pinnedRows = rowsOf(pinnedThreads, "pinned");
     items.push(...pinnedRows);
     items.push({ kind: "marker", marker: "pinned-divider" });
-    const activeRows = rowsOf(activeThreads, "active");
+    const activeRows = rowsOf(visibleGroupedActiveThreads, "active");
     items.push({ kind: "marker", marker: "active-placeholder" });
     items.push(...activeRows);
     if (snoozedThreads.length > 0) {
@@ -3452,6 +3480,7 @@ export default function Sidebar() {
     return items;
   }, [
     activeThreads,
+    visibleGroupedActiveThreads,
     pinnedThreads,
     renderedSettledThreads,
     settledThreads.length,
@@ -4730,12 +4759,8 @@ export default function Sidebar() {
                         const threadKey = scopedThreadKey(
                           scopeThreadRef(thread.environmentId, thread.id),
                         );
-                        // Settled and snoozed are the ONLY things that collapse a
-                        // row: every other thread is a full card. Density comes
-                        // from users (or the auto rules) actually parking work,
-                        // not from the sidebar second-guessing what still matters.
-                        const isCard = section === "active" || section === "pinned";
-                        const rowVariant = isCard ? "card" : "slim";
+                        const rowVariant =
+                          section === "active" ? "grouped" : section === "pinned" ? "card" : "slim";
                         return (
                           <SidebarThreadRow
                             // Fade between card and compact rows while the outer
@@ -4862,6 +4887,8 @@ export default function Sidebar() {
                       ];
                       for (const item of sidebarListItems) {
                         if (item.kind === "thread") {
+                          // Active rows render under their folder at the active marker.
+                          if (item.section === "active") continue;
                           items.push(renderThreadRow(threadByKey.get(item.key)!, item.section));
                           continue;
                         }
@@ -4905,6 +4932,80 @@ export default function Sidebar() {
                                 isDropTarget={dragTargetSection === "active"}
                               />,
                             );
+                            for (const [
+                              groupIndex,
+                              { project, threads: projectThreads },
+                            ] of activeThreadGroups.entries()) {
+                              const groupKey = project?.projectKey ?? "active-project-fallback";
+                              const isExpanded = !collapsedProjectKeys.includes(groupKey);
+                              items.push(
+                                <li
+                                  key={
+                                    project
+                                      ? `active-project:${project.projectKey}`
+                                      : "active-project-fallback"
+                                  }
+                                  data-thread-selection-safe
+                                  className={cn(
+                                    "list-none px-2.5 py-2",
+                                    groupIndex > 0 && "mt-1 border-t border-sidebar-border/60 pt-3",
+                                  )}
+                                >
+                                  <div className="flex min-w-0 items-center gap-2">
+                                    <button
+                                      type="button"
+                                      aria-expanded={isExpanded}
+                                      aria-label={`${isExpanded ? "Collapse" : "Expand"} ${project?.displayName ?? "Other threads"}`}
+                                      onClick={() =>
+                                        setCollapsedProjectKeys((keys) =>
+                                          keys.includes(groupKey)
+                                            ? keys.filter((key) => key !== groupKey)
+                                            : [...keys, groupKey],
+                                        )
+                                      }
+                                      className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-sm text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                    >
+                                      {isExpanded ? (
+                                        <FolderOpenIcon
+                                          aria-hidden
+                                          className="size-4 shrink-0 text-sidebar-muted-foreground"
+                                        />
+                                      ) : (
+                                        <FolderIcon
+                                          aria-hidden
+                                          className="size-4 shrink-0 text-sidebar-muted-foreground"
+                                        />
+                                      )}
+                                      <span className="min-w-0 flex-1 truncate text-sm font-medium text-sidebar-muted-foreground">
+                                        {project?.displayName ?? "Other threads"}
+                                      </span>
+                                    </button>
+                                    {project ? (
+                                      <button
+                                        type="button"
+                                        aria-label={`New thread in ${project.displayName}`}
+                                        onClick={() => handleNewThreadInProject(project.projectKey)}
+                                        className="flex size-6 shrink-0 items-center justify-center rounded-sm text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                                      >
+                                        <PlusIcon aria-hidden className="size-3.5" />
+                                      </button>
+                                    ) : (
+                                      <span className="shrink-0 text-xs text-sidebar-muted-foreground tabular-nums">
+                                        <span aria-hidden>{projectThreads.length}</span>
+                                        <span className="sr-only">
+                                          {`${projectThreads.length} active ${projectThreads.length === 1 ? "thread" : "threads"}`}
+                                        </span>
+                                      </span>
+                                    )}
+                                  </div>
+                                </li>,
+                              );
+                              if (isExpanded) {
+                                for (const thread of projectThreads) {
+                                  items.push(renderThreadRow(thread, "active"));
+                                }
+                              }
+                            }
                             break;
                           case "snoozed-header":
                             items.push(

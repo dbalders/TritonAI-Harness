@@ -2,7 +2,9 @@ import { createFileRoute } from "@tanstack/react-router";
 import { EnvironmentId, ProviderInstanceId } from "@t3tools/contracts";
 
 import { ProviderSettingsPanel } from "../components/settings/ProviderSettingsPanel";
+import { buildProviderEnvironmentOptions } from "../components/settings/ProviderSettingsPanel.logic";
 import { useSettingsScope } from "../components/settings/SettingsScopeContext";
+import { usePrimaryEnvironmentId } from "../state/environments";
 
 /**
  * Providers are machine state, so the page shows one environment at a time:
@@ -11,7 +13,10 @@ import { useSettingsScope } from "../components/settings/SettingsScopeContext";
  */
 function SettingsProvidersRoute() {
   const target = Route.useSearch();
-  const { environment, scope } = useSettingsScope();
+  const { environments, scope } = useSettingsScope();
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  // Keep the same panel and its credential-update state through a runtime restart.
+  const environment = buildProviderEnvironmentOptions(environments, primaryEnvironmentId)[0];
   if (!environment) {
     return (
       <p className="p-8 text-sm text-muted-foreground">

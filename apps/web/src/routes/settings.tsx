@@ -104,7 +104,12 @@ function SettingsScopeBoundary({ pathname, children }: { pathname: string; child
   }
   if (scope.kind === "unavailable")
     return <p className="p-8 text-sm text-muted-foreground">{scope.message}</p>;
-  if (scope.kind === "environment" && connectedEnvironments.length === 0) {
+  // Runtime owns its offline state, including progress while a key change restarts it.
+  if (
+    pathname !== "/settings/providers" &&
+    scope.kind === "environment" &&
+    connectedEnvironments.length === 0
+  ) {
     return (
       <p className="p-8 text-sm text-muted-foreground">
         Reconnect {scope.label} to change its settings.

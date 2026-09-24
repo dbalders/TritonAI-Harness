@@ -1065,6 +1065,19 @@ describe("groupThreadsByProjectForSidebar", () => {
       "logical-alpha",
     ]);
     expect(groups[1]?.threads.map((thread) => thread.id)).toEqual(["alpha-newer", "alpha-older"]);
+
+    // Folder grouping must not undo an explicit drag order within a project.
+    const manuallyOrderedGroups = groupThreadsByProjectForSidebar(projects, threads, {
+      preserveThreadOrder: true,
+    });
+    expect(manuallyOrderedGroups.map((group) => group.project?.projectKey)).toEqual([
+      "logical-beta",
+      "logical-alpha",
+    ]);
+    expect(manuallyOrderedGroups[1]?.threads.map((thread) => thread.id)).toEqual([
+      "alpha-older",
+      "alpha-newer",
+    ]);
   });
 
   it("keeps unmapped threads in a fallback group and omits archived threads", () => {

@@ -941,7 +941,13 @@ function bucketThreadsByLogicalProject<
 export function groupThreadsByProjectForSidebar<
   TProject extends LogicalSidebarProject,
   TThread extends { readonly id: string } & ScopedSidebarThread,
->(projects: readonly TProject[], threads: readonly TThread[]) {
+>(
+  projects: readonly TProject[],
+  threads: readonly TThread[],
+  options: { readonly preserveThreadOrder?: boolean } = {},
+) {
+  const orderThreads = (items: TThread[]) =>
+    options.preserveThreadOrder ? items : sortThreadsByActivityForSidebar(items);
   const { threadsByProjectKey, unmatchedThreads } = bucketThreadsByLogicalProject(
     projects,
     threads,
@@ -952,16 +958,13 @@ export function groupThreadsByProjectForSidebar<
       ? [
           {
             project: project as TProject | null,
-            threads: sortThreadsByActivityForSidebar(projectThreads),
+            threads: orderThreads(projectThreads),
           },
         ]
       : [];
   });
   return unmatchedThreads.length > 0
-    ? [
-        ...projectGroups,
-        { project: null, threads: sortThreadsByActivityForSidebar(unmatchedThreads) },
-      ]
+    ? [...projectGroups, { project: null, threads: orderThreads(unmatchedThreads) }]
     : projectGroups;
 }
 

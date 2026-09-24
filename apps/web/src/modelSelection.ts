@@ -127,6 +127,18 @@ function toAppModelOption(model: ServerProvider["models"][number]): AppModelOpti
   return option;
 }
 
+// Settings own membership and explicit names; the catalog supplies labels for bare slugs.
+function toCustomAppModelOption(
+  custom: CustomModelDefinition,
+  models: ReadonlyArray<ServerProvider["models"][number]>,
+): AppModelOption {
+  const reported = models.find((model) => model.slug === custom.slug);
+  if (custom.name === custom.slug && reported) {
+    return { ...toAppModelOption(reported), isCustom: true };
+  }
+  return { slug: custom.slug, name: custom.name, isCustom: true };
+}
+
 function readInstanceModelPreferences(
   settings: UnifiedSettings,
   instanceId: ProviderInstanceId,
@@ -211,7 +223,7 @@ function getAppModelOptions(
     }
 
     seen.add(entry.slug);
-    options.push({ slug: entry.slug, name: entry.name, isCustom: true });
+    options.push(toCustomAppModelOption(entry, rawModels));
   }
 
   const preferences = readInstanceModelPreferences(settings, defaultInstanceId);
@@ -259,7 +271,7 @@ export function getAppModelOptionsForInstance(
     }
 
     seen.add(custom.slug);
-    options.push({ slug: custom.slug, name: custom.name, isCustom: true });
+    options.push(toCustomAppModelOption(custom, entry.models));
   }
 
   const preferences = readInstanceModelPreferences(settings, entry.instanceId);

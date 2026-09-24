@@ -130,7 +130,7 @@ export class DesktopTritonAiApiKeyValidationError extends Schema.TaggedError<Des
       case "no-on-prem-access":
         return "This key is active, but it does not include access to on-prem models.";
       case "no-frontier-access":
-        return "This key is active, but it does not include access to frontier models.";
+        return "This key is active, but it does not include access to cloud models.";
     }
   }
 }

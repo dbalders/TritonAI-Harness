@@ -85,6 +85,40 @@ describe("instance-scoped model selection", () => {
     );
   });
 
+  it("keeps catalog labels for configured slugs without overriding explicit custom names", () => {
+    const instanceId = ProviderInstanceId.make("codex");
+    const driver = ProviderDriverKind.make("codex");
+    const slug = "api-glm-5.3";
+    const snapshot = provider({ instanceId, models: [slug] });
+    const entry = deriveProviderInstanceEntries([
+      {
+        ...snapshot,
+        models: [{ ...snapshot.models[0]!, name: "GLM 5.3", shortName: "GLM", isCustom: true }],
+      },
+    ])[0]!;
+    const settings = {
+      ...settingsWithProviderInstances(),
+      providerInstances: { [instanceId]: { driver, config: { customModels: [slug] } } },
+    };
+    expect(getAppModelOptionsForInstance(settings, entry)).toEqual([
+      expect.objectContaining({ slug, name: "GLM 5.3", shortName: "GLM" }),
+    ]);
+    const renamed = {
+      ...settings,
+      providerInstances: {
+        [instanceId]: {
+          driver,
+          config: {
+            customModels: [{ slug, name: "My model" }],
+          },
+        },
+      },
+    };
+    expect(getAppModelOptionsForInstance(renamed, entry)).toEqual([
+      { slug, name: "My model", isCustom: true },
+    ]);
+  });
+
   it("keeps custom models on the provider instance that declared them", () => {
     const providers = [
       provider({

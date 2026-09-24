@@ -90,7 +90,7 @@ describe("managed Harness config build input", () => {
               frontier: {
                 id: "frontier",
                 instanceId: "codex_frontier",
-                displayName: "Frontier models",
+                displayName: "Cloud models",
                 apiKeyEnvironmentVariable: "TRITONAI_FRONTIER_API_KEY",
               },
             },
@@ -131,7 +131,7 @@ describe("managed Harness config build input", () => {
               frontier: {
                 id: "frontier",
                 instanceId: "codex_frontier",
-                displayName: "Frontier models",
+                displayName: "Cloud models",
                 apiKeyEnvironmentVariable: "TRITONAI_FRONTIER_API_KEY",
               },
             },
