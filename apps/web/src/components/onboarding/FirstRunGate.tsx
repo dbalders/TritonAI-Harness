@@ -4,6 +4,7 @@ import { useLocation, useNavigate } from "@tanstack/react-router";
 import { Atom } from "effect/unstable/reactivity";
 import { useEffect, useState } from "react";
 
+import { WELCOME_WIZARD_ENABLED } from "../../branding";
 import {
   ensureClientSettingsHydrated,
   useClientSettings,
@@ -85,6 +86,7 @@ export function FirstRunGate({
   const hydrated = hydrationStatus === "ready";
   const completeOnboarding = useCompleteOnboarding();
   const onboardingCompletedAt = useClientSettings((settings) => settings.onboardingCompletedAt);
+  const onboardingComplete = !WELCOME_WIZARD_ENABLED || onboardingCompletedAt !== null;
   const bootstrapped = useAllEnvironmentShellsBootstrapped();
   const { environments, isReady: environmentCatalogReady } = useEnvironments();
   const projects = useProjects();
@@ -96,10 +98,7 @@ export function FirstRunGate({
   // Within a session settings stay hydrated, so remounts (e.g. returning from
   // the wizard) resolve synchronously instead of blanking a frame.
   const [gateState, setGateState] = useState<FirstRunGateState>(() => ({
-    decision:
-      (!enabled && !hostedStatic) || (hydrated && onboardingCompletedAt !== null)
-        ? "app"
-        : "pending",
+    decision: (!enabled && !hostedStatic) || (hydrated && onboardingComplete) ? "app" : "pending",
     stalled: false,
   }));
   const { decision, stalled } = gateState;
@@ -129,14 +128,14 @@ export function FirstRunGate({
     ? resolveHostedFirstRunDecision({
         localEnvironmentDisabled: isLocalEnvironmentDisabled(),
         hydrated,
-        completed: onboardingCompletedAt !== null,
+        completed: onboardingComplete,
         catalogReady: environmentCatalogReady,
         environmentCount: environments.length,
       })
     : resolveFirstRunDecision({
         enabled,
         hydrated,
-        completed: onboardingCompletedAt !== null,
+        completed: onboardingComplete,
         bootstrapped,
         authoritative: primaryShellLive,
         workspaceAuthoritative: workspaceEvidenceLive,

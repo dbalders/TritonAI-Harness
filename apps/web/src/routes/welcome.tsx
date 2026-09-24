@@ -1,16 +1,20 @@
 import { createFileRoute, redirect, useLocation, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 
+import { WELCOME_WIZARD_ENABLED } from "../branding";
 import { NoProjectsHero } from "../components/NoProjectsHero";
 import { WelcomeWizard } from "../components/onboarding/WelcomeWizard";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
 
-/** Onboarding overlays the workspace. Visiting /welcome reopens setup. */
+/** Keep saved welcome URLs usable when this distribution skips the wizard. */
 export const Route = createFileRoute("/welcome")({
   beforeLoad: ({ context }) => {
     const { authGateState } = context;
     if (authGateState.status !== "authenticated" && authGateState.status !== "hosted-static") {
       throw redirect({ to: "/pair", replace: true });
+    }
+    if (!WELCOME_WIZARD_ENABLED) {
+      throw redirect({ to: "/", replace: true });
     }
   },
   component: WelcomeRouteView,
