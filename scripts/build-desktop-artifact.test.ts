@@ -70,6 +70,7 @@ import {
   resolveFffNativeDependencies,
   resolveBuildOptions,
   resolveCuaDriverNativeDependencies,
+  resolveCuaDriverPatchedLoaderDependencies,
   resolveCuaDriverReleaseAsset,
   resolveDesktopBuildIconAssets,
   resolveDesktopProductName,
@@ -2869,6 +2870,18 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     });
     assert.deepStrictEqual(resolveCuaDriverNativeDependencies("linux", "arm64", "0.19.3"), {
       "@trycua/cua-driver-linux-arm64-gnu": "0.19.3",
+    });
+  });
+
+  it("keeps the asar-unpacked Cua Driver loader patch in staged installs", () => {
+    const workspacePatches = {
+      "@ubjs/node@0.31.0-3": "patches/@ubjs__node@0.31.0-3.patch",
+      "sharp@0.35.0": "patches/sharp@0.35.0.patch",
+    };
+    const loaderDependencies = resolveCuaDriverPatchedLoaderDependencies(workspacePatches);
+    assert.deepStrictEqual(loaderDependencies, { "@ubjs/node": "0.31.0-3" });
+    assert.deepStrictEqual(createStagePatchedDependencies(workspacePatches, loaderDependencies), {
+      "@ubjs/node@0.31.0-3": "patches/@ubjs__node@0.31.0-3.patch",
     });
   });
 
