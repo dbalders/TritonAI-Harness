@@ -173,13 +173,14 @@ fs.writeFileSync(process.env.TRITONAI_SYNC_AGENT_RESPONSE_FILE, JSON.stringify({
   return { fakeBin, repo, root, trace, upstream };
 }
 
-function runSync(fixture: Fixture, installExit = 0) {
+function runSync(fixture: Fixture, installExit = 0, extraEnv: Record<string, string> = {}) {
   NodeFS.writeFileSync(NodePath.join(fixture.trace, "install-exit"), String(installExit));
   return NodeChildProcess.spawnSync(process.execPath, [syncScript], {
     cwd: fixture.repo,
     encoding: "utf8",
     env: {
       ...process.env,
+      ...extraEnv,
       AWS_ACCESS_KEY_ID: "must-not-reach-merged-worktree-commands",
       PATH: `${fixture.fakeBin}${NodePath.delimiter}${process.env.PATH ?? ""}`,
       TEST_SENTINEL_SECRET: "must-not-reach-merged-worktree-commands",
@@ -238,6 +239,33 @@ it("installs a clean merged worktree before checks and review", () => {
     NodeFS.rmSync(fixture.root, { recursive: true, force: true });
   }
 });
+
+it("records the merge base and upstream commit count in the report", () => {
+  const fixture = createFixture();
+  try {
+    const result = runSync(fixture);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /"mergeBase": "[0-9a-f]{40}"/u);
+    assert.match(result.stdout, /"mergeBaseDate": "\d{4}-\d{2}-\d{2}"/u);
+    assert.match(result.stdout, /"upstreamCommitsToMerge": 1/u);
+  } finally {
+    NodeFS.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+for (const method of ["squash", "rebase"]) {
+  it(`refuses to run when the PR merge method is ${method}`, () => {
+    const fixture = createFixture();
+    try {
+      const result = runSync(fixture, 0, { TRITONAI_SYNC_PR_MERGE_METHOD: method });
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /squash and rebase are not allowed/u);
+      assert.ok(!NodeFS.existsSync(NodePath.join(fixture.trace, "install.json")));
+    } finally {
+      NodeFS.rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+}
 
 it("fails closed before checks and review when the merged worktree install fails", () => {
   const fixture = createFixture();
