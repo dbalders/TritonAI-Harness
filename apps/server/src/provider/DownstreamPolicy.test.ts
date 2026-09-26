@@ -17,10 +17,7 @@ import type * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { loadBuiltinIntegrations } from "../integrations/builtins.ts";
 import { type IntegrationManifest, validateIntegrationManifest } from "../integrations/manifest.ts";
 import { materializeCodexShadowHome, resolveCodexHomeLayout } from "./Drivers/CodexHomeLayout.ts";
-import {
-  computeDynamicToolFingerprint,
-  readCompatibleResumeThreadId,
-} from "./Layers/CodexSessionRuntime.ts";
+import { computeDynamicToolFingerprint, readResumeThreadId } from "./Layers/CodexSessionRuntime.ts";
 import { tritonAiCodexCapabilities } from "./Layers/CodexProvider.ts";
 
 describe("downstream provider and integration policy", () => {
@@ -71,7 +68,7 @@ describe("downstream provider and integration policy", () => {
     ).toThrow(/unsupported fields/u);
   });
 
-  it("binds dynamic-tool grants into Codex resume compatibility", () => {
+  it("keeps Codex conversation history when dynamic-tool grants change", () => {
     const tool = {
       name: "fixture_records_search",
       description: "Read fixture records.",
@@ -83,13 +80,15 @@ describe("downstream provider and integration policy", () => {
       dynamicToolFingerprint: computeDynamicToolFingerprint([tool]),
     };
 
-    expect(readCompatibleResumeThreadId(cursor, [tool])).toBe("provider-thread");
+    expect(readResumeThreadId(cursor, [tool])?.threadId).toBe("provider-thread");
     expect(
-      readCompatibleResumeThreadId(cursor, [
-        { ...tool, description: "Changed capability contract." },
-      ]),
-    ).toBeUndefined();
-    expect(readCompatibleResumeThreadId(cursor, [])).toBeUndefined();
+      readResumeThreadId(cursor, [{ ...tool, description: "Changed capability contract." }]),
+    ).toEqual({ threadId: "provider-thread", toolCatalogChanged: true });
+    // A revoked grant still resumes; item/tool/call refuses tools missing from the live catalog.
+    expect(readResumeThreadId(cursor, [])).toEqual({
+      threadId: "provider-thread",
+      toolCatalogChanged: true,
+    });
   });
 
   it("pins TritonAI identity and conservative provider defaults", () => {

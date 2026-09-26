@@ -2570,8 +2570,8 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
             : Effect.void,
         );
         // Keep read tools stable across routine connection changes, but never disclose an
-        // unavailable write tool to Codex. CodexSessionRuntime fingerprints this catalog and
-        // starts fresh instead of resuming when an opt-in write tool is enabled or disabled.
+        // unavailable write tool to a new Codex thread. A resumed thread keeps the catalog it
+        // started with, so every call is re-checked against this live catalog instead.
         const dynamicToolBindings = integrationRegistry
           ? integrationRegistry.toolDefinitions().flatMap((definition) => {
               const requiresApproval =

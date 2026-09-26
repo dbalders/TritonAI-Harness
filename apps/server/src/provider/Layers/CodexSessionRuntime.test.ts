@@ -31,7 +31,7 @@ import {
   isRecoverableThreadResumeError,
   makeMemoryConsolidationNotificationFilter,
   openCodexThread,
-  readCompatibleResumeThreadId,
+  readResumeThreadId,
   reconcilePluginSkillAvailability,
   resolvePluginSkillAvailability,
   readCodexThread,
@@ -159,48 +159,37 @@ describe("Codex resume cursor compatibility", () => {
     inputSchema: { type: "object" },
   } as const;
 
-  it("resumes only when the persisted and currently granted dynamic tool sets match", () => {
-    NodeAssert.equal(
-      readCompatibleResumeThreadId(
-        {
-          threadId: "provider-thread",
-          dynamicToolNames: [auditTool.name, recordsTool.name],
-          dynamicToolFingerprint: computeDynamicToolFingerprint([auditTool, recordsTool]),
-        },
-        [recordsTool, auditTool],
-      ),
-      "provider-thread",
+  it("resumes the persisted thread even when the granted dynamic tool set changed", () => {
+    const cursor = {
+      threadId: "provider-thread",
+      dynamicToolNames: [recordsTool.name],
+      dynamicToolFingerprint: computeDynamicToolFingerprint([recordsTool]),
+    };
+    NodeAssert.deepStrictEqual(readResumeThreadId(cursor, [recordsTool]), {
+      threadId: "provider-thread",
+      toolCatalogChanged: false,
+    });
+    NodeAssert.deepStrictEqual(readResumeThreadId(cursor, [recordsTool, auditTool]), {
+      threadId: "provider-thread",
+      toolCatalogChanged: true,
+    });
+    NodeAssert.deepStrictEqual(
+      readResumeThreadId(cursor, [{ ...recordsTool, description: "Updated fixture contract." }]),
+      { threadId: "provider-thread", toolCatalogChanged: true },
     );
-    NodeAssert.equal(
-      readCompatibleResumeThreadId(
-        {
-          threadId: "provider-thread",
-          dynamicToolNames: [recordsTool.name],
-          dynamicToolFingerprint: computeDynamicToolFingerprint([recordsTool]),
-        },
-        [recordsTool, auditTool],
-      ),
-      undefined,
-    );
-    NodeAssert.equal(
-      readCompatibleResumeThreadId(
-        {
-          threadId: "provider-thread",
-          dynamicToolNames: [recordsTool.name],
-          dynamicToolFingerprint: computeDynamicToolFingerprint([recordsTool]),
-        },
-        [{ ...recordsTool, description: "Updated fixture contract." }],
-      ),
-      undefined,
-    );
-    NodeAssert.equal(
-      readCompatibleResumeThreadId({ threadId: "legacy-thread" }, [recordsTool]),
-      undefined,
-    );
-    NodeAssert.equal(
-      readCompatibleResumeThreadId({ threadId: "legacy-thread" }, undefined),
-      "legacy-thread",
-    );
+    NodeAssert.deepStrictEqual(readResumeThreadId(cursor, []), {
+      threadId: "provider-thread",
+      toolCatalogChanged: true,
+    });
+    NodeAssert.deepStrictEqual(readResumeThreadId({ threadId: "legacy-thread" }, [recordsTool]), {
+      threadId: "legacy-thread",
+      toolCatalogChanged: true,
+    });
+    NodeAssert.deepStrictEqual(readResumeThreadId({ threadId: "legacy-thread" }, undefined), {
+      threadId: "legacy-thread",
+      toolCatalogChanged: false,
+    });
+    NodeAssert.equal(readResumeThreadId(undefined, [recordsTool]), undefined);
   });
 });
 
@@ -245,7 +234,7 @@ describe("integration write-tool approval", () => {
     );
   });
 
-  it("binds write-approval metadata into resume compatibility", () => {
+  it("binds write-approval metadata into the tool catalog fingerprint", () => {
     const tool = {
       name: "fixture_records_write",
       description: "Change a record.",

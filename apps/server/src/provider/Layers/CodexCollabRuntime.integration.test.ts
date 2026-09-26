@@ -31,7 +31,7 @@ import { HttpServer, HttpServerRequest, HttpServerResponse } from "effect/unstab
 import { assert, describe, vi } from "vite-plus/test";
 
 import wireFixture from "../testFixtures/codexMultiAgentWire.json" with { type: "json" };
-import { makeCodexSessionRuntime } from "./CodexSessionRuntime.ts";
+import { computeDynamicToolFingerprint, makeCodexSessionRuntime } from "./CodexSessionRuntime.ts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 
 const ROOT = wireFixture.rootThreadId;
@@ -1062,4 +1062,55 @@ describe("CodexSessionRuntime collab integration", () => {
       }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
     );
   }
+
+  it.effect("keeps the resumed thread's original tool catalog in its resume cursor", () =>
+    Effect.gen(function* () {
+      const script = { rootThreadId: ROOT, recordRequests: true, notifications: [] };
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      NodeFS.writeFileSync(scriptPath, JSON.stringify(script), "utf8");
+      NodeFS.rmSync(`${scriptPath}.requests`, { force: true });
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          NodeFS.rmSync(scriptPath, { force: true });
+          NodeFS.rmSync(`${scriptPath}.requests`, { force: true });
+        }),
+      );
+      const originalTool = {
+        name: "fixture_records_search",
+        description: "Read fixture records.",
+        inputSchema: { type: "object" },
+      };
+      const grantedLaterTool = {
+        name: "fixture_audit_recent",
+        description: "Read fixture audit events.",
+        inputSchema: { type: "object" },
+      };
+      const originalCatalog = {
+        dynamicToolNames: [originalTool.name],
+        dynamicToolFingerprint: computeDynamicToolFingerprint([originalTool]),
+      };
+
+      const runtime = yield* makeCodexSessionRuntime({
+        threadId: ThreadId.make("thread-resume-changed-catalog"),
+        binaryPath: peerPath,
+        cwd: "/tmp",
+        runtimeMode: "full-access",
+        environment: { ...process.env, T3_CODEX_COLLAB_SCRIPT: scriptPath },
+        resumeCursor: { threadId: ROOT, ...originalCatalog },
+        dynamicTools: [originalTool, grantedLaterTool],
+      });
+
+      const session = yield* runtime.start();
+      assert.deepEqual(
+        readRecordedRequests().map((request) => request.method),
+        ["thread/resume"],
+      );
+      // Codex restores the thread's original tools, so a later resume must still see a change.
+      assert.deepEqual(session.resumeCursor, { threadId: ROOT, ...originalCatalog });
+      const turn = yield* runtime.sendTurn({ input: "continue" });
+      assert.deepEqual(turn.resumeCursor, { threadId: ROOT, ...originalCatalog });
+
+      yield* runtime.close;
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
 });
