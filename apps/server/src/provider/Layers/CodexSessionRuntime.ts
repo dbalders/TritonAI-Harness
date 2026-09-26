@@ -1649,9 +1649,18 @@ export const makeCodexSessionRuntime = (
     const suppressMemoryConsolidationNotification = makeMemoryConsolidationNotificationFilter();
     const closedRef = yield* Ref.make(false);
     const dynamicToolNames = normalizeDynamicToolNames(options.dynamicTools);
-    const dynamicToolFingerprint = computeDynamicToolFingerprint(options.dynamicTools);
+    const currentToolCatalog = {
+      dynamicToolNames,
+      dynamicToolFingerprint: computeDynamicToolFingerprint(options.dynamicTools),
+    };
     const resume = readResumeThreadId(options.resumeCursor, options.dynamicTools);
     const resumeThreadId = resume?.threadId;
+    // The catalog the provider thread actually holds. A resumed thread keeps the one recorded in
+    // its cursor (none for legacy cursors); only a newly started thread gets the current catalog.
+    const threadToolCatalogRef = yield* Ref.make<{
+      readonly dynamicToolNames?: ReadonlyArray<string>;
+      readonly dynamicToolFingerprint?: string;
+    }>(currentToolCatalog);
 
     // `~` is not shell-expanded when env vars are set via
     // `child_process.spawn`; `expandHomePath` lets a configured
@@ -2478,13 +2487,13 @@ export const makeCodexSessionRuntime = (
           if (providerThreadId && payload.thread.id !== providerThreadId) {
             return Effect.void;
           }
-          return updateSession(sessionRef, {
-            resumeCursor: {
-              threadId: payload.thread.id,
-              dynamicToolNames,
-              dynamicToolFingerprint,
-            },
-          });
+          return Ref.get(threadToolCatalogRef).pipe(
+            Effect.flatMap((toolCatalog) =>
+              updateSession(sessionRef, {
+                resumeCursor: { threadId: payload.thread.id, ...toolCatalog },
+              }),
+            ),
+          );
         }),
       ),
     );
@@ -2985,12 +2994,24 @@ export const makeCodexSessionRuntime = (
       });
 
       const providerThreadId = opened.thread.id;
+      const toolCatalog =
+        providerThreadId === resumeThreadId && isCodexResumeCursorSchema(options.resumeCursor)
+          ? {
+              ...(options.resumeCursor.dynamicToolNames
+                ? { dynamicToolNames: options.resumeCursor.dynamicToolNames }
+                : {}),
+              ...(options.resumeCursor.dynamicToolFingerprint
+                ? { dynamicToolFingerprint: options.resumeCursor.dynamicToolFingerprint }
+                : {}),
+            }
+          : currentToolCatalog;
+      yield* Ref.set(threadToolCatalogRef, toolCatalog);
       const session = {
         ...(yield* Ref.get(sessionRef)),
         status: "ready",
         cwd: opened.cwd,
         model: opened.model,
-        resumeCursor: { threadId: providerThreadId, dynamicToolNames, dynamicToolFingerprint },
+        resumeCursor: { threadId: providerThreadId, ...toolCatalog },
         updatedAt: yield* nowIso,
       } satisfies ProviderSession;
       yield* Ref.set(sessionRef, session);
@@ -3155,8 +3176,7 @@ export const makeCodexSessionRuntime = (
               ? {
                   resumeCursor: {
                     threadId: resumedProviderThreadId,
-                    dynamicToolNames,
-                    dynamicToolFingerprint,
+                    ...(yield* Ref.get(threadToolCatalogRef)),
                   },
                 }
               : {}),
