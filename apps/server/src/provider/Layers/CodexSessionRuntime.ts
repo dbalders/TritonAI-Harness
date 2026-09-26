@@ -729,10 +729,15 @@ export function computeDynamicToolFingerprint(
   return NodeCrypto.createHash("sha256").update(canonicalJson(definitions), "utf8").digest("hex");
 }
 
-// Codex fixes a thread's dynamic tools at thread/start and restores that set on thread/resume, so
-// a resumed thread keeps the catalog it started with. Resume anyway: starting fresh silently drops
-// the whole conversation, and item/tool/call re-checks every call against the live catalog, so a
-// stale, revoked, or newly approval-gated tool still cannot run.
+/**
+ * Returns the provider thread to resume, and whether the dynamic-tool catalog has changed since
+ * the cursor was recorded.
+ *
+ * Codex fixes a thread's dynamic tools at thread/start and restores that set on thread/resume, so
+ * a resumed thread keeps the catalog it started with. Resume anyway: starting fresh silently drops
+ * the whole conversation, and item/tool/call re-checks every call against the live catalog, so a
+ * stale, revoked, or newly approval-gated tool still cannot run.
+ */
 export function readResumeThreadId(
   resumeCursor: ProviderSession["resumeCursor"],
   dynamicTools: ReadonlyArray<CodexDynamicToolDefinition> | undefined,
