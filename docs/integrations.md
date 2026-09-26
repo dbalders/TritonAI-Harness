@@ -267,8 +267,10 @@ that MCP silently omitted. The catalog is immutable for the process lifetime.
 Codex app-server tasks receive currently available provider tools as dynamic functions. Canonical
 manifest names such as `fixture.records.search` map deterministically to Codex-safe names such as
 `fixture_records_search`. Every call resolves through the live registry, so disable, disconnect,
-capability loss, or provider failure continues to fail closed. Resume cursors fingerprint the full
-dynamic-tool contract and start fresh when that contract changes. Tool input is decoded again at the
+capability loss, or provider failure continues to fail closed. Codex only accepts dynamic tools at
+`thread/start`, so a resumed thread keeps the tool list it started with; resume still wins over
+starting fresh, because a fresh thread silently loses the conversation while the live registry
+already refuses stale tools. Newly granted tools reach a task in its next thread. Tool input is decoded again at the
 Registry choke point; transport validation is not treated as the security boundary.
 Effective availability changes refresh every configured Codex provider snapshot immediately, with
 debouncing to avoid poll storms. Idle sessions are recreated at the next turn boundary with their
