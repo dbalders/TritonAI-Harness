@@ -37,6 +37,7 @@ import * as ExternalLauncher from "../src/process/externalLauncher.ts";
 import { ProviderSessionDirectoryLive } from "../src/provider/Layers/ProviderSessionDirectory.ts";
 import * as ProviderService from "../src/provider/Services/ProviderService.ts";
 import * as ProviderSessionDirectory from "../src/provider/Services/ProviderSessionDirectory.ts";
+import { IntegrationCredentialKeepalive } from "../src/integrations/IntegrationCredentialKeepalive.ts";
 import * as ProviderSessionReaper from "../src/provider/Services/ProviderSessionReaper.ts";
 import * as RepositoryIdentityResolver from "../src/project/RepositoryIdentityResolver.ts";
 import * as ServerLifecycleEvents from "../src/serverLifecycleEvents.ts";
@@ -77,6 +78,9 @@ const startupDependencies = Layer.mergeAll(
     start: () => Effect.void,
   }),
   Layer.succeed(ProviderSessionReaper.ProviderSessionReaper, {
+    start: () => Effect.void,
+  }),
+  Layer.succeed(IntegrationCredentialKeepalive, {
     start: () => Effect.void,
   }),
   ServerLifecycleEvents.layer,

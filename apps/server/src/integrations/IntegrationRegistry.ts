@@ -750,6 +750,7 @@ export class RegistryRuntime {
   readonly #activeProviderLifecycleWork = new Map<IntegrationProvider, Set<Promise<unknown>>>();
   readonly #activeProviderCommitWork = new Map<IntegrationProvider, Set<Promise<unknown>>>();
   readonly #providerPreparationWork = new Map<IntegrationProvider, Promise<void>>();
+  readonly #providerLastPreparedAt = new Map<IntegrationProvider, number>();
   readonly #activeSummaryRefreshWork = new Set<Promise<void>>();
   readonly #skillSyncOperations = new Map<string, Promise<void>>();
   #closing = false;
@@ -1836,8 +1837,51 @@ export class RegistryRuntime {
         this.#providerPreparationWork.delete(provider);
       }
     };
-    void work.then(remove, remove);
+    void work.then(() => {
+      this.#providerLastPreparedAt.set(provider, Date.now());
+      remove();
+    }, remove);
     await awaitWithSignal(work, signal);
+  }
+
+  /**
+   * Refresh credentials for connected integrations that no tool call has touched recently.
+   *
+   * Providers only renew inside `prepare`, which runs on invocation, so an integration nobody
+   * calls never rotates its credential. Remote grants with a finite refresh-token lifetime
+   * expire on exactly that silence and send the user back through a browser sign-in. Touching
+   * an idle provider keeps the grant rolling without waiting for someone to use it.
+   *
+   * Opportunistic by design: a provider that cannot refresh right now reports through its own
+   * status, and the next real invocation surfaces it.
+   */
+  async refreshIdleCredentials(options: {
+    readonly idleThresholdMs: number;
+    readonly signal?: AbortSignal;
+  }): Promise<ReadonlyArray<string>> {
+    if (this.#closing) return [];
+    await this.#ready;
+    const now = Date.now();
+    const refreshed: string[] = [];
+    for (const integration of this.#catalog.values()) {
+      if (this.#closing || options.signal?.aborted) break;
+      const { manifest, provider } = integration;
+      if (!provider?.prepare) continue;
+      if (!ownRecordValue(this.#state.installed, manifest.id)?.enabled) continue;
+      if (this.#summaries.get(manifest.id)?.connectionState !== "connected") continue;
+      // A connection that is mid-change owns the provider; preparing underneath it would race
+      // the lifecycle operation already rewriting the same credential.
+      if (this.#activeProviderLifecycleWork.has(provider)) continue;
+      const lastPreparedAt = this.#providerLastPreparedAt.get(provider);
+      if (lastPreparedAt !== undefined && now - lastPreparedAt < options.idleThresholdMs) continue;
+      try {
+        await this.#prepareProvider(provider, options.signal ?? new AbortController().signal);
+        refreshed.push(manifest.id);
+      } catch {
+        // Reported through provider status; a failed keepalive must not stop the sweep.
+      }
+    }
+    return refreshed;
   }
 
   #refreshSummaryAfterProviderSettlement(
@@ -2703,6 +2747,7 @@ export class RegistryRuntime {
         );
         await this.#clearProviderCommitJournal(id);
         this.#faultedProviders.delete(provider);
+        this.#providerLastPreparedAt.delete(provider);
         await this.#summarize(integration);
       } catch (error) {
         await this.#summarize(integration).catch(() => undefined);

@@ -1284,6 +1284,84 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
+  it("refreshes idle connected credentials and leaves recently prepared ones alone", async () => {
+    const root = await NodeFSP.mkdtemp(
+      NodePath.join(NodeOS.tmpdir(), "tritonai-credential-keepalive-"),
+    );
+    const state: ProviderState = {
+      status: {
+        state: "connected",
+        accountLabel: "Fixture",
+        grantedCapabilities: ["fixture.read"],
+        message: null,
+      },
+      credential: "test-credential",
+      disconnectFails: false,
+    };
+    let prepareCalls = 0;
+    const implementation: IntegrationProvider = {
+      ...provider("test-fixture-provider", state),
+      prepare: async (context) => {
+        prepareCalls += 1;
+        await context.beginCommit();
+      },
+    };
+    const registry = new RegistryRuntime(root, [packaged(fixtureManifest, implementation)]);
+    try {
+      await registry.install(fixtureManifest.id);
+      await registry.list();
+
+      // Never prepared in this process, so the grant is treated as idle.
+      await expect(registry.refreshIdleCredentials({ idleThresholdMs: 0 })).resolves.toEqual([
+        fixtureManifest.id,
+      ]);
+      expect(prepareCalls).toBe(1);
+
+      // Within the threshold the sweep must stay silent rather than rotate on every pass.
+      await expect(registry.refreshIdleCredentials({ idleThresholdMs: 60_000 })).resolves.toEqual(
+        [],
+      );
+      expect(prepareCalls).toBe(1);
+    } finally {
+      await registry.close();
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("skips credential keepalive for integrations that are not connected", async () => {
+    const root = await NodeFSP.mkdtemp(
+      NodePath.join(NodeOS.tmpdir(), "tritonai-credential-keepalive-idle-"),
+    );
+    const state: ProviderState = {
+      status: {
+        state: "not_connected",
+        accountLabel: null,
+        grantedCapabilities: [],
+        message: null,
+      },
+      credential: null,
+      disconnectFails: false,
+    };
+    let prepareCalls = 0;
+    const implementation: IntegrationProvider = {
+      ...provider("test-fixture-provider", state),
+      prepare: async (context) => {
+        prepareCalls += 1;
+        await context.beginCommit();
+      },
+    };
+    const registry = new RegistryRuntime(root, [packaged(fixtureManifest, implementation)]);
+    try {
+      await registry.install(fixtureManifest.id);
+      await registry.list();
+      await expect(registry.refreshIdleCredentials({ idleThresholdMs: 0 })).resolves.toEqual([]);
+      expect(prepareCalls).toBe(0);
+    } finally {
+      await registry.close();
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("prepares restart-only provider state once before concurrent tool invocations", async () => {
     const root = await NodeFSP.mkdtemp(
       NodePath.join(NodeOS.tmpdir(), "tritonai-provider-prepare-"),
