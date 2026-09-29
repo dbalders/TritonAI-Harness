@@ -147,6 +147,40 @@ describe("project notes", () => {
     expect(appendProjectRecentLine(updated, "2026-09-28", "Login fix")).toBe(updated);
   });
 
+  it("keeps history inside Recent when the user adds a section below it", () => {
+    const note = [
+      "# Acme",
+      "",
+      "## Recent",
+      "",
+      "- [[Daily/2026-09-27]]: Found the bug",
+      "",
+      "## Personal notes",
+      "",
+      "- [[Daily/2026-09-28]]: Keep the existing deployment policy.",
+      "",
+    ].join("\n");
+    const updated = appendProjectRecentLine(note, "2026-09-28", "Login fix");
+    expect(updated).toBe(
+      [
+        "# Acme",
+        "",
+        "## Recent",
+        "",
+        "- [[Daily/2026-09-27]]: Found the bug",
+        "- [[Daily/2026-09-28]]: Login fix",
+        "",
+        "## Personal notes",
+        "",
+        "- [[Daily/2026-09-28]]: Keep the existing deployment policy.",
+        "",
+      ].join("\n"),
+    );
+    expect(appendProjectRecentLine(updated, "2026-09-28", "Login fix again")).toBe(
+      updated.replace("Login fix", "Login fix again"),
+    );
+  });
+
   it("keeps a user's daily note above one summary, even when the day is redone", () => {
     const render = (overview: string) =>
       renderDailyNote({
