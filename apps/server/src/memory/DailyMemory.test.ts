@@ -255,7 +255,15 @@ it.layer(NodeServices.layer)("DailyMemory", (it) => {
 
   it.effect("gives same-titled projects in different workspaces their own notes", () =>
     Effect.gen(function* () {
-      const { baseDir, layer, fs, path } = yield* makeHarness({ memoryEnabled: true });
+      const activitySeen: string[] = [];
+      const { baseDir, layer, fs, path } = yield* makeHarness({
+        memoryEnabled: true,
+        generate: (input) =>
+          Effect.sync(() => {
+            activitySeen.push(input.activity);
+            return summaryFor(input);
+          }),
+      });
       const vault = path.join(baseDir, "memory", "general");
       yield* TestClock.setTime(NOW);
 
@@ -287,6 +295,10 @@ it.layer(NodeServices.layer)("DailyMemory", (it) => {
         assert.include(fork, "- [[Daily/2026-09-28]]: Progress 2026-09-28\n");
         const day28 = yield* fs.readFileString(path.join(vault, "Daily", "2026-09-28.md"));
         assert.include(day28, "**Fork cleanup** in [[Acme App (forks)]]");
+        // The model sees which note each thread belongs to.
+        const day28Activity = activitySeen.at(-1) ?? "";
+        assert.include(day28Activity, "## Thread: Fork cleanup\nProject: Acme App (forks)");
+        assert.include(day28Activity, "## Thread: Fix the login redirect\nProject: Acme App\n");
       }).pipe(Effect.provide(layer));
     }),
   );

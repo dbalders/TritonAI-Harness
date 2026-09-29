@@ -138,6 +138,15 @@ describe("project notes", () => {
     expect(updated.endsWith("## Recent\n- [[Daily/2026-09-28]]: Login fix\n")).toBe(true);
   });
 
+  it("adds a Recent section to a note without one instead of touching the user's lines", () => {
+    const userNote = "# Acme\n\n- [[Daily/2026-09-28]]: The day we chose cookie sessions.\n";
+    const updated = appendProjectRecentLine(userNote, "2026-09-28", "Login fix");
+    expect(updated).toBe(
+      "# Acme\n\n- [[Daily/2026-09-28]]: The day we chose cookie sessions.\n\n## Recent\n\n- [[Daily/2026-09-28]]: Login fix\n",
+    );
+    expect(appendProjectRecentLine(updated, "2026-09-28", "Login fix")).toBe(updated);
+  });
+
   it("keeps a user's daily note above one summary, even when the day is redone", () => {
     const render = (overview: string) =>
       renderDailyNote({

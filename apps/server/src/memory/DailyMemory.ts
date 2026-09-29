@@ -445,7 +445,7 @@ export const make = Effect.gen(function* () {
       cwd: paths.root,
       day,
       projectNames: [...new Set(projectNoteNames.values())],
-      activity: formatMemoryActivity(threads),
+      activity: formatMemoryActivity(threads, projectNoteNames),
       inboxNotes: [...processedNotes, ...includedInboxNotes].map(formatInboxNote).join("\n\n"),
       modelSelection: settings.textGenerationModelSelection,
     });

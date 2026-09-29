@@ -78,12 +78,16 @@ function formatLocalTime(iso: string): string {
 }
 
 /** The thread activity section of the summary prompt. */
-export function formatMemoryActivity(threads: ReadonlyArray<MemoryThreadActivity>): string {
+export function formatMemoryActivity(
+  threads: ReadonlyArray<MemoryThreadActivity>,
+  /** Project id to note name; the model reports work under these names. */
+  projectNoteNames: ReadonlyMap<string, string>,
+): string {
   return threads
     .map((thread) => {
       const header = [
         `## Thread: ${singleLine(thread.title)}`,
-        `Project: ${thread.projectTitle}`,
+        `Project: ${projectNoteNames.get(thread.projectId) ?? thread.projectTitle}`,
         ...(thread.branch ? [`Branch: ${thread.branch}`] : []),
         ...(thread.pullRequestUrl ? [`Pull request: ${thread.pullRequestUrl}`] : []),
       ];
@@ -263,9 +267,9 @@ export function renderProjectNote(input: {
 }
 
 /**
- * Adds the day's history line, or replaces it when the day is summarized
- * again. Only lines below the Recent heading are replaced; the rest of the
- * note is left as the user wrote it.
+ * Adds the day's history line under Recent, or replaces it when the day is
+ * summarized again. A note without a Recent heading gets one at the end. Lines
+ * above the heading are left as the user wrote them.
  */
 export function appendProjectRecentLine(content: string, day: string, recent: string): string {
   const prefix = `- [[Daily/${day}]]:`;
@@ -273,13 +277,20 @@ export function appendProjectRecentLine(content: string, day: string, recent: st
   const newline = content.includes("\r\n") ? "\r\n" : "\n";
   const lines = content.split(/\r?\n/u);
   const recentHeading = lines.findLastIndex((candidate) => candidate.trim() === "## Recent");
-  const existing = lines.findIndex(
-    (candidate, index) => index > recentHeading && candidate.startsWith(prefix),
-  );
-  if (existing !== -1) {
-    lines[existing] = line;
-    return lines.join(newline);
+  if (recentHeading !== -1) {
+    const existing = lines.findIndex(
+      (candidate, index) => index > recentHeading && candidate.startsWith(prefix),
+    );
+    if (existing !== -1) {
+      lines[existing] = line;
+      return lines.join(newline);
+    }
   }
-  const separator = content.length === 0 || content.endsWith("\n") ? "" : newline;
+  if (recentHeading === -1) {
+    const body = content.trimEnd();
+    const gap = body.length > 0 ? newline + newline : "";
+    return `${body}${gap}## Recent${newline}${newline}${line}${newline}`;
+  }
+  const separator = content.endsWith("\n") ? "" : newline;
   return `${content}${separator}${line}${newline}`;
 }
