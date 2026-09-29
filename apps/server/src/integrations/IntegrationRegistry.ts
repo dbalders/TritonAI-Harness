@@ -1865,21 +1865,26 @@ export class RegistryRuntime {
     const refreshed: string[] = [];
     for (const integration of this.#catalog.values()) {
       if (this.#closing || options.signal?.aborted) break;
-      const { manifest, provider } = integration;
-      if (!provider?.prepare) continue;
-      if (!ownRecordValue(this.#state.installed, manifest.id)?.enabled) continue;
-      if (this.#summaries.get(manifest.id)?.connectionState !== "connected") continue;
-      // A connection that is mid-change owns the provider; preparing underneath it would race
-      // the lifecycle operation already rewriting the same credential.
-      if (this.#activeProviderLifecycleWork.has(provider)) continue;
-      const lastPreparedAt = this.#providerLastPreparedAt.get(provider);
-      if (lastPreparedAt !== undefined && now - lastPreparedAt < options.idleThresholdMs) continue;
-      try {
-        await this.#prepareProvider(provider, options.signal ?? new AbortController().signal);
-        refreshed.push(manifest.id);
-      } catch {
-        // Reported through provider status; a failed keepalive must not stop the sweep.
-      }
+      await this.#serializeIntegration(integration.manifest.id, async () => {
+        const { manifest, provider } = integration;
+        if (this.#closing || options.signal?.aborted || this.#isRevoking(manifest.id)) return;
+        if (this.#catalog.get(manifest.id) !== integration || !provider?.prepare) return;
+        if (!ownRecordValue(this.#state.installed, manifest.id)?.enabled) return;
+        if (this.#summaries.get(manifest.id)?.connectionState !== "connected") return;
+        if (this.#activeProviderLifecycleWork.has(provider)) return;
+        const lastPreparedAt = this.#providerLastPreparedAt.get(provider);
+        if (lastPreparedAt !== undefined && now - lastPreparedAt < options.idleThresholdMs) return;
+        try {
+          // Keep the integration slot until shared preparation settles. Caller cancellation
+          // stops later providers, while shutdown still cancels the tracked operation.
+          await this.#prepareProvider(provider, new AbortController().signal);
+          refreshed.push(manifest.id);
+        } catch {
+          // A failed provider must not stop the sweep or leave cached availability stale.
+        } finally {
+          if (!this.#closing) await this.#summarize(integration).catch(() => undefined);
+        }
+      });
     }
     return refreshed;
   }

@@ -83,7 +83,7 @@ const makeIntegrationCredentialKeepalive = (options?: IntegrationCredentialKeepa
     return { start } satisfies IntegrationCredentialKeepaliveShape;
   });
 
-export const makeIntegrationCredentialKeepaliveLive = (
+const makeIntegrationCredentialKeepaliveLive = (
   options?: IntegrationCredentialKeepaliveLiveOptions,
 ) => Layer.effect(IntegrationCredentialKeepalive, makeIntegrationCredentialKeepalive(options));
 

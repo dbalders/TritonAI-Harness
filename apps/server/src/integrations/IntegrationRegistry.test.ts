@@ -1362,6 +1362,91 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
+  it.each(["disconnect", "remove"] as const)("drains a keepalive before %s", async (operation) => {
+    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-keepalive-drain-"));
+    const state: ProviderState = {
+      status: {
+        state: "connected",
+        accountLabel: "Fixture",
+        grantedCapabilities: ["fixture.read"],
+        message: null,
+      },
+      credential: "test-credential",
+      disconnectFails: false,
+    };
+    let started!: () => void;
+    const preparationStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    let release!: () => void;
+    const canFinish = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const implementation: IntegrationProvider = {
+      ...provider("test-fixture-provider", state),
+      prepare: async (context) => {
+        await context.beginCommit();
+        started();
+        await canFinish;
+      },
+    };
+    const registry = new RegistryRuntime(root, [packaged(fixtureManifest, implementation)]);
+    try {
+      await registry.install(fixtureManifest.id);
+      const sweep = registry.refreshIdleCredentials({ idleThresholdMs: 0 });
+      await preparationStarted;
+      const result = registry[operation](fixtureManifest.id);
+      const settled = Promise.all([sweep, result]);
+      release();
+      await expect(settled).resolves.toBeDefined();
+      expect(state.credential).toBeNull();
+    } finally {
+      release();
+      await registry.close();
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("publishes a changed connection status after a failed keepalive", async () => {
+    const root = await NodeFSP.mkdtemp(
+      NodePath.join(NodeOS.tmpdir(), "tritonai-keepalive-status-"),
+    );
+    const state: ProviderState = {
+      status: {
+        state: "connected",
+        accountLabel: "Fixture",
+        grantedCapabilities: ["fixture.read"],
+        message: null,
+      },
+      credential: "test-credential",
+      disconnectFails: false,
+    };
+    const implementation: IntegrationProvider = {
+      ...provider("test-fixture-provider", state),
+      prepare: async () => {
+        state.status = {
+          state: "not_connected",
+          accountLabel: null,
+          grantedCapabilities: [],
+          message: null,
+        };
+        throw new Error("Sign-in expired.");
+      },
+    };
+    const registry = new RegistryRuntime(root, [packaged(fixtureManifest, implementation)]);
+    try {
+      await registry.install(fixtureManifest.id);
+      await registry.refreshIdleCredentials({ idleThresholdMs: 0 });
+      const snapshot = await registry.snapshot();
+      expect(snapshot.integrations[0]?.connectionState).toBe("not_connected");
+      expect(snapshot.integrations[0]?.tools[0]?.available).toBe(false);
+      expect(snapshot.integrations[0]?.skills[0]?.available).toBe(false);
+    } finally {
+      await registry.close();
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("prepares restart-only provider state once before concurrent tool invocations", async () => {
     const root = await NodeFSP.mkdtemp(
       NodePath.join(NodeOS.tmpdir(), "tritonai-provider-prepare-"),
