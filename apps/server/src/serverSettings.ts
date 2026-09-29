@@ -1191,6 +1191,8 @@ const make = (
           yield* writeSettingsAtomically(restoredSettings);
         } else {
           yield* Ref.set(rawDocumentRef, {});
+          // Record the new-install Memory choice so later threads cannot turn it off.
+          if (restoredSettings.memoryEnabled) yield* writeSettingsAtomically(restoredSettings);
         }
         return restoredSettings;
       }

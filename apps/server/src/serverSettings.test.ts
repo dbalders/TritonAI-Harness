@@ -1129,15 +1129,15 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 
-  it.effect("turns Memory on for a new installation and keeps it after the first write", () =>
+  it.effect("turns Memory on for a new installation and records that choice", () =>
     Effect.gen(function* () {
       const serverConfig = yield* ServerConfig.ServerConfig;
       const fileSystem = yield* FileSystem.FileSystem;
       const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
 
       assert.isTrue((yield* serverSettings.getSettings).memoryEnabled);
-      yield* serverSettings.updateSettings({ addProjectBaseDirectory: "~/Development" });
 
+      // Recorded before any user change, so the first thread cannot make it look existing.
       const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
       // @effect-diagnostics-next-line preferSchemaOverJson:off
       assert.isTrue(JSON.parse(raw).memoryEnabled);
