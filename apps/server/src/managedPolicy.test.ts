@@ -20,6 +20,50 @@ import {
 const managedInstanceId = ProviderInstanceId.make("codex");
 const frontierInstanceId = ProviderInstanceId.make("codex_frontier");
 
+const primaryCapabilities = {
+  inputModalities: ["text", "image"],
+  optionDescriptors: [
+    {
+      id: "reasoningEffort",
+      label: "Reasoning",
+      type: "select",
+      options: [
+        { id: "low", label: "Low" },
+        { id: "high", label: "High", isDefault: true },
+        { id: "xhigh", label: "Extra High" },
+      ],
+      currentValue: "high",
+    },
+  ],
+} as const;
+const fixtureConfig: TritonAiManagedConfig = {
+  ...managedConfig,
+  models: {
+    default: "on-prem-primary",
+    restrictedFallback: "on-prem-fallback",
+    replacements: {
+      "retired-primary": "on-prem-primary",
+      "retired-cloud": "cloud-primary",
+    },
+    catalog: [
+      {
+        id: "on-prem-primary",
+        name: "Primary",
+        shortName: "Primary",
+        route: "on-prem",
+        capabilities: primaryCapabilities,
+      },
+      {
+        id: "on-prem-fallback",
+        name: "Fallback",
+        route: "on-prem",
+        capabilities: { inputModalities: ["text"] },
+      },
+      { id: "cloud-primary", name: "Cloud", route: "frontier" },
+    ],
+  },
+};
+
 describe("TritonAI managed Harness policy", () => {
   beforeEach(() => {
     migrateLegacyInstallerManagedSettings({
@@ -41,103 +85,71 @@ describe("TritonAI managed Harness policy", () => {
     );
   });
 
-  it("locks the managed Codex identity, route, runtime, and catalog", () => {
-    const effective = applyManagedHarnessPolicy({
-      ...DEFAULT_SERVER_SETTINGS,
-      providers: {
-        ...DEFAULT_SERVER_SETTINGS.providers,
-        codex: {
-          ...DEFAULT_SERVER_SETTINGS.providers.codex,
-          enabled: false,
-          binaryPath: "/tmp/personal-codex",
-          homePath: "~/.codex",
+  it("locks managed fields and separates route catalogs while preserving user fields", () => {
+    const effective = applyManagedHarnessPolicy(
+      {
+        ...DEFAULT_SERVER_SETTINGS,
+        providers: {
+          ...DEFAULT_SERVER_SETTINGS.providers,
+          codex: {
+            ...DEFAULT_SERVER_SETTINGS.providers.codex,
+            enabled: false,
+            binaryPath: "/tmp/personal-codex",
+            homePath: "~/.codex",
+          },
+        },
+        providerInstances: {
+          [managedInstanceId]: {
+            driver: ProviderDriverKind.make("opencode"),
+            enabled: false,
+            environment: [
+              {
+                name: "UCSD_AI_BASE_URL",
+                value: "https://unmanaged.example.test/v1",
+                sensitive: false,
+              },
+              { name: "USER_SETTING", value: "preserved", sensitive: false },
+            ],
+            config: { binaryPath: "/tmp/personal-codex", userDefined: true },
+          },
         },
       },
-      providerInstances: {
-        [managedInstanceId]: {
-          driver: ProviderDriverKind.make("opencode"),
-          enabled: false,
-          environment: [
-            {
-              name: "UCSD_AI_BASE_URL",
-              value: "https://unmanaged.example.test/v1",
-              sensitive: false,
-            },
-            { name: "USER_SETTING", value: "preserved", sensitive: false },
-          ],
-          config: { binaryPath: "/tmp/personal-codex", userDefined: true },
-        },
-      },
-    });
-
-    expect(effective.providers.codex.binaryPath).toBe("codex");
-    expect(effective.providers.codex.homePath).toBe(DEFAULT_TRITONAI_CODEX_HOME_PATH);
-    expect(effective.providerInstances[managedInstanceId]?.driver).toBe("codex");
-    expect(effective.providerInstances[managedInstanceId]?.config).toMatchObject({
+      fixtureConfig,
+    );
+    expect(effective.providers.codex).toMatchObject({
       binaryPath: "codex",
       homePath: DEFAULT_TRITONAI_CODEX_HOME_PATH,
-      userDefined: true,
+      customModels: ["on-prem-primary", "on-prem-fallback"],
+    });
+    expect(effective.providerInstances[managedInstanceId]).toMatchObject({
+      driver: "codex",
+      enabled: true,
+      config: {
+        binaryPath: "codex",
+        homePath: DEFAULT_TRITONAI_CODEX_HOME_PATH,
+        userDefined: true,
+        customModels: ["on-prem-primary", "on-prem-fallback"],
+        customModelMetadata: {
+          "on-prem-primary": {
+            name: "Primary",
+            shortName: "Primary",
+            capabilities: primaryCapabilities,
+          },
+        },
+      },
     });
     expect(effective.providerInstances[managedInstanceId]?.environment).toEqual([
       { name: "USER_SETTING", value: "preserved", sensitive: false },
-      { name: "UCSD_AI_BASE_URL", value: managedConfig.provider.baseUrl, sensitive: false },
-      {
-        name: "TRITONAI_API_KEY_SOURCE",
-        value: "TRITONAI_ONPREM_API_KEY",
-        sensitive: false,
-      },
-    ]);
-    expect(effective.providerInstances[managedInstanceId]?.config).toMatchObject({
-      customModels: ["api-glm-5.3-flash", "api-glm-5.3", "api-muse-glimmer-30b"],
-      customModelMetadata: {
-        "api-glm-5.3-flash": {
-          capabilities: {
-            inputModalities: ["text", "image"],
-            optionDescriptors: [
-              {
-                id: "reasoningEffort",
-                options: [{ id: "low" }, { id: "high", isDefault: true }, { id: "xhigh" }],
-                currentValue: "high",
-              },
-            ],
-          },
-        },
-        "api-glm-5.3": {
-          capabilities: {
-            inputModalities: ["text"],
-            optionDescriptors: [
-              {
-                id: "reasoningEffort",
-                options: [{ id: "high", isDefault: true }],
-                currentValue: "high",
-              },
-            ],
-          },
-        },
-        "api-muse-glimmer-30b": {
-          capabilities: { inputModalities: ["text", "image"] },
-        },
-      },
-    });
-    expect(effective.providers.codex.customModels).toEqual([
-      "api-glm-5.3-flash",
-      "api-glm-5.3",
-      "api-muse-glimmer-30b",
+      { name: "UCSD_AI_BASE_URL", value: fixtureConfig.provider.baseUrl, sensitive: false },
+      { name: "TRITONAI_API_KEY_SOURCE", value: "TRITONAI_ONPREM_API_KEY", sensitive: false },
     ]);
     expect(effective.providerInstances[frontierInstanceId]).toMatchObject({
       driver: "codex",
-      displayName: "Cloud models",
       enabled: true,
-      config: {
-        customModels: ["gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "claude-opus-5"],
-      },
+      config: { customModels: ["cloud-primary"] },
       environment: [
-        { name: "UCSD_AI_BASE_URL", value: managedConfig.provider.baseUrl, sensitive: false },
-        {
-          name: "TRITONAI_API_KEY_SOURCE",
-          value: "TRITONAI_FRONTIER_API_KEY",
-          sensitive: false,
-        },
+        { name: "UCSD_AI_BASE_URL", value: fixtureConfig.provider.baseUrl, sensitive: false },
+        { name: "TRITONAI_API_KEY_SOURCE", value: "TRITONAI_FRONTIER_API_KEY", sensitive: false },
       ],
     });
   });
@@ -201,151 +213,96 @@ describe("TritonAI managed Harness policy", () => {
   });
 
   it.each([
-    ["api-deepseek-v4-flash", "minimal", "high"],
-    ["api-deepseek-v4-flash", "medium", "high"],
-    ["api-deepseek-v4-flash", "low", "low"],
-    ["api-deepseek-v4-flash", "high", "high"],
-    ["glm-5.3-flash-test", "medium", "high"],
-    ["api-glm-5.3-flash", "max", "high"],
-    ["api-glm-5.3-flash", "xhigh", "xhigh"],
-    ["api-glm-5.3-flash", "low", "low"],
+    ["retired-primary", "minimal", "high"],
+    ["retired-primary", "medium", "high"],
+    ["on-prem-primary", "max", "high"],
+    ["on-prem-primary", "low", "low"],
+    ["on-prem-primary", "xhigh", "xhigh"],
   ])("normalizes managed reasoning for %s at %s", (model, effort, expected) => {
     const selection = {
       instanceId: managedInstanceId,
       model,
       options: [{ id: "reasoningEffort", value: effort }],
     };
-    const effective = applyManagedHarnessPolicy({
-      ...DEFAULT_SERVER_SETTINGS,
-      textGenerationModelSelection: selection,
-      sourceControlWriterModelSelection: selection,
-    });
+    const effective = applyManagedHarnessPolicy(
+      {
+        ...DEFAULT_SERVER_SETTINGS,
+        textGenerationModelSelection: selection,
+        sourceControlWriterModelSelection: selection,
+      },
+      fixtureConfig,
+    );
     const expectedSelection = {
       instanceId: managedInstanceId,
-      model: "api-glm-5.3-flash",
+      model: "on-prem-primary",
       options: [{ id: "reasoningEffort", value: expected }],
     };
     expect(effective.textGenerationModelSelection).toEqual(expectedSelection);
     expect(effective.sourceControlWriterModelSelection).toEqual(expectedSelection);
   });
 
-  it("uses defaults only for absent selections and fallbacks for retired selections", () => {
-    const retained = applyManagedHarnessPolicy(
-      {
-        ...DEFAULT_SERVER_SETTINGS,
-        textGenerationModelSelection: {
-          instanceId: ProviderInstanceId.make("codex"),
-          model: "gpt-5.6-terra",
-        },
-      },
-      managedConfig,
-      { textGenerationSelectionWasPersisted: true },
-    );
-    expect(retained.textGenerationModelSelection.model).toBe("gpt-5.6-terra");
-    expect(retained.textGenerationModelSelection.instanceId).toBe(frontierInstanceId);
-
-    const absent = applyManagedHarnessPolicy(DEFAULT_SERVER_SETTINGS, managedConfig, {
+  it("uses defaults for absent selections, replacements for retired models, and fallbacks for unknown models", () => {
+    const absent = applyManagedHarnessPolicy(DEFAULT_SERVER_SETTINGS, fixtureConfig, {
       textGenerationSelectionWasPersisted: false,
     });
-    expect(absent.textGenerationModelSelection.model).toBe(managedConfig.models.default);
-    expect(absent.textGenerationModelSelection.instanceId).toBe(managedInstanceId);
-
-    const retiredDeepSeek = applyManagedHarnessPolicy({
-      ...DEFAULT_SERVER_SETTINGS,
-      textGenerationModelSelection: {
-        instanceId: managedInstanceId,
-        model: "api-deepseek-v4-flash",
-      },
-      sourceControlWriterModelSelection: {
-        instanceId: managedInstanceId,
-        model: "api-deepseek-v4-flash",
-      },
+    expect(absent.textGenerationModelSelection).toMatchObject({
+      model: "on-prem-primary",
+      instanceId: managedInstanceId,
     });
-    expect(retiredDeepSeek.textGenerationModelSelection.model).toBe("api-glm-5.3-flash");
-    expect(retiredDeepSeek.sourceControlWriterModelSelection?.model).toBe("api-glm-5.3-flash");
-    expect(retiredDeepSeek.providers.codex.customModels).not.toContain("api-deepseek-v4-flash");
 
-    const retiredGlm = applyManagedHarnessPolicy({
-      ...DEFAULT_SERVER_SETTINGS,
-      textGenerationModelSelection: {
-        instanceId: managedInstanceId,
-        model: "api-glm-5.2",
+    for (const [model, expectedModel, expectedInstance] of [
+      ["cloud-primary", "cloud-primary", frontierInstanceId],
+      ["retired-cloud", "cloud-primary", frontierInstanceId],
+      ["retired-primary", "on-prem-primary", managedInstanceId],
+      ["unknown-model", "on-prem-fallback", managedInstanceId],
+      ["constructor", "on-prem-fallback", managedInstanceId],
+    ] as const) {
+      const selection = { instanceId: managedInstanceId, model };
+      const effective = applyManagedHarnessPolicy(
+        {
+          ...DEFAULT_SERVER_SETTINGS,
+          textGenerationModelSelection: selection,
+          sourceControlWriterModelSelection: selection,
+        },
+        fixtureConfig,
+      );
+      const expected = { model: expectedModel, instanceId: expectedInstance };
+      expect(effective.textGenerationModelSelection).toMatchObject(expected);
+      expect(effective.sourceControlWriterModelSelection).toMatchObject(expected);
+    }
+
+    const personal = { instanceId: ProviderInstanceId.make("personal"), model: "retired-primary" };
+    const personalSettings = applyManagedHarnessPolicy(
+      {
+        ...DEFAULT_SERVER_SETTINGS,
+        textGenerationModelSelection: personal,
+        sourceControlWriterModelSelection: personal,
       },
-    });
-    expect(retiredGlm.textGenerationModelSelection.model).toBe("api-glm-5.3");
-    expect(retiredGlm.textGenerationModelSelection.instanceId).toBe(managedInstanceId);
+      fixtureConfig,
+    );
+    expect(personalSettings.textGenerationModelSelection).toEqual(personal);
+    expect(personalSettings.sourceControlWriterModelSelection).toEqual(personal);
 
-    const personalGemma = {
-      instanceId: ProviderInstanceId.make("personal"),
-      model: "api-gemma-4-31b",
-    };
-    const personalSettings = applyManagedHarnessPolicy({
-      ...DEFAULT_SERVER_SETTINGS,
-      textGenerationModelSelection: personalGemma,
-      sourceControlWriterModelSelection: personalGemma,
-    });
-    expect(personalSettings.textGenerationModelSelection).toEqual(personalGemma);
-    expect(personalSettings.sourceControlWriterModelSelection).toEqual(personalGemma);
-
-    const retiredGemma = applyManagedHarnessPolicy({
-      ...DEFAULT_SERVER_SETTINGS,
-      textGenerationModelSelection: {
-        instanceId: managedInstanceId,
-        model: "api-gemma-4-31b",
-      },
-    });
-    expect(retiredGemma.textGenerationModelSelection.model).toBe("api-muse-glimmer-30b");
-    expect(retiredGemma.textGenerationModelSelection.instanceId).toBe(managedInstanceId);
-
-    const renamedGlimmer = applyManagedHarnessPolicy({
-      ...DEFAULT_SERVER_SETTINGS,
-      textGenerationModelSelection: {
-        instanceId: managedInstanceId,
-        model: "onyx-muse-glimmer-30b",
-      },
-    });
-    expect(renamedGlimmer.textGenerationModelSelection.model).toBe("api-muse-glimmer-30b");
-    expect(renamedGlimmer.textGenerationModelSelection.instanceId).toBe(managedInstanceId);
-
-    const retiredConfig: TritonAiManagedConfig = {
-      ...managedConfig,
-      models: {
-        ...managedConfig.models,
-        replacements: { "retired-model": "gpt-5.6-sol" },
-      },
-    };
+    const options = [
+      { id: "reasoningEffort", value: "xhigh" },
+      { id: "serviceTier", value: "fast" },
+    ];
     const retired = applyManagedHarnessPolicy(
       {
         ...DEFAULT_SERVER_SETTINGS,
         textGenerationModelSelection: {
-          instanceId: ProviderInstanceId.make("codex"),
-          model: "retired-model",
-          options: [
-            { id: "reasoningEffort", value: "xhigh" },
-            { id: "serviceTier", value: "fast" },
-          ],
+          instanceId: managedInstanceId,
+          model: "retired-cloud",
+          options,
         },
       },
-      retiredConfig,
+      fixtureConfig,
     );
-    expect(retired.textGenerationModelSelection.model).toBe("gpt-5.6-sol");
-    expect(retired.textGenerationModelSelection.instanceId).toBe(frontierInstanceId);
-    expect(retired.textGenerationModelSelection.options).toEqual([
-      { id: "reasoningEffort", value: "xhigh" },
-      { id: "serviceTier", value: "fast" },
-    ]);
-
-    const inheritedKey = applyManagedHarnessPolicy({
-      ...DEFAULT_SERVER_SETTINGS,
-      textGenerationModelSelection: {
-        instanceId: ProviderInstanceId.make("codex"),
-        model: "constructor",
-      },
+    expect(retired.textGenerationModelSelection).toEqual({
+      model: "cloud-primary",
+      instanceId: frontierInstanceId,
+      options,
     });
-    expect(inheritedKey.textGenerationModelSelection.model).toBe(
-      managedConfig.models.restrictedFallback,
-    );
-    expect(inheritedKey.textGenerationModelSelection.instanceId).toBe(managedInstanceId);
   });
 
   it("hides routes that have no configured credential", () => {
@@ -354,10 +311,10 @@ describe("TritonAI managed Harness policy", () => {
         ...DEFAULT_SERVER_SETTINGS,
         textGenerationModelSelection: {
           instanceId: frontierInstanceId,
-          model: "gpt-5.6-sol",
+          model: "cloud-primary",
         },
       },
-      managedConfig,
+      fixtureConfig,
       {
         credentialEnvironment: { TRITONAI_ONPREM_API_KEY: "on-prem-key" },
       },
@@ -370,12 +327,12 @@ describe("TritonAI managed Harness policy", () => {
     });
     expect(effective.textGenerationModelSelection).toMatchObject({
       instanceId: managedInstanceId,
-      model: managedConfig.models.restrictedFallback,
+      model: fixtureConfig.models.restrictedFallback,
     });
   });
 
   it("disables the managed catalog for an authoritative environment with no credentials", () => {
-    const effective = applyManagedHarnessPolicy(DEFAULT_SERVER_SETTINGS, managedConfig, {
+    const effective = applyManagedHarnessPolicy(DEFAULT_SERVER_SETTINGS, fixtureConfig, {
       credentialEnvironment: {},
     });
 

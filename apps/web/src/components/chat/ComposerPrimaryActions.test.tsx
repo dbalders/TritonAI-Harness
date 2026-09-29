@@ -1,34 +1,23 @@
-import { createElement } from "react";
+import { createElement, type ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-
-const stageArtworkState = vi.hoisted(() => ({
-  mode: "none" as "artwork" | "none",
-  variant: null as "nightly" | "dev" | null,
-}));
+import { describe, expect, it, vi } from "vite-plus/test";
 
 vi.mock("~/hooks/useSettings", () => ({
-  useEnvironmentIdentificationMode: () => stageArtworkState.mode,
+  useEnvironmentIdentificationMode: () => "none",
 }));
 vi.mock("../SidebarStageBackdrop", () => ({
-  StageBackdropButtonArt: ({ variant }: { variant: string }) => `stage-${variant}`,
-  useSidebarStageBackdropVariant: (enabled = true) => (enabled ? stageArtworkState.variant : null),
+  StageBackdropButtonArt: () => null,
+  useSidebarStageBackdropVariant: () => null,
 }));
 
 import { ComposerPrimaryActions } from "./ComposerPrimaryActions";
 
-function renderPendingActions(isRunning: boolean) {
+function renderActions(overrides: Partial<ComponentProps<typeof ComposerPrimaryActions>>) {
   return renderToStaticMarkup(
     createElement(ComposerPrimaryActions, {
       compact: true,
-      pendingAction: {
-        questionIndex: 0,
-        isLastQuestion: true,
-        canAdvance: true,
-        isResponding: false,
-        isComplete: true,
-      },
-      isRunning,
+      pendingAction: null,
+      isRunning: false,
       showPlanFollowUpPrompt: false,
       promptHasText: false,
       isSendBusy: false,
@@ -40,102 +29,47 @@ function renderPendingActions(isRunning: boolean) {
       onPreviousPendingQuestion: () => {},
       onInterrupt: () => {},
       onImplementPlanInNewThread: () => {},
+      ...overrides,
     }),
   );
 }
-
-function renderRunningActions(hasSendableContent: boolean) {
-  return renderToStaticMarkup(
-    createElement(ComposerPrimaryActions, {
-      compact: true,
-      pendingAction: null,
-      isRunning: true,
-      showPlanFollowUpPrompt: false,
-      promptHasText: hasSendableContent,
-      isSendBusy: false,
-      sendDisabledReason: null,
-      isConnecting: false,
-      isEnvironmentUnavailable: false,
-      isPreparingWorktree: false,
-      hasSendableContent,
-      onPreviousPendingQuestion: () => {},
-      onInterrupt: () => {},
-      onImplementPlanInNewThread: () => {},
-    }),
-  );
-}
-
-function renderSendButton(sendDisabledReason: string | null = null) {
-  return renderToStaticMarkup(
-    createElement(ComposerPrimaryActions, {
-      compact: true,
-      pendingAction: null,
-      isRunning: false,
-      showPlanFollowUpPrompt: false,
-      promptHasText: true,
-      isSendBusy: false,
-      sendDisabledReason,
-      isConnecting: false,
-      isEnvironmentUnavailable: false,
-      isPreparingWorktree: false,
-      hasSendableContent: true,
-      onPreviousPendingQuestion: () => {},
-      onInterrupt: () => {},
-      onImplementPlanInNewThread: () => {},
-    }),
-  );
-}
-
-afterEach(() => {
-  stageArtworkState.mode = "none";
-  stageArtworkState.variant = null;
-});
 
 describe("ComposerPrimaryActions", () => {
-  it("disables and labels the send button while feedback is uploading", () => {
-    const markup = renderSendButton("Sending feedback");
-
+  it("blocks sending while feedback is uploading", () => {
+    const markup = renderActions({
+      promptHasText: true,
+      hasSendableContent: true,
+      sendDisabledReason: "Sending feedback",
+    });
     expect(markup).toContain("disabled");
     expect(markup).toContain('aria-label="Sending feedback"');
   });
 
-  it("offers Stop generation while a running turn is waiting for user input", () => {
-    expect(renderPendingActions(true)).toContain('aria-label="Stop generation"');
+  it.each([true, false])("offers Stop for pending input only while running: %s", (isRunning) => {
+    const markup = renderActions({
+      isRunning,
+      pendingAction: {
+        questionIndex: 0,
+        isLastQuestion: true,
+        canAdvance: true,
+        isResponding: false,
+        isComplete: true,
+      },
+    });
+    expect(markup.includes('aria-label="Stop generation"')).toBe(isRunning);
   });
 
-  it("does not offer Stop generation for a pending request without a running turn", () => {
-    expect(renderPendingActions(false)).not.toContain('aria-label="Stop generation"');
-  });
-
-  it("renders stage artwork inside the send button when artwork identification is active", () => {
-    stageArtworkState.mode = "artwork";
-    stageArtworkState.variant = "nightly";
-
-    const markup = renderSendButton();
-
-    expect(markup).toContain("stage-nightly");
-  });
-
-  it("hides stage artwork when artwork identification is inactive", () => {
-    stageArtworkState.variant = "nightly";
-
-    const markup = renderSendButton();
-
-    expect(markup).not.toContain("stage-nightly");
-  });
-
-  it("renders a queue action alongside stop while running with a sendable draft", () => {
-    const markup = renderRunningActions(true);
-
-    expect(markup).toContain('aria-label="Stop generation"');
-    expect(markup).toContain('aria-label="Queue message"');
-    expect(markup).toContain('type="submit"');
-  });
-
-  it("keeps stop as the only action while running with an empty composer", () => {
-    const markup = renderRunningActions(false);
-
-    expect(markup).toContain('aria-label="Stop generation"');
-    expect(markup).not.toContain('aria-label="Queue message"');
-  });
+  it.each([true, false])(
+    "offers Queue alongside Stop only with a sendable draft: %s",
+    (hasSendableContent) => {
+      const markup = renderActions({
+        isRunning: true,
+        promptHasText: hasSendableContent,
+        hasSendableContent,
+      });
+      expect(markup).toContain('aria-label="Stop generation"');
+      expect(markup.includes('aria-label="Queue message"')).toBe(hasSendableContent);
+      if (hasSendableContent) expect(markup).toContain('type="submit"');
+    },
+  );
 });

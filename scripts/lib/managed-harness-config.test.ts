@@ -1,171 +1,121 @@
 import * as NodeCrypto from "node:crypto";
-import { describe, expect, it } from "vite-plus/test";
 import * as NodeURL from "node:url";
+import { TRITONAI_IMAGE_CONTEXT_MODEL, type TritonAiManagedConfig } from "@t3tools/contracts";
+import { describe, expect, it } from "vite-plus/test";
 
 import {
   loadManagedHarnessConfigForBuild,
   parseManagedHarnessConfig,
 } from "./managed-harness-config.ts";
 
+function configFixture() {
+  return {
+    schemaVersion: 2,
+    policyVersion: 1,
+    provider: {
+      driver: "codex",
+      managedBinary: true,
+      managedHome: true,
+      baseUrl: "https://tritonai.example.test/v1",
+      sharedApiKeyEnvironmentVariable: "TRITONAI_API_KEY",
+      apiKeySourceEnvironmentVariable: "TRITONAI_API_KEY_SOURCE",
+      routes: {
+        onPrem: {
+          id: "on-prem",
+          instanceId: "codex",
+          displayName: "Local models",
+          apiKeyEnvironmentVariable: "TRITONAI_ONPREM_API_KEY",
+        },
+        frontier: {
+          id: "frontier",
+          instanceId: "codex_frontier",
+          displayName: "Cloud models",
+          apiKeyEnvironmentVariable: "TRITONAI_FRONTIER_API_KEY",
+        },
+      },
+    },
+    models: {
+      default: "synthetic-text",
+      restrictedFallback: "synthetic-text",
+      replacements: {},
+      catalog: [
+        {
+          id: "synthetic-text",
+          name: "Text",
+          route: "on-prem",
+          capabilities: { inputModalities: ["text"] },
+        },
+        // This identifier is a parser contract: the dedicated image-context model must accept images.
+        {
+          id: TRITONAI_IMAGE_CONTEXT_MODEL,
+          name: "Image",
+          route: "on-prem",
+          capabilities: { inputModalities: ["text", "image"] },
+        },
+        { id: "synthetic-cloud", name: "Cloud", route: "frontier" },
+      ],
+    },
+    secureSkills: { pollIntervalMinutes: 60 },
+  } satisfies TritonAiManagedConfig;
+}
+
 describe("managed Harness config build input", () => {
-  it("loads the committed release payload with a stable identity", () => {
+  it("loads and validates the committed release payload with a stable identity", () => {
     const input = loadManagedHarnessConfigForBuild(
       NodeURL.fileURLToPath(new URL("../..", import.meta.url)),
     );
-    expect(input.config.schemaVersion).toBe(2);
-    expect(
-      input.config.models.catalog.some((model) => model.id === input.config.models.default),
-    ).toBe(true);
     expect(input.digest).toBe(NodeCrypto.createHash("sha256").update(input.source).digest("hex"));
   });
 
-  it("keeps explicit modalities for managed on-prem and image-context models", () => {
-    const input = loadManagedHarnessConfigForBuild(
-      NodeURL.fileURLToPath(new URL("../..", import.meta.url)),
-    );
-    const models = Object.fromEntries(
-      input.config.models.catalog.map((model) => [model.id, model]),
-    );
+  it("accepts explicit modalities and rejects missing text or image support", () => {
+    const fixture = configFixture();
+    expect(parseManagedHarnessConfig(JSON.stringify(fixture))).toEqual(fixture);
 
-    expect(models["api-glm-5.3-flash"]?.capabilities?.inputModalities).toEqual(["text", "image"]);
-    expect(models["api-glm-5.3"]?.capabilities?.inputModalities).toEqual(["text"]);
-    expect(models["api-muse-glimmer-30b"]?.capabilities?.inputModalities).toEqual([
-      "text",
-      "image",
-    ]);
+    const missingText = configFixture();
+    delete missingText.models.catalog[0]!.capabilities;
+    expect(() => parseManagedHarnessConfig(JSON.stringify(missingText))).toThrow(/text input/u);
+
+    const missingImage = configFixture();
+    missingImage.models.catalog[1]!.capabilities = { inputModalities: ["text"] };
+    expect(() => parseManagedHarnessConfig(JSON.stringify(missingImage))).toThrow(/image input/u);
   });
 
-  it("rejects missing on-prem and image-context modality declarations", () => {
-    const input = loadManagedHarnessConfigForBuild(
-      NodeURL.fileURLToPath(new URL("../..", import.meta.url)),
-    );
-    const missingGlmCapabilities = JSON.parse(input.source) as {
-      models: { catalog: Array<{ id: string; capabilities?: unknown }> };
-    };
-    const glm = missingGlmCapabilities.models.catalog.find((model) => model.id === "api-glm-5.3");
-    delete glm?.capabilities;
-
-    expect(() => parseManagedHarnessConfig(JSON.stringify(missingGlmCapabilities))).toThrow(
-      /api-glm-5\.3.*text input/u,
-    );
-
-    const textOnlyGlimmer = JSON.parse(input.source) as {
-      models: {
-        catalog: Array<{
-          id: string;
-          capabilities?: { inputModalities?: string[] };
-        }>;
-      };
-    };
-    const glimmer = textOnlyGlimmer.models.catalog.find(
-      (model) => model.id === "api-muse-glimmer-30b",
-    );
-    if (glimmer?.capabilities) glimmer.capabilities.inputModalities = ["text"];
-
-    expect(() => parseManagedHarnessConfig(JSON.stringify(textOnlyGlimmer))).toThrow(
-      /api-muse-glimmer-30b.*image input/u,
-    );
-  });
-
-  it("rejects unknown fields and missing catalog references", () => {
+  it("rejects unknown fields", () => {
     expect(() =>
-      parseManagedHarnessConfig(
-        JSON.stringify({
-          schemaVersion: 2,
-          policyVersion: 1,
-          provider: {
-            driver: "codex",
-            managedBinary: true,
-            managedHome: true,
-            baseUrl: "https://tritonai.example.test/v1",
-            sharedApiKeyEnvironmentVariable: "TRITONAI_API_KEY",
-            apiKeySourceEnvironmentVariable: "TRITONAI_API_KEY_SOURCE",
-            routes: {
-              onPrem: {
-                id: "on-prem",
-                instanceId: "codex",
-                displayName: "On-prem models",
-                apiKeyEnvironmentVariable: "TRITONAI_ONPREM_API_KEY",
-              },
-              frontier: {
-                id: "frontier",
-                instanceId: "codex_frontier",
-                displayName: "Cloud models",
-                apiKeyEnvironmentVariable: "TRITONAI_FRONTIER_API_KEY",
-              },
-            },
-          },
-          models: {
-            default: "missing",
-            restrictedFallback: "missing",
-            replacements: {},
-            catalog: [{ id: "other", name: "Other", route: "on-prem" }],
-          },
-          secureSkills: { pollIntervalMinutes: 60 },
-          unexpected: true,
-        }),
-      ),
-    ).toThrow();
+      parseManagedHarnessConfig(JSON.stringify({ ...configFixture(), unexpected: true })),
+    ).toThrow(/unexpected/u);
   });
+
+  it.each(["default", "restrictedFallback", "replacements"] as const)(
+    "rejects missing catalog references in %s",
+    (field) => {
+      const fixture = configFixture();
+      if (field === "replacements") fixture.models.replacements = { retired: "missing" };
+      else fixture.models[field] = "missing";
+      expect(() => parseManagedHarnessConfig(JSON.stringify(fixture))).toThrow(/catalog/u);
+    },
+  );
 
   it("rejects a valid route schema whose catalog omits frontier models", () => {
-    expect(() =>
-      parseManagedHarnessConfig(
-        JSON.stringify({
-          schemaVersion: 2,
-          policyVersion: 1,
-          provider: {
-            driver: "codex",
-            managedBinary: true,
-            managedHome: true,
-            baseUrl: "https://tritonai.example.test/v1",
-            sharedApiKeyEnvironmentVariable: "TRITONAI_API_KEY",
-            apiKeySourceEnvironmentVariable: "TRITONAI_API_KEY_SOURCE",
-            routes: {
-              onPrem: {
-                id: "on-prem",
-                instanceId: "codex",
-                displayName: "On-prem models",
-                apiKeyEnvironmentVariable: "TRITONAI_ONPREM_API_KEY",
-              },
-              frontier: {
-                id: "frontier",
-                instanceId: "codex_frontier",
-                displayName: "Cloud models",
-                apiKeyEnvironmentVariable: "TRITONAI_FRONTIER_API_KEY",
-              },
-            },
-          },
-          models: {
-            default: "on-prem-model",
-            restrictedFallback: "on-prem-model",
-            replacements: {},
-            catalog: [{ id: "on-prem-model", name: "On-prem model", route: "on-prem" }],
-          },
-          secureSkills: { pollIntervalMinutes: 60 },
-        }),
-      ),
-    ).toThrow(/frontier/i);
+    const fixture = configFixture();
+    fixture.models.catalog = fixture.models.catalog.filter((model) => model.route === "on-prem");
+    expect(() => parseManagedHarnessConfig(JSON.stringify(fixture))).toThrow(/frontier/u);
   });
-});
 
-it("rejects invalid engine approvals and accepts missing approval for fail-closed compatibility", () => {
-  const input = loadManagedHarnessConfigForBuild(
-    NodeURL.fileURLToPath(new URL("../..", import.meta.url)),
-  );
-  for (const approvedCodexVersion of ["latest", "^0.151.0", "0.151.0;echo unsafe", "01.151.0"]) {
-    expect(() =>
-      parseManagedHarnessConfig(
-        JSON.stringify({
-          ...input.config,
-          provider: { ...input.config.provider, approvedCodexVersion },
-        }),
-      ),
-    ).toThrow();
-  }
-  const { approvedCodexVersion: _approval, ...provider } = input.config.provider;
-  expect(
-    parseManagedHarnessConfig(JSON.stringify({ ...input.config, provider })).provider
-      .approvedCodexVersion,
-  ).toBeUndefined();
+  it("rejects invalid engine approvals and accepts missing approval for fail-closed compatibility", () => {
+    const fixture = configFixture();
+    for (const approvedCodexVersion of ["latest", "^1.2.3", "1.2.3;echo unsafe", "01.2.3"]) {
+      expect(() =>
+        parseManagedHarnessConfig(
+          JSON.stringify({
+            ...fixture,
+            provider: { ...fixture.provider, approvedCodexVersion },
+          }),
+        ),
+      ).toThrow();
+    }
+    expect(
+      parseManagedHarnessConfig(JSON.stringify(fixture)).provider.approvedCodexVersion,
+    ).toBeUndefined();
+  });
 });

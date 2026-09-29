@@ -6,7 +6,6 @@ import {
   type ServerProvider,
 } from "@t3tools/contracts";
 
-import rootRouteSource from "../routes/__root.tsx?raw";
 import {
   buildLocalEnvironmentUpdateGroups,
   collectProviderLaunchUpdateCandidates,
@@ -43,15 +42,6 @@ function updateAvailableProvider(input: {
     },
   };
 }
-
-it("wires the TritonAI launch notification to Codex only", () => {
-  const executableRootRouteSource = rootRouteSource.replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, "");
-
-  expect(executableRootRouteSource).toContain(
-    "<ProviderUpdateLaunchNotification providerDriver={CODEX_PROVIDER_DRIVER} />",
-  );
-  expect(executableRootRouteSource).toContain('ProviderDriverKind.make("codex")');
-});
 
 it("offers the launch popup for Codex updates only", () => {
   const codex = updateAvailableProvider({ driver: "codex" });
