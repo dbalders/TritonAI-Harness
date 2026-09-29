@@ -30,6 +30,7 @@ There is no public docs site yet. Use the markdown files in [docs](./docs).
 - [Remote access](./docs/user/remote-access.md)
 - [Keeping TritonAI Harness versions in sync](./docs/user/server-updates.md)
 - [Computer use](./docs/user/computer-use.md)
+- [Memory](./docs/user/memory.md)
 - [TritonAI Commons](./docs/user/tritonai-commons.md)
 - [Architecture overview](./docs/architecture/overview.md)
 - [Codex provider guide](./docs/providers/codex.md)

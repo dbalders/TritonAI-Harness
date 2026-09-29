@@ -1013,6 +1013,12 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:provider:install-remove",
       tag: WS_METHODS.providerInstallRemove,
     }),
+    memoryStatus: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:memory-status",
+      tag: WS_METHODS.serverGetMemoryStatus,
+      // Summaries finish in the background, so an open settings page catches up.
+      refreshIntervalMs: 30_000,
+    }),
     traceDiagnostics: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:trace-diagnostics",
       tag: WS_METHODS.serverGetTraceDiagnostics,

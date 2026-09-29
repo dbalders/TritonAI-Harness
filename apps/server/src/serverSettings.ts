@@ -1158,7 +1158,25 @@ const make = (
         );
 
       if (!(yield* readConfigExists)) {
-        const restoredSettings = restoreProviderHistory(DEFAULT_SERVER_SETTINGS);
+        // New installs start with Memory on. An install that already has
+        // threads is not new even without a settings file, so it keeps the off
+        // default until the user opts in.
+        const [threadHistory] = yield* sql<{ readonly hasThreads: number }>`
+          SELECT EXISTS (SELECT 1 FROM projection_threads) AS "hasThreads"
+        `.pipe(
+          Effect.mapError(
+            (cause) =>
+              new ServerSettingsError({
+                settingsPath,
+                operation: "read-provider-history",
+                cause,
+              }),
+          ),
+        );
+        const restoredSettings: ServerSettings = {
+          ...restoreProviderHistory(DEFAULT_SERVER_SETTINGS),
+          memoryEnabled: !threadHistory?.hasThreads,
+        };
         if (managedPolicyEnabled) {
           const hasCodexHistory = providerHistory.some(
             ({ providerName }) => providerName === "codex",

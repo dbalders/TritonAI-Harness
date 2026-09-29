@@ -275,6 +275,7 @@ import {
   ServerVoiceTranscriptionError,
 } from "./voice.ts";
 import { ServerTritonAiUsageError, ServerTritonAiUsageSnapshot } from "./tritonaiUsage.ts";
+import { ServerMemoryStatus } from "./memory.ts";
 import {
   ProjectCloneActionInput,
   ProjectCloneActionResult,
@@ -405,6 +406,7 @@ export const WS_METHODS = {
   serverUpdateSettings: "server.updateSettings",
   serverTranscribeVoice: "server.transcribeVoice",
   serverGetTritonAiUsage: "server.getTritonAiUsage",
+  serverGetMemoryStatus: "server.getMemoryStatus",
   serverDiscoverSourceControl: "server.discoverSourceControl",
   serverGetTraceDiagnostics: "server.getTraceDiagnostics",
   serverGetProcessDiagnostics: "server.getProcessDiagnostics",
@@ -645,6 +647,12 @@ const WsServerGetTritonAiUsageRpc = Rpc.make(WS_METHODS.serverGetTritonAiUsage, 
   payload: Schema.Struct({}),
   success: ServerTritonAiUsageSnapshot,
   error: Schema.Union([ServerTritonAiUsageError, EnvironmentAuthorizationError]),
+});
+
+const WsServerGetMemoryStatusRpc = Rpc.make(WS_METHODS.serverGetMemoryStatus, {
+  payload: Schema.Struct({}),
+  success: ServerMemoryStatus,
+  error: EnvironmentAuthorizationError,
 });
 
 const WsServerDiscoverSourceControlRpc = Rpc.make(WS_METHODS.serverDiscoverSourceControl, {
@@ -1568,6 +1576,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerUpdateSettingsRpc,
   WsServerTranscribeVoiceRpc,
   WsServerGetTritonAiUsageRpc,
+  WsServerGetMemoryStatusRpc,
   WsServerDiscoverSourceControlRpc,
   WsServerGetTraceDiagnosticsRpc,
   WsServerGetProcessDiagnosticsRpc,

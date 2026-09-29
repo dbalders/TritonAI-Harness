@@ -77,6 +77,28 @@ export interface ThreadTitleGenerationResult {
   needsRefinement?: boolean | undefined;
 }
 
+export interface DailyMemoryGenerationInput {
+  /** Working directory for the generation process. Nothing in it is read. */
+  cwd: string;
+  /** The local day being summarized, `YYYY-MM-DD`. */
+  day: string;
+  projectNames: ReadonlyArray<string>;
+  activity: string;
+  inboxNotes: string;
+  modelSelection: ModelSelection;
+}
+
+export interface DailyMemoryGenerationResult {
+  overview: string;
+  projects: ReadonlyArray<{
+    readonly project: string;
+    readonly workedOn: ReadonlyArray<string>;
+    readonly recent: string;
+  }>;
+  decisions: ReadonlyArray<string>;
+  openLoops: ReadonlyArray<string>;
+}
+
 /**
  * TextGeneration - Service tag for commit and change request text generation.
  */
@@ -108,6 +130,14 @@ export class TextGeneration extends Context.Service<
     readonly generateThreadTitle: (
       input: ThreadTitleGenerationInput,
     ) => Effect.Effect<ThreadTitleGenerationResult, TextGenerationError>;
+
+    /**
+     * Summarize one day of thread work for the memory vault. Only Codex
+     * implements this; other providers leave it undefined.
+     */
+    readonly generateDailyMemory?: (
+      input: DailyMemoryGenerationInput,
+    ) => Effect.Effect<DailyMemoryGenerationResult, TextGenerationError>;
   }
 >()("t3/textGeneration/TextGeneration") {}
 
@@ -115,7 +145,8 @@ type TextGenerationOp =
   | "generateCommitMessage"
   | "generatePrContent"
   | "generateBranchName"
-  | "generateThreadTitle";
+  | "generateThreadTitle"
+  | "generateDailyMemory";
 
 const resolveInstance = (
   registry: ProviderInstanceRegistry.ProviderInstanceRegistry["Service"],
@@ -166,6 +197,20 @@ export const make = Effect.gen(function* () {
               ));
             return yield* textGeneration.generateThreadTitle({ ...input, linkedContext });
           }),
+        ),
+      ),
+    generateDailyMemory: (input) =>
+      resolveInstance(registry, "generateDailyMemory", input.modelSelection.instanceId).pipe(
+        Effect.flatMap((textGeneration) =>
+          textGeneration.generateDailyMemory
+            ? textGeneration.generateDailyMemory(input)
+            : Effect.fail(
+                new TextGenerationError({
+                  operation: "generateDailyMemory",
+                  detail:
+                    "Daily memory needs a Codex text generation model. Choose one under Settings, Text generation.",
+                }),
+              ),
         ),
       ),
   });

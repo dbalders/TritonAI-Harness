@@ -15,6 +15,7 @@
 - [Import browser sessions](./user/browser-import.md)
 - [Devices](./user/devices.md)
 - [Usage and limits](./user/usage.md)
+- [Memory](./user/memory.md)
 - [Product usage data](./user/telemetry.md)
 - [Remote access](./user/remote-access.md)
 - [Keeping TritonAI Harness versions in sync](./user/server-updates.md)
