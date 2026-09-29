@@ -2091,6 +2091,12 @@ export class RegistryRuntime {
       if (tool.available) this.#availableTools.add(tool.name);
     }
     this.#summaries.set(manifest.id, integration);
+    if (provider && this.#activeProviderLifecycleWork.has(provider)) {
+      const registered = this.#catalog.get(manifest.id);
+      if (registered?.provider === provider) {
+        this.#refreshSummaryAfterProviderSettlement(registered, provider);
+      }
+    }
     this.#publishAvailabilityChangeIfNeeded();
     return integration;
   }
