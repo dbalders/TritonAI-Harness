@@ -37,6 +37,7 @@ import {
   type MemoryThreadActivity,
   mergeDailyNote,
   projectNoteName,
+  projectNoteWorkspace,
   renderDailyNote,
   renderProjectNote,
   selectMemoryMessages,
@@ -57,6 +58,8 @@ const CHECK_INTERVAL = Duration.hours(1);
 // Let startup work finish before the first check competes with it.
 const STARTUP_DELAY = Duration.seconds(30);
 const INBOX_NOTE_LIMIT = 8_000;
+// Stays under the prompt's inbox limit, so every note moved to processed was read.
+const INBOX_PROMPT_LIMIT = 18_000;
 
 interface SummarizerStatus {
   readonly state: "idle" | "summarizing" | "error";
@@ -295,6 +298,79 @@ const previousDailyNote = Effect.fn("memory.previousDailyNote")(function* (
   return earlier.at(-1) ?? null;
 });
 
+const formatInboxNote = (note: InboxNote) =>
+  `## ${note.fileName}\n\n${note.content.trim().slice(0, INBOX_NOTE_LIMIT)}`;
+
+/**
+ * New inbox notes that fit in the prompt after the ones already processed for
+ * the day. The rest stay in the inbox for the next summary.
+ */
+function fitInboxNotes(
+  processed: ReadonlyArray<InboxNote>,
+  candidates: ReadonlyArray<InboxNote>,
+): ReadonlyArray<InboxNote> {
+  let used = processed.reduce((total, note) => total + formatInboxNote(note).length + 2, 0);
+  const fitted: InboxNote[] = [];
+  for (const note of candidates) {
+    const size = formatInboxNote(note).length + 2;
+    if (used + size > INBOX_PROMPT_LIMIT) break;
+    used += size;
+    fitted.push(note);
+  }
+  return fitted;
+}
+
+/**
+ * Project id to note name. Projects share a title-based note only when they
+ * share a workspace; another project with the same title gets its own note.
+ */
+const resolveProjectNoteNames = Effect.fn("memory.resolveProjectNoteNames")(function* (
+  paths: GeneralVaultPaths,
+  threads: ReadonlyArray<MemoryThreadActivity>,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const names = new Map<string, string>();
+  // Lower-case note name to the workspace that owns it in this run.
+  const owners = new Map<string, string>();
+  for (const thread of threads) {
+    if (names.has(thread.projectId)) continue;
+    const base = projectNoteName(thread.projectTitle);
+    // Suffixes go after the base name's length cap, so each attempt is a new name.
+    const folder = path
+      .basename(path.dirname(thread.workspaceRoot))
+      .replace(/[\\/:*?"<>|#^[\]]/gu, " ")
+      .replace(/\s+/gu, " ")
+      .trim();
+    const qualified = folder.length > 0 ? `${base} (${folder})` : base;
+    for (let attempt = 1; ; attempt++) {
+      const candidate =
+        attempt === 1
+          ? base
+          : attempt === 2 && qualified !== base
+            ? qualified
+            : `${qualified} ${attempt}`;
+      const key = candidate.toLowerCase();
+      let owner = owners.get(key);
+      if (owner === undefined) {
+        const existing = yield* fs
+          .readFileString(path.join(paths.projects, `${candidate}.md`))
+          .pipe(Effect.option);
+        // A note without a workspace, such as one the user started, is shared.
+        owner =
+          (existing._tag === "Some" ? projectNoteWorkspace(existing.value) : null) ??
+          thread.workspaceRoot;
+      }
+      if (owner === thread.workspaceRoot) {
+        owners.set(key, owner);
+        names.set(thread.projectId, candidate);
+        break;
+      }
+    }
+  }
+  return names;
+});
+
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
@@ -356,10 +432,8 @@ export const make = Effect.gen(function* () {
     const processedNotes = yield* provide(
       readInboxNotes(path.join(paths.processed, day), Number.POSITIVE_INFINITY),
     );
-    const inboxNotes = [...processedNotes, ...newInboxNotes];
-    const projectNoteNames = new Map(
-      threads.map((thread) => [thread.projectId, projectNoteName(thread.projectTitle)]),
-    );
+    const includedInboxNotes = fitInboxNotes(processedNotes, newInboxNotes);
+    const projectNoteNames = yield* provide(resolveProjectNoteNames(paths, threads));
     const generateDailyMemory = textGeneration.generateDailyMemory;
     if (!generateDailyMemory) {
       return yield* new TextGenerationError({
@@ -372,9 +446,7 @@ export const make = Effect.gen(function* () {
       day,
       projectNames: [...new Set(projectNoteNames.values())],
       activity: formatMemoryActivity(threads),
-      inboxNotes: inboxNotes
-        .map((note) => `## ${note.fileName}\n\n${note.content.trim().slice(0, INBOX_NOTE_LIMIT)}`)
-        .join("\n\n"),
+      inboxNotes: [...processedNotes, ...includedInboxNotes].map(formatInboxNote).join("\n\n"),
       modelSelection: settings.textGenerationModelSelection,
     });
 
@@ -384,7 +456,7 @@ export const make = Effect.gen(function* () {
         new Set(threads.flatMap((thread) => (thread.codexThreadId ? [thread.codexThreadId] : []))),
       ),
     );
-    const inboxMoves = yield* provide(planInboxMoves(paths, day, newInboxNotes));
+    const inboxMoves = yield* provide(planInboxMoves(paths, day, includedInboxNotes));
     const rendered = renderDailyNote({
       day,
       summary,

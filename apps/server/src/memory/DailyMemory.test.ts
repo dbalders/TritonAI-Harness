@@ -253,6 +253,79 @@ it.layer(NodeServices.layer)("DailyMemory", (it) => {
     }),
   );
 
+  it.effect("gives same-titled projects in different workspaces their own notes", () =>
+    Effect.gen(function* () {
+      const { baseDir, layer, fs, path } = yield* makeHarness({ memoryEnabled: true });
+      const vault = path.join(baseDir, "memory", "general");
+      yield* TestClock.setTime(NOW);
+
+      yield* Effect.gen(function* () {
+        yield* seed;
+        const sql = yield* SqlClient.SqlClient;
+        const created = localIso(20, 9);
+        yield* sql`
+          INSERT INTO projection_projects (project_id, title, workspace_root, scripts_json, created_at, updated_at)
+          VALUES ('project-2', 'Acme App', '/forks/acme', '[]', ${created}, ${created})
+        `;
+        yield* sql`
+          INSERT INTO projection_threads (thread_id, project_id, title, created_at, updated_at)
+          VALUES ('thread-3', 'project-2', 'Fork cleanup', ${created}, ${created})
+        `;
+        const at = localIso(28, 12);
+        yield* sql`
+          INSERT INTO projection_thread_messages (message_id, thread_id, turn_id, role, text, is_streaming, created_at, updated_at)
+          VALUES ('m7', 'thread-3', 'turn-m7', 'user', 'Clean up the fork.', 0, ${at}, ${at})
+        `;
+        const memory = yield* DailyMemory.make;
+        yield* memory.runCatchUp;
+
+        const original = yield* fs.readFileString(path.join(vault, "Projects", "Acme App.md"));
+        const fork = yield* fs.readFileString(path.join(vault, "Projects", "Acme App (forks).md"));
+        assert.include(original, 'workspace: "/code/acme"');
+        assert.include(original, "- [[Daily/2026-09-28]]: Progress 2026-09-28\n");
+        assert.include(fork, 'workspace: "/forks/acme"');
+        assert.include(fork, "- [[Daily/2026-09-28]]: Progress 2026-09-28\n");
+        const day28 = yield* fs.readFileString(path.join(vault, "Daily", "2026-09-28.md"));
+        assert.include(day28, "**Fork cleanup** in [[Acme App (forks)]]");
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("leaves inbox notes that did not fit in the summary for the next one", () =>
+    Effect.gen(function* () {
+      const inboxSeen: string[] = [];
+      const { baseDir, layer, fs, path } = yield* makeHarness({
+        memoryEnabled: true,
+        generate: (input) =>
+          Effect.sync(() => {
+            inboxSeen.push(input.inboxNotes);
+            return summaryFor(input);
+          }),
+      });
+      const vault = path.join(baseDir, "memory", "general");
+      yield* fs.makeDirectory(path.join(vault, "Inbox"), { recursive: true });
+      for (const name of ["a", "b", "c"]) {
+        const note = path.join(vault, "Inbox", `2026-09-28-1200-${name}.md`);
+        yield* fs.writeFileString(note, `${name.repeat(7_000)}\n`);
+        yield* fs.utimes(note, NOON_28, NOON_28);
+      }
+      yield* TestClock.setTime(NOW);
+
+      yield* Effect.gen(function* () {
+        yield* seed;
+        const memory = yield* DailyMemory.make;
+        yield* memory.runCatchUp;
+
+        const day28Input = inboxSeen.at(-1) ?? "";
+        assert.include(day28Input, "a".repeat(7_000));
+        assert.include(day28Input, "b".repeat(7_000));
+        assert.notInclude(day28Input, "c".repeat(7_000));
+        assert.isTrue(yield* fs.exists(path.join(vault, "Inbox", "2026-09-28-1200-c.md")));
+        assert.isFalse(yield* fs.exists(path.join(vault, "Inbox", "2026-09-28-1200-a.md")));
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
   it.effect("stops catching up after the current day when Memory is turned off", () =>
     Effect.gen(function* () {
       let turnOff: Effect.Effect<void> = Effect.void;

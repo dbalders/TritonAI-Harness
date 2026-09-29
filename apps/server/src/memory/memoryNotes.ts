@@ -115,6 +115,21 @@ export function projectNoteName(title: string): string {
   return WINDOWS_RESERVED_NAME.test(cleaned) ? `${cleaned} project` : cleaned;
 }
 
+/** The workspace a project note was written for, or null when it names none. */
+export function projectNoteWorkspace(content: string): string | null {
+  const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---/u.exec(content);
+  const line = frontmatter?.[1]!
+    .split(/\r?\n/u)
+    .find((candidate) => candidate.startsWith("workspace: "));
+  if (!line) return null;
+  try {
+    const value: unknown = JSON.parse(line.slice("workspace: ".length));
+    return typeof value === "string" ? value : null;
+  } catch {
+    return null;
+  }
+}
+
 export function isHarnessNote(content: string): boolean {
   const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---/u.exec(content);
   return (
