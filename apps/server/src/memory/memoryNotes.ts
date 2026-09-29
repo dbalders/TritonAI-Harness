@@ -9,7 +9,7 @@
  */
 import type { DailyMemoryGenerationResult } from "../textGeneration/TextGeneration.ts";
 
-export const HARNESS_NOTE_SOURCE = "tritonai-harness";
+const HARNESS_NOTE_SOURCE = "tritonai-harness";
 
 const USER_MESSAGE_LIMIT = 2_000;
 const AGENT_MESSAGE_LIMIT = 3_000;

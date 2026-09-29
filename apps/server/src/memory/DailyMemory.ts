@@ -103,7 +103,7 @@ function pullRequestUrl(json: string | null): string | null {
 }
 
 /** Threads with messages in `[startIso, endIso)`, in order of first activity. */
-export const loadDayActivity = Effect.fn("memory.loadDayActivity")(function* (range: {
+const loadDayActivity = Effect.fn("memory.loadDayActivity")(function* (range: {
   readonly startIso: string;
   readonly endIso: string;
 }) {

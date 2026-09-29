@@ -13,7 +13,7 @@ import * as Schema from "effect/Schema";
 import { writeFileStringAtomically } from "../atomicWrite.ts";
 import { isLocalDay } from "./memoryDays.ts";
 
-export const MEMORY_SKILL_NAME = "tritonai-memory";
+const MEMORY_SKILL_NAME = "tritonai-memory";
 const MEMORY_SKILL_MARKER = "<!-- Managed by TritonAI Harness Memory. -->";
 
 export interface GeneralVaultPaths {
