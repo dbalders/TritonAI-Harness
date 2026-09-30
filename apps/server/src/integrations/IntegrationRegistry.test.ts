@@ -1447,78 +1447,109 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
-  it("restores availability when an invocation prepares during the sweep summary", async () => {
-    const root = await NodeFSP.mkdtemp(
-      NodePath.join(NodeOS.tmpdir(), "tritonai-keepalive-overlap-"),
-    );
-    const state: ProviderState = {
-      status: {
-        state: "connected",
-        accountLabel: "Fixture",
-        grantedCapabilities: ["fixture.read"],
-        message: null,
-      },
-      credential: "test-credential",
-      disconnectFails: false,
-    };
-    let holdStatus = false;
-    let statusStarted!: () => void;
-    const statusPending = new Promise<void>((resolve) => {
-      statusStarted = resolve;
-    });
-    let releaseStatus!: () => void;
-    const statusCanFinish = new Promise<void>((resolve) => {
-      releaseStatus = resolve;
-    });
-    let prepareCalls = 0;
-    let prepareStarted!: () => void;
-    const preparationPending = new Promise<void>((resolve) => {
-      prepareStarted = resolve;
-    });
-    let releasePrepare!: () => void;
-    const prepareCanFinish = new Promise<void>((resolve) => {
-      releasePrepare = resolve;
-    });
-    const implementation: IntegrationProvider = {
-      ...provider("test-fixture-provider", state),
-      status: async () => {
-        if (holdStatus) {
-          statusStarted();
-          await statusCanFinish;
+  it.each([false, true])(
+    "restores availability when preparation settles during summary (skills blocked: %s)",
+    async (blockSkills) => {
+      const root = await NodeFSP.mkdtemp(
+        NodePath.join(NodeOS.tmpdir(), "tritonai-keepalive-overlap-"),
+      );
+      const state: ProviderState = {
+        status: {
+          state: "connected",
+          accountLabel: "Fixture",
+          grantedCapabilities: ["fixture.read"],
+          message: null,
+        },
+        credential: "test-credential",
+        disconnectFails: false,
+      };
+      let holdStatus = false;
+      let statusStarted!: () => void;
+      const statusPending = new Promise<void>((resolve) => {
+        statusStarted = resolve;
+      });
+      let releaseStatus!: () => void;
+      const statusCanFinish = new Promise<void>((resolve) => {
+        releaseStatus = resolve;
+      });
+      let prepareCalls = 0;
+      let prepareStarted!: () => void;
+      const preparationPending = new Promise<void>((resolve) => {
+        prepareStarted = resolve;
+      });
+      let releasePrepare!: () => void;
+      const prepareCanFinish = new Promise<void>((resolve) => {
+        releasePrepare = resolve;
+      });
+      const implementation: IntegrationProvider = {
+        ...provider("test-fixture-provider", state),
+        status: async () => {
+          if (holdStatus) {
+            statusStarted();
+            await statusCanFinish;
+          }
+          return state.status;
+        },
+        prepare: async (context) => {
+          await context.beginCommit();
+          if (++prepareCalls === 2) {
+            prepareStarted();
+            await prepareCanFinish;
+          }
+        },
+      };
+      let skillsStarted!: () => void;
+      const skillsPending = new Promise<void>((resolve) => {
+        skillsStarted = resolve;
+      });
+      let releaseSkills!: () => void;
+      const skillsCanFinish = new Promise<void>((resolve) => {
+        releaseSkills = resolve;
+      });
+      let holdSkills = false;
+      const registry = new RegistryRuntime(root, [packaged(fixtureManifest, implementation)], {
+        sync: async ({ activeSkills }) => {
+          if (holdSkills && activeSkills.length === 0) {
+            skillsStarted();
+            await skillsCanFinish;
+          }
+        },
+        reconcileCatalog: async () => undefined,
+      });
+      try {
+        await registry.install(fixtureManifest.id);
+        holdSkills = blockSkills;
+        holdStatus = true;
+        const sweep = registry.refreshIdleCredentials({ idleThresholdMs: 0 });
+        await statusPending;
+        const invocation = registry.invokeTool("test.fixture.read", {});
+        await preparationPending;
+        holdStatus = false;
+        releaseStatus();
+        if (blockSkills) {
+          await skillsPending;
+          releasePrepare();
+          await invocation;
+          holdSkills = false;
+          releaseSkills();
+          await sweep;
+        } else {
+          await sweep;
+          releasePrepare();
+          await invocation;
         }
-        return state.status;
-      },
-      prepare: async (context) => {
-        await context.beginCommit();
-        if (++prepareCalls === 2) {
-          prepareStarted();
-          await prepareCanFinish;
-        }
-      },
-    };
-    const registry = new RegistryRuntime(root, [packaged(fixtureManifest, implementation)]);
-    try {
-      await registry.install(fixtureManifest.id);
-      holdStatus = true;
-      const sweep = registry.refreshIdleCredentials({ idleThresholdMs: 0 });
-      await statusPending;
-      const invocation = registry.invokeTool("test.fixture.read", {});
-      await preparationPending;
-      holdStatus = false;
-      releaseStatus();
-      await sweep;
-      releasePrepare();
-      await invocation;
-      const snapshot = await registry.snapshot();
-      expect(snapshot.integrations[0]?.tools[0]?.available).toBe(true);
-      expect(snapshot.integrations[0]?.skills[0]?.available).toBe(true);
-    } finally {
-      releaseStatus();
-      releasePrepare();
-      await registry.close();
-      await NodeFSP.rm(root, { recursive: true, force: true });
-    }
-  });
+        const snapshot = await registry.snapshot();
+        expect(snapshot.integrations[0]?.tools[0]?.available).toBe(true);
+        expect(snapshot.integrations[0]?.skills[0]?.available).toBe(true);
+      } finally {
+        releaseStatus();
+        releasePrepare();
+        releaseSkills();
+        await registry.close();
+        await NodeFSP.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("prepares restart-only provider state once before concurrent tool invocations", async () => {
     const root = await NodeFSP.mkdtemp(

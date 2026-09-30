@@ -2051,6 +2051,13 @@ export class RegistryRuntime {
       return currentOrUnavailable();
     }
     let integration = this.#createSummary(manifest, providerStatus);
+    // Capture settlement when availability is sampled, before skill synchronization can wait.
+    if (provider && this.#activeProviderLifecycleWork.has(provider)) {
+      const registered = this.#catalog.get(manifest.id);
+      if (registered?.provider === provider) {
+        this.#refreshSummaryAfterProviderSettlement(registered, provider);
+      }
+    }
     try {
       await this.#syncSkills({
         integrationId: integration.id,
@@ -2091,12 +2098,6 @@ export class RegistryRuntime {
       if (tool.available) this.#availableTools.add(tool.name);
     }
     this.#summaries.set(manifest.id, integration);
-    if (provider && this.#activeProviderLifecycleWork.has(provider)) {
-      const registered = this.#catalog.get(manifest.id);
-      if (registered?.provider === provider) {
-        this.#refreshSummaryAfterProviderSettlement(registered, provider);
-      }
-    }
     this.#publishAvailabilityChangeIfNeeded();
     return integration;
   }
