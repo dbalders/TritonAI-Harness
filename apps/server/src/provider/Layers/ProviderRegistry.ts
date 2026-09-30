@@ -40,6 +40,8 @@ import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as Semaphore from "effect/Semaphore";
 
+import * as ModelManifest from "../ModelManifest.ts";
+import { applyProviderCompatibility } from "../providerCompatibility.ts";
 import { ServerConfig } from "../../config.ts";
 import * as Integrations from "../../integrations/IntegrationRegistry.ts";
 import { subscribeIntegrationAvailabilityRefresh } from "../IntegrationAvailabilityRefresh.ts";
@@ -287,6 +289,8 @@ export const ProviderRegistryLive = Layer.effect(
   ProviderRegistry,
   Effect.gen(function* () {
     const instanceRegistry = yield* ProviderInstanceRegistry;
+    const manifestService = yield* ModelManifest.ModelManifest;
+    const serviceScope = yield* Effect.scope;
     const config = yield* ServerConfig;
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -365,7 +369,19 @@ export const ProviderRegistryLive = Layer.effect(
         ),
       ),
     );
-    const providersRef = yield* Ref.make<ReadonlyArray<ServerProvider>>(cachedProviders);
+    const initialManifest = yield* manifestService.current;
+    const classifyCompatibility = (
+      provider: ServerProvider,
+      manifest: ModelManifest.ModelManifestData,
+    ) =>
+      applyProviderCompatibility(
+        provider,
+        manifest.compatibility,
+        ModelManifest.BUNDLED_MODEL_MANIFEST.compatibility,
+      );
+    const providersRef = yield* Ref.make<ReadonlyArray<ServerProvider>>(
+      cachedProviders.map((provider) => classifyCompatibility(provider, initialManifest)),
+    );
     const workspaceRefreshesRef = yield* Ref.make<
       ReadonlyMap<ProviderInstance, ReadonlySet<string>>
     >(new Map());
@@ -433,6 +449,7 @@ export const ProviderRegistryLive = Layer.effect(
         readonly replace?: boolean;
       },
     ) {
+      const manifest = yield* manifestService.current;
       const nextProvidersWithUpdateState = yield* Effect.forEach(
         nextProviders,
         applyProviderUpdateState,
@@ -459,7 +476,11 @@ export const ProviderRegistryLive = Layer.effect(
             );
           }
 
-          const providers = orderProviderSnapshots([...mergedProviders.values()]);
+          const providers = orderProviderSnapshots(
+            [...mergedProviders.values()].map((provider) =>
+              classifyCompatibility(provider, manifest),
+            ),
+          );
           const providersToPersist = providers.filter((provider) =>
             updatedKeys.has(snapshotInstanceKey(provider)),
           );
@@ -482,13 +503,24 @@ export const ProviderRegistryLive = Layer.effect(
       return providers;
     });
 
+    const compatibilityRefreshRunning = yield* Ref.make(false);
     const syncProvider = Effect.fn("syncProvider")(function* (
       provider: ServerProvider,
       options?: {
         readonly publish?: boolean;
       },
     ) {
-      return yield* upsertProviders([provider], options);
+      const providers = yield* upsertProviders([provider], options);
+      // Reclassify the current read model after fetching. Never republish the
+      // probe captured before the fetch: a newer health result may have landed.
+      if (!(yield* Ref.getAndSet(compatibilityRefreshRunning, true))) {
+        yield* manifestService.refresh.pipe(
+          Effect.andThen(upsertProviders([], { persist: false })),
+          Effect.ensuring(Ref.set(compatibilityRefreshRunning, false)),
+          Effect.forkIn(serviceScope),
+        );
+      }
+      return providers;
     });
 
     const setProviderMaintenanceActionState = Effect.fn("setProviderMaintenanceActionState")(

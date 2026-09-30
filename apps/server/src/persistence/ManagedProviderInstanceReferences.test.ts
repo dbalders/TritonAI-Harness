@@ -12,7 +12,7 @@ import {
 
 const encodePayload = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
-const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
+const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layer({ filename: ":memory:" })));
 
 layer("managed provider instance references", (it) => {
   it.effect("renames collision references in event truth and runtime projections", () =>
@@ -132,7 +132,7 @@ layer("managed provider instance references", (it) => {
   );
 });
 
-const routeLayer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
+const routeLayer = it.layer(Layer.mergeAll(NodeSqliteClient.layer({ filename: ":memory:" })));
 
 routeLayer("managed provider route split", (it) => {
   it.effect("moves legacy Codex frontier-model references to the managed frontier route", () =>

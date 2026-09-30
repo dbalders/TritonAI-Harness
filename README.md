@@ -28,17 +28,17 @@ There is no public docs site yet. Use the markdown files in [docs](./docs).
 
 - [Getting started](./docs/getting-started/quick-start.md)
 - [Remote access](./docs/user/remote-access.md)
-- [Keeping TritonAI Harness versions in sync](./docs/user/server-updates.md)
+- [Keeping TritonAI Harness versions in sync](./docs/user/updating.md)
 - [Computer use](./docs/user/computer-use.md)
 - [Memory](./docs/user/memory.md)
 - [TritonAI Commons](./docs/user/tritonai-commons.md)
 - [Architecture overview](./docs/architecture/overview.md)
-- [Codex provider guide](./docs/providers/codex.md)
+- [Codex provider guide](./docs/user/providers-codex.md)
 - [TritonAI downstream notes](./docs/tritonai-downstream.md)
 - [TritonAI sync automation](./docs/tritonai-sync-automation.md)
 - [Operations](./docs/operations/ci.md)
 - [Secret storage](./docs/operations/secret-storage.md)
-- [Reference](./docs/reference/encyclopedia.md)
+- [Scripts reference](./docs/reference/scripts.md)
 
 ## Local development
 

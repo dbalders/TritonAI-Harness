@@ -6,20 +6,20 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { runMigrations } from "../Migrations.ts";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
-const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
+const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layer({ filename: ":memory:" })));
 
 layer("051_ProjectionThreadMessageContext", (it) => {
   it.effect("accepts context added by an earlier development migration", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
 
-      yield* runMigrations({ toMigrationInclusive: 50 });
+      yield* runMigrations({ toMigrationInclusive: 53 });
       yield* sql`
         ALTER TABLE projection_thread_messages
         ADD COLUMN context_json TEXT
       `;
 
-      yield* runMigrations({ toMigrationInclusive: 51 });
+      yield* runMigrations({ toMigrationInclusive: 54 });
 
       const columns = yield* sql<{ readonly name: string; readonly notnull: number }>`
         PRAGMA table_info(projection_thread_messages)
@@ -28,7 +28,7 @@ layer("051_ProjectionThreadMessageContext", (it) => {
       const migrations = yield* sql<{ readonly migration_id: number }>`
         SELECT migration_id
         FROM effect_sql_migrations
-        WHERE migration_id = 51
+        WHERE migration_id = 54
       `;
 
       assert.equal(context?.name, "context_json");

@@ -119,11 +119,11 @@ export function formatUsageReport(period: string, report: UsageReport): string {
 }
 
 const PlausibleConfig = Config.all({
-  apiKey: Config.redacted("PLAUSIBLE_API_KEY"),
-  baseUrl: Config.string("PLAUSIBLE_URL").pipe(
+  apiKey: Config.Redacted("PLAUSIBLE_API_KEY"),
+  baseUrl: Config.String("PLAUSIBLE_URL").pipe(
     Config.withDefault("https://tritonai-analytics.ucsd.edu"),
   ),
-  siteId: Config.string("PLAUSIBLE_SITE_ID").pipe(Config.withDefault("tritonai-harness")),
+  siteId: Config.String("PLAUSIBLE_SITE_ID").pipe(Config.withDefault("tritonai-harness")),
 });
 
 const makeQuery = Effect.fn("analyticsReport.makeQuery")(function* () {
@@ -160,7 +160,7 @@ const makeQuery = Effect.fn("analyticsReport.makeQuery")(function* () {
 export const analyticsReportCommand = Command.make(
   "analytics-report",
   {
-    period: Flag.string("period").pipe(
+    period: Flag.String("period").pipe(
       Flag.withDefault("30d"),
       Flag.withDescription("Plausible date range for activity, e.g. 7d, 30d, month, 12mo."),
     ),

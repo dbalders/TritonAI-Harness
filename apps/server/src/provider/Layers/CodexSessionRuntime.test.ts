@@ -13,9 +13,8 @@ import * as EffectCodexSchema from "effect-codex-app-server/schema";
 
 import { INTEGRATION_TOOL_RESULT_OMITTED } from "../../integrations/IntegrationRegistry.ts";
 import {
+  buildCodexAdditionalContext,
   buildCodexDeveloperInstructions,
-  codexDefaultModeDeveloperInstructions,
-  codexPlanModeDeveloperInstructions,
 } from "../CodexDeveloperInstructions.ts";
 import { codexSessionAppServerArgs } from "./codexLaunchArgs.ts";
 import {
@@ -107,25 +106,28 @@ describe("Codex thread history", () => {
     );
   }
 
-  it.effect("keeps the count-based rollback API for older threads", () =>
+  it.effect("surfaces Codex rejecting a revert of a legacy thread", () =>
     Effect.gen(function* () {
+      const rejection = CodexErrors.CodexAppServerRequestError.invalidRequest(
+        "thread/revert only supports paginated threads",
+      );
       const client: Parameters<typeof rollbackCodexThread>[0] = {
-        raw: { request: () => Effect.succeed({ thread: {} }) },
-        request: <M extends CodexRpc.ClientRequestMethod>(
-          method: M,
-          params: CodexRpc.ClientRequestParamsByMethod[M],
-        ) => {
-          NodeAssert.equal(method, "thread/rollback");
-          NodeAssert.deepEqual(params, { threadId: "legacy-thread", numTurns: 2 });
+        raw: {
+          request: (method) => {
+            if (method === "thread/read") return Effect.succeed({ thread: {} });
+            if (method === "thread/revert") return Effect.fail(rejection);
+            return Effect.die(`Unexpected raw request: ${method}`);
+          },
+        },
+        request: <M extends CodexRpc.ClientRequestMethod>(method: M) => {
+          NodeAssert.equal(method, "thread/read");
           return Effect.succeed({
-            thread: { id: "legacy-thread", turns: [] },
+            thread: { id: "legacy-thread", turns: [{ id: "turn-1", items: [] }] },
           } as unknown as CodexRpc.ClientRequestResponsesByMethod[M]);
         },
       };
-      NodeAssert.deepEqual(yield* rollbackCodexThread(client, "legacy-thread", 2), {
-        threadId: "legacy-thread",
-        turns: [],
-      });
+      const error = yield* Effect.flip(rollbackCodexThread(client, "legacy-thread", 1));
+      NodeAssert.strictEqual(error, rejection);
     }),
   );
 });
@@ -269,6 +271,7 @@ function makeThreadOpenResponse(
       createdAt: 1_776_470_400,
       modelProvider: "openai",
       preview: "",
+      projectId: null,
       sessionId: "session-1",
       source: "cli",
       turns: [],
@@ -279,6 +282,23 @@ function makeThreadOpenResponse(
 }
 
 describe("buildTurnStartParams", () => {
+  it.effect("sends currency skill aliases in Codex's canonical dollar form", () =>
+    Effect.gen(function* () {
+      for (const symbol of ["€", "£", "¥", "₹", "₩", "₿", "𑿝"]) {
+        const prose = `${symbol}20 ${symbol}20k ${symbol}100M ${symbol}1e6 5${symbol}review`;
+        const params = yield* buildTurnStartParams({
+          threadId: "provider-thread-1",
+          runtimeMode: "full-access",
+          prompt: `${symbol}review ${symbol}2spec $existing ${prose} ${symbol}last`,
+        });
+
+        NodeAssert.deepEqual(params.input, [
+          { type: "text", text: `$review $2spec $existing ${prose} $last` },
+        ]);
+      }
+    }),
+  );
+
   it("keeps invalid turn values only in the schema cause", () => {
     const secret = "codex-turn-input-secret-sentinel";
     const error = Effect.runSync(
@@ -287,8 +307,8 @@ describe("buildTurnStartParams", () => {
         runtimeMode: "full-access",
         attachments: [
           {
-            type: "image",
-            url: { secret } as unknown as string,
+            type: "localImage",
+            path: { secret } as unknown as string,
           },
         ],
       }).pipe(Effect.flip),
@@ -337,12 +357,13 @@ describe("buildTurnStartParams", () => {
         settings: {
           model: "gpt-5.3-codex",
           reasoning_effort: "medium",
-          developer_instructions: buildCodexDeveloperInstructions("plan", {
-            model: "gpt-5.3-codex",
-            reasoningEffort: "medium",
-          }),
+          developer_instructions: buildCodexDeveloperInstructions("plan"),
         },
       },
+      additionalContext: buildCodexAdditionalContext({
+        model: "gpt-5.3-codex",
+        reasoningEffort: "medium",
+      }),
     });
   });
 
@@ -356,8 +377,8 @@ describe("buildTurnStartParams", () => {
         interactionMode: "default",
         attachments: [
           {
-            type: "image",
-            url: "data:image/png;base64,abc",
+            type: "localImage",
+            path: "/tmp/generated.png",
           },
         ],
       }),
@@ -376,8 +397,8 @@ describe("buildTurnStartParams", () => {
           text: "Implement it",
         },
         {
-          type: "image",
-          url: "data:image/png;base64,abc",
+          type: "localImage",
+          path: "/tmp/generated.png",
         },
       ],
       model: "gpt-5.3-codex",
@@ -386,12 +407,13 @@ describe("buildTurnStartParams", () => {
         settings: {
           model: "gpt-5.3-codex",
           reasoning_effort: "medium",
-          developer_instructions: buildCodexDeveloperInstructions("default", {
-            model: "gpt-5.3-codex",
-            reasoningEffort: "medium",
-          }),
+          developer_instructions: buildCodexDeveloperInstructions("default"),
         },
       },
+      additionalContext: buildCodexAdditionalContext({
+        model: "gpt-5.3-codex",
+        reasoningEffort: "medium",
+      }),
     });
   });
 
@@ -408,8 +430,28 @@ describe("buildTurnStartParams", () => {
     const settings = params.collaborationMode?.settings;
     NodeAssert.equal(settings?.model, DEFAULT_MODEL);
     NodeAssert.equal(settings?.reasoning_effort, "medium");
-    NodeAssert.ok(settings?.developer_instructions?.includes(`as ${DEFAULT_MODEL} with medium`));
+    NodeAssert.ok(
+      params.additionalContext?.t3_code_runtime?.value.includes(`as ${DEFAULT_MODEL} with medium`),
+    );
   });
+
+  it.effect("names the model by display name and slug in the runtime context", () =>
+    Effect.gen(function* () {
+      const params = yield* buildTurnStartParams({
+        threadId: "provider-thread-1",
+        runtimeMode: "full-access",
+        model: "gpt-5.3-codex",
+        modelName: "GPT-5.3-Codex",
+        effort: "high",
+        interactionMode: "plan",
+      });
+
+      NodeAssert.match(
+        params.additionalContext?.t3_code_runtime?.value ?? "",
+        /as GPT-5\.3-Codex \(model slug: gpt-5\.3-codex\) with high reasoning effort/,
+      );
+    }),
+  );
 
   it.effect("routes approvals to the auto reviewer in auto mode", () =>
     Effect.gen(function* () {
@@ -696,137 +738,15 @@ describe("Codex MCP elicitation approvals", () => {
 });
 
 describe("buildCodexDeveloperInstructions", () => {
-  it.each(["default", "plan"] as const)(
-    "supplies session cursor defaults and user overrides in %s mode without browser tools",
-    (mode) => {
-      const instructions = buildCodexDeveloperInstructions(
-        mode,
-        { model: "test", reasoningEffort: "medium" },
-        false,
-        {
-          enabled: true,
-          available: true,
-          running: true,
-          accessibilityPermission: true,
-          screenRecordingPermission: true,
-        },
-      );
-
-      NodeAssert.match(instructions, /after start_session, call set_agent_cursor_motion/);
-      NodeAssert.match(instructions, /for that session before interacting/);
-      NodeAssert.match(
-        instructions,
-        /arc_size=0, turn_radius=1, spring=1, and glide_duration_ms=180 as defaults/,
-      );
-      NodeAssert.match(instructions, /substituting any explicitly user-requested motion values/);
-      NodeAssert.match(instructions, /call again only if the user later requests a motion change/);
-      NodeAssert.match(
-        instructions,
-        /cursor motion is unsupported, continue the task without retrying/,
-      );
-      NodeAssert.doesNotMatch(instructions, /preview_open/);
-    },
-  );
-
-  it("does not diagnose missing desktop status as a permission or environment failure", () => {
-    const instructions = buildCodexDeveloperInstructions(
-      "default",
-      { model: "test", reasoningEffort: "medium" },
-      false,
-    );
-    NodeAssert.match(instructions, /Desktop startup status: Unknown/);
-    NodeAssert.match(instructions, /failed desktop status check/);
-    NodeAssert.match(instructions, /check Computer use readiness and retry/);
-    NodeAssert.doesNotMatch(instructions, /Settings > General > Computer use/);
-  });
-
-  it("tells the agent which desktop permission is missing", () => {
-    const instructions = buildCodexDeveloperInstructions(
-      "default",
-      { model: "test", reasoningEffort: "medium" },
-      false,
-      {
-        enabled: true,
-        available: true,
-        running: false,
-        accessibilityPermission: true,
-        screenRecordingPermission: false,
-      },
-    );
-    NodeAssert.match(instructions, /Desktop startup status: Needs permissions/);
-    NodeAssert.match(instructions, /Allow Screen Recording in System Settings/);
-    NodeAssert.match(instructions, /Do not claim the app is missing/);
-    NodeAssert.doesNotMatch(instructions, /preview_open/);
-  });
-  it("does not mistake the desktop driver for the browser connection", () => {
-    const args = ['mcp_servers.cua-driver.command="cua-driver"'];
-    NodeAssert.equal(hasConfiguredMcpServer(args), true);
-    NodeAssert.equal(hasConfiguredMcpServer(args, "t3-code"), false);
-  });
-
-  it("appends runtime info after the mode instructions", () => {
-    const instructions = buildCodexDeveloperInstructions("default", {
-      model: "gpt-5.3-codex",
-      reasoningEffort: "high",
-    });
-
-    NodeAssert.match(instructions, /^<collaboration_mode># Collaboration Mode: Default/);
-    NodeAssert.match(instructions, /TritonAI Harness/);
-    NodeAssert.doesNotMatch(instructions, /running in T3 Code/);
-    NodeAssert.match(instructions, /Codex harness/);
-    NodeAssert.match(instructions, /## TritonAI Harness computer use/);
-    NodeAssert.match(instructions, /start_session/);
-    NodeAssert.match(instructions, /end_session/);
-    NodeAssert.match(instructions, /as gpt-5\.3-codex with high reasoning effort/);
-  });
-
-  it("describes Markdown media support in the runtime context in both modes", () => {
+  it("keeps T3 context out of the mode prompt, which the model catalog can replace", () => {
     for (const mode of ["default", "plan"] as const) {
-      const instructions = buildCodexDeveloperInstructions(mode, {
-        model: "gpt-5.3-codex",
-        reasoningEffort: "high",
-      });
-      NodeAssert.match(
+      const instructions = buildCodexDeveloperInstructions(mode);
+      NodeAssert.match(instructions, /^<collaboration_mode>[\s\S]*<\/collaboration_mode>$/);
+      NodeAssert.doesNotMatch(
         instructions,
-        /<runtime_info>.*embed images and videos.*Markdown.*<\/runtime_info>/,
+        /runtime_info|pull_request_linking|preview_|device_|start_session|computer_use_status/,
       );
     }
-  });
-
-  it("includes runtime info alongside plan mode instructions", () => {
-    const instructions = buildCodexDeveloperInstructions("plan", {
-      model: "gpt-5.3-codex",
-      reasoningEffort: "medium",
-    });
-
-    NodeAssert.match(instructions, /^<collaboration_mode># Plan Mode/);
-    NodeAssert.match(instructions, /as gpt-5\.3-codex with medium reasoning effort/);
-  });
-
-  it("varies with the model and effort of each turn", () => {
-    const first = buildCodexDeveloperInstructions("default", {
-      model: "gpt-5.3-codex",
-      reasoningEffort: "medium",
-    });
-    const second = buildCodexDeveloperInstructions("default", {
-      model: "gpt-5.4",
-      reasoningEffort: "high",
-    });
-
-    NodeAssert.notEqual(first, second);
-    NodeAssert.match(second, /report the model in this current-turn runtime information/);
-    NodeAssert.match(second, /not an identity from earlier messages or inherited instructions/);
-    NodeAssert.match(second, /not independent verification of the upstream backend/);
-  });
-
-  it("flattens multiline metadata into single-line runtime info", () => {
-    const instructions = buildCodexDeveloperInstructions("default", {
-      model: "gpt\n5.3\ncodex",
-      reasoningEffort: " high\neffort ",
-    });
-
-    NodeAssert.match(instructions, /as gpt 5\.3 codex with high effort reasoning effort/);
-    NodeAssert.doesNotMatch(instructions, /<runtime_info>[^<]*\n/);
   });
 });
 
@@ -910,41 +830,160 @@ describe("integration plugin skill availability", () => {
   );
 });
 
-describe("T3 browser developer instructions", () => {
+describe("TritonAI computer use context", () => {
+  const runtime = { model: "test", reasoningEffort: "medium" };
+  const computerUse = (context: ReturnType<typeof buildCodexAdditionalContext>) =>
+    `${context.tritonai_computer_use?.value ?? ""}\n${context.computer_use_status?.value ?? ""}`;
+
+  it("supplies session cursor defaults and user overrides without browser tools", () => {
+    const context = buildCodexAdditionalContext(runtime, false, {
+      enabled: true,
+      available: true,
+      running: true,
+      accessibilityPermission: true,
+      screenRecordingPermission: true,
+    });
+    const instructions = computerUse(context);
+
+    NodeAssert.match(instructions, /## TritonAI Harness computer use/);
+    NodeAssert.match(instructions, /start_session/);
+    NodeAssert.match(instructions, /end_session/);
+    NodeAssert.match(instructions, /after start_session, call set_agent_cursor_motion/);
+    NodeAssert.match(instructions, /for that session before interacting/);
+    NodeAssert.match(
+      instructions,
+      /arc_size=0, turn_radius=1, spring=1, and glide_duration_ms=180 as defaults/,
+    );
+    NodeAssert.match(instructions, /substituting any explicitly user-requested motion values/);
+    NodeAssert.match(instructions, /call again only if the user later requests a motion change/);
+    NodeAssert.match(
+      instructions,
+      /cursor motion is unsupported, continue the task without retrying/,
+    );
+    NodeAssert.equal(context.t3_code_tools, undefined);
+  });
+
+  it("does not diagnose missing desktop status as a permission or environment failure", () => {
+    const status = buildCodexAdditionalContext(runtime, false).computer_use_status?.value ?? "";
+    NodeAssert.match(status, /Desktop startup status: Unknown/);
+    NodeAssert.match(status, /failed desktop status check/);
+    NodeAssert.match(status, /check Computer use readiness and retry/);
+    NodeAssert.doesNotMatch(status, /Settings > General > Computer use/);
+  });
+
+  it("tells the agent which desktop permission is missing", () => {
+    const status =
+      buildCodexAdditionalContext(runtime, false, {
+        enabled: true,
+        available: true,
+        running: false,
+        accessibilityPermission: true,
+        screenRecordingPermission: false,
+      }).computer_use_status?.value ?? "";
+    NodeAssert.match(status, /Desktop startup status: Needs permissions/);
+    NodeAssert.match(status, /Allow Screen Recording in System Settings/);
+    NodeAssert.match(status, /Do not claim the app is missing/);
+  });
+
+  it("does not mistake the desktop driver for the browser connection", () => {
+    const args = ['mcp_servers.cua-driver.command="cua-driver"'];
+    NodeAssert.equal(hasConfiguredMcpServer(args), true);
+    NodeAssert.equal(hasConfiguredMcpServer(args, "t3-code"), false);
+  });
+});
+
+describe("buildCodexAdditionalContext", () => {
+  const runtime = { model: "gpt-5.3-codex", reasoningEffort: "high" };
+  const runtimeValue = (context: ReturnType<typeof buildCodexAdditionalContext>) =>
+    context.t3_code_runtime?.value ?? "";
+
+  it("describes the harness, model, effort, and Markdown media support", () => {
+    const context = buildCodexAdditionalContext(runtime);
+
+    NodeAssert.equal(context.t3_code_runtime?.kind, "application");
+    NodeAssert.match(
+      runtimeValue(context),
+      /<runtime_info>.*Codex harness, as gpt-5\.3-codex with high reasoning effort.*embed images and videos.*Markdown.*<\/runtime_info>/,
+    );
+  });
+
+  it("varies with the model and effort of each turn", () => {
+    NodeAssert.notEqual(
+      runtimeValue(
+        buildCodexAdditionalContext({ model: "gpt-5.3-codex", reasoningEffort: "medium" }),
+      ),
+      runtimeValue(buildCodexAdditionalContext({ model: "gpt-5.4", reasoningEffort: "high" })),
+    );
+  });
+
+  it("flattens multiline metadata into single-line runtime info", () => {
+    const value = runtimeValue(
+      buildCodexAdditionalContext({ model: "gpt\n5.3\ncodex", reasoningEffort: " high\neffort " }),
+    );
+
+    NodeAssert.match(value, /as gpt 5\.3 codex with high effort reasoning effort/);
+    NodeAssert.doesNotMatch(value, /<runtime_info>[^<]*\n/);
+  });
+
+  it("tells the agent which model is selected in the current turn", () => {
+    const value = runtimeValue(buildCodexAdditionalContext(runtime));
+
+    NodeAssert.match(value, /TritonAI Harness/);
+    NodeAssert.doesNotMatch(value, /running in T3 Code/);
+    NodeAssert.match(value, /report the model in this current-turn runtime information/);
+    NodeAssert.match(value, /not an identity from earlier messages or inherited instructions/);
+    NodeAssert.match(value, /not independent verification of the upstream backend/);
+  });
+
+  it("keeps every entry under Codex's 1,000 token cap per entry", () => {
+    const context = buildCodexAdditionalContext(
+      runtime,
+      { browser: true, device: true },
+      {
+        enabled: true,
+        available: true,
+        running: false,
+        accessibilityPermission: false,
+        screenRecordingPermission: false,
+      },
+    );
+    for (const entry of Object.values(context)) {
+      // Codex estimates 4 bytes per token and truncates the middle of longer values.
+      NodeAssert.ok(Buffer.byteLength(entry.value) < 4_000);
+    }
+  });
+});
+
+describe("T3 tool instructions", () => {
   const runtime = { model: "gpt-5.3-codex", reasoningEffort: "high" };
 
-  it("prefers the product-native preview tools in both collaboration modes", () => {
-    for (const mode of ["default", "plan"] as const) {
-      const instructions = buildCodexDeveloperInstructions(mode, runtime, true);
-      NodeAssert.match(instructions, /t3-code/);
-      NodeAssert.match(instructions, /preview_status/);
-      NodeAssert.match(instructions, /preview_open/);
-      NodeAssert.match(instructions, /show=false/);
-      NodeAssert.match(instructions, /Do not switch to global browser skills/);
-    }
+  it("prefers the product-native preview tools when they are attached", () => {
+    const tools = buildCodexAdditionalContext(runtime, true).t3_code_tools?.value ?? "";
+    NodeAssert.match(tools, /TritonAI Harness collaborative browser/);
+    NodeAssert.match(tools, /preview_status/);
+    NodeAssert.match(tools, /preview_open/);
+    NodeAssert.match(tools, /show=false/);
+    NodeAssert.match(tools, /Do not switch to global browser skills/);
+    NodeAssert.doesNotMatch(tools, /device_open/);
   });
 
-  it("omits the browser block entirely when the preview tools are not attached", () => {
-    for (const mode of ["default", "plan"] as const) {
-      const instructions = buildCodexDeveloperInstructions(mode, runtime, false);
-      NodeAssert.doesNotMatch(instructions, /preview_status/);
-      NodeAssert.doesNotMatch(instructions, /preview_open/);
-      NodeAssert.doesNotMatch(instructions, /T3 Code collaborative browser/);
-      // Steering away from other browser automation must go with the tools;
-      // keeping it would leave the model talked out of its only option.
-      NodeAssert.doesNotMatch(instructions, /Do not switch to global browser skills/);
-      // The rest of the collaboration mode is untouched.
-      NodeAssert.match(instructions, /<collaboration_mode>/);
-      NodeAssert.match(instructions, /<\/collaboration_mode>/);
-    }
+  it("describes device tools only when the credential grants them", () => {
+    const tools =
+      buildCodexAdditionalContext(runtime, { browser: false, device: true }).t3_code_tools?.value ??
+      "";
+    NodeAssert.match(tools, /device_open/);
+    NodeAssert.doesNotMatch(tools, /preview_open/);
   });
 
-  it("tracks the turn's MCP configuration rather than defaulting to on", () => {
-    NodeAssert.match(buildCodexDeveloperInstructions("default", runtime, true), /preview_open/);
-    NodeAssert.doesNotMatch(
-      buildCodexDeveloperInstructions("default", runtime, false),
-      /preview_open/,
-    );
+  it("omits the tool entry entirely when no tools are attached", () => {
+    // Steering away from other browser automation must go with the tools;
+    // keeping it would leave the model talked out of its only option.
+    const context = buildCodexAdditionalContext(runtime, false);
+    NodeAssert.deepStrictEqual(Object.keys(context), [
+      "t3_code_runtime",
+      "tritonai_computer_use",
+      "computer_use_status",
+    ]);
   });
 });
 
@@ -965,12 +1004,8 @@ describe("computerUseStateForSession", () => {
       const state = computerUseStateForSession(ready, args);
       NodeAssert.equal(state?.running, false);
       NodeAssert.match(
-        buildCodexDeveloperInstructions(
-          "default",
-          { model: "test", reasoningEffort: "medium" },
-          false,
-          state,
-        ),
+        buildCodexAdditionalContext({ model: "test", reasoningEffort: "medium" }, false, state)
+          .computer_use_status?.value ?? "",
         /Desktop startup status: Restart required/,
       );
     }
@@ -1032,6 +1067,7 @@ function makeThreadStartedNotification(
         id: threadId,
         modelProvider: "openai",
         preview: "",
+        projectId: null,
         sessionId: threadId,
         source,
         status: { type: "idle" as const },

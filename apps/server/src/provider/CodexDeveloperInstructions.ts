@@ -3,35 +3,28 @@ import {
   type DesktopComputerUseState,
   type ProviderInteractionMode,
 } from "@t3tools/contracts";
+import type { V2TurnStartParams__AdditionalContextEntry } from "effect-codex-app-server/schema";
 import { buildRuntimeInstructions } from "./RuntimeInstructions.ts";
 
-const T3_CODE_BROWSER_TOOL_INSTRUCTIONS = `
-
-## TritonAI Harness collaborative browser
+const T3_CODE_BROWSER_TOOL_INSTRUCTIONS = `## TritonAI Harness collaborative browser
 
 You are running inside TritonAI Harness. Its product-native collaborative browser is shared with the user through \`preview_*\` tools. Prefer those tools for browser navigation, page inspection, text extraction, and interaction regardless of whether the runtime transports them directly or through MCP.
 
 For browser work, first call \`preview_status\`. If no automation-capable preview is attached, call \`preview_open\` before concluding that the browser is unavailable. For background online research call \`preview_open\` with \`show=false\`; use \`show=true\` when the user asks to see or interact with the browser. Then use \`preview_navigate\`, \`preview_snapshot\`, and \`preview_evaluate\` to read the page. Prefer snapshot-provided locators over coordinates and include the source URLs used in the answer. Browser results provide DOM text and semantic page data, not screenshot images.
 
-Do not switch to global browser skills, Chrome, Node REPL browser automation, standalone Playwright, or agent-browser merely because the preview is initially closed or a first call fails. Use an alternative browser system only when the T3 preview tools are absent, the user explicitly requests another browser, or \`preview_open\` returns an explicit unsupported/unavailable error. A failed T3 preview tool call should be inspected and retried with corrected arguments when the error is actionable.
-`;
+Do not switch to global browser skills, Chrome, Node REPL browser automation, standalone Playwright, or agent-browser merely because the preview is initially closed or a first call fails. Use an alternative browser system only when the T3 preview tools are absent, the user explicitly requests another browser, or \`preview_open\` returns an explicit unsupported/unavailable error. A failed T3 preview tool call should be inspected and retried with corrected arguments when the error is actionable.`;
 
-const TRITONAI_COMPUTER_USE_INSTRUCTIONS = `
-
-## TritonAI Harness computer use
+const TRITONAI_COMPUTER_USE_INSTRUCTIONS = `## TritonAI Harness computer use
 
 Users invoke computer use in plain language or with /computer-use; it is a built-in capability, not a $ skill. When the user specifically asks for computer use, prefer the cua-driver tools over browser-only automation or shell scripts.
 
 When the cua-driver MCP tools are available and a task requires native desktop interaction, use them instead of claiming that local app control is unavailable. Start one named session with start_session, pass that same session name to every subsequent tool call, and always finish with end_session. Prefer accessibility elements and window-scoped capture over raw coordinates. Observe before acting, verify the result after each meaningful action, and do not bypass approval or permission failures. If an action returns "element_token is stale; call get_window_state again to refresh", treat it as a normal observation step: call get_window_state for the same window and session, locate the intended control again, and retry with the fresh element token. Never reuse the stale token or guess a replacement. Do not ask the user to fix permissions or report an error for this routine refresh. If fresh observations repeatedly cannot resolve the target, explain the blocker and ask for help only when needed. The visible agent cursor belongs to the named session; do not move the user's physical pointer.
 
-Immediately after start_session, call set_agent_cursor_motion for that session before interacting. Use arc_size=0, turn_radius=1, spring=1, and glide_duration_ms=180 as defaults, substituting any explicitly user-requested motion values in this initial call. These settings keep the visible cursor's travel short and direct with minimal turning and bounce. Configure motion once at session start; call again only if the user later requests a motion change. Avoid decorative cursor moves, loops, and extra waypoints; move directly to the next target. If the driver reports that cursor motion is unsupported, continue the task without retrying the cosmetic configuration.
-`;
-const T3_CODE_DEVICE_TOOL_INSTRUCTIONS = `
+Immediately after start_session, call set_agent_cursor_motion for that session before interacting. Use arc_size=0, turn_radius=1, spring=1, and glide_duration_ms=180 as defaults, substituting any explicitly user-requested motion values in this initial call. These settings keep the visible cursor's travel short and direct with minimal turning and bounce. Configure motion once at session start; call again only if the user later requests a motion change. Avoid decorative cursor moves, loops, and extra waypoints; move directly to the next target. If the driver reports that cursor motion is unsupported, continue the task without retrying the cosmetic configuration.`;
 
-## TritonAI Harness devices
+const T3_CODE_DEVICE_TOOL_INSTRUCTIONS = `## TritonAI Harness devices
 
-The \`t3-code\` MCP server also exposes \`device_*\` tools for iOS Simulators and Android Emulators on this environment. For mobile verification, call \`device_list\`, then \`device_open\` so the user can watch the device in their Device panel; its result explains how to drive the device. Driving happens through the \`agent-device\` CLI, which is on PATH. Keep the host config and session flags returned by \`device_open\` on every command so concurrent devices stay independent: prefer \`agent-device snapshot -i\` refs over coordinates, and use \`device_screenshot\` when you need to see the screen. Do not call simctl, adb, xcrun, or serve-sim directly while these tools are present. If \`device_list\` reports a platform as unavailable, say so instead of trying another route.
-`;
+The \`t3-code\` MCP server also exposes \`device_*\` tools for iOS Simulators and Android Emulators on this environment. For mobile verification, call \`device_list\`, then \`device_open\` so the user can watch the device in their Device panel; its result explains how to drive the device. Driving happens through the \`agent-device\` CLI, which is on PATH. Keep the host config and session flags returned by \`device_open\` on every command so concurrent devices stay independent: prefer \`agent-device snapshot -i\` refs over coordinates, and use \`device_screenshot\` when you need to see the screen. Prefer these tools and \`agent-device\` for opening and driving devices. Platform tools such as \`xcrun simctl\` and \`adb\` remain available for anything they do not cover, such as builds, logs, or port forwarding. If \`device_list\` reports a platform as unavailable, say so.`;
 
 export interface T3CodeToolAvailability {
   readonly browser: boolean;
@@ -50,16 +43,17 @@ const normalizeAvailability = (
  * from Playwright, agent-browser, and raw simctl/adb, so leaving them in would
  * talk it out of the only automation it still has.
  */
-const browserToolInstructions = (availability: boolean | T3CodeToolAvailability): string => {
+const toolInstructions = (availability: boolean | T3CodeToolAvailability): string => {
   const tools = normalizeAvailability(availability);
-  return `${tools.browser ? T3_CODE_BROWSER_TOOL_INSTRUCTIONS : ""}${
-    tools.device ? T3_CODE_DEVICE_TOOL_INSTRUCTIONS : ""
-  }`;
+  return [
+    tools.browser ? T3_CODE_BROWSER_TOOL_INSTRUCTIONS : "",
+    tools.device ? T3_CODE_DEVICE_TOOL_INSTRUCTIONS : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 };
 
-export const codexPlanModeDeveloperInstructions = (
-  browserToolsAvailable: boolean | T3CodeToolAvailability,
-): string => `<collaboration_mode># Plan Mode (Conversational)
+const CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS = `<collaboration_mode># Plan Mode (Conversational)
 
 You work in 3 phases, and you should *chat your way* to a great plan before finalizing it. A great plan is very detailed-intent- and implementation-wise-so that it can be handed to another engineer or agent to be implemented right away. It must be **decision complete**, where the implementer does not need to make any decisions.
 
@@ -187,13 +181,9 @@ Do not ask "should I proceed?" in the final output. The user can easily switch o
 Only produce at most one \`<proposed_plan>\` block per turn, and only when you are presenting a complete spec.
 
 If the user stays in Plan mode and asks for revisions after a prior \`<proposed_plan>\`, any new \`<proposed_plan>\` must be a complete replacement. If the user indicates that the prior plan is not acceptable but does not provide enough information to produce a complete replacement, address the concern and continue planning without producing a \`<proposed_plan>\` block. If the follow-up neither requires changes nor calls the plan into question (e.g. clarifying question), answer it before the block, then reproduce the prior \`<proposed_plan>\` unchanged.
-${browserToolInstructions(browserToolsAvailable)}
-${TRITONAI_COMPUTER_USE_INSTRUCTIONS}
 </collaboration_mode>`;
 
-export const codexDefaultModeDeveloperInstructions = (
-  browserToolsAvailable: boolean | T3CodeToolAvailability,
-): string => `<collaboration_mode># Collaboration Mode: Default
+const CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS = `<collaboration_mode># Collaboration Mode: Default
 
 You are now in Default mode. Any previous instructions for other modes (e.g. Plan mode) are no longer active.
 
@@ -204,30 +194,59 @@ Your active mode changes only when new developer instructions with a different \
 Use the \`request_user_input\` tool only when it is listed in the available tools for this turn.
 
 In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. If you absolutely must ask a question because the answer cannot be discovered from local context and a reasonable assumption would be risky, ask the user directly with a concise plain-text question. Never write a multiple choice question as a textual assistant message.
-${browserToolInstructions(browserToolsAvailable)}
-${TRITONAI_COMPUTER_USE_INSTRUCTIONS}
 </collaboration_mode>`;
 
 export interface CodexRuntimeInfo {
   readonly model: string;
+  readonly modelName?: string | undefined;
   readonly reasoningEffort: string;
 }
 
-export function buildCodexDeveloperInstructions(
-  interactionMode: ProviderInteractionMode,
+/** Mode prompt for `turn/start.collaborationMode.settings.developer_instructions`. */
+export function buildCodexDeveloperInstructions(interactionMode: ProviderInteractionMode): string {
+  return interactionMode === "plan"
+    ? CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS
+    : CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS;
+}
+
+/**
+ * T3 Code context for `turn/start.additionalContext`. Codex renders each entry
+ * as a `<key>value</key>` developer message and resends it only when the value
+ * changes.
+ *
+ * This must stay out of the collaboration mode: when the model catalog ships
+ * its own text for a mode, as newer models do, Codex uses that text and drops
+ * the client's `developer_instructions` entirely.
+ */
+export function buildCodexAdditionalContext(
   runtime: CodexRuntimeInfo,
   /**
    * Whether the `t3-code` MCP server is attached to this turn. Callers derive
    * it from the session's actual MCP configuration rather than re-reading the
    * setting, so the prompt cannot claim tools the turn doesn't have.
    */
-  browserToolsAvailable: boolean | T3CodeToolAvailability = true,
+  toolsAvailable: boolean | T3CodeToolAvailability = true,
   computerUseState?: DesktopComputerUseState,
+): Record<string, V2TurnStartParams__AdditionalContextEntry> {
+  const tools = toolInstructions(toolsAvailable);
+  // Separate keys keep each value under Codex's per-entry token cap.
+  return {
+    t3_code_runtime: {
+      kind: "application",
+      value: buildRuntimeInstructions({ harness: "Codex", ...runtime }),
+    },
+    ...(tools ? { t3_code_tools: { kind: "application", value: tools } } : {}),
+    tritonai_computer_use: { kind: "application", value: TRITONAI_COMPUTER_USE_INSTRUCTIONS },
+    computer_use_status: {
+      kind: "application",
+      value: computerUseStatusInstructions(computerUseState),
+    },
+  };
+}
+
+function computerUseStatusInstructions(
+  computerUseState: DesktopComputerUseState | undefined,
 ): string {
-  const base =
-    interactionMode === "plan"
-      ? codexPlanModeDeveloperInstructions(browserToolsAvailable)
-      : codexDefaultModeDeveloperInstructions(browserToolsAvailable);
   const computerUseStatus = computerUseState
     ? describeComputerUseReadiness(computerUseState)
     : {
@@ -236,9 +255,5 @@ export function buildCodexDeveloperInstructions(
         detail:
           "No desktop startup status was reported. This can mean an unsupported environment or a failed desktop status check. Computer use requires the local TritonAI Harness desktop backend and the Codex provider; remote, WSL, and browser-only environments do not receive host desktop access.",
       };
-  return `${base}
-
-<computer_use_status>Desktop startup status: ${computerUseStatus.label}. ${computerUseStatus.detail} ${computerUseStatus.ready ? "Refresh stale UI references and continue as described above. For other failures, report the actual blocker; direct the user to Settings > General > Computer use only for an actual permission or setup problem." : !computerUseState ? "If asked to use computer use, use the desktop tools if they are available. Otherwise explain that readiness is unknown: on the local desktop, ask the user to check Computer use readiness and retry; in remote, WSL, or browser-only environments, explain that host desktop access is unavailable. Do not infer a permission failure or unsupported environment from missing status alone, silently substitute shell/browser automation, or attempt to grant permissions yourself." : "If asked to use computer use, explain this blocker and direct the user to Settings > General > Computer use. Do not claim the app is missing, silently substitute shell/browser automation, or attempt to grant permissions yourself. Permission changes require restarting Harness before this environment reconnects."}</computer_use_status>
-
-${buildRuntimeInstructions({ harness: "Codex", ...runtime })}`;
+  return `Desktop startup status: ${computerUseStatus.label}. ${computerUseStatus.detail} ${computerUseStatus.ready ? "Refresh stale UI references and continue as described in the computer use instructions. For other failures, report the actual blocker; direct the user to Settings > General > Computer use only for an actual permission or setup problem." : !computerUseState ? "If asked to use computer use, use the desktop tools if they are available. Otherwise explain that readiness is unknown: on the local desktop, ask the user to check Computer use readiness and retry; in remote, WSL, or browser-only environments, explain that host desktop access is unavailable. Do not infer a permission failure or unsupported environment from missing status alone, silently substitute shell/browser automation, or attempt to grant permissions yourself." : "If asked to use computer use, explain this blocker and direct the user to Settings > General > Computer use. Do not claim the app is missing, silently substitute shell/browser automation, or attempt to grant permissions yourself. Permission changes require restarting Harness before this environment reconnects."}`;
 }

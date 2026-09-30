@@ -16,7 +16,7 @@ import {
 } from "../../../scripts/lib/managed-plugin-composition.ts";
 import { loadManagedHarnessConfigForBuild } from "../../../scripts/lib/managed-harness-config.ts";
 import { loadRepoEnv } from "../../../scripts/lib/public-config.ts";
-import { findEsmImportsOfExternalPackages } from "../../../scripts/lib/cli-external-packages.ts";
+import { findEsmImportsOfExternalPackages } from "../../../scripts/lib/cli-executable-imports.ts";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import {
   ServerCliBuildAssetMissingError,
@@ -109,7 +109,7 @@ const emitManagedBuildResources = Effect.fn("emitManagedBuildResources")(functio
 const buildCmd = Command.make(
   "build",
   {
-    verbose: Flag.boolean("verbose").pipe(Flag.withDefault(false)),
+    verbose: Flag.Boolean("verbose").pipe(Flag.withDefault(false)),
   },
   (config) =>
     Effect.gen(function* () {
@@ -150,8 +150,8 @@ const buildCmd = Command.make(
 const buildExeCmd = Command.make(
   "build-exe",
   {
-    verbose: Flag.boolean("verbose").pipe(Flag.withDefault(false)),
-    target: Flag.string("target").pipe(
+    verbose: Flag.Boolean("verbose").pipe(Flag.withDefault(false)),
+    target: Flag.String("target").pipe(
       Flag.withDescription(
         "Cross-build for <platform>-<arch> in nodejs.org naming (for example darwin-x64); defaults to the host.",
       ),
@@ -217,14 +217,14 @@ const buildExeCmd = Command.make(
 const publishCmd = Command.make(
   "publish",
   {
-    packagesDir: Flag.string("packages-dir").pipe(
+    packagesDir: Flag.String("packages-dir").pipe(
       Flag.withDescription("Output dir of scripts/build-npm-platform-packages.ts."),
     ),
-    tag: Flag.string("tag").pipe(Flag.withDefault("latest")),
-    access: Flag.string("access").pipe(Flag.withDefault("public")),
-    provenance: Flag.boolean("provenance").pipe(Flag.withDefault(false)),
-    dryRun: Flag.boolean("dry-run").pipe(Flag.withDefault(false)),
-    verbose: Flag.boolean("verbose").pipe(Flag.withDefault(false)),
+    tag: Flag.String("tag").pipe(Flag.withDefault("latest")),
+    access: Flag.String("access").pipe(Flag.withDefault("public")),
+    provenance: Flag.Boolean("provenance").pipe(Flag.withDefault(false)),
+    dryRun: Flag.Boolean("dry-run").pipe(Flag.withDefault(false)),
+    verbose: Flag.Boolean("verbose").pipe(Flag.withDefault(false)),
   },
   (config) =>
     Effect.gen(function* () {
