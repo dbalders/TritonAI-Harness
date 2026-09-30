@@ -61,9 +61,12 @@ export function MemorySettingsSection() {
   const openFolder = () => {
     const folder = status?.generalDirectoryPath;
     if (!folder) return;
-    const editor = resolveAndPersistPreferredEditor(
-      environment?.serverConfig?.availableEditors ?? [],
-    );
+    // Show the vault in Finder/Explorer; fall back to the preferred editor
+    // only where the environment has no usable file manager.
+    const availableEditors = environment?.serverConfig?.availableEditors ?? [];
+    const editor = availableEditors.includes("file-manager")
+      ? "file-manager"
+      : resolveAndPersistPreferredEditor(availableEditors);
     if (!editor) {
       setOpenError("No available editors found.");
       return;

@@ -839,7 +839,11 @@ export function DiagnosticsSettingsPanel() {
     const logsDirectoryPath = observability?.logsDirectoryPath ?? null;
     if (!logsDirectoryPath) return;
 
-    const editor = resolveAndPersistPreferredEditor(availableEditors ?? []);
+    // Show the folder in Finder/Explorer; fall back to the preferred editor
+    // only where the environment has no usable file manager.
+    const editor = availableEditors?.includes("file-manager")
+      ? "file-manager"
+      : resolveAndPersistPreferredEditor(availableEditors ?? []);
     if (!editor) {
       setOpenLogsDirectoryError("No available editors found.");
       return;
