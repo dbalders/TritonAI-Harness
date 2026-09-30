@@ -1,7 +1,7 @@
 /**
  * Where a link clicked inside a thread should open.
  *
- * Settings → Integrations → Browser lets the user choose between the OS
+ * Settings → Browser & Devices → Browser lets the user choose between the OS
  * default browser and a tab in the in-app browser. This module turns that
  * preference plus the click itself into one answer, so chat markdown and the
  * terminal drawer make the same decision and offer the same escape hatch.

@@ -1,7 +1,7 @@
 /**
  * Browser defaults - resolves the configured starting state for preview tabs.
  *
- * Settings → Integrations → Browser lets the user pick the viewport, zoom, and
+ * Settings → Browser & Devices → Browser lets the user pick the viewport, zoom, and
  * appearance a preview tab should open at. Those preferences apply to every
  * entry point that opens a tab without stating its own: the user opening a
  * browser panel, and agents calling `preview_open` with no size.

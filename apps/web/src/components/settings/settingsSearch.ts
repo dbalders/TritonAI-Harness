@@ -81,7 +81,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/keybindings": "Keybindings",
   "/settings/snap-shot": "SnapShots",
   "/settings/providers": "Runtime",
-  "/settings/integrations": "Integrations",
+  "/settings/integrations": "Browser & Devices",
   "/settings/skills": "Skills",
   "/settings/plugins": "Plugins",
   "/settings/source-control": "Source Control",
