@@ -86,7 +86,8 @@ describe("CheckpointDiffQuery.layer", () => {
             getArchivedShellSnapshot: () =>
               Effect.die("CheckpointDiffQuery should not request archived shell snapshots"),
             getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 0 }),
-            getCounts: () => Effect.succeed({ projectCount: 0, threadCount: 0 }),
+            getCounts: () =>
+              Effect.succeed({ projectCount: 0, threadCount: 0, firstThreadCreatedAt: null }),
             getEventReplayStats: () => Effect.die("unused"),
             getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
             getProjectShells: () => Effect.die("unused"),
@@ -202,7 +203,8 @@ describe("CheckpointDiffQuery.layer", () => {
             getArchivedShellSnapshot: () =>
               Effect.die("CheckpointDiffQuery should not request archived shell snapshots"),
             getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 0 }),
-            getCounts: () => Effect.succeed({ projectCount: 0, threadCount: 0 }),
+            getCounts: () =>
+              Effect.succeed({ projectCount: 0, threadCount: 0, firstThreadCreatedAt: null }),
             getEventReplayStats: () => Effect.die("unused"),
             getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
             getProjectShells: () => Effect.die("unused"),
@@ -293,7 +295,8 @@ describe("CheckpointDiffQuery.layer", () => {
             getArchivedShellSnapshot: () =>
               Effect.die("CheckpointDiffQuery should not request archived shell snapshots"),
             getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 0 }),
-            getCounts: () => Effect.succeed({ projectCount: 0, threadCount: 0 }),
+            getCounts: () =>
+              Effect.succeed({ projectCount: 0, threadCount: 0, firstThreadCreatedAt: null }),
             getEventReplayStats: () => Effect.die("unused"),
             getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
             getProjectShells: () => Effect.die("unused"),
@@ -369,7 +372,8 @@ describe("CheckpointDiffQuery.layer", () => {
             getArchivedShellSnapshot: () =>
               Effect.die("CheckpointDiffQuery should not request archived shell snapshots"),
             getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 0 }),
-            getCounts: () => Effect.succeed({ projectCount: 0, threadCount: 0 }),
+            getCounts: () =>
+              Effect.succeed({ projectCount: 0, threadCount: 0, firstThreadCreatedAt: null }),
             getEventReplayStats: () => Effect.die("unused"),
             getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
             getProjectShells: () => Effect.die("unused"),
@@ -430,7 +434,8 @@ describe("CheckpointDiffQuery.layer", () => {
             getArchivedShellSnapshot: () =>
               Effect.die("CheckpointDiffQuery should not request archived shell snapshots"),
             getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 0 }),
-            getCounts: () => Effect.succeed({ projectCount: 0, threadCount: 0 }),
+            getCounts: () =>
+              Effect.succeed({ projectCount: 0, threadCount: 0, firstThreadCreatedAt: null }),
             getEventReplayStats: () => Effect.die("unused"),
             getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
             getProjectShells: () => Effect.die("unused"),

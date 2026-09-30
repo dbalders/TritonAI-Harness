@@ -50,6 +50,8 @@ export interface ServerDerivedPaths {
   readonly providerEventLogPath: string;
   readonly terminalLogsDir: string;
   readonly environmentIdPath: string;
+  /** Random install ID attached to product analytics; independent of environmentIdPath. */
+  readonly anonymousIdPath: string;
   readonly serverRuntimeStatePath: string;
   readonly secretsDir: string;
 }
@@ -146,6 +148,7 @@ export const deriveServerPaths = Effect.fn(function* (
     providerEventLogPath: join(providerLogsDir, "events.log"),
     terminalLogsDir: join(logsDir, "terminals"),
     environmentIdPath: join(stateDir, "environment-id"),
+    anonymousIdPath: join(stateDir, "anonymous-id"),
     serverRuntimeStatePath: join(stateDir, "server-runtime.json"),
     secretsDir: join(stateDir, "secrets"),
   };

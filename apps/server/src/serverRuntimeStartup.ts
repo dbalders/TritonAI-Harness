@@ -159,7 +159,14 @@ export const recordStartupHeartbeat = Effect.gen(function* () {
 
   // A failed count is omitted rather than reported as zero, which would read as an empty install.
   const counts = yield* projectionSnapshotQuery.getCounts().pipe(
-    Effect.map(({ threadCount, projectCount }) => ({ threadCount, projectCount })),
+    Effect.map(({ threadCount, projectCount, firstThreadCreatedAt }) => ({
+      threadCount,
+      projectCount,
+      // Month granularity dates an install's first use without a precise timestamp.
+      ...(firstThreadCreatedAt && /^\d{4}-\d{2}/.test(firstThreadCreatedAt)
+        ? { firstThreadMonth: firstThreadCreatedAt.slice(0, 7) }
+        : {}),
+    })),
     Effect.catch((cause) =>
       Effect.logWarning("failed to gather startup projection counts for telemetry", {
         cause,

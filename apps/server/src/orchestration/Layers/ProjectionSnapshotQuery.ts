@@ -175,6 +175,7 @@ const ProjectionStateDbRowSchema = ProjectionState;
 const ProjectionCountsRowSchema = Schema.Struct({
   projectCount: Schema.Number,
   threadCount: Schema.Number,
+  firstThreadCreatedAt: Schema.NullOr(Schema.String),
 });
 const EventReplayStatsInput = Schema.Struct({
   fromSequenceExclusive: NonNegativeInt,
@@ -1017,7 +1018,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       sql`
         SELECT
           (SELECT COUNT(*) FROM projection_projects) AS "projectCount",
-          (SELECT COUNT(*) FROM projection_threads) AS "threadCount"
+          (SELECT COUNT(*) FROM projection_threads) AS "threadCount",
+          (SELECT MIN(created_at) FROM projection_threads) AS "firstThreadCreatedAt"
       `,
   });
 
@@ -2946,6 +2948,7 @@ pending_approval_requests AS (
       Effect.map((row): ProjectionSnapshotCounts => ({
         projectCount: row.projectCount,
         threadCount: row.threadCount,
+        firstThreadCreatedAt: row.firstThreadCreatedAt,
       })),
     );
 
