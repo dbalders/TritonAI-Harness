@@ -43,7 +43,7 @@ const VAULT_GUIDE = `# General memory
 
 This folder is the general memory vault for TritonAI Harness. It is plain Markdown with Obsidian links, so you can open it in Obsidian or any editor.
 
-- \`Daily/\` has one note per day with thread activity, written in the background after the day ends. \`.state/daily-summary.json\` records the last day covered. A day on or before it with no note had no activity; later days are not summarized yet.
+- \`Daily/\` has one note per day with thread activity, written in the background after the day ends. \`.state/daily-summary.json\` records the days covered, from \`coveredFrom\` through \`lastSummarizedDay\`. A day in that range with no note had no activity. A day outside it was not summarized, so its work may be missing here.
 - \`Projects/\` has one note per project. Write your own notes under Pinned; the daily summary only adds lines under Recent.
 - \`Inbox/\` holds notes agents or you write during the day. The next daily summary includes them and moves them to \`Inbox/processed/\`.
 
@@ -66,28 +66,45 @@ export const ensureGeneralVault = Effect.fn("memory.ensureGeneralVault")(functio
 const DailySummaryState = Schema.Struct({
   version: Schema.Literal(1),
   lastSummarizedDay: Schema.String,
+  /** First day of the unbroken run ending at `lastSummarizedDay`. */
+  coveredFrom: Schema.optionalKey(Schema.NullOr(Schema.String)),
 });
 const decodeDailySummaryState = Schema.decodeUnknownEffect(
   Schema.fromJsonString(DailySummaryState),
 );
 
-/** The last finished day with a note, or null before the first summary. */
-export const readLastSummarizedDay = Effect.fn("memory.readLastSummarizedDay")(function* (
+/**
+ * The days the summarizer has examined without a gap: every day from
+ * `coveredFrom` through `lastSummarizedDay`. `coveredFrom` is null when unknown.
+ */
+export interface DailySummaryProgress {
+  readonly coveredFrom: string | null;
+  readonly lastSummarizedDay: string;
+}
+
+/** Summary progress, or null before the first summary. */
+export const readSummaryProgress = Effect.fn("memory.readSummaryProgress")(function* (
   paths: GeneralVaultPaths,
 ) {
   const fs = yield* FileSystem.FileSystem;
   const raw = yield* fs.readFileString(paths.stateFile).pipe(Effect.option);
   if (raw._tag === "None") return null;
   const state = yield* decodeDailySummaryState(raw.value).pipe(Effect.option);
-  return state._tag === "Some" && isLocalDay(state.value.lastSummarizedDay)
-    ? state.value.lastSummarizedDay
-    : null;
+  if (state._tag === "None" || !isLocalDay(state.value.lastSummarizedDay)) return null;
+  const coveredFrom = state.value.coveredFrom;
+  return {
+    coveredFrom:
+      coveredFrom && isLocalDay(coveredFrom) && coveredFrom <= state.value.lastSummarizedDay
+        ? coveredFrom
+        : null,
+    lastSummarizedDay: state.value.lastSummarizedDay,
+  } satisfies DailySummaryProgress;
 });
 
-export const writeLastSummarizedDay = (paths: GeneralVaultPaths, day: string) =>
+export const writeSummaryProgress = (paths: GeneralVaultPaths, progress: DailySummaryProgress) =>
   writeFileStringAtomically({
     filePath: paths.stateFile,
-    contents: `${JSON.stringify({ version: 1, lastSummarizedDay: day }, null, 2)}\n`,
+    contents: `${JSON.stringify({ version: 1, ...progress }, null, 2)}\n`,
   });
 
 export function renderMemorySkill(input: {
@@ -111,7 +128,7 @@ The general memory vault is at:
 
 1. Search the vault for the subject with \`rg -n -i "search terms"\` in the vault folder.
 2. Read matching notes in \`Projects/\` first, then recent notes in \`Daily/\`.
-   Days without thread activity have no note. \`.state/daily-summary.json\` in the vault records the last day covered: a missing note on or before that day means no activity, and a missing note after it means the day is not summarized yet.
+   Days without thread activity have no note. \`.state/daily-summary.json\` in the vault records the days covered, from \`coveredFrom\` through \`lastSummarizedDay\`. A missing note inside that range means no activity. A missing note outside it means the day was never summarized, so check the session files instead of assuming nothing happened.
 3. For more detail, open the session file listed under Threads in a daily note. Extract only the relevant messages. Session files live under \`${input.sessionsPath}\`; a daily note may list a Codex thread id instead, which appears in the session file name.
 4. Say which notes you used, with dates. Say when notes look stale or incomplete.
 

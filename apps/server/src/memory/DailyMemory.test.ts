@@ -163,6 +163,11 @@ it.layer(NodeServices.layer)("DailyMemory", (it) => {
         assert.strictEqual(status.lastSummarizedDay, "2026-09-28");
         assert.strictEqual(status.generalDirectoryPath, vault);
 
+        // Coverage starts at the first day the catch-up window examined.
+        const state = yield* fs.readFileString(path.join(vault, ".state", "daily-summary.json"));
+        assert.include(state, '"coveredFrom": "2026-09-22"');
+        assert.include(state, '"lastSummarizedDay": "2026-09-28"');
+
         // Caught up: later checks the same day do nothing.
         yield* memory.runCatchUp;
         assert.deepStrictEqual(calls, ["2026-09-26", "2026-09-28"]);
@@ -363,6 +368,29 @@ it.layer(NodeServices.layer)("DailyMemory", (it) => {
         yield* memory.runCatchUp;
         assert.deepStrictEqual(calls, ["2026-09-26", "2026-09-28"]);
         assert.strictEqual((yield* memory.getStatus).lastSummarizedDay, "2026-09-28");
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("restarts coverage after a gap longer than the catch-up window", () =>
+    Effect.gen(function* () {
+      const { baseDir, layer, fs, path } = yield* makeHarness({ memoryEnabled: true });
+      const stateFile = path.join(baseDir, "memory", "general", ".state", "daily-summary.json");
+      yield* fs.makeDirectory(path.dirname(stateFile), { recursive: true });
+      yield* fs.writeFileString(
+        stateFile,
+        '{"version":1,"coveredFrom":"2026-09-01","lastSummarizedDay":"2026-09-10"}\n',
+      );
+      yield* TestClock.setTime(NOW);
+
+      yield* Effect.gen(function* () {
+        yield* seed;
+        const memory = yield* DailyMemory.make;
+        yield* memory.runCatchUp;
+        const state = yield* fs.readFileString(stateFile);
+        // 11 to 21 September were never examined, so they are not claimed as empty.
+        assert.include(state, '"coveredFrom": "2026-09-22"');
+        assert.include(state, '"lastSummarizedDay": "2026-09-28"');
       }).pipe(Effect.provide(layer));
     }),
   );

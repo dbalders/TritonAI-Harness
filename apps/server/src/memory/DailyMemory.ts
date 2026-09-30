@@ -30,7 +30,7 @@ import * as ServerConfig from "../config.ts";
 import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { TextGeneration } from "../textGeneration/TextGeneration.ts";
-import { localDayAt, localDayRange, pendingMemoryDays } from "./memoryDays.ts";
+import { addLocalDays, localDayAt, localDayRange, pendingMemoryDays } from "./memoryDays.ts";
 import {
   appendProjectRecentLine,
   formatMemoryActivity,
@@ -48,10 +48,10 @@ import {
   generalVaultPaths,
   type GeneralVaultPaths,
   installMemorySkill,
-  readLastSummarizedDay,
+  readSummaryProgress,
   removeMemorySkill,
   renderMemorySkill,
-  writeLastSummarizedDay,
+  writeSummaryProgress,
 } from "./memoryVault.ts";
 
 const MAX_CATCH_UP_DAYS = 7;
@@ -535,11 +535,17 @@ export const make = Effect.gen(function* () {
       );
 
       const today = localDayAt(yield* Clock.currentTimeMillis);
+      const progress = yield* provide(readSummaryProgress(paths));
       const days = pendingMemoryDays({
-        lastSummarizedDay: yield* provide(readLastSummarizedDay(paths)),
+        lastSummarizedDay: progress?.lastSummarizedDay ?? null,
         today,
         maxCatchUpDays: MAX_CATCH_UP_DAYS,
       });
+      // Days skipped by the catch-up cap were never examined, so coverage
+      // restarts at the first pending day after a gap or on the first run.
+      const continues =
+        progress !== null && days[0] === addLocalDays(progress.lastSummarizedDay, 1);
+      const coveredFrom = continues ? progress.coveredFrom : (days[0] ?? null);
       const streamingSince = DateTime.formatIso(
         DateTime.subtract(yield* DateTime.now, { hours: STREAMING_GRACE_HOURS }),
       );
@@ -551,7 +557,7 @@ export const make = Effect.gen(function* () {
         if (yield* provide(hasStreamingMessages(localDayRange(day), streamingSince))) break;
         yield* Ref.set(status, { state: "summarizing", message: `Summarizing ${day}.` });
         yield* summarizeDay(day, codexHome);
-        yield* provide(writeLastSummarizedDay(paths, day));
+        yield* provide(writeSummaryProgress(paths, { coveredFrom, lastSummarizedDay: day }));
       }
       yield* Ref.set(status, { state: "idle", message: null });
     }),
@@ -583,7 +589,7 @@ export const make = Effect.gen(function* () {
       directoryPath: config.memoryDir,
       generalDirectoryPath: paths.root,
       state: enabled ? current.state : "disabled",
-      lastSummarizedDay: yield* provide(readLastSummarizedDay(paths)),
+      lastSummarizedDay: (yield* provide(readSummaryProgress(paths)))?.lastSummarizedDay ?? null,
       message: enabled ? current.message : null,
     } satisfies ServerMemoryStatus;
   });

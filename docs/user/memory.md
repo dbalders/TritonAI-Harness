@@ -16,7 +16,7 @@ The notes use Obsidian links, so you can open the `general` folder as an Obsidia
 
 ## When notes are written
 
-A day's note is written after the day ends, in the background, while TritonAI Harness is open. Memory checks when the app starts and once an hour. If the app was closed, it catches up on the finished days it missed, up to the last seven. Days without thread activity get no note. Settings shows the last day Memory has caught up through, so a missing note on or before that day means there was no activity, and a missing note after it means the day has not been summarized yet.
+A day's note is written after the day ends, in the background, while TritonAI Harness is open. Memory checks when the app starts and once an hour. If the app was closed, it catches up on the finished days it missed, up to the last seven. Days without thread activity get no note. Settings shows the last day Memory has caught up through. Between the first day Memory summarized and that day, a missing note means there was no activity. Days after it, and days Memory never covered, may have work that is not in the notes yet.
 
 The summary uses your text generation model under **Settings > General > Text generation**, which must be a Codex model. If a summary fails, settings shows the error and Memory retries that day at the next check.
 
