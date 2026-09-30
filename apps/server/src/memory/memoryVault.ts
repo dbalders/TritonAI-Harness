@@ -5,6 +5,9 @@
  * first one: an Obsidian-style vault of daily notes, project notes, and an
  * inbox. Later systems (teams, project heads) get their own sibling folders.
  */
+// @effect-diagnostics nodeBuiltinImport:off - Vault paths identify independent skills in a shared Codex home.
+import * as NodeCrypto from "node:crypto";
+
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -13,8 +16,15 @@ import * as Schema from "effect/Schema";
 import { writeFileStringAtomically } from "../atomicWrite.ts";
 import { isLocalDay } from "./memoryDays.ts";
 
-const MEMORY_SKILL_NAME = "tritonai-memory";
 const MEMORY_SKILL_MARKER = "<!-- Managed by TritonAI Harness Memory. -->";
+
+export function memorySkillName(vaultPath: string): string {
+  return `tritonai-memory-${NodeCrypto.createHash("sha256").update(vaultPath).digest("hex").slice(0, 32)}`;
+}
+
+function memorySkillOwnerMarker(vaultPath: string): string {
+  return `<!-- Memory vault: ${JSON.stringify(vaultPath)} -->`;
+}
 
 export interface GeneralVaultPaths {
   readonly root: string;
@@ -112,11 +122,12 @@ export function renderMemorySkill(input: {
   readonly sessionsPath: string;
 }): string {
   return `---
-name: ${MEMORY_SKILL_NAME}
-description: Check the user's TritonAI Harness memory for past work, decisions, open loops, and links. Use when the user asks what happened before, what is left on a project, or refers to earlier work.
+name: ${memorySkillName(input.vaultPath)}
+description: ${JSON.stringify(`Check the user's TritonAI Harness memory at ${input.vaultPath} for past work, decisions, open loops, and links. Use when the user asks what happened before, what is left on a project, or refers to earlier work.`)}
 ---
 
 ${MEMORY_SKILL_MARKER}
+${memorySkillOwnerMarker(input.vaultPath)}
 
 # Memory
 
@@ -148,14 +159,19 @@ Only write when the user asks you to remember something or close out work.
  */
 export const installMemorySkill = Effect.fn("memory.installMemorySkill")(function* (input: {
   readonly skillsDirectory: string;
+  readonly vaultPath: string;
   readonly contents: string;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const skillFile = path.join(input.skillsDirectory, MEMORY_SKILL_NAME, "SKILL.md");
+  const skillFile = path.join(input.skillsDirectory, memorySkillName(input.vaultPath), "SKILL.md");
   const existing = yield* fs.readFileString(skillFile).pipe(Effect.option);
   if (existing._tag === "Some") {
-    if (!existing.value.includes(MEMORY_SKILL_MARKER)) return "user-owned" as const;
+    if (
+      !existing.value.includes(MEMORY_SKILL_MARKER) ||
+      !existing.value.includes(memorySkillOwnerMarker(input.vaultPath))
+    )
+      return "user-owned" as const;
     if (existing.value === input.contents) return "current" as const;
   } else if (yield* fs.exists(path.dirname(skillFile))) {
     return "user-owned" as const;
@@ -164,17 +180,23 @@ export const installMemorySkill = Effect.fn("memory.installMemorySkill")(functio
   return "installed" as const;
 });
 
-/** Removes the memory skill if Harness installed it. */
-export const removeMemorySkill = Effect.fn("memory.removeMemorySkill")(function* (
-  skillsDirectory: string,
-) {
+/** Removes only this vault's skill if Harness installed it. */
+export const removeMemorySkill = Effect.fn("memory.removeMemorySkill")(function* (input: {
+  readonly skillsDirectory: string;
+  readonly vaultPath: string;
+}) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const skillDirectory = path.join(skillsDirectory, MEMORY_SKILL_NAME);
+  const skillDirectory = path.join(input.skillsDirectory, memorySkillName(input.vaultPath));
   const existing = yield* fs
     .readFileString(path.join(skillDirectory, "SKILL.md"))
     .pipe(Effect.option);
-  if (existing._tag === "None" || !existing.value.includes(MEMORY_SKILL_MARKER)) return false;
+  if (
+    existing._tag === "None" ||
+    !existing.value.includes(MEMORY_SKILL_MARKER) ||
+    !existing.value.includes(memorySkillOwnerMarker(input.vaultPath))
+  )
+    return false;
   yield* fs.remove(skillDirectory, { recursive: true });
   return true;
 });

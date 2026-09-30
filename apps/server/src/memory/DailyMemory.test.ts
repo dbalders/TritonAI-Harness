@@ -21,6 +21,7 @@ import {
   TextGeneration,
 } from "../textGeneration/TextGeneration.ts";
 import * as DailyMemory from "./DailyMemory.ts";
+import { memorySkillName } from "./memoryVault.ts";
 
 const localIso = (day: number, hour: number) => new Date(2026, 8, day, hour).toISOString();
 const NOW = new Date(2026, 8, 29, 9).getTime();
@@ -163,7 +164,7 @@ it.layer(NodeServices.layer)("DailyMemory", (it) => {
           }
           assert.isTrue(yield* fs.exists(path.join(vault, "AGENTS.md")));
           assert.isTrue(
-            yield* fs.exists(path.join(codexHome, "skills", "tritonai-memory", "SKILL.md")),
+            yield* fs.exists(path.join(codexHome, "skills", memorySkillName(vault), "SKILL.md")),
           );
 
           yield* settings.start;
@@ -228,7 +229,7 @@ it.layer(NodeServices.layer)("DailyMemory", (it) => {
         assert.include(project, "- [[Daily/2026-09-28]]: Progress 2026-09-28\n");
 
         const skill = yield* fs.readFileString(
-          path.join(codexHome, "skills", "tritonai-memory", "SKILL.md"),
+          path.join(codexHome, "skills", memorySkillName(vault), "SKILL.md"),
         );
         assert.include(skill, vault);
 
@@ -499,7 +500,12 @@ it.layer(NodeServices.layer)("DailyMemory", (it) => {
         memoryEnabled: true,
       });
       yield* TestClock.setTime(NOW);
-      const skillFile = path.join(codexHome, "skills", "tritonai-memory", "SKILL.md");
+      const skillFile = path.join(
+        codexHome,
+        "skills",
+        memorySkillName(path.join(baseDir, "memory", "general")),
+        "SKILL.md",
+      );
 
       yield* Effect.gen(function* () {
         const memory = yield* DailyMemory.make;
@@ -530,8 +536,13 @@ it.layer(NodeServices.layer)("DailyMemory", (it) => {
 
   it.effect("leaves a same-named skill it did not write alone", () =>
     Effect.gen(function* () {
-      const { codexHome, layer, fs, path } = yield* makeHarness({ memoryEnabled: false });
-      const skillFile = path.join(codexHome, "skills", "tritonai-memory", "SKILL.md");
+      const { baseDir, codexHome, layer, fs, path } = yield* makeHarness({ memoryEnabled: false });
+      const skillFile = path.join(
+        codexHome,
+        "skills",
+        memorySkillName(path.join(baseDir, "memory", "general")),
+        "SKILL.md",
+      );
       yield* fs.makeDirectory(path.dirname(skillFile), { recursive: true });
       yield* fs.writeFileString(skillFile, "---\nname: tritonai-memory\n---\nMine.\n");
       yield* TestClock.setTime(NOW);

@@ -24,6 +24,6 @@ The summary uses your text generation model under **Settings > General > Text ge
 
 ## How agents use it
 
-When Memory is on, Codex agents get a `tritonai-memory` skill that points to the folder. They read it when you ask about earlier work, and they only write to it when you ask them to remember something or close out work. Agent notes go to `Inbox/`.
+When Memory is on, Codex agents get a `tritonai-memory-…` skill that points to the folder. Each vault has its own skill, so Stable and Nightly can share a Codex home without overwriting or removing each other's memory skill. They read it when you ask about earlier work, and they only write to it when you ask them to remember something or close out work. Agent notes go to `Inbox/`.
 
 Turning Memory off stops new notes and removes the skill. Your notes stay in the folder.

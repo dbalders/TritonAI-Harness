@@ -518,7 +518,7 @@ export const make = Effect.gen(function* () {
       const skillsDirectory = path.join(codexHome, "skills");
 
       if (!settings.memoryEnabled) {
-        yield* provide(removeMemorySkill(skillsDirectory));
+        yield* provide(removeMemorySkill({ skillsDirectory, vaultPath: paths.root }));
         yield* Ref.set(status, { state: "idle", message: null });
         return;
       }
@@ -527,6 +527,7 @@ export const make = Effect.gen(function* () {
       yield* provide(
         installMemorySkill({
           skillsDirectory,
+          vaultPath: paths.root,
           contents: renderMemorySkill({
             vaultPath: paths.root,
             sessionsPath: path.join(codexHome, "sessions"),
