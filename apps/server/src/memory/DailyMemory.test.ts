@@ -7,10 +7,12 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import * as ServerConfig from "../config.ts";
+import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import {
@@ -72,7 +74,8 @@ const seed = Effect.gen(function* () {
 });
 
 const makeHarness = (options: {
-  readonly memoryEnabled: boolean;
+  readonly memoryEnabled?: boolean;
+  readonly profile?: "stable" | "nightly";
   readonly generate?: (
     input: DailyMemoryGenerationInput,
   ) => Effect.Effect<DailyMemoryGenerationResult, TextGenerationError>;
@@ -80,27 +83,98 @@ const makeHarness = (options: {
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-memory-test-" });
+    const temporaryDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-memory-test-" });
+    const baseDir = options.profile
+      ? path.join(
+          temporaryDir,
+          options.profile === "nightly" ? ".tritonai-harness-nightly" : ".tritonai-harness",
+        )
+      : temporaryDir;
     const codexHome = path.join(baseDir, "codex");
     const calls: string[] = [];
     const generate =
       options.generate ??
       ((input: DailyMemoryGenerationInput) => Effect.succeed(summaryFor(input)));
+    const settingsLayer =
+      options.memoryEnabled === undefined
+        ? ServerSettings.layerUnmanagedTest.pipe(Layer.provide(ServerSecretStore.layer))
+        : ServerSettings.layerTest({
+            memoryEnabled: options.memoryEnabled,
+            providers: { codex: { homePath: codexHome } },
+          });
     const layer = Layer.mergeAll(
-      ServerConfig.layerTest(baseDir, baseDir),
-      ServerSettings.layerTest({
-        memoryEnabled: options.memoryEnabled,
-        providers: { codex: { homePath: codexHome } },
-      }),
+      settingsLayer,
       Layer.mock(TextGeneration)({
         generateDailyMemory: (input) =>
           Effect.sync(() => calls.push(input.day)).pipe(Effect.andThen(generate(input))),
       }),
-    ).pipe(Layer.provideMerge(SqlitePersistenceMemory));
+    ).pipe(
+      Layer.provideMerge(SqlitePersistenceMemory),
+      Layer.provideMerge(ServerConfig.layerTest(baseDir, baseDir)),
+    );
     return { baseDir, codexHome, calls, layer, fs, path };
   });
 
 it.layer(NodeServices.layer)("DailyMemory", (it) => {
+  for (const profile of ["stable", "nightly"] as const) {
+    it.effect(`automatically backfills a full week for an existing ${profile} installation`, () =>
+      Effect.gen(function* () {
+        const { baseDir, codexHome, calls, layer, fs, path } = yield* makeHarness({ profile });
+        yield* TestClock.setTime(NOW);
+
+        yield* Effect.gen(function* () {
+          const config = yield* ServerConfig.ServerConfig;
+          const settings = yield* ServerSettings.ServerSettingsService;
+          const sql = yield* SqlClient.SqlClient;
+          const legacySettings = yield* Schema.encodeUnknownEffect(
+            Schema.fromJsonString(Schema.Unknown),
+          )({ providers: { codex: { homePath: codexHome } } });
+          yield* fs.writeFileString(config.settingsPath, legacySettings);
+          yield* seed;
+          for (let day = 21; day <= 28; day++) {
+            const at = localIso(day, 12);
+            yield* sql`
+              INSERT INTO projection_thread_messages (message_id, thread_id, role, text, is_streaming, created_at, updated_at)
+              VALUES (${`history-${day}`}, 'thread-1', 'assistant', ${`Finished work on day ${day}.`}, 0, ${at}, ${at})
+            `;
+          }
+          yield* settings.start;
+          assert.isTrue((yield* settings.getSettings).memoryEnabled);
+
+          const memory = yield* DailyMemory.make;
+          yield* memory.runCatchUp;
+          const vault = path.join(baseDir, "memory", "general");
+          assert.deepStrictEqual(calls, [
+            "2026-09-22",
+            "2026-09-23",
+            "2026-09-24",
+            "2026-09-25",
+            "2026-09-26",
+            "2026-09-27",
+            "2026-09-28",
+          ]);
+          for (const day of calls) {
+            assert.isTrue(yield* fs.exists(path.join(vault, "Daily", `${day}.md`)));
+          }
+          assert.isFalse(yield* fs.exists(path.join(vault, "Daily", "2026-09-21.md")));
+          assert.isFalse(yield* fs.exists(path.join(vault, "Daily", "2026-09-29.md")));
+          for (const directory of ["Projects", "Inbox", "Inbox/processed"]) {
+            assert.isTrue(yield* fs.exists(path.join(vault, directory)));
+          }
+          assert.isTrue(yield* fs.exists(path.join(vault, "AGENTS.md")));
+          assert.isTrue(
+            yield* fs.exists(path.join(codexHome, "skills", "tritonai-memory", "SKILL.md")),
+          );
+
+          yield* settings.start;
+          yield* memory.runCatchUp;
+          assert.lengthOf(calls, 7);
+          assert.strictEqual((yield* memory.getStatus).lastSummarizedDay, "2026-09-28");
+        }).pipe(Effect.provide(layer));
+      }),
+    );
+  }
+
   it.effect("catches up on finished days and links notes, threads, and inbox notes", () =>
     Effect.gen(function* () {
       const { baseDir, codexHome, calls, layer, fs, path } = yield* makeHarness({

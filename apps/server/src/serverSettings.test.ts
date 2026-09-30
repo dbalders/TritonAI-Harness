@@ -1129,7 +1129,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 
-  it.effect("turns Memory on for a new installation and records that choice", () =>
+  it.effect("turns Memory on for a new installation and keeps it on after reload", () =>
     Effect.gen(function* () {
       const serverConfig = yield* ServerConfig.ServerConfig;
       const fileSystem = yield* FileSystem.FileSystem;
@@ -1137,14 +1137,13 @@ it.layer(NodeServices.layer)("server settings", (it) => {
 
       assert.isTrue((yield* serverSettings.getSettings).memoryEnabled);
 
-      // Recorded before any user change, so the first thread cannot make it look existing.
-      const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
-      assert.isTrue(JSON.parse(raw).memoryEnabled);
+      assert.isTrue(yield* fileSystem.exists(serverConfig.settingsPath));
+      yield* serverSettings.start;
+      assert.isTrue((yield* serverSettings.getSettings).memoryEnabled);
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 
-  it.effect("keeps Memory off for an installation with threads but no settings file", () =>
+  it.effect("turns Memory on for an installation with threads but no settings file", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       const createdAt = "2026-08-25T00:00:00.000Z";
@@ -1159,11 +1158,11 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
       yield* serverSettings.start;
 
-      assert.isFalse((yield* serverSettings.getSettings).memoryEnabled);
+      assert.isTrue((yield* serverSettings.getSettings).memoryEnabled);
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 
-  it.effect("keeps Memory off for an existing installation that never chose", () =>
+  it.effect("turns Memory on for an existing installation that never chose", () =>
     Effect.gen(function* () {
       const serverConfig = yield* ServerConfig.ServerConfig;
       const fileSystem = yield* FileSystem.FileSystem;
@@ -1174,7 +1173,30 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
       yield* serverSettings.start;
 
+      const settings = yield* serverSettings.getSettings;
+      assert.isTrue(settings.memoryEnabled);
+      assert.equal(settings.addProjectBaseDirectory, "~/Development");
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
+  it.effect("keeps an explicit Memory off choice through other settings changes and reload", () =>
+    Effect.gen(function* () {
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      yield* fileSystem.writeFileString(
+        serverConfig.settingsPath,
+        encodeUnknownJson({ memoryEnabled: false }),
+      );
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      yield* serverSettings.start;
+
       assert.isFalse((yield* serverSettings.getSettings).memoryEnabled);
+      yield* serverSettings.updateSettings({ addProjectBaseDirectory: "~/Development" });
+      yield* serverSettings.start;
+      assert.isFalse((yield* serverSettings.getSettings).memoryEnabled);
+
+      const persisted = yield* fileSystem.readFileString(serverConfig.settingsPath);
+      assert.include(persisted, '"memoryEnabled": false');
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 
@@ -1360,8 +1382,6 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       delete persisted.providers.opencode.customModels;
       assert.deepEqual(persisted, {
         addProjectBaseDirectory: "~/Development",
-        // A new installation starts with Memory on, which differs from the schema default.
-        memoryEnabled: true,
         observability: {
           otlpTracesUrl: "http://localhost:4318/v1/traces",
           otlpMetricsUrl: "http://localhost:4318/v1/metrics",

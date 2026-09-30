@@ -1116,9 +1116,10 @@ export const ServerSettings = Schema.Struct({
   /**
    * Whether this machine keeps a memory vault: a daily summary of thread work
    * written by Codex, plus a skill that tells Codex agents where to find it.
+   * On by default for new and existing installations, including Nightly.
    * Turning it off stops the summarizer and removes the skill; notes stay.
    */
-  memoryEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  memoryEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   backgroundActivity: BackgroundActivitySettings,
   // Legacy flat fields retained for old settings files and old clients. New
   // consumers should resolve `backgroundActivity` instead.
