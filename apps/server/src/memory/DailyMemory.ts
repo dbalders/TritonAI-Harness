@@ -12,6 +12,7 @@ import { type ServerMemoryStatus, TextGenerationError } from "@t3tools/contracts
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -58,6 +59,8 @@ const CHECK_INTERVAL = Duration.hours(1);
 // Let startup work finish before the first check competes with it.
 const STARTUP_DELAY = Duration.seconds(30);
 const INBOX_NOTE_LIMIT = 8_000;
+// A message still streaming after this long is treated as abandoned.
+const STREAMING_GRACE_HOURS = 2;
 // Stays under the prompt's inbox limit, so every note moved to processed was read.
 const INBOX_PROMPT_LIMIT = 18_000;
 
@@ -175,6 +178,24 @@ const loadDayActivity = Effect.fn("memory.loadDayActivity")(function* (range: {
   return [...threads.values()]
     .map(({ activity, messages }) => ({ ...activity, messages: selectMemoryMessages(messages) }))
     .filter((thread) => thread.messages.length > 0);
+});
+
+/** Whether a message from the range is still being written and was updated since `sinceIso`. */
+const hasStreamingMessages = Effect.fn("memory.hasStreamingMessages")(function* (
+  range: { readonly startIso: string; readonly endIso: string },
+  sinceIso: string,
+) {
+  const sql = yield* SqlClient.SqlClient;
+  const [row] = yield* sql<{ readonly streaming: number }>`
+    SELECT EXISTS (
+      SELECT 1 FROM projection_thread_messages
+      WHERE created_at >= ${range.startIso}
+        AND created_at < ${range.endIso}
+        AND is_streaming = 1
+        AND updated_at >= ${sinceIso}
+    ) AS "streaming"
+  `;
+  return Boolean(row?.streaming);
 });
 
 /** Maps Codex thread ids to their session files. Missing folders are skipped. */
@@ -481,8 +502,9 @@ export const make = Effect.gen(function* () {
     // Moved only after the note that links them is safely written.
     yield* provide(applyInboxMoves(inboxMoves));
 
+    // The model is given the resolved note names, so match them exactly.
     const recentByNoteName = new Map(
-      summary.projects.map((entry) => [projectNoteName(entry.project).toLowerCase(), entry.recent]),
+      summary.projects.map((entry) => [entry.project.trim().toLowerCase(), entry.recent]),
     );
     yield* writeProjectNotes({ day, threads, projectNoteNames, recentByNoteName });
   });
@@ -518,9 +540,15 @@ export const make = Effect.gen(function* () {
         today,
         maxCatchUpDays: MAX_CATCH_UP_DAYS,
       });
+      const streamingSince = DateTime.formatIso(
+        DateTime.subtract(yield* DateTime.now, { hours: STREAMING_GRACE_HOURS }),
+      );
       for (const day of days) {
         // Turning Memory off lets the day in progress finish, then stops the pass.
         if (!(yield* settingsService.getSettings).memoryEnabled) break;
+        // A turn from that day still streaming would be summarized without its
+        // result, so the day waits for a later check.
+        if (yield* provide(hasStreamingMessages(localDayRange(day), streamingSince))) break;
         yield* Ref.set(status, { state: "summarizing", message: `Summarizing ${day}.` });
         yield* summarizeDay(day, codexHome);
         yield* provide(writeLastSummarizedDay(paths, day));

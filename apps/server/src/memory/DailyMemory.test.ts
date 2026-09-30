@@ -2,6 +2,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { TextGenerationError } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -334,6 +335,34 @@ it.layer(NodeServices.layer)("DailyMemory", (it) => {
         assert.notInclude(day28Input, "c".repeat(7_000));
         assert.isTrue(yield* fs.exists(path.join(vault, "Inbox", "2026-09-28-1200-c.md")));
         assert.isFalse(yield* fs.exists(path.join(vault, "Inbox", "2026-09-28-1200-a.md")));
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("waits for a day whose turn is still streaming, unless it was abandoned", () =>
+    Effect.gen(function* () {
+      const { calls, layer } = yield* makeHarness({ memoryEnabled: true });
+      yield* TestClock.setTime(NOW);
+
+      yield* Effect.gen(function* () {
+        yield* seed;
+        const sql = yield* SqlClient.SqlClient;
+        const startedAt = localIso(28, 23);
+        const recently = DateTime.formatIso(DateTime.makeUnsafe(NOW - 10 * 60_000));
+        yield* sql`
+          INSERT INTO projection_thread_messages (message_id, thread_id, turn_id, role, text, is_streaming, created_at, updated_at)
+          VALUES ('m8', 'thread-1', 'turn-m8', 'assistant', 'Still working', 1, ${startedAt}, ${recently})
+        `;
+        const memory = yield* DailyMemory.make;
+        yield* memory.runCatchUp;
+        assert.deepStrictEqual(calls, ["2026-09-26"]);
+        assert.strictEqual((yield* memory.getStatus).lastSummarizedDay, "2026-09-27");
+
+        const longAgo = DateTime.formatIso(DateTime.makeUnsafe(NOW - 3 * 60 * 60_000));
+        yield* sql`UPDATE projection_thread_messages SET updated_at = ${longAgo} WHERE message_id = 'm8'`;
+        yield* memory.runCatchUp;
+        assert.deepStrictEqual(calls, ["2026-09-26", "2026-09-28"]);
+        assert.strictEqual((yield* memory.getStatus).lastSummarizedDay, "2026-09-28");
       }).pipe(Effect.provide(layer));
     }),
   );
