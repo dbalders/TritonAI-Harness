@@ -545,8 +545,20 @@ it.effect("startup heartbeat omits projection counts it could not read", () =>
       });
 
     assert.deepEqual(
-      yield* recordHeartbeat(() => Effect.succeed({ threadCount: 3, projectCount: 2 })),
-      [{ threadCount: 3, projectCount: 2 }],
+      yield* recordHeartbeat(() =>
+        Effect.succeed({
+          threadCount: 3,
+          projectCount: 2,
+          firstThreadCreatedAt: "2026-03-01T00:00:05.000Z",
+        }),
+      ),
+      [{ threadCount: 3, projectCount: 2, firstThreadMonth: "2026-03" }],
+    );
+    assert.deepEqual(
+      yield* recordHeartbeat(() =>
+        Effect.succeed({ threadCount: 0, projectCount: 0, firstThreadCreatedAt: null }),
+      ),
+      [{ threadCount: 0, projectCount: 0 }],
     );
     assert.deepEqual(
       yield* recordHeartbeat(() =>

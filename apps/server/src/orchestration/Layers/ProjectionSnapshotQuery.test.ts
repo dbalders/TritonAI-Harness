@@ -1418,6 +1418,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         assert.deepEqual(counts, {
           projectCount: 2,
           threadCount: 3,
+          firstThreadCreatedAt: "2026-03-01T00:00:05.000Z",
         });
 
         const project = yield* snapshotQuery.getActiveProjectByWorkspaceRoot("/tmp/workspace");

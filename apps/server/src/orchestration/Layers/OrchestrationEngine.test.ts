@@ -443,7 +443,8 @@ describe("OrchestrationEngine", () => {
             }),
           getSnapshotSequence: () =>
             Effect.succeed({ snapshotSequence: projectionSnapshot.snapshotSequence }),
-          getCounts: () => Effect.succeed({ projectCount: 1, threadCount: 1 }),
+          getCounts: () =>
+            Effect.succeed({ projectCount: 1, threadCount: 1, firstThreadCreatedAt: null }),
           getEventReplayStats: () => Effect.die("unused"),
           getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
           getProjectShellById: () => Effect.succeed(Option.none()),
