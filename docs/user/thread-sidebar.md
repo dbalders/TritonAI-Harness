@@ -136,4 +136,5 @@ several selected threads together. Choose **Wake thread** to bring a thread back
 ## Nightly appearance
 
 Nightly builds show a starry sidebar header, including with the UC San Diego theme.
+The `(Nightly)` label appears as text with a transparent background.
 Use **Settings → Appearance → Environment identification** to choose artwork, a pill, or neither.
