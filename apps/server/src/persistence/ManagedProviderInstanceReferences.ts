@@ -221,7 +221,7 @@ export const migrateManagedProviderInstanceReferences = Effect.fn(
   }
 });
 
-/** Replace retired managed on-prem models even when only the app is updated. */
+/** Replace retired managed models even when only the app is updated. */
 export const migrateManagedModelReferences = Effect.fn("migrateManagedModelReferences")(function* (
   instanceId: string,
   replacements: Readonly<Record<string, string>>,
@@ -273,13 +273,7 @@ export const layer = Layer.effectDiscard(
     yield* settings.start;
     yield* migrateManagedModelReferences(
       managedConfig.provider.routes.onPrem.instanceId,
-      Object.fromEntries(
-        Object.entries(managedConfig.models.replacements).filter(([, target]) =>
-          managedConfig.models.catalog.some(
-            (model) => model.id === target && model.route === "on-prem",
-          ),
-        ),
-      ),
+      managedConfig.models.replacements,
     );
     yield* migrateManagedProviderInstanceReferences(getManagedProviderInstanceRenames(), {
       previousInstanceId: managedConfig.provider.routes.onPrem.instanceId,
@@ -288,5 +282,9 @@ export const layer = Layer.effectDiscard(
         .filter((model) => model.route === managedConfig.provider.routes.frontier.id)
         .map((model) => model.id),
     });
+    yield* migrateManagedModelReferences(
+      managedConfig.provider.routes.frontier.instanceId,
+      managedConfig.models.replacements,
+    );
   }),
 );
