@@ -138,7 +138,8 @@ export const migrateManagedProviderInstanceReferences = Effect.fn(
                 ${routeSplit.nextInstanceId}
               )
               WHERE json_valid(default_model_selection_json)
-                AND json_extract(default_model_selection_json, '$.instanceId') = ${routeSplit.previousInstanceId}
+                AND COALESCE(json_extract(default_model_selection_json, '$.instanceId'),
+                  json_extract(default_model_selection_json, '$.provider')) = ${routeSplit.previousInstanceId}
                 AND json_extract(default_model_selection_json, '$.model') = ${modelId}
             `;
             yield* sql`
@@ -149,19 +150,21 @@ export const migrateManagedProviderInstanceReferences = Effect.fn(
                 ${routeSplit.nextInstanceId}
               )
               WHERE json_valid(model_selection_json)
-                AND json_extract(model_selection_json, '$.instanceId') = ${routeSplit.previousInstanceId}
+                AND COALESCE(json_extract(model_selection_json, '$.instanceId'),
+                  json_extract(model_selection_json, '$.provider')) = ${routeSplit.previousInstanceId}
                 AND json_extract(model_selection_json, '$.model') = ${modelId}
             `;
             yield* sql`
               UPDATE projection_thread_sessions
               SET provider_instance_id = ${routeSplit.nextInstanceId}
-              WHERE provider_instance_id = ${routeSplit.previousInstanceId}
+              WHERE (provider_instance_id = ${routeSplit.previousInstanceId} OR provider_instance_id IS NULL)
                 AND EXISTS (
                   SELECT 1
                   FROM projection_threads
                   WHERE projection_threads.thread_id = projection_thread_sessions.thread_id
                     AND json_valid(projection_threads.model_selection_json)
                     AND json_extract(projection_threads.model_selection_json, '$.model') = ${modelId}
+                    AND json_extract(projection_threads.model_selection_json, '$.instanceId') = ${routeSplit.nextInstanceId}
                 )
             `;
             yield* sql`
@@ -175,7 +178,13 @@ export const migrateManagedProviderInstanceReferences = Effect.fn(
                   '$.providerInstanceId',
                   ${routeSplit.nextInstanceId}
                 )
-              WHERE provider_instance_id = ${routeSplit.previousInstanceId}
+              WHERE (provider_instance_id = ${routeSplit.previousInstanceId} OR (
+                  provider_instance_id IS NULL AND
+                  COALESCE(json_extract(runtime_payload_json, '$.providerInstanceId'),
+                    json_extract(runtime_payload_json, '$.modelSelection.instanceId'),
+                    json_extract(runtime_payload_json, '$.modelSelection.provider'),
+                    json_extract(runtime_payload_json, '$.provider')) = ${routeSplit.previousInstanceId}
+                ))
                 AND json_valid(runtime_payload_json)
                 AND COALESCE(
                   json_extract(runtime_payload_json, '$.modelSelection.model'),
@@ -193,7 +202,8 @@ export const migrateManagedProviderInstanceReferences = Effect.fn(
                   ${routeSplit.nextInstanceId}
                 )
                 WHERE json_valid(payload_json)
-                  AND json_extract(payload_json, ${instancePath}) = ${routeSplit.previousInstanceId}
+                  AND COALESCE(json_extract(payload_json, ${instancePath}),
+                    json_extract(payload_json, ${`$.${selectionKey}.provider`})) = ${routeSplit.previousInstanceId}
                   AND json_extract(payload_json, ${modelPath}) = ${modelId}
               `;
             }
@@ -205,7 +215,10 @@ export const migrateManagedProviderInstanceReferences = Effect.fn(
                 ${routeSplit.nextInstanceId}
               )
               WHERE json_valid(payload_json)
-                AND json_extract(payload_json, '$.session.providerInstanceId') = ${routeSplit.previousInstanceId}
+                AND (json_extract(payload_json, '$.session.providerInstanceId') = ${routeSplit.previousInstanceId}
+                  OR (json_extract(payload_json, '$.session.providerInstanceId') IS NULL
+                    AND json_type(payload_json, '$.session') = 'object'
+                    AND json_extract(payload_json, '$.modelSelection.instanceId') = ${routeSplit.nextInstanceId}))
                 AND json_extract(payload_json, '$.modelSelection.model') = ${modelId}
             `;
 
