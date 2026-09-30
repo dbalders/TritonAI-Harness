@@ -8,9 +8,14 @@ Memory is on by default for new and existing installations, including Nightly. W
 
 Memory lives in a `memory` folder inside the TritonAI Harness home directory, such as `~/.tritonai-harness/memory` or `~/.tritonai-harness-nightly/memory`. The `general` folder inside it holds:
 
-- `Daily/`: one note per day with the work done, decisions, open loops, and the threads involved. Each thread lists its Codex session file, so an agent can open the full conversation.
-- `Projects/`: one note per project. Write your own notes under **Pinned**. Memory only adds a dated line under **Recent**.
-- `Inbox/`: notes written during the day. The next daily note includes them and moves them to `Inbox/processed/`.
+- `Daily/<year>/`: one note per day with the work done, decisions, open loops, and the threads involved. Each thread lists its Codex session file, so an agent can open the full conversation.
+- `Projects/<project>/`: a note for each project with a line for every day it was worked on.
+- `Inbox/<code>/`: notes agents wrote during the day. The next daily note includes them and moves them to `processed/`.
+- `Notes/`: your own notes. Memory never changes them.
+
+Every note Memory writes is named after the computer that wrote it, such as `Daily/2026/2026-09-29 MacBook Pro (3f2a).md`. The short code in parentheses tells two computers with the same name apart, and it is also the name of that computer's inbox folder. A folder that holds notes from more than one computer keeps each computer's notes separate.
+
+Memory rewrites its notes, so keep your own writing in `Notes/`. If you edit a note Memory wrote, Memory saves your copy under `Notes/Recovered/` before it writes that note again.
 
 The notes use Obsidian links, so you can open the `general` folder as an Obsidian vault. Any editor works too. **Open folder** in settings opens it in your preferred editor.
 
@@ -18,12 +23,14 @@ The notes use Obsidian links, so you can open the `general` folder as an Obsidia
 
 On its first run, Memory automatically creates the folders and backfills the previous seven completed days from your saved Harness conversations. A fresh installation with no saved conversations creates the folders and begins collecting memory as you work.
 
-A day's note is written after the day ends, in the background, while TritonAI Harness is open. Memory checks when the app starts and once an hour. If the app was closed, it catches up on the finished days it missed, up to the last seven. Days without thread activity get no note. Settings shows the last day Memory has caught up through. Between the first day Memory summarized and that day, a missing note means there was no activity. Days after it, and days Memory never covered, may have work that is not in the notes yet.
+Today's note appears a few hours into your day and is rewritten every four hours while there is new activity. It is marked as partial until the day ends. After midnight, Memory writes the finished day one last time. Memory works in the background while TritonAI Harness is open. It checks when the app starts and once an hour, and if the app was closed, it catches up on the finished days it missed, up to the last seven.
+
+Days without thread activity or inbox notes get no note. Settings shows the last day Memory has caught up through. Between the first day Memory summarized and that day, a missing note means there was no activity. Days after it, and days Memory never covered, may have work that is not in the notes yet.
 
 The summary uses your text generation model under **Settings > General > Text generation**, which must be a Codex model. If a summary fails, settings shows the error and Memory retries that day at the next check.
 
 ## How agents use it
 
-When Memory is on, Codex agents get a `tritonai-memory-…` skill that points to the folder. Each vault has its own skill, so Stable and Nightly can share a Codex home without overwriting or removing each other's memory skill. They read it when you ask about earlier work, and they only write to it when you ask them to remember something or close out work. Agent notes go to `Inbox/`.
+When Memory is on, Codex agents get a `tritonai-memory-…` skill that points to the folder. Each vault has its own skill, so Stable and Nightly can share a Codex home without overwriting or removing each other's memory skill. Agents read the notes when you ask about earlier work, and they only write to memory when you ask them to remember something or close out work. Agent notes go to this computer's inbox folder.
 
 Turning Memory off stops new notes and removes the skill. Your notes stay in the folder.

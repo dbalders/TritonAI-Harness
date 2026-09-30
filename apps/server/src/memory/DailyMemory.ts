@@ -1,12 +1,16 @@
 /**
- * DailyMemory - writes one note per finished day into the general memory
+ * DailyMemory - writes this device's daily notes into the general memory
  * vault, and keeps the Codex memory skill in step with the Memory setting.
  *
  * The summarizer remembers the last day it finished. On startup, every hour,
  * and when Memory is turned on, it summarizes each finished day after that
  * one, oldest first, and records each day only after its note is written. A
  * run that stops halfway resumes at the first unfinished day. Days without
- * thread activity are recorded without calling the model.
+ * thread activity or inbox notes are recorded without calling the model.
+ *
+ * Once every finished day is done, today's note is written too, and rewritten
+ * at most every four hours while there is new activity. It stays partial until
+ * the day ends and the final pass replaces it.
  */
 import { type ServerMemoryStatus, TextGenerationError } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -17,7 +21,6 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
@@ -25,18 +28,19 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
-import { writeFileStringAtomically } from "../atomicWrite.ts";
 import * as ServerConfig from "../config.ts";
+import { ServerEnvironment } from "../environment/ServerEnvironment.ts";
 import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { TextGeneration } from "../textGeneration/TextGeneration.ts";
 import { addLocalDays, localDayAt, localDayRange, pendingMemoryDays } from "./memoryDays.ts";
 import {
   appendProjectRecentLine,
+  dailyNoteName,
   formatMemoryActivity,
   type MemoryActivityMessage,
   type MemoryThreadActivity,
-  mergeDailyNote,
+  projectNoteFileName,
   projectNoteName,
   projectNoteWorkspace,
   renderDailyNote,
@@ -44,18 +48,28 @@ import {
   selectMemoryMessages,
 } from "./memoryNotes.ts";
 import {
+  type DevicePaths,
+  devicePaths,
   ensureGeneralVault,
+  findMemoryDevice,
   generalVaultPaths,
   type GeneralVaultPaths,
   installMemorySkill,
+  type MemoryDevice,
+  readPartialProgress,
   readSummaryProgress,
+  registerMemoryDevice,
   removeMemorySkill,
   renderMemorySkill,
+  writeGeneratedFile,
+  writePartialProgress,
   writeSummaryProgress,
 } from "./memoryVault.ts";
 
 const MAX_CATCH_UP_DAYS = 7;
 const CHECK_INTERVAL = Duration.hours(1);
+// Today's note is rewritten at most this often, and only when there is new input.
+const PARTIAL_INTERVAL_MS = 4 * 60 * 60_000;
 // Let startup work finish before the first check competes with it.
 const STARTUP_DELAY = Duration.seconds(30);
 const INBOX_NOTE_LIMIT = 8_000;
@@ -198,6 +212,30 @@ const hasStreamingMessages = Effect.fn("memory.hasStreamingMessages")(function* 
   return Boolean(row?.streaming);
 });
 
+/**
+ * Changes whenever a finished message in the range is added, edited, finished
+ * late, or removed with its thread, so an unchanged day skips the model.
+ */
+const activityFingerprint = Effect.fn("memory.activityFingerprint")(function* (range: {
+  readonly startIso: string;
+  readonly endIso: string;
+}) {
+  const sql = yield* SqlClient.SqlClient;
+  const [row] = yield* sql<{ readonly count: number; readonly latest: string | null }>`
+    SELECT COUNT(*) AS "count", MAX(m.updated_at) AS "latest"
+    FROM projection_thread_messages AS m
+    JOIN projection_threads AS t ON t.thread_id = m.thread_id
+    JOIN projection_projects AS p ON p.project_id = t.project_id
+    WHERE m.created_at >= ${range.startIso}
+      AND m.created_at < ${range.endIso}
+      AND m.is_streaming = 0
+      AND m.role IN ('user', 'assistant')
+      AND t.deleted_at IS NULL
+      AND p.deleted_at IS NULL
+  `;
+  return `${row?.count ?? 0}:${row?.latest ?? ""}`;
+});
+
 /** Maps Codex thread ids to their session files. Missing folders are skipped. */
 const findSessionFiles = Effect.fn("memory.findSessionFiles")(function* (
   codexHome: string,
@@ -262,15 +300,16 @@ interface InboxMove {
   readonly link: string;
 }
 
-/** Chooses where each processed note goes under `Inbox/processed/<day>/`. */
+/** Chooses where each processed note goes under `Inbox/<short id>/processed/<day>/`. */
 const planInboxMoves = Effect.fn("memory.planInboxMoves")(function* (
-  paths: GeneralVaultPaths,
+  vault: GeneralVaultPaths,
+  device: DevicePaths,
   day: string,
   notes: ReadonlyArray<InboxNote>,
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const targetDirectory = path.join(paths.processed, day);
+  const targetDirectory = path.join(device.processed, day);
   const taken = new Set<string>();
   const moves: InboxMove[] = [];
   for (const note of notes) {
@@ -287,7 +326,7 @@ const planInboxMoves = Effect.fn("memory.planInboxMoves")(function* (
     moves.push({
       from: note.filePath,
       to: path.join(targetDirectory, targetName),
-      link: `Inbox/processed/${day}/${targetName.replace(/\.md$/u, "")}`,
+      link: inboxLink(path, vault, path.join(targetDirectory, targetName)),
     });
   }
   return moves;
@@ -304,20 +343,55 @@ const applyInboxMoves = Effect.fn("memory.applyInboxMoves")(function* (
   }
 });
 
+/** A processed inbox note's wiki link target: its vault-relative path without `.md`. */
+function inboxLink(path: Path.Path, vault: GeneralVaultPaths, filePath: string): string {
+  return path.relative(vault.root, filePath).split(path.sep).join("/").replace(/\.md$/iu, "");
+}
+
+/** This device's latest day note before `day`, across year folders. */
 const previousDailyNote = Effect.fn("memory.previousDailyNote")(function* (
-  paths: GeneralVaultPaths,
+  vault: GeneralVaultPaths,
+  device: MemoryDevice,
   day: string,
 ) {
   const fs = yield* FileSystem.FileSystem;
-  const names = yield* fs
-    .readDirectory(paths.daily)
+  const path = yield* Path.Path;
+  const suffix = ` ${device.label}.md`;
+  const years = yield* fs
+    .readDirectory(vault.daily)
     .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
-  const earlier = names
-    .map((name) => /^(\d{4}-\d{2}-\d{2})\.md$/u.exec(name)?.[1])
-    .filter((name): name is string => name !== undefined && name < day)
-    .toSorted();
-  return earlier.at(-1) ?? null;
+  const earlier: string[] = [];
+  for (const year of years) {
+    if (!/^\d{4}$/u.test(year) || year > day.slice(0, 4)) continue;
+    const names = yield* fs
+      .readDirectory(path.join(vault.daily, year))
+      .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
+    for (const name of names) {
+      if (!name.endsWith(suffix)) continue;
+      const noteDay = name.slice(0, name.length - suffix.length);
+      if (/^\d{4}-\d{2}-\d{2}$/u.test(noteDay) && noteDay < day) earlier.push(noteDay);
+    }
+  }
+  return earlier.toSorted().at(-1) ?? null;
 });
+
+function dailyNotePath(
+  path: Path.Path,
+  vault: GeneralVaultPaths,
+  device: MemoryDevice,
+  day: string,
+) {
+  return path.join(vault.daily, day.slice(0, 4), `${dailyNoteName(day, device.label)}.md`);
+}
+
+function projectNotePath(
+  path: Path.Path,
+  vault: GeneralVaultPaths,
+  device: MemoryDevice,
+  noteName: string,
+) {
+  return path.join(vault.projects, noteName, `${projectNoteFileName(noteName, device.label)}.md`);
+}
 
 const formatInboxNote = (note: InboxNote) =>
   `## ${note.fileName}\n\n${note.content.trim().slice(0, INBOX_NOTE_LIMIT)}`;
@@ -346,7 +420,8 @@ function fitInboxNotes(
  * share a workspace; another project with the same title gets its own note.
  */
 const resolveProjectNoteNames = Effect.fn("memory.resolveProjectNoteNames")(function* (
-  paths: GeneralVaultPaths,
+  vault: GeneralVaultPaths,
+  device: MemoryDevice,
   threads: ReadonlyArray<MemoryThreadActivity>,
 ) {
   const fs = yield* FileSystem.FileSystem;
@@ -375,7 +450,7 @@ const resolveProjectNoteNames = Effect.fn("memory.resolveProjectNoteNames")(func
       let owner = owners.get(key);
       if (owner === undefined) {
         const existing = yield* fs
-          .readFileString(path.join(paths.projects, `${candidate}.md`))
+          .readFileString(projectNotePath(path, vault, device, candidate))
           .pipe(Effect.option);
         // A note without a workspace, such as one the user started, is shared.
         owner =
@@ -397,10 +472,12 @@ export const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
   const settingsService = yield* ServerSettingsService;
   const textGeneration = yield* TextGeneration;
+  const environment = yield* ServerEnvironment;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const sql = yield* SqlClient.SqlClient;
-  const paths = generalVaultPaths(path, config.memoryDir);
+  const vault = generalVaultPaths(path, config.memoryDir);
+  const descriptor = yield* environment.getDescriptor;
   const status = yield* Ref.make<SummarizerStatus>({ state: "idle", message: null });
   const lock = yield* Semaphore.make(1);
 
@@ -414,6 +491,8 @@ export const make = Effect.gen(function* () {
     );
 
   const writeProjectNotes = Effect.fn("memory.writeProjectNotes")(function* (input: {
+    readonly device: MemoryDevice;
+    readonly devicePaths: DevicePaths;
     readonly day: string;
     readonly threads: ReadonlyArray<MemoryThreadActivity>;
     readonly projectNoteNames: ReadonlyMap<string, string>;
@@ -424,37 +503,77 @@ export const make = Effect.gen(function* () {
       const noteName = input.projectNoteNames.get(thread.projectId);
       if (!noteName || seen.has(noteName)) continue;
       seen.add(noteName);
-      const filePath = path.join(paths.projects, `${noteName}.md`);
+      const filePath = projectNotePath(path, vault, input.device, noteName);
       const existing = yield* fs.readFileString(filePath).pipe(Effect.option);
       const content =
         existing._tag === "Some"
           ? existing.value
-          : renderProjectNote({ title: thread.projectTitle, workspaceRoot: thread.workspaceRoot });
+          : renderProjectNote({
+              title: thread.projectTitle,
+              workspaceRoot: thread.workspaceRoot,
+              deviceLabel: input.device.label,
+            });
       const titles = input.threads
         .filter((candidate) => input.projectNoteNames.get(candidate.projectId) === noteName)
         .map((candidate) => candidate.title);
       const recent =
         input.recentByNoteName.get(noteName.toLowerCase()) ?? `Worked on ${titles.join("; ")}.`;
-      yield* writeFileStringAtomically({
-        filePath,
-        contents: appendProjectRecentLine(content, input.day, recent),
-      });
+      yield* provide(
+        writeGeneratedFile({
+          vault,
+          device: input.devicePaths,
+          filePath,
+          contents: appendProjectRecentLine(
+            content,
+            dailyNoteName(input.day, input.device.label),
+            recent,
+          ),
+        }),
+      );
     }
   });
 
-  const summarizeDay = Effect.fn("memory.summarizeDay")(function* (day: string, codexHome: string) {
-    const range = localDayRange(day);
-    const threads = yield* provide(loadDayActivity(range));
-    if (threads.length === 0) return;
-
-    const settings = yield* settingsService.getSettings;
-    const newInboxNotes = yield* provide(readInboxNotes(paths.inbox, Date.parse(range.endIso)));
+  /** Inbox notes a summary of `day` would include, already moved or still waiting. */
+  const dayInbox = Effect.fn("memory.dayInbox")(function* (
+    device: DevicePaths,
+    day: string,
+    beforeMs: number,
+  ) {
+    const newInboxNotes = yield* provide(readInboxNotes(device.inbox, beforeMs));
     // A day summarized again keeps the inbox notes an earlier run already moved.
     const processedNotes = yield* provide(
-      readInboxNotes(path.join(paths.processed, day), Number.POSITIVE_INFINITY),
+      readInboxNotes(path.join(device.processed, day), Number.POSITIVE_INFINITY),
     );
-    const includedInboxNotes = fitInboxNotes(processedNotes, newInboxNotes);
-    const projectNoteNames = yield* provide(resolveProjectNoteNames(paths, threads));
+    return { processedNotes, includedInboxNotes: fitInboxNotes(processedNotes, newInboxNotes) };
+  });
+
+  /**
+   * Writes this device's note for `day` from its threads and inbox notes.
+   * Returns the note's vault-relative path and hash, or null when the day had
+   * nothing to summarize.
+   */
+  const summarizeDay = Effect.fn("memory.summarizeDay")(function* (input: {
+    readonly day: string;
+    readonly codexHome: string;
+    readonly device: MemoryDevice;
+    readonly devicePaths: DevicePaths;
+    readonly noteStatus: "partial" | "final";
+    readonly nowMs: number;
+  }) {
+    const { day, device } = input;
+    const range = localDayRange(day);
+    const threads = yield* provide(loadDayActivity(range));
+    const { processedNotes, includedInboxNotes } = yield* dayInbox(
+      input.devicePaths,
+      day,
+      Math.min(Date.parse(range.endIso), input.nowMs),
+    );
+    if (threads.length === 0 && processedNotes.length === 0 && includedInboxNotes.length === 0) {
+      return null;
+    }
+
+    const settings = yield* settingsService.getSettings;
+    const projectNoteNames = yield* provide(resolveProjectNoteNames(vault, device, threads));
     const generateDailyMemory = textGeneration.generateDailyMemory;
     if (!generateDailyMemory) {
       return yield* new TextGenerationError({
@@ -463,7 +582,7 @@ export const make = Effect.gen(function* () {
       });
     }
     const summary = yield* generateDailyMemory({
-      cwd: paths.root,
+      cwd: vault.root,
       day,
       projectNames: [...new Set(projectNoteNames.values())],
       activity: formatMemoryActivity(threads, projectNoteNames),
@@ -473,32 +592,39 @@ export const make = Effect.gen(function* () {
 
     const sessionPaths = yield* provide(
       findSessionFiles(
-        codexHome,
+        input.codexHome,
         new Set(threads.flatMap((thread) => (thread.codexThreadId ? [thread.codexThreadId] : []))),
       ),
     );
-    const inboxMoves = yield* provide(planInboxMoves(paths, day, includedInboxNotes));
+    const inboxMoves = yield* provide(
+      planInboxMoves(vault, input.devicePaths, day, includedInboxNotes),
+    );
     const rendered = renderDailyNote({
       day,
+      deviceLabel: device.label,
+      status: input.noteStatus,
+      updatedThrough: DateTime.formatIso(DateTime.makeUnsafe(input.nowMs)),
+      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       summary,
       threads,
       projectNoteNames,
       sessionPaths,
-      previousDay: yield* provide(previousDailyNote(paths, day)),
+      previousDay: yield* provide(previousDailyNote(vault, device, day)),
       inboxLinks: [
-        ...processedNotes.map(
-          (note) => `Inbox/processed/${day}/${note.fileName.replace(/\.md$/iu, "")}`,
-        ),
+        ...processedNotes.map((note) => inboxLink(path, vault, note.filePath)),
         ...inboxMoves.map((move) => move.link),
       ],
     });
 
-    const notePath = path.join(paths.daily, `${day}.md`);
-    const existing = yield* fs.readFileString(notePath).pipe(Effect.option);
-    yield* writeFileStringAtomically({
-      filePath: notePath,
-      contents: mergeDailyNote(Option.getOrNull(existing), rendered),
-    });
+    const notePath = dailyNotePath(path, vault, device, day);
+    const hash = yield* provide(
+      writeGeneratedFile({
+        vault,
+        device: input.devicePaths,
+        filePath: notePath,
+        contents: rendered,
+      }),
+    );
     // Moved only after the note that links them is safely written.
     yield* provide(applyInboxMoves(inboxMoves));
 
@@ -506,7 +632,66 @@ export const make = Effect.gen(function* () {
     const recentByNoteName = new Map(
       summary.projects.map((entry) => [entry.project.trim().toLowerCase(), entry.recent]),
     );
-    yield* writeProjectNotes({ day, threads, projectNoteNames, recentByNoteName });
+    yield* writeProjectNotes({
+      device,
+      devicePaths: input.devicePaths,
+      day,
+      threads,
+      projectNoteNames,
+      recentByNoteName,
+    });
+    return {
+      path: path.relative(vault.root, notePath).split(path.sep).join("/"),
+      sha256: hash,
+    };
+  });
+
+  /**
+   * Writes today's partial note when four hours have passed since the last one
+   * (or since midnight) and the day's input changed.
+   */
+  const updateToday = Effect.fn("memory.updateToday")(function* (input: {
+    readonly today: string;
+    readonly nowMs: number;
+    readonly streamingSince: string;
+    readonly codexHome: string;
+    readonly device: MemoryDevice;
+    readonly devicePaths: DevicePaths;
+  }) {
+    const range = localDayRange(input.today);
+    const previous = yield* provide(readPartialProgress(input.devicePaths));
+    const lastWrittenMs =
+      previous?.day === input.today ? Date.parse(previous.writtenAt) : Date.parse(range.startIso);
+    if (input.nowMs - lastWrittenMs < PARTIAL_INTERVAL_MS) return;
+    // Wait for a turn in progress rather than summarize it without its result.
+    if (yield* provide(hasStreamingMessages(range, input.streamingSince))) return;
+
+    const inbox = yield* dayInbox(input.devicePaths, input.today, input.nowMs);
+    const fingerprint = [
+      yield* provide(activityFingerprint(range)),
+      ...[...inbox.processedNotes, ...inbox.includedInboxNotes]
+        .map((note) => note.fileName.replace(/-\d+\.md$/u, ".md"))
+        .toSorted(),
+    ].join("|");
+    if (previous?.day === input.today && previous.fingerprint === fingerprint) return;
+
+    yield* Ref.set(status, { state: "summarizing", message: `Updating ${input.today}.` });
+    const note = yield* summarizeDay({
+      day: input.today,
+      codexHome: input.codexHome,
+      device: input.device,
+      devicePaths: input.devicePaths,
+      noteStatus: "partial",
+      nowMs: input.nowMs,
+    });
+    if (note === null) return;
+    yield* provide(
+      writePartialProgress(input.devicePaths, {
+        day: input.today,
+        writtenAt: DateTime.formatIso(DateTime.makeUnsafe(input.nowMs)),
+        fingerprint,
+      }),
+    );
   });
 
   const catchUp = provide(
@@ -518,25 +703,37 @@ export const make = Effect.gen(function* () {
       const skillsDirectory = path.join(codexHome, "skills");
 
       if (!settings.memoryEnabled) {
-        yield* provide(removeMemorySkill({ skillsDirectory, vaultPath: paths.root }));
+        yield* provide(removeMemorySkill({ skillsDirectory, vaultPath: vault.root }));
         yield* Ref.set(status, { state: "idle", message: null });
         return;
       }
 
-      yield* provide(ensureGeneralVault(paths));
+      const nowMs = yield* Clock.currentTimeMillis;
+      const device = yield* provide(
+        registerMemoryDevice({
+          vault,
+          environmentId: descriptor.environmentId,
+          computerName: descriptor.label,
+          platform: descriptor.platform.os,
+          nowIso: DateTime.formatIso(DateTime.makeUnsafe(nowMs)),
+        }),
+      );
+      const ownPaths = devicePaths(path, vault, device);
+      yield* provide(ensureGeneralVault(vault, device));
       yield* provide(
         installMemorySkill({
           skillsDirectory,
-          vaultPath: paths.root,
+          vaultPath: vault.root,
           contents: renderMemorySkill({
-            vaultPath: paths.root,
+            vaultPath: vault.root,
             sessionsPath: path.join(codexHome, "sessions"),
+            device,
           }),
         }),
       );
 
-      const today = localDayAt(yield* Clock.currentTimeMillis);
-      const progress = yield* provide(readSummaryProgress(paths));
+      const today = localDayAt(nowMs);
+      const progress = yield* provide(readSummaryProgress(ownPaths));
       const days = pendingMemoryDays({
         lastSummarizedDay: progress?.lastSummarizedDay ?? null,
         today,
@@ -547,18 +744,47 @@ export const make = Effect.gen(function* () {
       const continues =
         progress !== null && days[0] === addLocalDays(progress.lastSummarizedDay, 1);
       const coveredFrom = continues ? progress.coveredFrom : (days[0] ?? null);
+      const notes = continues ? { ...progress.notes } : {};
       const streamingSince = DateTime.formatIso(
         DateTime.subtract(yield* DateTime.now, { hours: STREAMING_GRACE_HOURS }),
       );
+      let finishedDaysDone = true;
       for (const day of days) {
         // Turning Memory off lets the day in progress finish, then stops the pass.
-        if (!(yield* settingsService.getSettings).memoryEnabled) break;
+        if (!(yield* settingsService.getSettings).memoryEnabled) {
+          finishedDaysDone = false;
+          break;
+        }
         // A turn from that day still streaming would be summarized without its
         // result, so the day waits for a later check.
-        if (yield* provide(hasStreamingMessages(localDayRange(day), streamingSince))) break;
+        if (yield* provide(hasStreamingMessages(localDayRange(day), streamingSince))) {
+          finishedDaysDone = false;
+          break;
+        }
         yield* Ref.set(status, { state: "summarizing", message: `Summarizing ${day}.` });
-        yield* summarizeDay(day, codexHome);
-        yield* provide(writeSummaryProgress(paths, { coveredFrom, lastSummarizedDay: day }));
+        const note = yield* summarizeDay({
+          day,
+          codexHome,
+          device,
+          devicePaths: ownPaths,
+          noteStatus: "final",
+          nowMs,
+        });
+        if (note !== null) notes[day] = note;
+        yield* provide(
+          writeSummaryProgress(ownPaths, { coveredFrom, lastSummarizedDay: day, notes }),
+        );
+      }
+      // Finished days come first; today waits until they are all written.
+      if (finishedDaysDone && (yield* settingsService.getSettings).memoryEnabled) {
+        yield* updateToday({
+          today,
+          nowMs,
+          streamingSince,
+          codexHome,
+          device,
+          devicePaths: ownPaths,
+        });
       }
       yield* Ref.set(status, { state: "idle", message: null });
     }),
@@ -585,12 +811,16 @@ export const make = Effect.gen(function* () {
       Effect.orElseSucceed(() => false),
     );
     const current = yield* Ref.get(status);
+    const device = yield* provide(findMemoryDevice(vault, descriptor.environmentId));
+    const progress = device
+      ? yield* provide(readSummaryProgress(devicePaths(path, vault, device)))
+      : null;
     return {
       enabled,
       directoryPath: config.memoryDir,
-      generalDirectoryPath: paths.root,
+      generalDirectoryPath: vault.root,
       state: enabled ? current.state : "disabled",
-      lastSummarizedDay: (yield* provide(readSummaryProgress(paths)))?.lastSummarizedDay ?? null,
+      lastSummarizedDay: progress?.lastSummarizedDay ?? null,
       message: enabled ? current.message : null,
     } satisfies ServerMemoryStatus;
   });

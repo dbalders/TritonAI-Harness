@@ -1,7 +1,7 @@
 // @effect-diagnostics globalDate:off - fixtures are built from host-local times.
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
-import { TextGenerationError } from "@t3tools/contracts";
+import { type ExecutionEnvironmentDescriptor, TextGenerationError } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -13,6 +13,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import { ServerEnvironment } from "../environment/ServerEnvironment.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import {
@@ -26,6 +27,27 @@ import { memorySkillName } from "./memoryVault.ts";
 const localIso = (day: number, hour: number) => new Date(2026, 8, day, hour).toISOString();
 const NOW = new Date(2026, 8, 29, 9).getTime();
 const NOON_28 = new Date(2026, 8, 28, 12);
+const HOUR = 60 * 60_000;
+const AFTER_MIDNIGHT_30 = new Date(2026, 8, 30, 1).getTime();
+const AFTERNOON_27 = new Date(2026, 8, 27, 15);
+const readCoverage = (text: string) =>
+  JSON.parse(text) as {
+    readonly coveredFrom: string | null;
+    readonly lastSummarizedDay: string;
+    readonly notes: Record<string, { readonly path: string; readonly sha256: string }>;
+  };
+const DEVICE_ID = "3f2a9c1e-0000-4000-8000-000000000001";
+const DEVICE = "Test Mac (3f2a)";
+
+/** Where this test device writes, relative to the general vault. */
+const files = (path: Path.Path, vault: string) => ({
+  daily: (day: string) => path.join(vault, "Daily", day.slice(0, 4), `${day} ${DEVICE}.md`),
+  project: (name: string) => path.join(vault, "Projects", name, `${name} - ${DEVICE}.md`),
+  inbox: path.join(vault, "Inbox", "3f2a"),
+  processed: (day: string) => path.join(vault, "Inbox", "3f2a", "processed", day),
+  coverage: path.join(vault, ".devices", DEVICE_ID, "coverage.json"),
+  recovered: (relativePath: string) => path.join(vault, "Notes", "Recovered", relativePath),
+});
 
 const summaryFor = (input: DailyMemoryGenerationInput): DailyMemoryGenerationResult => ({
   overview: `Work on ${input.day}.`,
@@ -105,6 +127,13 @@ const makeHarness = (options: {
           });
     const layer = Layer.mergeAll(
       settingsLayer,
+      Layer.mock(ServerEnvironment)({
+        getDescriptor: Effect.succeed({
+          environmentId: DEVICE_ID,
+          label: "Test Mac",
+          platform: { os: "darwin", arch: "arm64" },
+        } as unknown as ExecutionEnvironmentDescriptor),
+      }),
       Layer.mock(TextGeneration)({
         generateDailyMemory: (input) =>
           Effect.sync(() => calls.push(input.day)).pipe(Effect.andThen(generate(input))),
@@ -145,6 +174,8 @@ it.layer(NodeServices.layer)("DailyMemory", (it) => {
           const memory = yield* DailyMemory.make;
           yield* memory.runCatchUp;
           const vault = path.join(baseDir, "memory", "general");
+          const vaultFiles = files(path, vault);
+          // The last seven finished days, then today so far.
           assert.deepStrictEqual(calls, [
             "2026-09-22",
             "2026-09-23",
@@ -153,23 +184,31 @@ it.layer(NodeServices.layer)("DailyMemory", (it) => {
             "2026-09-26",
             "2026-09-27",
             "2026-09-28",
+            "2026-09-29",
           ]);
           for (const day of calls) {
-            assert.isTrue(yield* fs.exists(path.join(vault, "Daily", `${day}.md`)));
+            assert.isTrue(yield* fs.exists(vaultFiles.daily(day)));
           }
-          assert.isFalse(yield* fs.exists(path.join(vault, "Daily", "2026-09-21.md")));
-          assert.isFalse(yield* fs.exists(path.join(vault, "Daily", "2026-09-29.md")));
-          for (const directory of ["Projects", "Inbox", "Inbox/processed"]) {
+          assert.isFalse(yield* fs.exists(vaultFiles.daily("2026-09-21")));
+          assert.include(
+            yield* fs.readFileString(vaultFiles.daily("2026-09-29")),
+            "status: partial",
+          );
+          for (const directory of ["Projects", "Notes", "Inbox/3f2a/processed"]) {
             assert.isTrue(yield* fs.exists(path.join(vault, directory)));
           }
           assert.isTrue(yield* fs.exists(path.join(vault, "AGENTS.md")));
+          assert.include(
+            yield* fs.readFileString(path.join(vault, ".devices", DEVICE_ID, "device.json")),
+            '"name": "Test Mac"',
+          );
           assert.isTrue(
             yield* fs.exists(path.join(codexHome, "skills", memorySkillName(vault), "SKILL.md")),
           );
 
           yield* settings.start;
           yield* memory.runCatchUp;
-          assert.lengthOf(calls, 7);
+          assert.lengthOf(calls, 8);
           assert.strictEqual((yield* memory.getStatus).lastSummarizedDay, "2026-09-28");
         }).pipe(Effect.provide(layer));
       }),
@@ -182,6 +221,7 @@ it.layer(NodeServices.layer)("DailyMemory", (it) => {
         memoryEnabled: true,
       });
       const vault = path.join(baseDir, "memory", "general");
+      const vaultFiles = files(path, vault);
       const sessionFile = path.join(
         codexHome,
         "sessions",
@@ -192,12 +232,13 @@ it.layer(NodeServices.layer)("DailyMemory", (it) => {
       );
       yield* fs.makeDirectory(path.dirname(sessionFile), { recursive: true });
       yield* fs.writeFileString(sessionFile, "{}\n");
-      yield* fs.makeDirectory(path.join(vault, "Inbox"), { recursive: true });
-      yield* fs.makeDirectory(path.join(vault, "Daily"), { recursive: true });
-      const inboxNote = path.join(vault, "Inbox", "2026-09-28-1200-login.md");
+      yield* fs.makeDirectory(vaultFiles.inbox, { recursive: true });
+      const inboxNote = path.join(vaultFiles.inbox, "2026-09-28-1200-login.md");
       yield* fs.writeFileString(inboxNote, "## Summary\n\nLogin fixed.\n");
       yield* fs.utimes(inboxNote, NOON_28, NOON_28);
-      yield* fs.writeFileString(path.join(vault, "Daily", "2026-09-28.md"), "# My own notes\n");
+      // Someone typed into the file this device is about to write.
+      yield* fs.makeDirectory(path.dirname(vaultFiles.daily("2026-09-28")), { recursive: true });
+      yield* fs.writeFileString(vaultFiles.daily("2026-09-28"), "# My own notes\n");
       yield* TestClock.setTime(NOW);
 
       yield* Effect.gen(function* () {
@@ -205,47 +246,137 @@ it.layer(NodeServices.layer)("DailyMemory", (it) => {
         const memory = yield* DailyMemory.make;
         yield* memory.runCatchUp;
 
-        // Only days with live activity reach the model; today waits.
-        assert.deepStrictEqual(calls, ["2026-09-26", "2026-09-28"]);
-        assert.isFalse(yield* fs.exists(path.join(vault, "Daily", "2026-09-27.md")));
+        // Only days with live activity reach the model, then today so far.
+        assert.deepStrictEqual(calls, ["2026-09-26", "2026-09-28", "2026-09-29"]);
+        assert.isFalse(yield* fs.exists(vaultFiles.daily("2026-09-27")));
 
-        const day28 = yield* fs.readFileString(path.join(vault, "Daily", "2026-09-28.md"));
-        assert.isTrue(day28.startsWith("# My own notes\n\n---\n\n---\ndate: 2026-09-28"));
-        assert.include(day28, "### [[Acme App]]");
+        const day28 = yield* fs.readFileString(vaultFiles.daily("2026-09-28"));
+        assert.isTrue(day28.startsWith("---\ndate: 2026-09-28\n"));
+        assert.include(day28, "status: final");
+        assert.include(day28, `### [[Acme App - ${DEVICE}|Acme App]]`);
         assert.include(day28, `Session: \`${sessionFile}\``);
-        assert.include(day28, "- Previous day: [[Daily/2026-09-26]]");
-        assert.include(day28, "- Inbox: [[Inbox/processed/2026-09-28/2026-09-28-1200-login]]");
+        assert.include(day28, `- Previous day: [[2026-09-26 ${DEVICE}]]`);
+        assert.include(day28, "- Inbox: [[Inbox/3f2a/processed/2026-09-28/2026-09-28-1200-login]]");
         assert.notInclude(day28, "Deleted experiment");
+        assert.strictEqual(
+          yield* fs.readFileString(vaultFiles.recovered(`Daily/2026/2026-09-28 ${DEVICE}.md`)),
+          "# My own notes\n",
+        );
         assert.isFalse(yield* fs.exists(inboxNote));
         assert.isTrue(
           yield* fs.exists(
-            path.join(vault, "Inbox", "processed", "2026-09-28", "2026-09-28-1200-login.md"),
+            path.join(vaultFiles.processed("2026-09-28"), "2026-09-28-1200-login.md"),
           ),
         );
 
-        const project = yield* fs.readFileString(path.join(vault, "Projects", "Acme App.md"));
-        assert.include(project, "## Pinned");
-        assert.include(project, "- [[Daily/2026-09-26]]: Progress 2026-09-26\n");
-        assert.include(project, "- [[Daily/2026-09-28]]: Progress 2026-09-28\n");
+        const project = yield* fs.readFileString(vaultFiles.project("Acme App"));
+        assert.include(project, `- [[2026-09-26 ${DEVICE}]]: Progress 2026-09-26\n`);
+        assert.include(project, `- [[2026-09-28 ${DEVICE}]]: Progress 2026-09-28\n`);
 
         const skill = yield* fs.readFileString(
           path.join(codexHome, "skills", memorySkillName(vault), "SKILL.md"),
         );
         assert.include(skill, vault);
+        assert.include(skill, "Inbox/3f2a/YYYY-MM-DD-HHMM-short-topic.md");
 
         const status = yield* memory.getStatus;
         assert.strictEqual(status.state, "idle");
         assert.strictEqual(status.lastSummarizedDay, "2026-09-28");
         assert.strictEqual(status.generalDirectoryPath, vault);
 
-        // Coverage starts at the first day the catch-up window examined.
-        const state = yield* fs.readFileString(path.join(vault, ".state", "daily-summary.json"));
-        assert.include(state, '"coveredFrom": "2026-09-22"');
-        assert.include(state, '"lastSummarizedDay": "2026-09-28"');
+        // Coverage starts at the first day the catch-up window examined and
+        // lists the final note for each day with activity.
+        const coverage = readCoverage(yield* fs.readFileString(vaultFiles.coverage));
+        assert.strictEqual(coverage.coveredFrom, "2026-09-22");
+        assert.strictEqual(coverage.lastSummarizedDay, "2026-09-28");
+        assert.deepStrictEqual(Object.keys(coverage.notes), ["2026-09-26", "2026-09-28"]);
+        assert.strictEqual(
+          coverage.notes["2026-09-28"]?.path,
+          `Daily/2026/2026-09-28 ${DEVICE}.md`,
+        );
 
-        // Caught up: later checks the same day do nothing.
+        // Caught up: later checks within four hours do nothing.
         yield* memory.runCatchUp;
-        assert.deepStrictEqual(calls, ["2026-09-26", "2026-09-28"]);
+        assert.deepStrictEqual(calls, ["2026-09-26", "2026-09-28", "2026-09-29"]);
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("rewrites today's note every four hours while there is new activity", () =>
+    Effect.gen(function* () {
+      const { baseDir, calls, layer, fs, path } = yield* makeHarness({ memoryEnabled: true });
+      const vaultFiles = files(path, path.join(baseDir, "memory", "general"));
+      yield* TestClock.setTime(NOW);
+
+      yield* Effect.gen(function* () {
+        yield* seed;
+        const sql = yield* SqlClient.SqlClient;
+        const memory = yield* DailyMemory.make;
+        yield* memory.runCatchUp;
+        assert.deepStrictEqual(calls.slice(-1), ["2026-09-29"]);
+        const first = yield* fs.readFileString(vaultFiles.daily("2026-09-29"));
+        assert.include(first, "status: partial");
+        assert.include(first, `updatedThrough: ${localIso(29, 9)}`);
+
+        // New work two hours later waits for the four-hour mark.
+        const at = localIso(29, 10);
+        yield* sql`
+          INSERT INTO projection_thread_messages (message_id, thread_id, turn_id, role, text, is_streaming, created_at, updated_at)
+          VALUES ('m9', 'thread-1', 'turn-m9', 'user', 'Next step', 0, ${at}, ${at})
+        `;
+        yield* TestClock.setTime(NOW + 2 * HOUR);
+        yield* memory.runCatchUp;
+        assert.lengthOf(calls, 3);
+
+        yield* TestClock.setTime(NOW + 4 * HOUR);
+        yield* memory.runCatchUp;
+        assert.lengthOf(calls, 4);
+        assert.include(
+          yield* fs.readFileString(vaultFiles.daily("2026-09-29")),
+          `updatedThrough: ${localIso(29, 13)}`,
+        );
+
+        // Nothing new by the next mark: no model call.
+        yield* TestClock.setTime(NOW + 8 * HOUR);
+        yield* memory.runCatchUp;
+        assert.lengthOf(calls, 4);
+
+        // A reply that started before the last update but finished after it counts.
+        const finishedLate = localIso(29, 18);
+        yield* sql`UPDATE projection_thread_messages SET updated_at = ${finishedLate} WHERE message_id = 'm9'`;
+        yield* TestClock.setTime(NOW + 9 * HOUR);
+        yield* memory.runCatchUp;
+        assert.lengthOf(calls, 5);
+
+        // After midnight the day is written one last time as final.
+        yield* TestClock.setTime(AFTER_MIDNIGHT_30);
+        yield* memory.runCatchUp;
+        assert.deepStrictEqual(calls.slice(-1), ["2026-09-29"]);
+        assert.include(yield* fs.readFileString(vaultFiles.daily("2026-09-29")), "status: final");
+        const coverage = readCoverage(yield* fs.readFileString(vaultFiles.coverage));
+        assert.strictEqual(coverage.lastSummarizedDay, "2026-09-29");
+        assert.property(coverage.notes, "2026-09-29");
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("writes a note for a day that only had inbox notes", () =>
+    Effect.gen(function* () {
+      const { baseDir, calls, layer, fs, path } = yield* makeHarness({ memoryEnabled: true });
+      const vaultFiles = files(path, path.join(baseDir, "memory", "general"));
+      yield* fs.makeDirectory(vaultFiles.inbox, { recursive: true });
+      const inboxNote = path.join(vaultFiles.inbox, "2026-09-27-1500-idea.md");
+      yield* fs.writeFileString(inboxNote, "## Summary\n\nTry cookie sessions.\n");
+      yield* fs.utimes(inboxNote, AFTERNOON_27, AFTERNOON_27);
+      yield* TestClock.setTime(NOW);
+
+      yield* Effect.gen(function* () {
+        const memory = yield* DailyMemory.make;
+        yield* memory.runCatchUp;
+        assert.deepStrictEqual(calls, ["2026-09-27"]);
+        const day27 = yield* fs.readFileString(vaultFiles.daily("2026-09-27"));
+        assert.include(day27, "- None. This day only had inbox notes.");
+        assert.include(day27, "- Inbox: [[Inbox/3f2a/processed/2026-09-27/2026-09-27-1500-idea]]");
       }).pipe(Effect.provide(layer));
     }),
   );
@@ -273,8 +404,9 @@ it.layer(NodeServices.layer)("DailyMemory", (it) => {
           }),
       });
       const vault = path.join(baseDir, "memory", "general");
-      yield* fs.makeDirectory(path.join(vault, "Inbox"), { recursive: true });
-      const inboxNote = path.join(vault, "Inbox", "2026-09-28-1200-login.md");
+      const vaultFiles = files(path, vault);
+      yield* fs.makeDirectory(vaultFiles.inbox, { recursive: true });
+      const inboxNote = path.join(vaultFiles.inbox, "2026-09-28-1200-login.md");
       yield* fs.writeFileString(inboxNote, "## Summary\n\nLogin fixed.\n");
       yield* fs.utimes(inboxNote, NOON_28, NOON_28);
       yield* TestClock.setTime(NOW);
@@ -285,22 +417,24 @@ it.layer(NodeServices.layer)("DailyMemory", (it) => {
         yield* memory.runCatchUp;
         // An interrupted run or a lost state file summarizes the day again.
         yield* fs.writeFileString(
-          path.join(vault, ".state", "daily-summary.json"),
-          '{"version":1,"lastSummarizedDay":"2026-09-27"}\n',
+          vaultFiles.coverage,
+          '{"version":1,"lastSummarizedDay":"2026-09-27","coveredFrom":null,"notes":{}}\n',
         );
         yield* memory.runCatchUp;
 
-        assert.deepStrictEqual(calls, ["2026-09-26", "2026-09-28", "2026-09-28"]);
+        assert.deepStrictEqual(calls, ["2026-09-26", "2026-09-28", "2026-09-29", "2026-09-28"]);
         assert.include(inboxSeen[1], "Login fixed.");
-        const day28 = yield* fs.readFileString(path.join(vault, "Daily", "2026-09-28.md"));
-        assert.include(day28, "- Inbox: [[Inbox/processed/2026-09-28/2026-09-28-1200-login]]");
+        const day28 = yield* fs.readFileString(vaultFiles.daily("2026-09-28"));
+        assert.include(day28, "- Inbox: [[Inbox/3f2a/processed/2026-09-28/2026-09-28-1200-login]]");
         assert.isFalse(
           yield* fs.exists(
-            path.join(vault, "Inbox", "processed", "2026-09-28", "2026-09-28-1200-login-2.md"),
+            path.join(vaultFiles.processed("2026-09-28"), "2026-09-28-1200-login-2.md"),
           ),
         );
-        const project = yield* fs.readFileString(path.join(vault, "Projects", "Acme App.md"));
-        assert.include(project, "- [[Daily/2026-09-28]]: Run 2 on 2026-09-28\n");
+        // Harness wrote the note it replaced, so nothing is recovered.
+        assert.isFalse(yield* fs.exists(path.join(vault, "Notes", "Recovered")));
+        const project = yield* fs.readFileString(vaultFiles.project("Acme App"));
+        assert.include(project, `- [[2026-09-28 ${DEVICE}]]: Run 2 on 2026-09-28\n`);
         assert.notInclude(project, "Run 1 on 2026-09-28");
       }).pipe(Effect.provide(layer));
     }),
@@ -324,7 +458,7 @@ it.layer(NodeServices.layer)("DailyMemory", (it) => {
         const failed = yield* memory.getStatus;
         assert.strictEqual(failed.state, "error");
         assert.include(failed.message ?? "", "model offline");
-        // Empty days before it are done; the failing day is not.
+        // Empty days before it are done; the failing day is not, and today waits.
         assert.strictEqual(failed.lastSummarizedDay, "2026-09-25");
 
         // The next check retries the same day rather than skipping it.
@@ -336,16 +470,16 @@ it.layer(NodeServices.layer)("DailyMemory", (it) => {
 
   it.effect("gives same-titled projects in different workspaces their own notes", () =>
     Effect.gen(function* () {
-      const activitySeen: string[] = [];
+      const activityByDay = new Map<string, string>();
       const { baseDir, layer, fs, path } = yield* makeHarness({
         memoryEnabled: true,
         generate: (input) =>
           Effect.sync(() => {
-            activitySeen.push(input.activity);
+            activityByDay.set(input.day, input.activity);
             return summaryFor(input);
           }),
       });
-      const vault = path.join(baseDir, "memory", "general");
+      const vaultFiles = files(path, path.join(baseDir, "memory", "general"));
       yield* TestClock.setTime(NOW);
 
       yield* Effect.gen(function* () {
@@ -368,16 +502,19 @@ it.layer(NodeServices.layer)("DailyMemory", (it) => {
         const memory = yield* DailyMemory.make;
         yield* memory.runCatchUp;
 
-        const original = yield* fs.readFileString(path.join(vault, "Projects", "Acme App.md"));
-        const fork = yield* fs.readFileString(path.join(vault, "Projects", "Acme App (forks).md"));
+        const original = yield* fs.readFileString(vaultFiles.project("Acme App"));
+        const fork = yield* fs.readFileString(vaultFiles.project("Acme App (forks)"));
         assert.include(original, 'workspace: "/code/acme"');
-        assert.include(original, "- [[Daily/2026-09-28]]: Progress 2026-09-28\n");
+        assert.include(original, `- [[2026-09-28 ${DEVICE}]]: Progress 2026-09-28\n`);
         assert.include(fork, 'workspace: "/forks/acme"');
-        assert.include(fork, "- [[Daily/2026-09-28]]: Progress 2026-09-28\n");
-        const day28 = yield* fs.readFileString(path.join(vault, "Daily", "2026-09-28.md"));
-        assert.include(day28, "**Fork cleanup** in [[Acme App (forks)]]");
+        assert.include(fork, `- [[2026-09-28 ${DEVICE}]]: Progress 2026-09-28\n`);
+        const day28 = yield* fs.readFileString(vaultFiles.daily("2026-09-28"));
+        assert.include(
+          day28,
+          `**Fork cleanup** in [[Acme App (forks) - ${DEVICE}|Acme App (forks)]]`,
+        );
         // The model sees which note each thread belongs to.
-        const day28Activity = activitySeen.at(-1) ?? "";
+        const day28Activity = activityByDay.get("2026-09-28") ?? "";
         assert.include(day28Activity, "## Thread: Fork cleanup\nProject: Acme App (forks)");
         assert.include(day28Activity, "## Thread: Fix the login redirect\nProject: Acme App\n");
       }).pipe(Effect.provide(layer));
@@ -386,19 +523,19 @@ it.layer(NodeServices.layer)("DailyMemory", (it) => {
 
   it.effect("leaves inbox notes that did not fit in the summary for the next one", () =>
     Effect.gen(function* () {
-      const inboxSeen: string[] = [];
+      const inboxByDay = new Map<string, string>();
       const { baseDir, layer, fs, path } = yield* makeHarness({
         memoryEnabled: true,
         generate: (input) =>
           Effect.sync(() => {
-            inboxSeen.push(input.inboxNotes);
+            inboxByDay.set(input.day, input.inboxNotes);
             return summaryFor(input);
           }),
       });
-      const vault = path.join(baseDir, "memory", "general");
-      yield* fs.makeDirectory(path.join(vault, "Inbox"), { recursive: true });
+      const vaultFiles = files(path, path.join(baseDir, "memory", "general"));
+      yield* fs.makeDirectory(vaultFiles.inbox, { recursive: true });
       for (const name of ["a", "b", "c"]) {
-        const note = path.join(vault, "Inbox", `2026-09-28-1200-${name}.md`);
+        const note = path.join(vaultFiles.inbox, `2026-09-28-1200-${name}.md`);
         yield* fs.writeFileString(note, `${name.repeat(7_000)}\n`);
         yield* fs.utimes(note, NOON_28, NOON_28);
       }
@@ -409,12 +546,18 @@ it.layer(NodeServices.layer)("DailyMemory", (it) => {
         const memory = yield* DailyMemory.make;
         yield* memory.runCatchUp;
 
-        const day28Input = inboxSeen.at(-1) ?? "";
+        const day28Input = inboxByDay.get("2026-09-28") ?? "";
         assert.include(day28Input, "a".repeat(7_000));
         assert.include(day28Input, "b".repeat(7_000));
         assert.notInclude(day28Input, "c".repeat(7_000));
-        assert.isTrue(yield* fs.exists(path.join(vault, "Inbox", "2026-09-28-1200-c.md")));
-        assert.isFalse(yield* fs.exists(path.join(vault, "Inbox", "2026-09-28-1200-a.md")));
+        // Today's note picks up the one that did not fit.
+        assert.include(inboxByDay.get("2026-09-29") ?? "", "c".repeat(7_000));
+        assert.isTrue(
+          yield* fs.exists(path.join(vaultFiles.processed("2026-09-29"), "2026-09-28-1200-c.md")),
+        );
+        assert.isTrue(
+          yield* fs.exists(path.join(vaultFiles.processed("2026-09-28"), "2026-09-28-1200-a.md")),
+        );
       }).pipe(Effect.provide(layer));
     }),
   );
@@ -435,13 +578,14 @@ it.layer(NodeServices.layer)("DailyMemory", (it) => {
         `;
         const memory = yield* DailyMemory.make;
         yield* memory.runCatchUp;
+        // Today waits until every finished day is written.
         assert.deepStrictEqual(calls, ["2026-09-26"]);
         assert.strictEqual((yield* memory.getStatus).lastSummarizedDay, "2026-09-27");
 
         const longAgo = DateTime.formatIso(DateTime.makeUnsafe(NOW - 3 * 60 * 60_000));
         yield* sql`UPDATE projection_thread_messages SET updated_at = ${longAgo} WHERE message_id = 'm8'`;
         yield* memory.runCatchUp;
-        assert.deepStrictEqual(calls, ["2026-09-26", "2026-09-28"]);
+        assert.deepStrictEqual(calls, ["2026-09-26", "2026-09-28", "2026-09-29"]);
         assert.strictEqual((yield* memory.getStatus).lastSummarizedDay, "2026-09-28");
       }).pipe(Effect.provide(layer));
     }),
@@ -450,11 +594,11 @@ it.layer(NodeServices.layer)("DailyMemory", (it) => {
   it.effect("restarts coverage after a gap longer than the catch-up window", () =>
     Effect.gen(function* () {
       const { baseDir, layer, fs, path } = yield* makeHarness({ memoryEnabled: true });
-      const stateFile = path.join(baseDir, "memory", "general", ".state", "daily-summary.json");
-      yield* fs.makeDirectory(path.dirname(stateFile), { recursive: true });
+      const coverageFile = files(path, path.join(baseDir, "memory", "general")).coverage;
+      yield* fs.makeDirectory(path.dirname(coverageFile), { recursive: true });
       yield* fs.writeFileString(
-        stateFile,
-        '{"version":1,"coveredFrom":"2026-09-01","lastSummarizedDay":"2026-09-10"}\n',
+        coverageFile,
+        '{"version":1,"coveredFrom":"2026-09-01","lastSummarizedDay":"2026-09-10","notes":{"2026-09-05":{"path":"Daily/2026/old.md","sha256":"x"}}}\n',
       );
       yield* TestClock.setTime(NOW);
 
@@ -462,10 +606,11 @@ it.layer(NodeServices.layer)("DailyMemory", (it) => {
         yield* seed;
         const memory = yield* DailyMemory.make;
         yield* memory.runCatchUp;
-        const state = yield* fs.readFileString(stateFile);
+        const coverage = readCoverage(yield* fs.readFileString(coverageFile));
         // 11 to 21 September were never examined, so they are not claimed as empty.
-        assert.include(state, '"coveredFrom": "2026-09-22"');
-        assert.include(state, '"lastSummarizedDay": "2026-09-28"');
+        assert.strictEqual(coverage.coveredFrom, "2026-09-22");
+        assert.strictEqual(coverage.lastSummarizedDay, "2026-09-28");
+        assert.deepStrictEqual(Object.keys(coverage.notes), ["2026-09-26", "2026-09-28"]);
       }).pipe(Effect.provide(layer));
     }),
   );

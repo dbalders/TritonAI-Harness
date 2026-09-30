@@ -14,12 +14,6 @@ const HARNESS_NOTE_SOURCE = "tritonai-harness";
 const USER_MESSAGE_LIMIT = 2_000;
 const AGENT_MESSAGE_LIMIT = 3_000;
 const THREAD_ACTIVITY_LIMIT = 16_000;
-const USER_NOTE_SEPARATOR = "\n\n---\n\n";
-// A summary that `mergeDailyNote` placed below a user's own daily note.
-const APPENDED_SUMMARY = new RegExp(
-  `\\r?\\n\\r?\\n---\\r?\\n\\r?\\n---\\r?\\ndate: [^\\r\\n]*\\r?\\ntype: daily\\r?\\nsource: ${HARNESS_NOTE_SOURCE}\\r?\\n`,
-  "u",
-);
 
 export interface MemoryActivityMessage {
   readonly turnId: string | null;
@@ -134,38 +128,46 @@ export function projectNoteWorkspace(content: string): string | null {
   }
 }
 
-export function isHarnessNote(content: string): boolean {
-  const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---/u.exec(content);
-  return (
-    frontmatter !== null &&
-    frontmatter[1]!.split(/\r?\n/u).some((line) => line.trim() === `source: ${HARNESS_NOTE_SOURCE}`)
-  );
-}
-
 function bulletList(items: ReadonlyArray<string>, empty: string): string[] {
   const lines = items.map(singleLine).filter((item) => item.length > 0);
   return lines.length > 0 ? lines.map((item) => `- ${item}`) : [`- ${empty}`];
 }
 
 /**
- * The file contents for a day's note. A note the user started for that day is
- * kept above the summary; summarizing the day again replaces only the summary.
+ * How a device appears in file names, such as `MacBook Pro (3f2a)`. The short
+ * code keeps two machines with the same name apart and makes every generated
+ * file name unique across devices, so wiki links need no folder.
  */
-export function mergeDailyNote(existing: string | null, rendered: string): string {
-  if (existing === null || isHarnessNote(existing)) return rendered;
-  const summaryStart = existing.search(APPENDED_SUMMARY);
-  const userPart = summaryStart === -1 ? existing : existing.slice(0, summaryStart);
-  return `${userPart.trimEnd()}${USER_NOTE_SEPARATOR}${rendered}`;
+export function deviceFileLabel(device: { readonly name: string; readonly shortId: string }) {
+  return `${device.name} (${device.shortId})`;
+}
+
+/** A day note's file name without `.md`, which is also its wiki link target. */
+export function dailyNoteName(day: string, deviceLabel: string): string {
+  return `${day} ${deviceLabel}`;
+}
+
+/** A project note's file name without `.md`, which is also its wiki link target. */
+export function projectNoteFileName(noteName: string, deviceLabel: string): string {
+  return `${noteName} - ${deviceLabel}`;
 }
 
 export interface DailyNoteInput {
   readonly day: string;
+  readonly deviceLabel: string;
+  /** A note for today is partial until the day ends and it is written again. */
+  readonly status: "partial" | "final";
+  /** When the activity in a partial note was read, as an ISO time. */
+  readonly updatedThrough: string;
+  /** The IANA time zone that defined the day, such as `America/Los_Angeles`. */
+  readonly timeZone: string;
   readonly summary: DailyMemoryGenerationResult;
   readonly threads: ReadonlyArray<MemoryThreadActivity>;
   /** Project id to note name. */
   readonly projectNoteNames: ReadonlyMap<string, string>;
   /** Codex thread id to its session file, when the file was found. */
   readonly sessionPaths: ReadonlyMap<string, string>;
+  /** This device's previous day with a note. */
   readonly previousDay: string | null;
   /** Vault-relative paths of processed inbox notes, without `.md`. */
   readonly inboxLinks: ReadonlyArray<string>;
@@ -179,10 +181,12 @@ export function renderDailyNote(input: DailyNoteInput): string {
     if (name) noteNameByTitle.set(thread.projectTitle.trim().toLowerCase(), name);
   }
   for (const name of noteNames) noteNameByTitle.set(name.toLowerCase(), name);
+  const projectLink = (noteName: string) =>
+    `[[${projectNoteFileName(noteName, input.deviceLabel)}|${noteName}]]`;
 
   const workedOn = input.summary.projects.flatMap((entry) => {
     const noteName = noteNameByTitle.get(entry.project.trim().toLowerCase());
-    const heading = noteName ? `[[${noteName}]]` : singleLine(entry.project) || "Other";
+    const heading = noteName ? projectLink(noteName) : singleLine(entry.project) || "Other";
     return ["", `### ${heading}`, "", ...bulletList(entry.workedOn, "No details recorded.")];
   });
 
@@ -190,7 +194,7 @@ export function renderDailyNote(input: DailyNoteInput): string {
     const noteName = input.projectNoteNames.get(thread.projectId);
     const parts = [
       `**${singleLine(thread.title)}**`,
-      noteName ? `in [[${noteName}]]` : `in ${thread.projectTitle}`,
+      noteName ? `in ${projectLink(noteName)}` : `in ${thread.projectTitle}`,
       ...(thread.branch ? [`on \`${thread.branch}\``] : []),
     ];
     const details: string[] = [];
@@ -207,7 +211,9 @@ export function renderDailyNote(input: DailyNoteInput): string {
   });
 
   const links = [
-    ...(input.previousDay ? [`- Previous day: [[Daily/${input.previousDay}]]`] : []),
+    ...(input.previousDay
+      ? [`- Previous day: [[${dailyNoteName(input.previousDay, input.deviceLabel)}]]`]
+      : []),
     ...input.inboxLinks.map((link) => `- Inbox: [[${link}]]`),
   ];
 
@@ -216,13 +222,20 @@ export function renderDailyNote(input: DailyNoteInput): string {
     `date: ${input.day}`,
     "type: daily",
     `source: ${HARNESS_NOTE_SOURCE}`,
+    `device: ${JSON.stringify(input.deviceLabel)}`,
+    `status: ${input.status}`,
+    `updatedThrough: ${input.updatedThrough}`,
+    `timezone: ${JSON.stringify(input.timeZone)}`,
     ...(noteNames.length > 0
       ? ["projects:", ...noteNames.map((name) => `  - ${JSON.stringify(name)}`)]
       : ["projects: []"]),
     "---",
     "",
-    `# ${input.day}`,
+    `# ${input.day} on ${input.deviceLabel}`,
     "",
+    ...(input.status === "partial"
+      ? ["_So far today. This note is updated during the day and completed after it ends._", ""]
+      : []),
     singleLine(input.summary.overview) || "Summary unavailable.",
     "",
     "## Worked On",
@@ -238,7 +251,7 @@ export function renderDailyNote(input: DailyNoteInput): string {
     "",
     "## Threads",
     "",
-    ...threadLines,
+    ...(threadLines.length > 0 ? threadLines : ["- None. This day only had inbox notes."]),
     ...(links.length > 0 ? ["", "## Links", "", ...links] : []),
     "",
   ].join("\n");
@@ -247,19 +260,19 @@ export function renderDailyNote(input: DailyNoteInput): string {
 export function renderProjectNote(input: {
   readonly title: string;
   readonly workspaceRoot: string;
+  readonly deviceLabel: string;
 }): string {
   return [
     "---",
     "type: project",
     `source: ${HARNESS_NOTE_SOURCE}`,
+    `device: ${JSON.stringify(input.deviceLabel)}`,
     `workspace: ${JSON.stringify(input.workspaceRoot)}`,
     "---",
     "",
-    `# ${singleLine(input.title)}`,
+    `# ${singleLine(input.title)} on ${input.deviceLabel}`,
     "",
-    "## Pinned",
-    "",
-    "Your notes go here. The daily summary never changes this section.",
+    "Harness keeps this note up to date. Keep your own notes about the project in the `Notes` folder.",
     "",
     "## Recent",
     "",
@@ -271,8 +284,13 @@ export function renderProjectNote(input: {
  * summarized again. A note without a Recent heading gets one at the end. Only
  * the Recent section, up to the next heading, is changed.
  */
-export function appendProjectRecentLine(content: string, day: string, recent: string): string {
-  const prefix = `- [[Daily/${day}]]:`;
+export function appendProjectRecentLine(
+  content: string,
+  /** The day note's link target. */
+  dailyNote: string,
+  recent: string,
+): string {
+  const prefix = `- [[${dailyNote}]]:`;
   const line = `${prefix} ${singleLine(recent) || "Worked on this project."}`;
   const newline = content.includes("\r\n") ? "\r\n" : "\n";
   const lines = content.split(/\r?\n/u);

@@ -29,8 +29,8 @@ function describeMemoryStatus(enabled: boolean, status: ServerMemoryStatus | nul
     return status.message ?? "Writing daily notes.";
   }
   return status.lastSummarizedDay
-    ? `Caught up through ${status.lastSummarizedDay}. Days without thread activity have no note.`
-    : "The first daily note is written after today ends.";
+    ? `Caught up through ${status.lastSummarizedDay}. Today's note updates every four hours while you work.`
+    : "Today's note appears a few hours into your day and updates every four hours.";
 }
 
 /**
