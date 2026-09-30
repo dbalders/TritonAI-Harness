@@ -91,6 +91,34 @@ it.layer(NodeServices.layer)("AnalyticsService test", (it) => {
               : {}),
           });
         }
+        yield* analytics.record("provider.turn.completed", {
+          provider: "codex",
+          terminalStatus: "completed",
+          interactionMode: "default",
+          runtimeMode: "full-access",
+          durationMs: 1_234,
+          mixedModels: false,
+          usageStatus: "complete",
+          usageScope: "main_agent",
+          hasSubagents: false,
+          inputTokens: 100,
+          cachedInputTokens: 40,
+          cacheCreationTokens: 0,
+          outputTokens: 20,
+          reasoningTokens: 5,
+          model: "private-model-name",
+          effort: "high",
+        });
+        yield* analytics.record("client.turn.requested", {
+          surface: "desktop",
+          appVersion: "1.2.3",
+          clientAppVersion: "1.2.3",
+          clientOs: "macOS",
+          clientDeviceType: "desktop",
+          connectionMethod: "direct",
+          clientBrowser: "private-browser",
+          deviceModel: "private-device-model",
+        });
         const inheritedProperties = Object.assign(
           Object.create({ provider: "private-inherited-provider" }) as Record<string, unknown>,
           { interactionMode: "full" },
@@ -117,7 +145,11 @@ it.layer(NodeServices.layer)("AnalyticsService test", (it) => {
         yield* analytics.flush;
       }).pipe(Effect.provide(runtimeLayer));
 
-      assert.equal(capturedRequests.length, 48);
+      assert.equal(capturedRequests.length, 50);
+      // Plausible rejects events with more than 30 custom props.
+      assert.isTrue(
+        capturedRequests.every((request) => Object.keys(request.body?.props ?? {}).length <= 30),
+      );
       assert.equal(
         capturedRequests.every((request) => request.path === "/api/event"),
         true,
@@ -153,6 +185,27 @@ it.layer(NodeServices.layer)("AnalyticsService test", (it) => {
       assert.equal(firstRequest?.body?.props?.serverMode, "web");
       assert.notProperty(firstRequest?.body?.props ?? {}, "nestedValueIsDropped");
       assert.notProperty(firstRequest?.body?.props ?? {}, "nonFiniteValueIsDropped");
+
+      const turnCompletedRequest = capturedRequests.find(
+        (request) => request.body?.name === "provider.turn.completed",
+      );
+      assert.equal(turnCompletedRequest?.body?.props?.terminalStatus, "completed");
+      assert.equal(turnCompletedRequest?.body?.props?.durationMs, 1_234);
+      assert.equal(turnCompletedRequest?.body?.props?.inputTokens, 100);
+      assert.equal(turnCompletedRequest?.body?.props?.reasoningTokens, 5);
+      assert.equal(turnCompletedRequest?.body?.props?.usageStatus, "complete");
+      assert.notProperty(turnCompletedRequest?.body?.props ?? {}, "model");
+      assert.notProperty(turnCompletedRequest?.body?.props ?? {}, "effort");
+
+      const clientTurnRequest = capturedRequests.find(
+        (request) => request.body?.name === "client.turn.requested",
+      );
+      assert.equal(clientTurnRequest?.body?.props?.surface, "desktop");
+      assert.equal(clientTurnRequest?.body?.props?.clientAppVersion, "1.2.3");
+      assert.equal(clientTurnRequest?.body?.props?.clientOs, "macOS");
+      assert.equal(clientTurnRequest?.body?.props?.connectionMethod, "direct");
+      assert.notProperty(clientTurnRequest?.body?.props ?? {}, "clientBrowser");
+      assert.notProperty(clientTurnRequest?.body?.props ?? {}, "deviceModel");
 
       const inheritedPropertyRequest = capturedRequests.at(-3);
       assert.equal(inheritedPropertyRequest?.body?.name, "provider.turn.sent");
