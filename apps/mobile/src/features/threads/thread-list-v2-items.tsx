@@ -73,12 +73,12 @@ function threadTimeLabel(thread: EnvironmentThreadShell): string {
 // Menus keep lifecycle and title regeneration together. Archive keeps its
 // own surface (thread screen / settings) rather than crowding v2 rows.
 const CARD_MENU_ACTIONS: MenuAction[] = [
-  { id: "settle", title: "Settle", image: "checkmark" },
+  { id: "settle", title: "Done", image: "checkmark" },
   { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
 ];
 
 const SLIM_MENU_ACTIONS: MenuAction[] = [
-  { id: "unsettle", title: "Un-settle", image: "arrow.uturn.backward" },
+  { id: "unsettle", title: "Reopen", image: "arrow.uturn.backward" },
   { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
 ];
 
@@ -162,9 +162,9 @@ export const ThreadListV2SettledShelfHeader = memo(function ThreadListV2SettledS
   return (
     <Pressable
       accessibilityHint={
-        props.expanded ? "Collapses the settled threads." : "Expands the settled threads."
+        props.expanded ? "Collapses the done threads." : "Expands the done threads."
       }
-      accessibilityLabel={props.count === 1 ? "1 settled thread" : `${props.count} settled threads`}
+      accessibilityLabel={props.count === 1 ? "1 done thread" : `${props.count} done threads`}
       accessibilityRole="button"
       accessibilityState={{ disabled: props.disabled, expanded: props.expanded }}
       className={cn(
@@ -176,7 +176,7 @@ export const ThreadListV2SettledShelfHeader = memo(function ThreadListV2SettledS
       style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
     >
       <Text className="text-xs font-t3-medium text-foreground-tertiary">
-        {props.expanded ? "Settled" : `Settled (${props.count})`}
+        {props.expanded ? "Done" : `Done (${props.count})`}
       </Text>
       <View className="h-px flex-1 bg-border" />
       <SymbolView
@@ -575,7 +575,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   );
   const snoozableCardMenuActions = useMemo<MenuAction[]>(
     () => [
-      { id: "settle", title: "Settle", image: "checkmark" },
+      { id: "settle", title: "Done", image: "checkmark" },
       {
         id: "snooze",
         title: "Snooze",
@@ -691,15 +691,15 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     }
     return swipeActions.primary === "unsettle"
       ? {
-          accessibilityLabel: `Un-settle ${thread.title}`,
+          accessibilityLabel: `Reopen ${thread.title}`,
           icon: "arrow.uturn.backward" as const,
-          label: "Un-settle",
+          label: "Reopen",
           onPress: handleUnsettle,
         }
       : {
-          accessibilityLabel: `Settle ${thread.title}`,
+          accessibilityLabel: `Mark ${thread.title} done`,
           icon: "checkmark" as const,
-          label: "Settle",
+          label: "Done",
           onPress: handleSettle,
         };
   }, [

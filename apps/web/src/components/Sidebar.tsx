@@ -984,13 +984,13 @@ const dropVerbBadge: Record<SidebarDropVerb, ReactNode> = {
   settle: (
     <>
       <CircleCheckIcon aria-hidden className="size-3" />
-      Settle
+      Done
     </>
   ),
   unsettle: (
     <>
       <Undo2Icon aria-hidden className="size-3" />
-      Un-settle
+      Reopen
     </>
   ),
   wake: (
@@ -1732,7 +1732,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                       render={
                         <button
                           type="button"
-                          aria-label="Un-settle thread"
+                          aria-label="Reopen thread"
                           onClick={handleUnsettleClick}
                           className={cn(
                             "pointer-events-none absolute inset-y-0 right-0 -mr-1 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover/sidebar-row:pointer-events-auto group-hover/sidebar-row:opacity-100",
@@ -1743,12 +1743,12 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                     >
                       <Undo2Icon className="mb-px size-3.5" />
                     </TooltipTrigger>
-                    <TooltipPopup side="top">Un-settle thread</TooltipPopup>
+                    <TooltipPopup side="top">Reopen thread</TooltipPopup>
                   </Tooltip>
                 ) : (
                   <button
                     type="button"
-                    aria-label="Settle thread"
+                    aria-label="Done"
                     onClick={handleSettleClick}
                     className={cn(
                       "pointer-events-none absolute inset-y-0 right-0 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-2 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover/sidebar-row:pointer-events-auto group-hover/sidebar-row:opacity-100",
@@ -1950,16 +1950,16 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                             render={
                               <button
                                 type="button"
-                                aria-label="Settle thread"
+                                aria-label="Done"
                                 onClick={handleSettleClick}
                                 className="-mr-1 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground"
                               />
                             }
                           >
                             <CheckIcon className="size-3.5" />
-                            Settle
+                            Done
                           </TooltipTrigger>
-                          <TooltipPopup>Settle thread</TooltipPopup>
+                          <TooltipPopup>Done</TooltipPopup>
                         </Tooltip>
                       ) : null}
                     </span>
@@ -3168,7 +3168,7 @@ export default function Sidebar() {
               toastManager.add(
                 stackedThreadToast({
                   type: "error",
-                  title: "Failed to settle thread",
+                  title: "Failed to mark thread done",
                   description: error instanceof Error ? error.message : "An error occurred.",
                 }),
               );
@@ -3204,7 +3204,7 @@ export default function Sidebar() {
           toastManager.add(
             stackedThreadToast({
               type: "error",
-              title: "Failed to un-settle thread",
+              title: "Failed to reopen thread",
               description: error instanceof Error ? error.message : "An error occurred.",
             }),
           );
@@ -3712,9 +3712,10 @@ export default function Sidebar() {
           case "settle": {
             settlingThreadKeysRef.current.add(activeKey);
             const navigateAfterSettle = planForwardNavigation(activeKey);
-            const settled = await run(settleThread(threadRef), "Failed to settle thread").finally(
-              () => settlingThreadKeysRef.current.delete(activeKey),
-            );
+            const settled = await run(
+              settleThread(threadRef),
+              "Failed to mark thread done",
+            ).finally(() => settlingThreadKeysRef.current.delete(activeKey));
             if (
               settled &&
               shouldNavigateAfterThreadPark({
@@ -3732,10 +3733,7 @@ export default function Sidebar() {
             // The drag expresses unpin intent; button/menu confirmation is unchanged.
             if (plan.unpin && !(await run(unpinThread(threadRef), "Failed to unpin thread")))
               return;
-            if (
-              plan.unsettle &&
-              !(await run(unsettleThread(threadRef), "Failed to un-settle thread"))
-            )
+            if (plan.unsettle && !(await run(unsettleThread(threadRef), "Failed to reopen thread")))
               return;
             if (plan.unsnooze && !(await run(unsnoozeThread(threadRef), "Failed to wake thread")))
               return;
@@ -3933,7 +3931,7 @@ export default function Sidebar() {
         api.contextMenu.show(
           [
             ...(unpinMenuItem ? [unpinMenuItem] : []),
-            { id: "settle", label: `Settle (${count})` },
+            { id: "settle", label: `Done (${count})` },
             ...(canSnoozeSelection
               ? [
                   {
@@ -5032,9 +5030,7 @@ export default function Sidebar() {
                                 marker="settled-header"
                                 className={cn(snoozedThreads.length === 0 && "mt-auto")}
                                 label={
-                                  settledShelfExpanded
-                                    ? "Settled"
-                                    : `Settled (${settledThreads.length})`
+                                  settledShelfExpanded ? "Done" : `Done (${settledThreads.length})`
                                 }
                                 dragging={from !== null}
                                 isDropTarget={dragTargetSection === "settled"}
@@ -5050,7 +5046,7 @@ export default function Sidebar() {
                               <SidebarSectionPlaceholder
                                 key="settled-placeholder"
                                 marker="settled-placeholder"
-                                label="Settled"
+                                label="Done"
                                 showHint={
                                   from !== null &&
                                   (renderedSettledThreads.length === 0 ||

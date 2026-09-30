@@ -983,13 +983,13 @@ function ThreadNavigationSidebarPane(
           return (
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel={`Show ${Math.min(item.hiddenCount, THREAD_LIST_V2_SETTLED_PAGE_COUNT)} more settled threads`}
+              accessibilityLabel={`Show ${Math.min(item.hiddenCount, THREAD_LIST_V2_SETTLED_PAGE_COUNT)} more done threads`}
               onPress={showMoreSettled}
               className="mx-4 mt-2 items-center rounded-lg border border-dashed border-border py-2.5"
               style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
             >
               <Text className="text-xs font-t3-medium text-foreground-muted">
-                Show more ({item.hiddenCount} settled hidden)
+                Show more ({item.hiddenCount} done hidden)
               </Text>
             </Pressable>
           );

@@ -668,13 +668,13 @@ function AutoSettleSettingsRows() {
     <>
       <SettingsSwitchRow
         icon="arrow.triangle.branch"
-        label="Auto-settle merged threads"
+        label="Automatically mark merged threads done"
         value={referenceSettings.sidebarAutoSettleOnMerge}
         onValueChange={(value) => writeToAll({ sidebarAutoSettleOnMerge: value })}
       />
       <SettingsSwitchRow
         icon="clock"
-        label="Auto-settle inactive threads"
+        label="Automatically mark inactive threads done"
         subtitle={afterDays === null ? undefined : `After ${afterDays} days without activity`}
         value={afterDays !== null}
         onValueChange={(value) =>
@@ -683,7 +683,7 @@ function AutoSettleSettingsRows() {
       />
       {afterDays !== null ? (
         <View className="flex-row items-center gap-4 border-t border-border-subtle p-4">
-          <Text className="flex-1 text-lg text-foreground">Days before auto-settle</Text>
+          <Text className="flex-1 text-lg text-foreground">Days before marking done</Text>
           <TextInput
             className="min-h-10 w-20 rounded-xl px-3 py-2 text-center text-base"
             keyboardType="number-pad"
@@ -692,14 +692,14 @@ function AutoSettleSettingsRows() {
             onChangeText={setDaysDraft}
             onBlur={commitDays}
             onSubmitEditing={commitDays}
-            accessibilityLabel="Days before auto-settle"
+            accessibilityLabel="Days before marking done"
           />
         </View>
       ) : null}
       {mismatches.length > 0 ? (
         <View className="flex-row items-center gap-4 border-t border-border-subtle p-4">
           <View className="min-w-0 flex-1">
-            <Text className="text-lg text-foreground">Auto-settle defaults differ</Text>
+            <Text className="text-lg text-foreground">Automatic completion settings differ</Text>
             <Text className="text-sm text-foreground-muted">
               {mismatches.map((mismatch) => mismatch.label).join(", ")}
             </Text>
@@ -717,7 +717,7 @@ function AutoSettleSettingsRows() {
             className="rounded-full bg-subtle px-4 py-2 active:opacity-70"
           >
             <Text className="text-base font-t3-medium text-foreground">
-              Apply auto-settle defaults
+              Apply automatic completion settings
             </Text>
           </Pressable>
         </View>
