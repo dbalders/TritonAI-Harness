@@ -40,7 +40,7 @@ function jsonFile(value: unknown): string {
   return `${JSON.stringify(value, null, 2)}\n`;
 }
 
-export function sha256(contents: string): string {
+function sha256(contents: string): string {
   return NodeCrypto.createHash("sha256").update(contents).digest("hex");
 }
 
