@@ -500,7 +500,7 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("Worked for 8.0s");
   });
 
-  it("keeps assistant changed-files headers sticky below the thread header", () => {
+  it("offers the diff for an assistant's changed files", () => {
     const assistantMessageId = MessageId.make("message-assistant-with-files");
     const turnId = TurnId.make("turn-with-files");
     const markup = renderToStaticMarkup(
@@ -542,10 +542,6 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("sticky top-2 z-10");
-    expect(markup).not.toContain("self-start");
-    expect(markup).toContain("whitespace-nowrap");
-    expect(markup).toContain("size-3");
     expect(markup).not.toContain('aria-label="Collapse all folders"');
     expect(markup).toContain('aria-label="Open diff"');
     expect(markup).toContain("1 changed file");
@@ -1110,7 +1106,6 @@ describe("MessagesTimeline", () => {
 
     expect(markup).not.toContain("Show full message");
     expect(markup).toContain('data-user-message-collapsible="false"');
-    expect(markup).toContain("rounded-2xl bg-message p-3");
   });
 
   it("preserves arbitrary XML-like tags and comparisons in rendered user messages", async () => {

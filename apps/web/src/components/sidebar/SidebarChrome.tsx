@@ -94,7 +94,7 @@ function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
   );
 }
 
-export function SidebarBrandIdentity({ onBackdrop }: { onBackdrop: boolean }) {
+function SidebarBrandIdentity({ onBackdrop }: { onBackdrop: boolean }) {
   return (
     <span
       className={cn(

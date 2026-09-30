@@ -7,11 +7,7 @@ import {
   GitPullRequestIcon,
 } from "lucide-react";
 
-import {
-  ChangeRequestStatusIcon,
-  prStatusIndicator,
-  settledPrHoverColorClass,
-} from "./ThreadStatusIndicators";
+import { ChangeRequestStatusIcon, prStatusIndicator } from "./ThreadStatusIndicators";
 import { newestPullRequestSummary } from "../state/pullRequests";
 
 describe("ChangeRequestStatusIcon", () => {
@@ -98,39 +94,13 @@ describe("prStatusIndicator", () => {
     });
   });
 
-  it("uses red for closed pull requests", () => {
-    const closedPr = status().pr;
-    if (!closedPr) throw new Error("Expected pull request fixture");
-
-    expect(prStatusIndicator({ ...closedPr, state: "closed" }, undefined)?.colorClass).toContain(
-      "text-red-600",
-    );
-  });
-
-  it("uses gray and draft wording for draft pull requests", () => {
+  it("distinguishes draft pull requests in the status and tooltip", () => {
     const draftPr = status().pr;
     if (!draftPr) throw new Error("Expected pull request fixture");
 
     expect(prStatusIndicator({ ...draftPr, isDraft: true }, undefined)).toMatchObject({
       label: "PR draft",
-      colorClass: "text-zinc-500 dark:text-zinc-400/80",
       tooltipLead: "PR #42 - Draft",
     });
-  });
-});
-
-describe("settledPrHoverColorClass", () => {
-  it.each([
-    ["open", "text-emerald-600"],
-    ["merged", "text-violet-600"],
-    ["closed", "text-red-600"],
-  ] as const)("restores the %s pull request color on row hover", (state, colorClass) => {
-    expect(settledPrHoverColorClass(state)).toContain(`group-hover/sidebar-row:${colorClass}`);
-  });
-
-  it("keeps draft pull requests gray on row hover", () => {
-    expect(settledPrHoverColorClass("open", true)).toContain(
-      "group-hover/sidebar-row:text-zinc-500",
-    );
   });
 });

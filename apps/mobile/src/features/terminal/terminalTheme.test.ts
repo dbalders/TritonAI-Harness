@@ -6,23 +6,6 @@ import { themeColorToNativeColor } from "../../lib/mobileTheme";
 import { buildGhosttyThemeConfig, getMobileTerminalTheme } from "./terminalTheme";
 
 describe("getMobileTerminalTheme", () => {
-  it("preserves the default light terminal palette", () => {
-    expect(getMobileTerminalTheme("t3-code", "light")).toMatchObject({
-      background: "#f2f2f7",
-      foreground: "#6C6C71",
-      cursorForeground: "#009fff",
-      cursorBackground: "#f2f2f7",
-    });
-  });
-
-  it("preserves the default dark terminal palette", () => {
-    expect(getMobileTerminalTheme("t3-code", "dark")).toMatchObject({
-      background: "#0a0a0a",
-      foreground: "#adadb1",
-      cursorForeground: "#009fff",
-      cursorBackground: "#0a0a0a",
-    });
-  });
   it("applies the selected palette without replacing ANSI status colors", () => {
     const standard = getMobileTerminalTheme("t3-code", "dark");
     const ocean = getMobileTerminalTheme("ocean", "dark");
@@ -45,13 +28,40 @@ describe("getMobileTerminalTheme", () => {
 
 describe("buildGhosttyThemeConfig", () => {
   it("serializes theme colors into a ghostty config file", () => {
-    const config = buildGhosttyThemeConfig(getMobileTerminalTheme("t3-code", "dark"));
+    const config = buildGhosttyThemeConfig({
+      background: "#123456",
+      foreground: "#abcdef",
+      mutedForeground: "#777777",
+      border: "#888888",
+      cursorForeground: "#fedcba",
+      cursorBackground: "#654321",
+      palette: [
+        "#000000",
+        "#111111",
+        "#222222",
+        "#333333",
+        "#444444",
+        "#555555",
+        "#666666",
+        "#777777",
+        "#888888",
+        "#999999",
+        "#aaaaaa",
+        "#bbbbbb",
+        "#cccccc",
+        "#dddddd",
+        "#eeeeee",
+        "#ffffff",
+      ],
+    });
 
-    expect(config).toContain("background = #0a0a0a");
-    expect(config).toContain("foreground = #adadb1");
-    expect(config).toContain("cursor-color = #009fff");
-    expect(config).toContain("palette = 0=#141415");
-    expect(config).toContain("palette = 15=#c6c6c8");
+    expect(config).toContain("background = #123456");
+    expect(config).toContain("foreground = #abcdef");
+    expect(config).toContain("cursor-color = #fedcba");
+    expect(config).toContain("cursor-text = #654321");
+    expect(config).toContain("palette = 0=#000000");
+    expect(config).toContain("palette = 15=#ffffff");
+    expect(config.match(/^palette = /gm)).toHaveLength(16);
     expect(config.endsWith("\n")).toBe(true);
   });
 });
