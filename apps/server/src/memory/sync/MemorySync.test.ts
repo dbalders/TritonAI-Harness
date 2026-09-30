@@ -1,5 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off - A fake download edits a note synchronously mid-request.
-import * as NodeFs from "node:fs";
+import * as NodeFS from "node:fs";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
@@ -554,7 +554,7 @@ it.layer(NodeServices.layer)("MemorySync", (it) => {
         yield* (yield* MemorySync.MemorySync).syncNow;
       }).pipe(Effect.provide(mac.layer));
       const localPlans = imac.path.join(imac.vault, "Notes", "plans.md");
-      drive.onDownload = () => NodeFs.writeFileSync(localPlans, "Typed on the iMac mid-sync\n");
+      drive.onDownload = () => NodeFS.writeFileSync(localPlans, "Typed on the iMac mid-sync\n");
       yield* Effect.gen(function* () {
         const sync = yield* MemorySync.MemorySync;
         yield* sync.syncNow;
