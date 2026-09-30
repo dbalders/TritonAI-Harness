@@ -39,6 +39,7 @@ import {
   sha256Bytes,
 } from "../memoryVault.ts";
 import {
+  alignPathCase,
   classifyVaultPath,
   type CloudFile,
   conflictCopyPath,
@@ -55,6 +56,12 @@ import {
 import { type DriveItem, makeOneDrive, MAX_UPLOAD_BYTES } from "./oneDrive.ts";
 
 const SYNC_INTERVAL = Duration.minutes(5);
+
+const isNotFound = (error: unknown) =>
+  typeof error === "object" &&
+  error !== null &&
+  "reason" in error &&
+  (error as { readonly reason?: { readonly _tag?: string } }).reason?._tag === "NotFound";
 // Let startup and the first memory pass settle before the first sync.
 const STARTUP_DELAY = Duration.seconds(45);
 
@@ -102,7 +109,7 @@ function cloudFolderSegments(baseDirName: string): ReadonlyArray<string> {
       ? "TritonAI Harness"
       : baseDirName === ".tritonai-harness-nightly"
         ? "TritonAI Harness Nightly"
-        : `TritonAI Harness (${baseDirName.replace(/^\.+/u, "") || "custom"})`;
+        : "TritonAI Harness Dev";
   return [app, "memory", "general"];
 }
 
@@ -185,23 +192,42 @@ export const make = Effect.gen(function* () {
 
   const toLocalPath = (relativePath: string) => path.join(vault.root, ...relativePath.split("/"));
 
+  /**
+   * The current bytes at a vault path, or null when no file is there. Any
+   * other read error fails: a file sync cannot read must never look deleted.
+   */
+  const readLocal = (relativePath: string) =>
+    Effect.gen(function* () {
+      const filePath = toLocalPath(relativePath);
+      const info = yield* fs.stat(filePath);
+      if (info.type !== "File") return null;
+      return yield* fs.readFile(filePath);
+    }).pipe(
+      Effect.catchIf(isNotFound, () => Effect.succeed(null)),
+      Effect.mapError(
+        () =>
+          new MemorySyncFailure({
+            message: `Could not read ${relativePath} from the memory folder.`,
+          }),
+      ),
+    );
+
   /** Every file the plan cares about, with its bytes and hash. */
   const readLocalFiles = (device: MemoryDevice) =>
     Effect.gen(function* () {
-      const entries = yield* fs
-        .readDirectory(vault.root, { recursive: true })
-        .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
+      const entries = yield* fs.readDirectory(vault.root, { recursive: true }).pipe(
+        // No memory folder at all is an empty vault; sync restores it.
+        Effect.catchIf(isNotFound, () => Effect.succeed<ReadonlyArray<string>>([])),
+        Effect.mapError(
+          () => new MemorySyncFailure({ message: "Could not read the memory folder." }),
+        ),
+      );
       const files = new Map<string, { readonly bytes: Uint8Array; readonly sha256: string }>();
       for (const entry of entries) {
         const relativePath = entry.split(path.sep).join("/");
         if (classifyVaultPath(relativePath, device) === "ignored") continue;
-        const filePath = toLocalPath(relativePath);
-        const info = yield* fs.stat(filePath).pipe(Effect.option);
-        if (info._tag === "None" || info.value.type !== "File") continue;
-        const bytes = yield* fs.readFile(filePath).pipe(Effect.option);
-        if (bytes._tag === "Some") {
-          files.set(relativePath, { bytes: bytes.value, sha256: sha256Bytes(bytes.value) });
-        }
+        const bytes = yield* readLocal(relativePath);
+        if (bytes !== null) files.set(relativePath, { bytes, sha256: sha256Bytes(bytes) });
       }
       return files;
     });
@@ -319,12 +345,17 @@ export const make = Effect.gen(function* () {
     current.deltaLink = changes.deltaLink;
 
     yield* Effect.gen(function* () {
-      const local = yield* readLocalFiles(device);
       const cloud = cloudPaths(current);
+      const aligned = alignPathCase({
+        local: yield* readLocalFiles(device),
+        cloud: cloud.files,
+        synced: new Map(Object.entries(current.synced)),
+      });
+      current.synced = Object.fromEntries(aligned.synced);
       const actions = planMemorySync({
         device,
         local: new Map<string, LocalFile>(
-          [...local].map(([key, value]) => [key, { sha256: value.sha256 }]),
+          [...aligned.local].map(([key, value]) => [key, { sha256: value.sha256 }]),
         ),
         cloud: new Map<string, CloudFile>(
           [...cloud.files].map(([key, value]) => [key, { eTag: value.eTag }]),
@@ -332,7 +363,14 @@ export const make = Effect.gen(function* () {
         synced: new Map<string, SyncedFile>(Object.entries(current.synced)),
         written: yield* readWritten(device),
       });
-      yield* executeActions({ device, state: current, local, cloud, actions });
+      yield* executeActions({
+        device,
+        state: current,
+        local: aligned.local,
+        diskPath: aligned.diskPath,
+        cloud,
+        actions,
+      });
       // Encoded when the pass ends, so everything the actions recorded is saved.
     }).pipe(Effect.ensuring(Effect.suspend(() => writeState(current)).pipe(Effect.ignore)));
   });
@@ -341,6 +379,8 @@ export const make = Effect.gen(function* () {
     readonly device: MemoryDevice;
     readonly state: SyncState;
     readonly local: ReadonlyMap<string, { readonly bytes: Uint8Array; readonly sha256: string }>;
+    /** Where each local file is on disk, when its letter case differs from the cloud's. */
+    readonly diskPath: ReadonlyMap<string, string>;
     readonly cloud: {
       readonly files: ReadonlyMap<string, { readonly id: string; readonly eTag: string }>;
       readonly folders: Map<string, string>;
@@ -349,6 +389,19 @@ export const make = Effect.gen(function* () {
   }) {
     const { state, local, cloud } = input;
     const skipped: string[] = [];
+    const onDisk = (relativePath: string) => input.diskPath.get(relativePath) ?? relativePath;
+
+    /**
+     * Whether the local file is still what the scan saw. A note edited while
+     * this pass ran is left alone; the next pass sees the edit.
+     */
+    const unchangedSinceScan = (relativePath: string) =>
+      readLocal(onDisk(relativePath)).pipe(
+        Effect.map((bytes) => {
+          const scanned = local.get(relativePath)?.sha256 ?? null;
+          return (bytes === null ? null : sha256Bytes(bytes)) === scanned;
+        }),
+      );
 
     const folderFor = Effect.fn("memorySync.folderFor")(function* (relativePath: string) {
       const parts = relativePath.split("/").slice(0, -1);
@@ -412,7 +465,8 @@ export const make = Effect.gen(function* () {
           break;
         case "download": {
           const { bytes, eTag } = yield* downloadTo(action.path);
-          yield* writeBytesAtomically(toLocalPath(action.path), bytes);
+          if (!(yield* unchangedSinceScan(action.path))) break;
+          yield* writeBytesAtomically(toLocalPath(onDisk(action.path)), bytes);
           state.synced[action.path] = { sha256: sha256Bytes(bytes), eTag };
           break;
         }
@@ -429,10 +483,11 @@ export const make = Effect.gen(function* () {
             action.kind === "conflictCopy" ||
             (action.kind === "compare" && action.pathClass === "notes");
           if (isNote) {
+            if (!(yield* unchangedSinceScan(action.path))) break;
             // Keep both: this computer's version under a conflict name, the cloud one in place.
             const copy = conflictCopyPath(action.path, input.device.label, stamp);
             yield* writeBytesAtomically(toLocalPath(copy), mine.bytes);
-            yield* writeBytesAtomically(toLocalPath(action.path), bytes);
+            yield* writeBytesAtomically(toLocalPath(onDisk(action.path)), bytes);
             state.synced[action.path] = { sha256: sha256Bytes(bytes), eTag };
           } else {
             yield* archive(action.path, bytes);
@@ -441,6 +496,8 @@ export const make = Effect.gen(function* () {
           break;
         }
         case "deleteCloud": {
+          // Only while the file is still gone here.
+          if (!(yield* unchangedSinceScan(action.path))) break;
           const remote = cloud.files.get(action.path)!;
           if ((yield* oneDrive.remove(remote.id, action.ifMatch)) === "deleted") {
             delete state.items[remote.id];
@@ -449,7 +506,8 @@ export const make = Effect.gen(function* () {
           break;
         }
         case "deleteLocal":
-          yield* fs.remove(toLocalPath(action.path)).pipe(Effect.ignore);
+          if (!(yield* unchangedSinceScan(action.path))) break;
+          yield* fs.remove(toLocalPath(onDisk(action.path))).pipe(Effect.ignore);
           delete state.synced[action.path];
           break;
         case "forget":

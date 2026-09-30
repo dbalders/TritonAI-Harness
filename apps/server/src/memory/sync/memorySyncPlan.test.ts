@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  alignPathCase,
   classifyVaultPath,
   conflictCopyPath,
   type CloudFile,
@@ -228,5 +229,38 @@ describe("conflictCopyPath", () => {
     expect(conflictCopyPath("Notes/Projects/plans.md", "Mac (5c9e)", "2026-09-29 221530")).toBe(
       "Notes/Projects/plans (conflict Mac (5c9e) 2026-09-29 221530).md",
     );
+  });
+});
+
+describe("alignPathCase", () => {
+  it("treats a case-only rename in OneDrive as the same file, never a delete", () => {
+    const aligned = alignPathCase({
+      local: new Map([["Notes/plans.md", { sha256: "a" }]]),
+      cloud: new Map([["Notes/Plans.md", { eTag: "e2" }]]),
+      synced: new Map([["Notes/plans.md", { sha256: "a", eTag: "e1" }]]),
+    });
+    expect([...aligned.local.keys()]).toEqual(["Notes/Plans.md"]);
+    expect([...aligned.synced.keys()]).toEqual(["Notes/Plans.md"]);
+    expect(aligned.diskPath.get("Notes/Plans.md")).toBe("Notes/plans.md");
+    const actions = planMemorySync({
+      device,
+      local: aligned.local,
+      cloud: new Map([["Notes/Plans.md", { eTag: "e2" }]]),
+      synced: aligned.synced,
+      written: new Set(),
+    });
+    expect(actions).toEqual([{ kind: "download", path: "Notes/Plans.md" }]);
+  });
+
+  it("keeps only one of two local files that differ only in case", () => {
+    const aligned = alignPathCase({
+      local: new Map([
+        ["Notes/a.md", { sha256: "1" }],
+        ["Notes/A.md", { sha256: "2" }],
+      ]),
+      cloud: new Map<string, { eTag: string }>(),
+      synced: new Map<string, { sha256: string; eTag: string }>(),
+    });
+    expect(aligned.local.size).toBe(1);
   });
 });

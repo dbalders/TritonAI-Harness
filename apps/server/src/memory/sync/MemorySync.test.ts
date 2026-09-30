@@ -1,3 +1,6 @@
+// @effect-diagnostics nodeBuiltinImport:off - A fake download edits a note synchronously mid-request.
+import * as NodeFs from "node:fs";
+
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import type { ExecutionEnvironmentDescriptor } from "@t3tools/contracts";
@@ -60,6 +63,8 @@ class FakeOneDrive {
     readonly parentId: string | null;
   }> = [];
   readonly refreshTokens = new Set<string>(["plugin-rt"]);
+  /** Runs while a file is being downloaded, to simulate an edit made mid-pass. */
+  onDownload: (() => void) | null = null;
   devicePolls = 0;
   private next = 1;
 
@@ -214,6 +219,7 @@ class FakeOneDrive {
     const content = /^\/me\/drive\/items\/([^/]+)\/content$/u.exec(route);
     if (content) {
       const item = this.items.get(content[1]!);
+      this.onDownload?.();
       return item
         ? { status: 200, body: item.content }
         : reply(404, { error: { code: "itemNotFound" } });
@@ -485,6 +491,83 @@ it.layer(NodeServices.layer)("MemorySync", (it) => {
 
       assert.strictEqual(yield* mac.read(day), "Mac worked on login.\n");
       assert.strictEqual(cloud(day), "Mac worked on login.\n");
+    }),
+  );
+
+  it.effect("stops without deleting cloud notes when part of the vault cannot be read", () =>
+    Effect.gen(function* () {
+      const drive = new FakeOneDrive();
+      const mac = yield* setup(drive, MAC);
+      const cloud = (relativePath: string) =>
+        drive.file(`TritonAI Harness/memory/general/${relativePath}`);
+      const notes = mac.path.join(mac.vault, "Notes");
+      yield* Effect.gen(function* () {
+        const secrets = yield* ServerSecretStore.ServerSecretStore;
+        yield* secrets.set(
+          "integration-microsoft-365--oauth",
+          new TextEncoder().encode(toJson({ refreshToken: "plugin-rt" })),
+        );
+        yield* mac.registerDevice;
+        yield* mac.write("Notes/plans.md", "Plan v1\n");
+        const sync = yield* MemorySync.MemorySync;
+        yield* sync.start;
+        yield* sync.syncNow;
+        assert.strictEqual(cloud("Notes/plans.md"), "Plan v1\n");
+
+        yield* mac.fs.chmod(notes, 0o000);
+        yield* sync.syncNow.pipe(Effect.ensuring(mac.fs.chmod(notes, 0o755).pipe(Effect.ignore)));
+        const status = yield* sync.getStatus;
+        assert.strictEqual(status.sync.state, "error");
+        assert.strictEqual(cloud("Notes/plans.md"), "Plan v1\n");
+      }).pipe(Effect.provide(mac.layer));
+    }),
+  );
+
+  it.effect("keeps a note edited while its cloud version downloads", () =>
+    Effect.gen(function* () {
+      const drive = new FakeOneDrive();
+      const mac = yield* setup(drive, MAC);
+      const imac = yield* setup(drive, IMAC);
+      const signInWithPlugin = Effect.gen(function* () {
+        const secrets = yield* ServerSecretStore.ServerSecretStore;
+        yield* secrets.set(
+          "integration-microsoft-365--oauth",
+          new TextEncoder().encode(toJson({ refreshToken: "plugin-rt" })),
+        );
+        const sync = yield* MemorySync.MemorySync;
+        yield* sync.start;
+        return sync;
+      });
+      yield* Effect.gen(function* () {
+        yield* mac.registerDevice;
+        yield* mac.write("Notes/plans.md", "Plan v1\n");
+        yield* (yield* signInWithPlugin).syncNow;
+      }).pipe(Effect.provide(mac.layer));
+      yield* Effect.gen(function* () {
+        yield* imac.registerDevice;
+        yield* (yield* signInWithPlugin).syncNow;
+      }).pipe(Effect.provide(imac.layer));
+
+      // The Mac changes the note; the iMac's user edits it while it downloads.
+      yield* mac.write("Notes/plans.md", "Plan v2 from Mac\n");
+      yield* Effect.gen(function* () {
+        yield* (yield* MemorySync.MemorySync).syncNow;
+      }).pipe(Effect.provide(mac.layer));
+      const localPlans = imac.path.join(imac.vault, "Notes", "plans.md");
+      drive.onDownload = () => NodeFs.writeFileSync(localPlans, "Typed on the iMac mid-sync\n");
+      yield* Effect.gen(function* () {
+        const sync = yield* MemorySync.MemorySync;
+        yield* sync.syncNow;
+        drive.onDownload = null;
+        assert.strictEqual(yield* imac.read("Notes/plans.md"), "Typed on the iMac mid-sync\n");
+        // The next pass sees both changes and keeps both.
+        yield* sync.syncNow;
+      }).pipe(Effect.provide(imac.layer));
+      assert.strictEqual(yield* imac.read("Notes/plans.md"), "Plan v2 from Mac\n");
+      const notes = yield* imac.fs.readDirectory(imac.path.join(imac.vault, "Notes"));
+      const conflict = notes.find((name) => name.startsWith("plans (conflict iMac (bbbb) "));
+      assert.isDefined(conflict);
+      assert.strictEqual(yield* imac.read(`Notes/${conflict}`), "Typed on the iMac mid-sync\n");
     }),
   );
 

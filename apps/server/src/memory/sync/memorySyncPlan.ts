@@ -214,6 +214,51 @@ export function planMemorySync(input: SyncPlanInput): ReadonlyArray<SyncAction> 
   return actions.toSorted((left, right) => ACTION_ORDER[left.kind] - ACTION_ORDER[right.kind]);
 }
 
+/**
+ * Re-keys local and synced paths to the cloud's spelling when they differ
+ * only in letter case. OneDrive and most desktop file systems ignore case, so
+ * `Notes/plans.md` renamed to `Notes/Plans.md` is one file, not a new file and
+ * a deleted one. Without this, a case-only rename would plan a download of
+ * the new name and a delete of the old name that removes the same file.
+ *
+ * Two local files that differ only in case (possible on Linux) cannot both
+ * exist in OneDrive; the later one is left out of sync.
+ */
+export function alignPathCase<L, C, S>(input: {
+  readonly local: ReadonlyMap<string, L>;
+  readonly cloud: ReadonlyMap<string, C>;
+  readonly synced: ReadonlyMap<string, S>;
+}): {
+  readonly local: Map<string, L>;
+  readonly synced: Map<string, S>;
+  /** Canonical path to the path the file has on this computer's disk. */
+  readonly diskPath: Map<string, string>;
+} {
+  const canonical = new Map<string, string>();
+  for (const path of input.cloud.keys()) canonical.set(path.toLowerCase(), path);
+  const spell = (path: string) => {
+    const key = path.toLowerCase();
+    const existing = canonical.get(key);
+    if (existing !== undefined) return existing;
+    canonical.set(key, path);
+    return path;
+  };
+  const local = new Map<string, L>();
+  const diskPath = new Map<string, string>();
+  for (const [path, value] of input.local) {
+    const aligned = spell(path);
+    if (local.has(aligned)) continue;
+    local.set(aligned, value);
+    diskPath.set(aligned, path);
+  }
+  const synced = new Map<string, S>();
+  for (const [path, value] of input.synced) {
+    const aligned = spell(path);
+    if (!synced.has(aligned) || aligned === path) synced.set(aligned, value);
+  }
+  return { local, synced, diskPath };
+}
+
 /** A name for the local side of a note both computers changed. */
 export function conflictCopyPath(path: string, deviceLabel: string, stamp: string): string {
   const slash = path.lastIndexOf("/");
