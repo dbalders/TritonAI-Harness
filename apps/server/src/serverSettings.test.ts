@@ -1733,7 +1733,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       const effective = yield* serverSettings.getSettings;
       assert.equal(effective.providers.codex.binaryPath, "/installer/runtime/codex");
       assert.equal(effective.providers.codex.homePath, "/installer/home/codex");
-      assert.equal(effective.textGenerationModelSelection.model, "gpt-5.6-sol");
+      assert.equal(effective.textGenerationModelSelection.model, "gpt-6.1-sol");
       assert.deepInclude(effective.providerInstances[managedInstanceId]?.config, {
         unknownNested: "retained",
       });

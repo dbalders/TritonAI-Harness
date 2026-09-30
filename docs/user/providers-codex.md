@@ -11,6 +11,9 @@ GLM 5.3 Flash is the default on-prem model and supports text and image input. Ch
 DeepSeek selections fall back to GLM 5.3 Flash. Existing selections of other available models
 are preserved.
 
+GPT-6.1 Sol replaces GPT-5.6 Luna, Sol, and Terra in Cloud models. Saved selections of those
+models and GPT-5.5 move to GPT-6.1 Sol.
+
 ## Engine Updates
 
 Stable and Nightly can use the same Codex installation. If a new profile cannot find Codex,
