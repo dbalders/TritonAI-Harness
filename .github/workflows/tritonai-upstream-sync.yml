@@ -1,8 +1,10 @@
 name: TritonAI Upstream Sync
 
+# Manual only. Upstream syncs are integration events, not a daily cron: the
+# downstream is far enough from upstream that every sync needs a human on the PR.
+# Squash-merging a sync PR breaks git ancestry for every later sync, so the
+# script refuses `squash` and the PR must be merged with a merge commit.
 on:
-  schedule:
-    - cron: "17 11 * * *"
   workflow_dispatch:
     inputs:
       downstream_branch:
@@ -38,8 +40,8 @@ concurrency:
 jobs:
   sync:
     name: Merge upstream into TritonAI Harness branch
-    runs-on: self-hosted
-    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
     steps:
       - name: Checkout Harness repo
         uses: actions/checkout@v6
@@ -63,6 +65,9 @@ jobs:
           node-version-file: package.json
           cache: true
           run-install: false
+
+      - name: Install browser secret helper build libraries
+        run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config
 
       - name: Install frozen dependencies
         run: vp install --frozen-lockfile

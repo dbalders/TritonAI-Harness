@@ -11,6 +11,8 @@ TritonAI Harness is the UCSD-oriented downstream of upstream T3 Code. The downst
 
 Use project-specific branch names. Do not create tool-owned branch prefixes such as `codex/...`.
 
+Merge `sync/*` PRs with a merge commit, never a squash. See "Ancestry Rules" in [tritonai-sync-automation.md](./tritonai-sync-automation.md).
+
 ## Local Upstream Sync
 
 The sync script creates a temporary git worktree so the normal checkout can stay dirty while the merge is evaluated elsewhere.
@@ -18,20 +20,20 @@ The sync script creates a temporary git worktree so the normal checkout can stay
 Dry orientation run:
 
 ```sh
-bun run tritonai:sync:check
+vp run tritonai:sync:check
 ```
 
 Review run with the configured Codex command:
 
 ```sh
 export TRITONAI_SYNC_AGENT_COMMAND='codex exec "$(cat "$TRITONAI_SYNC_AGENT_PROMPT_FILE")" > "$TRITONAI_SYNC_AGENT_RESPONSE_FILE"'
-bun run tritonai:sync:review
+vp run tritonai:sync:review
 ```
 
 Push a generated sync branch and open a PR:
 
 ```sh
-bun run tritonai:sync:pr
+vp run tritonai:sync:pr
 ```
 
 The script exits with:
@@ -46,7 +48,7 @@ Useful environment overrides:
 - `TRITONAI_SYNC_UPSTREAM_REMOTE=upstream`
 - `TRITONAI_SYNC_UPSTREAM_URL=https://github.com/pingdotgg/t3code.git`
 - `TRITONAI_SYNC_UPSTREAM_BRANCH=main`
-- `TRITONAI_SYNC_CHECKS="bun run typecheck && bun run test"`
+- `TRITONAI_SYNC_CHECKS="vp run typecheck && vp run test"`
 - `TRITONAI_SYNC_AGENT_SECRET_ENV_ALLOWLIST="CODEX_HOME,TRITONAI_HOME,TRITONAI_API_KEY"`
 
 ## Codex Review Command
@@ -101,7 +103,7 @@ present, and the final assembled app is independently checked for `resources/app
 To prepare a PR that merges the latest stable parent T3 Code release into TritonAI Harness:
 
 ```sh
-bun run tritonai:release-sync:pr
+vp run tritonai:release-sync:pr
 ```
 
 Useful release-sync overrides:
