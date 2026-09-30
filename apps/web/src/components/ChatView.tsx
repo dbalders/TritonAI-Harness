@@ -4068,7 +4068,8 @@ export default function ChatView(props: ChatViewProps) {
       markGettingStartedQuestThread(activeThread.id, stepId);
       setComposerDraftPrompt(composerDraftTarget, prompt);
       promptRef.current = prompt;
-      composerRef.current?.resetCursorState({ prompt, cursor: prompt.length });
+      // Detecting the trigger opens the matching menu, so "$" lists skills.
+      composerRef.current?.resetCursorState({ prompt, cursor: prompt.length, detectTrigger: true });
       scheduleComposerFocus();
     },
     [activeThread, composerDraftTarget, composerRef, scheduleComposerFocus, setComposerDraftPrompt],
