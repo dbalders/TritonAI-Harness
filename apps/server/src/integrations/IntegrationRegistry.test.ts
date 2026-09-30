@@ -21,6 +21,7 @@ import {
   type IntegrationSkillMaterializer,
 } from "./IntegrationSkillMaterializer.ts";
 import { EmptyIntegrationToolInput } from "./IntegrationTool.ts";
+import { describeIntegrationToolFailure } from "./IntegrationToolFailure.ts";
 
 const connectedManifest: IntegrationManifest = {
   apiVersion: "tritonai.harness/v2",
@@ -1042,6 +1043,83 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
+  it("tells the agent to verify an admitted write whose provider then rejects", async () => {
+    const root = await NodeFSP.mkdtemp(
+      NodePath.join(NodeOS.tmpdir(), "tritonai-write-outcome-unknown-"),
+    );
+    const manifest: IntegrationManifest = {
+      ...fixtureManifest,
+      id: "test-write-outcome-unknown",
+      name: "Test Write Outcome",
+      provider: "test-write-outcome-unknown-provider",
+      capabilities: [
+        {
+          id: "fixture.write",
+          displayName: "Write fixture",
+          description: "Write fixture records.",
+          access: "default",
+        },
+      ],
+      tools: [
+        {
+          name: "test.fixture.write",
+          displayName: "Write fixture",
+          description: "Write one fixture record.",
+          capabilities: ["fixture.write"],
+          effect: "write",
+        },
+      ],
+      skills: [],
+    };
+    const implementation: IntegrationProvider = {
+      id: "test-write-outcome-unknown-provider",
+      tools: [
+        {
+          name: "test.fixture.write",
+          description: "Write one fixture record.",
+          input: EmptyIntegrationToolInput,
+          readOnly: false,
+          openWorld: false,
+        },
+      ],
+      status: async () => ({
+        state: "connected",
+        accountLabel: "Fixture user",
+        grantedCapabilities: ["fixture.write"],
+        message: null,
+      }),
+      connect: async () => ({ kind: "connected", flowId: "fixture-flow", message: "Connected." }),
+      disconnect: async () => undefined,
+      invoke: async (_toolName, _input, context) => {
+        await context!.beginCommit!();
+        throw new IntegrationProviderPublicError(
+          "The fixture operation may have completed. Verify its result before retrying.",
+        );
+      },
+    };
+    const registry = new RegistryRuntime(root, [packaged(manifest, implementation)]);
+    try {
+      await registry.install(manifest.id);
+      const failure = await registry
+        .invokeTool(
+          "test.fixture.write",
+          {},
+          { signal: new AbortController().signal, writeApproved: true },
+        )
+        .then(
+          () => expect.unreachable("an admitted rejected write must fail"),
+          (error: unknown) => error,
+        );
+      expect(failure).toMatchObject({ code: "operation_failed" });
+      expect(describeIntegrationToolFailure(failure).text).toBe(
+        "Integration tool call failed (operation_failed): Write fixture may have completed. Verify its result before retrying; Test Write Outcome is unavailable until its connection is reset.",
+      );
+    } finally {
+      await registry.close();
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps capability revocation active when disable queues behind installation", async () => {
     const root = await NodeFSP.mkdtemp(
       NodePath.join(NodeOS.tmpdir(), "tritonai-install-capability-disable-"),
@@ -1970,6 +2048,128 @@ describe("IntegrationRegistry lifecycle", () => {
       expect(providerInvocations).toBe(1);
       expect(receivedInput).toEqual({ query: "bounded" });
       expect(providerObservedAbort).toBe(true);
+    } finally {
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("tells the agent which input paths failed without echoing submitted values", async () => {
+    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-tool-issues-"));
+    const state: ProviderState = {
+      status: {
+        state: "connected",
+        accountLabel: "Fixture",
+        grantedCapabilities: ["fixture.read"],
+        message: null,
+      },
+      credential: "present",
+      disconnectFails: false,
+    };
+    const baseProvider = provider("test-fixture-provider", state);
+    const received: Array<unknown> = [];
+    const schemaProvider: IntegrationProvider = {
+      ...baseProvider,
+      tools: baseProvider.tools.map((tool) => ({
+        ...tool,
+        input: Schema.Struct({
+          operations: Schema.Array(
+            Schema.Struct({
+              type: Schema.Literals(["updateNodeParameters", "setNodeParameter"]),
+              nodeName: Schema.String,
+              parameters: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+            }),
+          ),
+        }),
+      })),
+      invoke: async (_name, input) => {
+        received.push(input);
+        return { updated: true };
+      },
+    };
+    try {
+      const registry = new RegistryRuntime(root, [packaged(fixtureManifest, schemaProvider)]);
+      await registry.install(fixtureManifest.id);
+      const failure = await registry
+        .invokeTool("test.fixture.read", {
+          operations: [
+            {
+              type: "updateNode",
+              nodeName: "X",
+              changes: { parameters: { jsCode: "SECRET_CODE_MARKER" } },
+            },
+          ],
+        })
+        .then(
+          () => expect.unreachable("invalid input must be rejected"),
+          (error: unknown) => error,
+        );
+      expect(failure).toMatchObject({ code: "invalid_input" });
+      const { code, text } = describeIntegrationToolFailure(failure);
+      expect(code).toBe("invalid_input");
+      expect(text).toBe(
+        "Integration tool call failed (invalid_input): Input for integration tool test.fixture.read did not match its declared schema: " +
+          'operations[0].changes: unexpected property; operations[0].type: Expected "updateNodeParameters" | "setNodeParameter"',
+      );
+      expect(text).not.toContain("SECRET_CODE_MARKER");
+      expect(text).not.toContain('updateNode"');
+      expect(received).toEqual([]);
+
+      const corrected = {
+        operations: [
+          {
+            type: "updateNodeParameters",
+            nodeName: "X",
+            parameters: { jsCode: "SECRET_CODE_MARKER" },
+          },
+        ],
+      };
+      await expect(registry.invokeTool("test.fixture.read", corrected)).resolves.toEqual({
+        updated: true,
+      });
+      expect(received).toEqual([corrected]);
+    } finally {
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("bounds reported input issues", async () => {
+    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-tool-bounds-"));
+    const state: ProviderState = {
+      status: {
+        state: "connected",
+        accountLabel: "Fixture",
+        grantedCapabilities: ["fixture.read"],
+        message: null,
+      },
+      credential: "present",
+      disconnectFails: false,
+    };
+    const baseProvider = provider("test-fixture-provider", state);
+    const schemaProvider: IntegrationProvider = {
+      ...baseProvider,
+      tools: baseProvider.tools.map((tool) => ({
+        ...tool,
+        input: Schema.Struct({ values: Schema.Array(Schema.Number) }),
+      })),
+    };
+    try {
+      const registry = new RegistryRuntime(root, [packaged(fixtureManifest, schemaProvider)]);
+      await registry.install(fixtureManifest.id);
+      const failure = await registry
+        .invokeTool("test.fixture.read", {
+          values: Array.from({ length: 50 }, (_, index) => `SECRET_${index}`),
+          ["k".repeat(5_000)]: true,
+        })
+        .then(
+          () => expect.unreachable("invalid input must be rejected"),
+          (error: unknown) => error,
+        );
+      const { text } = describeIntegrationToolFailure(failure);
+      expect(text).toContain("values[0]: Expected number");
+      expect(text).toContain("more issue(s) omitted");
+      expect(text).not.toContain("values[5]");
+      expect(text).not.toContain("SECRET_");
+      expect(text.length).toBeLessThan(2_000);
     } finally {
       await NodeFSP.rm(root, { recursive: true, force: true });
     }

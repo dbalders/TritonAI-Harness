@@ -41,6 +41,7 @@ import {
 } from "./IntegrationSkillMaterializer.ts";
 import {
   decodeIntegrationToolInput,
+  describeIntegrationToolInputIssues,
   integrationToolJsonSchema,
   prepareIntegrationToolInput,
   type IntegrationProviderTool,
@@ -3146,10 +3147,11 @@ export class RegistryRuntime {
         let decodedInput: unknown;
         try {
           decodedInput = await decodeIntegrationToolInput(definition, input);
-        } catch {
+        } catch (error) {
+          const issues = describeIntegrationToolInputIssues(error);
           throw operationError(
             "invalid_input",
-            `Input for integration tool ${name} did not match its declared schema.`,
+            `Input for integration tool ${name} did not match its declared schema${issues ? `: ${issues}` : "."}`,
           );
         }
         const invokeProvider = (providerContext?: IntegrationLifecycleContext) => {
@@ -3240,7 +3242,10 @@ export class RegistryRuntime {
             "operation_failed",
             error instanceof ProviderStatusContractError
               ? `${manifest.name} returned an invalid provider status.`
-              : `${manifest.name} is unavailable until its connection is reset.`,
+              : writeCommitAdmitted
+                ? // Only success proves an admitted write settled, so a rejection is ambiguous.
+                  `${tool.displayName} may have completed. Verify its result before retrying; ${manifest.name} is unavailable until its connection is reset.`
+                : `${manifest.name} is unavailable until its connection is reset.`,
           );
         }
         throw error;

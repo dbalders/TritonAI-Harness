@@ -14,7 +14,7 @@ import {
   type VerifiedPluginSdkArtifact,
   verifyPluginSdkArtifact,
 } from "@t3tools/shared/pluginSdkArtifact";
-import { Ajv2020 } from "ajv/dist/2020.js";
+import { Ajv2020, type ErrorObject } from "ajv/dist/2020.js";
 import * as Effect from "effect/Effect";
 import type * as JsonSchema from "effect/JsonSchema";
 import * as Option from "effect/Option";
@@ -99,6 +99,39 @@ function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
   );
 }
 
+// Ajv messages and params come from the schema, never from the validated data, so these issues
+// can tell an agent which path failed and what was expected without echoing submitted values.
+function pluginSchemaIssue(error: ErrorObject): Schema.FilterIssue {
+  const path = error.instancePath
+    .split("/")
+    .slice(1)
+    .map((token) => {
+      const key = token.replaceAll("~1", "/").replaceAll("~0", "~");
+      return /^(?:0|[1-9]\d*)$/u.test(key) ? Number(key) : key;
+    });
+  const params = error.params as Record<string, unknown>;
+  switch (error.keyword) {
+    case "additionalProperties":
+      return { path: [...path, String(params.additionalProperty)], issue: "unexpected property" };
+    case "unevaluatedProperties":
+      return { path: [...path, String(params.unevaluatedProperty)], issue: "unexpected property" };
+    case "required":
+      return {
+        path: [...path, String(params.missingProperty)],
+        issue: "missing required property",
+      };
+    case "enum":
+      return {
+        path,
+        issue: `Expected ${(params.allowedValues as ReadonlyArray<unknown>).map((value) => JSON.stringify(value)).join(" | ")}`,
+      };
+    case "const":
+      return { path, issue: `Expected ${JSON.stringify(params.allowedValue)}` };
+    default:
+      return { path, issue: error.message ?? `failed ${error.keyword} validation` };
+  }
+}
+
 function compileJsonSchema(schema: PluginJsonSchema): Schema.Decoder<unknown> {
   // Plugin contracts are draft-2020-12 JSON Schema. Validate that exact document:
   // Effect's best-effort importer cannot represent all patternProperties scopes.
@@ -118,7 +151,9 @@ function compileJsonSchema(schema: PluginJsonSchema): Schema.Decoder<unknown> {
   // Unknown would derive a separate JSON codec and drop the advertised check.
   return Schema.Any.check(
     Schema.makeFilter<unknown>(
-      (input) => validate(input) || validator.errorsText(validate.errors, { separator: "; " }),
+      (input) =>
+        validate(input) ||
+        (validate.errors?.length ? validate.errors.map(pluginSchemaIssue) : "Invalid input."),
       { toJsonSchema: () => schema as JsonSchema.JsonSchema },
     ),
   );

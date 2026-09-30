@@ -1,5 +1,10 @@
 import { expect, it, vi } from "@effect/vitest";
-import { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  IntegrationOperationError,
+  ProviderInstanceId,
+  ThreadId,
+} from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -249,6 +254,60 @@ it.effect("preserves bounded results and reports omitted results as completed MC
         },
       ]);
       expect(invokeTool).toHaveBeenCalledTimes(2);
+    }).pipe(Effect.provide(testLayer)),
+  ).pipe(Effect.ensuring(Effect.sync(() => registrySpy.mockRestore())));
+});
+
+it.effect("tells MCP agents why a call failed only through safe errors", () => {
+  const invokeTool = vi
+    .fn<Integrations.RegistryRuntime["invokeTool"]>()
+    .mockRejectedValueOnce(
+      new IntegrationOperationError({
+        code: "invalid_input",
+        message:
+          "Input for integration tool fixture.read did not match its declared schema: operations[0].changes: unexpected property",
+      }),
+    )
+    .mockRejectedValueOnce(
+      new Integrations.IntegrationProviderPublicError("Workflow wf-1 was not found."),
+    )
+    .mockRejectedValueOnce(new Error("401 from https://n8n.invalid?token=SECRET_TOKEN"));
+  const registrySpy = vi.spyOn(Integrations, "getIntegrationRegistry").mockReturnValue({
+    invokeTool,
+  } as unknown as Integrations.RegistryRuntime);
+  const authorized = invocation(new Set(["integrations.invoke"]));
+
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const server = yield* McpServer.McpServer;
+      const call = server
+        .callTool({ name: "fixture.read", arguments: {} })
+        .pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, authorized),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+
+      const invalid = yield* call;
+      expect(invalid.isError).toBe(true);
+      expect(invalid.structuredContent).toEqual({ error: "invalid_input" });
+      expect(invalid.content).toEqual([
+        {
+          type: "text",
+          text: "Integration tool call failed (invalid_input): Input for integration tool fixture.read did not match its declared schema: operations[0].changes: unexpected property",
+        },
+      ]);
+
+      const providerFailure = yield* call;
+      expect(providerFailure.isError).toBe(true);
+      expect(providerFailure.structuredContent).toEqual({ error: "provider_error" });
+      expect(providerFailure.content).toEqual([
+        { type: "text", text: "Integration tool call failed: Workflow wf-1 was not found." },
+      ]);
+
+      const unknown = yield* call;
+      expect(unknown.isError).toBe(true);
+      expect(unknown.structuredContent).toEqual({ error: "integration_tool_failed" });
+      expect(unknown.content).toEqual([{ type: "text", text: "Integration tool call failed." }]);
     }).pipe(Effect.provide(testLayer)),
   ).pipe(Effect.ensuring(Effect.sync(() => registrySpy.mockRestore())));
 });

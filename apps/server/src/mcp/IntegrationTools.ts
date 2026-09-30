@@ -8,6 +8,10 @@ import { McpSchema, McpServer } from "effect/unstable/ai";
 import * as Integrations from "../integrations/IntegrationRegistry.ts";
 import type { IntegrationProviderTool } from "../integrations/IntegrationRegistry.ts";
 import { integrationToolJsonSchema } from "../integrations/IntegrationTool.ts";
+import {
+  describeIntegrationToolFailure,
+  IntegrationToolUnavailableError,
+} from "../integrations/IntegrationToolFailure.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 
 class IntegrationToolInvocationError extends Schema.TaggedError<IntegrationToolInvocationError>()(
@@ -93,7 +97,7 @@ function registerTool(
             })
           : Effect.fail(
               new IntegrationToolInvocationError({
-                cause: new Error("MCP credential does not grant integration invocation access."),
+                cause: new IntegrationToolUnavailableError("Integration tool is unavailable."),
               }),
             );
       }).pipe(
@@ -110,14 +114,16 @@ function registerTool(
             toolName: definition.name,
           }).pipe(Effect.andThen(Effect.failCause(cause))),
         ),
-        Effect.orElseSucceed(
-          () =>
+        Effect.catch((error) => {
+          const failure = describeIntegrationToolFailure(error.cause);
+          return Effect.succeed(
             new McpSchema.CallToolResult({
               isError: true,
-              structuredContent: { error: "integration_tool_unavailable" },
-              content: [{ type: "text", text: "Integration tool is unavailable." }],
+              structuredContent: { error: failure.code },
+              content: [{ type: "text", text: failure.text }],
             }),
-        ),
+          );
+        }),
       ),
   };
   return Effect.suspend(() => {

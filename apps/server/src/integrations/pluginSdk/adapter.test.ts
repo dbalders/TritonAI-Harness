@@ -12,7 +12,11 @@ import { verifyPluginSdkArtifact } from "@t3tools/shared/pluginSdkArtifact";
 
 import type * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
 import { createRegistryRuntime } from "../IntegrationRegistry.ts";
-import { decodeIntegrationToolInput, integrationToolJsonSchema } from "../IntegrationTool.ts";
+import {
+  decodeIntegrationToolInput,
+  describeIntegrationToolInputIssues,
+  integrationToolJsonSchema,
+} from "../IntegrationTool.ts";
 import { loadPluginSdkIntegration, PluginSdkQuarantineError } from "./adapter.ts";
 
 const id = "fixture-reader";
@@ -232,6 +236,65 @@ describe("plugin SDK adapter", () => {
       for (const topic of ["", "has space", "tab\t", "control\u0085", "null\u0000"]) {
         await expect(decodeIntegrationToolInput(tool, { topic })).rejects.toThrow();
       }
+    } finally {
+      await loaded.provider?.close?.();
+    }
+  });
+
+  it("reports failing plugin input paths and expectations without submitted values", async () => {
+    const loaded = await loadPluginSdkIntegration({
+      files: artifact(providerSource, "# Fixture reader\n", {
+        inputSchema: {
+          $schema: "https://json-schema.org/draft/2020-12/schema",
+          type: "object",
+          properties: {
+            operations: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  type: { type: "string", enum: ["updateNodeParameters", "setNodeParameter"] },
+                  nodeName: { type: "string" },
+                  parameters: { type: "object", additionalProperties: {} },
+                },
+                required: ["type", "nodeName"],
+                additionalProperties: false,
+              },
+            },
+          },
+          required: ["operations"],
+          additionalProperties: false,
+        },
+      }),
+      secrets: secretStore(),
+      configuration: { prefix: "fixture" },
+      expected: { id, version: "1.0.0" },
+      hostNodeVersion: "24.13.1",
+    });
+    try {
+      const tool = loaded.provider!.tools[0]!;
+      const failure = await decodeIntegrationToolInput(tool, {
+        operations: [
+          { type: "updateNode", changes: { parameters: { jsCode: "SECRET_CODE_MARKER" } } },
+        ],
+      }).then(
+        () => expect.unreachable("invalid input must be rejected"),
+        (error: unknown) => error,
+      );
+      const issues = describeIntegrationToolInputIssues(failure);
+      expect(issues).toBe(
+        "operations[0].nodeName: missing required property; " +
+          "operations[0].changes: unexpected property; " +
+          'operations[0].type: Expected "updateNodeParameters" | "setNodeParameter"',
+      );
+      expect(issues).not.toContain("SECRET_CODE_MARKER");
+
+      const corrected = {
+        operations: [
+          { type: "updateNodeParameters", nodeName: "X", parameters: { jsCode: "code" } },
+        ],
+      };
+      await expect(decodeIntegrationToolInput(tool, corrected)).resolves.toEqual(corrected);
     } finally {
       await loaded.provider?.close?.();
     }
