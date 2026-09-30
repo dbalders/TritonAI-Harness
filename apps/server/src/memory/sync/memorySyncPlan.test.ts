@@ -140,6 +140,25 @@ describe("this computer's files", () => {
     ).toEqual([{ kind: "download", path: pending }]);
   });
 
+  it("restores a missing inbox note unless its contents survive in processed", () => {
+    const pending = "Inbox/5c9e/idea.md";
+    const processed = "Inbox/5c9e/processed/2026-09-30/idea-2.md";
+    const baseline = {
+      cloud: { [pending]: "e1" },
+      synced: { [pending]: ["original", "e1"] as [string, string] },
+    };
+    expect(plan(baseline)).toEqual([{ kind: "download", path: pending }]);
+    expect(plan({ ...baseline, local: { [processed]: "different" } })).toContainEqual({
+      kind: "download",
+      path: pending,
+    });
+    expect(plan({ ...baseline, local: { [processed]: "original" } })).toContainEqual({
+      kind: "deleteCloud",
+      path: pending,
+      ifMatch: "e1",
+    });
+  });
+
   it("keeps a cloud copy someone else changed and stops if its device record was taken over", () => {
     expect(
       plan({

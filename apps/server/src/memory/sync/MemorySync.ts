@@ -20,6 +20,7 @@ import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
@@ -84,6 +85,10 @@ const SyncState = Schema.Struct({
   synced: Schema.Record(
     Schema.String,
     Schema.Struct({ sha256: Schema.String, eTag: Schema.String }),
+  ),
+  /** Written before uploading, so a restart can recover an unrecorded success. */
+  pendingUploads: Schema.Record(Schema.String, Schema.String).pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
   ),
 });
 type SyncState = {
@@ -165,8 +170,10 @@ export const make = Effect.gen(function* () {
       ...state,
       items: { ...state.items },
       synced: { ...state.synced },
+      pendingUploads: { ...state.pendingUploads },
     })),
-    Effect.orElseSucceed(() => null),
+    Effect.catchIf(isNotFound, () => Effect.succeed(null)),
+    Effect.mapError(() => new MemorySyncFailure({ message: "Could not read the sync state." })),
   );
 
   const writeState = (state: SyncState) =>
@@ -320,6 +327,7 @@ export const make = Effect.gen(function* () {
         deltaLink: null,
         items: {},
         synced: {},
+        pendingUploads: {},
       };
     }
     const current = state;
@@ -332,6 +340,7 @@ export const make = Effect.gen(function* () {
         // The cloud folder itself was replaced; nothing in it was seen before.
         current.rootId = rootId;
         current.synced = {};
+        current.pendingUploads = {};
       }
       current.items = {};
       changes = yield* oneDrive.delta(current.rootId, null);
@@ -344,8 +353,27 @@ export const make = Effect.gen(function* () {
     applyItems(current, changes.items);
     current.deltaLink = changes.deltaLink;
 
-    yield* Effect.gen(function* () {
+    const outcome = yield* Effect.gen(function* () {
       const cloud = cloudPaths(current);
+      // An upload may have reached OneDrive before its response or baseline
+      // could be saved. Reconcile its recorded bytes before detecting edits
+      // from another computer, even if the local file has since changed.
+      const cloudByLowerPath = new Map(
+        [...cloud.files].map(([filePath, remote]) => [
+          filePath.toLowerCase(),
+          { filePath, remote },
+        ]),
+      );
+      for (const [filePath, sha256] of Object.entries(current.pendingUploads)) {
+        const found = cloudByLowerPath.get(filePath.toLowerCase());
+        if (found) {
+          const bytes = yield* oneDrive.download(found.remote.id);
+          if (sha256Bytes(bytes) === sha256) {
+            current.synced[found.filePath] = { sha256, eTag: found.remote.eTag };
+          }
+        }
+        delete current.pendingUploads[filePath];
+      }
       const aligned = alignPathCase({
         local: yield* readLocalFiles(device),
         cloud: cloud.files,
@@ -371,8 +399,11 @@ export const make = Effect.gen(function* () {
         cloud,
         actions,
       });
-      // Encoded when the pass ends, so everything the actions recorded is saved.
-    }).pipe(Effect.ensuring(Effect.suspend(() => writeState(current)).pipe(Effect.ignore)));
+    }).pipe(Effect.exit);
+    // Save successful actions even when a later one failed. A failed save is
+    // itself a failed pass; upload intents already on disk survive a restart.
+    yield* writeState(current);
+    if (Exit.isFailure(outcome)) return yield* Effect.failCause(outcome.cause);
   });
 
   const executeActions = Effect.fn("memorySync.executeActions")(function* (input: {
@@ -433,11 +464,19 @@ export const make = Effect.gen(function* () {
       }
       const parentId = yield* folderFor(relativePath);
       const name = relativePath.split("/").at(-1)!;
+      const sha256 = sha256Bytes(bytes);
+      state.pendingUploads[relativePath] = sha256;
+      yield* writeState(state);
       const result = yield* oneDrive.upload(parentId, name, bytes, ifMatch);
       // Someone else wrote it first; the next pass sees their version.
-      if (result.kind === "conflict" || !result.item.eTag) return;
+      if (result.kind === "conflict") {
+        delete state.pendingUploads[relativePath];
+        return;
+      }
+      if (!result.item.eTag) return;
+      delete state.pendingUploads[relativePath];
       state.items[result.item.id] = { name, parentId, eTag: result.item.eTag, folder: false };
-      state.synced[relativePath] = { sha256: sha256Bytes(bytes), eTag: result.item.eTag };
+      state.synced[relativePath] = { sha256, eTag: result.item.eTag };
     });
 
     const downloadTo = Effect.fn("memorySync.downloadTo")(function* (relativePath: string) {
@@ -507,7 +546,15 @@ export const make = Effect.gen(function* () {
         }
         case "deleteLocal":
           if (!(yield* unchangedSinceScan(action.path))) break;
-          yield* fs.remove(toLocalPath(onDisk(action.path))).pipe(Effect.ignore);
+          yield* fs.remove(toLocalPath(onDisk(action.path))).pipe(
+            Effect.catchIf(isNotFound, () => Effect.void),
+            Effect.mapError(
+              () =>
+                new MemorySyncFailure({
+                  message: `Could not remove ${action.path} from the memory folder.`,
+                }),
+            ),
+          );
           delete state.synced[action.path];
           break;
         case "forget":

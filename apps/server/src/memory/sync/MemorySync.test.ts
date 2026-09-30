@@ -65,6 +65,7 @@ class FakeOneDrive {
   readonly refreshTokens = new Set<string>(["plugin-rt"]);
   /** Runs while a file is being downloaded, to simulate an edit made mid-pass. */
   onDownload: (() => void) | null = null;
+  onUpload: (() => void) | null = null;
   devicePolls = 0;
   private next = 1;
 
@@ -177,6 +178,7 @@ class FakeOneDrive {
         existing.content = body;
         existing.eTag = `e-${this.next}`;
         this.record(existing);
+        this.onUpload?.();
         return reply(200, this.json(existing));
       }
       return reply(201, this.json(this.create(parentId, name, false, new Uint8Array(body))));
@@ -350,6 +352,142 @@ const setup = (drive: FakeOneDrive, computer: Computer) =>
   });
 
 it.layer(NodeServices.layer)("MemorySync", (it) => {
+  it.effect("restores a lost inbox while retaining its sync state", () =>
+    Effect.gen(function* () {
+      const drive = new FakeOneDrive();
+      const mac = yield* setup(drive, MAC);
+      const pending = `Inbox/${MAC.shortId}/idea.md`;
+      yield* Effect.gen(function* () {
+        const secrets = yield* ServerSecretStore.ServerSecretStore;
+        yield* secrets.set(
+          "integration-microsoft-365--oauth",
+          new TextEncoder().encode(toJson({ refreshToken: "plugin-rt" })),
+        );
+        yield* mac.registerDevice;
+        yield* mac.write(pending, "Do not lose this idea.\n");
+        const sync = yield* MemorySync.MemorySync;
+        yield* sync.start;
+        yield* sync.syncNow;
+        yield* mac.fs.remove(mac.path.join(mac.vault, "Inbox"), { recursive: true });
+        yield* sync.syncNow;
+        assert.strictEqual(yield* mac.read(pending), "Do not lose this idea.\n");
+        assert.strictEqual(
+          drive.file(`TritonAI Harness/memory/general/${pending}`),
+          "Do not lose this idea.\n",
+        );
+      }).pipe(Effect.provide(mac.layer));
+    }),
+  );
+
+  it.effect("retries a failed local deletion without resurrecting the cloud note", () =>
+    Effect.gen(function* () {
+      const drive = new FakeOneDrive();
+      const mac = yield* setup(drive, MAC);
+      const imac = yield* setup(drive, IMAC);
+      const signIn = Effect.gen(function* () {
+        const secrets = yield* ServerSecretStore.ServerSecretStore;
+        yield* secrets.set(
+          "integration-microsoft-365--oauth",
+          new TextEncoder().encode(toJson({ refreshToken: "plugin-rt" })),
+        );
+        const sync = yield* MemorySync.MemorySync;
+        yield* sync.start;
+        return sync;
+      });
+      yield* mac.registerDevice;
+      yield* imac.registerDevice;
+      yield* mac.write("Notes/plans.md", "Plan\n");
+      const macSync = yield* signIn.pipe(Effect.provide(mac.layer));
+      const imacSync = yield* signIn.pipe(Effect.provide(imac.layer));
+      yield* macSync.syncNow;
+      yield* imacSync.syncNow;
+      yield* mac.fs.remove(mac.path.join(mac.vault, "Notes/plans.md"));
+      yield* macSync.syncNow;
+      const notes = imac.path.join(imac.vault, "Notes");
+      yield* imac.fs.chmod(notes, 0o555);
+      yield* imacSync.syncNow.pipe(
+        Effect.ensuring(imac.fs.chmod(notes, 0o755).pipe(Effect.ignore)),
+      );
+      assert.strictEqual((yield* imacSync.getStatus).sync.state, "error");
+      assert.strictEqual(yield* imac.read("Notes/plans.md"), "Plan\n");
+      yield* imacSync.syncNow;
+      assert.strictEqual((yield* imacSync.getStatus).sync.state, "idle");
+      assert.isNull(yield* imac.read("Notes/plans.md"));
+      assert.isNull(drive.file("TritonAI Harness/memory/general/Notes/plans.md"));
+    }),
+  );
+
+  it.effect("recovers an uploaded device record after a state save failure and restart", () =>
+    Effect.gen(function* () {
+      const drive = new FakeOneDrive();
+      const mac = yield* setup(drive, MAC);
+      yield* Effect.gen(function* () {
+        const secrets = yield* ServerSecretStore.ServerSecretStore;
+        yield* secrets.set(
+          "integration-microsoft-365--oauth",
+          new TextEncoder().encode(toJson({ refreshToken: "plugin-rt" })),
+        );
+        yield* mac.registerDevice;
+        const sync = yield* MemorySync.MemorySync;
+        yield* sync.start;
+        yield* sync.syncNow;
+        const record = `.devices/${MAC.environmentId}/device.json`;
+        const before = (yield* mac.read(record))!;
+        const uploaded = before.replace("2026-09-29T20:00:00.000Z", "2026-09-30T20:00:00.000Z");
+        yield* mac.write(record, uploaded);
+        const syncDirectory = mac.path.join(mac.vault, ".sync");
+        // If the intent cannot be saved, no upload may start.
+        yield* mac.fs.chmod(syncDirectory, 0o555);
+        yield* sync.syncNow.pipe(
+          Effect.ensuring(mac.fs.chmod(syncDirectory, 0o755).pipe(Effect.ignore)),
+        );
+        assert.strictEqual((yield* sync.getStatus).sync.state, "error");
+        assert.strictEqual(drive.file(`TritonAI Harness/memory/general/${record}`), before);
+
+        drive.onUpload = () => NodeFS.chmodSync(syncDirectory, 0o555);
+        yield* sync.syncNow.pipe(
+          Effect.ensuring(mac.fs.chmod(syncDirectory, 0o755).pipe(Effect.ignore)),
+        );
+        drive.onUpload = null;
+        assert.strictEqual(drive.file(`TritonAI Harness/memory/general/${record}`), uploaded);
+        assert.strictEqual((yield* sync.getStatus).sync.state, "error");
+        assert.include((yield* sync.getStatus).sync.message ?? "", "save the sync state");
+
+        // Memory writes again before the next run; comparing only current bytes cannot recover.
+        const latest = uploaded.replace("20:00:00", "21:00:00");
+        yield* mac.write(record, latest);
+        const restarted = yield* MemorySync.make.pipe(
+          Effect.provideService(
+            MicrosoftSignIn.MicrosoftSignIn,
+            yield* MicrosoftSignIn.make(OAUTH),
+          ),
+        );
+        yield* restarted.syncNow;
+        assert.strictEqual((yield* restarted.getStatus).sync.state, "idle");
+        assert.strictEqual(drive.file(`TritonAI Harness/memory/general/${record}`), latest);
+        yield* restarted.syncNow;
+        assert.strictEqual((yield* restarted.getStatus).sync.state, "idle");
+
+        // A different cloud edit must still stop this installation.
+        const remote = [...drive.items.values()].find((item) => item.name === "device.json")!;
+        const other = latest.replace("21:00:00", "22:00:00");
+        drive.handle(
+          "PUT",
+          new URL(
+            `https://graph.microsoft.com/v1.0/me/drive/items/${remote.parentId}:/device.json:/content`,
+          ),
+          { authorization: "Bearer access", "if-match": remote.eTag },
+          new TextEncoder().encode(other),
+        );
+        yield* restarted.syncNow;
+        assert.strictEqual((yield* restarted.getStatus).sync.state, "error");
+        assert.include((yield* restarted.getStatus).sync.message ?? "", "Another installation");
+        assert.strictEqual(drive.file(`TritonAI Harness/memory/general/${record}`), other);
+        assert.strictEqual(yield* mac.read(record), latest);
+      }).pipe(Effect.provide(mac.layer));
+    }),
+  );
+
   it.effect("syncs two computers through OneDrive without either overwriting the other", () =>
     Effect.gen(function* () {
       const drive = new FakeOneDrive();

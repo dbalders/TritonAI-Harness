@@ -97,8 +97,21 @@ function isPendingOwnInboxNote(path: string, device: SyncDevice): boolean {
 
 /** Whether Harness took this file away itself rather than losing it. */
 function removedOnPurpose(path: string, input: SyncPlanInput): boolean {
-  // A consumed inbox note moved to `processed/`.
-  if (isPendingOwnInboxNote(path, input.device)) return true;
+  // A consumed inbox note moved to `processed/<day>/`; its name may have
+  // gained a suffix to avoid a collision. Require the original contents.
+  if (isPendingOwnInboxNote(path, input.device)) {
+    const original = input.synced.get(path);
+    const prefix = `Inbox/${input.device.shortId}/processed/`;
+    return (
+      original !== undefined &&
+      [...input.local].some(
+        ([candidate, file]) =>
+          candidate.startsWith(prefix) &&
+          candidate.split("/").length === 5 &&
+          file.sha256 === original.sha256,
+      )
+    );
+  }
   // A generated note Harness removed drops out of `written.json`. The record
   // itself lives in this computer's device folder, so a lost vault loses it
   // too and every file is downloaded again instead.
