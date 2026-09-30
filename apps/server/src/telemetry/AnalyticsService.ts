@@ -40,10 +40,41 @@ const TELEMETRY_RETRY_MAX_DELAY_MS = 5 * 60_000;
 
 const PUBLIC_PROVIDER_VALUES = new Set(["claudeAgent", "codex", "cursor", "grok", "opencode"]);
 
+// Plausible accepts at most 30 props per event, including the common props added in sendEvent.
+const CLIENT_EVENT_PROPERTIES = [
+  "surface",
+  "clientAppVersion",
+  "clientOs",
+  "clientOsMajorVersion",
+  "clientDeviceType",
+  "webDeployment",
+  "connectionMethod",
+] as const;
+
 const PLAUSIBLE_EVENT_PROPERTIES = {
   "server.boot.heartbeat": ["threadCount", "projectCount"],
   "thread.created": ["runtimeMode", "interactionMode"],
-  "provider.turn.completed": ["provider", "outcome"],
+  "client.connected": CLIENT_EVENT_PROPERTIES,
+  "client.thread.started": CLIENT_EVENT_PROPERTIES,
+  "client.turn.requested": CLIENT_EVENT_PROPERTIES,
+  "provider.turn.completed": [
+    "provider",
+    "terminalStatus",
+    "interactionMode",
+    "runtimeMode",
+    "durationMs",
+    "mixedModels",
+    "usageStatus",
+    "usageScope",
+    "hasSubagents",
+    "inputTokens",
+    "cachedInputTokens",
+    "cacheCreationTokens",
+    "outputTokens",
+    "reasoningTokens",
+  ],
+  "provider.runtime_mode.changed": ["provider", "from", "to"],
+  "provider.thread.compacted": ["provider"],
   "provider.session.recovered": ["provider", "strategy"],
   "provider.session.stopped": ["provider"],
   "provider.session.started": ["provider", "runtimeMode", "hasResumeCursor", "hasCwd"],
