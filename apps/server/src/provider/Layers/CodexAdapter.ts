@@ -59,6 +59,7 @@ import {
 import { getCodexServiceTierOptionValue } from "../../codexModelOptions.ts";
 import * as Integrations from "../../integrations/IntegrationRegistry.ts";
 import { integrationToolJsonSchema } from "../../integrations/IntegrationTool.ts";
+import { IntegrationToolUnavailableError } from "../../integrations/IntegrationToolFailure.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import * as PreviewAutomationBroker from "../../mcp/PreviewAutomationBroker.ts";
 import {
@@ -2740,7 +2741,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
                   }
                   const canonicalName = dynamicToolByName.get(name);
                   if (!canonicalName || !integrationRegistry?.isToolAvailableSync(canonicalName)) {
-                    throw new Error("Dynamic tool is unavailable.");
+                    throw new IntegrationToolUnavailableError("Dynamic tool is unavailable.");
                   }
                   return integrationRegistry.invokeTool(canonicalName, toolArguments, {
                     signal,

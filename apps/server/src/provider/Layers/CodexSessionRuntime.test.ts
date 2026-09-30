@@ -6,12 +6,21 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import { describe } from "vite-plus/test";
-import { DEFAULT_MODEL, DEFAULT_TRITONAI_CODEX_MODEL, ThreadId } from "@t3tools/contracts";
+import {
+  DEFAULT_MODEL,
+  DEFAULT_TRITONAI_CODEX_MODEL,
+  IntegrationOperationError,
+  ThreadId,
+} from "@t3tools/contracts";
 import * as CodexErrors from "effect-codex-app-server/errors";
 import * as CodexRpc from "effect-codex-app-server/rpc";
 import * as EffectCodexSchema from "effect-codex-app-server/schema";
 
-import { INTEGRATION_TOOL_RESULT_OMITTED } from "../../integrations/IntegrationRegistry.ts";
+import {
+  INTEGRATION_TOOL_RESULT_OMITTED,
+  IntegrationProviderPublicError,
+} from "../../integrations/IntegrationRegistry.ts";
+import { IntegrationToolUnavailableError } from "../../integrations/IntegrationToolFailure.ts";
 import {
   buildCodexDeveloperInstructions,
   codexDefaultModeDeveloperInstructions,
@@ -23,6 +32,7 @@ import {
   computeDynamicToolFingerprint,
   describeMcpElicitation,
   dynamicToolApprovalRequired,
+  dynamicToolFailureResponse,
   dynamicToolInvocationAvailable,
   dynamicToolInvocationAllowed,
   dynamicToolResultResponse,
@@ -204,6 +214,41 @@ describe("integration write-tool approval", () => {
         },
       ],
     });
+  });
+
+  it("tells the agent why a dynamic tool call failed only through safe errors", () => {
+    const failureText = (error: unknown) => {
+      const response = dynamicToolFailureResponse(error);
+      NodeAssert.equal(response.success, false);
+      const [item] = response.contentItems;
+      return item?.type === "inputText" ? item.text : undefined;
+    };
+    NodeAssert.equal(
+      failureText(
+        new IntegrationOperationError({
+          code: "invalid_input",
+          message:
+            'Input for integration tool n8n.update_workflow did not match its declared schema: operations[0].type: Expected "updateNodeParameters"',
+        }),
+      ),
+      'Integration tool call failed (invalid_input): Input for integration tool n8n.update_workflow did not match its declared schema: operations[0].type: Expected "updateNodeParameters"',
+    );
+    NodeAssert.equal(
+      failureText(new IntegrationProviderPublicError("Workflow wf-1 was not found.")),
+      "Integration tool call failed: Workflow wf-1 was not found.",
+    );
+    NodeAssert.equal(
+      failureText(new Error("401 from https://n8n.invalid?token=SECRET_TOKEN")),
+      "Tool call failed.",
+    );
+    NodeAssert.equal(
+      failureText({ _tag: "IntegrationProviderPublicError", message: "SECRET_TOKEN" }),
+      "Tool call failed.",
+    );
+    NodeAssert.equal(
+      failureText(new IntegrationToolUnavailableError("Dynamic tool is unavailable.")),
+      "Dynamic tool is unavailable.",
+    );
   });
 
   it("uses the selected runtime mode as the write-tool approval contract", () => {
