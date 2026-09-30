@@ -11,6 +11,7 @@ import {
   type IntegrationSummary,
   type IntegrationsListResult,
 } from "@t3tools/contracts";
+import { compareSemverVersions } from "@t3tools/shared/semver";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -1870,8 +1871,21 @@ export class RegistryRuntime {
         if (this.#closing || options.signal?.aborted || this.#isRevoking(manifest.id)) return;
         if (this.#catalog.get(manifest.id) !== integration || !provider?.prepare) return;
         if (!ownRecordValue(this.#state.installed, manifest.id)?.enabled) return;
-        if (this.#summaries.get(manifest.id)?.connectionState !== "connected") return;
+        // n8n 1.1.0 is the first shipped bundle with durable rotation and bounded cleanup.
+        // Keep an older Installer composition from activating background refresh prematurely.
+        if (manifest.id === "n8n" && compareSemverVersions(manifest.version, "1.1.0") < 0) return;
+        if (this.#faultedProviders.has(provider)) return;
         if (this.#activeProviderLifecycleWork.has(provider)) return;
+        if (this.#summaries.get(manifest.id)?.connectionState === "error") {
+          await this.#summarize(integration).catch(() => undefined);
+          if (this.#closing || options.signal?.aborted || this.#isRevoking(manifest.id)) return;
+          if (
+            this.#faultedProviders.has(provider) ||
+            this.#activeProviderLifecycleWork.has(provider)
+          )
+            return;
+        }
+        if (this.#summaries.get(manifest.id)?.connectionState !== "connected") return;
         const lastPreparedAt = this.#providerLastPreparedAt.get(provider);
         if (lastPreparedAt !== undefined && now - lastPreparedAt < options.idleThresholdMs) return;
         try {

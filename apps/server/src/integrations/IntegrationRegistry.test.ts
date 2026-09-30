@@ -1328,6 +1328,99 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
+  it("reobserves a transient status error before the next keepalive", async () => {
+    const root = await NodeFSP.mkdtemp(
+      NodePath.join(NodeOS.tmpdir(), "tritonai-keepalive-status-retry-"),
+    );
+    const state: ProviderState = {
+      status: {
+        state: "connected",
+        accountLabel: "Fixture",
+        grantedCapabilities: ["fixture.read"],
+        message: null,
+      },
+      credential: "test-credential",
+      disconnectFails: false,
+    };
+    let prepareCalls = 0;
+    let failStatus = false;
+    const base = provider("test-fixture-provider", state);
+    const implementation: IntegrationProvider = {
+      ...base,
+      prepare: async () => {
+        prepareCalls += 1;
+        if (prepareCalls === 1) failStatus = true;
+      },
+      status: async () => {
+        if (failStatus) {
+          failStatus = false;
+          throw new Error("Temporary status failure.");
+        }
+        return base.status();
+      },
+    };
+    const registry = new RegistryRuntime(root, [packaged(fixtureManifest, implementation)]);
+    try {
+      await registry.install(fixtureManifest.id);
+      await registry.refreshIdleCredentials({ idleThresholdMs: 0 });
+      expect((await registry.snapshot()).integrations[0]?.connectionState).toBe("error");
+      await expect(registry.refreshIdleCredentials({ idleThresholdMs: 0 })).resolves.toEqual([
+        fixtureManifest.id,
+      ]);
+      expect(prepareCalls).toBe(2);
+      expect((await registry.snapshot()).integrations[0]?.connectionState).toBe("connected");
+    } finally {
+      await registry.close();
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ["1.0.0", false],
+    ["1.1.0-rc.1", false],
+    ["1.1.0", true],
+    ["1.1.0+build.1", true],
+    ["1.2.0", true],
+    ["2.0.0", true],
+  ])("gates n8n keepalive on the fixed plugin version (%s)", async (version, enabled) => {
+    const root = await NodeFSP.mkdtemp(
+      NodePath.join(NodeOS.tmpdir(), "tritonai-n8n-keepalive-version-"),
+    );
+    const manifest: IntegrationManifest = {
+      ...fixtureManifest,
+      id: "n8n",
+      version: version as string,
+    };
+    const state: ProviderState = {
+      status: {
+        state: "connected",
+        accountLabel: "Fixture",
+        grantedCapabilities: ["fixture.read"],
+        message: null,
+      },
+      credential: "test-credential",
+      disconnectFails: false,
+    };
+    let prepareCalls = 0;
+    const implementation: IntegrationProvider = {
+      ...provider("test-fixture-provider", state),
+      prepare: async () => {
+        prepareCalls += 1;
+      },
+    };
+    const registry = new RegistryRuntime(root, [packaged(manifest, implementation)]);
+    try {
+      await registry.install(manifest.id);
+      await expect(registry.refreshIdleCredentials({ idleThresholdMs: 0 })).resolves.toEqual(
+        enabled ? ["n8n"] : [],
+      );
+      expect(prepareCalls).toBe(enabled ? 1 : 0);
+    } finally {
+      await registry.close();
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("skips credential keepalive for integrations that are not connected", async () => {
     const root = await NodeFSP.mkdtemp(
       NodePath.join(NodeOS.tmpdir(), "tritonai-credential-keepalive-idle-"),

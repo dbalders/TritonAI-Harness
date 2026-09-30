@@ -49,8 +49,8 @@ const makeIntegrationCredentialKeepalive = (options?: IntegrationCredentialKeepa
       const registry = getIntegrationRegistryOptional();
       if (!registry) return;
 
-      const refreshed = yield* Effect.promise(() =>
-        registry.refreshIdleCredentials({ idleThresholdMs }),
+      const refreshed = yield* Effect.promise((signal) =>
+        registry.refreshIdleCredentials({ idleThresholdMs, signal }),
       );
 
       if (refreshed.length > 0) {
