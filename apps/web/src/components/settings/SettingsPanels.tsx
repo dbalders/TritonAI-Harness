@@ -2,6 +2,7 @@ import { ComputerUseSetting } from "./ComputerUseSetting";
 import { ArchiveIcon, ArchiveX, ChevronRightIcon, LoaderIcon, SettingsIcon } from "lucide-react";
 import { Spinner } from "~/components/ui/spinner";
 import { NotificationSettings } from "./NotificationSettings";
+import { MemorySettingsSection } from "./MemorySettings";
 import { Link, useNavigate } from "@tanstack/react-router";
 import type { CSSProperties, ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -3184,6 +3185,8 @@ export function GeneralSettingsPanel() {
           }
         />
       </SettingsSection>
+
+      <MemorySettingsSection />
 
       <SettingsSection id="about" title="About">
         {isElectron || HOSTED_APP_CHANNEL ? (

@@ -416,6 +416,40 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGeneration", (it) => {
     ),
   );
 
+  it.effect("summarizes a day of activity and drops empty bullets", () =>
+    withFakeCodexEnv(
+      {
+        output: JSON.stringify({
+          overview: "  Fixed login.  ",
+          projects: [
+            { project: " Acme App ", workedOn: ["Fixed redirect.", "  "], recent: " Login " },
+          ],
+          decisions: ["", "Keep cookie name."],
+          openLoops: ["Verify in staging."],
+        }),
+        stdinMustContain: "- Acme App",
+      },
+      (textGeneration) =>
+        Effect.gen(function* () {
+          const generated = yield* textGeneration.generateDailyMemory!({
+            cwd: process.cwd(),
+            day: "2026-09-28",
+            projectNames: ["Acme App"],
+            activity: "## Thread: Fix login",
+            inboxNotes: "",
+            modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+          });
+
+          expect(generated).toEqual({
+            overview: "Fixed login.",
+            projects: [{ project: "Acme App", workedOn: ["Fixed redirect."], recent: "Login" }],
+            decisions: ["Keep cookie name."],
+            openLoops: ["Verify in staging."],
+          });
+        }),
+    ),
+  );
+
   it.effect("returns the refinement signal for an unresolved subject", () =>
     withFakeCodexEnv(
       { output: JSON.stringify({ title: "Investigate issue", needsRefinement: true }) },

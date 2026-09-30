@@ -149,6 +149,7 @@ import * as ResourceMonitorBinary from "./resourceTelemetry/ResourceMonitorBinar
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 import * as UsageService from "./usage/UsageService.ts";
+import * as DailyMemory from "./memory/DailyMemory.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
 import {
   clearPersistedServerRuntimeState,
@@ -562,6 +563,8 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
 );
 
 const RuntimeDependenciesLive = TritonAiCommonsAction.runtimeLayer.pipe(
+  // Memory reads threads and calls text generation, so it sits above the core.
+  Layer.provideMerge(DailyMemory.layer),
   Layer.provideMerge(RuntimeCoreDependenciesLive),
   // Misc.
   Layer.provideMerge(BackgroundLayerLive),

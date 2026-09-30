@@ -395,6 +395,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["generated thread titles source control content default provider"],
   },
   {
+    id: "memory",
+    title: "Memory",
+    to: "/settings/general",
+    searchTerms: ["daily notes summary vault obsidian remember past work hivemind skill"],
+    environmentOnly: true,
+  },
+  {
     id: "diagnostics",
     title: "Diagnostics",
     to: "/settings/general",

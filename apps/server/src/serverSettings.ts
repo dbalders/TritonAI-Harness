@@ -1173,6 +1173,7 @@ const make = (
           yield* writeSettingsAtomically(restoredSettings);
         } else {
           yield* Ref.set(rawDocumentRef, {});
+          yield* writeSettingsAtomically(restoredSettings);
         }
         return restoredSettings;
       }

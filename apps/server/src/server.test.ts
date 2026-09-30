@@ -120,6 +120,7 @@ import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as EnvironmentTheme from "./environmentTheme.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
+import * as DailyMemory from "./memory/DailyMemory.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
@@ -794,6 +795,17 @@ const buildAppUnderTest = (options?: {
             streamChanges: Stream.make([]),
             refresh: Effect.void,
             ...options?.layers?.usageLimitSources,
+          }),
+          Layer.mock(DailyMemory.DailyMemory)({
+            runCatchUp: Effect.void,
+            getStatus: Effect.succeed({
+              enabled: false,
+              directoryPath: "/tmp/t3-memory",
+              generalDirectoryPath: "/tmp/t3-memory/general",
+              state: "disabled",
+              lastSummarizedDay: null,
+              message: null,
+            }),
           }),
         ),
       ),

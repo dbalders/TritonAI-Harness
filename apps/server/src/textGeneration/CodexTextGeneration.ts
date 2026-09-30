@@ -25,6 +25,7 @@ import * as TextGeneration from "./TextGeneration.ts";
 import {
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
+  buildDailyMemoryPrompt,
   buildPrContentPrompt,
   buildThreadTitlePrompt,
 } from "./TextGenerationPrompts.ts";
@@ -47,6 +48,15 @@ import {
 } from "../provider/Drivers/TritonAiCodexConfig.ts";
 
 const CODEX_TIMEOUT_MS = 180_000;
+// A day of activity is a much larger prompt than a title or commit message.
+const DAILY_MEMORY_TIMEOUT_MS = 600_000;
+
+type CodexTextGenerationOperation =
+  | "generateCommitMessage"
+  | "generatePrContent"
+  | "generateBranchName"
+  | "generateThreadTitle"
+  | "generateDailyMemory";
 const encodeJsonString = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 /**
  * Build a Codex text-generation closure bound to a specific `CodexSettings`
@@ -108,11 +118,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
     fileSystem.remove(filePath).pipe(Effect.catch(() => Effect.void));
 
   const encodeJsonForOperation = (
-    operation:
-      | "generateCommitMessage"
-      | "generatePrContent"
-      | "generateBranchName"
-      | "generateThreadTitle",
+    operation: CodexTextGenerationOperation,
     value: unknown,
   ): Effect.Effect<string, TextGenerationError> =>
     encodeJsonString(value).pipe(
@@ -175,18 +181,16 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
     imagePaths = [],
     cleanupPaths = [],
     modelSelection,
+    timeoutMs = CODEX_TIMEOUT_MS,
   }: {
-    operation:
-      | "generateCommitMessage"
-      | "generatePrContent"
-      | "generateBranchName"
-      | "generateThreadTitle";
+    operation: CodexTextGenerationOperation;
     cwd: string;
     prompt: string;
     outputSchemaJson: S;
     imagePaths?: ReadonlyArray<string>;
     cleanupPaths?: ReadonlyArray<string>;
     modelSelection: ModelSelection;
+    timeoutMs?: number;
   }): Effect.fn.Return<S["Type"], TextGenerationError, S["DecodingServices"]> {
     const schemaJson = yield* encodeJsonForOperation(
       operation,
@@ -296,7 +300,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
     return yield* Effect.gen(function* () {
       yield* runCodexCommand().pipe(
         Effect.scoped,
-        Effect.timeoutOption(CODEX_TIMEOUT_MS),
+        Effect.timeoutOption(timeoutMs),
         Effect.flatMap(
           Option.match({
             onNone: () =>
@@ -442,10 +446,42 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       } satisfies TextGeneration.ThreadTitleGenerationResult;
     });
 
+  const generateDailyMemory = Effect.fn("CodexTextGeneration.generateDailyMemory")(function* (
+    input: TextGeneration.DailyMemoryGenerationInput,
+  ) {
+    const { prompt, outputSchema } = buildDailyMemoryPrompt({
+      day: input.day,
+      projectNames: input.projectNames,
+      activity: input.activity,
+      inboxNotes: input.inboxNotes,
+    });
+
+    const generated = yield* runCodexJson({
+      operation: "generateDailyMemory",
+      cwd: input.cwd,
+      prompt,
+      outputSchemaJson: outputSchema,
+      modelSelection: input.modelSelection,
+      timeoutMs: DAILY_MEMORY_TIMEOUT_MS,
+    });
+
+    return {
+      overview: generated.overview.trim(),
+      projects: generated.projects.map((entry) => ({
+        project: entry.project.trim(),
+        workedOn: entry.workedOn.map((line) => line.trim()).filter((line) => line.length > 0),
+        recent: entry.recent.trim(),
+      })),
+      decisions: generated.decisions.map((line) => line.trim()).filter((line) => line.length > 0),
+      openLoops: generated.openLoops.map((line) => line.trim()).filter((line) => line.length > 0),
+    } satisfies TextGeneration.DailyMemoryGenerationResult;
+  });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
+    generateDailyMemory,
   } satisfies TextGeneration.TextGeneration["Service"];
 });
