@@ -89,7 +89,9 @@ export class DailyMemory extends Context.Service<
   {
     /** Runs one catch-up pass now. Safe to call while another pass runs; it waits. */
     readonly runCatchUp: Effect.Effect<void>;
-    readonly getStatus: Effect.Effect<ServerMemoryStatus>;
+    readonly getStatus: Effect.Effect<Omit<ServerMemoryStatus, "sync">>;
+    /** Runs `effect` while no catch-up pass is writing to the vault. */
+    readonly exclusive: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
   }
 >()("t3/memory/DailyMemory") {}
 
@@ -832,10 +834,10 @@ export const make = Effect.gen(function* () {
       state: enabled ? current.state : "disabled",
       lastSummarizedDay: progress?.lastSummarizedDay ?? null,
       message: enabled ? current.message : null,
-    } satisfies ServerMemoryStatus;
+    } satisfies Omit<ServerMemoryStatus, "sync">;
   });
 
-  return DailyMemory.of({ runCatchUp, getStatus });
+  return DailyMemory.of({ runCatchUp, getStatus, exclusive: lock.withPermits(1) });
 });
 
 /** Runs catch-up after startup, every hour, and whenever Memory is switched. */

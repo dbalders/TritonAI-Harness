@@ -44,6 +44,10 @@ function sha256(contents: string): string {
   return NodeCrypto.createHash("sha256").update(contents).digest("hex");
 }
 
+export function sha256Bytes(contents: Uint8Array): string {
+  return NodeCrypto.createHash("sha256").update(contents).digest("hex");
+}
+
 export interface GeneralVaultPaths {
   readonly root: string;
   readonly guide: string;

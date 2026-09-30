@@ -36,6 +36,13 @@ const managedPluginComposition = managedPluginBuildInput?.composition ?? null;
 const managedPluginConfiguration = managedPluginBuildInput
   ? readManagedPluginBuildConfiguration(managedPluginBuildInput.composition, repoEnv)
   : null;
+// Memory sync signs in with the Microsoft 365 plugin's Entra app. A build
+// without the plugin composition can name the app directly.
+const microsoftOAuthConfiguration =
+  managedPluginConfiguration?.["microsoft-365"] ??
+  (repoEnv.TRITONAI_MICROSOFT_OAUTH_JSON?.trim()
+    ? (JSON.parse(repoEnv.TRITONAI_MICROSOFT_OAUTH_JSON) as unknown)
+    : null);
 const cliBuildChannel = /^[^-+]+-(?:nightly|preview)\./.test(packageJson.version)
   ? "nightly"
   : "latest";
@@ -161,6 +168,7 @@ export default mergeConfig(
         __TRITONAI_BUILD_SUPPORTS_INTEGRATION_FIXTURES__: "false",
         __TRITONAI_BUILD_PLUGIN_COMPOSITION__: JSON.stringify(managedPluginComposition),
         __TRITONAI_BUILD_PLUGIN_CONFIGURATION__: JSON.stringify(managedPluginConfiguration),
+        __TRITONAI_BUILD_MICROSOFT_OAUTH__: JSON.stringify(microsoftOAuthConfiguration),
         __TRITONAI_BUILD_MANAGED_CONFIG__: JSON.stringify(managedHarnessConfig.config),
         __TRITONAI_BUILD_MANAGED_CONFIG_DIGEST__: JSON.stringify(managedHarnessConfig.digest),
         __T3CODE_BUILD_RELAY_URL__: JSON.stringify(repoEnv.T3CODE_RELAY_URL?.trim() ?? ""),

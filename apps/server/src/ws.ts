@@ -178,7 +178,7 @@ import * as GitHubCli from "./sourceControl/GitHubCli.ts";
 import * as GitLabCli from "./sourceControl/GitLabCli.ts";
 import { transcribeVoice } from "./voiceTranscription.ts";
 import { fetchTritonAiUsage } from "./tritonAiUsage.ts";
-import * as DailyMemory from "./memory/DailyMemory.ts";
+import * as MemorySync from "./memory/sync/MemorySync.ts";
 import * as ForgejoCli from "./sourceControl/ForgejoCli.ts";
 import * as SourceControlProviderRegistry from "./sourceControl/SourceControlProviderRegistry.ts";
 import * as Integrations from "./integrations/IntegrationRegistry.ts";
@@ -600,7 +600,7 @@ const makeWsRpcLayer = (
       const keybindings = yield* Keybindings.Keybindings;
       const environmentTheme = yield* EnvironmentTheme.EnvironmentThemeService;
       const usageLimitSources = yield* UsageLimitSources.UsageLimitSources;
-      const dailyMemory = yield* DailyMemory.DailyMemory;
+      const memorySync = yield* MemorySync.MemorySync;
       const externalLauncher = yield* ExternalLauncher.ExternalLauncher;
       const remoteOpenTargets = yield* RemoteOpenTargets.RemoteOpenTargets;
       const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
@@ -2606,9 +2606,29 @@ const makeWsRpcLayer = (
             "rpc.aggregate": "server",
           }),
         [WS_METHODS.serverGetMemoryStatus]: (_input) =>
-          observeRpcEffect(WS_METHODS.serverGetMemoryStatus, dailyMemory.getStatus, {
+          observeRpcEffect(WS_METHODS.serverGetMemoryStatus, memorySync.getStatus, {
             "rpc.aggregate": "server",
           }),
+        [WS_METHODS.serverStartMemorySync]: (_input) =>
+          observeRpcEffect(WS_METHODS.serverStartMemorySync, memorySync.start, {
+            "rpc.aggregate": "server",
+          }),
+        [WS_METHODS.serverPollMemorySync]: ({ flowId }) =>
+          observeRpcEffect(WS_METHODS.serverPollMemorySync, memorySync.poll(flowId), {
+            "rpc.aggregate": "server",
+          }),
+        [WS_METHODS.serverSyncMemoryNow]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.serverSyncMemoryNow,
+            memorySync.syncNow.pipe(Effect.andThen(memorySync.getStatus)),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.serverSignOutMemorySync]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.serverSignOutMemorySync,
+            memorySync.signOut.pipe(Effect.andThen(memorySync.getStatus)),
+            { "rpc.aggregate": "server" },
+          ),
         [WS_METHODS.serverDiscoverSourceControl]: (_input) =>
           observeRpcEffect(
             WS_METHODS.serverDiscoverSourceControl,
