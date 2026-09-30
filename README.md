@@ -64,6 +64,7 @@ Someone can open the app, connect a work source, complete a real task, and come 
 | --------------------------------------- | ---------------------------------------------------- |
 | Give the agent a task or attach files   | [Messages and context](docs/user/composer.md)        |
 | Organize and continue my work           | [Working with threads](docs/user/thread-sidebar.md)  |
+| Understand and manage saved context     | [Memory](docs/user/memory.md)                        |
 | Choose when the agent asks for approval | [Permission modes](docs/user/permission-modes.md)    |
 | Use the app from another device         | [Remote access](docs/user/remote-access.md)          |
 | Enable interaction with local apps      | [Computer use](docs/user/computer-use.md)            |

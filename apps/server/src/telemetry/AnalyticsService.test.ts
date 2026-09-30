@@ -4,6 +4,7 @@ import { assert, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Scope from "effect/Scope";
 import * as HttpClient from "effect/unstable/http/HttpClient";
@@ -91,6 +92,34 @@ it.layer(NodeServices.layer)("AnalyticsService test", (it) => {
               : {}),
           });
         }
+        yield* analytics.record("provider.turn.completed", {
+          provider: "codex",
+          terminalStatus: "completed",
+          interactionMode: "default",
+          runtimeMode: "full-access",
+          durationMs: 1_234,
+          mixedModels: false,
+          usageStatus: "complete",
+          usageScope: "main_agent",
+          hasSubagents: false,
+          inputTokens: 100,
+          cachedInputTokens: 40,
+          cacheCreationTokens: 0,
+          outputTokens: 20,
+          reasoningTokens: 5,
+          model: "private-model-name",
+          effort: "high",
+        });
+        yield* analytics.record("client.turn.requested", {
+          surface: "desktop",
+          appVersion: "1.2.3",
+          clientAppVersion: "1.2.3",
+          clientOs: "macOS",
+          clientDeviceType: "desktop",
+          connectionMethod: "direct",
+          clientBrowser: "private-browser",
+          deviceModel: "private-device-model",
+        });
         const inheritedProperties = Object.assign(
           Object.create({ provider: "private-inherited-provider" }) as Record<string, unknown>,
           { interactionMode: "full" },
@@ -117,7 +146,11 @@ it.layer(NodeServices.layer)("AnalyticsService test", (it) => {
         yield* analytics.flush;
       }).pipe(Effect.provide(runtimeLayer));
 
-      assert.equal(capturedRequests.length, 48);
+      assert.equal(capturedRequests.length, 50);
+      // Plausible rejects events with more than 30 custom props.
+      assert.isTrue(
+        capturedRequests.every((request) => Object.keys(request.body?.props ?? {}).length <= 30),
+      );
       assert.equal(
         capturedRequests.every((request) => request.path === "/api/event"),
         true,
@@ -154,6 +187,35 @@ it.layer(NodeServices.layer)("AnalyticsService test", (it) => {
       assert.notProperty(firstRequest?.body?.props ?? {}, "nestedValueIsDropped");
       assert.notProperty(firstRequest?.body?.props ?? {}, "nonFiniteValueIsDropped");
 
+      // Every event carries the same random install ID.
+      const installIds = new Set(capturedRequests.map((request) => request.body?.props?.aid));
+      assert.equal(installIds.size, 1);
+      assert.match(
+        String([...installIds][0]),
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      );
+
+      const turnCompletedRequest = capturedRequests.find(
+        (request) => request.body?.name === "provider.turn.completed",
+      );
+      assert.equal(turnCompletedRequest?.body?.props?.terminalStatus, "completed");
+      assert.equal(turnCompletedRequest?.body?.props?.durationMs, 1_234);
+      assert.equal(turnCompletedRequest?.body?.props?.inputTokens, 100);
+      assert.equal(turnCompletedRequest?.body?.props?.reasoningTokens, 5);
+      assert.equal(turnCompletedRequest?.body?.props?.usageStatus, "complete");
+      assert.notProperty(turnCompletedRequest?.body?.props ?? {}, "model");
+      assert.notProperty(turnCompletedRequest?.body?.props ?? {}, "effort");
+
+      const clientTurnRequest = capturedRequests.find(
+        (request) => request.body?.name === "client.turn.requested",
+      );
+      assert.equal(clientTurnRequest?.body?.props?.surface, "desktop");
+      assert.equal(clientTurnRequest?.body?.props?.clientAppVersion, "1.2.3");
+      assert.equal(clientTurnRequest?.body?.props?.clientOs, "macOS");
+      assert.equal(clientTurnRequest?.body?.props?.connectionMethod, "direct");
+      assert.notProperty(clientTurnRequest?.body?.props ?? {}, "clientBrowser");
+      assert.notProperty(clientTurnRequest?.body?.props ?? {}, "deviceModel");
+
       const inheritedPropertyRequest = capturedRequests.at(-3);
       assert.equal(inheritedPropertyRequest?.body?.name, "provider.turn.sent");
       assert.equal(inheritedPropertyRequest?.body?.props?.interactionMode, "full");
@@ -169,6 +231,38 @@ it.layer(NodeServices.layer)("AnalyticsService test", (it) => {
       const privateProviderRequest = capturedRequests.at(-1);
       assert.equal(privateProviderRequest?.body?.name, "provider.turn.sent");
       assert.equal(privateProviderRequest?.body?.props?.provider, "other");
+    }),
+  );
+
+  it.effect("does not create an install ID when telemetry is disabled", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-telemetry-disabled-",
+      });
+      const serverConfigLayer = ServerConfig.ServerConfig.layerTest(process.cwd(), baseDir);
+      const runtimeLayer = AnalyticsService.layer.pipe(
+        Layer.provideMerge(serverConfigLayer),
+        Layer.provide(
+          ConfigProvider.layer(ConfigProvider.fromUnknown({ T3CODE_TELEMETRY_ENABLED: false })),
+        ),
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.succeed(HostProcessPlatform, "linux"),
+            Layer.succeed(HostProcessArchitecture, "arm64"),
+          ),
+        ),
+        Layer.provideMerge(NodeHttpServer.layerTest),
+      );
+
+      const anonymousIdPath = yield* Effect.gen(function* () {
+        const analytics = yield* AnalyticsService.AnalyticsService;
+        yield* analytics.record("server.boot.heartbeat", { threadCount: 1, projectCount: 1 });
+        yield* analytics.flush;
+        return (yield* ServerConfig.ServerConfig).anonymousIdPath;
+      }).pipe(Effect.provide(runtimeLayer));
+
+      assert.isFalse(yield* fileSystem.exists(anonymousIdPath));
     }),
   );
 

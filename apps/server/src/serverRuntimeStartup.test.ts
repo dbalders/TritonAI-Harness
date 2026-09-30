@@ -18,9 +18,11 @@ import * as Stream from "effect/Stream";
 
 import * as ServerConfig from "./config.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
+import { PersistenceSqlError } from "./persistence/Errors.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as ServerSettings from "./serverSettings.ts";
+import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 
 it.effect("automatic pull only updates enabled, behind, clean default-branch checkouts", () =>
@@ -515,5 +517,54 @@ it.effect("completeAutoBootstrapWelcome settles an empty bootstrap result", () =
     const completion = yield* ServerRuntimeStartup.completeAutoBootstrapWelcome(Effect.succeed({}));
 
     assert.deepStrictEqual(completion, { bootstrapStatus: "complete" });
+  }),
+);
+
+it.effect("startup heartbeat omits projection counts it could not read", () =>
+  Effect.gen(function* () {
+    const recordHeartbeat = (
+      getCounts: () => ReturnType<
+        ProjectionSnapshotQuery.ProjectionSnapshotQuery["Service"]["getCounts"]
+      >,
+    ) =>
+      Effect.gen(function* () {
+        const recorded: Array<Readonly<Record<string, unknown>> | undefined> = [];
+        yield* ServerRuntimeStartup.recordStartupHeartbeat.pipe(
+          Effect.provideService(
+            AnalyticsService.AnalyticsService,
+            AnalyticsService.AnalyticsService.of({
+              record: (_event, properties) => Effect.sync(() => recorded.push(properties)),
+              flush: Effect.void,
+            }),
+          ),
+          Effect.provideService(ProjectionSnapshotQuery.ProjectionSnapshotQuery, {
+            getCounts,
+          } as unknown as ProjectionSnapshotQuery.ProjectionSnapshotQuery["Service"]),
+        );
+        return recorded;
+      });
+
+    assert.deepEqual(
+      yield* recordHeartbeat(() =>
+        Effect.succeed({
+          threadCount: 3,
+          projectCount: 2,
+          firstThreadCreatedAt: "2026-03-01T00:00:05.000Z",
+        }),
+      ),
+      [{ threadCount: 3, projectCount: 2, firstThreadMonth: "2026-03" }],
+    );
+    assert.deepEqual(
+      yield* recordHeartbeat(() =>
+        Effect.succeed({ threadCount: 0, projectCount: 0, firstThreadCreatedAt: null }),
+      ),
+      [{ threadCount: 0, projectCount: 0 }],
+    );
+    assert.deepEqual(
+      yield* recordHeartbeat(() =>
+        Effect.fail(new PersistenceSqlError({ operation: "ProjectionSnapshotQuery.getCounts" })),
+      ),
+      [{}],
+    );
   }),
 );

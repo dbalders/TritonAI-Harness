@@ -50,8 +50,16 @@ export interface ServerDerivedPaths {
   readonly providerEventLogPath: string;
   readonly terminalLogsDir: string;
   readonly environmentIdPath: string;
+  /** Random install ID attached to product analytics; independent of environmentIdPath. */
+  readonly anonymousIdPath: string;
   readonly serverRuntimeStatePath: string;
   readonly secretsDir: string;
+  /**
+   * Parent folder for memory systems. Each system owns a subfolder, starting
+   * with `general`. Installed apps keep it beside `userdata` so it is easy to
+   * find; dev runs keep it inside their own state directory.
+   */
+  readonly memoryDir: string;
 }
 
 export interface DeriveServerPathsOptions {
@@ -120,10 +128,8 @@ export const deriveServerPaths = Effect.fn(function* (
   options: DeriveServerPathsOptions = {},
 ): Effect.fn.Return<ServerDerivedPaths, never, Path.Path> {
   const { join } = yield* Path.Path;
-  const stateDir = join(
-    baseDir,
-    devUrl !== undefined && !options.baseDirIsExplicit ? "dev" : "userdata",
-  );
+  const isDevState = devUrl !== undefined && !options.baseDirIsExplicit;
+  const stateDir = join(baseDir, isDevState ? "dev" : "userdata");
   const dbPath = join(stateDir, "state.sqlite");
   const attachmentsDir = join(stateDir, "attachments");
   const logsDir = join(stateDir, "logs");
@@ -146,8 +152,10 @@ export const deriveServerPaths = Effect.fn(function* (
     providerEventLogPath: join(providerLogsDir, "events.log"),
     terminalLogsDir: join(logsDir, "terminals"),
     environmentIdPath: join(stateDir, "environment-id"),
+    anonymousIdPath: join(stateDir, "anonymous-id"),
     serverRuntimeStatePath: join(stateDir, "server-runtime.json"),
     secretsDir: join(stateDir, "secrets"),
+    memoryDir: isDevState ? join(stateDir, "memory") : join(baseDir, "memory"),
   };
 });
 

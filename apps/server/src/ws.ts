@@ -178,6 +178,7 @@ import * as GitHubCli from "./sourceControl/GitHubCli.ts";
 import * as GitLabCli from "./sourceControl/GitLabCli.ts";
 import { transcribeVoice } from "./voiceTranscription.ts";
 import { fetchTritonAiUsage } from "./tritonAiUsage.ts";
+import * as DailyMemory from "./memory/DailyMemory.ts";
 import * as ForgejoCli from "./sourceControl/ForgejoCli.ts";
 import * as SourceControlProviderRegistry from "./sourceControl/SourceControlProviderRegistry.ts";
 import * as Integrations from "./integrations/IntegrationRegistry.ts";
@@ -599,6 +600,7 @@ const makeWsRpcLayer = (
       const keybindings = yield* Keybindings.Keybindings;
       const environmentTheme = yield* EnvironmentTheme.EnvironmentThemeService;
       const usageLimitSources = yield* UsageLimitSources.UsageLimitSources;
+      const dailyMemory = yield* DailyMemory.DailyMemory;
       const externalLauncher = yield* ExternalLauncher.ExternalLauncher;
       const remoteOpenTargets = yield* RemoteOpenTargets.RemoteOpenTargets;
       const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
@@ -2601,6 +2603,10 @@ const makeWsRpcLayer = (
           }),
         [WS_METHODS.serverGetTritonAiUsage]: (_input) =>
           observeRpcEffect(WS_METHODS.serverGetTritonAiUsage, fetchTritonAiUsage(), {
+            "rpc.aggregate": "server",
+          }),
+        [WS_METHODS.serverGetMemoryStatus]: (_input) =>
+          observeRpcEffect(WS_METHODS.serverGetMemoryStatus, dailyMemory.getStatus, {
             "rpc.aggregate": "server",
           }),
         [WS_METHODS.serverDiscoverSourceControl]: (_input) =>

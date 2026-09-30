@@ -35,7 +35,9 @@ import type { ProjectionRepositoryError } from "../../persistence/Errors.ts";
 
 export interface ProjectionSnapshotCounts {
   readonly projectCount: number;
+  /** Includes deleted threads, so it only grows. */
   readonly threadCount: number;
+  readonly firstThreadCreatedAt: string | null;
 }
 
 export interface ProjectionSnapshotSequence {

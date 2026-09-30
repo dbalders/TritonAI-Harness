@@ -1,8 +1,9 @@
 /**
- * Privacy-friendly aggregate analytics delivered to Plausible.
+ * Pseudonymous product analytics delivered to Plausible.
  *
- * Buffers non-identifying product events in memory and sends them to the
- * TritonAI Plausible property over Effect's HTTP client.
+ * Buffers product events in memory and sends them to the TritonAI Plausible
+ * property over Effect's HTTP client. Events carry a random install ID (`aid`)
+ * so installs can be counted; see Identify.ts.
  *
  * @module AnalyticsService
  */
@@ -25,6 +26,7 @@ import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 
 import packageJson from "../../package.json" with { type: "json" };
 import * as ServerConfig from "../config.ts";
+import { getAnonymousInstallId } from "./Identify.ts";
 
 interface BufferedAnalyticsEvent {
   readonly event: string;
@@ -40,10 +42,42 @@ const TELEMETRY_RETRY_MAX_DELAY_MS = 5 * 60_000;
 
 const PUBLIC_PROVIDER_VALUES = new Set(["claudeAgent", "codex", "cursor", "grok", "opencode"]);
 
+// Plausible accepts at most 30 props per event, including the common props added in sendEvent.
+// Keep the largest entry at 20 or fewer.
+const CLIENT_EVENT_PROPERTIES = [
+  "surface",
+  "clientAppVersion",
+  "clientOs",
+  "clientOsMajorVersion",
+  "clientDeviceType",
+  "webDeployment",
+  "connectionMethod",
+] as const;
+
 const PLAUSIBLE_EVENT_PROPERTIES = {
-  "server.boot.heartbeat": ["threadCount", "projectCount"],
+  "server.boot.heartbeat": ["threadCount", "projectCount", "firstThreadMonth"],
   "thread.created": ["runtimeMode", "interactionMode"],
-  "provider.turn.completed": ["provider", "outcome"],
+  "client.connected": CLIENT_EVENT_PROPERTIES,
+  "client.thread.started": CLIENT_EVENT_PROPERTIES,
+  "client.turn.requested": CLIENT_EVENT_PROPERTIES,
+  "provider.turn.completed": [
+    "provider",
+    "terminalStatus",
+    "interactionMode",
+    "runtimeMode",
+    "durationMs",
+    "mixedModels",
+    "usageStatus",
+    "usageScope",
+    "hasSubagents",
+    "inputTokens",
+    "cachedInputTokens",
+    "cacheCreationTokens",
+    "outputTokens",
+    "reasoningTokens",
+  ],
+  "provider.runtime_mode.changed": ["provider", "from", "to"],
+  "provider.thread.compacted": ["provider"],
   "provider.session.recovered": ["provider", "strategy"],
   "provider.session.stopped": ["provider"],
   "provider.session.started": ["provider", "runtimeMode", "hasResumeCursor", "hasCwd"],
@@ -181,6 +215,10 @@ const makeWithOptions = (options: AnalyticsServiceOptions = {}) =>
     const hostArchitecture = yield* HostProcessArchitecture;
     const userAgent = `TritonAI-Harness/${packageJson.version}`;
     const eventUrl = `https://${telemetryConfig.plausibleSiteId}/`;
+    // Opted-out installs never create an ID file.
+    const installId = telemetryConfig.enabled
+      ? yield* getAnonymousInstallId
+      : Option.none<string>();
 
     const enqueueBufferedEvent = (
       event: string,
@@ -229,6 +267,7 @@ const makeWithOptions = (options: AnalyticsServiceOptions = {}) =>
           serverArch: hostArchitecture,
           serverAppVersion: packageJson.version,
           serverMode: serverConfig.mode,
+          ...(Option.isSome(installId) ? { aid: installId.value } : {}),
         },
       };
 

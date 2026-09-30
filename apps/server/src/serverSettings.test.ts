@@ -1129,6 +1129,77 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 
+  it.effect("turns Memory on for a new installation and keeps it on after reload", () =>
+    Effect.gen(function* () {
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+
+      assert.isTrue((yield* serverSettings.getSettings).memoryEnabled);
+
+      assert.isTrue(yield* fileSystem.exists(serverConfig.settingsPath));
+      yield* serverSettings.start;
+      assert.isTrue((yield* serverSettings.getSettings).memoryEnabled);
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
+  it.effect("turns Memory on for an installation with threads but no settings file", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const createdAt = "2026-08-25T00:00:00.000Z";
+      yield* sql`
+        INSERT INTO projection_projects (project_id, title, workspace_root, scripts_json, created_at, updated_at)
+        VALUES ('project-1', 'Acme App', '/code/acme', '[]', ${createdAt}, ${createdAt})
+      `;
+      yield* sql`
+        INSERT INTO projection_threads (thread_id, project_id, title, created_at, updated_at)
+        VALUES ('thread-1', 'project-1', 'Earlier work', ${createdAt}, ${createdAt})
+      `;
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      yield* serverSettings.start;
+
+      assert.isTrue((yield* serverSettings.getSettings).memoryEnabled);
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
+  it.effect("turns Memory on for an existing installation that never chose", () =>
+    Effect.gen(function* () {
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      yield* fileSystem.writeFileString(
+        serverConfig.settingsPath,
+        encodeUnknownJson({ addProjectBaseDirectory: "~/Development" }),
+      );
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      yield* serverSettings.start;
+
+      const settings = yield* serverSettings.getSettings;
+      assert.isTrue(settings.memoryEnabled);
+      assert.equal(settings.addProjectBaseDirectory, "~/Development");
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
+  it.effect("keeps an explicit Memory off choice through other settings changes and reload", () =>
+    Effect.gen(function* () {
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      yield* fileSystem.writeFileString(
+        serverConfig.settingsPath,
+        encodeUnknownJson({ memoryEnabled: false }),
+      );
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      yield* serverSettings.start;
+
+      assert.isFalse((yield* serverSettings.getSettings).memoryEnabled);
+      yield* serverSettings.updateSettings({ addProjectBaseDirectory: "~/Development" });
+      yield* serverSettings.start;
+      assert.isFalse((yield* serverSettings.getSettings).memoryEnabled);
+
+      const persisted = yield* fileSystem.readFileString(serverConfig.settingsPath);
+      assert.include(persisted, '"memoryEnabled": false');
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+
   it.effect("folds a legacy in-config enabled flag into the envelope on load", () =>
     Effect.gen(function* () {
       const serverConfig = yield* ServerConfig.ServerConfig;

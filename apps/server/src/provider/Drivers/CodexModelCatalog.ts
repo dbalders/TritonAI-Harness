@@ -8,6 +8,9 @@ import * as ProcessRunner from "../../processRunner.ts";
 
 const MANAGED_MODEL_CATALOG_FILE = "tritonai-model-catalog.json";
 const MODEL_TEMPLATE_SLUG = "gpt-5.2";
+// Codex routes approval auto-review to this model whenever the catalog lists it,
+// but TritonAI teams are not granted it. Without it, Codex reviews with the chat's model.
+const CODEX_AUTO_REVIEW_SLUG = "codex-auto-review";
 
 type JsonObject = Record<string, unknown>;
 
@@ -96,7 +99,9 @@ export function buildTritonAiCodexModelCatalog(
     throw new Error("Codex bundled model catalog did not contain a models array.");
   }
 
-  const models = parsed.models.filter(isJsonObject);
+  const models = parsed.models
+    .filter(isJsonObject)
+    .filter((model) => model.slug !== CODEX_AUTO_REVIEW_SLUG);
   const template =
     models.find((model) => model.slug === MODEL_TEMPLATE_SLUG) ??
     models.find((model) => model.tool_mode == null && model.use_responses_lite === false) ??

@@ -153,27 +153,28 @@ export const makeCommandGate = Effect.gen(function* () {
   } satisfies CommandGate;
 });
 
-const recordStartupHeartbeat = Effect.gen(function* () {
+export const recordStartupHeartbeat = Effect.gen(function* () {
   const analytics = yield* AnalyticsService.AnalyticsService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
 
-  const { threadCount, projectCount } = yield* projectionSnapshotQuery.getCounts().pipe(
+  // A failed count is omitted rather than reported as zero, which would read as an empty install.
+  const counts = yield* projectionSnapshotQuery.getCounts().pipe(
+    Effect.map(({ threadCount, projectCount, firstThreadCreatedAt }) => ({
+      threadCount,
+      projectCount,
+      // Month granularity dates an install's first use without a precise timestamp.
+      ...(firstThreadCreatedAt && /^\d{4}-\d{2}/.test(firstThreadCreatedAt)
+        ? { firstThreadMonth: firstThreadCreatedAt.slice(0, 7) }
+        : {}),
+    })),
     Effect.catch((cause) =>
       Effect.logWarning("failed to gather startup projection counts for telemetry", {
         cause,
-      }).pipe(
-        Effect.as({
-          threadCount: 0,
-          projectCount: 0,
-        }),
-      ),
+      }).pipe(Effect.as({})),
     ),
   );
 
-  yield* analytics.record("server.boot.heartbeat", {
-    threadCount,
-    projectCount,
-  });
+  yield* analytics.record("server.boot.heartbeat", counts);
 });
 
 const getAutoBootstrapThreadModelSelection = (): ModelSelection => ({

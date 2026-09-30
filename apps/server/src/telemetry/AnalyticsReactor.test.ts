@@ -4,12 +4,9 @@ import {
   CorrelationId,
   EventId,
   ProjectId,
-  ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
-  TurnId,
   type OrchestrationEvent,
-  type ProviderRuntimeEvent,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -20,14 +17,10 @@ import * as Stream from "effect/Stream";
 import { expect } from "vite-plus/test";
 
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
-import {
-  ProviderService,
-  type ProviderServiceShape,
-} from "../provider/Services/ProviderService.ts";
 import * as AnalyticsReactor from "./AnalyticsReactor.ts";
 import { AnalyticsService } from "./AnalyticsService.ts";
 
-it.effect("records canonical thread creation and turn completion without identifiers", () =>
+it.effect("records canonical thread creation without identifiers", () =>
   Effect.gen(function* () {
     const recorded: Array<{
       readonly event: string;
@@ -35,7 +28,6 @@ it.effect("records canonical thread creation and turn completion without identif
     }> = [];
     let flushCount = 0;
     const domainEvents = yield* PubSub.unbounded<OrchestrationEvent>();
-    const providerEvents = yield* PubSub.unbounded<ProviderRuntimeEvent>();
 
     const layer = AnalyticsReactor.layer.pipe(
       Layer.provideMerge(
@@ -68,11 +60,6 @@ it.effect("records canonical thread creation and turn completion without identif
             streamDomainEvents: Stream.fromPubSub(domainEvents),
           }),
         ),
-      ),
-      Layer.provideMerge(
-        Layer.succeed(ProviderService, {
-          streamEvents: Stream.fromPubSub(providerEvents),
-        } as ProviderServiceShape),
       ),
     );
     const scope = yield* Scope.make("sequential");
@@ -110,22 +97,6 @@ it.effect("records canonical thread creation and turn completion without identif
           updatedAt: "2026-07-17T00:00:00.000Z",
         },
       });
-      yield* PubSub.publish(providerEvents, {
-        type: "turn.completed",
-        eventId: EventId.make("event-turn-completed"),
-        provider: ProviderDriverKind.make("codex"),
-        providerInstanceId: ProviderInstanceId.make("private-provider-instance"),
-        threadId: ThreadId.make("thread-1"),
-        turnId: TurnId.make("turn-1"),
-        createdAt: "2026-07-17T00:01:00.000Z",
-        payload: {
-          state: "completed",
-          usage: { private: "usage" },
-          modelUsage: { private: "model-usage" },
-          totalCostUsd: 1.23,
-        },
-      });
-
       yield* Effect.yieldNow;
       yield* reactor.drain;
 
@@ -135,13 +106,6 @@ it.effect("records canonical thread creation and turn completion without identif
           properties: {
             runtimeMode: "full-access",
             interactionMode: "plan",
-          },
-        },
-        {
-          event: "provider.turn.completed",
-          properties: {
-            provider: "codex",
-            outcome: "completed",
           },
         },
       ]);

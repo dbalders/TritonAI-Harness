@@ -81,7 +81,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/keybindings": "Keybindings",
   "/settings/snap-shot": "SnapShots",
   "/settings/providers": "Runtime",
-  "/settings/integrations": "Integrations",
+  "/settings/integrations": "Browser & Devices",
   "/settings/skills": "Skills",
   "/settings/plugins": "Plugins",
   "/settings/source-control": "Source Control",
@@ -393,6 +393,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/general",
     scope: "project-defaults",
     searchTerms: ["generated thread titles source control content default provider"],
+  },
+  {
+    id: "memory",
+    title: "Memory",
+    to: "/settings/general",
+    searchTerms: ["daily notes summary vault obsidian remember past work hivemind skill"],
+    environmentOnly: true,
   },
   {
     id: "diagnostics",

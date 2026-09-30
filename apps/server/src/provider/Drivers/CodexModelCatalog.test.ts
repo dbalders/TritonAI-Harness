@@ -168,6 +168,22 @@ describe("CodexModelCatalog", () => {
     }
   });
 
+  it("drops the ungranted auto-review model so Codex reviews with the chat model", () => {
+    const catalog = JSON.parse(bundledCatalog) as { models: Array<Record<string, unknown>> };
+    catalog.models.push({ slug: "codex-auto-review", visibility: "hide" });
+
+    const result = JSON.parse(
+      buildTritonAiCodexModelCatalog(JSON.stringify(catalog), {
+        "api-glm-5.3": { name: "GLM 5.3", capabilities: { inputModalities: ["text"] } },
+      }),
+    ) as { models: Array<Record<string, unknown>> };
+
+    NodeAssert.deepStrictEqual(
+      result.models.map((model) => model.slug),
+      ["gpt-5.2", "gpt-5.5", "api-glm-5.3"],
+    );
+  });
+
   it("rejects malformed bundled catalog output", () => {
     NodeAssert.throws(
       () => buildTritonAiCodexModelCatalog("{}", {}),

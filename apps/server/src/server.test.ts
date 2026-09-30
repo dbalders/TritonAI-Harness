@@ -120,6 +120,7 @@ import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as EnvironmentTheme from "./environmentTheme.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
+import * as DailyMemory from "./memory/DailyMemory.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
@@ -795,6 +796,17 @@ const buildAppUnderTest = (options?: {
             refresh: Effect.void,
             ...options?.layers?.usageLimitSources,
           }),
+          Layer.mock(DailyMemory.DailyMemory)({
+            runCatchUp: Effect.void,
+            getStatus: Effect.succeed({
+              enabled: false,
+              directoryPath: "/tmp/t3-memory",
+              generalDirectoryPath: "/tmp/t3-memory/general",
+              state: "disabled",
+              lastSummarizedDay: null,
+              message: null,
+            }),
+          }),
         ),
       ),
       Layer.provide(
@@ -1042,7 +1054,8 @@ const buildAppUnderTest = (options?: {
             getThreadShellById: () => Effect.succeed(Option.none()),
             getThreadDetailById: () => Effect.succeed(Option.none()),
             getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
-            getCounts: () => Effect.succeed({ projectCount: 0, threadCount: 0 }),
+            getCounts: () =>
+              Effect.succeed({ projectCount: 0, threadCount: 0, firstThreadCreatedAt: null }),
             getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
             getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
             getThreadCheckpointContext: () => Effect.succeed(Option.none()),

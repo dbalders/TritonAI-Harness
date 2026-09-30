@@ -327,3 +327,61 @@ export function buildThreadTitlePrompt(input: ThreadTitlePromptInput) {
 
   return { prompt, outputSchema };
 }
+
+// ---------------------------------------------------------------------------
+// Daily memory
+// ---------------------------------------------------------------------------
+
+export interface DailyMemoryPromptInput {
+  /** The local day being summarized, `YYYY-MM-DD`. */
+  day: string;
+  /** Exact project names; the model must use these for `projects[].project`. */
+  projectNames: ReadonlyArray<string>;
+  /** That day's thread activity, already trimmed to fit. */
+  activity: string;
+  /** Inbox notes agents or the user wrote since the last summary. */
+  inboxNotes: string;
+}
+
+export function buildDailyMemoryPrompt(input: DailyMemoryPromptInput) {
+  const prompt = [
+    "You write the daily note for a developer's memory vault.",
+    `Summarize the work done on ${input.day} from the thread activity and inbox notes below.`,
+    "Return a JSON object with keys: overview, projects, decisions, openLoops.",
+    "Rules:",
+    "- overview: one or two plain sentences about the day as a whole",
+    "- projects: one entry per project that had real work, using the exact project name from the list",
+    "- projects[].workedOn: short bullets of what changed, was learned, or was decided in that project; name PRs, branches, files, and results when the activity shows them",
+    "- projects[].recent: one line under 140 characters for the project's running history",
+    "- decisions: choices the user made or confirmed that later work should respect",
+    "- openLoops: concrete unfinished work, unanswered questions, or promised follow-ups",
+    "- say only what the activity supports; mark anything unverified as unverified",
+    "- never include secrets, tokens, keys, or credentials",
+    "- write plain sentences without markdown headings; each bullet is one string",
+    "",
+    "Project names:",
+    ...(input.projectNames.length > 0 ? input.projectNames.map((name) => `- ${name}`) : ["(none)"]),
+    "",
+    "Thread activity:",
+    limitSection(input.activity, 80_000),
+    "",
+    "Inbox notes:",
+    input.inboxNotes.trim().length > 0 ? limitSection(input.inboxNotes, 20_000) : "(none)",
+  ].join("\n");
+
+  return {
+    prompt,
+    outputSchema: Schema.Struct({
+      overview: Schema.String,
+      projects: Schema.Array(
+        Schema.Struct({
+          project: Schema.String,
+          workedOn: Schema.Array(Schema.String),
+          recent: Schema.String,
+        }),
+      ),
+      decisions: Schema.Array(Schema.String),
+      openLoops: Schema.Array(Schema.String),
+    }),
+  };
+}

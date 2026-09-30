@@ -1,4 +1,4 @@
-import type { OrchestrationEvent, ProviderRuntimeEvent } from "@t3tools/contracts";
+import type { OrchestrationEvent } from "@t3tools/contracts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -7,16 +7,12 @@ import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
 import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
-import { ProviderService } from "../provider/Services/ProviderService.ts";
 import { AnalyticsService } from "./AnalyticsService.ts";
 
 type TrackedDomainEvent = Extract<OrchestrationEvent, { type: "thread.created" }>;
-type TrackedProviderEvent = Extract<ProviderRuntimeEvent, { type: "turn.completed" }>;
 
-type AnalyticsInput =
-  | { readonly source: "domain"; readonly event: TrackedDomainEvent }
-  | { readonly source: "provider"; readonly event: TrackedProviderEvent };
-
+// Turn completion is recorded by ProviderService, which deduplicates completions
+// and attaches duration and token usage. Recording it here too double-counted turns.
 export class AnalyticsReactor extends Context.Service<
   AnalyticsReactor,
   {
@@ -28,26 +24,17 @@ export class AnalyticsReactor extends Context.Service<
 const makeAnalyticsReactor = Effect.gen(function* () {
   const analytics = yield* AnalyticsService;
   const orchestrationEngine = yield* OrchestrationEngineService;
-  const providerService = yield* ProviderService;
 
-  const processInput = Effect.fn("AnalyticsReactor.processInput")(function* (
-    input: AnalyticsInput,
+  const processEvent = Effect.fn("AnalyticsReactor.processEvent")(function* (
+    event: TrackedDomainEvent,
   ) {
-    if (input.source === "domain") {
-      yield* analytics.record("thread.created", {
-        runtimeMode: input.event.payload.runtimeMode,
-        interactionMode: input.event.payload.interactionMode,
-      });
-      return;
-    }
-
-    yield* analytics.record("provider.turn.completed", {
-      provider: input.event.provider,
-      outcome: input.event.payload.state,
+    yield* analytics.record("thread.created", {
+      runtimeMode: event.payload.runtimeMode,
+      interactionMode: event.payload.interactionMode,
     });
   });
 
-  const worker = yield* makeDrainableWorker(processInput);
+  const worker = yield* makeDrainableWorker(processEvent);
 
   const start: AnalyticsReactor["Service"]["start"] = Effect.fn("AnalyticsReactor.start")(
     function* () {
@@ -55,14 +42,7 @@ const makeAnalyticsReactor = Effect.gen(function* () {
       yield* Effect.forkScoped(
         Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
           if (event.type !== "thread.created") return Effect.void;
-          return worker.enqueue({ source: "domain", event });
-        }),
-        { startImmediately: true },
-      );
-      yield* Effect.forkScoped(
-        Stream.runForEach(providerService.streamEvents, (event) => {
-          if (event.type !== "turn.completed") return Effect.void;
-          return worker.enqueue({ source: "provider", event });
+          return worker.enqueue(event);
         }),
         { startImmediately: true },
       );
