@@ -4,6 +4,7 @@ import { ProviderDriverKind } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
 import * as PlatformError from "effect/PlatformError";
 import * as FileSystem from "effect/FileSystem";
@@ -187,7 +188,13 @@ it.effect(
     }).pipe(Effect.provide(NodeServices.layer)),
 );
 
-it.layer(NodeServices.layer)("managed Codex update transaction", (it) => {
+// Fixtures stage 0.151.0 over 0.146.0; pin the approval so a config bump doesn't move them.
+const fixtureLayer = Layer.merge(
+  NodeServices.layer,
+  Layer.succeed(ManagedCodexApprovedVersion, "0.151.0"),
+);
+
+it.layer(fixtureLayer)("managed Codex update transaction", (it) => {
   it.effect("stages, verifies, atomically activates, and retains the managed launcher", () =>
     Effect.gen(function* () {
       const fixture = yield* makeFixture();
@@ -242,7 +249,7 @@ it.layer(NodeServices.layer)("managed Codex update transaction", (it) => {
   );
 });
 
-it.layer(NodeServices.layer)("approved managed engine policy", (it) => {
+it.layer(fixtureLayer)("approved managed engine policy", (it) => {
   for (const installed of ["0.151.0", "0.155.1"]) {
     it.effect(`rejects direct updates from ${installed} without running npm`, () =>
       Effect.gen(function* () {
@@ -292,7 +299,7 @@ it.layer(NodeServices.layer)("approved managed engine policy", (it) => {
   );
 });
 
-it.layer(NodeServices.layer)("Windows managed engine updates", (it) => {
+it.layer(fixtureLayer)("Windows managed engine updates", (it) => {
   for (const layout of ["lib\\node_modules", "node_modules"]) {
     for (const scenario of [
       "success",
