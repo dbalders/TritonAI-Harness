@@ -4,11 +4,15 @@ New to AI tools? The getting started guide teaches the basics by having you do s
 
 ## The steps
 
-1. **Your first conversation.** Say hello, reply in the same conversation, and hand the assistant a file to work on.
-2. **Connect your work.** Sign in to Microsoft 365 or Google Workspace under **Settings > Plugins**, then ask for a morning brief of your calendar and email. The morning brief unlocks after a tool is connected.
+The main quest has three chapters:
+
+1. **Your first conversation.** Say hello, reply in the same conversation, learn to give the assistant the full picture, and hand it a file to work on.
+2. **Connect your work.** Sign in to Microsoft 365 or Google Workspace under **Settings > Plugins**, ask for a morning brief of your calendar and email, then have the assistant put the brief in your Drafts folder. It writes drafts but never sends email for you. These steps unlock after a tool is connected.
 3. **Make it yours.** Use a skill by typing `$` in the message box, choose how much the assistant does on its own with the permission mode menu, and come back the next day to pick up where you left off. That last step uses [Memory](./memory.md) and unlocks the day after you start the guide.
 
-Buttons such as **Fill in the box for me** put an example request in the message box. Edit it before you send; replace anything in brackets, like `[your role]`, with your own details. **Skip this step** marks a step done without doing it.
+**Side quests** are optional and stay available after you finish: a gallery of everyday requests to try, [computer use](./computer-use.md) in the desktop app, and a morning brief delivered every weekday through the n8n plugin.
+
+Buttons such as **Fill in the box for me** put an example request in the message box. Edit it before you send; replace anything in brackets, like `[your role]`, with your own details. **Skip this step** (or **Mark as done** for a side quest) marks a step done without doing it.
 
 ## Hide or reopen the guide
 

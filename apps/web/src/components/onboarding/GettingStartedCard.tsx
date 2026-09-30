@@ -73,17 +73,24 @@ function StepIcon({ view }: { readonly view: GettingStartedStepView }) {
   return <CircleIcon className="size-3 text-muted-foreground/70" />;
 }
 
+const MAIN_CHAPTERS = GETTING_STARTED_CHAPTERS.filter((chapter) => !chapter.optional);
+
 export function GettingStartedCard({ onFillComposer }: GettingStartedCardProps) {
   const guide = useGettingStartedState();
   const navigate = useNavigate();
   const openLatestConversation = useOpenLatestConversation();
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
 
+  const chosen =
+    guide.steps.find((view) => view.step.id === selectedStepId && view.status !== "done") ?? null;
+  // Once the main quest is done the card celebrates until a side quest is chosen.
   const selected =
-    guide.steps.find((view) => view.step.id === selectedStepId && view.status !== "done") ??
-    guide.nextStep ??
-    guide.steps.find((view) => view.status === "locked") ??
-    null;
+    chosen ??
+    (guide.isComplete
+      ? null
+      : (guide.nextStep ??
+        guide.steps.find((view) => !view.optional && view.status === "locked") ??
+        null));
 
   useConnectedToolDetection(
     !guide.hidden &&
@@ -93,16 +100,33 @@ export function GettingStartedCard({ onFillComposer }: GettingStartedCardProps) 
   if (guide.hidden) return null;
 
   const progressPercent = Math.round((guide.completedCount / guide.total) * 100);
-  const chapterIndex = selected
-    ? GETTING_STARTED_CHAPTERS.findIndex((chapter) => chapter.id === selected.step.chapter)
-    : -1;
-  const chapter = chapterIndex >= 0 ? GETTING_STARTED_CHAPTERS[chapterIndex] : null;
+  const selectedChapter = selected
+    ? (GETTING_STARTED_CHAPTERS.find((chapter) => chapter.id === selected.step.chapter) ?? null)
+    : null;
+  const chapterLabel = selectedChapter
+    ? selectedChapter.optional
+      ? "Side quest · optional"
+      : `Chapter ${MAIN_CHAPTERS.indexOf(selectedChapter) + 1} of ${MAIN_CHAPTERS.length} · ${selectedChapter.title}`
+    : null;
+  const chapterSteps = selectedChapter
+    ? guide.steps.filter((view) => view.step.chapter === selectedChapter.id)
+    : guide.steps.filter((view) => view.optional);
+
+  const selectChapter = (chapterId: string) => {
+    const steps = guide.steps.filter((view) => view.step.chapter === chapterId);
+    const target =
+      steps.find((view) => view.status === "available") ??
+      steps.find((view) => view.status === "locked");
+    if (target) setSelectedStepId(target.step.id);
+  };
 
   const runAction = (view: GettingStartedStepView) => {
     const { action } = view.step;
     switch (action.kind) {
       case "prompt":
         onFillComposer(view.step.id, action.prompt);
+        return;
+      case "ideas":
         return;
       case "open-latest-thread":
         void openLatestConversation?.();
@@ -119,16 +143,14 @@ export function GettingStartedCard({ onFillComposer }: GettingStartedCardProps) 
   return (
     <section
       aria-label="Getting started"
-      className="mx-auto mt-3 w-full max-w-3xl rounded-2xl border border-border/60 bg-card/70 p-4 text-left shadow-xs/5 backdrop-blur-sm"
+      className="mx-auto mt-3 max-h-[calc(45dvh+2rem)] w-full max-w-3xl overflow-y-auto rounded-2xl border border-border/60 bg-card/70 p-4 text-left shadow-xs/5 backdrop-blur-sm"
     >
       <header className="flex items-center gap-3">
         <SparklesIcon className="size-4 shrink-0 text-primary" aria-hidden />
         <div className="min-w-0 flex-1">
           <p className="font-medium text-foreground text-sm">Getting started</p>
-          {chapter && !guide.isComplete ? (
-            <p className="truncate text-muted-foreground text-xs">
-              Chapter {chapterIndex + 1} of {GETTING_STARTED_CHAPTERS.length} · {chapter.title}
-            </p>
+          {chapterLabel ? (
+            <p className="truncate text-muted-foreground text-xs">{chapterLabel}</p>
           ) : null}
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -166,21 +188,21 @@ export function GettingStartedCard({ onFillComposer }: GettingStartedCardProps) 
         </div>
       </header>
 
-      {guide.isComplete ? (
+      {selected === null ? (
         <div className="mt-3 flex items-start gap-3">
           <PartyPopperIcon className="mt-0.5 size-5 shrink-0 text-primary" aria-hidden />
           <div className="min-w-0 flex-1">
             <p className="font-medium text-foreground">You finished getting started</p>
             <p className="mt-1 text-muted-foreground text-sm">
               You can talk to the assistant, share files, connect your tools, use skills, and pick
-              up tomorrow where you left off. Keep bringing it real work.
+              up where you left off. Try a side quest below, or keep bringing it real work.
             </p>
             <Button className="mt-3" size="sm" onClick={() => setGettingStartedHidden(true)}>
               Close the guide
             </Button>
           </div>
         </div>
-      ) : selected ? (
+      ) : (
         <div className="mt-3">
           <h2 className="font-medium text-base text-foreground">{selected.step.title}</h2>
           <p className="mt-1 text-muted-foreground text-sm leading-relaxed">{selected.step.body}</p>
@@ -195,9 +217,24 @@ export function GettingStartedCard({ onFillComposer }: GettingStartedCardProps) 
               {selected.step.tip}
             </p>
           ) : null}
+          {selected.status === "available" && selected.step.action.kind === "ideas" ? (
+            <div className="mt-3 grid grid-cols-2 gap-1.5 sm:grid-cols-4">
+              {selected.step.action.ideas.map((idea) => (
+                <button
+                  key={idea.label}
+                  type="button"
+                  onClick={() => onFillComposer(selected.step.id, idea.prompt)}
+                  className="rounded-lg border border-border/60 bg-background/60 px-2.5 py-1.5 text-left text-foreground text-xs transition-colors hover:bg-accent focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  {idea.label}
+                </button>
+              ))}
+            </div>
+          ) : null}
           {selected.status === "available" ? (
             <div className="mt-3 flex flex-wrap items-center gap-2">
-              {selected.step.action.kind === "open-latest-thread" && !openLatestConversation ? (
+              {selected.step.action.kind === "ideas" ? null : selected.step.action.kind ===
+                  "open-latest-thread" && !openLatestConversation ? (
                 <p className="text-muted-foreground text-xs">
                   Send a message first, then come back to reply.
                 </p>
@@ -206,6 +243,18 @@ export function GettingStartedCard({ onFillComposer }: GettingStartedCardProps) 
                   {selected.step.action.label}
                 </Button>
               )}
+              {selected.step.settingsLink ? (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    if (selected.step.settingsLink)
+                      void navigate({ to: selected.step.settingsLink.to });
+                  }}
+                >
+                  {selected.step.settingsLink.label}
+                </Button>
+              ) : null}
               {selected.step.completion !== "acknowledge" ? (
                 <Button
                   size="sm"
@@ -215,42 +264,70 @@ export function GettingStartedCard({ onFillComposer }: GettingStartedCardProps) 
                     completeGettingStartedSteps([selected.step.id]);
                   }}
                 >
-                  Skip this step
+                  {selected.optional ? "Mark as done" : "Skip this step"}
                 </Button>
               ) : null}
             </div>
           ) : null}
         </div>
-      ) : null}
+      )}
 
-      {!guide.isComplete ? (
-        <ol className="mt-4 flex flex-wrap gap-1.5" aria-label="Steps">
-          {guide.steps.map((view) => (
-            <li key={view.step.id}>
-              <button
-                type="button"
-                disabled={view.status === "done"}
-                aria-current={view.step.id === selected?.step.id ? "step" : undefined}
-                onClick={() => setSelectedStepId(view.step.id)}
-                className={cn(
-                  "flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs transition-colors",
-                  "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring",
-                  view.step.id === selected?.step.id
-                    ? "border-primary/50 bg-primary/8 text-foreground"
-                    : "border-border/60 text-muted-foreground hover:text-foreground",
-                  view.status === "done" && "cursor-default line-through opacity-70",
-                )}
-              >
-                <StepIcon view={view} />
-                <span>{view.step.title}</span>
-                <span className="sr-only">
-                  {view.status === "done" ? "(done)" : view.status === "locked" ? "(locked)" : ""}
-                </span>
-              </button>
-            </li>
-          ))}
-        </ol>
-      ) : null}
+      <nav className="mt-4 flex flex-wrap items-center gap-1.5" aria-label="Chapters">
+        {GETTING_STARTED_CHAPTERS.map((chapter) => {
+          const steps = guide.steps.filter((view) => view.step.chapter === chapter.id);
+          const done = steps.filter((view) => view.status === "done").length;
+          const current = chapter.id === (selectedChapter?.id ?? "side-quests");
+          return (
+            <button
+              key={chapter.id}
+              type="button"
+              aria-current={current ? "true" : undefined}
+              onClick={() => selectChapter(chapter.id)}
+              className={cn(
+                "flex items-center gap-1.5 rounded-md px-2 py-1 text-xs transition-colors",
+                "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring",
+                current
+                  ? "bg-accent font-medium text-foreground"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {done === steps.length ? (
+                <CheckIcon className="size-3 text-success-foreground" aria-hidden />
+              ) : null}
+              {chapter.title}
+              <span className="text-muted-foreground tabular-nums">
+                {done}/{steps.length}
+              </span>
+            </button>
+          );
+        })}
+      </nav>
+      <ol className="mt-2 flex flex-wrap gap-1.5" aria-label="Steps">
+        {chapterSteps.map((view) => (
+          <li key={view.step.id}>
+            <button
+              type="button"
+              disabled={view.status === "done"}
+              aria-current={view.step.id === selected?.step.id ? "step" : undefined}
+              onClick={() => setSelectedStepId(view.step.id)}
+              className={cn(
+                "flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs transition-colors",
+                "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring",
+                view.step.id === selected?.step.id
+                  ? "border-primary/50 bg-primary/8 text-foreground"
+                  : "border-border/60 text-muted-foreground hover:text-foreground",
+                view.status === "done" && "cursor-default line-through opacity-70",
+              )}
+            >
+              <StepIcon view={view} />
+              <span>{view.step.title}</span>
+              <span className="sr-only">
+                {view.status === "done" ? "(done)" : view.status === "locked" ? "(locked)" : ""}
+              </span>
+            </button>
+          </li>
+        ))}
+      </ol>
     </section>
   );
 }

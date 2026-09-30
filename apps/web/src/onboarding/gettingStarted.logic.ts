@@ -1,5 +1,6 @@
 import { collectComposerInlineTokens } from "@t3tools/shared/composerInlineTokens";
 
+import { isComputerUseRequest } from "../computerUse";
 import { TRITONAI_FIRST_RUN_PROMPT } from "../tritonAiWorkspace";
 
 /**
@@ -7,25 +8,42 @@ import { TRITONAI_FIRST_RUN_PROMPT } from "../tritonAiWorkspace";
  * never used an AI tool how to work in Harness by doing real, small tasks in
  * the composer. Each step finishes itself when the person does the thing it
  * teaches, so the guide never asks them to confirm what they just did.
+ *
+ * The main quest is what "finished" means. Side quests are optional extras
+ * that stay available afterwards.
  */
 
-export type GettingStartedChapterId = "first-conversation" | "connect" | "make-it-yours";
+export type GettingStartedChapterId =
+  | "first-conversation"
+  | "connect"
+  | "make-it-yours"
+  | "side-quests";
 
 export interface GettingStartedChapter {
   readonly id: GettingStartedChapterId;
   readonly title: string;
+  /** Optional chapters do not count toward finishing the guide. */
+  readonly optional?: boolean;
 }
 
 export const GETTING_STARTED_CHAPTERS: ReadonlyArray<GettingStartedChapter> = [
   { id: "first-conversation", title: "Your first conversation" },
   { id: "connect", title: "Connect your work" },
   { id: "make-it-yours", title: "Make it yours" },
+  { id: "side-quests", title: "Side quests", optional: true },
 ];
+
+export interface GettingStartedIdea {
+  readonly label: string;
+  readonly prompt: string;
+}
 
 /** What the step's main button does. */
 export type GettingStartedAction =
   /** Fills the composer with an example the person can edit before sending. */
   | { readonly kind: "prompt"; readonly label: string; readonly prompt: string }
+  /** Offers several examples; picking one fills the composer. */
+  | { readonly kind: "ideas"; readonly ideas: ReadonlyArray<GettingStartedIdea> }
   /** Opens the most recent conversation so the person can reply in it. */
   | { readonly kind: "open-latest-thread"; readonly label: string }
   | { readonly kind: "open-plugins"; readonly label: string }
@@ -42,6 +60,8 @@ export type GettingStartedCompletion =
   | "attachment"
   /** A message that uses a $skill. */
   | "skill"
+  /** A message that asks for computer use. */
+  | "computer-use"
   /** A message sent from the draft this step filled in. */
   | "quest-send"
   /** A plugin that needs a sign-in is connected. */
@@ -55,12 +75,64 @@ export interface GettingStartedStep {
   readonly body: string;
   readonly tip: string | null;
   readonly action: GettingStartedAction;
+  /** A second button that opens settings the step depends on. */
+  readonly settingsLink?: {
+    readonly label: string;
+    readonly to: "/settings/general" | "/settings/plugins";
+  };
   readonly completion: GettingStartedCompletion;
   /** Steps that must be finished first. */
   readonly requires?: ReadonlyArray<string>;
   /** Only available from the day after the guide was started. */
   readonly unlocksNextDay?: boolean;
+  /** Only offered in the desktop app. */
+  readonly desktopOnly?: boolean;
 }
+
+const FILL = "Fill in the box for me";
+
+export const GETTING_STARTED_IDEAS: ReadonlyArray<GettingStartedIdea> = [
+  {
+    label: "Reply to an email",
+    prompt:
+      "Here's an email I need to answer:\n\n[paste the email]\n\nDraft a friendly reply that says yes, but asks to move the deadline to Friday.",
+  },
+  {
+    label: "Summarize a meeting",
+    prompt:
+      "Turn these meeting notes into a short summary with decisions, action items, and who owns each one:\n\n[paste your notes]",
+  },
+  {
+    label: "Plan my week",
+    prompt:
+      "Help me plan my week. Here's what's on my plate:\n\n[list your tasks and deadlines]\n\nSuggest an order, and point out anything I could delegate or drop.",
+  },
+  {
+    label: "Make writing clearer",
+    prompt:
+      "Rewrite this so it's clearer and friendlier for a campus-wide audience. Keep it about the same length:\n\n[paste your text]",
+  },
+  {
+    label: "Explain something new",
+    prompt:
+      "Explain [a topic or term from my work] like I'm new to it. Then ask me three quick questions to check I understood.",
+  },
+  {
+    label: "Write a how-to",
+    prompt:
+      "Write step-by-step instructions for [a process in my office] that a new staff member could follow on their first day.",
+  },
+  {
+    label: "Understand a spreadsheet",
+    prompt:
+      "I've attached a spreadsheet. Tell me what's in it in plain language, point out anything unusual, and suggest one chart that would help me explain it.",
+  },
+  {
+    label: "Brainstorm ideas",
+    prompt:
+      "Give me 10 ideas for [an event, project, or problem]. Then help me pick the best three and explain why.",
+  },
+];
 
 export const GETTING_STARTED_STEPS: ReadonlyArray<GettingStartedStep> = [
   {
@@ -69,7 +141,7 @@ export const GETTING_STARTED_STEPS: ReadonlyArray<GettingStartedStep> = [
     title: "Say hello",
     body: "Type in the box the way you'd message a helpful coworker. There's no special wording to learn.",
     tip: "Replace [your role] with what you do, then press Enter to send.",
-    action: { kind: "prompt", label: "Fill in the box for me", prompt: TRITONAI_FIRST_RUN_PROMPT },
+    action: { kind: "prompt", label: FILL, prompt: TRITONAI_FIRST_RUN_PROMPT },
     completion: "any-send",
   },
   {
@@ -82,6 +154,20 @@ export const GETTING_STARTED_STEPS: ReadonlyArray<GettingStartedStep> = [
     completion: "follow-up",
   },
   {
+    id: "full-picture",
+    chapter: "first-conversation",
+    title: "Give it the full picture",
+    body: "The more it knows, the better it does. A good request says what you want, who it's for, and what a great result looks like. When you're not sure what to say, ask it to interview you first.",
+    tip: "Answer its questions in your next message. That's the fastest way to a great result.",
+    action: {
+      kind: "prompt",
+      label: FILL,
+      prompt:
+        "I need to write [what you're writing, like an announcement for my team]. Before you write anything, ask me up to five questions so you get it right.",
+    },
+    completion: "quest-send",
+  },
+  {
     id: "share-file",
     chapter: "first-conversation",
     title: "Hand it a file",
@@ -89,7 +175,7 @@ export const GETTING_STARTED_STEPS: ReadonlyArray<GettingStartedStep> = [
     tip: "Attach the file before you send. Any work file you're comfortable sharing is fine.",
     action: {
       kind: "prompt",
-      label: "Fill in the box for me",
+      label: FILL,
       prompt:
         "I've attached a file. Summarize it in five bullet points, then list any deadlines or action items for me.",
     },
@@ -108,13 +194,28 @@ export const GETTING_STARTED_STEPS: ReadonlyArray<GettingStartedStep> = [
     id: "morning-brief",
     chapter: "connect",
     title: "Get your first morning brief",
-    body: "With your tools connected, ask for a quick rundown of your day. It takes seconds and is a good habit to start each morning with.",
+    body: "With your tools connected, ask for a quick rundown of your day. It takes seconds, and it's a good way to start each morning.",
     tip: "Edit the request to fit how you work before sending.",
     action: {
       kind: "prompt",
-      label: "Fill in the box for me",
+      label: FILL,
       prompt:
         "Give me a short morning brief: today's meetings from my calendar, emails from the last day that need a reply from me, and anything I can safely ignore.",
+    },
+    completion: "quest-send",
+    requires: ["connect-tools"],
+  },
+  {
+    id: "brief-to-inbox",
+    chapter: "connect",
+    title: "Put your brief in your inbox",
+    body: "The assistant can write email drafts in Outlook or Gmail. It never sends email for you: the draft waits in your Drafts folder until you review it and press Send yourself.",
+    tip: "Open your Drafts folder afterwards to see what it wrote.",
+    action: {
+      kind: "prompt",
+      label: FILL,
+      prompt:
+        "Write today's morning brief as an email draft addressed to me, with the subject “Morning brief”. Don't send it.",
     },
     completion: "quest-send",
     requires: ["connect-tools"],
@@ -145,11 +246,51 @@ export const GETTING_STARTED_STEPS: ReadonlyArray<GettingStartedStep> = [
     tip: null,
     action: {
       kind: "prompt",
-      label: "Fill in the box for me",
+      label: FILL,
       prompt: "What did I work on yesterday, and what's still open?",
     },
     completion: "quest-send",
     unlocksNextDay: true,
+  },
+  {
+    id: "try-ideas",
+    chapter: "side-quests",
+    title: "Try an idea for your job",
+    body: "Not sure what to use it for? Pick an everyday task below. Each one fills in the box with a request you can adjust before sending.",
+    tip: "Replace anything in [brackets] with your own details.",
+    action: { kind: "ideas", ideas: GETTING_STARTED_IDEAS },
+    completion: "quest-send",
+  },
+  {
+    id: "computer-use",
+    chapter: "side-quests",
+    title: "Let it use your apps",
+    body: "With computer use turned on, the assistant can open apps on this computer, click, and type for you, and you can watch everything it does. Turn it on under Settings > General first.",
+    tip: "Start your request with “Use computer use to…”. Stop it at any time from the conversation.",
+    action: {
+      kind: "prompt",
+      label: FILL,
+      prompt: "Use computer use to open Calculator and work out 18% of 245.",
+    },
+    settingsLink: { label: "Turn on computer use", to: "/settings/general" },
+    completion: "computer-use",
+    desktopOnly: true,
+  },
+  {
+    id: "daily-brief",
+    chapter: "side-quests",
+    title: "Get your brief every morning",
+    body: "UC San Diego's n8n automation service can run a task on a schedule. Ask the assistant to build a workflow that sends you a morning brief every weekday. It shows you the plan and asks before turning anything on.",
+    tip: "Needs the n8n plugin connected under Settings > Plugins.",
+    action: {
+      kind: "prompt",
+      label: FILL,
+      prompt:
+        "Using n8n, set up a workflow that runs every weekday at 8:00 am and emails me a morning brief with today's meetings and the emails that need a reply. Show me the plan and ask me before you publish it.",
+    },
+    settingsLink: { label: "Open Plugins", to: "/settings/plugins" },
+    completion: "quest-send",
+    requires: ["morning-brief"],
   },
 ];
 
@@ -159,18 +300,36 @@ export type GettingStartedStepStatus = "done" | "available" | "locked";
 
 export interface GettingStartedStepView {
   readonly step: GettingStartedStep;
+  readonly optional: boolean;
   readonly status: GettingStartedStepStatus;
   /** Why a locked step is not available yet. */
   readonly lockedReason: string | null;
 }
 
 export interface GettingStartedState {
+  /** The steps offered here, main quest first. */
   readonly steps: ReadonlyArray<GettingStartedStepView>;
+  /** Main quest progress; side quests do not count. */
   readonly completedCount: number;
   readonly total: number;
-  /** The first step the person can do now, or null when none is available. */
+  readonly sideQuestsCompleted: number;
+  readonly sideQuestsTotal: number;
+  /** The first main-quest step the person can do now, or null. */
   readonly nextStep: GettingStartedStepView | null;
+  /** The whole main quest is done. */
   readonly isComplete: boolean;
+}
+
+export interface GettingStartedPlatform {
+  readonly desktop: boolean;
+}
+
+const OPTIONAL_CHAPTERS = new Set(
+  GETTING_STARTED_CHAPTERS.filter((chapter) => chapter.optional).map((chapter) => chapter.id),
+);
+
+export function isGettingStartedStepOptional(step: GettingStartedStep): boolean {
+  return OPTIONAL_CHAPTERS.has(step.chapter);
 }
 
 function localDayKey(date: Date): string {
@@ -210,21 +369,34 @@ function resolveLockedReason(
 export function resolveGettingStartedState(
   progress: GettingStartedProgress,
   now: Date,
+  platform: GettingStartedPlatform,
 ): GettingStartedState {
-  const steps = GETTING_STARTED_STEPS.map((step): GettingStartedStepView => {
-    if (progress[step.id] !== undefined) {
-      return { step, status: "done", lockedReason: null };
-    }
-    const lockedReason = resolveLockedReason(step, progress, now);
-    return { step, status: lockedReason === null ? "available" : "locked", lockedReason };
-  });
-  const completedCount = steps.filter((view) => view.status === "done").length;
+  const steps = GETTING_STARTED_STEPS.filter((step) => platform.desktop || !step.desktopOnly).map(
+    (step): GettingStartedStepView => {
+      const optional = isGettingStartedStepOptional(step);
+      if (progress[step.id] !== undefined) {
+        return { step, optional, status: "done", lockedReason: null };
+      }
+      const lockedReason = resolveLockedReason(step, progress, now);
+      return {
+        step,
+        optional,
+        status: lockedReason === null ? "available" : "locked",
+        lockedReason,
+      };
+    },
+  );
+  const main = steps.filter((view) => !view.optional);
+  const side = steps.filter((view) => view.optional);
+  const completedCount = main.filter((view) => view.status === "done").length;
   return {
     steps,
     completedCount,
-    total: steps.length,
-    nextStep: steps.find((view) => view.status === "available") ?? null,
-    isComplete: completedCount === steps.length,
+    total: main.length,
+    sideQuestsCompleted: side.filter((view) => view.status === "done").length,
+    sideQuestsTotal: side.length,
+    nextStep: main.find((view) => view.status === "available") ?? null,
+    isComplete: completedCount === main.length,
   };
 }
 
@@ -247,6 +419,8 @@ function sendCompletes(step: GettingStartedStep, event: GettingStartedSendEvent)
       return event.attachmentCount > 0;
     case "skill":
       return collectComposerInlineTokens(event.text).some((token) => token.type === "skill");
+    case "computer-use":
+      return isComputerUseRequest(event.text);
     case "quest-send":
       return event.questStepId === step.id;
     case "connected":

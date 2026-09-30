@@ -4,6 +4,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useState } from "react";
 
 import { toastManager } from "../components/ui/toast";
+import { isElectron } from "../env";
 import {
   sortScopedProjectsForSidebar,
   sortThreadsByActivityForSidebar,
@@ -26,6 +27,8 @@ import {
   type GettingStartedSendEvent,
   type GettingStartedState,
 } from "./gettingStarted.logic";
+
+const PLATFORM = { desktop: isElectron };
 
 /**
  * Drafts a guide step filled with its example, by thread id. A message sent
@@ -60,29 +63,39 @@ export function completeGettingStartedSteps(stepIds: ReadonlyArray<string>): voi
 
   // Someone who hid the guide still earns progress, just without the fanfare.
   if (before.gettingStartedHidden) return;
-  const state = resolveGettingStartedState(progress, now);
+  const state = resolveGettingStartedState(progress, now, PLATFORM);
   const finished = state.steps.filter(
     (view) =>
       stepIds.includes(view.step.id) && before.gettingStartedProgress[view.step.id] === undefined,
   );
   const lastFinished = finished.at(-1);
   if (!lastFinished) return;
+  const mainQuestJustFinished =
+    state.isComplete &&
+    !resolveGettingStartedState(before.gettingStartedProgress, now, PLATFORM).isComplete;
   toastManager.add(
-    state.isComplete
+    lastFinished.optional
       ? {
           type: "success",
-          title: "You finished getting started",
-          description: "You know the basics. Keep asking for help with real work.",
-          timeout: 8_000,
-        }
-      : {
-          type: "success",
-          title: `Step complete: ${lastFinished.step.title}`,
-          description: `${state.completedCount} of ${state.total} done${
-            state.nextStep ? ` · Next: ${state.nextStep.step.title}` : ""
-          }`,
+          title: `Side quest complete: ${lastFinished.step.title}`,
+          description: `${state.sideQuestsCompleted} of ${state.sideQuestsTotal} side quests done`,
           timeout: 6_000,
-        },
+        }
+      : mainQuestJustFinished
+        ? {
+            type: "success",
+            title: "You finished getting started",
+            description: "You know the basics. Side quests are there whenever you want more.",
+            timeout: 8_000,
+          }
+        : {
+            type: "success",
+            title: `Step complete: ${lastFinished.step.title}`,
+            description: `${state.completedCount} of ${state.total} done${
+              state.nextStep ? ` · Next: ${state.nextStep.step.title}` : ""
+            }`,
+            timeout: 6_000,
+          },
   );
 }
 
@@ -91,8 +104,8 @@ export function recordGettingStartedSend(
   event: Omit<GettingStartedSendEvent, "questStepId"> & { readonly threadId: ThreadId },
 ): void {
   const settings = getClientSettings();
-  const state = resolveGettingStartedState(settings.gettingStartedProgress, new Date());
-  if (state.isComplete) return;
+  const state = resolveGettingStartedState(settings.gettingStartedProgress, new Date(), PLATFORM);
+  if (state.steps.every((view) => view.status === "done")) return;
   const questStepId = questStepIdByThreadId.get(event.threadId) ?? null;
   const completed = resolveStepsCompletedBySend(state, { ...event, questStepId });
   if (questStepId !== null && completed.includes(questStepId)) {
@@ -125,7 +138,7 @@ export function useGettingStartedState(): GettingStartedState & { readonly hidde
   const progress = useClientSettings((settings) => settings.gettingStartedProgress);
   const hidden = useClientSettings((settings) => settings.gettingStartedHidden);
   const now = useNowOnFocus();
-  return { ...resolveGettingStartedState(progress, now), hidden };
+  return { ...resolveGettingStartedState(progress, now, PLATFORM), hidden };
 }
 
 /** Shows the guide again and opens a fresh draft where it appears. */

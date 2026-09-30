@@ -4061,6 +4061,7 @@ export default function ChatView(props: ChatViewProps) {
       focusComposer();
     });
   }, [focusComposer]);
+  const gettingStartedHidden = useClientSettings((settings) => settings.gettingStartedHidden);
   const fillComposerForGettingStarted = useCallback(
     (stepId: string, prompt: string) => {
       if (!activeThread) return;
@@ -10128,7 +10129,12 @@ export default function ChatView(props: ChatViewProps) {
               data-chat-composer-overlay="true"
               className={
                 isDraftHeroState
-                  ? "pointer-events-none absolute inset-0 z-20 flex items-center"
+                  ? cn(
+                      "pointer-events-none absolute inset-0 z-20 flex items-center",
+                      // The guide card hangs below the centered composer; lift the
+                      // composer so the card has room.
+                      !gettingStartedHidden && "pb-[min(24rem,45dvh)]",
+                    )
                   : "pointer-events-none absolute inset-x-0 bottom-0 z-20 pt-1.5 sm:pt-2"
               }
             >
