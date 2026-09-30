@@ -2132,6 +2132,50 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
+  it("never echoes submitted values from filter messages or reported input", async () => {
+    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-tool-leaks-"));
+    const state: ProviderState = {
+      status: {
+        state: "connected",
+        accountLabel: "Fixture",
+        grantedCapabilities: ["fixture.read"],
+        message: null,
+      },
+      credential: "present",
+      disconnectFails: false,
+    };
+    const baseProvider = provider("test-fixture-provider", state);
+    const schemaProvider: IntegrationProvider = {
+      ...baseProvider,
+      tools: baseProvider.tools.map((tool) => ({
+        ...tool,
+        input: Schema.Struct({
+          token: Schema.String.check(
+            Schema.makeFilter((input: string) => input === "valid" || `Invalid token ${input}`),
+          ),
+          count: Schema.String.annotate({ parseOptions: { reportInput: true } }),
+        }),
+      })),
+    };
+    try {
+      const registry = new RegistryRuntime(root, [packaged(fixtureManifest, schemaProvider)]);
+      await registry.install(fixtureManifest.id);
+      const failure = await registry
+        .invokeTool("test.fixture.read", { token: "SECRET_TOKEN", count: 123456789 })
+        .then(
+          () => expect.unreachable("invalid input must be rejected"),
+          (error: unknown) => error,
+        );
+      const { text } = describeIntegrationToolFailure(failure);
+      expect(text).toContain("token: invalid value");
+      expect(text).toContain("count: Expected string");
+      expect(text).not.toContain("SECRET_TOKEN");
+      expect(text).not.toContain("123456789");
+    } finally {
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("bounds reported input issues", async () => {
     const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-tool-bounds-"));
     const state: ProviderState = {

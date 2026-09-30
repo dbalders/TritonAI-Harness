@@ -59,5 +59,5 @@ export function describeIntegrationToolFailure(error: unknown): IntegrationToolF
       text: bounded(`Integration tool call failed: ${error.message}`),
     };
   }
-  return { code: "integration_tool_failed", text: "Integration tool call failed." };
+  return { code: "integration_tool_failed", text: "Tool call failed." };
 }

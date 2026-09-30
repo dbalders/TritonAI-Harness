@@ -19,6 +19,7 @@ import * as Effect from "effect/Effect";
 import type * as JsonSchema from "effect/JsonSchema";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import type * as SchemaIssue from "effect/SchemaIssue";
 
 import type * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
 import {
@@ -31,7 +32,10 @@ import {
 } from "../IntegrationRegistry.ts";
 import { scopeIntegrationSecretStore } from "../IntegrationSecretStore.ts";
 import { importPluginModule as importDiskPluginModule } from "../importPluginModule.ts";
-import type { IntegrationProviderTool } from "../IntegrationTool.ts";
+import {
+  type IntegrationProviderTool,
+  vettedIntegrationToolInputIssue,
+} from "../IntegrationTool.ts";
 
 interface PluginSdkOperationContext {
   readonly signal: AbortSignal;
@@ -99,9 +103,13 @@ function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
   );
 }
 
-// Ajv messages and params come from the schema, never from the validated data, so these issues
-// can tell an agent which path failed and what was expected without echoing submitted values.
-function pluginSchemaIssue(error: ErrorObject): Schema.FilterIssue {
+// Agents see these issues verbatim, so they must never carry submitted values. Ajv messages and
+// the params read below come from the schema; instance paths and `additionalProperties` params
+// may name submitted property keys, which the formatter caps. That holds only for the Ajv
+// configuration in compileJsonSchema: discriminator and `$data` stay disabled, no custom keywords
+// or formats are added, and strict mode rejects unknown formats at compile time. Other params,
+// such as `propertyNames`' submitted `propertyName`, are never read.
+function pluginSchemaIssue(error: ErrorObject): SchemaIssue.Issue {
   const path = error.instancePath
     .split("/")
     .slice(1)
@@ -112,23 +120,32 @@ function pluginSchemaIssue(error: ErrorObject): Schema.FilterIssue {
   const params = error.params as Record<string, unknown>;
   switch (error.keyword) {
     case "additionalProperties":
-      return { path: [...path, String(params.additionalProperty)], issue: "unexpected property" };
+      return vettedIntegrationToolInputIssue(
+        [...path, String(params.additionalProperty)],
+        "unexpected property",
+      );
     case "unevaluatedProperties":
-      return { path: [...path, String(params.unevaluatedProperty)], issue: "unexpected property" };
+      return vettedIntegrationToolInputIssue(
+        [...path, String(params.unevaluatedProperty)],
+        "unexpected property",
+      );
     case "required":
-      return {
-        path: [...path, String(params.missingProperty)],
-        issue: "missing required property",
-      };
+      return vettedIntegrationToolInputIssue(
+        [...path, String(params.missingProperty)],
+        "missing required property",
+      );
     case "enum":
-      return {
+      return vettedIntegrationToolInputIssue(
         path,
-        issue: `Expected ${(params.allowedValues as ReadonlyArray<unknown>).map((value) => JSON.stringify(value)).join(" | ")}`,
-      };
+        `Expected ${(params.allowedValues as ReadonlyArray<unknown>).map((value) => JSON.stringify(value)).join(" | ")}`,
+      );
     case "const":
-      return { path, issue: `Expected ${JSON.stringify(params.allowedValue)}` };
+      return vettedIntegrationToolInputIssue(
+        path,
+        `Expected ${JSON.stringify(params.allowedValue)}`,
+      );
     default:
-      return { path, issue: error.message ?? `failed ${error.keyword} validation` };
+      return vettedIntegrationToolInputIssue(path, error.message ?? "invalid value");
   }
 }
 

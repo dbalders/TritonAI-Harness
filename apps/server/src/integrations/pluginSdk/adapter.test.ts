@@ -300,6 +300,42 @@ describe("plugin SDK adapter", () => {
     }
   });
 
+  it("names submitted property keys but never their values in plugin input issues", async () => {
+    const loaded = await loadPluginSdkIntegration({
+      files: artifact(providerSource, "# Fixture reader\n", {
+        inputSchema: {
+          $schema: "https://json-schema.org/draft/2020-12/schema",
+          type: "object",
+          properties: {
+            labels: {
+              type: "object",
+              propertyNames: { pattern: "^[a-z]+$" },
+              additionalProperties: { type: "number" },
+            },
+          },
+          additionalProperties: false,
+        },
+      }),
+      secrets: secretStore(),
+      configuration: { prefix: "fixture" },
+      expected: { id, version: "1.0.0" },
+      hostNodeVersion: "24.13.1",
+    });
+    try {
+      const failure = await decodeIntegrationToolInput(loaded.provider!.tools[0]!, {
+        labels: { SECRET_KEY: "SECRET_VALUE" },
+      }).then(
+        () => expect.unreachable("invalid input must be rejected"),
+        (error: unknown) => error,
+      );
+      const issues = describeIntegrationToolInputIssues(failure);
+      expect(issues).toContain("labels.SECRET_KEY: must be number");
+      expect(issues).not.toContain("SECRET_VALUE");
+    } finally {
+      await loaded.provider?.close?.();
+    }
+  });
+
   it("uses Unicode matching for plugin patternProperties", async () => {
     const loaded = await loadPluginSdkIntegration({
       files: artifact(providerSource, "# Fixture reader\n", {

@@ -307,7 +307,7 @@ it.effect("tells MCP agents why a call failed only through safe errors", () => {
       const unknown = yield* call;
       expect(unknown.isError).toBe(true);
       expect(unknown.structuredContent).toEqual({ error: "integration_tool_failed" });
-      expect(unknown.content).toEqual([{ type: "text", text: "Integration tool call failed." }]);
+      expect(unknown.content).toEqual([{ type: "text", text: "Tool call failed." }]);
     }).pipe(Effect.provide(testLayer)),
   ).pipe(Effect.ensuring(Effect.sync(() => registrySpy.mockRestore())));
 });

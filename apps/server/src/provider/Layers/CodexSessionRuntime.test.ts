@@ -239,11 +239,11 @@ describe("integration write-tool approval", () => {
     );
     NodeAssert.equal(
       failureText(new Error("401 from https://n8n.invalid?token=SECRET_TOKEN")),
-      "Integration tool call failed.",
+      "Tool call failed.",
     );
     NodeAssert.equal(
       failureText({ _tag: "IntegrationProviderPublicError", message: "SECRET_TOKEN" }),
-      "Integration tool call failed.",
+      "Tool call failed.",
     );
     NodeAssert.equal(
       failureText(new IntegrationToolUnavailableError("Dynamic tool is unavailable.")),
