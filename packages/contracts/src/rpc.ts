@@ -275,7 +275,13 @@ import {
   ServerVoiceTranscriptionError,
 } from "./voice.ts";
 import { ServerTritonAiUsageError, ServerTritonAiUsageSnapshot } from "./tritonaiUsage.ts";
-import { ServerMemoryStatus } from "./memory.ts";
+import {
+  ServerMemoryStatus,
+  ServerMemorySyncError,
+  ServerMemorySyncPollInput,
+  ServerMemorySyncPollResult,
+  ServerMemorySyncStartResult,
+} from "./memory.ts";
 import {
   ProjectCloneActionInput,
   ProjectCloneActionResult,
@@ -407,6 +413,10 @@ export const WS_METHODS = {
   serverTranscribeVoice: "server.transcribeVoice",
   serverGetTritonAiUsage: "server.getTritonAiUsage",
   serverGetMemoryStatus: "server.getMemoryStatus",
+  serverStartMemorySync: "server.startMemorySync",
+  serverPollMemorySync: "server.pollMemorySync",
+  serverSyncMemoryNow: "server.syncMemoryNow",
+  serverSignOutMemorySync: "server.signOutMemorySync",
   serverDiscoverSourceControl: "server.discoverSourceControl",
   serverGetTraceDiagnostics: "server.getTraceDiagnostics",
   serverGetProcessDiagnostics: "server.getProcessDiagnostics",
@@ -653,6 +663,30 @@ const WsServerGetMemoryStatusRpc = Rpc.make(WS_METHODS.serverGetMemoryStatus, {
   payload: Schema.Struct({}),
   success: ServerMemoryStatus,
   error: EnvironmentAuthorizationError,
+});
+
+const WsServerStartMemorySyncRpc = Rpc.make(WS_METHODS.serverStartMemorySync, {
+  payload: Schema.Struct({}),
+  success: ServerMemorySyncStartResult,
+  error: Schema.Union([ServerMemorySyncError, EnvironmentAuthorizationError]),
+});
+
+const WsServerPollMemorySyncRpc = Rpc.make(WS_METHODS.serverPollMemorySync, {
+  payload: ServerMemorySyncPollInput,
+  success: ServerMemorySyncPollResult,
+  error: Schema.Union([ServerMemorySyncError, EnvironmentAuthorizationError]),
+});
+
+const WsServerSyncMemoryNowRpc = Rpc.make(WS_METHODS.serverSyncMemoryNow, {
+  payload: Schema.Struct({}),
+  success: ServerMemoryStatus,
+  error: EnvironmentAuthorizationError,
+});
+
+const WsServerSignOutMemorySyncRpc = Rpc.make(WS_METHODS.serverSignOutMemorySync, {
+  payload: Schema.Struct({}),
+  success: ServerMemoryStatus,
+  error: Schema.Union([ServerMemorySyncError, EnvironmentAuthorizationError]),
 });
 
 const WsServerDiscoverSourceControlRpc = Rpc.make(WS_METHODS.serverDiscoverSourceControl, {
@@ -1577,6 +1611,10 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerTranscribeVoiceRpc,
   WsServerGetTritonAiUsageRpc,
   WsServerGetMemoryStatusRpc,
+  WsServerStartMemorySyncRpc,
+  WsServerPollMemorySyncRpc,
+  WsServerSyncMemoryNowRpc,
+  WsServerSignOutMemorySyncRpc,
   WsServerDiscoverSourceControlRpc,
   WsServerGetTraceDiagnosticsRpc,
   WsServerGetProcessDiagnosticsRpc,

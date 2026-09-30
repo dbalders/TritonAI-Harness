@@ -402,6 +402,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     environmentOnly: true,
   },
   {
+    id: "memory-sync",
+    title: "Sync memory with OneDrive",
+    to: "/settings/general",
+    searchTerms: ["onedrive microsoft sync memory other computers devices sign in"],
+    environmentOnly: true,
+  },
+  {
     id: "diagnostics",
     title: "Diagnostics",
     to: "/settings/general",
