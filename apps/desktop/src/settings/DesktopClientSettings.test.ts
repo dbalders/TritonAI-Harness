@@ -40,6 +40,8 @@ const clientSettings: ClientSettings = {
   diffFilesCollapsed: true,
   diffIgnoreWhitespace: true,
   tritonAiFirstRunOnboardingCompleted: false,
+  gettingStartedProgress: {},
+  gettingStartedHidden: false,
   diffLayout: "stacked",
   environmentIdentificationMode: "artwork",
   favorites: [],

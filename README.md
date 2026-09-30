@@ -60,16 +60,17 @@ Someone can open the app, connect a work source, complete a real task, and come 
 
 ## Using Harness
 
-| I want to…                              | Start here                                           |
-| --------------------------------------- | ---------------------------------------------------- |
-| Give the agent a task or attach files   | [Messages and context](docs/user/composer.md)        |
-| Organize and continue my work           | [Working with threads](docs/user/thread-sidebar.md)  |
-| Understand and manage saved context     | [Memory](docs/user/memory.md)                        |
-| Choose when the agent asks for approval | [Permission modes](docs/user/permission-modes.md)    |
-| Use the app from another device         | [Remote access](docs/user/remote-access.md)          |
-| Enable interaction with local apps      | [Computer use](docs/user/computer-use.md)            |
-| Find or share a reusable skill          | [TritonAI Commons](docs/user/tritonai-commons.md)    |
-| Understand the managed AI engine        | [Codex provider guide](docs/user/providers-codex.md) |
+| I want to…                              | Start here                                            |
+| --------------------------------------- | ----------------------------------------------------- |
+| Learn the basics step by step           | [Getting started guide](docs/user/getting-started.md) |
+| Give the agent a task or attach files   | [Messages and context](docs/user/composer.md)         |
+| Organize and continue my work           | [Working with threads](docs/user/thread-sidebar.md)   |
+| Understand and manage saved context     | [Memory](docs/user/memory.md)                         |
+| Choose when the agent asks for approval | [Permission modes](docs/user/permission-modes.md)     |
+| Use the app from another device         | [Remote access](docs/user/remote-access.md)           |
+| Enable interaction with local apps      | [Computer use](docs/user/computer-use.md)             |
+| Find or share a reusable skill          | [TritonAI Commons](docs/user/tritonai-commons.md)     |
+| Understand the managed AI engine        | [Codex provider guide](docs/user/providers-codex.md)  |
 
 Browse the [documentation index](docs/README.md) for more guides.
 

@@ -395,6 +395,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["generated thread titles source control content default provider"],
   },
   {
+    id: "getting-started",
+    title: "Getting started guide",
+    to: "/settings/general",
+    searchTerms: ["onboarding tutorial learn basics help new user walkthrough restart"],
+  },
+  {
     id: "memory",
     title: "Memory",
     to: "/settings/general",

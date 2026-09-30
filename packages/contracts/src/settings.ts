@@ -364,6 +364,13 @@ export const ClientSettingsSchema = Schema.Struct({
   tritonAiFirstRunOnboardingCompleted: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
   ),
+  // Getting started guide: step id -> ISO time it was completed, and whether
+  // the person hid the guide. Unknown step ids are kept so an older client
+  // never drops progress a newer one recorded.
+  gettingStartedProgress: Schema.Record(Schema.String, Schema.String).pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
+  gettingStartedHidden: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   diffLayout: DiffLayout.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_DIFF_LAYOUT))),
   environmentIdentificationMode: EnvironmentIdentificationMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_ENVIRONMENT_IDENTIFICATION_MODE)),
@@ -1504,6 +1511,8 @@ export const ClientSettingsPatch = Schema.Struct({
   diffFilesCollapsed: Schema.optionalKey(Schema.Boolean),
   diffIgnoreWhitespace: Schema.optionalKey(Schema.Boolean),
   tritonAiFirstRunOnboardingCompleted: Schema.optionalKey(Schema.Boolean),
+  gettingStartedProgress: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+  gettingStartedHidden: Schema.optionalKey(Schema.Boolean),
   diffLayout: Schema.optionalKey(DiffLayout),
   environmentIdentificationMode: Schema.optionalKey(EnvironmentIdentificationMode),
   glassOpacity: Schema.optionalKey(GlassOpacity),

@@ -368,6 +368,11 @@ import { readPreparedConnection } from "../state/session";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
 import { createPageScrollController, type PageScrollKey } from "./chat/pageScrollController";
 import { DraftHeroHeadline } from "./chat/DraftHeroHeadline";
+import { GettingStartedCard, GettingStartedThreadTracker } from "./onboarding/GettingStartedCard";
+import {
+  markGettingStartedQuestThread,
+  recordGettingStartedSend,
+} from "../onboarding/gettingStarted";
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
@@ -4056,6 +4061,17 @@ export default function ChatView(props: ChatViewProps) {
       focusComposer();
     });
   }, [focusComposer]);
+  const fillComposerForGettingStarted = useCallback(
+    (stepId: string, prompt: string) => {
+      if (!activeThread) return;
+      markGettingStartedQuestThread(activeThread.id, stepId);
+      setComposerDraftPrompt(composerDraftTarget, prompt);
+      promptRef.current = prompt;
+      composerRef.current?.resetCursorState({ prompt, cursor: prompt.length });
+      scheduleComposerFocus();
+    },
+    [activeThread, composerDraftTarget, composerRef, scheduleComposerFocus, setComposerDraftPrompt],
+  );
   const useArtifactTemplate = useCallback(
     (template: CodexArtifactTemplate) => {
       const composer = composerRef.current;
@@ -8567,6 +8583,12 @@ export default function ChatView(props: ChatViewProps) {
         failure = startResult;
       } else {
         turnStartSucceeded = true;
+        recordGettingStartedSend({
+          threadId: threadIdForSend,
+          isFollowUp: !isFirstMessage,
+          attachmentCount: composerAttachmentsSnapshot.length,
+          text: outgoingMessageText,
+        });
         // The turn is under way and will spend quota, so that thread's limits
         // snapshot is stale. Uploads may have outlasted a navigation, so only
         // the sending thread's panel clears.
@@ -10168,6 +10190,7 @@ export default function ChatView(props: ChatViewProps) {
                       </div>
                     </div>
                   ) : null}
+                  {!isDraftHeroState && isServerThread ? <GettingStartedThreadTracker /> : null}
                   {!isDraftHeroState && activeGoal ? (
                     <GoalProgressRow
                       goal={activeGoal}
@@ -10376,6 +10399,11 @@ export default function ChatView(props: ChatViewProps) {
                       className="h-[calc(env(safe-area-inset-bottom)+1rem)] sm:h-[calc(env(safe-area-inset-bottom)+1.25rem)]"
                     />
                   </div>
+                  {isDraftHeroState ? (
+                    <div className="absolute inset-x-0 top-full">
+                      <GettingStartedCard onFillComposer={fillComposerForGettingStarted} />
+                    </div>
+                  ) : null}
                 </div>
               </div>
             </div>

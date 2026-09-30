@@ -260,6 +260,21 @@ describe("ClientSettings load balancing", () => {
 });
 
 describe("ClientSettings word wrap", () => {
+  it("defaults the getting started guide to no progress and visible", () => {
+    const decoded = decodeClientSettings({});
+    expect(decoded.gettingStartedProgress).toEqual({});
+    expect(decoded.gettingStartedHidden).toBe(false);
+    expect(
+      decodeClientSettingsPatch({
+        gettingStartedProgress: { "say-hello": "2026-09-30T17:00:00.000Z" },
+        gettingStartedHidden: true,
+      }),
+    ).toEqual({
+      gettingStartedProgress: { "say-hello": "2026-09-30T17:00:00.000Z" },
+      gettingStartedHidden: true,
+    });
+  });
+
   it("defaults first-run onboarding incomplete", () => {
     expect(decodeClientSettings({}).tritonAiFirstRunOnboardingCompleted).toBe(false);
     expect(

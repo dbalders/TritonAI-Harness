@@ -57,6 +57,7 @@ import {
   SettingsIcon,
   SquarePenIcon,
   TextSearchIcon,
+  SparklesIcon,
 } from "lucide-react";
 import {
   useCallback,
@@ -75,6 +76,7 @@ import { useAtomValue } from "@effect/atom-react";
 import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
 import { useDesktopLocalBootstraps } from "../connection/useDesktopLocalBootstraps";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
+import { useOpenGettingStartedGuide } from "../onboarding/gettingStarted";
 import { useOpenPanelPullRequestUrl } from "../hooks/useOpenPanelPullRequestUrl";
 import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
 import { useClientSettings } from "../hooks/useSettings";
@@ -494,6 +496,7 @@ function OpenCommandPaletteDialog(props: {
   readonly clearOpenIntent: () => void;
 }) {
   const navigate = useNavigate();
+  const openGettingStartedGuide = useOpenGettingStartedGuide();
   const pathname = useLocation({ select: (location) => location.pathname });
   const { clearOpenIntent, openIntent, openOverlayMode, setOpen } = props;
   const [query, setQuery] = useState(openIntent?.kind === "search" ? openIntent.query : "");
@@ -1643,6 +1646,17 @@ function OpenCommandPaletteDialog(props: {
         themeHalves,
         initialAppearance: resolvedTheme,
       });
+    },
+  });
+
+  actionItems.push({
+    kind: "action",
+    value: "action:getting-started",
+    searchTerms: ["getting started", "guide", "onboarding", "tutorial", "help", "learn", "new"],
+    title: "Getting started guide",
+    icon: <SparklesIcon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await openGettingStartedGuide();
     },
   });
 

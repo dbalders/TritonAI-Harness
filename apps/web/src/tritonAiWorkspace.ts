@@ -1,4 +1,6 @@
-export const TRITONAI_FIRST_RUN_PROMPT = "How does TritonAI Harness work, and how can it help me?";
+// The first step of the getting started guide; a fresh install opens with it in the composer.
+export const TRITONAI_FIRST_RUN_PROMPT =
+  "Hi! I'm new to AI tools. I work at UC San Diego as [your role]. What are three everyday tasks you could help me with? Keep it short.";
 export const TRITONAI_FIRST_RUN_WORKSPACE = "~/TritonAI";
 
 const TRITONAI_APP_BASE_NAME = "TritonAI Harness";

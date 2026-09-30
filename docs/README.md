@@ -3,6 +3,7 @@
 ## Using TritonAI Harness
 
 - [Install TritonAI Harness](./user/install.md)
+- [Getting started guide](./user/getting-started.md)
 - [Messages and context](./user/composer.md)
 - [Working with threads](./user/thread-sidebar.md)
 - [Permission modes](./user/permission-modes.md)
