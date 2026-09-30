@@ -11,6 +11,7 @@ import {
   type IntegrationSummary,
   type IntegrationsListResult,
 } from "@t3tools/contracts";
+import { compareSemverVersions } from "@t3tools/shared/semver";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -750,6 +751,7 @@ export class RegistryRuntime {
   readonly #activeProviderLifecycleWork = new Map<IntegrationProvider, Set<Promise<unknown>>>();
   readonly #activeProviderCommitWork = new Map<IntegrationProvider, Set<Promise<unknown>>>();
   readonly #providerPreparationWork = new Map<IntegrationProvider, Promise<void>>();
+  readonly #providerLastPreparedAt = new Map<IntegrationProvider, number>();
   readonly #activeSummaryRefreshWork = new Set<Promise<void>>();
   readonly #skillSyncOperations = new Map<string, Promise<void>>();
   #closing = false;
@@ -1836,8 +1838,69 @@ export class RegistryRuntime {
         this.#providerPreparationWork.delete(provider);
       }
     };
-    void work.then(remove, remove);
+    void work.then(() => {
+      this.#providerLastPreparedAt.set(provider, Date.now());
+      remove();
+    }, remove);
     await awaitWithSignal(work, signal);
+  }
+
+  /**
+   * Refresh credentials for connected integrations that no tool call has touched recently.
+   *
+   * Providers only renew inside `prepare`, which runs on invocation, so an integration nobody
+   * calls never rotates its credential. Remote grants with a finite refresh-token lifetime
+   * expire on exactly that silence and send the user back through a browser sign-in. Touching
+   * an idle provider keeps the grant rolling without waiting for someone to use it.
+   *
+   * Opportunistic by design: a provider that cannot refresh right now reports through its own
+   * status, and the next real invocation surfaces it.
+   */
+  async refreshIdleCredentials(options: {
+    readonly idleThresholdMs: number;
+    readonly signal?: AbortSignal;
+  }): Promise<ReadonlyArray<string>> {
+    if (this.#closing) return [];
+    await this.#ready;
+    const now = Date.now();
+    const refreshed: string[] = [];
+    for (const integration of this.#catalog.values()) {
+      if (this.#closing || options.signal?.aborted) break;
+      await this.#serializeIntegration(integration.manifest.id, async () => {
+        const { manifest, provider } = integration;
+        if (this.#closing || options.signal?.aborted || this.#isRevoking(manifest.id)) return;
+        if (this.#catalog.get(manifest.id) !== integration || !provider?.prepare) return;
+        if (!ownRecordValue(this.#state.installed, manifest.id)?.enabled) return;
+        // n8n 1.1.0 is the first shipped bundle with durable rotation and bounded cleanup.
+        // Keep an older Installer composition from activating background refresh prematurely.
+        if (manifest.id === "n8n" && compareSemverVersions(manifest.version, "1.1.0") < 0) return;
+        if (this.#faultedProviders.has(provider)) return;
+        if (this.#activeProviderLifecycleWork.has(provider)) return;
+        if (this.#summaries.get(manifest.id)?.connectionState === "error") {
+          await this.#summarize(integration).catch(() => undefined);
+          if (this.#closing || options.signal?.aborted || this.#isRevoking(manifest.id)) return;
+          if (
+            this.#faultedProviders.has(provider) ||
+            this.#activeProviderLifecycleWork.has(provider)
+          )
+            return;
+        }
+        if (this.#summaries.get(manifest.id)?.connectionState !== "connected") return;
+        const lastPreparedAt = this.#providerLastPreparedAt.get(provider);
+        if (lastPreparedAt !== undefined && now - lastPreparedAt < options.idleThresholdMs) return;
+        try {
+          // Keep the integration slot until shared preparation settles. Caller cancellation
+          // stops later providers, while shutdown still cancels the tracked operation.
+          await this.#prepareProvider(provider, new AbortController().signal);
+          refreshed.push(manifest.id);
+        } catch {
+          // A failed provider must not stop the sweep or leave cached availability stale.
+        } finally {
+          if (!this.#closing) await this.#summarize(integration).catch(() => undefined);
+        }
+      });
+    }
+    return refreshed;
   }
 
   #refreshSummaryAfterProviderSettlement(
@@ -2002,6 +2065,13 @@ export class RegistryRuntime {
       return currentOrUnavailable();
     }
     let integration = this.#createSummary(manifest, providerStatus);
+    // Capture settlement when availability is sampled, before skill synchronization can wait.
+    if (provider && this.#activeProviderLifecycleWork.has(provider)) {
+      const registered = this.#catalog.get(manifest.id);
+      if (registered?.provider === provider) {
+        this.#refreshSummaryAfterProviderSettlement(registered, provider);
+      }
+    }
     try {
       await this.#syncSkills({
         integrationId: integration.id,
@@ -2703,6 +2773,7 @@ export class RegistryRuntime {
         );
         await this.#clearProviderCommitJournal(id);
         this.#faultedProviders.delete(provider);
+        this.#providerLastPreparedAt.delete(provider);
         await this.#summarize(integration);
       } catch (error) {
         await this.#summarize(integration).catch(() => undefined);

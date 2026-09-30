@@ -121,6 +121,7 @@ import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import { authHttpApiLayer, environmentAuthenticatedAuthLayer } from "./auth/http.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
+import { IntegrationCredentialKeepaliveLive } from "./integrations/IntegrationCredentialKeepalive.ts";
 import * as IntegrationRegistry from "./integrations/IntegrationRegistry.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import {
@@ -507,6 +508,9 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(GitLayerLive),
   Layer.provideMerge(VcsLayerLive),
   Layer.provideMerge(ProviderRuntimeLayerLive),
+  // Keeps idle OAuth grants rolling. Reads the registry through its module accessor, so it
+  // needs no layer dependency on registry startup.
+  Layer.provideMerge(IntegrationCredentialKeepaliveLive),
   Layer.provideMerge(Layer.mergeAll(TerminalLayerLive, PreviewLayerLive, DeviceLayerLive)),
   Layer.provideMerge(PersistenceLayerLive),
   // Both read a user-owned file out of the state directory and stream changes
