@@ -360,6 +360,33 @@ it.layer(NodeServices.layer)("DailyMemory", (it) => {
     }),
   );
 
+  it.effect("removes today's partial note when its only thread is deleted", () =>
+    Effect.gen(function* () {
+      const { baseDir, calls, layer, fs, path } = yield* makeHarness({ memoryEnabled: true });
+      const vaultFiles = files(path, path.join(baseDir, "memory", "general"));
+      yield* TestClock.setTime(NOW);
+
+      yield* Effect.gen(function* () {
+        yield* seed;
+        const sql = yield* SqlClient.SqlClient;
+        const memory = yield* DailyMemory.make;
+        yield* memory.runCatchUp;
+        assert.include(yield* fs.readFileString(vaultFiles.daily("2026-09-29")), "status: partial");
+
+        yield* sql`UPDATE projection_threads SET deleted_at = ${localIso(29, 10)} WHERE thread_id = 'thread-1'`;
+        const callsBefore = calls.length;
+        yield* TestClock.setTime(AFTER_MIDNIGHT_30);
+        yield* memory.runCatchUp;
+        // Nothing is left to summarize, so the model is not called.
+        assert.lengthOf(calls, callsBefore);
+        assert.isFalse(yield* fs.exists(vaultFiles.daily("2026-09-29")));
+        const coverage = readCoverage(yield* fs.readFileString(vaultFiles.coverage));
+        assert.strictEqual(coverage.lastSummarizedDay, "2026-09-29");
+        assert.notProperty(coverage.notes, "2026-09-29");
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
   it.effect("writes a note for a day that only had inbox notes", () =>
     Effect.gen(function* () {
       const { baseDir, calls, layer, fs, path } = yield* makeHarness({ memoryEnabled: true });

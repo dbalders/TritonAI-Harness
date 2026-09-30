@@ -198,6 +198,16 @@ it.layer(NodeServices.layer)("memory vault", (it) => {
         assert.isTrue(yield* fs.exists(directory));
       }
 
+      // Notes dropped straight into Inbox/ join this device's inbox.
+      yield* fs.writeFileString(path.join(vault.inbox, "idea.md"), "Loose note.\n");
+      yield* fs.writeFileString(path.join(vault.inbox, "3f2a", "idea.md"), "Already here.\n");
+      yield* ensureGeneralVault(vault, device);
+      assert.isFalse(yield* fs.exists(path.join(vault.inbox, "idea.md")));
+      assert.strictEqual(
+        yield* fs.readFileString(path.join(vault.inbox, "3f2a", "idea-2.md")),
+        "Loose note.\n",
+      );
+
       // A later run leaves its own current guide alone and moves nothing.
       yield* ensureGeneralVault(vault, device);
       assert.strictEqual(yield* fs.readFileString(vault.guide), guide);

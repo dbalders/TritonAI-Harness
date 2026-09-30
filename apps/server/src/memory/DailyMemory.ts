@@ -59,6 +59,7 @@ import {
   readPartialProgress,
   readSummaryProgress,
   registerMemoryDevice,
+  removeGeneratedFile,
   removeMemorySkill,
   renderMemorySkill,
   writeGeneratedFile,
@@ -569,6 +570,15 @@ export const make = Effect.gen(function* () {
       Math.min(Date.parse(range.endIso), input.nowMs),
     );
     if (threads.length === 0 && processedNotes.length === 0 && includedInboxNotes.length === 0) {
+      // An earlier note for the day, such as a partial one whose thread was
+      // since deleted, no longer describes anything.
+      yield* provide(
+        removeGeneratedFile({
+          vault,
+          device: input.devicePaths,
+          filePath: dailyNotePath(path, vault, device, day),
+        }),
+      );
       return null;
     }
 

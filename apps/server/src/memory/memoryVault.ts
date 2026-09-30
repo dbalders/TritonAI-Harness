@@ -221,7 +221,8 @@ Agents: only write here when the user asks you to remember something or close ou
 
 /**
  * Creates the vault folders and keeps the guide current. A guide Harness did
- * not write is moved to `Notes/` rather than replaced.
+ * not write is moved to `Notes/` rather than replaced. Notes left directly in
+ * `Inbox/` are claimed by this device so its next summary includes them.
  */
 export const ensureGeneralVault = Effect.fn("memory.ensureGeneralVault")(function* (
   vault: GeneralVaultPaths,
@@ -232,6 +233,21 @@ export const ensureGeneralVault = Effect.fn("memory.ensureGeneralVault")(functio
   const paths = devicePaths(path, vault, device);
   for (const directory of [vault.daily, vault.projects, vault.notes, paths.processed]) {
     yield* fs.makeDirectory(directory, { recursive: true });
+  }
+  const looseNotes = yield* fs
+    .readDirectory(vault.inbox)
+    .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
+  for (const name of looseNotes.toSorted()) {
+    if (!name.toLowerCase().endsWith(".md")) continue;
+    const from = path.join(vault.inbox, name);
+    const info = yield* fs.stat(from).pipe(Effect.option);
+    if (info._tag === "None" || info.value.type !== "File") continue;
+    const stem = name.slice(0, -".md".length);
+    let to = path.join(paths.inbox, name);
+    for (let attempt = 2; yield* fs.exists(to); attempt++) {
+      to = path.join(paths.inbox, `${stem}-${attempt}.md`);
+    }
+    yield* fs.rename(from, to);
   }
   const guide = vaultGuide(device);
   const existing = yield* fs.readFileString(vault.guide).pipe(Effect.option);
@@ -276,6 +292,22 @@ const WrittenFiles = Schema.Struct({
 });
 const decodeWrittenFiles = Schema.decodeUnknownEffect(Schema.fromJsonString(WrittenFiles));
 
+const readWrittenFiles = Effect.fn("memory.readWrittenFiles")(function* (device: DevicePaths) {
+  const fs = yield* FileSystem.FileSystem;
+  const raw = yield* fs.readFileString(device.written).pipe(Effect.option);
+  if (raw._tag === "None") return {};
+  return yield* decodeWrittenFiles(raw.value).pipe(
+    Effect.map((value): Record<string, string> => ({ ...value.files })),
+    Effect.orElseSucceed((): Record<string, string> => ({})),
+  );
+});
+
+const writeWrittenFiles = (device: DevicePaths, files: Record<string, string>) =>
+  writeFileStringAtomically({
+    filePath: device.written,
+    contents: jsonFile({ version: 1, files }),
+  });
+
 /**
  * Writes a file this device generates. If the file on disk is not what Harness
  * last wrote there, someone edited it, so their copy is saved under
@@ -290,14 +322,7 @@ export const writeGeneratedFile = Effect.fn("memory.writeGeneratedFile")(functio
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const relativePath = path.relative(input.vault.root, input.filePath);
-  const rawWritten = yield* fs.readFileString(input.device.written).pipe(Effect.option);
-  const written =
-    rawWritten._tag === "Some"
-      ? yield* decodeWrittenFiles(rawWritten.value).pipe(
-          Effect.map((value) => ({ ...value.files })),
-          Effect.orElseSucceed((): Record<string, string> => ({})),
-        )
-      : {};
+  const written = yield* readWrittenFiles(input.device);
   const existing = yield* fs.readFileString(input.filePath).pipe(Effect.option);
   if (
     existing._tag === "Some" &&
@@ -309,11 +334,31 @@ export const writeGeneratedFile = Effect.fn("memory.writeGeneratedFile")(functio
   const hash = sha256(input.contents);
   yield* writeFileStringAtomically({ filePath: input.filePath, contents: input.contents });
   written[relativePath] = hash;
-  yield* writeFileStringAtomically({
-    filePath: input.device.written,
-    contents: jsonFile({ version: 1, files: written }),
-  });
+  yield* writeWrittenFiles(input.device, written);
   return hash;
+});
+
+/**
+ * Removes a file this device generated that no longer applies, such as a day
+ * note whose only thread was deleted. An edited copy is saved first.
+ */
+export const removeGeneratedFile = Effect.fn("memory.removeGeneratedFile")(function* (input: {
+  readonly vault: GeneralVaultPaths;
+  readonly device: DevicePaths;
+  readonly filePath: string;
+}) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const existing = yield* fs.readFileString(input.filePath).pipe(Effect.option);
+  if (existing._tag === "None") return;
+  const relativePath = path.relative(input.vault.root, input.filePath);
+  const written = yield* readWrittenFiles(input.device);
+  if (sha256(existing.value) !== written[relativePath]) {
+    yield* preserveUserFile(input.vault, existing.value, relativePath);
+  }
+  yield* fs.remove(input.filePath);
+  delete written[relativePath];
+  yield* writeWrittenFiles(input.device, written);
 });
 
 const CoveredNote = Schema.Struct({ path: Schema.String, sha256: Schema.String });
