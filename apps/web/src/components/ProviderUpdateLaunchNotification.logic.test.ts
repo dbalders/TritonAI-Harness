@@ -11,6 +11,7 @@ import { AsyncResult } from "effect/unstable/reactivity";
 import {
   buildLocalEnvironmentUpdateGroups,
   canOneClickUpdateProviderCandidate,
+  collectProviderLaunchUpdateCandidates,
   collectProviderUpdateCandidates,
   collectProviderUpdateOutcomeSnapshots,
   collectUpdatedProviderSnapshots,
@@ -197,6 +198,34 @@ describe("provider update launch notification logic", () => {
 
     expect(hasOneClickUpdateProviderCandidate(candidate, [candidate])).toBe(true);
     expect(canOneClickUpdateProviderCandidate(candidate, [candidate])).toBe(false);
+  });
+
+  it("does not prompt at launch for an update that is already queued or running", () => {
+    const updateState = (
+      status: NonNullable<ServerProvider["updateState"]>["status"],
+    ): ServerProvider["updateState"] => ({
+      status,
+      startedAt: checkedAt,
+      finishedAt: status === "failed" ? laterCheckedAt : null,
+      message: null,
+      output: null,
+    });
+    const cursor = provider({ driver: driver("cursor"), latestVersion: "0.3.0" });
+
+    for (const status of ["queued", "running"] as const) {
+      expect(
+        collectProviderLaunchUpdateCandidates([
+          provider({ driver: driver("codex"), updateState: updateState(status) }),
+          cursor,
+        ]).map((candidate) => candidate.driver),
+      ).toEqual([driver("cursor")]);
+    }
+    // A failed update leaves the prompt's update action available again.
+    expect(
+      collectProviderLaunchUpdateCandidates([
+        provider({ driver: driver("codex"), updateState: updateState("failed") }),
+      ]).map((candidate) => candidate.driver),
+    ).toEqual([driver("codex")]);
   });
 
   it("builds a notification key from provider latest versions", () => {

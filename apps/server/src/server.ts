@@ -54,6 +54,8 @@ import { AntigravityInstallation } from "./provider/AntigravityInstallation.ts";
 import { ProviderInstanceRegistry } from "./provider/Services/ProviderInstanceRegistry.ts";
 import { ProviderRegistry } from "./provider/Services/ProviderRegistry.ts";
 import { ProviderSessionReaperLive } from "./provider/Layers/ProviderSessionReaper.ts";
+import * as ManagedCodexAutoUpdate from "./provider/managedCodexAutoUpdate.ts";
+import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
 import { ProviderUsageLimitsIngestionLive } from "./provider/Layers/ProviderUsageLimitsIngestion.ts";
 import * as OpenCodeRuntime from "./provider/opencodeRuntime.ts";
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
@@ -497,8 +499,15 @@ const AntigravityInstallationRefreshLive = Layer.effectDiscard(
   }),
 );
 
+// One server-lifetime runner so every client and the startup auto-update share
+// the same per-instance update locks and `updateState`.
+const ProviderMaintenanceLive = ManagedCodexAutoUpdate.layer.pipe(
+  Layer.provideMerge(ProviderMaintenanceRunner.layer),
+);
+
 const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(AntigravityInstallationRefreshLive),
+  Layer.provideMerge(ProviderMaintenanceLive),
   Layer.provideMerge(ProviderAuthServiceLive),
   // Core Services
   Layer.provideMerge(ServerSettingsLayerLive),
