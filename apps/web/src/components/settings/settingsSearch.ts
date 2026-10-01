@@ -412,7 +412,9 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "diagnostics",
     title: "Diagnostics",
     to: "/settings/general",
-    searchTerms: ["logs traces processes resource history failures spans cpu memory"],
+    searchTerms: [
+      "logs traces processes resource history failures spans cpu memory installer version",
+    ],
   },
   {
     id: "open-source-licenses",

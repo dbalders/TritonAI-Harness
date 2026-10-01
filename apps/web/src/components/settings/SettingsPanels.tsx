@@ -56,14 +56,6 @@ import {
   isDesktopUpdateButtonDisabled,
   resolveDesktopUpdateButtonAction,
 } from "../../components/desktopUpdate.logic";
-import {
-  getInstallerSettingsButtonLabel,
-  getInstallerSettingsVersion,
-  getInstallerUpdateActionError,
-  getInstallerUpdateButtonTooltip,
-  isInstallerUpdateButtonDisabled,
-  resolveInstallerUpdateButtonAction,
-} from "../../components/installerUpdate.logic";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { TraitsPicker } from "../chat/TraitsPicker";
 import {
@@ -92,7 +84,6 @@ import { useSettingsScope } from "./SettingsScopeContext";
 import { ProjectDefaultsSettings } from "./ProjectDefaultsSettings";
 import { useThreadActions } from "../../hooks/useThreadActions";
 import { useDesktopUpdateState } from "../../state/desktopUpdate";
-import { useInstallerUpdateState } from "../../state/installerUpdate";
 import {
   getCustomModelOptionsByInstance,
   resolveAppModelSelectionState,
@@ -454,135 +445,6 @@ function HarnessVersionSection() {
           }
         />
       ) : null}
-    </>
-  );
-}
-
-function FullInstallerRepairSection() {
-  const updateState = useInstallerUpdateState();
-
-  const handleButtonClick = useCallback(() => {
-    const bridge = window.desktopBridge;
-    if (!bridge || !updateState) return;
-
-    const action = resolveInstallerUpdateButtonAction(updateState);
-    if (action === "open") {
-      void bridge
-        .openInstallerUpdate()
-        .then((result) => {
-          if (result.completed) {
-            toastManager.add({
-              type: "success",
-              title: "Installer download opened",
-              description:
-                "Run the full TritonAI Installer to update Harness, Codex, and managed skills.",
-            });
-            return;
-          }
-          const actionError = getInstallerUpdateActionError(result);
-          if (actionError) {
-            toastManager.add(
-              stackedThreadToast({
-                type: "error",
-                title: "Could not open installer download",
-                description: actionError,
-              }),
-            );
-          }
-        })
-        .catch((error: unknown) => {
-          toastManager.add(
-            stackedThreadToast({
-              type: "error",
-              title: "Could not open installer download",
-              description: error instanceof Error ? error.message : "An unexpected error occurred.",
-            }),
-          );
-        });
-      return;
-    }
-
-    if (action !== "check") return;
-    void bridge
-      .checkInstallerUpdate()
-      .then((result) => {
-        if (result.state.status === "available") {
-          toastManager.add({
-            type: "success",
-            title: "TritonAI update available",
-            description: result.state.availableVersion
-              ? `Full Installer ${result.state.availableVersion} is available. Click “Get Update” to download.`
-              : "A newer full TritonAI Installer is available.",
-          });
-        } else if (result.state.status === "up-to-date") {
-          toastManager.add({
-            type: "success",
-            title: "TritonAI is up to date",
-            description: result.state.installedVersion
-              ? `Full Installer ${result.state.installedVersion} is the latest version.`
-              : "The latest full Installer is already installed.",
-          });
-        } else if (result.state.status === "error") {
-          toastManager.add(
-            stackedThreadToast({
-              type: "error",
-              title: "Could not check for installer updates",
-              description: result.state.message ?? "Try again after checking your network.",
-            }),
-          );
-        }
-      })
-      .catch((error: unknown) => {
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Could not check for installer updates",
-            description: error instanceof Error ? error.message : "Update check failed.",
-          }),
-        );
-      });
-  }, [updateState]);
-
-  const action = updateState ? resolveInstallerUpdateButtonAction(updateState) : "none";
-  const buttonTooltip = updateState ? getInstallerUpdateButtonTooltip(updateState) : null;
-
-  return (
-    <SettingsRow
-      title={
-        <span className="inline-flex items-center gap-2">
-          <span>Full Installer</span>
-          <code className="text-[11px] font-medium text-muted-foreground">
-            {getInstallerSettingsVersion(updateState)}
-          </code>
-        </span>
-      }
-      description="Use the full TritonAI Installer for first install, repair, or managed runtime updates."
-      control={
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <Button
-                size="xs"
-                variant={action === "open" ? "default" : "outline"}
-                disabled={isInstallerUpdateButtonDisabled(updateState)}
-                onClick={handleButtonClick}
-              >
-                {getInstallerSettingsButtonLabel(updateState)}
-              </Button>
-            }
-          />
-          {buttonTooltip ? <TooltipPopup>{buttonTooltip}</TooltipPopup> : null}
-        </Tooltip>
-      }
-    />
-  );
-}
-
-function AboutVersionSection() {
-  return (
-    <>
-      <HarnessVersionSection />
-      <FullInstallerRepairSection />
     </>
   );
 }
@@ -3190,7 +3052,7 @@ export function GeneralSettingsPanel() {
 
       <SettingsSection id="about" title="About">
         {isElectron || HOSTED_APP_CHANNEL ? (
-          <AboutVersionSection />
+          <HarnessVersionSection />
         ) : (
           <SettingsRow
             title={<AboutVersionTitle />}

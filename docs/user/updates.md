@@ -1,6 +1,6 @@
 # TritonAI updates
 
-TritonAI uses separate update paths so routine changes do not require rerunning the full Installer.
+Routine updates are managed in Harness. The full TritonAI Installer is for initial setup and repairs.
 
 - **Harness application:** use **Settings > About > Check for Updates**. A Harness update also carries UCSD-managed configuration, built-in skills, and the managed plugin composition.
 - **Managed Codex CLI:** TritonAI checks the installed Codex provider version. When an update is available, use the provider update action in the sidebar or provider settings. The update is staged, verified, activated transactionally, and checked again by Harness.
@@ -13,6 +13,12 @@ If a Codex update cannot run on the current managed Node.js version, no staged u
 Windows loads the credentials saved by TritonAI Installer when you open Harness directly or restart after an update. Credentials saved in Harness settings take precedence.
 
 On Windows, managed engine updates use the Node.js and npm installed by TritonAI Installer, including when Harness is opened directly. You do not need to add them to your system PATH. Updates allow a short retry period when Windows temporarily locks engine files during verification.
+
+## Installer version
+
+**Settings > General > Diagnostics > View diagnostics** shows the installer version recorded on this desktop device. It identifies the installer used for setup; it does not change when Harness updates itself. If the record is missing or unreadable, the version shows as **Unavailable**.
+
+This is diagnostic information. Harness does not check for newer installer releases or offer an installer update button.
 
 ## Stable and Nightly
 
