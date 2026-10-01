@@ -14,6 +14,11 @@ are preserved.
 GPT-6.1 Sol replaces GPT-5.6 Luna, Sol, and Terra in Cloud models. Saved selections of those
 models and GPT-5.5 move to GPT-6.1 Sol.
 
+Cloud offers GPT-6 Astra, GPT-6.1 Sol, and Claude Opus 5.5. Saved managed Claude Opus 4.8 and
+Opus 5 selections move directly to Opus 5.5.
+
+On upgrade, saved app and project defaults for new threads reset to Flash once. Existing threads retain their selected models. You can change app and project defaults afterward; later launches preserve those choices.
+
 ## Engine Updates
 
 Stable and Nightly can use the same Codex installation. If a new profile cannot find Codex,

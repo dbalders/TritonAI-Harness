@@ -1,6 +1,7 @@
 import {
   DEFAULT_SERVER_SETTINGS,
   DEFAULT_TRITONAI_CODEX_HOME_PATH,
+  ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
   type TritonAiManagedConfig,
@@ -13,6 +14,7 @@ import {
   getManagedProviderInstanceRenames,
   managedConfig,
   migrateLegacyInstallerManagedSettings,
+  migrateManagedNewThreadDefaults,
   stripManagedFieldsForPersistence,
   validateBundledManagedConfig,
 } from "./managedPolicy.ts";
@@ -152,6 +154,68 @@ describe("TritonAI managed Harness policy", () => {
         { name: "TRITONAI_API_KEY_SOURCE", value: "TRITONAI_FRONTIER_API_KEY", sensitive: false },
       ],
     });
+  });
+
+  it("uses Flash for new tasks on profiles without an explicit default", () => {
+    const effective = migrateManagedNewThreadDefaults(DEFAULT_SERVER_SETTINGS, {}).settings;
+    expect(effective.defaultModelSelection).toEqual({
+      instanceId: managedInstanceId,
+      model: "api-glm-5.3-flash",
+      options: [{ id: "reasoningEffort", value: "high" }],
+    });
+  });
+
+  it("resets app and project defaults once while preserving later choices", () => {
+    const sol = { instanceId: frontierInstanceId, model: "gpt-6.1-sol" };
+    const first = migrateManagedNewThreadDefaults(
+      {
+        ...DEFAULT_SERVER_SETTINGS,
+        defaultModelSelection: sol,
+        projectSettingsOverrides: {
+          [ProjectId.make("project")]: {
+            defaultModelSelection: sol,
+            defaultRuntimeMode: "approval-required",
+          },
+        },
+      },
+      { tritonAiManagedPolicy: { migrationVersion: 2, codexHomePath: "/kept/home" } },
+    );
+    expect(first.settings.defaultModelSelection?.model).toBe("api-glm-5.3-flash");
+    expect(first.settings.projectSettingsOverrides).toEqual({
+      project: { defaultRuntimeMode: "approval-required" },
+    });
+    expect(first.document).toEqual({
+      tritonAiManagedPolicy: {
+        migrationVersion: 2,
+        codexHomePath: "/kept/home",
+        newThreadDefaultsVersion: 1,
+      },
+    });
+    const changed = { ...first.settings, defaultModelSelection: sol };
+    expect(migrateManagedNewThreadDefaults(changed, first.document)).toEqual({
+      settings: changed,
+      document: first.document,
+      migrated: false,
+    });
+  });
+
+  it("preserves explicit defaults and upgrades retired managed defaults", () => {
+    const personalDefault = {
+      instanceId: ProviderInstanceId.make("personal"),
+      model: "personal-model",
+    };
+    expect(
+      applyManagedHarnessPolicy({
+        ...DEFAULT_SERVER_SETTINGS,
+        defaultModelSelection: personalDefault,
+      }).defaultModelSelection,
+    ).toEqual(personalDefault);
+    expect(
+      applyManagedHarnessPolicy({
+        ...DEFAULT_SERVER_SETTINGS,
+        defaultModelSelection: { instanceId: managedInstanceId, model: "claude-opus-5" },
+      }).defaultModelSelection,
+    ).toEqual({ instanceId: frontierInstanceId, model: "claude-opus-5-5" });
   });
 
   it("keeps fresh profile homes independent across settings documents", () => {

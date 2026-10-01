@@ -300,6 +300,47 @@ function resolveManagedSelection(
   };
 }
 
+/** Reset legacy new-thread defaults once; later user choices remain editable. */
+export function migrateManagedNewThreadDefaults(
+  settings: ServerSettings,
+  document: unknown,
+): { readonly settings: ServerSettings; readonly document: unknown; readonly migrated: boolean } {
+  const root = record(document);
+  const marker = record(root?.[MANAGED_POLICY_MARKER_KEY]);
+  if (
+    typeof marker?.newThreadDefaultsVersion === "number" &&
+    marker.newThreadDefaultsVersion >= 1
+  ) {
+    return { settings, document, migrated: false };
+  }
+  const projectSettingsOverrides = Object.fromEntries(
+    Object.entries(settings.projectSettingsOverrides)
+      .map(([projectId, overrides]) => {
+        const { defaultModelSelection: _oldDefault, ...remaining } = overrides;
+        return [projectId, remaining] as const;
+      })
+      .filter(([, overrides]) => Object.keys(overrides).length > 0),
+  );
+  return {
+    settings: {
+      ...settings,
+      defaultModelSelection: resolveManagedSelection(
+        settings.textGenerationModelSelection,
+        managedConfig,
+        false,
+        managedConfig.models.catalog,
+      ),
+      projectSettingsOverrides,
+      projectSettingsFolded: true,
+    },
+    document: {
+      ...root,
+      [MANAGED_POLICY_MARKER_KEY]: { ...marker, newThreadDefaultsVersion: 1 },
+    },
+    migrated: true,
+  };
+}
+
 function managedRuntimeFromDocument(input: unknown, defaultHomePath: string) {
   const root = record(input);
   const marker = record(root?.[MANAGED_POLICY_MARKER_KEY]);
@@ -417,6 +458,9 @@ export function applyManagedHarnessPolicy(
       availableModels,
     ),
     sourceControlWriterModelSelection,
+    defaultModelSelection: persisted.defaultModelSelection
+      ? resolveManagedSelection(persisted.defaultModelSelection, config, true, availableModels)
+      : null,
   };
 }
 
