@@ -1291,6 +1291,48 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
+  it("reports a system error fault by its code without the message's path", async () => {
+    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-fault-code-"));
+    const state: ProviderState = {
+      status: {
+        state: "not_connected",
+        accountLabel: null,
+        grantedCapabilities: [],
+        message: null,
+      },
+      credential: null,
+      disconnectFails: false,
+    };
+    const rejectingProvider: IntegrationProvider = {
+      ...provider("test-connected-provider", state),
+      connect: async (_capabilities, context) => {
+        await context!.beginCommit();
+        throw Object.assign(
+          new Error("EACCES: permission denied, open '/Users/someone/private/credential.bin'"),
+          { code: "EACCES" },
+        );
+      },
+    };
+    const faults: Array<{ readonly integrationId: string; readonly reason: string }> = [];
+    const registry = new RegistryRuntime(
+      root,
+      [packaged(connectedManifest, rejectingProvider)],
+      undefined,
+      undefined,
+      { onProviderFault: (fault) => faults.push(fault) },
+    );
+    try {
+      await registry.install(connectedManifest.id);
+      await expect(registry.connect(connectedManifest.id)).rejects.toMatchObject({
+        code: "operation_failed",
+      });
+      expect(faults).toEqual([{ integrationId: connectedManifest.id, reason: "Error (EACCES)" }]);
+    } finally {
+      await registry.close();
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps capability revocation active when disable queues behind installation", async () => {
     const root = await NodeFSP.mkdtemp(
       NodePath.join(NodeOS.tmpdir(), "tritonai-install-capability-disable-"),

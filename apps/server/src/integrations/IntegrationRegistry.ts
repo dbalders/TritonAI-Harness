@@ -526,6 +526,34 @@ function operationError(
   return new IntegrationOperationError({ code, message });
 }
 
+const TRANSIENT_LOCK_CODES = new Set(["EBUSY", "EPERM", "EACCES"]);
+
+/**
+ * Windows antivirus and search indexers briefly lock a file that was just written. A commit
+ * journal that cannot be removed faults its provider on every launch, so ride out that lock.
+ */
+async function removeFileThroughTransientLocks(path: string): Promise<void> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await NodeFSP.rm(path, { force: true });
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (attempt >= 5 || code === undefined || !TRANSIENT_LOCK_CODES.has(code)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, attempt * 50));
+    }
+  }
+}
+
+/** A fault reason for logs: system errors by code only, since their messages carry paths. */
+function faultReason(error: unknown): string {
+  if (!(error instanceof Error)) return "Unknown failure.";
+  const code = (error as NodeJS.ErrnoException).code;
+  if (typeof code === "string") return `${error.name} (${code})`;
+  const message = error.message.trim() || error.name;
+  return message.length > 200 ? `${message.slice(0, 199)}…` : message;
+}
+
 function safeMessage(error: unknown): string {
   return error instanceof Error && error.message.trim()
     ? error.message
@@ -1148,7 +1176,7 @@ export class RegistryRuntime {
   }
 
   async #clearProviderCommitJournal(integrationId: string): Promise<void> {
-    await NodeFSP.rm(this.#commitJournalPath(integrationId), { force: true });
+    await removeFileThroughTransientLocks(this.#commitJournalPath(integrationId));
     if ((await lstatOrNull(this.#commitJournalRoot)) !== null) {
       await syncDirectory(this.#commitJournalRoot);
     }
@@ -1533,7 +1561,7 @@ export class RegistryRuntime {
     this.#faultedProviders.add(provider);
     for (const { manifest, provider: registeredProvider } of this.#catalog.values()) {
       if (registeredProvider !== provider) continue;
-      this.#reportProviderFault(manifest.id, safeMessage(cause));
+      this.#reportProviderFault(manifest.id, faultReason(cause));
       this.#summaryGenerations.set(
         manifest.id,
         (this.#summaryGenerations.get(manifest.id) ?? 0) + 1,
