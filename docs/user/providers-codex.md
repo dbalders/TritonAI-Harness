@@ -4,6 +4,10 @@ For one account, use the default Codex provider with your normal Codex login.
 [Provider setup](./install.md#providers) covers installation, Settings > Providers,
 and custom binaries or environment variables.
 
+In TritonAI Harness, **Settings > Runtime** lists the On-prem and Cloud connections
+and any additional Codex accounts. Entries for other engines from older installations
+stay hidden after an upgrade; their saved settings are preserved.
+
 ## Managed Models
 
 GLM 5.3 Flash is the default on-prem model and supports text and image input. Choose Low, High
