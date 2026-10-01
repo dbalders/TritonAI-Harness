@@ -160,7 +160,7 @@ describe("TritonAI credential IPC", () => {
           assert.equal(request.url, "https://configured.tritonai.example/v1/models");
           assert.equal(request.headers.authorization, "Bearer replacement-key");
           return jsonResponse(request, {
-            data: [{ id: "api-glm-5.3-flash" }, { id: "gpt-5.6-sol" }],
+            data: [{ id: "api-glm-5.3-flash" }, { id: "gpt-6.1-sol" }],
           });
         }),
       );
@@ -207,7 +207,7 @@ describe("TritonAI credential IPC", () => {
             data: [
               {
                 id: (request.headers.authorization ?? "").includes("frontier-key")
-                  ? "gpt-5.6-sol"
+                  ? "gpt-6.1-sol"
                   : "api-glm-5.3-flash",
               },
             ],
@@ -256,7 +256,7 @@ describe("TritonAI credential IPC", () => {
         env: { TRITONAI_API_KEY: "existing-shared-key" },
       });
       const validationLayer = makeHttpClientLayer((request) =>
-        Effect.succeed(jsonResponse(request, { data: [{ id: "gpt-5.6-sol" }] })),
+        Effect.succeed(jsonResponse(request, { data: [{ id: "gpt-6.1-sol" }] })),
       );
 
       yield* updateTritonAiCredentials
@@ -294,7 +294,7 @@ describe("TritonAI credential IPC", () => {
       const validationLayer = makeHttpClientLayer((request) =>
         Effect.succeed(
           jsonResponse(request, {
-            data: [{ id: "api-glm-5.3-flash" }, { id: "gpt-5.6-sol" }],
+            data: [{ id: "api-glm-5.3-flash" }, { id: "gpt-6.1-sol" }],
           }),
         ),
       );
@@ -360,7 +360,7 @@ describe("TritonAI credential IPC", () => {
         env: { TRITONAI_API_KEY: current },
       });
       const validationLayer = makeHttpClientLayer((request) =>
-        Effect.succeed(jsonResponse(request, { data: [{ id: "gpt-5.6-sol" }] })),
+        Effect.succeed(jsonResponse(request, { data: [{ id: "gpt-6.1-sol" }] })),
       );
       const candidate = "frontier-only-key";
 
@@ -445,7 +445,7 @@ describe("TritonAI credential IPC", () => {
       const validationLayer = makeHttpClientLayer((request) =>
         Effect.succeed(
           jsonResponse(request, {
-            data: [{ id: "api-glm-5.3-flash" }, { id: "gpt-5.6-sol" }],
+            data: [{ id: "api-glm-5.3-flash" }, { id: "gpt-6.1-sol" }],
           }),
         ),
       );
