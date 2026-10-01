@@ -33,10 +33,17 @@ export PATH="$pnpm_bin:$repo_root/node_modules/.bin:$PATH"
 pnpm install --frozen-lockfile --filter '@t3tools/mobile...'
 
 cd apps/mobile/ios
+if ! command -v pod >/dev/null 2>&1; then
+  brew install cocoapods
+fi
+pod install
+
+# CocoaPods regenerates widget metadata, so apply build numbers afterwards.
 python3 - <<'PY'
 import json
 import os
 import plistlib
+import re
 from pathlib import Path
 
 receipt = json.loads(Path('ci_scripts/nightly-source.json').read_text())
@@ -51,12 +58,12 @@ for target in ['TritonAIHarnessPreview', 'ExpoWidgetsTarget', 'expo-sharing-exte
     info['CFBundleVersion'] = build_number
     with path.open('wb') as file:
         plistlib.dump(info, file)
+project = Path('TritonAIHarnessPreview.xcodeproj/project.pbxproj')
+contents, count = re.subn(r'(CURRENT_PROJECT_VERSION\s*=\s*)[^;]+;', lambda match: match[1] + build_number + ';', project.read_text())
+if count < 6:
+    raise ValueError('Expected build numbers for all three targets in Debug and Release')
+project.write_text(contents)
 PY
-
-if ! command -v pod >/dev/null 2>&1; then
-  brew install cocoapods
-fi
-pod install
 
 # Xcode's React Native build phases run in a fresh shell.
 {
