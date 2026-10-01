@@ -1120,6 +1120,177 @@ describe("IntegrationRegistry lifecycle", () => {
     }
   });
 
+  it("keeps a provider available when an admitted write proves nothing changed", async () => {
+    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-write-unchanged-"));
+    const manifest: IntegrationManifest = {
+      ...fixtureManifest,
+      id: "test-write-unchanged",
+      name: "Test Write Unchanged",
+      provider: "test-write-unchanged-provider",
+      capabilities: [
+        {
+          id: "fixture.write",
+          displayName: "Write fixture",
+          description: "Write fixture records.",
+          access: "default",
+        },
+      ],
+      tools: [
+        {
+          name: "test.fixture.write",
+          displayName: "Write fixture",
+          description: "Write one fixture record.",
+          capabilities: ["fixture.write"],
+          effect: "write",
+        },
+      ],
+      skills: [],
+    };
+    let rejectWrite = true;
+    const implementation = (): IntegrationProvider => ({
+      id: "test-write-unchanged-provider",
+      tools: [
+        {
+          name: "test.fixture.write",
+          description: "Write one fixture record.",
+          input: EmptyIntegrationToolInput,
+          readOnly: false,
+          openWorld: false,
+        },
+      ],
+      status: async () => ({
+        state: "connected",
+        accountLabel: "Fixture user",
+        grantedCapabilities: ["fixture.write"],
+        message: null,
+      }),
+      connect: async () => ({ kind: "connected", flowId: "fixture-flow", message: "Connected." }),
+      disconnect: async () => undefined,
+      invoke: async (_toolName, _input, context) => {
+        await context!.beginCommit!();
+        if (rejectWrite) {
+          throw new IntegrationProviderPublicError("The fixture record already exists.", {
+            unchanged: true,
+          });
+        }
+        return { written: true };
+      },
+    });
+    const faults: Array<{ readonly integrationId: string; readonly reason: string }> = [];
+    const registry = new RegistryRuntime(
+      root,
+      [packaged(manifest, implementation())],
+      undefined,
+      undefined,
+      { onProviderFault: (fault) => faults.push(fault) },
+    );
+    let restarted: RegistryRuntime | undefined;
+    try {
+      await registry.install(manifest.id);
+      const failure = await registry
+        .invokeTool(
+          "test.fixture.write",
+          {},
+          { signal: new AbortController().signal, writeApproved: true },
+        )
+        .then(
+          () => expect.unreachable("a refused write must fail"),
+          (error: unknown) => error,
+        );
+      expect(describeIntegrationToolFailure(failure).text).toContain(
+        "The fixture record already exists.",
+      );
+      expect(faults).toEqual([]);
+      expect((await registry.snapshot()).integrations[0]).toMatchObject({
+        connectionState: "connected",
+      });
+      await expect(
+        NodeFSP.access(NodePath.join(root, "commit-journal", `${manifest.id}.json`)),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+
+      rejectWrite = false;
+      await expect(
+        registry.invokeTool(
+          "test.fixture.write",
+          {},
+          { signal: new AbortController().signal, writeApproved: true },
+        ),
+      ).resolves.toEqual({ written: true });
+      await registry.close();
+
+      restarted = new RegistryRuntime(root, [packaged(manifest, implementation())]);
+      expect((await restarted.list()).integrations[0]).toMatchObject({
+        connectionState: "connected",
+      });
+    } finally {
+      await registry.close();
+      await restarted?.close();
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports why an ambiguous admitted rejection faulted the provider", async () => {
+    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-fault-report-"));
+    const state: ProviderState = {
+      status: {
+        state: "not_connected",
+        accountLabel: null,
+        grantedCapabilities: [],
+        message: null,
+      },
+      credential: null,
+      disconnectFails: false,
+    };
+    const rejectingProvider: IntegrationProvider = {
+      ...provider("test-connected-provider", state),
+      connect: async (_capabilities, context) => {
+        await context!.beginCommit();
+        throw new Error("Credential commit result was ambiguous.");
+      },
+    };
+    const faults: Array<{ readonly integrationId: string; readonly reason: string }> = [];
+    const options = { onProviderFault: (fault: (typeof faults)[number]) => faults.push(fault) };
+    let registry: RegistryRuntime | undefined;
+    let restarted: RegistryRuntime | undefined;
+    try {
+      registry = new RegistryRuntime(
+        root,
+        [packaged(connectedManifest, rejectingProvider)],
+        undefined,
+        undefined,
+        options,
+      );
+      await registry.install(connectedManifest.id);
+      await expect(registry.connect(connectedManifest.id)).rejects.toMatchObject({
+        code: "operation_failed",
+      });
+      await registry.close();
+      restarted = new RegistryRuntime(
+        root,
+        [packaged(connectedManifest, provider("test-connected-provider", state))],
+        undefined,
+        undefined,
+        options,
+      );
+      await restarted.list();
+      expect(faults).toEqual([
+        {
+          integrationId: connectedManifest.id,
+          reason: "Credential commit result was ambiguous.",
+        },
+        {
+          integrationId: connectedManifest.id,
+          reason:
+            "A commit from an earlier session never settled; reset the connection to recover.",
+        },
+      ]);
+    } finally {
+      await registry?.close();
+      await restarted?.close();
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps capability revocation active when disable queues behind installation", async () => {
     const root = await NodeFSP.mkdtemp(
       NodePath.join(NodeOS.tmpdir(), "tritonai-install-capability-disable-"),
