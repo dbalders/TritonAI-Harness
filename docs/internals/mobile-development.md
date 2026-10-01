@@ -72,28 +72,40 @@ EAS workflows, so verify that separately before publishing OTA updates.
 ## Nightly TestFlight automation
 
 After the Nightly workflow publishes a verified desktop prerelease, it calls
-`mobile-nightly-testflight.yml` to build its exact source commit for iOS and
-upload it to the existing Preview app record (`6813180967`). Preview uses the
-nightly artwork. EAS increments the build number remotely; the app version
-continues to come from `app.config.ts`. No Android build or OTA is published by
-this workflow. Build-only, skipped, and failed nightly publications do not
-start a mobile build.
+`mobile-nightly-testflight.yml` to generate the Preview iOS project from that
+exact source commit. It pushes the source plus generated native files to the
+dedicated `mobile-nightly` branch, which starts Xcode Cloud. Generated native
+files remain ignored on development branches. Each build branch commit records
+the nightly tag, source SHA, and automation SHA under `ios/ci_scripts/`.
+Build-only, skipped, and failed nightly publications do not start a mobile build.
 
-The repository's `EXPO_TOKEN` must access `@dbalders/t3-code`. Before the first
-non-interactive run, configure UCSD distribution signing for the main app and
-extensions, plus an App Store Connect submission API key, in EAS for
-`preview:testflight`. Project linkage alone does not provision those credentials.
-The workflow validates the bundle ID, team, Expo project, and submit app ID
-before requesting a build. It waits for the build, submits that specific EAS
-build ID, and waits for upload completion. Apple processing, TestFlight groups,
-and external beta review can still delay tester availability. This upload does
-not submit the app for public App Store review.
+Configure Xcode Cloud once from the shared `TritonAIHarnessPreview` scheme in
+`apps/mobile/ios/TritonAIHarnessPreview.xcworkspace` on `mobile-nightly`:
 
-For a failed mobile build/upload, dispatch **Mobile Nightly TestFlight** with
-the published nightly tag. This creates another build with an incremented build
-number; it does not republish the desktop nightly. Each run records its source
-SHA and EAS build receipt. Mobile failures leave the already published desktop
-release intact and fail the Nightly run visibly.
+- Use the UCSD team (`G789749RTK`) and existing Preview app (`6813180967`,
+  `edu.ucsd.tritonai.harness.preview`).
+- Connect `dbalders/TritonAI-Harness` and set the branch-change start condition
+  to `mobile-nightly` only.
+- Archive for iOS distribution, then add the TestFlight post-action and the
+  intended tester group. Xcode Cloud manages the distribution signing keys.
+
+The post-clone script installs the repository's Node and pnpm versions, mobile
+dependencies, and CocoaPods. It sets every app/extension build number to
+`CI_BUILD_NUMBER`; the app version continues to come from `app.config.ts`.
+Preview uses the nightly artwork. No Expo signing credentials, Android build,
+or OTA publication are involved. EAS workflows remain available separately.
+
+GitHub Actions success proves that the native branch was prepared. Check Xcode
+Cloud for archive/upload success and TestFlight for processing and tester
+availability. An Xcode Cloud failure does not change the already published
+desktop nightly or retroactively fail its Actions run. Apple processing and
+external beta review can delay tester availability. The TestFlight post-action
+does not submit the app for public App Store review.
+
+To retry preparation, dispatch **Mobile Nightly TestFlight** with the published
+nightly tag. To retry an archive or upload after preparation succeeded, rebuild
+the corresponding commit in Xcode Cloud. The generated branch advances without
+force pushes and retains the exact nightly source as a commit parent.
 
 ## Development refresh
 

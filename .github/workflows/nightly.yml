@@ -675,17 +675,17 @@ jobs:
         with:
           script: await require('./.github/scripts/publish-nightly.cjs')({github, context});
   mobile_testflight:
-    name: Upload nightly mobile app to TestFlight
+    name: Prepare nightly mobile app for TestFlight
     needs:
       - preflight
       - publish
     if: needs.preflight.outputs.publish == 'true'
+    permissions:
+      contents: write
     uses: ./.github/workflows/mobile-nightly-testflight.yml
     with:
       nightly_tag: ${{ needs.preflight.outputs.tag }}
       source_sha: ${{ needs.preflight.outputs.ref }}
-    secrets:
-      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
   verify:
     name: Verify both nightly artifact sets
     needs:
