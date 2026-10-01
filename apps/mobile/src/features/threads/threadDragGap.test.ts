@@ -28,10 +28,10 @@ describe("drag action labels", () => {
   it("names the action for each destination instead of its section", () => {
     expect(threadDragAction("active", "pinned")).toBe("Pin");
     expect(threadDragAction("pinned", "active")).toBe("Unpin");
-    expect(threadDragAction("settled", "active")).toBe("Unsettle");
+    expect(threadDragAction("settled", "active")).toBe("Reopen");
     expect(threadDragAction("snoozed", "active")).toBe("Unsnooze");
-    expect(threadDragAction("active", "settled")).toBe("Settle");
-    expect(threadDragAction("pinned", "settled")).toBe("Settle");
+    expect(threadDragAction("active", "settled")).toBe("Done");
+    expect(threadDragAction("pinned", "settled")).toBe("Done");
     expect(threadDragAction("active", "active")).toBe("Reorder");
   });
   it("does not offer a parked-section reorder or snooze without a wake time", () => {
