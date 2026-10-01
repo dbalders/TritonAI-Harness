@@ -45,7 +45,7 @@ function prepareNightlyMobileNative({ root, tag, sourceSha, generatorSha }) {
     ),
     "utf8",
   );
-  if (!scheme.includes("<ArchiveAction") || !scheme.includes('buildForArchiving="YES"')) {
+  if (!scheme.includes("<ArchiveAction") || !/buildForArchiving\s*=\s*"YES"/.test(scheme)) {
     throw new Error("Preview must have a shared scheme that supports archiving");
   }
 

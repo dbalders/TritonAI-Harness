@@ -41,7 +41,7 @@ function fixture(t) {
   const scheme = path.join(schemeDirectory, "TritonAIHarnessPreview.xcscheme");
   fs.writeFileSync(
     scheme,
-    '<Scheme><BuildActionEntry buildForArchiving="YES"/><ArchiveAction/></Scheme>',
+    '<Scheme><BuildActionEntry buildForArchiving = "YES"/><ArchiveAction/></Scheme>',
   );
   return {
     root,
