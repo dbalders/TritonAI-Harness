@@ -1748,7 +1748,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                 ) : (
                   <button
                     type="button"
-                    aria-label="Done"
+                    aria-label={`Mark ${thread.title} done`}
                     onClick={handleSettleClick}
                     className={cn(
                       "pointer-events-none absolute inset-y-0 right-0 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-2 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover/sidebar-row:pointer-events-auto group-hover/sidebar-row:opacity-100",
@@ -1950,7 +1950,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                             render={
                               <button
                                 type="button"
-                                aria-label="Done"
+                                aria-label={`Mark ${thread.title} done`}
                                 onClick={handleSettleClick}
                                 className="-mr-1 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground"
                               />
@@ -1959,7 +1959,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                             <CheckIcon className="size-3.5" />
                             Done
                           </TooltipTrigger>
-                          <TooltipPopup>Done</TooltipPopup>
+                          <TooltipPopup>Mark thread done</TooltipPopup>
                         </Tooltip>
                       ) : null}
                     </span>
