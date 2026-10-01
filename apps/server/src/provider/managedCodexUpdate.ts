@@ -237,9 +237,7 @@ export const updateTritonAiManagedCodex = Effect.fn(
   const currentVersion = parseCodexCliVersion(commandOutput(currentResult));
   if (!currentVersion) return yield* updateError("The installed Codex version is invalid.");
   if (compareSemverVersions(currentVersion, approvedVersion) >= 0) {
-    return yield* updateError(
-      "The installed Codex version already meets or exceeds the approved version.",
-    );
+    return currentVersion;
   }
 
   const runtimeRoot = path.dirname(installation.installRoot);
