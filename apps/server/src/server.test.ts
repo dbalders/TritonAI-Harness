@@ -138,6 +138,7 @@ import { OrchestrationEventStore } from "./persistence/Services/OrchestrationEve
 import { PersistenceSqlError } from "./persistence/Errors.ts";
 import * as ProjectionThreadMessages from "./persistence/Services/ProjectionThreadMessages.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
+import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
 import * as ProviderService from "./provider/Services/ProviderService.ts";
 import { ProviderAuthService } from "./provider/Services/ProviderAuthService.ts";
 import { ProviderInstanceRegistry } from "./provider/Services/ProviderInstanceRegistry.ts";
@@ -796,6 +797,8 @@ const buildAppUnderTest = (options?: {
             refresh: Effect.void,
             ...options?.layers?.usageLimitSources,
           }),
+          // Server-lifetime in production; built from the provider mocks below.
+          ProviderMaintenanceRunner.layer,
           Layer.mock(MemorySync.MemorySync)({
             getStatus: Effect.succeed({
               enabled: false,
