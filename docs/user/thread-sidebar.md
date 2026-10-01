@@ -55,7 +55,8 @@ spot where the thread will land. Drops into either section keep the position you
 mobile, open a thread's menu and choose **Arrange threads**. Drag a handle within or between
 **Pinned** and **Active** to reorder, pin, or unpin. Drop onto the **Done** divider to
 mark a thread done. The dragged card shows the action before you release it. Expand **Snoozed**
-or **Done** to drag a parked thread back into either live section. Each drop saves; **Done** returns to the thread list.
+or **Done** to drag a parked thread back into either live section. Each drop saves;
+choose the **Done** button in the sheet header to return to the thread list.
 **Move up** and **Move down** are also available in the thread menu. The server
 saves the order, so it survives a refresh and appears on your other connected devices.
 
@@ -98,8 +99,8 @@ threads already marked done.
 
 ## Link a pull request
 
-The server finds the PR for each active thread's saved branch, even when your
-apps are closed. Done threads keep their saved links. Update the server if
+The server finds the PR for each thread that has not been marked done, using its
+saved branch even when your apps are closed. Done threads keep their saved links. Update the server if
 automatic branch links do not appear.
 
 On web and desktop, right-click a pull request link in a thread and choose
