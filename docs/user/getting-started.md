@@ -1,6 +1,6 @@
 # Getting started guide
 
-New to AI tools? The getting started guide teaches the basics by having you do small, real tasks in TritonAI Harness. It appears under the message box whenever you open a new conversation, and each step finishes on its own when you do what it describes.
+New to AI tools? The getting started guide teaches the basics by having you do small, real tasks in TritonAI Harness. It talks to you above the message box when you open a new conversation, and each step finishes on its own when you do what it describes. Inside a conversation it says what's next in one line, and **Next** opens a new conversation with that step ready.
 
 ## The steps
 
@@ -12,10 +12,10 @@ The main quest has three chapters:
 
 **Side quests** are optional and stay available after you finish: a gallery of everyday requests to try, [computer use](./computer-use.md) in the desktop app, and a morning brief delivered every weekday through the n8n plugin.
 
-Buttons such as **Fill in the box for me** put an example request in the message box. Edit it before you send; replace anything in brackets, like `[your role]`, with your own details. **Skip this step** (or **Mark as done** for a side quest) marks a step done without doing it.
+Buttons such as **Fill in the box for me** put an example request in the message box. Edit it before you send; replace anything in brackets, like `[your role]`, with your own details. To skip a step, open **See all steps** and choose **Skip** under the list.
 
 ## Hide or reopen the guide
 
-Close the guide with the **X** in its corner. Your progress is kept. To bring it back, use **Getting started** at the bottom of the sidebar, **Getting started guide** in the command palette, or **Settings > General > Getting started**. **Start over** there clears your progress.
+Choose **Not now** to hide the guide. Your progress is kept. To bring it back, use **Getting started** at the bottom of the sidebar, **Getting started guide** in the command palette, or **Settings > General > Getting started**. **Start over** there clears your progress.
 
 Progress is saved for this app on this computer, so another computer or browser starts the guide fresh.

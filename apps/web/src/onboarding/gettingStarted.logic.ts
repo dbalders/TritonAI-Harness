@@ -72,8 +72,12 @@ export interface GettingStartedStep {
   readonly id: string;
   readonly chapter: GettingStartedChapterId;
   readonly title: string;
-  readonly body: string;
-  readonly tip: string | null;
+  /** One line telling the person what to do. */
+  readonly summary: string;
+  /** Replaces the summary once the step's example is in the composer. */
+  readonly filledHint: string | null;
+  /** Said once the step is done. */
+  readonly doneLine: string;
   readonly action: GettingStartedAction;
   /** A second button that opens settings the step depends on. */
   readonly settingsLink?: {
@@ -139,8 +143,9 @@ export const GETTING_STARTED_STEPS: ReadonlyArray<GettingStartedStep> = [
     id: "say-hello",
     chapter: "first-conversation",
     title: "Say hello",
-    body: "Type in the box the way you'd message a helpful coworker. There's no special wording to learn.",
-    tip: "Replace [your role] with what you do, then press Enter to send.",
+    summary: "Send your first message. We'll write it, you just fill in your role.",
+    filledHint: "Replace [your role] with what you do, then press Enter.",
+    doneLine: "Nice, you sent your first message.",
     action: { kind: "prompt", label: FILL, prompt: TRITONAI_FIRST_RUN_PROMPT },
     completion: "any-send",
   },
@@ -148,8 +153,9 @@ export const GETTING_STARTED_STEPS: ReadonlyArray<GettingStartedStep> = [
     id: "follow-up",
     chapter: "first-conversation",
     title: "Keep the conversation going",
-    body: "The assistant remembers everything said in a conversation, so you can just reply. Ask it to go deeper, make something shorter, or try again.",
-    tip: "Try: “Walk me through the first idea, one step at a time.”",
+    summary: "Reply in the same conversation. It remembers what was said.",
+    filledHint: "Try: “Walk me through the first idea, one step at a time.”",
+    doneLine: "Nice, that was your first back-and-forth.",
     action: { kind: "open-latest-thread", label: "Go to my conversation" },
     completion: "follow-up",
   },
@@ -157,8 +163,9 @@ export const GETTING_STARTED_STEPS: ReadonlyArray<GettingStartedStep> = [
     id: "full-picture",
     chapter: "first-conversation",
     title: "Give it the full picture",
-    body: "The more it knows, the better it does. A good request says what you want, who it's for, and what a great result looks like. When you're not sure what to say, ask it to interview you first.",
-    tip: "Answer its questions in your next message. That's the fastest way to a great result.",
+    summary: "Get better answers by letting it ask you a few questions first.",
+    filledHint: "Fill in the brackets and send. Then answer its questions.",
+    doneLine: "Good. Answering its questions is the fastest way to a great result.",
     action: {
       kind: "prompt",
       label: FILL,
@@ -171,8 +178,9 @@ export const GETTING_STARTED_STEPS: ReadonlyArray<GettingStartedStep> = [
     id: "share-file",
     chapter: "first-conversation",
     title: "Hand it a file",
-    body: "Drag a document, spreadsheet, or image onto the box, or click the paperclip. The assistant reads it and works on it with you.",
-    tip: "Attach the file before you send. Any work file you're comfortable sharing is fine.",
+    summary: "Attach a file with the paperclip and ask about it.",
+    filledHint: "Attach a file with the paperclip, then press Enter.",
+    doneLine: "Nice, it read your file.",
     action: {
       kind: "prompt",
       label: FILL,
@@ -185,8 +193,9 @@ export const GETTING_STARTED_STEPS: ReadonlyArray<GettingStartedStep> = [
     id: "connect-tools",
     chapter: "connect",
     title: "Connect your email and calendar",
-    body: "Sign in to Microsoft 365 or Google Workspace so the assistant can look at your calendar, email, and files when you ask. You choose what it can see and change.",
-    tip: "Use your UC San Diego account. You can disconnect at any time.",
+    summary: "Connect your email and calendar so it can help with your day.",
+    filledHint: null,
+    doneLine: "Your tools are connected.",
     action: { kind: "open-plugins", label: "Open Plugins" },
     completion: "connected",
   },
@@ -194,8 +203,9 @@ export const GETTING_STARTED_STEPS: ReadonlyArray<GettingStartedStep> = [
     id: "morning-brief",
     chapter: "connect",
     title: "Get your first morning brief",
-    body: "With your tools connected, ask for a quick rundown of your day. It takes seconds, and it's a good way to start each morning.",
-    tip: "Edit the request to fit how you work before sending.",
+    summary: "Ask for a quick rundown of your day.",
+    filledHint: "Press Enter to send.",
+    doneLine: "That's your first morning brief.",
     action: {
       kind: "prompt",
       label: FILL,
@@ -209,8 +219,9 @@ export const GETTING_STARTED_STEPS: ReadonlyArray<GettingStartedStep> = [
     id: "brief-to-inbox",
     chapter: "connect",
     title: "Put your brief in your inbox",
-    body: "The assistant can write email drafts in Outlook or Gmail. It never sends email for you: the draft waits in your Drafts folder until you review it and press Send yourself.",
-    tip: "Open your Drafts folder afterwards to see what it wrote.",
+    summary: "Have it put your brief in your email drafts. It never sends.",
+    filledHint: "Press Enter. It asks before it writes the draft.",
+    doneLine: "Check your Drafts folder: it's waiting for you there.",
     action: {
       kind: "prompt",
       label: FILL,
@@ -224,8 +235,9 @@ export const GETTING_STARTED_STEPS: ReadonlyArray<GettingStartedStep> = [
     id: "use-skill",
     chapter: "make-it-yours",
     title: "Use a skill",
-    body: "Skills are saved instructions for work you do often, like writing in UC San Diego style or checking accessibility. Type $ in the box to browse them.",
-    tip: "Pick a skill from the list, then describe your task after it.",
+    summary: "Skills are saved recipes for common work. Type $ to see them.",
+    filledHint: "Pick a skill from the list, then say what you need.",
+    doneLine: "Nice, you used your first skill.",
     action: { kind: "prompt", label: "Show me the skills", prompt: "$" },
     completion: "skill",
   },
@@ -233,8 +245,9 @@ export const GETTING_STARTED_STEPS: ReadonlyArray<GettingStartedStep> = [
     id: "stay-in-control",
     chapter: "make-it-yours",
     title: "Decide how much it does on its own",
-    body: "The assistant can create and edit files in your project folder. The mode menu under the box sets how much it does alone: Supervised asks before every change, and Auto handles routine steps but asks about risky ones. Everything it does shows up in the conversation.",
-    tip: "Not sure yet? Choose Supervised for anything unfamiliar.",
+    summary: "The mode menu under the box sets how much it does alone. Supervised asks first.",
+    filledHint: null,
+    doneLine: "Got it. You can change the mode any time.",
     action: { kind: "acknowledge", label: "Got it" },
     completion: "acknowledge",
   },
@@ -242,8 +255,9 @@ export const GETTING_STARTED_STEPS: ReadonlyArray<GettingStartedStep> = [
     id: "pick-up",
     chapter: "make-it-yours",
     title: "Pick up where you left off",
-    body: "Memory writes a short note about each day's work, so the assistant can help you continue the next day without starting over.",
-    tip: null,
+    summary: "Ask what you worked on yesterday.",
+    filledHint: "Press Enter to send.",
+    doneLine: "That's Memory at work.",
     action: {
       kind: "prompt",
       label: FILL,
@@ -256,8 +270,9 @@ export const GETTING_STARTED_STEPS: ReadonlyArray<GettingStartedStep> = [
     id: "try-ideas",
     chapter: "side-quests",
     title: "Try an idea for your job",
-    body: "Not sure what to use it for? Pick an everyday task below. Each one fills in the box with a request you can adjust before sending.",
-    tip: "Replace anything in [brackets] with your own details.",
+    summary: "Not sure what to ask? Pick an everyday task.",
+    filledHint: "Fill in the brackets, then press Enter.",
+    doneLine: "Nice. Come back to these ideas any time.",
     action: { kind: "ideas", ideas: GETTING_STARTED_IDEAS },
     completion: "quest-send",
   },
@@ -265,8 +280,9 @@ export const GETTING_STARTED_STEPS: ReadonlyArray<GettingStartedStep> = [
     id: "computer-use",
     chapter: "side-quests",
     title: "Let it use your apps",
-    body: "With computer use turned on, the assistant can open apps on this computer, click, and type for you, and you can watch everything it does. Turn it on under Settings > General first.",
-    tip: "Start your request with “Use computer use to…”. Stop it at any time from the conversation.",
+    summary: "Let it click and type in your apps while you watch. Turn it on in Settings first.",
+    filledHint: "Press Enter to send.",
+    doneLine: "That's computer use.",
     action: {
       kind: "prompt",
       label: FILL,
@@ -280,8 +296,9 @@ export const GETTING_STARTED_STEPS: ReadonlyArray<GettingStartedStep> = [
     id: "daily-brief",
     chapter: "side-quests",
     title: "Get your brief every morning",
-    body: "UC San Diego's n8n automation service can run a task on a schedule. Ask the assistant to build a workflow that sends you a morning brief every weekday. It shows you the plan and asks before turning anything on.",
-    tip: "Needs the n8n plugin connected under Settings > Plugins.",
+    summary: "Get your brief emailed every weekday morning with n8n.",
+    filledHint: "Press Enter. It asks before turning anything on.",
+    doneLine: "Your morning brief is on its way.",
     action: {
       kind: "prompt",
       label: FILL,
@@ -448,4 +465,17 @@ export function mergeGettingStartedProgress(
   const added = stepIds.filter((id) => progress[id] === undefined);
   if (added.length === 0) return progress;
   return { ...progress, ...Object.fromEntries(added.map((id) => [id, completedAt])) };
+}
+
+/**
+ * What the guide shows inside a conversation: a celebration right after a
+ * message there finished steps, otherwise a one-line "Next up".
+ */
+export function resolveGettingStartedThreadNudge(
+  state: GettingStartedState,
+  justCompletedStepIds: ReadonlyArray<string>,
+): "celebrate" | "next-up" | "none" {
+  if (justCompletedStepIds.length > 0) return "celebrate";
+  if (state.isComplete || state.nextStep === null) return "none";
+  return "next-up";
 }

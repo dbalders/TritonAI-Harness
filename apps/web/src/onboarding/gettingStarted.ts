@@ -1,9 +1,10 @@
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
-import type { ThreadId } from "@t3tools/contracts";
+import type { ScopedProjectRef, ThreadId } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 
 import { toastManager } from "../components/ui/toast";
+import { useComposerDraftStore } from "../composerDraftStore";
 import { isElectron } from "../env";
 import {
   sortScopedProjectsForSidebar,
@@ -31,17 +32,66 @@ import {
 const PLATFORM = { desktop: isElectron };
 
 /**
- * Drafts a guide step filled with its example, by thread id. A message sent
- * from one of them finishes that step. Kept in memory: after a restart the
- * person can fill the example again.
+ * In-memory coach state. `questStepIdByThreadId` maps drafts a step filled
+ * with its example; a message sent from one finishes that step. `lastSend` is
+ * the latest send and the steps it finished, so the conversation it happened
+ * in can celebrate them. After a restart the person can fill an example again.
  */
-const questStepIdByThreadId = new Map<string, string>();
-
-export function markGettingStartedQuestThread(threadId: ThreadId, stepId: string): void {
-  questStepIdByThreadId.set(threadId, stepId);
+interface CoachMemory {
+  readonly questStepIdByThreadId: ReadonlyMap<string, string>;
+  readonly lastSend: {
+    readonly threadId: string;
+    readonly completedStepIds: ReadonlyArray<string>;
+  } | null;
 }
 
-export function completeGettingStartedSteps(stepIds: ReadonlyArray<string>): void {
+let coachMemory: CoachMemory = { questStepIdByThreadId: new Map(), lastSend: null };
+const coachListeners = new Set<() => void>();
+const EMPTY_STEP_IDS: ReadonlyArray<string> = [];
+
+function updateCoachMemory(next: CoachMemory): void {
+  coachMemory = next;
+  for (const listener of coachListeners) listener();
+}
+
+function subscribeCoachMemory(listener: () => void): () => void {
+  coachListeners.add(listener);
+  return () => coachListeners.delete(listener);
+}
+
+export function markGettingStartedQuestThread(threadId: ThreadId, stepId: string): void {
+  const questStepIdByThreadId = new Map(coachMemory.questStepIdByThreadId);
+  questStepIdByThreadId.set(threadId, stepId);
+  updateCoachMemory({ ...coachMemory, questStepIdByThreadId });
+}
+
+/** The step whose example fills this draft, if any. */
+export function useGettingStartedQuestStep(threadId: string | null): string | null {
+  return useSyncExternalStore(subscribeCoachMemory, () =>
+    threadId === null ? null : (coachMemory.questStepIdByThreadId.get(threadId) ?? null),
+  );
+}
+
+/** Steps the latest message in this conversation finished. */
+export function useJustCompletedGettingStartedSteps(
+  threadId: string | null,
+): ReadonlyArray<string> {
+  return useSyncExternalStore(subscribeCoachMemory, () =>
+    threadId !== null && coachMemory.lastSend?.threadId === threadId
+      ? coachMemory.lastSend.completedStepIds
+      : EMPTY_STEP_IDS,
+  );
+}
+
+/**
+ * Records finished steps. `announce` shows a toast; the coach celebrates steps
+ * finished in a conversation itself, so only steps finished elsewhere (such as
+ * connecting a plugin in Settings) need one.
+ */
+export function completeGettingStartedSteps(
+  stepIds: ReadonlyArray<string>,
+  options: { readonly announce?: boolean } = {},
+): void {
   if (stepIds.length === 0) return;
   const before = getClientSettings();
   const now = new Date();
@@ -62,7 +112,7 @@ export function completeGettingStartedSteps(stepIds: ReadonlyArray<string>): voi
   }));
 
   // Someone who hid the guide still earns progress, just without the fanfare.
-  if (before.gettingStartedHidden) return;
+  if (before.gettingStartedHidden || options.announce === false) return;
   const state = resolveGettingStartedState(progress, now, PLATFORM);
   const finished = state.steps.filter(
     (view) =>
@@ -105,13 +155,21 @@ export function recordGettingStartedSend(
 ): void {
   const settings = getClientSettings();
   const state = resolveGettingStartedState(settings.gettingStartedProgress, new Date(), PLATFORM);
-  if (state.steps.every((view) => view.status === "done")) return;
-  const questStepId = questStepIdByThreadId.get(event.threadId) ?? null;
+  if (state.steps.every((view) => view.status === "done")) {
+    if (coachMemory.lastSend !== null) updateCoachMemory({ ...coachMemory, lastSend: null });
+    return;
+  }
+  const questStepId = coachMemory.questStepIdByThreadId.get(event.threadId) ?? null;
   const completed = resolveStepsCompletedBySend(state, { ...event, questStepId });
+  const questStepIdByThreadId = new Map(coachMemory.questStepIdByThreadId);
   if (questStepId !== null && completed.includes(questStepId)) {
     questStepIdByThreadId.delete(event.threadId);
   }
-  completeGettingStartedSteps(completed);
+  updateCoachMemory({
+    questStepIdByThreadId,
+    lastSend: { threadId: event.threadId, completedStepIds: completed },
+  });
+  completeGettingStartedSteps(completed, { announce: false });
 }
 
 export function setGettingStartedHidden(hidden: boolean): void {
@@ -119,7 +177,7 @@ export function setGettingStartedHidden(hidden: boolean): void {
 }
 
 export function resetGettingStartedProgress(): void {
-  questStepIdByThreadId.clear();
+  updateCoachMemory({ questStepIdByThreadId: new Map(), lastSend: null });
   void persistClientSettingsPatch({ gettingStartedProgress: {}, gettingStartedHidden: false });
 }
 
@@ -181,4 +239,22 @@ export function useOpenLatestConversation(): (() => Promise<void>) | null {
     });
   }, [latest, navigate]);
   return latest ? open : null;
+}
+
+/** Opens a fresh draft in the project with a step's example filled in. */
+export function useStartGettingStartedStepInNewDraft(): (
+  projectRef: ScopedProjectRef,
+  stepId: string,
+  prompt: string,
+) => Promise<void> {
+  const handleNewThread = useNewThreadHandler();
+  return useCallback(
+    async (projectRef, stepId, prompt) => {
+      const draft = await handleNewThread(projectRef);
+      if (!draft) return;
+      useComposerDraftStore.getState().setPrompt(draft.draftId, prompt);
+      markGettingStartedQuestThread(draft.threadId, stepId);
+    },
+    [handleNewThread],
+  );
 }

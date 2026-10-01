@@ -6,6 +6,7 @@ import {
   isGettingStartedStepOptional,
   mergeGettingStartedProgress,
   resolveGettingStartedState,
+  resolveGettingStartedThreadNudge,
   resolveStepsCompletedBySend,
   type GettingStartedSendEvent,
 } from "./gettingStarted.logic";
@@ -171,5 +172,29 @@ describe("mergeGettingStartedProgress", () => {
     expect(
       mergeGettingStartedProgress(progress, ["say-hello", "follow-up"], EVENING.toISOString()),
     ).toEqual({ "say-hello": MORNING.toISOString(), "follow-up": EVENING.toISOString() });
+  });
+});
+
+describe("resolveGettingStartedThreadNudge", () => {
+  it("celebrates right after a message finished a step, then shrinks to next up", () => {
+    const state = resolveGettingStartedState(doneAt(["say-hello"]), MORNING, DESKTOP);
+    expect(resolveGettingStartedThreadNudge(state, ["say-hello"])).toBe("celebrate");
+    expect(resolveGettingStartedThreadNudge(state, [])).toBe("next-up");
+  });
+
+  it("stays quiet once nothing is left to do today", () => {
+    const allButTomorrow = MAIN_STEP_IDS.filter((id) => id !== "pick-up");
+    expect(
+      resolveGettingStartedThreadNudge(
+        resolveGettingStartedState(doneAt(allButTomorrow), EVENING, DESKTOP),
+        [],
+      ),
+    ).toBe("none");
+    expect(
+      resolveGettingStartedThreadNudge(
+        resolveGettingStartedState(doneAt(MAIN_STEP_IDS), NEXT_MORNING, DESKTOP),
+        ["pick-up"],
+      ),
+    ).toBe("celebrate");
   });
 });

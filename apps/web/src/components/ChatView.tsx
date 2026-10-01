@@ -368,7 +368,7 @@ import { readPreparedConnection } from "../state/session";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
 import { createPageScrollController, type PageScrollKey } from "./chat/pageScrollController";
 import { DraftHeroHeadline } from "./chat/DraftHeroHeadline";
-import { GettingStartedCard, GettingStartedThreadTracker } from "./onboarding/GettingStartedCard";
+import { GettingStartedCoach } from "./onboarding/GettingStartedCoach";
 import {
   markGettingStartedQuestThread,
   recordGettingStartedSend,
@@ -10132,9 +10132,9 @@ export default function ChatView(props: ChatViewProps) {
                 isDraftHeroState
                   ? cn(
                       "pointer-events-none absolute inset-0 z-20 flex items-center",
-                      // The guide card hangs below the centered composer; lift the
-                      // composer so the card has room.
-                      !gettingStartedHidden && "pb-[min(24rem,45dvh)]",
+                      // The guide stands above the centered composer; lower the
+                      // composer so the guide has room.
+                      !gettingStartedHidden && "pt-[min(10rem,18dvh)]",
                     )
                   : "pointer-events-none absolute inset-x-0 bottom-0 z-20 pt-1.5 sm:pt-2"
               }
@@ -10189,15 +10189,31 @@ export default function ChatView(props: ChatViewProps) {
                             : undefined
                         }
                       >
-                        <DraftHeroHeadline
-                          draftId={draftId}
-                          activeProjectRef={activeProjectRef}
-                          activeProjectTitle={activeProject?.title ?? null}
-                        />
+                        {gettingStartedHidden ? (
+                          <DraftHeroHeadline
+                            draftId={draftId}
+                            activeProjectRef={activeProjectRef}
+                            activeProjectTitle={activeProject?.title ?? null}
+                          />
+                        ) : (
+                          <GettingStartedCoach
+                            where="hero"
+                            threadId={activeThread?.id ?? null}
+                            projectRef={activeProjectRef}
+                            onFillComposer={fillComposerForGettingStarted}
+                          />
+                        )}
                       </div>
                     </div>
                   ) : null}
-                  {!isDraftHeroState && isServerThread ? <GettingStartedThreadTracker /> : null}
+                  {!isDraftHeroState && isServerThread ? (
+                    <GettingStartedCoach
+                      where="thread"
+                      threadId={activeThread?.id ?? null}
+                      projectRef={activeProjectRef}
+                      onFillComposer={fillComposerForGettingStarted}
+                    />
+                  ) : null}
                   {!isDraftHeroState && activeGoal ? (
                     <GoalProgressRow
                       goal={activeGoal}
@@ -10406,11 +10422,6 @@ export default function ChatView(props: ChatViewProps) {
                       className="h-[calc(env(safe-area-inset-bottom)+1rem)] sm:h-[calc(env(safe-area-inset-bottom)+1.25rem)]"
                     />
                   </div>
-                  {isDraftHeroState ? (
-                    <div className="absolute inset-x-0 top-full">
-                      <GettingStartedCard onFillComposer={fillComposerForGettingStarted} />
-                    </div>
-                  ) : null}
                 </div>
               </div>
             </div>

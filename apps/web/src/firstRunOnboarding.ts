@@ -16,6 +16,7 @@ import { useShallow } from "zustand/react/shallow";
 
 import { APP_BASE_NAME } from "./branding";
 import { useComposerDraftStore } from "./composerDraftStore";
+import { markGettingStartedQuestThread } from "./onboarding/gettingStarted";
 import {
   useClientSettingsHydrated,
   usePrimarySettings,
@@ -238,10 +239,12 @@ export function TritonAiFirstRunOnboardingBootstrap(props: { pathname: string })
           return;
         }
 
-        await createNewThread(projectRef, {
+        const draft = await createNewThread(projectRef, {
           newDraftPrompt: TRITONAI_FIRST_RUN_PROMPT,
           replace: true,
         });
+        // The first message is the guide's first step, so the coach can say what to do next.
+        if (draft) markGettingStartedQuestThread(draft.threadId, "say-hello");
         updateSettings({ tritonAiFirstRunOnboardingCompleted: true });
       } catch (error) {
         console.error("[first-run-onboarding] failed", error);
