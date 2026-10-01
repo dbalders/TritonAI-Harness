@@ -164,6 +164,57 @@ describe("installer version marker", () => {
 });
 
 describe("installer update controller", () => {
+  it.each([true, false])(
+    "loads the recorded version without checking releases (updates enabled: %s)",
+    async (enabled) => {
+      const fetchRelease = vi.fn();
+      const openExternal = vi.fn();
+      const onState = vi.fn();
+      const controller = createInstallerUpdateController({
+        enabled,
+        platform: "darwin",
+        arch: "arm64",
+        readMarker: async () => ({ status: "valid", version: "0.3.3" }),
+        fetchRelease,
+        openExternal,
+        onState,
+      });
+
+      await controller.loadInstalledVersion();
+
+      expect(controller.getState()).toMatchObject({
+        installedVersion: "0.3.3",
+        markerStatus: "valid",
+        availableVersion: null,
+        checkedAt: null,
+      });
+      expect(onState).toHaveBeenCalledWith(controller.getState());
+      expect(fetchRelease).not.toHaveBeenCalled();
+      expect(openExternal).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps diagnostics available when the installer record cannot be read", async () => {
+    const controller = createInstallerUpdateController({
+      enabled: true,
+      platform: "darwin",
+      arch: "arm64",
+      readMarker: async () => {
+        throw new Error("Installer record is unreadable");
+      },
+      fetchRelease: vi.fn(),
+      openExternal: vi.fn(),
+    });
+
+    await controller.loadInstalledVersion();
+
+    expect(controller.getState()).toMatchObject({
+      installedVersion: null,
+      markerStatus: "corrupt",
+      availableVersion: null,
+    });
+  });
+
   it("offers the latest installer to a legacy installation and opens the exact asset", async () => {
     const openExternal = vi.fn(async () => true);
     const controller = createInstallerUpdateController({

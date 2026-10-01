@@ -120,7 +120,7 @@ import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as EnvironmentTheme from "./environmentTheme.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
-import * as DailyMemory from "./memory/DailyMemory.ts";
+import * as MemorySync from "./memory/sync/MemorySync.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
@@ -799,8 +799,7 @@ const buildAppUnderTest = (options?: {
           }),
           // Server-lifetime in production; built from the provider mocks below.
           ProviderMaintenanceRunner.layer,
-          Layer.mock(DailyMemory.DailyMemory)({
-            runCatchUp: Effect.void,
+          Layer.mock(MemorySync.MemorySync)({
             getStatus: Effect.succeed({
               enabled: false,
               directoryPath: "/tmp/t3-memory",
@@ -808,6 +807,13 @@ const buildAppUnderTest = (options?: {
               state: "disabled",
               lastSummarizedDay: null,
               message: null,
+              sync: {
+                state: "off",
+                account: null,
+                cloudFolder: "OneDrive/TritonAI Harness/memory/general",
+                lastSyncedAt: null,
+                message: null,
+              },
             }),
           }),
         ),

@@ -1188,13 +1188,13 @@ export function HomeScreen(props: HomeScreenProps) {
                 settledShelfExpanded && threadListV2Layout.hiddenSettledCount > 0 ? (
                   <Pressable
                     accessibilityRole="button"
-                    accessibilityLabel={`Show ${Math.min(threadListV2Layout.hiddenSettledCount, THREAD_LIST_V2_SETTLED_PAGE_COUNT)} more settled threads`}
+                    accessibilityLabel={`Show ${Math.min(threadListV2Layout.hiddenSettledCount, THREAD_LIST_V2_SETTLED_PAGE_COUNT)} more done threads`}
                     onPress={showMoreSettled}
                     className="mx-4 mt-2 items-center rounded-lg border border-dashed border-border py-2.5"
                     style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
                   >
                     <Text className="text-xs font-t3-medium text-foreground-muted">
-                      Show more ({threadListV2Layout.hiddenSettledCount} settled hidden)
+                      Show more ({threadListV2Layout.hiddenSettledCount} done hidden)
                     </Text>
                   </Pressable>
                 ) : null

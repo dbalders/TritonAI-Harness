@@ -13,6 +13,7 @@ import { useNewThreadHandler } from "./useHandleNewThread";
 
 const harness = vi.hoisted(() => ({
   projectDefault: null as ModelSelection | null,
+  appDefault: null as ModelSelection | null,
   params: { environmentId: "env", threadId: "old-glm" } as Record<string, string>,
   navigate: vi.fn(async () => {}),
 }));
@@ -29,6 +30,7 @@ vi.mock("@effect/atom-react", async (importOriginal) => ({
         {
           settings: {
             ...DEFAULT_SERVER_SETTINGS,
+            defaultModelSelection: harness.appDefault,
             defaultThreadEnvMode: "local",
             newWorktreesStartFromOrigin: false,
           },
@@ -90,6 +92,7 @@ beforeEach(() => {
     stickyRuntimeMode: null,
   });
   harness.projectDefault = null;
+  harness.appDefault = null;
   harness.params = { environmentId: "env", threadId: "old-glm" };
   harness.navigate.mockClear();
   useComposerDraftStore.getState().setStickyModelSelection(FLASH);
@@ -100,6 +103,16 @@ describe("new task model intent", () => {
     const result = await useNewThreadHandler()(PROJECT);
     expect(result).not.toBeNull();
     expect(selectedModel(result!.draftId)).toEqual(FLASH);
+  });
+
+  it("uses the app's Flash default ahead of a remembered GLM selection", async () => {
+    harness.appDefault = FLASH;
+    useComposerDraftStore.getState().setStickyModelSelection(GLM);
+    const result = await useNewThreadHandler()(PROJECT);
+    expect(selectedModel(result!.draftId)).toEqual(FLASH);
+    expect(useComposerDraftStore.getState().stickyModelSelectionByProvider[INSTANCE]).toMatchObject(
+      GLM,
+    );
   });
 
   it("ignores a GLM composer override on an older task", async () => {

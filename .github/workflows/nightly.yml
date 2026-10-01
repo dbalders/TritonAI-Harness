@@ -23,7 +23,7 @@ concurrency:
   group: harness-nightly
   cancel-in-progress: false
 env:
-  TRITONAI_INSTALLER_COMPOSITION_COMMIT: ee029bf79248e0371d81f5e662f4a5888a6f164c
+  TRITONAI_INSTALLER_COMPOSITION_COMMIT: b7c9666bcc4c60302bfd8eca39e95a252b1ac0ae
 jobs:
   preflight:
     runs-on: ubuntu-24.04

@@ -1690,6 +1690,62 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       }).pipe(Effect.provide(makeManagedServerSettingsLayer())),
   );
 
+  it.effect(
+    "resets legacy app and project model defaults once and preserves subsequent choices",
+    () =>
+      Effect.gen(function* () {
+        const config = yield* ServerConfig.ServerConfig;
+        const fs = yield* FileSystem.FileSystem;
+        const sql = yield* SqlClient.SqlClient;
+        const settings = yield* ServerSettingsModule.ServerSettingsService;
+        const sol = createModelSelection(ProviderInstanceId.make("codex_frontier"), "gpt-6.1-sol");
+        const projectId = ProjectId.make("legacy-sol-project");
+        yield* sql`
+        INSERT INTO projection_projects (
+          project_id, title, workspace_root, default_model_selection_json,
+          default_thread_env_mode, auto_pull, scripts_json, created_at, updated_at
+        ) VALUES (
+          ${projectId}, ${"Legacy Sol"}, ${"/tmp/legacy-sol"}, ${encodeUnknownJson(sol)},
+          ${"worktree"}, ${1}, ${"[]"},
+          ${"2026-10-01T00:00:00.000Z"}, ${"2026-10-01T00:00:00.000Z"}
+        )
+      `;
+        yield* fs.writeFileString(
+          config.settingsPath,
+          encodeUnknownJson({
+            tritonAiManagedPolicy: { migrationVersion: 2 },
+            defaultModelSelection: sol,
+            projectSettingsOverrides: {
+              explicit: { defaultModelSelection: sol, defaultAutoPull: true },
+            },
+          }),
+        );
+        const reset = yield* settings.getSettings;
+        assert.equal(reset.defaultModelSelection?.model, "api-glm-5.3-flash");
+        assert.isTrue(reset.projectSettingsFolded);
+        assert.deepEqual(reset.projectSettingsOverrides, {
+          [ProjectId.make("explicit")]: { defaultAutoPull: true },
+          [projectId]: { defaultThreadEnvMode: "worktree", defaultAutoPull: true },
+        });
+        yield* settings.updateSettings({
+          defaultModelSelection: sol,
+          projectSettingsOverrides: { [projectId]: { defaultModelSelection: sol } },
+        });
+        const reopened = yield* Effect.gen(function* () {
+          const freshSettings = yield* ServerSettingsModule.ServerSettingsService;
+          return yield* freshSettings.getSettings;
+        }).pipe(
+          Effect.provide(
+            Layer.fresh(
+              ServerSettingsModule.layerManagedTest({ TRITONAI_API_KEY: "managed-test-key" }),
+            ),
+          ),
+        );
+        assert.deepInclude(reopened.defaultModelSelection, sol);
+        assert.deepEqual(reopened.projectSettingsOverrides[projectId]?.defaultModelSelection, sol);
+      }).pipe(Effect.provide(makeManagedServerSettingsLayer())),
+  );
+
   it.effect("keeps managed values effective while preserving the raw user document", () =>
     Effect.gen(function* () {
       const serverConfig = yield* ServerConfig.ServerConfig;
@@ -1733,7 +1789,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       const effective = yield* serverSettings.getSettings;
       assert.equal(effective.providers.codex.binaryPath, "/installer/runtime/codex");
       assert.equal(effective.providers.codex.homePath, "/installer/home/codex");
-      assert.equal(effective.textGenerationModelSelection.model, "gpt-5.6-sol");
+      assert.equal(effective.textGenerationModelSelection.model, "gpt-6.1-sol");
       assert.deepInclude(effective.providerInstances[managedInstanceId]?.config, {
         unknownNested: "retained",
       });
@@ -1774,6 +1830,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
           migrationVersion: 2,
           codexBinaryPath: "/installer/runtime/codex",
           codexHomePath: "/installer/home/codex",
+          newThreadDefaultsVersion: 1,
           providerInstanceReferenceRenames: {
             codex_frontier: referenceTarget,
           },

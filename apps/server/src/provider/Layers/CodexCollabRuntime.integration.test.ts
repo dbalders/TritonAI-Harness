@@ -17,6 +17,7 @@ import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import {
+  IntegrationOperationError,
   type ProviderApprovalDecision,
   type ProviderEvent,
   ThreadId,
@@ -1062,6 +1063,90 @@ describe("CodexSessionRuntime collab integration", () => {
       }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
     );
   }
+
+  it.live("returns an integration operation error to Codex as the dynamic tool result", () =>
+    Effect.gen(function* () {
+      const scriptedRequest = {
+        id: 7101,
+        method: "item/tool/call",
+        params: {
+          threadId: ROOT,
+          turnId: wireFixture.responses.turnStart.turn.id,
+          callId: "call-invalid-input",
+          tool: "fixture_records_search",
+          arguments: { query: 42 },
+        },
+      };
+      const script = {
+        rootThreadId: ROOT,
+        holdTurnOpen: true,
+        completeTurnOnServerResponse: true,
+        notifications: [],
+        serverRequests: [scriptedRequest],
+      };
+      const responsesPath = `${scriptPath}.responses`;
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      NodeFS.writeFileSync(scriptPath, JSON.stringify(script), "utf8");
+      NodeFS.rmSync(responsesPath, { force: true });
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          NodeFS.rmSync(scriptPath, { force: true });
+          NodeFS.rmSync(responsesPath, { force: true });
+        }),
+      );
+
+      const runtime = yield* makeCodexSessionRuntime({
+        threadId: ThreadId.make("thread-codex-dynamic-tool-error"),
+        binaryPath: peerPath,
+        cwd: NodeOS.tmpdir(),
+        runtimeMode: "full-access",
+        environment: { ...process.env, T3_CODEX_COLLAB_SCRIPT: scriptPath },
+        dynamicTools: [
+          {
+            name: "fixture_records_search",
+            description: "Read fixture records.",
+            inputSchema: { type: "object" },
+          },
+        ],
+        invokeDynamicTool: async () => {
+          throw new IntegrationOperationError({
+            code: "invalid_input",
+            message:
+              "Input for integration tool fixture.records.search did not match its declared schema: query: Expected string",
+          });
+        },
+      });
+      const turnCompleted = yield* Deferred.make<void>();
+      yield* runtime.events.pipe(
+        Stream.runForEach((event) =>
+          event.method === "turn/completed"
+            ? Deferred.succeed(turnCompleted, undefined).pipe(Effect.asVoid)
+            : Effect.void,
+        ),
+        Effect.forkScoped,
+      );
+
+      yield* runtime.start();
+      yield* runtime.sendTurn({ input: "Search records" });
+      yield* Deferred.await(turnCompleted);
+
+      const recordedResponse = yield* decodeMcpElicitationResponse(
+        NodeFS.readFileSync(responsesPath, "utf8"),
+      );
+      assert.equal(recordedResponse.id, scriptedRequest.id);
+      assert.deepEqual(recordedResponse.result, {
+        success: false,
+        contentItems: [
+          {
+            type: "inputText",
+            text: "Integration tool call failed (invalid_input): Input for integration tool fixture.records.search did not match its declared schema: query: Expected string",
+          },
+        ],
+      });
+
+      yield* runtime.close;
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
 
   it.effect("keeps the resumed thread's original tool catalog in its resume cursor", () =>
     Effect.gen(function* () {
