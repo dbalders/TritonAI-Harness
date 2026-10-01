@@ -165,6 +165,25 @@ describe("TritonAI managed Harness policy", () => {
     });
   });
 
+  it("resets to Flash's defaults even with a customized text-generation selection", () => {
+    const effective = migrateManagedNewThreadDefaults(
+      {
+        ...DEFAULT_SERVER_SETTINGS,
+        textGenerationModelSelection: {
+          instanceId: frontierInstanceId,
+          model: "gpt-6.1-sol",
+          options: [{ id: "reasoningEffort", value: "low" }],
+        },
+      },
+      {},
+    ).settings;
+    expect(effective.defaultModelSelection).toEqual({
+      instanceId: managedInstanceId,
+      model: "api-glm-5.3-flash",
+      options: [{ id: "reasoningEffort", value: "high" }],
+    });
+  });
+
   it("resets app and project defaults once while preserving later choices", () => {
     const sol = { instanceId: frontierInstanceId, model: "gpt-6.1-sol" };
     const first = migrateManagedNewThreadDefaults(

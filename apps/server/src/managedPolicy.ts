@@ -325,7 +325,7 @@ export function migrateManagedNewThreadDefaults(
     settings: {
       ...settings,
       defaultModelSelection: resolveManagedSelection(
-        settings.textGenerationModelSelection,
+        DEFAULT_SERVER_SETTINGS.textGenerationModelSelection,
         managedConfig,
         false,
         managedConfig.models.catalog,
