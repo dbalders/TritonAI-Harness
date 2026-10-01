@@ -21,6 +21,8 @@ import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 
 import { cn } from "../../lib/utils";
+import { isElectron } from "../../env";
+import { useInstallerUpdateState } from "../../state/installerUpdate";
 import { ensureLocalApi } from "../../localApi";
 import { resolveAndPersistPreferredEditor } from "../../editorPreferences";
 import { formatRelativeTimeLabel, getRelativeTimeState } from "../../timestampFormat";
@@ -35,7 +37,12 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { toastManager } from "../ui/toast";
 import { ExpandableText } from "./ExpandableText";
 import { ResourceTelemetryDiagnostics } from "./ResourceTelemetryDiagnostics";
-import { SettingsPageContainer, SettingsSection, useRelativeTimeTick } from "./settingsLayout";
+import {
+  SettingsPageContainer,
+  SettingsRow,
+  SettingsSection,
+  useRelativeTimeTick,
+} from "./settingsLayout";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useSettingsScope } from "./SettingsScopeContext";
 
@@ -772,6 +779,7 @@ function DiagnosticsRefreshButton({
 
 export function DiagnosticsSettingsPanel() {
   const { environment } = useSettingsScope();
+  const installerState = useInstallerUpdateState();
   // The boundary only mounts this page when the selection resolves to one
   // connected environment, so the representative is the one to inspect.
   const environmentId = environment?.environmentId ?? null;
@@ -973,6 +981,19 @@ export function DiagnosticsSettingsPanel() {
 
   return (
     <SettingsPageContainer width="expanded" className="gap-10">
+      {isElectron ? (
+        <SettingsSection title="Desktop installation">
+          <SettingsRow
+            title="Installer version"
+            description="Installer version recorded on this device. Routine updates are managed in Harness."
+            control={
+              <code className="select-text text-xs text-muted-foreground">
+                {installerState?.installedVersion ?? "Unavailable"}
+              </code>
+            }
+          />
+        </SettingsSection>
+      ) : null}
       {managedPolicy ? (
         <SettingsSection title="TritonAI Managed Update">
           <StatsGrid>
