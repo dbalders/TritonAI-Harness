@@ -1,0 +1,150 @@
+name: Mobile Nightly TestFlight
+
+# Called directly after publication: releases created with GITHUB_TOKEN do not
+# trigger a separate release-event workflow.
+on:
+  workflow_call:
+    inputs:
+      nightly_tag:
+        required: true
+        type: string
+      source_sha:
+        required: true
+        type: string
+    secrets:
+      EXPO_TOKEN:
+        required: true
+  workflow_dispatch:
+    inputs:
+      nightly_tag:
+        description: Published nightly tag to build or retry
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mobile-nightly-testflight-${{ inputs.nightly_tag }}
+  cancel-in-progress: false
+
+jobs:
+  testflight:
+    name: Build and upload Harness Preview
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      APP_VARIANT: preview
+      NODE_OPTIONS: --max-old-space-size=8192
+    steps:
+      - name: Checkout workflow helpers
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Resolve published nightly source
+        id: source
+        uses: actions/github-script@v8
+        env:
+          NIGHTLY_TAG: ${{ inputs.nightly_tag }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        with:
+          script: |
+            const { resolveNightlyMobile } = require('./.github/scripts/resolve-nightly-mobile.cjs');
+            const sha = await resolveNightlyMobile({
+              github, context, tag: process.env.NIGHTLY_TAG, sourceSha: process.env.SOURCE_SHA,
+            });
+            core.setOutput('sha', sha);
+
+      - name: Check Expo token
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          if [ -z "$EXPO_TOKEN" ]; then
+            echo "::error::EXPO_TOKEN is required for nightly TestFlight uploads."
+            exit 1
+          fi
+
+      - name: Checkout exact nightly source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.source.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: |
+            args:
+              - --filter=@t3tools/mobile...
+
+      - name: Expose pnpm
+        run: |
+          pnpm_version="$(node --print "require('./package.json').packageManager.split('@').pop()")"
+          vp_pnpm_bin="$HOME/.vite-plus/package_manager/pnpm/$pnpm_version/pnpm/bin"
+          echo "$vp_pnpm_bin" >> "$GITHUB_PATH"
+          "$vp_pnpm_bin/pnpm" --version
+
+      - name: Setup EAS
+        uses: expo/expo-github-action@v8
+        with:
+          eas-version: 24.8.0
+          token: ${{ secrets.EXPO_TOKEN }}
+          packager: npm
+
+      - name: Pull preview environment
+        working-directory: apps/mobile
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: eas env:pull preview --non-interactive
+
+      - name: Verify upload target
+        working-directory: apps/mobile
+        run: |
+          npx expo config --json --type public > "$RUNNER_TEMP/mobile-config.json"
+          jq -e '.owner == "dbalders" and .extra.eas.projectId == "dec81a5b-db3d-4de0-a00c-532e6e456a98" and .ios.bundleIdentifier == "edu.ucsd.tritonai.harness.preview" and .ios.appleTeamId == "G789749RTK"' "$RUNNER_TEMP/mobile-config.json"
+          jq -e '.build["preview:testflight"].distribution == "store" and .build["preview:testflight"].autoIncrement == true and .submit["preview:testflight"].ios.ascAppId == "6813180967" and .submit["preview:testflight"].ios.appleTeamId == "G789749RTK"' eas.json
+
+      - name: Build iOS archive
+        id: build
+        working-directory: apps/mobile
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          eas build --platform ios --profile preview:testflight --non-interactive --wait --json > "$RUNNER_TEMP/nightly-mobile-build.json"
+          build_id="$(jq -er 'if length == 1 and .[0].status == "FINISHED" then .[0].id else error("Expected one successful iOS build") end' "$RUNNER_TEMP/nightly-mobile-build.json")"
+          echo "id=$build_id" >> "$GITHUB_OUTPUT"
+
+      - name: Upload exact build to TestFlight
+        working-directory: apps/mobile
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          BUILD_ID: ${{ steps.build.outputs.id }}
+        run: eas submit --platform ios --profile preview:testflight --id "$BUILD_ID" --non-interactive --wait
+
+      - name: Record uploaded source and build
+        env:
+          NIGHTLY_TAG: ${{ inputs.nightly_tag }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+          BUILD_ID: ${{ steps.build.outputs.id }}
+        run: |
+          {
+            echo "## Nightly uploaded to TestFlight"
+            echo "- Nightly: $NIGHTLY_TAG"
+            echo "- Source: $SOURCE_SHA"
+            echo "- App: TritonAI Harness Preview (6813180967)"
+            echo "- EAS build: $BUILD_ID"
+            echo "- Apple processing and tester availability remain separate."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Retain build receipt
+        if: always() && steps.build.outcome != 'skipped'
+        uses: actions/upload-artifact@v7
+        with:
+          name: nightly-mobile-build-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/nightly-mobile-build.json
+          if-no-files-found: ignore
+          retention-days: 14
