@@ -1,0 +1,32 @@
+{
+  "fill": {
+    "solid": "display-p3:0.032,0.052,0.135,1.00000"
+  },
+  "groups": [
+    {
+      "layers": [
+        {
+          "image-name": "logo.png",
+          "name": "TritonAI Harness Nightly",
+          "glass": false,
+          "position": {
+            "scale": 1,
+            "translation-in-points": [0, 0]
+          }
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0
+      }
+    }
+  ],
+  "supported-platforms": {
+    "circles": ["watchOS"],
+    "squares": "shared"
+  }
+}
