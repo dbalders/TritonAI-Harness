@@ -305,7 +305,7 @@ export function dynamicToolUnavailableText(
  * Agent-facing text for a call to a tool missing from this session's dynamic tool list. Codex fixes
  * the list when a thread's session starts, so only a new thread can pick up a newly available tool.
  */
-export function dynamicToolNotInSessionText(
+function dynamicToolNotInSessionText(
   name: string,
   current: CodexDynamicToolAvailability | undefined,
 ): string {
@@ -327,7 +327,7 @@ export interface CodexDynamicToolRejection {
  * Records a refused dynamic tool call in the server trace. Logs reach the trace file only as events
  * on an active span, so each rejection gets its own.
  */
-export const traceDynamicToolRejection = (rejection: CodexDynamicToolRejection) =>
+const traceDynamicToolRejection = (rejection: CodexDynamicToolRejection) =>
   Effect.logWarning("integrations.dynamic-tool.rejected", rejection).pipe(
     Effect.withSpan("integrations.dynamic-tool.rejected", {
       attributes: {
