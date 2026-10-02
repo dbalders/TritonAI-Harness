@@ -7,11 +7,13 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import {
   GitCommandError,
   VcsProcessExitError,
+  VcsRepositoryDetectionError,
   type VcsSwitchRefInput,
   type VcsSwitchRefResult,
   type VcsCreateRefInput,
@@ -30,6 +32,8 @@ import {
   type VcsStatusInput,
   type VcsStatusResult,
 } from "@t3tools/contracts";
+import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import { SpawnExecutableResolution } from "@t3tools/shared/shell";
 import {
   makeGitVcsDriverCore,
   PATCH_RENDER_PREFIX_ARGS,
@@ -508,8 +512,54 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
     ignoreClassifier: "native" as const,
   };
 
-  const isInsideWorkTree: VcsDriver.VcsDriver["Service"]["isInsideWorkTree"] = (cwd) =>
-    gitCommand(
+  const isInsideWorkTree: VcsDriver.VcsDriver["Service"]["isInsideWorkTree"] = Effect.fn(
+    "GitVcsDriver.isInsideWorkTree",
+  )(function* (cwd) {
+    const platform = yield* HostProcessPlatform;
+    if (platform === "darwin") {
+      const resolveExecutable = yield* SpawnExecutableResolution;
+      const env = yield* HostProcessEnvironment;
+      const gitPath = resolveExecutable("git", platform, {
+        ...env,
+        PATH: env.PATH ?? "/usr/bin:/bin",
+      });
+      const realGitPath =
+        gitPath === undefined
+          ? undefined
+          : yield* fileSystem.realPath(gitPath).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new VcsRepositoryDetectionError({
+                    operation: "GitVcsDriver.isInsideWorkTree",
+                    cwd,
+                    detail: "Could not resolve the Git executable.",
+                    cause,
+                  }),
+              ),
+            );
+      if (realGitPath === "/usr/bin/git") {
+        // Apple's Git stub prompts to install developer tools even during a background probe.
+        const hasDeveloperTools = yield* vcsProcess
+          .run({
+            operation: "GitVcsDriver.isInsideWorkTree.developerTools",
+            command: "/usr/bin/xcode-select",
+            args: ["-p"],
+            cwd,
+            spawnCwd: process.cwd(),
+            timeoutMs: 5_000,
+            maxOutputBytes: 4_096,
+          })
+          .pipe(
+            Effect.as(true),
+            Effect.catchTag("VcsProcessExitError", (error) =>
+              error.exitCode === 2 ? Effect.succeed(false) : Effect.fail(error),
+            ),
+          );
+        if (!hasDeveloperTools) return false;
+      }
+    }
+
+    return yield* gitCommand(
       vcsProcess,
       "GitVcsDriver.isInsideWorkTree",
       cwd,
@@ -519,7 +569,20 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         timeoutMs: 5_000,
         maxOutputBytes: 4_096,
       },
-    ).pipe(Effect.map((result) => result.exitCode === 0 && result.stdout.trim() === "true"));
+    ).pipe(
+      Effect.map((result) => result.exitCode === 0 && result.stdout.trim() === "true"),
+      Effect.catchTag("VcsProcessSpawnError", (error) => {
+        const cause = error.cause;
+        // FileSystem NotFound is a missing working directory, not a missing executable.
+        return cause instanceof PlatformError.PlatformError &&
+          cause.reason._tag === "NotFound" &&
+          cause.reason.module === "ChildProcess" &&
+          cause.reason.method === "spawn"
+          ? Effect.succeed(false)
+          : Effect.fail(error);
+      }),
+    );
+  });
 
   const execute: VcsDriver.VcsDriver["Service"]["execute"] = (input) =>
     gitCommand(vcsProcess, input.operation, input.cwd, input.args, {
