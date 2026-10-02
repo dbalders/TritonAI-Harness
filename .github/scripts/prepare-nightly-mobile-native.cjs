@@ -102,6 +102,7 @@ function prepareNightlyMobileNative({ root, tag, sourceSha, generatorSha }) {
   // requiring workflow-write permission merely to publish a native build tree.
   git(
     "rm",
+    "--quiet",
     "--cached",
     "-r",
     "--force",
