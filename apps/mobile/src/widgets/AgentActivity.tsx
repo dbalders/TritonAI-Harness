@@ -226,12 +226,10 @@ export function AgentActivity(
     </HStack>
   );
 
-  // Keep the compact Live Activity identity product-specific without depending
-  // on the upstream T3 mark bundled in the widget asset catalog.
-  const renderLogo = (height: number, color: Foreground) => (
-    <Text modifiers={[font({ weight: "bold", size: height * 0.72 }), foregroundStyle(color)]}>
-      TAI
-    </Text>
+  const renderLogo = (height: number) => (
+    <HStack modifiers={[frame({ width: height, height })]}>
+      <Image assetName="HarnessMark" modifiers={[resizable()]} />
+    </HStack>
   );
 
   return {
@@ -251,7 +249,7 @@ export function AgentActivity(
             overflow beyond the visible rows is inferable from the count. */}
         <ZStack>
           <HStack spacing={0} alignment="center">
-            {renderLogo(13, primaryForeground)}
+            {renderLogo(13)}
             <Spacer minLength={0} />
           </HStack>
           <HStack spacing={6} alignment="center">
@@ -296,7 +294,7 @@ export function AgentActivity(
     bannerSmall: (
       <VStack alignment="leading" spacing={5} modifiers={[padding({ all: 10 })]}>
         <HStack spacing={7} alignment="center">
-          {renderLogo(14, primaryForeground)}
+          {renderLogo(14)}
           <Text
             modifiers={[
               font({ weight: "bold", size: 13 }),
@@ -327,7 +325,7 @@ export function AgentActivity(
         ) : null}
       </VStack>
     ),
-    compactLeading: renderLogo(14, tint),
+    compactLeading: renderLogo(14),
     compactTrailing: (
       <Text modifiers={[font({ weight: "semibold", size: 11 }), foregroundStyle(tint)]}>
         {attentionRow
@@ -343,10 +341,10 @@ export function AgentActivity(
     minimal:
       (attentionRow || failedRow || allDone) && heroRow
         ? renderGlyph(phaseSymbol(heroRow.phase), 13, phaseTint(heroRow.phase))
-        : renderLogo(11, tint),
+        : renderLogo(11),
     expandedLeading: (
       <HStack spacing={5} alignment="center" modifiers={[padding({ leading: 4, vertical: 4 })]}>
-        {renderLogo(15, tint)}
+        {renderLogo(15)}
         <Text modifiers={[font({ weight: "bold", size: 13 }), foregroundStyle(tint)]}>
           {allDone ? doneLabel : `${props.activeCount}`}
         </Text>

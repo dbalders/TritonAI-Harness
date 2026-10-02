@@ -3,7 +3,7 @@ import type { NativeStackNavigationOptions } from "@react-navigation/native-stac
 import { Platform, View } from "react-native";
 
 import { AppText as Text } from "./AppText";
-import { T3Wordmark } from "./T3Wordmark";
+import { HarnessLogo } from "./HarnessLogo";
 import { IPAD_HOME_TITLE_OFFSET } from "../lib/layoutMetrics";
 import { resolveMobileStageLabel } from "../lib/mobileBranding";
 
@@ -30,18 +30,19 @@ export function CompactBrandTitle(
   return (
     <View
       aria-level={1}
-      accessibilityLabel="T3 Code, Threads"
+      accessibilityLabel="TritonAI Harness, Threads"
       accessible
       role="heading"
       className="flex-row items-center gap-1.5"
       style={{ marginLeft: titleOffset }}
     >
-      <T3Wordmark colorClassName="accent-icon" height={15} />
+      <HarnessLogo size={26} />
       <Text
         allowFontScaling={props.allowFontScaling}
-        className="font-t3-medium text-[21px] tracking-[-0.5px] text-foreground-muted"
+        className="shrink font-t3-bold text-[17px] tracking-[-0.3px] text-foreground"
+        numberOfLines={1}
       >
-        Code
+        TritonAI Harness
       </Text>
       <View className="rounded-full bg-subtle px-1.5 py-0.5">
         <Text

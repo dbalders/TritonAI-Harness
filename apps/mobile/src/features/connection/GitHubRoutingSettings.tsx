@@ -1,3 +1,4 @@
+import { TRITONAI_CONNECT_NAME } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import {
   connectionCatalogDisplayUrl,
@@ -64,7 +65,7 @@ export function GitHubRoutingSettings() {
                     {entry.target.label}
                   </Text>
                   <Text className="text-xs text-foreground-muted" numberOfLines={1}>
-                    {connectionCatalogDisplayUrl(entry) ?? "T3 Connect"}
+                    {connectionCatalogDisplayUrl(entry) ?? TRITONAI_CONNECT_NAME}
                   </Text>
                 </View>
                 <Text className="text-sm text-foreground-muted">
