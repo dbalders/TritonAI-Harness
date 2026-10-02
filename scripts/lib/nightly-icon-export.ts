@@ -42,25 +42,7 @@ export function resizeNightlyIcon(source: PNG, size: number, opaque = false): Bu
   return PNG.sync.write(output);
 }
 
-export function renderNightlyIconAssets(master: Buffer): Map<string, Buffer> {
-  const source = PNG.sync.read(master);
-  if (source.width !== 1024 || source.height !== 1024)
-    throw new Error("Nightly icon master must be 1024x1024.");
-  const ico = encodePngIco(
-    WINDOWS_ICON_SIZES.map((size) => ({ size, contents: resizeNightlyIcon(source, size) })),
-  );
-  return new Map([
-    [BRAND_ASSET_PATHS.nightlyIosIconPng, resizeNightlyIcon(source, 1024, true)],
-    [BRAND_ASSET_PATHS.nightlyLinuxIconPng, master],
-    [BRAND_ASSET_PATHS.nightlyWindowsIconIco, ico],
-    [BRAND_ASSET_PATHS.nightlyWebFaviconIco, ico],
-    [BRAND_ASSET_PATHS.nightlyWebFavicon16Png, resizeNightlyIcon(source, 16)],
-    [BRAND_ASSET_PATHS.nightlyWebFavicon32Png, resizeNightlyIcon(source, 32)],
-    [BRAND_ASSET_PATHS.nightlyWebAppleTouchIconPng, resizeNightlyIcon(source, 180, true)],
-  ]);
-}
-
-// Development shares nightly's circular raster export treatment.
+// Development retains its circular raster export treatment.
 export function renderDevelopmentIconAssets(master: Buffer): Map<string, Buffer> {
   const source = PNG.sync.read(master);
   if (source.width !== 1024 || source.height !== 1024)

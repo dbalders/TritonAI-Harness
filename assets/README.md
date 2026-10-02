@@ -1,26 +1,26 @@
 # Brand icons
 
-Production uses `prod/app-icon.icon` for its generated iOS, Linux, Windows, and web assets.
-The separate production macOS master is `prod/tritonai-harness-1024.png`;
-`icons:export` intentionally leaves it unchanged. Development and nightly
-use approved circular raster masters:
+Main and nightly share a full-bleed square icon family: a white Triton mark on navy
+for main, and a starry blue/purple sky for nightly. Their authoritative 1024px masters
+are the `Assets/logo.png` layers in these Icon Composer projects:
 
-- `dev/tritonai-harness-dev-1024.png` — Aurora: white trident over navy and teal waves.
-- `nightly/tritonai-harness-nightly-1024.png` — white trident over the starry purple sky.
+- `prod/app-icon.icon`
+- `nightly/tritonai-app-icon.icon`
 
-Run `vp run icons:export` to regenerate PNG/ICO renditions and the development web
-favicon/splash copies. Run `vp run icons:check` to verify the exports.
-Development and nightly retain the circular transparent silhouette for macOS and Linux;
-iOS and Apple touch icons are flattened onto navy. Development's Icon Composer layer
-is generated from the same master for iOS builds. Do not replace the development
-master with the old pre-Tahoe rounded-square export.
+Run `vp run icons:export` to regenerate desktop, iOS, Windows, Linux, web, and runtime
+logo assets. Run `vp run icons:check` to verify those exports. Icon Composer 2 or newer
+on macOS is required; `ICON_COMPOSER_TOOL` can select an `ictool` executable. The
+exporter pins design generation 26.
 
-Production exporting requires Icon Composer 2 or newer on macOS. The exporter pins
-design generation 26. `ICON_COMPOSER_TOOL` can select a specific `ictool` executable.
-The production macOS master must remain the original full-size circular TritonAI mark
-with transparent corners. Do not replace it with an inset Icon Composer macOS export.
+iOS receives the opaque square master and applies its own corner mask. macOS gets
+an Icon Composer macOS rendition with 860px artwork centered on the 1024px canvas
+to match neighboring Dock tiles in the desktop app; Windows, Linux, favicons, and runtime logos get
+rounded-square renditions. Desktop packaging converts the generated macOS PNGs into
+ICNS resources. Edit the source layers rather than generated PNG/ICO renditions.
 
-Do not edit generated PNG/ICO renditions directly; update the appropriate master.
+Development retains its separate Aurora circular raster master at
+`dev/tritonai-harness-dev-1024.png`. Its desktop/web exports and opaque iOS layer
+are generated from that master by the same export command.
 
 ## Android launcher and splash artwork
 
