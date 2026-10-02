@@ -4,11 +4,7 @@ import { PNG } from "pngjs";
 import { it } from "@effect/vitest";
 import { expect } from "vite-plus/test";
 import { BRAND_ASSET_PATHS, DEVELOPMENT_PUBLIC_ICON_OVERRIDES } from "./brand-assets.ts";
-import {
-  renderDevelopmentIconAssets,
-  renderNightlyIconAssets,
-  resizeNightlyIcon,
-} from "./nightly-icon-export.ts";
+import { renderDevelopmentIconAssets, resizeNightlyIcon } from "./nightly-icon-export.ts";
 
 it("downsamples transparency without dark color fringes", () => {
   const source = new PNG({ width: 2, height: 2 });
@@ -16,42 +12,6 @@ it("downsamples transparency without dark color fringes", () => {
   source.data.set([255, 255, 255, 255], 0);
   const small = PNG.sync.read(resizeNightlyIcon(source, 1));
   expect([...small.data]).toEqual([255, 255, 255, 64]);
-});
-
-it.layer(NodeServices.layer)("nightly artwork", (it) => {
-  it.effect("ships transparent artwork and current PNG/ICO exports from the approved master", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const root = yield* path.fromFileUrl(new URL("../../", import.meta.url));
-      const master = Buffer.from(
-        yield* fs.readFile(path.join(root, BRAND_ASSET_PATHS.nightlyMacIconPng)),
-      );
-      const image = PNG.sync.read(master);
-      expect([image.width, image.height]).toEqual([1024, 1024]);
-      for (const [x, y] of [
-        [0, 0],
-        [1023, 0],
-        [0, 1023],
-        [1023, 1023],
-      ] as const) {
-        expect(image.data[(y * 1024 + x) * 4 + 3]).toBe(0);
-      }
-      expect(image.data[(512 * 1024 + 512) * 4 + 3]).toBe(255);
-      const stable = Buffer.from(
-        yield* fs.readFile(path.join(root, BRAND_ASSET_PATHS.productionMacIconPng)),
-      );
-      expect(master.equals(stable)).toBe(false);
-      const outputs = renderNightlyIconAssets(master);
-      for (const [file, bytes] of outputs) {
-        expect(Buffer.from(yield* fs.readFile(path.join(root, file))).equals(bytes)).toBe(true);
-      }
-      const ico = outputs.get(BRAND_ASSET_PATHS.nightlyWindowsIconIco)!;
-      expect(ico.readUInt16LE(4)).toBe(7);
-      const touch = PNG.sync.read(outputs.get(BRAND_ASSET_PATHS.nightlyWebAppleTouchIconPng)!);
-      expect([touch.width, touch.height, touch.data[3]]).toEqual([180, 180, 255]);
-    }),
-  );
 });
 
 it.layer(NodeServices.layer)("development artwork", (it) => {
@@ -91,6 +51,35 @@ it.layer(NodeServices.layer)("development artwork", (it) => {
             outputs.get(override.sourceRelativePath)!,
           ),
         ).toBe(true);
+    }),
+  );
+});
+
+it.layer(NodeServices.layer)("square iOS artwork", (it) => {
+  it.effect("ships full-bleed main and Preview masters with matching opaque fallback icons", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* path.fromFileUrl(new URL("../../", import.meta.url));
+      for (const [project, fallback] of [
+        [BRAND_ASSET_PATHS.productionIconComposerProject, BRAND_ASSET_PATHS.productionIosIconPng],
+        [BRAND_ASSET_PATHS.nightlyIconComposerProject, BRAND_ASSET_PATHS.nightlyIosIconPng],
+      ] as const) {
+        const master = Buffer.from(yield* fs.readFile(path.join(root, project, "Assets/logo.png")));
+        const image = PNG.sync.read(master);
+        expect([image.width, image.height]).toEqual([1024, 1024]);
+        expect(image.data.every((value, index) => index % 4 !== 3 || value === 255)).toBe(true);
+        expect(Buffer.from(yield* fs.readFile(path.join(root, fallback))).equals(master)).toBe(
+          true,
+        );
+        if (project === BRAND_ASSET_PATHS.nightlyIconComposerProject) {
+          // Clouds reach the lower corners rather than leaving the old flat navy exterior.
+          for (const x of [0, 1023]) {
+            const pixel = (1023 * 1024 + x) * 4;
+            expect(image.data[pixel + 2]).toBeGreaterThan(150);
+          }
+        }
+      }
     }),
   );
 });

@@ -12,11 +12,12 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { Command, Flag } from "effect/unstable/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import sharp from "sharp";
 
 import { BRAND_ASSET_PATHS, DEVELOPMENT_PUBLIC_ICON_OVERRIDES } from "./lib/brand-assets.ts";
 import { encodePngIco, readPngDimensions, WINDOWS_ICON_SIZES } from "./lib/icon-export.ts";
 
-import { renderDevelopmentIconAssets, renderNightlyIconAssets } from "./lib/nightly-icon-export.ts";
+import { renderDevelopmentIconAssets } from "./lib/nightly-icon-export.ts";
 
 const DESIGN_GENERATION = 26;
 const ICON_COMPOSER_EXECUTABLE_PARTS = [
@@ -43,7 +44,7 @@ const decodeIconComposerVersion = Schema.decodeUnknownEffect(
   Schema.fromJsonString(IconComposerVersion),
 );
 
-type IconPlatform = "iOS";
+type IconPlatform = "iOS" | "macOS";
 
 interface VariantOutputs {
   readonly ios: string;
@@ -101,7 +102,13 @@ export class IconExportFileSystemError extends Schema.TaggedError<IconExportFile
 export class IconExportProcessError extends Schema.TaggedError<IconExportProcessError>()(
   "IconExportProcessError",
   {
-    operation: Schema.Literals(["spawn", "collect-stdout", "collect-stderr", "wait-for-exit"]),
+    operation: Schema.Literals([
+      "spawn",
+      "collect-stdout",
+      "collect-stderr",
+      "wait-for-exit",
+      "encode-icns",
+    ]),
     command: Schema.String,
     argumentCount: NonNegativeInt,
     cause: Schema.Defect(),
@@ -217,6 +224,20 @@ const ICON_VARIANTS = [
       favicon32: BRAND_ASSET_PATHS.productionWebFavicon32Png,
       faviconIco: BRAND_ASSET_PATHS.productionWebFaviconIco,
       windowsIco: BRAND_ASSET_PATHS.productionWindowsIconIco,
+    },
+  },
+  {
+    label: "nightly",
+    source: BRAND_ASSET_PATHS.nightlyIconComposerProject,
+    outputs: {
+      ios: BRAND_ASSET_PATHS.nightlyIosIconPng,
+      macos: BRAND_ASSET_PATHS.nightlyMacIconPng,
+      universal: BRAND_ASSET_PATHS.nightlyLinuxIconPng,
+      appleTouch: BRAND_ASSET_PATHS.nightlyWebAppleTouchIconPng,
+      favicon16: BRAND_ASSET_PATHS.nightlyWebFavicon16Png,
+      favicon32: BRAND_ASSET_PATHS.nightlyWebFavicon32Png,
+      faviconIco: BRAND_ASSET_PATHS.nightlyWebFaviconIco,
+      windowsIco: BRAND_ASSET_PATHS.nightlyWindowsIconIco,
     },
   },
 ] as const satisfies ReadonlyArray<IconVariant>;
@@ -510,6 +531,37 @@ const renderIcon = Effect.fn("iconExport.renderIcon")(function* (
       actualHeight: dimensions.height,
     });
   }
+  if (platform === "macOS") {
+    // Electron's static icons need a Dock inset. The 860px footprint matches
+    // neighboring Dock tiles; 824px looked smaller in the running app.
+    const artworkSize = Math.round((size * 860) / 1024);
+    const inset = Math.floor((size - artworkSize) / 2);
+    const padded = yield* Effect.tryPromise({
+      try: () =>
+        sharp(buffer)
+          .resize(artworkSize, artworkSize)
+          .extend({
+            top: inset,
+            left: inset,
+            bottom: size - artworkSize - inset,
+            right: size - artworkSize - inset,
+            background: { r: 0, g: 0, b: 0, alpha: 0 },
+          })
+          .png()
+          .toBuffer(),
+      catch: (cause) =>
+        new IconExportRenditionError({ sourcePath, outputPath, expectedSize: size, cause }),
+    });
+    yield* fs
+      .writeFile(outputPath, padded)
+      .pipe(
+        Effect.mapError(
+          (cause) =>
+            new IconExportFileSystemError({ operation: "write-file", path: outputPath, cause }),
+        ),
+      );
+    return padded;
+  }
   return buffer;
 });
 
@@ -563,7 +615,11 @@ const renderVariant = Effect.fn("iconExport.renderVariant")(function* (
   });
 
   return new Map<string, Buffer>([
-    [variant.outputs.ios, ios],
+    [
+      variant.outputs.ios,
+      Buffer.from(yield* fs.readFile(path.join(sourcePath, "Assets/logo.png"))),
+    ],
+    [variant.outputs.macos, yield* render("macOS", 1024)],
     [variant.outputs.universal, ios],
     [variant.outputs.appleTouch, yield* render("iOS", 180)],
     [variant.outputs.favicon16, yield* render("iOS", 16)],
@@ -686,14 +742,7 @@ export const exportBrandIcons = Effect.fn("exportBrandIcons")(function* (checkOn
     `Exporting icons with Icon Composer ${tool.version}, design generation ${DESIGN_GENERATION}.`,
   );
 
-  // Nightly uses the approved raster master, retaining its circular silhouette.
-  const nightlyMaster = yield* fs.readFile(
-    path.join(repositoryRoot, BRAND_ASSET_PATHS.nightlyMacIconPng),
-  );
-  const generated = yield* Effect.try({
-    try: () => renderNightlyIconAssets(Buffer.from(nightlyMaster)),
-    catch: (cause) => new IconExportEncodingError({ variant: "nightly", cause }),
-  });
+  const generated = new Map<string, Buffer>();
   const developmentMaster = yield* fs.readFile(
     path.join(repositoryRoot, BRAND_ASSET_PATHS.developmentDesktopIconPng),
   );
@@ -714,6 +763,72 @@ export const exportBrandIcons = Effect.fn("exportBrandIcons")(function* (checkOn
       generated.set(relativePath, contents);
     }
   }
+
+  const renderedRuntimeLogo = yield* renderIcon(
+    tool.path,
+    path.join(repositoryRoot, BRAND_ASSET_PATHS.productionIconComposerProject),
+    path.join(temporaryDirectory, "runtime-logo.png"),
+    "iOS",
+    512,
+  );
+  // Runtime logos need web-sized 8-bit PNGs rather than Icon Composer's 16-bit exports.
+  const runtimeLogo = yield* Effect.tryPromise({
+    try: () => sharp(renderedRuntimeLogo).png().toBuffer(),
+    catch: (cause) => new IconExportEncodingError({ variant: "runtime", cause }),
+  });
+  generated.set("assets/prod/tritonai-logo.png", runtimeLogo);
+  generated.set(
+    "assets/prod/logo.svg",
+    Buffer.from(
+      `<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">\n  <image href="data:image/png;base64,${runtimeLogo.toString("base64")}" width="512" height="512"/>\n</svg>\n`,
+    ),
+  );
+  generated.set("apps/web/public/tritonai-logo.png", runtimeLogo);
+  const desktopLogo = yield* Effect.tryPromise({
+    try: () =>
+      sharp(generated.get(BRAND_ASSET_PATHS.productionMacIconPng)!)
+        .resize(512, 512)
+        .png()
+        .toBuffer(),
+    catch: (cause) => new IconExportEncodingError({ variant: "desktop", cause }),
+  });
+  generated.set("apps/desktop/resources/icon.png", desktopLogo);
+  generated.set(
+    "apps/desktop/resources/icon.ico",
+    generated.get(BRAND_ASSET_PATHS.productionWindowsIconIco)!,
+  );
+  const iconSetPath = path.join(temporaryDirectory, "Main.iconset");
+  yield* fs.makeDirectory(iconSetPath);
+  for (const size of [16, 32, 128, 256, 512]) {
+    for (const scale of [1, 2]) {
+      const filename = `icon_${size}x${size}${scale === 2 ? "@2x" : ""}.png`;
+      const outputPath = path.join(iconSetPath, filename);
+      yield* renderIcon(
+        tool.path,
+        path.join(repositoryRoot, BRAND_ASSET_PATHS.productionIconComposerProject),
+        outputPath,
+        "macOS",
+        size * scale,
+      );
+    }
+  }
+  const icnsPath = path.join(temporaryDirectory, "Main.icns");
+  const icnsResult = yield* runCommand("/usr/bin/iconutil", [
+    "-c",
+    "icns",
+    "-o",
+    icnsPath,
+    iconSetPath,
+  ]);
+  if (icnsResult.exitCode !== 0) {
+    return yield* new IconExportProcessError({
+      operation: "encode-icns",
+      command: "/usr/bin/iconutil",
+      argumentCount: 5,
+      cause: new Error(icnsResult.stderr),
+    });
+  }
+  generated.set("apps/desktop/resources/icon.icns", Buffer.from(yield* fs.readFile(icnsPath)));
 
   for (const override of DEVELOPMENT_PUBLIC_ICON_OVERRIDES) {
     const sourceContents = generated.get(override.sourceRelativePath);

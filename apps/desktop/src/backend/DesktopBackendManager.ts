@@ -604,7 +604,11 @@ export const runBackendProcess = Effect.fn("runBackendProcess")(function* (
           (options.onReadinessFailure?.(error) ?? Effect.void).pipe(
             // A live child that never serves readiness prevents the supervisor from reaching its
             // bounded restart path. Terminate this exact child after recording the timeout.
-            Effect.ensuring(handle.kill().pipe(Effect.ignore)),
+            Effect.ensuring(
+              handle
+                .kill({ killSignal: "SIGTERM", forceKillAfter: DEFAULT_BACKEND_TERMINATE_GRACE })
+                .pipe(Effect.ignore),
+            ),
             Effect.as(true),
           ),
       }),

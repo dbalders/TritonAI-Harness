@@ -135,8 +135,8 @@ struct SubscriptionUsage: Widget {
     return AppIntentConfiguration(kind: name, intent: SubscriptionUsageConfigurationAppIntent.self, provider: SubscriptionUsageTimelineProvider()) { entry in
       SubscriptionUsageEntryView(entry: entry)
     }
-    .configurationDisplayName("Subscription usage")
-    .description("Subscription quotas from your connected T3 Code environments.")
+    .configurationDisplayName("Harness usage")
+    .description("Subscription quotas from your connected TritonAI Harness environments.")
     .supportedFamilies([.systemSmall, .systemMedium, .systemLarge, .systemExtraLarge, .accessoryRectangular])
   }
 }

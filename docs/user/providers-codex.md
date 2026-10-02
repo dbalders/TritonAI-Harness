@@ -11,15 +11,11 @@ stay hidden after an upgrade; their saved settings are preserved.
 ## Managed Models
 
 GLM 5.3 Flash is the default on-prem model and supports text and image input. Choose Low, High
-(the default), or Extra High reasoning. GLM 5.3 and Glimmer remain available. DeepSeek has been removed from the managed catalog; saved managed
-DeepSeek selections fall back to GLM 5.3 Flash. Existing selections of other available models
-are preserved.
+(the default), or Extra High reasoning. GLM 5.3 and Glimmer remain available. DeepSeek has been removed from the managed catalog.
 
-GPT-6.1 Sol replaces GPT-5.6 Luna, Sol, and Terra in Cloud models. Saved selections of those
-models and GPT-5.5 move to GPT-6.1 Sol.
+Cloud offers GPT-6 Astra, GPT-6.1 Sol, and Claude Opus 5.5. GPT-6.1 Sol replaces the GPT-5.6 variants in the model picker.
 
-Cloud offers GPT-6 Astra, GPT-6.1 Sol, and Claude Opus 5.5. Saved managed Claude Opus 4.8 and
-Opus 5 selections move directly to Opus 5.5.
+Catalog updates do not rewrite old chats or conversation history. If an old chat's model is no longer available, choose a current model in its selector before continuing.
 
 On upgrade, saved app and project defaults for new threads reset to Flash once. Existing threads retain their selected models. You can change app and project defaults afterward; later launches preserve those choices.
 

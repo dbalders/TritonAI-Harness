@@ -144,7 +144,7 @@
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Allow TritonAI Harness to connect to Harness servers on your local network or tailnet.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Allow T3 Code to use your microphone for voice input.</string>
+	<string>Allow TritonAI Harness to use your microphone for voice input.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Allow TritonAI Harness to save images to your photo library.</string>
 	<key>NSSupportsLiveActivities</key>

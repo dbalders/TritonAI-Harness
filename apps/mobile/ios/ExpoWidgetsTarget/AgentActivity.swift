@@ -9,7 +9,7 @@ struct AgentActivity: Widget {
     StaticConfiguration(kind: name, provider: WidgetsTimelineProvider(name: name)) { entry in
       WidgetsEntryView(entry: entry)
     }
-    .configurationDisplayName("Agent Activity")
+    .configurationDisplayName("Harness activity")
     .description("Shows the current state of active TritonAI Harness agents.")
     .supportedFamilies([.systemSmall, .systemMedium, .accessoryRectangular])
   }
