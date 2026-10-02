@@ -209,6 +209,20 @@ export interface IntegrationProviderFault {
   readonly reason: string;
 }
 
+/**
+ * Records a provider fault in the server trace. Server logs reach the trace file only as events on
+ * an active span, and a fault is reported from outside any span, so the warning gets its own.
+ */
+export const logProviderFault = (fault: IntegrationProviderFault) =>
+  Effect.logWarning("integrations.provider.faulted", fault).pipe(
+    Effect.withSpan("integrations.provider.faulted", {
+      attributes: {
+        "integration.id": fault.integrationId,
+        "integration.fault.reason": fault.reason,
+      },
+    }),
+  );
+
 export interface RegistryRuntimeOptions {
   readonly providerStatusTimeoutMs?: number;
   readonly providerOperationTimeoutMs?: number;
@@ -3440,7 +3454,7 @@ export const startupLayer = Layer.effectDiscard(
         skillMaterializer,
         {
           onProviderFault: (fault) => {
-            runFork(Effect.logWarning("integrations.provider.faulted", fault));
+            runFork(logProviderFault(fault));
           },
         },
       ),

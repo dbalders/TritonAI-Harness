@@ -68,6 +68,8 @@ const makeIntegrationCredentialKeepalive = (options?: IntegrationCredentialKeepa
             Effect.catchDefect((defect: unknown) =>
               Effect.logWarning("integrations.credential.keepalive.sweep-failed", { defect }),
             ),
+            // The sweep runs outside any span; its logs reach the trace file only inside one.
+            Effect.withSpan("integrations.credential.keepalive.sweep"),
             Effect.repeat(Schedule.spaced(Duration.millis(sweepIntervalMs))),
             Effect.delay(Duration.millis(initialDelayMs)),
           ),
