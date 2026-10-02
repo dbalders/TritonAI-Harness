@@ -81,6 +81,8 @@ Generated trees omit `.repos`, `.gitmodules`, and GitHub workflow files: desktop
 submodules are not mobile dependencies, and the generated branch only runs in
 Xcode Cloud.
 Build-only, skipped, and failed nightly publications do not start a mobile build.
+Native preparation runs on macOS and commits the resolved Swift package pins,
+which Xcode Cloud requires before it can validate and archive the shared scheme.
 
 Configure Xcode Cloud once from the shared `TritonAIHarnessPreview` scheme in
 `apps/mobile/ios/TritonAIHarnessPreview.xcworkspace` on `mobile-nightly`:
