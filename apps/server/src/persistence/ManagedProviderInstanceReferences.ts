@@ -2,7 +2,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
-import { getManagedProviderInstanceRenames, managedConfig } from "../managedPolicy.ts";
+import { getManagedProviderInstanceRenames } from "../managedPolicy.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 
 /**
@@ -13,14 +13,8 @@ import { ServerSettingsService } from "../serverSettings.ts";
  */
 export const migrateManagedProviderInstanceReferences = Effect.fn(
   "migrateManagedProviderInstanceReferences",
-)(function* (
-  renames: Readonly<Record<string, string>>,
-  routeSplit?: {
-    readonly previousInstanceId: string;
-    readonly nextInstanceId: string;
-    readonly frontierModelIds: readonly string[];
-  },
-) {
+)(function* (renames: Readonly<Record<string, string>>) {
+  if (Object.keys(renames).length === 0) return;
   const sql = yield* SqlClient.SqlClient;
 
   yield* sql`
@@ -115,189 +109,13 @@ export const migrateManagedProviderInstanceReferences = Effect.fn(
     },
     { discard: true },
   );
-
-  if (routeSplit && routeSplit.frontierModelIds.length > 0) {
-    yield* Effect.forEach(
-      routeSplit.frontierModelIds,
-      (modelId) => {
-        const migrationKey = `provider-route-split:${routeSplit.previousInstanceId}:${routeSplit.nextInstanceId}:${modelId}`;
-        return sql.withTransaction(
-          Effect.gen(function* () {
-            const applied = yield* sql<{ readonly migrationKey: string }>`
-              SELECT migration_key AS "migrationKey"
-              FROM tritonai_managed_policy_migrations
-              WHERE migration_key = ${migrationKey}
-            `;
-            if (applied.length > 0) return;
-
-            yield* sql`
-              UPDATE projection_projects
-              SET default_model_selection_json = json_set(
-                default_model_selection_json,
-                '$.instanceId',
-                ${routeSplit.nextInstanceId}
-              )
-              WHERE json_valid(default_model_selection_json)
-                AND COALESCE(json_extract(default_model_selection_json, '$.instanceId'),
-                  json_extract(default_model_selection_json, '$.provider')) = ${routeSplit.previousInstanceId}
-                AND json_extract(default_model_selection_json, '$.model') = ${modelId}
-            `;
-            yield* sql`
-              UPDATE projection_threads
-              SET model_selection_json = json_set(
-                model_selection_json,
-                '$.instanceId',
-                ${routeSplit.nextInstanceId}
-              )
-              WHERE json_valid(model_selection_json)
-                AND COALESCE(json_extract(model_selection_json, '$.instanceId'),
-                  json_extract(model_selection_json, '$.provider')) = ${routeSplit.previousInstanceId}
-                AND json_extract(model_selection_json, '$.model') = ${modelId}
-            `;
-            yield* sql`
-              UPDATE projection_thread_sessions
-              SET provider_instance_id = ${routeSplit.nextInstanceId}
-              WHERE (provider_instance_id = ${routeSplit.previousInstanceId} OR provider_instance_id IS NULL)
-                AND EXISTS (
-                  SELECT 1
-                  FROM projection_threads
-                  WHERE projection_threads.thread_id = projection_thread_sessions.thread_id
-                    AND json_valid(projection_threads.model_selection_json)
-                    AND json_extract(projection_threads.model_selection_json, '$.model') = ${modelId}
-                    AND json_extract(projection_threads.model_selection_json, '$.instanceId') = ${routeSplit.nextInstanceId}
-                )
-            `;
-            yield* sql`
-              UPDATE provider_session_runtime
-              SET
-                provider_instance_id = ${routeSplit.nextInstanceId},
-                runtime_payload_json = json_set(
-                  runtime_payload_json,
-                  '$.modelSelection.instanceId',
-                  ${routeSplit.nextInstanceId},
-                  '$.providerInstanceId',
-                  ${routeSplit.nextInstanceId}
-                )
-              WHERE (provider_instance_id = ${routeSplit.previousInstanceId} OR (
-                  provider_instance_id IS NULL AND
-                  COALESCE(json_extract(runtime_payload_json, '$.providerInstanceId'),
-                    json_extract(runtime_payload_json, '$.modelSelection.instanceId'),
-                    json_extract(runtime_payload_json, '$.modelSelection.provider'),
-                    json_extract(runtime_payload_json, '$.provider')) = ${routeSplit.previousInstanceId}
-                ))
-                AND json_valid(runtime_payload_json)
-                AND COALESCE(
-                  json_extract(runtime_payload_json, '$.modelSelection.model'),
-                  json_extract(runtime_payload_json, '$.model')
-                ) = ${modelId}
-            `;
-            for (const selectionKey of ["defaultModelSelection", "modelSelection"]) {
-              const instancePath = `$.${selectionKey}.instanceId`;
-              const modelPath = `$.${selectionKey}.model`;
-              yield* sql`
-                UPDATE orchestration_events
-                SET payload_json = json_set(
-                  payload_json,
-                  ${instancePath},
-                  ${routeSplit.nextInstanceId}
-                )
-                WHERE json_valid(payload_json)
-                  AND COALESCE(json_extract(payload_json, ${instancePath}),
-                    json_extract(payload_json, ${`$.${selectionKey}.provider`})) = ${routeSplit.previousInstanceId}
-                  AND json_extract(payload_json, ${modelPath}) = ${modelId}
-              `;
-            }
-            yield* sql`
-              UPDATE orchestration_events
-              SET payload_json = json_set(
-                payload_json,
-                '$.session.providerInstanceId',
-                ${routeSplit.nextInstanceId}
-              )
-              WHERE json_valid(payload_json)
-                AND (json_extract(payload_json, '$.session.providerInstanceId') = ${routeSplit.previousInstanceId}
-                  OR (json_extract(payload_json, '$.session.providerInstanceId') IS NULL
-                    AND json_type(payload_json, '$.session') = 'object'
-                    AND json_extract(payload_json, '$.modelSelection.instanceId') = ${routeSplit.nextInstanceId}))
-                AND json_extract(payload_json, '$.modelSelection.model') = ${modelId}
-            `;
-
-            yield* sql`
-              INSERT INTO tritonai_managed_policy_migrations (migration_key, applied_at)
-              VALUES (${migrationKey}, CURRENT_TIMESTAMP)
-            `;
-          }),
-        );
-      },
-      { discard: true },
-    );
-  }
 });
 
-/** Replace retired managed models even when only the app is updated. */
-export const migrateManagedModelReferences = Effect.fn("migrateManagedModelReferences")(function* (
-  instanceId: string,
-  replacements: Readonly<Record<string, string>>,
-) {
-  const sql = yield* SqlClient.SqlClient;
-  yield* sql.withTransaction(
-    Effect.gen(function* () {
-      for (const [previousModel, nextModel] of Object.entries(replacements)) {
-        yield* sql`
-          UPDATE provider_session_runtime
-          SET runtime_payload_json = json_set(runtime_payload_json, '$.model', ${nextModel})
-          WHERE (provider_instance_id = ${instanceId} OR (
-            provider_instance_id IS NULL AND
-            COALESCE(json_extract(runtime_payload_json, '$.providerInstanceId'),
-              json_extract(runtime_payload_json, '$.modelSelection.instanceId'),
-              json_extract(runtime_payload_json, '$.provider')) = ${instanceId}
-          ))
-            AND json_valid(runtime_payload_json)
-            AND json_extract(runtime_payload_json, '$.model') = ${previousModel}
-        `;
-        for (const [table, column, selectionPath] of [
-          ["projection_projects", "default_model_selection_json", "$"],
-          ["projection_threads", "model_selection_json", "$"],
-          ["provider_session_runtime", "runtime_payload_json", "$.modelSelection"],
-          ["orchestration_events", "payload_json", "$.defaultModelSelection"],
-          ["orchestration_events", "payload_json", "$.modelSelection"],
-        ] as const) {
-          const modelPath = `${selectionPath}.model`;
-          const instancePath = `${selectionPath}.instanceId`;
-          yield* sql`
-          UPDATE ${sql(table)}
-          SET ${sql(column)} = json_set(${sql(column)}, ${modelPath}, ${nextModel})
-          WHERE json_valid(${sql(column)})
-            AND (json_extract(${sql(column)}, ${instancePath}) = ${instanceId}
-              OR (json_extract(${sql(column)}, ${instancePath}) IS NULL
-                AND json_extract(${sql(column)}, ${`${selectionPath}.provider`}) = ${instanceId}))
-            AND json_extract(${sql(column)}, ${modelPath}) = ${previousModel}
-        `;
-        }
-      }
-    }),
-  );
-});
-
-/** Run the idempotent reference migration after settings and SQLite are ready. */
+/** Repair provider identity collisions without rewriting historical model choices. */
 export const layer = Layer.effectDiscard(
   Effect.gen(function* () {
     const settings = yield* ServerSettingsService;
     yield* settings.start;
-    yield* migrateManagedModelReferences(
-      managedConfig.provider.routes.onPrem.instanceId,
-      managedConfig.models.replacements,
-    );
-    yield* migrateManagedProviderInstanceReferences(getManagedProviderInstanceRenames(), {
-      previousInstanceId: managedConfig.provider.routes.onPrem.instanceId,
-      nextInstanceId: managedConfig.provider.routes.frontier.instanceId,
-      frontierModelIds: managedConfig.models.catalog
-        .filter((model) => model.route === managedConfig.provider.routes.frontier.id)
-        .map((model) => model.id),
-    });
-    yield* migrateManagedModelReferences(
-      managedConfig.provider.routes.frontier.instanceId,
-      managedConfig.models.replacements,
-    );
+    yield* migrateManagedProviderInstanceReferences(getManagedProviderInstanceRenames());
   }),
 );
