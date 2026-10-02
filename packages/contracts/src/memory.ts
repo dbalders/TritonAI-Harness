@@ -30,6 +30,8 @@ export type ServerMemorySyncState = typeof ServerMemorySyncState.Type;
 /** OneDrive sync of the memory vault between the user's computers. */
 export const ServerMemorySyncStatus = Schema.Struct({
   state: ServerMemorySyncState,
+  /** A saved Microsoft sign-in exists even when its account name could not be loaded. */
+  signedIn: Schema.optionalKey(Schema.Boolean),
   /** The signed-in Microsoft account, such as `user@ucsd.edu`. */
   account: Schema.NullOr(TrimmedNonEmptyString),
   /** The OneDrive folder the vault syncs with. */
