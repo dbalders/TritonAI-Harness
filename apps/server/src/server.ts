@@ -15,7 +15,13 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schedule from "effect/Schedule";
 import * as Stream from "effect/Stream";
-import { FetchHttpClient, HttpRouter, HttpServer } from "effect/unstable/http";
+import {
+  FetchHttpClient,
+  HttpRouter,
+  HttpServer,
+  HttpServerRequest,
+  HttpServerResponse,
+} from "effect/unstable/http";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
@@ -594,9 +600,24 @@ const RuntimeDependenciesLive = TritonAiCommonsAction.runtimeLayer.pipe(
 
 const commandReadinessLayer = HttpRouter.middleware(
   (httpEffect) =>
-    Effect.flatMap(ServerRuntimeStartup.ServerRuntimeStartup, (startup) =>
-      startup.awaitCommandReady.pipe(Effect.orDie, Effect.andThen(httpEffect)),
-    ),
+    Effect.gen(function* () {
+      const request = yield* HttpServerRequest.HttpServerRequest;
+      // Liveness must not wait on readiness, static files, SQLite, or secrets.
+      if (
+        (request.method === "GET" || request.method === "HEAD") &&
+        request.url.split("?")[0] === "/api/health"
+      ) {
+        return yield* HttpServerResponse.json(
+          { status: "alive" },
+          {
+            headers: { "cache-control": "no-store" },
+          },
+        );
+      }
+      const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
+      yield* startup.awaitCommandReady.pipe(Effect.orDie);
+      return yield* httpEffect;
+    }),
   { global: true },
 );
 

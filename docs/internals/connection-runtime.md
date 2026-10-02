@@ -72,3 +72,19 @@ follow replacement sessions. After a transport failure they wait for the
 supervisor; an expected domain failure may resubscribe on the same healthy
 session. Reconnection does not automatically replay mutations, whose retry and
 idempotency rules belong to the operation.
+
+## Backend liveness and startup readiness
+
+`GET /api/health` (or `HEAD`) reports `{ "status": "alive" }` without waiting for
+command readiness, filesystem access, or SQLite. It only proves that the HTTP
+server can respond. `/.well-known/t3/environment` still waits for command readiness.
+Compare the two when diagnosing startup stalls: a responsive liveness endpoint
+with blocked readiness points to startup work; both timing out requires further
+process, event-loop, and transport evidence. The HTTP listener must already exist
+for either probe to respond.
+
+If readiness times out, desktop explicitly gives the backend two seconds after
+SIGTERM before force-stopping it so the supervisor can continue its bounded
+restart policy. Secret-store traces separate process-lock acquisition, file reads,
+and the locked operation to distinguish lock contention from slow I/O without
+recording secret values.
