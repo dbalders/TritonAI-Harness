@@ -4,6 +4,10 @@ For one account, use the default Codex provider with your normal Codex login.
 [Provider setup](./install.md#providers) covers installation, Settings > Providers,
 and custom binaries or environment variables.
 
+In TritonAI Harness, **Settings > Runtime** lists the On-prem and Cloud connections
+and any additional Codex accounts. Entries for other engines from older installations
+stay hidden after an upgrade; their saved settings are preserved.
+
 ## Managed Models
 
 GLM 5.3 Flash is the default on-prem model and supports text and image input. Choose Low, High
@@ -13,6 +17,11 @@ are preserved.
 
 GPT-6.1 Sol replaces GPT-5.6 Luna, Sol, and Terra in Cloud models. Saved selections of those
 models and GPT-5.5 move to GPT-6.1 Sol.
+
+Cloud offers GPT-6 Astra, GPT-6.1 Sol, and Claude Opus 5.5. Saved managed Claude Opus 4.8 and
+Opus 5 selections move directly to Opus 5.5.
+
+On upgrade, saved app and project defaults for new threads reset to Flash once. Existing threads retain their selected models. You can change app and project defaults afterward; later launches preserve those choices.
 
 ## Engine Updates
 

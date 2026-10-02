@@ -2,16 +2,18 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>CFBundleShortVersionString</key>
+	<string>1.2.0</string>
+	<key>CFBundleVersion</key>
+	<string>2</string>
+	<key>ExpoWidgetsAppGroupIdentifier</key>
+	<string>group.edu.ucsd.tritonai.harness.preview</string>
 	<key>NSExtension</key>
 	<dict>
 		<key>NSExtensionPointIdentifier</key>
 		<string>com.apple.widgetkit-extension</string>
 	</dict>
-  <key>ExpoWidgetsAppGroupIdentifier</key>
-  <string>group.edu.ucsd.tritonai.harness.preview</string>
-	<key>CFBundleShortVersionString</key>
-	<string>1.2.0</string>
-	<key>CFBundleVersion</key>
-	<string>2</string>
+	<key>RCTNewArchEnabled</key>
+	<true/>
 </dict>
 </plist>

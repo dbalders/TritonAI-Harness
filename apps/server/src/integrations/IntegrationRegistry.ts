@@ -80,11 +80,28 @@ export interface IntegrationLifecycleContext extends IntegrationInvocationContex
 
 export class IntegrationProviderPublicError extends Error {
   readonly _tag = "IntegrationProviderPublicError";
+  /**
+   * The external service definitively refused the operation, so nothing changed. An admitted
+   * commit rejected this way settles like a success: Harness clears its journal and keeps the
+   * provider available instead of faulting it as an ambiguous outcome.
+   */
+  readonly unchanged: boolean;
 
-  constructor(message: string) {
+  constructor(message: string, options?: { readonly unchanged?: boolean }) {
     super(message.trim() || "Integration provider operation failed.");
     this.name = "IntegrationProviderPublicError";
+    this.unchanged = options?.unchanged === true;
   }
+}
+
+function isUnchangedProviderError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    "_tag" in error &&
+    error._tag === "IntegrationProviderPublicError" &&
+    "unchanged" in error &&
+    error.unchanged === true
+  );
 }
 
 /** Every context-aware method must settle promptly after its AbortSignal aborts. */
@@ -187,9 +204,16 @@ interface PersistedIntegrationState {
 type InstalledIntegrationState = PersistedIntegrationState["installed"][string];
 type RemovingIntegrationState = NonNullable<PersistedIntegrationState["removing"]>[string];
 
+export interface IntegrationProviderFault {
+  readonly integrationId: string;
+  readonly reason: string;
+}
+
 export interface RegistryRuntimeOptions {
   readonly providerStatusTimeoutMs?: number;
   readonly providerOperationTimeoutMs?: number;
+  /** Observes every provider fault, which otherwise surfaces only as a reset prompt. */
+  readonly onProviderFault?: (fault: IntegrationProviderFault) => void;
 }
 
 const DEFAULT_PROVIDER_STATUS_TIMEOUT_MS = 5_000;
@@ -502,6 +526,34 @@ function operationError(
   return new IntegrationOperationError({ code, message });
 }
 
+const TRANSIENT_LOCK_CODES = new Set(["EBUSY", "EPERM", "EACCES"]);
+
+/**
+ * Windows antivirus and search indexers briefly lock a file that was just written. A commit
+ * journal that cannot be removed faults its provider on every launch, so ride out that lock.
+ */
+async function removeFileThroughTransientLocks(path: string): Promise<void> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await NodeFSP.rm(path, { force: true });
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (attempt >= 5 || code === undefined || !TRANSIENT_LOCK_CODES.has(code)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, attempt * 50));
+    }
+  }
+}
+
+/** A fault reason for logs: system errors by code only, since their messages carry paths. */
+function faultReason(error: unknown): string {
+  if (!(error instanceof Error)) return "Unknown failure.";
+  const code = (error as NodeJS.ErrnoException).code;
+  if (typeof code === "string") return `${error.name} (${code})`;
+  const message = error.message.trim() || error.name;
+  return message.length > 200 ? `${message.slice(0, 199)}…` : message;
+}
+
 function safeMessage(error: unknown): string {
   return error instanceof Error && error.message.trim()
     ? error.message
@@ -737,6 +789,7 @@ export class RegistryRuntime {
   readonly #removeInstalledPackage: (path: string) => Promise<void>;
   readonly #providerStatusTimeoutMs: number;
   readonly #providerOperationTimeoutMs: number;
+  readonly #onProviderFault: ((fault: IntegrationProviderFault) => void) | undefined;
   readonly #activeStatusChecks = new Set<AbortController>();
   readonly #activeStatusWork = new Set<Promise<IntegrationProviderStatus>>();
   readonly #providerStatusAttempts = new Map<IntegrationProvider, ProviderStatusAttempt>();
@@ -775,6 +828,7 @@ export class RegistryRuntime {
       options.providerStatusTimeoutMs ?? DEFAULT_PROVIDER_STATUS_TIMEOUT_MS;
     this.#providerOperationTimeoutMs =
       options.providerOperationTimeoutMs ?? DEFAULT_PROVIDER_OPERATION_TIMEOUT_MS;
+    this.#onProviderFault = options.onProviderFault;
     if (
       !Number.isSafeInteger(this.#providerStatusTimeoutMs) ||
       this.#providerStatusTimeoutMs <= 0 ||
@@ -1122,7 +1176,7 @@ export class RegistryRuntime {
   }
 
   async #clearProviderCommitJournal(integrationId: string): Promise<void> {
-    await NodeFSP.rm(this.#commitJournalPath(integrationId), { force: true });
+    await removeFileThroughTransientLocks(this.#commitJournalPath(integrationId));
     if ((await lstatOrNull(this.#commitJournalRoot)) !== null) {
       await syncDirectory(this.#commitJournalRoot);
     }
@@ -1169,6 +1223,10 @@ export class RegistryRuntime {
         throw new Error(`Provider commit journal ${entry.name} does not match the fixed catalog.`);
       }
       this.#faultedProviders.add(integration.provider);
+      this.#reportProviderFault(
+        integrationId,
+        "A commit from an earlier session never settled; reset the connection to recover.",
+      );
     }
   }
 
@@ -1331,7 +1389,7 @@ export class RegistryRuntime {
             const timeout = setTimeout(() => {
               const integration = this.#catalog.get(id);
               const provider = integration?.provider;
-              if (provider) this.#faultProvider(provider);
+              if (provider) this.#faultProvider(provider, new ProviderOperationTimeoutError());
               reject(
                 operationError(
                   "operation_failed",
@@ -1421,7 +1479,7 @@ export class RegistryRuntime {
         : new Promise<void>((resolve, reject) => {
             const timeout = setTimeout(() => {
               const provider = this.#catalog.get(manifest.id)?.provider;
-              if (provider) this.#faultProvider(provider);
+              if (provider) this.#faultProvider(provider, new ProviderOperationTimeoutError());
               reject(
                 operationError(
                   "operation_failed",
@@ -1490,11 +1548,20 @@ export class RegistryRuntime {
     return integration;
   }
 
-  #faultProvider(provider: IntegrationProvider): void {
+  #reportProviderFault(integrationId: string, reason: string): void {
+    try {
+      this.#onProviderFault?.({ integrationId, reason });
+    } catch {
+      // Fault reporting is diagnostic and must never change fault handling.
+    }
+  }
+
+  #faultProvider(provider: IntegrationProvider, cause?: unknown): void {
     if (this.#faultedProviders.has(provider)) return;
     this.#faultedProviders.add(provider);
     for (const { manifest, provider: registeredProvider } of this.#catalog.values()) {
       if (registeredProvider !== provider) continue;
+      this.#reportProviderFault(manifest.id, faultReason(cause));
       this.#summaryGenerations.set(
         manifest.id,
         (this.#summaryGenerations.get(manifest.id) ?? 0) + 1,
@@ -1662,7 +1729,7 @@ export class RegistryRuntime {
     let timeout = setTimeout(
       () => {
         timedOut = true;
-        if (!commitAdmission) this.#faultProvider(provider);
+        if (!commitAdmission) this.#faultProvider(provider, new ProviderOperationTimeoutError());
         controller.abort();
       },
       Math.max(0, operationDeadline - Date.now()),
@@ -1713,7 +1780,7 @@ export class RegistryRuntime {
                 try {
                   await this.#clearProviderCommitJournal(integration.manifest.id);
                 } catch (cleanupError) {
-                  this.#faultProvider(provider);
+                  this.#faultProvider(provider, cleanupError);
                   throw cleanupError;
                 }
               }
@@ -1727,7 +1794,7 @@ export class RegistryRuntime {
                 try {
                   await this.#clearProviderCommitJournal(integration.manifest.id);
                 } catch (error) {
-                  this.#faultProvider(provider);
+                  this.#faultProvider(provider, error);
                   throw error;
                 }
               }
@@ -1760,8 +1827,9 @@ export class RegistryRuntime {
             );
             timeout = setTimeout(() => {
               timedOut = true;
-              this.#faultProvider(provider);
-              rejectOperation(new ProviderOperationTimeoutError());
+              const timeoutError = new ProviderOperationTimeoutError();
+              this.#faultProvider(provider, timeoutError);
+              rejectOperation(timeoutError);
             }, this.#providerOperationTimeoutMs);
             return commitController.signal;
           })();
@@ -1792,7 +1860,7 @@ export class RegistryRuntime {
         try {
           await this.#clearProviderCommitJournal(integration.manifest.id);
         } catch (error) {
-          this.#faultProvider(provider);
+          this.#faultProvider(provider, error);
           throw error;
         }
       }
@@ -1809,11 +1877,28 @@ export class RegistryRuntime {
           commitAdmissionDrainTimedOut = true;
         }
       }
-      // Success is the only generic proof that an admitted external commit settled. A provider
-      // rejection may be ambiguous even when it returns promptly, so retain the durable journal
-      // and require the verified disconnect/reset path to clear it.
+      // A provider that proves the external service refused the commit settles it like a
+      // success: nothing changed, so there is no ambiguous outcome to reset.
+      if (
+        commitStarted &&
+        !commitAdmissionDrainTimedOut &&
+        !timedOut &&
+        !this.#faultedProviders.has(provider) &&
+        isUnchangedProviderError(error)
+      ) {
+        try {
+          await this.#clearProviderCommitJournal(integration.manifest.id);
+        } catch (clearError) {
+          this.#faultProvider(provider, clearError);
+          throw clearError;
+        }
+        throw error;
+      }
+      // Otherwise success is the only generic proof that an admitted external commit settled. A
+      // provider rejection may be ambiguous even when it returns promptly, so retain the durable
+      // journal and require the verified disconnect/reset path to clear it.
       if (commitAdmission && (commitAdmissionDrainTimedOut || !preAdmissionCancelled)) {
-        this.#faultProvider(provider);
+        this.#faultProvider(provider, error);
       }
       throw error;
     } finally {
@@ -3198,8 +3283,9 @@ export class RegistryRuntime {
           } catch (error) {
             journalFailure = error;
           }
-          this.#faultProvider(provider);
-          throw new ProviderWriteAdmissionError(journalFailure);
+          const admissionError = new ProviderWriteAdmissionError(journalFailure);
+          this.#faultProvider(provider, admissionError);
+          throw admissionError;
         }
         if (controller.signal.aborted && !writeCommitAdmitted) {
           throw operationError("disabled", `${manifest.name} access was revoked.`);
@@ -3271,9 +3357,10 @@ export async function createRegistryRuntime(
   root: string,
   packages: ReadonlyArray<IntegrationPackage>,
   skills: IntegrationSkillMaterializer = noIntegrationSkills,
+  options: RegistryRuntimeOptions = {},
 ): Promise<RegistryRuntime> {
   try {
-    return new RegistryRuntime(root, packages, skills);
+    return new RegistryRuntime(root, packages, skills, undefined, options);
   } catch (error) {
     for (const { provider } of packages.toReversed()) {
       try {
@@ -3340,6 +3427,7 @@ export const startupLayer = Layer.effectDiscard(
     const skillMaterializer = new CodexIntegrationSkillMaterializer(
       resolveIntegrationCodexHomes(config.baseDir, settings),
     );
+    const runFork = Effect.runForkWith(yield* Effect.context<never>());
     const builtinIntegrations = yield* Effect.promise(() =>
       loadBuiltinIntegrations(secrets, {
         includeFixtures: process.env.TRITONAI_ENABLE_INTEGRATION_FIXTURES === "1",
@@ -3350,6 +3438,11 @@ export const startupLayer = Layer.effectDiscard(
         NodePath.join(config.stateDir, "integrations"),
         builtinIntegrations,
         skillMaterializer,
+        {
+          onProviderFault: (fault) => {
+            runFork(Effect.logWarning("integrations.provider.faulted", fault));
+          },
+        },
       ),
     );
     yield* Effect.addFinalizer(() =>

@@ -216,14 +216,19 @@ export function canOneClickUpdateProviderCandidate(
 /**
  * Candidates eligible for an unsolicited launch prompt. Launch prompts may be
  * scoped to one provider without narrowing the update surfaces in Settings and
- * the sidebar.
+ * the sidebar. An update already queued or running (such as the server's
+ * automatic managed Codex update) is not prompted for again.
  */
 export function collectProviderLaunchUpdateCandidates(
   providers: ReadonlyArray<ServerProvider>,
   providerDriver?: ProviderDriverKind,
 ): ProviderUpdateCandidate[] {
-  return collectProviderUpdateCandidates(providers).filter(
-    (candidate) => providerDriver === undefined || candidate.driver === providerDriver,
+  return collectProviderUpdateCandidates(
+    providers.filter(
+      (provider) =>
+        !isProviderUpdateActive(provider) &&
+        (providerDriver === undefined || provider.driver === providerDriver),
+    ),
   );
 }
 

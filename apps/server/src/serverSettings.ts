@@ -63,6 +63,7 @@ import {
   applyManagedHarnessPolicy,
   createManagedProfileSettings,
   migrateLegacyInstallerManagedSettings,
+  migrateManagedNewThreadDefaults,
   rawSettingsHasTextGenerationSelection,
   stripManagedFieldsForPersistence,
 } from "./managedPolicy.ts";
@@ -642,6 +643,28 @@ const make = (
       ),
     );
 
+    const foldProjectSettings = Effect.fn("ServerSettings.foldProjectSettings")(function* (
+      settings: ServerSettings,
+    ) {
+      const rows = settings.projectSettingsFolded
+        ? []
+        : yield* sql<LegacyProjectSettingsRow>`
+            SELECT project_id AS "projectId", default_model_selection_json AS "defaultModelSelection",
+              default_thread_env_mode AS "defaultThreadEnvMode", auto_pull AS "autoPull", scripts_json AS "scripts"
+            FROM projection_projects WHERE deleted_at IS NULL
+          `.pipe(
+            Effect.mapError(
+              (cause) =>
+                new ServerSettingsError({
+                  settingsPath,
+                  operation: "read-project-settings",
+                  cause,
+                }),
+            ),
+          );
+      return foldLegacyProjectSettings(settings, rows);
+    });
+
     const readRawConfig = fs.readFileString(settingsPath).pipe(
       Effect.mapError(
         (cause) =>
@@ -1158,7 +1181,7 @@ const make = (
         );
 
       if (!(yield* readConfigExists)) {
-        const restoredSettings = restoreProviderHistory(DEFAULT_SERVER_SETTINGS);
+        let restoredSettings = restoreProviderHistory(DEFAULT_SERVER_SETTINGS);
         if (managedPolicyEnabled) {
           const hasCodexHistory = providerHistory.some(
             ({ providerName }) => providerName === "codex",
@@ -1168,7 +1191,12 @@ const make = (
               hasCodexHistory ? DEFAULT_TRITONAI_CODEX_HOME_PATH : defaultCodexHomePath,
             ),
           ).document;
-          yield* Ref.set(rawDocumentRef, initialDocument);
+          const defaultsMigration = migrateManagedNewThreadDefaults(
+            yield* foldProjectSettings(restoredSettings),
+            initialDocument,
+          );
+          restoredSettings = defaultsMigration.settings;
+          yield* Ref.set(rawDocumentRef, defaultsMigration.document);
           // Record the home before the first conversation so reopening cannot reclassify it as legacy.
           yield* writeSettingsAtomically(restoredSettings);
         } else {
@@ -1207,24 +1235,13 @@ const make = (
         return restoreProviderHistory(DEFAULT_SERVER_SETTINGS);
       }
       const restored = restoreProviderHistory(decoded.value);
-      const legacyProjectRows = restored.projectSettingsFolded
-        ? []
-        : yield* sql<LegacyProjectSettingsRow>`
-        SELECT project_id AS "projectId", default_model_selection_json AS "defaultModelSelection",
-          default_thread_env_mode AS "defaultThreadEnvMode", auto_pull AS "autoPull", scripts_json AS "scripts"
-        FROM projection_projects WHERE deleted_at IS NULL
-      `.pipe(
-            Effect.mapError(
-              (cause) =>
-                new ServerSettingsError({
-                  settingsPath,
-                  operation: "read-project-settings",
-                  cause,
-                }),
-            ),
-          );
-      const restoredSettings = foldLegacyProjectSettings(restored, legacyProjectRows);
-      const projectSettingsWereFolded = restoredSettings !== restored;
+      const foldedSettings = yield* foldProjectSettings(restored);
+      const projectSettingsWereFolded = foldedSettings !== restored;
+      const defaultsMigration = managedPolicyEnabled
+        ? migrateManagedNewThreadDefaults(foldedSettings, migration.document)
+        : { settings: foldedSettings, document: migration.document, migrated: false };
+      yield* Ref.set(rawDocumentRef, defaultsMigration.document);
+      const restoredSettings = defaultsMigration.settings;
       const withoutManagedTritonAiProviderEnvironment =
         removeManagedTritonAiProviderEnvironment(restoredSettings);
       const removedManagedTritonAiProviderEnvironment =
@@ -1251,7 +1268,7 @@ const make = (
         ) &&
         !removedManagedTritonAiProviderEnvironment
       ) {
-        if (migration.migrated || projectSettingsWereFolded) {
+        if (migration.migrated || defaultsMigration.migrated || projectSettingsWereFolded) {
           yield* writeSettingsAtomically(withoutManagedTritonAiProviderEnvironment);
         }
         return restoredSettings;

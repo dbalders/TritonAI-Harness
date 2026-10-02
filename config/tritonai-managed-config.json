@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "policyVersion": 8,
+  "policyVersion": 9,
   "provider": {
     "driver": "codex",
     "managedBinary": true,
@@ -35,7 +35,8 @@
       "gpt-5.6-luna": "gpt-6.1-sol",
       "gpt-5.6-sol": "gpt-6.1-sol",
       "gpt-5.6-terra": "gpt-6.1-sol",
-      "claude-opus-4-8": "claude-opus-5",
+      "claude-opus-4-8": "claude-opus-5-5",
+      "claude-opus-5": "claude-opus-5-5",
       "api-deepseek-v4-flash": "api-glm-5.3-flash",
       "glm-5.3-flash-test": "api-glm-5.3-flash"
     },
@@ -104,13 +105,18 @@
         }
       },
       {
+        "id": "gpt-6-astra",
+        "name": "GPT-6 Astra",
+        "route": "frontier"
+      },
+      {
         "id": "gpt-6.1-sol",
         "name": "GPT-6.1 Sol",
         "route": "frontier"
       },
       {
-        "id": "claude-opus-5",
-        "name": "Claude Opus 5",
+        "id": "claude-opus-5-5",
+        "name": "Claude Opus 5.5",
         "route": "frontier"
       }
     ]
