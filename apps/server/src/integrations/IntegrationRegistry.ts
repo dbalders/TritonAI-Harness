@@ -652,7 +652,8 @@ export function persistedToolUnavailability(
     return {
       available: false,
       reason: "not_installed",
-      detail: `the ${manifest.name} plugin is not installed.`,
+      // Included plugins are installed by turning them on, so name the control users see.
+      detail: `${manifest.name} is turned off. Turn it on in ${PLUGIN_SETTINGS}.`,
     };
   }
   if (installed.version !== manifest.version) {

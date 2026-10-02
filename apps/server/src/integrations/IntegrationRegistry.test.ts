@@ -6026,7 +6026,7 @@ describe("IntegrationRegistry tool availability reasons", () => {
         expect(registry.toolAvailabilitySync("test.events.list")).toEqual({
           available: false,
           reason: "not_installed",
-          detail: "the Test Cloud Records plugin is not installed.",
+          detail: "Test Cloud Records is turned off. Turn it on in Settings > Plugins.",
         });
         await registry.install(optInEventsManifest.id);
         expect(registry.toolAvailabilitySync("test.records.list")).toEqual({ available: true });
