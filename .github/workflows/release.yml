@@ -29,7 +29,7 @@ permissions:
 
 env:
   # Keep the composition producer tied to this reviewed Harness revision.
-  TRITONAI_INSTALLER_COMPOSITION_COMMIT: b7c9666bcc4c60302bfd8eca39e95a252b1ac0ae
+  TRITONAI_INSTALLER_COMPOSITION_COMMIT: fcb231294b843a322243f1ba3d7b64f5c6c2e602
 
 jobs:
   resolve_release:
