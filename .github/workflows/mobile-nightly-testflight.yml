@@ -1,0 +1,127 @@
+name: Mobile Nightly TestFlight
+
+# Called directly after publication: releases created with GITHUB_TOKEN do not
+# trigger a separate release-event workflow.
+on:
+  workflow_call:
+    inputs:
+      nightly_tag:
+        required: true
+        type: string
+      source_sha:
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      nightly_tag:
+        description: Published nightly tag to build or retry
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mobile-nightly-native
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Prepare Harness Preview for Xcode Cloud
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      APP_VARIANT: preview
+      NODE_OPTIONS: --max-old-space-size=8192
+    steps:
+      - name: Checkout workflow helpers
+        uses: actions/checkout@v6
+        with:
+          path: automation
+          persist-credentials: false
+
+      - name: Resolve published nightly source
+        id: source
+        uses: actions/github-script@v8
+        env:
+          NIGHTLY_TAG: ${{ inputs.nightly_tag }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        with:
+          script: |
+            const { resolveNightlyMobile } = require('./automation/.github/scripts/resolve-nightly-mobile.cjs');
+            const sha = await resolveNightlyMobile({
+              github, context, tag: process.env.NIGHTLY_TAG, sourceSha: process.env.SOURCE_SHA,
+            });
+            core.setOutput('sha', sha);
+
+      - name: Checkout exact nightly source
+        uses: actions/checkout@v6
+        with:
+          path: source
+          ref: ${{ steps.source.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          working-directory: source
+          node-version-file: package.json
+          cache: true
+          run-install: |
+            args:
+              - --filter=@t3tools/mobile...
+
+      - name: Generate Preview native project
+        working-directory: source/apps/mobile
+        env:
+          EXPO_NO_GIT_STATUS: "1"
+        run: vp exec expo prebuild --platform ios --no-install
+
+      - name: Resolve native dependencies for Xcode Cloud
+        working-directory: source/apps/mobile/ios
+        run: |
+          pod install
+          xcodebuild -resolvePackageDependencies \
+            -workspace TritonAIHarnessPreview.xcworkspace \
+            -scheme TritonAIHarnessPreview \
+            -derivedDataPath "$RUNNER_TEMP/mobile-swift-dependencies" \
+            -hideShellScriptEnvironment
+
+      - name: Publish native build branch
+        id: native
+        working-directory: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NIGHTLY_TAG: ${{ inputs.nightly_tag }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          generator_sha="$(git -C ../automation rev-parse HEAD)"
+          previous="$(git -c credential.helper='!gh auth git-credential' ls-remote origin refs/heads/mobile-nightly | cut -f1)"
+          parents=(-p "$SOURCE_SHA")
+          if [ -n "$previous" ]; then
+            git -c credential.helper='!gh auth git-credential' fetch origin "$previous"
+            parents=(-p "$previous" -p "$SOURCE_SHA")
+          fi
+          tree="$(node ../automation/.github/scripts/prepare-nightly-mobile-native.cjs "$PWD" "$NIGHTLY_TAG" "$SOURCE_SHA" "$generator_sha")"
+          commit="$(git commit-tree "$tree" "${parents[@]}" -m "build(mobile): prepare $NIGHTLY_TAG for TestFlight")"
+          git -c credential.helper='!gh auth git-credential' push origin "$commit:refs/heads/mobile-nightly"
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+
+      - name: Record Xcode Cloud handoff
+        env:
+          NIGHTLY_TAG: ${{ inputs.nightly_tag }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+          NATIVE_SHA: ${{ steps.native.outputs.commit }}
+        run: |
+          {
+            echo '## Nightly prepared for Xcode Cloud'
+            echo "- Nightly: $NIGHTLY_TAG"
+            echo "- Source: $SOURCE_SHA"
+            echo "- Native build commit: $NATIVE_SHA"
+            echo '- App: TritonAI Harness Preview (6813180967)'
+            echo '- Xcode Cloud must complete its archive and TestFlight post-action.'
+            echo '- Check App Store Connect for build status and tester availability.'
+          } >> "$GITHUB_STEP_SUMMARY"

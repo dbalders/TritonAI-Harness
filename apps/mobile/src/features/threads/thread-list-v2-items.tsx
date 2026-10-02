@@ -71,12 +71,12 @@ const STATUS_LABEL_BY_STATUS: Partial<
 // Menus keep lifecycle and title regeneration together. Archive keeps its
 // own surface (thread screen / settings) rather than crowding v2 rows.
 const CARD_MENU_ACTIONS: MenuAction[] = [
-  { id: "settle", title: "Settle", image: "checkmark" },
+  { id: "settle", title: "Done", image: "checkmark" },
   { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
 ];
 
 const SLIM_MENU_ACTIONS: MenuAction[] = [
-  { id: "unsettle", title: "Un-settle", image: "arrow.uturn.backward" },
+  { id: "unsettle", title: "Reopen", image: "arrow.uturn.backward" },
   { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
 ];
 
@@ -190,7 +190,8 @@ type ThreadListV2ShelfHeaderProps = {
 function ThreadListV2ShelfHeader(
   props: ThreadListV2ShelfHeaderProps & { readonly kind: "snoozed" | "settled" },
 ) {
-  const label = props.kind === "snoozed" ? "Snoozed" : "Settled";
+  const label = props.kind === "snoozed" ? "Snoozed" : "Done";
+  const description = props.kind === "snoozed" ? "snoozed" : "done";
   return (
     <ThreadListV2Section
       label={props.expanded ? label : `${label} (${props.count})`}
@@ -200,8 +201,8 @@ function ThreadListV2ShelfHeader(
         expanded: props.expanded,
         disabled: props.disabled,
         onToggle: props.onToggle,
-        accessibilityLabel: `${props.count} ${props.kind} ${props.count === 1 ? "thread" : "threads"}`,
-        accessibilityHint: `${props.expanded ? "Collapses" : "Expands"} the ${props.kind} threads.`,
+        accessibilityLabel: `${props.count} ${description} ${props.count === 1 ? "thread" : "threads"}`,
+        accessibilityHint: `${props.expanded ? "Collapses" : "Expands"} the ${description} threads.`,
       }}
     />
   );
@@ -227,7 +228,7 @@ export const ThreadListV2ShowMoreRow = memo(function ThreadListV2ShowMoreRow(pro
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`Show ${Math.min(props.hiddenCount, THREAD_LIST_V2_SETTLED_PAGE_COUNT)} more settled threads`}
+      accessibilityLabel={`Show ${Math.min(props.hiddenCount, THREAD_LIST_V2_SETTLED_PAGE_COUNT)} more done threads`}
       onPress={props.onPress}
       className="mx-4 mt-2 items-center rounded-lg border border-dashed border-border py-2.5"
       style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
@@ -239,7 +240,7 @@ export const ThreadListV2ShowMoreRow = memo(function ThreadListV2ShowMoreRow(pro
             : "text-xs font-t3-medium text-foreground-muted"
         }
       >
-        Show more ({props.hiddenCount} settled hidden)
+        Show more ({props.hiddenCount} done hidden)
       </Text>
     </Pressable>
   );
@@ -680,7 +681,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         ? [
             {
               id: "auto-settle",
-              title: "Auto-settle behavior",
+              title: "Automatically mark done",
               image: "timer",
               subactions: [
                 {
@@ -711,7 +712,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   );
   const snoozableCardMenuActions = useMemo<MenuAction[]>(
     () => [
-      { id: "settle", title: "Settle", image: "checkmark" },
+      { id: "settle", title: "Done", image: "checkmark" },
       {
         id: "snooze",
         title: "Snooze",
@@ -844,15 +845,15 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     }
     return swipeActions.primary === "unsettle"
       ? {
-          accessibilityLabel: `Un-settle ${thread.title}`,
+          accessibilityLabel: `Reopen ${thread.title}`,
           icon: "arrow.uturn.backward" as const,
-          label: "Un-settle",
+          label: "Reopen",
           onPress: handleUnsettle,
         }
       : {
-          accessibilityLabel: `Settle ${thread.title}`,
+          accessibilityLabel: `Mark ${thread.title} done`,
           icon: "checkmark" as const,
-          label: "Settle",
+          label: "Done",
           onPress: handleSettle,
         };
   }, [

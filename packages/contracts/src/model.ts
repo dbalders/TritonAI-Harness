@@ -161,11 +161,7 @@ export const DEFAULT_MODEL = DEFAULT_TRITONAI_CODEX_MODEL;
  * marks the first of these present in the live `model/list` response as
  * default; when none are available, Codex's own `isDefault` flag wins.
  */
-export const PREFERRED_DEFAULT_CODEX_MODELS: ReadonlyArray<string> = [
-  DEFAULT_MODEL,
-  "gpt-5.6-sol",
-  "gpt-5.6-terra",
-];
+export const PREFERRED_DEFAULT_CODEX_MODELS: ReadonlyArray<string> = [DEFAULT_MODEL, "gpt-6.1-sol"];
 export const DEFAULT_TEXT_GENERATION_MODEL = DEFAULT_TRITONAI_CODEX_MODEL;
 export const DEFAULT_TEXT_GENERATION_REASONING_EFFORT = "high";
 /** Keep the official Antigravity session's current model. Never send this ID to ACP. */

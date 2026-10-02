@@ -19,7 +19,13 @@ import * as Random from "effect/Random";
 import * as Schedule from "effect/Schedule";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
-import { FetchHttpClient, HttpRouter, HttpServer } from "effect/unstable/http";
+import {
+  FetchHttpClient,
+  HttpRouter,
+  HttpServer,
+  HttpServerRequest,
+  HttpServerResponse,
+} from "effect/unstable/http";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
@@ -61,6 +67,8 @@ import { AntigravityInstallation } from "./provider/AntigravityInstallation.ts";
 import { ProviderInstanceRegistry } from "./provider/Services/ProviderInstanceRegistry.ts";
 import { ProviderRegistry } from "./provider/Services/ProviderRegistry.ts";
 import { ProviderSessionReaperLive } from "./provider/Layers/ProviderSessionReaper.ts";
+import * as ManagedCodexAutoUpdate from "./provider/managedCodexAutoUpdate.ts";
+import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
 import { ProviderUsageLimitsIngestionLive } from "./provider/Layers/ProviderUsageLimitsIngestion.ts";
 import * as OpenCodeRuntime from "./provider/opencodeRuntime.ts";
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
@@ -170,6 +178,8 @@ import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import * as DailyMemory from "./memory/DailyMemory.ts";
+import * as MemorySync from "./memory/sync/MemorySync.ts";
+import * as MicrosoftSignIn from "./memory/sync/microsoftSignIn.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
 import {
   clearPersistedServerRuntimeState,
@@ -526,9 +536,16 @@ const ProviderInstallationRefreshLive = Layer.effectDiscard(
   }),
 );
 
+// One server-lifetime runner so every client and the startup auto-update share
+// the same per-instance update locks and `updateState`.
+const ProviderMaintenanceLive = ManagedCodexAutoUpdate.layer.pipe(
+  Layer.provideMerge(ProviderMaintenanceRunner.layer),
+);
+
 const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(ProviderInstallationRefreshLive),
   Layer.provideMerge(ReplayMarkers.layer),
+  Layer.provideMerge(ProviderMaintenanceLive),
   Layer.provideMerge(ProviderAuthServiceLive),
   // Core Services
   Layer.provideMerge(ServerSettingsLayerLive),
@@ -595,6 +612,8 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
 );
 
 const RuntimeDependenciesLive = TritonAiCommonsAction.runtimeLayer.pipe(
+  // Memory sync takes the summarizer's lock while it touches the vault.
+  Layer.provideMerge(MemorySync.layer.pipe(Layer.provide(MicrosoftSignIn.layer))),
   // Memory reads threads and calls text generation, so it sits above the core.
   Layer.provideMerge(DailyMemory.layer),
   Layer.provideMerge(RuntimeCoreDependenciesLive),
@@ -613,9 +632,24 @@ const RuntimeDependenciesLive = TritonAiCommonsAction.runtimeLayer.pipe(
 
 const commandReadinessLayer = HttpRouter.middleware(
   (httpEffect) =>
-    Effect.flatMap(ServerRuntimeStartup.ServerRuntimeStartup, (startup) =>
-      startup.awaitCommandReady.pipe(Effect.orDie, Effect.andThen(httpEffect)),
-    ),
+    Effect.gen(function* () {
+      const request = yield* HttpServerRequest.HttpServerRequest;
+      // Liveness must not wait on readiness, static files, SQLite, or secrets.
+      if (
+        (request.method === "GET" || request.method === "HEAD") &&
+        request.url.split("?")[0] === "/api/health"
+      ) {
+        return yield* HttpServerResponse.json(
+          { status: "alive" },
+          {
+            headers: { "cache-control": "no-store" },
+          },
+        );
+      }
+      const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
+      yield* startup.awaitCommandReady.pipe(Effect.orDie);
+      return yield* httpEffect;
+    }),
   { global: true },
 );
 

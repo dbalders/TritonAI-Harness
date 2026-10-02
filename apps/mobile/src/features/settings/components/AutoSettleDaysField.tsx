@@ -41,7 +41,7 @@ export function AutoSettleDaysField(props: AutoSettleDaysFieldProps) {
       onChangeText={setDraft}
       onBlur={commit}
       onSubmitEditing={commit}
-      accessibilityLabel="Days before auto-settle"
+      accessibilityLabel="Days before marking done"
       editable={!props.disabled}
     />
   );

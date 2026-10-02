@@ -25,7 +25,8 @@
     "test": "vp test run --config ../../vite.config.ts --dir ."
   },
   "dependencies": {
-    "effect": "catalog:"
+    "effect": "catalog:",
+    "unicode-segmenter": "0.17.3"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",

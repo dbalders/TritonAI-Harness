@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "policyVersion": 8,
+  "policyVersion": 10,
   "provider": {
     "driver": "codex",
     "managedBinary": true,
@@ -31,8 +31,12 @@
       "api-gemma-4-31b": "api-muse-glimmer-30b",
       "onyx-muse-glimmer-30b": "api-muse-glimmer-30b",
       "api-glm-5.2": "api-glm-5.3",
-      "gpt-5.5": "gpt-5.6-sol",
-      "claude-opus-4-8": "claude-opus-5",
+      "gpt-5.5": "gpt-6.1-sol",
+      "gpt-5.6-luna": "gpt-6.1-sol",
+      "gpt-5.6-sol": "gpt-6.1-sol",
+      "gpt-5.6-terra": "gpt-6.1-sol",
+      "claude-opus-4-8": "claude-opus-5-5",
+      "claude-opus-5": "claude-opus-5-5",
       "api-deepseek-v4-flash": "api-glm-5.3-flash",
       "glm-5.3-flash-test": "api-glm-5.3-flash"
     },
@@ -101,23 +105,18 @@
         }
       },
       {
-        "id": "gpt-5.6-luna",
-        "name": "GPT-5.6 Luna",
+        "id": "gpt-6-astra",
+        "name": "GPT-6 Astra",
         "route": "frontier"
       },
       {
-        "id": "gpt-5.6-sol",
-        "name": "GPT-5.6 Sol",
+        "id": "gpt-6.1-sol",
+        "name": "GPT-6.1 Sol",
         "route": "frontier"
       },
       {
-        "id": "gpt-5.6-terra",
-        "name": "GPT-5.6 Terra",
-        "route": "frontier"
-      },
-      {
-        "id": "claude-opus-5",
-        "name": "Claude Opus 5",
+        "id": "claude-opus-5-5",
+        "name": "Claude Opus 5.5",
         "route": "frontier"
       }
     ]

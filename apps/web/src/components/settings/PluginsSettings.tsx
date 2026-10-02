@@ -244,6 +244,28 @@ function DeviceCodeAuthorization({
   readonly integrationName: string;
   readonly flow: Extract<IntegrationConnectResult, { readonly kind: "device_code" }>;
 }) {
+  return (
+    <DeviceCodePrompt
+      title={`Finish signing in to ${integrationName}`}
+      message={flow.message}
+      userCode={flow.userCode}
+      verificationUri={flow.verificationUriComplete ?? flow.verificationUri}
+    />
+  );
+}
+
+/** A device-code sign-in: the code to enter and a link to the provider's sign-in page. */
+export function DeviceCodePrompt({
+  title,
+  message,
+  userCode,
+  verificationUri,
+}: {
+  readonly title: string;
+  readonly message: string;
+  readonly userCode: string;
+  readonly verificationUri: string;
+}) {
   const { copyToClipboard, isCopied } = useCopyToClipboard({ target: "device code" });
 
   return (
@@ -252,30 +274,16 @@ function DeviceCodeAuthorization({
       role="status"
       aria-live="polite"
     >
-      <p className="text-sm font-semibold">Finish signing in to {integrationName}</p>
-      <p className="mt-1 text-xs text-muted-foreground">{flow.message}</p>
+      <p className="text-sm font-semibold">{title}</p>
+      <p className="mt-1 text-xs text-muted-foreground">{message}</p>
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <code className="select-all rounded bg-background px-3 py-1.5 text-sm font-semibold tracking-widest">
-          {flow.userCode}
+          {userCode}
         </code>
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          onClick={() => copyToClipboard(flow.userCode)}
-        >
+        <Button type="button" size="sm" variant="outline" onClick={() => copyToClipboard(userCode)}>
           {isCopied ? "Copied!" : "Copy code"}
         </Button>
-        <Button
-          size="sm"
-          render={
-            <a
-              href={flow.verificationUriComplete ?? flow.verificationUri}
-              target="_blank"
-              rel="noreferrer"
-            />
-          }
-        >
+        <Button size="sm" render={<a href={verificationUri} target="_blank" rel="noreferrer" />}>
           Open sign-in
         </Button>
       </div>

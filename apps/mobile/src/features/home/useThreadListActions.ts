@@ -83,8 +83,8 @@ const ACTION_VERBS: Record<ThreadListAction, string> = {
   archive: "archived",
   unarchive: "unarchived",
   delete: "deleted",
-  settle: "settled",
-  unsettle: "un-settled",
+  settle: "marked done",
+  unsettle: "reopened",
 };
 
 function actionFailureMessage(action: ThreadListAction, cause: Cause.Cause<unknown>): string {
@@ -102,8 +102,8 @@ function selectionHaptic(): void {
 function actionFailureTitle(action: ThreadListAction): string {
   if (action === "archive") return "Could not archive thread";
   if (action === "unarchive") return "Could not unarchive thread";
-  if (action === "settle") return "Could not settle thread";
-  if (action === "unsettle") return "Could not un-settle thread";
+  if (action === "settle") return "Could not mark thread done";
+  if (action === "unsettle") return "Could not reopen thread";
   return "Could not delete thread";
 }
 
@@ -134,7 +134,7 @@ function useThreadActionExecutor(
         ) {
           Alert.alert(
             actionFailureTitle(action),
-            "This environment's server does not support settling yet. Update the server to use Settle.",
+            "This environment's server does not support marking threads done yet. Update the server to use Done.",
           );
           return false;
         }
@@ -457,7 +457,7 @@ export function useThreadListActions(): {
       if (!environmentSupportsAutoSettleOptOut(thread.environmentId)) {
         Alert.alert(
           "Could not update auto-settle",
-          "This environment's server does not support turning auto-settle off per thread yet. Update the server to use it.",
+          "This environment's server does not support turning off automatic completion per thread yet. Update the server to use it.",
         );
         return false;
       }

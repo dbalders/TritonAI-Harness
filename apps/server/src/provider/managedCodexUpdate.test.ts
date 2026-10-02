@@ -251,27 +251,47 @@ it.layer(fixtureLayer)("managed Codex update transaction", (it) => {
 
 it.layer(fixtureLayer)("approved managed engine policy", (it) => {
   for (const installed of ["0.151.0", "0.155.1"]) {
-    it.effect(`rejects direct updates from ${installed} without running npm`, () =>
+    it.effect(`keeps an already approved engine at ${installed} without running npm`, () =>
       Effect.gen(function* () {
         const fixture = yield* makeFixture();
         yield* fixture.fs.writeFileString(
           fixture.path.join(fixture.installRoot, "version.txt"),
           installed,
         );
-        const error = yield* updateTritonAiManagedCodex({
+        const version = yield* updateTritonAiManagedCodex({
           binaryPath: fixture.binaryPath,
           run: (input) => {
             expect(input.command).not.toBe("npm");
             return Effect.succeed(success(`codex-cli ${installed}`));
           },
-        }).pipe(Effect.flip);
-        expect(error.message).toContain("meets or exceeds");
+        });
+        expect(version).toBe(installed);
         expect(yield* fixture.fs.readDirectory(fixture.runtimeRoot)).toEqual([
           "openai-codex-0.146.0",
         ]);
       }).pipe(Effect.scoped),
     );
   }
+  it.effect("succeeds when another provider already updated the shared engine", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture();
+      const runner = yield* makeFakeRunner();
+      let installs = 0;
+      const run: ProcessRunner["Service"]["run"] = (input) => {
+        if (input.command === "npm") installs += 1;
+        return runner(input);
+      };
+      const update = () =>
+        updateTritonAiManagedCodex({ binaryPath: fixture.binaryPath, run }).pipe(Effect.scoped);
+      expect(yield* update()).toBe("0.151.0");
+      expect(yield* update()).toBe("0.151.0");
+      expect(installs).toBe(1);
+      expect(yield* fixture.fs.readFileString(fixture.binaryPath)).toContain("managed launcher");
+      expect(yield* fixture.fs.readDirectory(fixture.runtimeRoot)).toEqual([
+        "openai-codex-0.146.0",
+      ]);
+    }).pipe(Effect.scoped),
+  );
   for (const approved of [null, "latest", "0.155.1 || true"]) {
     it.effect(`fails closed for policy ${String(approved)}`, () =>
       Effect.gen(function* () {

@@ -14,7 +14,7 @@ internal data class ActivityRow(val status: String, val title: String, val proje
 /**
  * One entry per relay phase. The status label matches the relay's row wording and the
  * tint matches the web sidebar pills and the iOS Live Activity so a thread reads the
- * same on every surface. The icon is always the T3 mark; the chip verb carries the state.
+ * same on every surface. The icon is always the Harness mark; the chip verb carries the state.
  */
 internal enum class ActivityPhase(
   val status: String,

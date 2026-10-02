@@ -1,4 +1,5 @@
 import Foundation
+import UserNotifications
 
 // The registry runs on macOS without starting a simulator. Only the OS-facing
 // types are replaced; the tests compile the dependency's actual Swift source.
@@ -6,9 +7,22 @@ public enum UIBackgroundFetchResult {
   case noData
 }
 
-public struct UNNotificationPresentationOptions: OptionSet {
-  public let rawValue: Int
-  public init(rawValue: Int) { self.rawValue = rawValue }
+// The chained delegate's optional methods are Objective-C, so their options have to be too.
+public typealias UNNotificationPresentationOptions = UserNotifications.UNNotificationPresentationOptions
+
+// Mirrors ExpoModulesCore's Mutex backport, whose import the tests strip.
+public final class Mutex<Value>: @unchecked Sendable {
+  private var value: Value
+  private let lock = NSLock()
+
+  public init(_ initialValue: Value) { value = initialValue }
+
+  @discardableResult
+  public func withLock<T>(_ body: (inout Value) throws -> T) rethrows -> T {
+    lock.lock()
+    defer { lock.unlock() }
+    return try body(&value)
+  }
 }
 
 public final class UNNotification: NSObject {}
@@ -18,7 +32,19 @@ public final class UNNotificationResponse: NSObject {
   init(_ identifier: String) { self.identifier = identifier }
 }
 
-public protocol UNUserNotificationCenterDelegate: AnyObject {}
+@objc public protocol UNUserNotificationCenterDelegate: NSObjectProtocol {
+  @objc optional func userNotificationCenter(
+    _ center: UNUserNotificationCenter,
+    willPresent notification: UNNotification,
+    withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+  )
+  @objc optional func userNotificationCenter(
+    _ center: UNUserNotificationCenter,
+    didReceive response: UNNotificationResponse,
+    withCompletionHandler completionHandler: @escaping () -> Void
+  )
+  @objc optional func userNotificationCenter(_ center: UNUserNotificationCenter, openSettingsFor notification: UNNotification?)
+}
 
 public final class UNUserNotificationCenter: NSObject {
   private static let instance = UNUserNotificationCenter()

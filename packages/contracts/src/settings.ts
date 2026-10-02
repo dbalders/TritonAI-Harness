@@ -1223,6 +1223,11 @@ export const ServerSettings = Schema.Struct({
    * Turning it off stops the summarizer and removes the skill; notes stay.
    */
   memoryEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  /**
+   * Whether this machine syncs its memory vault with the user's OneDrive so
+   * their other computers see it. Off until the user turns it on and signs in.
+   */
+  memorySyncEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   backgroundActivity: BackgroundActivitySettings,
   // Legacy flat fields retained for old settings files and old clients. New
   // consumers should resolve `backgroundActivity` instead.
@@ -1563,6 +1568,7 @@ export const ServerSettingsPatch = Schema.Struct({
   sidebarAutoSettleAfterDays: Schema.optionalKey(Schema.NullOr(SidebarAutoSettleAfterDays)),
   sidebarAutoSettleOnMerge: Schema.optionalKey(Schema.Boolean),
   memoryEnabled: Schema.optionalKey(Schema.Boolean),
+  memorySyncEnabled: Schema.optionalKey(Schema.Boolean),
   backgroundActivity: Schema.optionalKey(
     Schema.Struct({
       schemaVersion: Schema.optionalKey(Schema.Literal(1)),

@@ -1047,6 +1047,22 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:provider:install-remove",
       tag: WS_METHODS.providerInstallRemove,
     }),
+    startMemorySync: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:memory-sync-start",
+      tag: WS_METHODS.serverStartMemorySync,
+    }),
+    pollMemorySync: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:memory-sync-poll",
+      tag: WS_METHODS.serverPollMemorySync,
+    }),
+    syncMemoryNow: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:memory-sync-now",
+      tag: WS_METHODS.serverSyncMemoryNow,
+    }),
+    signOutMemorySync: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:memory-sync-sign-out",
+      tag: WS_METHODS.serverSignOutMemorySync,
+    }),
     memoryStatus: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:memory-status",
       tag: WS_METHODS.serverGetMemoryStatus,

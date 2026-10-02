@@ -57,6 +57,7 @@ import {
 import { loadRepoEnv } from "./lib/public-config.ts";
 import { selectDesktopRuntimeExternalDependencies } from "./lib/desktop-external-packages.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
+import { prepareWindowsCuaDriver } from "./lib/windows-cua-driver.ts";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -649,7 +650,7 @@ export class ResourceMonitorBuildOutputMissingError extends Schema.TaggedError<R
 export class CuaDriverArtifactError extends Schema.TaggedError<CuaDriverArtifactError>()(
   "CuaDriverArtifactError",
   {
-    operation: Schema.Literals(["download", "checksum", "extract"]),
+    operation: Schema.Literals(["download", "checksum", "extract", "prepare"]),
     platform: BuildPlatform,
     arch: BuildArch,
     expectedSha256: Schema.String,
@@ -3103,7 +3104,24 @@ const stageCuaDriver = Effect.fn("stageCuaDriver")(function* (input: {
   const destinationPath = path.join(destinationDirectory, executableName);
   yield* fs.remove(destinationDirectory, { recursive: true, force: true }).pipe(Effect.ignore);
   yield* fs.makeDirectory(destinationDirectory, { recursive: true });
-  yield* fs.copyFile(extractedPath, destinationPath);
+  if (input.platform === "win") {
+    const bytes = yield* fs.readFile(extractedPath);
+    const prepared = yield* Effect.try({
+      try: () => prepareWindowsCuaDriver(bytes, input.arch === "arm64" ? "arm64" : "x64"),
+      catch: (cause) =>
+        new CuaDriverArtifactError({
+          operation: "prepare",
+          platform: input.platform,
+          arch: input.arch,
+          expectedSha256: asset.sha256,
+          actualSha256,
+          cause,
+        }),
+    });
+    yield* fs.writeFile(destinationPath, prepared);
+  } else {
+    yield* fs.copyFile(extractedPath, destinationPath);
+  }
   yield* fs.copyFile(
     path.join(yield* RepoRoot, "third_party/cua-driver/LICENSE.md"),
     path.join(destinationDirectory, "LICENSE.md"),

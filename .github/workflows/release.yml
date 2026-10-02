@@ -29,7 +29,7 @@ permissions:
 
 env:
   # Keep the composition producer tied to this reviewed Harness revision.
-  TRITONAI_INSTALLER_COMPOSITION_COMMIT: ee029bf79248e0371d81f5e662f4a5888a6f164c
+  TRITONAI_INSTALLER_COMPOSITION_COMMIT: fcb231294b843a322243f1ba3d7b64f5c6c2e602
 
 jobs:
   resolve_release:
@@ -154,6 +154,9 @@ jobs:
 
       - name: Typecheck
         run: vp run typecheck
+
+      - name: Install browser secret helper build libraries
+        run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config
 
       - name: Test
         run: vp run test

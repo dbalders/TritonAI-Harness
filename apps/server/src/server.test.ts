@@ -121,7 +121,7 @@ import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as EnvironmentTheme from "./environmentTheme.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
-import * as DailyMemory from "./memory/DailyMemory.ts";
+import * as MemorySync from "./memory/sync/MemorySync.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
@@ -140,6 +140,7 @@ import { PersistenceSqlError } from "./persistence/Errors.ts";
 import * as ProjectionThreadMessages from "./persistence/Services/ProjectionThreadMessages.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 import * as ModelManifest from "./provider/ModelManifest.ts";
+import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
 import * as ProviderService from "./provider/Services/ProviderService.ts";
 import { ProviderAuthService } from "./provider/Services/ProviderAuthService.ts";
 import { ProviderInstanceRegistry } from "./provider/Services/ProviderInstanceRegistry.ts";
@@ -813,8 +814,9 @@ const buildAppUnderTest = (options?: {
             refresh: Effect.void,
             ...options?.layers?.usageLimitSources,
           }),
-          Layer.mock(DailyMemory.DailyMemory)({
-            runCatchUp: Effect.void,
+          // Server-lifetime in production; built from the provider mocks below.
+          ProviderMaintenanceRunner.layer,
+          Layer.mock(MemorySync.MemorySync)({
             getStatus: Effect.succeed({
               enabled: false,
               directoryPath: "/tmp/t3-memory",
@@ -822,6 +824,13 @@ const buildAppUnderTest = (options?: {
               state: "disabled",
               lastSummarizedDay: null,
               message: null,
+              sync: {
+                state: "off",
+                account: null,
+                cloudFolder: "OneDrive/TritonAI Harness/memory/general",
+                lastSyncedAt: null,
+                message: null,
+              },
             }),
           }),
         ),
@@ -1815,6 +1824,35 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       yield* Deferred.succeed(ready, undefined);
       assert.equal((yield* Fiber.join(request)).status, 200);
       assert.isTrue(yield* Deferred.isDone(completed));
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("serves liveness while command readiness is blocked", () =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const ready = yield* Deferred.make<void>();
+      yield* buildAppUnderTest({
+        layers: {
+          serverRuntimeStartup: {
+            awaitCommandReady: Deferred.succeed(entered, undefined).pipe(
+              Effect.andThen(Deferred.await(ready)),
+            ),
+          },
+        },
+      });
+      const readiness = yield* HttpClient.get("/.well-known/t3/environment").pipe(Effect.forkChild);
+      yield* Deferred.await(entered);
+      for (const path of ["/api/health", "/api/health?probe=1"]) {
+        const response = yield* HttpClient.get(path);
+        assert.equal(response.status, 200);
+        assert.equal(response.headers["cache-control"], "no-store");
+        assert.deepStrictEqual(yield* response.json, { status: "alive" });
+      }
+      const head = yield* HttpClient.head("/api/health");
+      assert.equal(head.status, 200);
+      assert.equal(yield* head.text, "");
+      yield* Deferred.succeed(ready, undefined);
+      assert.equal((yield* Fiber.join(readiness)).status, 200);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

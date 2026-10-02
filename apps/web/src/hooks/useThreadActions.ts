@@ -68,7 +68,7 @@ export class ThreadSettlementUnsupportedError extends Schema.TaggedError<ThreadS
   },
 ) {
   override get message(): string {
-    return "This environment's server does not support settling yet. Update the server to use Settle.";
+    return "This environment's server does not support marking threads done yet. Update the server to use Done.";
   }
 }
 
@@ -116,7 +116,7 @@ export class ThreadAutoSettleOptOutUnsupportedError extends Schema.TaggedError<T
   },
 ) {
   override get message(): string {
-    return "This environment's server does not support turning auto-settle off per thread yet. Update the server to use it.";
+    return "This environment's server does not support turning off automatic completion per thread yet. Update the server to use it.";
   }
 }
 

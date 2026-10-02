@@ -162,17 +162,17 @@ function AutoSettleSettingsRows() {
           onClear={clearProjectOverrides}
         />
       ) : null}
-      <SettingsSection title="Auto-settle">
+      <SettingsSection title="Automatic completion">
         <SettingsSwitchRow
           icon="arrow.triangle.branch"
-          label="Auto-settle merged threads"
+          label="Automatically mark merged threads done"
           value={referenceSettings.sidebarAutoSettleOnMerge}
           disabled={disabled}
           onValueChange={(value) => writeToAll({ sidebarAutoSettleOnMerge: value })}
         />
         <SettingsSwitchRow
           icon="clock"
-          label="Auto-settle inactive threads"
+          label="Automatically mark inactive threads done"
           value={afterDays !== null}
           disabled={disabled}
           onValueChange={(value) =>
@@ -194,7 +194,7 @@ function AutoSettleSettingsRows() {
       {pendingWrites === 0 && mismatches.length > 0 ? (
         <SettingsSection title="Across environments">
           <View className="gap-3 p-4">
-            <Text className="text-base text-foreground">Auto-settle defaults differ</Text>
+            <Text className="text-base text-foreground">Automatic completion settings differ</Text>
             <Text className="text-sm text-foreground-muted">
               {mismatches.map((mismatch) => mismatch.label).join(", ")}
             </Text>
@@ -205,7 +205,7 @@ function AutoSettleSettingsRows() {
               className="self-start rounded-full bg-subtle px-4 py-2 active:opacity-70"
             >
               <Text className="text-sm font-t3-medium text-foreground">
-                Apply auto-settle defaults
+                Apply automatic completion settings
               </Text>
             </Pressable>
           </View>

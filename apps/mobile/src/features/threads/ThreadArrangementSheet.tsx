@@ -383,7 +383,7 @@ export function ThreadArrangementSheet(props: { onClose: () => void }) {
             </Pressable>
           </View>
           <Text className="px-5 pb-3 text-sm text-foreground-muted">
-            Drag to reorder, pin, or settle. Changes save when you drop.
+            Drag to reorder, pin, or mark done. Changes save when you drop.
           </Text>
           <View
             onLayout={(event) => {
@@ -518,8 +518,10 @@ export function ThreadArrangementSheet(props: { onClose: () => void }) {
                         }}
                       >
                         <Text className="text-sm font-t3-semibold text-foreground-muted">
-                          {item.section[0]!.toUpperCase() + item.section.slice(1)} (
-                          {sections[item.section].length})
+                          {item.section === "settled"
+                            ? "Done"
+                            : item.section[0]!.toUpperCase() + item.section.slice(1)}{" "}
+                          ({sections[item.section].length})
                         </Text>
                       </Pressable>
                     )}

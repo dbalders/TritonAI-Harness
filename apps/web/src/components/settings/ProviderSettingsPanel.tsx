@@ -828,17 +828,9 @@ export function EnvironmentProviderSettings({
     instancesByDriver.set(driver, list);
   }
 
-  const defaultSlotIdsBySource = new Set<string>(
-    visibleProviderSettings.map((providerSettings) =>
-      String(defaultInstanceIdForDriver(providerSettings.provider)),
-    ),
-  );
-
   const rows: InstanceRow[] = [];
-  const visibleDriverKinds = new Set<ProviderDriverKind>(
-    visibleProviderSettings.map((providerSettings) => providerSettings.provider),
-  );
 
+  // Persisted legacy instances must not bypass the client's supported driver list.
   for (const providerSettings of visibleProviderSettings) {
     type LegacyProviderSettings = (typeof settings.providers)[keyof typeof settings.providers];
     const legacyProviders = settings.providers as Record<string, LegacyProviderSettings>;
@@ -889,18 +881,6 @@ export function EnvironmentProviderSettings({
       rows.push({ instanceId: id, instance, driver: instance.driver, isDefault: false });
     }
   }
-  for (const [driver, list] of instancesByDriver) {
-    if (visibleDriverKinds.has(driver)) continue;
-    for (const [id, instance] of list) {
-      rows.push({
-        instanceId: id,
-        instance,
-        driver: instance.driver,
-        isDefault: defaultSlotIdsBySource.has(String(id)),
-      });
-    }
-  }
-
   const targetInstanceMissing =
     targetInstanceId !== undefined &&
     selectedInstanceId === targetInstanceId &&

@@ -101,7 +101,7 @@ describe("buildThreadActionMenuItems", () => {
     const find = (state: ThreadActionMenuState) =>
       buildThreadActionMenuItems(state).find((item) => item.id === "auto-settle");
     const on = find(baseState);
-    expect(on?.label).toBe("Auto-settle behavior");
+    expect(on?.label).toBe("Automatically mark done");
     expect(on?.children?.map((child) => [child.id, child.checked])).toEqual([
       ["auto-settle:enabled", true],
       ["auto-settle:disabled", false],

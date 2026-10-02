@@ -201,7 +201,7 @@ export const deregisterManagedRelayEnvironment = Effect.fn(
   const session = registry.get(managedRelaySessionAtom);
   if (!session || session.accountId !== input.accountId) {
     return yield* new ManagedRelaySessionError({
-      message: "Sign in to T3 Connect before deregistering an environment.",
+      message: `Sign in to ${TRITONAI_CONNECT_NAME} before deregistering an environment.`,
     });
   }
   const clerkToken = yield* readSessionClerkToken(session);

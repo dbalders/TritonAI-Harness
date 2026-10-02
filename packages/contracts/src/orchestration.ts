@@ -3,6 +3,7 @@ import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 import * as Struct from "effect/Struct";
+import { countGraphemes } from "unicode-segmenter/grapheme";
 import { OrchestrationMessageContext } from "./composerContext.ts";
 import { ProviderOptionSelections } from "./model.ts";
 import { RepositoryIdentity, ThreadEnvMode } from "./environment.ts";
@@ -566,10 +567,15 @@ const ProjectLucideIconName = TrimmedNonEmptyString.check(
 
 const ProjectEmoji = TrimmedNonEmptyString.check(Schema.isMaxLength(32));
 
-// Grapheme-count validation belongs to the server command boundary, not snapshot decoding.
+// Hermes (the Android/iOS JS runtime) has no Intl.Segmenter, and this module
+// loads at app startup, so `new Intl.Segmenter()` crashes mobile on launch.
+// Use the same Unicode segmentation on every runtime so stored monograms
+// remain decodable and joiners cannot bypass the two-grapheme limit. The
+// server command boundary (decider) also enforces the limit.
 export const ProjectMonogramText = TrimmedNonEmptyString.check(
   Schema.isMaxLength(32),
   Schema.isPattern(/^[\p{L}\p{N}][\p{L}\p{N}\p{M}\u200c\u200d]*$/u),
+  Schema.makeFilter((text) => countGraphemes(text) <= 2),
 );
 
 const ProjectLucideIcon = Schema.Struct({

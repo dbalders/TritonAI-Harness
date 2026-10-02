@@ -42,6 +42,7 @@ import * as EffectCodexSchema from "effect-codex-app-server/schema";
 
 import { buildCodexInitializeParams } from "./CodexProvider.ts";
 import { codexSessionAppServerArgs } from "./codexLaunchArgs.ts";
+import { describeIntegrationToolFailure } from "../../integrations/IntegrationToolFailure.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
 import {
   buildCodexAdditionalContext,
@@ -478,6 +479,12 @@ export class CodexSessionRuntimeThreadIdMissingError extends Schema.TaggedError<
     return `Codex session is missing a provider thread id for ${this.threadId}`;
   }
 }
+
+/** Carries a dynamic tool rejection to its agent-facing failure response. */
+class CodexDynamicToolInvocationError extends Schema.TaggedError<CodexDynamicToolInvocationError>()(
+  "CodexDynamicToolInvocationError",
+  { cause: Schema.Defect() },
+) {}
 
 interface PendingApproval {
   readonly requestId: ApprovalRequestId;
@@ -989,6 +996,13 @@ function serializeDynamicToolResult(value: unknown): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+/** Tell the agent why a dynamic tool call failed without disclosing unsafe error details. */
+export function dynamicToolFailureResponse(
+  error: unknown,
+): EffectCodexSchema.DynamicToolCallResponse {
+  return dynamicToolResponse(false, describeIntegrationToolFailure(error).text);
 }
 
 export function dynamicToolResultResponse(
@@ -2978,13 +2992,13 @@ export const makeCodexSessionRuntime = (
               signal,
               ...(writeApproved ? { writeApproved: true } : {}),
             }),
-          catch: () => undefined,
+          catch: (cause) => new CodexDynamicToolInvocationError({ cause }),
         }).pipe(
           Effect.matchEffect({
-            onFailure: () =>
+            onFailure: (error) =>
               Effect.logWarning("dynamic tool invocation failed", {
                 toolName: definition.name,
-              }).pipe(Effect.as(dynamicToolResponse(false, "Dynamic tool is unavailable."))),
+              }).pipe(Effect.as(dynamicToolFailureResponse(error.cause))),
             onSuccess: (value) => {
               const response = dynamicToolResultResponse(value);
               return response === undefined

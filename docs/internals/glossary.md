@@ -64,3 +64,7 @@ Terms whose meaning matters across T3 Code. Architecture and lifecycle constrain
 | Attachment inventory | The ordered image records shown as thumbnails above the prose, including images with no inline references.                          |
 
 See [composer context references](./composer-context-references.md) for the contract and lifecycle.
+
+**Done** is the thread state for work moved out of the active list without
+archiving or deleting its conversation. **Reopen** returns it to active work.
+Internal commands and persisted fields use the term settlement.

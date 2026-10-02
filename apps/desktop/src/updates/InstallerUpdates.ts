@@ -6,7 +6,6 @@ import type {
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
-import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -33,7 +32,6 @@ const GITHUB_RELEASE_URL =
 const GITHUB_DOWNLOAD_PATH_PREFIX = "/dbalders/TritonAI-Installer/releases/download/";
 const MAX_RELEASE_RESPONSE_BYTES = 512 * 1024;
 const MAX_MARKER_BYTES = 16 * 1024;
-const INSTALLER_UPDATE_POLL_INTERVAL = Duration.hours(6);
 const STABLE_VERSION_PATTERN = /^\d+\.\d+\.\d+$/;
 const decodeUnknownJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
 
@@ -291,6 +289,18 @@ export function createInstallerUpdateController(options: InstallerUpdateControll
     }
   };
 
+  const loadInstalledVersion = async () => {
+    const marker = await options.readMarker().catch(() => ({
+      status: "corrupt" as const,
+      version: null,
+    }));
+    await setState({
+      ...state,
+      installedVersion: marker.version,
+      markerStatus: marker.status,
+    });
+  };
+
   const check = async (): Promise<InstallerUpdateCheckResult> => {
     if (!state.enabled || checkInFlight || openInFlight) {
       return { checked: false, state };
@@ -409,6 +419,7 @@ export function createInstallerUpdateController(options: InstallerUpdateControll
 
   return {
     getState: () => state,
+    loadInstalledVersion,
     check,
     open,
   };
@@ -480,15 +491,7 @@ const make = Effect.gen(function* () {
 
   return InstallerUpdates.of({
     getState: Effect.sync(controller.getState),
-    configure: Effect.gen(function* () {
-      if (!controller.getState().enabled) return;
-      yield* Effect.promise(controller.check).pipe(Effect.forkScoped);
-      yield* Effect.sleep(INSTALLER_UPDATE_POLL_INTERVAL).pipe(
-        Effect.andThen(Effect.promise(controller.check)),
-        Effect.forever,
-        Effect.forkScoped,
-      );
-    }),
+    configure: Effect.promise(controller.loadInstalledVersion),
     check: Effect.promise(controller.check),
     open: Effect.promise(controller.open),
   });

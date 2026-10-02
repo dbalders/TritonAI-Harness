@@ -42,7 +42,7 @@ export function AutoSettleDaysField(props: AutoSettleDaysFieldProps) {
             modifiers={[
               buttonStyle("bordered"),
               disabled(props.disabled),
-              accessibilityLabel(`Days before auto-settle: ${props.value}`),
+              accessibilityLabel(`Days before marking done: ${props.value}`),
               frame({ minWidth: 64, minHeight: 44 }),
               foregroundStyle(colors["--color-primary-text"]),
               font({ size: appearance.baseFontSize }),
@@ -60,7 +60,7 @@ export function AutoSettleDaysField(props: AutoSettleDaysFieldProps) {
             ]}
           >
             <Picker
-              label="Days before auto-settle"
+              label="Days before marking done"
               selection={draft}
               onSelectionChange={setDraft}
               modifiers={[pickerStyle("wheel"), frame({ height: 180 })]}

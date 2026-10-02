@@ -6207,7 +6207,7 @@ export default function ChatView(props: ChatViewProps) {
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Failed to un-settle thread",
+            title: "Failed to reopen thread",
             description: error instanceof Error ? error.message : "An error occurred.",
           }),
         );
@@ -6458,8 +6458,8 @@ export default function ChatView(props: ChatViewProps) {
       id: `thread-${isSnoozed ? "snoozed" : "settled"}:${activeThread?.id ?? "unknown"}`,
       variant: "info",
       icon: isSnoozed ? <AlarmClockIcon /> : <CheckCircle2Icon />,
-      title: `This thread is ${isSnoozed ? "snoozed" : "settled"}`,
-      description: `Send a message to ${isSnoozed ? "wake" : "unsettle"}`,
+      title: `This thread is ${isSnoozed ? "snoozed" : "done"}`,
+      description: `Send a message to ${isSnoozed ? "wake" : "reopen"}`,
       actions: (
         <Button
           size="xs"
@@ -6474,8 +6474,8 @@ export default function ChatView(props: ChatViewProps) {
               ? "Waking..."
               : "Wake now"
             : isUnsettling
-              ? "Un-settling..."
-              : "Un-settle"}
+              ? "Reopening..."
+              : "Reopen"}
         </Button>
       ),
     };
@@ -6851,7 +6851,7 @@ export default function ChatView(props: ChatViewProps) {
           toastManager.add(
             stackedThreadToast({
               type: "error",
-              title: "Failed to settle thread",
+              title: "Failed to mark thread done",
               description: error instanceof Error ? error.message : "An error occurred.",
             }),
           );

@@ -45,6 +45,7 @@ import {
   type RegistryRuntime,
 } from "../../integrations/IntegrationRegistry.ts";
 import { EmptyIntegrationToolInput } from "../../integrations/IntegrationTool.ts";
+import { describeIntegrationToolFailure } from "../../integrations/IntegrationToolFailure.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import * as PreviewAutomationBroker from "../../mcp/PreviewAutomationBroker.ts";
 import { TRITONAI_COMMONS_SUBMIT_TOOL_NAME } from "../../mcp/TritonAiCommonsTool.ts";
@@ -1358,12 +1359,15 @@ reconciliationLayer("CodexAdapter integration availability reconciliation", (it)
       );
       NodeAssert.equal(activeRuntime.options.isDynamicToolAvailable?.(binding!.name), false);
       yield* Effect.promise(() =>
-        NodeAssert.rejects(() =>
-          activeRuntime.options.invokeDynamicTool!({
-            name: binding!.name,
-            arguments: {},
-            signal: new AbortController().signal,
-          }),
+        NodeAssert.rejects(
+          () =>
+            activeRuntime.options.invokeDynamicTool!({
+              name: binding!.name,
+              arguments: {},
+              signal: new AbortController().signal,
+            }),
+          (error: unknown) =>
+            describeIntegrationToolFailure(error).text === "Dynamic tool is unavailable.",
         ),
       );
       yield* adapter.sendTurn({ threadId, input: "active turn boundary", attachments: [] });
