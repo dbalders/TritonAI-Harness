@@ -354,6 +354,7 @@ export const make = Effect.gen(function* () {
 
   const acquireSecretStoreLock = (lockPath: string, resource: string) =>
     acquireSqliteProcessLock(lockPath, resource).pipe(
+      Effect.withSpan("ServerSecretStore.acquireProcessLock"),
       Effect.mapError((cause) =>
         cause._tag === "SqliteProcessLockTimeoutError"
           ? new SecretStoreLockTimeoutError({ resource })
@@ -556,6 +557,7 @@ export const make = Effect.gen(function* () {
       const storedOption: Option.Option<Uint8Array> = yield* fileSystem
         .readFile(resolveSecretPath(name))
         .pipe(
+          Effect.withSpan("ServerSecretStore.readFile"),
           Effect.map((bytes): Option.Option<Uint8Array> => Option.some(Uint8Array.from(bytes))),
           Effect.mapError(
             (cause) =>
@@ -599,9 +601,10 @@ export const make = Effect.gen(function* () {
   ): Effect.Effect<A, SecretStoreError, R> =>
     Effect.acquireUseRelease(
       acquireSecretStoreLock(`${resolveSecretPath(name)}.lock`, `secret ${name}`),
-      () => operation,
+      () => operation.pipe(Effect.withSpan("ServerSecretStore.lockedOperation")),
       releaseSqliteProcessLock,
     ).pipe(
+      Effect.withSpan("ServerSecretStore.withSecretLock"),
       Effect.mapError((cause) =>
         isSecretStoreError(cause)
           ? cause
