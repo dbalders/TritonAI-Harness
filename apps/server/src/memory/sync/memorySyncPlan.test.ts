@@ -140,6 +140,29 @@ describe("this computer's files", () => {
     ).toEqual([{ kind: "download", path: pending }]);
   });
 
+  it("restores processed inbox notes when sync metadata survives a lost inbox", () => {
+    const processed = "Inbox/5c9e/processed/2026-09-29/idea.md";
+    const pending = "Inbox/5c9e/idea.md";
+    const other = "Inbox/91c7/processed/2026-09-29/idea.md";
+    expect(
+      plan({
+        local: { [WRITTEN]: "w" },
+        cloud: { [processed]: "ep", [pending]: "en", [other]: "eo", [WRITTEN]: "ew" },
+        synced: {
+          [processed]: ["processed", "ep"],
+          [pending]: ["pending", "en"],
+          [other]: ["other", "eo"],
+          [WRITTEN]: ["w", "ew"],
+        },
+        written: [],
+      }),
+    ).toEqual([
+      { kind: "download", path: pending },
+      { kind: "download", path: processed },
+      { kind: "download", path: other },
+    ]);
+  });
+
   it("restores a missing inbox note unless its contents survive in processed", () => {
     const pending = "Inbox/5c9e/idea.md";
     const processed = "Inbox/5c9e/processed/2026-09-30/idea-2.md";

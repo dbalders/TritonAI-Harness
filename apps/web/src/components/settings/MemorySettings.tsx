@@ -153,7 +153,7 @@ function MemorySyncRow({
 
   if (status.sync.state === "unavailable") return null;
   const enabled = settings.memorySyncEnabled;
-  const signedIn = status.sync.account !== null;
+  const signedIn = status.sync.signedIn ?? status.sync.account !== null;
 
   return (
     <SettingsRow
