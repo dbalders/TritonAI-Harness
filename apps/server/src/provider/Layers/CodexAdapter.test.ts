@@ -42,6 +42,7 @@ import { ServerConfig } from "../../config.ts";
 import {
   codexDynamicIntegrationToolName,
   INTEGRATION_TOOL_RESULT_OMITTED,
+  type IntegrationToolAvailability,
   type RegistryRuntime,
 } from "../../integrations/IntegrationRegistry.ts";
 import { EmptyIntegrationToolInput } from "../../integrations/IntegrationTool.ts";
@@ -382,8 +383,13 @@ validationLayer("CodexAdapterLive validation", (it) => {
 
       const runtimeOptions = validationRuntimeFactory.factory.mock.calls[0]?.[0];
       NodeAssert.ok(runtimeOptions);
-      const { dynamicTools, invokeDynamicTool, isDynamicToolAvailable, ...transportOptions } =
-        runtimeOptions;
+      const {
+        dynamicTools,
+        invokeDynamicTool,
+        dynamicToolAvailability,
+        awaitDynamicToolAvailability,
+        ...transportOptions
+      } = runtimeOptions;
       NodeAssert.deepStrictEqual(transportOptions, {
         binaryPath: "codex",
         cwd: process.cwd(),
@@ -399,7 +405,11 @@ validationLayer("CodexAdapterLive validation", (it) => {
         [TRITONAI_COMMONS_SUBMIT_TOOL_NAME],
       );
       NodeAssert.equal(typeof invokeDynamicTool, "function");
-      NodeAssert.equal(isDynamicToolAvailable?.(TRITONAI_COMMONS_SUBMIT_TOOL_NAME), true);
+      NodeAssert.equal(
+        dynamicToolAvailability?.(TRITONAI_COMMONS_SUBMIT_TOOL_NAME).available,
+        true,
+      );
+      NodeAssert.equal(typeof awaitDynamicToolAvailability, "function");
     }),
   );
   it.effect("enables the collaborative browser MCP namespace by default", () =>
@@ -426,8 +436,13 @@ validationLayer("CodexAdapterLive validation", (it) => {
 
         const runtimeOptions = validationRuntimeFactory.factory.mock.calls[0]?.[0];
         NodeAssert.ok(runtimeOptions);
-        const { dynamicTools, invokeDynamicTool, isDynamicToolAvailable, ...transportOptions } =
-          runtimeOptions;
+        const {
+          dynamicTools,
+          invokeDynamicTool,
+          dynamicToolAvailability,
+          awaitDynamicToolAvailability,
+          ...transportOptions
+        } = runtimeOptions;
         NodeAssert.deepStrictEqual(transportOptions, {
           mcpCapabilities: new Set(["preview"]),
           appServerArgs: [
@@ -452,7 +467,11 @@ validationLayer("CodexAdapterLive validation", (it) => {
           [TRITONAI_COMMONS_SUBMIT_TOOL_NAME],
         );
         NodeAssert.equal(typeof invokeDynamicTool, "function");
-        NodeAssert.equal(isDynamicToolAvailable?.(TRITONAI_COMMONS_SUBMIT_TOOL_NAME), true);
+        NodeAssert.equal(
+          dynamicToolAvailability?.(TRITONAI_COMMONS_SUBMIT_TOOL_NAME).available,
+          true,
+        );
+        NodeAssert.equal(typeof awaitDynamicToolAvailability, "function");
       } finally {
         McpProviderSession.clearMcpProviderSession(threadId);
       }
@@ -515,7 +534,10 @@ validationLayer("CodexAdapterLive validation", (it) => {
           )?.requiresApproval,
           true,
         );
-        NodeAssert.equal(runtimeOptions.isDynamicToolAvailable?.("preview_status"), true);
+        NodeAssert.equal(
+          runtimeOptions.dynamicToolAvailability?.("preview_status").available,
+          true,
+        );
         NodeAssert.equal(runtimeOptions.environment, undefined);
       } finally {
         McpProviderSession.clearMcpProviderSession(threadId);
@@ -609,9 +631,29 @@ const reconciliationAvailability = {
   available: false,
   writeAvailable: false,
   advancesDuringPrepare: 0,
+  /** A credential refresh is in flight; awaiting availability settles it. */
+  refreshing: false,
 };
 const reconciliationToolName = "fixture.records.search";
 const reconciliationWriteToolName = "fixture.records.write";
+const reconciliationToolAvailability = (name: string): IntegrationToolAvailability =>
+  reconciliationAvailability.refreshing
+    ? {
+        available: false,
+        reason: "connection_changing",
+        detail: "Fixture is refreshing its connection. Try again shortly.",
+      }
+    : (
+          name === reconciliationWriteToolName
+            ? reconciliationAvailability.writeAvailable
+            : reconciliationAvailability.available
+        )
+      ? { available: true }
+      : {
+          available: false,
+          reason: "not_connected",
+          detail: "Fixture is not connected. Connect it in Settings > Plugins.",
+        };
 const reconciliationInvokeTool = vi.fn<RegistryRuntime["invokeTool"]>(() =>
   Promise.resolve({ records: [] }),
 );
@@ -643,10 +685,12 @@ const reconciliationRegistry = {
       openWorld: false,
     },
   ],
-  isToolAvailableSync: (name: string) =>
-    name === reconciliationWriteToolName
-      ? reconciliationAvailability.writeAvailable
-      : reconciliationAvailability.available,
+  isToolAvailableSync: (name: string) => reconciliationToolAvailability(name).available,
+  toolAvailabilitySync: (name: string) => reconciliationToolAvailability(name),
+  awaitToolAvailability: async (name: string) => {
+    reconciliationAvailability.refreshing = false;
+    return reconciliationToolAvailability(name);
+  },
   // Approval policy is deliberately independent from the provider's write classification.
   toolRequiresApprovalSync: () => false,
   isSkillAvailableSync: () => false,
@@ -669,6 +713,8 @@ const replacementReconciliationRegistry = {
     },
   ],
   isToolAvailableSync: () => true,
+  toolAvailabilitySync: () => ({ available: true }),
+  awaitToolAvailability: () => Promise.resolve({ available: true }),
   isSkillAvailableSync: () => false,
   reserveSkillsSync: () => null,
   invokeTool: () => Promise.resolve({ records: [] }),
@@ -1357,7 +1403,13 @@ reconciliationLayer("CodexAdapter integration availability reconciliation", (it)
       const binding = activeRuntime.options.dynamicTools?.find(
         ({ name }) => name === codexDynamicIntegrationToolName(reconciliationToolName),
       );
-      NodeAssert.equal(activeRuntime.options.isDynamicToolAvailable?.(binding!.name), false);
+      NodeAssert.deepStrictEqual(activeRuntime.options.dynamicToolAvailability?.(binding!.name), {
+        available: false,
+        canonicalName: reconciliationToolName,
+        reason: "not_connected",
+        detail: "Fixture is not connected. Connect it in Settings > Plugins.",
+        transient: false,
+      });
       yield* Effect.promise(() =>
         NodeAssert.rejects(
           () =>
@@ -1367,13 +1419,47 @@ reconciliationLayer("CodexAdapter integration availability reconciliation", (it)
               signal: new AbortController().signal,
             }),
           (error: unknown) =>
-            describeIntegrationToolFailure(error).text === "Dynamic tool is unavailable.",
+            describeIntegrationToolFailure(error).text ===
+            `${reconciliationToolName} is unavailable (not_connected): Fixture is not connected. Connect it in Settings > Plugins.`,
         ),
       );
       yield* adapter.sendTurn({ threadId, input: "active turn boundary", attachments: [] });
 
       NodeAssert.equal(reconciliationRuntimeFactory.factory.mock.calls.length, 1);
       NodeAssert.equal(activeRuntime.closeImpl.mock.calls.length, 0);
+    }),
+  );
+
+  it.effect("waits out a credential refresh instead of refusing a dynamic tool call", () =>
+    Effect.gen(function* () {
+      reconciliationAvailability.generation = 4;
+      reconciliationAvailability.available = true;
+      reconciliationAvailability.advancesDuringPrepare = 0;
+      reconciliationRuntimeFactory.factory.mockClear();
+      reconciliationInvokeTool.mockClear();
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("thread-integration-refresh-wait");
+      yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
+      const runtime = reconciliationRuntimeFactory.lastRuntime!;
+      const name = codexDynamicIntegrationToolName(reconciliationToolName);
+
+      reconciliationAvailability.refreshing = true;
+      try {
+        const availability = runtime.options.dynamicToolAvailability?.(name);
+        NodeAssert.equal(availability?.available, false);
+        NodeAssert.equal(availability?.available === false && availability.transient, true);
+        const result = yield* Effect.promise(() =>
+          runtime.options.invokeDynamicTool!({
+            name,
+            arguments: {},
+            signal: new AbortController().signal,
+          }),
+        );
+        NodeAssert.deepStrictEqual(result, { records: [] });
+        NodeAssert.equal(reconciliationInvokeTool.mock.calls[0]?.[0], reconciliationToolName);
+      } finally {
+        reconciliationAvailability.refreshing = false;
+      }
     }),
   );
 });

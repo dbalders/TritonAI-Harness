@@ -16,6 +16,7 @@ import {
   logProviderFault,
   MAX_INTEGRATION_TOOL_RESULT_BYTES,
   normalizeIntegrationToolResult,
+  persistedToolUnavailability,
   RegistryRuntime,
   type IntegrationProvider,
   type IntegrationProviderStatus,
@@ -5958,5 +5959,211 @@ describe("IntegrationRegistry lifecycle", () => {
     } finally {
       await NodeFSP.rm(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("IntegrationRegistry tool availability reasons", () => {
+  const optInEventsManifest: IntegrationManifest = {
+    ...connectedManifest,
+    capabilities: connectedManifest.capabilities.map((capability) =>
+      capability.id === "events.read" ? { ...capability, access: "opt-in" } : capability,
+    ),
+  };
+  const connectedState = (grantedCapabilities: Array<string>): ProviderState => ({
+    status: { state: "connected", accountLabel: "Test User", grantedCapabilities, message: null },
+    credential: "present",
+    disconnectFails: false,
+  });
+  const withRegistry = async (
+    prefix: string,
+    integrations: ConstructorParameters<typeof RegistryRuntime>[1],
+    run: (registry: RegistryRuntime) => Promise<void>,
+  ) => {
+    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), prefix));
+    const registry = new RegistryRuntime(root, integrations);
+    try {
+      await run(registry);
+    } finally {
+      await registry.close();
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  };
+  const blockingPrepare = (state: ProviderState) => {
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let block = false;
+    const implementation: IntegrationProvider = {
+      ...provider("test-fixture-provider", state),
+      prepare: async () => {
+        if (!block) return;
+        markStarted();
+        await released;
+      },
+    };
+    return {
+      implementation,
+      started,
+      release,
+      arm: () => {
+        block = true;
+      },
+    };
+  };
+
+  it("names the capability that is not selected and the one that is not granted", async () => {
+    const state = connectedState(["records.read"]);
+    await withRegistry(
+      "tritonai-tool-reasons-capability-",
+      [packaged(optInEventsManifest, provider("test-connected-provider", state))],
+      async (registry) => {
+        await registry.list();
+        expect(registry.toolAvailabilitySync("test.events.list")).toEqual({
+          available: false,
+          reason: "not_installed",
+          detail: "Test Cloud Records is turned off. Turn it on in Settings > Plugins.",
+        });
+        await registry.install(optInEventsManifest.id);
+        expect(registry.toolAvailabilitySync("test.records.list")).toEqual({ available: true });
+        expect(registry.toolAvailabilitySync("test.events.list")).toEqual({
+          available: false,
+          reason: "capability_not_selected",
+          detail:
+            "the Events capability is not enabled. Enable it for Test Cloud Records in Settings > Plugins.",
+        });
+
+        await registry.setCapabilityEnabled(optInEventsManifest.id, "events.read", true);
+        expect(registry.toolAvailabilitySync("test.events.list")).toEqual({
+          available: false,
+          reason: "capability_not_granted",
+          detail:
+            "the Events capability is enabled but not granted. Reconnect Test Cloud Records in Settings > Plugins to authorize it.",
+        });
+        expect(registry.isToolAvailableSync("test.events.list")).toBe(false);
+
+        state.status = { ...state.status, grantedCapabilities: ["records.read", "events.read"] };
+        await registry.list();
+        expect(registry.toolAvailabilitySync("test.events.list")).toEqual({ available: true });
+
+        await registry.setEnabled(optInEventsManifest.id, false);
+        expect(registry.toolAvailabilitySync("test.events.list")).toMatchObject({
+          available: false,
+          reason: "disabled",
+        });
+        expect(registry.toolAvailabilitySync("test.missing.tool")).toMatchObject({
+          available: false,
+          reason: "unknown_tool",
+        });
+      },
+    );
+  });
+
+  it("reports a version that does not match the included plugin", () => {
+    const tool = connectedManifest.tools[0]!;
+    expect(
+      persistedToolUnavailability(connectedManifest, tool, { version: "0.9.0", enabled: true }),
+    ).toEqual({
+      available: false,
+      reason: "version_mismatch",
+      detail:
+        "the installed Test Cloud Records plugin (0.9.0) does not match the included version (1.0.0). Restart Harness to reconcile it.",
+    });
+    expect(
+      persistedToolUnavailability(connectedManifest, tool, { version: "1.0.0", enabled: true }),
+    ).toBeUndefined();
+  });
+
+  it("reports a faulted provider ahead of its connection state", async () => {
+    const state = connectedState(["records.read"]);
+    const faulting: IntegrationProvider = {
+      ...provider("test-connected-provider", state),
+      connect: async (_capabilities, context) => {
+        await context!.beginCommit();
+        throw new Error("Credential commit result was ambiguous.");
+      },
+    };
+    await withRegistry(
+      "tritonai-tool-reasons-faulted-",
+      [packaged(connectedManifest, faulting)],
+      async (registry) => {
+        await registry.install(connectedManifest.id);
+        expect(registry.toolAvailabilitySync("test.records.list")).toEqual({ available: true });
+        await expect(registry.connect(connectedManifest.id)).rejects.toMatchObject({
+          code: "operation_failed",
+        });
+        expect(registry.toolAvailabilitySync("test.records.list")).toEqual({
+          available: false,
+          reason: "faulted",
+          detail:
+            "Test Cloud Records is unavailable until its connection is reset in Settings > Plugins.",
+        });
+      },
+    );
+  });
+
+  it("treats an in-flight credential refresh as transient and waits for it", async () => {
+    const state = connectedState(["fixture.read"]);
+    const prepare = blockingPrepare(state);
+    await withRegistry(
+      "tritonai-tool-reasons-refresh-",
+      [packaged(fixtureManifest, prepare.implementation)],
+      async (registry) => {
+        await registry.install(fixtureManifest.id);
+        await registry.list();
+        expect(registry.toolAvailabilitySync("test.fixture.read")).toEqual({ available: true });
+
+        prepare.arm();
+        const invocation = registry.invokeTool("test.fixture.read", {});
+        await prepare.started;
+        expect(registry.toolAvailabilitySync("test.fixture.read")).toEqual({
+          available: false,
+          reason: "connection_changing",
+          detail: "Test Fixture is refreshing its connection. Try again shortly.",
+        });
+
+        const waited = registry.awaitToolAvailability("test.fixture.read");
+        prepare.release();
+        await expect(waited).resolves.toEqual({ available: true });
+        await expect(invocation).resolves.toMatchObject({ toolName: "test.fixture.read" });
+      },
+    );
+  });
+
+  it("returns the transient reason when the refresh outlasts the wait", async () => {
+    const state = connectedState(["fixture.read"]);
+    const prepare = blockingPrepare(state);
+    await withRegistry(
+      "tritonai-tool-reasons-refresh-bound-",
+      [packaged(fixtureManifest, prepare.implementation)],
+      async (registry) => {
+        await registry.install(fixtureManifest.id);
+        await registry.list();
+        prepare.arm();
+        const invocation = registry.invokeTool("test.fixture.read", {});
+        await prepare.started;
+        try {
+          await expect(
+            registry.awaitToolAvailability("test.fixture.read", { timeoutMs: 1 }),
+          ).resolves.toMatchObject({ available: false, reason: "connection_changing" });
+          const cancelled = new AbortController();
+          cancelled.abort();
+          await expect(
+            registry.awaitToolAvailability("test.fixture.read", { signal: cancelled.signal }),
+          ).rejects.toBeDefined();
+          // A refusal that settling cannot change is returned without waiting.
+          await expect(
+            registry.awaitToolAvailability("test.missing.tool", { timeoutMs: 60_000 }),
+          ).resolves.toMatchObject({ available: false, reason: "unknown_tool" });
+        } finally {
+          prepare.release();
+          await invocation;
+        }
+      },
+    );
   });
 });

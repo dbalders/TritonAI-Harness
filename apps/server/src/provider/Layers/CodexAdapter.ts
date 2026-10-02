@@ -85,6 +85,8 @@ import {
   CodexSessionRuntimeThreadIdMissingError,
   describeMcpElicitation,
   makeCodexSessionRuntime,
+  type CodexDynamicToolAvailability,
+  dynamicToolUnavailableText,
   type CodexSessionRuntimeError,
   type CodexSessionRuntimeOptions,
   type CodexSessionRuntimeShape,
@@ -2626,6 +2628,62 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
         const dynamicToolByName = new Map(
           dynamicToolBindings.map((binding) => [binding.dynamicName, binding.canonicalName]),
         );
+        // Resolves undisclosed names too, so a refusal can say which plugin tool was meant.
+        const integrationToolNameFor = (name: string) =>
+          dynamicToolByName.get(name) ??
+          integrationRegistry
+            ?.toolDefinitions()
+            .find(
+              (definition) =>
+                Integrations.codexDynamicIntegrationToolName(definition.name) === name,
+            )?.name;
+        const toCodexAvailability = (
+          canonicalName: string,
+          availability: Integrations.IntegrationToolAvailability,
+        ): CodexDynamicToolAvailability =>
+          availability.available
+            ? { available: true, canonicalName }
+            : {
+                available: false,
+                canonicalName,
+                reason: availability.reason,
+                detail: availability.detail,
+                transient: availability.reason === "connection_changing",
+              };
+        const unknownDynamicTool = {
+          available: false,
+          reason: "unknown_tool",
+          detail: "No included integration plugin provides this tool.",
+        } as const;
+        const dynamicToolUnavailableError = (
+          name: string,
+          availability: Extract<CodexDynamicToolAvailability, { available: false }>,
+        ) =>
+          new IntegrationToolUnavailableError(dynamicToolUnavailableText(name, availability), {
+            toolName: availability.canonicalName ?? name,
+            reason: availability.reason,
+            ...(availability.detail ? { detail: availability.detail } : {}),
+          });
+        const dynamicToolAvailability = (name: string): CodexDynamicToolAvailability => {
+          if (name === TRITONAI_COMMONS_SUBMIT_TOOL_NAME) return { available: true };
+          if (previewDynamicToolNames.has(name)) {
+            const activeMcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
+            return activeMcpSession?.providerSessionId === mcpSession?.providerSessionId &&
+              previewAutomationBroker !== undefined
+              ? { available: true }
+              : {
+                  available: false,
+                  reason: "preview_unavailable",
+                  detail: "the preview session this thread started with is no longer active.",
+                };
+          }
+          const canonicalName = integrationToolNameFor(name);
+          if (!canonicalName || !integrationRegistry) return unknownDynamicTool;
+          return toCodexAvailability(
+            canonicalName,
+            integrationRegistry.toolAvailabilitySync(canonicalName),
+          );
+        };
         const allDynamicToolDefinitions = [
           ...previewDynamicToolBindings,
           tritonAiCommonsDynamicToolDefinition,
@@ -2686,20 +2744,13 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           ...(allDynamicToolDefinitions.length
             ? {
                 dynamicTools: allDynamicToolDefinitions,
-                isDynamicToolAvailable: (name: string) => {
-                  if (name === TRITONAI_COMMONS_SUBMIT_TOOL_NAME) return true;
-                  if (previewDynamicToolNames.has(name)) {
-                    const activeMcpSession = McpProviderSession.readMcpProviderSession(
-                      input.threadId,
-                    );
-                    return (
-                      activeMcpSession?.providerSessionId === mcpSession?.providerSessionId &&
-                      previewAutomationBroker !== undefined
-                    );
-                  }
+                dynamicToolAvailability,
+                awaitDynamicToolAvailability: async (name: string, { signal }) => {
                   const canonicalName = dynamicToolByName.get(name);
-                  return Boolean(
-                    canonicalName && integrationRegistry?.isToolAvailableSync(canonicalName),
+                  if (!canonicalName || !integrationRegistry) return dynamicToolAvailability(name);
+                  return toCodexAvailability(
+                    canonicalName,
+                    await integrationRegistry.awaitToolAvailability(canonicalName, { signal }),
                   );
                 },
                 invokeDynamicTool: async ({
@@ -2740,8 +2791,17 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
                     );
                   }
                   const canonicalName = dynamicToolByName.get(name);
-                  if (!canonicalName || !integrationRegistry?.isToolAvailableSync(canonicalName)) {
-                    throw new IntegrationToolUnavailableError("Dynamic tool is unavailable.");
+                  if (!canonicalName || !integrationRegistry) {
+                    throw dynamicToolUnavailableError(name, unknownDynamicTool);
+                  }
+                  // A write approval can outlast a credential refresh started meanwhile; wait it
+                  // out here too rather than refusing an approved call.
+                  const availability = toCodexAvailability(
+                    canonicalName,
+                    await integrationRegistry.awaitToolAvailability(canonicalName, { signal }),
+                  );
+                  if (!availability.available) {
+                    throw dynamicToolUnavailableError(name, availability);
                   }
                   return integrationRegistry.invokeTool(canonicalName, toolArguments, {
                     signal,
