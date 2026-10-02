@@ -1,6 +1,9 @@
 // @effect-diagnostics nodeBuiltinImport:off globalDate:off globalTimers:off cryptoRandomUUID:off
 import { describe, expect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as Logger from "effect/Logger";
 import * as Schema from "effect/Schema";
+import * as Tracer from "effect/Tracer";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -10,6 +13,7 @@ import {
   createRegistryRuntime,
   INTEGRATION_TOOL_RESULT_OMITTED,
   IntegrationProviderPublicError,
+  logProviderFault,
   MAX_INTEGRATION_TOOL_RESULT_BYTES,
   normalizeIntegrationToolResult,
   RegistryRuntime,
@@ -1290,6 +1294,29 @@ describe("IntegrationRegistry lifecycle", () => {
       await NodeFSP.rm(root, { recursive: true, force: true });
     }
   });
+
+  it.effect("records a provider fault in the trace as a span carrying its warning", () =>
+    Effect.gen(function* () {
+      const spans: Array<Tracer.NativeSpan> = [];
+      const tracer = Tracer.make({
+        span: (options) => {
+          const span = new Tracer.NativeSpan(options);
+          spans.push(span);
+          return span;
+        },
+      });
+      yield* logProviderFault({ integrationId: "microsoft-365", reason: "Error (EACCES)" }).pipe(
+        Effect.provide(Logger.layer([Logger.tracerLogger])),
+        Effect.withTracer(tracer),
+      );
+      const span = spans.find(({ name }) => name === "integrations.provider.faulted");
+      expect(span?.attributes.get("integration.id")).toBe("microsoft-365");
+      expect(span?.attributes.get("integration.fault.reason")).toBe("Error (EACCES)");
+      expect(span?.events.some(([name]) => name.includes("integrations.provider.faulted"))).toBe(
+        true,
+      );
+    }),
+  );
 
   it("reports a system error fault by its code without the message's path", async () => {
     const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-fault-code-"));
