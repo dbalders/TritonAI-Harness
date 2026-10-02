@@ -21,6 +21,11 @@ function fixture(t) {
   fs.mkdirSync(path.join(root, "apps/mobile"), { recursive: true });
   fs.writeFileSync(path.join(root, "apps/mobile/.gitignore"), "/ios\n");
   fs.writeFileSync(path.join(root, "source.txt"), "nightly source\n");
+  fs.mkdirSync(path.join(root, ".repos/reference"), { recursive: true });
+  fs.writeFileSync(path.join(root, ".repos/reference/unused.txt"), "desktop reference\n");
+  fs.writeFileSync(path.join(root, ".gitmodules"), "# desktop references\n");
+  fs.mkdirSync(path.join(root, ".github/workflows"), { recursive: true });
+  fs.writeFileSync(path.join(root, ".github/workflows/desktop.yml"), "name: Desktop\n");
   git("add", ".");
   git("commit", "--quiet", "-m", "nightly source");
   const sourceSha = git("rev-parse", "HEAD");
@@ -73,6 +78,11 @@ test("stages native sources and provenance without changing the nightly source",
     },
   );
   const files = f.git("ls-tree", "-r", "--name-only", tree).split("\n");
+  assert.ok(!files.some((file) => /^(?:\.repos\/|\.gitmodules$|\.github\/workflows\/)/.test(file)));
+  assert.equal(
+    fs.readFileSync(path.join(f.root, ".repos/reference/unused.txt"), "utf8"),
+    "desktop reference\n",
+  );
   assert.ok(
     files.includes("apps/mobile/ios/TritonAIHarnessPreview.xcworkspace/contents.xcworkspacedata"),
   );

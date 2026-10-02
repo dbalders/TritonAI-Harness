@@ -96,6 +96,21 @@ function prepareNightlyMobileNative({ root, tag, sourceSha, generatorSha }) {
     }
   }
   visit(ios);
+  // Reference checkouts are unrelated to the mobile build. Xcode Cloud eagerly
+  // clones every Git submodule before running our dependency setup hook.
+  // This generated branch also needs no GitHub workflows; omitting them avoids
+  // requiring workflow-write permission merely to publish a native build tree.
+  git(
+    "rm",
+    "--cached",
+    "-r",
+    "--force",
+    "--ignore-unmatch",
+    "--",
+    ".repos",
+    ".gitmodules",
+    ".github/workflows",
+  );
   git("add", "--force", "--", ...files);
   return git("write-tree");
 }

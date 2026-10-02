@@ -77,6 +77,9 @@ exact source commit. It pushes the source plus generated native files to the
 dedicated `mobile-nightly` branch, which starts Xcode Cloud. Generated native
 files remain ignored on development branches. Each build branch commit records
 the nightly tag, source SHA, and automation SHA under `ios/ci_scripts/`.
+Generated trees omit `.repos`, `.gitmodules`, and GitHub workflow files: desktop reference
+submodules are not mobile dependencies, and the generated branch only runs in
+Xcode Cloud.
 Build-only, skipped, and failed nightly publications do not start a mobile build.
 
 Configure Xcode Cloud once from the shared `TritonAIHarnessPreview` scheme in
