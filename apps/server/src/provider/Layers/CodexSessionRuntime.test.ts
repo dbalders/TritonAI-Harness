@@ -4,7 +4,9 @@ import { it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Logger from "effect/Logger";
 import * as Schema from "effect/Schema";
+import * as Tracer from "effect/Tracer";
 import { describe } from "vite-plus/test";
 import {
   DEFAULT_MODEL,
@@ -35,6 +37,8 @@ import {
   dynamicToolFailureResponse,
   dynamicToolInvocationAvailable,
   dynamicToolInvocationAllowed,
+  gateDynamicToolCall,
+  type CodexDynamicToolGate,
   dynamicToolResultResponse,
   hasConfiguredMcpServer,
   computerUseStateForSession,
@@ -266,16 +270,206 @@ describe("integration write-tool approval", () => {
   });
 
   it("fails closed before write approval when live availability is revoked", () => {
-    NodeAssert.equal(dynamicToolInvocationAvailable("fixture_records_write", undefined), true);
+    NodeAssert.deepStrictEqual(dynamicToolInvocationAvailable("fixture_records_write", undefined), {
+      available: true,
+    });
     NodeAssert.equal(
-      dynamicToolInvocationAvailable("fixture_records_write", () => false),
+      dynamicToolInvocationAvailable("fixture_records_write", () => ({
+        available: false,
+        reason: "revoking",
+      })).available,
       false,
     );
-    NodeAssert.equal(
+    NodeAssert.deepStrictEqual(
       dynamicToolInvocationAvailable("fixture_records_write", () => {
         throw new Error("availability lookup failed");
       }),
-      false,
+      {
+        available: false,
+        reason: "availability_check_failed",
+        detail: "Harness could not check whether this tool is available.",
+      },
+    );
+  });
+
+  describe("dynamic tool call gate", () => {
+    const moveTool = {
+      name: "microsoft365_mail_message_move",
+      description: "Move a message.",
+      inputSchema: { type: "object" },
+      requiresApproval: true,
+    } as const;
+    const notGranted = {
+      available: false,
+      canonicalName: "microsoft365.mail.message.move",
+      reason: "capability_not_granted",
+      detail:
+        "the Organize mail capability is enabled but not granted. Reconnect Microsoft 365 in Settings > Plugins to authorize it.",
+    } as const;
+    const refreshing = {
+      available: false,
+      canonicalName: "microsoft365.mail.message.move",
+      reason: "connection_changing",
+      detail: "Microsoft 365 is refreshing its connection. Try again shortly.",
+      transient: true,
+    } as const;
+    const gateOptions = (
+      overrides: Partial<Parameters<typeof gateDynamicToolCall>[0]["options"]>,
+    ): Parameters<typeof gateDynamicToolCall>[0]["options"] => ({
+      threadId: ThreadId.make("thread-gate"),
+      dynamicTools: [moveTool],
+      invokeDynamicTool: () => Promise.resolve({ moved: true }),
+      ...overrides,
+    });
+    const recordSpans = () => {
+      const spans: Array<Tracer.NativeSpan> = [];
+      const tracer = Tracer.make({
+        span: (options) => {
+          const span = new Tracer.NativeSpan(options);
+          spans.push(span);
+          return span;
+        },
+      });
+      return {
+        spans,
+        traced: <A, E>(effect: Effect.Effect<A, E>) =>
+          effect.pipe(
+            Effect.provide(Logger.layer([Logger.tracerLogger])),
+            Effect.withTracer(tracer),
+          ),
+      };
+    };
+    const responseText = (gate: CodexDynamicToolGate) => {
+      NodeAssert.equal(gate.allowed, false);
+      if (gate.allowed) return "";
+      NodeAssert.equal(gate.response.success, false);
+      const [item] = gate.response.contentItems;
+      return item?.type === "inputText" ? item.text : "";
+    };
+
+    it.effect("refuses with the tool, reason, and fix, and traces the refusal", () =>
+      Effect.gen(function* () {
+        const { spans, traced } = recordSpans();
+        const gate = yield* traced(
+          gateDynamicToolCall({
+            options: gateOptions({ dynamicToolAvailability: () => notGranted }),
+            payload: { tool: moveTool.name },
+          }),
+        );
+        NodeAssert.equal(
+          responseText(gate),
+          "microsoft365.mail.message.move is unavailable (capability_not_granted): the Organize mail capability is enabled but not granted. Reconnect Microsoft 365 in Settings > Plugins to authorize it.",
+        );
+        const span = spans.find(({ name }) => name === "integrations.dynamic-tool.rejected");
+        NodeAssert.ok(span);
+        NodeAssert.equal(span.attributes.get("thread.id"), "thread-gate");
+        NodeAssert.equal(span.attributes.get("dynamic_tool.name"), moveTool.name);
+        NodeAssert.equal(
+          span.attributes.get("integration.tool.name"),
+          "microsoft365.mail.message.move",
+        );
+        NodeAssert.equal(
+          span.attributes.get("dynamic_tool.unavailable.reason"),
+          "capability_not_granted",
+        );
+        NodeAssert.equal(span.attributes.get("dynamic_tool.unavailable.detail"), notGranted.detail);
+        NodeAssert.ok(
+          span.events.some(([name]) => name.includes("integrations.dynamic-tool.rejected")),
+        );
+      }),
+    );
+
+    it.effect("tells the agent a new thread is needed for a tool missing from its session", () =>
+      Effect.gen(function* () {
+        const { spans, traced } = recordSpans();
+        const gate = yield* traced(
+          gateDynamicToolCall({
+            options: gateOptions({
+              dynamicTools: [],
+              dynamicToolAvailability: () => ({
+                available: true,
+                canonicalName: "microsoft365.mail.message.move",
+              }),
+            }),
+            payload: { tool: moveTool.name },
+          }),
+        );
+        NodeAssert.equal(
+          responseText(gate),
+          "microsoft365.mail.message.move is unavailable (not_in_session): it was not available when this thread's session started. Start a new thread to pick it up.",
+        );
+        const span = spans.find(({ name }) => name === "integrations.dynamic-tool.rejected");
+        NodeAssert.equal(span?.attributes.get("dynamic_tool.unavailable.reason"), "not_in_session");
+
+        const stillRefused = yield* gateDynamicToolCall({
+          options: gateOptions({ dynamicTools: [], dynamicToolAvailability: () => notGranted }),
+          payload: { tool: moveTool.name },
+        });
+        NodeAssert.equal(
+          responseText(stillRefused),
+          `microsoft365.mail.message.move is unavailable (capability_not_granted): ${notGranted.detail} It is also missing from this thread's session (not_in_session), so start a new thread once that is fixed.`,
+        );
+      }),
+    );
+
+    it.effect("waits out a credential refresh and admits the call once it settles", () =>
+      Effect.gen(function* () {
+        let available = false;
+        const waits: Array<string> = [];
+        const gate = yield* gateDynamicToolCall({
+          options: gateOptions({
+            dynamicToolAvailability: () => (available ? { available: true } : refreshing),
+            awaitDynamicToolAvailability: async (name) => {
+              waits.push(name);
+              available = true;
+              return { available: true };
+            },
+          }),
+          payload: { tool: moveTool.name },
+        });
+        NodeAssert.deepStrictEqual(waits, [moveTool.name]);
+        NodeAssert.ok(gate.allowed);
+        NodeAssert.equal(gate.definition, moveTool);
+      }),
+    );
+
+    it.effect("refuses with the re-checked reason when the wait does not help", () =>
+      Effect.gen(function* () {
+        const gate = yield* gateDynamicToolCall({
+          options: gateOptions({
+            dynamicToolAvailability: () => refreshing,
+            awaitDynamicToolAvailability: () => Promise.resolve(notGranted),
+          }),
+          payload: { tool: moveTool.name },
+        });
+        NodeAssert.match(responseText(gate), /\(capability_not_granted\)/u);
+        const failedWait = yield* gateDynamicToolCall({
+          options: gateOptions({
+            dynamicToolAvailability: () => refreshing,
+            awaitDynamicToolAvailability: () => Promise.reject(new Error("aborted")),
+          }),
+          payload: { tool: moveTool.name },
+        });
+        NodeAssert.match(responseText(failedWait), /\(connection_changing\)/u);
+      }),
+    );
+
+    it.effect("does not wait on a reason that settling cannot change", () =>
+      Effect.gen(function* () {
+        let waited = false;
+        const gate = yield* gateDynamicToolCall({
+          options: gateOptions({
+            dynamicToolAvailability: () => notGranted,
+            awaitDynamicToolAvailability: async () => {
+              waited = true;
+              return { available: true };
+            },
+          }),
+          payload: { tool: moveTool.name },
+        });
+        NodeAssert.equal(gate.allowed, false);
+        NodeAssert.equal(waited, false);
+      }),
     );
   });
 

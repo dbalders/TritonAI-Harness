@@ -41,7 +41,11 @@ import * as EffectCodexSchema from "effect-codex-app-server/schema";
 
 import { buildCodexInitializeParams } from "./CodexProvider.ts";
 import { codexSessionAppServerArgs } from "./codexLaunchArgs.ts";
-import { describeIntegrationToolFailure } from "../../integrations/IntegrationToolFailure.ts";
+import {
+  describeIntegrationToolFailure,
+  describeUnavailableIntegrationTool,
+  IntegrationToolUnavailableError,
+} from "../../integrations/IntegrationToolFailure.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
 import {
   buildCodexDeveloperInstructions,
@@ -255,17 +259,162 @@ export function dynamicToolApprovalRequired(
   return requiresApproval === true && runtimeMode !== "full-access" && !approvedForSession;
 }
 
+export type CodexDynamicToolAvailability =
+  | { readonly available: true; readonly canonicalName?: string }
+  | {
+      readonly available: false;
+      /** Integration tool behind the dynamic name, when there is one. */
+      readonly canonicalName?: string;
+      readonly reason: string;
+      readonly detail?: string;
+      /** In-flight provider work (such as a credential refresh) may make the tool available. */
+      readonly transient?: boolean;
+    };
+
+type CodexDynamicToolUnavailable = Extract<CodexDynamicToolAvailability, { available: false }>;
+
 export function dynamicToolInvocationAvailable(
   name: string,
-  isAvailable: ((name: string) => boolean) | undefined,
-): boolean {
-  if (!isAvailable) return true;
+  check: ((name: string) => CodexDynamicToolAvailability) | undefined,
+): CodexDynamicToolAvailability {
+  if (!check) return { available: true };
   try {
-    return isAvailable(name);
+    return check(name);
   } catch {
-    return false;
+    return {
+      available: false,
+      reason: "availability_check_failed",
+      detail: "Harness could not check whether this tool is available.",
+    };
   }
 }
+
+/** Agent-facing text for a dynamic tool the live catalog refuses. */
+export function dynamicToolUnavailableText(
+  name: string,
+  availability: CodexDynamicToolUnavailable,
+): string {
+  return describeUnavailableIntegrationTool({
+    toolName: availability.canonicalName ?? name,
+    reason: availability.reason,
+    ...(availability.detail ? { detail: availability.detail } : {}),
+  });
+}
+
+/**
+ * Agent-facing text for a call to a tool missing from this session's dynamic tool list. Codex fixes
+ * the list when a thread's session starts, so only a new thread can pick up a newly available tool.
+ */
+export function dynamicToolNotInSessionText(
+  name: string,
+  current: CodexDynamicToolAvailability | undefined,
+): string {
+  if (current && !current.available) {
+    return `${dynamicToolUnavailableText(name, current)} It is also missing from this thread's session (not_in_session), so start a new thread once that is fixed.`;
+  }
+  return `${current?.canonicalName ?? name} is unavailable (not_in_session): it was not available when this thread's session started. Start a new thread to pick it up.`;
+}
+
+export interface CodexDynamicToolRejection {
+  readonly threadId: ThreadId;
+  readonly toolName: string;
+  readonly canonicalName?: string | undefined;
+  readonly reason: string;
+  readonly detail?: string | undefined;
+}
+
+/**
+ * Records a refused dynamic tool call in the server trace. Logs reach the trace file only as events
+ * on an active span, so each rejection gets its own.
+ */
+export const traceDynamicToolRejection = (rejection: CodexDynamicToolRejection) =>
+  Effect.logWarning("integrations.dynamic-tool.rejected", rejection).pipe(
+    Effect.withSpan("integrations.dynamic-tool.rejected", {
+      attributes: {
+        "thread.id": rejection.threadId,
+        "dynamic_tool.name": rejection.toolName,
+        "dynamic_tool.unavailable.reason": rejection.reason,
+        ...(rejection.canonicalName ? { "integration.tool.name": rejection.canonicalName } : {}),
+        ...(rejection.detail ? { "dynamic_tool.unavailable.detail": rejection.detail } : {}),
+      },
+    }),
+  );
+
+export type CodexDynamicToolGate =
+  | { readonly allowed: true; readonly definition: CodexDynamicToolDefinition }
+  | { readonly allowed: false; readonly response: EffectCodexSchema.DynamicToolCallResponse };
+
+/**
+ * Admits a dynamic tool call only if this session disclosed the tool and it is available now.
+ * Transient unavailability is waited out once (bounded by the callback) before refusing. Every
+ * refusal is traced and tells the agent which tool failed and why.
+ */
+export const gateDynamicToolCall = (input: {
+  readonly options: Pick<
+    CodexSessionRuntimeOptions,
+    | "threadId"
+    | "dynamicTools"
+    | "dynamicToolAvailability"
+    | "awaitDynamicToolAvailability"
+    | "invokeDynamicTool"
+  >;
+  readonly payload: Pick<EffectCodexSchema.DynamicToolCallParams, "tool" | "namespace">;
+}): Effect.Effect<CodexDynamicToolGate> =>
+  Effect.gen(function* () {
+    const { options, payload } = input;
+    const definition = options.dynamicTools?.find((tool) => tool.name === payload.tool);
+    if (payload.namespace || !definition || !options.invokeDynamicTool) {
+      const current = payload.namespace
+        ? undefined
+        : options.dynamicToolAvailability
+          ? dynamicToolInvocationAvailable(payload.tool, options.dynamicToolAvailability)
+          : undefined;
+      yield* traceDynamicToolRejection({
+        threadId: options.threadId,
+        toolName: payload.namespace ? `${payload.namespace}/${payload.tool}` : payload.tool,
+        canonicalName: current?.canonicalName,
+        reason: "not_in_session",
+        detail:
+          current?.available === false
+            ? current.detail
+              ? `${current.reason}: ${current.detail}`
+              : current.reason
+            : undefined,
+      });
+      return {
+        allowed: false,
+        response: dynamicToolResponse(false, dynamicToolNotInSessionText(payload.tool, current)),
+      } as const;
+    }
+    let availability = dynamicToolInvocationAvailable(
+      definition.name,
+      options.dynamicToolAvailability,
+    );
+    const awaitAvailability = options.awaitDynamicToolAvailability;
+    if (!availability.available && availability.transient && awaitAvailability) {
+      const initial = availability;
+      availability = yield* Effect.tryPromise((signal) =>
+        awaitAvailability(definition.name, { signal }),
+      ).pipe(Effect.orElseSucceed(() => initial));
+    }
+    if (!availability.available) {
+      yield* traceDynamicToolRejection({
+        threadId: options.threadId,
+        toolName: definition.name,
+        canonicalName: availability.canonicalName,
+        reason: availability.reason,
+        detail: availability.detail,
+      });
+      return {
+        allowed: false,
+        response: dynamicToolResponse(
+          false,
+          dynamicToolUnavailableText(definition.name, availability),
+        ),
+      } as const;
+    }
+    return { allowed: true, definition } as const;
+  });
 
 export interface CodexPluginSkillDefinition {
   readonly name: string;
@@ -300,7 +449,13 @@ export interface CodexSessionRuntimeOptions {
   readonly mcpCapabilities?: ReadonlySet<string>;
   readonly computerUseState?: DesktopComputerUseState | undefined;
   readonly dynamicTools?: ReadonlyArray<CodexDynamicToolDefinition>;
-  readonly isDynamicToolAvailable?: (name: string) => boolean;
+  /** Live availability of a dynamic tool, including names this session did not disclose. */
+  readonly dynamicToolAvailability?: (name: string) => CodexDynamicToolAvailability;
+  /** Waits out transient unavailability, such as a credential refresh, then re-checks. */
+  readonly awaitDynamicToolAvailability?: (
+    name: string,
+    options: { readonly signal: AbortSignal },
+  ) => Promise<CodexDynamicToolAvailability>;
   readonly invokeDynamicTool?: (input: CodexDynamicToolInvocation) => Promise<unknown>;
   readonly pluginSkills?: ReadonlyArray<CodexPluginSkillDefinition>;
   readonly isPluginSkillAvailable?: (name: string) => boolean;
@@ -2803,13 +2958,9 @@ export const makeCodexSessionRuntime = (
 
     yield* client.handleServerRequest("item/tool/call", (payload) =>
       Effect.gen(function* () {
-        const definition = options.dynamicTools?.find((tool) => tool.name === payload.tool);
-        if (payload.namespace || !definition || !options.invokeDynamicTool) {
-          return dynamicToolResponse(false, "Dynamic tool is unavailable.");
-        }
-        if (!dynamicToolInvocationAvailable(definition.name, options.isDynamicToolAvailable)) {
-          return dynamicToolResponse(false, "Dynamic tool is unavailable.");
-        }
+        const gate = yield* gateDynamicToolCall({ options, payload });
+        if (!gate.allowed) return gate.response;
+        const { definition } = gate;
         let writeApproved = false;
         const approvedForSession = (yield* Ref.get(sessionApprovedDynamicToolsRef)).has(
           definition.name,
@@ -2880,9 +3031,18 @@ export const makeCodexSessionRuntime = (
         }).pipe(
           Effect.matchEffect({
             onFailure: (error) =>
-              Effect.logWarning("dynamic tool invocation failed", {
-                toolName: definition.name,
-              }).pipe(Effect.as(dynamicToolFailureResponse(error.cause))),
+              (error.cause instanceof IntegrationToolUnavailableError && error.cause.details
+                ? traceDynamicToolRejection({
+                    threadId: options.threadId,
+                    toolName: definition.name,
+                    canonicalName: error.cause.details.toolName,
+                    reason: error.cause.details.reason,
+                    detail: error.cause.details.detail,
+                  })
+                : Effect.logWarning("dynamic tool invocation failed", {
+                    toolName: definition.name,
+                  })
+              ).pipe(Effect.as(dynamicToolFailureResponse(error.cause))),
             onSuccess: (value) => {
               const response = dynamicToolResultResponse(value);
               return response === undefined

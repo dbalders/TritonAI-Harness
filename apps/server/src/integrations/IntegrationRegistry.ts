@@ -223,6 +223,33 @@ export const logProviderFault = (fault: IntegrationProviderFault) =>
     }),
   );
 
+/**
+ * Why an integration tool cannot be called right now. `connection_changing` is the only transient
+ * reason: provider preparation (such as a credential refresh) or other lifecycle work is in flight,
+ * and `awaitToolAvailability` waits it out.
+ */
+export type IntegrationToolUnavailableReason =
+  | "registry_closing"
+  | "unknown_tool"
+  | "not_installed"
+  | "version_mismatch"
+  | "disabled"
+  | "capability_not_selected"
+  | "capability_not_granted"
+  | "not_connected"
+  | "revoking"
+  | "faulted"
+  | "connection_changing";
+
+export type IntegrationToolAvailability =
+  | { readonly available: true }
+  | {
+      readonly available: false;
+      readonly reason: IntegrationToolUnavailableReason;
+      /** Agent-facing explanation naming the plugin, capability, and the fix. */
+      readonly detail: string;
+    };
+
 export interface RegistryRuntimeOptions {
   readonly providerStatusTimeoutMs?: number;
   readonly providerOperationTimeoutMs?: number;
@@ -601,6 +628,59 @@ function assertCurrentPackageVersion(
   }
 }
 
+/** Where users manage plugins, named in agent-facing refusals. */
+const PLUGIN_SETTINGS = "Settings > Plugins";
+
+function capabilityNames(manifest: IntegrationManifest, ids: ReadonlyArray<string>): string {
+  return ids
+    .map(
+      (id) => manifest.capabilities.find((capability) => capability.id === id)?.displayName ?? id,
+    )
+    .join(" or ");
+}
+
+/**
+ * The refusal, if any, that the persisted install state alone imposes on a tool: not installed,
+ * a version that does not match the catalog, disabled, or none of its capabilities selected.
+ */
+export function persistedToolUnavailability(
+  manifest: IntegrationManifest,
+  tool: IntegrationManifest["tools"][number],
+  installed: InstalledIntegrationState | undefined,
+): Extract<IntegrationToolAvailability, { available: false }> | undefined {
+  if (!installed) {
+    return {
+      available: false,
+      reason: "not_installed",
+      detail: `the ${manifest.name} plugin is not installed.`,
+    };
+  }
+  if (installed.version !== manifest.version) {
+    return {
+      available: false,
+      reason: "version_mismatch",
+      detail: `the installed ${manifest.name} plugin (${installed.version}) does not match the included version (${manifest.version}). Restart Harness to reconcile it.`,
+    };
+  }
+  if (!installed.enabled) {
+    return {
+      available: false,
+      reason: "disabled",
+      detail: `${manifest.name} is not enabled. Enable it in ${PLUGIN_SETTINGS}.`,
+    };
+  }
+  const toolCapabilities = dependencyCapabilityIds(tool);
+  const selected = selectedCapabilityIds(manifest, installed);
+  if (!toolCapabilities.some((id) => selected.has(id))) {
+    return {
+      available: false,
+      reason: "capability_not_selected",
+      detail: `the ${capabilityNames(manifest, toolCapabilities)} capability is not enabled. Enable it for ${manifest.name} in ${PLUGIN_SETTINGS}.`,
+    };
+  }
+  return undefined;
+}
+
 async function awaitWithSignal<A>(work: Promise<A>, signal: AbortSignal): Promise<A> {
   if (signal.aborted) throw cancellationError(signal);
   let removeAbortListener: () => void = () => undefined;
@@ -821,6 +901,7 @@ export class RegistryRuntime {
   readonly #providerPreparationWork = new Map<IntegrationProvider, Promise<void>>();
   readonly #providerLastPreparedAt = new Map<IntegrationProvider, number>();
   readonly #activeSummaryRefreshWork = new Set<Promise<void>>();
+  readonly #providerSummaryRefreshWork = new Map<IntegrationProvider, Set<Promise<void>>>();
   readonly #skillSyncOperations = new Map<string, Promise<void>>();
   #closing = false;
   #closePromise: Promise<void> | null = null;
@@ -2014,7 +2095,14 @@ export class RegistryRuntime {
       })
       .catch(() => undefined);
     this.#activeSummaryRefreshWork.add(refresh);
-    void refresh.then(() => this.#activeSummaryRefreshWork.delete(refresh));
+    const providerRefreshes = this.#providerSummaryRefreshWork.get(provider) ?? new Set();
+    providerRefreshes.add(refresh);
+    this.#providerSummaryRefreshWork.set(provider, providerRefreshes);
+    void refresh.then(() => {
+      this.#activeSummaryRefreshWork.delete(refresh);
+      providerRefreshes.delete(refresh);
+      if (providerRefreshes.size === 0) this.#providerSummaryRefreshWork.delete(provider);
+    });
   }
 
   #createSummary(
@@ -2358,22 +2446,126 @@ export class RegistryRuntime {
   }
 
   isToolAvailableSync(name: string): boolean {
-    if (this.#closing) return false;
-    if (!this.#availableTools.has(name)) return false;
-    for (const { manifest, provider } of this.#catalog.values()) {
-      const tool = manifest.tools.find((candidate) => candidate.name === name);
-      if (tool) {
-        return (
-          !this.#isSurfaceRevoking(manifest, dependencyCapabilityIds(tool)) &&
-          !(
-            provider &&
-            (this.#faultedProviders.has(provider) ||
-              this.#activeProviderLifecycleWork.has(provider))
-          )
-        );
-      }
+    return this.toolAvailabilitySync(name).available;
+  }
+
+  /**
+   * Explains whether a tool can be called right now. Availability itself is exactly the cached
+   * gate `isToolAvailableSync` has always applied; the reason only describes a refusal.
+   */
+  toolAvailabilitySync(name: string): IntegrationToolAvailability {
+    if (this.#closing) {
+      return {
+        available: false,
+        reason: "registry_closing",
+        detail: "Harness is shutting down its integration plugins.",
+      };
     }
-    return false;
+    const integration = [...this.#catalog.values()].find(({ manifest }) =>
+      manifest.tools.some((candidate) => candidate.name === name),
+    );
+    const tool = integration?.manifest.tools.find((candidate) => candidate.name === name);
+    if (!integration || !tool) {
+      return {
+        available: false,
+        reason: "unknown_tool",
+        detail: "No included integration plugin provides this tool.",
+      };
+    }
+    const { manifest, provider } = integration;
+    const toolCapabilities = dependencyCapabilityIds(tool);
+    const faulted = provider ? this.#faultedProviders.has(provider) : false;
+    const revoking = this.#isSurfaceRevoking(manifest, toolCapabilities);
+    const settling = provider ? this.#activeProviderLifecycleWork.has(provider) : false;
+    if (this.#availableTools.has(name) && !revoking && !faulted && !settling) {
+      return { available: true };
+    }
+    const unavailable = (reason: IntegrationToolUnavailableReason, detail: string) =>
+      ({ available: false, reason, detail }) as const;
+    const installed = ownRecordValue(this.#state.installed, manifest.id);
+    const refusal = persistedToolUnavailability(manifest, tool, installed);
+    if (refusal) return refusal;
+    const selected = selectedCapabilityIds(manifest, installed);
+    const selectedToolCapabilities = toolCapabilities.filter((id) => selected.has(id));
+    if (faulted) {
+      return unavailable(
+        "faulted",
+        `${manifest.name} is unavailable until its connection is reset in ${PLUGIN_SETTINGS}.`,
+      );
+    }
+    if (revoking) {
+      return unavailable("revoking", `${manifest.name} access is being revoked.`);
+    }
+    const changing = unavailable(
+      "connection_changing",
+      `${manifest.name} is refreshing its connection. Try again shortly.`,
+    );
+    if (settling) return changing;
+    const summary = this.#summaries.get(manifest.id);
+    if (!summary || summary.connectionState !== "connected") {
+      return unavailable(
+        "not_connected",
+        `${manifest.name} is not connected. Connect it in ${PLUGIN_SETTINGS}.`,
+      );
+    }
+    const granted = new Set(
+      summary.capabilities.filter((capability) => capability.granted).map(({ id }) => id),
+    );
+    if (!selectedToolCapabilities.some((id) => granted.has(id))) {
+      return unavailable(
+        "capability_not_granted",
+        `the ${capabilityNames(manifest, selectedToolCapabilities)} capability is enabled but not granted. Reconnect ${manifest.name} in ${PLUGIN_SETTINGS} to authorize it.`,
+      );
+    }
+    // Entitled by every durable check: the cached summary was sampled while the provider was
+    // settling, and its post-settlement refresh has not landed yet.
+    return changing;
+  }
+
+  /**
+   * Like `toolAvailabilitySync`, but waits out transient provider work (a shared credential
+   * refresh, a write commit) before deciding. Bounded by the provider operation timeout, which
+   * also bounds that work, and by the caller's signal and registry shutdown.
+   */
+  async awaitToolAvailability(
+    name: string,
+    options: { readonly signal?: AbortSignal; readonly timeoutMs?: number } = {},
+  ): Promise<IntegrationToolAvailability> {
+    const initial = this.toolAvailabilitySync(name);
+    if (initial.available || initial.reason !== "connection_changing") return initial;
+    const provider = [...this.#catalog.values()].find(({ manifest }) =>
+      manifest.tools.some((candidate) => candidate.name === name),
+    )?.provider;
+    if (!provider) return initial;
+    const signal = options.signal ?? new AbortController().signal;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<"timeout">((resolve) => {
+      timer = setTimeout(
+        () => resolve("timeout"),
+        options.timeoutMs ?? this.#providerOperationTimeoutMs,
+      );
+    });
+    try {
+      for (;;) {
+        if (this.#closing) break;
+        const pending = [
+          ...(this.#activeProviderLifecycleWork.get(provider) ?? []),
+          ...(this.#providerSummaryRefreshWork.get(provider) ?? []),
+        ];
+        if (pending.length === 0) break;
+        const settled = await awaitWithSignal(
+          Promise.race([Promise.allSettled(pending), deadline]),
+          signal,
+        );
+        if (settled === "timeout") break;
+        // Settled work may queue more (a summary refresh, a follow-up operation); re-sample.
+        const current = this.toolAvailabilitySync(name);
+        if (current.available || current.reason !== "connection_changing") break;
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+    return this.toolAvailabilitySync(name);
   }
 
   isSkillAvailableSync(name: string): boolean {
