@@ -3,6 +3,7 @@ import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 import * as Struct from "effect/Struct";
+import { countGraphemes } from "unicode-segmenter/grapheme";
 import { OrchestrationMessageContext } from "./composerContext.ts";
 import { ProviderOptionSelections } from "./model.ts";
 import { RepositoryIdentity, ThreadEnvMode } from "./environment.ts";
@@ -547,26 +548,8 @@ const ProjectEmoji = TrimmedNonEmptyString.check(Schema.isMaxLength(32));
 
 // Hermes (the Android/iOS JS runtime) has no Intl.Segmenter, and this module
 // loads at app startup, so `new Intl.Segmenter()` crashes mobile on launch.
-// Count grapheme clusters with a small approximation instead: a code point
-// continues the current cluster when it is a combining mark, joiner,
-// variation selector, or emoji modifier, or follows a ZWJ. This must stay
-// runtime-independent (not `typeof Intl.Segmenter` feature detection) so the
-// shared contract validates identically on server, web, and mobile.
-const GRAPHEME_CONTINUATION = /[\p{M}\u200c\u200d\ufe0f\u{1F3FB}-\u{1F3FF}]/u;
-
-const countGraphemes = (text: string): number => {
-  let clusters = 0;
-  let prevJoiner = false;
-  for (const char of text) {
-    if (clusters > 0 && (prevJoiner || GRAPHEME_CONTINUATION.test(char))) {
-      prevJoiner = char === "\u200d";
-      continue;
-    }
-    clusters += 1;
-    prevJoiner = char === "\u200d";
-  }
-  return clusters;
-};
+// Use the same Unicode segmentation on every runtime so stored monograms
+// remain decodable and joiners cannot bypass the two-grapheme limit.
 
 export const ProjectMonogramText = TrimmedNonEmptyString.check(
   Schema.isMaxLength(32),

@@ -6,6 +6,31 @@ afterEach(() => {
   vi.resetModules();
 });
 
+it("rejects more than two visible letters separated by joiners without Intl.Segmenter", async () => {
+  vi.stubGlobal("Intl", Object.create(Intl, { Segmenter: { value: undefined } }));
+  vi.resetModules();
+
+  const { ProjectIconOverride } = await import("./index.ts");
+  const decode = Schema.decodeUnknownSync(ProjectIconOverride);
+  for (const monogram of ["A\u200dB\u200dC", "A\u200cB\u200cC"]) {
+    expect(() =>
+      decode({ kind: "lucide", name: "folder-code", color: "blue", monogram }),
+    ).toThrow();
+  }
+});
+
+it("decodes persisted international monograms without Intl.Segmenter", async () => {
+  vi.stubGlobal("Intl", Object.create(Intl, { Segmenter: { value: undefined } }));
+  vi.resetModules();
+
+  const { ProjectIconOverride } = await import("./index.ts");
+  const decode = Schema.decodeUnknownSync(ProjectIconOverride);
+  for (const monogram of ["क्षत्र", "한국".normalize("NFD"), "กำขำ", "ກຳຂຳ"]) {
+    const icon = { kind: "lucide", name: "folder-code", color: "blue", monogram };
+    expect(decode(icon)).toEqual(icon);
+  }
+});
+
 it("loads the mobile contracts and decodes project icons without Intl.Segmenter", async () => {
   vi.stubGlobal("Intl", Object.create(Intl, { Segmenter: { value: undefined } }));
   vi.resetModules();
