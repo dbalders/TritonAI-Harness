@@ -60,6 +60,12 @@ function prepareNightlyMobileNative({ root, tag, sourceSha, generatorSha }) {
   );
 
   const workspace = path.join(ios, "TritonAIHarnessPreview.xcworkspace");
+  const resolved = JSON.parse(
+    fs.readFileSync(path.join(workspace, "xcshareddata/swiftpm/Package.resolved"), "utf8"),
+  );
+  if (!Array.isArray(resolved.pins) || resolved.pins.length === 0) {
+    throw new Error("Swift package dependencies must be resolved before publishing to Xcode Cloud");
+  }
   fs.mkdirSync(workspace, { recursive: true });
   fs.writeFileSync(
     path.join(workspace, "contents.xcworkspacedata"),

@@ -48,6 +48,12 @@ function fixture(t) {
     scheme,
     '<Scheme><BuildActionEntry buildForArchiving = "YES"/><ArchiveAction/></Scheme>',
   );
+  const swiftpm = path.join(ios, "TritonAIHarnessPreview.xcworkspace/xcshareddata/swiftpm");
+  fs.mkdirSync(swiftpm, { recursive: true });
+  fs.writeFileSync(
+    path.join(swiftpm, "Package.resolved"),
+    JSON.stringify({ version: 3, pins: [{ identity: "clerk-ios" }] }),
+  );
   return {
     root,
     ios,
@@ -87,6 +93,11 @@ test("stages native sources and provenance without changing the nightly source",
     files.includes("apps/mobile/ios/TritonAIHarnessPreview.xcworkspace/contents.xcworkspacedata"),
   );
   assert.ok(files.includes("apps/mobile/ios/ci_scripts/ci_post_clone.sh"));
+  assert.ok(
+    files.includes(
+      "apps/mobile/ios/TritonAIHarnessPreview.xcworkspace/xcshareddata/swiftpm/Package.resolved",
+    ),
+  );
   assert.ok(
     !files.some((file) =>
       /Pods|DerivedData|xcuserdata|private.txt|\.xcode.env.local|Podfile.lock/.test(file),

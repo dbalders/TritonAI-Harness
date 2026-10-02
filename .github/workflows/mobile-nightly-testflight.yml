@@ -28,8 +28,8 @@ concurrency:
 jobs:
   prepare:
     name: Prepare Harness Preview for Xcode Cloud
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    runs-on: macos-26
+    timeout-minutes: 45
     env:
       APP_VARIANT: preview
       NODE_OPTIONS: --max-old-space-size=8192
@@ -77,6 +77,16 @@ jobs:
         env:
           EXPO_NO_GIT_STATUS: "1"
         run: vp exec expo prebuild --platform ios --no-install
+
+      - name: Resolve native dependencies for Xcode Cloud
+        working-directory: source/apps/mobile/ios
+        run: |
+          pod install
+          xcodebuild -resolvePackageDependencies \
+            -workspace TritonAIHarnessPreview.xcworkspace \
+            -scheme TritonAIHarnessPreview \
+            -derivedDataPath "$RUNNER_TEMP/mobile-swift-dependencies" \
+            -hideShellScriptEnvironment
 
       - name: Publish native build branch
         id: native
