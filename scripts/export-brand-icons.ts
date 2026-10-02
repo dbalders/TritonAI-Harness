@@ -532,9 +532,9 @@ const renderIcon = Effect.fn("iconExport.renderIcon")(function* (
     });
   }
   if (platform === "macOS") {
-    // Electron's static ICNS resources need the conventional Dock inset;
-    // Icon Composer's exported PNG artwork otherwise fills the entire canvas.
-    const artworkSize = Math.round((size * 824) / 1024);
+    // Electron's static icons need a Dock inset. The 860px footprint matches
+    // neighboring Dock tiles; 824px looked smaller in the running app.
+    const artworkSize = Math.round((size * 860) / 1024);
     const inset = Math.floor((size - artworkSize) / 2);
     const padded = yield* Effect.tryPromise({
       try: () =>

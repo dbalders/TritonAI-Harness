@@ -51,9 +51,16 @@ it.layer(NodeServices.layer)("runtime branding", (it) => {
         const visible = Array.from({ length: icon.width }, (_, x) => x).filter(
           (x) => alphaAt(x, centerRow)! >= 128,
         );
-        assert.closeTo(visible.length / icon.width, 0.805, 0.01);
-        assert.isAtLeast(visible[0]!, 90);
-        assert.isAtMost(visible.at(-1)!, icon.width - 91);
+        assert.closeTo(visible.length / icon.width, 0.84, 0.005);
+        assert.isAtLeast(visible[0]!, 80);
+        assert.isAtMost(visible.at(-1)!, icon.width - 81);
+        const centerColumn = Math.floor(icon.width / 2);
+        const visibleHeight = Array.from({ length: icon.height }, (_, y) => y).filter(
+          (y) => alphaAt(centerColumn, y)! >= 128,
+        );
+        assert.closeTo(visibleHeight.length / icon.height, 0.84, 0.005);
+        assert.closeTo(visible[0]!, icon.width - 1 - visible.at(-1)!, 1);
+        assert.closeTo(visibleHeight[0]!, icon.height - 1 - visibleHeight.at(-1)!, 1);
         // Inside the padded rounded square, outside a padded circular badge.
         assert.isAtLeast(alphaAt(200, 200)!, 250);
         assert.isAtLeast(alphaAt(icon.width - 201, 200)!, 250);

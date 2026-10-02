@@ -13,8 +13,8 @@ on macOS is required; `ICON_COMPOSER_TOOL` can select an `ictool` executable. Th
 exporter pins design generation 26.
 
 iOS receives the opaque square master and applies its own corner mask. macOS gets
-an Icon Composer macOS rendition with 824px artwork centered on the 1024px canvas
-to match conventional Dock icon sizing; Windows, Linux, favicons, and runtime logos get
+an Icon Composer macOS rendition with 860px artwork centered on the 1024px canvas
+to match neighboring Dock tiles in the desktop app; Windows, Linux, favicons, and runtime logos get
 rounded-square renditions. Desktop packaging converts the generated macOS PNGs into
 ICNS resources. Edit the source layers rather than generated PNG/ICO renditions.
 
