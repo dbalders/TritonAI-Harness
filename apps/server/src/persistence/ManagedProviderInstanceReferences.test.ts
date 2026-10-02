@@ -143,12 +143,13 @@ layer("startup preserves historical model selections", (it) => {
       yield* sql`CREATE TABLE projection_thread_sessions (thread_id TEXT, provider_instance_id TEXT)`;
       yield* sql`CREATE TABLE provider_session_runtime (provider_instance_id TEXT, runtime_payload_json TEXT)`;
       yield* sql`CREATE TABLE orchestration_events (payload_json TEXT)`;
-      const selection = encodePayload({
+      const modelSelection = {
         provider: "codex",
         instanceId: "codex",
         model: "gpt-5.6-sol",
-      });
-      const history = encodePayload({ modelSelection: JSON.parse(selection) });
+      };
+      const selection = encodePayload(modelSelection);
+      const history = encodePayload({ modelSelection });
       yield* sql`INSERT INTO projection_projects VALUES (${selection})`;
       yield* sql`INSERT INTO projection_threads VALUES ('old-chat', ${selection})`;
       yield* sql`INSERT INTO orchestration_events VALUES (${history})`;
