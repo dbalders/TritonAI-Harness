@@ -24,36 +24,35 @@ it.layer(NodeServices.layer)("runtime branding", (it) => {
     }),
   );
 
-  it.effect("keeps the production macOS icon full-size with transparent corners", () =>
+  it.effect("ships rounded-square macOS icons that fill the canvas", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const repoRoot = yield* path.fromFileUrl(new URL("..", import.meta.url));
-      const contents = yield* fs.readFile(
-        path.join(repoRoot, "assets/prod/tritonai-harness-1024.png"),
-      );
-      const icon = PNG.sync.read(Buffer.from(contents));
-      const alphaAt = (x: number, y: number) => icon.data[(y * icon.width + x) * 4 + 3];
+      for (const source of [
+        "assets/prod/tritonai-harness-1024.png",
+        "assets/nightly/tritonai-harness-nightly-1024.png",
+      ]) {
+        const contents = yield* fs.readFile(path.join(repoRoot, source));
+        const icon = PNG.sync.read(Buffer.from(contents));
+        const alphaAt = (x: number, y: number) => icon.data[(y * icon.width + x) * 4 + 3];
 
-      assert.deepEqual([icon.width, icon.height], [1024, 1024]);
-      assert.deepEqual(
-        [
-          alphaAt(0, 0),
-          alphaAt(icon.width - 1, 0),
-          alphaAt(0, icon.height - 1),
-          alphaAt(icon.width - 1, icon.height - 1),
-        ],
-        [0, 0, 0, 0],
-      );
-      assert.deepEqual(
-        [
-          alphaAt(Math.floor(icon.width / 2), 0),
-          alphaAt(icon.width - 1, Math.floor(icon.height / 2)),
-          alphaAt(Math.floor(icon.width / 2), icon.height - 1),
-          alphaAt(0, Math.floor(icon.height / 2)),
-        ],
-        [255, 255, 255, 255],
-      );
+        assert.deepEqual([icon.width, icon.height], [1024, 1024]);
+        assert.deepEqual(
+          [
+            alphaAt(0, 0),
+            alphaAt(icon.width - 1, 0),
+            alphaAt(0, icon.height - 1),
+            alphaAt(icon.width - 1, icon.height - 1),
+          ],
+          [0, 0, 0, 0],
+        );
+        // This corner is inside a rounded square but outside the former circular badge.
+        assert.isAtLeast(alphaAt(128, 128)!, 250);
+        assert.isAtLeast(alphaAt(icon.width - 129, 128)!, 250);
+        assert.isAtLeast(alphaAt(128, icon.height - 129)!, 250);
+        assert.isAtLeast(alphaAt(icon.width - 129, icon.height - 129)!, 250);
+      }
     }),
   );
 });

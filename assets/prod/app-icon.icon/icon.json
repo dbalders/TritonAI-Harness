@@ -1,13 +1,14 @@
 {
   "fill": {
-    "solid": "display-p3:0.09412,0.16863,0.28627,1.00000"
+    "solid": "srgb:0.09804,0.16863,0.27843,1.00000"
   },
   "groups": [
     {
       "layers": [
         {
-          "image-name": "logo.svg",
+          "image-name": "logo.png",
           "name": "TritonAI Harness",
+          "glass": false,
           "position": {
             "scale": 1,
             "translation-in-points": [0, 0]
@@ -16,11 +17,11 @@
       ],
       "shadow": {
         "kind": "neutral",
-        "opacity": 0.5
+        "opacity": 0
       },
       "translucency": {
-        "enabled": true,
-        "value": 0.5
+        "enabled": false,
+        "value": 0
       }
     }
   ],

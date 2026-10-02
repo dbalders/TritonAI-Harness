@@ -8,7 +8,9 @@ const appVariant = Constants.expoConfig?.extra?.appVariant;
 const BRAND_MARK_SOURCE =
   appVariant === "development"
     ? require("../../../../assets/dev/tritonai-harness-dev-1024.png")
-    : require("../../../../assets/prod/tritonai-logo.png");
+    : appVariant === "preview"
+      ? require("../../../../assets/nightly/tritonai-harness-nightly-ios-1024.png")
+      : require("../../../../assets/prod/tritonai-logo.png");
 const DEFAULT_STAGE_LABEL =
   appVariant === "development" ? "Dev" : appVariant === "preview" ? "Preview" : "";
 
