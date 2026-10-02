@@ -1788,6 +1788,35 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("serves liveness while command readiness is blocked", () =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const ready = yield* Deferred.make<void>();
+      yield* buildAppUnderTest({
+        layers: {
+          serverRuntimeStartup: {
+            awaitCommandReady: Deferred.succeed(entered, undefined).pipe(
+              Effect.andThen(Deferred.await(ready)),
+            ),
+          },
+        },
+      });
+      const readiness = yield* HttpClient.get("/.well-known/t3/environment").pipe(Effect.forkChild);
+      yield* Deferred.await(entered);
+      for (const path of ["/api/health", "/api/health?probe=1"]) {
+        const response = yield* HttpClient.get(path);
+        assert.equal(response.status, 200);
+        assert.equal(response.headers["cache-control"], "no-store");
+        assert.deepStrictEqual(yield* response.json, { status: "alive" });
+      }
+      const head = yield* HttpClient.head("/api/health");
+      assert.equal(head.status, 200);
+      assert.equal(yield* head.text, "");
+      yield* Deferred.succeed(ready, undefined);
+      assert.equal((yield* Fiber.join(readiness)).status, 200);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("serves static index content for GET / when staticDir is configured", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;

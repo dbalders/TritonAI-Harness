@@ -7,11 +7,9 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import {
   layer as managedReferencesLayer,
-  migrateManagedModelReferences,
   migrateManagedProviderInstanceReferences,
 } from "./ManagedProviderInstanceReferences.ts";
 
-import { managedConfig } from "../managedPolicy.ts";
 import { layerTest as settingsLayerTest } from "../serverSettings.ts";
 
 const encodePayload = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
@@ -136,374 +134,42 @@ layer("managed provider instance references", (it) => {
   );
 });
 
-const routeLayer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
-
-routeLayer("managed provider route split", (it) => {
-  it.effect("moves legacy Codex frontier-model references to the managed frontier route", () =>
+layer("startup preserves historical model selections", (it) => {
+  it.effect("does not rewrite chats or events when the managed catalog changes", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      const previousInstanceId = "codex";
-      const nextInstanceId = "codex_frontier";
-      const frontierModel = "gpt-5.6-sol";
-
       yield* sql`CREATE TABLE projection_projects (default_model_selection_json TEXT)`;
-      yield* sql`
-        CREATE TABLE projection_threads (
-          thread_id TEXT PRIMARY KEY,
-          model_selection_json TEXT
-        )
-      `;
-      yield* sql`
-        CREATE TABLE projection_thread_sessions (
-          thread_id TEXT PRIMARY KEY,
-          provider_instance_id TEXT
-        )
-      `;
-      yield* sql`
-        CREATE TABLE provider_session_runtime (
-          provider_instance_id TEXT,
-          runtime_payload_json TEXT
-        )
-      `;
+      yield* sql`CREATE TABLE projection_threads (thread_id TEXT, model_selection_json TEXT)`;
+      yield* sql`CREATE TABLE projection_thread_sessions (thread_id TEXT, provider_instance_id TEXT)`;
+      yield* sql`CREATE TABLE provider_session_runtime (provider_instance_id TEXT, runtime_payload_json TEXT)`;
       yield* sql`CREATE TABLE orchestration_events (payload_json TEXT)`;
-
-      yield* sql`
-        INSERT INTO projection_projects (default_model_selection_json)
-        VALUES ('{"instanceId":"codex","model":"gpt-5.6-sol"}')
-      `;
-      yield* sql`
-        INSERT INTO projection_projects (default_model_selection_json)
-        VALUES ('{"instanceId":"codex","model":"api-deepseek-v4-flash"}')
-      `;
-      yield* sql`
-        INSERT INTO projection_threads (thread_id, model_selection_json)
-        VALUES ('frontier-thread', '{"instanceId":"codex","model":"gpt-5.6-sol"}')
-      `;
-      yield* sql`
-        INSERT INTO projection_threads (thread_id, model_selection_json)
-        VALUES ('on-prem-thread', '{"instanceId":"codex","model":"api-deepseek-v4-flash"}')
-      `;
-      yield* sql`
-        INSERT INTO projection_thread_sessions (thread_id, provider_instance_id)
-        VALUES ('frontier-thread', ${previousInstanceId})
-      `;
-      yield* sql`
-        INSERT INTO projection_thread_sessions (thread_id, provider_instance_id)
-        VALUES ('on-prem-thread', ${previousInstanceId})
-      `;
-      yield* sql`
-        INSERT INTO provider_session_runtime (provider_instance_id, runtime_payload_json)
-        VALUES (
-          ${previousInstanceId},
-          '{"providerInstanceId":"codex","modelSelection":{"instanceId":"codex","model":"gpt-5.6-sol"}}'
-        )
-      `;
-      yield* sql`
-        INSERT INTO provider_session_runtime (provider_instance_id, runtime_payload_json)
-        VALUES (
-          ${previousInstanceId},
-          '{"providerInstanceId":"codex","modelSelection":{"instanceId":"codex","model":"api-deepseek-v4-flash"}}'
-        )
-      `;
-      yield* sql`
-        INSERT INTO orchestration_events (payload_json)
-        VALUES ('{"defaultModelSelection":{"instanceId":"codex","model":"gpt-5.6-sol"},"modelSelection":{"instanceId":"codex","model":"gpt-5.6-sol"},"session":{"providerInstanceId":"codex"}}')
-      `;
-      yield* sql`
-        INSERT INTO orchestration_events (payload_json)
-        VALUES (
-          '{"defaultModelSelection":{"instanceId":"codex","model":"api-deepseek-v4-flash"},"modelSelection":{"instanceId":"codex","model":"api-deepseek-v4-flash"},"session":{"providerInstanceId":"codex"}}'
-        )
-      `;
-
-      const routeSplit = {
-        previousInstanceId,
-        nextInstanceId,
-        frontierModelIds: [frontierModel],
+      const modelSelection = {
+        provider: "codex",
+        instanceId: "codex",
+        model: "gpt-5.6-sol",
       };
-      yield* migrateManagedProviderInstanceReferences({}, routeSplit);
-
-      const project = yield* sql<{ readonly instanceId: string }>`
-        SELECT json_extract(default_model_selection_json, '$.instanceId') AS "instanceId"
-        FROM projection_projects
-        ORDER BY rowid
-      `;
-      const thread = yield* sql<{ readonly instanceId: string }>`
-        SELECT json_extract(model_selection_json, '$.instanceId') AS "instanceId"
-        FROM projection_threads
-        ORDER BY rowid
-      `;
-      const threadSession = yield* sql<{ readonly instanceId: string }>`
-        SELECT provider_instance_id AS "instanceId"
-        FROM projection_thread_sessions
-        ORDER BY rowid
-      `;
-      const runtime = yield* sql<{
-        readonly instanceId: string;
-        readonly payloadInstanceId: string;
-        readonly selectionInstanceId: string;
-      }>`
-        SELECT
-          provider_instance_id AS "instanceId",
-          json_extract(runtime_payload_json, '$.providerInstanceId') AS "payloadInstanceId",
-          json_extract(runtime_payload_json, '$.modelSelection.instanceId') AS "selectionInstanceId"
-        FROM provider_session_runtime
-        ORDER BY rowid
-      `;
-      const event = yield* sql<{
-        readonly projectInstanceId: string;
-        readonly threadInstanceId: string;
-        readonly sessionInstanceId: string;
-      }>`
-        SELECT
-          json_extract(payload_json, '$.defaultModelSelection.instanceId') AS "projectInstanceId",
-          json_extract(payload_json, '$.modelSelection.instanceId') AS "threadInstanceId",
-          json_extract(payload_json, '$.session.providerInstanceId') AS "sessionInstanceId"
-        FROM orchestration_events
-        ORDER BY rowid
-      `;
-
-      assert.deepStrictEqual(project, [
-        { instanceId: nextInstanceId },
-        { instanceId: previousInstanceId },
+      const selection = encodePayload(modelSelection);
+      const history = encodePayload({ modelSelection });
+      yield* sql`INSERT INTO projection_projects VALUES (${selection})`;
+      yield* sql`INSERT INTO projection_threads VALUES ('old-chat', ${selection})`;
+      yield* sql`INSERT INTO orchestration_events VALUES (${history})`;
+      yield* sql`CREATE TRIGGER preserve_history BEFORE UPDATE ON orchestration_events
+        BEGIN SELECT RAISE(ABORT, 'startup must not rewrite history'); END`;
+      for (let pass = 0; pass < 2; pass++) {
+        yield* Layer.build(managedReferencesLayer.pipe(Layer.provide(settingsLayerTest()))).pipe(
+          Effect.scoped,
+        );
+      }
+      assert.deepStrictEqual(yield* sql`SELECT model_selection_json FROM projection_threads`, [
+        { model_selection_json: selection },
       ]);
-      assert.deepStrictEqual(thread, [
-        { instanceId: nextInstanceId },
-        { instanceId: previousInstanceId },
-      ]);
-      assert.deepStrictEqual(threadSession, [
-        { instanceId: nextInstanceId },
-        { instanceId: previousInstanceId },
-      ]);
-      assert.deepStrictEqual(runtime, [
-        {
-          instanceId: nextInstanceId,
-          payloadInstanceId: nextInstanceId,
-          selectionInstanceId: nextInstanceId,
-        },
-        {
-          instanceId: previousInstanceId,
-          payloadInstanceId: previousInstanceId,
-          selectionInstanceId: previousInstanceId,
-        },
-      ]);
-      assert.deepStrictEqual(event, [
-        {
-          projectInstanceId: nextInstanceId,
-          threadInstanceId: nextInstanceId,
-          sessionInstanceId: nextInstanceId,
-        },
-        {
-          projectInstanceId: previousInstanceId,
-          threadInstanceId: previousInstanceId,
-          sessionInstanceId: previousInstanceId,
-        },
-      ]);
-
-      yield* sql`
-        INSERT INTO projection_projects (default_model_selection_json)
-        VALUES ('{"instanceId":"codex","model":"gpt-5.6-sol"}')
-      `;
-      yield* migrateManagedProviderInstanceReferences({}, routeSplit);
-      const projectsAfterRestart = yield* sql<{ readonly instanceId: string }>`
-        SELECT json_extract(default_model_selection_json, '$.instanceId') AS "instanceId"
-        FROM projection_projects
-        ORDER BY rowid
-      `;
-      assert.deepStrictEqual(projectsAfterRestart, [
-        { instanceId: nextInstanceId },
-        { instanceId: previousInstanceId },
-        { instanceId: previousInstanceId },
-      ]);
-
-      const laterFrontierModel = "claude-opus-5";
-      yield* sql`
-        INSERT INTO projection_projects (default_model_selection_json)
-        VALUES (
-          '{"instanceId":"codex","model":"claude-opus-5"}'
-        )
-      `;
-      yield* migrateManagedProviderInstanceReferences(
-        {},
-        {
-          ...routeSplit,
-          frontierModelIds: [frontierModel, laterFrontierModel],
-        },
+      assert.deepStrictEqual(
+        yield* sql`SELECT default_model_selection_json FROM projection_projects`,
+        [{ default_model_selection_json: selection }],
       );
-      const projectsAfterCatalogExpansion = yield* sql<{ readonly instanceId: string }>`
-        SELECT json_extract(default_model_selection_json, '$.instanceId') AS "instanceId"
-        FROM projection_projects
-        ORDER BY rowid
-      `;
-      assert.deepStrictEqual(projectsAfterCatalogExpansion, [
-        { instanceId: nextInstanceId },
-        { instanceId: previousInstanceId },
-        { instanceId: previousInstanceId },
-        { instanceId: nextInstanceId },
+      assert.deepStrictEqual(yield* sql`SELECT payload_json FROM orchestration_events`, [
+        { payload_json: history },
       ]);
     }),
   );
 });
-
-for (const [retiredModel, replacement] of Object.entries(managedConfig.models.replacements)) {
-  for (const managedInstanceId of ["codex", "codex_frontier"]) {
-    layer(`managed model replacements: ${managedInstanceId}/${retiredModel}`, (it) => {
-      it.effect(
-        "replaces retired models in persisted state and replay events without changing personal providers",
-        () =>
-          Effect.gen(function* () {
-            const sql = yield* SqlClient.SqlClient;
-            for (const [table, column, selectionPath] of [
-              ["projection_projects", "default_model_selection_json", "$"],
-              ["projection_threads", "model_selection_json", "$"],
-              ["provider_session_runtime", "runtime_payload_json", "$.modelSelection"],
-              ["orchestration_events", "payload_json", "$.modelSelection"],
-            ] as const) {
-              yield* sql`CREATE TABLE ${sql(table)} (${sql(column)} TEXT)`;
-              for (const instanceId of [managedInstanceId, "personal", null]) {
-                const selection = {
-                  ...(instanceId ? { instanceId } : {}),
-                  provider: managedInstanceId,
-                  model: retiredModel,
-                  options: [],
-                };
-                const payload =
-                  selectionPath === "$"
-                    ? selection
-                    : {
-                        modelSelection: selection,
-                        defaultModelSelection: selection,
-                      };
-                yield* sql`INSERT INTO ${sql(table)} (${sql(column)}) VALUES (${encodePayload(payload)})`;
-              }
-            }
-            yield* sql`ALTER TABLE provider_session_runtime ADD COLUMN provider_instance_id TEXT`;
-            yield* sql`UPDATE provider_session_runtime SET provider_instance_id = json_extract(runtime_payload_json, '$.modelSelection.instanceId'), runtime_payload_json = json_set(runtime_payload_json, '$.model', ${retiredModel}, '$.provider', ${managedInstanceId})`;
-            for (let pass = 0; pass < 2; pass++) {
-              yield* migrateManagedModelReferences(managedInstanceId, {
-                [retiredModel]: replacement,
-              });
-            }
-            const runtimeModels = yield* sql<{
-              model: string;
-            }>`SELECT json_extract(runtime_payload_json, '$.model') AS model FROM provider_session_runtime ORDER BY rowid`;
-            assert.deepStrictEqual(
-              runtimeModels.map((row) => row.model),
-              [replacement, retiredModel, replacement],
-            );
-            for (const [table, column, selectionPath] of [
-              ["projection_projects", "default_model_selection_json", "$"],
-              ["projection_threads", "model_selection_json", "$"],
-              ["provider_session_runtime", "runtime_payload_json", "$.modelSelection"],
-              ["orchestration_events", "payload_json", "$.modelSelection"],
-              ["orchestration_events", "payload_json", "$.defaultModelSelection"],
-            ] as const) {
-              const rows = yield* sql<{
-                model: string;
-              }>`SELECT json_extract(${sql(column)}, ${`${selectionPath}.model`}) AS model FROM ${sql(table)} ORDER BY rowid`;
-              assert.deepStrictEqual(
-                rows.map((row) => row.model),
-                [replacement, retiredModel, replacement],
-              );
-            }
-          }),
-      );
-    });
-  }
-}
-
-for (const [retiredModel, replacement] of [
-  ["gpt-5.6-sol", "gpt-6.1-sol"],
-  ["claude-opus-4-8", "claude-opus-5-5"],
-  ["claude-opus-5", "claude-opus-5-5"],
-] as const) {
-  layer(`managed model upgrade startup: ${retiredModel}`, (it) => {
-    it.effect("upgrades provider-only selections and their runtime route together", () =>
-      Effect.gen(function* () {
-        const sql = yield* SqlClient.SqlClient;
-        yield* sql`CREATE TABLE projection_projects (default_model_selection_json TEXT)`;
-        yield* sql`CREATE TABLE projection_threads (thread_id TEXT PRIMARY KEY, model_selection_json TEXT)`;
-        yield* sql`CREATE TABLE projection_thread_sessions (thread_id TEXT PRIMARY KEY, provider_instance_id TEXT)`;
-        yield* sql`CREATE TABLE provider_session_runtime (provider_instance_id TEXT, runtime_payload_json TEXT)`;
-        yield* sql`CREATE TABLE orchestration_events (payload_json TEXT)`;
-        for (const instanceId of [undefined, "personal"]) {
-          const selection = {
-            provider: "codex",
-            ...(instanceId ? { instanceId } : {}),
-            model: retiredModel,
-          };
-          const threadId = instanceId ?? "legacy";
-          yield* sql`INSERT INTO projection_projects VALUES (${encodePayload(selection)})`;
-          yield* sql`INSERT INTO projection_threads VALUES (${threadId}, ${encodePayload(selection)})`;
-          yield* sql`INSERT INTO projection_thread_sessions VALUES (${threadId}, ${instanceId ?? null})`;
-          yield* sql`INSERT INTO provider_session_runtime VALUES (${instanceId ?? null}, ${encodePayload(
-            {
-              provider: "codex",
-              model: retiredModel,
-              modelSelection: selection,
-            },
-          )})`;
-          yield* sql`INSERT INTO orchestration_events VALUES (${encodePayload({
-            defaultModelSelection: selection,
-            modelSelection: selection,
-            session: {
-              provider: "codex",
-              ...(instanceId ? { providerInstanceId: instanceId } : {}),
-            },
-          })})`;
-        }
-        for (let pass = 0; pass < 2; pass++) {
-          yield* Layer.build(managedReferencesLayer.pipe(Layer.provide(settingsLayerTest()))).pipe(
-            Effect.scoped,
-          );
-        }
-        for (const [table, column, selectionPath] of [
-          ["projection_projects", "default_model_selection_json", "$"],
-          ["projection_threads", "model_selection_json", "$"],
-          ["provider_session_runtime", "runtime_payload_json", "$.modelSelection"],
-          ["orchestration_events", "payload_json", "$.defaultModelSelection"],
-          ["orchestration_events", "payload_json", "$.modelSelection"],
-        ] as const) {
-          const rows = yield* sql<{ instanceId: string; model: string }>`
-          SELECT json_extract(${sql(column)}, ${`${selectionPath}.instanceId`}) AS instanceId,
-            json_extract(${sql(column)}, ${`${selectionPath}.model`}) AS model
-          FROM ${sql(table)} ORDER BY rowid
-        `;
-          assert.deepStrictEqual(rows, [
-            { instanceId: "codex_frontier", model: replacement },
-            { instanceId: "personal", model: retiredModel },
-          ]);
-        }
-        const sessions = yield* sql<{ instanceId: string }>`
-        SELECT provider_instance_id AS instanceId FROM projection_thread_sessions ORDER BY rowid
-      `;
-        assert.deepStrictEqual(sessions, [
-          { instanceId: "codex_frontier" },
-          { instanceId: "personal" },
-        ]);
-        const runtimes = yield* sql<{
-          instanceId: string;
-          payloadInstanceId: string | null;
-          model: string;
-        }>`
-        SELECT provider_instance_id AS instanceId,
-          json_extract(runtime_payload_json, '$.providerInstanceId') AS payloadInstanceId,
-          json_extract(runtime_payload_json, '$.model') AS model
-        FROM provider_session_runtime ORDER BY rowid
-      `;
-        assert.deepStrictEqual(runtimes, [
-          { instanceId: "codex_frontier", payloadInstanceId: "codex_frontier", model: replacement },
-          { instanceId: "personal", payloadInstanceId: null, model: retiredModel },
-        ]);
-        const events = yield* sql<{ instanceId: string }>`
-        SELECT json_extract(payload_json, '$.session.providerInstanceId') AS instanceId
-        FROM orchestration_events ORDER BY rowid
-      `;
-        assert.deepStrictEqual(events, [
-          { instanceId: "codex_frontier" },
-          { instanceId: "personal" },
-        ]);
-      }),
-    );
-  });
-}

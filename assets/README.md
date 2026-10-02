@@ -24,11 +24,15 @@ are generated from that master by the same export command.
 
 ## Android launcher and splash artwork
 
-Run `vp run icons:export:android` after changing either release master. Main and
-Preview use the same full-bleed source artwork for their adaptive backgrounds and
-splash images. The release foreground is transparent so Android can apply its own
-adaptive mask without framing a rounded-square icon twice. The monochrome and
-notification icons use a white Triton silhouette extracted from the main master.
+Android masks the central 72dp of a 108dp adaptive canvas, and the Android 12+ splash screen masks
+the central two thirds of a 288dp canvas. The Android artwork is exported from the approved
+Harness production, development, and nightly PNG masters by `vp run icons:export:android`:
 
-Development's existing Android blueprint assets are separate and remain checked in;
-the release Android exporter does not regenerate them.
+- `apps/mobile/assets/android-icon-foreground*.png`: variant badges sized to stay inside the
+  adaptive safe zone. Each uses its configured solid background color.
+- `apps/mobile/assets/android-splash-icon-*.png`: badges on the matching background, sized for
+  the splash mask.
+
+Rerun the export after changing a master. `android-icon-mark.png`, `android-notification-icon.png`,
+and the native agent notification drawable derive a white trident silhouette from the production
+master for Android's system-tinted icons.

@@ -1,12 +1,16 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import {
   DesktopBackendBootstrap,
   type DesktopBackendBootstrap as DesktopBackendBootstrapValue,
   DesktopTelemetryControlMessage,
 } from "@t3tools/contracts";
 import { assert, describe, it } from "@effect/vitest";
+import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -373,6 +377,52 @@ describe("DesktopBackendManager", () => {
         });
       }).pipe(Effect.provide(TestClock.layer())),
     ),
+  );
+
+  it.effect.skipIf(HostProcessPlatform.defaultValue() === "win32")(
+    "force-kills a backend that ignores termination after readiness fails",
+    () =>
+      Effect.gen(function* () {
+        const childReady = yield* Deferred.make<void>();
+        const script = `
+        process.on("SIGTERM", () => {});
+        process.stdout.write("ready\\n");
+        setTimeout(() => process.exit(42), 6000);
+      `;
+        const result = yield* DesktopBackendManager.runBackendProcess({
+          ...baseConfig,
+          executablePath: process.execPath,
+          args: ["-e", script],
+          entryPath: "readiness-fixture",
+          cwd: process.cwd(),
+          env: {},
+          bootstrap: {
+            mode: "desktop",
+            noBrowser: true,
+            port: 3773,
+            t3Home: "/unused-fixture",
+            host: "127.0.0.1",
+            desktopBootstrapToken: "fixture",
+            secretStoreKeys: [],
+            legacySecretFingerprints: {},
+            tailscaleServeEnabled: false,
+            tailscaleServePort: 443,
+          },
+          bootstrapDelivery: "stdin",
+          desktopTelemetryStream: Stream.empty,
+          readinessTimeout: Duration.seconds(1),
+          onOutput: (_stream, chunk) =>
+            new TextDecoder().decode(chunk).includes("ready")
+              ? Deferred.succeed(childReady, undefined).pipe(Effect.asVoid)
+              : Effect.void,
+        }).pipe(Effect.provide(httpClientLayer(() => Effect.never)), Effect.exit);
+        assert.isTrue(yield* Deferred.isDone(childReady));
+        // A child that reaches its own exit(42) was never force-killed.
+        assert.isTrue(Exit.isFailure(result));
+        if (Exit.isFailure(result)) {
+          assert.include(Cause.pretty(result.cause), "SIGKILL");
+        }
+      }).pipe(Effect.provide(NodeServices.layer), TestClock.withLive),
   );
 
   it.effect("reports bootstrap encoding failures with stable process context", () =>

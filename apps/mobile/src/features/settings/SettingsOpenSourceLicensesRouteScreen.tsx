@@ -134,7 +134,7 @@ export function SettingsOpenSourceLicensesRouteScreen() {
         ListHeaderComponent={
           <View className="gap-4 px-5 pt-4 pb-5">
             <Text className="text-base leading-normal text-foreground-muted">
-              Notices for dependencies, assets, and optional tools used by T3 Code Mobile.
+              Notices for dependencies, assets, and optional tools used by TritonAI Harness.
             </Text>
             <TextInput
               accessibilityLabel="Search open-source licenses"
