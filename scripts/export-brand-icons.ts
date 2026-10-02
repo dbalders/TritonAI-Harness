@@ -531,6 +531,37 @@ const renderIcon = Effect.fn("iconExport.renderIcon")(function* (
       actualHeight: dimensions.height,
     });
   }
+  if (platform === "macOS") {
+    // Electron's static ICNS resources need the conventional Dock inset;
+    // Icon Composer's exported PNG artwork otherwise fills the entire canvas.
+    const artworkSize = Math.round((size * 824) / 1024);
+    const inset = Math.floor((size - artworkSize) / 2);
+    const padded = yield* Effect.tryPromise({
+      try: () =>
+        sharp(buffer)
+          .resize(artworkSize, artworkSize)
+          .extend({
+            top: inset,
+            left: inset,
+            bottom: size - artworkSize - inset,
+            right: size - artworkSize - inset,
+            background: { r: 0, g: 0, b: 0, alpha: 0 },
+          })
+          .png()
+          .toBuffer(),
+      catch: (cause) =>
+        new IconExportRenditionError({ sourcePath, outputPath, expectedSize: size, cause }),
+    });
+    yield* fs
+      .writeFile(outputPath, padded)
+      .pipe(
+        Effect.mapError(
+          (cause) =>
+            new IconExportFileSystemError({ operation: "write-file", path: outputPath, cause }),
+        ),
+      );
+    return padded;
+  }
   return buffer;
 });
 
@@ -753,7 +784,15 @@ export const exportBrandIcons = Effect.fn("exportBrandIcons")(function* (checkOn
     ),
   );
   generated.set("apps/web/public/tritonai-logo.png", runtimeLogo);
-  generated.set("apps/desktop/resources/icon.png", runtimeLogo);
+  const desktopLogo = yield* Effect.tryPromise({
+    try: () =>
+      sharp(generated.get(BRAND_ASSET_PATHS.productionMacIconPng)!)
+        .resize(512, 512)
+        .png()
+        .toBuffer(),
+    catch: (cause) => new IconExportEncodingError({ variant: "desktop", cause }),
+  });
+  generated.set("apps/desktop/resources/icon.png", desktopLogo);
   generated.set(
     "apps/desktop/resources/icon.ico",
     generated.get(BRAND_ASSET_PATHS.productionWindowsIconIco)!,

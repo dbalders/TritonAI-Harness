@@ -24,7 +24,7 @@ it.layer(NodeServices.layer)("runtime branding", (it) => {
     }),
   );
 
-  it.effect("ships rounded-square macOS icons that fill the canvas", () =>
+  it.effect("ships rounded-square macOS icons at the standard Dock footprint", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -47,11 +47,18 @@ it.layer(NodeServices.layer)("runtime branding", (it) => {
           ],
           [0, 0, 0, 0],
         );
-        // This corner is inside a rounded square but outside the former circular badge.
-        assert.isAtLeast(alphaAt(128, 128)!, 250);
-        assert.isAtLeast(alphaAt(icon.width - 129, 128)!, 250);
-        assert.isAtLeast(alphaAt(128, icon.height - 129)!, 250);
-        assert.isAtLeast(alphaAt(icon.width - 129, icon.height - 129)!, 250);
+        const centerRow = Math.floor(icon.height / 2);
+        const visible = Array.from({ length: icon.width }, (_, x) => x).filter(
+          (x) => alphaAt(x, centerRow)! >= 128,
+        );
+        assert.closeTo(visible.length / icon.width, 0.805, 0.01);
+        assert.isAtLeast(visible[0]!, 90);
+        assert.isAtMost(visible.at(-1)!, icon.width - 91);
+        // Inside the padded rounded square, outside a padded circular badge.
+        assert.isAtLeast(alphaAt(200, 200)!, 250);
+        assert.isAtLeast(alphaAt(icon.width - 201, 200)!, 250);
+        assert.isAtLeast(alphaAt(200, icon.height - 201)!, 250);
+        assert.isAtLeast(alphaAt(icon.width - 201, icon.height - 201)!, 250);
       }
     }),
   );
