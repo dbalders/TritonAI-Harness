@@ -123,7 +123,7 @@ function ConfiguredConnectOnboardingRouteScreen() {
             showHeader={false}
           />
         ) : (
-          <View collapsable={false} className="rounded-[24px] bg-card p-5">
+          <View collapsable={false} className="rounded-[24px] bg-grouped-card p-5">
             <Text className="text-sm leading-normal text-foreground-muted">
               Sign in to your TritonAI account to set up {TRITONAI_CONNECT_NAME}.
             </Text>

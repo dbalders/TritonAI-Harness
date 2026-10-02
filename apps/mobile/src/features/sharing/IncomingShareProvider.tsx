@@ -90,7 +90,7 @@ async function readBase64(
   const { File } = await import("expo-file-system");
   const handle = new File(uri).open();
   try {
-    const bytes = handle.readBytes(maxBytes + 1);
+    const bytes = await handle.readBytes(maxBytes + 1);
     if (bytes.byteLength > maxBytes) {
       return null;
     }

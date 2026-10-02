@@ -47,6 +47,9 @@ to this checkout. Open its printed development-client URL with AgentDevice
 `open <app-id> <url>` and all returned target arguments, using the platform's
 bundle or package as `<app-id>`.
 The device must be able to reach both Metro and the isolated backend.
+Append `&disableAutoLaunch=1&disableFab=1` to the development-client URL query
+when developer chrome would obscure screenshots or taps; the SDK 58 dev client
+applies these preferences before the app loads.
 
 ## Pair and verify
 
