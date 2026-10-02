@@ -1,4 +1,5 @@
 import { useAuth } from "@clerk/expo";
+import { TRITONAI_CONNECT_NAME } from "@t3tools/contracts";
 import { AuthView, type UserProfileCustomPage, UserProfileView } from "@clerk/expo/native";
 import { StackActions, useNavigation } from "@react-navigation/native";
 import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
@@ -11,7 +12,7 @@ import { T3ConnectProfilePage } from "../cloud/T3ConnectProfilePage";
 const USER_PROFILE_CUSTOM_PAGES = [
   {
     path: "t3-connect",
-    label: "T3 Connect",
+    label: TRITONAI_CONNECT_NAME,
     icon: "globe",
     content: <T3ConnectProfilePage />,
   },
