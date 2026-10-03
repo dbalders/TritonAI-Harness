@@ -237,6 +237,57 @@ describe("TritonAI managed Harness policy", () => {
     ).toEqual({ instanceId: frontierInstanceId, model: "claude-opus-5-5" });
   });
 
+  it.each(["api-muse-glimmer-30b", "onyx-muse-glimmer-30b", "api-gemma-4-31b"])(
+    "replaces retired managed %s defaults with Flash while preserving personal selections",
+    (model) => {
+      for (const [effort, expectedEffort] of [
+        ["minimal", "high"],
+        ["medium", "high"],
+        ["low", "low"],
+        ["high", "high"],
+      ] as const) {
+        const selection = {
+          instanceId: managedInstanceId,
+          model,
+          options: [{ id: "reasoningEffort", value: effort }],
+        };
+        const effective = applyManagedHarnessPolicy({
+          ...DEFAULT_SERVER_SETTINGS,
+          defaultModelSelection: selection,
+          textGenerationModelSelection: selection,
+          sourceControlWriterModelSelection: selection,
+          providers: {
+            ...DEFAULT_SERVER_SETTINGS.providers,
+            codex: { ...DEFAULT_SERVER_SETTINGS.providers.codex, customModels: [model] },
+          },
+        });
+        const expected = {
+          instanceId: managedInstanceId,
+          model: "api-glm-5.3-flash",
+          options: [{ id: "reasoningEffort", value: expectedEffort }],
+        };
+        expect(effective.defaultModelSelection).toEqual(expected);
+        expect(effective.textGenerationModelSelection).toEqual(expected);
+        expect(effective.sourceControlWriterModelSelection).toEqual(expected);
+        expect(effective.providers.codex.customModels).toEqual([
+          "api-glm-5.3-flash",
+          "api-glm-5.3",
+        ]);
+        expect(effective.providerInstances[managedInstanceId]?.config).toMatchObject({
+          customModels: ["api-glm-5.3-flash", "api-glm-5.3"],
+        });
+
+        const personalSelection = { ...selection, instanceId: ProviderInstanceId.make("personal") };
+        expect(
+          applyManagedHarnessPolicy({
+            ...DEFAULT_SERVER_SETTINGS,
+            defaultModelSelection: personalSelection,
+          }).defaultModelSelection,
+        ).toEqual(personalSelection);
+      }
+    },
+  );
+
   it("keeps fresh profile homes independent across settings documents", () => {
     const stableHome = "/profiles/stable/codex";
     const nightlyHome = "/profiles/nightly/codex";

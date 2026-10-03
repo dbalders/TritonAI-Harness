@@ -37,4 +37,4 @@ export const TRITONAI_CODEX_MODEL_PROVIDER_ID = "ucsd";
 export const TRITONAI_CODEX_MODEL_PROVIDER_NAME = "UCSD TritonAI";
 export const DEFAULT_TRITONAI_CODEX_MODEL = "api-glm-5.3-flash";
 export const DEFAULT_TRITONAI_CODEX_MODEL_DISPLAY_NAME = "GLM 5.3 Flash";
-export const TRITONAI_IMAGE_CONTEXT_MODEL = "api-muse-glimmer-30b";
+export const TRITONAI_IMAGE_CONTEXT_MODEL = "api-glm-5.3-flash";
