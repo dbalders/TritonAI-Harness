@@ -3,14 +3,30 @@ import * as Schema from "effect/Schema";
 
 const MAX_FAILURE_TEXT_LENGTH = 2_000;
 
+/** Why a tool was refused, carried for the trace; the message is what the agent sees. */
+export interface IntegrationToolUnavailableDetails {
+  readonly toolName: string;
+  readonly reason: string;
+  readonly detail?: string;
+}
+
 /** Thrown by a transport when the requested tool is not bound or is no longer available. */
 export class IntegrationToolUnavailableError extends Error {
   readonly _tag = "IntegrationToolUnavailableError";
+  readonly details: IntegrationToolUnavailableDetails | undefined;
 
-  constructor(message: string) {
+  constructor(message: string, details?: IntegrationToolUnavailableDetails) {
     super(message);
     this.name = "IntegrationToolUnavailableError";
+    this.details = details;
   }
+}
+
+/** Agent-facing refusal naming the tool, the reason code, and how to fix it. */
+export function describeUnavailableIntegrationTool(details: IntegrationToolUnavailableDetails) {
+  return details.detail
+    ? `${details.toolName} is unavailable (${details.reason}): ${details.detail}`
+    : `${details.toolName} is unavailable (${details.reason}).`;
 }
 
 export interface IntegrationToolFailure {

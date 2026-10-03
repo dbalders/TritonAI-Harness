@@ -629,6 +629,7 @@ export const make = Effect.gen(function* () {
         : run.state;
     return {
       state,
+      signedIn: signedIn !== null,
       account: signedIn?.account ?? null,
       cloudFolder,
       lastSyncedAt: run.lastSyncedAt,

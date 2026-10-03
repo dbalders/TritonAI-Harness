@@ -32,7 +32,7 @@ stay hidden after an upgrade; their saved settings are preserved.
 ## Managed Models
 
 GLM 5.3 Flash is the default on-prem model and supports text and image input. Choose Low, High
-(the default), or Extra High reasoning. GLM 5.3 and Glimmer remain available. DeepSeek has been removed from the managed catalog.
+(the default), or Extra High reasoning. GLM 5.3 remains available. Glimmer and DeepSeek have been removed from the managed catalog; saved app defaults using those models now use Flash.
 
 Cloud offers GPT-6 Astra, GPT-6.1 Sol, and Claude Opus 5.5. GPT-6.1 Sol replaces the GPT-5.6 variants in the model picker.
 
@@ -91,7 +91,7 @@ this four-image budget with screenshots.
 
 ## Attach Images To A Text-Only Model
 
-When a managed model accepts only text, TritonAI analyzes attached images and passes their
+When a managed model accepts only text, such as GLM 5.3, TritonAI uses GLM 5.3 Flash to analyze attached images and passes their
 descriptions and visible text to the model. If a group of images produces incomplete or malformed
 analysis, TritonAI automatically retries each image separately before sending your message.
 

@@ -28,8 +28,9 @@
     "default": "api-glm-5.3-flash",
     "restrictedFallback": "api-glm-5.3-flash",
     "replacements": {
-      "api-gemma-4-31b": "api-muse-glimmer-30b",
-      "onyx-muse-glimmer-30b": "api-muse-glimmer-30b",
+      "api-gemma-4-31b": "api-glm-5.3-flash",
+      "onyx-muse-glimmer-30b": "api-glm-5.3-flash",
+      "api-muse-glimmer-30b": "api-glm-5.3-flash",
       "api-glm-5.2": "api-glm-5.3",
       "gpt-5.5": "gpt-6.1-sol",
       "gpt-5.6-luna": "gpt-6.1-sol",
@@ -77,29 +78,6 @@
               "type": "select",
               "options": [{ "id": "high", "label": "High", "isDefault": true }],
               "currentValue": "high"
-            }
-          ]
-        }
-      },
-      {
-        "id": "api-muse-glimmer-30b",
-        "name": "Glimmer 30B",
-        "shortName": "Glimmer",
-        "route": "on-prem",
-        "capabilities": {
-          "inputModalities": ["text", "image"],
-          "optionDescriptors": [
-            {
-              "id": "reasoningEffort",
-              "label": "Reasoning",
-              "type": "select",
-              "options": [
-                { "id": "minimal", "label": "Minimal" },
-                { "id": "low", "label": "Low" },
-                { "id": "medium", "label": "Medium", "isDefault": true },
-                { "id": "high", "label": "High" }
-              ],
-              "currentValue": "medium"
             }
           ]
         }
