@@ -15,7 +15,7 @@ import {
 } from "../provider/managedCodexUpdate.ts";
 
 export const managedCodexUpdateCommand = Command.make(managedCodexUpdateCommandName, {
-  binaryPath: Argument.string("binary-path"),
+  binaryPath: Argument.String("binary-path"),
 }).pipe(
   Command.withDescription("Update the TritonAI-managed Codex runtime."),
   Command.unlisted,

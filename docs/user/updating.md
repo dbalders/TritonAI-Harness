@@ -22,3 +22,14 @@ interrupts its connections.
 
 Dismissing the version warning only hides that reminder for the two displayed versions. It does not
 update either side.
+
+## Update providers
+
+The UCSD-managed Codex engine updates to the version approved in your Harness release on its own.
+After Harness starts, it installs a pending engine update in the background unless a Codex session
+is running. If that attempt is skipped or fails, update it from **Settings → Providers**. See
+[TritonAI updates](updates.md) for the other update paths.
+
+**Settings → Providers** shows provider updates for the selected environment. **Update all** updates
+every outdated provider on every connected environment at once. Hover it to see which providers it
+will update. Providers that only offer a manual update command are not included.

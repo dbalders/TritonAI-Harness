@@ -29,6 +29,7 @@ import {
   createEnvironmentQueryAtomFamily,
   createEnvironmentRpcQueryAtomFamily,
   createEnvironmentRpcSubscriptionAtomFamily,
+  createEnvironmentSubscriptionAtomFamily,
   createRuntimeCommand,
   scheduleAtomCommandEffect,
 } from "./runtime.ts";
@@ -935,6 +936,14 @@ export function createServerEnvironmentAtoms<R, E>(
       );
     }).pipe(Atom.withLabel(`environment-data:server:usage-prices:${environmentId}`)),
   );
+  const usageScanSettingsAtom = Atom.family((environmentId: EnvironmentId) =>
+    Atom.make((get) =>
+      JSON.stringify([
+        get(usagePricesAtom(environmentId)),
+        get(settingsValueAtom(environmentId))?.cursorKeychainUsageEnabled ?? false,
+      ]),
+    ).pipe(Atom.withLabel(`environment-data:server:usage-scan-settings:${environmentId}`)),
+  );
   const providersValueAtom = Atom.family((environmentId: EnvironmentId) =>
     Atom.make((get) => get(configValueAtom(environmentId))?.providers ?? null).pipe(
       Atom.withLabel(`environment-data:server:providers:${environmentId}`),
@@ -980,9 +989,34 @@ export function createServerEnvironmentAtoms<R, E>(
         key: ({ environmentId, input }) => JSON.stringify([environmentId, input]),
       },
     }),
+    respondProviderAuth: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:provider:auth-respond",
+      tag: WS_METHODS.providerAuthRespond,
+    }),
     completeProviderAuth: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:provider:auth-complete",
       tag: WS_METHODS.providerAuthComplete,
+    }),
+    chatGptReconnectProfile: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:chatgpt:reconnect-profile",
+      tag: WS_METHODS.chatGptReconnectProfile,
+    }),
+    chatGptImportProfile: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:chatgpt:import-profile",
+      tag: WS_METHODS.chatGptImportProfile,
+    }),
+    chatGptHandoffState: createEnvironmentSubscriptionAtomFamily(runtime, {
+      label: "environment-data:chatgpt:handoff",
+      sensitiveInput: true,
+      // OAuth must not be replayed when the connection recovers.
+      subscribe: (input: EnvironmentRpcInput<typeof WS_METHODS.chatGptHandoffSubscribe>) =>
+        runStream(WS_METHODS.chatGptHandoffSubscribe, input),
+      idleTtlMs: 0,
+    }),
+    codexAuthCallbackState: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:codex:auth-callback",
+      tag: WS_METHODS.codexAuthCallbackSubscribe,
+      idleTtlMs: 0,
     }),
     cancelProviderAuth: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:provider:auth-cancel",
@@ -1075,7 +1109,7 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:usage-summary",
       tag: WS_METHODS.serverGetUsageSummary,
       staleTimeMs: 60_000,
-      refreshTrigger: ({ environmentId }) => usagePricesAtom(environmentId),
+      refreshTrigger: ({ environmentId }) => usageScanSettingsAtom(environmentId),
     }),
     configProjection,
     welcome,
@@ -1098,6 +1132,7 @@ export function createServerEnvironmentAtoms<R, E>(
             environmentId,
             input.instanceId ?? null,
             input.cwd ?? null,
+            input.fresh ?? false,
             input.refreshModels ?? false,
           ]),
       },

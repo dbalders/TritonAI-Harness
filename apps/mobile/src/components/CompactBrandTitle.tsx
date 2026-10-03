@@ -6,6 +6,7 @@ import { AppText as Text } from "./AppText";
 import { HarnessLogo } from "./HarnessLogo";
 import { IPAD_HOME_TITLE_OFFSET } from "../lib/layoutMetrics";
 import { resolveMobileStageLabel } from "../lib/mobileBranding";
+import { useAndroidControlSizing } from "./useAndroidControlSizing";
 
 /**
  * Horizontal correction applied to content rendered in the brand title slot,
@@ -26,6 +27,7 @@ export function CompactBrandTitle(
 ) {
   const stageLabel = resolveMobileStageLabel(Constants.expoConfig?.extra?.appVariant);
   const titleOffset = brandTitleOffset();
+  const { scale } = useAndroidControlSizing();
 
   return (
     <View
@@ -34,20 +36,29 @@ export function CompactBrandTitle(
       accessible
       role="heading"
       className="flex-row items-center gap-1.5"
-      style={{ marginLeft: titleOffset }}
+      style={[{ marginLeft: titleOffset }, Platform.OS === "android" && { gap: 5.25 * scale }]}
     >
-      <HarnessLogo size={26} />
+      <HarnessLogo size={Math.round(26 * scale)} />
       <Text
         allowFontScaling={props.allowFontScaling}
-        className="shrink font-t3-bold text-[17px] tracking-[-0.3px] text-foreground"
+        className="shrink font-t3-bold text-foreground"
         numberOfLines={1}
+        style={{ fontSize: 17 * scale, letterSpacing: -0.3 * scale }}
       >
         TritonAI Harness
       </Text>
-      <View className="rounded-full bg-subtle px-1.5 py-0.5">
+      <View
+        className="rounded-full bg-subtle px-1.5 py-0.5"
+        style={
+          Platform.OS === "android"
+            ? { paddingHorizontal: 5.25 * scale, paddingVertical: 1.75 * scale }
+            : undefined
+        }
+      >
         <Text
           allowFontScaling={props.allowFontScaling}
-          className="font-t3-bold text-[9px] tracking-[0.9px] text-foreground-muted uppercase"
+          className="font-t3-bold text-foreground-muted uppercase"
+          style={{ fontSize: 9 * scale, letterSpacing: 0.9 * scale }}
         >
           {stageLabel}
         </Text>

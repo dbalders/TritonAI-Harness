@@ -15,7 +15,9 @@ const TritonAiCommonsToolInput = Schema.Struct({
 });
 
 const decodeToolInput = Schema.decodeUnknownPromise(TritonAiCommonsToolInput);
-const schemaDocument = Schema.toJsonSchemaDocument(TritonAiCommonsToolInput);
+const schemaDocument = Schema.toJsonSchemaDocument(TritonAiCommonsToolInput, {
+  onExcessProperty: "error",
+});
 const isCommonsError = Schema.is(ServerTritonAiCommonsError);
 
 export const tritonAiCommonsDynamicToolDefinition = {

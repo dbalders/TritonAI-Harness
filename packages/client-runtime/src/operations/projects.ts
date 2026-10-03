@@ -8,8 +8,10 @@ import type {
   SourceControlProviderKind,
   SourceControlRepositoryInfo,
 } from "@t3tools/contracts";
+import { newProjectFolderName } from "@t3tools/shared/path";
 import { isSourceControlProviderReady } from "@t3tools/shared/sourceControl";
 import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import * as Order from "effect/Order";
 
 import {
@@ -207,6 +209,36 @@ export function getCloneDestinationPath(
     return directoryPath;
   }
   return `${ensureBrowseDirectoryPath(directoryPath)}${name}`;
+}
+
+/**
+ * Where `projects.createNew` will put a project named `name`. The server adds
+ * `-2`, `-3`, ... when that folder is taken, so this is a preview.
+ */
+export function getNewProjectPathPreview(newProjectsRoot: string, name: string): string {
+  return getCloneDestinationPath(newProjectsRoot, newProjectFolderName(name));
+}
+
+/**
+ * The GitHub account a new project would be published under, or null when
+ * GitHub is not ready on that environment. A ready GitHub with an unknown
+ * account still publishes; `gh` picks the signed-in user.
+ */
+export function getNewProjectGitHubTarget(
+  discovery: SourceControlDiscoveryResult | null,
+): { readonly account: string | null } | null {
+  const github = discovery?.sourceControlProviders.find((provider) => provider.kind === "github");
+  if (!github || !isSourceControlProviderReady(github)) return null;
+  return { account: Option.getOrNull(github.auth.account) };
+}
+
+/** `owner/folder` for publishing a new project, or just the folder for `gh` to place. */
+export function getNewProjectGitHubRepository(
+  target: { readonly account: string | null },
+  workspaceRoot: string,
+): string {
+  const folderName = workspaceRoot.split(/[\\/]/).filter(Boolean).at(-1) ?? "";
+  return target.account ? `${target.account}/${folderName}` : folderName;
 }
 
 /**

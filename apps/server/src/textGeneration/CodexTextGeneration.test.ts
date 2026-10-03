@@ -146,6 +146,7 @@ function withFakeCodexEnv<A, E, R>(
     environment?: NodeJS.ProcessEnv;
     models?: ReadonlyArray<string>;
     configOverrides?: Partial<CodexSettings>;
+    managedRuntime?: boolean;
   },
   effectFn: (textGeneration: TextGeneration.TextGeneration["Service"]) => Effect.Effect<A, E, R>,
 ) {
@@ -169,6 +170,13 @@ function withFakeCodexEnv<A, E, R>(
           capabilities: null,
         })),
       ),
+      input.managedRuntime
+        ? Effect.succeed({
+            config,
+            environment: input.environment ?? process.env,
+            revision: "test",
+          })
+        : undefined,
     );
     return yield* effectFn(textGeneration);
   }).pipe(Effect.scoped);
@@ -251,6 +259,26 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGeneration", (it) => {
             ]),
           }),
       ),
+  );
+
+  it.effect("omits a persisted service tier for managed ChatGPT text generation", () =>
+    withFakeCodexEnv(
+      {
+        output: JSON.stringify({ subject: "Update project", body: "" }),
+        managedRuntime: true,
+        forbidArg: 'service_tier="priority"',
+      },
+      (textGeneration) =>
+        textGeneration.generateCommitMessage({
+          cwd: process.cwd(),
+          branch: "feature/chatgpt",
+          stagedSummary: "M README.md",
+          stagedPatch: "diff --git a/README.md b/README.md",
+          modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "gpt-5.4", [
+            { id: "serviceTier", value: "priority" },
+          ]),
+        }),
+    ),
   );
 
   it.effect("passes exec-safe launch args into codex exec", () =>
@@ -657,7 +685,7 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGeneration", (it) => {
                   }),
                 ),
               ),
-              Effect.ensuring(fs.remove(imagePath).pipe(Effect.catch(() => Effect.void))),
+              Effect.ensuring(fs.remove(imagePath).pipe(Effect.ignore)),
             );
 
           expect(generated.branch).toBe("fix/ui-regression");
@@ -680,7 +708,7 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGeneration", (it) => {
           const { attachmentsDir } = yield* ServerConfig.ServerConfig;
           const missingAttachmentId = "thread-missing-attachment";
           const missingPath = path.join(attachmentsDir, `${missingAttachmentId}.png`);
-          yield* fs.remove(missingPath).pipe(Effect.catch(() => Effect.void));
+          yield* fs.remove(missingPath).pipe(Effect.ignore);
 
           const result = yield* textGeneration
             .generateBranchName({

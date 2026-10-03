@@ -13,8 +13,10 @@ import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
 import * as References from "effect/References";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
+import { TestClock } from "effect/testing";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import { expect } from "vite-plus/test";
 import type {
@@ -31,6 +33,7 @@ import {
   TextGenerationError,
 } from "@t3tools/contracts";
 import * as GitHubCli from "../sourceControl/GitHubCli.ts";
+import { decodeGitHubPullRequestListJson } from "../sourceControl/gitHubPullRequests.ts";
 import * as GitLabCli from "../sourceControl/GitLabCli.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
@@ -509,6 +512,30 @@ function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
   return {
     service: {
       execute,
+      // The fake answers the CLI shape, so batched lookups read it the way the fallback does.
+      listPullRequestsByHead: (input) =>
+        execute({
+          cwd: input.cwd,
+          args: [
+            "pr",
+            "list",
+            "--head",
+            input.headSelector,
+            "--state",
+            input.state,
+            "--limit",
+            String(input.limit),
+            "--json",
+            "number,title,url,baseRefName,headRefName,state,isDraft,mergedAt,closedAt,updatedAt,isCrossRepository,headRepository,headRepositoryOwner",
+          ],
+        }).pipe(
+          Effect.map((result) => {
+            const raw = result.stdout.trim();
+            if (raw.length === 0) return [];
+            const decoded = decodeGitHubPullRequestListJson(raw);
+            return Result.isSuccess(decoded) ? decoded.success : [];
+          }),
+        ),
       listOpenPullRequests: (input) =>
         execute({
           cwd: input.cwd,
@@ -1308,7 +1335,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
           prListByHeadSelector: {
             // Fake gh returns raw JSON stdout, matching the CLI boundary under test.
             // @effect-diagnostics-next-line preferSchemaOverJson:off
-            "contributor:feature/deleted-fork-branch": JSON.stringify([
+            "feature/deleted-fork-branch": JSON.stringify([
               {
                 number: 218,
                 title: "Deleted fork branch PR",
@@ -1338,8 +1365,9 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         updatedAt: "2026-04-05T15:00:00.000Z",
       });
       expect(
-        ghCalls.some((call) => call.includes("--head contributor:feature/deleted-fork-branch")),
+        ghCalls.some((call) => call.includes("--head feature/deleted-fork-branch --state all")),
       ).toBe(true);
+      expect(ghCalls.some((call) => call.includes("--head contributor:"))).toBe(false);
     }),
   );
 
@@ -1487,6 +1515,61 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         repositoryKey: "github.com/pingdotgg/codething-mvp",
       });
       expect(ghCalls.filter((call) => call.startsWith("pr list "))).toHaveLength(2);
+    }),
+  );
+
+  it.effect("branch PR lookup rechecks open PRs every minute and settled answers less often", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      for (const branch of ["feature/open-pr", "feature/merged-pr", "feature/no-pr"]) {
+        yield* runGit(repoDir, ["checkout", "-b", branch, "main"]);
+        yield* runGit(repoDir, ["push", "-u", "origin", branch]);
+      }
+      const pullRequest = (number: number, headRefName: string, state: string) => ({
+        number,
+        title: headRefName,
+        url: `https://github.com/pingdotgg/codething-mvp/pull/${number}`,
+        baseRefName: "main",
+        headRefName,
+        state,
+        updatedAt: "2026-04-07T15:00:00Z",
+      });
+      const { manager, ghCalls } = yield* makeManager({
+        ghScenario: {
+          prListByHeadSelector: {
+            "feature/open-pr": encodeCliJson([pullRequest(301, "feature/open-pr", "OPEN")]),
+            "feature/merged-pr": encodeCliJson([pullRequest(302, "feature/merged-pr", "MERGED")]),
+          },
+        },
+      });
+      const lookupAll = Effect.forEach(
+        ["feature/open-pr", "feature/merged-pr", "feature/no-pr"],
+        (branch) => manager.branchPullRequest({ cwd: repoDir, branch }),
+      );
+      const prListCalls = () => ghCalls.filter((call) => call.startsWith("pr list "));
+
+      yield* lookupAll;
+      expect(prListCalls()).toHaveLength(3);
+
+      yield* TestClock.adjust("61 seconds");
+      yield* lookupAll;
+      expect(prListCalls()).toHaveLength(4);
+      expect(prListCalls().at(-1)).toContain("--head feature/open-pr");
+
+      // Just inside the 5-minute window only the open PR is asked again.
+      yield* TestClock.adjust("238 seconds");
+      yield* lookupAll;
+      expect(prListCalls()).toHaveLength(5);
+      expect(prListCalls().at(-1)).toContain("--head feature/open-pr");
+
+      // Just past it the settled answers expire too.
+      yield* TestClock.adjust("2 seconds");
+      yield* lookupAll;
+      expect(prListCalls()).toHaveLength(7);
+      expect(prListCalls().slice(-2).join("\n")).not.toContain("--head feature/open-pr");
     }),
   );
 
@@ -1720,8 +1803,6 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       const { manager } = yield* makeManager({
         ghScenario: {
           prListByHeadSelector: {
-            "alice:feature": output,
-            "fork:feature": output,
             feature: output,
           },
         },
@@ -1889,10 +1970,6 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
           ghScenario: {
             prListSequence: [
               // @effect-diagnostics-next-line preferSchemaOverJson:off
-              JSON.stringify([]),
-              // @effect-diagnostics-next-line preferSchemaOverJson:off
-              JSON.stringify([]),
-              // @effect-diagnostics-next-line preferSchemaOverJson:off
               JSON.stringify([
                 {
                   number: 488,
@@ -1927,7 +2004,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
           updatedAt: "2026-03-10T07:00:00.000Z",
         });
         expect(ghCalls).toContain(
-          "pr list --head jasonLaster:statemachine --state all --limit 20 --json number,title,url,baseRefName,headRefName,state,isDraft,mergedAt,closedAt,updatedAt,isCrossRepository,headRepository,headRepositoryOwner",
+          "pr list --head statemachine --state all --limit 100 --json number,title,url,baseRefName,headRefName,state,isDraft,mergedAt,closedAt,updatedAt,isCrossRepository,headRepository,headRepositoryOwner",
         );
       }),
     20_000,
@@ -1959,7 +2036,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
           ghScenario: {
             prListByHeadSelector: {
               // @effect-diagnostics-next-line preferSchemaOverJson:off
-              "contributor:main": JSON.stringify([
+              main: JSON.stringify([
                 {
                   number: 777,
                   title: "Fork PR from main",
@@ -1993,7 +2070,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
           updatedAt: "2026-03-10T07:00:00.000Z",
         });
         expect(ghCalls).toContain(
-          "pr list --head contributor:main --state all --limit 20 --json number,title,url,baseRefName,headRefName,state,isDraft,mergedAt,closedAt,updatedAt,isCrossRepository,headRepository,headRepositoryOwner",
+          "pr list --head main --state all --limit 100 --json number,title,url,baseRefName,headRefName,state,isDraft,mergedAt,closedAt,updatedAt,isCrossRepository,headRepository,headRepositoryOwner",
         );
       }),
     20_000,
@@ -2048,34 +2125,6 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
               ]),
               // @effect-diagnostics-next-line preferSchemaOverJson:off
               "upstream/effect-atom": JSON.stringify([
-                {
-                  number: 1518,
-                  title: "Wrong PR",
-                  url: "https://github.com/pingdotgg/t3code/pull/1518",
-                  baseRefName: "main",
-                  headRefName: "upstream/effect-atom",
-                  state: "OPEN",
-                  updatedAt: "2026-04-01T10:00:00Z",
-                },
-              ]),
-              // @effect-diagnostics-next-line preferSchemaOverJson:off
-              "pingdotgg:effect-atom": JSON.stringify([]),
-              // @effect-diagnostics-next-line preferSchemaOverJson:off
-              "my-org/upstream:effect-atom": JSON.stringify([]),
-              // @effect-diagnostics-next-line preferSchemaOverJson:off
-              "pingdotgg:upstream/effect-atom": JSON.stringify([
-                {
-                  number: 1518,
-                  title: "Wrong PR",
-                  url: "https://github.com/pingdotgg/t3code/pull/1518",
-                  baseRefName: "main",
-                  headRefName: "upstream/effect-atom",
-                  state: "OPEN",
-                  updatedAt: "2026-04-01T10:00:00Z",
-                },
-              ]),
-              // @effect-diagnostics-next-line preferSchemaOverJson:off
-              "my-org/upstream:upstream/effect-atom": JSON.stringify([
                 {
                   number: 1518,
                   title: "Wrong PR",
@@ -2296,7 +2345,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
             prListByHeadSelector: {
               // Fake gh returns raw JSON stdout, matching the CLI boundary under test.
               // @effect-diagnostics-next-line preferSchemaOverJson:off
-              "contributor:feature/fork-plain": JSON.stringify([
+              "feature/fork-plain": JSON.stringify([
                 {
                   number: 89,
                   title: "Fork PR pushed without -u",
@@ -2316,9 +2365,8 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
 
         const status = yield* manager.status({ cwd: repoDir });
         expect(status.pr?.number).toBe(89);
-        expect(ghCalls.some((call) => call.includes("--head contributor:feature/fork-plain"))).toBe(
-          true,
-        );
+        expect(ghCalls.some((call) => call.includes("--head feature/fork-plain"))).toBe(true);
+        expect(ghCalls.some((call) => call.includes("--head contributor:"))).toBe(false);
         expect(ghCalls.some((call) => call.includes("--head main"))).toBe(false);
       }),
   );
@@ -2353,7 +2401,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
           prListByHeadSelector: {
             // Fake gh returns raw JSON stdout, matching the CLI boundary under test.
             // @effect-diagnostics-next-line preferSchemaOverJson:off
-            "contributor:feature/fork-settle": JSON.stringify([
+            "feature/fork-settle": JSON.stringify([
               {
                 number: 91,
                 title: "Fork PR to settle",
@@ -3562,7 +3610,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
   );
 
   it.effect(
-    "returns existing cross-repo PR metadata using the fork owner selector",
+    "returns existing cross-repo PR metadata found under the bare branch name",
     () =>
       Effect.gen(function* () {
         const repoDir = yield* makeTempDir("t3code-git-manager-");
@@ -3581,8 +3629,6 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         const { manager, ghCalls } = yield* makeManager({
           ghScenario: {
             prListSequence: [
-              // @effect-diagnostics-next-line preferSchemaOverJson:off
-              JSON.stringify([]),
               // @effect-diagnostics-next-line preferSchemaOverJson:off
               JSON.stringify([
                 {
@@ -3614,7 +3660,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         expect(result.pr.number).toBe(142);
         expect(
           ghCalls.some((call) =>
-            call.includes("pr list --head octocat:statemachine --state open --limit 1"),
+            call.includes("pr list --head statemachine --state open --limit 100"),
           ),
         ).toBe(true);
         expect(ghCalls.some((call) => call.startsWith("pr create "))).toBe(false);
@@ -3680,30 +3726,6 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
                   headRefName: "upstream/effect-atom",
                 },
               ]),
-              // @effect-diagnostics-next-line preferSchemaOverJson:off
-              "pingdotgg:effect-atom": JSON.stringify([]),
-              // @effect-diagnostics-next-line preferSchemaOverJson:off
-              "my-org/upstream:effect-atom": JSON.stringify([]),
-              // @effect-diagnostics-next-line preferSchemaOverJson:off
-              "pingdotgg:upstream/effect-atom": JSON.stringify([
-                {
-                  number: 1518,
-                  title: "Wrong PR",
-                  url: "https://github.com/pingdotgg/t3code/pull/1518",
-                  baseRefName: "main",
-                  headRefName: "upstream/effect-atom",
-                },
-              ]),
-              // @effect-diagnostics-next-line preferSchemaOverJson:off
-              "my-org/upstream:upstream/effect-atom": JSON.stringify([
-                {
-                  number: 1518,
-                  title: "Wrong PR",
-                  url: "https://github.com/pingdotgg/t3code/pull/1518",
-                  baseRefName: "main",
-                  headRefName: "upstream/effect-atom",
-                },
-              ]),
             },
           },
         });
@@ -3723,7 +3745,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
   );
 
   it.effect(
-    "prefers owner-qualified selectors before bare branch names for cross-repo PRs",
+    "picks the fork PR among same-named branches from other repositories",
     () =>
       Effect.gen(function* () {
         const repoDir = yield* makeTempDir("t3code-git-manager-");
@@ -3755,9 +3777,6 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
                   baseRefName: "main",
                   headRefName: "statemachine",
                 },
-              ]),
-              // @effect-diagnostics-next-line preferSchemaOverJson:off
-              "octocat:statemachine": JSON.stringify([
                 {
                   number: 142,
                   title: "Existing fork PR",
@@ -3774,8 +3793,6 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
                   },
                 },
               ]),
-              // @effect-diagnostics-next-line preferSchemaOverJson:off
-              "fork-seed:statemachine": JSON.stringify([]),
             },
           },
         });
@@ -3787,11 +3804,9 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
 
         expect(result.pr.status).toBe("opened_existing");
         expect(result.pr.number).toBe(142);
-
-        const ownerSelectorCallIndex = ghCalls.findIndex((call) =>
-          call.includes("pr list --head octocat:statemachine --state open --limit 1"),
-        );
-        expect(ownerSelectorCallIndex).toBeGreaterThanOrEqual(0);
+        expect(
+          ghCalls.some((call) => /--head [^ ]*:/u.test(call) && call.startsWith("pr list")),
+        ).toBe(false);
         expect(ghCalls.some((call) => call.startsWith("pr create "))).toBe(false);
       }),
     12_000,
@@ -3820,7 +3835,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
           ghScenario: {
             prListByHeadSelector: {
               // @effect-diagnostics-next-line preferSchemaOverJson:off
-              "octocat:statemachine": JSON.stringify([
+              statemachine: JSON.stringify([
                 {
                   number: 142,
                   title: "Existing fork PR",
@@ -3838,11 +3853,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
                 },
               ]),
               // @effect-diagnostics-next-line preferSchemaOverJson:off
-              "fork-seed:statemachine": JSON.stringify([]),
-              // @effect-diagnostics-next-line preferSchemaOverJson:off
               "t3code/pr-142/statemachine": JSON.stringify([]),
-              // @effect-diagnostics-next-line preferSchemaOverJson:off
-              statemachine: JSON.stringify([]),
             },
           },
         });
@@ -3855,10 +3866,10 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         expect(result.pr.status).toBe("opened_existing");
         expect(result.pr.number).toBe(142);
 
-        const openLookupCalls = ghCalls.filter((call) => call.includes("--state open --limit 1"));
+        const openLookupCalls = ghCalls.filter((call) => call.includes("--state open --limit 100"));
         expect(openLookupCalls).toHaveLength(1);
         expect(openLookupCalls[0]).toContain(
-          "pr list --head octocat:statemachine --state open --limit 1",
+          "pr list --head statemachine --state open --limit 100",
         );
       }),
     12_000,
@@ -3883,12 +3894,10 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         const { manager, ghCalls } = yield* makeManager({
           ghScenario: {
             prListSequenceByHeadSelector: {
-              "octocat:statemachine": [
+              statemachine: [
                 `[{"number":41,"title":"Ambiguous fork PR","url":"https://github.com/pingdotgg/codething-mvp/pull/41","baseRefName":"main","headRefName":"statemachine","state":"OPEN"}]`,
                 `[{"number":142,"title":"Add stacked git actions","url":"https://github.com/pingdotgg/codething-mvp/pull/142","baseRefName":"main","headRefName":"statemachine","state":"OPEN","isCrossRepository":true,"headRepository":{"nameWithOwner":"octocat/codething-mvp"},"headRepositoryOwner":{"login":"octocat"}}]`,
               ],
-              "fork-seed:statemachine": ["[]"],
-              statemachine: ["[]"],
             },
           },
         });
@@ -4119,7 +4128,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     }),
   );
 
-  it.effect("generates PR content against the remote base when the local base is stale", () =>
+  it.effect("generates PR content from branch changes when the remote base advances", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("t3code-git-manager-");
       yield* initRepo(repoDir);
@@ -4151,7 +4160,15 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       yield* runGit(repoDir, ["push", "-u", "origin", "feature/remote-base"]);
       yield* runGit(repoDir, ["config", "branch.feature/remote-base.gh-merge-base", "main"]);
 
+      NodeFS.writeFileSync(NodePath.join(peerDir, "later-main.txt"), "unrelated\n");
+      yield* runGit(peerDir, ["add", "later-main.txt"]);
+      yield* runGit(peerDir, ["commit", "-m", "Later main commit"]);
+      yield* runGit(peerDir, ["push", "origin", "main"]);
+      yield* runGit(repoDir, ["fetch", "origin"]);
+
       let generatedCommitSummary = "";
+      let generatedDiffSummary = "";
+      let generatedDiffPatch = "";
       const { manager } = yield* makeManager({
         ghScenario: {
           prListSequence: ["[]", "[]"],
@@ -4159,6 +4176,8 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         textGeneration: {
           generatePrContent: (input) => {
             generatedCommitSummary = input.commitSummary;
+            generatedDiffSummary = input.diffSummary;
+            generatedDiffPatch = input.diffPatch;
             return Effect.succeed({ title: "Feature PR", body: "Feature body" });
           },
         },
@@ -4172,6 +4191,11 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       expect(result.pr.status).toBe("created");
       expect(generatedCommitSummary).toContain("Feature commit");
       expect(generatedCommitSummary).not.toContain("Remote base commit");
+      expect(generatedCommitSummary).not.toContain("Later main commit");
+      expect(generatedDiffSummary).toContain("feature.txt");
+      expect(generatedDiffSummary).not.toContain("later-main.txt");
+      expect(generatedDiffPatch).toContain("feature.txt");
+      expect(generatedDiffPatch).not.toContain("later-main.txt");
     }),
   );
 
@@ -4272,7 +4296,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       const { manager, ghCalls } = yield* makeManager({
         ghScenario: {
           prListSequenceByHeadSelector: {
-            "octocat:statemachine": [
+            statemachine: [
               // @effect-diagnostics-next-line preferSchemaOverJson:off
               JSON.stringify([]),
               // @effect-diagnostics-next-line preferSchemaOverJson:off
@@ -4294,10 +4318,6 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
                 },
               ]),
             ],
-            // @effect-diagnostics-next-line preferSchemaOverJson:off
-            "fork-seed:statemachine": [JSON.stringify([])],
-            // @effect-diagnostics-next-line preferSchemaOverJson:off
-            statemachine: [JSON.stringify([])],
           },
         },
       });

@@ -607,6 +607,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             pinnedAt: null,
             pinOrderKey: null,
             activeOrderKey: null,
+            autoSettleDisabledAt: null,
             titleRegenerationRequestId: null,
             titleRegenerationStartedAt: null,
             latestUserMessageAt: null,
@@ -754,6 +755,21 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             ...existingRow.value,
             pinnedAt: null,
             pinOrderKey: null,
+            updatedAt: event.payload.updatedAt,
+          });
+          return;
+        }
+
+        case "thread.auto-settle-set": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            autoSettleDisabledAt: event.payload.autoSettleDisabledAt,
             updatedAt: event.payload.updatedAt,
           });
           return;
@@ -1728,6 +1744,18 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             threadId: event.payload.threadId,
             turnId: event.payload.turnId,
           });
+          // Do not let a placeholder (status "missing") overwrite a checkpoint
+          // that has already been captured with a real git ref. In-memory
+          // projectEvent already refuses this. SQL did not, so thread detail
+          // and diffs could show missing after a ready capture.
+          if (
+            Option.isSome(existingTurn) &&
+            existingTurn.value.checkpointStatus !== null &&
+            existingTurn.value.checkpointStatus !== "missing" &&
+            event.payload.status === "missing"
+          ) {
+            return;
+          }
           const nextState = event.payload.status === "error" ? "error" : "completed";
           yield* projectionTurnRepository.clearCheckpointTurnConflict({
             threadId: event.payload.threadId,
@@ -2016,14 +2044,6 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
 
     const applyAttachmentSideEffects = Effect.fn("applyAttachmentSideEffects")(
       function* (event: OrchestrationEvent, sideEffects: AttachmentSideEffects) {
-        if (
-          sideEffects.deletedThreadIds.size === 0 &&
-          sideEffects.prunedThreadRelativePaths.size === 0 &&
-          sideEffects.prunedAttachmentIds.size === 0
-        ) {
-          return;
-        }
-
         const deletedThreadIds = new Map<string, Set<string>>();
         for (const [threadId, protectedIds] of sideEffects.deletedThreadIds) {
           const recreatedLater = yield* eventStore.hasEventAfter({
@@ -2206,9 +2226,16 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               );
             }),
           );
+          const hasCleanup =
+            attachmentSideEffects.deletedThreadIds.size > 0 ||
+            attachmentSideEffects.prunedThreadRelativePaths.size > 0 ||
+            attachmentSideEffects.prunedAttachmentIds.size > 0;
           // Return the cleanup effect so the caller runs it after the outer transaction commits.
+          // Most events have no cleanup, so they skip the call and write no cleanup span.
           // @effect-diagnostics-next-line returnEffectInGen:off
-          return applyAttachmentSideEffects(event, attachmentSideEffects).pipe(Effect.asVoid);
+          return hasCleanup
+            ? applyAttachmentSideEffects(event, attachmentSideEffects).pipe(Effect.asVoid)
+            : Effect.void;
         },
         Effect.provideService(FileSystem.FileSystem, fileSystem),
         Effect.provideService(Path.Path, path),

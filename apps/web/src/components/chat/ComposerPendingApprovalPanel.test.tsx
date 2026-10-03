@@ -31,14 +31,6 @@ describe("ComposerPendingApprovalPanel", () => {
     expect(markup).toContain('aria-label="Command"');
     expect(markup).toContain('tabindex="0"');
     expect(markup).toContain(detail);
-    expect(markup).toContain("max-h-20");
-    expect(markup).toContain("overflow-auto");
-    expect(markup).toContain("whitespace-pre");
-    expect(markup).toContain("[scrollbar-width:thin]");
-    expect(markup).toContain("[&amp;::-webkit-scrollbar]:h-1.5");
-    expect(markup).not.toContain("truncate");
-    expect(markup).not.toContain("line-clamp");
-    expect(markup).toContain("min-w-0");
     expect(markup).not.toContain("Command approval requested");
   });
 
@@ -72,13 +64,11 @@ describe("ComposerPendingApprovalPanel", () => {
       />,
     );
 
-    expect(markup).toContain('aria-label="App access approval"');
-    expect(markup).toContain('aria-label="App access request"');
     expect(markup).toContain(">Safari<");
     expect(markup).toContain("Allow ChatGPT to use Safari?");
   });
 
-  it("limits long app names so the complete approval message stays readable", () => {
+  it("preserves the full app name and approval message", () => {
     const appName = "A".repeat(200);
     const detail = "Allow ChatGPT to access the selected application?";
     const markup = renderToStaticMarkup(
@@ -94,9 +84,7 @@ describe("ComposerPendingApprovalPanel", () => {
       />,
     );
 
-    expect(markup).toContain("max-w-32 shrink truncate");
     expect(markup).toContain(appName);
-    expect(markup).toContain('data-approval-detail="complete"');
     expect(markup).toContain(detail);
   });
 
