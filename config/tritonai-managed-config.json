@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "policyVersion": 10,
+  "policyVersion": 11,
   "provider": {
     "driver": "codex",
     "managedBinary": true,
