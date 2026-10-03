@@ -14,7 +14,6 @@ interface ImportMetaEnv {
   readonly VITE_RELAY_OTLP_TRACES_DATASET: string;
   readonly VITE_RELAY_OTLP_TRACES_TOKEN: string;
   readonly VITE_DOT_BRIDGE_URL: string;
-  readonly VITE_DOT_USER_ID: string;
   readonly APP_VERSION: string;
 }
 
