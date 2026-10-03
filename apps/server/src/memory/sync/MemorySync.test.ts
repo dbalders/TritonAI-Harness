@@ -7,6 +7,7 @@ import type { ExecutionEnvironmentDescriptor } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Semaphore from "effect/Semaphore";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
@@ -67,6 +68,7 @@ class FakeOneDrive {
   onDownload: (() => void) | null = null;
   onUpload: (() => void) | null = null;
   devicePolls = 0;
+  accountLookupFails = false;
   private next = 1;
 
   private record(item: FakeItem, deleted = false) {
@@ -154,7 +156,10 @@ class FakeOneDrive {
     if (headers.authorization !== "Bearer access")
       return reply(401, { error: { code: "InvalidAuthenticationToken" } });
     const route = decodeURIComponent(url.pathname.replace(/^\/v1\.0/u, ""));
-    if (route === "/me") return reply(200, { id: ACCOUNT, userPrincipalName: "person@ucsd.edu" });
+    if (route === "/me")
+      return this.accountLookupFails
+        ? reply(503, { error: { code: "serviceUnavailable" } })
+        : reply(200, { id: ACCOUNT, userPrincipalName: "person@ucsd.edu" });
     if (route === "/me/drive") return reply(200, { id: "drive-1" });
 
     const childPath = /^\/me\/drive\/(?:root|items\/([^/:]+)):\/(.+?)(?::\/content)?$/u.exec(route);
@@ -352,11 +357,38 @@ const setup = (drive: FakeOneDrive, computer: Computer) =>
   });
 
 it.layer(NodeServices.layer)("MemorySync", (it) => {
+  it.effect("keeps sign out available when Microsoft cannot load the account name", () =>
+    Effect.gen(function* () {
+      const drive = new FakeOneDrive();
+      drive.accountLookupFails = true;
+      const mac = yield* setup(drive, MAC);
+      yield* Effect.gen(function* () {
+        const sync = yield* MemorySync.MemorySync;
+        assert.strictEqual((yield* sync.getStatus).sync.signedIn, false);
+        const started = yield* sync.start;
+        assert.strictEqual(started.kind, "device_code");
+        if (started.kind !== "device_code") return;
+        assert.strictEqual((yield* sync.poll(started.flowId)).state, "pending");
+        assert.strictEqual((yield* sync.poll(started.flowId)).state, "connected");
+        assert.strictEqual((yield* sync.getStatus).sync.signedIn, true);
+        assert.isNull((yield* sync.getStatus).sync.account);
+        const settings = yield* ServerSettings.ServerSettingsService;
+        yield* settings.updateSettings({ memorySyncEnabled: false });
+        assert.strictEqual((yield* sync.getStatus).sync.signedIn, true);
+        yield* sync.signOut;
+        assert.strictEqual((yield* sync.getStatus).sync.signedIn, false);
+        const secrets = yield* ServerSecretStore.ServerSecretStore;
+        assert.isTrue(Option.isNone(yield* secrets.get("memory-sync-microsoft")));
+      }).pipe(Effect.provide(mac.layer));
+    }),
+  );
+
   it.effect("restores a lost inbox while retaining its sync state", () =>
     Effect.gen(function* () {
       const drive = new FakeOneDrive();
       const mac = yield* setup(drive, MAC);
       const pending = `Inbox/${MAC.shortId}/idea.md`;
+      const processed = `Inbox/${MAC.shortId}/processed/2026-09-29/saved.md`;
       yield* Effect.gen(function* () {
         const secrets = yield* ServerSecretStore.ServerSecretStore;
         yield* secrets.set(
@@ -364,16 +396,26 @@ it.layer(NodeServices.layer)("MemorySync", (it) => {
           new TextEncoder().encode(toJson({ refreshToken: "plugin-rt" })),
         );
         yield* mac.registerDevice;
+        yield* mac.write(
+          `.devices/${MAC.environmentId}/written.json`,
+          toJson({ version: 1, files: {} }),
+        );
         yield* mac.write(pending, "Do not lose this idea.\n");
+        yield* mac.write(processed, "Keep this processed idea too.\n");
         const sync = yield* MemorySync.MemorySync;
         yield* sync.start;
         yield* sync.syncNow;
         yield* mac.fs.remove(mac.path.join(mac.vault, "Inbox"), { recursive: true });
         yield* sync.syncNow;
         assert.strictEqual(yield* mac.read(pending), "Do not lose this idea.\n");
+        assert.strictEqual(yield* mac.read(processed), "Keep this processed idea too.\n");
         assert.strictEqual(
           drive.file(`TritonAI Harness/memory/general/${pending}`),
           "Do not lose this idea.\n",
+        );
+        assert.strictEqual(
+          drive.file(`TritonAI Harness/memory/general/${processed}`),
+          "Keep this processed idea too.\n",
         );
       }).pipe(Effect.provide(mac.layer));
     }),

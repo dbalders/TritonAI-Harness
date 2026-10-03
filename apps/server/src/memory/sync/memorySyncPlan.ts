@@ -115,8 +115,8 @@ function removedOnPurpose(path: string, input: SyncPlanInput): boolean {
   // A generated note Harness removed drops out of `written.json`. The record
   // itself lives in this computer's device folder, so a lost vault loses it
   // too and every file is downloaded again instead.
+  if (!path.startsWith("Daily/") && !path.startsWith("Projects/")) return false;
   const devicePrefix = `.devices/${input.device.id}/`;
-  if (path.startsWith(devicePrefix)) return false;
   return input.local.has(`${devicePrefix}written.json`) && !input.written.has(path);
 }
 
