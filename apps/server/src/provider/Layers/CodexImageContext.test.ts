@@ -1,5 +1,4 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { TRITONAI_IMAGE_CONTEXT_MODEL } from "@t3tools/contracts";
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -46,7 +45,7 @@ function completionResponse(content: string, status = 200): Response {
 }
 
 it.layer(testLayer)("CodexImageContext", (it) => {
-  it.effect("uses a non-agentic managed Glimmer request for batched image analysis", () =>
+  it.effect("uses a non-agentic managed Flash request for batched image analysis", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const directory = yield* fileSystem.makeTempDirectoryScoped({
@@ -68,7 +67,7 @@ it.layer(testLayer)("CodexImageContext", (it) => {
             "X-TritonAI-Client-Version": TRITONAI_CLIENT_VERSION,
           });
           const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-          expect(body.model).toBe(TRITONAI_IMAGE_CONTEXT_MODEL);
+          expect(body.model).toBe("api-glm-5.3-flash");
           expect(body).not.toHaveProperty("tools");
           expect(body.reasoning_effort).toBe("low");
           expect(JSON.stringify(body)).toContain("untrusted user-provided data");
