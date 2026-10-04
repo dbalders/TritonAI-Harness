@@ -49,8 +49,8 @@ describe("CodexModelCatalog", () => {
           name: "GLM 5.3",
           capabilities: { inputModalities: ["text"] },
         },
-        "api-muse-glimmer-30b": {
-          name: "Glimmer 30B",
+        "api-glm-5.3-flash": {
+          name: "GLM 5.3 Flash",
           capabilities: { inputModalities: ["text", "image"] },
         },
         "custom-with-unknown-modalities": { name: "Unknown" },
@@ -59,7 +59,7 @@ describe("CodexModelCatalog", () => {
 
     NodeAssert.deepStrictEqual(
       result.models.map((model) => model.slug),
-      ["gpt-5.2", "gpt-5.5", "api-glm-5.3", "api-muse-glimmer-30b"],
+      ["gpt-5.2", "gpt-5.5", "api-glm-5.3", "api-glm-5.3-flash"],
     );
     const glm = result.models.find((model) => model.slug === "api-glm-5.3");
     NodeAssert.deepStrictEqual(glm?.input_modalities, ["text"]);
@@ -86,9 +86,9 @@ describe("CodexModelCatalog", () => {
     NodeAssert.equal(glm?.max_context_window, 124_000);
     NodeAssert.deepStrictEqual(glm?.truncation_policy, { mode: "tokens", limit: 12_345 });
 
-    const glimmer = result.models.find((model) => model.slug === "api-muse-glimmer-30b");
-    NodeAssert.deepStrictEqual(glimmer?.input_modalities, ["text", "image"]);
-    NodeAssert.equal(glimmer?.base_instructions, glm?.base_instructions);
+    const flash = result.models.find((model) => model.slug === "api-glm-5.3-flash");
+    NodeAssert.deepStrictEqual(flash?.input_modalities, ["text", "image"]);
+    NodeAssert.equal(flash?.base_instructions, glm?.base_instructions);
   });
 
   it("updates explicit modalities for a model already in the bundled catalog", () => {
