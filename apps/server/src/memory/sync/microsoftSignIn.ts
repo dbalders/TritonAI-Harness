@@ -20,6 +20,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import { HttpClient, HttpClientRequest } from "effect/unstable/http";
 
 import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
@@ -124,6 +125,10 @@ export interface DeviceCodeStart {
   readonly intervalSeconds: number;
 }
 
+export type SignInStart =
+  | { readonly kind: "connected" }
+  | ({ readonly kind: "device_code" } & DeviceCodeStart);
+
 export interface DeviceCodePoll {
   readonly state: "pending" | "connected" | "expired" | "failed";
   readonly retryAfterSeconds: number | null;
@@ -144,14 +149,31 @@ export class MicrosoftSignIn extends Context.Service<
     /** Drops the cached access token after Graph rejects it. */
     readonly invalidateAccessToken: Effect.Effect<void>;
     readonly account: Effect.Effect<SignedInAccount | null>;
-    readonly startDeviceCode: Effect.Effect<DeviceCodeStart, MemorySyncFailure>;
-    readonly pollDeviceCode: (flowId: string) => Effect.Effect<DeviceCodePoll, MemorySyncFailure>;
+    /**
+     * Signs in silently from a saved or plugin sign-in and runs
+     * `onConnected`, or begins a device-code sign-in for the user to finish.
+     */
+    readonly start: <E>(
+      onConnected: Effect.Effect<void, E>,
+    ) => Effect.Effect<SignInStart, MemorySyncFailure | E>;
+    /** Runs `onConnected` with the credential save once the user finishes signing in. */
+    readonly pollDeviceCode: <E>(
+      flowId: string,
+      onConnected: Effect.Effect<void, E>,
+    ) => Effect.Effect<DeviceCodePoll, MemorySyncFailure | E>;
+    /**
+     * Ends sign-ins in progress. Their device codes stop working, and none of
+     * them can save a credential or run its `onConnected` afterwards.
+     */
+    readonly cancelSignIn: Effect.Effect<void>;
+    /** Cancels sign-ins in progress and forgets the saved credential. */
     readonly signOut: Effect.Effect<void, MemorySyncFailure>;
   }
 >()("t3/memory/sync/microsoftSignIn") {}
 
 interface PendingFlow {
   readonly deviceCode: string;
+  readonly generation: number;
   readonly expiresAtMs: number;
   intervalSeconds: number;
 }
@@ -174,7 +196,21 @@ export const make = (config: MicrosoftOAuthConfig | null) =>
       null,
     );
     const flows = yield* Ref.make(new Map<string, PendingFlow>());
+    // Cancelling and signing out start a new generation. A sign-in begun in an
+    // earlier one may still finish at Microsoft, but `commit` will not save it.
+    const generation = yield* Ref.make(0);
+    const commitLock = yield* Semaphore.make(1);
     const failure = (message: string) => new MemorySyncFailure({ message });
+
+    /** Runs `effect` unless a cancel or sign-out came after `since`; None when one did. */
+    const commit = <A, E>(since: number, effect: Effect.Effect<A, E>) =>
+      commitLock.withPermits(1)(
+        Effect.gen(function* () {
+          if ((yield* Ref.get(generation)) !== since) return Option.none<A>();
+          return Option.some(yield* effect);
+        }),
+      );
+    const cancelled = failure("Sign-in was cancelled.");
 
     const send = (request: HttpClientRequest.HttpClientRequest) =>
       httpClient.execute(request).pipe(
@@ -267,6 +303,7 @@ export const make = (config: MicrosoftOAuthConfig | null) =>
       );
 
     const accessToken = Effect.gen(function* () {
+      const since = yield* Ref.get(generation);
       const now = yield* Clock.currentTimeMillis;
       const current = yield* Ref.get(cached);
       if (current && current.expiresAtMs - ACCESS_TOKEN_SKEW_MS > now) return current.token;
@@ -280,12 +317,26 @@ export const make = (config: MicrosoftOAuthConfig | null) =>
               : Effect.void,
           ),
         );
-        yield* saveOwnCredential({
-          ...own.value,
-          refreshToken: token.refresh_token ?? own.value.refreshToken,
-          updatedAt: DateTime.formatIso(DateTime.makeUnsafe(now)),
-        });
-        yield* cacheToken(token);
+        // Turning sync off does not end this sign-in; only signing out does.
+        const saved = yield* commitLock.withPermits(1)(
+          Effect.gen(function* () {
+            const stored = yield* readOwnCredential;
+            if (Option.isNone(stored)) return false;
+            if (stored.value.refreshToken !== own.value.refreshToken) return true;
+            yield* saveOwnCredential({
+              ...own.value,
+              refreshToken: token.refresh_token ?? own.value.refreshToken,
+              updatedAt: DateTime.formatIso(DateTime.makeUnsafe(now)),
+            });
+            yield* cacheToken(token);
+            return true;
+          }),
+        );
+        if (!saved) {
+          return yield* new MemorySyncSignInRequired({
+            message: "Sign in with your Microsoft account to sync memory.",
+          });
+        }
         return token.access_token;
       }
 
@@ -298,15 +349,19 @@ export const make = (config: MicrosoftOAuthConfig | null) =>
             Effect.catchTag("MemorySyncSignInRequired", () => Effect.succeed(null)),
           );
           if (token?.refresh_token) {
+            const refreshToken = token.refresh_token;
             const me = yield* fetchAccount(token.access_token);
-            yield* saveOwnCredential({
-              version: 1,
-              refreshToken: token.refresh_token,
-              accountId: me?.id ?? null,
-              account: me?.userPrincipalName ?? null,
-              updatedAt: DateTime.formatIso(DateTime.makeUnsafe(now)),
-            });
-            yield* cacheToken(token);
+            const saved = yield* commit(
+              since,
+              saveOwnCredential({
+                version: 1,
+                refreshToken,
+                accountId: me?.id ?? null,
+                account: me?.userPrincipalName ?? null,
+                updatedAt: DateTime.formatIso(DateTime.makeUnsafe(now)),
+              }).pipe(Effect.andThen(cacheToken(token))),
+            );
+            if (Option.isNone(saved)) return yield* cancelled;
             return token.access_token;
           }
         }
@@ -322,45 +377,67 @@ export const make = (config: MicrosoftOAuthConfig | null) =>
       ),
     );
 
-    const startDeviceCode = Effect.gen(function* () {
-      const { status, json } = yield* postForm("devicecode", { scope: SCOPES });
-      if (status !== 200) {
-        const error = yield* decodeOAuthError(json).pipe(
-          Effect.orElseSucceed(() => ({ error: `http_${status}` })),
+    const startDeviceCode = (since: number) =>
+      Effect.gen(function* () {
+        const { status, json } = yield* postForm("devicecode", { scope: SCOPES });
+        if (status !== 200) {
+          const error = yield* decodeOAuthError(json).pipe(
+            Effect.orElseSucceed(() => ({ error: `http_${status}` })),
+          );
+          return yield* failure(`Microsoft sign-in failed: ${describeOAuthError(error)}`);
+        }
+        const code = yield* decodeDeviceCodeResponse(json).pipe(
+          Effect.mapError(() => failure("Microsoft returned an unexpected sign-in response.")),
         );
-        return yield* failure(`Microsoft sign-in failed: ${describeOAuthError(error)}`);
-      }
-      const code = yield* decodeDeviceCodeResponse(json).pipe(
-        Effect.mapError(() => failure("Microsoft returned an unexpected sign-in response.")),
-      );
-      const now = yield* Clock.currentTimeMillis;
-      const flowId = NodeCrypto.createHash("sha256")
-        .update(code.device_code)
-        .digest("hex")
-        .slice(0, 32);
-      const intervalSeconds = Math.min(Math.max(code.interval ?? 5, 1), 60);
-      const expiresAtMs = now + Math.min(Math.max(code.expires_in, 60), 1800) * 1000;
-      yield* Ref.update(flows, (current) =>
-        new Map(current).set(flowId, {
-          deviceCode: code.device_code,
-          expiresAtMs,
+        const now = yield* Clock.currentTimeMillis;
+        const flowId = NodeCrypto.createHash("sha256")
+          .update(code.device_code)
+          .digest("hex")
+          .slice(0, 32);
+        const intervalSeconds = Math.min(Math.max(code.interval ?? 5, 1), 60);
+        const expiresAtMs = now + Math.min(Math.max(code.expires_in, 60), 1800) * 1000;
+        const registered = yield* commit(
+          since,
+          Ref.update(flows, (current) =>
+            new Map(current).set(flowId, {
+              deviceCode: code.device_code,
+              generation: since,
+              expiresAtMs,
+              intervalSeconds,
+            }),
+          ),
+        );
+        if (Option.isNone(registered)) return yield* cancelled;
+        return {
+          flowId,
+          userCode: code.user_code,
+          verificationUri: code.verification_uri,
+          expiresAt: DateTime.formatIso(DateTime.makeUnsafe(expiresAtMs)),
           intervalSeconds,
-        }),
-      );
-      return {
-        flowId,
-        userCode: code.user_code,
-        verificationUri: code.verification_uri,
-        expiresAt: DateTime.formatIso(DateTime.makeUnsafe(expiresAtMs)),
-        intervalSeconds,
-      } satisfies DeviceCodeStart;
-    });
+        } satisfies DeviceCodeStart;
+      });
 
-    const pollDeviceCode = (flowId: string) =>
+    const start = <E>(onConnected: Effect.Effect<void, E>) =>
+      Effect.gen(function* () {
+        const since = yield* Ref.get(generation);
+        const signedIn = yield* accessToken.pipe(
+          Effect.as(true),
+          Effect.catchTag("MemorySyncSignInRequired", () => Effect.succeed(false)),
+        );
+        if (!signedIn) {
+          return { kind: "device_code", ...(yield* startDeviceCode(since)) } satisfies SignInStart;
+        }
+        if (Option.isNone(yield* commit(since, onConnected))) return yield* cancelled;
+        return { kind: "connected" } satisfies SignInStart;
+      });
+
+    const pollDeviceCode = <E>(flowId: string, onConnected: Effect.Effect<void, E>) =>
       Effect.gen(function* () {
         const flow = (yield* Ref.get(flows)).get(flowId);
         const now = yield* Clock.currentTimeMillis;
+        // Leaves a newer sign-in alone if it reused this id.
         const finish = Ref.update(flows, (current) => {
+          if (current.get(flowId) !== flow) return current;
           const next = new Map(current);
           next.delete(flowId);
           return next;
@@ -384,16 +461,30 @@ export const make = (config: MicrosoftOAuthConfig | null) =>
           if (!token.refresh_token) {
             return yield* failure("Microsoft did not return a lasting sign-in. Try again.");
           }
+          const refreshToken = token.refresh_token;
           const me = yield* fetchAccount(token.access_token);
-          yield* saveOwnCredential({
-            version: 1,
-            refreshToken: token.refresh_token,
-            accountId: me?.id ?? null,
-            account: me?.userPrincipalName ?? null,
-            updatedAt: DateTime.formatIso(DateTime.makeUnsafe(now)),
-          });
-          yield* cacheToken(token);
+          const connected = yield* commit(
+            flow.generation,
+            Effect.gen(function* () {
+              yield* saveOwnCredential({
+                version: 1,
+                refreshToken,
+                accountId: me?.id ?? null,
+                account: me?.userPrincipalName ?? null,
+                updatedAt: DateTime.formatIso(DateTime.makeUnsafe(now)),
+              });
+              yield* cacheToken(token);
+              yield* onConnected;
+            }),
+          );
           yield* finish;
+          if (Option.isNone(connected)) {
+            return {
+              state: "expired",
+              retryAfterSeconds: null,
+              message: "Sign-in was cancelled. Turn sync on to try again.",
+            } satisfies DeviceCodePoll;
+          }
           return {
             state: "connected",
             retryAfterSeconds: null,
@@ -420,21 +511,29 @@ export const make = (config: MicrosoftOAuthConfig | null) =>
         } satisfies DeviceCodePoll;
       });
 
-    const signOut = Effect.gen(function* () {
-      yield* Ref.set(cached, null);
+    const cancel = Effect.gen(function* () {
+      yield* Ref.update(generation, (current) => current + 1);
       yield* Ref.set(flows, new Map());
-      yield* secrets
-        .remove(OWN_SECRET)
-        .pipe(Effect.mapError(() => failure("Could not remove the Microsoft sign-in.")));
     });
+
+    const signOut = commitLock.withPermits(1)(
+      Effect.gen(function* () {
+        yield* cancel;
+        yield* Ref.set(cached, null);
+        yield* secrets
+          .remove(OWN_SECRET)
+          .pipe(Effect.mapError(() => failure("Could not remove the Microsoft sign-in.")));
+      }),
+    );
 
     return MicrosoftSignIn.of({
       config,
       accessToken,
       invalidateAccessToken: Ref.set(cached, null),
       account,
-      startDeviceCode,
+      start,
       pollDeviceCode,
+      cancelSignIn: commitLock.withPermits(1)(cancel),
       signOut,
     });
   });

@@ -2623,6 +2623,12 @@ const makeWsRpcLayer = (
             memorySync.syncNow.pipe(Effect.andThen(memorySync.getStatus)),
             { "rpc.aggregate": "server" },
           ),
+        [WS_METHODS.serverStopMemorySync]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.serverStopMemorySync,
+            memorySync.stop.pipe(Effect.andThen(memorySync.getStatus)),
+            { "rpc.aggregate": "server" },
+          ),
         [WS_METHODS.serverSignOutMemorySync]: (_input) =>
           observeRpcEffect(
             WS_METHODS.serverSignOutMemorySync,

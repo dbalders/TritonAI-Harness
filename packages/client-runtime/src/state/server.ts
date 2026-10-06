@@ -1025,6 +1025,10 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:memory-sync-now",
       tag: WS_METHODS.serverSyncMemoryNow,
     }),
+    stopMemorySync: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:memory-sync-stop",
+      tag: WS_METHODS.serverStopMemorySync,
+    }),
     signOutMemorySync: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:memory-sync-sign-out",
       tag: WS_METHODS.serverSignOutMemorySync,

@@ -134,6 +134,8 @@ export class MemorySync extends Context.Service<
     readonly poll: (
       flowId: string,
     ) => Effect.Effect<ServerMemorySyncPollResult, ServerMemorySyncError>;
+    /** Turns sync off and cancels any sign-in still in progress. */
+    readonly stop: Effect.Effect<void, ServerMemorySyncError>;
     readonly signOut: Effect.Effect<void, ServerMemorySyncError>;
   }
 >()("t3/memory/sync/MemorySync") {}
@@ -642,8 +644,13 @@ export const make = Effect.gen(function* () {
   );
 
   // Turning the setting on starts the first pass through the layer's settings watch.
+  // It runs only as part of a sign-in, so a cancelled sign-in cannot turn sync on.
   const enable = settingsService.updateSettings({ memorySyncEnabled: true }).pipe(
     Effect.mapError(() => serverError("Could not turn on memory sync.")),
+    Effect.asVoid,
+  );
+  const disable = settingsService.updateSettings({ memorySyncEnabled: false }).pipe(
+    Effect.mapError(() => serverError("Could not turn off memory sync.")),
     Effect.asVoid,
   );
 
@@ -651,32 +658,21 @@ export const make = Effect.gen(function* () {
     if (!signIn.config) {
       return yield* serverError("This version of TritonAI Harness cannot sign in to Microsoft.");
     }
-    const token = yield* signIn.accessToken.pipe(
-      Effect.map(() => true),
-      Effect.catchTag("MemorySyncSignInRequired", () => Effect.succeed(false)),
-      Effect.mapError((error) => serverError(error.message)),
-    );
-    if (token) {
-      yield* enable;
-      return { kind: "connected" } satisfies ServerMemorySyncStartResult;
-    }
-    const code = yield* signIn.startDeviceCode.pipe(
-      Effect.mapError((error) => serverError(error.message)),
-    );
-    return { kind: "device_code", ...code } satisfies ServerMemorySyncStartResult;
+    return yield* signIn.start(enable).pipe(Effect.mapError((error) => serverError(error.message)));
   });
 
   const poll = (flowId: string) =>
-    signIn.pollDeviceCode(flowId).pipe(
-      Effect.mapError((error) => serverError(error.message)),
-      Effect.tap((result) => (result.state === "connected" ? enable : Effect.void)),
-    );
+    signIn
+      .pollDeviceCode(flowId, enable)
+      .pipe(Effect.mapError((error) => serverError(error.message)));
+
+  // Cancel before writing false: a sign-in that finished first is turned off by
+  // the write, and one finishing later is refused.
+  const stop = signIn.cancelSignIn.pipe(Effect.andThen(disable));
 
   const signOut = dailyMemory.exclusive(
     Effect.gen(function* () {
-      yield* settingsService
-        .updateSettings({ memorySyncEnabled: false })
-        .pipe(Effect.mapError(() => serverError("Could not turn off memory sync.")));
+      yield* stop;
       yield* signIn.signOut.pipe(Effect.mapError((error) => serverError(error.message)));
       // Another account starts from a clean slate; notes stay on this computer.
       yield* fs.remove(stateFile).pipe(Effect.ignore);
@@ -684,7 +680,7 @@ export const make = Effect.gen(function* () {
     }),
   );
 
-  return MemorySync.of({ getStatus, syncNow, start, poll, signOut });
+  return MemorySync.of({ getStatus, syncNow, start, poll, stop, signOut });
 });
 
 /** Syncs after startup, every five minutes, and whenever sync or Memory is switched. */

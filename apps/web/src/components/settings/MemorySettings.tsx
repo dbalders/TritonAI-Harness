@@ -77,10 +77,10 @@ function MemorySyncRow({
   readonly refreshStatus: () => void;
 }) {
   const settings = useScopedSettings();
-  const updateSettings = useUpdateScopedSettings();
   const startSync = useAtomCommand(serverEnvironment.startMemorySync, { reportFailure: false });
   const pollSync = useAtomCommand(serverEnvironment.pollMemorySync, { reportFailure: false });
   const syncNow = useAtomCommand(serverEnvironment.syncMemoryNow, { reportFailure: false });
+  const stopSync = useAtomCommand(serverEnvironment.stopMemorySync, { reportFailure: false });
   const signOut = useAtomCommand(serverEnvironment.signOutMemorySync, { reportFailure: false });
   const [flow, setFlow] = useState<DeviceCodeFlow | null>(null);
   const [busy, setBusy] = useState(false);
@@ -140,7 +140,10 @@ function MemorySyncRow({
     };
   }, [environmentId, flow, pollSync, refreshStatus]);
 
-  const runAndRefresh = async (command: typeof syncNow | typeof signOut, fallback: string) => {
+  const runAndRefresh = async (
+    command: typeof syncNow | typeof stopSync | typeof signOut,
+    fallback: string,
+  ) => {
     setBusy(true);
     setError(null);
     const result = await command({ environmentId, input: {} });
@@ -193,8 +196,9 @@ function MemorySyncRow({
               if (checked) {
                 void turnOn();
               } else {
+                // The server also cancels a sign-in still in progress.
                 setFlow(null);
-                updateSettings({ memorySyncEnabled: false });
+                void runAndRefresh(stopSync, "Could not turn off sync.");
               }
             }}
             aria-label="Sync memory with OneDrive"
