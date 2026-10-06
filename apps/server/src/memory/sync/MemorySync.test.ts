@@ -9,6 +9,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
 import * as Semaphore from "effect/Semaphore";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
@@ -270,6 +271,64 @@ class FakeOneDrive {
   }
 }
 
+/**
+ * The real file system, except that the directories in `denied` refuse access
+ * the way chmod 555 ("writes") or 000 ("everything") does on macOS. Windows
+ * ignores directory modes, so tests deny access here to fail the same calls.
+ */
+const makeDeniableFileSystem = (fs: FileSystem.FileSystem, path: Path.Path) => {
+  const denied = new Map<string, "writes" | "everything">();
+  const under = (target: string, directory: string) => {
+    const relative = path.relative(directory, target);
+    return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+  };
+  const guard = <A>(
+    method: string,
+    target: string,
+    access: "read" | "write",
+    effect: Effect.Effect<A, PlatformError.PlatformError>,
+    recursive = false,
+  ) =>
+    Effect.suspend(() => {
+      for (const [directory, scope] of denied) {
+        if (access === "read" && scope === "writes") continue;
+        // Listing a parent recursively has to open the denied directory too.
+        if (under(target, directory) || (recursive && under(directory, target))) {
+          return Effect.fail(
+            PlatformError.systemError({
+              _tag: "PermissionDenied",
+              module: "FileSystem",
+              method,
+              pathOrDescriptor: target,
+            }),
+          );
+        }
+      }
+      return effect;
+    });
+  const deniable = FileSystem.make({
+    ...fs,
+    readDirectory: (target, options) =>
+      guard(
+        "readDirectory",
+        target,
+        "read",
+        fs.readDirectory(target, options),
+        options?.recursive === true,
+      ),
+    readFile: (target) => guard("readFile", target, "read", fs.readFile(target)),
+    stat: (target) => guard("stat", target, "read", fs.stat(target)),
+    makeDirectory: (target, options) =>
+      guard("makeDirectory", target, "write", fs.makeDirectory(target, options)),
+    writeFile: (target, data, options) =>
+      guard("writeFile", target, "write", fs.writeFile(target, data, options)),
+    remove: (target, options) => guard("remove", target, "write", fs.remove(target, options)),
+    rename: (from, to) =>
+      guard("rename", from, "write", guard("rename", to, "write", fs.rename(from, to))),
+  });
+  return { deniable, denied };
+};
+
 interface Computer {
   readonly environmentId: string;
   readonly shortId: string;
@@ -290,6 +349,7 @@ const setup = (drive: FakeOneDrive, computer: Computer) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
+    const { deniable, denied } = makeDeniableFileSystem(fs, path);
     const temporary = yield* fs.makeTempDirectoryScoped({ prefix: "t3-memory-sync-test-" });
     const baseDir = path.join(temporary, ".tritonai-harness");
     const vault = path.join(baseDir, "memory", "general");
@@ -350,10 +410,22 @@ const setup = (drive: FakeOneDrive, computer: Computer) =>
       ),
       Layer.provideMerge(ServerSecretStore.layer),
       Layer.provideMerge(ServerConfig.layerTest(baseDir, baseDir)),
+      Layer.provideMerge(Layer.succeed(FileSystem.FileSystem, deniable)),
     );
     // One set of services per computer for the whole test, like a running app.
     const context = yield* Layer.build(layer);
-    return { vault, label, write, read, registerDevice, writeDay, layer: context, fs, path };
+    return {
+      vault,
+      label,
+      write,
+      read,
+      registerDevice,
+      writeDay,
+      layer: context,
+      fs,
+      path,
+      denied,
+    };
   });
 
 it.layer(NodeServices.layer)("MemorySync", (it) => {
@@ -445,12 +517,10 @@ it.layer(NodeServices.layer)("MemorySync", (it) => {
       yield* imacSync.syncNow;
       yield* mac.fs.remove(mac.path.join(mac.vault, "Notes/plans.md"));
       yield* macSync.syncNow;
-      const notes = imac.path.join(imac.vault, "Notes");
-      yield* imac.fs.chmod(notes, 0o555);
-      yield* imacSync.syncNow.pipe(
-        Effect.ensuring(imac.fs.chmod(notes, 0o755).pipe(Effect.ignore)),
-      );
+      imac.denied.set(imac.path.join(imac.vault, "Notes"), "writes");
+      yield* imacSync.syncNow.pipe(Effect.ensuring(Effect.sync(() => imac.denied.clear())));
       assert.strictEqual((yield* imacSync.getStatus).sync.state, "error");
+      assert.include((yield* imacSync.getStatus).sync.message ?? "", "remove Notes/plans.md");
       assert.strictEqual(yield* imac.read("Notes/plans.md"), "Plan\n");
       yield* imacSync.syncNow;
       assert.strictEqual((yield* imacSync.getStatus).sync.state, "idle");
@@ -479,17 +549,14 @@ it.layer(NodeServices.layer)("MemorySync", (it) => {
         yield* mac.write(record, uploaded);
         const syncDirectory = mac.path.join(mac.vault, ".sync");
         // If the intent cannot be saved, no upload may start.
-        yield* mac.fs.chmod(syncDirectory, 0o555);
-        yield* sync.syncNow.pipe(
-          Effect.ensuring(mac.fs.chmod(syncDirectory, 0o755).pipe(Effect.ignore)),
-        );
+        mac.denied.set(syncDirectory, "writes");
+        yield* sync.syncNow.pipe(Effect.ensuring(Effect.sync(() => mac.denied.clear())));
         assert.strictEqual((yield* sync.getStatus).sync.state, "error");
+        assert.include((yield* sync.getStatus).sync.message ?? "", "save the sync state");
         assert.strictEqual(drive.file(`TritonAI Harness/memory/general/${record}`), before);
 
-        drive.onUpload = () => NodeFS.chmodSync(syncDirectory, 0o555);
-        yield* sync.syncNow.pipe(
-          Effect.ensuring(mac.fs.chmod(syncDirectory, 0o755).pipe(Effect.ignore)),
-        );
+        drive.onUpload = () => mac.denied.set(syncDirectory, "writes");
+        yield* sync.syncNow.pipe(Effect.ensuring(Effect.sync(() => mac.denied.clear())));
         drive.onUpload = null;
         assert.strictEqual(drive.file(`TritonAI Harness/memory/general/${record}`), uploaded);
         assert.strictEqual((yield* sync.getStatus).sync.state, "error");
@@ -694,10 +761,15 @@ it.layer(NodeServices.layer)("MemorySync", (it) => {
         yield* sync.syncNow;
         assert.strictEqual(cloud("Notes/plans.md"), "Plan v1\n");
 
-        yield* mac.fs.chmod(notes, 0o000);
-        yield* sync.syncNow.pipe(Effect.ensuring(mac.fs.chmod(notes, 0o755).pipe(Effect.ignore)));
+        mac.denied.set(notes, "everything");
+        yield* sync.syncNow.pipe(Effect.ensuring(Effect.sync(() => mac.denied.clear())));
         const status = yield* sync.getStatus;
         assert.strictEqual(status.sync.state, "error");
+        assert.strictEqual(status.sync.message, "Could not read the memory folder.");
+        assert.strictEqual(cloud("Notes/plans.md"), "Plan v1\n");
+
+        yield* sync.syncNow;
+        assert.strictEqual((yield* sync.getStatus).sync.state, "idle");
         assert.strictEqual(cloud("Notes/plans.md"), "Plan v1\n");
       }).pipe(Effect.provide(mac.layer));
     }),
