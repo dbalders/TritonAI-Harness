@@ -2518,15 +2518,16 @@ export class RegistryRuntime {
         `the ${capabilityNames(manifest, selectedToolCapabilities)} capability is enabled but not granted. Reconnect ${manifest.name} in ${PLUGIN_SETTINGS} to authorize it.`,
       );
     }
-    // Entitled by every durable check: the cached summary was sampled while the provider was
-    // settling, and its post-settlement refresh has not landed yet.
+    // Entitled by every durable check, so the cached summary is behind: it was sampled while the
+    // provider was settling or before a durable change, and its refresh has not landed yet.
     return changing;
   }
 
   /**
    * Like `toolAvailabilitySync`, but waits out transient provider work (a shared credential
-   * refresh, a write commit) before deciding. Bounded by the provider operation timeout, which
-   * also bounds that work, and by the caller's signal and registry shutdown.
+   * refresh, a write commit) before deciding, and re-samples a stale cached summary once when no
+   * such work remains. Bounded by the provider operation timeout, which also bounds that work,
+   * and by the caller's signal and registry shutdown.
    */
   async awaitToolAvailability(
     name: string,
@@ -2534,10 +2535,11 @@ export class RegistryRuntime {
   ): Promise<IntegrationToolAvailability> {
     const initial = this.toolAvailabilitySync(name);
     if (initial.available || initial.reason !== "connection_changing") return initial;
-    const provider = [...this.#catalog.values()].find(({ manifest }) =>
+    const integration = [...this.#catalog.values()].find(({ manifest }) =>
       manifest.tools.some((candidate) => candidate.name === name),
-    )?.provider;
-    if (!provider) return initial;
+    );
+    if (!integration) return initial;
+    const { provider } = integration;
     const signal = options.signal ?? new AbortController().signal;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const deadline = new Promise<"timeout">((resolve) => {
@@ -2546,14 +2548,25 @@ export class RegistryRuntime {
         options.timeoutMs ?? this.#providerOperationTimeoutMs,
       );
     });
+    let resampled = false;
     try {
       for (;;) {
         if (this.#closing) break;
-        const pending = [
-          ...(this.#activeProviderLifecycleWork.get(provider) ?? []),
-          ...(this.#providerSummaryRefreshWork.get(provider) ?? []),
-        ];
-        if (pending.length === 0) break;
+        const pending: Array<Promise<unknown>> = provider
+          ? [
+              ...(this.#activeProviderLifecycleWork.get(provider) ?? []),
+              ...(this.#providerSummaryRefreshWork.get(provider) ?? []),
+            ]
+          : [];
+        if (pending.length === 0) {
+          // Nothing in flight will correct the cached summary (its post-settlement refresh failed,
+          // or it lags a durable change), so sample it once more instead of refusing on stale data.
+          if (resampled) break;
+          resampled = true;
+          pending.push(
+            this.#serializeIntegration(integration.manifest.id, () => this.#summarize(integration)),
+          );
+        }
         const settled = await awaitWithSignal(
           Promise.race([Promise.allSettled(pending), deadline]),
           signal,
