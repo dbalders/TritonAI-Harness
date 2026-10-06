@@ -56,6 +56,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.serverStartMemorySync]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverPollMemorySync]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverSyncMemoryNow]: AuthOrchestrationOperateScope,
+  [WS_METHODS.serverStopMemorySync]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverSignOutMemorySync]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverDiscoverSourceControl]: AuthOrchestrationReadScope,
   [WS_METHODS.serverGetTraceDiagnostics]: AuthOrchestrationReadScope,

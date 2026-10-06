@@ -416,6 +416,7 @@ export const WS_METHODS = {
   serverStartMemorySync: "server.startMemorySync",
   serverPollMemorySync: "server.pollMemorySync",
   serverSyncMemoryNow: "server.syncMemoryNow",
+  serverStopMemorySync: "server.stopMemorySync",
   serverSignOutMemorySync: "server.signOutMemorySync",
   serverDiscoverSourceControl: "server.discoverSourceControl",
   serverGetTraceDiagnostics: "server.getTraceDiagnostics",
@@ -681,6 +682,12 @@ const WsServerSyncMemoryNowRpc = Rpc.make(WS_METHODS.serverSyncMemoryNow, {
   payload: Schema.Struct({}),
   success: ServerMemoryStatus,
   error: EnvironmentAuthorizationError,
+});
+
+const WsServerStopMemorySyncRpc = Rpc.make(WS_METHODS.serverStopMemorySync, {
+  payload: Schema.Struct({}),
+  success: ServerMemoryStatus,
+  error: Schema.Union([ServerMemorySyncError, EnvironmentAuthorizationError]),
 });
 
 const WsServerSignOutMemorySyncRpc = Rpc.make(WS_METHODS.serverSignOutMemorySync, {
@@ -1614,6 +1621,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerStartMemorySyncRpc,
   WsServerPollMemorySyncRpc,
   WsServerSyncMemoryNowRpc,
+  WsServerStopMemorySyncRpc,
   WsServerSignOutMemorySyncRpc,
   WsServerDiscoverSourceControlRpc,
   WsServerGetTraceDiagnosticsRpc,

@@ -4,7 +4,9 @@ import * as NodeFS from "node:fs";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import type { ExecutionEnvironmentDescriptor } from "@t3tools/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -68,6 +70,8 @@ class FakeOneDrive {
   /** Runs while a file is being downloaded, to simulate an edit made mid-pass. */
   onDownload: (() => void) | null = null;
   onUpload: (() => void) | null = null;
+  /** Holds a request before it is answered, to finish a sign-in at a chosen moment. */
+  hold: ((url: URL, params: URLSearchParams) => Effect.Effect<void> | null) | null = null;
   devicePolls = 0;
   accountLookupFails = false;
   private next = 1;
@@ -250,7 +254,7 @@ class FakeOneDrive {
     return Layer.succeed(
       HttpClient.HttpClient,
       HttpClient.make((request) =>
-        Effect.sync(() => {
+        Effect.gen({ self: this }, function* () {
           const body = request.body._tag === "Uint8Array" ? request.body.body : new Uint8Array();
           const headers = Object.fromEntries(
             Object.entries(request.headers).map(([key, value]) => [
@@ -260,6 +264,8 @@ class FakeOneDrive {
           );
           const url = new URL(request.url);
           for (const [key, value] of request.urlParams) url.searchParams.append(key, value);
+          const held = this.hold?.(url, new URLSearchParams(new TextDecoder().decode(body)));
+          if (held) yield* held;
           const reply = this.handle(request.method, url, headers, body);
           return HttpClientResponse.fromWeb(
             request,
@@ -426,6 +432,61 @@ const setup = (drive: FakeOneDrive, computer: Computer) =>
       path,
       denied,
     };
+  });
+
+const DEVICE_CODE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
+const isDeviceCodeToken = (url: URL, params: URLSearchParams) =>
+  url.pathname.endsWith("/token") && params.get("grant_type") === DEVICE_CODE_GRANT;
+/** The account lookup between Microsoft's token response and saving the sign-in. */
+const isAccountLookup = (url: URL) => url.pathname === "/v1.0/me";
+
+/** Holds the first matching request; `reached` waits for it and `release` answers it. */
+const holdFirst = (drive: FakeOneDrive, matches: (url: URL, params: URLSearchParams) => boolean) =>
+  Effect.gen(function* () {
+    const reached = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    drive.hold = (url, params) => {
+      if (!matches(url, params)) return null;
+      drive.hold = null;
+      return Deferred.succeed(reached, undefined).pipe(Effect.andThen(Deferred.await(release)));
+    };
+    return { reached: Deferred.await(reached), release: Deferred.succeed(release, undefined) };
+  });
+
+/**
+ * Starts a device-code sign-in, holds the poll that completes it at the
+ * matching request, and runs `cancel` while Microsoft's answer is held.
+ */
+const cancelDuringSignIn = <E>(
+  drive: FakeOneDrive,
+  held: (url: URL, params: URLSearchParams) => boolean,
+  cancel: (sync: MemorySync.MemorySync["Service"]) => Effect.Effect<unknown, E>,
+) =>
+  Effect.gen(function* () {
+    const sync = yield* MemorySync.MemorySync;
+    const started = yield* sync.start;
+    if (started.kind !== "device_code") return assert.fail("expected a device code");
+    assert.strictEqual((yield* sync.poll(started.flowId)).state, "pending");
+    const request = yield* holdFirst(drive, held);
+    const poll = yield* sync.poll(started.flowId).pipe(Effect.forkChild);
+    yield* request.reached;
+    yield* cancel(sync);
+    yield* request.release;
+    return { sync, flowId: started.flowId, result: yield* Fiber.join(poll) };
+  });
+
+/** Sync stays off and signed out, and a pass touches nothing in OneDrive. */
+const assertNotSyncing = (drive: FakeOneDrive, sync: MemorySync.MemorySync["Service"]) =>
+  Effect.gen(function* () {
+    const settings = yield* ServerSettings.ServerSettingsService;
+    assert.isFalse((yield* settings.getSettings).memorySyncEnabled);
+    const secrets = yield* ServerSecretStore.ServerSecretStore;
+    assert.isTrue(Option.isNone(yield* secrets.get("memory-sync-microsoft")));
+    const status = yield* sync.getStatus;
+    assert.strictEqual(status.sync.state, "off");
+    assert.isFalse(status.sync.signedIn);
+    yield* sync.syncNow;
+    assert.isNull(drive.file("TritonAI Harness"));
   });
 
 it.layer(NodeServices.layer)("MemorySync", (it) => {
@@ -846,6 +907,111 @@ it.layer(NodeServices.layer)("MemorySync", (it) => {
         assert.isFalse((yield* settings.getSettings).memorySyncEnabled);
         const restarted = yield* sync.start;
         assert.strictEqual(restarted.kind, "device_code");
+      }).pipe(Effect.provide(mac.layer));
+    }),
+  );
+  it.effect("turning sync off while a sign-in poll waits on Microsoft cancels it", () =>
+    Effect.gen(function* () {
+      const drive = new FakeOneDrive();
+      const mac = yield* setup(drive, MAC);
+      yield* Effect.gen(function* () {
+        yield* mac.registerDevice;
+        const { sync, flowId, result } = yield* cancelDuringSignIn(
+          drive,
+          isDeviceCodeToken,
+          (sync) => sync.stop,
+        );
+        assert.notStrictEqual(result.state, "connected");
+        yield* assertNotSyncing(drive, sync);
+        // The cancelled code cannot be finished later, either.
+        assert.strictEqual((yield* sync.poll(flowId)).state, "expired");
+        yield* assertNotSyncing(drive, sync);
+      }).pipe(Effect.provide(mac.layer));
+    }),
+  );
+
+  it.effect("turning sync off after Microsoft answers but before saving discards the sign-in", () =>
+    Effect.gen(function* () {
+      const drive = new FakeOneDrive();
+      const mac = yield* setup(drive, MAC);
+      yield* Effect.gen(function* () {
+        yield* mac.registerDevice;
+        const { sync, result } = yield* cancelDuringSignIn(
+          drive,
+          isAccountLookup,
+          (sync) => sync.stop,
+        );
+        assert.notStrictEqual(result.state, "connected");
+        yield* assertNotSyncing(drive, sync);
+      }).pipe(Effect.provide(mac.layer));
+    }),
+  );
+
+  it.effect("signing out while a sign-in completes leaves it signed out", () =>
+    Effect.gen(function* () {
+      const drive = new FakeOneDrive();
+      const mac = yield* setup(drive, MAC);
+      yield* Effect.gen(function* () {
+        yield* mac.registerDevice;
+        const { sync, result } = yield* cancelDuringSignIn(
+          drive,
+          isAccountLookup,
+          (sync) => sync.signOut,
+        );
+        assert.notStrictEqual(result.state, "connected");
+        yield* assertNotSyncing(drive, sync);
+      }).pipe(Effect.provide(mac.layer));
+    }),
+  );
+
+  it.effect("turning sync off while it reuses the plugin sign-in keeps it off", () =>
+    Effect.gen(function* () {
+      const drive = new FakeOneDrive();
+      const mac = yield* setup(drive, MAC);
+      yield* Effect.gen(function* () {
+        const secrets = yield* ServerSecretStore.ServerSecretStore;
+        yield* secrets.set(
+          "integration-microsoft-365--oauth",
+          new TextEncoder().encode(toJson({ refreshToken: "plugin-rt" })),
+        );
+        yield* mac.registerDevice;
+        const sync = yield* MemorySync.MemorySync;
+        const request = yield* holdFirst(
+          drive,
+          (_url, params) => params.get("grant_type") === "refresh_token",
+        );
+        const start = yield* sync.start.pipe(Effect.exit, Effect.forkChild);
+        yield* request.reached;
+        yield* sync.stop;
+        yield* request.release;
+        const started = yield* Fiber.join(start);
+        assert.isFalse(started._tag === "Success" && started.value.kind === "connected");
+        yield* assertNotSyncing(drive, sync);
+        // The plugin sign-in still works for the next attempt.
+        assert.strictEqual((yield* sync.start).kind, "connected");
+      }).pipe(Effect.provide(mac.layer));
+    }),
+  );
+
+  it.effect("turning sync back on after a cancelled sign-in starts a fresh one", () =>
+    Effect.gen(function* () {
+      const drive = new FakeOneDrive();
+      const mac = yield* setup(drive, MAC);
+      yield* Effect.gen(function* () {
+        yield* mac.registerDevice;
+        const { sync } = yield* cancelDuringSignIn(drive, isAccountLookup, (sync) => sync.stop);
+        yield* assertNotSyncing(drive, sync);
+        const started = yield* sync.start;
+        if (started.kind !== "device_code") return assert.fail("expected a device code");
+        assert.strictEqual((yield* sync.poll(started.flowId)).state, "connected");
+        const settings = yield* ServerSettings.ServerSettingsService;
+        assert.isTrue((yield* settings.getSettings).memorySyncEnabled);
+        assert.isTrue((yield* sync.getStatus).sync.signedIn);
+        yield* sync.syncNow;
+        assert.strictEqual((yield* sync.getStatus).sync.state, "idle");
+        assert.isNotNull(
+          drive.file(`TritonAI Harness/memory/general/.devices/${MAC.environmentId}/device.json`),
+        );
       }).pipe(Effect.provide(mac.layer));
     }),
   );
