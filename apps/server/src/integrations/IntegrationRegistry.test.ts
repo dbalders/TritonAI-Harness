@@ -6178,9 +6178,11 @@ describe("IntegrationRegistry tool availability reasons", () => {
       releaseStatus = resolve;
     });
     let blockStatus = false;
+    let statusChecks = 0;
     const blockingStatus: IntegrationProvider = {
       ...provider("test-connected-provider", state),
       status: async () => {
+        statusChecks += 1;
         if (blockStatus) {
           blockStatus = false;
           markStatusStarted();
@@ -6202,6 +6204,7 @@ describe("IntegrationRegistry tool availability reasons", () => {
         // The capability is persisted before its summary lands, and no provider work is in
         // flight, so the cached summary is all that stands between the tool and the caller.
         blockStatus = true;
+        const checksBeforeEnabling = statusChecks;
         const enabling = registry.setCapabilityEnabled(optInEventsManifest.id, "events.read", true);
         await statusStarted;
         expect(registry.toolAvailabilitySync("test.events.list")).toMatchObject({
@@ -6209,10 +6212,18 @@ describe("IntegrationRegistry tool availability reasons", () => {
           reason: "connection_changing",
         });
 
-        const waited = registry.awaitToolAvailability("test.events.list");
+        const waited = [
+          registry.awaitToolAvailability("test.events.list"),
+          registry.awaitToolAvailability("test.events.list"),
+        ];
         releaseStatus();
-        await expect(waited).resolves.toEqual({ available: true });
+        await expect(Promise.all(waited)).resolves.toEqual([
+          { available: true },
+          { available: true },
+        ]);
         await enabling;
+        // The enable's own summary corrected availability, so neither queued sample re-checks.
+        expect(statusChecks - checksBeforeEnabling).toBe(1);
       },
     );
   });

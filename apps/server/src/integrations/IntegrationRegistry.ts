@@ -2564,7 +2564,12 @@ export class RegistryRuntime {
           if (resampled) break;
           resampled = true;
           pending.push(
-            this.#serializeIntegration(integration.manifest.id, () => this.#summarize(integration)),
+            this.#serializeIntegration(integration.manifest.id, async () => {
+              // Concurrent callers queue behind each other; skip once an earlier sample fixed it.
+              const current = this.toolAvailabilitySync(name);
+              if (current.available || current.reason !== "connection_changing") return;
+              await this.#summarize(integration);
+            }),
           );
         }
         const settled = await awaitWithSignal(
