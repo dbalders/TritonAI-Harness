@@ -5637,20 +5637,18 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("creates a project from just a name in the projects folder", () =>
+  // TritonAI Harness hides upstream's "New project" (start a Git repository
+  // from a name), so the server neither advertises nor creates one.
+  it.effect("does not offer or create a project from just a name", () =>
     Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const created: Array<{ readonly title: string; readonly workspaceRoot: string }> = [];
+      const created: Array<string> = [];
       const gitCalls: Array<string> = [];
       yield* buildAppUnderTest({
         layers: {
           orchestrationEngine: {
             dispatch: (command) =>
               Effect.sync(() => {
-                if (command.type === "project.create") {
-                  created.push({ title: command.title, workspaceRoot: command.workspaceRoot });
-                }
+                created.push(command.type);
                 return { sequence: created.length };
               }),
           },
@@ -5674,22 +5672,15 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       yield* Effect.scoped(
         withWsRpcClient(yield* getWsServerUrl("/ws"), (client) =>
           Effect.gen(function* () {
-            const root = (yield* client[WS_METHODS.serverGetConfig]({})).newProjectsRoot ?? "";
-            const result = yield* client[WS_METHODS.projectsCreateNew]({ name: "Pinball Stats" });
-
-            assert.equal(result.workspaceRoot, path.join(root, "pinball-stats"));
-            assert.isUndefined(result.commitError);
-            assert.deepEqual(created, [
-              { title: "Pinball Stats", workspaceRoot: result.workspaceRoot },
-            ]);
-            assert.deepEqual(gitCalls, [
-              "init --initial-branch=main",
-              "add --force -- README.md assets/icon.svg",
-              "commit --message Initial commit",
-            ]);
-            assert.isTrue(
-              yield* fileSystem.exists(path.join(result.workspaceRoot, "assets", "icon.svg")),
+            const config = yield* client[WS_METHODS.serverGetConfig]({});
+            const error = yield* Effect.flip(
+              client[WS_METHODS.projectsCreateNew]({ name: "Pinball Stats" }),
             );
+
+            assert.isFalse("newProjectsRoot" in config);
+            assert.include(String(error.message), "not available");
+            assert.deepEqual(created, []);
+            assert.deepEqual(gitCalls, []);
           }),
         ),
       );

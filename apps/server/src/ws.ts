@@ -2085,6 +2085,12 @@ const makeWsRpcLayer = (
       // away from folders the user organizes by hand. A nested repository is
       // fine here (unlike Scratch) because each project gets its own `git init`.
       const newProjectsRoot = path.resolve(config.baseDir, "projects");
+      // TritonAI Harness decision: hide upstream's "New project" (start a Git
+      // repository from a name). Harness users may not have Git installed, and
+      // the folder would land under the hidden base directory. Not advertising
+      // `newProjectsRoot` hides every client entry point, and the RPC refuses so
+      // older clients cannot create one either.
+      const newProjectsEnabled = false;
       const createNewProject = (input: ProjectCreateNewInput) =>
         Effect.gen(function* () {
           const folder = yield* NewProject.createNewProjectFolder({
@@ -2189,7 +2195,7 @@ const makeWsRpcLayer = (
             threadSnapshotPagination: true,
             reasoningMessages: true,
             ...(scratchWorkspaceRoot === undefined ? {} : { scratchWorkspaceRoot }),
-            newProjectsRoot,
+            ...(newProjectsEnabled ? { newProjectsRoot } : {}),
           };
         });
 
@@ -3527,9 +3533,17 @@ const makeWsRpcLayer = (
             "rpc.aggregate": "orchestration",
           }),
         [WS_METHODS.projectsCreateNew]: (input) =>
-          observeRpcEffect(WS_METHODS.projectsCreateNew, createNewProject(input), {
-            "rpc.aggregate": "orchestration",
-          }),
+          observeRpcEffect(
+            WS_METHODS.projectsCreateNew,
+            newProjectsEnabled
+              ? createNewProject(input)
+              : Effect.fail(
+                  new OrchestrationDispatchCommandError({
+                    message: "Creating a new project is not available on this environment.",
+                  }),
+                ),
+            { "rpc.aggregate": "orchestration" },
+          ),
         [WS_METHODS.projectCloneCancel]: (input) =>
           observeRpcEffect(
             WS_METHODS.projectCloneCancel,
