@@ -218,6 +218,54 @@ const readUcsdEnvironmentFile = Effect.gen(function* () {
   );
 });
 
+const MANAGED_NODE_RUNTIME_PATTERN = /^node-v(\d+)\.(\d+)\.(\d+)-/u;
+
+// The Installer's private Node runtime (with npm/npx) used to reach agent shells only through the
+// macOS launcher's PATH. Find the newest complete runtime so it can be appended after the user's
+// own PATH; a user-installed Node keeps precedence.
+const resolveManagedNodeBinDirectory = Effect.gen(function* () {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const environment = yield* DesktopEnvironment.DesktopEnvironment;
+  if (environment.platform === "win32") return Option.none<string>();
+  const runtimeRoot = environment.path.join(
+    environment.homeDirectory,
+    ".agents",
+    "ucsd",
+    "runtime",
+    "node",
+  );
+  const entries = yield* fileSystem
+    .readDirectory(runtimeRoot)
+    .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
+  const runtimes = entries
+    .flatMap((name) => {
+      const match = MANAGED_NODE_RUNTIME_PATTERN.exec(name);
+      return match === null ? [] : [{ name, version: match.slice(1, 4).map(Number) }];
+    })
+    .sort((left, right) => compareVersionParts(right.version, left.version));
+  for (const runtime of runtimes) {
+    const binDirectory = environment.path.join(runtimeRoot, runtime.name, "bin");
+    const hasNode = yield* fileSystem
+      .exists(environment.path.join(binDirectory, "node"))
+      .pipe(Effect.orElseSucceed(() => false));
+    if (hasNode) return Option.some(binDirectory);
+  }
+  return Option.none<string>();
+});
+
+function compareVersionParts(left: ReadonlyArray<number>, right: ReadonlyArray<number>): number {
+  for (let index = 0; index < Math.max(left.length, right.length); index++) {
+    const difference = (left[index] ?? 0) - (right[index] ?? 0);
+    if (difference !== 0) return difference;
+  }
+  return 0;
+}
+
+export function appendPathEntry(currentPath: string | undefined, entry: string): string {
+  const entries = (currentPath ?? "").split(":").filter((value) => value.length > 0);
+  return entries.includes(entry) ? entries.join(":") : [...entries, entry].join(":");
+}
+
 function ucsdEnvironmentFallback(ucsdEnvironment: Record<string, string>): Record<string, string> {
   return Object.fromEntries(
     Object.entries(ucsdEnvironment).filter(([name]) => {
@@ -671,6 +719,7 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
     const serverExposure = yield* DesktopServerExposure.DesktopServerExposure;
     const backendExposure = yield* serverExposure.backendConfig;
     const ucsdEnvironment = yield* readUcsdEnvironmentFile;
+    const managedNodeBinDirectory = yield* resolveManagedNodeBinDirectory;
     const tritonAiCredentialOverride = yield* DesktopTritonAiApiKey.readTritonAiCredentialOverride;
     const tritonAiCredentialEnvironment = resolveTritonAiCredentialEnvironment(
       ucsdEnvironment,
@@ -729,6 +778,10 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
         ...ucsdEnvironmentFallback(withoutTritonAiCredentials(ucsdEnvironment)),
         ...tritonAiCredentialEnvironment,
         ...backendChildEnvPatch(),
+        ...Option.match(managedNodeBinDirectory, {
+          onNone: () => ({}),
+          onSome: (binDirectory) => ({ PATH: appendPathEntry(process.env.PATH, binDirectory) }),
+        }),
         ELECTRON_RUN_AS_NODE: "1",
       },
       // Primary wants process.env (PATH, shells, etc.), but the bootstrap

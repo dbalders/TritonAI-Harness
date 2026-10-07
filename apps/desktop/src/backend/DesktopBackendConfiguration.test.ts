@@ -955,6 +955,70 @@ describe("DesktopBackendConfiguration", () => {
     }),
   );
 
+  it.effect(
+    "resolvePrimary appends the Installer's newest Node runtime after the inherited PATH",
+    () =>
+      Effect.gen(function* () {
+        const previousPath = process.env.PATH;
+        try {
+          yield* withHarness(
+            Effect.gen(function* () {
+              const fileSystem = yield* FileSystem.FileSystem;
+              const environment = yield* DesktopEnvironment.DesktopEnvironment;
+              const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+              const runtimeRoot = environment.path.join(
+                environment.homeDirectory,
+                ".agents",
+                "ucsd",
+                "runtime",
+                "node",
+              );
+
+              process.env.PATH = "/usr/bin:/bin";
+              assert.isUndefined(
+                (yield* configuration.resolvePrimary).env.PATH,
+                "no managed runtime leaves the inherited PATH alone",
+              );
+
+              const runtimes = {
+                older: "node-v22.9.0-darwin-arm64",
+                newest: "node-v22.23.2-darwin-arm64",
+                incomplete: "node-v24.0.0-darwin-arm64",
+                staging: ".node-v99.0.0-stage-abc",
+              };
+              for (const name of Object.values(runtimes)) {
+                yield* fileSystem.makeDirectory(environment.path.join(runtimeRoot, name, "bin"), {
+                  recursive: true,
+                });
+              }
+              for (const name of [runtimes.older, runtimes.newest, runtimes.staging]) {
+                yield* fileSystem.writeFileString(
+                  environment.path.join(runtimeRoot, name, "bin", "node"),
+                  "",
+                );
+              }
+              const newestBin = environment.path.join(runtimeRoot, runtimes.newest, "bin");
+
+              assert.equal(
+                (yield* configuration.resolvePrimary).env.PATH,
+                `/usr/bin:/bin:${newestBin}`,
+                "the newest complete runtime goes last so a user-installed Node keeps precedence",
+              );
+
+              process.env.PATH = `/usr/bin:${newestBin}:/bin`;
+              assert.equal(
+                (yield* configuration.resolvePrimary).env.PATH,
+                `/usr/bin:${newestBin}:/bin`,
+                "an entry already on PATH is not duplicated",
+              );
+            }),
+          );
+        } finally {
+          restoreEnv("PATH", previousPath);
+        }
+      }),
+  );
+
   it.effect("Windows startup reads Installer literals without running its launcher", () =>
     Effect.gen(function* () {
       const names = ["TRITONAI_API_KEY", "UCSD_AI_BASE_URL"] as const;
