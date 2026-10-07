@@ -1097,6 +1097,13 @@ describe("DesktopBackendConfiguration", () => {
                 "declared folders are restored in launcher order, missing ones skipped, after the user's PATH",
               );
 
+              process.env.PATH = "";
+              assert.equal(
+                (yield* configuration.resolvePrimary).env.PATH,
+                `:${declared.helpers}:${declared.codex}:${declared.node}`,
+                "an explicitly empty PATH (the current directory) stays first",
+              );
+
               // Under the old launcher they are already on PATH; nothing changes.
               const launcherPath = `${Object.values(declared).join(":")}:/usr/bin:/bin`;
               process.env.PATH = launcherPath;

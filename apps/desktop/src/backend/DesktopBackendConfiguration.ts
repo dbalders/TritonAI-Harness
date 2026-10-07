@@ -235,12 +235,46 @@ function declaredManagedPathEntries(rawPath: string | undefined): ReadonlyArray<
     : declared[1].split(":").filter((entry) => entry.startsWith("/"));
 }
 
+// A missing tool folder is normal; anything else (e.g. permissions) is logged and treated as
+// absent, so a damaged runtime can never stop the backend from starting.
+function absentUnlessLogged<A, R>(
+  effect: Effect.Effect<A, PlatformError.PlatformError, R>,
+  fallback: A,
+  path: string,
+): Effect.Effect<A, never, R> {
+  return effect.pipe(
+    Effect.catchTags({
+      PlatformError: (cause) =>
+        cause.reason._tag === "NotFound"
+          ? Effect.succeed(fallback)
+          : Effect.logWarning("Could not inspect an Installer-managed tool folder.").pipe(
+              Effect.annotateLogs({
+                component: "desktop-backend-configuration",
+                path,
+                error: cause.message || String(cause),
+              }),
+              Effect.as(fallback),
+            ),
+    }),
+  );
+}
+
+const statManagedPath = Effect.fn("desktop.backendConfiguration.statManagedPath")(function* (
+  target: string,
+) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  return yield* absentUnlessLogged(
+    fileSystem.stat(target).pipe(Effect.map(Option.some)),
+    Option.none<FileSystem.File.Info>(),
+    target,
+  );
+});
+
 const isExecutableFile = Effect.fn("desktop.backendConfiguration.isExecutableFile")(function* (
   file: string,
 ) {
-  const fileSystem = yield* FileSystem.FileSystem;
   // stat follows symlinks, so npm/npx links into lib/node_modules are checked at their target.
-  const info = yield* fileSystem.stat(file).pipe(Effect.option);
+  const info = yield* statManagedPath(file);
   return Option.exists(info, (value) => value.type === "File" && (value.mode & 0o111) !== 0);
 });
 
@@ -253,9 +287,11 @@ const newestUsableRuntimeBin = Effect.fn("desktop.backendConfiguration.newestUsa
   ) {
     const fileSystem = yield* FileSystem.FileSystem;
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
-    const entries = yield* fileSystem
-      .readDirectory(root)
-      .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
+    const entries = yield* absentUnlessLogged<ReadonlyArray<string>, never>(
+      fileSystem.readDirectory(root),
+      [],
+      root,
+    );
     const runtimes = entries
       .flatMap((name) => {
         const match = pattern.exec(name);
@@ -278,7 +314,6 @@ const newestUsableRuntimeBin = Effect.fn("desktop.backendConfiguration.newestUsa
 
 const resolveManagedPathEntries = Effect.fn("desktop.backendConfiguration.resolveManagedPath")(
   function* (ucsdEnvironment: Record<string, string>) {
-    const fileSystem = yield* FileSystem.FileSystem;
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
     // Windows still starts through the Installer's PowerShell launcher, which owns its PATH.
     if (environment.platform === "win32") return [] as ReadonlyArray<string>;
@@ -306,7 +341,7 @@ const resolveManagedPathEntries = Effect.fn("desktop.backendConfiguration.resolv
     }
     const existing: Array<string> = [];
     for (const candidate of candidates) {
-      const info = yield* fileSystem.stat(candidate).pipe(Effect.option);
+      const info = yield* statManagedPath(candidate);
       if (Option.exists(info, (value) => value.type === "Directory")) existing.push(candidate);
     }
     return existing as ReadonlyArray<string>;
@@ -323,7 +358,9 @@ function compareVersionParts(left: ReadonlyArray<number>, right: ReadonlyArray<n
 
 // Append without rebuilding the inherited PATH: an empty entry means the current directory.
 function appendPathEntry(currentPath: string | undefined, entry: string): string {
-  if (currentPath === undefined || currentPath.length === 0) return entry;
+  if (currentPath === undefined) return entry;
+  // An explicitly empty PATH means the current directory; keep it ahead of the managed entry.
+  if (currentPath.length === 0) return `:${entry}`;
   return currentPath.split(":").includes(entry) ? currentPath : `${currentPath}:${entry}`;
 }
 
