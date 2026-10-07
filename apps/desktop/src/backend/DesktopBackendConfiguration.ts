@@ -218,56 +218,100 @@ const readUcsdEnvironmentFile = Effect.gen(function* () {
   );
 });
 
-// Official Node archive layout the Installer stages, e.g. node-v22.23.2-darwin-arm64.
+// On macOS the Installer's launcher used to put its private tool folders (helper scripts,
+// managed Codex CLI, npm global bin, Node runtime) ahead of PATH by sourcing
+// ~/.agents/ucsd/env, which declares them as `export PATH='<dirs>':$PATH`. Restore exactly
+// those folders for every launch path (Dock, Finder, update relaunch), appended after the
+// user's own PATH so their tools keep precedence. If an env file declares none, fall back to
+// the newest usable Node and Codex runtimes the Installer staged.
+const DECLARED_MANAGED_PATH_PATTERN = /^'([^']*)':\$(?:PATH|\{PATH\})$/u;
 const MANAGED_NODE_RUNTIME_PATTERN = /^node-v(\d+)\.(\d+)\.(\d+)-([a-z0-9]+)-([a-z0-9]+)$/u;
+const MANAGED_CODEX_RUNTIME_PATTERN = /^openai-codex-(\d+)\.(\d+)\.(\d+)$/u;
 
-// The Installer's private Node runtime (with npm/npx) used to reach agent shells only through the
-// macOS launcher's PATH. Find the newest complete runtime so it can be appended after the user's
-// own PATH; a user-installed Node keeps precedence.
-const resolveManagedNodeBinDirectory = Effect.gen(function* () {
+function declaredManagedPathEntries(rawPath: string | undefined): ReadonlyArray<string> {
+  const declared = rawPath === undefined ? null : DECLARED_MANAGED_PATH_PATTERN.exec(rawPath);
+  return declared?.[1] === undefined
+    ? []
+    : declared[1].split(":").filter((entry) => entry.startsWith("/"));
+}
+
+const isExecutableFile = Effect.fn("desktop.backendConfiguration.isExecutableFile")(function* (
+  file: string,
+) {
   const fileSystem = yield* FileSystem.FileSystem;
-  const environment = yield* DesktopEnvironment.DesktopEnvironment;
-  if (environment.platform === "win32") return Option.none<string>();
-  const runtimeRoot = environment.path.join(
-    environment.homeDirectory,
-    ".agents",
-    "ucsd",
-    "runtime",
-    "node",
-  );
-  const entries = yield* fileSystem
-    .readDirectory(runtimeRoot)
-    .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
-  const runtimes = entries
-    .flatMap((name) => {
-      const match = MANAGED_NODE_RUNTIME_PATTERN.exec(name);
-      return match === null ||
-        match[4] !== environment.platform ||
-        match[5] !== environment.processArch
-        ? []
-        : [{ name, version: match.slice(1, 4).map(Number) }];
-    })
-    .sort((left, right) => compareVersionParts(right.version, left.version));
-  for (const runtime of runtimes) {
-    const binDirectory = environment.path.join(runtimeRoot, runtime.name, "bin");
-    const nodeInfo = yield* fileSystem
-      .stat(environment.path.join(binDirectory, "node"))
-      .pipe(Effect.option);
-    const nodeIsExecutable = Option.exists(
-      nodeInfo,
-      (info) => info.type === "File" && (info.mode & 0o111) !== 0,
-    );
-    if (!nodeIsExecutable) continue;
-    let hasCompanions = true;
-    for (const command of ["npm", "npx"]) {
-      hasCompanions &&= yield* fileSystem
-        .exists(environment.path.join(binDirectory, command))
-        .pipe(Effect.orElseSucceed(() => false));
-    }
-    if (hasCompanions) return Option.some(binDirectory);
-  }
-  return Option.none<string>();
+  // stat follows symlinks, so npm/npx links into lib/node_modules are checked at their target.
+  const info = yield* fileSystem.stat(file).pipe(Effect.option);
+  return Option.exists(info, (value) => value.type === "File" && (value.mode & 0o111) !== 0);
 });
+
+const newestUsableRuntimeBin = Effect.fn("desktop.backendConfiguration.newestUsableRuntimeBin")(
+  function* (
+    root: string,
+    pattern: RegExp,
+    accepts: (match: RegExpExecArray) => boolean,
+    commands: ReadonlyArray<string>,
+  ) {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const environment = yield* DesktopEnvironment.DesktopEnvironment;
+    const entries = yield* fileSystem
+      .readDirectory(root)
+      .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
+    const runtimes = entries
+      .flatMap((name) => {
+        const match = pattern.exec(name);
+        return match === null || !accepts(match)
+          ? []
+          : [{ name, version: match.slice(1, 4).map(Number) }];
+      })
+      .sort((left, right) => compareVersionParts(right.version, left.version));
+    for (const runtime of runtimes) {
+      const binDirectory = environment.path.join(root, runtime.name, "bin");
+      let usable = true;
+      for (const command of commands) {
+        usable &&= yield* isExecutableFile(environment.path.join(binDirectory, command));
+      }
+      if (usable) return Option.some(binDirectory);
+    }
+    return Option.none<string>();
+  },
+);
+
+const resolveManagedPathEntries = Effect.fn("desktop.backendConfiguration.resolveManagedPath")(
+  function* (ucsdEnvironment: Record<string, string>) {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const environment = yield* DesktopEnvironment.DesktopEnvironment;
+    // Windows still starts through the Installer's PowerShell launcher, which owns its PATH.
+    if (environment.platform === "win32") return [] as ReadonlyArray<string>;
+    let candidates = declaredManagedPathEntries(ucsdEnvironment.PATH);
+    if (candidates.length === 0) {
+      const runtimeRoot = environment.path.join(
+        environment.homeDirectory,
+        ".agents",
+        "ucsd",
+        "runtime",
+      );
+      const codexBin = yield* newestUsableRuntimeBin(
+        environment.path.join(runtimeRoot, "codex"),
+        MANAGED_CODEX_RUNTIME_PATTERN,
+        () => true,
+        ["codex"],
+      );
+      const nodeBin = yield* newestUsableRuntimeBin(
+        environment.path.join(runtimeRoot, "node"),
+        MANAGED_NODE_RUNTIME_PATTERN,
+        (match) => match[4] === environment.platform && match[5] === environment.processArch,
+        ["node", "npm", "npx"],
+      );
+      candidates = [...Option.toArray(codexBin), ...Option.toArray(nodeBin)];
+    }
+    const existing: Array<string> = [];
+    for (const candidate of candidates) {
+      const info = yield* fileSystem.stat(candidate).pipe(Effect.option);
+      if (Option.exists(info, (value) => value.type === "Directory")) existing.push(candidate);
+    }
+    return existing as ReadonlyArray<string>;
+  },
+);
 
 function compareVersionParts(left: ReadonlyArray<number>, right: ReadonlyArray<number>): number {
   for (let index = 0; index < Math.max(left.length, right.length); index++) {
@@ -736,7 +780,7 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
     const serverExposure = yield* DesktopServerExposure.DesktopServerExposure;
     const backendExposure = yield* serverExposure.backendConfig;
     const ucsdEnvironment = yield* readUcsdEnvironmentFile;
-    const managedNodeBinDirectory = yield* resolveManagedNodeBinDirectory;
+    const managedPathEntries = yield* resolveManagedPathEntries(ucsdEnvironment);
     const tritonAiCredentialOverride = yield* DesktopTritonAiApiKey.readTritonAiCredentialOverride;
     const tritonAiCredentialEnvironment = resolveTritonAiCredentialEnvironment(
       ucsdEnvironment,
@@ -795,10 +839,9 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
         ...ucsdEnvironmentFallback(withoutTritonAiCredentials(ucsdEnvironment)),
         ...tritonAiCredentialEnvironment,
         ...backendChildEnvPatch(),
-        ...Option.match(managedNodeBinDirectory, {
-          onNone: () => ({}),
-          onSome: (binDirectory) => ({ PATH: appendPathEntry(process.env.PATH, binDirectory) }),
-        }),
+        ...(managedPathEntries.length === 0
+          ? {}
+          : { PATH: managedPathEntries.reduce(appendPathEntry, process.env.PATH) }),
         ELECTRON_RUN_AS_NODE: "1",
       },
       // Primary wants process.env (PATH, shells, etc.), but the bootstrap

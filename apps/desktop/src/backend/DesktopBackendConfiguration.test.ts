@@ -1035,6 +1035,138 @@ describe("DesktopBackendConfiguration", () => {
       }),
   );
 
+  it.effect(
+    "resolvePrimary restores the Installer's declared tool folders after the inherited PATH",
+    () =>
+      Effect.gen(function* () {
+        const previousPath = process.env.PATH;
+        try {
+          yield* withHarness(
+            Effect.gen(function* () {
+              const fileSystem = yield* FileSystem.FileSystem;
+              const environment = yield* DesktopEnvironment.DesktopEnvironment;
+              const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+              const ucsd = environment.path.join(environment.homeDirectory, ".agents", "ucsd");
+              const declared = {
+                helpers: environment.path.join(ucsd, "bin"),
+                codex: environment.path.join(
+                  ucsd,
+                  "runtime",
+                  "codex",
+                  "openai-codex-0.151.0",
+                  "bin",
+                ),
+                npmGlobal: environment.path.join(ucsd, "runtime", "node-global", "bin"),
+                node: environment.path.join(
+                  ucsd,
+                  "runtime",
+                  "node",
+                  "node-v22.23.2-darwin-x64",
+                  "bin",
+                ),
+              };
+              for (const directory of [declared.helpers, declared.codex, declared.node]) {
+                yield* fileSystem.makeDirectory(directory, { recursive: true });
+              }
+              // A newer staged runtime the env file does not declare must not be picked.
+              const undeclared = environment.path.join(
+                ucsd,
+                "runtime",
+                "node",
+                "node-v24.0.0-darwin-x64",
+                "bin",
+              );
+              yield* fileSystem.makeDirectory(undeclared, { recursive: true });
+              for (const command of ["node", "npm", "npx"]) {
+                yield* fileSystem.writeFileString(environment.path.join(undeclared, command), "");
+                yield* fileSystem.chmod(environment.path.join(undeclared, command), 0o755);
+              }
+              yield* fileSystem.writeFileString(
+                environment.path.join(ucsd, "env"),
+                [
+                  `export PATH='${Object.values(declared).join(":")}':$PATH`,
+                  "export UCSD_AI_BASE_URL=https://tritonai-api.ucsd.edu/v1",
+                  "",
+                ].join("\n"),
+              );
+
+              process.env.PATH = "/usr/bin:/bin";
+              assert.equal(
+                (yield* configuration.resolvePrimary).env.PATH,
+                `/usr/bin:/bin:${declared.helpers}:${declared.codex}:${declared.node}`,
+                "declared folders are restored in launcher order, missing ones skipped, after the user's PATH",
+              );
+
+              // Under the old launcher they are already on PATH; nothing changes.
+              const launcherPath = `${Object.values(declared).join(":")}:/usr/bin:/bin`;
+              process.env.PATH = launcherPath;
+              assert.equal((yield* configuration.resolvePrimary).env.PATH, launcherPath);
+            }),
+          );
+        } finally {
+          restoreEnv("PATH", previousPath);
+        }
+      }),
+  );
+
+  it.effect("resolvePrimary falls back to the newest usable Codex and Node runtimes", () =>
+    Effect.gen(function* () {
+      const previousPath = process.env.PATH;
+      try {
+        yield* withHarness(
+          Effect.gen(function* () {
+            const fileSystem = yield* FileSystem.FileSystem;
+            const environment = yield* DesktopEnvironment.DesktopEnvironment;
+            const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+            const runtime = environment.path.join(
+              environment.homeDirectory,
+              ".agents",
+              "ucsd",
+              "runtime",
+            );
+            const writeCommands = (bin: string, commands: ReadonlyArray<string>) =>
+              Effect.gen(function* () {
+                yield* fileSystem.makeDirectory(bin, { recursive: true });
+                for (const command of commands) {
+                  yield* fileSystem.writeFileString(environment.path.join(bin, command), "");
+                  yield* fileSystem.chmod(environment.path.join(bin, command), 0o755);
+                }
+              });
+            const olderCodex = environment.path.join(
+              runtime,
+              "codex",
+              "openai-codex-0.146.0",
+              "bin",
+            );
+            const newerCodex = environment.path.join(
+              runtime,
+              "codex",
+              "openai-codex-0.151.0",
+              "bin",
+            );
+            const nodeBin = environment.path.join(
+              runtime,
+              "node",
+              "node-v22.23.2-darwin-x64",
+              "bin",
+            );
+            yield* writeCommands(olderCodex, ["codex"]);
+            yield* writeCommands(newerCodex, ["codex"]);
+            yield* writeCommands(nodeBin, ["node", "npm", "npx"]);
+
+            process.env.PATH = "/usr/bin:/bin";
+            assert.equal(
+              (yield* configuration.resolvePrimary).env.PATH,
+              `/usr/bin:/bin:${newerCodex}:${nodeBin}`,
+            );
+          }),
+        );
+      } finally {
+        restoreEnv("PATH", previousPath);
+      }
+    }),
+  );
+
   it.effect("Windows startup reads Installer literals without running its launcher", () =>
     Effect.gen(function* () {
       const names = ["TRITONAI_API_KEY", "UCSD_AI_BASE_URL"] as const;
