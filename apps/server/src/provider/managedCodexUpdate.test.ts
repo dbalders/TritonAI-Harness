@@ -62,20 +62,62 @@ const makeFixture = Effect.fn("managedCodexUpdate.test.makeFixture")(function* (
   return { fs, path, runtimeRoot, installRoot, binaryPath };
 });
 
+/** Mirrors the Installer's POSIX launcher and its pinned Node.js runtime. */
+const writePosixManagedLauncher = Effect.fn("managedCodexUpdate.test.writePosixManagedLauncher")(
+  function* (fixture: Effect.Success<ReturnType<typeof makeFixture>>) {
+    const { fs, path } = fixture;
+    const nodeHome = path.join(
+      path.dirname(fixture.runtimeRoot),
+      "node",
+      "node-v22.23.2-darwin-arm64",
+    );
+    const nodeBinary = path.join(nodeHome, "bin", "node");
+    const npmCli = path.join(nodeHome, "lib", "node_modules", "npm", "bin", "npm-cli.js");
+    yield* fs.makeDirectory(path.dirname(nodeBinary), { recursive: true });
+    yield* fs.makeDirectory(path.dirname(npmCli), { recursive: true });
+    yield* fs.writeFileString(nodeBinary, "");
+    yield* fs.writeFileString(npmCli, "");
+    yield* fs.writeFileString(
+      fixture.binaryPath,
+      [
+        "#!/usr/bin/env sh",
+        "# managed launcher",
+        "set -eu",
+        'SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)',
+        'NODE_BIN="$SCRIPT_DIR/../../../node/node-v22.23.2-darwin-arm64/bin/node"',
+        'exec "$NODE_BIN" "$SCRIPT_DIR/../lib/node_modules/@openai/codex/bin/codex.js" "$@"',
+        "",
+      ].join("\n"),
+    );
+    return { nodeBinary, npmCli };
+  },
+);
+
 const makeFakeRunner = Effect.fn("managedCodexUpdate.test.makeFakeRunner")(function* (options?: {
   readonly failNpm?: boolean;
   readonly failActivatedVerification?: boolean;
+  readonly managedNpm?: { readonly nodeBinary: string; readonly npmCli: string };
+  readonly npmCommands?: Array<string>;
+  readonly entryScripts?: Array<string>;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const run: ProcessRunner["Service"]["run"] = (input) =>
     Effect.gen(function* () {
-      if (input.command === "npm") {
-        expect(input.args.some((arg) => /^@openai\/codex@0\.15[12]\.0$/.test(arg))).toBe(true);
-        expect(input.args).not.toContain("@openai/codex@latest");
+      const npmArgs =
+        input.command === "npm"
+          ? input.args
+          : input.command === options?.managedNpm?.nodeBinary &&
+              input.args[0] === options.managedNpm.npmCli
+            ? input.args.slice(1)
+            : null;
+      if (npmArgs) {
+        options?.npmCommands?.push(input.command);
+        expect(npmArgs.some((arg) => /^@openai\/codex@0\.15[12]\.0$/.test(arg))).toBe(true);
+        expect(npmArgs).not.toContain("@openai/codex@latest");
         if (options?.failNpm) return failure("npm failed");
-        const prefixIndex = input.args.indexOf("--prefix");
-        const prefix = input.args[prefixIndex + 1];
+        const prefixIndex = npmArgs.indexOf("--prefix");
+        const prefix = npmArgs[prefixIndex + 1];
         if (!prefix) return failure("missing prefix");
         const stagedBinary = path.join(prefix, "bin", "codex");
         yield* fs.makeDirectory(path.dirname(stagedBinary), { recursive: true });
@@ -85,10 +127,19 @@ const makeFakeRunner = Effect.fn("managedCodexUpdate.test.makeFakeRunner")(funct
         return success("installed");
       }
 
-      if (!normalizeCommandPath(input.command).endsWith("/bin/codex")) {
+      // The pinned Node.js runtime verifies a staged package through its entry script.
+      const entryScript =
+        input.command === options?.managedNpm?.nodeBinary &&
+        input.args[0]?.endsWith(path.join("@openai", "codex", "bin", "codex.js"))
+          ? input.args[0]
+          : null;
+      if (entryScript) options?.entryScripts?.push(entryScript);
+      if (!entryScript && !normalizeCommandPath(input.command).endsWith("/bin/codex")) {
         return failure("unexpected command");
       }
-      const commandInstallRoot = path.dirname(path.dirname(input.command));
+      const commandInstallRoot = entryScript
+        ? path.resolve(entryScript, "..", "..", "..", "..", "..", "..")
+        : path.dirname(path.dirname(input.command));
       const version = yield* fs.readFileString(path.join(commandInstallRoot, "version.txt"));
       if (
         options?.failActivatedVerification &&
@@ -230,6 +281,44 @@ it.layer(fixtureLayer)("managed Codex update transaction", (it) => {
       expect((yield* fixture.fs.readDirectory(fixture.runtimeRoot)).toSorted()).toEqual([
         "openai-codex-0.146.0",
       ]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("stages and verifies with the Node.js runtime the POSIX launcher pins", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture();
+      const managedNpm = yield* writePosixManagedLauncher(fixture);
+      const npmCommands: Array<string> = [];
+      const entryScripts: Array<string> = [];
+      const version = yield* updateTritonAiManagedCodex({
+        binaryPath: fixture.binaryPath,
+        run: yield* makeFakeRunner({ managedNpm, npmCommands, entryScripts }),
+      }).pipe(Effect.scoped);
+
+      expect(version).toBe("0.151.0");
+      expect(npmCommands).toEqual([managedNpm.nodeBinary]);
+      // The staged package is verified without relying on node from PATH.
+      expect(entryScripts).toHaveLength(1);
+      expect(yield* fixture.fs.readFileString(fixture.binaryPath)).toContain("NODE_BIN=");
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("fails closed when the pinned POSIX Node.js runtime has no npm", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture();
+      const managedNpm = yield* writePosixManagedLauncher(fixture);
+      yield* fixture.fs.remove(managedNpm.npmCli);
+      const npmCommands: Array<string> = [];
+      const error = yield* updateTritonAiManagedCodex({
+        binaryPath: fixture.binaryPath,
+        run: yield* makeFakeRunner({ managedNpm, npmCommands }),
+      }).pipe(Effect.scoped, Effect.flip);
+
+      expect(error.message).toContain("Repair it with TritonAI Installer");
+      expect(npmCommands).toEqual([]);
+      expect(
+        yield* fixture.fs.readFileString(fixture.path.join(fixture.installRoot, "version.txt")),
+      ).toBe("0.146.0");
     }).pipe(Effect.scoped),
   );
 
