@@ -15,7 +15,14 @@ import { AppText as Text } from "../../components/AppText";
 import { serverEnvironment } from "../../state/server";
 import { usePreparedConnection } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { createNativeAccountLogin } from "./nativeAccountLogin";
+import { createNativeAccountLogin, createNativeAccountLoginState } from "./nativeAccountLogin";
+
+// In-memory only: panel remounts must not discard an unexchanged browser callback.
+// Proof is sent only after this client's backend reports the identical callback/request.
+const nativeAccountSessions = new Map<
+  EnvironmentId,
+  ReturnType<typeof createNativeAccountLoginState>
+>();
 
 function AccountButton({
   title,
@@ -46,24 +53,32 @@ export function UcsdAccountSettings({ environmentId }: { readonly environmentId:
   const poll = useAtomCommand(serverEnvironment.pollAccountLogin, { reportFailure: false });
   const signOut = useAtomCommand(serverEnvironment.signOutAccount, { reportFailure: false });
   const controller = useMemo(() => {
-    const native = createNativeAccountLogin({
-      getStatus: async () => accountCommandValue(await getStatus({ environmentId, input: {} })),
-      start: async (input) => accountCommandValue(await start({ environmentId, input })),
-      poll: async (input) => accountCommandValue(await poll({ environmentId, input })),
-      signOut: async () => accountCommandValue(await signOut({ environmentId, input: {} })),
-      createReturnUrl: () => {
-        const configured = Constants.expoConfig?.scheme;
-        const scheme = Array.isArray(configured) ? configured[0] : configured;
-        const id = Encoding.encodeBase64Url(Crypto.getRandomBytes(32));
-        return `${scheme}:///account/callback/${id}`;
+    let nativeState = nativeAccountSessions.get(environmentId);
+    if (!nativeState) {
+      nativeState = createNativeAccountLoginState();
+      nativeAccountSessions.set(environmentId, nativeState);
+    }
+    const native = createNativeAccountLogin(
+      {
+        getStatus: async () => accountCommandValue(await getStatus({ environmentId, input: {} })),
+        start: async (input) => accountCommandValue(await start({ environmentId, input })),
+        poll: async (input) => accountCommandValue(await poll({ environmentId, input })),
+        signOut: async () => accountCommandValue(await signOut({ environmentId, input: {} })),
+        createReturnUrl: () => {
+          const configured = Constants.expoConfig?.scheme;
+          const scheme = Array.isArray(configured) ? configured[0] : configured;
+          const id = Encoding.encodeBase64Url(Crypto.getRandomBytes(32));
+          return `${scheme}:///account/callback/${id}`;
+        },
+        openAuthSession: async (url, returnUrl) => {
+          const result = await WebBrowser.openAuthSessionAsync(url, returnUrl);
+          return result.type === "success" && "url" in result
+            ? { type: "success", url: result.url }
+            : { type: "cancel" };
+        },
       },
-      openAuthSession: async (url, returnUrl) => {
-        const result = await WebBrowser.openAuthSessionAsync(url, returnUrl);
-        return result.type === "success" && "url" in result
-          ? { type: "success", url: result.url }
-          : { type: "cancel" };
-      },
-    });
+      nativeState,
+    );
     const controller = createAccountLoginController({
       ...native,
       openExternal: async (url) => {

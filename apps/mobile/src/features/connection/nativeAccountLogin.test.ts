@@ -1,6 +1,10 @@
 import type { AccountStatus } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
-import { createNativeAccountLogin, readNativeAccountCompletion } from "./nativeAccountLogin";
+import {
+  createNativeAccountLogin,
+  createNativeAccountLoginState,
+  readNativeAccountCompletion,
+} from "./nativeAccountLogin";
 
 const id = "a".repeat(43);
 const proof = "p".repeat(43);
@@ -38,7 +42,8 @@ function setup() {
       }),
     ),
   };
-  return { actions, native: createNativeAccountLogin(actions) };
+  const state = createNativeAccountLoginState();
+  return { actions, state, native: createNativeAccountLogin(actions, state) };
 }
 
 describe("native UCSD sign-in", () => {
@@ -156,5 +161,75 @@ describe("native UCSD sign-in", () => {
     await expect(native.getStatus()).rejects.toThrow("Disconnected");
     expect(await native.getStatus()).toEqual(signedIn);
     expect(actions.poll).toHaveBeenLastCalledWith({ requestId: id, completionCode: proof });
+  });
+
+  it.each(["status", "exchange"])(
+    "retries a received proof after a transient %s failure and panel remount",
+    async (failure) => {
+      const { native, actions, state } = setup();
+      await native.start();
+      await native.openExternal(verificationUrl);
+      if (failure === "status") actions.getStatus.mockRejectedValueOnce(new Error("Disconnected"));
+      else actions.poll.mockRejectedValueOnce(new Error("Disconnected"));
+      await expect(native.getStatus()).rejects.toThrow("Disconnected");
+      const remounted = createNativeAccountLogin(actions, state);
+      expect(await remounted.getStatus()).toEqual(signedIn);
+      expect(actions.poll).toHaveBeenLastCalledWith({ requestId: id, completionCode: proof });
+      expect(actions.openAuthSession).toHaveBeenCalledTimes(1);
+      await remounted.poll(pending);
+      expect(actions.poll).toHaveBeenLastCalledWith({});
+    },
+  );
+
+  it("invalidates a browser opened by the previous panel when a remount cancels", async () => {
+    const { native, actions, state } = setup();
+    let finish!: (value: { type: "success"; url: string }) => void;
+    actions.openAuthSession.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    await native.start();
+    const opened = native.openExternal(verificationUrl);
+    await createNativeAccountLogin(actions, state).signOut();
+    finish({ type: "success", url: callback });
+    await opened;
+    await native.poll(pending);
+    expect(actions.poll).toHaveBeenLastCalledWith({});
+  });
+
+  it("discards another client session's retained proof before restoring its pending callback", async () => {
+    const { native, actions, state } = setup();
+    await native.start();
+    await native.openExternal(verificationUrl);
+    const otherPending = {
+      ...pending,
+      returnUrl: returnUrl.replace("c".repeat(43), "d".repeat(43)),
+      verificationUrl: verificationUrl.replace(id, "b".repeat(43)),
+    };
+    actions.getStatus.mockResolvedValueOnce(otherPending);
+    const remounted = createNativeAccountLogin(actions, state);
+    expect(await remounted.getStatus()).toEqual(otherPending);
+    expect(actions.poll).not.toHaveBeenCalled();
+    await remounted.poll(otherPending);
+    expect(actions.poll).toHaveBeenLastCalledWith({});
+  });
+
+  it("does not retain proof in another environment or beyond ten minutes", async () => {
+    const { native, actions, state } = setup();
+    await native.start();
+    await native.openExternal(verificationUrl);
+    const other = createNativeAccountLogin(actions);
+    expect(await other.getStatus()).toEqual(pending);
+    await other.poll(pending);
+    expect(actions.poll).toHaveBeenLastCalledWith({});
+    const clock = vi.spyOn(Date, "now").mockReturnValue(state.expiresAt + 1);
+    try {
+      await createNativeAccountLogin(actions, state).getStatus();
+      expect(actions.poll).toHaveBeenLastCalledWith({});
+      expect(state.completion).toBeNull();
+    } finally {
+      clock.mockRestore();
+    }
   });
 });

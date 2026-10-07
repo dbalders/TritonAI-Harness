@@ -42,28 +42,55 @@ export function readNativeAccountCompletion(
   return { requestId, completionCode };
 }
 
-/** Callback proof stays in the initiating environment's controller, never in navigation or storage. */
-export function createNativeAccountLogin(actions: Actions) {
-  let generation = 0;
-  let returnUrl: string | null = null;
-  let completion: Completion | null = null;
-  let browserOpen = false;
+export function createNativeAccountLoginState() {
+  return {
+    generation: 0,
+    returnUrl: null as string | null,
+    completion: null as Completion | null,
+    browserOpen: false,
+    expiresAt: 0,
+  };
+}
+
+/** Memory belongs to one environment; backend callback ownership binds it to the client session. */
+export function createNativeAccountLogin(
+  actions: Actions,
+  state = createNativeAccountLoginState(),
+) {
+  const clearProof = () => {
+    state.completion = null;
+    state.expiresAt = 0;
+  };
 
   const poll = async (account: AccountStatus): Promise<AccountStatus> => {
-    const request = generation;
+    const request = state.generation;
+    if (state.expiresAt <= Date.now()) clearProof();
     const next = await actions.poll(
-      account.returnUrl === returnUrl && completion ? completion : {},
+      account.returnUrl === state.returnUrl &&
+        state.completion?.requestId ===
+          new URL(account.verificationUrl ?? "https://invalid").searchParams.get("requestId")
+        ? state.completion
+        : {},
     );
-    if (request === generation && next.status !== "pending") completion = null;
+    if (request === state.generation && next.status !== "pending") clearProof();
     return next;
   };
   return {
     getStatus: async () => {
-      const request = generation;
+      let request = state.generation;
       const account = await actions.getStatus();
       if (
-        request === generation &&
-        returnUrl === null &&
+        request === state.generation &&
+        (account.status !== "pending" ||
+          (state.returnUrl !== null && account.returnUrl !== state.returnUrl))
+      ) {
+        request = ++state.generation;
+        state.returnUrl = null;
+        clearProof();
+      }
+      if (
+        request === state.generation &&
+        state.returnUrl === null &&
         account.status === "pending" &&
         account.returnUrl &&
         accountCallbackId(account.returnUrl)
@@ -73,26 +100,26 @@ export function createNativeAccountLogin(actions: Actions) {
           accountCallbackId(destination) &&
           new URL(account.returnUrl).protocol === new URL(destination).protocol
         ) {
-          // Restore the destination from this session's backend, never a saved completion proof.
-          returnUrl = account.returnUrl;
+          // Restore only a destination owned by this backend client session and app variant.
+          state.returnUrl = account.returnUrl;
         }
       }
-      return request === generation &&
+      return request === state.generation &&
         account.status === "pending" &&
-        account.returnUrl === returnUrl &&
-        completion
+        account.returnUrl === state.returnUrl &&
+        state.completion
         ? poll(account)
         : account;
     },
     start: async () => {
-      const request = ++generation;
-      completion = null;
+      const request = ++state.generation;
+      clearProof();
       const destination = actions.createReturnUrl();
       if (!accountCallbackId(destination)) throw new Error("Invalid app sign-in callback.");
-      returnUrl = destination;
+      state.returnUrl = destination;
       const account = await actions.start({ returnUrl: destination });
       if (
-        request === generation &&
+        request === state.generation &&
         account.status === "pending" &&
         account.returnUrl !== destination
       )
@@ -101,23 +128,24 @@ export function createNativeAccountLogin(actions: Actions) {
     },
     poll,
     signOut: async () => {
-      generation++;
-      returnUrl = null;
-      completion = null;
+      state.generation++;
+      state.returnUrl = null;
+      clearProof();
       return actions.signOut();
     },
     openExternal: async (url: string) => {
-      if (!returnUrl) throw new Error("Start a new sign-in in this app.");
-      if (browserOpen) throw new Error("A sign-in browser is already open.");
-      const request = generation;
-      const destination = returnUrl;
-      browserOpen = true;
+      if (!state.returnUrl) throw new Error("Start a new sign-in in this app.");
+      if (state.browserOpen) throw new Error("A sign-in browser is already open.");
+      const request = state.generation;
+      const destination = state.returnUrl;
+      state.browserOpen = true;
       try {
         const result = await actions.openAuthSession(url, destination);
-        if (request !== generation || result.type !== "success") return;
-        completion = readNativeAccountCompletion(result.url, destination, url);
+        if (request !== state.generation || result.type !== "success") return;
+        state.completion = readNativeAccountCompletion(result.url, destination, url);
+        state.expiresAt = Date.now() + 10 * 60 * 1000;
       } finally {
-        browserOpen = false;
+        state.browserOpen = false;
       }
     },
   };
