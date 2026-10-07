@@ -842,6 +842,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
+    id: "ucsd-account",
+    title: "UC San Diego account",
+    to: "/settings/connections",
+    searchTerms: ["ucsd sign in login account sso identity connection sign out"],
+  },
+  {
     id: "remote-environments",
     title: "Environments",
     to: "/settings/connections",

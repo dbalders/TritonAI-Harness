@@ -194,6 +194,11 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   cancelProviderAuthCallback: (url: string) =>
     ipcRenderer.invoke(IpcChannels.CANCEL_PROVIDER_AUTH_CALLBACK_CHANNEL, url),
   openExternal: (url: string) => ipcRenderer.invoke(IpcChannels.OPEN_EXTERNAL_CHANNEL, url),
+  accountLogin: {
+    prepare: () => ipcRenderer.invoke(IpcChannels.ACCOUNT_LOGIN_PREPARE_CHANNEL),
+    read: (id) => ipcRenderer.invoke(IpcChannels.ACCOUNT_LOGIN_READ_CHANNEL, id),
+    cancel: (id) => ipcRenderer.invoke(IpcChannels.ACCOUNT_LOGIN_CANCEL_CHANNEL, id),
+  },
   checkSystemPermission: (pane: string) =>
     ipcRenderer.invoke(IpcChannels.CHECK_SYSTEM_PERMISSION_CHANNEL, pane),
   openSystemSettings: (pane: string) =>

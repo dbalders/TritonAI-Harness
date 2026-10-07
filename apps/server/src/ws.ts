@@ -163,6 +163,7 @@ import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
+import * as Account from "./auth/AccountService.ts";
 import { requiredScopeForRpcMethod, requiredScopeForDeviceList } from "./auth/RpcAuthorization.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
@@ -705,6 +706,7 @@ const makeWsRpcLayer = (
         ),
       );
       const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+      const account = yield* Account.AccountService;
       const sourceControlDiscovery = yield* SourceControlDiscovery.SourceControlDiscovery;
       const automaticGitFetchInterval = serverSettings.getSettings.pipe(
         Effect.map(
@@ -2979,6 +2981,20 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.serverGetTritonAiUsage, fetchTritonAiUsage(), {
             "rpc.aggregate": "server",
           }),
+        [WS_METHODS.serverGetAccountStatus]: (_input) =>
+          observeRpcEffect(WS_METHODS.serverGetAccountStatus, account.getStatus(currentSessionId)),
+        [WS_METHODS.serverStartAccountLogin]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverStartAccountLogin,
+            account.startLogin(currentSessionId, input),
+          ),
+        [WS_METHODS.serverPollAccountLogin]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverPollAccountLogin,
+            account.pollLogin(currentSessionId, input),
+          ),
+        [WS_METHODS.serverSignOutAccount]: (_input) =>
+          observeRpcEffect(WS_METHODS.serverSignOutAccount, account.signOut(currentSessionId)),
         [WS_METHODS.serverGetMemoryStatus]: (_input) =>
           observeRpcEffect(WS_METHODS.serverGetMemoryStatus, memorySync.getStatus, {
             "rpc.aggregate": "server",
@@ -4402,6 +4418,7 @@ const makeWsRpcLayer = (
 
 export const websocketRpcRouteLayer = Layer.unwrap(
   Effect.gen(function* () {
+    const account = yield* Account.AccountService;
     const previewAutomationBroker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
     const baseServerSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
     const config = yield* ServerConfig.ServerConfig;
@@ -4472,6 +4489,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
               previewAutomationBroker,
             ).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
+              Layer.provide(Layer.succeed(Account.AccountService, account)),
               Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),
               Layer.provide(AgentSessionScanner.layer),
               // Shared with the startup auto-update, so update locks and state span clients.

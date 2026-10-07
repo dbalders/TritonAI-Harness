@@ -1343,6 +1343,11 @@ export interface DesktopBridge {
   receiveProviderAuthCallback?: (authorizationUrl: string) => Promise<string>;
   cancelProviderAuthCallback?: (authorizationUrl: string) => Promise<void>;
   openExternal: (url: string) => Promise<boolean>;
+  accountLogin?: {
+    prepare: () => Promise<{ id: string; returnUrl: string }>;
+    read: (id: string) => Promise<{ requestId: string; completionCode: string } | null>;
+    cancel: (id: string) => Promise<void>;
+  };
   /**
    * Open a System Settings pane by identifier. Optional: older desktop builds
    * lack it, and callers no-op when it is missing.
