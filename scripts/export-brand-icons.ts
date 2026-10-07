@@ -744,13 +744,23 @@ export const exportBrandIcons = Effect.fn("exportBrandIcons")(function* (checkOn
 
   const generated = new Map<string, Buffer>();
   const developmentMaster = yield* fs.readFile(
-    path.join(repositoryRoot, BRAND_ASSET_PATHS.developmentDesktopIconPng),
+    path.join(repositoryRoot, BRAND_ASSET_PATHS.developmentIconMasterPng),
   );
   const developmentAssets = yield* Effect.try({
     try: () => renderDevelopmentIconAssets(Buffer.from(developmentMaster)),
     catch: (cause) => new IconExportEncodingError({ variant: "development", cause }),
   });
   for (const [relativePath, contents] of developmentAssets) generated.set(relativePath, contents);
+  generated.set(
+    BRAND_ASSET_PATHS.developmentDesktopIconPng,
+    yield* renderIcon(
+      tool.path,
+      path.join(repositoryRoot, BRAND_ASSET_PATHS.developmentMacIconComposerProject),
+      path.join(temporaryDirectory, "development-macOS-1024.png"),
+      "macOS",
+      1024,
+    ),
+  );
   for (const variant of ICON_VARIANTS) {
     yield* Console.log(`Rendering ${variant.label} from ${variant.source}...`);
     const variantAssets = yield* renderVariant(

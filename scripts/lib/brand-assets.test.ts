@@ -96,6 +96,9 @@ describe("brand-assets", () => {
       "assets/prod/app-icon.icon",
     ]);
     expect(BRAND_ASSET_PATHS.developmentDesktopIconPng).toBe(
+      "assets/dev/tritonai-harness-dev-macos-1024.png",
+    );
+    expect(BRAND_ASSET_PATHS.developmentIconMasterPng).toBe(
       "assets/dev/tritonai-harness-dev-1024.png",
     );
     expect(BRAND_ASSET_PATHS.nightlyMacIconPng).toBe(

@@ -6,6 +6,49 @@ import * as Path from "effect/Path";
 import { PNG } from "pngjs";
 
 it.layer(NodeServices.layer)("runtime branding", (it) => {
+  it.effect(
+    "preserves the Aurora trident and central artwork in the macOS-only square source",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const repoRoot = yield* path.fromFileUrl(new URL("..", import.meta.url));
+        const original = PNG.sync.read(
+          Buffer.from(
+            yield* fs.readFile(path.join(repoRoot, "assets/dev/tritonai-harness-dev-1024.png")),
+          ),
+        );
+        const square = PNG.sync.read(
+          Buffer.from(
+            yield* fs.readFile(
+              path.join(repoRoot, "assets/dev/macos-app-icon.icon/Assets/logo.png"),
+            ),
+          ),
+        );
+        assert.deepEqual([square.width, square.height], [original.width, original.height]);
+        assert.isTrue(square.data.every((value, index) => index % 4 !== 3 || value === 255));
+        assert.isTrue(
+          original.data.every((value, index) => {
+            const pixel = Math.floor(index / 4);
+            const offset = pixel * 4;
+            const isTrident =
+              original.data[offset]! > 225 &&
+              original.data[offset + 1]! > 225 &&
+              original.data[offset + 2]! > 225;
+            const isCenter =
+              Math.hypot((pixel % 1024) - 511.5, Math.floor(pixel / 1024) - 511.5) < 430;
+            return (
+              index % 4 === 3 ||
+              original.data[offset + 3] !== 255 ||
+              (!isTrident && !isCenter) ||
+              value === square.data[index]
+            );
+          }),
+          "The existing white trident and central Aurora artwork must stay unchanged.",
+        );
+      }),
+  );
+
   it.effect("keeps the web boot logo independent from environment app icons", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -30,6 +73,7 @@ it.layer(NodeServices.layer)("runtime branding", (it) => {
       const path = yield* Path.Path;
       const repoRoot = yield* path.fromFileUrl(new URL("..", import.meta.url));
       for (const source of [
+        "assets/dev/tritonai-harness-dev-macos-1024.png",
         "assets/prod/tritonai-harness-1024.png",
         "assets/nightly/tritonai-harness-nightly-1024.png",
       ]) {

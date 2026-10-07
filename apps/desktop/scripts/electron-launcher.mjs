@@ -27,7 +27,7 @@ const developmentMacIconPngPath = NodePath.join(
   repoRoot,
   "assets",
   "dev",
-  "tritonai-harness-dev-1024.png",
+  "tritonai-harness-dev-macos-1024.png",
 );
 const productionMacIconPngPath = NodePath.join(
   repoRoot,
