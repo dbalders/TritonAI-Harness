@@ -470,7 +470,7 @@ export const make = Effect.fn("PublicSkillRepository.make")(function* (
   const httpClient = yield* HttpClient.HttpClient;
   const configuredToken =
     options.githubToken === undefined
-      ? yield* Config.redacted(PUBLIC_SKILLS_GITHUB_TOKEN_ENV).pipe(
+      ? yield* Config.Redacted(PUBLIC_SKILLS_GITHUB_TOKEN_ENV).pipe(
           Config.option,
           Effect.orElseSucceed(() => Option.none()),
         )

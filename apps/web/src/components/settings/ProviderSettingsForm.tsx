@@ -250,7 +250,7 @@ function ProviderSettingsFieldRow({
   const readOnly = readOnlyFieldKeys?.has(field.key) ?? false;
   const descriptionClassName =
     variant === "dialog"
-      ? "text-[11px] text-muted-foreground"
+      ? "text-2xs text-muted-foreground"
       : "mt-1 block text-xs text-muted-foreground";
   const label = <span className="text-xs font-medium text-foreground">{field.label}</span>;
   const description = field.description ? (
@@ -277,7 +277,7 @@ function ProviderSettingsFieldRow({
           value={value}
           inputId={inputId}
           size="sm"
-          className="w-full sm:w-56"
+          className="w-full max-w-full @min-[32rem]/settings-row:w-56"
           onChange={onChange}
         />
       ) : field.control === "textarea" ? (
@@ -285,7 +285,7 @@ function ProviderSettingsFieldRow({
           readOnly={readOnly}
           id={inputId}
           aria-describedby={descriptionId}
-          className="w-full sm:w-96"
+          className="w-full max-w-full @min-[32rem]/settings-row:w-[min(24rem,50cqw)]"
           value={readProviderConfigString(value, field.key)}
           onChange={(event) =>
             onChange(nextProviderConfigWithFieldValue(value, field, event.target.value))
@@ -299,7 +299,7 @@ function ProviderSettingsFieldRow({
           id={inputId}
           aria-describedby={descriptionId}
           size="sm"
-          className="w-full sm:w-56"
+          className="w-full max-w-full @min-[32rem]/settings-row:w-56"
           type={field.control === "password" ? "password" : undefined}
           autoComplete={field.control === "password" ? "off" : undefined}
           value={readProviderConfigString(value, field.key)}
@@ -407,7 +407,6 @@ function ProviderSettingsFieldRow({
           <Input
             readOnly={readOnly}
             id={inputId}
-            className="bg-background"
             type={type}
             autoComplete={field.control === "password" ? "off" : undefined}
             value={readProviderConfigString(value, field.key)}

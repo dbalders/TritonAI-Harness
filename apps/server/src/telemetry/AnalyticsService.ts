@@ -89,17 +89,17 @@ const PLAUSIBLE_EVENT_PROPERTIES = {
 } as const satisfies Readonly<Record<string, ReadonlyArray<string>>>;
 
 const TelemetryEnvConfig = Config.all({
-  plausibleEventsEndpoint: Config.string("TRITONAI_PLAUSIBLE_EVENTS_ENDPOINT").pipe(
+  plausibleEventsEndpoint: Config.String("TRITONAI_PLAUSIBLE_EVENTS_ENDPOINT").pipe(
     Config.withDefault(PLAUSIBLE_EVENTS_ENDPOINT),
   ),
-  plausibleSiteId: Config.string("TRITONAI_PLAUSIBLE_SITE_ID").pipe(
+  plausibleSiteId: Config.String("TRITONAI_PLAUSIBLE_SITE_ID").pipe(
     Config.withDefault(PLAUSIBLE_SITE_ID),
   ),
-  enabled: Config.boolean("T3CODE_TELEMETRY_ENABLED").pipe(Config.withDefault(true)),
-  maxBufferedEvents: Config.number("T3CODE_TELEMETRY_MAX_BUFFERED_EVENTS").pipe(
+  enabled: Config.Boolean("T3CODE_TELEMETRY_ENABLED").pipe(Config.withDefault(true)),
+  maxBufferedEvents: Config.Number("T3CODE_TELEMETRY_MAX_BUFFERED_EVENTS").pipe(
     Config.withDefault(1_000),
   ),
-  wslDistroName: Config.string("WSL_DISTRO_NAME").pipe(Config.option),
+  wslDistroName: Config.String("WSL_DISTRO_NAME").pipe(Config.option),
 });
 
 // Plausible custom properties accept scalar strings, numbers, and booleans.

@@ -27,7 +27,7 @@ it("decodes persisted international monograms without Intl.Segmenter", async () 
   const decode = Schema.decodeUnknownSync(ProjectIconOverride);
   for (const monogram of ["क्षत्र", "한국".normalize("NFD"), "กำขำ", "ກຳຂຳ"]) {
     const icon = { kind: "lucide", name: "folder-code", color: "blue", monogram };
-    expect(decode(icon)).toEqual(icon);
+    expect(decode(icon)).toEqual({ kind: "monogram", text: monogram, color: "blue" });
   }
 });
 
@@ -39,7 +39,7 @@ it("loads the mobile contracts and decodes project icons without Intl.Segmenter"
   const decode = Schema.decodeUnknownSync(ProjectIconOverride);
   for (const monogram of ["T3", "e\u0301", "किखि", "क्ष", "क्\u200dष"]) {
     const icon = { kind: "lucide", name: "folder-code", color: "blue", monogram };
-    expect(decode(icon)).toEqual(icon);
+    expect(decode(icon)).toEqual({ kind: "monogram", text: monogram, color: "blue" });
   }
   for (const monogram of ["ABC", "किखिगि", "e\u0301e\u0301e\u0301"]) {
     expect(() =>
