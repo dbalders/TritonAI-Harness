@@ -56,12 +56,12 @@ struct SubscriptionUsageTimelineEntry: TimelineEntry {
 
 struct SubscriptionUsageTimelineProvider: AppIntentTimelineProvider {
   func placeholder(in context: Context) -> SubscriptionUsageTimelineEntry {
-    SubscriptionUsageTimelineEntry(date: Date(), name: "SubscriptionUsage", props: nil, entryIndex: nil, configuration: SubscriptionUsageConfigurationAppIntent())
+    SubscriptionUsageTimelineEntry(date: Date(), name: "SubscriptionUsage", props: WidgetsLayoutRegistry.initialProps(for: "SubscriptionUsage"), entryIndex: nil, configuration: SubscriptionUsageConfigurationAppIntent())
   }
 
   func snapshot(for configuration: SubscriptionUsageConfigurationAppIntent, in context: Context) async -> SubscriptionUsageTimelineEntry {
     let entries = parseTimeline(configuration: configuration)
-    return entries.first ?? SubscriptionUsageTimelineEntry(date: Date(), name: "SubscriptionUsage", props: nil, entryIndex: nil, configuration: configuration)
+    return entries.first ?? SubscriptionUsageTimelineEntry(date: Date(), name: "SubscriptionUsage", props: WidgetsLayoutRegistry.initialProps(for: "SubscriptionUsage"), entryIndex: nil, configuration: configuration)
   }
 
   func timeline(for configuration: SubscriptionUsageConfigurationAppIntent, in context: Context) async -> Timeline<SubscriptionUsageTimelineEntry> {
@@ -71,7 +71,9 @@ struct SubscriptionUsageTimelineProvider: AppIntentTimelineProvider {
   }
   
   func parseTimeline(configuration: SubscriptionUsageConfigurationAppIntent) -> [SubscriptionUsageTimelineEntry] {
-    let timeline = WidgetsStorage.getArray(forKey: "__expo_widgets_SubscriptionUsage_timeline") ?? []
+    guard let timeline = WidgetsStorage.getArray(forKey: "__expo_widgets_SubscriptionUsage_timeline") else {
+      return [SubscriptionUsageTimelineEntry(date: Date(), name: "SubscriptionUsage", props: WidgetsLayoutRegistry.initialProps(for: "SubscriptionUsage"), entryIndex: nil, configuration: configuration)]
+    }
     let entries: [SubscriptionUsageTimelineEntry?] = timeline.enumerated().map { index, entry in
       guard let entry = entry as? [String: Any], let timestamp = entry["timestamp"] as? Int, let props = entry["props"] as? [String: Any] else {
         return nil
@@ -101,7 +103,7 @@ struct SubscriptionUsageEntryView: View {
     var env: [String: Any] = getWidgetEnvironment(environment: environment)
     env["timestamp"] = Int(entry.date.timeIntervalSince1970 * 1000)
     env["configuration"] = [
-      "codexPeriod": entry.configuration.codexPeriod.rawValue,
+        "codexPeriod": entry.configuration.codexPeriod.rawValue,
       "claudePeriod": entry.configuration.claudePeriod.rawValue
     ]
     return env
@@ -116,9 +118,8 @@ struct SubscriptionUsageEntryView: View {
   }
 
   public var body: some View {
-    if let layout = WidgetsStorage.getString(forKey: "__expo_widgets_\(entry.name)_layout"),
-       !layout.isEmpty {
-      let node = evaluateLayout(layout: layout, props: entry.props ?? [:], environment: widgetEnvironment)
+    if let layout = WidgetsLayoutRegistry.layout(for: entry.name) {
+      let node = evaluateLayout(layout: layout, props: entry.props, environment: widgetEnvironment)
       WidgetsDynamicView(name: entry.name, kind: .widget, node: node, entryIndex: entry.entryIndex, environmentString: widgetEnvironmentString)
     } else {
       WidgetsDynamicView(name: entry.name, kind: .widget, node: createRedBox(message: "No layout found for \(WidgetsStorage.appGroupIdentifier ?? "")::\(entry.name)"), entryIndex: entry.entryIndex, environmentString: widgetEnvironmentString)

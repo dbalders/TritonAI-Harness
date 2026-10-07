@@ -19,7 +19,7 @@
 	<key>CFBundlePackageType</key>
 	<string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.2.0</string>
+	<string>1.4.0</string>
 	<key>CFBundleSignature</key>
 	<string>????</string>
 	<key>CFBundleURLTypes</key>
@@ -47,68 +47,68 @@
 		<key>colors</key>
 		<dict>
 			<key>background</key>
-			<string>#F2F2F7</string>
+			<string>#fcfcfc</string>
 			<key>border</key>
-			<string>#E5E5EA</string>
+			<string>#e4e4e7</string>
 			<key>danger</key>
-			<string>#DC2626</string>
+			<string>#c10007</string>
 			<key>foreground</key>
-			<string>#262626</string>
+			<string>#27272a</string>
 			<key>input</key>
-			<string>#FFFFFF</string>
+			<string>#ffffff</string>
 			<key>inputForeground</key>
-			<string>#262626</string>
+			<string>#27272a</string>
 			<key>muted</key>
-			<string>#F2F2F7</string>
+			<string>#fafafa</string>
 			<key>mutedForeground</key>
-			<string>#737373</string>
+			<string>#71717b</string>
 			<key>neutral</key>
-			<string>#F5F5F5</string>
+			<string>#fafafa</string>
 			<key>primary</key>
-			<string>#262626</string>
+			<string>#1b4ed8</string>
 			<key>primaryForeground</key>
-			<string>#FFFFFF</string>
+			<string>#ffffff</string>
 			<key>ring</key>
-			<string>#A3A3A3</string>
+			<string>#1b4ed8</string>
 			<key>shadow</key>
 			<string>#000000</string>
 			<key>success</key>
 			<string>#059669</string>
 			<key>warning</key>
-			<string>#D97706</string>
+			<string>#bb4d00</string>
 		</dict>
 		<key>darkColors</key>
 		<dict>
 			<key>background</key>
-			<string>#0E0E0E</string>
+			<string>#0a0a0a</string>
 			<key>border</key>
-			<string>#2A2A2A</string>
+			<string>#191919</string>
 			<key>danger</key>
-			<string>#FCA5A5</string>
+			<string>#ff6467</string>
 			<key>foreground</key>
-			<string>#F5F5F5</string>
+			<string>#f5f5f5</string>
 			<key>input</key>
-			<string>#171717</string>
+			<string>#111111</string>
 			<key>inputForeground</key>
-			<string>#F5F5F5</string>
+			<string>#f5f5f5</string>
 			<key>muted</key>
-			<string>#0E0E0E</string>
+			<string>#111111</string>
 			<key>mutedForeground</key>
-			<string>#A3A3A3</string>
+			<string>#818181</string>
 			<key>neutral</key>
-			<string>#1C1C1C</string>
+			<string>#111111</string>
 			<key>primary</key>
-			<string>#F5F5F5</string>
+			<string>#346bf1</string>
 			<key>primaryForeground</key>
-			<string>#0A0A0A</string>
+			<string>#ffffff</string>
 			<key>ring</key>
-			<string>#525252</string>
+			<string>#346bf1</string>
 			<key>shadow</key>
 			<string>#000000</string>
 			<key>success</key>
-			<string>#34D399</string>
+			<string>#34d399</string>
 			<key>warning</key>
-			<string>#FBBF24</string>
+			<string>#ffb900</string>
 		</dict>
 		<key>design</key>
 		<dict>

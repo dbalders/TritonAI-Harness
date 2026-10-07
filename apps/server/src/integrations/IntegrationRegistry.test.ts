@@ -6166,4 +6166,65 @@ describe("IntegrationRegistry tool availability reasons", () => {
       },
     );
   });
+
+  it("re-samples a stale summary when no provider work remains to wait on", async () => {
+    const state = connectedState(["records.read", "events.read"]);
+    let markStatusStarted!: () => void;
+    const statusStarted = new Promise<void>((resolve) => {
+      markStatusStarted = resolve;
+    });
+    let releaseStatus!: () => void;
+    const statusReleased = new Promise<void>((resolve) => {
+      releaseStatus = resolve;
+    });
+    let blockStatus = false;
+    let statusChecks = 0;
+    const blockingStatus: IntegrationProvider = {
+      ...provider("test-connected-provider", state),
+      status: async () => {
+        statusChecks += 1;
+        if (blockStatus) {
+          blockStatus = false;
+          markStatusStarted();
+          await statusReleased;
+        }
+        return state.status;
+      },
+    };
+    await withRegistry(
+      "tritonai-tool-reasons-stale-summary-",
+      [packaged(optInEventsManifest, blockingStatus)],
+      async (registry) => {
+        await registry.install(optInEventsManifest.id);
+        await registry.list();
+        expect(registry.toolAvailabilitySync("test.events.list")).toMatchObject({
+          available: false,
+        });
+
+        // The capability is persisted before its summary lands, and no provider work is in
+        // flight, so the cached summary is all that stands between the tool and the caller.
+        blockStatus = true;
+        const checksBeforeEnabling = statusChecks;
+        const enabling = registry.setCapabilityEnabled(optInEventsManifest.id, "events.read", true);
+        await statusStarted;
+        expect(registry.toolAvailabilitySync("test.events.list")).toMatchObject({
+          available: false,
+          reason: "connection_changing",
+        });
+
+        const waited = [
+          registry.awaitToolAvailability("test.events.list"),
+          registry.awaitToolAvailability("test.events.list"),
+        ];
+        releaseStatus();
+        await expect(Promise.all(waited)).resolves.toEqual([
+          { available: true },
+          { available: true },
+        ]);
+        await enabling;
+        // The enable's own summary corrected availability, so neither queued sample re-checks.
+        expect(statusChecks - checksBeforeEnabling).toBe(1);
+      },
+    );
+  });
 });

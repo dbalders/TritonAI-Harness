@@ -11,6 +11,12 @@ vi.mock("./components/onboarding/FirstRunGate", () => ({
 vi.mock("./components/ThreadNotificationCoordinator", () => ({
   ThreadNotificationCoordinator: () => null,
 }));
+vi.mock("./components/settings/ChatGptWelcomeCoordinator", () => ({
+  ChatGptWelcomeCoordinator: () => null,
+}));
+vi.mock("./components/settings/ProviderAuthCallbackCoordinator", () => ({
+  ProviderAuthCallbackCoordinator: () => null,
+}));
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, it, vi } from "vite-plus/test";
 

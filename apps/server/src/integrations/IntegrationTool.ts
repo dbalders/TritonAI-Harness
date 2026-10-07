@@ -39,7 +39,7 @@ export function prepareIntegrationToolInput(definition: IntegrationProviderTool)
 export function integrationToolJsonSchema(
   definition: IntegrationProviderTool,
 ): Readonly<Record<string, unknown>> {
-  const document = Schema.toJsonSchemaDocument(definition.input);
+  const document = Schema.toJsonSchemaDocument(definition.input, { onExcessProperty: "error" });
   const schema = document.schema as Readonly<Record<string, unknown>>;
   return Object.keys(document.definitions).length > 0
     ? { ...schema, $defs: document.definitions }

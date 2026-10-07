@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleShortVersionString</key>
-	<string>1.2.0</string>
+	<string>1.4.0</string>
 	<key>CFBundleVersion</key>
 	<string>2</string>
 	<key>ExpoWidgetsAppGroupIdentifier</key>

@@ -21,7 +21,7 @@ it.layer(NodeServices.layer)("development artwork", (it) => {
       const path = yield* Path.Path;
       const root = yield* path.fromFileUrl(new URL("../../", import.meta.url));
       const master = Buffer.from(
-        yield* fs.readFile(path.join(root, BRAND_ASSET_PATHS.developmentDesktopIconPng)),
+        yield* fs.readFile(path.join(root, BRAND_ASSET_PATHS.developmentIconMasterPng)),
       );
       const image = PNG.sync.read(master);
       expect([image.width, image.height]).toEqual([1024, 1024]);

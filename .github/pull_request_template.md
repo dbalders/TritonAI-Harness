@@ -38,3 +38,5 @@
 - [ ] New behavior has regression coverage where practical
 - [ ] No secrets, credentials, private URLs, or sensitive logs are included
 - [ ] Actionable review findings have been resolved or explicitly answered
+
+<!-- End the body with the attribution footer described in AGENTS.md: the implementation model and harness, plus review models when known. -->

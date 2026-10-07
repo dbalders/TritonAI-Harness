@@ -7,7 +7,7 @@ import { runMigrations } from "../Migrations.ts";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import BackfillProjectionThreadSessionInstanceId from "./033_BackfillProjectionThreadSessionInstanceId.ts";
 
-const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
+const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layer({ filename: ":memory:" })));
 
 const insertLegacySessions = (suffix: string) =>
   Effect.gen(function* () {

@@ -1,7 +1,7 @@
 # Managed plugin host runtime
 
 Managed provider packages load after the server bundle starts. Their Effect peer must therefore
-be available as a package. The server and provider packages share the pinned Effect 4.0.0-rc.112
+be available as a package. The server and provider packages share the pinned Effect 4.0.0-rc.115
 runtime on disk. Windows stages that peer and its dependency closure inside `server.asar`.
 The standalone WSL archive includes the same runtime, managed policy, plugin composition, and
 a small disk-backed asynchronous module loader required by Node single-executable applications.
@@ -30,7 +30,7 @@ introduced an unchanged-input parser result whose identity must match across tho
 valid calendar timestamps and other constrained inputs fail validation before provider invocation.
 
 The pinned Effect patch shares the missing-input symbol and unchanged-input result within the
-process. The rc.112 patch preserves those sentinels across copies of the same runtime version.
+process. The rc.115 patch preserves those sentinels across copies of the same runtime version.
 Every host and provider runtime copy must use the matching patch. The cross-runtime input-contract test checks valid
 values, absent optional fields, and rejection of invalid and excess fields. Preserve that test
 when upgrading or removing the dependency patch.

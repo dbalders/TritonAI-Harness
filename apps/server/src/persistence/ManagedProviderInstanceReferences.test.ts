@@ -14,7 +14,7 @@ import { layerTest as settingsLayerTest } from "../serverSettings.ts";
 
 const encodePayload = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
-const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
+const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layer({ filename: ":memory:" })));
 
 layer("managed provider instance references", (it) => {
   it.effect("renames collision references in event truth and runtime projections", () =>

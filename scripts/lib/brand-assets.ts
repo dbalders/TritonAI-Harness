@@ -1,5 +1,7 @@
 export const BRAND_ASSET_PATHS = {
   developmentIconComposerProject: "assets/dev/app-icon.icon",
+  developmentMacIconComposerProject: "assets/dev/macos-app-icon.icon",
+  developmentIconMasterPng: "assets/dev/tritonai-harness-dev-1024.png",
   developmentIosIconPng: "assets/dev/tritonai-harness-dev-ios-1024.png",
   developmentUniversalIconPng: "assets/dev/tritonai-harness-dev-universal-1024.png",
 
@@ -23,7 +25,7 @@ export const BRAND_ASSET_PATHS = {
   nightlyWebFavicon32Png: "assets/nightly/tritonai-harness-nightly-web-favicon-32x32.png",
   nightlyWebAppleTouchIconPng: "assets/nightly/tritonai-harness-nightly-web-apple-touch-180.png",
 
-  developmentDesktopIconPng: "assets/dev/tritonai-harness-dev-1024.png",
+  developmentDesktopIconPng: "assets/dev/tritonai-harness-dev-macos-1024.png",
   developmentWindowsIconIco: "assets/dev/tritonai-harness-dev-windows.ico",
   developmentWebFaviconIco: "assets/dev/tritonai-harness-dev-web-favicon.ico",
   developmentWebFavicon16Png: "assets/dev/tritonai-harness-dev-web-favicon-16x16.png",

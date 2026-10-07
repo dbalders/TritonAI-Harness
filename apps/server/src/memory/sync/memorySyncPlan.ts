@@ -1,8 +1,8 @@
 /**
  * Decides what one sync pass does to each file in the memory vault.
  *
- * Every generated file has exactly one writer: the computer whose short code
- * ends its name, or whose `.devices/<id>/` or `Inbox/<code>/` folder holds it.
+ * Generated paths route by short code, but short codes can collide before sync.
+ * Remote full-ID records must be checked before applying any planned action.
  * This computer only uploads its own files and only downloads everyone
  * else's, so two computers never write the same file. `Notes/` is the one
  * folder the user edits by hand on any computer; it syncs both ways and keeps
@@ -61,6 +61,8 @@ export interface CloudFile {
 
 /** What the last successful sync saw for a path on both sides. */
 export interface SyncedFile {
+  /** Full ID of the device that uploaded these bytes from its written manifest. */
+  readonly ownerId?: string;
   readonly sha256: string;
   readonly eTag: string;
 }
@@ -79,10 +81,12 @@ export type SyncAction =
   | { readonly kind: "deleteLocal"; readonly path: string }
   | { readonly kind: "forget"; readonly path: string }
   /** Another install changed this computer's record: stop instead of fighting it. */
-  | { readonly kind: "ownerConflict"; readonly path: string };
+  | { readonly kind: "ownerConflict"; readonly path: string; readonly message?: string };
 
 export interface SyncPlanInput {
   readonly device: SyncDevice;
+  /** Validated records read from OneDrive in this pass, never just local records. */
+  readonly remoteDevices?: ReadonlyArray<SyncDevice>;
   readonly local: ReadonlyMap<string, LocalFile>;
   readonly cloud: ReadonlyMap<string, CloudFile>;
   readonly synced: ReadonlyMap<string, SyncedFile>;
@@ -117,7 +121,14 @@ function removedOnPurpose(path: string, input: SyncPlanInput): boolean {
   // too and every file is downloaded again instead.
   if (!path.startsWith("Daily/") && !path.startsWith("Projects/")) return false;
   const devicePrefix = `.devices/${input.device.id}/`;
-  return input.local.has(`${devicePrefix}written.json`) && !input.written.has(path);
+  return (
+    input.synced.get(path)?.ownerId === input.device.id &&
+    input.remoteDevices?.some(
+      (record) => record.id === input.device.id && record.shortId === input.device.shortId,
+    ) === true &&
+    input.local.has(`${devicePrefix}written.json`) &&
+    !input.written.has(path)
+  );
 }
 
 function planOwn(
@@ -201,12 +212,38 @@ const ACTION_ORDER: Record<SyncAction["kind"], number> = {
   forget: 3,
 };
 
+/** A collision stops the entire pass, including Inbox and device-record writes. */
+export function memoryOwnershipConflict(
+  device: SyncDevice,
+  remoteDevices: ReadonlyArray<SyncDevice>,
+): Extract<SyncAction, { kind: "ownerConflict" }> | null {
+  const owners = new Map([[device.shortId.toLowerCase(), device.id]]);
+  for (const record of remoteDevices) {
+    const shortId = record.shortId.toLowerCase();
+    const owner = owners.get(shortId);
+    if (
+      (owner !== undefined && owner !== record.id) ||
+      (record.id === device.id && shortId !== device.shortId.toLowerCase())
+    ) {
+      return {
+        kind: "ownerConflict",
+        path: `.devices/${record.id}/device.json`,
+        message: `Memory ownership conflict: computer code ${record.shortId} does not identify a unique device. Sync stopped to preserve your notes. The device identities need repair before syncing again.`,
+      };
+    }
+    owners.set(shortId, record.id);
+  }
+  return null;
+}
+
 /**
  * Actions for every path either side or the last sync knows about. Deletes
  * come after uploads and downloads so a moved file exists in its new place
  * before its old copy goes.
  */
 export function planMemorySync(input: SyncPlanInput): ReadonlyArray<SyncAction> {
+  const conflict = memoryOwnershipConflict(input.device, input.remoteDevices ?? []);
+  if (conflict) return [conflict];
   const paths = new Set([...input.local.keys(), ...input.cloud.keys(), ...input.synced.keys()]);
   const actions: SyncAction[] = [];
   for (const path of [...paths].toSorted()) {
