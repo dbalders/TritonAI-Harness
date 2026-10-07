@@ -64,7 +64,7 @@ const resolveResourcePath = Effect.fn("desktop.assets.resolveResourcePath")(func
 const sourceTreeIconFileNames = {
   dev: {
     ico: "tritonai-harness-dev-windows.ico",
-    macPng: "tritonai-harness-dev-1024.png",
+    macPng: "tritonai-harness-dev-macos-1024.png",
     universalPng: "tritonai-harness-dev-universal-1024.png",
   },
   prod: {

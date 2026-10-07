@@ -19,8 +19,11 @@ rounded-square renditions. Desktop packaging converts the generated macOS PNGs i
 ICNS resources. Edit the source layers rather than generated PNG/ICO renditions.
 
 Development retains its separate Aurora circular raster master at
-`dev/tritonai-harness-dev-1024.png`. Its desktop/web exports and opaque iOS layer
-are generated from that master by the same export command.
+`dev/tritonai-harness-dev-1024.png`. Its web, Linux, Windows, and opaque iOS exports
+are generated from that unchanged master. The macOS-only project
+`dev/macos-app-icon.icon` preserves the same Aurora artwork and extends its background
+into the square corners. It generates `dev/tritonai-harness-dev-macos-1024.png` with
+the same rounded-square shape and 860px Dock footprint as main and nightly.
 
 ## Android launcher and splash artwork
 
