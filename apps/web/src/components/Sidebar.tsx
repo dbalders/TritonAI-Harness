@@ -1674,6 +1674,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   ) : null;
 
   if (variant === "slim" || variant === "grouped") {
+    const showWokeStatus = variant === "grouped" ? isWokeStatus : isWoke;
     return (
       <li
         data-thread-item
@@ -1734,7 +1735,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
             ) : null}
             {/* The PR badge stays outside the hover-fading slot: it must
               remain visible AND clickable while the row is hovered. Only
-              the time/jump label yields to the settle affordance. */}
+              the status/time label yields to the settle affordance. */}
             {prBadge}
             {sortable?.isDragging ? (
               dragDestination
@@ -1743,7 +1744,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                 <span
                   className={cn(
                     "inline-flex justify-end tabular-nums text-secondary-label transition-opacity",
-                    !isWoke && "group-hover/sidebar-row:opacity-0",
+                    !showWokeStatus && "group-hover/sidebar-row:opacity-0",
                   )}
                 >
                   {variantAction === "unsnooze" && props.snoozeWakeLabelText !== null ? (
@@ -1752,7 +1753,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                     <span className="text-xs text-info-foreground tabular-nums">
                       {props.snoozeWakeLabelText}
                     </span>
-                  ) : isWoke ? (
+                  ) : showWokeStatus ? (
                     // A wake can land straight in the settled tail (e.g. PR
                     // merged while snoozed); the signal must survive the trip.
                     <Tooltip>
@@ -1771,6 +1772,10 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                       />
                       <TooltipPopup side="top">Dismiss Woke notification</TooltipPopup>
                     </Tooltip>
+                  ) : variant === "grouped" && topStatus ? (
+                    <span role="status" className={cn("text-xs font-medium", topStatus.className)}>
+                      {topStatus.label}
+                    </span>
                   ) : (
                     <span className="text-xs">
                       {variantAction === "unsettle"
@@ -1787,7 +1792,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                       onClick={handleUnsnoozeClick}
                       className={cn(
                         "pointer-events-none absolute inset-y-0 right-0 -mr-1 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover/sidebar-row:pointer-events-auto group-hover/sidebar-row:opacity-100",
-                        isWoke && "group-hover/sidebar-row:static",
+                        showWokeStatus && "group-hover/sidebar-row:static",
                       )}
                     >
                       <AlarmClockOffIcon className="mb-px size-3" />
@@ -1803,7 +1808,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                           onClick={handleUnsettleClick}
                           className={cn(
                             "pointer-events-none absolute inset-y-0 right-0 -mr-1 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover/sidebar-row:pointer-events-auto group-hover/sidebar-row:opacity-100",
-                            isWoke && "group-hover/sidebar-row:static",
+                            showWokeStatus && "group-hover/sidebar-row:static",
                           )}
                         />
                       }
@@ -1819,7 +1824,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                     onClick={handleSettleClick}
                     className={cn(
                       "pointer-events-none absolute inset-y-0 right-0 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-2 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover/sidebar-row:pointer-events-auto group-hover/sidebar-row:opacity-100",
-                      isWoke && "group-hover/sidebar-row:static",
+                      showWokeStatus && "group-hover/sidebar-row:static",
                     )}
                   >
                     <CheckIcon className="size-3" />
