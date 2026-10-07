@@ -1,0 +1,12 @@
+{
+  "images": [
+    {
+      "idiom": "universal",
+      "filename": "HarnessMark.png"
+    }
+  ],
+  "info": {
+    "author": "expo",
+    "version": 1
+  }
+}
