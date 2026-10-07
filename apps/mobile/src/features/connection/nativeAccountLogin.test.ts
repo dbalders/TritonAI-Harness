@@ -95,6 +95,51 @@ describe("native UCSD sign-in", () => {
     expect(actions.poll).toHaveBeenLastCalledWith({});
   });
 
+  it("reopens a cancelled pending browser after the settings panel remounts", async () => {
+    const { native, actions } = setup();
+    actions.openAuthSession.mockResolvedValueOnce({ type: "cancel" });
+    await native.start();
+    await native.openExternal(verificationUrl);
+    const remounted = createNativeAccountLogin({
+      ...actions,
+      createReturnUrl: () => returnUrl.replace("c".repeat(43), "d".repeat(43)),
+    });
+    expect(await remounted.getStatus()).toEqual(pending);
+    expect(actions.poll).not.toHaveBeenCalled();
+    await remounted.openExternal(verificationUrl);
+    expect(actions.openAuthSession).toHaveBeenLastCalledWith(verificationUrl, returnUrl);
+    expect(await remounted.getStatus()).toEqual(signedIn);
+    expect(actions.poll).toHaveBeenLastCalledWith({ requestId: id, completionCode: proof });
+  });
+
+  it.each([
+    returnUrl.replace("t3code-dev", "t3code-preview"),
+    returnUrl.replace("t3code-dev:///", "http://127.0.0.1:18794/"),
+    `${returnUrl}?extra=1`,
+  ])("does not adopt another app's callback destination on remount", async (destination) => {
+    const { native, actions } = setup();
+    actions.getStatus.mockResolvedValueOnce({ ...pending, returnUrl: destination });
+    await native.getStatus();
+    await expect(native.openExternal(verificationUrl)).rejects.toThrow("Start a new sign-in");
+    expect(actions.openAuthSession).not.toHaveBeenCalled();
+  });
+
+  it("does not restore a late pending destination after cancellation", async () => {
+    const { native, actions } = setup();
+    let finish!: (value: AccountStatus) => void;
+    actions.getStatus.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    const checking = native.getStatus();
+    await native.signOut();
+    finish(pending);
+    await checking;
+    await expect(native.openExternal(verificationUrl)).rejects.toThrow("Start a new sign-in");
+    expect(actions.openAuthSession).not.toHaveBeenCalled();
+  });
+
   it("never delivers proof to another environment's attempt", async () => {
     const { native, actions } = setup();
     await native.start();

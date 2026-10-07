@@ -59,8 +59,28 @@ export function createNativeAccountLogin(actions: Actions) {
   };
   return {
     getStatus: async () => {
+      const request = generation;
       const account = await actions.getStatus();
-      return account.status === "pending" && account.returnUrl === returnUrl && completion
+      if (
+        request === generation &&
+        returnUrl === null &&
+        account.status === "pending" &&
+        account.returnUrl &&
+        accountCallbackId(account.returnUrl)
+      ) {
+        const destination = actions.createReturnUrl();
+        if (
+          accountCallbackId(destination) &&
+          new URL(account.returnUrl).protocol === new URL(destination).protocol
+        ) {
+          // Restore the destination from this session's backend, never a saved completion proof.
+          returnUrl = account.returnUrl;
+        }
+      }
+      return request === generation &&
+        account.status === "pending" &&
+        account.returnUrl === returnUrl &&
+        completion
         ? poll(account)
         : account;
     },

@@ -32,12 +32,16 @@ function fixture(overrides?: {
   fetch?: typeof globalThis.fetch;
   serviceUrl?: string;
   allowInsecureLoopback?: boolean;
+  beforeRead?: Effect.Effect<void>;
 }) {
   const values = new Map<string, Uint8Array>();
   const calls: { url: string; init: RequestInit | undefined }[] = [];
   let time = 1_800_000_000;
   const store: ServerSecretStore["Service"] = {
-    get: (name) => Effect.sync(() => Option.fromNullishOr(values.get(name))),
+    get: (name) =>
+      (overrides?.beforeRead ?? Effect.void).pipe(
+        Effect.andThen(Effect.sync(() => Option.fromNullishOr(values.get(name)))),
+      ),
     set: (name, value) =>
       Effect.sync(() => {
         values.set(name, value);
@@ -311,6 +315,70 @@ describe("AccountService", () => {
         expect(yield* account.signOut("a")).toMatchObject({ status: "signed-out" });
         expect(f.values.size).toBe(0);
       }),
+  );
+
+  it.effect("cancels starts waiting on credential reads or queued behind them", () =>
+    Effect.gen(function* () {
+      let releaseRead!: () => void;
+      let markReading!: () => void;
+      const reading = new Promise<void>((resolve) => {
+        markReading = resolve;
+      });
+      const gate = new Promise<void>((resolve) => {
+        releaseRead = resolve;
+      });
+      const f = fixture({
+        beforeRead: Effect.promise(async () => {
+          markReading();
+          await gate;
+        }),
+      });
+      const account = yield* f.make;
+      const first = yield* Effect.forkChild(account.startLogin("a"));
+      yield* Effect.promise(() => reading);
+      const queued = yield* Effect.forkChild(account.startLogin("a"));
+      yield* Effect.yieldNow;
+      const cancelling = yield* Effect.forkChild(account.signOut("a"));
+      yield* Effect.yieldNow;
+      releaseRead();
+      expect((yield* Fiber.join(first)).status).toBe("signed-out");
+      expect((yield* Fiber.join(queued)).status).toBe("signed-out");
+      expect((yield* Fiber.join(cancelling)).status).toBe("signed-out");
+      expect((yield* account.getStatus("a")).status).toBe("signed-out");
+      expect((yield* account.pollLogin("a")).status).toBe("signed-out");
+      expect(f.calls).toHaveLength(0);
+      expect((yield* account.startLogin("a")).status).toBe("pending");
+    }),
+  );
+
+  it.effect("discards a broker start response that arrives after cancellation", () =>
+    Effect.gen(function* () {
+      let finish!: (value: Response) => void;
+      let markRequested!: () => void;
+      const response = new Promise<Response>((resolve) => {
+        finish = resolve;
+      });
+      const requested = new Promise<void>((resolve) => {
+        markRequested = resolve;
+      });
+      const f = fixture({
+        fetch: async () => {
+          markRequested();
+          return response;
+        },
+      });
+      const account = yield* f.make;
+      const starting = yield* Effect.forkChild(account.startLogin("a"));
+      yield* Effect.promise(() => requested);
+      const cancelling = yield* Effect.forkChild(account.signOut("a"));
+      yield* Effect.yieldNow;
+      finish(Response.json(f.startResponse()));
+      expect((yield* Fiber.join(starting)).status).toBe("signed-out");
+      expect((yield* Fiber.join(cancelling)).status).toBe("signed-out");
+      f.advance(2);
+      expect((yield* account.pollLogin("a")).status).toBe("signed-out");
+      expect(f.calls).toHaveLength(1);
+    }),
   );
 
   it.effect("revokes a successful late poll after sign-out without resurrecting its identity", () =>

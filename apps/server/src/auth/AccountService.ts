@@ -280,6 +280,7 @@ export const make = (
       options: LoginOptions = {},
     ) {
       const lane = getLane(sessionId);
+      const generation = lane.generation;
       return yield* lane.semaphore.withPermit(
         Effect.gen(function* () {
           if (!serviceUrl)
@@ -287,11 +288,12 @@ export const make = (
               "not_configured",
               "UC San Diego sign-in is not configured on this server.",
             );
+          if (generation !== lane.generation) return signedOut();
           const current = yield* statusLocked(sessionId, lane);
+          if (generation !== lane.generation) return signedOut();
           if (current.status !== "signed-out") return current;
           if (options.returnUrl !== undefined && !accountCallbackId(options.returnUrl))
             return yield* error("request_rejected", "Invalid native sign-in callback.");
-          const generation = ++lane.generation;
           const verifier = NodeCrypto.randomBytes(48).toString("base64url");
           const codeChallenge = NodeCrypto.createHash("sha256")
             .update(verifier)
@@ -410,6 +412,7 @@ export const make = (
       lane.pending = null;
       return yield* lane.semaphore.withPermit(
         Effect.gen(function* () {
+          lane.pending = null;
           const credential = yield* read(sessionId);
           if (credential) yield* revoke(credential);
           yield* remove(sessionId);
