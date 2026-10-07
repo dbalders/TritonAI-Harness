@@ -137,11 +137,11 @@ describe("AccountService", () => {
     }),
   );
 
-  it.effect(
-    "waits for the owning desktop callback rather than exchanging on a background poll",
-    () =>
+  it.effect.each(["http://127.0.0.1:45123/account/callback/", "t3code-dev:///account/callback/"])(
+    "waits for the owning native callback rather than exchanging on a background poll: %s",
+    (base) =>
       Effect.gen(function* () {
-        const returnUrl = `http://127.0.0.1:45123/account/callback/${"c".repeat(43)}`;
+        const returnUrl = `${base}${"c".repeat(43)}`;
         const f = fixture({
           fetch: async (input, init) => {
             if (String(input).endsWith("/v1/login/start"))

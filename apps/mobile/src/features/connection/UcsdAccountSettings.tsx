@@ -3,14 +3,19 @@ import {
   createAccountLoginController,
 } from "@t3tools/client-runtime/state/server";
 import type { EnvironmentId } from "@t3tools/contracts";
+import Constants from "expo-constants";
+import * as Crypto from "expo-crypto";
+import * as Encoding from "effect/Encoding";
+import * as WebBrowser from "expo-web-browser";
 import { useFocusEffect } from "@react-navigation/native";
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
-import { AppState, Linking, Pressable, View } from "react-native";
+import { AppState, Pressable, View } from "react-native";
 
 import { AppText as Text } from "../../components/AppText";
 import { serverEnvironment } from "../../state/server";
 import { usePreparedConnection } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { createNativeAccountLogin } from "./nativeAccountLogin";
 
 function AccountButton({
   title,
@@ -40,24 +45,39 @@ export function UcsdAccountSettings({ environmentId }: { readonly environmentId:
   const start = useAtomCommand(serverEnvironment.startAccountLogin, { reportFailure: false });
   const poll = useAtomCommand(serverEnvironment.pollAccountLogin, { reportFailure: false });
   const signOut = useAtomCommand(serverEnvironment.signOutAccount, { reportFailure: false });
-  const controller = useMemo(
-    () =>
-      createAccountLoginController({
-        getStatus: async () => accountCommandValue(await getStatus({ environmentId, input: {} })),
-        start: async () => accountCommandValue(await start({ environmentId, input: {} })),
-        poll: async () => accountCommandValue(await poll({ environmentId, input: {} })),
-        signOut: async () => accountCommandValue(await signOut({ environmentId, input: {} })),
-        openExternal: async (url) => {
-          await Linking.openURL(url);
-        },
-        now: Date.now,
-        schedule: (callback, delay) => {
-          const timer = setTimeout(callback, delay);
-          return () => clearTimeout(timer);
-        },
-      }),
-    [environmentId, getStatus, poll, signOut, start],
-  );
+  const controller = useMemo(() => {
+    const native = createNativeAccountLogin({
+      getStatus: async () => accountCommandValue(await getStatus({ environmentId, input: {} })),
+      start: async (input) => accountCommandValue(await start({ environmentId, input })),
+      poll: async (input) => accountCommandValue(await poll({ environmentId, input })),
+      signOut: async () => accountCommandValue(await signOut({ environmentId, input: {} })),
+      createReturnUrl: () => {
+        const configured = Constants.expoConfig?.scheme;
+        const scheme = Array.isArray(configured) ? configured[0] : configured;
+        const id = Encoding.encodeBase64Url(Crypto.getRandomBytes(32));
+        return `${scheme}:///account/callback/${id}`;
+      },
+      openAuthSession: async (url, returnUrl) => {
+        const result = await WebBrowser.openAuthSessionAsync(url, returnUrl);
+        return result.type === "success" && "url" in result
+          ? { type: "success", url: result.url }
+          : { type: "cancel" };
+      },
+    });
+    const controller = createAccountLoginController({
+      ...native,
+      openExternal: async (url) => {
+        await native.openExternal(url);
+        await controller.check();
+      },
+      now: Date.now,
+      schedule: (callback, delay) => {
+        const timer = setTimeout(callback, delay);
+        return () => clearTimeout(timer);
+      },
+    });
+    return controller;
+  }, [environmentId, getStatus, poll, signOut, start]);
   const { account, busy, error, checkedAt } = useSyncExternalStore(
     controller.subscribe,
     controller.getSnapshot,
@@ -90,17 +110,12 @@ export function UcsdAccountSettings({ environmentId }: { readonly environmentId:
             : signedIn
               ? `Signed in as ${account.profile?.displayName ?? "UC San Diego account"} · ${account.profile?.email ?? ""}`
               : pending
-                ? "Finish signing in with your UC San Diego account in your browser."
+                ? "Waiting for UC San Diego sign-in…"
                 : "Sign in to connect your UC San Diego account to this environment."}
       </Text>
-      {pending && account.userCode ? (
-        <Text selectable className="text-base font-t3-bold text-foreground">
-          Confirm this code matches the sign-in page: {account.userCode}
-        </Text>
-      ) : null}
       {account?.expiresAt ? (
         <Text className="text-xs text-foreground-muted">
-          {pending ? "Code expires" : "Session expires"}{" "}
+          {pending ? "Sign-in expires" : "Session expires"}{" "}
           {new Date(account.expiresAt * 1000).toLocaleString()}.
         </Text>
       ) : null}

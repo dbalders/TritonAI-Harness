@@ -290,7 +290,7 @@ export const make = (
           const current = yield* statusLocked(sessionId, lane);
           if (current.status !== "signed-out") return current;
           if (options.returnUrl !== undefined && !accountCallbackId(options.returnUrl))
-            return yield* error("request_rejected", "Invalid desktop sign-in callback.");
+            return yield* error("request_rejected", "Invalid native sign-in callback.");
           const generation = ++lane.generation;
           const verifier = NodeCrypto.randomBytes(48).toString("base64url");
           const codeChallenge = NodeCrypto.createHash("sha256")
@@ -359,7 +359,7 @@ export const make = (
             pending.response.returnUrl &&
             (!/^[A-Za-z0-9_-]{43}$/u.test(completion.completionCode ?? "") || !completion.requestId)
           )
-            return yield* error("request_rejected", "Invalid desktop sign-in callback.");
+            return yield* error("request_rejected", "Invalid native sign-in callback.");
           if (!completion.completionCode && pending.nextPollAt > now())
             return pendingStatus(pending);
           pending.nextPollAt = now() + pending.response.pollIntervalSeconds;
