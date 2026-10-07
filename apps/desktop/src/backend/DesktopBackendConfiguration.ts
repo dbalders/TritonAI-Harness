@@ -218,7 +218,8 @@ const readUcsdEnvironmentFile = Effect.gen(function* () {
   );
 });
 
-const MANAGED_NODE_RUNTIME_PATTERN = /^node-v(\d+)\.(\d+)\.(\d+)-/u;
+// Official Node archive layout the Installer stages, e.g. node-v22.23.2-darwin-arm64.
+const MANAGED_NODE_RUNTIME_PATTERN = /^node-v(\d+)\.(\d+)\.(\d+)-([a-z0-9]+)-([a-z0-9]+)$/u;
 
 // The Installer's private Node runtime (with npm/npx) used to reach agent shells only through the
 // macOS launcher's PATH. Find the newest complete runtime so it can be appended after the user's
@@ -240,15 +241,30 @@ const resolveManagedNodeBinDirectory = Effect.gen(function* () {
   const runtimes = entries
     .flatMap((name) => {
       const match = MANAGED_NODE_RUNTIME_PATTERN.exec(name);
-      return match === null ? [] : [{ name, version: match.slice(1, 4).map(Number) }];
+      return match === null ||
+        match[4] !== environment.platform ||
+        match[5] !== environment.processArch
+        ? []
+        : [{ name, version: match.slice(1, 4).map(Number) }];
     })
     .sort((left, right) => compareVersionParts(right.version, left.version));
   for (const runtime of runtimes) {
     const binDirectory = environment.path.join(runtimeRoot, runtime.name, "bin");
-    const hasNode = yield* fileSystem
-      .exists(environment.path.join(binDirectory, "node"))
-      .pipe(Effect.orElseSucceed(() => false));
-    if (hasNode) return Option.some(binDirectory);
+    const nodeInfo = yield* fileSystem
+      .stat(environment.path.join(binDirectory, "node"))
+      .pipe(Effect.option);
+    const nodeIsExecutable = Option.exists(
+      nodeInfo,
+      (info) => info.type === "File" && (info.mode & 0o111) !== 0,
+    );
+    if (!nodeIsExecutable) continue;
+    let hasCompanions = true;
+    for (const command of ["npm", "npx"]) {
+      hasCompanions &&= yield* fileSystem
+        .exists(environment.path.join(binDirectory, command))
+        .pipe(Effect.orElseSucceed(() => false));
+    }
+    if (hasCompanions) return Option.some(binDirectory);
   }
   return Option.none<string>();
 });
@@ -261,9 +277,10 @@ function compareVersionParts(left: ReadonlyArray<number>, right: ReadonlyArray<n
   return 0;
 }
 
+// Append without rebuilding the inherited PATH: an empty entry means the current directory.
 function appendPathEntry(currentPath: string | undefined, entry: string): string {
-  const entries = (currentPath ?? "").split(":").filter((value) => value.length > 0);
-  return entries.includes(entry) ? entries.join(":") : [...entries, entry].join(":");
+  if (currentPath === undefined || currentPath.length === 0) return entry;
+  return currentPath.split(":").includes(entry) ? currentPath : `${currentPath}:${entry}`;
 }
 
 function ucsdEnvironmentFallback(ucsdEnvironment: Record<string, string>): Record<string, string> {

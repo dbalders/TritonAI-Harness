@@ -980,29 +980,45 @@ describe("DesktopBackendConfiguration", () => {
                 "no managed runtime leaves the inherited PATH alone",
               );
 
+              // The harness runs as darwin/x64.
               const runtimes = {
-                older: "node-v22.9.0-darwin-arm64",
-                newest: "node-v22.23.2-darwin-arm64",
-                incomplete: "node-v24.0.0-darwin-arm64",
-                staging: ".node-v99.0.0-stage-abc",
+                older: "node-v22.9.0-darwin-x64",
+                newest: "node-v22.23.2-darwin-x64",
+                otherArch: "node-v23.0.0-darwin-arm64",
+                missingNpx: "node-v24.0.0-darwin-x64",
+                notExecutable: "node-v25.0.0-darwin-x64",
+                staging: ".node-v99.0.0-darwin-x64-stage-abc",
               };
-              for (const name of Object.values(runtimes)) {
-                yield* fileSystem.makeDirectory(environment.path.join(runtimeRoot, name, "bin"), {
-                  recursive: true,
+              const writeRuntime = (name: string, commands: ReadonlyArray<string>, mode: number) =>
+                Effect.gen(function* () {
+                  const bin = environment.path.join(runtimeRoot, name, "bin");
+                  yield* fileSystem.makeDirectory(bin, { recursive: true });
+                  for (const command of commands) {
+                    const file = environment.path.join(bin, command);
+                    yield* fileSystem.writeFileString(file, "");
+                    yield* fileSystem.chmod(file, mode);
+                  }
                 });
-              }
-              for (const name of [runtimes.older, runtimes.newest, runtimes.staging]) {
-                yield* fileSystem.writeFileString(
-                  environment.path.join(runtimeRoot, name, "bin", "node"),
-                  "",
-                );
-              }
+              const complete = ["node", "npm", "npx"];
+              yield* writeRuntime(runtimes.older, complete, 0o755);
+              yield* writeRuntime(runtimes.newest, complete, 0o755);
+              yield* writeRuntime(runtimes.otherArch, complete, 0o755);
+              yield* writeRuntime(runtimes.missingNpx, ["node", "npm"], 0o755);
+              yield* writeRuntime(runtimes.notExecutable, complete, 0o644);
+              yield* writeRuntime(runtimes.staging, complete, 0o755);
               const newestBin = environment.path.join(runtimeRoot, runtimes.newest, "bin");
 
               assert.equal(
                 (yield* configuration.resolvePrimary).env.PATH,
                 `/usr/bin:/bin:${newestBin}`,
-                "the newest complete runtime goes last so a user-installed Node keeps precedence",
+                "the newest usable runtime for this platform and arch goes last so a user-installed Node keeps precedence",
+              );
+
+              process.env.PATH = "/usr/bin::/bin";
+              assert.equal(
+                (yield* configuration.resolvePrimary).env.PATH,
+                `/usr/bin::/bin:${newestBin}`,
+                "an empty inherited entry (the current directory) is preserved",
               );
 
               process.env.PATH = `/usr/bin:${newestBin}:/bin`;
