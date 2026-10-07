@@ -58,7 +58,8 @@ const PREVIEW_ASSETS = {
 
 const RELEASE_ASSETS = {
   appIcon: fromRepoRoot(BRAND_ASSET_PATHS.productionIosIconPng),
-  iosIcon: fromRepoRoot(BRAND_ASSET_PATHS.productionIconComposerProject),
+  // Use the Mac logo's opaque master so iOS supplies the only icon mask and treatment.
+  iosIcon: fromRepoRoot(BRAND_ASSET_PATHS.productionIosIconPng),
   splashIcon: fromRepoRoot(BRAND_ASSET_PATHS.productionIosIconPng),
   androidAdaptiveForeground: "./assets/android-icon-foreground.png",
   androidAdaptiveBackgroundColor: "#182B49",
