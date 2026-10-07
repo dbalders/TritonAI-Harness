@@ -18,7 +18,6 @@ import {
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
 import { AddUsageLimitSourceDialog } from "./AddUsageLimitSourceDialog";
-import { searchableSetting } from "./settingsSearch";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 
 /** Hub management follows the selected device and access rules of provider settings. */
@@ -66,7 +65,7 @@ export function UsageProviderSettings({
   return (
     <>
       <SettingsSection
-        {...searchableSetting("usage-providers")}
+        title="Usage providers"
         headerAction={
           !readOnly ? (
             <Button size="xs" variant="outline" onClick={() => setAdding(true)}>
