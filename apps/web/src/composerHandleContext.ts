@@ -19,10 +19,14 @@ export function useFocusComposerAfterNewThread(): (request: Promise<unknown>) =>
   const composerHandleRef = useComposerHandleContext();
   return useCallback(
     (request) => {
-      void request.then((opened) => {
-        if (!opened) return;
-        window.requestAnimationFrame(() => composerHandleRef?.current?.focusAtEnd());
-      });
+      void request
+        .then((opened) => {
+          if (!opened) return;
+          window.requestAnimationFrame(() => composerHandleRef?.current?.focusAtEnd());
+        })
+        .catch((error: unknown) => {
+          console.error("Could not open a new thread.", error);
+        });
     },
     [composerHandleRef],
   );
