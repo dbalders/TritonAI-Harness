@@ -98,6 +98,7 @@ jobs:
         working-directory: source
         env:
           GH_TOKEN: ${{ github.token }}
+          MANUAL_REBUILD: ${{ github.workflow == 'Mobile Stable TestFlight' && github.event_name == 'workflow_dispatch' }}
           RELEASE_TAG: ${{ steps.source.outputs.tag }}
           SOURCE_SHA: ${{ steps.source.outputs.sha }}
         run: |
@@ -108,7 +109,7 @@ jobs:
           parents=(-p "$SOURCE_SHA")
           if [ -n "$previous" ]; then
             git -c credential.helper='!gh auth git-credential' fetch origin "$previous"
-            if [ "$GITHUB_EVENT_NAME" != workflow_dispatch ]; then
+            if [ "$MANUAL_REBUILD" != true ]; then
               if git show "$previous:apps/mobile/ios/ci_scripts/stable-source.json" | \
                 jq -e --arg tag "$RELEASE_TAG" --arg sha "$SOURCE_SHA" '.tag == $tag and .sourceSha == $sha' >/dev/null; then
                 echo "Stable release already prepared for Xcode Cloud"
