@@ -119,7 +119,7 @@ const DeviceRecord = Schema.Struct({
   platform: Schema.String,
   lastSeen: Schema.String,
 });
-const decodeDeviceRecord = Schema.decodeUnknownEffect(Schema.fromJsonString(DeviceRecord));
+export const decodeDeviceRecord = Schema.decodeUnknownEffect(Schema.fromJsonString(DeviceRecord));
 
 const readDeviceRecord = (file: string) =>
   Effect.gen(function* () {

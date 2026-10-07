@@ -8,6 +8,7 @@ import {
   type LocalFile,
   planMemorySync,
   type SyncAction,
+  type SyncDevice,
   type SyncedFile,
 } from "./memorySyncPlan.ts";
 
@@ -22,9 +23,12 @@ const plan = (options: {
   readonly cloud?: Record<string, string>;
   readonly synced?: Record<string, [sha: string, eTag: string]>;
   readonly written?: ReadonlyArray<string>;
+  readonly remoteDevices?: ReadonlyArray<SyncDevice>;
+  readonly ownerId?: string | null;
 }): ReadonlyArray<SyncAction> =>
   planMemorySync({
     device,
+    remoteDevices: options.remoteDevices ?? [device],
     local: new Map<string, LocalFile>(
       Object.entries(options.local ?? {}).map(([path, sha256]) => [path, { sha256 }]),
     ),
@@ -34,7 +38,11 @@ const plan = (options: {
     synced: new Map<string, SyncedFile>(
       Object.entries(options.synced ?? {}).map(([path, [sha256, eTag]]) => [
         path,
-        { sha256, eTag },
+        {
+          sha256,
+          eTag,
+          ...(options.ownerId === null ? {} : { ownerId: options.ownerId ?? device.id }),
+        },
       ]),
     ),
     written: new Set(options.written ?? []),
@@ -304,5 +312,58 @@ describe("alignPathCase", () => {
       synced: new Map<string, { sha256: string; eTag: string }>(),
     });
     expect(aligned.local.size).toBe(1);
+  });
+});
+
+describe("generated note ownership", () => {
+  it("preserves a downloaded note after local loss when only its short ID matches", () => {
+    const path = "Daily/2026-10-02 Other computer (aaaa).md";
+    const actions = planMemorySync({
+      device: { id: "aaaaaaaa-new", shortId: "aaaa" },
+      local: new Map([[".devices/aaaaaaaa-new/written.json", { sha256: "manifest" }]]),
+      cloud: new Map([[path, { eTag: "unchanged" }]]),
+      synced: new Map([[path, { sha256: "note", eTag: "unchanged" }]]),
+      written: new Set(),
+    });
+    expect(actions).toContainEqual({ kind: "download", path });
+    expect(actions.some((action) => action.kind === "deleteCloud")).toBe(false);
+  });
+});
+
+describe("full-ID provenance", () => {
+  it.each(["Daily/2026/Mac (5c9e).md", "Projects/X/X - Mac (5c9e).md"])(
+    "requires both upload provenance and a remote owner record to delete %s",
+    (path) => {
+      const input = {
+        local: { [WRITTEN]: "w" },
+        cloud: { [path]: "e1", [WRITTEN]: "ew" },
+        synced: {
+          [path]: ["note", "e1"] as [string, string],
+          [WRITTEN]: ["w", "ew"] as [string, string],
+        },
+      };
+      expect(plan(input)).toContainEqual({ kind: "deleteCloud", path, ifMatch: "e1" });
+      for (const overrides of [
+        { remoteDevices: [] },
+        { ownerId: null },
+        { ownerId: "other-full-id" },
+      ]) {
+        expect(plan({ ...input, ...overrides })).toContainEqual({ kind: "download", path });
+        expect(
+          plan({ ...input, ...overrides }).some((action) => action.kind === "deleteCloud"),
+        ).toBe(false);
+      }
+    },
+  );
+
+  it("stops every action when independent full IDs share a code", () => {
+    const actions = plan({
+      remoteDevices: [device, { id: "other-full-id", shortId: device.shortId }],
+      local: { [WRITTEN]: "w", [NOTE]: "new" },
+      cloud: { [OWN_DAY]: "e1" },
+      synced: { [OWN_DAY]: ["note", "e1"] },
+    });
+    expect(actions).toHaveLength(1);
+    expect(actions[0]).toMatchObject({ kind: "ownerConflict" });
   });
 });
