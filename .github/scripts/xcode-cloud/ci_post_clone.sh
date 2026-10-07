@@ -3,7 +3,9 @@ set -euo pipefail
 
 repo_root="${CI_PRIMARY_REPOSITORY_PATH:?}"
 cd "$repo_root"
-export APP_VARIANT=preview
+export APP_VARIANT="$(python3 -c 'import json; from pathlib import Path; p=Path("apps/mobile/ios/ci_scripts/stable-source.json"); print(json.loads(p.read_text())["variant"] if p.exists() else "preview")')"
+case "$APP_VARIANT" in production|preview) ;; *) echo "Unsupported mobile variant" >&2; exit 1 ;; esac
+if [ "$APP_VARIANT" = production ]; then export T3CODE_MOBILE_UPDATES_ENABLED=0; fi
 export NODE_OPTIONS=--max-old-space-size=8192
 
 tools_dir="$repo_root/.xcode-cloud-tools"
@@ -46,19 +48,21 @@ import plistlib
 import re
 from pathlib import Path
 
-receipt = json.loads(Path('ci_scripts/nightly-source.json').read_text())
-print(f"Nightly source: {receipt['tag']} ({receipt['sourceSha']})")
+receipt_path = Path('ci_scripts/stable-source.json') if os.environ['APP_VARIANT'] == 'production' else Path('ci_scripts/nightly-source.json')
+receipt = json.loads(receipt_path.read_text())
+print(f"Mobile source: {receipt['tag']} ({receipt['sourceSha']})")
+native_name = 'TritonAIHarness' if os.environ['APP_VARIANT'] == 'production' else 'TritonAIHarnessPreview'
 build_number = os.environ['CI_BUILD_NUMBER']
 if not build_number.isdigit():
     raise ValueError('CI_BUILD_NUMBER must be numeric')
-for target in ['TritonAIHarnessPreview', 'ExpoWidgetsTarget', 'expo-sharing-extension']:
+for target in [native_name, 'ExpoWidgetsTarget', 'expo-sharing-extension']:
     path = Path(target) / 'Info.plist'
     with path.open('rb') as file:
         info = plistlib.load(file)
     info['CFBundleVersion'] = build_number
     with path.open('wb') as file:
         plistlib.dump(info, file)
-project = Path('TritonAIHarnessPreview.xcodeproj/project.pbxproj')
+project = Path(f'{native_name}.xcodeproj/project.pbxproj')
 contents, count = re.subn(r'(CURRENT_PROJECT_VERSION\s*=\s*)[^;]+;', lambda match: match[1] + build_number + ';', project.read_text())
 if count < 6:
     raise ValueError('Expected build numbers for all three targets in Debug and Release')
@@ -69,5 +73,6 @@ PY
 {
   printf 'export NODE_BINARY="%s/node"\n' "$node_bin"
   printf 'export PATH="%s:%s:%s/node_modules/.bin:$PATH"\n' "$node_bin" "$pnpm_bin" "$repo_root"
-  printf 'export APP_VARIANT=preview\n'
+  printf 'export APP_VARIANT=%s\n' "$APP_VARIANT"
+  if [ "$APP_VARIANT" = production ]; then printf 'export T3CODE_MOBILE_UPDATES_ENABLED=0\n'; fi
 } > .xcode.env.local

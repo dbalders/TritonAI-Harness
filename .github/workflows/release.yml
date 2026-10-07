@@ -715,6 +715,8 @@ jobs:
           retention-days: 14
 
   release:
+    outputs:
+      source_sha: ${{ steps.verify_release_source.outputs.sha }}
     name: Prepare controlled GitHub Release
     needs: [preflight, build, mac]
     if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.build.result == 'success' && needs.mac.result == 'success' }}
@@ -830,6 +832,7 @@ jobs:
           gh release upload "$RELEASE_TAG" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --clobber
 
       - name: Verify final controlled release assets
+        id: verify_release_source
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -841,6 +844,7 @@ jobs:
           node scripts/verify-controlled-release-assets.cjs verified-release-assets "$RELEASE_VERSION"
           tag_commit="$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq .sha)"
           test "$tag_commit" = "$(git rev-parse HEAD)"
+          echo "sha=$tag_commit" >> "$GITHUB_OUTPUT"
 
       - name: Report draft ready for testing
         if: github.event_name != 'workflow_dispatch' || inputs.publish != true
@@ -1019,3 +1023,15 @@ jobs:
             --release-version "${{ needs.preflight.outputs.version }}" \
             --tag "${{ needs.preflight.outputs.tag }}" \
             --release-url "https://github.com/${{ github.repository }}/releases/tag/${{ needs.preflight.outputs.tag }}"
+
+  mobile_testflight:
+    name: Build stable iOS for TestFlight
+    needs: [preflight, release]
+    if: github.event_name == 'workflow_dispatch' && inputs.publish == true && needs.preflight.outputs.is_prerelease == 'false'
+    permissions:
+      contents: write
+    uses: ./.github/workflows/mobile-stable-testflight.yml
+    with:
+      release_tag: ${{ needs.preflight.outputs.tag }}
+      source_sha: ${{ needs.release.outputs.source_sha }}
+    secrets: inherit

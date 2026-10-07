@@ -1,0 +1,140 @@
+name: Mobile Stable TestFlight
+
+# Called directly after publication: releases created with GITHUB_TOKEN do not
+# trigger a separate release-event workflow.
+on:
+  workflow_call:
+    inputs:
+      release_tag:
+        required: true
+        type: string
+      source_sha:
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Published stable tag to build or retry; leave empty for current main
+        required: false
+        type: string
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mobile-stable-native
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Prepare Harness for Xcode Cloud
+    if: github.event_name != 'release' || github.event.release.prerelease == false
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      APP_VARIANT: production
+      T3CODE_MOBILE_UPDATES_ENABLED: "0"
+      NODE_OPTIONS: --max-old-space-size=8192
+    steps:
+      - name: Checkout workflow helpers
+        uses: actions/checkout@v6
+        with:
+          path: automation
+          persist-credentials: false
+
+      - name: Resolve stable release or initial main source
+        id: source
+        uses: actions/github-script@v8
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag || github.event.release.tag_name }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        with:
+          script: |
+            const { resolveStableMobile } = require('./automation/.github/scripts/resolve-stable-mobile.cjs');
+            const sha = await resolveStableMobile({
+              github, context, tag: process.env.RELEASE_TAG, sourceSha: process.env.SOURCE_SHA, allowMain: context.eventName === "workflow_dispatch",
+            });
+            core.setOutput('sha', sha);
+            core.setOutput('tag', process.env.RELEASE_TAG || 'main');
+
+      - name: Checkout exact stable source
+        uses: actions/checkout@v6
+        with:
+          path: source
+          ref: ${{ steps.source.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          working-directory: source
+          node-version-file: package.json
+          cache: true
+          run-install: |
+            args:
+              - --filter=@t3tools/mobile...
+
+      - name: Generate production native project
+        working-directory: source/apps/mobile
+        env:
+          EXPO_NO_GIT_STATUS: "1"
+        run: vp exec expo prebuild --platform ios --no-install
+
+      - name: Resolve native dependencies for Xcode Cloud
+        working-directory: source/apps/mobile/ios
+        run: |
+          pod install
+          xcodebuild -resolvePackageDependencies \
+            -workspace TritonAIHarness.xcworkspace \
+            -scheme TritonAIHarness \
+            -derivedDataPath "$RUNNER_TEMP/mobile-swift-dependencies" \
+            -hideShellScriptEnvironment
+
+      - name: Publish native build branch
+        id: native
+        working-directory: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.source.outputs.tag }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          generator_sha="$(git -C ../automation rev-parse HEAD)"
+          previous="$(git -c credential.helper='!gh auth git-credential' ls-remote origin refs/heads/mobile-stable | cut -f1)"
+          parents=(-p "$SOURCE_SHA")
+          if [ -n "$previous" ]; then
+            git -c credential.helper='!gh auth git-credential' fetch origin "$previous"
+            if [ "$GITHUB_EVENT_NAME" != workflow_dispatch ]; then
+              if git show "$previous:apps/mobile/ios/ci_scripts/stable-source.json" | \
+                jq -e --arg tag "$RELEASE_TAG" --arg sha "$SOURCE_SHA" '.tag == $tag and .sourceSha == $sha' >/dev/null; then
+                echo "Stable release already prepared for Xcode Cloud"
+                echo "commit=$previous" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+            fi
+            parents=(-p "$previous" -p "$SOURCE_SHA")
+          fi
+          tree="$(node ../automation/.github/scripts/prepare-mobile-native.cjs "$PWD" "$RELEASE_TAG" "$SOURCE_SHA" "$generator_sha" production)"
+          commit="$(git commit-tree "$tree" "${parents[@]}" -m "build(mobile): prepare $RELEASE_TAG for TestFlight")"
+          git -c credential.helper='!gh auth git-credential' push origin "$commit:refs/heads/mobile-stable"
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+
+      - name: Record Xcode Cloud handoff
+        env:
+          RELEASE_TAG: ${{ steps.source.outputs.tag }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+          NATIVE_SHA: ${{ steps.native.outputs.commit }}
+        run: |
+          {
+            echo '## Stable prepared for Xcode Cloud'
+            echo "- Release/source: $RELEASE_TAG"
+            echo "- Source: $SOURCE_SHA"
+            echo "- Native build commit: $NATIVE_SHA"
+            echo '- App: TritonAI Harness (6813147394)'
+            echo '- Xcode Cloud must complete its archive and TestFlight post-action.'
+            echo '- Check App Store Connect for build status and tester availability.'
+          } >> "$GITHUB_STEP_SUMMARY"
