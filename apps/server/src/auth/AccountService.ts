@@ -429,6 +429,14 @@ export const layer = Layer.effect(
     const allowInsecureLoopback = yield* Config.String(
       "TRITONAI_ACCOUNT_ALLOW_INSECURE_LOOPBACK",
     ).pipe(Config.withDefault("0"));
-    return yield* make({ serviceUrl, allowInsecureLoopback: allowInsecureLoopback === "1" });
+    return yield* make({ serviceUrl, allowInsecureLoopback: allowInsecureLoopback === "1" }).pipe(
+      Effect.catchIf(
+        (cause) => cause.code === "invalid_configuration",
+        () =>
+          Effect.logWarning(
+            "UC San Diego sign-in is disabled because the account service configuration is invalid.",
+          ).pipe(Effect.andThen(make())),
+      ),
+    );
   }),
 );

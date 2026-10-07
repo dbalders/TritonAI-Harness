@@ -1,12 +1,14 @@
 import * as NodeCrypto from "node:crypto";
 
 import { describe, expect, it } from "@effect/vitest";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
-import { make, resolveAccountServiceUrl } from "./AccountService.ts";
+import * as Account from "./AccountService.ts";
 import { ServerSecretStore } from "./ServerSecretStore.ts";
 
 const serviceUrl = "https://accounts.example.test";
@@ -72,6 +74,7 @@ function fixture(overrides?: {
   };
   return {
     values,
+    store,
     calls,
     startResponse,
     credential,
@@ -79,7 +82,7 @@ function fixture(overrides?: {
     advance: (seconds: number) => {
       time += seconds;
     },
-    make: make({
+    make: Account.make({
       serviceUrl: overrides?.serviceUrl ?? serviceUrl,
       ...(overrides?.allowInsecureLoopback === undefined
         ? {}
@@ -91,6 +94,49 @@ function fixture(overrides?: {
 }
 
 describe("AccountService", () => {
+  it.effect("keeps the account layer available when its optional URL is invalid", () =>
+    Effect.gen(function* () {
+      const f = fixture();
+      for (const value of ["not-a-url", `${serviceUrl}/prod`, "http://accounts.example.test"]) {
+        const configuredLayer = Account.layer.pipe(
+          Layer.provide(Layer.succeed(ServerSecretStore, f.store)),
+          Layer.provide(
+            ConfigProvider.layer(
+              ConfigProvider.fromEnv({ env: { TRITONAI_ACCOUNT_SERVICE_URL: value } }),
+            ),
+          ),
+        );
+        yield* Effect.gen(function* () {
+          const account = yield* Account.AccountService;
+          expect(yield* account.getStatus("local-a")).toMatchObject({
+            configured: false,
+            status: "signed-out",
+          });
+          expect((yield* Effect.flip(account.startLogin("local-a"))).code).toBe("not_configured");
+        }).pipe(Effect.provide(configuredLayer));
+      }
+    }),
+  );
+
+  it.effect("keeps sign-in configured when the account URL is valid", () =>
+    Effect.gen(function* () {
+      const f = fixture();
+      const configuredLayer = Account.layer.pipe(
+        Layer.provide(Layer.succeed(ServerSecretStore, f.store)),
+        Layer.provide(
+          ConfigProvider.layer(
+            ConfigProvider.fromEnv({ env: { TRITONAI_ACCOUNT_SERVICE_URL: serviceUrl } }),
+          ),
+        ),
+      );
+      const status = yield* Effect.gen(function* () {
+        const account = yield* Account.AccountService;
+        return yield* account.getStatus("local-a");
+      }).pipe(Effect.provide(configuredLayer));
+      expect(status).toMatchObject({ configured: true, status: "signed-out" });
+    }),
+  );
+
   it.effect(
     "waits for the owning desktop callback rather than exchanging on a background poll",
     () =>
@@ -129,9 +175,11 @@ describe("AccountService", () => {
       }),
   );
   it("accepts only a configured secure origin or explicit loopback development origin", () => {
-    expect(resolveAccountServiceUrl("")).toBeNull();
-    expect(resolveAccountServiceUrl(`${serviceUrl}/`)).toBe(serviceUrl);
-    expect(resolveAccountServiceUrl("http://127.0.0.1:8788", true)).toBe("http://127.0.0.1:8788");
+    expect(Account.resolveAccountServiceUrl("")).toBeNull();
+    expect(Account.resolveAccountServiceUrl(`${serviceUrl}/`)).toBe(serviceUrl);
+    expect(Account.resolveAccountServiceUrl("http://127.0.0.1:8788", true)).toBe(
+      "http://127.0.0.1:8788",
+    );
     for (const value of [
       "http://127.0.0.1:8788",
       "http://accounts.example.test",
@@ -140,8 +188,8 @@ describe("AccountService", () => {
       `${serviceUrl}?override=1`,
       `${serviceUrl}#fragment`,
     ])
-      expect(() => resolveAccountServiceUrl(value)).toThrow();
-    expect(() => resolveAccountServiceUrl("http://accounts.example.test", true)).toThrow();
+      expect(() => Account.resolveAccountServiceUrl(value)).toThrow();
+    expect(() => Account.resolveAccountServiceUrl("http://accounts.example.test", true)).toThrow();
   });
 
   it.effect("keeps an unconfigured server signed out without making requests", () =>
