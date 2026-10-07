@@ -128,6 +128,7 @@ import { useThreadActions } from "../hooks/useThreadActions";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
 import { isCommandPaletteOpen, openCommandPalette } from "../commandPaletteBus";
+import { useFocusComposerAfterNewThread } from "../composerHandleContext";
 import { useClientSettings } from "../hooks/useSettings";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useLocalStorage } from "../hooks/useLocalStorage";
@@ -2360,6 +2361,7 @@ export default function Sidebar() {
     },
   });
   const newThreadContext = useHandleNewThread();
+  const focusComposerAfterNewThread = useFocusComposerAfterNewThread();
   const openAddProjectCommandPalette = useCallback(
     () => openCommandPalette({ open: "add-project" }),
     [],
@@ -3060,9 +3062,9 @@ export default function Sidebar() {
       const projectRef = projectNewThreadTargetByKey.get(projectKey);
       if (!projectRef) return;
       if (isMobile) setOpenMobile(false);
-      void handleNewThreadRef.current(projectRef);
+      focusComposerAfterNewThread(handleNewThreadRef.current(projectRef));
     },
-    [isMobile, projectNewThreadTargetByKey, setOpenMobile],
+    [focusComposerAfterNewThread, isMobile, projectNewThreadTargetByKey, setOpenMobile],
   );
   const settledThreadKeys = useMemo(
     () =>
@@ -4666,18 +4668,20 @@ export default function Sidebar() {
       // the palette picker.
       if (shouldCreateNewThreadInCurrentProject(event?.shiftKey ?? false, projectGroups.length)) {
         if (isMobile) setOpenMobile(false);
-        void startNewThreadFromContext({
-          activeDraftThread: newThreadContext.activeDraftThread,
-          activeThread: newThreadContext.activeThread ?? undefined,
-          defaultProjectRef: newThreadContext.defaultProjectRef,
-          handleNewThread: newThreadContext.handleNewThread,
-        });
+        focusComposerAfterNewThread(
+          startNewThreadFromContext({
+            activeDraftThread: newThreadContext.activeDraftThread,
+            activeThread: newThreadContext.activeThread ?? undefined,
+            defaultProjectRef: newThreadContext.defaultProjectRef,
+            handleNewThread: newThreadContext.handleNewThread,
+          }),
+        );
         return;
       }
       if (isMobile) setOpenMobile(false);
       openCommandPalette({ open: "new-thread-in" });
     },
-    [isMobile, newThreadContext, projectGroups.length, setOpenMobile],
+    [focusComposerAfterNewThread, isMobile, newThreadContext, projectGroups.length, setOpenMobile],
   );
 
   // The global list actions mirror chat.new: in multi-project setups both route through
