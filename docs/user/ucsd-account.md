@@ -8,9 +8,13 @@ When your environment offers sign-in, open **Settings → Connections → UC San
 account**. Desktop sign-in opens your browser for campus authentication, then
 returns you to Harness automatically. There is no code to enter or compare.
 
-On mobile, select the environment in **Settings → Environments**. Mobile and web
-sign-in use a matching code: sign in in your browser and confirm the code shown
-in Harness. Only approve a connection you started yourself.
+On mobile, select the environment in **Settings → Environments**. Sign-in opens
+the system authentication browser and returns to Harness automatically after
+campus authentication. There is no code comparison or final confirmation page.
+iOS may ask permission to open the sign-in website.
+
+Web sign-in uses a matching code: sign in in your browser and confirm the code
+shown in Harness. Only approve a connection you started yourself.
 
 Sign-in belongs to your current connection to that environment. Another browser,
 device, or environment needs its own sign-in. Sessions last one hour; sign in
