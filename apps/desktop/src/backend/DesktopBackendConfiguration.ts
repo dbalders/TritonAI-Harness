@@ -261,7 +261,7 @@ function compareVersionParts(left: ReadonlyArray<number>, right: ReadonlyArray<n
   return 0;
 }
 
-export function appendPathEntry(currentPath: string | undefined, entry: string): string {
+function appendPathEntry(currentPath: string | undefined, entry: string): string {
   const entries = (currentPath ?? "").split(":").filter((value) => value.length > 0);
   return entries.includes(entry) ? entries.join(":") : [...entries, entry].join(":");
 }
