@@ -34,6 +34,7 @@ import { ServerEnvironment } from "../../environment/ServerEnvironment.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { DailyMemory } from "../DailyMemory.ts";
 import {
+  decodeDeviceRecord,
   findMemoryDevice,
   generalVaultPaths,
   type MemoryDevice,
@@ -45,8 +46,10 @@ import {
   type CloudFile,
   conflictCopyPath,
   type LocalFile,
+  memoryOwnershipConflict,
   planMemorySync,
   type SyncAction,
+  type SyncDevice,
   type SyncedFile,
 } from "./memorySyncPlan.ts";
 import {
@@ -84,7 +87,11 @@ const SyncState = Schema.Struct({
   /** What the last sync saw on both sides, by vault-relative path. */
   synced: Schema.Record(
     Schema.String,
-    Schema.Struct({ sha256: Schema.String, eTag: Schema.String }),
+    Schema.Struct({
+      sha256: Schema.String,
+      eTag: Schema.String,
+      ownerId: Schema.optionalKey(Schema.String),
+    }),
   ),
   /** Written before uploading, so a restart can recover an unrecorded success. */
   pendingUploads: Schema.Record(Schema.String, Schema.String).pipe(
@@ -247,7 +254,14 @@ export const make = Effect.gen(function* () {
       Effect.map(
         (value) => new Set(Object.keys(value.files).map((key) => key.split(path.sep).join("/"))),
       ),
-      Effect.orElseSucceed(() => new Set<string>()),
+      Effect.catchIf(isNotFound, () => Effect.succeed(new Set<string>())),
+      Effect.mapError(
+        () =>
+          new MemorySyncFailure({
+            message:
+              "Could not verify the written memory files. Sync stopped to preserve your notes.",
+          }),
+      ),
     );
 
   function applyItems(state: SyncState, items: ReadonlyArray<DriveItem>) {
@@ -357,6 +371,30 @@ export const make = Effect.gen(function* () {
 
     const outcome = yield* Effect.gen(function* () {
       const cloud = cloudPaths(current);
+      // Read remote records before uploads, downloads to disk, or deletions. Local
+      // registration cannot see another computer before its first sync.
+      const remoteDevices: SyncDevice[] = [];
+      for (const [filePath, remote] of cloud.files) {
+        const match = /^\.devices\/([^/]+)\/device\.json$/iu.exec(filePath);
+        if (!match) continue;
+        const bytes = yield* oneDrive.download(remote.id);
+        const record = yield* decodeDeviceRecord(new TextDecoder().decode(bytes)).pipe(
+          Effect.mapError(
+            () =>
+              new MemorySyncFailure({
+                message: `Memory ownership conflict: could not verify ${filePath}. Sync stopped to preserve your notes.`,
+              }),
+          ),
+        );
+        if (record.id !== match[1] || !record.shortId) {
+          return yield* new MemorySyncFailure({
+            message: `Memory ownership conflict: ${filePath} does not match its device identity. Sync stopped to preserve your notes.`,
+          });
+        }
+        remoteDevices.push(record);
+      }
+      const conflict = memoryOwnershipConflict(device, remoteDevices);
+      if (conflict) return yield* new MemorySyncFailure({ message: conflict.message! });
       // An upload may have reached OneDrive before its response or baseline
       // could be saved. Reconcile its recorded bytes before detecting edits
       // from another computer, even if the local file has since changed.
@@ -382,8 +420,14 @@ export const make = Effect.gen(function* () {
         synced: new Map(Object.entries(current.synced)),
       });
       current.synced = Object.fromEntries(aligned.synced);
+      const written = new Set(
+        [...(yield* readWritten(device))].map(
+          (filePath) => cloudByLowerPath.get(filePath.toLowerCase())?.filePath ?? filePath,
+        ),
+      );
       const actions = planMemorySync({
         device,
+        remoteDevices,
         local: new Map<string, LocalFile>(
           [...aligned.local].map(([key, value]) => [key, { sha256: value.sha256 }]),
         ),
@@ -391,10 +435,11 @@ export const make = Effect.gen(function* () {
           [...cloud.files].map(([key, value]) => [key, { eTag: value.eTag }]),
         ),
         synced: new Map<string, SyncedFile>(Object.entries(current.synced)),
-        written: yield* readWritten(device),
+        written,
       });
       yield* executeActions({
         device,
+        written,
         state: current,
         local: aligned.local,
         diskPath: aligned.diskPath,
@@ -410,6 +455,7 @@ export const make = Effect.gen(function* () {
 
   const executeActions = Effect.fn("memorySync.executeActions")(function* (input: {
     readonly device: MemoryDevice;
+    readonly written: ReadonlySet<string>;
     readonly state: SyncState;
     readonly local: ReadonlyMap<string, { readonly bytes: Uint8Array; readonly sha256: string }>;
     /** Where each local file is on disk, when its letter case differs from the cloud's. */
@@ -478,7 +524,11 @@ export const make = Effect.gen(function* () {
       if (!result.item.eTag) return;
       delete state.pendingUploads[relativePath];
       state.items[result.item.id] = { name, parentId, eTag: result.item.eTag, folder: false };
-      state.synced[relativePath] = { sha256, eTag: result.item.eTag };
+      state.synced[relativePath] = {
+        sha256,
+        eTag: result.item.eTag,
+        ...(input.written.has(relativePath) ? { ownerId: input.device.id } : {}),
+      };
     });
 
     const downloadTo = Effect.fn("memorySync.downloadTo")(function* (relativePath: string) {
@@ -499,6 +549,7 @@ export const make = Effect.gen(function* () {
         case "ownerConflict":
           return yield* new MemorySyncFailure({
             message:
+              action.message ??
               "Another installation is writing memory as this computer, so sync stopped. Turn sync off on one of them.",
           });
         case "upload":
@@ -508,7 +559,15 @@ export const make = Effect.gen(function* () {
           const { bytes, eTag } = yield* downloadTo(action.path);
           if (!(yield* unchangedSinceScan(action.path))) break;
           yield* writeBytesAtomically(toLocalPath(onDisk(action.path)), bytes);
-          state.synced[action.path] = { sha256: sha256Bytes(bytes), eTag };
+          const sha256 = sha256Bytes(bytes);
+          const previous = state.synced[action.path];
+          state.synced[action.path] = {
+            sha256,
+            eTag,
+            ...(previous?.sha256 === sha256 && previous.ownerId
+              ? { ownerId: previous.ownerId }
+              : {}),
+          };
           break;
         }
         case "compare":
@@ -517,7 +576,14 @@ export const make = Effect.gen(function* () {
           const mine = local.get(action.path)!;
           const { bytes, eTag } = yield* downloadTo(action.path);
           if (sha256Bytes(bytes) === mine.sha256) {
-            state.synced[action.path] = { sha256: mine.sha256, eTag };
+            const previous = state.synced[action.path];
+            state.synced[action.path] = {
+              sha256: mine.sha256,
+              eTag,
+              ...(previous?.sha256 === mine.sha256 && previous.ownerId
+                ? { ownerId: previous.ownerId }
+                : {}),
+            };
             break;
           }
           const isNote =

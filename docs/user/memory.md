@@ -35,7 +35,9 @@ To see every computer's notes on each of them, turn on **Sync memory with OneDri
 
 Your notes stay in the same local folder. Memory copies them to `TritonAI Harness/memory/general` in your OneDrive (Nightly uses `TritonAI Harness Nightly`) and brings in your other computers' notes about every five minutes. Each computer only changes its own notes, so they never overwrite each other. The `Notes` folder syncs both ways; if you edit the same note on two computers before they sync, you keep both versions, one with "conflict" and the computer's name in its title.
 
-Sync never deletes your notes to match another computer. If this computer loses its memory folder, sync downloads its notes again from OneDrive. **Sign out** stops sync and forgets the Microsoft sign-in; the notes stay on this computer and in OneDrive.
+If two computers have the same short code, sync stops with an ownership-conflict message to preserve your notes. Renaming a computer does not change its code. Keep sync off on the affected computers until their memory identities have been repaired; do not delete cloud notes or device records to clear the message.
+
+A generated note is only deleted from OneDrive when sync has verified which computer uploaded it and that computer intentionally removed it. Notes from older sync records without that ownership evidence are restored if their local copy goes missing. If this computer loses its memory folder, sync downloads its notes again from OneDrive. **Sign out** stops sync and forgets the Microsoft sign-in; the notes stay on this computer and in OneDrive.
 
 ## How agents use it
 
