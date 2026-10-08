@@ -192,29 +192,29 @@ export const make = Effect.gen(function* () {
           Effect.flatMap((json) => secrets.set(STATE_SECRET, new TextEncoder().encode(json))),
         );
 
+  const request = (input: HttpClientRequest.HttpClientRequest) =>
+    httpClient.execute(input).pipe(
+      Effect.flatMap((response) =>
+        response.json.pipe(
+          Effect.orElseSucceed((): unknown => null),
+          Effect.map((json): Reply => ({
+            status: response.status,
+            json:
+              typeof json === "object" && json !== null && !Array.isArray(json)
+                ? (json as Record<string, unknown>)
+                : {},
+          })),
+        ),
+      ),
+      Effect.timeout(REQUEST_TIMEOUT),
+    );
   const post = (url: string, headers: Record<string, string>, body: unknown) =>
-    httpClient
-      .execute(
-        HttpClientRequest.post(url).pipe(
-          HttpClientRequest.setHeaders(headers),
-          HttpClientRequest.bodyJsonUnsafe(body),
-        ),
-      )
-      .pipe(
-        Effect.flatMap((response) =>
-          response.json.pipe(
-            Effect.orElseSucceed((): unknown => null),
-            Effect.map((json): Reply => ({
-              status: response.status,
-              json:
-                typeof json === "object" && json !== null && !Array.isArray(json)
-                  ? (json as Record<string, unknown>)
-                  : {},
-            })),
-          ),
-        ),
-        Effect.timeout(REQUEST_TIMEOUT),
-      );
+    request(
+      HttpClientRequest.post(url).pipe(
+        HttpClientRequest.setHeaders(headers),
+        HttpClientRequest.bodyJsonUnsafe(body),
+      ),
+    );
   const workerHeaders = (stored: Stored) => ({
     "x-triton-harness-user": stored.userId,
     "x-triton-harness-token": stored.token,
@@ -502,6 +502,32 @@ export const make = Effect.gen(function* () {
           return yield* failure(
             "This computer still holds results for its previous bot. Let them finish delivery before choosing another service.",
           );
+        }
+        if (previous?.held.length) {
+          // Check the authenticated account before replacing its cloud pairing.
+          const identity = yield* request(
+            HttpClientRequest.get(`${apiUrl}/me`).pipe(
+              HttpClientRequest.setHeader("authorization", `Bearer ${input.ownerToken}`),
+            ),
+          ).pipe(Effect.mapError(() => failure("Could not confirm your TritonAI Bot account.")));
+          if (identity.status === 401) {
+            return yield* failure(
+              "Your TritonAI Bot sign-in expired. Sign in again, then choose Allow.",
+            );
+          }
+          const owner = yield* Schema.decodeUnknownEffect(
+            Schema.Struct({
+              user: Schema.Struct({ userId: Schema.String.check(Schema.isMinLength(1)) }),
+            }),
+          )(identity.json).pipe(Effect.option);
+          if (identity.status !== 200 || Option.isNone(owner)) {
+            return yield* failure("Could not confirm your TritonAI Bot account.");
+          }
+          if (previous.userId !== owner.value.user.userId) {
+            return yield* failure(
+              "This computer still holds results for another account. Sign back into that account and finish delivery before changing accounts.",
+            );
+          }
         }
         const reply = yield* post(
           `${apiUrl}/harness/pairing`,

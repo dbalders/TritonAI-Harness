@@ -37,13 +37,19 @@ class FakeBot {
   replaced = false;
   resultStatus = 200;
   sessionValid = true;
+  ownerId = "owner@ucsd.edu";
 
   handle(path: string, headers: Record<string, string>, body: Record<string, unknown>) {
     this.calls.push({ path, headers, body });
     const worker = headers["x-triton-harness-token"];
+    if (path === "/me") {
+      return this.sessionValid
+        ? { status: 200, json: { user: { userId: this.ownerId } } }
+        : { status: 401, json: { error: "Invalid or expired owner session" } };
+    }
     if (path === "/harness/pairing") {
       return this.sessionValid
-        ? { status: 200, json: { ok: true, userId: "owner@ucsd.edu", harnessToken: this.current } }
+        ? { status: 200, json: { ok: true, userId: this.ownerId, harnessToken: this.current } }
         : { status: 401, json: { ok: false, error: "Invalid or expired owner session" } };
     }
     if (path === "/harness/pairing/revoke")
@@ -363,6 +369,33 @@ it.layer(NodeServices.layer)("BotTaskComputer", (it) => {
       }).pipe(Effect.provide(services(bot, harness)));
     },
   );
+  it.effect(
+    "refuses an account switch before replacing its cloud pairing while held work remains",
+    () => {
+      const bot = new FakeBot(),
+        harness = new FakeHarness();
+      bot.tasks = [{ taskId: "held-account-a", title: "Report", prompt: "Write it" }];
+      return Effect.gen(function* () {
+        yield* TestClock.setTime(START);
+        const computer = yield* BotTaskComputer.BotTaskComputer;
+        yield* allow(computer);
+        const pairings = bot.calls.filter((call) => call.path === "/harness/pairing").length;
+        bot.ownerId = "other-owner@ucsd.edu";
+        const refused = yield* computer
+          .allow({ apiUrl: API, ownerToken: "other-owner-session", projectId: PROJECT })
+          .pipe(Effect.flip);
+        assert.include(refused.message, "another account");
+        assert.strictEqual(
+          bot.calls.filter((call) => call.path === "/harness/pairing").length,
+          pairings,
+        );
+        const status = yield* computer.getStatus;
+        assert.strictEqual(status.userId, "owner@ucsd.edu");
+        assert.strictEqual(status.currentTask?.taskId, "held-account-a");
+      }).pipe(Effect.provide(services(bot, harness)));
+    },
+  );
+
   it.effect("stops locally without sending another service's owner token to the paired bot", () => {
     const bot = new FakeBot(),
       harness = new FakeHarness();
