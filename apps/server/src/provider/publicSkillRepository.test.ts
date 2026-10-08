@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
@@ -155,12 +156,12 @@ function memorySnapshot(initial: ServerProviderSkillCatalog | null) {
   return { store, written };
 }
 
-function stateDirRepositoryLayer(repository: Parameters<typeof repositoryLayer>[0] = {}) {
-  return layer.pipe(
-    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-public-skills-" })),
+/** Dependencies of the production `layer`, which reads the state dir as it starts. */
+function stateDirDependencies(repository: Parameters<typeof repositoryLayer>[0] = {}) {
+  return ServerConfig.layerTest(process.cwd(), { prefix: "t3-public-skills-" }).pipe(
     Layer.provideMerge(NodeServices.layer),
-    Layer.provide(repositoryLayer(repository)),
-    Layer.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} }))),
+    Layer.provideMerge(repositoryLayer(repository)),
+    Layer.provideMerge(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} }))),
   );
 }
 
@@ -383,7 +384,7 @@ describe("public skill repository", () => {
     return Effect.gen(function* () {
       const repository = yield* PublicSkillRepository;
       const saved = yield* repository.readCatalog;
-      const refreshed = yield* repository.refreshCatalog;
+      const refreshed = yield* repository.refreshCatalog();
       const next = yield* repository.readCatalog;
 
       expect(saved.catalog.revision).toBe(SECOND_REVISION);
@@ -403,7 +404,7 @@ describe("public skill repository", () => {
     const snapshot = memorySnapshot(SAVED_CATALOG);
     return Effect.gen(function* () {
       const repository = yield* PublicSkillRepository;
-      const refreshed = yield* repository.refreshCatalog;
+      const refreshed = yield* repository.refreshCatalog();
 
       expect(refreshed).toEqual({ catalog: SAVED_CATALOG, stale: true });
       expect(snapshot.written).toEqual([]);
@@ -435,14 +436,14 @@ describe("public skill repository", () => {
     Effect.gen(function* () {
       const repository = yield* PublicSkillRepository;
       const fileSystem = yield* FileSystem.FileSystem;
-      yield* repository.refreshCatalog;
+      yield* repository.refreshCatalog();
 
       const saved = yield* Schema.decodeEffect(CatalogJson)(
         yield* fileSystem.readFileString(yield* snapshotFilePath),
       );
       expect(saved.revision).toBe(REVISION);
       expect(saved.entries).toHaveLength(2);
-    }).pipe(Effect.provide(stateDirRepositoryLayer())),
+    }).pipe(Effect.provide(layer.pipe(Layer.provideMerge(stateDirDependencies())))),
   );
 
   it.effect("restores the catalog saved by an earlier run", () =>
@@ -452,22 +453,77 @@ describe("public skill repository", () => {
         yield* snapshotFilePath,
         yield* Schema.encodeEffect(CatalogJson)(SAVED_CATALOG),
       );
-      const repository = yield* PublicSkillRepository;
-      const read = yield* repository.readCatalog;
+      const read = yield* PublicSkillRepository.pipe(
+        Effect.flatMap((repository) => repository.readCatalog),
+        Effect.provide(layer),
+      );
 
       expect(read).toEqual({ catalog: SAVED_CATALOG, stale: true });
-    }).pipe(Effect.provide(stateDirRepositoryLayer({ hangResolve: true }))),
+    }).pipe(Effect.provide(stateDirDependencies({ hangResolve: true }))),
   );
 
   it.effect("ignores an unreadable saved catalog", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       yield* fileSystem.writeFileString(yield* snapshotFilePath, "{ not a catalog");
-      const repository = yield* PublicSkillRepository;
-      const read = yield* repository.readCatalog;
+      const read = yield* PublicSkillRepository.pipe(
+        Effect.flatMap((repository) => repository.readCatalog),
+        Effect.provide(layer),
+      );
 
       expect(read.stale).toBe(false);
       expect(read.catalog.revision).toBe(REVISION);
-    }).pipe(Effect.provide(stateDirRepositoryLayer())),
+    }).pipe(Effect.provide(stateDirDependencies())),
   );
+
+  it.effect("checks GitHub as soon as the service starts", () => {
+    const written = Deferred.makeUnsafe<ServerProviderSkillCatalog>();
+    const store: PublicSkillCatalogSnapshotStore = {
+      read: Effect.succeed(SAVED_CATALOG),
+      write: (catalog) => Deferred.succeed(written, catalog).pipe(Effect.asVoid),
+    };
+    return Effect.gen(function* () {
+      yield* PublicSkillRepository;
+      const refreshed = yield* Deferred.await(written);
+
+      expect(refreshed.revision).toBe(REVISION);
+    }).pipe(
+      Effect.provide(
+        publicSkillRepositoryLayer(
+          {},
+          { githubToken: null, snapshot: store, refreshOnStart: true },
+        ),
+      ),
+    );
+  });
+
+  it.effect("fetches a fresh catalog on a forced refresh within the TTL", () => {
+    const calls: RepositoryCall[] = [];
+    let revision = REVISION;
+    let tree = TREE_SHA;
+    return Effect.gen(function* () {
+      const repository = yield* PublicSkillRepository;
+      const first = yield* repository.refreshCatalog();
+      revision = SECOND_REVISION;
+      tree = SECOND_TREE_SHA;
+      const unforced = yield* repository.refreshCatalog();
+      const forced = yield* repository.refreshCatalog({ force: true });
+
+      expect(first.catalog.revision).toBe(REVISION);
+      expect(unforced.catalog.revision).toBe(REVISION);
+      expect(forced).toEqual({
+        catalog: expect.objectContaining({ revision: SECOND_REVISION }),
+        stale: false,
+      });
+      expect(calls.filter((call) => call.url.endsWith("/commits/main"))).toHaveLength(2);
+    }).pipe(
+      Effect.provide(
+        publicSkillRepositoryLayer({
+          calls,
+          currentRevision: () => revision,
+          currentTree: () => tree,
+        }),
+      ),
+    );
+  });
 });

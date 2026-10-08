@@ -662,7 +662,9 @@ export const listProviderSkillCatalog = Effect.fn("listProviderSkillCatalog")(fu
         };
   const publicSkills = yield* PublicSkillRepository;
   const catalog = yield* (
-    input.refresh ? publicSkills.refreshCatalog : publicSkills.readCatalog
+    input.refresh
+      ? publicSkills.refreshCatalog({ force: input.refresh === "force" })
+      : publicSkills.readCatalog
   ).pipe(Effect.result);
   const commonsSubmissionRead = yield* listTritonAiCommonsSubmissionReceipts(config.stateDir).pipe(
     Effect.result,

@@ -38,7 +38,8 @@ const MAX_SKILL_FILE_COUNT = 200;
 const MAX_SKILL_BYTES = 2 * 1024 * 1024;
 const MAX_GITHUB_METADATA_BYTES = 2 * 1024 * 1024;
 const PUBLIC_SKILLS_REQUEST_TIMEOUT = "15 seconds";
-const PUBLIC_SKILLS_CATALOG_TTL = "5 minutes";
+// The catalog changes rarely; each server start and the Refresh button also check.
+const PUBLIC_SKILLS_CATALOG_TTL = "1 day";
 const PUBLIC_SKILLS_SNAPSHOT_FILE_NAME = "public-skill-catalog.json";
 const PUBLIC_SKILLS_RATE_LIMIT_COOLDOWN = "1 minute";
 const PUBLIC_SKILLS_MAX_RATE_LIMIT_COOLDOWN = "1 hour";
@@ -461,6 +462,8 @@ export interface PublicSkillRepositoryOptions {
   readonly rateLimitCooldown?: Duration.Input;
   readonly githubToken?: Redacted.Redacted<string> | null;
   readonly snapshot?: PublicSkillCatalogSnapshotStore;
+  /** Check GitHub in the background as soon as the service starts. */
+  readonly refreshOnStart?: boolean;
 }
 
 export interface PublicSkillCatalogRead {
@@ -480,8 +483,11 @@ export class PublicSkillRepository extends Context.Service<
     /** Last known catalog without waiting; refreshes in the background when stale.
      * Waits on GitHub only when no catalog has ever been fetched. */
     readonly readCatalog: Effect.Effect<PublicSkillCatalogRead, ServerProviderSkillCatalogError>;
-    /** Waits for a fresh catalog, falling back to the last known one if GitHub fails. */
-    readonly refreshCatalog: Effect.Effect<PublicSkillCatalogRead, ServerProviderSkillCatalogError>;
+    /** Waits for a fresh catalog, falling back to the last known one if GitHub fails.
+     * `force` fetches even when the cached catalog is within its TTL. */
+    readonly refreshCatalog: (options?: {
+      readonly force?: boolean;
+    }) => Effect.Effect<PublicSkillCatalogRead, ServerProviderSkillCatalogError>;
     readonly loadBundle: (input: {
       readonly id: string;
       readonly revision: string;
@@ -710,21 +716,27 @@ export const make = Effect.fn("PublicSkillRepository.make")(function* (
     yield* Effect.forkIn(discoverCatalog.pipe(Effect.ignoreCause({ log: true })), serviceScope);
     return { catalog: latest.catalog, stale: true };
   });
-  const refreshCatalog = Effect.gen(function* () {
-    yield* ensureSnapshotLoaded;
-    return yield* discoverCatalog.pipe(
-      Effect.map((catalog) => ({ catalog, stale: false })),
-      Effect.catch((error) =>
-        Ref.get(latestCatalog).pipe(
-          Effect.flatMap((latest) =>
-            latest === null
-              ? Effect.fail(error)
-              : Effect.succeed({ catalog: latest.catalog, stale: true }),
+  const refreshCatalog: PublicSkillRepository["Service"]["refreshCatalog"] = (refreshOptions) =>
+    Effect.gen(function* () {
+      yield* ensureSnapshotLoaded;
+      if (refreshOptions?.force) {
+        // The branch's commit is cached for the TTL too; drop both so GitHub is asked again.
+        yield* Cache.invalidate(commitCache, PUBLIC_SKILLS_DEFAULT_BRANCH);
+        yield* Cache.invalidate(catalogCache, PUBLIC_SKILLS_DEFAULT_BRANCH);
+      }
+      return yield* discoverCatalog.pipe(
+        Effect.map((catalog) => ({ catalog, stale: false })),
+        Effect.catch((error) =>
+          Ref.get(latestCatalog).pipe(
+            Effect.flatMap((latest) =>
+              latest === null
+                ? Effect.fail(error)
+                : Effect.succeed({ catalog: latest.catalog, stale: true }),
+            ),
           ),
         ),
-      ),
-    );
-  });
+      );
+    });
   const loadBundle: PublicSkillRepository["Service"]["loadBundle"] = Effect.fn(
     "PublicSkillRepository.loadBundle",
   )(function* (input) {
@@ -791,6 +803,10 @@ export const make = Effect.fn("PublicSkillRepository.make")(function* (
     } satisfies ServerProviderSkillBundle;
   });
 
+  if (options.refreshOnStart) {
+    yield* Effect.forkIn(readCatalog.pipe(Effect.ignoreCause({ log: true })), serviceScope);
+  }
+
   return PublicSkillRepository.of({ discoverCatalog, readCatalog, refreshCatalog, loadBundle });
 });
 
@@ -826,6 +842,6 @@ const makeStateDirSnapshotStore = Effect.gen(function* () {
 export const layer = Layer.effect(
   PublicSkillRepository,
   Effect.gen(function* () {
-    return yield* make({ snapshot: yield* makeStateDirSnapshotStore });
+    return yield* make({ snapshot: yield* makeStateDirSnapshotStore, refreshOnStart: true });
   }),
 );

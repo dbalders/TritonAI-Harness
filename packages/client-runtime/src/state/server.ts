@@ -1196,6 +1196,11 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:provider-skill-catalog",
       tag: WS_METHODS.serverListProviderSkillCatalog,
     }),
+    // The Refresh button: fetch from GitHub now, then re-read providerSkillCatalog.
+    forceRefreshProviderSkillCatalog: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:force-refresh-provider-skill-catalog",
+      tag: WS_METHODS.serverListProviderSkillCatalog,
+    }),
     installProviderSkill: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:install-provider-skill",
       tag: WS_METHODS.serverInstallProviderSkill,

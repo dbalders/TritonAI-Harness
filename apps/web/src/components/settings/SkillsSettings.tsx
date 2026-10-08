@@ -448,6 +448,11 @@ export function SkillsSettingsPanel() {
   const navigate = useNavigate();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const providers = useAtomValue(primaryServerProvidersAtom);
+  const forceRefreshCatalogCommand = useAtomCommand(
+    serverEnvironment.forceRefreshProviderSkillCatalog,
+    { label: "skill catalog refresh", reportFailure: false },
+  );
+  const [forcingCatalogRefresh, setForcingCatalogRefresh] = useState(false);
   const installSkillCommand = useAtomCommand(serverEnvironment.installProviderSkill, {
     label: "skill install",
     reportFailure: false,
@@ -487,7 +492,7 @@ export function SkillsSettingsPanel() {
     primaryEnvironmentId && catalogQuery.data?.catalogStale
       ? serverEnvironment.providerSkillCatalog({
           environmentId: primaryEnvironmentId,
-          input: { refresh: true },
+          input: { refresh: "wait" },
         })
       : null,
   );
@@ -504,7 +509,7 @@ export function SkillsSettingsPanel() {
   const managedSkillsStatus: ServerManagedSkillsStatus = catalogLoadError
     ? "unknown"
     : (catalogResult?.managedSkillsStatus ?? "unknown");
-  const catalogLoading = catalogQuery.isPending;
+  const catalogLoading = catalogQuery.isPending || forcingCatalogRefresh;
   const catalogError = catalogLoadError ?? catalogResult?.unavailableReason ?? null;
   const managedManifestWarning = catalogLoadError
     ? "Managed skill ownership could not be verified."
@@ -574,9 +579,17 @@ export function SkillsSettingsPanel() {
   const catalogInstallDisabled = installDisabled || catalogError !== null;
   const removalBlocked = ownershipBlocked;
 
-  const loadCatalog = () => {
+  // The server otherwise checks GitHub only at startup and once a day.
+  const loadCatalog = async () => {
+    if (primaryEnvironmentId) {
+      setForcingCatalogRefresh(true);
+      await forceRefreshCatalogCommand({
+        environmentId: primaryEnvironmentId,
+        input: { refresh: "force" },
+      });
+      setForcingCatalogRefresh(false);
+    }
     catalogQuery.refresh();
-    refreshedCatalogQuery.refresh();
   };
 
   const installSkill = useCallback(
@@ -809,7 +822,7 @@ export function SkillsSettingsPanel() {
               variant="outline"
               disabled={catalogLoading}
               aria-label="Retry loading TritonAI Commons"
-              onClick={() => loadCatalog()}
+              onClick={() => void loadCatalog()}
             >
               <RefreshCwIcon className="size-3.5" />
               {catalogLoading ? "Retrying..." : "Retry"}
@@ -877,7 +890,7 @@ export function SkillsSettingsPanel() {
             variant="ghost"
             aria-label="Refresh skill catalog"
             disabled={catalogLoading}
-            onClick={() => loadCatalog()}
+            onClick={() => void loadCatalog()}
           >
             <RefreshCwIcon className="size-3.5" />
           </Button>

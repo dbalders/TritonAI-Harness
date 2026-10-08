@@ -157,8 +157,9 @@ export const ServerManagedSkillsStatus = Schema.Literals(["absent", "invalid", "
 export type ServerManagedSkillsStatus = typeof ServerManagedSkillsStatus.Type;
 
 export const ServerListProviderSkillCatalogInput = Schema.Struct({
-  /** Wait for a fresh catalog instead of returning the saved copy. */
-  refresh: Schema.optional(Schema.Boolean),
+  /** "wait": wait for the refresh already under way instead of returning the saved copy.
+   * "force": fetch a fresh catalog now, even if the saved one is recent. */
+  refresh: Schema.optional(Schema.Literals(["wait", "force"])),
 });
 export type ServerListProviderSkillCatalogInput = typeof ServerListProviderSkillCatalogInput.Type;
 
