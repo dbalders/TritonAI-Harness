@@ -17,9 +17,15 @@ Web sign-in uses a matching code: sign in in your browser and confirm the code
 shown in Harness. Only approve a connection you started yourself.
 
 Sign-in belongs to your current connection to that environment. Another browser,
-device, or environment needs its own sign-in. Sessions last one hour; sign in
-again after expiry. **Check connection** verifies your session with the account
-service, and **Sign out** revokes it. If sign-out cannot reach the service, retry
-when the connection is restored.
+device, or environment needs its own sign-in. When automatic renewal is available,
+Harness keeps your sign-in active while the environment runs, including after you
+leave Settings. It also tries to renew when you return after being offline.
+UC San Diego may occasionally require you to sign in again; renewal lasts at most
+30 days before a fresh sign-in is required. Older sessions showing an expiry time
+need one new sign-in to enable renewal.
+
+**Check connection** verifies your session with the account service, and
+**Sign out** revokes it. If sign-out cannot reach the service, retry when the
+connection is restored.
 
 Your existing environment pairing and AI provider sign-ins are still required.
