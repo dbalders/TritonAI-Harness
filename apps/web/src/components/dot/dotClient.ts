@@ -7,7 +7,7 @@ export interface DotSession {
 export interface DotRun {
   readonly runId: string;
   readonly threadId: string;
-  readonly event: { readonly kind: string; readonly text?: string };
+  readonly event: { readonly kind: string; readonly text?: string; readonly phase?: string };
   readonly status:
     | "queued"
     | "running"
@@ -47,6 +47,72 @@ export interface DotMemory {
   readonly remindAt?: string;
 }
 
+export type DotFeedbackRating = "useful" | "not-useful";
+export type DotFeedbackReason =
+  | "already-handled"
+  | "not-important"
+  | "inaccurate"
+  | "too-late"
+  | "duplicate";
+
+export const DOT_FEEDBACK_REASONS: ReadonlyArray<{
+  readonly id: DotFeedbackReason;
+  readonly label: string;
+}> = [
+  { id: "already-handled", label: "Already handled" },
+  { id: "not-important", label: "Not important" },
+  { id: "inaccurate", label: "Wrong/inaccurate" },
+  { id: "too-late", label: "Too late" },
+  { id: "duplicate", label: "Duplicate" },
+];
+
+/** One proactive output's owner rating, from `GET /state`. Older bots omit it. */
+export interface DotFeedback {
+  readonly outputId: string;
+  readonly kind: string;
+  readonly rating?: DotFeedbackRating;
+  readonly reasons?: readonly DotFeedbackReason[];
+  readonly note?: string;
+  readonly implicit?: "handled" | "not-urgent" | "snoozed";
+}
+
+export interface DotQualityCounts {
+  readonly kind: string;
+  readonly delivered: number;
+  readonly rated: number;
+  readonly useful: number;
+  readonly notUseful: number;
+  /** Null until at least one explicit rating exists. */
+  readonly usefulRate: number | null;
+}
+
+export interface DotQuality {
+  readonly windows: ReadonlyArray<{
+    readonly days: number;
+    readonly total: DotQualityCounts;
+    readonly byKind: readonly DotQualityCounts[];
+  }>;
+}
+
+const PROACTIVE_KINDS = new Set([
+  "attention",
+  "meeting-prep",
+  "heartbeat",
+  "routine",
+  "harness-update",
+]);
+
+/** Mirrors the bot's rule: only finished output the bot sent without being asked can be rated. */
+export function isRateableRun(run: DotRun): boolean {
+  if (!PROACTIVE_KINDS.has(run.event.kind)) return false;
+  if (!["completed", "failed", "uncertain"].includes(run.status)) return false;
+  if (run.status === "completed" && !run.result?.summary?.trim()) return false;
+  return (
+    run.event.kind !== "harness-update" ||
+    ["completed", "failed", "uncertain"].includes(run.event.phase ?? "")
+  );
+}
+
 export interface DotState {
   readonly streamId?: string;
   readonly dotMemory?: readonly DotMemory[];
@@ -54,6 +120,8 @@ export interface DotState {
   readonly tasks: readonly DotTask[];
   readonly runs: readonly DotRun[];
   readonly approvals: readonly DotApproval[];
+  readonly feedback?: readonly DotFeedback[];
+  readonly quality?: DotQuality;
   /** Absent from older bots; `available: false` means Outlook and calendar are off for this account. */
   readonly microsoft?: { readonly available: boolean; readonly message?: string };
 }
@@ -227,6 +295,18 @@ export class DotClient {
 
   pause(session: DotSession, paused: boolean): Promise<{ paused: boolean }> {
     return this.request(paused ? "/pause" : "/resume", session, {});
+  }
+
+  rate(
+    session: DotSession,
+    runId: string,
+    rating: DotFeedbackRating,
+    reasons: readonly DotFeedbackReason[] = [],
+  ): Promise<{ feedback: DotFeedback; changed: boolean }> {
+    return this.request(`/feedback/${encodeURIComponent(runId)}`, session, {
+      rating,
+      ...(rating === "not-useful" && reasons.length ? { reasons } : {}),
+    });
   }
 
   decide(session: DotSession, approvalId: string, approved: boolean): Promise<{ ok: boolean }> {

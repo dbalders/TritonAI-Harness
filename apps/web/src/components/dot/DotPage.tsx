@@ -12,12 +12,18 @@ import { SidebarInset } from "../ui/sidebar";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { clearBotSessions, useBotServiceUrl } from "./botService";
 import {
+  DOT_FEEDBACK_REASONS,
   DotApiError,
   DotClient,
   draftAfterSend,
+  isRateableRun,
   readDotSession,
   runStatusLabel,
   saveDotSession,
+  type DotFeedback,
+  type DotFeedbackRating,
+  type DotFeedbackReason,
+  type DotQuality,
   type DotSession,
   type DotState,
   type PendingConnection,
@@ -62,6 +68,7 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busyApproval, setBusyApproval] = useState<string | null>(null);
+  const [busyFeedback, setBusyFeedback] = useState<string | null>(null);
   const pendingMessage = useRef<PendingMessage | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const activeOwner = useRef(session?.ownerToken);
@@ -197,6 +204,11 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
     [state],
   );
 
+  const feedbackByRun = useMemo(
+    () => new Map((state?.feedback ?? []).map((item) => [item.outputId, item])),
+    [state],
+  );
+
   useEffect(() => {
     if (runs.length || sending) chatEndRef.current?.scrollIntoView({ block: "end" });
   }, [runs.length, runs.at(-1)?.result?.summary, sending]);
@@ -222,6 +234,24 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
       reportError(cause, session.ownerToken);
     } finally {
       setSending(false);
+    }
+  };
+
+  const rate = async (
+    runId: string,
+    rating: DotFeedbackRating,
+    reasons: readonly DotFeedbackReason[] = [],
+  ) => {
+    if (!session) return;
+    setBusyFeedback(runId);
+    setError(null);
+    try {
+      await client.rate(session, runId, rating, reasons);
+      await refresh();
+    } catch (cause) {
+      reportError(cause);
+    } finally {
+      setBusyFeedback(null);
     }
   };
 
@@ -389,6 +419,13 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
                             )}
                           </div>
                         </div>
+                        {isRateableRun(run) && (
+                          <RunFeedback
+                            feedback={feedbackByRun.get(run.runId)}
+                            disabled={busyFeedback !== null || !connected}
+                            onRate={(rating, reasons) => void rate(run.runId, rating, reasons)}
+                          />
+                        )}
                       </Fragment>
                     ))}
                     <div ref={chatEndRef} />
@@ -440,6 +477,7 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
                   ))}
                 </section>
               )}
+              {state?.quality && <QualitySummary quality={state.quality} />}
               <details className="shrink-0 rounded-xl border px-3 py-2">
                 <summary className="cursor-pointer text-sm font-medium">
                   Bot memory ·{" "}
@@ -532,5 +570,75 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
         </div>
       </div>
     </SidebarInset>
+  );
+}
+
+/** Ratings record the owner's judgment only; they never change what the bot sends. */
+function RunFeedback({
+  feedback,
+  disabled,
+  onRate,
+}: {
+  readonly feedback: DotFeedback | undefined;
+  readonly disabled: boolean;
+  readonly onRate: (rating: DotFeedbackRating, reasons: readonly DotFeedbackReason[]) => void;
+}) {
+  const reasons = feedback?.rating === "not-useful" ? (feedback.reasons ?? []) : [];
+  return (
+    <div className="-mt-1 flex flex-wrap items-center gap-1 ps-2 text-xs text-muted-foreground">
+      <Button
+        variant={feedback?.rating === "useful" ? "secondary" : "ghost"}
+        size="compact"
+        aria-pressed={feedback?.rating === "useful"}
+        disabled={disabled}
+        onClick={() => onRate("useful", [])}
+      >
+        👍 Useful
+      </Button>
+      <Button
+        variant={feedback?.rating === "not-useful" ? "secondary" : "ghost"}
+        size="compact"
+        aria-pressed={feedback?.rating === "not-useful"}
+        disabled={disabled}
+        onClick={() => onRate("not-useful", reasons)}
+      >
+        👎 Not useful
+      </Button>
+      {feedback?.rating === "not-useful" &&
+        DOT_FEEDBACK_REASONS.map((reason) => {
+          const selected = reasons.includes(reason.id);
+          return (
+            <Button
+              key={reason.id}
+              variant={selected ? "secondary" : "ghost"}
+              size="compact"
+              aria-pressed={selected}
+              disabled={disabled}
+              onClick={() =>
+                onRate(
+                  "not-useful",
+                  selected ? reasons.filter((item) => item !== reason.id) : [...reasons, reason.id],
+                )
+              }
+            >
+              {reason.label}
+            </Button>
+          );
+        })}
+    </div>
+  );
+}
+
+function QualitySummary({ quality }: { readonly quality: DotQuality }) {
+  const week = quality.windows.find((window) => window.days === 7);
+  if (!week || (!week.total.delivered && !week.total.rated)) return null;
+  const { delivered, rated, useful } = week.total;
+  return (
+    <p role="status" className="shrink-0 text-xs text-muted-foreground">
+      Last 7 days: {delivered} proactive {delivered === 1 ? "message" : "messages"} delivered ·{" "}
+      {rated
+        ? `${useful} of ${rated} rated useful (${Math.round((useful / rated) * 100)}%)`
+        : "no ratings yet"}
+    </p>
   );
 }

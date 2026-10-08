@@ -3,6 +3,7 @@ import {
   DotApiError,
   draftAfterSend,
   DotClient,
+  isRateableRun,
   readDotSession,
   saveDotSession,
   runStatusLabel,
@@ -15,6 +16,50 @@ const session = {
 };
 
 describe("DotClient", () => {
+  it("rates a proactive output with owner authentication and only sends reasons for not-useful", async () => {
+    const mock = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async () =>
+        Response.json({ ok: true, changed: true, feedback: { outputId: "a", kind: "reminder" } }),
+      );
+    const client = new DotClient("https://bot.example.test", mock);
+    await client.rate(session, "run/1", "not-useful", ["duplicate"]);
+    await client.rate(session, "run/1", "useful", ["duplicate"]);
+    expect(mock.mock.calls.map(([url]) => url)).toEqual([
+      "https://bot.example.test/feedback/run%2F1",
+      "https://bot.example.test/feedback/run%2F1",
+    ]);
+    expect(JSON.parse(String(mock.mock.calls[0]?.[1]?.body))).toEqual({
+      rating: "not-useful",
+      reasons: ["duplicate"],
+    });
+    expect(JSON.parse(String(mock.mock.calls[1]?.[1]?.body))).toEqual({ rating: "useful" });
+    expect(mock.mock.calls[0]?.[1]?.headers).toEqual({
+      Authorization: `Bearer ${session.ownerToken}`,
+      "Content-Type": "application/json",
+    });
+  });
+
+  it("offers ratings only on finished proactive output", () => {
+    const run = (kind: string, status = "completed", phase?: string) =>
+      ({
+        runId: "r",
+        threadId: "dot",
+        event: { kind, ...(phase ? { phase } : {}) },
+        status,
+        createdAt: "",
+        updatedAt: "",
+        result: { summary: "Output" },
+      }) as Parameters<typeof isRateableRun>[0];
+    expect(isRateableRun(run("attention"))).toBe(true);
+    expect(isRateableRun(run("heartbeat", "failed"))).toBe(true);
+    expect(isRateableRun(run("harness-update", "completed", "completed"))).toBe(true);
+    expect(isRateableRun(run("harness-update", "completed", "running"))).toBe(false);
+    expect(isRateableRun(run("message"))).toBe(false);
+    expect(isRateableRun(run("today"))).toBe(false);
+    expect(isRateableRun(run("meeting-prep", "queued"))).toBe(false);
+  });
+
   it("binds the native browser fetch to its global receiver", async () => {
     const nativeFetch = globalThis.fetch;
     globalThis.fetch = function (this: unknown) {
