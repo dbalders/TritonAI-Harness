@@ -682,8 +682,10 @@ export const make = Effect.fn("PublicSkillRepository.make")(function* (
   );
 
   // A forced refresh invalidates the cache without cancelling a lookup already
-  // running, so only the newest lookup may publish, one publish at a time.
-  const latestLookup = yield* Ref.make(0);
+  // running. Publish one at a time, and never over a newer lookup's result; an
+  // older success still lands if the newer lookup failed.
+  const startedLookups = yield* Ref.make(0);
+  const publishedLookup = yield* Ref.make(0);
   const publishLock = yield* Semaphore.make(1);
 
   const catalogCache = yield* Cache.makeWith<
@@ -693,11 +695,12 @@ export const make = Effect.fn("PublicSkillRepository.make")(function* (
   >(
     () =>
       Effect.gen(function* () {
-        const lookup = yield* Ref.updateAndGet(latestLookup, (count) => count + 1);
+        const lookup = yield* Ref.updateAndGet(startedLookups, (count) => count + 1);
         const catalog = yield* buildCatalog();
         yield* publishLock.withPermits(1)(
           Effect.gen(function* () {
-            if ((yield* Ref.get(latestLookup)) !== lookup) return;
+            if ((yield* Ref.get(publishedLookup)) > lookup) return;
+            yield* Ref.set(publishedLookup, lookup);
             const refreshedAtMs = yield* Clock.currentTimeMillis;
             yield* Ref.set(latestCatalog, { catalog, refreshedAtMs });
             if (options.snapshot) yield* options.snapshot.write(catalog);

@@ -53,6 +53,7 @@ function repositoryLayer(input?: {
   readonly currentRevision?: () => string;
   readonly currentTree?: () => string;
   readonly failResolveAttempts?: number;
+  readonly failResolveAttempt?: number;
   readonly hangResolve?: boolean;
   /** Holds the first commit lookup, answered with the revision current when it arrived. */
   readonly holdFirstResolve?: {
@@ -123,7 +124,10 @@ function repositoryLayer(input?: {
             status: 403,
             headers: { "retry-after": "60", "x-ratelimit-remaining": "0" },
           });
-        } else if (resolveAttempts <= (input?.failResolveAttempts ?? 0)) {
+        } else if (
+          resolveAttempts <= (input?.failResolveAttempts ?? 0) ||
+          resolveAttempts === input?.failResolveAttempt
+        ) {
           response = new Response("offline", { status: 503 });
         } else {
           response = Response.json({
@@ -569,6 +573,32 @@ describe("public skill repository", () => {
       Effect.provide(
         publicSkillRepositoryLayer(
           { holdFirstResolve: hold, currentRevision: () => revision, currentTree: () => tree },
+          { githubToken: null, snapshot: snapshot.store },
+        ),
+      ),
+    );
+  });
+
+  it.effect("keeps an older lookup's catalog when the forced refresh fails", () => {
+    const hold = { arrived: Deferred.makeUnsafe<void>(), release: Deferred.makeUnsafe<void>() };
+    const snapshot = memorySnapshot(null);
+    return Effect.gen(function* () {
+      const repository = yield* PublicSkillRepository;
+      const older = yield* repository.refreshCatalog().pipe(Effect.forkChild);
+      yield* Deferred.await(hold.arrived);
+      const forcedError = yield* Effect.flip(repository.refreshCatalog({ force: true }));
+      yield* Deferred.succeed(hold.release, undefined);
+      yield* Fiber.join(older);
+      const latest = yield* repository.readCatalog;
+
+      expect(forcedError.message).toContain("could not be reached");
+      expect(latest.catalog.revision).toBe(REVISION);
+      expect(latest.stale).toBe(false);
+      expect(snapshot.written.map((catalog) => catalog.revision)).toEqual([REVISION]);
+    }).pipe(
+      Effect.provide(
+        publicSkillRepositoryLayer(
+          { holdFirstResolve: hold, failResolveAttempt: 2 },
           { githubToken: null, snapshot: snapshot.store },
         ),
       ),
