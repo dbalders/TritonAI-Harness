@@ -11,12 +11,14 @@ import { Input } from "../ui/input";
 import { SidebarInset } from "../ui/sidebar";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { clearBotSessions, useBotServiceUrl } from "./botService";
+import { BotRunStatus } from "./BotRunStatus";
 import {
   DOT_FEEDBACK_REASONS,
   DotApiError,
   DotClient,
   draftAfterSend,
   isRateableRun,
+  isPendingDotRun,
   readDotSession,
   runStatusLabel,
   saveDotSession,
@@ -70,6 +72,7 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
   const [busyApproval, setBusyApproval] = useState<string | null>(null);
   const [busyFeedback, setBusyFeedback] = useState<string | null>(null);
   const pendingMessage = useRef<PendingMessage | null>(null);
+  const acceptedRunIds = useRef(new Set<string>());
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const activeOwner = useRef(session?.ownerToken);
   const mounted = useRef(true);
@@ -83,6 +86,7 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
         setState(null);
         setConnected(false);
         pendingMessage.current = null;
+        acceptedRunIds.current.clear();
       }
     },
     [serviceUrl],
@@ -108,8 +112,11 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
   const refresh = useCallback(async () => {
     if (!session) return;
     try {
-      const result = await client.state(session);
+      const result = await client.stateWithRunDetails(session, [...acceptedRunIds.current]);
       if (activeOwner.current !== session.ownerToken) return;
+      for (const run of result.runs) {
+        if (!isPendingDotRun(run)) acceptedRunIds.current.delete(run.runId);
+      }
       setState(result);
       setConnected(true);
     } catch (cause) {
@@ -226,7 +233,9 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
         : { requestId: randomUUID(), threadId, text };
     pendingMessage.current = message;
     try {
-      await client.send(session, message);
+      const accepted = await client.send(session, message);
+      if (activeOwner.current !== session.ownerToken) return;
+      acceptedRunIds.current.add(accepted.runId);
       pendingMessage.current = null;
       setDraft((current) => draftAfterSend(current, sentDraft));
       await refresh();
@@ -420,12 +429,19 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
                                 : "bg-muted text-foreground",
                             )}
                           >
-                            {run.result?.summary ?? run.error ?? runStatusLabel(run.status)}
-                            {run.result?.summary && run.status !== "completed" && (
-                              <p className="mt-2 text-xs text-muted-foreground">
-                                {runStatusLabel(run.status)}
-                              </p>
-                            )}
+                            {run.result?.summary ??
+                              run.error ??
+                              (isPendingDotRun(run)
+                                ? "Message pending"
+                                : runStatusLabel(run.status))}
+                            <BotRunStatus run={run} />
+                            {run.result?.summary &&
+                              !isPendingDotRun(run) &&
+                              run.status !== "completed" && (
+                                <p className="mt-2 text-xs text-muted-foreground">
+                                  {runStatusLabel(run.status)}
+                                </p>
+                              )}
                           </div>
                         </div>
                         {isRateableRun(run) && (

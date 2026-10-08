@@ -7,6 +7,7 @@ import {
   readDotSession,
   saveDotSession,
   runStatusLabel,
+  type DotRun,
 } from "./dotClient";
 
 const session = {
@@ -58,6 +59,68 @@ describe("DotClient", () => {
     expect(isRateableRun(run("message"))).toBe(false);
     expect(isRateableRun(run("today"))).toBe(false);
     expect(isRateableRun(run("meeting-prep", "queued"))).toBe(false);
+  });
+
+  const run = (runId: string, status: DotRun["status"]): DotRun => ({
+    runId,
+    status,
+    threadId: "dot",
+    event: { kind: "message" },
+    createdAt: "2026-10-08T12:00:00Z",
+    updatedAt: "2026-10-08T12:00:00Z",
+  });
+
+  it("polls active and newly accepted runs by GET, including completion between polls", async () => {
+    const queued = run("queued", "queued");
+    const approval = run("approval", "waiting-approval");
+    const completed = run("completed", "completed");
+    const finished = { ...queued, status: "completed", result: { summary: "Done" } };
+    const mock = vi.fn<typeof fetch>().mockImplementation(async (url) => {
+      if (url === "https://bot.example.test/state")
+        return Response.json({ ok: true, runs: [queued, approval, completed] });
+      const id = String(url).split("/").at(-1);
+      return Response.json({
+        ok: true,
+        run: id === "queued" ? finished : id === "approval" ? approval : run("accepted", "running"),
+      });
+    });
+    const state = await new DotClient("https://bot.example.test", mock).stateWithRunDetails(
+      session,
+      ["accepted", "queued", "completed"],
+    );
+    expect(state.runs).toEqual([finished, approval, completed, run("accepted", "running")]);
+    expect(mock.mock.calls.map(([url]) => url)).toEqual([
+      "https://bot.example.test/state",
+      "https://bot.example.test/runs/queued",
+      "https://bot.example.test/runs/approval",
+      "https://bot.example.test/runs/accepted",
+    ]);
+    for (const [, init] of mock.mock.calls) {
+      expect(init?.method).toBe("GET");
+      expect(init?.headers).toEqual({ Authorization: `Bearer ${session.ownerToken}` });
+    }
+  });
+
+  it("preserves durable waiting state but marks telemetry unavailable on a failed detail read", async () => {
+    const approval = { ...run("approval", "waiting-approval"), activityFresh: true };
+    const mock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json({ ok: true, runs: [approval] }))
+      .mockRejectedValueOnce(new TypeError("offline"));
+    const state = await new DotClient("https://bot.example.test", mock).stateWithRunDetails(
+      session,
+    );
+    expect(state.runs).toEqual([{ ...approval, activityFresh: false }]);
+  });
+
+  it("propagates an expired owner session during detail polling", async () => {
+    const mock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json({ ok: true, runs: [run("active", "running")] }))
+      .mockResolvedValueOnce(Response.json({ ok: false, error: "Sign in again" }, { status: 401 }));
+    await expect(
+      new DotClient("https://bot.example.test", mock).stateWithRunDetails(session),
+    ).rejects.toMatchObject({ status: 401 });
   });
 
   it("binds the native browser fetch to its global receiver", async () => {

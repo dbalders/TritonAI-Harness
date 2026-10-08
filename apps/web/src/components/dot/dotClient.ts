@@ -20,6 +20,19 @@ export interface DotRun {
   readonly updatedAt: string;
   readonly result?: { readonly summary: string; readonly taskId?: string };
   readonly error?: string;
+  /** Fixed service-authored status; absent from older services and terminal runs. */
+  readonly activity?: {
+    readonly kind: string;
+    readonly phrase: string;
+    readonly startedAt: string;
+    readonly updatedAt: string;
+    readonly step: number;
+  };
+  readonly activityFresh?: boolean;
+}
+
+export function isPendingDotRun(run: DotRun): boolean {
+  return ["queued", "running", "waiting-approval"].includes(run.status);
 }
 
 export interface DotTask {
@@ -268,6 +281,36 @@ export class DotClient {
 
   state(session: DotSession): Promise<DotState> {
     return this.request<DotState>("/state", session);
+  }
+
+  /** Poll active runs, including a newly accepted message not yet listed in /state. */
+  async stateWithRunDetails(
+    session: DotSession,
+    acceptedRunIds: readonly string[] = [],
+  ): Promise<DotState> {
+    const state = await this.state(session);
+    const ids = new Set([
+      ...state.runs.filter(isPendingDotRun).map((run) => run.runId),
+      ...acceptedRunIds.filter(
+        (id) => !state.runs.some((run) => run.runId === id && !isPendingDotRun(run)),
+      ),
+    ]);
+    const details = await Promise.all(
+      [...ids].map(async (id) => {
+        try {
+          const { run } = await this.run(session, id);
+          return run.runId === id ? run : undefined;
+        } catch (cause) {
+          if (cause instanceof DotApiError && cause.status === 401) throw cause;
+          // The state snapshot still supplies durable approval/result information.
+          const snapshot = state.runs.find((run) => run.runId === id);
+          return snapshot ? { ...snapshot, activityFresh: false } : undefined;
+        }
+      }),
+    );
+    const byId = new Map(state.runs.map((run) => [run.runId, run]));
+    for (const run of details) if (run) byId.set(run.runId, run);
+    return { ...state, runs: [...byId.values()] };
   }
 
   send(

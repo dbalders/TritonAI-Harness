@@ -11,6 +11,13 @@ On desktop, your browser opens campus sign-in and then returns you to Harness
 automatically. In a web browser, sign in and confirm the code shown in Harness.
 The mobile app does not support TritonAI Bot yet.
 
+While a message is pending, a short status underneath it shows the bot's current
+activity when the service supplies a recent update. After 90 seconds without an
+activity update, it changes to **Status unavailable**, including when the
+connection drops. **Needs your input** means the run is waiting for your approval;
+it remains visible even when worker activity updates stop. These statuses do not
+show the bot's reasoning or action details.
+
 The bot appears in the sidebar only when a service address is set. If your build
 does not include a default address, add one in Settings. To use a different service
 or turn the bot off, open
