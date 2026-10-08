@@ -16,11 +16,18 @@ import {
 const CALLBACK_PATH = "/dot/callback";
 const SIGN_IN_TIMEOUT_MS = 5 * 60_000;
 const identifier = /^[A-Za-z0-9_-]{43}$/;
-const RETURN_PAGE =
-  '<!doctype html><html lang="en"><meta charset="utf-8"><title>Signed in</title><body style="font:17px/1.6 system-ui;text-align:center;padding:12vh 24px">Signed in. You can close this tab and return to TritonAI Harness.</body></html>';
+const returnPage = (message: string) =>
+  `<!doctype html><html lang="en"><meta charset="utf-8"><title>TritonAI Bot</title><body style="font:17px/1.6 system-ui;text-align:center;padding:12vh 24px">${message}</body></html>`;
+const RETURN_PAGE = returnPage("Signed in. You can close this tab and return to TritonAI Harness.");
+const SIGNUPS_CLOSED_PAGE = returnPage(
+  "TritonAI Bot isn't accepting new users right now. You can close this tab.",
+);
 
 const DotSignInReturn = Schema.NullOr(
-  Schema.Struct({ requestId: Schema.String, code: Schema.String }),
+  Schema.Union([
+    Schema.Struct({ requestId: Schema.String, code: Schema.String }),
+    Schema.Struct({ requestId: Schema.String, error: Schema.Literal("signups_closed") }),
+  ]),
 );
 export type DotSignInReturn = typeof DotSignInReturn.Type;
 
@@ -48,11 +55,13 @@ export function listenForDotSignIn(timeoutMs = SIGN_IN_TIMEOUT_MS): Promise<DotS
     }
     const requestId = url.searchParams.get("requestId") ?? "";
     const code = url.searchParams.get("code") ?? "";
+    // The bot refuses new accounts while signups are closed and says so here instead of a code.
+    const refused = url.searchParams.get("error") === "signups_closed";
     if (
       request.method !== "GET" ||
       url.pathname !== CALLBACK_PATH ||
       !identifier.test(requestId) ||
-      !identifier.test(code)
+      (!refused && !identifier.test(code))
     ) {
       response.writeHead(404).end();
       return;
@@ -64,8 +73,8 @@ export function listenForDotSignIn(timeoutMs = SIGN_IN_TIMEOUT_MS): Promise<DotS
         "referrer-policy": "no-referrer",
         connection: "close",
       })
-      .end(RETURN_PAGE);
-    close({ requestId, code });
+      .end(refused ? SIGNUPS_CLOSED_PAGE : RETURN_PAGE);
+    close(refused ? { requestId, error: "signups_closed" } : { requestId, code });
   });
   let timer: ReturnType<typeof setTimeout> | undefined;
   const close = (value: DotSignInReturn = null) => {

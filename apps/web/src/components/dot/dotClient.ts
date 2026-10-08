@@ -54,6 +54,8 @@ export interface DotState {
   readonly tasks: readonly DotTask[];
   readonly runs: readonly DotRun[];
   readonly approvals: readonly DotApproval[];
+  /** Absent from older bots; `available: false` means Outlook and calendar are off for this account. */
+  readonly microsoft?: { readonly available: boolean; readonly message?: string };
 }
 
 export interface PendingConnection {

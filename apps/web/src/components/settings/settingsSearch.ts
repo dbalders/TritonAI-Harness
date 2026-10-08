@@ -831,6 +831,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["ucsd sign in login account sso identity connection sign out"],
   },
   {
+    id: "tritonai-bot",
+    title: "TritonAI Bot",
+    to: "/settings/connections",
+    searchTerms: ["personal bot dot service address url endpoint assistant sign in turn off"],
+  },
+  {
     id: "remote-environments",
     title: "Environments",
     to: "/settings/connections",

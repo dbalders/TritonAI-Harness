@@ -85,6 +85,7 @@ import {
 import { Link, useParams, useRouter, useRouterState } from "@tanstack/react-router";
 
 import { useRightPanelStore } from "../rightPanelStore";
+import { useBotServiceUrl } from "./dot/botService";
 import {
   isAtomCommandInterrupted,
   settlePromise,
@@ -2286,6 +2287,7 @@ export default function Sidebar() {
   const isDotRouteActive = useRouterState({
     select: (state) => state.location.pathname === "/dot",
   });
+  const botServiceUrl = useBotServiceUrl();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const confirmThreadArchive = useClientSettings((s) => s.confirmThreadArchive);
@@ -4947,14 +4949,16 @@ export default function Sidebar() {
               closeDelay={0}
               timeout={400}
             >
-              <SidebarMenuButton
-                isActive={isDotRouteActive}
-                render={<Link to="/dot" />}
-                tooltip="Your dot"
-              >
-                <BotIcon />
-                <span>Your dot</span>
-              </SidebarMenuButton>
+              {botServiceUrl ? (
+                <SidebarMenuButton
+                  isActive={isDotRouteActive}
+                  render={<Link to="/dot" />}
+                  tooltip="TritonAI Bot"
+                >
+                  <BotIcon />
+                  <span>TritonAI Bot</span>
+                </SidebarMenuButton>
+              ) : null}
               <DndContext
                 sensors={dndSensors}
                 collisionDetection={dndCollisionDetection}

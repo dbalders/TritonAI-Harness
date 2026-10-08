@@ -51,3 +51,16 @@ it("rejects malformed requests without failing", async () => {
   listener.close();
   await expect(listener.result).resolves.toBeNull();
 });
+
+it("tells the app when the bot is not accepting new users", async () => {
+  const listener = await listenForDotSignIn();
+  expect((await fetch(`${listener.redirectUri}?requestId=short&error=signups_closed`)).status).toBe(
+    404,
+  );
+  const returned = await fetch(
+    `${listener.redirectUri}?requestId=${requestId}&error=signups_closed`,
+  );
+  expect(returned.status).toBe(200);
+  expect(await returned.text()).toContain("isn't accepting new users");
+  await expect(listener.result).resolves.toEqual({ requestId, error: "signups_closed" });
+});

@@ -1,3 +1,4 @@
+import { Link } from "@tanstack/react-router";
 import { BotIcon, SendIcon } from "lucide-react";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -9,6 +10,7 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { SidebarInset } from "../ui/sidebar";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
+import { clearBotSessions, useBotServiceUrl } from "./botService";
 import {
   DotApiError,
   DotClient,
@@ -21,14 +23,34 @@ import {
   type PendingMessage,
 } from "./dotClient";
 
-const DOT_API_URL = (
-  import.meta.env.VITE_DOT_BRIDGE_URL?.trim() || ""
-).replace(/\/$/, "");
-const client = new DotClient(DOT_API_URL);
+const SIGNUPS_CLOSED = "TritonAI Bot isn't accepting new users right now.";
+
 export function DotPage() {
-  const [session, setSession] = useState<DotSession | null>(() =>
-    readDotSession(sessionStorage, DOT_API_URL),
+  const serviceUrl = useBotServiceUrl();
+  // Remount per address: sessions, pending sign-ins and polling never cross services.
+  return serviceUrl ? (
+    <BotWorkspace key={serviceUrl} serviceUrl={serviceUrl} />
+  ) : (
+    <SidebarInset className="h-dvh min-h-0 overflow-hidden isolate">
+      <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
+        <h1 className="text-lg font-semibold">TritonAI Bot is off</h1>
+        <p className="max-w-sm text-sm text-muted-foreground">
+          Add a TritonAI Bot service address in Settings to use your personal bot.
+        </p>
+        <Button variant="outline" render={<Link to="/settings/connections" />}>
+          Open Connections settings
+        </Button>
+      </div>
+    </SidebarInset>
   );
+}
+
+function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
+  const client = useMemo(() => new DotClient(serviceUrl), [serviceUrl]);
+  const [session, setSession] = useState<DotSession | null>(() => {
+    clearBotSessions(sessionStorage, serviceUrl);
+    return readDotSession(sessionStorage, serviceUrl);
+  });
   const [state, setState] = useState<DotState | null>(null);
   const [connected, setConnected] = useState(false);
   const [connection, setConnection] = useState<PendingConnection | null>(null);
@@ -44,16 +66,19 @@ export function DotPage() {
   const activeOwner = useRef(session?.ownerToken);
   const mounted = useRef(true);
 
-  const saveSession = useCallback((value: DotSession | null) => {
-    saveDotSession(sessionStorage, DOT_API_URL, value);
-    activeOwner.current = value?.ownerToken;
-    setSession(value);
-    if (!value) {
-      setState(null);
-      setConnected(false);
-      pendingMessage.current = null;
-    }
-  }, []);
+  const saveSession = useCallback(
+    (value: DotSession | null) => {
+      saveDotSession(sessionStorage, serviceUrl, value);
+      activeOwner.current = value?.ownerToken;
+      setSession(value);
+      if (!value) {
+        setState(null);
+        setConnected(false);
+        pendingMessage.current = null;
+      }
+    },
+    [serviceUrl],
+  );
 
   useEffect(() => {
     mounted.current = true;
@@ -82,7 +107,7 @@ export function DotPage() {
       setConnected(false);
       reportError(cause);
     }
-  }, [reportError, session]);
+  }, [client, reportError, session]);
 
   useEffect(() => {
     let cancelled = false;
@@ -111,6 +136,12 @@ export function DotPage() {
           if (cancelled) return;
           if (returned?.requestId !== connection.requestId)
             throw new Error("Sign-in expired. Please try again.");
+          if ("error" in returned)
+            throw new Error(
+              returned.error === "signups_closed"
+                ? SIGNUPS_CLOSED
+                : "Sign-in failed. Please try again.",
+            );
           result = await client.pollConnection(connection, returned.code);
         } else result = await client.pollConnection(connection);
         if (cancelled) return;
@@ -133,7 +164,7 @@ export function DotPage() {
       if (connection.redirectUri)
         void window.desktopBridge?.cancelDotSignIn?.(connection.redirectUri);
     };
-  }, [connection, reportError, saveSession]);
+  }, [client, connection, reportError, saveSession]);
 
   const signIn = async () => {
     setConnecting(true);
@@ -205,7 +236,7 @@ export function DotPage() {
   };
 
   return (
-    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground isolate">
+    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none isolate">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background text-foreground">
         <WorkspacePageHeader electron={isElectron}>
           <div className="flex min-w-0 flex-1 items-center gap-2.5">
@@ -213,7 +244,7 @@ export function DotPage() {
               <BotIcon className="size-4.5" />
             </div>
             <div className="min-w-0">
-              <h1 className="truncate text-sm font-semibold text-foreground">Your dot</h1>
+              <h1 className="truncate text-sm font-semibold text-foreground">TritonAI Bot</h1>
               <p className="truncate text-xs text-muted-foreground">
                 {state?.user.email ?? session?.email ?? "Your campus bot"}
               </p>
@@ -228,13 +259,13 @@ export function DotPage() {
                 ? "Connecting…"
                 : "Sign in"}
           </Badge>
-          {session && (
+          {session && state?.microsoft?.available !== false && (
             <Button
               variant="ghost"
               size="sm"
               onClick={() => {
                 void ensureLocalApi()
-                  .shell.openExternal(`${DOT_API_URL}/connections`)
+                  .shell.openExternal(`${serviceUrl}/connections`)
                   .catch(reportError);
               }}
             >
@@ -251,9 +282,10 @@ export function DotPage() {
         <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col gap-4 px-5 pb-4 sm:px-6">
           {!session ? (
             <div className="flex flex-1 flex-col items-center justify-center gap-4 text-center">
-              <h2 className="text-lg font-semibold">Connect to your bot</h2>
+              <h2 className="text-lg font-semibold">Connect to your TritonAI Bot</h2>
               <p className="max-w-sm text-sm text-muted-foreground">
-                Sign in with UC San Diego to chat, review approvals, and keep your work moving.
+                Sign in with your UC San Diego account to get your own personal bot: chat, review
+                approvals, and keep your work moving.
               </p>
               {connection ? (
                 <>
@@ -290,7 +322,9 @@ export function DotPage() {
             <>
               <div className="flex items-center justify-between gap-2">
                 <span className="text-xs text-muted-foreground">
-                  Your ongoing conversation · synced with Teams
+                  {state?.microsoft?.available === false
+                    ? "Your ongoing conversation"
+                    : "Your ongoing conversation · synced with Teams"}
                 </span>
                 <Button
                   variant="outline"
@@ -307,6 +341,12 @@ export function DotPage() {
                   {state?.user.paused ? "Resume bot" : "Pause bot"}
                 </Button>
               </div>
+              {state?.microsoft?.available === false && (
+                <p role="status" className="text-xs text-muted-foreground">
+                  {state.microsoft.message ??
+                    "Outlook and calendar aren't available for your account."}
+                </p>
+              )}
               {state?.user.paused && (
                 <p role="status" className="text-sm text-muted-foreground">
                   Your bot is paused. Queued messages will continue when you resume it.
@@ -315,7 +355,7 @@ export function DotPage() {
               <div className="min-h-0 flex-1 overflow-y-auto">
                 {runs.length === 0 ? (
                   <div className="flex h-full min-h-40 items-center justify-center text-sm text-muted-foreground">
-                    {connected ? "Say hello to your dot." : "Connecting to your dot…"}
+                    {connected ? "Say hello to your bot." : "Connecting to your bot…"}
                   </div>
                 ) : (
                   <div className="flex flex-col gap-3 py-2">
@@ -398,13 +438,13 @@ export function DotPage() {
               )}
               <details className="shrink-0 rounded-xl border px-3 py-2">
                 <summary className="cursor-pointer text-sm font-medium">
-                  Dot memory ·{" "}
+                  Bot memory ·{" "}
                   {(state?.dotMemory ?? []).filter((item) => item.status === "active").length}{" "}
                   active
                 </summary>
                 <div className="mt-2 max-h-52 space-y-3 overflow-y-auto text-sm">
                   <p className="text-xs text-muted-foreground">
-                    Ask your dot to remember something, set a reminder, or mark work done. Completed
+                    Ask your bot to remember something, set a reminder, or mark work done. Completed
                     items stop reminders. Forget removes the memory; past chat messages remain.
                   </p>
                   {(state?.dotMemory ?? []).length === 0 && (
@@ -454,7 +494,7 @@ export function DotPage() {
                 </div>
               </details>
               <form
-                className="flex shrink-0 items-center gap-2 rounded-full border border-border bg-background px-3 py-1.5 focus-within:border-ring"
+                className="flex shrink-0 items-center gap-2"
                 onSubmit={(event) => {
                   event.preventDefault();
                   void send();
@@ -462,12 +502,11 @@ export function DotPage() {
               >
                 <Input
                   nativeInput
-                  unstyled
                   value={draft}
                   onChange={(event) => setDraft(event.currentTarget.value)}
-                  placeholder="Message your dot..."
-                  aria-label="Message your dot"
-                  className="min-w-0 flex-1 border-0 bg-transparent px-1 text-sm leading-6 text-foreground placeholder:text-placeholder focus-visible:ring-0"
+                  placeholder="Message your bot..."
+                  aria-label="Message your bot"
+                  className="min-w-0 flex-1"
                 />
                 <Button
                   type="submit"
