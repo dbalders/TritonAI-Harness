@@ -12,6 +12,11 @@ import { SidebarInset } from "../ui/sidebar";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { clearBotSessions, useBotServiceUrl } from "./botService";
 import { BotRunStatus } from "./BotRunStatus";
+import { BotHandlingPanel } from "./BotHandlingPanel";
+import { BotRoutinesPanel } from "./BotRoutinesPanel";
+import { BotCapabilitiesPanel, BotMicrosoftBanner } from "./BotDiscoveryPanels";
+import type { DotHandlingItem } from "./dotHandling";
+import type { DotScheduledPrompt, DotScheduledPromptAction } from "./dotRoutines";
 import {
   DOT_FEEDBACK_REASONS,
   DotApiError,
@@ -65,6 +70,8 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
   const [connection, setConnection] = useState<PendingConnection | null>(null);
   const [connecting, setConnecting] = useState(false);
   const threadId = state?.streamId ?? "dot";
+  const pendingPromptRuns = useRef(new Map<string, string>());
+  const [busyPause, setBusyPause] = useState(false);
   const [busyMemory, setBusyMemory] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
@@ -86,6 +93,8 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
         setState(null);
         setConnected(false);
         pendingMessage.current = null;
+        pendingPromptRuns.current.clear();
+        setBusyFeedback(null);
         acceptedRunIds.current.clear();
       }
     },
@@ -258,9 +267,9 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
       await client.rate(session, runId, rating, reasons);
       await refresh();
     } catch (cause) {
-      reportError(cause);
+      reportError(cause, session.ownerToken);
     } finally {
-      setBusyFeedback(null);
+      if (activeOwner.current === session.ownerToken) setBusyFeedback(null);
     }
   };
 
@@ -277,6 +286,79 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
       setBusyApproval(null);
     }
   };
+
+  const stopHandling = async (item: DotHandlingItem) => {
+    if (!session || activeOwner.current !== session.ownerToken)
+      throw new Error("Sign in again to continue.");
+    setError(null);
+    try {
+      const result = await client.stopHandling(session, item);
+      if (activeOwner.current !== session.ownerToken)
+        throw new Error("Your bot session changed. Sign in again to continue.");
+      await refresh();
+      return result;
+    } catch (cause) {
+      if (cause instanceof DotApiError && cause.status === 409) await refresh();
+      reportError(cause, session.ownerToken);
+      throw cause;
+    }
+  };
+
+  const markHandlingSeen = async (through: string) => {
+    if (!session || activeOwner.current !== session.ownerToken)
+      throw new Error("Sign in again to continue.");
+    setError(null);
+    try {
+      const result = await client.markHandlingSeen(session, through);
+      if (activeOwner.current !== session.ownerToken)
+        throw new Error("Your bot session changed. Sign in again to continue.");
+      await refresh();
+      return result;
+    } catch (cause) {
+      reportError(cause, session.ownerToken);
+      throw cause;
+    }
+  };
+
+  const promptAction = async (prompt: DotScheduledPrompt, action: DotScheduledPromptAction) => {
+    if (!session || activeOwner.current !== session.ownerToken)
+      throw new Error("Sign in again to continue.");
+    setError(null);
+    let requestId: string | undefined;
+    if (action === "run") {
+      requestId = pendingPromptRuns.current.get(prompt.promptId) ?? randomUUID();
+      pendingPromptRuns.current.set(prompt.promptId, requestId);
+    }
+    try {
+      const result = await client.scheduledPromptAction(
+        session,
+        prompt.promptId,
+        action,
+        requestId,
+      );
+      if (activeOwner.current !== session.ownerToken)
+        throw new Error("Your bot session changed. Sign in again to continue.");
+      if (action === "run") pendingPromptRuns.current.delete(prompt.promptId);
+      if (result.runId) acceptedRunIds.current.add(result.runId);
+      await refresh();
+      return result;
+    } catch (cause) {
+      if (cause instanceof DotApiError && activeOwner.current === session.ownerToken) {
+        if (action === "run" && cause.status >= 400 && cause.status < 500)
+          pendingPromptRuns.current.delete(prompt.promptId);
+        if (cause.status === 409) await refresh();
+      }
+      reportError(cause, session.ownerToken);
+      throw cause;
+    }
+  };
+
+  const hasPanels =
+    state?.handling !== undefined ||
+    state?.watches !== undefined ||
+    state?.scheduledPrompts !== undefined ||
+    state?.capabilities !== undefined ||
+    Boolean(state?.capabilitiesError);
 
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none isolate">
@@ -331,7 +413,12 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
           )}
         </WorkspacePageHeader>
 
-        <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col gap-4 px-5 pb-4 sm:px-6">
+        <div
+          className={cn(
+            "mx-auto flex min-h-0 w-full flex-1 flex-col gap-4 px-5 pb-4 sm:px-6",
+            hasPanels ? "max-w-6xl" : "max-w-3xl",
+          )}
+        >
           {!session ? (
             <div className="flex flex-1 flex-col items-center justify-center gap-4 text-center">
               <h2 className="text-lg font-semibold">Connect to your TritonAI Bot</h2>
@@ -381,13 +468,19 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
                 <Button
                   variant="outline"
                   size="sm"
-                  disabled={!state}
+                  disabled={!state || !connected || busyPause}
                   onClick={() => {
-                    if (session && state)
-                      void client
-                        .pause(session, !state.user.paused)
-                        .then(refresh)
-                        .catch((cause) => reportError(cause, session.ownerToken));
+                    if (!state || busyPause) return;
+                    setError(null);
+                    setBusyPause(true);
+                    void client
+                      .pause(session, !state.user.paused, state.user.controlVersion)
+                      .then(refresh)
+                      .catch(async (cause) => {
+                        if (cause instanceof DotApiError && cause.status === 409) await refresh();
+                        reportError(cause, session.ownerToken);
+                      })
+                      .finally(() => setBusyPause(false));
                   }}
                 >
                   {state?.user.paused ? "Resume bot" : "Pause bot"}
@@ -401,190 +494,226 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
               )}
               {state?.user.paused && (
                 <p role="status" className="text-sm text-muted-foreground">
-                  Your bot is paused. Queued messages will continue when you resume it.
+                  Your bot is paused. Nothing new starts until you resume it. Reminders, monitors,
+                  routines and assignments remain saved. Work already running cannot be recalled.
                 </p>
               )}
-              <div className="min-h-0 flex-1 overflow-y-auto">
-                {runs.length === 0 ? (
-                  <div className="flex h-full min-h-40 items-center justify-center text-sm text-muted-foreground">
-                    {connected ? "Say hello to your bot." : "Connecting to your bot…"}
-                  </div>
-                ) : (
-                  <div className="flex flex-col gap-3 py-2">
-                    {runs.map((run) => (
-                      <Fragment key={run.runId}>
-                        {run.event.kind === "message" && (
-                          <div className="flex justify-end">
-                            <div className="max-w-[85%] rounded-2xl bg-primary px-4 py-2.5 text-sm leading-relaxed text-primary-foreground">
-                              {run.event.text}
-                            </div>
-                          </div>
-                        )}
-                        <div className="flex justify-start">
-                          <div
-                            className={cn(
-                              "max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap",
-                              ["failed", "uncertain"].includes(run.status)
-                                ? "bg-destructive/10 text-destructive-foreground"
-                                : "bg-muted text-foreground",
+              <BotMicrosoftBanner
+                microsoft={state?.microsoft}
+                connectionsUrl={`${serviceUrl}/connections`}
+              />
+              <div className="flex min-h-0 flex-1 flex-col gap-4 lg:flex-row">
+                <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-4">
+                  <div className="min-h-0 flex-1 overflow-y-auto">
+                    {runs.length === 0 ? (
+                      <div className="flex h-full min-h-40 items-center justify-center text-sm text-muted-foreground">
+                        {connected ? "Say hello to your bot." : "Connecting to your bot…"}
+                      </div>
+                    ) : (
+                      <div className="flex flex-col gap-3 py-2">
+                        {runs.map((run) => (
+                          <Fragment key={run.runId}>
+                            {run.event.kind === "message" && (
+                              <div className="flex justify-end">
+                                <div className="max-w-[85%] rounded-2xl bg-primary px-4 py-2.5 text-sm leading-relaxed text-primary-foreground">
+                                  {run.event.text}
+                                </div>
+                              </div>
                             )}
-                          >
-                            {run.result?.summary ??
-                              run.error ??
-                              (isPendingDotRun(run)
-                                ? "Message pending"
-                                : runStatusLabel(run.status))}
-                            <BotRunStatus run={run} />
-                            {run.result?.summary &&
-                              !isPendingDotRun(run) &&
-                              run.status !== "completed" && (
-                                <p className="mt-2 text-xs text-muted-foreground">
-                                  {runStatusLabel(run.status)}
-                                </p>
-                              )}
+                            <div className="flex justify-start">
+                              <div
+                                className={cn(
+                                  "max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap",
+                                  ["failed", "uncertain"].includes(run.status)
+                                    ? "bg-destructive/10 text-destructive-foreground"
+                                    : "bg-muted text-foreground",
+                                )}
+                              >
+                                {run.result?.summary ??
+                                  run.error ??
+                                  (isPendingDotRun(run)
+                                    ? "Message pending"
+                                    : runStatusLabel(run.status))}
+                                <BotRunStatus run={run} />
+                                {run.result?.summary &&
+                                  !isPendingDotRun(run) &&
+                                  run.status !== "completed" && (
+                                    <p className="mt-2 text-xs text-muted-foreground">
+                                      {runStatusLabel(run.status)}
+                                    </p>
+                                  )}
+                              </div>
+                            </div>
+                            {state?.feedback !== undefined && isRateableRun(run) && (
+                              <RunFeedback
+                                feedback={feedbackByRun.get(run.runId)}
+                                disabled={busyFeedback !== null || !connected}
+                                onRate={(rating, reasons) => void rate(run.runId, rating, reasons)}
+                              />
+                            )}
+                          </Fragment>
+                        ))}
+                        <div ref={chatEndRef} />
+                      </div>
+                    )}
+                  </div>
+                  {(state?.approvals.length ?? 0) > 0 && (
+                    <section
+                      aria-label="Pending approvals"
+                      className="max-h-56 shrink-0 overflow-y-auto rounded-xl border p-3"
+                    >
+                      <h2 className="mb-2 text-sm font-semibold">Needs your approval</h2>
+                      {state?.approvals.map((approval) => (
+                        <div key={approval.approvalId} className="mb-3 space-y-2 text-sm">
+                          <p>{approval.summary}</p>
+                          <details>
+                            <summary className="cursor-pointer text-muted-foreground">
+                              Review action details
+                            </summary>
+                            <dl className="space-y-1 py-2">
+                              {Object.entries(approval.payload).map(([key, value]) => (
+                                <div key={key}>
+                                  <dt className="font-medium">{key}</dt>
+                                  <dd className="whitespace-pre-wrap break-words">
+                                    {typeof value === "string" ? value : JSON.stringify(value)}
+                                  </dd>
+                                </div>
+                              ))}
+                            </dl>
+                          </details>
+                          <div className="flex gap-2">
+                            <Button
+                              size="sm"
+                              disabled={busyApproval !== null || state?.user.paused}
+                              onClick={() => void decide(approval.approvalId, true)}
+                            >
+                              Approve
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              disabled={busyApproval !== null}
+                              onClick={() => void decide(approval.approvalId, false)}
+                            >
+                              Deny
+                            </Button>
                           </div>
                         </div>
-                        {isRateableRun(run) && (
-                          <RunFeedback
-                            feedback={feedbackByRun.get(run.runId)}
-                            disabled={busyFeedback !== null || !connected}
-                            onRate={(rating, reasons) => void rate(run.runId, rating, reasons)}
-                          />
-                        )}
-                      </Fragment>
-                    ))}
-                    <div ref={chatEndRef} />
-                  </div>
+                      ))}
+                    </section>
+                  )}
+                  {state?.quality && <QualitySummary quality={state.quality} />}
+                  <details className="shrink-0 rounded-xl border px-3 py-2">
+                    <summary className="cursor-pointer text-sm font-medium">
+                      Bot memory ·{" "}
+                      {(state?.dotMemory ?? []).filter((item) => item.status === "active").length}{" "}
+                      active
+                    </summary>
+                    <div className="mt-2 max-h-52 space-y-3 overflow-y-auto text-sm">
+                      <p className="text-xs text-muted-foreground">
+                        Ask your bot to remember something, set a reminder, or mark work done.
+                        Completed items stop reminders. Forget removes the memory; past chat
+                        messages remain.
+                      </p>
+                      {(state?.dotMemory ?? []).length === 0 && (
+                        <p className="text-muted-foreground">Nothing saved yet.</p>
+                      )}
+                      {(state?.dotMemory ?? []).map((item) => (
+                        <div
+                          key={item.memoryId}
+                          className="flex items-start justify-between gap-3 border-t pt-2"
+                        >
+                          <div className="min-w-0 whitespace-pre-wrap break-words">
+                            <p>{item.text}</p>
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              {item.status === "completed"
+                                ? "Completed"
+                                : item.remindAt
+                                  ? `Reminder: ${new Date(item.remindAt).toLocaleString()}`
+                                  : "Active context"}
+                            </p>
+                          </div>
+                          <div className="flex shrink-0 gap-1">
+                            {(item.status === "active"
+                              ? (["complete", "forget"] as const)
+                              : (["forget"] as const)
+                            ).map((action) => (
+                              <Button
+                                key={action}
+                                variant="ghost"
+                                size="sm"
+                                disabled={busyMemory !== null || !connected}
+                                onClick={() => {
+                                  if (!session) return;
+                                  setBusyMemory(item.memoryId);
+                                  void client
+                                    .changeMemory(session, item, action)
+                                    .then(refresh)
+                                    .catch((cause) => reportError(cause, session.ownerToken))
+                                    .finally(() => setBusyMemory(null));
+                                }}
+                              >
+                                {action === "complete" ? "Done" : "Forget"}
+                              </Button>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </details>
+                  <form
+                    className="flex shrink-0 items-center gap-2"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      void send();
+                    }}
+                  >
+                    <Input
+                      nativeInput
+                      value={draft}
+                      onChange={(event) => setDraft(event.currentTarget.value)}
+                      placeholder="Message your bot..."
+                      aria-label="Message your bot"
+                      className="min-w-0 flex-1"
+                    />
+                    <Button
+                      type="submit"
+                      size="icon-sm"
+                      variant="ghost"
+                      aria-label="Send message"
+                      disabled={!draft.trim() || sending || !connected}
+                    >
+                      <SendIcon className="size-4" />
+                    </Button>
+                  </form>
+                </div>
+                {hasPanels && (
+                  <aside
+                    aria-label="Bot activity and capabilities"
+                    className="flex max-h-[40%] min-h-0 shrink-0 flex-col gap-3 overflow-y-auto lg:max-h-none lg:w-80"
+                  >
+                    {!connected && (
+                      <p role="status" className="text-xs text-muted-foreground">
+                        Connection interrupted. These are the last received updates.
+                      </p>
+                    )}
+                    <BotHandlingPanel
+                      handling={state?.handling}
+                      onStop={stopHandling}
+                      onSeen={markHandlingSeen}
+                    />
+                    <BotRoutinesPanel
+                      watches={state?.watches}
+                      scheduledPrompts={state?.scheduledPrompts}
+                      onPromptAction={promptAction}
+                    />
+                    <BotCapabilitiesPanel
+                      capabilities={state?.capabilities}
+                      capabilitiesError={state?.capabilitiesError}
+                    />
+                  </aside>
                 )}
               </div>
-              {(state?.approvals.length ?? 0) > 0 && (
-                <section
-                  aria-label="Pending approvals"
-                  className="max-h-56 shrink-0 overflow-y-auto rounded-xl border p-3"
-                >
-                  <h2 className="mb-2 text-sm font-semibold">Needs your approval</h2>
-                  {state?.approvals.map((approval) => (
-                    <div key={approval.approvalId} className="mb-3 space-y-2 text-sm">
-                      <p>{approval.summary}</p>
-                      <details>
-                        <summary className="cursor-pointer text-muted-foreground">
-                          Review action details
-                        </summary>
-                        <dl className="space-y-1 py-2">
-                          {Object.entries(approval.payload).map(([key, value]) => (
-                            <div key={key}>
-                              <dt className="font-medium">{key}</dt>
-                              <dd className="whitespace-pre-wrap break-words">
-                                {typeof value === "string" ? value : JSON.stringify(value)}
-                              </dd>
-                            </div>
-                          ))}
-                        </dl>
-                      </details>
-                      <div className="flex gap-2">
-                        <Button
-                          size="sm"
-                          disabled={busyApproval !== null || state?.user.paused}
-                          onClick={() => void decide(approval.approvalId, true)}
-                        >
-                          Approve
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          disabled={busyApproval !== null}
-                          onClick={() => void decide(approval.approvalId, false)}
-                        >
-                          Deny
-                        </Button>
-                      </div>
-                    </div>
-                  ))}
-                </section>
-              )}
-              {state?.quality && <QualitySummary quality={state.quality} />}
-              <details className="shrink-0 rounded-xl border px-3 py-2">
-                <summary className="cursor-pointer text-sm font-medium">
-                  Bot memory ·{" "}
-                  {(state?.dotMemory ?? []).filter((item) => item.status === "active").length}{" "}
-                  active
-                </summary>
-                <div className="mt-2 max-h-52 space-y-3 overflow-y-auto text-sm">
-                  <p className="text-xs text-muted-foreground">
-                    Ask your bot to remember something, set a reminder, or mark work done. Completed
-                    items stop reminders. Forget removes the memory; past chat messages remain.
-                  </p>
-                  {(state?.dotMemory ?? []).length === 0 && (
-                    <p className="text-muted-foreground">Nothing saved yet.</p>
-                  )}
-                  {(state?.dotMemory ?? []).map((item) => (
-                    <div
-                      key={item.memoryId}
-                      className="flex items-start justify-between gap-3 border-t pt-2"
-                    >
-                      <div className="min-w-0 whitespace-pre-wrap break-words">
-                        <p>{item.text}</p>
-                        <p className="mt-1 text-xs text-muted-foreground">
-                          {item.status === "completed"
-                            ? "Completed"
-                            : item.remindAt
-                              ? `Reminder: ${new Date(item.remindAt).toLocaleString()}`
-                              : "Active context"}
-                        </p>
-                      </div>
-                      <div className="flex shrink-0 gap-1">
-                        {(item.status === "active"
-                          ? (["complete", "forget"] as const)
-                          : (["forget"] as const)
-                        ).map((action) => (
-                          <Button
-                            key={action}
-                            variant="ghost"
-                            size="sm"
-                            disabled={busyMemory !== null || !connected}
-                            onClick={() => {
-                              if (!session) return;
-                              setBusyMemory(item.memoryId);
-                              void client
-                                .changeMemory(session, item, action)
-                                .then(refresh)
-                                .catch((cause) => reportError(cause, session.ownerToken))
-                                .finally(() => setBusyMemory(null));
-                            }}
-                          >
-                            {action === "complete" ? "Done" : "Forget"}
-                          </Button>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </details>
-              <form
-                className="flex shrink-0 items-center gap-2"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  void send();
-                }}
-              >
-                <Input
-                  nativeInput
-                  value={draft}
-                  onChange={(event) => setDraft(event.currentTarget.value)}
-                  placeholder="Message your bot..."
-                  aria-label="Message your bot"
-                  className="min-w-0 flex-1"
-                />
-                <Button
-                  type="submit"
-                  size="icon-sm"
-                  variant="ghost"
-                  aria-label="Send message"
-                  disabled={!draft.trim() || sending || !connected}
-                >
-                  <SendIcon className="size-4" />
-                </Button>
-              </form>
             </>
           )}
           {error && (

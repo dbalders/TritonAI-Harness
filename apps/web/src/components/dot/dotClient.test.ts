@@ -1,3 +1,4 @@
+import type { DotHandlingItem } from "./dotHandling";
 import { describe, expect, it, vi } from "vite-plus/test";
 import {
   DotApiError,
@@ -17,6 +18,123 @@ const session = {
 };
 
 describe("DotClient", () => {
+  it("stops only the versioned owner item and reports a conflict's factual message", async () => {
+    const item: DotHandlingItem = {
+      kind: "reminder",
+      id: "item/1",
+      title: "Check report",
+      state: "scheduled",
+      version: "opaque-v2",
+      controls: ["stop"],
+    };
+    const mock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        Response.json({
+          ok: true,
+          stopped: true,
+          outcome: "stopped",
+          kind: item.kind,
+          id: item.id,
+          message: "Reminder stopped.",
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            ok: false,
+            stopped: false,
+            outcome: "conflict",
+            message: "This item changed. Refresh before stopping it.",
+          },
+          { status: 409 },
+        ),
+      );
+    const client = new DotClient("https://bot.example.test", mock);
+    await expect(client.stopHandling(session, item)).resolves.toMatchObject({ stopped: true });
+    expect(mock.mock.calls[0]?.[0]).toBe(
+      "https://bot.example.test/handling/reminder/item%2F1/stop",
+    );
+    expect(JSON.parse(String(mock.mock.calls[0]?.[1]?.body))).toEqual({
+      expectedVersion: "opaque-v2",
+    });
+    expect(mock.mock.calls[0]?.[1]?.headers).toMatchObject({
+      Authorization: `Bearer ${session.ownerToken}`,
+    });
+    await expect(client.stopHandling(session, item)).rejects.toMatchObject({
+      status: 409,
+      message: "This item changed. Refresh before stopping it.",
+    });
+  });
+
+  it("requires a stable Run now request ID and uses the scheduled-prompt routes", async () => {
+    const mock = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async () =>
+        Response.json({ ok: true, runId: "run1", status: "queued", duplicate: false }),
+      );
+    const client = new DotClient("https://bot.example.test", mock);
+    expect(() => client.scheduledPromptAction(session, "sp_123456789abc", "run")).toThrow(
+      "request ID",
+    );
+    expect(mock).not.toHaveBeenCalled();
+    await client.scheduledPromptAction(session, "sp_123456789abc", "run", "click1");
+    await client.scheduledPromptAction(session, "sp_123456789abc", "run", "click1");
+    await client.scheduledPromptAction(session, "sp_123456789abc", "pause");
+    await client.scheduledPromptAction(session, "sp_123456789abc", "resume");
+    await client.scheduledPromptAction(session, "sp_123456789abc", "delete");
+    await client.scheduledPromptAction(session, "sp_123456789abc", "opened");
+    expect(mock.mock.calls.map(([url]) => url)).toEqual(
+      ["run", "run", "pause", "resume", "delete", "opened"].map(
+        (action) => `https://bot.example.test/scheduled-prompts/sp_123456789abc/${action}`,
+      ),
+    );
+    expect(mock.mock.calls.map(([, init]) => JSON.parse(String(init?.body)))).toEqual([
+      { requestId: "click1" },
+      { requestId: "click1" },
+      {},
+      {},
+      {},
+      {},
+    ]);
+    expect(
+      mock.mock.calls.every(
+        ([, init]) =>
+          init?.method === "POST" &&
+          new Headers(init.headers).get("Authorization") === `Bearer ${session.ownerToken}`,
+      ),
+    ).toBe(true);
+  });
+
+  it("fences pause controls when supported while accepting older snapshots", async () => {
+    const mock = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async () => Response.json({ ok: true, paused: true }));
+    const client = new DotClient("https://bot.example.test", mock);
+    await client.pause(session, true, 4);
+    await client.pause(session, false);
+    expect(mock.mock.calls.map(([, init]) => JSON.parse(String(init?.body)))).toEqual([
+      { expectedControlVersion: 4 },
+      {},
+    ]);
+    mock.mockResolvedValueOnce(
+      Response.json({
+        ok: true,
+        user: { userId: "owner", email: "owner@example.test" },
+        runs: [],
+        tasks: [],
+        approvals: [],
+      }),
+    );
+    const state = await client.stateWithRunDetails(session);
+    expect(state.runs).toEqual([]);
+    expect(state.handling).toBeUndefined();
+    expect(state.watches).toBeUndefined();
+    expect(state.scheduledPrompts).toBeUndefined();
+    expect(state.capabilities).toBeUndefined();
+    expect(state.microsoft).toBeUndefined();
+  });
+
   it("rates a proactive output with owner authentication and only sends reasons for not-useful", async () => {
     const mock = vi
       .fn<typeof fetch>()

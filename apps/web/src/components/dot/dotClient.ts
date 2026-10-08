@@ -1,3 +1,7 @@
+import type { DotCapability, DotMicrosoftState } from "./dotDiscovery";
+import type { DotHandlingItem, DotHandlingStopResult, DotHandlingView } from "./dotHandling";
+import type { DotScheduledPrompt, DotScheduledPromptAction, DotWatch } from "./dotRoutines";
+
 export interface DotSession {
   readonly ownerToken: string;
   readonly expiresAt: number;
@@ -129,14 +133,24 @@ export function isRateableRun(run: DotRun): boolean {
 export interface DotState {
   readonly streamId?: string;
   readonly dotMemory?: readonly DotMemory[];
-  readonly user: { readonly userId: string; readonly email: string; readonly paused?: boolean };
+  readonly user: {
+    readonly userId: string;
+    readonly email: string;
+    readonly paused?: boolean;
+    readonly controlVersion?: number;
+  };
   readonly tasks: readonly DotTask[];
   readonly runs: readonly DotRun[];
   readonly approvals: readonly DotApproval[];
   readonly feedback?: readonly DotFeedback[];
   readonly quality?: DotQuality;
   /** Absent from older bots; `available: false` means Outlook and calendar are off for this account. */
-  readonly microsoft?: { readonly available: boolean; readonly message?: string };
+  readonly microsoft?: DotMicrosoftState;
+  readonly handling?: DotHandlingView;
+  readonly watches?: readonly DotWatch[];
+  readonly scheduledPrompts?: readonly DotScheduledPrompt[];
+  readonly capabilities?: readonly DotCapability[];
+  readonly capabilitiesError?: string;
 }
 
 export interface PendingConnection {
@@ -231,10 +245,11 @@ export class DotClient {
     const payload = (await response.json().catch(() => ({}))) as T & {
       ok?: boolean;
       error?: string;
+      message?: string;
     };
     if (!response.ok || payload.ok !== true)
       throw new DotApiError(
-        payload.error ?? `Could not reach your bot (${response.status}).`,
+        payload.error ?? payload.message ?? `Could not reach your bot (${response.status}).`,
         response.status,
       );
     return payload;
@@ -336,8 +351,49 @@ export class DotClient {
     });
   }
 
-  pause(session: DotSession, paused: boolean): Promise<{ paused: boolean }> {
-    return this.request(paused ? "/pause" : "/resume", session, {});
+  pause(
+    session: DotSession,
+    paused: boolean,
+    expectedControlVersion?: number,
+  ): Promise<{ paused: boolean; controlVersion?: number; summary?: string }> {
+    return this.request(
+      paused ? "/pause" : "/resume",
+      session,
+      expectedControlVersion === undefined ? {} : { expectedControlVersion },
+    );
+  }
+
+  markHandlingSeen(session: DotSession, through: string): Promise<{ ok: boolean; seenAt: string }> {
+    return this.request("/handling/seen", session, { through });
+  }
+
+  stopHandling(session: DotSession, item: DotHandlingItem): Promise<DotHandlingStopResult> {
+    return this.request(
+      `/handling/${encodeURIComponent(item.kind)}/${encodeURIComponent(item.id)}/stop`,
+      session,
+      { expectedVersion: item.version },
+    );
+  }
+
+  scheduledPromptAction(
+    session: DotSession,
+    promptId: string,
+    action: DotScheduledPromptAction,
+    requestId?: string,
+  ): Promise<{
+    ok: boolean;
+    runId?: string;
+    threadId?: string;
+    status?: DotRun["status"];
+    prompt?: DotScheduledPrompt;
+  }> {
+    if (action === "run" && !requestId)
+      throw new Error("A request ID is required to run a routine.");
+    return this.request(
+      `/scheduled-prompts/${encodeURIComponent(promptId)}/${action}`,
+      session,
+      action === "run" ? { requestId } : {},
+    );
   }
 
   rate(

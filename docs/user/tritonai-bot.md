@@ -30,5 +30,20 @@ If the service is not accepting new users, sign-in tells you so; existing users
 can still sign in. The service also has daily usage limits per person and for
 all users together, and replies when a limit is reached.
 
+When your bot service supports it, the **Handling** panel shows work needing
+your attention, work in progress, upcoming items and recent results. Stop ends
+one item after confirmation. A stop request cannot recall an assignment already
+running in Harness or undo an action sent to another service. Pause keeps your
+saved work and blocks new execution until you resume.
+
+Open **Watches & routines** to check monitoring freshness and manage scheduled
+prompts. Run now requests a run; its result arrives separately. Stop deletes a
+saved routine while keeping past results. Watches show their supported Teams
+commands. **What I can do** explains which features your account can use and
+which need a connection. Mark recent Handling results seen after reviewing them.
+For routines, mark results read after reading them in your conversation to reset
+the unread spending limit; a paused routine still needs Resume. If Microsoft access expires, **Reconnect Microsoft**
+opens the existing connections page.
+
 This sign-in is separate from your [UC San Diego account](./ucsd-account.md)
 connection to a Harness environment.
