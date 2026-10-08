@@ -20,7 +20,7 @@ import { Switch } from "../ui/switch";
 import { AddUsageLimitSourceDialog } from "./AddUsageLimitSourceDialog";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 
-/** Hub management follows the selected device and access rules of provider settings. */
+/** Usage-source management for one environment, with provider settings access rules. */
 export function UsageProviderSettings({
   environmentId,
   environmentLabel,
@@ -65,7 +65,7 @@ export function UsageProviderSettings({
   return (
     <>
       <SettingsSection
-        title="Usage providers"
+        title={environmentLabel}
         headerAction={
           !readOnly ? (
             <Button size="xs" variant="outline" onClick={() => setAdding(true)}>

@@ -16,7 +16,8 @@ subscription bill. Totals depend on the history available on each server.
 
 On macOS, choose **Enable Cursor usage** on Usage to allow TritonAI Harness to read your existing
 Cursor CLI login from Keychain for **Usage → Limits**. macOS may ask you to allow access on the
-server Mac.
+server Mac. To turn it off, open the environment dropdown on **Usage**, choose **Usage sources**,
+and switch off **Cursor account usage** for that environment.
 
 Usage includes each configured Codex account's history, including disabled accounts. Custom homes
 follow the account's home setting or its `CODEX_HOME` environment variable. Use absolute paths or
@@ -94,6 +95,14 @@ or endpoint configurations do not report subscription limits.
 
 API-key accounts may not report subscription limits. This also applies to Claude connections
 using a proxy through `ANTHROPIC_AUTH_TOKEN`.
+
+## Connect a CLIProxyAPI hub
+
+Open the environment dropdown on **Usage**, then choose **Usage sources**. Add a hub under the
+environment that will connect to it, using its URL and management key. Accounts appear under
+**Usage → Limits**. This supplies usage information; configure the provider separately to send
+agent requests through the hub. Remove a hub from **Usage sources** when it is no longer needed.
+Removing it also deletes its stored management key from that environment.
 
 ## Subscription usage widget
 
