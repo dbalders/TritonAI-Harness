@@ -4,8 +4,9 @@ UC San Diego sign-in is optional. Harness remains usable without it. This first
 version connects your campus identity to Harness; it does not sync conversations,
 settings, skills, teams, or model API keys, and it does not connect Dot.
 
-When your environment offers sign-in, open **Settings → Connections → UC San Diego
-account**. Desktop sign-in opens your browser for campus authentication, then
+Open **Settings → Connections → UC San Diego account** to sign in. Harness includes
+the UC San Diego account connection by default. Desktop sign-in opens your browser
+for campus authentication, then
 returns you to Harness automatically. There is no code to enter or compare.
 
 On mobile, select the environment in **Settings → Environments**. Sign-in opens
