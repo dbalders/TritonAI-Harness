@@ -31,7 +31,7 @@ export interface TaskOutcome {
 export type TaskProgress = { readonly kind: "pending" } | ({ readonly kind: "done" } & TaskOutcome);
 
 /** Work left this long is reported so the bot is not left waiting indefinitely. */
-export const HELD_TASK_LIMIT_MS = 24 * 3_600_000;
+const HELD_TASK_LIMIT_MS = 24 * 3_600_000;
 /** A thread that never received the task's message this long after the claim never started it. */
 export const START_GRACE_MS = 5 * 60_000;
 const NOTHING_RAN =
