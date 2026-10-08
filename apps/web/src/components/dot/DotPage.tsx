@@ -344,8 +344,7 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
       return result;
     } catch (cause) {
       if (cause instanceof DotApiError && activeOwner.current === session.ownerToken) {
-        if (action === "run" && cause.status >= 400 && cause.status < 500)
-          pendingPromptRuns.current.delete(prompt.promptId);
+        // The bot can report HTTP 400 after reserving a run; acknowledgement is the only safe reset.
         if (cause.status === 409) await refresh();
       }
       reportError(cause, session.ownerToken);

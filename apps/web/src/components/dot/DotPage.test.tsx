@@ -219,41 +219,50 @@ describe("TritonAI Bot page integration", () => {
     expect(container.textContent).not.toContain("Check report");
   });
 
-  it("retains a Run now ID on ambiguous failure and gives a new click a new ID after acknowledgement", async () => {
-    state = withPanels();
-    let attempts = 0;
-    onPost = async (path) => {
-      if (path.endsWith("/run")) {
-        if (++attempts === 1) throw new TypeError("Network interrupted");
-        return Response.json(
-          {
-            ok: true,
-            runId: "routine1",
-            threadId: "routine",
-            status: "queued",
-            duplicate: attempts === 2,
-          },
-          { status: 202 },
-        );
-      }
-      return Response.json({ ok: true });
-    };
-    await render();
-    await click("Run now");
-    expect(container.textContent).toContain("Network interrupted");
-    await click("Run now");
-    expect(container.textContent).toContain("Run queued; it has not finished.");
-    expect(container.textContent).not.toContain("Network interrupted");
-    expect(container.textContent).toContain("Routine result");
-    await click("Run now");
-    const ids = requests
-      .filter((request) => request.path.endsWith("/run"))
-      .map((request) => request.body.requestId);
-    expect(ids).toHaveLength(3);
-    expect(ids[0]).toEqual(expect.any(String));
-    expect(ids[1]).toBe(ids[0]);
-    expect(ids[2]).not.toBe(ids[1]);
-  });
+  it.each(["network", "http400", "http408"])(
+    "retains a Run now ID after %s and gives a new click a new ID after acknowledgement",
+    async (failure) => {
+      state = withPanels();
+      let attempts = 0;
+      onPost = async (path) => {
+        if (path.endsWith("/run")) {
+          if (++attempts === 1) {
+            if (failure === "network") throw new TypeError("Request interrupted");
+            return Response.json(
+              { ok: false, error: "Request interrupted" },
+              { status: failure === "http400" ? 400 : 408 },
+            );
+          }
+          return Response.json(
+            {
+              ok: true,
+              runId: "routine1",
+              threadId: "routine",
+              status: "queued",
+              duplicate: attempts === 2,
+            },
+            { status: 202 },
+          );
+        }
+        return Response.json({ ok: true });
+      };
+      await render();
+      await click("Run now");
+      expect(container.textContent).toContain("Request interrupted");
+      await click("Run now");
+      expect(container.textContent).toContain("Run queued; it has not finished.");
+      expect(container.textContent).not.toContain("Request interrupted");
+      expect(container.textContent).toContain("Routine result");
+      await click("Run now");
+      const ids = requests
+        .filter((request) => request.path.endsWith("/run"))
+        .map((request) => request.body.requestId);
+      expect(ids).toHaveLength(3);
+      expect(ids[0]).toEqual(expect.any(String));
+      expect(ids[1]).toBe(ids[0]);
+      expect(ids[2]).not.toBe(ids[1]);
+    },
+  );
 
   it("refreshes a changed handling version on conflict without retrying Stop automatically", async () => {
     state = withPanels();
@@ -348,6 +357,8 @@ describe("TritonAI Bot page integration", () => {
   });
 
   it("ignores a late feedback 401 after the owner disconnects and signs in again", async () => {
+    // Keep the unrelated native hashing job inside the test's deterministic promise chain.
+    vi.spyOn(crypto.subtle, "digest").mockResolvedValue(new ArrayBuffer(32));
     const newSession = { ...session, ownerToken: "replacement-owner-token" };
     state = {
       ...withPanels(),
