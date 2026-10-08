@@ -1,7 +1,7 @@
 import {
   type ServerProviderSkillBundle,
   type ServerProviderSkillBundleFile,
-  type ServerProviderSkillCatalog,
+  ServerProviderSkillCatalog,
   type ServerProviderSkillCatalogEntry,
   ServerProviderSkillCatalogError,
   ServerProviderSkillInstallError,
@@ -15,14 +15,19 @@ import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
 import * as Stream from "effect/Stream";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
+
+import { writeFileStringAtomically } from "../atomicWrite.ts";
+import * as ServerConfig from "../config.ts";
 
 const PUBLIC_SKILLS_REPOSITORY_URL = "https://github.com/dbalders/UCSD-Skills-Library";
 const PUBLIC_SKILLS_API_URL = "https://api.github.com/repos/dbalders/UCSD-Skills-Library";
@@ -34,6 +39,7 @@ const MAX_SKILL_BYTES = 2 * 1024 * 1024;
 const MAX_GITHUB_METADATA_BYTES = 2 * 1024 * 1024;
 const PUBLIC_SKILLS_REQUEST_TIMEOUT = "15 seconds";
 const PUBLIC_SKILLS_CATALOG_TTL = "5 minutes";
+const PUBLIC_SKILLS_SNAPSHOT_FILE_NAME = "public-skill-catalog.json";
 const PUBLIC_SKILLS_RATE_LIMIT_COOLDOWN = "1 minute";
 const PUBLIC_SKILLS_MAX_RATE_LIMIT_COOLDOWN = "1 hour";
 const PUBLIC_SKILLS_COMMIT_CACHE_CAPACITY = 128;
@@ -444,19 +450,38 @@ function validateRelativeBundlePath(path: string): string | null {
   return parts.join("/");
 }
 
+/** Last good catalog kept across restarts, so Settings can render before GitHub answers. */
+export interface PublicSkillCatalogSnapshotStore {
+  readonly read: Effect.Effect<ServerProviderSkillCatalog | null>;
+  readonly write: (catalog: ServerProviderSkillCatalog) => Effect.Effect<void>;
+}
+
 export interface PublicSkillRepositoryOptions {
   readonly catalogTtl?: Duration.Input;
   readonly rateLimitCooldown?: Duration.Input;
   readonly githubToken?: Redacted.Redacted<string> | null;
+  readonly snapshot?: PublicSkillCatalogSnapshotStore;
+}
+
+export interface PublicSkillCatalogRead {
+  readonly catalog: ServerProviderSkillCatalog;
+  /** The catalog is a saved copy and a background refresh has started. */
+  readonly stale: boolean;
 }
 
 export class PublicSkillRepository extends Context.Service<
   PublicSkillRepository,
   {
+    /** Fresh catalog; waits on GitHub once the TTL has passed. */
     readonly discoverCatalog: Effect.Effect<
       ServerProviderSkillCatalog,
       ServerProviderSkillCatalogError
     >;
+    /** Last known catalog without waiting; refreshes in the background when stale.
+     * Waits on GitHub only when no catalog has ever been fetched. */
+    readonly readCatalog: Effect.Effect<PublicSkillCatalogRead, ServerProviderSkillCatalogError>;
+    /** Waits for a fresh catalog, falling back to the last known one if GitHub fails. */
+    readonly refreshCatalog: Effect.Effect<PublicSkillCatalogRead, ServerProviderSkillCatalogError>;
     readonly loadBundle: (input: {
       readonly id: string;
       readonly revision: string;
@@ -630,16 +655,75 @@ export const make = Effect.fn("PublicSkillRepository.make")(function* (
     } satisfies ServerProviderSkillCatalog;
   });
 
+  // `refreshedAtMs` is null for a snapshot loaded from disk, so the first read
+  // after a restart always checks GitHub in the background.
+  const latestCatalog = yield* Ref.make<{
+    readonly catalog: ServerProviderSkillCatalog;
+    readonly refreshedAtMs: number | null;
+  } | null>(null);
+  const catalogTtlMs = Duration.toMillis(catalogTtl);
+  const ensureSnapshotLoaded = yield* Effect.cached(
+    (options.snapshot?.read ?? Effect.succeed(null)).pipe(
+      Effect.catchCause(() => Effect.succeed(null)),
+      Effect.flatMap((catalog) =>
+        catalog === null
+          ? Effect.void
+          : Ref.update(latestCatalog, (current) => current ?? { catalog, refreshedAtMs: null }),
+      ),
+    ),
+  );
+
   const catalogCache = yield* Cache.makeWith<
     string,
     ServerProviderSkillCatalog,
     ServerProviderSkillCatalogError
-  >(() => buildCatalog(), {
-    capacity: 1,
-    timeToLive: (exit) => (Exit.isSuccess(exit) ? catalogTtl : Duration.zero),
-  });
+  >(
+    () =>
+      buildCatalog().pipe(
+        Effect.tap((catalog) =>
+          Effect.gen(function* () {
+            const refreshedAtMs = yield* Clock.currentTimeMillis;
+            yield* Ref.set(latestCatalog, { catalog, refreshedAtMs });
+            if (options.snapshot) yield* options.snapshot.write(catalog);
+          }),
+        ),
+      ),
+    {
+      capacity: 1,
+      timeToLive: (exit) => (Exit.isSuccess(exit) ? catalogTtl : Duration.zero),
+    },
+  );
 
   const discoverCatalog = Cache.get(catalogCache, PUBLIC_SKILLS_DEFAULT_BRANCH);
+  const readCatalog = Effect.gen(function* () {
+    yield* ensureSnapshotLoaded;
+    const latest = yield* Ref.get(latestCatalog);
+    if (latest === null) return { catalog: yield* discoverCatalog, stale: false };
+    const now = yield* Clock.currentTimeMillis;
+    const fresh =
+      latest.refreshedAtMs !== null &&
+      now >= latest.refreshedAtMs &&
+      now - latest.refreshedAtMs < catalogTtlMs;
+    if (fresh) return { catalog: latest.catalog, stale: false };
+    // The cache single-flights this with any concurrent or follow-up refresh.
+    yield* Effect.forkDetach(discoverCatalog.pipe(Effect.ignoreCause({ log: true })));
+    return { catalog: latest.catalog, stale: true };
+  });
+  const refreshCatalog = Effect.gen(function* () {
+    yield* ensureSnapshotLoaded;
+    return yield* discoverCatalog.pipe(
+      Effect.map((catalog) => ({ catalog, stale: false })),
+      Effect.catch((error) =>
+        Ref.get(latestCatalog).pipe(
+          Effect.flatMap((latest) =>
+            latest === null
+              ? Effect.fail(error)
+              : Effect.succeed({ catalog: latest.catalog, stale: true }),
+          ),
+        ),
+      ),
+    );
+  });
   const loadBundle: PublicSkillRepository["Service"]["loadBundle"] = Effect.fn(
     "PublicSkillRepository.loadBundle",
   )(function* (input) {
@@ -706,14 +790,54 @@ export const make = Effect.fn("PublicSkillRepository.make")(function* (
     } satisfies ServerProviderSkillBundle;
   });
 
-  return PublicSkillRepository.of({ discoverCatalog, loadBundle });
+  return PublicSkillRepository.of({ discoverCatalog, readCatalog, refreshCatalog, loadBundle });
 });
 
-const defaultRepository = Effect.runSync(Effect.cached(make()));
+const decodeCatalogSnapshot = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(ServerProviderSkillCatalog),
+);
+const encodeCatalogSnapshot = Schema.encodeEffect(
+  Schema.fromJsonString(ServerProviderSkillCatalog),
+);
 
-export const discoverPublicSkillCatalog = Effect.fn("discoverPublicSkillCatalog")(function* () {
+const makeStateDirSnapshotStore = Effect.gen(function* () {
+  const config = yield* ServerConfig.ServerConfig;
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const filePath = path.join(config.stateDir, PUBLIC_SKILLS_SNAPSHOT_FILE_NAME);
+  return {
+    read: fileSystem.readFileString(filePath).pipe(
+      Effect.flatMap(decodeCatalogSnapshot),
+      Effect.catchCause(() => Effect.succeed(null)),
+    ),
+    write: (catalog) =>
+      encodeCatalogSnapshot(catalog).pipe(
+        Effect.flatMap((contents) =>
+          writeFileStringAtomically({ filePath, contents: `${contents}\n` }),
+        ),
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+        Effect.provideService(Path.Path, path),
+        Effect.ignoreCause({ log: true }),
+      ),
+  } satisfies PublicSkillCatalogSnapshotStore;
+});
+
+const defaultRepository = Effect.runSync(
+  Effect.cached(
+    Effect.gen(function* () {
+      return yield* make({ snapshot: yield* makeStateDirSnapshotStore });
+    }),
+  ),
+);
+
+export const readPublicSkillCatalog = Effect.fn("readPublicSkillCatalog")(function* () {
   const repository = yield* defaultRepository;
-  return yield* repository.discoverCatalog;
+  return yield* repository.readCatalog;
+});
+
+export const refreshPublicSkillCatalog = Effect.fn("refreshPublicSkillCatalog")(function* () {
+  const repository = yield* defaultRepository;
+  return yield* repository.refreshCatalog;
 });
 
 export const loadPublicSkillBundle = Effect.fn("loadPublicSkillBundle")(function* (input: {

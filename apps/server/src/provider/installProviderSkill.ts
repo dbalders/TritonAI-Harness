@@ -21,6 +21,7 @@ import * as SchemaIssue from "effect/SchemaIssue";
 import * as Stream from "effect/Stream";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
+import * as ServerConfig from "../config.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import {
   loadManagedSkillManifest,
@@ -265,7 +266,7 @@ function loadBundleForCatalogEntry(
 ): Effect.Effect<
   ServerProviderSkillBundleData,
   ServerProviderSkillInstallError,
-  HttpClient.HttpClient
+  FileSystem.FileSystem | HttpClient.HttpClient | Path.Path | ServerConfig.ServerConfig
 > {
   return loadPublicSkillBundle({ id: catalogEntryId, revision }).pipe(
     Effect.flatMap(validateSkillBundle),
@@ -1278,7 +1279,11 @@ export const installProviderSkill = Effect.fn("installProviderSkill")(function* 
     readonly rollback: ProviderSkillInstallRollback;
   },
   ServerProviderSkillInstallError,
-  FileSystem.FileSystem | HttpClient.HttpClient | Path.Path | VcsProcess.VcsProcess
+  | FileSystem.FileSystem
+  | HttpClient.HttpClient
+  | Path.Path
+  | ServerConfig.ServerConfig
+  | VcsProcess.VcsProcess
 > {
   const request = yield* decodeInstallInput(input.request).pipe(
     Effect.mapError((error) =>

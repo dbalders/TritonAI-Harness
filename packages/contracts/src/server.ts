@@ -156,6 +156,12 @@ export type ServerTritonAiCommonsSubmissionReceipt =
 export const ServerManagedSkillsStatus = Schema.Literals(["absent", "invalid", "unknown", "valid"]);
 export type ServerManagedSkillsStatus = typeof ServerManagedSkillsStatus.Type;
 
+export const ServerListProviderSkillCatalogInput = Schema.Struct({
+  /** Wait for a fresh catalog instead of returning the saved copy. */
+  refresh: Schema.optional(Schema.Boolean),
+});
+export type ServerListProviderSkillCatalogInput = typeof ServerListProviderSkillCatalogInput.Type;
+
 export const ServerListProviderSkillCatalogResult = Schema.Struct({
   catalog: Schema.optional(ServerProviderSkillCatalog),
   managedSkillNames: Schema.Array(TrimmedNonEmptyString),
@@ -163,6 +169,8 @@ export const ServerListProviderSkillCatalogResult = Schema.Struct({
   commonsSubmissions: Schema.Array(ServerTritonAiCommonsSubmissionReceipt).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
+  /** `catalog` is a saved copy and a background refresh has started; ask again with `refresh`. */
+  catalogStale: Schema.optional(Schema.Boolean),
   unavailableReason: Schema.optional(TrimmedNonEmptyString),
   managedManifestWarning: Schema.optional(TrimmedNonEmptyString),
 });

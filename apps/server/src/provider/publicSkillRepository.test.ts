@@ -6,8 +6,11 @@ import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
+import type { ServerProviderSkillCatalog } from "@t3tools/contracts";
+
 import {
   make,
+  type PublicSkillCatalogSnapshotStore,
   PublicSkillRepository,
   type PublicSkillRepositoryOptions,
 } from "./publicSkillRepository.ts";
@@ -127,6 +130,23 @@ function publicSkillRepositoryLayer(
     Layer.provide(repositoryLayer(repository)),
     Layer.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env }))),
   );
+}
+
+const SAVED_CATALOG: ServerProviderSkillCatalog = {
+  version: 1,
+  repositoryUrl: "https://github.com/dbalders/UCSD-Skills-Library",
+  revision: SECOND_REVISION,
+  fetchedAt: "2026-10-01T00:00:00.000Z",
+  entries: [],
+};
+
+function memorySnapshot(initial: ServerProviderSkillCatalog | null) {
+  const written: ServerProviderSkillCatalog[] = [];
+  const store: PublicSkillCatalogSnapshotStore = {
+    read: Effect.succeed(initial),
+    write: (catalog) => Effect.sync(() => void written.push(catalog)),
+  };
+  return { store, written };
 }
 
 describe("public skill repository", () => {
@@ -316,4 +336,75 @@ describe("public skill repository", () => {
       expect(error.message).toContain("cannot contain symlinks");
     }).pipe(Effect.provide(publicSkillRepositoryLayer({ symlink: true }))),
   );
+
+  it.effect("serves the saved catalog without waiting on GitHub", () => {
+    const snapshot = memorySnapshot(SAVED_CATALOG);
+    return Effect.gen(function* () {
+      const repository = yield* PublicSkillRepository;
+      const read = yield* repository.readCatalog;
+
+      expect(read).toEqual({ catalog: SAVED_CATALOG, stale: true });
+    }).pipe(
+      Effect.provide(
+        publicSkillRepositoryLayer(
+          { hangResolve: true },
+          { githubToken: null, snapshot: snapshot.store },
+        ),
+      ),
+    );
+  });
+
+  it.effect("replaces and saves the catalog after a refresh", () => {
+    const calls: RepositoryCall[] = [];
+    const snapshot = memorySnapshot(SAVED_CATALOG);
+    return Effect.gen(function* () {
+      const repository = yield* PublicSkillRepository;
+      const saved = yield* repository.readCatalog;
+      const refreshed = yield* repository.refreshCatalog;
+      const next = yield* repository.readCatalog;
+
+      expect(saved.catalog.revision).toBe(SECOND_REVISION);
+      expect(refreshed.stale).toBe(false);
+      expect(refreshed.catalog.revision).toBe(REVISION);
+      expect(next).toEqual(refreshed);
+      expect(snapshot.written.map((catalog) => catalog.revision)).toEqual([REVISION]);
+      expect(calls.filter((call) => call.url.endsWith("/commits/main"))).toHaveLength(1);
+    }).pipe(
+      Effect.provide(
+        publicSkillRepositoryLayer({ calls }, { githubToken: null, snapshot: snapshot.store }),
+      ),
+    );
+  });
+
+  it.effect("keeps the saved catalog when a refresh fails", () => {
+    const snapshot = memorySnapshot(SAVED_CATALOG);
+    return Effect.gen(function* () {
+      const repository = yield* PublicSkillRepository;
+      const refreshed = yield* repository.refreshCatalog;
+
+      expect(refreshed).toEqual({ catalog: SAVED_CATALOG, stale: true });
+      expect(snapshot.written).toEqual([]);
+    }).pipe(
+      Effect.provide(
+        publicSkillRepositoryLayer(
+          { failResolveAttempts: 1 },
+          { githubToken: null, snapshot: snapshot.store },
+        ),
+      ),
+    );
+  });
+
+  it.effect("waits for GitHub on the first read when nothing is saved", () => {
+    const calls: RepositoryCall[] = [];
+    return Effect.gen(function* () {
+      const repository = yield* PublicSkillRepository;
+      const first = yield* repository.readCatalog;
+      const second = yield* repository.readCatalog;
+
+      expect(first.stale).toBe(false);
+      expect(first.catalog.revision).toBe(REVISION);
+      expect(second).toEqual(first);
+      expect(calls).toHaveLength(4);
+    }).pipe(Effect.provide(publicSkillRepositoryLayer({ calls })));
+  });
 });

@@ -6,6 +6,7 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import type {
   ProviderInstanceId,
+  ServerListProviderSkillCatalogResult,
   ServerManagedSkillsStatus,
   ServerProvider,
   ServerProviderSkill,
@@ -433,6 +434,14 @@ function CatalogSkillSection({
   );
 }
 
+const lastCatalogResults = new Map<string, ServerListProviderSkillCatalogResult>();
+
+function commonsSubmissionsByPath(result: ServerListProviderSkillCatalogResult | undefined) {
+  return new Map(
+    result?.commonsSubmissions.map((submission) => [submission.skillPath, submission]),
+  );
+}
+
 export function SkillsSettingsPanel() {
   const navigate = useNavigate();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
@@ -469,13 +478,26 @@ export function SkillsSettingsPanel() {
     label: "commons GitHub setup enable",
     reportFailure: false,
   });
-  const [catalog, setCatalog] = useState<ServerProviderSkillCatalog | null>(null);
-  const [managedSkillNames, setManagedSkillNames] = useState<ReadonlySet<string>>(new Set());
-  const [managedSkillsStatus, setManagedSkillsStatus] =
-    useState<ServerManagedSkillsStatus>("unknown");
+  // Seed from the last result this session so revisiting Skills renders at once.
+  const [cachedCatalogResult] = useState(() =>
+    primaryEnvironmentId ? lastCatalogResults.get(primaryEnvironmentId) : undefined,
+  );
+  const [catalog, setCatalog] = useState<ServerProviderSkillCatalog | null>(
+    cachedCatalogResult?.catalog ?? null,
+  );
+  const [managedSkillNames, setManagedSkillNames] = useState<ReadonlySet<string>>(
+    () => new Set(cachedCatalogResult?.managedSkillNames),
+  );
+  const [managedSkillsStatus, setManagedSkillsStatus] = useState<ServerManagedSkillsStatus>(
+    cachedCatalogResult?.managedSkillsStatus ?? "unknown",
+  );
   const [catalogLoading, setCatalogLoading] = useState(false);
-  const [catalogError, setCatalogError] = useState<string | null>(null);
-  const [managedManifestWarning, setManagedManifestWarning] = useState<string | null>(null);
+  const [catalogError, setCatalogError] = useState<string | null>(
+    cachedCatalogResult?.unavailableReason ?? null,
+  );
+  const [managedManifestWarning, setManagedManifestWarning] = useState<string | null>(
+    cachedCatalogResult?.managedManifestWarning ?? null,
+  );
   const [installUrl, setInstallUrl] = useState("");
   const [installingSkillKey, setInstallingSkillKey] = useState<string | null>(null);
   const [removingSkillKey, setRemovingSkillKey] = useState<string | null>(null);
@@ -487,7 +509,7 @@ export function SkillsSettingsPanel() {
   >(new Map());
   const [commonsSubmissions, setCommonsSubmissions] = useState<
     ReadonlyMap<string, ServerSubmitProviderSkillToTritonAiCommonsResult>
-  >(new Map());
+  >(() => commonsSubmissionsByPath(cachedCatalogResult));
 
   const codexProviders = useMemo(() => providers.filter(isCodexProvider), [providers]);
   const installProvider = codexProviders[0] ?? null;
@@ -536,17 +558,26 @@ export function SkillsSettingsPanel() {
         setManagedManifestWarning(null);
         return;
       }
+      const environmentId = primaryEnvironmentId;
+      const applyResult = (result: ServerListProviderSkillCatalogResult) => {
+        lastCatalogResults.set(environmentId, result);
+        setCatalog(result.catalog ?? null);
+        setManagedSkillNames(new Set(result.managedSkillNames));
+        setManagedSkillsStatus(result.managedSkillsStatus);
+        setCommonsSubmissions(commonsSubmissionsByPath(result));
+        setCatalogError(result.unavailableReason ?? null);
+        setManagedManifestWarning(result.managedManifestWarning ?? null);
+      };
       const result = unwrapAtomCommandResult(
-        await listCatalogCommand({ environmentId: primaryEnvironmentId, input: {} }),
+        await listCatalogCommand({ environmentId, input: {} }),
       );
-      setCatalog(result.catalog ?? null);
-      setManagedSkillNames(new Set(result.managedSkillNames));
-      setManagedSkillsStatus(result.managedSkillsStatus);
-      setCommonsSubmissions(
-        new Map(result.commonsSubmissions.map((submission) => [submission.skillPath, submission])),
-      );
-      setCatalogError(result.unavailableReason ?? null);
-      setManagedManifestWarning(result.managedManifestWarning ?? null);
+      applyResult(result);
+      // A saved copy renders now; the server is already refreshing it, so wait
+      // for that once and swap in any added or removed skills.
+      if (result.catalogStale) {
+        const refreshed = await listCatalogCommand({ environmentId, input: { refresh: true } });
+        if (refreshed._tag === "Success") applyResult(refreshed.value);
+      }
     } catch (error) {
       setCatalog(null);
       setManagedSkillNames(new Set());
