@@ -24,6 +24,7 @@ export const TeamCommand = Schema.Union([
     revision: Schema.Int,
   }),
   Schema.Struct({ action: Schema.Literal("accept"), invitationId: Id, token: Identity }),
+  Schema.Struct({ action: Schema.Literal("accept-pending"), invitationId: Id }),
   Schema.Struct({ action: Schema.Literal("decline"), invitationId: Id }),
   Schema.Struct({
     action: Schema.Literal("cancel-invite"),

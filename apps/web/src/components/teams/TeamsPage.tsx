@@ -315,19 +315,28 @@ function TeamWorkspace({ environmentId }: { environmentId: EnvironmentId }) {
                         {new Date(invite.expiresAt * 1000).toLocaleDateString()}
                       </p>
                     </div>
-                    <Button
-                      variant="ghost"
-                      disabled={busy}
-                      onClick={() => void run({ action: "decline", invitationId: invite.id })}
-                    >
-                      Decline
-                    </Button>
+                    <div className="flex gap-2">
+                      <Button
+                        disabled={busy}
+                        aria-label={`Accept invitation to ${invite.teamName}`}
+                        onClick={() =>
+                          void run({ action: "accept-pending", invitationId: invite.id })
+                        }
+                      >
+                        Accept
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        disabled={busy}
+                        aria-label={`Decline invitation to ${invite.teamName}`}
+                        onClick={() => void run({ action: "decline", invitationId: invite.id })}
+                      >
+                        Decline
+                      </Button>
+                    </div>
                   </li>
                 ))}
               </ul>
-              <p className="mt-3 text-xs text-muted-foreground">
-                Paste the invitation code from the team owner to accept.
-              </p>
             </section>
           ) : null}
           <form

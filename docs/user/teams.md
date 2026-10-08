@@ -4,10 +4,11 @@ Open **Teams** in the sidebar and sign in with UC San Diego. Your administrator
 must enable your account and the team storage service for this staff pilot.
 Teams is available in the web and desktop clients.
 
-Create a team, or paste an invitation code from a team owner. Owners create
-invitations for specific UCSD addresses; creating an invitation sends no email
-and grants no access. The recipient must sign in with that account and accept
-the code before joining. Owners can cancel pending invitations.
+Create a team, or accept a pending invitation in Teams. Owners invite specific
+UCSD addresses; creating an invitation sends no email and grants no access.
+The recipient must sign in with that account and choose **Accept** before
+joining. You can also paste an invitation code from the team owner. Owners
+can cancel pending invitations.
 
 Owners manage names and membership, editors can publish and edit documents,
 and readers can view them. Assign another owner before the last owner leaves

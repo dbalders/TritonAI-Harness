@@ -642,6 +642,14 @@ describe("Teams account proxy", () => {
             teamRequests++;
             expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${token}`);
             expect(init?.redirect).toBe("error");
+            expect(JSON.parse(String(init?.body))).toEqual(
+              teamRequests === 1
+                ? { action: "list" }
+                : {
+                    action: "accept-pending",
+                    invitationId: "b284157c-032d-4c05-98e7-df7b47023ee3",
+                  },
+            );
             return Response.json({ teams: [], invitations: [], team: null, invitationCode: null });
           }
           return f.defaultFetch(input, init);
@@ -657,11 +665,17 @@ describe("Teams account proxy", () => {
       expect(teamRequests).toBe(0);
       expect((yield* account.teams("owner-session", { action: "list" })).teams).toEqual([]);
       expect(teamRequests).toBe(1);
+      const accept = {
+        action: "accept-pending",
+        invitationId: "b284157c-032d-4c05-98e7-df7b47023ee3",
+      } as const;
+      yield* account.teams("owner-session", accept);
+      expect(teamRequests).toBe(2);
       yield* account.signOut("owner-session");
       expect((yield* Effect.flip(account.teams("owner-session", { action: "list" }))).code).toBe(
         "sign_in_required",
       );
-      expect(teamRequests).toBe(1);
+      expect(teamRequests).toBe(2);
     }),
   );
   it.effect("rejects an expired campus session before contacting team storage", () =>
