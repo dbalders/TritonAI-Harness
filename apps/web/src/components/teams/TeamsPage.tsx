@@ -406,7 +406,7 @@ function TeamWorkspace({ environmentId }: { environmentId: EnvironmentId }) {
           )}
           {team.state === "ready" ? (
             <TeamSharedStorage
-              key={`${team.id}:${team.revision}`}
+              key={`${team.id}:${team.storage?.folderId ?? ""}`}
               environmentId={environmentId}
               teamId={team.id}
               canWrite={team.role !== "reader" || team.canManage}

@@ -1,8 +1,42 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import type { TeamsResult, TeamStorageStatus } from "@t3tools/contracts";
+import { TeamsError, type TeamsResult, type TeamStorageStatus } from "@t3tools/contracts";
 import { createTeamsController, mergeTeamStorageResult } from "./teams.ts";
 const empty: TeamsResult = { teams: [], invitations: [], team: null, invitationCode: null };
 describe("team account lifecycle", () => {
+  it("retains the selected team through a temporary refresh failure and clears it on revocation", async () => {
+    const pending = Promise.withResolvers<TeamsResult>();
+    const opened: TeamsResult = {
+      ...empty,
+      team: {
+        id: "team",
+        reference: "T-TEST",
+        name: "Synthetic",
+        role: "editor",
+        canManage: false,
+        state: "ready",
+        revision: 1,
+        members: [],
+        invitations: [],
+        storage: { tenantId: "tenant", siteId: "site", driveId: "drive", folderId: "folder" },
+      },
+    };
+    const execute = vi
+      .fn()
+      .mockReturnValueOnce(pending.promise)
+      .mockResolvedValueOnce(opened)
+      .mockRejectedValueOnce(new TeamsError({ code: "unavailable", message: "Try again" }))
+      .mockRejectedValueOnce(new TeamsError({ code: "not_found", message: "Team unavailable" }));
+    const controller = createTeamsController(execute);
+    controller.activate();
+    pending.resolve(empty);
+    await pending.promise;
+    await controller.run({ action: "get", teamId: "team" });
+    await controller.run({ action: "get", teamId: "team" });
+    expect(controller.getSnapshot().result).toBe(opened);
+    expect(controller.getSnapshot().error).toBe("Try again");
+    await controller.run({ action: "get", teamId: "team" });
+    expect(controller.getSnapshot().result).toBeNull();
+  });
   it("discards a late response after sign out and cannot repopulate private data", async () => {
     const pending = Promise.withResolvers<TeamsResult>();
     const controller = createTeamsController(() => pending.promise);

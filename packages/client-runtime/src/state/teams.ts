@@ -33,7 +33,14 @@ export function createTeamsController(execute: (command: TeamCommand) => Promise
     } catch (error) {
       if (active && generation === request)
         publish({
-          result: null,
+          // Keep the mounted editor through retryable failures; confirmed access
+          // failures and account teardown still discard all private state.
+          result:
+            error instanceof Error &&
+            "code" in error &&
+            ["unavailable", "conflict", "invalid_request"].includes(String(error.code))
+              ? state.result
+              : null,
           busy: false,
           error: error instanceof Error ? error.message : "Teams could not be reached.",
         });

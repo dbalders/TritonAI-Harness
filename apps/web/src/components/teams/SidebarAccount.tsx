@@ -39,7 +39,7 @@ function Account({ environmentId }: { environmentId: EnvironmentId }) {
         </MenuTrigger>
         <MenuPopup side="top" align="start">
           <MenuItem render={<Link to="/teams" />}>Teams</MenuItem>
-          <MenuItem render={<Link to="/settings/general" hash="ucsd-account" />}>
+          <MenuItem render={<Link to="/settings/connections" hash="ucsd-account" />}>
             Account settings
           </MenuItem>
           <MenuItem disabled={busy} onClick={() => void controller.signOut()}>
