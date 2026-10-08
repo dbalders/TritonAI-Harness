@@ -415,6 +415,8 @@ it.layer(NodeServices.layer)("BotTaskComputer", (it) => {
       bot.resultStatus = 401;
       yield* computer.tick;
       assert.lengthOf(bot.results, 0);
+      assert.strictEqual((yield* computer.getStatus).state, "off");
+      assert.include((yield* computer.getStatus).message ?? "", "Choose Allow");
       bot.resultStatus = 200;
       bot.current = "new-worker-token";
       yield* allow(computer);
@@ -422,4 +424,52 @@ it.layer(NodeServices.layer)("BotTaskComputer", (it) => {
       assert.strictEqual(harness.commands.length, 2);
     }).pipe(Effect.provide(services(bot, harness)));
   });
+
+  it.effect(
+    "stops a delivery batch on rejected authentication and preserves every held task",
+    () => {
+      const bot = new FakeBot(),
+        harness = new FakeHarness();
+      bot.tasks = [
+        { taskId: "first", title: "First", prompt: "First task" },
+        { taskId: "second", title: "Second", prompt: "Second task" },
+        { taskId: "next", title: "Next", prompt: "Later task" },
+      ];
+      return Effect.gen(function* () {
+        yield* TestClock.setTime(START);
+        const computer = yield* BotTaskComputer.BotTaskComputer;
+        yield* allow(computer);
+        const first = harness.commands.find((command) => command.type === "thread.create")!;
+        harness.finish(first.threadId, "First result");
+        bot.resultStatus = 503;
+        yield* TestClock.adjust("30 seconds");
+        yield* computer.tick;
+        const second = harness.commands.filter((command) => command.type === "thread.create")[1]!;
+        harness.finish(second.threadId, "Second result");
+        bot.resultStatus = 401;
+        const callsBefore = bot.calls.length;
+        yield* TestClock.adjust("2 minutes");
+        yield* computer.tick;
+        assert.deepEqual(
+          bot.calls.slice(callsBefore).map((call) => call.path),
+          ["/harness/results"],
+        );
+        assert.strictEqual((yield* computer.getStatus).state, "off");
+        assert.strictEqual(bot.tasks.length, 1);
+        bot.resultStatus = 200;
+        bot.current = "new-worker-token";
+        yield* allow(computer);
+        assert.deepEqual(
+          bot.results.map((result) => result.taskId),
+          ["first", "second"],
+        );
+        assert.include(String(bot.results[0]!.result), "First result");
+        assert.include(String(bot.results[1]!.result), "Second result");
+        assert.strictEqual(
+          harness.commands.filter((command) => command.type === "thread.create").length,
+          3,
+        );
+      }).pipe(Effect.provide(services(bot, harness)));
+    },
+  );
 });

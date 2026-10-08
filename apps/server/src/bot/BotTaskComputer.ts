@@ -270,13 +270,12 @@ export const make = Effect.gen(function* () {
       result: task.outcome.result,
     }).pipe(
       // 409 settles a completed or replaced claim. Keep results on 401 so re-pairing can redeliver them.
-      Effect.map((reply) => reply.status === 200 || reply.status === 409),
-      Effect.tap((settled) =>
-        settled
+      Effect.tap((reply) =>
+        reply.status === 200 || reply.status === 409
           ? Effect.void
           : Effect.logWarning("bot task result was not accepted", { taskId: task.taskId }),
       ),
-      Effect.orElseSucceed(() => false),
+      Effect.orElseSucceed(() => null),
     );
 
   const settleHeld = (initial: Stored, now: number) =>
@@ -303,7 +302,12 @@ export const make = Effect.gen(function* () {
           };
           yield* writeStored(stored);
         }
-        if (yield* deliver(stored, { ...task, outcome })) {
+        const reply = yield* deliver(stored, { ...task, outcome });
+        if (reply === null) continue;
+        if (yield* handleRejection(stored, reply)) {
+          return { ...stored, active: false, replaced: reply.json.replaced === true };
+        }
+        if (reply.status === 200 || reply.status === 409) {
           stored = { ...stored, held: stored.held.filter((item) => item.taskId !== task.taskId) };
           yield* writeStored(stored);
         }

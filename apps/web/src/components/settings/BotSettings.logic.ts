@@ -51,9 +51,12 @@ export function isTaskComputer(
   remote: DotTaskComputer | null | undefined,
   local: ServerBotTaskComputerStatus | null,
 ): boolean {
-  if (remote !== undefined) return remote !== null && remote.deviceId === local?.deviceId;
+  if (remote !== undefined) {
+    return Boolean(remote?.deviceId && local?.deviceId && remote.deviceId === local.deviceId);
+  }
   return (
     local !== null &&
+    Boolean(local.deviceId) &&
     (local.state === "idle" || local.state === "running" || local.state === "error")
   );
 }

@@ -20,12 +20,21 @@ const remote = {
   pairedAt: "2026-10-08T06:00:00.000Z",
   online: true,
 };
+const unidentified = {
+  deviceName: "Another computer",
+  pairedAt: "2026-10-08T06:00:00.000Z",
+  online: true,
+};
 
 describe("bot settings wording", () => {
   it("treats the bot as the authority on which computer runs tasks", () => {
     expect(isTaskComputer(remote, local)).toBe(true);
     expect(isTaskComputer({ ...remote, deviceId: "other" }, local)).toBe(false);
     expect(isTaskComputer(null, local)).toBe(false);
+    expect(isTaskComputer(unidentified, null)).toBe(false);
+    expect(isTaskComputer(unidentified, local)).toBe(false);
+    expect(isTaskComputer(remote, null)).toBe(false);
+    expect(isTaskComputer({ ...remote, deviceId: "" }, { ...local, deviceId: "" })).toBe(false);
     // Before the bot's state loads, fall back to what this computer reports.
     expect(isTaskComputer(undefined, local)).toBe(true);
     expect(isTaskComputer(undefined, { ...local, state: "replaced" })).toBe(false);
