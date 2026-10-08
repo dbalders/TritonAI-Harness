@@ -202,6 +202,17 @@ describe("DotClient", () => {
     expect(JSON.parse(String(mock.mock.calls[1]?.[1]?.body))).toEqual({ approved: false });
   });
 
+  it("signs out only the presenting desktop session with its owner token", async () => {
+    const mock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(Response.json({ ok: true, revoked: "session" }));
+    await new DotClient("https://bot.example.test", mock).signOut(session);
+    const [url, init] = mock.mock.calls[0]!;
+    expect(url).toBe("https://bot.example.test/logout");
+    expect(init).toMatchObject({ method: "POST", credentials: "omit", body: "{}" });
+    expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${session.ownerToken}`);
+  });
+
   it("stores sessions per endpoint and clears them on disconnect", () => {
     const values = new Map<string, string>();
     const storage = {

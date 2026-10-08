@@ -307,7 +307,16 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
             </Button>
           )}
           {session && (
-            <Button variant="ghost" size="sm" onClick={() => saveSession(null)}>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                // Forget the session locally first; server sign-out is best effort (older bots lack it).
+                const current = session;
+                saveSession(null);
+                void client.signOut(current).catch(() => undefined);
+              }}
+            >
               Disconnect
             </Button>
           )}

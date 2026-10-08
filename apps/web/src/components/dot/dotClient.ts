@@ -312,6 +312,11 @@ export class DotClient {
   decide(session: DotSession, approvalId: string, approved: boolean): Promise<{ ok: boolean }> {
     return this.request(`/approvals/${encodeURIComponent(approvalId)}`, session, { approved });
   }
+
+  /** Revokes this desktop session on the bot, so a copied token stops working too. Microsoft stays connected. */
+  signOut(session: DotSession): Promise<{ ok: boolean }> {
+    return this.request("/logout", session, {});
+  }
 }
 
 /** Keeps only what was typed after a message was sent; an edit to the sent text is kept whole. */
