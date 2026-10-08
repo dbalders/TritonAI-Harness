@@ -3,8 +3,11 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as Queue from "effect/Queue";
+import * as Stream from "effect/Stream";
 
 import {
+  runTritonAiFeedbackSkillSync,
   syncTritonAiFeedbackSkill,
   TritonAiFeedbackSkillSyncError,
 } from "./tritonAiFeedbackSkill.ts";
@@ -62,5 +65,48 @@ describe("syncTritonAiFeedbackSkill", () => {
         );
       }),
     ).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("refuses a source whose skill name changed", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const skillsDirectory = yield* fs.makeTempDirectoryScoped();
+        const renamed = "---\nname: renamed-feedback\ndescription: Moved.\n---\n";
+
+        const error = yield* syncTritonAiFeedbackSkill({
+          skillsDirectory,
+          fetchFile: (url) => Effect.succeed(url.endsWith("SKILL.md") ? renamed : "MIT"),
+        }).pipe(Effect.flip);
+
+        expect(error._tag).toBe("TritonAiFeedbackSkillSyncError");
+        expect(yield* fs.readDirectory(skillsDirectory)).toEqual([]);
+      }),
+    ).pipe(Effect.provide(NodeServices.layer)),
+  );
+});
+
+describe("runTritonAiFeedbackSkillSync", () => {
+  it.effect("syncs at startup and again only when the Codex home moves", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const changes = yield* Queue.unbounded<string>();
+        const synced = yield* Queue.unbounded<string>();
+
+        yield* runTritonAiFeedbackSkillSync({
+          currentSkillsDirectory: Effect.succeed("/home-a/skills"),
+          skillsDirectoryChanges: Stream.fromQueue(changes),
+          sync: (skillsDirectory) => Queue.offer(synced, skillsDirectory),
+          refreshInterval: "1 hour",
+        });
+        expect(yield* Queue.take(synced)).toBe("/home-a/skills");
+
+        // An unrelated settings change resolves to the same home and is skipped.
+        yield* Queue.offer(changes, "/home-a/skills");
+        yield* Queue.offer(changes, "/home-b/skills");
+        expect(yield* Queue.take(synced)).toBe("/home-b/skills");
+        expect(yield* Queue.size(synced)).toBe(0);
+      }),
+    ),
   );
 });
