@@ -36,12 +36,16 @@ describe("RPC authorization scopes", () => {
 
   it("preserves TritonAI management and integration scopes", () => {
     const readMethods = [
+      WS_METHODS.serverGetAccountStatus,
       WS_METHODS.serverGetTritonAiUsage,
       WS_METHODS.serverListProviderSkillCatalog,
       WS_METHODS.serverListPlugins,
       WS_METHODS.integrationsList,
     ];
     const operateMethods = [
+      WS_METHODS.serverStartAccountLogin,
+      WS_METHODS.serverPollAccountLogin,
+      WS_METHODS.serverSignOutAccount,
       WS_METHODS.serverTranscribeVoice,
       WS_METHODS.serverInstallProviderSkill,
       WS_METHODS.serverRemoveProviderSkill,

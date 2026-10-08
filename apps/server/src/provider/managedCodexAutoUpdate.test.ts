@@ -1,3 +1,4 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import {
   ProviderDriverKind,
@@ -10,10 +11,12 @@ import {
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 
+import * as ServerConfig from "../config.ts";
 import * as ManagedCodexAutoUpdate from "./managedCodexAutoUpdate.ts";
 import { makeProviderMaintenanceCapabilities } from "./providerMaintenance.ts";
 import {
@@ -100,6 +103,7 @@ const makeHarness = Effect.fn("makeHarness")(function* (input: {
   readonly initialProviders?: ReadonlyArray<ServerProvider>;
   readonly unmanagedInstanceIds?: ReadonlyArray<ProviderInstanceId>;
   readonly rejectedInstanceId?: ProviderInstanceId;
+  readonly devUrl?: URL;
 }) {
   const providersRef = yield* Ref.make(input.initialProviders ?? []);
   const sessionsRef = yield* Ref.make<ReadonlyArray<ProviderSession>>([]);
@@ -160,6 +164,11 @@ const makeHarness = Effect.fn("makeHarness")(function* (input: {
     Layer.mock(ProviderRegistry)(registry),
     Layer.succeed(ProviderMaintenanceRunner, runner),
     Layer.mock(ProviderService)(providerService),
+    ServerConfig.layerTest(
+      process.cwd(),
+      { prefix: "t3-managed-codex-auto-update-" },
+      { devUrl: input.devUrl },
+    ).pipe(Layer.provide(NodeServices.layer)),
   );
 
   return {
@@ -167,6 +176,7 @@ const makeHarness = Effect.fn("makeHarness")(function* (input: {
     sessionsRef,
     updateCalls: Ref.get(updateCallsRef),
     nextUpdate: PubSub.take(updatedSubscription),
+    subscribed: Deferred.isDone(subscribed),
     publish: (providers: ReadonlyArray<ServerProvider>) =>
       Deferred.await(subscribed).pipe(Effect.andThen(PubSub.publish(changes, providers))),
   };
@@ -301,4 +311,25 @@ describe("ManagedCodexAutoUpdate.layer", () => {
       assert.deepStrictEqual(yield* harness.updateCalls, [CODEX_ID, CODEX_WORK_ID]);
     }),
   );
+
+  it.effect("never updates automatically in a development server", () => {
+    const messages: Array<unknown> = [];
+    const logger = Logger.make(({ message }) => {
+      messages.push(message);
+    });
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness({
+        initialProviders: [snapshot()],
+        devUrl: new URL("http://localhost:5733"),
+      });
+      yield* Layer.build(ManagedCodexAutoUpdate.layer.pipe(Layer.provide(harness.services)));
+
+      // The layer decides while it builds, so no watcher is ever started.
+      assert.deepStrictEqual(messages, [
+        ["Automatic managed Codex updates are off in development servers"],
+      ]);
+      assert.isFalse(yield* harness.subscribed);
+      assert.deepStrictEqual(yield* harness.updateCalls, []);
+    }).pipe(Effect.provide(Logger.layer([logger], { mergeWithExisting: false })));
+  });
 });

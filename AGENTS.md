@@ -8,6 +8,8 @@ TritonAI Harness is maintained by David Balderston as a downstream distribution 
 
 `TritonAI-Installer` owns installer packaging and managed-machine setup. Do not move installer-owned behavior into this repository.
 
+AWS Lambda services for Citizen Developer and UCSD workflows belong under `~/Github/UCSD/AI/Lambda/<service>/`, in their own private GitHub repositories or an explicitly chosen shared private Lambda repository. This public Harness repository owns their API clients, public contracts, configuration hooks, and UI. Do not commit Lambda handlers, service tests/fixtures, deployment templates, campus configuration, or operational runbooks here. Keep service builds independent and connect over authenticated HTTPS. Check both the final diff and branch history before publishing; a later deletion does not remove previously committed service source. After an authorized cleanup, rebase or recreate affected dependent branches on clean history instead of merging old history back.
+
 ## What makes TritonAI Harness special?
 
 TritonAI Harness inherits the product principles that make upstream T3 Code successful. Preserve those strengths while adapting the product deliberately for TritonAI users. Here's a brief list of the things we can never compromise on.

@@ -8,6 +8,7 @@ import {
   type ServerSelfUpdateResult,
   WS_METHODS,
 } from "@t3tools/contracts";
+export { accountCommandValue, createAccountLoginController } from "./accountLogin.ts";
 import * as Cause from "effect/Cause";
 import * as Duration from "effect/Duration";
 import * as Deferred from "effect/Deferred";
@@ -1046,6 +1047,22 @@ export function createServerEnvironmentAtoms<R, E>(
     removeProviderInstallation: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:provider:install-remove",
       tag: WS_METHODS.providerInstallRemove,
+    }),
+    getAccountStatus: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:account-status",
+      tag: WS_METHODS.serverGetAccountStatus,
+    }),
+    startAccountLogin: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:account-start",
+      tag: WS_METHODS.serverStartAccountLogin,
+    }),
+    pollAccountLogin: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:account-poll",
+      tag: WS_METHODS.serverPollAccountLogin,
+    }),
+    signOutAccount: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:account-sign-out",
+      tag: WS_METHODS.serverSignOutAccount,
     }),
     startMemorySync: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:memory-sync-start",

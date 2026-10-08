@@ -77,6 +77,7 @@ import {
 import { FoldedSettingsSection } from "./FoldedSettingsSection";
 import { LoadBalancingSettings } from "./LoadBalancingSettings";
 import { GitHubRoutingSettings } from "./GitHubRoutingSettings";
+import { UcsdAccountSettings } from "./UcsdAccountSettings";
 import { Input } from "../ui/input";
 import { CommandShortcut } from "../ui/command";
 import {
@@ -3695,6 +3696,7 @@ export function ConnectionsSettings() {
   return (
     <SettingsPageContainer width="wide">
       {primarySettings}
+      <UcsdAccountSettings environmentId={primaryEnvironmentId} />
       <SettingsSection
         {...searchableSetting("remote-environments")}
         title="Environments"

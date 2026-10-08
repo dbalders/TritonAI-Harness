@@ -955,6 +955,225 @@ describe("DesktopBackendConfiguration", () => {
     }),
   );
 
+  it.effect(
+    "resolvePrimary appends the Installer's newest Node runtime after the inherited PATH",
+    () =>
+      Effect.gen(function* () {
+        const previousPath = process.env.PATH;
+        try {
+          yield* withHarness(
+            Effect.gen(function* () {
+              const fileSystem = yield* FileSystem.FileSystem;
+              const environment = yield* DesktopEnvironment.DesktopEnvironment;
+              const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+              const runtimeRoot = environment.path.join(
+                environment.homeDirectory,
+                ".agents",
+                "ucsd",
+                "runtime",
+                "node",
+              );
+
+              process.env.PATH = "/usr/bin:/bin";
+              assert.isUndefined(
+                (yield* configuration.resolvePrimary).env.PATH,
+                "no managed runtime leaves the inherited PATH alone",
+              );
+
+              // The harness runs as darwin/x64.
+              const runtimes = {
+                older: "node-v22.9.0-darwin-x64",
+                newest: "node-v22.23.2-darwin-x64",
+                otherArch: "node-v23.0.0-darwin-arm64",
+                missingNpx: "node-v24.0.0-darwin-x64",
+                notExecutable: "node-v25.0.0-darwin-x64",
+                staging: ".node-v99.0.0-darwin-x64-stage-abc",
+              };
+              const writeRuntime = (name: string, commands: ReadonlyArray<string>, mode: number) =>
+                Effect.gen(function* () {
+                  const bin = environment.path.join(runtimeRoot, name, "bin");
+                  yield* fileSystem.makeDirectory(bin, { recursive: true });
+                  for (const command of commands) {
+                    const file = environment.path.join(bin, command);
+                    yield* fileSystem.writeFileString(file, "");
+                    yield* fileSystem.chmod(file, mode);
+                  }
+                });
+              const complete = ["node", "npm", "npx"];
+              yield* writeRuntime(runtimes.older, complete, 0o755);
+              yield* writeRuntime(runtimes.newest, complete, 0o755);
+              yield* writeRuntime(runtimes.otherArch, complete, 0o755);
+              yield* writeRuntime(runtimes.missingNpx, ["node", "npm"], 0o755);
+              yield* writeRuntime(runtimes.notExecutable, complete, 0o644);
+              yield* writeRuntime(runtimes.staging, complete, 0o755);
+              const newestBin = environment.path.join(runtimeRoot, runtimes.newest, "bin");
+
+              assert.equal(
+                (yield* configuration.resolvePrimary).env.PATH,
+                `/usr/bin:/bin:${newestBin}`,
+                "the newest usable runtime for this platform and arch goes last so a user-installed Node keeps precedence",
+              );
+
+              process.env.PATH = "/usr/bin::/bin";
+              assert.equal(
+                (yield* configuration.resolvePrimary).env.PATH,
+                `/usr/bin::/bin:${newestBin}`,
+                "an empty inherited entry (the current directory) is preserved",
+              );
+
+              process.env.PATH = `/usr/bin:${newestBin}:/bin`;
+              assert.equal(
+                (yield* configuration.resolvePrimary).env.PATH,
+                `/usr/bin:${newestBin}:/bin`,
+                "an entry already on PATH is not duplicated",
+              );
+            }),
+          );
+        } finally {
+          restoreEnv("PATH", previousPath);
+        }
+      }),
+  );
+
+  it.effect(
+    "resolvePrimary restores the Installer's declared tool folders after the inherited PATH",
+    () =>
+      Effect.gen(function* () {
+        const previousPath = process.env.PATH;
+        try {
+          yield* withHarness(
+            Effect.gen(function* () {
+              const fileSystem = yield* FileSystem.FileSystem;
+              const environment = yield* DesktopEnvironment.DesktopEnvironment;
+              const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+              const ucsd = environment.path.join(environment.homeDirectory, ".agents", "ucsd");
+              const declared = {
+                helpers: environment.path.join(ucsd, "bin"),
+                codex: environment.path.join(
+                  ucsd,
+                  "runtime",
+                  "codex",
+                  "openai-codex-0.151.0",
+                  "bin",
+                ),
+                npmGlobal: environment.path.join(ucsd, "runtime", "node-global", "bin"),
+                node: environment.path.join(
+                  ucsd,
+                  "runtime",
+                  "node",
+                  "node-v22.23.2-darwin-x64",
+                  "bin",
+                ),
+              };
+              for (const directory of [declared.helpers, declared.codex, declared.node]) {
+                yield* fileSystem.makeDirectory(directory, { recursive: true });
+              }
+              // A newer staged runtime the env file does not declare must not be picked.
+              const undeclared = environment.path.join(
+                ucsd,
+                "runtime",
+                "node",
+                "node-v24.0.0-darwin-x64",
+                "bin",
+              );
+              yield* fileSystem.makeDirectory(undeclared, { recursive: true });
+              for (const command of ["node", "npm", "npx"]) {
+                yield* fileSystem.writeFileString(environment.path.join(undeclared, command), "");
+                yield* fileSystem.chmod(environment.path.join(undeclared, command), 0o755);
+              }
+              yield* fileSystem.writeFileString(
+                environment.path.join(ucsd, "env"),
+                [
+                  `export PATH='${Object.values(declared).join(":")}':$PATH`,
+                  "export UCSD_AI_BASE_URL=https://tritonai-api.ucsd.edu/v1",
+                  "",
+                ].join("\n"),
+              );
+
+              process.env.PATH = "/usr/bin:/bin";
+              assert.equal(
+                (yield* configuration.resolvePrimary).env.PATH,
+                `/usr/bin:/bin:${declared.helpers}:${declared.codex}:${declared.node}`,
+                "declared folders are restored in launcher order, missing ones skipped, after the user's PATH",
+              );
+
+              process.env.PATH = "";
+              assert.equal(
+                (yield* configuration.resolvePrimary).env.PATH,
+                `:${declared.helpers}:${declared.codex}:${declared.node}`,
+                "an explicitly empty PATH (the current directory) stays first",
+              );
+
+              // Under the old launcher they are already on PATH; nothing changes.
+              const launcherPath = `${Object.values(declared).join(":")}:/usr/bin:/bin`;
+              process.env.PATH = launcherPath;
+              assert.equal((yield* configuration.resolvePrimary).env.PATH, launcherPath);
+            }),
+          );
+        } finally {
+          restoreEnv("PATH", previousPath);
+        }
+      }),
+  );
+
+  it.effect("resolvePrimary falls back to the newest usable Codex and Node runtimes", () =>
+    Effect.gen(function* () {
+      const previousPath = process.env.PATH;
+      try {
+        yield* withHarness(
+          Effect.gen(function* () {
+            const fileSystem = yield* FileSystem.FileSystem;
+            const environment = yield* DesktopEnvironment.DesktopEnvironment;
+            const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+            const runtime = environment.path.join(
+              environment.homeDirectory,
+              ".agents",
+              "ucsd",
+              "runtime",
+            );
+            const writeCommands = (bin: string, commands: ReadonlyArray<string>) =>
+              Effect.gen(function* () {
+                yield* fileSystem.makeDirectory(bin, { recursive: true });
+                for (const command of commands) {
+                  yield* fileSystem.writeFileString(environment.path.join(bin, command), "");
+                  yield* fileSystem.chmod(environment.path.join(bin, command), 0o755);
+                }
+              });
+            const olderCodex = environment.path.join(
+              runtime,
+              "codex",
+              "openai-codex-0.146.0",
+              "bin",
+            );
+            const newerCodex = environment.path.join(
+              runtime,
+              "codex",
+              "openai-codex-0.151.0",
+              "bin",
+            );
+            const nodeBin = environment.path.join(
+              runtime,
+              "node",
+              "node-v22.23.2-darwin-x64",
+              "bin",
+            );
+            yield* writeCommands(olderCodex, ["codex"]);
+            yield* writeCommands(newerCodex, ["codex"]);
+            yield* writeCommands(nodeBin, ["node", "npm", "npx"]);
+
+            process.env.PATH = "/usr/bin:/bin";
+            assert.equal(
+              (yield* configuration.resolvePrimary).env.PATH,
+              `/usr/bin:/bin:${newerCodex}:${nodeBin}`,
+            );
+          }),
+        );
+      } finally {
+        restoreEnv("PATH", previousPath);
+      }
+    }),
+  );
+
   it.effect("Windows startup reads Installer literals without running its launcher", () =>
     Effect.gen(function* () {
       const names = ["TRITONAI_API_KEY", "UCSD_AI_BASE_URL"] as const;
@@ -1436,7 +1655,7 @@ describe("DesktopBackendConfiguration", () => {
       }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("resolveWsl preserves existing WSLENV entries when forwarding backend secrets", () =>
+  it.effect("resolveWsl preserves WSLENV while forwarding backend configuration", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const baseDir = yield* fileSystem.makeTempDirectoryScoped({
@@ -1450,6 +1669,9 @@ describe("DesktopBackendConfiguration", () => {
       const previousTritonAiOnPremKey = process.env.TRITONAI_ONPREM_API_KEY;
       const previousTritonAiFrontierKey = process.env.TRITONAI_FRONTIER_API_KEY;
       const previousUcsdAiBaseUrl = process.env.UCSD_AI_BASE_URL;
+      const previousAccountServiceUrl = process.env.TRITONAI_ACCOUNT_SERVICE_URL;
+      const previousAccountAllowInsecureLoopback =
+        process.env.TRITONAI_ACCOUNT_ALLOW_INSECURE_LOOPBACK;
       const previousOtlpHeaders = process.env.T3CODE_OTLP_HEADERS;
       const previousOtlpProtocol = process.env.T3CODE_OTLP_PROTOCOL;
       // A developer's own OTEL_* variables would be forwarded too.
@@ -1463,6 +1685,8 @@ describe("DesktopBackendConfiguration", () => {
         process.env.TRITONAI_ONPREM_API_KEY = "on-prem-key";
         process.env.TRITONAI_FRONTIER_API_KEY = "frontier-key";
         process.env.UCSD_AI_BASE_URL = "https://voice.example.test/v1";
+        process.env.TRITONAI_ACCOUNT_SERVICE_URL = "https://accounts.example.test";
+        process.env.TRITONAI_ACCOUNT_ALLOW_INSECURE_LOOPBACK = "1";
         process.env.T3CODE_OTLP_HEADERS = 'authorization="Bearer%20my-token"';
         process.env.T3CODE_OTLP_PROTOCOL = "http/protobuf";
 
@@ -1488,14 +1712,16 @@ describe("DesktopBackendConfiguration", () => {
           assert.equal(config.env.TRITONAI_ONPREM_API_KEY, "on-prem-key");
           assert.equal(config.env.TRITONAI_FRONTIER_API_KEY, "frontier-key");
           assert.equal(config.env.UCSD_AI_BASE_URL, "https://voice.example.test/v1");
+          assert.equal(config.env.TRITONAI_ACCOUNT_SERVICE_URL, "https://accounts.example.test");
+          assert.equal(config.env.TRITONAI_ACCOUNT_ALLOW_INSECURE_LOOPBACK, "1");
           assert.equal(config.env.T3CODE_OTLP_PROTOCOL, "http/protobuf");
           // The existing WSLENV is preserved byte-for-byte (note the empty
           // "::" segment survives — WSL ignores it, so we don't normalize
-          // it away) and missing backend secret names are appended.
+          // it away) and missing backend configuration names are appended.
           // OPENAI_API_KEY is already declared, so it isn't forwarded twice.
           assert.equal(
             config.env.WSLENV,
-            "GOPATH/p:OPENAI_API_KEY/u:EMPTY::AZURE_DEVOPS_EXT_PAT/u:ANTHROPIC_API_KEY:TRITONAI_API_KEY:TRITONAI_ONPREM_API_KEY:TRITONAI_FRONTIER_API_KEY:UCSD_AI_BASE_URL:T3CODE_OTLP_HEADERS:T3CODE_OTLP_PROTOCOL",
+            "GOPATH/p:OPENAI_API_KEY/u:EMPTY::AZURE_DEVOPS_EXT_PAT/u:ANTHROPIC_API_KEY:TRITONAI_API_KEY:TRITONAI_ONPREM_API_KEY:TRITONAI_FRONTIER_API_KEY:UCSD_AI_BASE_URL:TRITONAI_ACCOUNT_SERVICE_URL:TRITONAI_ACCOUNT_ALLOW_INSECURE_LOOPBACK:T3CODE_OTLP_HEADERS:T3CODE_OTLP_PROTOCOL",
           );
         }).pipe(
           Effect.provide(
@@ -1524,6 +1750,11 @@ describe("DesktopBackendConfiguration", () => {
         restoreEnv("TRITONAI_ONPREM_API_KEY", previousTritonAiOnPremKey);
         restoreEnv("TRITONAI_FRONTIER_API_KEY", previousTritonAiFrontierKey);
         restoreEnv("UCSD_AI_BASE_URL", previousUcsdAiBaseUrl);
+        restoreEnv("TRITONAI_ACCOUNT_SERVICE_URL", previousAccountServiceUrl);
+        restoreEnv(
+          "TRITONAI_ACCOUNT_ALLOW_INSECURE_LOOPBACK",
+          previousAccountAllowInsecureLoopback,
+        );
         for (const [name, value] of ambientOtel) restoreEnv(name, value);
       }
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),

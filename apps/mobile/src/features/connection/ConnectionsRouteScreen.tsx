@@ -10,6 +10,7 @@ import { AndroidScreenHeader } from "../../components/AndroidScreenHeader";
 import { useRemoteConnections } from "../../state/use-remote-environment-registry";
 import { LocalEnvironmentList } from "./LocalEnvironmentList";
 import { GitHubRoutingSettings } from "./GitHubRoutingSettings";
+import { UcsdAccountSettings } from "./UcsdAccountSettings";
 
 export function ConnectionsRouteScreen() {
   const {
@@ -67,6 +68,9 @@ export function ConnectionsRouteScreen() {
           onRemove={onRemoveEnvironmentPress}
           onSetEnabled={onSetEnvironmentEnabled}
           onUpdate={onUpdateEnvironment}
+          renderExpandedContent={(environmentId) => (
+            <UcsdAccountSettings environmentId={environmentId} />
+          )}
         />
         <GitHubRoutingSettings />
       </ScrollView>
