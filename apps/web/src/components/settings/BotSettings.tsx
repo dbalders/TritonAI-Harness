@@ -38,19 +38,11 @@ function failureMessage(result: Parameters<typeof squashAtomCommandFailure>[0], 
  */
 export function BotSettings() {
   const serviceUrl = useBotServiceUrl();
-  return serviceUrl ? (
-    <BotSettingsForService key={serviceUrl} serviceUrl={serviceUrl} />
-  ) : (
-    <SettingsPageContainer>
-      <p className="text-sm text-muted-foreground">
-        Set a TritonAI Bot service address in Settings → Connections to manage your bot.
-      </p>
-    </SettingsPageContainer>
-  );
+  return <BotSettingsForService key={serviceUrl ?? "off"} serviceUrl={serviceUrl} />;
 }
 
-function BotSettingsForService({ serviceUrl }: { serviceUrl: string }) {
-  const client = useMemo(() => new DotClient(serviceUrl), [serviceUrl]);
+function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
+  const client = useMemo(() => (serviceUrl ? new DotClient(serviceUrl) : null), [serviceUrl]);
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
@@ -61,7 +53,7 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string }) {
   const navigate = useNavigate();
   const environmentId = usePrimaryEnvironmentId();
   const [session, setSession] = useState<DotSession | null>(() =>
-    readDotSession(sessionStorage, serviceUrl),
+    serviceUrl ? readDotSession(sessionStorage, serviceUrl) : null,
   );
   const [state, setState] = useState<DotState | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -86,10 +78,12 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string }) {
 
   const isCurrentSession = useCallback(
     (token: string) =>
-      mounted.current && readDotSession(sessionStorage, serviceUrl)?.ownerToken === token,
+      mounted.current &&
+      Boolean(serviceUrl && readDotSession(sessionStorage, serviceUrl)?.ownerToken === token),
     [serviceUrl],
   );
   const loadState = useCallback(async () => {
+    if (!serviceUrl || !client) return;
     const current = readDotSession(sessionStorage, serviceUrl);
     if (current?.ownerToken !== session?.ownerToken) {
       if (mounted.current) {
@@ -121,7 +115,7 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string }) {
   }, [loadState]);
 
   const allow = async () => {
-    if (!session || !environmentId || !projectId) return;
+    if (!session || !serviceUrl || !environmentId || !projectId) return;
     setBusy(true);
     setError(null);
     const result = await allowHere({
@@ -176,7 +170,7 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string }) {
   };
 
   const setWarning = async (enabled: boolean) => {
-    if (!session) return;
+    if (!session || !client) return;
     setBusy(true);
     setError(null);
     try {
@@ -199,6 +193,11 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string }) {
 
   return (
     <SettingsPageContainer>
+      {!serviceUrl ? (
+        <p className="text-sm text-muted-foreground">
+          Set a TritonAI Bot service address in Settings → Connections to manage your bot.
+        </p>
+      ) : null}
       <SettingsSection id="tritonai-bot-account" title="Account">
         <SettingsRow
           title="Campus account"
@@ -255,19 +254,22 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string }) {
           }
           status={error ? <span className="text-destructive">{error}</span> : undefined}
           control={
-            thisComputer ? (
-              <Button size="xs" variant="outline" disabled={busy} onClick={() => void stop()}>
-                Stop running tasks here
-              </Button>
-            ) : (
-              <Button
-                size="xs"
-                disabled={busy || !session || !environmentId || !projectId}
-                onClick={() => void allow()}
-              >
-                Allow
-              </Button>
-            )
+            <div className="flex gap-2">
+              {local && local.state !== "off" ? (
+                <Button size="xs" variant="outline" disabled={busy} onClick={() => void stop()}>
+                  Stop running tasks here
+                </Button>
+              ) : null}
+              {!thisComputer ? (
+                <Button
+                  size="xs"
+                  disabled={busy || !serviceUrl || !session || !environmentId || !projectId}
+                  onClick={() => void allow()}
+                >
+                  Allow
+                </Button>
+              ) : null}
+            </div>
           }
         />
         <SettingsRow

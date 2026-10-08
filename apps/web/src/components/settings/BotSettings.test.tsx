@@ -2,9 +2,12 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
+import type { ServerBotTaskComputerStatus } from "@t3tools/contracts";
 
 const configuration = vi.hoisted(() => ({
   serviceUrl: "https://bot.example.test" as string | null,
+  local: null as ServerBotTaskComputerStatus | null,
+  command: vi.fn(async () => ({ _tag: "Success" })),
 }));
 vi.mock("../dot/botService", () => ({ useBotServiceUrl: () => configuration.serviceUrl }));
 vi.mock("@tanstack/react-router", () => ({
@@ -17,14 +20,14 @@ vi.mock("@tanstack/react-router", () => ({
 }));
 vi.mock("../../state/entities", () => ({ useProjects: () => [] }));
 vi.mock("../../state/environments", () => ({
-  usePrimaryEnvironmentId: () => null,
+  usePrimaryEnvironmentId: () => "synthetic-environment",
   usePrimaryEnvironment: () => null,
   useEnvironments: () => ({ environments: [] }),
 }));
 vi.mock("../../state/query", () => ({
-  useEnvironmentQuery: () => ({ data: null, refresh: vi.fn() }),
+  useEnvironmentQuery: () => ({ data: configuration.local, refresh: vi.fn() }),
 }));
-vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => vi.fn() }));
+vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => configuration.command }));
 
 import {
   DotApiError,
@@ -60,6 +63,8 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   configuration.serviceUrl = firstUrl;
+  configuration.local = null;
+  configuration.command.mockClear();
   sessionStorage.clear();
   saveDotSession(sessionStorage, firstUrl, firstSession);
   saveDotSession(sessionStorage, secondUrl, secondSession);
@@ -123,3 +128,39 @@ it("explains configuration when the Bot is off without sending any session", asy
   expect(container.textContent).toContain("Set a TritonAI Bot service address");
   expect(fetchState).not.toHaveBeenCalled();
 });
+
+it.each(["signed out", "different service", "service disabled", "unreachable", "expired session"])(
+  "can stop locally when %s without transmitting an unrelated owner token",
+  async (scenario) => {
+    configuration.local = {
+      state: "idle",
+      deviceId: "synthetic-device",
+      deviceName: "This Mac",
+      apiUrl: firstUrl,
+      userId: firstSession.email,
+      projectId: "synthetic-project",
+      currentTask: null,
+      lastCheckInAt: null,
+      message: null,
+    };
+    if (scenario === "signed out") saveDotSession(sessionStorage, firstUrl, null);
+    if (scenario === "different service") configuration.serviceUrl = secondUrl;
+    if (scenario === "service disabled") configuration.serviceUrl = null;
+    vi.spyOn(DotClient.prototype, "state").mockImplementation(async () => {
+      if (scenario === "expired session") throw new DotApiError("Expired", 401);
+      if (scenario === "unreachable") throw new Error("Unavailable");
+      return state(secondSession.email);
+    });
+    await act(async () => root.render(<BotSettings />));
+    const stop = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent === "Stop running tasks here",
+    );
+    expect(stop).toBeDefined();
+    expect(stop?.disabled).toBe(false);
+    await act(async () => stop?.click());
+    expect(configuration.command).toHaveBeenCalledWith({
+      environmentId: "synthetic-environment",
+      input: { apiUrl: configuration.serviceUrl, ownerToken: null },
+    });
+  },
+);
