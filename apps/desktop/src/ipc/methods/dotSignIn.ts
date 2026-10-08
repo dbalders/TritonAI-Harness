@@ -97,6 +97,8 @@ export const installDotSignIn = Effect.fn("desktop.ipc.installDotSignIn")(functi
   let pending: DotSignInListener | undefined;
   let attempts = 0;
   const cancel = () => {
+    // Also supersedes a start that is still binding, so its listener closes as soon as it opens.
+    attempts += 1;
     pending?.close();
     pending = undefined;
   };
@@ -108,8 +110,8 @@ export const installDotSignIn = Effect.fn("desktop.ipc.installDotSignIn")(functi
       result: Schema.String,
       handler: () =>
         Effect.promise(async () => {
-          const attempt = ++attempts;
           cancel();
+          const attempt = attempts;
           const listener = await listenForDotSignIn();
           // A newer start superseded this one while it was binding.
           if (attempt !== attempts) listener.close();

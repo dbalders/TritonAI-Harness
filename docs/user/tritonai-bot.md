@@ -11,8 +11,9 @@ On desktop, your browser opens campus sign-in and then returns you to Harness
 automatically. In a web browser, sign in and confirm the code shown in Harness.
 The mobile app does not support TritonAI Bot yet.
 
-The bot appears in the sidebar only when a service address is set. Release builds
-include a default address. To use a different service or turn the bot off, open
+The bot appears in the sidebar only when a service address is set. If your build
+does not include a default address, add one in Settings. To use a different service
+or turn the bot off, open
 **Settings → Connections → TritonAI Bot**. Changing or clearing the address signs
 you out of the previous service; your bot session is never sent to another address.
 

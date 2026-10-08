@@ -79,11 +79,7 @@ export function TritonAiBotSettings() {
               placeholder="https://"
               className="w-72"
             />
-            <Button
-              size="xs"
-              type="submit"
-              disabled={!hydrated || (normalizeBotServiceUrl(draft) ?? "") === (active ?? "")}
-            >
+            <Button size="xs" type="submit" disabled={!hydrated || draft.trim() === (active ?? "")}>
               Save
             </Button>
             {setting !== null && BUILD_DEFAULT_BOT_SERVICE_URL ? (

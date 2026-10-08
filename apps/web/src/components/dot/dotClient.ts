@@ -146,7 +146,11 @@ export class DotClient {
       redirect: "error",
       credentials: "omit",
     });
-    const payload = (await response.json()) as T & { ok?: boolean; error?: string };
+    // A proxy or gateway error page is not JSON; report it as an unreachable bot.
+    const payload = (await response.json().catch(() => ({}))) as T & {
+      ok?: boolean;
+      error?: string;
+    };
     if (!response.ok || payload.ok !== true)
       throw new DotApiError(
         payload.error ?? `Could not reach your bot (${response.status}).`,

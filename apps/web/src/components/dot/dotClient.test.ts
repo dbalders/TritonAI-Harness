@@ -29,6 +29,16 @@ describe("DotClient", () => {
       globalThis.fetch = nativeFetch;
     }
   });
+  it("reports a non-JSON gateway error as an unreachable bot and keeps its status", async () => {
+    const fetchImpl = vi.fn(async () => new Response("<html>Bad gateway</html>", { status: 502 }));
+    const failure = new DotClient("https://bot.example.test", fetchImpl as typeof fetch).state(
+      session,
+    );
+    await expect(failure).rejects.toMatchObject({
+      status: 502,
+      message: "Could not reach your bot (502).",
+    });
+  });
   it("sends owner authentication and preserves request IDs through a failed send and retry", async () => {
     const mock = vi
       .fn<typeof fetch>()
