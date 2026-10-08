@@ -434,14 +434,14 @@ function CatalogSkillSection({
   );
 }
 
-/** Prefer the refreshed result unless the base query has since seen a newer catalog. */
-function newerCatalogResult(
-  base: ServerListProviderSkillCatalogResult | null,
-  refreshed: ServerListProviderSkillCatalogResult | null,
+/** Prefer the refreshed catalog unless the base query has since seen a newer one. */
+function newerCatalog(
+  base: ServerListProviderSkillCatalogResult["catalog"],
+  refreshed: ServerListProviderSkillCatalogResult["catalog"],
 ) {
-  if (!refreshed) return base;
+  if (!refreshed) return base ?? null;
   if (!base) return refreshed;
-  return (refreshed.catalog?.fetchedAt ?? "") >= (base.catalog?.fetchedAt ?? "") ? refreshed : base;
+  return refreshed.fetchedAt >= base.fetchedAt ? refreshed : base;
 }
 
 export function SkillsSettingsPanel() {
@@ -491,10 +491,12 @@ export function SkillsSettingsPanel() {
         })
       : null,
   );
-  const catalogResult = newerCatalogResult(catalogQuery.data, refreshedCatalogQuery.data);
+  // Only the catalog comes from the refresh; ownership, warnings, and receipts
+  // always come from the latest base response.
+  const catalogResult = catalogQuery.data;
+  const catalog = newerCatalog(catalogResult?.catalog, refreshedCatalogQuery.data?.catalog);
   // A failed request keeps the last list on screen but cannot vouch for ownership.
   const catalogLoadError = catalogQuery.error;
-  const catalog = catalogResult?.catalog ?? null;
   const managedSkillNames = useMemo<ReadonlySet<string>>(
     () => new Set(catalogResult?.managedSkillNames),
     [catalogResult],
@@ -516,9 +518,11 @@ export function SkillsSettingsPanel() {
   const [commonsSubmissionErrors, setCommonsSubmissionErrors] = useState<
     ReadonlyMap<string, string>
   >(new Map());
-  const [newCommonsSubmissions, setNewCommonsSubmissions] = useState<
-    ReadonlyMap<string, ServerSubmitProviderSkillToTritonAiCommonsResult>
-  >(new Map());
+  // Receipts from submissions made on this page, until the next catalog read includes them.
+  const [newCommonsSubmissions, setNewCommonsSubmissions] = useState<{
+    readonly environmentId: typeof primaryEnvironmentId;
+    readonly byPath: ReadonlyMap<string, ServerSubmitProviderSkillToTritonAiCommonsResult>;
+  }>({ environmentId: null, byPath: new Map() });
   const commonsSubmissions = useMemo<
     ReadonlyMap<string, ServerSubmitProviderSkillToTritonAiCommonsResult>
   >(
@@ -527,9 +531,11 @@ export function SkillsSettingsPanel() {
         ...(catalogResult?.commonsSubmissions.map(
           (submission) => [submission.skillPath, submission] as const,
         ) ?? []),
-        ...newCommonsSubmissions,
+        ...(newCommonsSubmissions.environmentId === primaryEnvironmentId
+          ? newCommonsSubmissions.byPath
+          : []),
       ]),
-    [catalogResult, newCommonsSubmissions],
+    [catalogResult, newCommonsSubmissions, primaryEnvironmentId],
   );
 
   const codexProviders = useMemo(() => providers.filter(isCodexProvider), [providers]);
@@ -568,7 +574,10 @@ export function SkillsSettingsPanel() {
   const catalogInstallDisabled = installDisabled || catalogError !== null;
   const removalBlocked = ownershipBlocked;
 
-  const loadCatalog = catalogQuery.refresh;
+  const loadCatalog = () => {
+    catalogQuery.refresh();
+    refreshedCatalogQuery.refresh();
+  };
 
   const installSkill = useCallback(
     async (
@@ -754,7 +763,13 @@ export function SkillsSettingsPanel() {
           throw squashAtomCommandFailure(commandResult);
         }
         const result = commandResult.value;
-        setNewCommonsSubmissions((current) => new Map(current).set(skill.path, result));
+        setNewCommonsSubmissions((current) => ({
+          environmentId: primaryEnvironmentId,
+          byPath: new Map(current.environmentId === primaryEnvironmentId ? current.byPath : []).set(
+            skill.path,
+            result,
+          ),
+        }));
         const openReview = await ensureLocalApi().dialogs.confirm(
           `${displayName} was shared with UCSD. Harness opened a public, ready-for-review pull request and will keep this skill marked as shared.\n\nOpen the pull request now to review it and participate in the submission?`,
         );
