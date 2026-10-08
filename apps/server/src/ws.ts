@@ -187,6 +187,7 @@ import * as GitLabCli from "./sourceControl/GitLabCli.ts";
 import { transcribeVoice } from "./voiceTranscription.ts";
 import { fetchTritonAiUsage } from "./tritonAiUsage.ts";
 import * as MemorySync from "./memory/sync/MemorySync.ts";
+import * as BotTaskComputer from "./bot/BotTaskComputer.ts";
 import * as ForgejoCli from "./sourceControl/ForgejoCli.ts";
 import * as SourceControlProviderRegistry from "./sourceControl/SourceControlProviderRegistry.ts";
 import * as Integrations from "./integrations/IntegrationRegistry.ts";
@@ -610,6 +611,7 @@ const makeWsRpcLayer = (
       const environmentTheme = yield* EnvironmentTheme.EnvironmentThemeService;
       const usageLimitSources = yield* UsageLimitSources.UsageLimitSources;
       const memorySync = yield* MemorySync.MemorySync;
+      const botTaskComputer = yield* BotTaskComputer.BotTaskComputer;
       const externalLauncher = yield* ExternalLauncher.ExternalLauncher;
       const remoteOpenTargets = yield* RemoteOpenTargets.RemoteOpenTargets;
       const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
@@ -3019,6 +3021,22 @@ const makeWsRpcLayer = (
             memorySync.stop.pipe(Effect.andThen(memorySync.getStatus)),
             { "rpc.aggregate": "server" },
           ),
+        [WS_METHODS.serverGetBotTaskComputer]: (_input) =>
+          observeRpcEffect(WS_METHODS.serverGetBotTaskComputer, botTaskComputer.getStatus, {
+            "rpc.aggregate": "server",
+          }),
+        [WS_METHODS.serverAllowBotTaskComputer]: (input) =>
+          observeRpcEffect(WS_METHODS.serverAllowBotTaskComputer, botTaskComputer.allow(input), {
+            "rpc.aggregate": "server",
+          }),
+        [WS_METHODS.serverStopBotTaskComputer]: (input) =>
+          observeRpcEffect(WS_METHODS.serverStopBotTaskComputer, botTaskComputer.stop(input), {
+            "rpc.aggregate": "server",
+          }),
+        [WS_METHODS.serverSetBotTaskProject]: (input) =>
+          observeRpcEffect(WS_METHODS.serverSetBotTaskProject, botTaskComputer.setProject(input), {
+            "rpc.aggregate": "server",
+          }),
         [WS_METHODS.serverSignOutMemorySync]: (_input) =>
           observeRpcEffect(
             WS_METHODS.serverSignOutMemorySync,

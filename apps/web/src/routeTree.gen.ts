@@ -19,6 +19,7 @@ import { Route as ChatRouteImport } from './routes/_chat'
 import { Route as ChatIndexRouteImport } from './routes/_chat.index'
 import { Route as SettingsUsageRouteImport } from './routes/settings.usage'
 import { Route as SettingsStorageRouteImport } from './routes/settings.storage'
+import { Route as SettingsTritonaiBotRouteImport } from './routes/settings.tritonai-bot'
 import { Route as SettingsSourceControlRouteImport } from './routes/settings.source-control'
 import { Route as SettingsSnapShotRouteImport } from './routes/settings.snap-shot'
 import { Route as SettingsSkillsRouteImport } from './routes/settings.skills'
@@ -85,6 +86,11 @@ const SettingsUsageRoute = SettingsUsageRouteImport.update({
 const SettingsStorageRoute = SettingsStorageRouteImport.update({
   id: '/storage',
   path: '/storage',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsTritonaiBotRoute = SettingsTritonaiBotRouteImport.update({
+  id: '/tritonai-bot',
+  path: '/tritonai-bot',
   getParentRoute: () => SettingsRoute,
 } as any)
 const SettingsSourceControlRoute = SettingsSourceControlRouteImport.update({
@@ -205,6 +211,7 @@ export interface FileRoutesByFullPath {
   '/settings/snap-shot': typeof SettingsSnapShotRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
   '/settings/storage': typeof SettingsStorageRoute
+  '/settings/tritonai-bot': typeof SettingsTritonaiBotRoute
   '/settings/usage': typeof SettingsUsageRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
@@ -233,6 +240,7 @@ export interface FileRoutesByTo {
   '/settings/snap-shot': typeof SettingsSnapShotRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
   '/settings/storage': typeof SettingsStorageRoute
+  '/settings/tritonai-bot': typeof SettingsTritonaiBotRoute
   '/settings/usage': typeof SettingsUsageRoute
   '/': typeof ChatIndexRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
@@ -264,6 +272,7 @@ export interface FileRoutesById {
   '/settings/snap-shot': typeof SettingsSnapShotRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
   '/settings/storage': typeof SettingsStorageRoute
+  '/settings/tritonai-bot': typeof SettingsTritonaiBotRoute
   '/settings/usage': typeof SettingsUsageRoute
   '/_chat/': typeof ChatIndexRoute
   '/_chat/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
@@ -296,6 +305,7 @@ export interface FileRouteTypes {
     | '/settings/snap-shot'
     | '/settings/source-control'
     | '/settings/storage'
+    | '/settings/tritonai-bot'
     | '/settings/usage'
     | '/$environmentId/$threadId'
     | '/draft/$draftId'
@@ -324,6 +334,7 @@ export interface FileRouteTypes {
     | '/settings/snap-shot'
     | '/settings/source-control'
     | '/settings/storage'
+    | '/settings/tritonai-bot'
     | '/settings/usage'
     | '/'
     | '/$environmentId/$threadId'
@@ -354,6 +365,7 @@ export interface FileRouteTypes {
     | '/settings/snap-shot'
     | '/settings/source-control'
     | '/settings/storage'
+    | '/settings/tritonai-bot'
     | '/settings/usage'
     | '/_chat/'
     | '/_chat/$environmentId/$threadId'
@@ -441,6 +453,13 @@ declare module '@tanstack/react-router' {
       path: '/storage'
       fullPath: '/settings/storage'
       preLoaderRoute: typeof SettingsStorageRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/tritonai-bot': {
+      id: '/settings/tritonai-bot'
+      path: '/tritonai-bot'
+      fullPath: '/settings/tritonai-bot'
+      preLoaderRoute: typeof SettingsTritonaiBotRouteImport
       parentRoute: typeof SettingsRoute
     }
     '/settings/source-control': {
@@ -604,6 +623,7 @@ interface SettingsRouteChildren {
   SettingsSnapShotRoute: typeof SettingsSnapShotRoute
   SettingsSourceControlRoute: typeof SettingsSourceControlRoute
   SettingsStorageRoute: typeof SettingsStorageRoute
+  SettingsTritonaiBotRoute: typeof SettingsTritonaiBotRoute
   SettingsUsageRoute: typeof SettingsUsageRoute
 }
 
@@ -623,6 +643,7 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsSnapShotRoute: SettingsSnapShotRoute,
   SettingsSourceControlRoute: SettingsSourceControlRoute,
   SettingsStorageRoute: SettingsStorageRoute,
+  SettingsTritonaiBotRoute: SettingsTritonaiBotRoute,
   SettingsUsageRoute: SettingsUsageRoute,
 }
 

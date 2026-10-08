@@ -2,6 +2,7 @@ import type { DotHandlingItem } from "./dotHandling";
 import { describe, expect, it, vi } from "vite-plus/test";
 import {
   DotApiError,
+  taskComputerNotice,
   draftAfterSend,
   DotClient,
   isRateableRun,
@@ -9,6 +10,7 @@ import {
   saveDotSession,
   runStatusLabel,
   type DotRun,
+  type DotState,
 } from "./dotClient";
 
 const session = {
@@ -416,5 +418,33 @@ describe("draftAfterSend", () => {
     expect(draftAfterSend("hello", "hello")).toBe("");
     expect(draftAfterSend("hello world", "hello")).toBe("world");
     expect(draftAfterSend("goodbye", "hello")).toBe("goodbye");
+  });
+});
+
+describe("taskComputerNotice", () => {
+  const state = (overrides: Partial<DotState> = {}, warn?: boolean): DotState => ({
+    user: {
+      userId: "u",
+      email: "owner@ucsd.edu",
+      ...(warn === undefined ? {} : { warnWhenTaskComputerOffline: warn }),
+    },
+    tasks: [],
+    runs: [],
+    approvals: [],
+    ...overrides,
+  });
+  const computer = { deviceName: "Office iMac", pairedAt: "2026-10-08T06:00:00.000Z" };
+
+  it("warns when no computer or an offline computer would run the work", () => {
+    expect(taskComputerNotice(state({ taskComputer: null }))).toContain("No computer is set");
+    expect(taskComputerNotice(state({ taskComputer: { ...computer, online: false } }))).toBe(
+      "Office iMac is offline, so approved work will wait until it checks in.",
+    );
+  });
+
+  it("stays quiet when online, turned off, or the bot predates task computers", () => {
+    expect(taskComputerNotice(state({ taskComputer: { ...computer, online: true } }))).toBeNull();
+    expect(taskComputerNotice(state({ taskComputer: null }, false))).toBeNull();
+    expect(taskComputerNotice(state())).toBeNull();
   });
 });

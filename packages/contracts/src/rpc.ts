@@ -301,6 +301,13 @@ import {
   ServerMemorySyncStartResult,
 } from "./memory.ts";
 import {
+  ServerBotTaskComputerAllowInput,
+  ServerBotTaskComputerError,
+  ServerBotTaskComputerProjectInput,
+  ServerBotTaskComputerStatus,
+  ServerBotTaskComputerStopInput,
+} from "./botTaskComputer.ts";
+import {
   ProjectCloneActionInput,
   ProjectCloneActionResult,
   ProjectCloneListEvent,
@@ -447,6 +454,10 @@ export const WS_METHODS = {
   serverSyncMemoryNow: "server.syncMemoryNow",
   serverStopMemorySync: "server.stopMemorySync",
   serverSignOutMemorySync: "server.signOutMemorySync",
+  serverGetBotTaskComputer: "server.getBotTaskComputer",
+  serverAllowBotTaskComputer: "server.allowBotTaskComputer",
+  serverStopBotTaskComputer: "server.stopBotTaskComputer",
+  serverSetBotTaskProject: "server.setBotTaskProject",
   serverDiscoverSourceControl: "server.discoverSourceControl",
   serverGetTraceDiagnostics: "server.getTraceDiagnostics",
   serverGetProcessDiagnostics: "server.getProcessDiagnostics",
@@ -785,6 +796,30 @@ const WsServerSignOutMemorySyncRpc = Rpc.make(WS_METHODS.serverSignOutMemorySync
   payload: Schema.Struct({}),
   success: ServerMemoryStatus,
   error: Schema.Union([ServerMemorySyncError, EnvironmentAuthorizationError]),
+});
+
+const WsServerGetBotTaskComputerRpc = Rpc.make(WS_METHODS.serverGetBotTaskComputer, {
+  payload: Schema.Struct({}),
+  success: ServerBotTaskComputerStatus,
+  error: EnvironmentAuthorizationError,
+});
+
+const WsServerAllowBotTaskComputerRpc = Rpc.make(WS_METHODS.serverAllowBotTaskComputer, {
+  payload: ServerBotTaskComputerAllowInput,
+  success: ServerBotTaskComputerStatus,
+  error: Schema.Union([ServerBotTaskComputerError, EnvironmentAuthorizationError]),
+});
+
+const WsServerStopBotTaskComputerRpc = Rpc.make(WS_METHODS.serverStopBotTaskComputer, {
+  payload: ServerBotTaskComputerStopInput,
+  success: ServerBotTaskComputerStatus,
+  error: Schema.Union([ServerBotTaskComputerError, EnvironmentAuthorizationError]),
+});
+
+const WsServerSetBotTaskProjectRpc = Rpc.make(WS_METHODS.serverSetBotTaskProject, {
+  payload: ServerBotTaskComputerProjectInput,
+  success: ServerBotTaskComputerStatus,
+  error: Schema.Union([ServerBotTaskComputerError, EnvironmentAuthorizationError]),
 });
 
 const WsServerDiscoverSourceControlRpc = Rpc.make(WS_METHODS.serverDiscoverSourceControl, {
@@ -1755,6 +1790,10 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerSyncMemoryNowRpc,
   WsServerStopMemorySyncRpc,
   WsServerSignOutMemorySyncRpc,
+  WsServerGetBotTaskComputerRpc,
+  WsServerAllowBotTaskComputerRpc,
+  WsServerStopBotTaskComputerRpc,
+  WsServerSetBotTaskProjectRpc,
   WsServerDiscoverSourceControlRpc,
   WsServerGetTraceDiagnosticsRpc,
   WsServerGetProcessDiagnosticsRpc,

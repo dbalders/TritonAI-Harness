@@ -181,6 +181,7 @@ import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import * as DailyMemory from "./memory/DailyMemory.ts";
 import * as MemorySync from "./memory/sync/MemorySync.ts";
+import * as BotTaskComputer from "./bot/BotTaskComputer.ts";
 import * as MicrosoftSignIn from "./memory/sync/microsoftSignIn.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
 import {
@@ -619,6 +620,8 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
 const RuntimeDependenciesLive = TritonAiCommonsAction.runtimeLayer.pipe(
   // Memory sync takes the summarizer's lock while it touches the vault.
   Layer.provideMerge(MemorySync.layer.pipe(Layer.provide(MicrosoftSignIn.layer))),
+  // Runs approved TritonAI Bot tasks as Harness threads when the owner allows this computer.
+  Layer.provideMerge(BotTaskComputer.layer),
   // Memory reads threads and calls text generation, so it sits above the core.
   Layer.provideMerge(DailyMemory.layer),
   Layer.provideMerge(RuntimeCoreDependenciesLive),

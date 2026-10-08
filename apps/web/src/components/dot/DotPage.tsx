@@ -20,6 +20,7 @@ import type { DotScheduledPrompt, DotScheduledPromptAction } from "./dotRoutines
 import {
   DOT_FEEDBACK_REASONS,
   DotApiError,
+  taskComputerNotice,
   DotClient,
   draftAfterSend,
   isRateableRun,
@@ -87,10 +88,17 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
   const saveSession = useCallback(
     (value: DotSession | null) => {
       saveDotSession(sessionStorage, serviceUrl, value);
+      const ownerChanged = activeOwner.current !== value?.ownerToken;
       activeOwner.current = value?.ownerToken;
       setSession(value);
-      if (!value) {
+      if (!value || ownerChanged) {
         setState(null);
+        setDraft("");
+        setSending(false);
+        setBusyApproval(null);
+        setBusyMemory(null);
+        setBusyPause(false);
+        setError(null);
         setConnected(false);
         pendingMessage.current = null;
         pendingPromptRuns.current.clear();
@@ -119,7 +127,7 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
   );
 
   const refresh = useCallback(async () => {
-    if (!session) return;
+    if (!session || activeOwner.current !== session.ownerToken) return;
     try {
       const result = await client.stateWithRunDetails(session, [...acceptedRunIds.current]);
       if (activeOwner.current !== session.ownerToken) return;
@@ -251,7 +259,7 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
     } catch (cause) {
       reportError(cause, session.ownerToken);
     } finally {
-      setSending(false);
+      if (activeOwner.current === session.ownerToken) setSending(false);
     }
   };
 
@@ -283,7 +291,7 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
     } catch (cause) {
       reportError(cause, session.ownerToken);
     } finally {
-      setBusyApproval(null);
+      if (activeOwner.current === session.ownerToken) setBusyApproval(null);
     }
   };
 
@@ -565,6 +573,13 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
                       {state?.approvals.map((approval) => (
                         <div key={approval.approvalId} className="mb-3 space-y-2 text-sm">
                           <p>{approval.summary}</p>
+                          {approval.action === "harness-task" &&
+                            state &&
+                            taskComputerNotice(state) && (
+                              <p className="text-xs text-muted-foreground">
+                                {taskComputerNotice(state)}
+                              </p>
+                            )}
                           <details>
                             <summary className="cursor-pointer text-muted-foreground">
                               Review action details

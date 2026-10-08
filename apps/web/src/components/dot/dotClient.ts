@@ -130,6 +130,16 @@ export function isRateableRun(run: DotRun): boolean {
   );
 }
 
+/** The one computer that runs approved Harness tasks. Any signed-in Harness can chat. */
+export interface DotTaskComputer {
+  readonly deviceId?: string;
+  readonly deviceName: string;
+  readonly platform?: string;
+  readonly pairedAt: string;
+  readonly lastSeenAt?: string;
+  readonly online: boolean;
+}
+
 export interface DotState {
   readonly streamId?: string;
   readonly dotMemory?: readonly DotMemory[];
@@ -138,7 +148,9 @@ export interface DotState {
     readonly email: string;
     readonly paused?: boolean;
     readonly controlVersion?: number;
+    readonly warnWhenTaskComputerOffline?: boolean;
   };
+  readonly taskComputer?: DotTaskComputer | null;
   readonly tasks: readonly DotTask[];
   readonly runs: readonly DotRun[];
   readonly approvals: readonly DotApproval[];
@@ -167,6 +179,20 @@ export interface PendingMessage {
   readonly requestId: string;
   readonly threadId: string;
   readonly text: string;
+}
+
+/**
+ * Why approved Harness work would wait, shown on reviews when the owner wants it.
+ * Matches the bot's own notice so Harness and Teams say the same thing.
+ */
+export function taskComputerNotice(state: DotState): string | null {
+  if (state.user.warnWhenTaskComputerOffline === false || state.taskComputer === undefined)
+    return null;
+  if (state.taskComputer === null)
+    return "No computer is set to run Harness tasks, so approved work will wait. Choose Allow in TritonAI Bot settings on the computer that should run it.";
+  if (!state.taskComputer.online)
+    return `${state.taskComputer.deviceName} is offline, so approved work will wait until it checks in.`;
+  return null;
 }
 
 export class DotApiError extends Error {
@@ -408,8 +434,19 @@ export class DotClient {
     });
   }
 
-  decide(session: DotSession, approvalId: string, approved: boolean): Promise<{ ok: boolean }> {
+  decide(
+    session: DotSession,
+    approvalId: string,
+    approved: boolean,
+  ): Promise<{ ok: boolean; summary?: string }> {
     return this.request(`/approvals/${encodeURIComponent(approvalId)}`, session, { approved });
+  }
+
+  updateSettings(
+    session: DotSession,
+    settings: { readonly warnWhenTaskComputerOffline: boolean },
+  ): Promise<{ user: DotState["user"] }> {
+    return this.request("/settings", session, settings);
   }
 
   /** Revokes this desktop session on the bot, so a copied token stops working too. Microsoft stays connected. */
