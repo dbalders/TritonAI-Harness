@@ -26,7 +26,7 @@ import {
   loadManagedSkillManifest,
   managedSkillManifestBlocksMutation,
 } from "./managedSkillManifest.ts";
-import { loadPublicSkillBundle } from "./publicSkillRepository.ts";
+import { PublicSkillRepository } from "./publicSkillRepository.ts";
 
 const GIT_CLONE_TIMEOUT_MS = 120_000;
 const MAX_BUNDLE_FILE_COUNT = 200;
@@ -268,9 +268,10 @@ function loadBundleForCatalogEntry(
 ): Effect.Effect<
   ServerProviderSkillBundleData,
   ServerProviderSkillInstallError,
-  HttpClient.HttpClient
+  PublicSkillRepository
 > {
-  return loadPublicSkillBundle({ id: catalogEntryId, revision }).pipe(
+  return PublicSkillRepository.pipe(
+    Effect.flatMap((repository) => repository.loadBundle({ id: catalogEntryId, revision })),
     Effect.flatMap(validateSkillBundle),
     Effect.flatMap((bundle) => {
       const expectedName = catalogEntryId.split("/")[1];
@@ -1281,7 +1282,11 @@ export const installProviderSkill = Effect.fn("installProviderSkill")(function* 
     readonly rollback: ProviderSkillInstallRollback;
   },
   ServerProviderSkillInstallError,
-  FileSystem.FileSystem | HttpClient.HttpClient | Path.Path | VcsProcess.VcsProcess
+  | FileSystem.FileSystem
+  | HttpClient.HttpClient
+  | Path.Path
+  | PublicSkillRepository
+  | VcsProcess.VcsProcess
 > {
   const request = yield* decodeInstallInput(input.request).pipe(
     Effect.mapError((error) =>
