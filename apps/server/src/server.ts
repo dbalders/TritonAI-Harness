@@ -109,6 +109,7 @@ import { ProviderRegistryLive } from "./provider/Layers/ProviderRegistry.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as ManagedProviderInstanceReferences from "./persistence/ManagedProviderInstanceReferences.ts";
 import * as SecureSkills from "./secureSkills.ts";
+import * as TritonAiFeedbackSkill from "./tritonAiFeedbackSkill.ts";
 import * as TritonAiCommonsAction from "./provider/TritonAiCommonsAction.ts";
 import * as NativeAppIconResolver from "./assets/NativeAppIconResolver.ts";
 import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
@@ -219,6 +220,9 @@ const ServerSettingsLayerLive = ServerSettings.layer.pipe(
 const SecureSkillsPollingLayerLive = Layer.effectDiscard(SecureSkills.pollingLayer).pipe(
   Layer.provide(ServerSettingsLayerLive),
 );
+const TritonAiFeedbackSkillSyncLayerLive = Layer.effectDiscard(
+  TritonAiFeedbackSkill.syncLayer,
+).pipe(Layer.provide(ServerSettingsLayerLive));
 
 const NativeTelemetryLayerLive = NativeTelemetryClient.layer.pipe(
   Layer.provide(ResourceMonitorBinary.layer),
@@ -628,6 +632,7 @@ const RuntimeDependenciesLive = TritonAiCommonsAction.runtimeLayer.pipe(
   Layer.provideMerge(RemoteOpenTargets.layer),
   Layer.provideMerge(ServerLifecycleEvents.layer),
   Layer.provideMerge(SecureSkillsPollingLayerLive),
+  Layer.provideMerge(TritonAiFeedbackSkillSyncLayerLive),
   Layer.provide(NetService.layer),
 );
 
