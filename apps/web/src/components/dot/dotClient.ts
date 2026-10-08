@@ -62,6 +62,8 @@ export interface PendingConnection {
   readonly expiresAt: number;
   readonly verificationUrl: string;
   readonly userCode: string;
+  /** Desktop loopback address that receives the bot's one-time return code. */
+  readonly redirectUri?: string;
 }
 
 export interface PendingMessage {
@@ -151,7 +153,7 @@ export class DotClient {
     return payload;
   }
 
-  async startConnection(): Promise<PendingConnection> {
+  async startConnection(redirectUri?: string): Promise<PendingConnection> {
     const codeVerifier = base64Url(crypto.getRandomValues(new Uint8Array(48)));
     const codeChallenge = base64Url(
       new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(codeVerifier))),
@@ -159,20 +161,31 @@ export class DotClient {
     const response = await this.request<Omit<PendingConnection, "codeVerifier">>(
       "/client/connect/start",
       null,
-      { codeChallenge },
+      redirectUri ? { codeChallenge, redirectUri } : { codeChallenge },
     );
     if (new URL(response.verificationUrl).origin !== new URL(this.baseUrl).origin)
       throw new Error("The sign-in address does not match your bot.");
-    return { ...response, codeVerifier };
+    // Older bots ignore the redirect and expect browser confirmation instead.
+    const { redirectUri: accepted, ...pending } = response;
+    return accepted && accepted === redirectUri
+      ? { ...pending, codeVerifier, redirectUri }
+      : { ...pending, codeVerifier };
   }
 
-  async pollConnection(connection: PendingConnection): Promise<DotSession | null> {
+  async pollConnection(
+    connection: PendingConnection,
+    returnCode?: string,
+  ): Promise<DotSession | null> {
     if (connection.expiresAt <= Date.now() / 1000)
       throw new Error("Sign-in expired. Please try again.");
     const response = await this.request<DotSession & { pending?: boolean }>(
       "/client/connect/token",
       null,
-      { requestId: connection.requestId, codeVerifier: connection.codeVerifier },
+      {
+        requestId: connection.requestId,
+        codeVerifier: connection.codeVerifier,
+        ...(returnCode ? { returnCode } : {}),
+      },
     );
     return response.pending
       ? null

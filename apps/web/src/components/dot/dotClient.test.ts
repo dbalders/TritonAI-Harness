@@ -94,6 +94,43 @@ describe("DotClient", () => {
     );
   });
 
+  it("uses the loopback return only when the bot accepts it", async () => {
+    const mock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        Response.json({
+          ok: true,
+          requestId: "request",
+          verificationUrl: "https://bot.example.test/client/connect?requestId=request",
+          userCode: "ABCD1234",
+          expiresAt: Date.now() / 1000 + 300,
+          redirectUri: "http://127.0.0.1:53682/dot/callback",
+        }),
+      )
+      .mockResolvedValueOnce(Response.json({ ok: true, ...session }))
+      .mockResolvedValueOnce(
+        Response.json({
+          ok: true,
+          requestId: "legacy",
+          verificationUrl: "https://bot.example.test/client/connect?requestId=legacy",
+          userCode: "ABCD1234",
+          expiresAt: Date.now() / 1000 + 300,
+        }),
+      );
+    const client = new DotClient("https://bot.example.test", mock);
+    const redirectUri = "http://127.0.0.1:53682/dot/callback";
+    const connection = await client.startConnection(redirectUri);
+    expect(connection.redirectUri).toBe(redirectUri);
+    expect(JSON.parse(String(mock.mock.calls[0]?.[1]?.body)).redirectUri).toBe(redirectUri);
+    expect(await client.pollConnection(connection, "return-code")).toEqual(session);
+    expect(JSON.parse(String(mock.mock.calls[1]?.[1]?.body))).toEqual({
+      requestId: "request",
+      codeVerifier: connection.codeVerifier,
+      returnCode: "return-code",
+    });
+    expect((await client.startConnection(redirectUri)).redirectUri).toBeUndefined();
+  });
+
   it("expires sessions before dispatch, reports authentication failures, and sends boolean denials", async () => {
     const mock = vi
       .fn<typeof fetch>()

@@ -42,6 +42,7 @@ export function DotPage() {
   const pendingMessage = useRef<PendingMessage | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const activeOwner = useRef(session?.ownerToken);
+  const mounted = useRef(true);
 
   const saveSession = useCallback((value: DotSession | null) => {
     saveDotSession(sessionStorage, DOT_API_URL, value);
@@ -52,6 +53,13 @@ export function DotPage() {
       setConnected(false);
       pendingMessage.current = null;
     }
+  }, []);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
   }, []);
 
   const reportError = useCallback(
@@ -94,9 +102,17 @@ export function DotPage() {
     if (!connection) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout>;
+    const awaitDotSignIn = window.desktopBridge?.awaitDotSignIn;
     const poll = async () => {
       try {
-        const result = await client.pollConnection(connection);
+        let result: DotSession | null;
+        if (connection.redirectUri && awaitDotSignIn) {
+          const returned = await awaitDotSignIn(connection.redirectUri);
+          if (cancelled) return;
+          if (returned?.requestId !== connection.requestId)
+            throw new Error("Sign-in expired. Please try again.");
+          result = await client.pollConnection(connection, returned.code);
+        } else result = await client.pollConnection(connection);
         if (cancelled) return;
         if (result) {
           saveSession(result);
@@ -114,19 +130,27 @@ export function DotPage() {
     return () => {
       cancelled = true;
       clearTimeout(timer);
+      if (connection.redirectUri)
+        void window.desktopBridge?.cancelDotSignIn?.(connection.redirectUri);
     };
   }, [connection, reportError, saveSession]);
 
   const signIn = async () => {
     setConnecting(true);
     setError(null);
+    // Owned here until the connection effect takes it over.
+    let listener: string | undefined;
     try {
-      const pending = await client.startConnection();
+      listener = await window.desktopBridge?.startDotSignIn?.();
+      const pending = await client.startConnection(listener);
+      if (!mounted.current) return;
+      if (pending.redirectUri) listener = undefined;
       setConnection(pending);
       await ensureLocalApi().shell.openExternal(pending.verificationUrl);
     } catch (cause) {
       reportError(cause);
     } finally {
+      if (listener) void window.desktopBridge?.cancelDotSignIn?.(listener);
       setConnecting(false);
     }
   };
@@ -233,10 +257,16 @@ export function DotPage() {
               </p>
               {connection ? (
                 <>
-                  <p className="text-sm">Confirm this code in the sign-in page:</p>
-                  <p className="font-mono text-2xl tracking-widest">{connection.userCode}</p>
+                  {connection.redirectUri ? null : (
+                    <>
+                      <p className="text-sm">Confirm this code in the sign-in page:</p>
+                      <p className="font-mono text-2xl tracking-widest">{connection.userCode}</p>
+                    </>
+                  )}
                   <p role="status" className="text-sm text-muted-foreground">
-                    Waiting for you to connect…
+                    {connection.redirectUri
+                      ? "Finish signing in with UC San Diego in your browser…"
+                      : "Waiting for you to connect…"}
                   </p>
                   <Button
                     variant="outline"
