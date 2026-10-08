@@ -51,6 +51,15 @@ from pathlib import Path
 receipt_path = Path('ci_scripts/stable-source.json') if os.environ['APP_VARIANT'] == 'production' else Path('ci_scripts/nightly-source.json')
 receipt = json.loads(receipt_path.read_text())
 print(f"Mobile source: {receipt['tag']} ({receipt['sourceSha']})")
+if receipt.get('marketingVersion'):
+    if not re.fullmatch(r'\d+\.\d+\.\d+', receipt['marketingVersion']):
+        raise ValueError('Invalid stable marketing version')
+    # Expo embeds this configuration in the JS bundle used by About and diagnostics.
+    config = Path('../app.config.ts')
+    contents, count = re.subn(r'(version:\s*")\d+\.\d+\.\d+(")', lambda match: match[1] + receipt['marketingVersion'] + match[2], config.read_text())
+    if count != 1:
+        raise ValueError('Expected one mobile marketing version in app.config.ts')
+    config.write_text(contents)
 native_name = 'TritonAIHarness' if os.environ['APP_VARIANT'] == 'production' else 'TritonAIHarnessPreview'
 build_number = os.environ['CI_BUILD_NUMBER']
 if not build_number.isdigit():
@@ -60,12 +69,18 @@ for target in [native_name, 'ExpoWidgetsTarget', 'expo-sharing-extension']:
     with path.open('rb') as file:
         info = plistlib.load(file)
     info['CFBundleVersion'] = build_number
+    if receipt.get('marketingVersion'):
+        if not re.fullmatch(r'\d+\.\d+\.\d+', receipt['marketingVersion']):
+            raise ValueError('Invalid stable marketing version')
+        info['CFBundleShortVersionString'] = receipt['marketingVersion']
     with path.open('wb') as file:
         plistlib.dump(info, file)
 project = Path(f'{native_name}.xcodeproj/project.pbxproj')
 contents, count = re.subn(r'(CURRENT_PROJECT_VERSION\s*=\s*)[^;]+;', lambda match: match[1] + build_number + ';', project.read_text())
 if count < 6:
     raise ValueError('Expected build numbers for all three targets in Debug and Release')
+if receipt.get('marketingVersion'):
+    contents = re.sub(r'(MARKETING_VERSION\s*=\s*)[^;]+;', lambda match: match[1] + receipt['marketingVersion'] + ';', contents)
 project.write_text(contents)
 PY
 

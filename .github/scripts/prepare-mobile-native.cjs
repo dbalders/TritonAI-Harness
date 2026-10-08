@@ -2,9 +2,19 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 
-function prepareMobileNative({ root, tag, sourceSha, generatorSha, variant = "preview" }) {
+function prepareMobileNative({
+  root,
+  tag,
+  sourceSha,
+  generatorSha,
+  variant = "preview",
+  marketingVersion,
+}) {
   if (!["preview", "production"].includes(variant)) throw new Error("Unsupported mobile variant");
   const isProduction = variant === "production";
+  if (marketingVersion && (!isProduction || !/^\d+\.\d+\.\d+$/.test(marketingVersion))) {
+    throw new Error("Marketing version must be a production three-part version");
+  }
   const nativeName = isProduction ? "TritonAIHarness" : "TritonAIHarnessPreview";
   const bundleId = `edu.ucsd.tritonai.harness${isProduction ? "" : ".preview"}`;
   const validTag = isProduction
@@ -62,7 +72,7 @@ function prepareMobileNative({ root, tag, sourceSha, generatorSha, variant = "pr
   fs.chmodSync(hook, 0o755);
   fs.writeFileSync(
     path.join(scripts, isProduction ? "stable-source.json" : "nightly-source.json"),
-    `${JSON.stringify({ tag, sourceSha, generatorSha, ...(isProduction ? { variant } : {}) }, null, 2)}\n`,
+    `${JSON.stringify({ tag, sourceSha, generatorSha, ...(isProduction ? { variant } : {}), ...(marketingVersion ? { marketingVersion } : {}) }, null, 2)}\n`,
   );
 
   const workspace = path.join(ios, `${nativeName}.xcworkspace`);
@@ -130,6 +140,8 @@ function prepareMobileNative({ root, tag, sourceSha, generatorSha, variant = "pr
 
 module.exports = { prepareMobileNative };
 if (require.main === module) {
-  const [root, tag, sourceSha, generatorSha, variant] = process.argv.slice(2);
-  console.log(prepareMobileNative({ root, tag, sourceSha, generatorSha, variant }));
+  const [root, tag, sourceSha, generatorSha, variant, marketingVersion] = process.argv.slice(2);
+  console.log(
+    prepareMobileNative({ root, tag, sourceSha, generatorSha, variant, marketingVersion }),
+  );
 }
