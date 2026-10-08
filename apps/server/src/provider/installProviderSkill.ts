@@ -199,7 +199,10 @@ function installSourceTooLarge(url: string) {
   );
 }
 
-function readLimitedInstallText(url: string, response: HttpClientResponse.HttpClientResponse) {
+export function readLimitedInstallText(
+  url: string,
+  response: HttpClientResponse.HttpClientResponse,
+) {
   const contentLength = parseContentLengthHeader(response.headers["content-length"]);
   if (contentLength !== null && contentLength > MAX_INSTALL_SOURCE_BYTES) {
     return installSourceTooLarge(url);
@@ -373,7 +376,7 @@ function validateBundlePath(
   return Effect.succeed(parts.join("/"));
 }
 
-function extractFrontmatter(
+export function extractFrontmatter(
   content: string,
 ): Effect.Effect<
   { readonly name: string; readonly description?: string },

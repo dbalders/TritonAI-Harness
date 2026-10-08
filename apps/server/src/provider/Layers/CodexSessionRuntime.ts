@@ -22,6 +22,7 @@ import {
   UCSD_AI_BASE_URL_ENV,
 } from "@t3tools/contracts";
 import { normalizeModelSlug } from "@t3tools/shared/model";
+import { rewriteTritonAiFeedbackCommand } from "@t3tools/shared/tritonAiFeedback";
 import * as NodeCrypto from "node:crypto";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -1063,13 +1064,14 @@ export function buildTurnStartParams(input: {
   CodexErrors.CodexAppServerProtocolParseError
 > {
   const turnInput: Array<EffectCodexSchema.V2TurnStartParams__UserInput> = [];
-  if (input.prompt) {
+  const prompt = input.prompt ? rewriteTritonAiFeedbackCommand(input.prompt) : undefined;
+  if (prompt) {
     turnInput.push({
       type: "text",
-      text: input.prompt.replace(SKILL_MENTION_PATTERN, "$1$$$2"),
+      text: prompt.replace(SKILL_MENTION_PATTERN, "$1$$$2"),
     });
     const selectedNames = new Set(
-      [...input.prompt.matchAll(/(?:^|\s)\$([a-z][a-z0-9-]{0,63})\b/gu)].map((match) => match[1]),
+      [...prompt.matchAll(/(?:^|\s)\$([a-z][a-z0-9-]{0,63})\b/gu)].map((match) => match[1]),
     );
     for (const skill of input.pluginSkills ?? []) {
       if (!selectedNames.has(skill.name)) continue;

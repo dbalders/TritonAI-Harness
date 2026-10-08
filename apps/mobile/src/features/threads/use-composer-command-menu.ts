@@ -14,6 +14,7 @@ import {
   readComposerDraftSelection,
   setComposerDraftContext,
 } from "../../state/use-composer-drafts";
+import { OPENAI_FEEDBACK_COMMAND_NAME } from "@t3tools/shared/tritonAiFeedback";
 import { USAGE_LIMITS_COMMAND } from "@t3tools/shared/usageLimits";
 import {
   detectComposerTrigger,
@@ -106,7 +107,7 @@ export function buildComposerSlashCommandItems(input: {
     if (
       !input.hasThread &&
       input.selectedProviderStatus?.driver === "codex" &&
-      command.name === "feedback"
+      command.name === OPENAI_FEEDBACK_COMMAND_NAME
     ) {
       continue;
     }

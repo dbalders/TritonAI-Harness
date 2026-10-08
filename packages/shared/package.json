@@ -335,6 +335,10 @@
       "types": "./src/usageLimits.ts",
       "import": "./src/usageLimits.ts"
     },
+    "./tritonAiFeedback": {
+      "types": "./src/tritonAiFeedback.ts",
+      "import": "./src/tritonAiFeedback.ts"
+    },
     "./desktopAppControl": {
       "types": "./src/desktopAppControl.ts",
       "import": "./src/desktopAppControl.ts"

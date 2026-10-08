@@ -12,31 +12,35 @@ import {
 
 describe("parseCodexFeedbackCommand", () => {
   it("accepts feedback without a reason", () => {
-    expect(parseCodexFeedbackCommand(" /feedback ")).toEqual({});
+    expect(parseCodexFeedbackCommand(" /openai-feedback ")).toEqual({});
   });
 
   it("preserves a feedback description", () => {
-    expect(parseCodexFeedbackCommand("/feedback The agent stopped early.")).toEqual({
+    expect(parseCodexFeedbackCommand("/openai-feedback The agent stopped early.")).toEqual({
       reason: "The agent stopped early.",
     });
   });
 
   it("accepts mixed-case feedback commands", () => {
-    expect(parseCodexFeedbackCommand("/Feedback Retry failed.")).toEqual({
+    expect(parseCodexFeedbackCommand("/OpenAI-Feedback Retry failed.")).toEqual({
       reason: "Retry failed.",
     });
   });
 
   it("ignores other slash commands and ordinary messages", () => {
-    expect(parseCodexFeedbackCommand("/feedback-status")).toBeNull();
-    expect(parseCodexFeedbackCommand("Please send /feedback")).toBeNull();
+    expect(parseCodexFeedbackCommand("/openai-feedback-status")).toBeNull();
+    expect(parseCodexFeedbackCommand("Please send /openai-feedback")).toBeNull();
+  });
+
+  it("leaves /feedback for the TritonAI feedback skill", () => {
+    expect(parseCodexFeedbackCommand("/feedback The agent stopped early.")).toBeNull();
   });
 });
 
 describe("submitCodexFeedback", () => {
   const submission = {
     id: MessageId.make("feedback-message-1"),
-    command: "/feedback The agent stopped early.",
+    command: "/openai-feedback The agent stopped early.",
     createdAt: "2026-08-23T00:00:00.000Z",
   } as const;
 

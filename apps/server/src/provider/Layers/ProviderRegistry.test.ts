@@ -476,6 +476,11 @@ it.layer(Layer.mergeAll(TestNodeServices, ServerSettingsModule.layerTest(), Test
           assert.deepStrictEqual(status.slashCommands.slice(1), [
             {
               name: "feedback",
+              description: "Report a problem or idea to the TritonAI team",
+              input: { hint: "Describe the problem or idea (optional)" },
+            },
+            {
+              name: "openai-feedback",
               description: "Send this thread and Codex logs to OpenAI",
               input: { hint: "Describe the issue (optional)" },
             },
