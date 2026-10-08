@@ -1,0 +1,56 @@
+name: Mobile Stable App Review
+
+# GitHub-owned reconciliation continues after Xcode Cloud and Apple review finish.
+# A release published with GITHUB_TOKEN may not emit a release event; the schedule
+# also discovers it. Never dispatches a main/nightly build or withdraws a review.
+on:
+  release:
+    types: [published]
+  schedule:
+    - cron: "17,47 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mobile-stable-app-review
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    name: Submit newest eligible stable iOS build
+    if: vars.IOS_APP_REVIEW_AUTOMATION == 'true' && (github.event_name != 'release' || github.event.release.prerelease == false)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout trusted automation
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+
+      - name: Reconcile Xcode Cloud and Apple review
+        uses: actions/github-script@v8
+        env:
+          ASC_KEY_TYPE: ${{ vars.IOS_APP_STORE_KEY_TYPE || 'team' }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+          FIRST_TAG: ${{ vars.IOS_APP_REVIEW_FIRST_TAG }}
+          RELEASE_AFTER_APPROVAL: ${{ vars.IOS_RELEASE_AFTER_APPROVAL }}
+        with:
+          script: |
+            const { appleClient, reconcile } = require('./.github/scripts/stable-ios-review.cjs');
+            const apple = appleClient({
+              keyType: process.env.ASC_KEY_TYPE,
+              keyId: process.env.ASC_KEY_ID,
+              issuerId: process.env.ASC_ISSUER_ID,
+              privateKey: process.env.ASC_PRIVATE_KEY,
+            });
+            await reconcile({
+              github, context, apple, firstTag: process.env.FIRST_TAG,
+              releaseAfterApproval: process.env.RELEASE_AFTER_APPROVAL === 'true',
+              summary: core.summary, log: core.info,
+            });
