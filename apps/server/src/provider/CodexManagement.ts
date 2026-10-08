@@ -4,6 +4,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ServerInstallProviderSkillInput,
+  type ServerListProviderSkillCatalogInput,
   ServerMarketplaceAddInput,
   ServerMarketplaceRemoveInput,
   ServerMarketplaceUpgradeInput,
@@ -49,7 +50,7 @@ import {
   loadManagedSkillManifest,
   managedSkillManifestBlocksMutation,
 } from "./managedSkillManifest.ts";
-import { discoverPublicSkillCatalog } from "./publicSkillRepository.ts";
+import { PublicSkillRepository } from "./publicSkillRepository.ts";
 import { isProtectedLocalSkillPathForCommons } from "./tritonAiCommons.ts";
 import { listTritonAiCommonsSubmissionReceipts } from "./tritonAiCommonsReceipts.ts";
 import {
@@ -645,7 +646,9 @@ export const loadProviderSkillForCommonsSubmission = Effect.fn(
   return { bundle, skillPath: skill.path };
 });
 
-export const listProviderSkillCatalog = Effect.fn("listProviderSkillCatalog")(function* () {
+export const listProviderSkillCatalog = Effect.fn("listProviderSkillCatalog")(function* (
+  input: ServerListProviderSkillCatalogInput = {},
+) {
   const config = yield* ServerConfig.ServerConfig;
   const target = yield* resolveCodexManagementTarget().pipe(Effect.result);
   const path = yield* Path.Path;
@@ -657,7 +660,12 @@ export const listProviderSkillCatalog = Effect.fn("listProviderSkillCatalog")(fu
           status: "unknown" as const,
           warning: "The managed secure skills manifest could not be located.",
         };
-  const catalog = yield* discoverPublicSkillCatalog().pipe(Effect.result);
+  const publicSkills = yield* PublicSkillRepository;
+  const catalog = yield* (
+    input.refresh
+      ? publicSkills.refreshCatalog({ force: input.refresh === "force" })
+      : publicSkills.readCatalog
+  ).pipe(Effect.result);
   const commonsSubmissionRead = yield* listTritonAiCommonsSubmissionReceipts(config.stateDir).pipe(
     Effect.result,
   );
@@ -674,7 +682,10 @@ export const listProviderSkillCatalog = Effect.fn("listProviderSkillCatalog")(fu
       commonsSubmissionRead._tag === "Success" ? commonsSubmissionRead.success : [],
     ...(managed.warning ? { managedManifestWarning: managed.warning } : {}),
     ...(catalog._tag === "Success"
-      ? { catalog: catalog.success }
+      ? {
+          catalog: catalog.success.catalog,
+          ...(catalog.success.stale ? { catalogStale: true } : {}),
+        }
       : {
           unavailableReason:
             "TritonAI Commons is unavailable. Check your internet connection and retry.",

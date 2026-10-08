@@ -58,6 +58,7 @@ import { ProviderSessionDirectoryLive } from "./provider/Layers/ProviderSessionD
 import * as ProviderSessionRuntime from "./persistence/ProviderSessionRuntime.ts";
 import { ProviderAdapterRegistryLive } from "./provider/Layers/ProviderAdapterRegistry.ts";
 import * as ModelManifest from "./provider/ModelManifest.ts";
+import * as PublicSkillRepository from "./provider/publicSkillRepository.ts";
 import * as ResetCreditCoordinator from "./provider/Layers/resetCreditCoordinator.ts";
 import * as ProviderEventLoggers from "./provider/Layers/ProviderEventLoggers.ts";
 import { ProviderServiceLive } from "./provider/Layers/ProviderService.ts";
@@ -109,6 +110,7 @@ import { ProviderRegistryLive } from "./provider/Layers/ProviderRegistry.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as ManagedProviderInstanceReferences from "./persistence/ManagedProviderInstanceReferences.ts";
 import * as SecureSkills from "./secureSkills.ts";
+import * as TritonAiFeedbackSkill from "./tritonAiFeedbackSkill.ts";
 import * as TritonAiCommonsAction from "./provider/TritonAiCommonsAction.ts";
 import * as NativeAppIconResolver from "./assets/NativeAppIconResolver.ts";
 import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
@@ -219,6 +221,9 @@ const ServerSettingsLayerLive = ServerSettings.layer.pipe(
 const SecureSkillsPollingLayerLive = Layer.effectDiscard(SecureSkills.pollingLayer).pipe(
   Layer.provide(ServerSettingsLayerLive),
 );
+const TritonAiFeedbackSkillSyncLayerLive = Layer.effectDiscard(
+  TritonAiFeedbackSkill.syncLayer,
+).pipe(Layer.provide(ServerSettingsLayerLive));
 
 const NativeTelemetryLayerLive = NativeTelemetryClient.layer.pipe(
   Layer.provide(ResourceMonitorBinary.layer),
@@ -587,7 +592,12 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   // from the repo's `model-manifest.json` on `main` and applied by the
   // Codex/Claude drivers.
   Layer.provideMerge(
-    Layer.mergeAll(ProviderEventLoggers.layer, ModelManifest.layer, ResetCreditCoordinator.layer),
+    Layer.mergeAll(
+      ProviderEventLoggers.layer,
+      ModelManifest.layer,
+      PublicSkillRepository.layer,
+      ResetCreditCoordinator.layer,
+    ),
   ),
   // `OpenCodeDriver.create()` yields `OpenCodeRuntime`; previously the old
   // `ProviderRegistryLive` pulled `OpenCodeRuntimeLive` in for itself, but
@@ -628,6 +638,7 @@ const RuntimeDependenciesLive = TritonAiCommonsAction.runtimeLayer.pipe(
   Layer.provideMerge(RemoteOpenTargets.layer),
   Layer.provideMerge(ServerLifecycleEvents.layer),
   Layer.provideMerge(SecureSkillsPollingLayerLive),
+  Layer.provideMerge(TritonAiFeedbackSkillSyncLayerLive),
   Layer.provide(NetService.layer),
 );
 

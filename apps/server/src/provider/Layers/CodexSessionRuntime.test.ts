@@ -538,6 +538,20 @@ describe("buildTurnStartParams", () => {
     }),
   );
 
+  it.effect("routes /feedback to the TritonAI feedback skill", () =>
+    Effect.gen(function* () {
+      const params = yield* buildTurnStartParams({
+        threadId: "provider-thread-1",
+        runtimeMode: "full-access",
+        prompt: "/feedback The agent stopped early.",
+      });
+
+      NodeAssert.deepEqual(params.input, [
+        { type: "text", text: "$tritonai-feedback The agent stopped early." },
+      ]);
+    }),
+  );
+
   it("keeps invalid turn values only in the schema cause", () => {
     const secret = "codex-turn-input-secret-sentinel";
     const error = Effect.runSync(

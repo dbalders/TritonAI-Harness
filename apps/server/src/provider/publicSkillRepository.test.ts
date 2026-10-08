@@ -1,13 +1,23 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
+import { ServerProviderSkillCatalog } from "@t3tools/contracts";
+
+import * as ServerConfig from "../config.ts";
 import {
+  layer,
   make,
+  type PublicSkillCatalogSnapshotStore,
   PublicSkillRepository,
   type PublicSkillRepositoryOptions,
 } from "./publicSkillRepository.ts";
@@ -43,7 +53,13 @@ function repositoryLayer(input?: {
   readonly currentRevision?: () => string;
   readonly currentTree?: () => string;
   readonly failResolveAttempts?: number;
+  readonly failResolveAttempt?: number;
   readonly hangResolve?: boolean;
+  /** Holds the first commit lookup, answered with the revision current when it arrived. */
+  readonly holdFirstResolve?: {
+    readonly arrived: Deferred.Deferred<void>;
+    readonly release: Deferred.Deferred<void>;
+  };
   readonly rateLimitOnce?: boolean;
   readonly symlink?: boolean;
   readonly truncated?: boolean;
@@ -88,13 +104,30 @@ function repositoryLayer(input?: {
       if (url.pathname.includes("/commits/")) {
         if (input?.hangResolve) return Effect.never;
         resolveAttempts += 1;
+        const hold = input?.holdFirstResolve;
+        if (hold && resolveAttempts === 1) {
+          const held = HttpClientResponse.fromWeb(
+            request,
+            Response.json({
+              sha: input?.currentRevision?.() ?? REVISION,
+              commit: { tree: { sha: input?.currentTree?.() ?? TREE_SHA } },
+            }),
+          );
+          return Deferred.succeed(hold.arrived, undefined).pipe(
+            Effect.andThen(Deferred.await(hold.release)),
+            Effect.as(held),
+          );
+        }
         if (input?.rateLimitOnce && !rateLimited) {
           rateLimited = true;
           response = new Response("rate limited", {
             status: 403,
             headers: { "retry-after": "60", "x-ratelimit-remaining": "0" },
           });
-        } else if (resolveAttempts <= (input?.failResolveAttempts ?? 0)) {
+        } else if (
+          resolveAttempts <= (input?.failResolveAttempts ?? 0) ||
+          resolveAttempts === input?.failResolveAttempt
+        ) {
           response = new Response("offline", { status: 503 });
         } else {
           response = Response.json({
@@ -128,6 +161,40 @@ function publicSkillRepositoryLayer(
     Layer.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env }))),
   );
 }
+
+const SAVED_CATALOG: ServerProviderSkillCatalog = {
+  version: 1,
+  repositoryUrl: "https://github.com/dbalders/UCSD-Skills-Library",
+  revision: SECOND_REVISION,
+  fetchedAt: "2026-10-01T00:00:00.000Z",
+  entries: [],
+};
+
+function memorySnapshot(initial: ServerProviderSkillCatalog | null) {
+  const written: ServerProviderSkillCatalog[] = [];
+  const store: PublicSkillCatalogSnapshotStore = {
+    read: Effect.succeed(initial),
+    write: (catalog) => Effect.sync(() => void written.push(catalog)),
+  };
+  return { store, written };
+}
+
+/** Dependencies of the production `layer`, which reads the state dir as it starts. */
+function stateDirDependencies(repository: Parameters<typeof repositoryLayer>[0] = {}) {
+  return ServerConfig.layerTest(process.cwd(), { prefix: "t3-public-skills-" }).pipe(
+    Layer.provideMerge(NodeServices.layer),
+    Layer.provideMerge(repositoryLayer(repository)),
+    Layer.provideMerge(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} }))),
+  );
+}
+
+const CatalogJson = Schema.fromJsonString(ServerProviderSkillCatalog);
+
+const snapshotFilePath = Effect.gen(function* () {
+  const config = yield* ServerConfig.ServerConfig;
+  const path = yield* Path.Path;
+  return path.join(config.stateDir, "public-skill-catalog.json");
+});
 
 describe("public skill repository", () => {
   it.effect("discovers catalog skills over HTTPS at one exact main revision", () => {
@@ -316,4 +383,225 @@ describe("public skill repository", () => {
       expect(error.message).toContain("cannot contain symlinks");
     }).pipe(Effect.provide(publicSkillRepositoryLayer({ symlink: true }))),
   );
+
+  it.effect("serves the saved catalog without waiting on GitHub", () => {
+    const snapshot = memorySnapshot(SAVED_CATALOG);
+    return Effect.gen(function* () {
+      const repository = yield* PublicSkillRepository;
+      const read = yield* repository.readCatalog;
+
+      expect(read).toEqual({ catalog: SAVED_CATALOG, stale: true });
+    }).pipe(
+      Effect.provide(
+        publicSkillRepositoryLayer(
+          { hangResolve: true },
+          { githubToken: null, snapshot: snapshot.store },
+        ),
+      ),
+    );
+  });
+
+  it.effect("replaces and saves the catalog after a refresh", () => {
+    const calls: RepositoryCall[] = [];
+    const snapshot = memorySnapshot(SAVED_CATALOG);
+    return Effect.gen(function* () {
+      const repository = yield* PublicSkillRepository;
+      const saved = yield* repository.readCatalog;
+      const refreshed = yield* repository.refreshCatalog();
+      const next = yield* repository.readCatalog;
+
+      expect(saved.catalog.revision).toBe(SECOND_REVISION);
+      expect(refreshed.stale).toBe(false);
+      expect(refreshed.catalog.revision).toBe(REVISION);
+      expect(next).toEqual(refreshed);
+      expect(snapshot.written.map((catalog) => catalog.revision)).toEqual([REVISION]);
+      expect(calls.filter((call) => call.url.endsWith("/commits/main"))).toHaveLength(1);
+    }).pipe(
+      Effect.provide(
+        publicSkillRepositoryLayer({ calls }, { githubToken: null, snapshot: snapshot.store }),
+      ),
+    );
+  });
+
+  it.effect("keeps the saved catalog when a refresh fails", () => {
+    const snapshot = memorySnapshot(SAVED_CATALOG);
+    return Effect.gen(function* () {
+      const repository = yield* PublicSkillRepository;
+      const refreshed = yield* repository.refreshCatalog();
+
+      expect(refreshed).toEqual({ catalog: SAVED_CATALOG, stale: true });
+      expect(snapshot.written).toEqual([]);
+    }).pipe(
+      Effect.provide(
+        publicSkillRepositoryLayer(
+          { failResolveAttempts: 1 },
+          { githubToken: null, snapshot: snapshot.store },
+        ),
+      ),
+    );
+  });
+
+  it.effect("waits for GitHub on the first read when nothing is saved", () => {
+    const calls: RepositoryCall[] = [];
+    return Effect.gen(function* () {
+      const repository = yield* PublicSkillRepository;
+      const first = yield* repository.readCatalog;
+      const second = yield* repository.readCatalog;
+
+      expect(first.stale).toBe(false);
+      expect(first.catalog.revision).toBe(REVISION);
+      expect(second).toEqual(first);
+      expect(calls).toHaveLength(4);
+    }).pipe(Effect.provide(publicSkillRepositoryLayer({ calls })));
+  });
+
+  it.effect("saves a refreshed catalog in the state directory", () =>
+    Effect.gen(function* () {
+      const repository = yield* PublicSkillRepository;
+      const fileSystem = yield* FileSystem.FileSystem;
+      yield* repository.refreshCatalog();
+
+      const saved = yield* Schema.decodeEffect(CatalogJson)(
+        yield* fileSystem.readFileString(yield* snapshotFilePath),
+      );
+      expect(saved.revision).toBe(REVISION);
+      expect(saved.entries).toHaveLength(2);
+    }).pipe(Effect.provide(layer.pipe(Layer.provideMerge(stateDirDependencies())))),
+  );
+
+  it.effect("restores the catalog saved by an earlier run", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      yield* fileSystem.writeFileString(
+        yield* snapshotFilePath,
+        yield* Schema.encodeEffect(CatalogJson)(SAVED_CATALOG),
+      );
+      const read = yield* PublicSkillRepository.pipe(
+        Effect.flatMap((repository) => repository.readCatalog),
+        Effect.provide(layer),
+      );
+
+      expect(read).toEqual({ catalog: SAVED_CATALOG, stale: true });
+    }).pipe(Effect.provide(stateDirDependencies({ hangResolve: true }))),
+  );
+
+  it.effect("ignores an unreadable saved catalog", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      yield* fileSystem.writeFileString(yield* snapshotFilePath, "{ not a catalog");
+      const read = yield* PublicSkillRepository.pipe(
+        Effect.flatMap((repository) => repository.readCatalog),
+        Effect.provide(layer),
+      );
+
+      expect(read.stale).toBe(false);
+      expect(read.catalog.revision).toBe(REVISION);
+    }).pipe(Effect.provide(stateDirDependencies())),
+  );
+
+  it.effect("checks GitHub as soon as the service starts", () => {
+    const written = Deferred.makeUnsafe<ServerProviderSkillCatalog>();
+    const store: PublicSkillCatalogSnapshotStore = {
+      read: Effect.succeed(SAVED_CATALOG),
+      write: (catalog) => Deferred.succeed(written, catalog).pipe(Effect.asVoid),
+    };
+    return Effect.gen(function* () {
+      yield* PublicSkillRepository;
+      const refreshed = yield* Deferred.await(written);
+
+      expect(refreshed.revision).toBe(REVISION);
+    }).pipe(
+      Effect.provide(
+        publicSkillRepositoryLayer(
+          {},
+          { githubToken: null, snapshot: store, refreshOnStart: true },
+        ),
+      ),
+    );
+  });
+
+  it.effect("fetches a fresh catalog on a forced refresh within the TTL", () => {
+    const calls: RepositoryCall[] = [];
+    let revision = REVISION;
+    let tree = TREE_SHA;
+    return Effect.gen(function* () {
+      const repository = yield* PublicSkillRepository;
+      const first = yield* repository.refreshCatalog();
+      revision = SECOND_REVISION;
+      tree = SECOND_TREE_SHA;
+      const unforced = yield* repository.refreshCatalog();
+      const forced = yield* repository.refreshCatalog({ force: true });
+
+      expect(first.catalog.revision).toBe(REVISION);
+      expect(unforced.catalog.revision).toBe(REVISION);
+      expect(forced).toEqual({
+        catalog: expect.objectContaining({ revision: SECOND_REVISION }),
+        stale: false,
+      });
+      expect(calls.filter((call) => call.url.endsWith("/commits/main"))).toHaveLength(2);
+    }).pipe(
+      Effect.provide(
+        publicSkillRepositoryLayer({
+          calls,
+          currentRevision: () => revision,
+          currentTree: () => tree,
+        }),
+      ),
+    );
+  });
+
+  it.effect("keeps a forced refresh when an older lookup finishes after it", () => {
+    const hold = { arrived: Deferred.makeUnsafe<void>(), release: Deferred.makeUnsafe<void>() };
+    const snapshot = memorySnapshot(null);
+    let revision = REVISION;
+    let tree = TREE_SHA;
+    return Effect.gen(function* () {
+      const repository = yield* PublicSkillRepository;
+      const older = yield* repository.refreshCatalog().pipe(Effect.forkChild);
+      yield* Deferred.await(hold.arrived);
+      revision = SECOND_REVISION;
+      tree = SECOND_TREE_SHA;
+      const forced = yield* repository.refreshCatalog({ force: true });
+      yield* Deferred.succeed(hold.release, undefined);
+      yield* Fiber.join(older);
+      const latest = yield* repository.readCatalog;
+
+      expect(forced.catalog.revision).toBe(SECOND_REVISION);
+      expect(latest).toEqual({ catalog: forced.catalog, stale: false });
+      expect(snapshot.written.map((catalog) => catalog.revision)).toEqual([SECOND_REVISION]);
+    }).pipe(
+      Effect.provide(
+        publicSkillRepositoryLayer(
+          { holdFirstResolve: hold, currentRevision: () => revision, currentTree: () => tree },
+          { githubToken: null, snapshot: snapshot.store },
+        ),
+      ),
+    );
+  });
+
+  it.effect("keeps an older lookup's catalog when the forced refresh fails", () => {
+    const hold = { arrived: Deferred.makeUnsafe<void>(), release: Deferred.makeUnsafe<void>() };
+    const snapshot = memorySnapshot(null);
+    return Effect.gen(function* () {
+      const repository = yield* PublicSkillRepository;
+      const older = yield* repository.refreshCatalog().pipe(Effect.forkChild);
+      yield* Deferred.await(hold.arrived);
+      const forcedError = yield* Effect.flip(repository.refreshCatalog({ force: true }));
+      yield* Deferred.succeed(hold.release, undefined);
+      yield* Fiber.join(older);
+      const latest = yield* repository.readCatalog;
+
+      expect(forcedError.message).toContain("could not be reached");
+      expect(latest.catalog.revision).toBe(REVISION);
+      expect(latest.stale).toBe(false);
+      expect(snapshot.written.map((catalog) => catalog.revision)).toEqual([REVISION]);
+    }).pipe(
+      Effect.provide(
+        publicSkillRepositoryLayer(
+          { holdFirstResolve: hold, failResolveAttempt: 2 },
+          { githubToken: null, snapshot: snapshot.store },
+        ),
+      ),
+    );
+  });
 });

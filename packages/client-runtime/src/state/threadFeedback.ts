@@ -20,7 +20,8 @@ export type CodexFeedbackSubmission = CodexFeedbackSubmissionDetails &
   );
 
 export function parseCodexFeedbackCommand(text: string): { readonly reason?: string } | null {
-  const match = /^\/feedback(?:\s+([\s\S]*))?$/iu.exec(text.trim());
+  // TritonAI routes `/feedback` to its own feedback skill; the upload stays reachable.
+  const match = /^\/openai-feedback(?:\s+([\s\S]*))?$/iu.exec(text.trim());
   if (!match) {
     return null;
   }
