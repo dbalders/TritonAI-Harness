@@ -88,7 +88,9 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
   }, []);
 
   const reportError = useCallback(
-    (cause: unknown) => {
+    // Pass the owner token a request used: a late failure from a replaced session must not touch the current one.
+    (cause: unknown, ownerToken?: string) => {
+      if (ownerToken !== undefined && ownerToken !== activeOwner.current) return;
       if (cause instanceof DotApiError && cause.status === 401) saveSession(null);
       setError(cause instanceof Error ? cause.message : "Could not reach your bot.");
     },
@@ -216,7 +218,7 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
       setDraft((current) => (current.trim() === text ? "" : current));
       await refresh();
     } catch (cause) {
-      reportError(cause);
+      reportError(cause, session.ownerToken);
     } finally {
       setSending(false);
     }
@@ -230,7 +232,7 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
       await client.decide(session, approvalId, approved);
       await refresh();
     } catch (cause) {
-      reportError(cause);
+      reportError(cause, session.ownerToken);
     } finally {
       setBusyApproval(null);
     }
@@ -336,7 +338,7 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
                       void client
                         .pause(session, !state.user.paused)
                         .then(refresh)
-                        .catch(reportError);
+                        .catch((cause) => reportError(cause, session.ownerToken));
                   }}
                 >
                   {state?.user.paused ? "Resume bot" : "Pause bot"}
@@ -482,7 +484,7 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
                               void client
                                 .changeMemory(session, item, action)
                                 .then(refresh)
-                                .catch(reportError)
+                                .catch((cause) => reportError(cause, session.ownerToken))
                                 .finally(() => setBusyMemory(null));
                             }}
                           >
