@@ -212,7 +212,8 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
     try {
       await client.send(session, message);
       pendingMessage.current = null;
-      setDraft("");
+      // Keep anything typed while the message was sending.
+      setDraft((current) => (current.trim() === text ? "" : current));
       await refresh();
     } catch (cause) {
       reportError(cause);
