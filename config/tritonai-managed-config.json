@@ -1,11 +1,11 @@
 {
   "schemaVersion": 2,
-  "policyVersion": 11,
+  "policyVersion": 12,
   "provider": {
     "driver": "codex",
     "managedBinary": true,
     "managedHome": true,
-    "approvedCodexVersion": "0.156.1",
+    "approvedCodexVersion": "0.161.0",
     "baseUrl": "https://tritonai-api.ucsd.edu/v1",
     "sharedApiKeyEnvironmentVariable": "TRITONAI_API_KEY",
     "apiKeySourceEnvironmentVariable": "TRITONAI_API_KEY_SOURCE",
