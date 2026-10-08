@@ -99,6 +99,54 @@ function fixture(overrides?: {
 }
 
 describe("AccountService", () => {
+  it.effect.each([{}, { TRITONAI_ACCOUNT_SERVICE_URL: "" }])(
+    "offers campus sign-in without a launch-time account URL: %j",
+    (env) =>
+      Effect.gen(function* () {
+        const f = fixture();
+        const configuredLayer = Account.layer.pipe(
+          Layer.provide(Layer.succeed(ServerSecretStore, f.store)),
+          Layer.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env }))),
+        );
+        const status = yield* Effect.gen(function* () {
+          const account = yield* Account.AccountService;
+          return yield* account.getStatus("local-a");
+        }).pipe(Effect.provide(configuredLayer));
+        expect(status).toMatchObject({
+          configured: true,
+          status: "signed-out",
+          serviceUrl: "https://23ys8aak93.execute-api.us-west-2.amazonaws.com",
+        });
+        expect(f.calls).toHaveLength(0);
+      }),
+  );
+
+  it.effect.each(["disabled", "   "])(
+    "allows an explicit account override to disable sign-in: %j",
+    (value) =>
+      Effect.gen(function* () {
+        const f = fixture();
+        const configuredLayer = Account.layer.pipe(
+          Layer.provide(Layer.succeed(ServerSecretStore, f.store)),
+          Layer.provide(
+            ConfigProvider.layer(
+              ConfigProvider.fromEnv({ env: { TRITONAI_ACCOUNT_SERVICE_URL: value } }),
+            ),
+          ),
+        );
+        yield* Effect.gen(function* () {
+          const account = yield* Account.AccountService;
+          expect(yield* account.getStatus("local-a")).toMatchObject({
+            configured: false,
+            serviceUrl: null,
+            status: "signed-out",
+          });
+          expect((yield* Effect.flip(account.startLogin("local-a"))).code).toBe("not_configured");
+        }).pipe(Effect.provide(configuredLayer));
+        expect(f.calls).toHaveLength(0);
+      }),
+  );
+
   it.effect("keeps the account layer available when its optional URL is invalid", () =>
     Effect.gen(function* () {
       const f = fixture();
@@ -138,7 +186,7 @@ describe("AccountService", () => {
         const account = yield* Account.AccountService;
         return yield* account.getStatus("local-a");
       }).pipe(Effect.provide(configuredLayer));
-      expect(status).toMatchObject({ configured: true, status: "signed-out" });
+      expect(status).toMatchObject({ configured: true, status: "signed-out", serviceUrl });
     }),
   );
 

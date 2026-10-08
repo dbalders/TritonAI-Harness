@@ -56,7 +56,7 @@ export function resolveAccountServiceUrl(
   value: string,
   allowInsecureLoopback = false,
 ): string | null {
-  if (!value.trim()) return null;
+  if (!value.trim() || value.trim() === "disabled") return null;
   try {
     const url = new URL(value.trim());
     const loopback = ["127.0.0.1", "[::1]", "localhost"].includes(url.hostname);
@@ -521,7 +521,7 @@ export const layer = Layer.effect(
   AccountService,
   Effect.gen(function* () {
     const serviceUrl = yield* Config.String("TRITONAI_ACCOUNT_SERVICE_URL").pipe(
-      Config.withDefault(""),
+      Config.withDefault("https://23ys8aak93.execute-api.us-west-2.amazonaws.com"),
     );
     const allowInsecureLoopback = yield* Config.String(
       "TRITONAI_ACCOUNT_ALLOW_INSECURE_LOOPBACK",
