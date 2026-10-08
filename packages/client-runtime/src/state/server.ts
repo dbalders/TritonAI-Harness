@@ -1,3 +1,4 @@
+export { createTeamsController, mergeTeamStorageResult } from "./teams.ts";
 import {
   type EnvironmentId,
   type ServerConfig,
@@ -8,7 +9,11 @@ import {
   type ServerSelfUpdateResult,
   WS_METHODS,
 } from "@t3tools/contracts";
-export { accountCommandValue, createAccountLoginController } from "./accountLogin.ts";
+export {
+  accountCommandValue,
+  createAccountLoginController,
+  type AccountLoginState,
+} from "./accountLogin.ts";
 import * as Cause from "effect/Cause";
 import * as Duration from "effect/Duration";
 import * as Deferred from "effect/Deferred";
@@ -1047,6 +1052,14 @@ export function createServerEnvironmentAtoms<R, E>(
     removeProviderInstallation: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:provider:install-remove",
       tag: WS_METHODS.providerInstallRemove,
+    }),
+    teamStorage: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:team-storage",
+      tag: WS_METHODS.serverTeamStorage,
+    }),
+    teams: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:teams",
+      tag: WS_METHODS.serverTeams,
     }),
     getAccountStatus: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:account-status",

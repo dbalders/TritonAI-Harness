@@ -1,7 +1,14 @@
 import * as NodeCrypto from "node:crypto";
 import { accountCallbackId } from "@t3tools/shared/accountCallback";
 
-import { AccountProfile, type AccountStatus, ServerAccountError } from "@t3tools/contracts";
+import {
+  AccountProfile,
+  type AccountStatus,
+  ServerAccountError,
+  TeamsResult,
+  TeamsError,
+  type TeamCommand,
+} from "@t3tools/contracts";
 import * as Config from "effect/Config";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -102,6 +109,10 @@ interface LoginCompletion {
 export class AccountService extends Context.Service<
   AccountService,
   {
+    readonly teams: (
+      sessionId: string,
+      command: TeamCommand,
+    ) => Effect.Effect<TeamsResult, TeamsError>;
     readonly getStatus: (sessionId: string) => Effect.Effect<AccountStatus, ServerAccountError>;
     readonly startLogin: (
       sessionId: string,
@@ -214,7 +225,7 @@ export const make = (
           }),
         catch: () => error("unavailable", "The account service could not be reached. Try again."),
       });
-    const responseText = (response: Response) =>
+    const responseText = (response: Response, maxBytes = 32_768) =>
       Effect.tryPromise({
         try: async () => {
           const reader = response.body?.getReader();
@@ -226,7 +237,7 @@ export const make = (
               const { done, value } = await reader.read();
               if (done) break;
               length += value.length;
-              if (length > 32_768) throw new Error("Oversize response");
+              if (length > maxBytes) throw new Error("Oversize response");
               chunks.push(value);
             }
           } finally {
@@ -492,6 +503,112 @@ export const make = (
         }),
       );
     });
+    const teams = Effect.fn("AccountService.teams")(function* (
+      sessionId: string,
+      command: TeamCommand,
+    ) {
+      const lane = getLane(sessionId);
+      return yield* lane.semaphore.withPermit(
+        Effect.gen(function* () {
+          if (!serviceUrl)
+            return yield* new TeamsError({
+              code: "not_configured",
+              message: "UC San Diego sign-in is not configured on this environment.",
+            });
+          const credential = yield* Effect.gen(function* () {
+            const current = yield* read(sessionId);
+            if (current && current.expiresAt <= now() + 300 && current.renewalToken) {
+              yield* statusLocked(sessionId, lane);
+              return yield* read(sessionId);
+            }
+            return current;
+          }).pipe(
+            Effect.mapError(
+              () =>
+                new TeamsError({
+                  code: "unavailable",
+                  message: "Your account could not be read securely.",
+                }),
+            ),
+          );
+          if (!credential)
+            return yield* new TeamsError({
+              code: "sign_in_required",
+              message: "Sign in with UC San Diego to use Teams.",
+            });
+          const generation = lane.generation;
+          const response = yield* request("/v1/teams", {
+            token: credential.accessToken,
+            body: command,
+          }).pipe(
+            Effect.mapError(
+              () =>
+                new TeamsError({
+                  code: "unavailable",
+                  message: "Teams could not be reached. Refresh before retrying a change.",
+                }),
+            ),
+          );
+          if (generation !== lane.generation)
+            return yield* new TeamsError({
+              code: "sign_in_required",
+              message: "Your account changed. Sign in again.",
+            });
+          if (response.status === 401) {
+            yield* remove(sessionId).pipe(
+              Effect.mapError(
+                () =>
+                  new TeamsError({
+                    code: "unavailable",
+                    message: "Sign out and reconnect your account.",
+                  }),
+              ),
+            );
+            return yield* new TeamsError({
+              code: "sign_in_required",
+              message: "Your UC San Diego sign-in expired. Sign in again.",
+            });
+          }
+          const body = yield* responseText(response, 262_144).pipe(
+            Effect.mapError(
+              () =>
+                new TeamsError({
+                  code: "unavailable",
+                  message: "Teams returned an invalid response.",
+                }),
+            ),
+          );
+          if (response.status !== 200) {
+            const failure = yield* Schema.decodeUnknownEffect(
+              Schema.fromJsonString(
+                Schema.Struct({
+                  code: TeamsError.fields.code,
+                  error: Schema.String.check(Schema.isMaxLength(1024)),
+                }),
+              ),
+            )(body).pipe(
+              Effect.mapError(
+                () =>
+                  new TeamsError({
+                    code: "unavailable",
+                    message: "Teams is unavailable on this environment.",
+                  }),
+              ),
+            );
+            return yield* new TeamsError({ code: failure.code, message: failure.error });
+          }
+          return yield* Schema.decodeUnknownEffect(Schema.fromJsonString(TeamsResult))(body).pipe(
+            Effect.mapError(
+              () =>
+                new TeamsError({
+                  code: "unavailable",
+                  message: "Teams returned an invalid response.",
+                }),
+            ),
+          );
+        }),
+      );
+    });
     // The environment owns renewal, so leaving Settings does not stop keeping sign-in alive.
     if (serviceUrl) {
       yield* Effect.gen(function* () {
@@ -514,7 +631,7 @@ export const make = (
         }
       }).pipe(Effect.forkScoped);
     }
-    return AccountService.of({ getStatus, startLogin, pollLogin, signOut });
+    return AccountService.of({ getStatus, startLogin, pollLogin, signOut, teams });
   });
 
 export const layer = Layer.effect(

@@ -631,3 +631,51 @@ describe("account session renewal", () => {
     }),
   );
 });
+
+describe("Teams account proxy", () => {
+  it.effect("uses only the owning environment session's campus credential", () =>
+    Effect.gen(function* () {
+      let teamRequests = 0;
+      const f = fixture({
+        fetch: async (input, init) => {
+          if (String(input).endsWith("/v1/teams")) {
+            teamRequests++;
+            expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${token}`);
+            expect(init?.redirect).toBe("error");
+            return Response.json({ teams: [], invitations: [], team: null, invitationCode: null });
+          }
+          return f.defaultFetch(input, init);
+        },
+      });
+      const account = yield* f.make;
+      yield* account.startLogin("owner-session");
+      f.advance(5);
+      yield* account.pollLogin("owner-session");
+      expect((yield* Effect.flip(account.teams("another-session", { action: "list" }))).code).toBe(
+        "sign_in_required",
+      );
+      expect(teamRequests).toBe(0);
+      expect((yield* account.teams("owner-session", { action: "list" })).teams).toEqual([]);
+      expect(teamRequests).toBe(1);
+      yield* account.signOut("owner-session");
+      expect((yield* Effect.flip(account.teams("owner-session", { action: "list" }))).code).toBe(
+        "sign_in_required",
+      );
+      expect(teamRequests).toBe(1);
+    }),
+  );
+  it.effect("rejects an expired campus session before contacting team storage", () =>
+    Effect.gen(function* () {
+      const f = fixture();
+      const account = yield* f.make;
+      yield* account.startLogin("owner-session");
+      f.advance(5);
+      yield* account.pollLogin("owner-session");
+      f.advance(3601);
+      expect((yield* Effect.flip(account.teams("owner-session", { action: "list" }))).code).toBe(
+        "sign_in_required",
+      );
+      expect(f.calls.some((call) => call.url.endsWith("/v1/teams"))).toBe(false);
+    }),
+  );
+});

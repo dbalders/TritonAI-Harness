@@ -1,4 +1,5 @@
-import { ArrowLeftIcon, ChartNoAxesColumnIcon, SettingsIcon } from "lucide-react";
+import { ArrowLeftIcon, ChartNoAxesColumnIcon, SettingsIcon, UsersIcon } from "lucide-react";
+import { SidebarAccount } from "../teams/SidebarAccount";
 import type { ReactNode } from "react";
 import { memo, useCallback } from "react";
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
@@ -191,6 +192,14 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
             />
           ) : null}
           <SidebarUtilityItem
+            icon={<UsersIcon />}
+            label="Teams"
+            onClick={() => {
+              closeMobileSidebar();
+              void navigate({ to: "/teams" });
+            }}
+          />
+          <SidebarUtilityItem
             icon={<ChartNoAxesColumnIcon />}
             label="Usage"
             onClick={handleUsageClick}
@@ -208,6 +217,7 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
       <SidebarThreadUndoNotice />
       <SidebarProviderUpdatePill />
       <SidebarUpdateArchitectureWarning />
+      <SidebarAccount />
       <SidebarUtilityMenu />
     </SidebarFooter>
   );
