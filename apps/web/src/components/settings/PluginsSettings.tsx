@@ -1208,20 +1208,24 @@ export function PluginsSettingsPanel() {
         }
       >
         {data.integrations.length ? (
-          data.integrations.map((integration) => (
-            <IntegrationCard
-              key={integration.id}
-              integration={integration}
-              busy={busyIds.has(integration.id)}
-              flow={flows.get(integration.id) ?? null}
-              onAction={action}
-              onApiKeySubmit={submitApiKey}
-              onCapabilityEnabled={setCapabilityEnabled}
-              {...(connectionAttention?.id === integration.id
-                ? { connectionAttentionRequest: connectionAttention.request }
-                : {})}
-            />
-          ))
+          data.integrations
+            .toSorted((left, right) =>
+              left.name.localeCompare(right.name, undefined, { sensitivity: "base" }),
+            )
+            .map((integration) => (
+              <IntegrationCard
+                key={integration.id}
+                integration={integration}
+                busy={busyIds.has(integration.id)}
+                flow={flows.get(integration.id) ?? null}
+                onAction={action}
+                onApiKeySubmit={submitApiKey}
+                onCapabilityEnabled={setCapabilityEnabled}
+                {...(connectionAttention?.id === integration.id
+                  ? { connectionAttentionRequest: connectionAttention.request }
+                  : {})}
+              />
+            ))
         ) : (
           <p className="p-6 text-center text-xs text-muted-foreground">
             No plugins are included in this Harness build.

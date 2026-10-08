@@ -1,6 +1,6 @@
 {
-  "tag": "main",
-  "sourceSha": "7a2b7b9a03a0d608a44701720616d54368006178",
-  "generatorSha": "3add63a6d5a37006b5edf3326fb3f97db5049ba4",
+  "tag": "v0.3.6",
+  "sourceSha": "fb89e33a92f37720e0714d2296271b39d18104a0",
+  "generatorSha": "fb89e33a92f37720e0714d2296271b39d18104a0",
   "variant": "production"
 }

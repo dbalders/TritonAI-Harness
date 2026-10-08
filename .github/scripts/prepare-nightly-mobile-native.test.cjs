@@ -115,7 +115,7 @@ test("rejects stable tags, invalid SHAs, wrong source, and edited source", (t) =
   );
   assert.throws(
     () => prepareNightlyMobileNative({ ...f.options, sourceSha: "b".repeat(40) }),
-    /exact nightly source/,
+    /exact mobile source/,
   );
   fs.writeFileSync(path.join(f.root, "source.txt"), "edited source");
   assert.throws(() => prepareNightlyMobileNative(f.options));

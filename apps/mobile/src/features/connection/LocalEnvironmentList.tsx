@@ -1,5 +1,5 @@
 import type { EnvironmentId } from "@t3tools/contracts";
-import type { ComponentProps } from "react";
+import type { ComponentProps, ReactNode } from "react";
 import { View } from "react-native";
 
 import { SymbolView } from "../../components/AppSymbol";
@@ -13,6 +13,7 @@ export function LocalEnvironmentList({
   environments,
   expandedId,
   onToggle,
+  renderExpandedContent,
   ...rowActions
 }: Pick<
   EnvironmentRowProps,
@@ -21,6 +22,7 @@ export function LocalEnvironmentList({
   readonly environments: ReadonlyArray<EnvironmentRowProps["environment"]>;
   readonly expandedId: EnvironmentId | null;
   readonly onToggle: (environmentId: EnvironmentId) => void;
+  readonly renderExpandedContent?: (environmentId: EnvironmentId) => ReactNode;
 }) {
   if (environments.length === 0) {
     return (
@@ -54,6 +56,9 @@ export function LocalEnvironmentList({
             onToggle={() => onToggle(environment.environmentId)}
             {...rowActions}
           />
+          {expandedId === environment.environmentId
+            ? renderExpandedContent?.(environment.environmentId)
+            : null}
         </View>
       ))}
     </View>

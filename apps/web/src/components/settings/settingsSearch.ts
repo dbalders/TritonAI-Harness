@@ -580,23 +580,6 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
-    id: "usage-providers",
-    title: "Usage providers",
-    to: "/settings/providers",
-    searchTerms: [
-      "usage sources CLIProxyAPI CLI proxy hub quota subscription limits management key add remove",
-    ],
-    providerSettingsOnly: true,
-  },
-  {
-    id: "cursor-keychain-usage",
-    title: "Cursor account usage",
-    to: "/settings/providers",
-    searchTerms: ["cursor macOS keychain usage tokens cost limits permission"],
-    providerSettingsOnly: true,
-    macProviderSettingsOnly: true,
-  },
-  {
     id: "provider-health-check-interval",
     title: "Health check interval",
     to: "/settings/providers",
@@ -840,6 +823,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: [
       "connections server backend local remote access administrative permissions scope pairing links qr code authorized clients sessions revoke endpoint",
     ],
+  },
+  {
+    id: "ucsd-account",
+    title: "UC San Diego account",
+    to: "/settings/connections",
+    searchTerms: ["ucsd sign in login account sso identity connection sign out"],
   },
   {
     id: "remote-environments",

@@ -78,6 +78,7 @@ import { WorkspacePageContainer } from "../WorkspacePageContainer";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { UsageLimitsSection } from "./UsageLimits";
 import { UsagePriceOverrides } from "./UsagePriceOverrides";
+import { UsageSourcesDialog } from "./UsageSourcesDialog";
 import { UsageProviderChart } from "./UsageProviderChart";
 import { sortModelsByTokens } from "./usageBreakdown";
 import {
@@ -997,6 +998,7 @@ function UsageEnvironmentFilter({
   readonly contractMismatches: MergedUsage["contractMismatches"];
 }) {
   const [modelPricesOpen, setModelPricesOpen] = useState(false);
+  const [usageSourcesOpen, setUsageSourcesOpen] = useState(false);
   const allSelected = selectedEnvironmentIds === null;
   const label = allSelected
     ? "All environments"
@@ -1117,8 +1119,10 @@ function UsageEnvironmentFilter({
             <SlidersHorizontalIcon aria-hidden />
             Model prices
           </MenuItem>
+          <MenuItem onClick={() => setUsageSourcesOpen(true)}>Usage sources</MenuItem>
         </MenuPopup>
       </Menu>
+      {usageSourcesOpen ? <UsageSourcesDialog onOpenChange={setUsageSourcesOpen} /> : null}
       {modelPricesOpen ? (
         <UsagePriceOverrides
           usage={environments}

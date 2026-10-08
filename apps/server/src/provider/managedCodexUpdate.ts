@@ -192,6 +192,51 @@ const resolveWindowsManagedTools = Effect.fn("managedCodexUpdate.resolveWindowsM
   },
 );
 
+/**
+ * Finds the Node.js runtime and npm the Installer's POSIX launcher pins.
+ * Installer machines rarely have node or npm on the app's PATH, so staging and
+ * verification must not depend on it. Returns null for launchers without a
+ * pinned runtime, which keep using npm from PATH.
+ */
+const resolvePosixManagedTools = Effect.fn("managedCodexUpdate.resolvePosixManagedTools")(
+  function* (installation: TritonAiManagedCodexInstallation) {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const launcher = yield* fs.readFileString(installation.binaryPath);
+    // Read the Installer's pinned paths as data; never execute the launcher.
+    const nodeRelative = /^NODE_BIN="\$SCRIPT_DIR\/([^"\r\n]+)"$/mu.exec(launcher)?.[1];
+    if (!nodeRelative) return null;
+    const entryRelative =
+      /^exec "\$NODE_BIN" "\$SCRIPT_DIR\/\.\.\/(lib\/node_modules\/@openai\/codex\/bin\/codex\.js)" "\$@"$/mu.exec(
+        launcher,
+      )?.[1];
+    if (!entryRelative) {
+      return yield* updateError(
+        "The managed launcher is unsupported. Repair it with TritonAI Installer.",
+      );
+    }
+    const nodeBinary = path.resolve(installation.installRoot, "bin", ...nodeRelative.split("/"));
+    const nodeHome = path.dirname(path.dirname(nodeBinary));
+    const expectedNodeRoot = path.join(
+      path.dirname(path.dirname(installation.installRoot)),
+      "node",
+    );
+    const npmCli = path.join(nodeHome, "lib", "node_modules", "npm", "bin", "npm-cli.js");
+    if (
+      path.dirname(nodeHome) !== expectedNodeRoot ||
+      !/^node-v\d+\.\d+\.\d+-(?:darwin|linux)-(?:x64|arm64)$/u.test(path.basename(nodeHome)) ||
+      path.relative(nodeHome, nodeBinary) !== path.join("bin", "node") ||
+      !(yield* fs.exists(nodeBinary)) ||
+      !(yield* fs.exists(npmCli))
+    ) {
+      return yield* updateError(
+        "The managed Node.js/npm runtime is missing. Repair it with TritonAI Installer.",
+      );
+    }
+    return { nodeBinary, npmCli, entrySegments: entryRelative.split("/") };
+  },
+);
+
 export const updateTritonAiManagedCodex = Effect.fn(
   "managedCodexUpdate.updateTritonAiManagedCodex",
 )(function* (input: { readonly binaryPath: string; readonly run: ManagedCodexCommandRunner }) {
@@ -244,6 +289,7 @@ export const updateTritonAiManagedCodex = Effect.fn(
   const windowsTools = installation.windows
     ? yield* resolveWindowsManagedTools(installation)
     : null;
+  const managedTools = windowsTools ?? (yield* resolvePosixManagedTools(installation));
   const installationName = path.basename(installation.installRoot);
   // Windows can briefly retain an executable's file mapping after --version exits.
   const retryFileOperation = <A>(operation: Effect.Effect<A, PlatformError.PlatformError>) =>
@@ -292,9 +338,9 @@ export const updateTritonAiManagedCodex = Effect.fn(
   yield* runCheckedCommand(
     input.run,
     {
-      command: windowsTools?.nodeBinary ?? "npm",
+      command: managedTools?.nodeBinary ?? "npm",
       args: [
-        ...(windowsTools ? [windowsTools.npmCli] : []),
+        ...(managedTools ? [managedTools.npmCli] : []),
         "install",
         "-g",
         "--prefix",
@@ -327,9 +373,9 @@ export const updateTritonAiManagedCodex = Effect.fn(
   const stagedVersionResult = yield* runCheckedCommand(
     input.run,
     {
-      command: windowsTools?.nodeBinary ?? stagedBinaryPath,
-      args: windowsTools
-        ? [path.join(stagedInstallRoot, ...windowsTools.entrySegments), "--version"]
+      command: managedTools?.nodeBinary ?? stagedBinaryPath,
+      args: managedTools
+        ? [path.join(stagedInstallRoot, ...managedTools.entrySegments), "--version"]
         : ["--version"],
       timeout: "30 seconds",
       maxOutputBytes: 8 * 1024,

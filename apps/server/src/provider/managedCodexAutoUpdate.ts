@@ -5,6 +5,7 @@ import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 
+import { ServerConfig } from "../config.ts";
 import { forkParked } from "../serverActivation.ts";
 import { isTritonAiManagedCodexMaintenanceCapabilities } from "./managedCodexUpdate.ts";
 import { ProviderMaintenanceRunner } from "./providerMaintenanceRunner.ts";
@@ -132,9 +133,17 @@ export const makeManagedCodexAutoUpdater = Effect.fn("makeManagedCodexAutoUpdate
 /**
  * Watches provider snapshots after activation, so a standby server never swaps
  * the engine under the server it may replace. Updates run one at a time.
+ *
+ * Development servers never update automatically: they share the developer's
+ * managed runtime with installed Harness apps, and a branch's approved version
+ * would replace those apps' engine. The manual update action stays available.
  */
 export const layer = Layer.effectDiscard(
   Effect.gen(function* () {
+    if ((yield* ServerConfig).devUrl !== undefined) {
+      yield* Effect.logInfo("Automatic managed Codex updates are off in development servers");
+      return;
+    }
     const providerRegistry = yield* ProviderRegistry;
     const { considerProviders } = yield* makeManagedCodexAutoUpdater();
     yield* forkParked(
