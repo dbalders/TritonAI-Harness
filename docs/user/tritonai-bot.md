@@ -45,5 +45,21 @@ For routines, mark results read after reading them in your conversation to reset
 the unread spending limit; a paused routine still needs Resume. If Microsoft access expires, **Reconnect Microsoft**
 opens the existing connections page.
 
+When your service supports task computers, open **Settings → TritonAI Bot** on
+that computer, choose a project and select **Allow**. This authorizes that Harness
+environment to run approved Bot assignments as ordinary threads in the chosen
+project, using its model and permission defaults. Every signed-in Harness can
+chat and review approvals; only the computer you allow claims new assignments.
+Allowing another computer moves new assignments there. Keep Harness running for
+it to check in and collect work.
+
+**Stop running tasks here** stops new assignments on that environment. Work
+already running may continue, and saved results are still delivered. Disconnect
+signs out the chat session; use Stop separately to turn off task running. If a
+follow-up begins before an assignment's outcome is collected, its result is
+reported as unconfirmed. Inspect its Harness thread before asking it to run
+again. Older services may not support task computers; failed setup does not
+start an assignment.
+
 This sign-in is separate from your [UC San Diego account](./ucsd-account.md)
 connection to a Harness environment.
