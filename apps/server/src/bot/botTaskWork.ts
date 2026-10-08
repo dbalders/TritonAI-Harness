@@ -94,12 +94,24 @@ export function taskProgress(
   const replies = (next === -1 ? following : following.slice(0, next)).filter(
     (message) => message.role === "assistant",
   );
+  // Follow-up turns can supersede a running assignment. Their existence proves no terminal outcome.
+  if (next !== -1) {
+    const partial = replies
+      .map((message) => message.text.trim())
+      .filter(Boolean)
+      .join("\n\n");
+    return {
+      kind: "done",
+      status: "failed",
+      result: capResult(
+        `The assignment's outcome could not be confirmed after a follow-up started. Check this Harness thread before asking again.${partial ? `\n\nEarlier reply (unconfirmed):\n${partial}` : ""}\n\n${reference}`,
+      ),
+    };
+  }
   const sessionBusy = thread.session?.status === "running" || thread.session?.status === "starting";
   const turnRunning = thread.latestTurn === null || thread.latestTurn.state === "running";
   const finished =
-    start !== -1 &&
-    (next !== -1 || (!sessionBusy && !turnRunning)) &&
-    replies.every((message) => !message.streaming);
+    start !== -1 && !sessionBusy && !turnRunning && replies.every((message) => !message.streaming);
   if (!finished) {
     if (now - Date.parse(held.claimedAt) > HELD_TASK_LIMIT_MS) {
       return {
@@ -116,9 +128,7 @@ export function taskProgress(
     .map((message) => message.text.trim())
     .filter(Boolean)
     .join("\n\n");
-  const failed =
-    next === -1 &&
-    (thread.latestTurn?.state === "error" || thread.latestTurn?.state === "interrupted");
+  const failed = thread.latestTurn?.state === "error" || thread.latestTurn?.state === "interrupted";
   if (failed) {
     const reason =
       thread.session?.lastError ??

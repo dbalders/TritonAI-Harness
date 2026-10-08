@@ -82,9 +82,35 @@ describe("taskProgress", () => {
       ],
     });
     const progress = taskProgress(later, held, NOW);
-    expect(progress).toMatchObject({ kind: "done", status: "completed" });
+    expect(progress).toMatchObject({ kind: "done", status: "failed" });
+    expect(progress.kind === "done" && progress.result).toContain("could not be confirmed");
+    expect(progress.kind === "done" && progress.result).toContain(
+      "Earlier reply (unconfirmed):\nFirst answer.",
+    );
     expect(progress.kind === "done" && progress.result).not.toContain("Other work");
   });
+
+  it.each(["running", "error", "interrupted", "completed"] as const)(
+    "never turns an original %s assignment into success merely because its owner follows up",
+    (state) => {
+      const later = thread({
+        latestTurn: { state },
+        session: { status: state === "running" ? "running" : "ready" },
+        messages: [
+          message("message-1", "user", "brief"),
+          message("follow-up", "user", "Now something else"),
+        ],
+      });
+      expect(taskProgress(later, held, NOW)).toMatchObject({
+        kind: "done",
+        status: "failed",
+        result: expect.stringContaining("could not be confirmed"),
+      });
+      expect(taskProgress(later, held, NOW)).not.toMatchObject({
+        result: expect.stringContaining("Finished without a written reply"),
+      });
+    },
+  );
 
   it("reports a failed turn with its reason and any partial reply", () => {
     const progress = taskProgress(
