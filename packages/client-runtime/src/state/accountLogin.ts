@@ -53,9 +53,24 @@ export function createAccountLoginController(actions: AccountLoginActions) {
     });
   };
 
+  const scheduleRenewal = (account: AccountStatus, request: number, retry = false) => {
+    clearTimer();
+    if (!current(request) || account.status !== "signed-in" || !account.renewalExpiresAt) return;
+    const delay = retry
+      ? 60_000
+      : Math.max(60_000, (account.expiresAt ?? 0) * 1000 - actions.now() - 240_000);
+    cancelTimer = actions.schedule(() => {
+      if (current(request)) void run("check");
+    }, delay);
+  };
+
   const schedulePoll = (account: AccountStatus, request: number) => {
     clearTimer();
-    if (!current(request) || account.status !== "pending") return;
+    if (!current(request)) return;
+    if (account.status !== "pending") {
+      scheduleRenewal(account, request);
+      return;
+    }
     const deadline = Math.min(
       account.expiresAt === null ? Infinity : account.expiresAt * 1000,
       pendingDeadline,
@@ -142,7 +157,16 @@ export function createAccountLoginController(actions: AccountLoginActions) {
         await openBrowser(account.verificationUrl, request);
       }
     } catch (error) {
-      if (current(request)) fail(error);
+      if (current(request)) {
+        fail(error);
+        if (kind === "check") {
+          if (state.account) scheduleRenewal(state.account, request, true);
+          else
+            cancelTimer = actions.schedule(() => {
+              if (current(request)) void run("check");
+            }, 60_000);
+        }
+      }
     }
   };
 

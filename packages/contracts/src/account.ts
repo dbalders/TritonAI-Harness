@@ -17,6 +17,7 @@ export const AccountStatus = Schema.Struct({
   serviceUrl: Schema.NullOr(Schema.String),
   profile: Schema.NullOr(AccountProfile),
   expiresAt: Schema.NullOr(Schema.Int),
+  renewalExpiresAt: Schema.optionalKey(Schema.Int),
   verificationUrl: Schema.NullOr(Schema.String),
   userCode: Schema.NullOr(Schema.String),
   pollIntervalSeconds: Schema.NullOr(Schema.Int),

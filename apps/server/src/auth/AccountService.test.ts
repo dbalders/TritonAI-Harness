@@ -4,6 +4,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as TestClock from "effect/testing/TestClock";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -469,5 +470,116 @@ describe("AccountService", () => {
         expect(yield* account.signOut("a")).toMatchObject({ status: "signed-out", profile: null });
         expect(f.values.size).toBe(0);
       }),
+  );
+});
+
+describe("account session renewal", () => {
+  function renewableFixture(mode: "ok" | "offline" | "revoked" | "wrong-user" = "ok") {
+    let expiresAt = 1_800_003_602;
+    const renewalExpiresAt = 1_802_592_002;
+    const renewalToken = "z".repeat(43);
+    let failure = mode;
+    const f = fixture({
+      fetch: async (input, init) => {
+        const path = new URL(String(input)).pathname;
+        if (path === "/v1/login/token")
+          return Response.json({
+            accessToken: token,
+            profile,
+            expiresAt,
+            renewalToken,
+            renewalExpiresAt,
+          });
+        if (path === "/v1/session/refresh") {
+          expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${renewalToken}`);
+          if (failure === "offline") throw new Error("Network unavailable");
+          if (failure === "revoked") return new Response(null, { status: 401 });
+          expiresAt += 3600;
+          return Response.json({
+            accessToken: "renewed-synthetic-token",
+            profile: failure === "wrong-user" ? { ...profile, subject: "other-user" } : profile,
+            expiresAt,
+            renewalExpiresAt,
+          });
+        }
+        if (path === "/v1/me") return Response.json({ profile, expiresAt, renewalExpiresAt });
+        return f.defaultFetch(input, init);
+      },
+    });
+    return {
+      ...f,
+      recover: () => {
+        failure = "ok";
+      },
+    };
+  }
+  it.effect("renews in the backend without an open account panel and stops after sign-out", () =>
+    Effect.gen(function* () {
+      const f = renewableFixture();
+      const account = yield* f.make;
+      yield* account.startLogin("a");
+      f.advance(2);
+      yield* account.pollLogin("a");
+      f.advance(3500);
+      yield* TestClock.adjust("61 seconds");
+      expect(f.calls.filter((c) => c.url.endsWith("/v1/session/refresh"))).toHaveLength(1);
+      yield* account.signOut("a");
+      f.advance(3600);
+      yield* TestClock.adjust("61 seconds");
+      expect(f.calls.filter((c) => c.url.endsWith("/v1/session/refresh"))).toHaveLength(1);
+    }),
+  );
+  it.effect(
+    "renews expired access on demand after restarting the backend, without exposing credentials",
+    () =>
+      Effect.gen(function* () {
+        const f = renewableFixture();
+        const account = yield* f.make;
+        yield* account.startLogin("a");
+        f.advance(2);
+        yield* account.pollLogin("a");
+        f.advance(3601);
+        const restarted = yield* f.make;
+        const status = yield* restarted.getStatus("a");
+        expect(status).toMatchObject({
+          status: "signed-in",
+          expiresAt: 1_800_007_202,
+          renewalExpiresAt: 1_802_592_002,
+        });
+        expect(encodeUnknown(status)).not.toContain("z".repeat(43));
+        expect(f.calls.filter((c) => c.url.endsWith("/v1/login/start"))).toHaveLength(1);
+        yield* restarted.signOut("a");
+        expect(f.values.size).toBe(0);
+      }),
+  );
+  it.effect("keeps renewal credentials through a network outage and retries successfully", () =>
+    Effect.gen(function* () {
+      const f = renewableFixture("offline");
+      const account = yield* f.make;
+      yield* account.startLogin("a");
+      f.advance(2);
+      yield* account.pollLogin("a");
+      f.advance(3601);
+      expect((yield* Effect.flip(account.getStatus("a"))).code).toBe("unavailable");
+      expect(f.values.size).toBe(1);
+      f.recover();
+      expect((yield* account.getStatus("a")).status).toBe("signed-in");
+    }),
+  );
+  it.effect("requires browser sign-in after campus revocation and rejects changed identities", () =>
+    Effect.gen(function* () {
+      for (const mode of ["revoked", "wrong-user"] as const) {
+        const f = renewableFixture(mode);
+        const account = yield* f.make;
+        yield* account.startLogin("a");
+        f.advance(2);
+        yield* account.pollLogin("a");
+        f.advance(3601);
+        if (mode === "revoked") {
+          expect((yield* account.getStatus("a")).status).toBe("signed-out");
+          expect(f.values.size).toBe(0);
+        } else expect((yield* Effect.flip(account.getStatus("a"))).code).toBe("invalid_response");
+      }
+    }),
   );
 });

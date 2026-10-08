@@ -228,3 +228,39 @@ describe("UC San Diego account login lifecycle", () => {
     deactivate();
   });
 });
+
+describe("automatic account renewal", () => {
+  it("checks before expiry, retries a transient failure, and cancels renewal when the panel closes", async () => {
+    const { actions, controller } = setup();
+    const renewable = { ...signedIn, renewalExpiresAt: 1_802_592_000 };
+    actions.getStatus.mockResolvedValue(renewable);
+    const deactivate = controller.activate();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(3_359_999);
+    expect(actions.getStatus).toHaveBeenCalledTimes(1);
+    actions.getStatus.mockRejectedValueOnce(new Error("Temporarily unavailable"));
+    await vi.advanceTimersByTimeAsync(1);
+    expect(controller.getSnapshot().error).toBe("Temporarily unavailable");
+    actions.getStatus.mockResolvedValue({ ...renewable, expiresAt: 1_800_007_000 });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(actions.getStatus).toHaveBeenCalledTimes(3);
+    expect(controller.getSnapshot().error).toBeNull();
+    expect(actions.openExternal).not.toHaveBeenCalled();
+    deactivate();
+    await vi.advanceTimersByTimeAsync(4_000_000);
+    expect(actions.getStatus).toHaveBeenCalledTimes(3);
+  });
+});
+
+it("retries an offline initial check without opening a browser", async () => {
+  const { actions, controller } = setup();
+  actions.getStatus.mockRejectedValueOnce(new Error("Offline"));
+  const deactivate = controller.activate();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(controller.getSnapshot().account).toBeNull();
+  actions.getStatus.mockResolvedValue({ ...signedIn, renewalExpiresAt: 1_802_592_000 });
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(controller.getSnapshot().account?.status).toBe("signed-in");
+  expect(actions.openExternal).not.toHaveBeenCalled();
+  deactivate();
+});

@@ -128,7 +128,11 @@ export function UcsdAccountSettings({ environmentId }: { readonly environmentId:
                 ? "Waiting for UC San Diego sign-in…"
                 : "Sign in to connect your UC San Diego account to this environment."}
       </Text>
-      {account?.expiresAt ? (
+      {signedIn && account?.renewalExpiresAt ? (
+        <Text className="text-xs text-foreground-muted">
+          Your sign-in renews automatically. UC San Diego may occasionally ask you to sign in again.
+        </Text>
+      ) : account?.expiresAt ? (
         <Text className="text-xs text-foreground-muted">
           {pending ? "Sign-in expires" : "Session expires"}{" "}
           {new Date(account.expiresAt * 1000).toLocaleString()}.

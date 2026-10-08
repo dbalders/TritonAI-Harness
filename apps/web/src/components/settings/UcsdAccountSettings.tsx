@@ -151,7 +151,11 @@ function AccountConnection({ environmentId }: { readonly environmentId: Environm
           <strong className="ml-2 select-all font-mono tracking-wider">{account.userCode}</strong>
         </div>
       ) : null}
-      {account?.expiresAt ? (
+      {signedIn && account?.renewalExpiresAt ? (
+        <p className="mt-2 text-xs text-muted-foreground">
+          Your sign-in renews automatically. UC San Diego may occasionally ask you to sign in again.
+        </p>
+      ) : account?.expiresAt ? (
         <p className="mt-2 text-xs text-muted-foreground">
           {pending ? "Sign-in expires" : "Session expires"}{" "}
           {new Date(account.expiresAt * 1000).toLocaleString()}.

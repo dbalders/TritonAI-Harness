@@ -3695,8 +3695,8 @@ export function ConnectionsSettings() {
 
   return (
     <SettingsPageContainer width="wide">
-      <UcsdAccountSettings environmentId={primaryEnvironmentId} />
       {primarySettings}
+      <UcsdAccountSettings environmentId={primaryEnvironmentId} />
       <SettingsSection
         {...searchableSetting("remote-environments")}
         title="Environments"

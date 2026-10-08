@@ -27,9 +27,15 @@ const Credential = Schema.Struct({
   accessToken: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(8_192)),
   expiresAt: EpochSeconds,
   profile: AccountProfile,
+  renewalToken: Schema.optionalKey(ShortText),
+  renewalExpiresAt: Schema.optionalKey(EpochSeconds),
 });
 type Credential = typeof Credential.Type;
-const Me = Schema.Struct({ profile: AccountProfile, expiresAt: EpochSeconds });
+const Me = Schema.Struct({
+  profile: AccountProfile,
+  expiresAt: EpochSeconds,
+  renewalExpiresAt: Schema.optionalKey(EpochSeconds),
+});
 const decodeStart = Schema.decodeUnknownEffect(Schema.fromJsonString(LoginStart));
 const decodeCredential = Schema.decodeUnknownEffect(Schema.fromJsonString(Credential));
 const encodeCredential = Schema.encodeSync(Schema.fromJsonString(Credential));
@@ -157,11 +163,16 @@ export const make = (
       pollIntervalSeconds: pending.response.pollIntervalSeconds,
       ...(pending.response.returnUrl ? { returnUrl: pending.response.returnUrl } : {}),
     });
-    const signedIn = (credential: Pick<Credential, "profile" | "expiresAt">): AccountStatus => ({
+    const signedIn = (
+      credential: Pick<Credential, "profile" | "expiresAt" | "renewalExpiresAt">,
+    ): AccountStatus => ({
       ...signedOut(),
       status: "signed-in",
       profile: credential.profile,
       expiresAt: credential.expiresAt,
+      ...(credential.renewalExpiresAt !== undefined
+        ? { renewalExpiresAt: credential.renewalExpiresAt }
+        : {}),
     });
     const remove = (sessionId: string) =>
       secrets.remove(secretName(sessionId)).pipe(Effect.mapError(storageError));
@@ -175,7 +186,12 @@ export const make = (
       const credential = yield* decodeCredential(new TextDecoder().decode(bytes.value)).pipe(
         Effect.mapError(storageError),
       );
-      if (credential.expiresAt <= now()) {
+      if (
+        credential.expiresAt <= now() &&
+        (!credential.renewalToken ||
+          !credential.renewalExpiresAt ||
+          credential.renewalExpiresAt <= now())
+      ) {
         yield* remove(sessionId);
         return null;
       }
@@ -222,7 +238,7 @@ export const make = (
       }).pipe(Effect.timeout("10 seconds"), Effect.mapError(invalidResponse));
     const revoke = Effect.fn("AccountService.revoke")(function* (credential: Credential) {
       const response = yield* request("/v1/logout", {
-        token: credential.accessToken,
+        token: credential.renewalToken ?? credential.accessToken,
         method: "POST",
       });
       if (![204, 401].includes(response.status)) {
@@ -237,8 +253,48 @@ export const make = (
       lane: SessionLane,
     ) {
       if (!serviceUrl) return signedOut();
-      const credential = yield* read(sessionId);
+      const generation = lane.generation;
+      let credential = yield* read(sessionId);
       if (credential) {
+        if (
+          credential.renewalToken &&
+          credential.renewalExpiresAt &&
+          credential.expiresAt <= now() + 300
+        ) {
+          const renewal = yield* request("/v1/session/refresh", {
+            token: credential.renewalToken,
+            method: "POST",
+          });
+          if ([401, 403].includes(renewal.status)) {
+            yield* remove(sessionId);
+            return signedOut();
+          }
+          if (renewal.status !== 200)
+            return yield* error(
+              "unavailable",
+              "Your sign-in could not be renewed yet. Harness will retry.",
+            );
+          const renewed = yield* responseText(renewal).pipe(
+            Effect.flatMap(decodeCredential),
+            Effect.mapError(invalidResponse),
+          );
+          if (
+            renewed.profile.issuer !== credential.profile.issuer ||
+            renewed.profile.subject !== credential.profile.subject ||
+            renewed.expiresAt <= now() ||
+            renewed.expiresAt > now() + 3660 ||
+            renewed.expiresAt > credential.renewalExpiresAt ||
+            renewed.renewalExpiresAt !== credential.renewalExpiresAt
+          )
+            return yield* invalidResponse();
+          credential = {
+            ...credential,
+            accessToken: renewed.accessToken,
+            profile: renewed.profile,
+            expiresAt: renewed.expiresAt,
+          };
+          yield* save(sessionId, credential).pipe(Effect.uninterruptible);
+        }
         const response = yield* request("/v1/me", { token: credential.accessToken });
         if (response.status === 401 || response.status === 403) {
           yield* remove(sessionId);
@@ -263,7 +319,14 @@ export const make = (
           yield* remove(sessionId);
           return yield* invalidResponse();
         }
-        return signedIn(me);
+        return generation === lane.generation
+          ? signedIn({
+              ...me,
+              ...(credential.renewalExpiresAt !== undefined
+                ? { renewalExpiresAt: credential.renewalExpiresAt }
+                : {}),
+            })
+          : signedOut();
       }
       if (lane.pending && lane.pending.response.expiresAt > now())
         return pendingStatus(lane.pending);
@@ -390,6 +453,15 @@ export const make = (
             Effect.flatMap(decodeCredential),
             Effect.mapError(invalidResponse),
           );
+          if (
+            (credential.renewalToken === undefined) !==
+              (credential.renewalExpiresAt === undefined) ||
+            (credential.renewalExpiresAt !== undefined &&
+              (!/^[A-Za-z0-9_-]{43}$/u.test(credential.renewalToken ?? "") ||
+                credential.renewalExpiresAt <= credential.expiresAt ||
+                credential.renewalExpiresAt > now() + 30 * 86400 + 60))
+          )
+            return yield* invalidResponse();
           if (credential.expiresAt <= now() || credential.expiresAt > now() + 3_660)
             return yield* invalidResponse();
           // Keep a late token recoverable if cancellation's remote revocation fails. The waiting
@@ -420,6 +492,28 @@ export const make = (
         }),
       );
     });
+    // The environment owns renewal, so leaving Settings does not stop keeping sign-in alive.
+    if (serviceUrl) {
+      yield* Effect.gen(function* () {
+        while (true) {
+          yield* Effect.sleep("60 seconds");
+          yield* Effect.forEach(
+            [...lanes.entries()],
+            ([sessionId, lane]) =>
+              lane.semaphore
+                .withPermit(
+                  Effect.gen(function* () {
+                    const credential = yield* read(sessionId);
+                    if (credential?.renewalToken && credential.expiresAt <= now() + 300)
+                      yield* statusLocked(sessionId, lane);
+                  }),
+                )
+                .pipe(Effect.catch(() => Effect.void)),
+            { concurrency: 4, discard: true },
+          );
+        }
+      }).pipe(Effect.forkScoped);
+    }
     return AccountService.of({ getStatus, startLogin, pollLogin, signOut });
   });
 
