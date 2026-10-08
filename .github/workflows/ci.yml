@@ -78,7 +78,8 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    # Leave room for native-library downloads before the workspace test suite.
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v6

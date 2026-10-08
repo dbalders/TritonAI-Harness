@@ -10,6 +10,15 @@ describe("shouldHandleAppLink", () => {
     },
   );
 
+  it.each(["t3code", "t3code-dev", "t3code-preview"])(
+    "leaves %s account callbacks to the authentication session",
+    (scheme) => {
+      expect(
+        shouldHandleAppLink(`${scheme}:///account/callback/receiver?completionCode=proof`),
+      ).toBe(false);
+    },
+  );
+
   it.each([
     "t3code://threads/env-1/thread-1",
     "t3code://pair?pairingUrl=x",

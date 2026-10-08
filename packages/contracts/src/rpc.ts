@@ -286,6 +286,7 @@ import {
 } from "./providerUsageLimits.ts";
 import { UsagePricing, UsageReadError, UsageSummary, UsageSummaryInput } from "./usage.ts";
 import { ServerSettings, ServerSettingsError, ServerSettingsPatch } from "./settings.ts";
+import { AccountStatus, ServerAccountError } from "./account.ts";
 import {
   ServerVoiceTranscribeInput,
   ServerVoiceTranscribeResult,
@@ -433,6 +434,10 @@ export const WS_METHODS = {
   serverUpsertKeybinding: "server.upsertKeybinding",
   serverRemoveKeybinding: "server.removeKeybinding",
   serverGetSettings: "server.getSettings",
+  serverGetAccountStatus: "server.getAccountStatus",
+  serverStartAccountLogin: "server.startAccountLogin",
+  serverPollAccountLogin: "server.pollAccountLogin",
+  serverSignOutAccount: "server.signOutAccount",
   serverUpdateSettings: "server.updateSettings",
   serverTranscribeVoice: "server.transcribeVoice",
   serverGetTritonAiUsage: "server.getTritonAiUsage",
@@ -700,6 +705,32 @@ const WsServerGetSettingsRpc = Rpc.make(WS_METHODS.serverGetSettings, {
   payload: Schema.Struct({}),
   success: ServerSettings,
   error: Schema.Union([ServerSettingsError, EnvironmentAuthorizationError]),
+});
+
+const WsServerGetAccountStatusRpc = Rpc.make(WS_METHODS.serverGetAccountStatus, {
+  payload: Schema.Struct({}),
+  success: AccountStatus,
+  error: Schema.Union([ServerAccountError, EnvironmentAuthorizationError]),
+});
+const WsServerStartAccountLoginRpc = Rpc.make(WS_METHODS.serverStartAccountLogin, {
+  payload: Schema.Struct({
+    returnUrl: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(512))),
+  }),
+  success: AccountStatus,
+  error: Schema.Union([ServerAccountError, EnvironmentAuthorizationError]),
+});
+const WsServerPollAccountLoginRpc = Rpc.make(WS_METHODS.serverPollAccountLogin, {
+  payload: Schema.Struct({
+    requestId: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(128))),
+    completionCode: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(128))),
+  }),
+  success: AccountStatus,
+  error: Schema.Union([ServerAccountError, EnvironmentAuthorizationError]),
+});
+const WsServerSignOutAccountRpc = Rpc.make(WS_METHODS.serverSignOutAccount, {
+  payload: Schema.Struct({}),
+  success: AccountStatus,
+  error: Schema.Union([ServerAccountError, EnvironmentAuthorizationError]),
 });
 
 const WsServerUpdateSettingsRpc = Rpc.make(WS_METHODS.serverUpdateSettings, {
@@ -1711,6 +1742,10 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerUpsertKeybindingRpc,
   WsServerRemoveKeybindingRpc,
   WsServerGetSettingsRpc,
+  WsServerGetAccountStatusRpc,
+  WsServerStartAccountLoginRpc,
+  WsServerPollAccountLoginRpc,
+  WsServerSignOutAccountRpc,
   WsServerUpdateSettingsRpc,
   WsServerTranscribeVoiceRpc,
   WsServerGetTritonAiUsageRpc,

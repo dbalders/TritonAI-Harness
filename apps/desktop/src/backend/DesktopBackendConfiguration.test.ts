@@ -1655,7 +1655,7 @@ describe("DesktopBackendConfiguration", () => {
       }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("resolveWsl preserves existing WSLENV entries when forwarding backend secrets", () =>
+  it.effect("resolveWsl preserves WSLENV while forwarding backend configuration", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const baseDir = yield* fileSystem.makeTempDirectoryScoped({
@@ -1669,6 +1669,9 @@ describe("DesktopBackendConfiguration", () => {
       const previousTritonAiOnPremKey = process.env.TRITONAI_ONPREM_API_KEY;
       const previousTritonAiFrontierKey = process.env.TRITONAI_FRONTIER_API_KEY;
       const previousUcsdAiBaseUrl = process.env.UCSD_AI_BASE_URL;
+      const previousAccountServiceUrl = process.env.TRITONAI_ACCOUNT_SERVICE_URL;
+      const previousAccountAllowInsecureLoopback =
+        process.env.TRITONAI_ACCOUNT_ALLOW_INSECURE_LOOPBACK;
       const previousOtlpHeaders = process.env.T3CODE_OTLP_HEADERS;
       const previousOtlpProtocol = process.env.T3CODE_OTLP_PROTOCOL;
       // A developer's own OTEL_* variables would be forwarded too.
@@ -1682,6 +1685,8 @@ describe("DesktopBackendConfiguration", () => {
         process.env.TRITONAI_ONPREM_API_KEY = "on-prem-key";
         process.env.TRITONAI_FRONTIER_API_KEY = "frontier-key";
         process.env.UCSD_AI_BASE_URL = "https://voice.example.test/v1";
+        process.env.TRITONAI_ACCOUNT_SERVICE_URL = "https://accounts.example.test";
+        process.env.TRITONAI_ACCOUNT_ALLOW_INSECURE_LOOPBACK = "1";
         process.env.T3CODE_OTLP_HEADERS = 'authorization="Bearer%20my-token"';
         process.env.T3CODE_OTLP_PROTOCOL = "http/protobuf";
 
@@ -1707,14 +1712,16 @@ describe("DesktopBackendConfiguration", () => {
           assert.equal(config.env.TRITONAI_ONPREM_API_KEY, "on-prem-key");
           assert.equal(config.env.TRITONAI_FRONTIER_API_KEY, "frontier-key");
           assert.equal(config.env.UCSD_AI_BASE_URL, "https://voice.example.test/v1");
+          assert.equal(config.env.TRITONAI_ACCOUNT_SERVICE_URL, "https://accounts.example.test");
+          assert.equal(config.env.TRITONAI_ACCOUNT_ALLOW_INSECURE_LOOPBACK, "1");
           assert.equal(config.env.T3CODE_OTLP_PROTOCOL, "http/protobuf");
           // The existing WSLENV is preserved byte-for-byte (note the empty
           // "::" segment survives — WSL ignores it, so we don't normalize
-          // it away) and missing backend secret names are appended.
+          // it away) and missing backend configuration names are appended.
           // OPENAI_API_KEY is already declared, so it isn't forwarded twice.
           assert.equal(
             config.env.WSLENV,
-            "GOPATH/p:OPENAI_API_KEY/u:EMPTY::AZURE_DEVOPS_EXT_PAT/u:ANTHROPIC_API_KEY:TRITONAI_API_KEY:TRITONAI_ONPREM_API_KEY:TRITONAI_FRONTIER_API_KEY:UCSD_AI_BASE_URL:T3CODE_OTLP_HEADERS:T3CODE_OTLP_PROTOCOL",
+            "GOPATH/p:OPENAI_API_KEY/u:EMPTY::AZURE_DEVOPS_EXT_PAT/u:ANTHROPIC_API_KEY:TRITONAI_API_KEY:TRITONAI_ONPREM_API_KEY:TRITONAI_FRONTIER_API_KEY:UCSD_AI_BASE_URL:TRITONAI_ACCOUNT_SERVICE_URL:TRITONAI_ACCOUNT_ALLOW_INSECURE_LOOPBACK:T3CODE_OTLP_HEADERS:T3CODE_OTLP_PROTOCOL",
           );
         }).pipe(
           Effect.provide(
@@ -1743,6 +1750,11 @@ describe("DesktopBackendConfiguration", () => {
         restoreEnv("TRITONAI_ONPREM_API_KEY", previousTritonAiOnPremKey);
         restoreEnv("TRITONAI_FRONTIER_API_KEY", previousTritonAiFrontierKey);
         restoreEnv("UCSD_AI_BASE_URL", previousUcsdAiBaseUrl);
+        restoreEnv("TRITONAI_ACCOUNT_SERVICE_URL", previousAccountServiceUrl);
+        restoreEnv(
+          "TRITONAI_ACCOUNT_ALLOW_INSECURE_LOOPBACK",
+          previousAccountAllowInsecureLoopback,
+        );
         for (const [name, value] of ambientOtel) restoreEnv(name, value);
       }
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),

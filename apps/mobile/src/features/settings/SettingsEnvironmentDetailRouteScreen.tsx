@@ -15,6 +15,7 @@ import { environmentSession } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useRemoteConnections } from "../../state/use-remote-environment-registry";
 import { ConnectionEnvironmentRow } from "../connection/ConnectionEnvironmentRow";
+import { UcsdAccountSettings } from "../connection/UcsdAccountSettings";
 import { SettingsActionRow } from "./components/SettingsActionRow";
 import { SettingsScreen } from "./components/SettingsScreen";
 import { SettingsSection } from "./components/SettingsSection";
@@ -166,6 +167,7 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
                 onSetEnabled={connections.onSetEnvironmentEnabled}
                 onUpdate={connections.onUpdateEnvironment}
               />
+              <UcsdAccountSettings environmentId={environmentId} />
             </SettingsSection>
             {!connected ? (
               <Text className="px-2 text-sm text-foreground-muted">
