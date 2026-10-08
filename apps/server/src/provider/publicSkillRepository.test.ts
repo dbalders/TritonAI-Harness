@@ -1,14 +1,20 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
-import type { ServerProviderSkillCatalog } from "@t3tools/contracts";
+import { ServerProviderSkillCatalog } from "@t3tools/contracts";
 
+import * as ServerConfig from "../config.ts";
 import {
+  layer,
   make,
   type PublicSkillCatalogSnapshotStore,
   PublicSkillRepository,
@@ -148,6 +154,23 @@ function memorySnapshot(initial: ServerProviderSkillCatalog | null) {
   };
   return { store, written };
 }
+
+function stateDirRepositoryLayer(repository: Parameters<typeof repositoryLayer>[0] = {}) {
+  return layer.pipe(
+    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-public-skills-" })),
+    Layer.provideMerge(NodeServices.layer),
+    Layer.provide(repositoryLayer(repository)),
+    Layer.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} }))),
+  );
+}
+
+const CatalogJson = Schema.fromJsonString(ServerProviderSkillCatalog);
+
+const snapshotFilePath = Effect.gen(function* () {
+  const config = yield* ServerConfig.ServerConfig;
+  const path = yield* Path.Path;
+  return path.join(config.stateDir, "public-skill-catalog.json");
+});
 
 describe("public skill repository", () => {
   it.effect("discovers catalog skills over HTTPS at one exact main revision", () => {
@@ -407,4 +430,44 @@ describe("public skill repository", () => {
       expect(calls).toHaveLength(4);
     }).pipe(Effect.provide(publicSkillRepositoryLayer({ calls })));
   });
+
+  it.effect("saves a refreshed catalog in the state directory", () =>
+    Effect.gen(function* () {
+      const repository = yield* PublicSkillRepository;
+      const fileSystem = yield* FileSystem.FileSystem;
+      yield* repository.refreshCatalog;
+
+      const saved = yield* Schema.decodeEffect(CatalogJson)(
+        yield* fileSystem.readFileString(yield* snapshotFilePath),
+      );
+      expect(saved.revision).toBe(REVISION);
+      expect(saved.entries).toHaveLength(2);
+    }).pipe(Effect.provide(stateDirRepositoryLayer())),
+  );
+
+  it.effect("restores the catalog saved by an earlier run", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      yield* fileSystem.writeFileString(
+        yield* snapshotFilePath,
+        yield* Schema.encodeEffect(CatalogJson)(SAVED_CATALOG),
+      );
+      const repository = yield* PublicSkillRepository;
+      const read = yield* repository.readCatalog;
+
+      expect(read).toEqual({ catalog: SAVED_CATALOG, stale: true });
+    }).pipe(Effect.provide(stateDirRepositoryLayer({ hangResolve: true }))),
+  );
+
+  it.effect("ignores an unreadable saved catalog", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      yield* fileSystem.writeFileString(yield* snapshotFilePath, "{ not a catalog");
+      const repository = yield* PublicSkillRepository;
+      const read = yield* repository.readCatalog;
+
+      expect(read.stale).toBe(false);
+      expect(read.catalog.revision).toBe(REVISION);
+    }).pipe(Effect.provide(stateDirRepositoryLayer())),
+  );
 });

@@ -493,6 +493,7 @@ export const make = Effect.fn("PublicSkillRepository.make")(function* (
   options: PublicSkillRepositoryOptions = {},
 ) {
   const httpClient = yield* HttpClient.HttpClient;
+  const serviceScope = yield* Effect.scope;
   const configuredToken =
     options.githubToken === undefined
       ? yield* Config.Redacted(PUBLIC_SKILLS_GITHUB_TOKEN_ENV).pipe(
@@ -706,7 +707,7 @@ export const make = Effect.fn("PublicSkillRepository.make")(function* (
       now - latest.refreshedAtMs < catalogTtlMs;
     if (fresh) return { catalog: latest.catalog, stale: false };
     // The cache single-flights this with any concurrent or follow-up refresh.
-    yield* Effect.forkDetach(discoverCatalog.pipe(Effect.ignoreCause({ log: true })));
+    yield* Effect.forkIn(discoverCatalog.pipe(Effect.ignoreCause({ log: true })), serviceScope);
     return { catalog: latest.catalog, stale: true };
   });
   const refreshCatalog = Effect.gen(function* () {
@@ -822,28 +823,9 @@ const makeStateDirSnapshotStore = Effect.gen(function* () {
   } satisfies PublicSkillCatalogSnapshotStore;
 });
 
-const defaultRepository = Effect.runSync(
-  Effect.cached(
-    Effect.gen(function* () {
-      return yield* make({ snapshot: yield* makeStateDirSnapshotStore });
-    }),
-  ),
+export const layer = Layer.effect(
+  PublicSkillRepository,
+  Effect.gen(function* () {
+    return yield* make({ snapshot: yield* makeStateDirSnapshotStore });
+  }),
 );
-
-export const readPublicSkillCatalog = Effect.fn("readPublicSkillCatalog")(function* () {
-  const repository = yield* defaultRepository;
-  return yield* repository.readCatalog;
-});
-
-export const refreshPublicSkillCatalog = Effect.fn("refreshPublicSkillCatalog")(function* () {
-  const repository = yield* defaultRepository;
-  return yield* repository.refreshCatalog;
-});
-
-export const loadPublicSkillBundle = Effect.fn("loadPublicSkillBundle")(function* (input: {
-  readonly id: string;
-  readonly revision: string;
-}) {
-  const repository = yield* defaultRepository;
-  return yield* repository.loadBundle(input);
-});
