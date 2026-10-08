@@ -61,7 +61,7 @@ export interface DotScheduledPrompt {
   readonly feedback?: { readonly useful: number; readonly notUseful: number };
 }
 
-export type DotScheduledPromptAction = "run" | "pause" | "resume" | "delete";
+export type DotScheduledPromptAction = "run" | "pause" | "resume" | "delete" | "opened";
 
 /** A Run now response acknowledges a durable run, which may still be queued. */
 export interface DotScheduledPromptRunResponse {

@@ -16,7 +16,7 @@ import type { DotScheduledPrompt, DotScheduledPromptAction, DotWatch } from "./d
 export interface BotRoutinesPanelProps {
   readonly watches: readonly DotWatch[] | undefined;
   readonly scheduledPrompts: readonly DotScheduledPrompt[] | undefined;
-  /** Return the action response after refreshing state; reject request or refresh failures. */
+  /** Return the server acknowledgement after attempting a state refresh; reject request failures. */
   readonly onPromptAction: (
     prompt: DotScheduledPrompt,
     action: DotScheduledPromptAction,
@@ -216,7 +216,9 @@ function PromptRow({
             ? "Routine stopped. Past results remain in history."
             : action === "pause"
               ? "Pause request accepted."
-              : "Resume request accepted.",
+              : action === "opened"
+                ? "Results marked read. A paused routine still needs Resume."
+                : "Resume request accepted.",
       );
       if (action === "delete") closeConfirmation();
     } catch (cause) {
@@ -292,6 +294,16 @@ function PromptRow({
               ? "Pause"
               : "Resume"}
         </Button>
+        {(prompt.lastRun || prompt.consecutiveUnread > 0) && (
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={busy !== null}
+            onClick={() => void act("opened")}
+          >
+            {busy === "opened" ? "Marking read…" : "Mark results read"}
+          </Button>
+        )}
         <Button
           ref={stopButton}
           variant="ghost"
@@ -305,6 +317,12 @@ function PromptRow({
           Stop
         </Button>
       </div>
+      {prompt.consecutiveUnread > 0 && (
+        <p className="text-xs text-muted-foreground">
+          {prompt.consecutiveUnread} unread results. After reading them in your conversation, mark
+          results read to reset the unread spending limit.
+        </p>
+      )}
       {message && (
         <p role="status" className="text-xs text-muted-foreground">
           {message}

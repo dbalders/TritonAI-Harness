@@ -76,14 +76,19 @@ function sourceUrl(link: string | undefined): string | undefined {
 export function BotHandlingPanel({
   handling,
   onStop,
+  onSeen,
 }: {
   readonly handling: DotHandlingView | undefined;
   /** Parent refreshes state after the action and rejects API errors (including HTTP 409). */
   readonly onStop: (item: DotHandlingItem) => Promise<DotHandlingStopResult>;
+  readonly onSeen?: (through: string) => Promise<unknown>;
 }) {
   const headingId = useId();
   const [selected, setSelected] = useState<DotHandlingItem | null>(null);
   const [busy, setBusy] = useState(false);
+  const [markingSeen, setMarkingSeen] = useState(false);
+  const seenInFlight = useRef(false);
+  const [seenError, setSeenError] = useState<string | null>(null);
   const stopping = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -167,6 +172,39 @@ export function BotHandlingPanel({
       <p role="status" aria-live="polite" className="wrap-anywhere">
         {notice}
       </p>
+      {onSeen && handling.items.some((item) => item.state === "done-unseen") && (
+        <div className="mb-3 space-y-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={markingSeen || busy}
+            onClick={async () => {
+              if (seenInFlight.current) return;
+              seenInFlight.current = true;
+              setMarkingSeen(true);
+              setSeenError(null);
+              try {
+                await onSeen(handling.generatedAt);
+                setNotice("Recent results marked seen.");
+              } catch (cause) {
+                setSeenError(
+                  cause instanceof Error ? cause.message : "Could not mark results seen.",
+                );
+              } finally {
+                seenInFlight.current = false;
+                setMarkingSeen(false);
+              }
+            }}
+          >
+            {markingSeen ? "Marking seen…" : "Mark recent results seen"}
+          </Button>
+          {seenError && (
+            <p role="alert" className="text-sm text-destructive">
+              {seenError}
+            </p>
+          )}
+        </div>
+      )}
       <div className="space-y-3">
         {GROUPS.map((group, index) => {
           const items = handling.items.filter((item) =>
