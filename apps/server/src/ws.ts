@@ -3102,10 +3102,10 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.serverSignalProcess, processDiagnostics.signal(input), {
             "rpc.aggregate": "server",
           }),
-        [WS_METHODS.serverListProviderSkillCatalog]: (_input) =>
+        [WS_METHODS.serverListProviderSkillCatalog]: (input) =>
           observeRpcEffect(
             WS_METHODS.serverListProviderSkillCatalog,
-            CodexManagement.listProviderSkillCatalog(),
+            CodexManagement.listProviderSkillCatalog(input),
             {
               "rpc.aggregate": "server",
             },
