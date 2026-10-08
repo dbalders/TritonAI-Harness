@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import {
   DotApiError,
+  draftAfterSend,
   DotClient,
   readDotSession,
   saveDotSession,
@@ -160,5 +161,13 @@ describe("DotClient", () => {
     expect(readDotSession(storage, "https://bot.example.test")).toBeNull();
     saveDotSession(storage, "https://bot.example.test", null);
     expect(values.size).toBe(0);
+  });
+});
+
+describe("draftAfterSend", () => {
+  it("clears what was sent and keeps only text typed while sending", () => {
+    expect(draftAfterSend("hello", "hello")).toBe("");
+    expect(draftAfterSend("hello world", "hello")).toBe("world");
+    expect(draftAfterSend("goodbye", "hello")).toBe("goodbye");
   });
 });

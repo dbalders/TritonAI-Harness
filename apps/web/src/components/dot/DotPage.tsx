@@ -14,6 +14,7 @@ import { clearBotSessions, useBotServiceUrl } from "./botService";
 import {
   DotApiError,
   DotClient,
+  draftAfterSend,
   readDotSession,
   runStatusLabel,
   saveDotSession,
@@ -201,6 +202,7 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
   }, [runs.length, runs.at(-1)?.result?.summary, sending]);
 
   const send = async () => {
+    const sentDraft = draft;
     const text = draft.trim();
     if (!session || !text || sending) return;
     setSending(true);
@@ -214,8 +216,7 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
     try {
       await client.send(session, message);
       pendingMessage.current = null;
-      // Keep anything typed while the message was sending.
-      setDraft((current) => (current.trim() === text ? "" : current));
+      setDraft((current) => draftAfterSend(current, sentDraft));
       await refresh();
     } catch (cause) {
       reportError(cause, session.ownerToken);

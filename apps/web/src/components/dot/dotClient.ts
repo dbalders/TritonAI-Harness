@@ -230,6 +230,11 @@ export class DotClient {
   }
 }
 
+/** Keeps only what was typed after a message was sent; an edit to the sent text is kept whole. */
+export function draftAfterSend(current: string, sent: string): string {
+  return current.startsWith(sent) ? current.slice(sent.length).trimStart() : current;
+}
+
 export function runStatusLabel(status: DotRun["status"]): string {
   return {
     queued: "Queued",
