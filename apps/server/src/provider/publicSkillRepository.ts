@@ -23,6 +23,7 @@ import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
@@ -680,21 +681,30 @@ export const make = Effect.fn("PublicSkillRepository.make")(function* (
     ),
   );
 
+  // A forced refresh invalidates the cache without cancelling a lookup already
+  // running, so only the newest lookup may publish, one publish at a time.
+  const latestLookup = yield* Ref.make(0);
+  const publishLock = yield* Semaphore.make(1);
+
   const catalogCache = yield* Cache.makeWith<
     string,
     ServerProviderSkillCatalog,
     ServerProviderSkillCatalogError
   >(
     () =>
-      buildCatalog().pipe(
-        Effect.tap((catalog) =>
+      Effect.gen(function* () {
+        const lookup = yield* Ref.updateAndGet(latestLookup, (count) => count + 1);
+        const catalog = yield* buildCatalog();
+        yield* publishLock.withPermits(1)(
           Effect.gen(function* () {
+            if ((yield* Ref.get(latestLookup)) !== lookup) return;
             const refreshedAtMs = yield* Clock.currentTimeMillis;
             yield* Ref.set(latestCatalog, { catalog, refreshedAtMs });
             if (options.snapshot) yield* options.snapshot.write(catalog);
           }),
-        ),
-      ),
+        );
+        return catalog;
+      }),
     {
       capacity: 1,
       timeToLive: (exit) => (Exit.isSuccess(exit) ? catalogTtl : Duration.zero),

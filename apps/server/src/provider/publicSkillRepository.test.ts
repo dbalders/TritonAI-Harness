@@ -54,6 +54,11 @@ function repositoryLayer(input?: {
   readonly currentTree?: () => string;
   readonly failResolveAttempts?: number;
   readonly hangResolve?: boolean;
+  /** Holds the first commit lookup, answered with the revision current when it arrived. */
+  readonly holdFirstResolve?: {
+    readonly arrived: Deferred.Deferred<void>;
+    readonly release: Deferred.Deferred<void>;
+  };
   readonly rateLimitOnce?: boolean;
   readonly symlink?: boolean;
   readonly truncated?: boolean;
@@ -98,6 +103,20 @@ function repositoryLayer(input?: {
       if (url.pathname.includes("/commits/")) {
         if (input?.hangResolve) return Effect.never;
         resolveAttempts += 1;
+        const hold = input?.holdFirstResolve;
+        if (hold && resolveAttempts === 1) {
+          const held = HttpClientResponse.fromWeb(
+            request,
+            Response.json({
+              sha: input?.currentRevision?.() ?? REVISION,
+              commit: { tree: { sha: input?.currentTree?.() ?? TREE_SHA } },
+            }),
+          );
+          return Deferred.succeed(hold.arrived, undefined).pipe(
+            Effect.andThen(Deferred.await(hold.release)),
+            Effect.as(held),
+          );
+        }
         if (input?.rateLimitOnce && !rateLimited) {
           rateLimited = true;
           response = new Response("rate limited", {
@@ -523,6 +542,35 @@ describe("public skill repository", () => {
           currentRevision: () => revision,
           currentTree: () => tree,
         }),
+      ),
+    );
+  });
+
+  it.effect("keeps a forced refresh when an older lookup finishes after it", () => {
+    const hold = { arrived: Deferred.makeUnsafe<void>(), release: Deferred.makeUnsafe<void>() };
+    const snapshot = memorySnapshot(null);
+    let revision = REVISION;
+    let tree = TREE_SHA;
+    return Effect.gen(function* () {
+      const repository = yield* PublicSkillRepository;
+      const older = yield* repository.refreshCatalog().pipe(Effect.forkChild);
+      yield* Deferred.await(hold.arrived);
+      revision = SECOND_REVISION;
+      tree = SECOND_TREE_SHA;
+      const forced = yield* repository.refreshCatalog({ force: true });
+      yield* Deferred.succeed(hold.release, undefined);
+      yield* Fiber.join(older);
+      const latest = yield* repository.readCatalog;
+
+      expect(forced.catalog.revision).toBe(SECOND_REVISION);
+      expect(latest).toEqual({ catalog: forced.catalog, stale: false });
+      expect(snapshot.written.map((catalog) => catalog.revision)).toEqual([SECOND_REVISION]);
+    }).pipe(
+      Effect.provide(
+        publicSkillRepositoryLayer(
+          { holdFirstResolve: hold, currentRevision: () => revision, currentTree: () => tree },
+          { githubToken: null, snapshot: snapshot.store },
+        ),
       ),
     );
   });
