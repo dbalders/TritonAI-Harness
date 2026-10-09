@@ -40,7 +40,9 @@ a reply and choose **Share**. **Share text to a team** publishes only the text
 you review, as a memory note labeled with the thread's project, to a team where
 you are an editor or owner; the project's linked team is chosen first when you
 can write to it. **Add team memory to message** previews one note
-from the project's linked team and adds it to your draft. When you send, your
+from the project's linked team and adds it to your draft. The list names each
+note by its title and author; when a team has many documents, some show their
+title only after you preview them. When you send, your
 team access is checked again: if you were removed, the project was
 unlinked or relinked, or the team folder moved, the message is held and you can
 remove the team memory and keep the rest of your draft. Signing out or switching

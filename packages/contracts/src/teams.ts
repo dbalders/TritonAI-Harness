@@ -165,6 +165,24 @@ export const formatTeamNote = (note: {
     note.text,
   ].join("\n\n");
 };
+/**
+ * The title, description, and project label `formatTeamNote` writes at the top of a document.
+ * Fields are empty when the document doesn't start that way. Anyone who can edit the document can
+ * change these lines, so they describe it rather than vouch for it.
+ */
+export const teamNoteHeader = (text: string) => {
+  const blocks = text.split("\n\n");
+  const title = /^# (.+)$/u.exec(text.split("\n", 1)[0] ?? "")?.[1]?.trim() ?? "";
+  let next = 1;
+  const field = (name: string) => {
+    const block = blocks[next];
+    if (!title || !block?.startsWith(`${name}: `) || block.includes("\n")) return "";
+    next += 1;
+    return block.slice(name.length + 2).trim();
+  };
+  const description = field("Description");
+  return { title, description, project: field("Project") };
+};
 /** Team text a user can add to one message: a memory note, or a skill's instructions. */
 export const TeamContextKind = Schema.Literals(["memory", "skill"]);
 export type TeamContextKind = typeof TeamContextKind.Type;
@@ -202,6 +220,34 @@ export const formatTeamMemoryContext = (input: { teamName: string; path: string;
  * instructions with them are refused, so the text an agent receives is the text the user read.
  */
 export const hasHiddenTeamText = (text: string) => /(?![\t\n\r])[\p{Cc}\p{Cf}]/u.test(text);
+/**
+ * What a list shows for a document before it is opened, read from the start of the document.
+ * `hidden` means the text that was read contains hidden or control characters; a title or
+ * description that contains them is left empty rather than shown.
+ */
+export const TeamDocumentSummary = Schema.Struct({
+  title: Schema.String.check(Schema.isMaxLength(80)),
+  description: Schema.String.check(Schema.isMaxLength(200)),
+  hidden: Schema.Boolean,
+});
+export type TeamDocumentSummary = typeof TeamDocumentSummary.Type;
+/** Summarizes a document's own header; titles and descriptions longer than publishing allows are cut. */
+export const summarizeTeamNote = (text: string): TeamDocumentSummary => {
+  const header = teamNoteHeader(text);
+  const shown = !hasHiddenTeamText(`${header.title}\n${header.description}`);
+  // Lengths are UTF-16 units, as the schema counts them; a surrogate pair is never split.
+  const cut = (value: string, max: number) => {
+    if (value.length <= max) return value;
+    const last = value.charCodeAt(max - 2);
+    const end = last >= 0xd800 && last <= 0xdbff ? max - 2 : max - 1;
+    return `${value.slice(0, end)}…`;
+  };
+  return {
+    title: shown ? cut(header.title, 80) : "",
+    description: shown ? cut(header.description, 200) : "",
+    hidden: hasHiddenTeamText(text),
+  };
+};
 export const TeamDocument = Schema.Struct({
   path: Schema.String,
   etag: Schema.String,
@@ -223,6 +269,8 @@ export const TeamStorageStatus = Schema.Struct({
       path: Schema.String,
       etag: Schema.String,
       size: Schema.Int,
+      /** Present for the documents a linked project's memory or skill list summarized. */
+      summary: Schema.optionalKey(TeamDocumentSummary),
     }),
   ),
 });

@@ -3,9 +3,11 @@ import {
   formatTeamContext,
   formatTeamMemoryContext,
   formatTeamNote,
+  summarizeTeamNote,
   TEAM_SKILL_PREAMBLE,
+  teamNoteHeader,
 } from "@t3tools/contracts";
-import { teamDocumentAuthor, teamNoteDetails, teamNoteTitle } from "./threadTeamContext";
+import { teamContextRows, teamDocumentAuthor } from "./threadTeamContext";
 
 describe("team memory context", () => {
   it("keeps note text inside one attributed block", () => {
@@ -26,12 +28,6 @@ describe("team memory context", () => {
     expect(block.match(/<\/team-memory>/gu)).toHaveLength(1);
   });
 
-  it("titles a note from its heading, falling back to the file name", () => {
-    expect(teamNoteTitle("# Weekly summary\n\nProject: Grants\n\nDone.", "Memory/x/y/z.md")).toBe(
-      "Weekly summary",
-    );
-    expect(teamNoteTitle("No heading", "Memory/x/y/z.md")).toBe("z.md");
-  });
   it("frames a team skill for one message and keeps its text inside the block", () => {
     const block = formatTeamContext({
       kind: "skill",
@@ -60,14 +56,84 @@ describe("team memory context", () => {
       project: "Grants",
       text: "Project: not a label\n\nDescription: not this either",
     });
-    expect(teamNoteDetails(text)).toEqual({
+    expect(teamNoteHeader(text)).toEqual({
+      title: "Grant summary",
       description: "Summarize a grant report.",
       project: "Grants",
     });
-    expect(teamNoteDetails("# Note\n\nJust text")).toEqual({ description: "", project: "" });
+    // A memory note has no description line; its body is never read as one.
+    expect(
+      teamNoteHeader(
+        formatTeamNote({ title: "Note", project: "Grants", text: "Description: body text" }),
+      ),
+    ).toEqual({ title: "Note", description: "", project: "Grants" });
+    expect(teamNoteHeader("No heading\n\nProject: Grants")).toEqual({
+      title: "",
+      description: "",
+      project: "",
+    });
     expect(teamDocumentAuthor("Skills/alice-id/d/r.md", { "alice-id": "Alice" })).toBe("Alice");
     expect(teamDocumentAuthor("Skills/gone-id/d/r.md", { "alice-id": "Alice" })).toBe(
       "a former member",
     );
+  });
+
+  it("summarizes a header without showing hidden characters or exceeding publish limits", () => {
+    const skill = formatTeamNote({
+      title: "Formatter",
+      description: "Formats reports.",
+      project: "Grants",
+      text: "Step one.",
+    });
+    expect(summarizeTeamNote(skill)).toEqual({
+      title: "Formatter",
+      description: "Formats reports.",
+      hidden: false,
+    });
+    // Hidden text in the body flags the document but keeps a clean title readable.
+    expect(summarizeTeamNote(`${skill}\u200b`)).toEqual({
+      title: "Formatter",
+      description: "Formats reports.",
+      hidden: true,
+    });
+    // A spoofable title is never shown.
+    expect(summarizeTeamNote("# Pay\u202eroll\n\nDescription: x\n\nBody")).toEqual({
+      title: "",
+      description: "",
+      hidden: true,
+    });
+    // Edited headers can exceed what publishing allows; the cut never splits a character.
+    const long = summarizeTeamNote(`# ${"a".repeat(78)}😀😀\n\nDescription: ${"d".repeat(300)}`);
+    expect(long.title).toBe(`${"a".repeat(78)}…`);
+    expect(long.title.length).toBeLessThanOrEqual(80);
+    expect(long.description).toHaveLength(200);
+  });
+
+  it("lists documents by title and author, naming record ids only when needed", () => {
+    const authors = { "alice-id": "Alice" };
+    const summary = (title: string, description = "") => ({ title, description, hidden: false });
+    const rows = teamContextRows(
+      "skill",
+      [
+        { path: "Skills/alice-id/d/99999999-r.md" },
+        { path: "Skills/alice-id/d/bbbbbbbb-r.md", summary: summary("Report", "Second") },
+        { path: "Skills/alice-id/d/aaaaaaaa-r.md", summary: summary("Report", "First") },
+        { path: "Skills/gone-id/d/cccccccc-r.md", summary: summary("Agenda") },
+        {
+          path: "Skills/alice-id/d/dddddddd-r.md",
+          summary: { title: "", description: "", hidden: true },
+        },
+      ],
+      authors,
+    );
+    expect(rows.map(({ label, description, source }) => [label, description, source])).toEqual([
+      ["Agenda", "No description", "From a former member"],
+      ["Report", "First", "From Alice · aaaaaaaa"],
+      ["Report", "Second", "From Alice · bbbbbbbb"],
+      ["Skill 99999999", "Preview to see its title.", "From Alice"],
+      ["Untitled skill", "No description", "From Alice"],
+    ]);
+    expect(rows[4]?.warning).toMatch(/hidden or control characters/u);
+    expect(rows.every((row) => !row.label.includes("Skills/"))).toBe(true);
   });
 });

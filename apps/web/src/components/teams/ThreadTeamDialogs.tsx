@@ -3,6 +3,8 @@ import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime"
 import {
   formatTeamContext,
   formatTeamNote,
+  summarizeTeamNote,
+  teamNoteHeader,
   type EnvironmentId,
   type ProjectId,
   type TeamContextKind,
@@ -35,7 +37,7 @@ import { Textarea } from "../ui/textarea";
 import { toastManager } from "../ui/toast";
 import { teamDocumentDeviceId } from "./TeamDocuments";
 import { useTeamProjectRequest } from "./TeamProjects";
-import { teamDocumentAuthor, teamNoteDetails, teamNoteTitle } from "./threadTeamContext";
+import { teamContextRows, teamDocumentAuthor, type TeamListedDocument } from "./threadTeamContext";
 
 const MAX_NOTE_BYTES = 64 * 1024;
 type Share = Extract<TeamProjectCommand, { action: "share" }>;
@@ -364,7 +366,8 @@ const copy = {
     exact: "Exactly this will be added to your message:",
     after:
       "Once sent, the text stays in this conversation and the agent’s context. Removing the note or your team access later does not take it back.",
-    add: (title: string) => `Add “${title}” to message`,
+    add: (title: string | null) =>
+      title === null ? "Add the current note to message" : `Add “${title}” to message`,
   },
   skill: {
     title: "Use a team skill",
@@ -377,7 +380,8 @@ const copy = {
     exact: "Exactly this will be added to your message, and the agent may act on it:",
     after:
       "Read the instructions before sending. Once sent, they stay in this conversation and the agent’s context; removing the skill or your team access later does not take them back.",
-    add: (title: string) => `Use “${title}” in this message`,
+    add: (title: string | null) =>
+      title === null ? "Use the current skill in this message" : `Use “${title}” in this message`,
   },
 } as const;
 
@@ -441,7 +445,7 @@ function ContextPicker({
 }) {
   const { run, busy, error } = useTeamProjectRequest(environmentId);
   const [link, setLink] = useState<TeamProjectLink | null | "unlinked">(null);
-  const [files, setFiles] = useState<readonly string[] | null>(null);
+  const [files, setFiles] = useState<readonly TeamListedDocument[] | null>(null);
   const [authors, setAuthors] = useState<Readonly<Record<string, string>>>();
   const [note, setNote] = useState<TeamDocument | null>(null);
   const [changed, setChanged] = useState(false);
@@ -471,8 +475,18 @@ function ContextPicker({
     const problem = storageProblem(listed);
     if (problem) return setNotice(problem);
     setAuthors(listed.authors);
-    setFiles((listed.storage?.files ?? []).map((file) => file.path).toSorted());
+    setFiles((listed.storage?.files ?? []).map(({ path, summary }) => ({ path, summary })));
   };
+  // A document's row shows what was last read from it, including documents the list didn't summarize.
+  const remember = (document: TeamDocument) =>
+    setFiles(
+      (current) =>
+        current?.map((file) =>
+          file.path === document.path
+            ? { ...file, summary: summarizeTeamNote(document.text) }
+            : file,
+        ) ?? current,
+    );
   useEffect(() => {
     void load();
     // Loads once per mount; the dialog remounts for another account, project, or kind.
@@ -487,6 +501,7 @@ function ContextPicker({
     if (!result || "error" in result) return null;
     const document = result.storage?.document ?? null;
     if (!document) setNotice(storageProblem(result) ?? "This document could not be opened.");
+    else remember(document);
     if (result.authors) setAuthors(result.authors);
     return document;
   };
@@ -510,7 +525,12 @@ function ContextPicker({
       if (!result || "error" in result) return;
       if (!result.reference) return setNotice("This could not be added. Try again.");
       reference = result.reference;
+      // Older servers don't return the document; its title is then not repeated as current.
+      const current = result.storage?.document?.path === note.path ? result.storage.document : null;
+      if (current) remember(current);
       if (reference.block !== shown) {
+        // Title, details, and the button follow the text the user is now asked to review.
+        if (current) setNote(current);
         setIssued(reference);
         setChanged(true);
         return;
@@ -540,8 +560,15 @@ function ContextPicker({
         </p>
       </DialogPanel>
     );
-  const title = note ? teamNoteTitle(note.text, note.path) : "";
-  const details = note ? teamNoteDetails(note.text) : null;
+  const details = note ? teamNoteHeader(note.text) : null;
+  // A changed block an older server issued without its document isn't labeled with the old title.
+  const title =
+    note &&
+    issued &&
+    issued.block !==
+      formatTeamContext({ kind, teamName: issued.teamName, path: note.path, text: note.text })
+      ? null
+      : details?.title || (kind === "skill" ? "Untitled skill" : "Untitled note");
   return (
     <>
       <DialogPanel>
@@ -568,31 +595,37 @@ function ContextPicker({
                   {text.changed}
                 </p>
               ) : null}
-              {kind === "skill" ? (
-                <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 rounded-lg border border-border p-3 text-xs">
-                  <dt className="text-muted-foreground">Skill</dt>
-                  <dd>{title}</dd>
-                  <dt className="text-muted-foreground">For</dt>
-                  <dd>{details.description || "No description"}</dd>
-                  {details.project ? (
-                    <>
-                      <dt className="text-muted-foreground">Project label</dt>
-                      <dd>{details.project}</dd>
-                    </>
-                  ) : null}
-                  <dt className="text-muted-foreground">Source</dt>
-                  <dd>
-                    {link.teamName} shared Skills folder, in{" "}
-                    {teamDocumentAuthor(note.path, authors)}
-                    ’s folder
-                  </dd>
-                  <dt className="text-muted-foreground">Who can see it</dt>
-                  <dd>
-                    Every member of {link.teamName} can read it, and editors can change it, so
-                    review it each time you use it.
-                  </dd>
-                </dl>
-              ) : null}
+              <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 rounded-lg border border-border p-3 text-xs">
+                <dt className="text-muted-foreground">{kind === "skill" ? "Skill" : "Note"}</dt>
+                <dd>{title ?? "Changed; see the current text below"}</dd>
+                {kind === "skill" && title !== null ? (
+                  <>
+                    <dt className="text-muted-foreground">For</dt>
+                    <dd>{details.description || "No description"}</dd>
+                  </>
+                ) : null}
+                {details.project && title !== null ? (
+                  <>
+                    <dt className="text-muted-foreground">Project label</dt>
+                    <dd>{details.project}</dd>
+                  </>
+                ) : null}
+                <dt className="text-muted-foreground">Source</dt>
+                <dd>
+                  {link.teamName} shared {kind === "skill" ? "Skills" : "Memory"} folder, in{" "}
+                  {teamDocumentAuthor(note.path, authors)}
+                  ’s folder
+                </dd>
+                {kind === "skill" ? (
+                  <>
+                    <dt className="text-muted-foreground">Who can see it</dt>
+                    <dd>
+                      Every member of {link.teamName} can read it, and editors can change it, so
+                      review it each time you use it.
+                    </dd>
+                  </>
+                ) : null}
+              </dl>
               <p className="text-xs text-muted-foreground">{text.exact}</p>
               <pre
                 aria-label={kind === "skill" ? "Team skill to use" : "Team memory to add"}
@@ -610,18 +643,25 @@ function ContextPicker({
             <p className="text-sm text-muted-foreground">{text.empty}</p>
           ) : (
             <ul className="max-h-72 divide-y divide-border overflow-auto rounded-lg border border-border px-3">
-              {files.map((path) => (
-                <li key={path} className="flex items-center gap-2 py-2">
-                  <span className="min-w-0 flex-1 truncate text-xs">
-                    From {teamDocumentAuthor(path, authors)} ·{" "}
-                    <span className="font-mono">{path.split("/").at(-1)?.slice(0, 8)}</span>
-                  </span>
+              {teamContextRows(kind, files, authors).map((row) => (
+                <li key={row.path} className="flex items-start gap-2 py-2">
+                  <div className="min-w-0 flex-1 space-y-0.5">
+                    <p className="truncate text-sm">{row.label}</p>
+                    {row.description ? (
+                      <p className="line-clamp-2 text-xs text-muted-foreground">
+                        {row.description}
+                      </p>
+                    ) : null}
+                    <p className="truncate text-xs text-muted-foreground">{row.source}</p>
+                    {row.warning ? <p className="text-xs text-destructive">{row.warning}</p> : null}
+                  </div>
                   <Button
                     size="sm"
                     variant="outline"
                     disabled={busy}
+                    aria-label={`Preview ${row.label}`}
                     onClick={() =>
-                      void read(path).then((document) => {
+                      void read(row.path).then((document) => {
                         setChanged(false);
                         setIssued(null);
                         if (document) setNote(document);

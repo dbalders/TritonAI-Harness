@@ -62,6 +62,8 @@ const storageUnavailable = (status: TeamStorageStatus["status"]) =>
         : "Connect Microsoft in Teams → your team → Shared storage, then try again.",
   });
 const folders = { memory: "Memory", skill: "Skills" } as const;
+/** Documents a project's memory or skill list titles; the rest show their titles once previewed. */
+const LIST_SUMMARIES = 20;
 /** The one top-level team folder a project command may touch; the contract pins its path too. */
 const folderOf = (
   command: Extract<TeamProjectCommand, { projectId: ProjectId }>,
@@ -288,7 +290,8 @@ export const make = Effect.gen(function* () {
     }
     return {
       projects: [],
-      storage: null,
+      // The document the block was made from, so a changed one is reviewed under its current title.
+      storage: status,
       reference: {
         id: entry.id,
         kind,
@@ -460,7 +463,7 @@ export const make = Effect.gen(function* () {
           return storage.execute(
             sessionId,
             { action: "list-files", teamId },
-            { ...scope, listRoot: folder },
+            { ...scope, listRoot: folder, summaries: LIST_SUMMARIES },
           );
         case "memory-read":
         case "skill-read":

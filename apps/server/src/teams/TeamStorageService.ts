@@ -23,7 +23,7 @@ import {
 import { AccountService } from "../auth/AccountService.ts";
 import { ServerSecretStore } from "../auth/ServerSecretStore.ts";
 import * as Microsoft from "../memory/sync/microsoftSignIn.ts";
-import { executeDocument } from "./teamDocuments.ts";
+import { executeDocument, summarizeDocument } from "./teamDocuments.ts";
 
 const Guid = Schema.String.check(Schema.isPattern(/^[a-f0-9-]{36}$/iu));
 const OAuth = Schema.Struct({ clientId: Guid, tenantId: Guid });
@@ -65,6 +65,11 @@ export interface TeamStorageScope {
   readonly storage: TeamStorage;
   /** Lists only this top-level folder instead of the whole team folder. */
   readonly listRoot?: "Memory" | "Skills";
+  /**
+   * Also reads the start of this many listed documents, in path order, for their titles and
+   * descriptions. Each costs one Graph lookup and one partial download.
+   */
+  readonly summaries?: number;
 }
 interface Connection {
   readonly sessionId: string;
@@ -351,6 +356,7 @@ export const make = (config: Microsoft.MicrosoftOAuthConfig | null) =>
             }
             if (command.action !== "list-files") return connected;
             const files: TeamStorageStatus["files"][number][] = [];
+            const parents = new Map<string, string>();
             const visited = new Set<string>();
             const root = `https://graph.microsoft.com/v1.0/drives/${encodeURIComponent(storage.driveId)}/items/`;
             const folderEndpoint = (path: string) =>
@@ -456,8 +462,10 @@ export const make = (config: Microsoft.MicrosoftOAuthConfig | null) =>
                   const path = parent.path ? `${parent.path}/${item.name}` : item.name;
                   if (item.folder !== undefined)
                     queue.push({ id: item.id, path, depth: parent.depth + 1 });
-                  else if (item.file !== undefined && item.eTag)
+                  else if (item.file !== undefined && item.eTag) {
                     files.push({ id: item.id, path, etag: item.eTag, size: item.size ?? 0 });
+                    parents.set(path, parent.id);
+                  }
                   if (files.length + queue.length > 4000)
                     return yield* failure("This team has too many shared files to display.");
                 }
@@ -465,8 +473,29 @@ export const make = (config: Microsoft.MicrosoftOAuthConfig | null) =>
               }
             }
             for (const parent of queue) yield* verifyFolder(parent);
+            const summarized = files
+              .toSorted((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
+              .slice(0, scope?.summaries ?? 0);
+            const summaries = new Map(
+              yield* Effect.forEach(
+                summarized,
+                (file) =>
+                  summarizeDocument({
+                    storage,
+                    file: { ...file, parentId: parents.get(file.path)! },
+                    send,
+                  }).pipe(Effect.map((summary) => [file.path, summary] as const)),
+                { concurrency: 4 },
+              ).pipe(Effect.provideService(HttpClient.HttpClient, http)),
+            );
             yield* verifyCurrent;
-            return { ...connected, files };
+            return {
+              ...connected,
+              files: files.map((file) => {
+                const summary = summaries.get(file.path);
+                return summary ? { ...file, summary } : file;
+              }),
+            };
           });
           return yield* action.pipe(
             Effect.tap(() => verifyCurrent),

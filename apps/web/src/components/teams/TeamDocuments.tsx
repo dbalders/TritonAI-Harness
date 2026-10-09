@@ -205,7 +205,14 @@ export function TeamDocuments({
                 className="w-full break-all text-left text-xs text-primary underline-offset-4 hover:underline disabled:opacity-50"
                 onClick={() => void run({ action: "read-file", teamId, path: file.path })}
               >
-                {file.path}
+                {file.summary?.title ? (
+                  <>
+                    {file.summary.title}
+                    <span className="block text-muted-foreground">{file.path}</span>
+                  </>
+                ) : (
+                  file.path
+                )}
               </button>
             </li>
           ))}

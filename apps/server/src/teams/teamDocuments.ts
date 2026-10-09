@@ -4,6 +4,8 @@ import {
   type TeamStorageCommand,
   formatTeamNote,
   hasHiddenTeamText,
+  summarizeTeamNote,
+  type TeamDocumentSummary,
   TeamsError,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -74,6 +76,30 @@ const readText = (response: HttpClientResponse.HttpClientResponse, max = MAX_BYT
       try: () => new TextDecoder("utf-8", { fatal: true }).decode(bytes),
       catch: () => unavailable("The document is not valid UTF-8 text."),
     });
+  });
+
+/**
+ * The signed download address Graph gave for an item, only on the team's own SharePoint site.
+ * The trusted membership service pins that site. Never expose the signed URL or forward a Graph
+ * bearer to its download host.
+ */
+const downloadUrl = (item: typeof Item.Type, storage: TeamStorage) =>
+  Effect.gen(function* () {
+    const url = yield* Effect.try({
+      try: () => new URL(item["@microsoft.graph.downloadUrl"] ?? ""),
+      catch: () => unavailable("Shared storage did not provide a valid document download."),
+    });
+    const siteHost = storage.siteId.split(",")[0]?.toLowerCase() ?? "";
+    if (
+      url.protocol !== "https:" ||
+      !/^[a-z0-9][a-z0-9-]*\.sharepoint\.com$/u.test(siteHost) ||
+      url.hostname !== siteHost ||
+      url.port ||
+      url.username ||
+      url.password
+    )
+      return yield* unavailable("Shared storage returned an unexpected download host.");
+    return url;
   });
 
 type DocumentCommand = Extract<
@@ -205,22 +231,7 @@ export const executeDocument = (input: {
         const item = yield* child(parentId, parts, false, false);
         if (!item.eTag || item.size === undefined || item.size < 0 || item.size > MAX_BYTES)
           return yield* unavailable("The document is missing a version or exceeds 64 KB.");
-        const url = yield* Effect.try({
-          try: () => new URL(item["@microsoft.graph.downloadUrl"] ?? ""),
-          catch: () => unavailable("Shared storage did not provide a valid document download."),
-        });
-        // The trusted membership service pins the SharePoint site. Never expose the
-        // signed URL or forward a Graph bearer to its download host.
-        const siteHost = storage.siteId.split(",")[0]?.toLowerCase() ?? "";
-        if (
-          url.protocol !== "https:" ||
-          !/^[a-z0-9][a-z0-9-]*\.sharepoint\.com$/u.test(siteHost) ||
-          url.hostname !== siteHost ||
-          url.port ||
-          url.username ||
-          url.password
-        )
-          return yield* unavailable("Shared storage returned an unexpected download host.");
+        const url = yield* downloadUrl(item, storage);
         yield* verifyCurrent;
         const response = yield* http.execute(HttpClientRequest.get(url.href)).pipe(
           Effect.provideService(FetchHttpClient.RequestInit, { redirect: "manual" }),
@@ -296,4 +307,77 @@ export const executeDocument = (input: {
     if ((yield* locateParent(false)) !== parentId) return yield* conflict();
     yield* verifyCurrent;
     return { path, etag: saved.eTag, text } satisfies TeamDocument;
+  });
+
+/** Enough of a document's start for the header `formatTeamNote` writes, whose fields are capped. */
+const SUMMARY_BYTES = 4096;
+
+/**
+ * Reads the start of one document a list just found, for its title and description. Runs inside
+ * the list's own authorized storage call: the item is resolved again from the team root and must
+ * still be the listed item, version, and folder. Access failures from `send` fail the list; any
+ * other problem leaves this document without a summary, so it can still be opened in full.
+ */
+export const summarizeDocument = (input: {
+  storage: TeamStorage;
+  file: { id: string; path: string; etag: string; parentId: string };
+  send: Send;
+}) =>
+  Effect.gen(function* () {
+    const { storage, file } = input;
+    if (!documentPath.test(file.path)) return null;
+    const http = yield* HttpClient.HttpClient;
+    const root = `https://graph.microsoft.com/v1.0/drives/${encodeURIComponent(storage.driveId)}/items/`;
+    const response = yield* input.send(
+      HttpClientRequest.get(
+        `${root}${encodeURIComponent(storage.folderId)}:/${file.path.split("/").map(encodeURIComponent).join("/")}`,
+      ),
+    );
+    const read = Effect.gen(function* () {
+      if (response.status !== 200) return null;
+      const item = yield* readText(response).pipe(Effect.flatMap(decodeItem));
+      if (
+        item.id !== file.id ||
+        item.eTag !== file.etag ||
+        item.parentReference.id !== file.parentId ||
+        item.file === undefined ||
+        item.folder !== undefined ||
+        item.remoteItem !== undefined
+      )
+        return null;
+      const url = yield* downloadUrl(item, storage);
+      const download = yield* http.execute(
+        HttpClientRequest.get(url.href).pipe(
+          HttpClientRequest.setHeader("range", `bytes=0-${SUMMARY_BYTES - 1}`),
+        ),
+      );
+      // A host that ignores the range answers 200 with the whole file; only its start is read.
+      if (download.status !== 200 && download.status !== 206) return null;
+      const chunks: Uint8Array[] = [];
+      let size = 0;
+      yield* download.stream.pipe(
+        Stream.runForEachWhile((chunk) =>
+          Effect.sync(() => {
+            chunks.push(chunk);
+            size += chunk.byteLength;
+            return size < SUMMARY_BYTES;
+          }),
+        ),
+      );
+      const bytes = new Uint8Array(size);
+      let offset = 0;
+      for (const chunk of chunks) {
+        bytes.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      const text = new TextDecoder().decode(bytes.subarray(0, SUMMARY_BYTES));
+      // A cut-off final line could hold half a title or a broken character.
+      return summarizeTeamNote(
+        size >= SUMMARY_BYTES ? text.slice(0, Math.max(0, text.lastIndexOf("\n"))) : text,
+      ) satisfies TeamDocumentSummary;
+    });
+    return yield* read.pipe(
+      Effect.provideService(FetchHttpClient.RequestInit, { redirect: "manual" }),
+      Effect.orElseSucceed(() => null),
+    );
   });
