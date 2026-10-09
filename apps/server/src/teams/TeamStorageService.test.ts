@@ -19,6 +19,8 @@ function fixture() {
   let folderListed = false;
   let microsoftUnavailable = false;
   let demoteOnGraph = false;
+  let switchAccountOnGraph = false;
+  let subject = "alice";
   let teamOverride: Partial<NonNullable<TeamsResult["team"]>> = {};
   const graphWrites: string[] = [];
   const values = new Map<string, Uint8Array>();
@@ -30,7 +32,7 @@ function fixture() {
     profile: signedIn
       ? {
           issuer: "https://campus.example.test",
-          subject: "alice",
+          subject,
           email: "alice@ucsd.edu",
           displayName: "Alice",
         }
@@ -99,6 +101,8 @@ function fixture() {
         if (request.method !== "GET") graphWrites.push(`${request.method} ${request.url}`);
         // A concurrent owner action demotes the caller after the operation has started.
         if (demoteOnGraph) teamOverride = { role: "reader", canManage: false, revision: 3 };
+        // Another campus account takes over the session while a listing is in flight.
+        if (switchAccountOnGraph) subject = "mallory";
       }
       if (moveFolder && path.includes("/drives/")) {
         if (path.endsWith("/items/root/children"))
@@ -202,6 +206,9 @@ function fixture() {
     },
     demoteOnGraph: () => {
       demoteOnGraph = true;
+    },
+    switchAccountOnGraph: () => {
+      switchAccountOnGraph = true;
     },
     setMicrosoftUnavailable: (value: boolean) => {
       microsoftUnavailable = value;
@@ -369,6 +376,56 @@ describe("Teams storage role and team binding", () => {
         (yield* Effect.flip(service.execute("a", { action: "list-files", teamId }))).code,
       ).toBe("not_found");
       expect(f.graphRequests).toHaveLength(0);
+    }),
+  );
+
+  it.effect(
+    "denies a removed member every storage action, including nested paths, before Graph",
+    () =>
+      Effect.gen(function* () {
+        const f = fixture();
+        const service = yield* f.make;
+        yield* f.connect(service);
+        f.revoke();
+        for (const command of [
+          { action: "status", teamId },
+          { action: "connect", teamId },
+          { action: "list-files", teamId },
+          { action: "read-file", teamId, path: "summary.md" },
+          { action: "read-file", teamId, path },
+          publish,
+          { action: "update-file", teamId, path, etag: "v1", text: "Changed" },
+          { action: "delete-file", teamId, path, etag: "v1" },
+        ] as const)
+          expect((yield* Effect.flip(service.execute("a", command))).code).toBe("not_found");
+        expect(f.graphRequests).toHaveLength(0);
+      }),
+  );
+
+  it.effect("refuses a quarantined or provisioning team before Graph", () =>
+    Effect.gen(function* () {
+      for (const state of ["needs-attention", "provisioning"] as const) {
+        const f = fixture();
+        const service = yield* f.make;
+        yield* f.connect(service);
+        f.setTeam({ state });
+        for (const command of [{ action: "list-files", teamId }, publish] as const)
+          expect((yield* Effect.flip(service.execute("a", command))).code).toBe("unavailable");
+        expect(f.graphRequests).toHaveLength(0);
+      }
+    }),
+  );
+
+  it.effect("discards a listing when the campus account changes mid-operation", () =>
+    Effect.gen(function* () {
+      const f = fixture();
+      const service = yield* f.make;
+      yield* f.connect(service);
+      f.switchAccountOnGraph();
+      expect(
+        (yield* Effect.flip(service.execute("a", { action: "list-files", teamId }))).code,
+      ).toBe("sign_in_required");
+      expect(f.graphRequests).toHaveLength(1);
     }),
   );
 });
