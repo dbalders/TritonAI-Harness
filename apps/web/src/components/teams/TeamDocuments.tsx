@@ -26,6 +26,7 @@ export function TeamDocuments({
   canWrite,
   busy,
   run,
+  projectTitle,
 }: {
   teamId: string;
   document: TeamDocument | null;
@@ -33,6 +34,8 @@ export function TeamDocuments({
   canWrite: boolean;
   busy: boolean;
   run: (command: TeamStorageCommand) => Promise<TeamStorageStatus | null>;
+  /** Set when shown for a linked Harness project: only team memory, labeled with this project. */
+  projectTitle?: string;
 }) {
   const [kind, setKind] = useState<Publish["kind"]>("memory");
   const [title, setTitle] = useState("");
@@ -76,14 +79,16 @@ export function TeamDocuments({
   const managedFiles = files.filter((file) => /^(Memory|SOPs|Skills)\/.+\.md$/u.test(file.path));
   return (
     <div className="space-y-4">
-      <div className="space-y-1">
-        <h4 className="text-sm font-medium">Team knowledge</h4>
-        <p className="text-xs text-muted-foreground">
-          Share a work summary, SOP, or skill document with this team. Project labels organize
-          notes; all team members can read them. Skill documents are shared text; publishing does
-          not install them.
-        </p>
-      </div>
+      {projectTitle === undefined ? (
+        <div className="space-y-1">
+          <h4 className="text-sm font-medium">Team knowledge</h4>
+          <p className="text-xs text-muted-foreground">
+            Share a work summary, SOP, or skill document with this team. Project labels organize
+            notes; all team members can read them. Skill documents are shared text; publishing does
+            not install them.
+          </p>
+        </div>
+      ) : null}
       {canWrite ? (
         <form
           className="space-y-3 rounded-lg border border-border p-3"
@@ -92,36 +97,38 @@ export function TeamDocuments({
             void publish();
           }}
         >
-          <div className="grid gap-3 sm:grid-cols-2">
-            <label className="space-y-1 text-xs">
-              Document type
-              <select
-                aria-label="Document type"
-                className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
-                value={kind}
-                disabled={busy}
-                onChange={(event) => {
-                  const value = event.target.value;
-                  if (value === "memory" || value === "sop" || value === "skill") setKind(value);
-                }}
-              >
-                <option value="memory">Work summary</option>
-                <option value="sop">SOP</option>
-                <option value="skill">Skill document</option>
-              </select>
-            </label>
-            <label className="space-y-1 text-xs">
-              Project label (optional)
-              <Input
-                aria-label="Document project"
-                value={project}
-                maxLength={80}
-                disabled={busy}
-                onChange={(event) => setProject(event.target.value)}
-                placeholder="Team-wide"
-              />
-            </label>
-          </div>
+          {projectTitle === undefined ? (
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="space-y-1 text-xs">
+                Document type
+                <select
+                  aria-label="Document type"
+                  className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+                  value={kind}
+                  disabled={busy}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    if (value === "memory" || value === "sop" || value === "skill") setKind(value);
+                  }}
+                >
+                  <option value="memory">Work summary</option>
+                  <option value="sop">SOP</option>
+                  <option value="skill">Skill document</option>
+                </select>
+              </label>
+              <label className="space-y-1 text-xs">
+                Project label (optional)
+                <Input
+                  aria-label="Document project"
+                  value={project}
+                  maxLength={80}
+                  disabled={busy}
+                  onChange={(event) => setProject(event.target.value)}
+                  placeholder="Team-wide"
+                />
+              </label>
+            </div>
+          ) : null}
           <label className="block space-y-1 text-xs">
             Title
             <Input

@@ -143,6 +143,7 @@ import { authHttpApiLayer, environmentAuthenticatedAuthLayer } from "./auth/http
 import * as ReplayMarkers from "./auth/replayMarkers.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as TeamStorage from "./teams/TeamStorageService.ts";
+import * as TeamProject from "./teams/TeamProjectService.ts";
 import * as Account from "./auth/AccountService.ts";
 import { IntegrationCredentialKeepaliveLive } from "./integrations/IntegrationCredentialKeepalive.ts";
 import * as IntegrationRegistry from "./integrations/IntegrationRegistry.ts";
@@ -694,6 +695,7 @@ export const makeRoutesLayerFor = (
     // and mutations observed on WebSocket invalidate patches subsequently read over HTTP.
     Layer.provide(PullRequestServiceLive),
     Layer.provide(PreviewAutomationBroker.layer),
+    Layer.provide(TeamProject.layer.pipe(Layer.provide(ServerSecretStore.layer))),
     Layer.provide(TeamStorage.layer.pipe(Layer.provide(ServerSecretStore.layer))),
     Layer.provide(Account.layer.pipe(Layer.provide(ServerSecretStore.layer))),
     Layer.provide(ServerSelfUpdate.layer.pipe(Layer.provide(DesktopAppUpdateLayerLive))),

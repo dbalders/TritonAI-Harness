@@ -1,5 +1,6 @@
 import * as NodeCrypto from "node:crypto";
 import {
+  type TeamStorage,
   type TeamStorageCommand,
   type TeamStorageStatus,
   type AccountStatus,
@@ -45,6 +46,7 @@ const encodeIdentity = Schema.encodeSync(
   Schema.fromJsonString(Schema.Array(Schema.NullOr(Schema.String))),
 );
 const decodePage = Schema.decodeUnknownEffect(Page);
+const decodeItem = Schema.decodeUnknownEffect(Item);
 const empty = (status: TeamStorageStatus["status"]): TeamStorageStatus => ({
   status,
   account: null,
@@ -57,6 +59,13 @@ const empty = (status: TeamStorageStatus["status"]): TeamStorageStatus => ({
   files: [],
 });
 const failure = (message: string) => new TeamsError({ code: "unavailable", message });
+/** Narrows a storage command for callers that hold their own server-side team binding. */
+export interface TeamStorageScope {
+  /** The exact root recorded at binding time; any other root for the team is refused. */
+  readonly storage: TeamStorage;
+  /** Lists only this top-level folder instead of the whole team folder. */
+  readonly listRoot?: "Memory";
+}
 interface Connection {
   readonly sessionId: string;
   readonly signIn: Microsoft.MicrosoftSignIn["Service"];
@@ -70,6 +79,7 @@ export class TeamStorageService extends Context.Service<
     readonly execute: (
       sessionId: string,
       command: TeamStorageCommand,
+      scope?: TeamStorageScope,
     ) => Effect.Effect<TeamStorageStatus, TeamsError>;
   }
 >()("t3/teams/TeamStorageService") {}
@@ -139,6 +149,7 @@ export const make = (config: Microsoft.MicrosoftOAuthConfig | null) =>
     const execute = Effect.fn("TeamStorageService.execute")(function* (
       sessionId: string,
       command: TeamStorageCommand,
+      scope?: TeamStorageScope,
     ) {
       return yield* getLane(sessionId).withPermit(
         Effect.gen(function* () {
@@ -164,6 +175,18 @@ export const make = (config: Microsoft.MicrosoftOAuthConfig | null) =>
           if (!team || !team.storage || team.state !== "ready")
             return yield* failure("The team's private folder is not ready.");
           const storage = team.storage;
+          const expected = scope?.storage;
+          if (
+            expected &&
+            (expected.tenantId.toLowerCase() !== storage.tenantId.toLowerCase() ||
+              expected.siteId !== storage.siteId ||
+              expected.driveId !== storage.driveId ||
+              expected.folderId !== storage.folderId)
+          )
+            return yield* new TeamsError({
+              code: "conflict",
+              message: "This project's team folder changed. Unlink the project and link it again.",
+            });
           if (!config || config.tenantId.toLowerCase() !== storage.tenantId.toLowerCase())
             return empty("not-configured");
           const key = NodeCrypto.createHash("sha256")
@@ -328,13 +351,38 @@ export const make = (config: Microsoft.MicrosoftOAuthConfig | null) =>
             }
             if (command.action !== "list-files") return connected;
             const files: TeamStorageStatus["files"][number][] = [];
-            const queue = [{ id: storage.folderId, path: "", depth: 0 }];
             const visited = new Set<string>();
             const root = `https://graph.microsoft.com/v1.0/drives/${encodeURIComponent(storage.driveId)}/items/`;
             const folderEndpoint = (path: string) =>
               path
                 ? `${root}${encodeURIComponent(storage.folderId)}:/${path.split("/").map(encodeURIComponent).join("/")}`
                 : `${root}${encodeURIComponent(storage.folderId)}`;
+            const queue = [{ id: storage.folderId, path: "", depth: 0 }];
+            if (scope?.listRoot) {
+              const response = yield* send(
+                HttpClientRequest.get(
+                  `${folderEndpoint(scope.listRoot)}?$select=id,name,parentReference,folder,remoteItem`,
+                ),
+              );
+              // Nobody has published to this folder yet.
+              if (response.status === 404) return { ...connected, files };
+              if (response.status !== 200)
+                return yield* failure(
+                  "Shared storage access could not be verified. Refresh your team membership.",
+                );
+              const item = yield* response.json.pipe(
+                Effect.flatMap(decodeItem),
+                Effect.mapError(() => failure("Shared storage returned invalid folder metadata.")),
+              );
+              if (
+                item.name !== scope.listRoot ||
+                item.parentReference.id !== storage.folderId ||
+                item.folder === undefined ||
+                item.remoteItem !== undefined
+              )
+                return yield* failure("A shared folder moved. Refresh the team before continuing.");
+              queue[0] = { id: item.id, path: scope.listRoot, depth: 1 };
+            }
             const verifyFolder = (parent: { id: string; path: string }) =>
               Effect.gen(function* () {
                 if (!parent.path) return;

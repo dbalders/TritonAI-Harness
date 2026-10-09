@@ -164,6 +164,7 @@ import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as TeamStorage from "./teams/TeamStorageService.ts";
+import * as TeamProject from "./teams/TeamProjectService.ts";
 import * as Account from "./auth/AccountService.ts";
 import { requiredScopeForRpcMethod, requiredScopeForDeviceList } from "./auth/RpcAuthorization.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
@@ -709,6 +710,7 @@ const makeWsRpcLayer = (
       const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
       const account = yield* Account.AccountService;
       const teamStorage = yield* TeamStorage.TeamStorageService;
+      const teamProject = yield* TeamProject.TeamProjectService;
       const sourceControlDiscovery = yield* SourceControlDiscovery.SourceControlDiscovery;
       const automaticGitFetchInterval = serverSettings.getSettings.pipe(
         Effect.map(
@@ -2988,6 +2990,11 @@ const makeWsRpcLayer = (
             WS_METHODS.serverTeamStorage,
             teamStorage.execute(currentSessionId, input),
           ),
+        [WS_METHODS.serverTeamProjects]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverTeamProjects,
+            teamProject.execute(currentSessionId, input),
+          ),
         [WS_METHODS.serverTeams]: (input) =>
           observeRpcEffect(WS_METHODS.serverTeams, account.teams(currentSessionId, input)),
         [WS_METHODS.serverGetAccountStatus]: (_input) =>
@@ -4432,6 +4439,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
   Effect.gen(function* () {
     const account = yield* Account.AccountService;
     const teamStorage = yield* TeamStorage.TeamStorageService;
+    const teamProject = yield* TeamProject.TeamProjectService;
     const previewAutomationBroker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
     const baseServerSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
     const config = yield* ServerConfig.ServerConfig;
@@ -4504,6 +4512,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
               Layer.provideMerge(RpcSerialization.layerJson),
               Layer.provide(Layer.succeed(Account.AccountService, account)),
               Layer.provide(Layer.succeed(TeamStorage.TeamStorageService, teamStorage)),
+              Layer.provide(Layer.succeed(TeamProject.TeamProjectService, teamProject)),
               Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),
               Layer.provide(AgentSessionScanner.layer),
               // Shared with the startup auto-update, so update locks and state span clients.

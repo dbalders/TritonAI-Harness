@@ -1,4 +1,5 @@
 import * as Schema from "effect/Schema";
+import { ProjectId } from "./baseSchemas.ts";
 
 const Id = Schema.String.check(
   Schema.isPattern(/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/u),
@@ -171,3 +172,50 @@ export const TeamStorageStatus = Schema.Struct({
   ),
 });
 export type TeamStorageStatus = typeof TeamStorageStatus.Type;
+
+const MemoryPath = Schema.String.check(Schema.isMaxLength(512), Schema.isPattern(/^Memory\//u));
+/** Team-memory access from a Harness project. The server resolves the team from its own binding. */
+export const TeamProjectCommand = Schema.Union([
+  Schema.Struct({ action: Schema.Literal("list"), teamId: Id }),
+  Schema.Struct({ action: Schema.Literal("bind"), teamId: Id, projectId: ProjectId }),
+  Schema.Struct({ action: Schema.Literal("unbind"), teamId: Id, projectId: ProjectId }),
+  Schema.Struct({
+    action: Schema.Literals(["memory-status", "memory-list"]),
+    projectId: ProjectId,
+  }),
+  Schema.Struct({ action: Schema.Literal("memory-read"), projectId: ProjectId, path: MemoryPath }),
+  Schema.Struct({
+    action: Schema.Literal("memory-publish"),
+    projectId: ProjectId,
+    recordId: Id,
+    deviceId: Id,
+    title: Name,
+    text: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(60_000)),
+  }),
+  Schema.Struct({
+    action: Schema.Literal("memory-update"),
+    projectId: ProjectId,
+    path: MemoryPath,
+    etag: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(512)),
+    text: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(60_000)),
+  }),
+  Schema.Struct({
+    action: Schema.Literal("memory-delete"),
+    projectId: ProjectId,
+    path: MemoryPath,
+    etag: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(512)),
+  }),
+]);
+export type TeamProjectCommand = typeof TeamProjectCommand.Type;
+export const TeamProjectLink = Schema.Struct({
+  projectId: ProjectId,
+  projectTitle: Schema.String,
+  teamId: Id,
+  linkedAt: Schema.String,
+});
+export type TeamProjectLink = typeof TeamProjectLink.Type;
+export const TeamProjectResult = Schema.Struct({
+  projects: Schema.Array(TeamProjectLink),
+  storage: Schema.NullOr(TeamStorageStatus),
+});
+export type TeamProjectResult = typeof TeamProjectResult.Type;

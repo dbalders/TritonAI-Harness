@@ -1,4 +1,5 @@
 import { TeamSharedStorage } from "./TeamSharedStorage";
+import { TeamProjects } from "./TeamProjects";
 // @effect-diagnostics cryptoRandomUUID:off - Browser event creates a retry-stable request ID before dispatch.
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createTeamsController } from "@t3tools/client-runtime/state/server";
@@ -415,6 +416,14 @@ function TeamWorkspace({ environmentId }: { environmentId: EnvironmentId }) {
           )}
           {team.state === "ready" ? (
             <TeamSharedStorage
+              key={`${team.id}:${team.storage?.folderId ?? ""}`}
+              environmentId={environmentId}
+              teamId={team.id}
+              canWrite={team.role !== "reader" || team.canManage}
+            />
+          ) : null}
+          {team.state === "ready" ? (
+            <TeamProjects
               key={`${team.id}:${team.storage?.folderId ?? ""}`}
               environmentId={environmentId}
               teamId={team.id}

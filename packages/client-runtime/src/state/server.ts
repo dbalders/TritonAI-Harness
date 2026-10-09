@@ -1061,6 +1061,10 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:teams",
       tag: WS_METHODS.serverTeams,
     }),
+    teamProjects: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:team-projects",
+      tag: WS_METHODS.serverTeamProjects,
+    }),
     getAccountStatus: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:account-status",
       tag: WS_METHODS.serverGetAccountStatus,

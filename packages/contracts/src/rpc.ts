@@ -293,6 +293,8 @@ import {
   TeamsError,
   TeamStorageCommand,
   TeamStorageStatus,
+  TeamProjectCommand,
+  TeamProjectResult,
 } from "./teams.ts";
 import { AccountStatus, ServerAccountError } from "./account.ts";
 import {
@@ -444,6 +446,7 @@ export const WS_METHODS = {
   serverGetSettings: "server.getSettings",
   serverTeamStorage: "server.teamStorage",
   serverTeams: "server.teams",
+  serverTeamProjects: "server.teamProjects",
   serverGetAccountStatus: "server.getAccountStatus",
   serverStartAccountLogin: "server.startAccountLogin",
   serverPollAccountLogin: "server.pollAccountLogin",
@@ -725,6 +728,11 @@ const WsServerTeamStorageRpc = Rpc.make(WS_METHODS.serverTeamStorage, {
 const WsServerTeamsRpc = Rpc.make(WS_METHODS.serverTeams, {
   payload: TeamCommand,
   success: TeamsResult,
+  error: Schema.Union([TeamsError, EnvironmentAuthorizationError]),
+});
+const WsServerTeamProjectsRpc = Rpc.make(WS_METHODS.serverTeamProjects, {
+  payload: TeamProjectCommand,
+  success: TeamProjectResult,
   error: Schema.Union([TeamsError, EnvironmentAuthorizationError]),
 });
 
@@ -1765,6 +1773,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetSettingsRpc,
   WsServerTeamStorageRpc,
   WsServerTeamsRpc,
+  WsServerTeamProjectsRpc,
   WsServerGetAccountStatusRpc,
   WsServerStartAccountLoginRpc,
   WsServerPollAccountLoginRpc,
