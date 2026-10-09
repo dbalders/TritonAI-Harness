@@ -404,6 +404,7 @@ interface MessagesTimelineProps {
     citation: AssistantCitation,
     sourceAnchor: AssistantCitationSourceAnchor,
   ) => boolean;
+  onShareAssistantText?: ((text: string) => void) | undefined;
   agentPanelModel?: AgentPanelModel;
   onOpenAgents?: () => void;
   isWorking: boolean;
@@ -480,6 +481,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   citationRequest = null,
   citationHistoryLoading = false,
   onCiteAssistantText,
+  onShareAssistantText,
   isWorking,
   worktreeSetup = null,
   onCancelWorktreeSetup,
@@ -1290,6 +1292,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               viewport={timelineViewportElement}
               threadRef={citationThreadRef}
               onCite={onCiteAssistantText}
+              onShare={onShareAssistantText}
             />
           ) : null}
           <LegendList<MessagesTimelineRow>

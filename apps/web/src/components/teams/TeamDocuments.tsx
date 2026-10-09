@@ -6,7 +6,7 @@ import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
 
 type Publish = Extract<TeamStorageCommand, { action: "publish" }>;
-function deviceId() {
+export function teamDocumentDeviceId() {
   try {
     const saved = localStorage.getItem("tritonai-team-document-device");
     if (saved && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u.test(saved)) return saved;
@@ -43,7 +43,7 @@ export function TeamDocuments({
   const [text, setText] = useState("");
   const [edit, setEdit] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [ownDevice] = useState(deviceId);
+  const [ownDevice] = useState(teamDocumentDeviceId);
   const pending = useRef<Publish | null>(null);
   useEffect(() => {
     setEdit(document?.text ?? "");

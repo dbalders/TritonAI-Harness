@@ -2,6 +2,7 @@ import {
   type TeamDocument,
   type TeamStorage,
   type TeamStorageCommand,
+  formatTeamNote,
   TeamsError,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -233,10 +234,7 @@ export const executeDocument = (input: {
       yield* verifyCurrent;
       return null;
     }
-    const text =
-      command.action === "publish"
-        ? `# ${command.title.replace(/[\r\n]/gu, " ")}\n\n${command.project.trim() ? `Project: ${command.project.replace(/[\r\n]/gu, " ")}\n\n` : ""}${command.text}`
-        : command.text;
+    const text = command.action === "publish" ? formatTeamNote(command) : command.text;
     const bytes = new TextEncoder().encode(text);
     if (bytes.byteLength > MAX_BYTES)
       return yield* new TeamsError({

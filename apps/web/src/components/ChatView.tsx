@@ -256,6 +256,7 @@ import {
 } from "lucide-react";
 import { cn, randomHex, randomUUID } from "~/lib/utils";
 import { stackedThreadToast, toastManager } from "./ui/toast";
+import { ShareToTeamDialog, TeamMemoryDialog } from "./teams/ThreadTeamDialogs";
 import { decodeProjectScriptKeybindingRule } from "~/lib/projectScriptKeybindings";
 import { type NewProjectScriptInput } from "./ProjectScriptsControl";
 import {
@@ -1776,6 +1777,12 @@ export default function ChatView(props: ChatViewProps) {
     },
     [composerRef],
   );
+  // Bound to the thread it was opened from, so switching threads closes it and drops its draft.
+  const [teamDialog, setTeamDialog] = useState<
+    | { kind: "share"; threadId: ThreadId; text: string }
+    | { kind: "memory"; threadId: ThreadId }
+    | null
+  >(null);
   const [isWorkspaceFileDragActive, setIsWorkspaceFileDragActive] = useState(false);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [expandedImage, setExpandedImage] = useState<ExpandedImagePreview | null>(null);
@@ -10319,8 +10326,42 @@ export default function ChatView(props: ChatViewProps) {
             onAddProjectScript={saveProjectScript}
             onUpdateProjectScript={updateProjectScript}
             onDeleteProjectScript={deleteProjectScript}
+            teamActions={
+              isServerThread && activeProject
+                ? {
+                    onShare: () =>
+                      setTeamDialog({ kind: "share", threadId: activeThread.id, text: "" }),
+                    onAddMemory: () => setTeamDialog({ kind: "memory", threadId: activeThread.id }),
+                  }
+                : undefined
+            }
           />
         </WorkspacePageHeader>
+        {isServerThread && activeProject ? (
+          <>
+            <ShareToTeamDialog
+              environmentId={activeThread.environmentId}
+              threadId={activeThread.id}
+              projectTitle={activeProject.title}
+              initialText={teamDialog?.kind === "share" ? teamDialog.text : ""}
+              open={teamDialog?.kind === "share" && teamDialog.threadId === activeThread.id}
+              onOpenChange={(open) => {
+                if (!open) setTeamDialog(null);
+              }}
+            />
+            <TeamMemoryDialog
+              environmentId={activeThread.environmentId}
+              projectId={activeProject.id}
+              open={teamDialog?.kind === "memory" && teamDialog.threadId === activeThread.id}
+              onOpenChange={(open) => {
+                if (!open) setTeamDialog(null);
+              }}
+              onInsert={(text) =>
+                composerRef.current?.insertTextAtEnd(text, { ensureLeadingBoundary: true }) ?? false
+              }
+            />
+          </>
+        ) : null}
 
         {/* Main content area with optional plan sidebar */}
         <div className="flex min-h-0 min-w-0 flex-1">
@@ -10373,6 +10414,12 @@ export default function ChatView(props: ChatViewProps) {
                 {...(!paintOnlyDisplayedTimeline
                   ? {
                       onCiteAssistantText: citeAssistantText,
+                      ...(isServerThread && activeProject
+                        ? {
+                            onShareAssistantText: (text: string) =>
+                              setTeamDialog({ kind: "share", threadId: activeThread.id, text }),
+                          }
+                        : {}),
                       agentPanelModel,
                       onOpenAgents: addAgentsSurface,
                       onUseArtifactTemplate: useArtifactTemplate,

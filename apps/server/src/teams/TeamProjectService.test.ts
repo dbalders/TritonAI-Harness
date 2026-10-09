@@ -1,7 +1,9 @@
 import { describe, expect, it } from "@effect/vitest";
 import {
   type AccountStatus,
+  formatTeamNote,
   ProjectId,
+  ThreadId,
   type TeamRole,
   type TeamStorage as TeamStorageRecord,
   TeamsError,
@@ -11,6 +13,7 @@ import * as Option from "effect/Option";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import { AccountService } from "../auth/AccountService.ts";
 import { ServerSecretStore } from "../auth/ServerSecretStore.ts";
+import type { OrchestrationThreadShell } from "@t3tools/contracts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as TeamProject from "./TeamProjectService.ts";
 import * as TeamStorage from "./TeamStorageService.ts";
@@ -23,6 +26,7 @@ const projectId = ProjectId.make("project-a");
 const otherProject = ProjectId.make("project-personal");
 const recordId = "33333333-3333-4333-a333-333333333333";
 const deviceId = "44444444-4444-4444-a444-444444444444";
+const threadId = ThreadId.make("thread-a");
 
 function fixture() {
   let subject = "alice";
@@ -32,15 +36,18 @@ function fixture() {
     [teamB]: { mallory: "owner" },
   };
   const storage: Record<string, TeamStorageRecord> = {
-    [teamA]: { tenantId, siteId: "site", driveId: "driveA", folderId: "rootA" },
-    [teamB]: { tenantId, siteId: "site", driveId: "driveB", folderId: "rootB" },
+    [teamA]: { tenantId, siteId: "ucsd.sharepoint.com,site", driveId: "driveA", folderId: "rootA" },
+    [teamB]: { tenantId, siteId: "ucsd.sharepoint.com,site", driveId: "driveB", folderId: "rootB" },
   };
   const projects = new Map([
     [projectId, "Grant reports"],
     [otherProject, "Personal notes"],
   ]);
+  const threads = new Map([[threadId, projectId]]);
   const values = new Map<string, Uint8Array>();
   const graph: string[] = [];
+  // Runs once, inside the next Graph request, to interleave another call with an in-flight one.
+  let duringGraph: Effect.Effect<unknown, unknown> | null = null;
   const writes: { method: string; url: string; body: string }[] = [];
   const status = (): AccountStatus => ({
     configured: true,
@@ -131,7 +138,13 @@ function fixture() {
     getFullThreadDiffContext: unused,
     getThreadRuntimeContext: unused,
     getTurnStartMessage: unused,
-    getThreadShellById: unused,
+    getThreadShellById: (id) =>
+      Effect.sync(() => {
+        const owner = threads.get(id);
+        return owner
+          ? Option.some({ id, projectId: owner } as unknown as OrchestrationThreadShell)
+          : Option.none();
+      }),
     getThreadDetailById: unused,
     getThreadDetailSnapshot: unused,
     searchThreads: unused,
@@ -140,8 +153,17 @@ function fixture() {
   const graphPath =
     /^\/v1\.0\/drives\/([^/]+)\/items\/([^:/]+)(?::\/(.*?))?(:\/children|:\/content|\/children)?$/u;
   const http = HttpClient.make((request) =>
-    Effect.sync(() => {
+    Effect.gen(function* () {
       const url = new URL(request.url);
+      if (
+        duringGraph &&
+        url.hostname === "graph.microsoft.com" &&
+        url.pathname.includes("/items/")
+      ) {
+        const interleaved = duringGraph;
+        duringGraph = null;
+        yield* Effect.ignore(interleaved);
+      }
       const json = (body: unknown, status = 200) =>
         HttpClientResponse.fromWeb(request, Response.json(body, { status }));
       if (url.pathname.endsWith("/devicecode"))
@@ -164,6 +186,11 @@ function fixture() {
           userPrincipalName: `${subject}@ucsd.edu`,
           userType: "Member",
         });
+      if (url.hostname === "ucsd.sharepoint.com")
+        return HttpClientResponse.fromWeb(
+          request,
+          new Response(`Shared note from ${url.pathname.slice(1)}`),
+        );
       const match = graphPath.exec(url.pathname);
       if (!match) return json(null, 404);
       graph.push(`${request.method} ${request.url}`);
@@ -175,7 +202,14 @@ function fixture() {
         id: id(segments),
         name: segments.at(-1),
         parentReference: { id: id(segments.slice(0, -1)) },
-        ...(file ? { file: {}, eTag: "v1", size: 10 } : { folder: {} }),
+        ...(file
+          ? {
+              file: {},
+              eTag: "v1",
+              size: 10,
+              "@microsoft.graph.downloadUrl": `https://ucsd.sharepoint.com/${id(segments)}`,
+            }
+          : { folder: {} }),
       });
       if (request.method === "PUT" && suffix === ":/content") {
         const body =
@@ -221,7 +255,11 @@ function fixture() {
     roles,
     storage,
     projects,
+    threads,
     values,
+    interleave: (effect: Effect.Effect<unknown, unknown>) => {
+      duringGraph = effect;
+    },
     switchTo: (next: string) => {
       subject = next;
     },
@@ -251,6 +289,9 @@ describe("Team project memory", () => {
       expect(f.graph.length).toBeGreaterThan(0);
       for (const request of f.graph)
         expect(request).toContain("/drives/driveA/items/rootA:/Memory");
+      const path = `Memory/${"a".repeat(43)}/${deviceId}/${recordId}.md`;
+      const read = yield* service.execute("s", { action: "memory-read", projectId, path });
+      expect(read.storage?.document?.text).toBe(`Shared note from rootA:${path}`);
       yield* service.execute("s", {
         action: "memory-publish",
         projectId,
@@ -320,12 +361,18 @@ describe("Team project memory", () => {
       f.graph.length = 0;
       delete f.roles[teamA]!.alice;
       for (const attempt of attempts)
-        expect(yield* code(service.execute("s", attempt))).toBe("not_found");
+        expect([attempt.action, yield* code(service.execute("s", attempt))]).toEqual([
+          attempt.action,
+          "not_found",
+        ]);
       // Another campus identity in the same environment is a member of team B only.
       f.roles[teamA]!.alice = "editor";
       f.switchTo("mallory");
       for (const attempt of attempts)
-        expect(yield* code(service.execute("s", attempt))).toBe("not_found");
+        expect([attempt.action, yield* code(service.execute("s", attempt))]).toEqual([
+          attempt.action,
+          "not_found",
+        ]);
       f.signOut();
       for (const attempt of attempts)
         expect(yield* code(service.execute("s", attempt))).toBe("sign_in_required");
@@ -392,6 +439,109 @@ describe("Team project memory", () => {
       expect(
         (yield* service.execute("s", { action: "list", teamId: teamA })).projects,
       ).toHaveLength(0);
+      expect(f.graph).toHaveLength(0);
+    }),
+  );
+
+  it.effect("withholds memory a concurrent unlink overtook", () =>
+    Effect.gen(function* () {
+      const f = fixture();
+      const { service, connect } = yield* f.make;
+      yield* connect(teamA);
+      yield* service.execute("s", { action: "bind", teamId: teamA, projectId });
+      const path = `Memory/${"a".repeat(43)}/${deviceId}/${recordId}.md`;
+      for (const attempt of [
+        { action: "memory-list", projectId },
+        { action: "memory-read", projectId, path },
+      ] as const) {
+        // The unlink commits while the read is waiting on Graph.
+        f.interleave(service.execute("s", { action: "unbind", teamId: teamA, projectId }));
+        expect([attempt.action, yield* code(service.execute("s", attempt))]).toEqual([
+          attempt.action,
+          "not_found",
+        ]);
+        expect(
+          (yield* service.execute("s", { action: "list", teamId: teamA })).projects,
+        ).toHaveLength(0);
+        yield* service.execute("s", { action: "bind", teamId: teamA, projectId });
+      }
+      // Moved to team B mid-read: team A's listing is not returned under the new link.
+      f.roles[teamB]!.alice = "editor";
+      f.interleave(
+        service
+          .execute("s", { action: "unbind", teamId: teamA, projectId })
+          .pipe(Effect.andThen(service.execute("s", { action: "bind", teamId: teamB, projectId }))),
+      );
+      expect(yield* code(service.execute("s", { action: "memory-list", projectId }))).toBe(
+        "not_found",
+      );
+      expect((yield* service.execute("s", { action: "project-link", projectId })).projects).toEqual(
+        [expect.objectContaining({ teamId: teamB })],
+      );
+    }),
+  );
+
+  it.effect("reports a project's link only to members of its team", () =>
+    Effect.gen(function* () {
+      const f = fixture();
+      const { service } = yield* f.make;
+      expect(yield* code(service.execute("s", { action: "project-link", projectId }))).toBe(
+        "not_found",
+      );
+      yield* service.execute("s", { action: "bind", teamId: teamA, projectId });
+      expect((yield* service.execute("s", { action: "project-link", projectId })).projects).toEqual(
+        [expect.objectContaining({ projectId, teamId: teamA, teamName: "Team A" })],
+      );
+      f.switchTo("mallory");
+      expect(yield* code(service.execute("s", { action: "project-link", projectId }))).toBe(
+        "not_found",
+      );
+    }),
+  );
+
+  it.effect("shares chosen thread text to an allowed team with server provenance", () =>
+    Effect.gen(function* () {
+      const f = fixture();
+      const { service, connect } = yield* f.make;
+      yield* connect(teamA);
+      const share = (teamId: string, thread = threadId) =>
+        service.execute("s", {
+          action: "share",
+          teamId,
+          threadId: thread,
+          recordId,
+          deviceId,
+          title: "Finding",
+          text: "Use the 2025 template.",
+        });
+      f.graph.length = 0;
+      // Non-member team and unknown thread: nothing reaches Graph.
+      expect(yield* code(share(teamB))).toBe("not_found");
+      expect(yield* code(share(teamA, ThreadId.make("thread-gone")))).toBe("not_found");
+      expect(f.graph).toHaveLength(0);
+      f.roles[teamA]!.alice = "reader";
+      expect(yield* code(share(teamA))).toBe("forbidden");
+      expect(f.writes).toHaveLength(0);
+      f.roles[teamA]!.alice = "editor";
+      const shared = yield* share(teamA);
+      // The saved note is exactly what the preview shows, labelled with the thread's project.
+      const expected = formatTeamNote({
+        title: "Finding",
+        project: "Grant reports",
+        text: "Use the 2025 template.",
+      });
+      expect(shared.storage?.document?.text).toBe(expected);
+      expect(f.writes).toEqual([
+        expect.objectContaining({
+          body: expected,
+          url: expect.stringContaining(`/drives/driveA/items/rootA:/Memory/`),
+        }),
+      ]);
+      // A project linked to the team keeps sharing into the root it was linked to.
+      yield* service.execute("s", { action: "bind", teamId: teamA, projectId });
+      f.storage[teamA] = { ...f.storage[teamA]!, driveId: "driveB", folderId: "rootB" };
+      f.graph.length = 0;
+      expect(yield* code(share(teamA))).toBe("conflict");
       expect(f.graph).toHaveLength(0);
     }),
   );

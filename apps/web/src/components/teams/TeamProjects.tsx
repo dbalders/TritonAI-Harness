@@ -22,7 +22,7 @@ const retryable = (cause: unknown) =>
   (cause.code === "conflict" || cause.code === "unavailable" || cause.code === "invalid_request");
 
 /** One request at a time; a newer mount or unmount discards late answers. */
-function useTeamProjectRequest(environmentId: EnvironmentId) {
+export function useTeamProjectRequest(environmentId: EnvironmentId) {
   const request = useAtomCommand(serverEnvironment.teamProjects, { reportFailure: false });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);

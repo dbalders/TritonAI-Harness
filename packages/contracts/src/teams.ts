@@ -1,5 +1,5 @@
 import * as Schema from "effect/Schema";
-import { ProjectId } from "./baseSchemas.ts";
+import { ProjectId, ThreadId } from "./baseSchemas.ts";
 
 const Id = Schema.String.check(
   Schema.isPattern(/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/u),
@@ -147,6 +147,9 @@ export const TeamStorageCommand = Schema.Union([
   }),
 ]);
 export type TeamStorageCommand = typeof TeamStorageCommand.Type;
+/** The exact text a published team note is saved with, so a share preview matches storage. */
+export const formatTeamNote = (note: { title: string; project: string; text: string }) =>
+  `# ${note.title.replace(/[\r\n]/gu, " ")}\n\n${note.project.trim() ? `Project: ${note.project.replace(/[\r\n]/gu, " ")}\n\n` : ""}${note.text}`;
 export const TeamDocument = Schema.Struct({
   path: Schema.String,
   etag: Schema.String,
@@ -183,7 +186,19 @@ export const TeamProjectCommand = Schema.Union([
     action: Schema.Literals(["memory-status", "memory-list"]),
     projectId: ProjectId,
   }),
+  /** The link for a project, only when the caller can open its team. */
+  Schema.Struct({ action: Schema.Literal("project-link"), projectId: ProjectId }),
   Schema.Struct({ action: Schema.Literal("memory-read"), projectId: ProjectId, path: MemoryPath }),
+  /** Publishes text the user chose in a thread as a memory note; provenance comes from the server. */
+  Schema.Struct({
+    action: Schema.Literal("share"),
+    teamId: Id,
+    threadId: ThreadId,
+    recordId: Id,
+    deviceId: Id,
+    title: Name,
+    text: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(60_000)),
+  }),
   Schema.Struct({
     action: Schema.Literal("memory-publish"),
     projectId: ProjectId,
@@ -211,6 +226,7 @@ export const TeamProjectLink = Schema.Struct({
   projectId: ProjectId,
   projectTitle: Schema.String,
   teamId: Id,
+  teamName: Schema.String,
   linkedAt: Schema.String,
 });
 export type TeamProjectLink = typeof TeamProjectLink.Type;
