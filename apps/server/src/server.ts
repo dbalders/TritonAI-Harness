@@ -667,8 +667,16 @@ const commandReadinessLayer = HttpRouter.middleware(
   { global: true },
 );
 
+/** Campus account and Teams services; both transports share one instance of each. */
+export const teamServicesLayer = TeamProject.layer.pipe(
+  Layer.provide(ServerSecretStore.layer),
+  Layer.provideMerge(TeamStorage.layer.pipe(Layer.provide(ServerSecretStore.layer))),
+  Layer.provideMerge(Account.layer.pipe(Layer.provide(ServerSecretStore.layer))),
+);
+
 export const makeRoutesLayerFor = (
   loadIntegrationRegistry?: Parameters<typeof McpHttpServer.makeLayer>[0],
+  teamServices: typeof teamServicesLayer = teamServicesLayer,
 ) =>
   Layer.mergeAll(
     Layer.mergeAll(
@@ -695,9 +703,7 @@ export const makeRoutesLayerFor = (
     // and mutations observed on WebSocket invalidate patches subsequently read over HTTP.
     Layer.provide(PullRequestServiceLive),
     Layer.provide(PreviewAutomationBroker.layer),
-    Layer.provide(TeamProject.layer.pipe(Layer.provide(ServerSecretStore.layer))),
-    Layer.provide(TeamStorage.layer.pipe(Layer.provide(ServerSecretStore.layer))),
-    Layer.provide(Account.layer.pipe(Layer.provide(ServerSecretStore.layer))),
+    Layer.provide(teamServices),
     Layer.provide(ServerSelfUpdate.layer.pipe(Layer.provide(DesktopAppUpdateLayerLive))),
     Layer.provide(commandReadinessLayer),
     Layer.provide(browserApiCorsLayer),

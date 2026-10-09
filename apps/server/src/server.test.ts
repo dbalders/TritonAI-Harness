@@ -131,6 +131,10 @@ import {
   OrchestrationThreadSettleBlockedError,
 } from "./orchestration/Errors.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
+import { AccountService } from "./auth/AccountService.ts";
+import { TeamProjectService } from "./teams/TeamProjectService.ts";
+import { TeamStorageService } from "./teams/TeamStorageService.ts";
+import * as TeamFixture from "./teams/testing/teamProjectFixture.ts";
 import { ThreadDeletionReactor } from "./orchestration/Services/ThreadDeletionReactor.ts";
 import * as PullRequestSyncReactor from "./orchestration/PullRequestSyncReactor.ts";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
@@ -587,6 +591,7 @@ const buildAppUnderTest = (options?: {
     desktopTelemetryReceiver?: Partial<
       DesktopTelemetryReceiver.DesktopTelemetryReceiver["Service"]
     >;
+    teamServices?: Parameters<typeof makeRoutesLayerFor>[1];
   };
 }) =>
   Effect.gen(function* () {
@@ -785,9 +790,12 @@ const buildAppUnderTest = (options?: {
     const servedRoutesLayer = HttpRouter.serve(
       // Viewed-file marks for a host that keeps none of its own are rows, so the routes want a
       // database. Its own, in memory: nothing here shares a table with the auth store.
-      makeRoutesLayerFor(async () => ({
-        toolDefinitions: () => [],
-      })).pipe(Layer.provide(Layer.mergeAll(serviceLauncherClientLayer, SqlitePersistenceMemory))),
+      makeRoutesLayerFor(
+        async () => ({
+          toolDefinitions: () => [],
+        }),
+        options?.layers?.teamServices,
+      ).pipe(Layer.provide(Layer.mergeAll(serviceLauncherClientLayer, SqlitePersistenceMemory))),
       {
         disableListenLog: true,
         disableLogger: true,
@@ -2286,6 +2294,110 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       assert.equal(response.status, 200);
       assert.equal(snapshot.thread.id, threadId);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("refuses revoked team memory on both dispatch transports", () =>
+    Effect.gen(function* () {
+      const teams = TeamFixture.teamProjectFixture();
+      const { service, account, storage } = yield* teams.make;
+      yield* service.execute("s", {
+        action: "bind",
+        teamId: TeamFixture.teamA,
+        projectId: TeamFixture.projectId,
+      });
+      const dispatched: Array<OrchestrationCommand> = [];
+      yield* buildAppUnderTest({
+        layers: {
+          teamServices: Layer.mergeAll(
+            Layer.succeed(AccountService, account),
+            Layer.succeed(TeamStorageService, storage),
+            Layer.succeed(TeamProjectService, service),
+          ),
+          orchestrationEngine: {
+            dispatch: (command) =>
+              Effect.sync(() => {
+                dispatched.push(command);
+                return { sequence: dispatched.length };
+              }),
+            readEvents: () => Stream.empty,
+          },
+        },
+      });
+      const wsUrl = yield* getWsServerUrl("/ws");
+      // Microsoft storage is connected per session, so this session connects before adding.
+      const issued = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          Effect.gen(function* () {
+            const teamId = TeamFixture.teamA;
+            const flow = yield* client[WS_METHODS.serverTeamStorage]({ action: "connect", teamId });
+            yield* client[WS_METHODS.serverTeamStorage]({
+              action: "poll",
+              teamId,
+              flowId: flow.flowId!,
+            });
+            return yield* client[WS_METHODS.serverTeamProjects]({
+              action: "memory-attach",
+              projectId: TeamFixture.projectId,
+              path: `Memory/${"a".repeat(43)}/${TeamFixture.deviceId}/${TeamFixture.recordId}.md`,
+            });
+          }),
+        ),
+      );
+      const block = issued.reference!.block;
+      delete teams.roles[TeamFixture.teamA]!.alice;
+
+      const createdAt = "2026-10-09T00:00:00.000Z";
+      const turn = (text: string) => ({
+        type: "thread.turn.start" as const,
+        commandId: CommandId.make(`cmd-turn-${dispatched.length}`),
+        threadId: ThreadId.make(TeamFixture.threadId),
+        message: {
+          messageId: MessageId.make(`msg-${dispatched.length}`),
+          role: "user" as const,
+          text,
+          attachments: [],
+        },
+        runtimeMode: "full-access" as const,
+        interactionMode: "default" as const,
+        createdAt,
+      });
+      const goal = {
+        type: "thread.goal.set" as const,
+        commandId: CommandId.make("cmd-goal"),
+        threadId: ThreadId.make(TeamFixture.threadId),
+        objective: `Finish ${block}`,
+        createdAt,
+      };
+      const cookie = yield* getAuthenticatedSessionCookieHeader();
+      const dispatchUrl = yield* getHttpServerUrl("/api/orchestration/dispatch");
+      const post = (command: unknown) =>
+        fetchEffect(dispatchUrl, {
+          method: "POST",
+          headers: { cookie, "content-type": "application/json" },
+          body: encodeTestJson(command),
+        });
+
+      for (const command of [turn(`Draft\n${block}`), goal]) {
+        const response = yield* post(command);
+        assert.equal(response.status, 403);
+        const body = yield* responseJsonEffect<{ readonly reason: string }>(response);
+        assert.equal(body.reason, "team_memory_not_allowed");
+      }
+      const refusedOverWs = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand](turn(`Draft\n${block}`)),
+        ),
+      ).pipe(Effect.flip);
+      assertInclude(refusedOverWs.message, "team memory you can no longer send");
+      assert.deepEqual(dispatched, []);
+
+      const accepted = yield* post(turn("Draft without team memory"));
+      assert.equal(accepted.status, 200);
+      assert.deepEqual(
+        dispatched.map((command) => command.type),
+        ["thread.turn.start"],
+      );
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

@@ -86,6 +86,9 @@ export class TeamProjectService extends Context.Service<
     /**
      * Refuses a client's message or goal text that contains a team-memory block this server issued
      * unless the sending session can still open that block's team through the same link and root.
+     * Defense in depth for the WebSocket and HTTP client dispatch only: it recognizes blocks still
+     * in memory (not after a restart or once evicted), and host MCP tools do not pass through it.
+     * The client's `memory-verify` before each send is what holds edited and older notes.
      */
     readonly authorizeOutgoingCommand: (
       sessionId: string,
@@ -100,7 +103,8 @@ export const make = Effect.gen(function* () {
   const secrets = yield* ServerSecretStore;
   const projects = yield* ProjectionSnapshotQuery;
   const lock = yield* Semaphore.make(1);
-  // In memory on purpose: a restart expires every reference, which only ever blocks a send.
+  // In memory on purpose. After a restart or eviction `memory-verify` refuses the old reference,
+  // while the dispatch gate no longer recognizes its block and treats it as ordinary text.
   const issued = new Map<string, Issued>();
 
   const readLinks = secrets.get(SECRET_NAME).pipe(

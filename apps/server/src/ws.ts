@@ -2216,7 +2216,8 @@ const makeWsRpcLayer = (
             ORCHESTRATION_WS_METHODS.dispatchCommand,
             Effect.gen(function* () {
               yield* ProjectCloneTracker.rejectCommandsDuringClone(projectCloneTracker, command);
-              // Team memory this server issued leaves only while this session can still open it.
+              // Unedited team memory this server still remembers issuing leaves only while this
+              // session can still open it. The HTTP dispatch route runs the same check.
               yield* teamProject
                 .authorizeOutgoingCommand(currentSessionId, command)
                 .pipe(

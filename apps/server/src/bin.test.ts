@@ -45,6 +45,7 @@ import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSna
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
 import { orchestrationHttpApiLayer } from "./orchestration/http.ts";
+import { TeamProjectService } from "./teams/TeamProjectService.ts";
 import * as ProjectCloneTracker from "./project/ProjectCloneTracker.ts";
 import { layerConfig as SqlitePersistenceLayerLive } from "./persistence/Layers/Sqlite.ts";
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
@@ -454,6 +455,10 @@ const withLiveProjectCliServer = <A, E, R>(baseDir: string, run: () => Effect.Ef
               get: () => Effect.succeed(null),
               discard: () => Effect.void,
             }),
+          ),
+          // Project commands carry no message text for the team-memory gate to check.
+          Layer.provide(
+            Layer.mock(TeamProjectService)({ authorizeOutgoingCommand: () => Effect.void }),
           ),
         ),
       ),
