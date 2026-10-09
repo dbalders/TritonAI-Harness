@@ -678,6 +678,34 @@ describe("Teams account proxy", () => {
       expect(teamRequests).toBe(2);
     }),
   );
+  it.effect("says an unanswered change may still be in progress", () =>
+    Effect.gen(function* () {
+      const f = fixture({
+        fetch: async (input, init) => {
+          if (String(input).endsWith("/v1/teams"))
+            throw new DOMException("timed out", "TimeoutError");
+          return f.defaultFetch(input, init);
+        },
+      });
+      const account = yield* f.make;
+      yield* account.startLogin("owner-session");
+      f.advance(5);
+      yield* account.pollLogin("owner-session");
+      const read = yield* Effect.flip(account.teams("owner-session", { action: "list" }));
+      expect(read).toMatchObject({ code: "unavailable" });
+      expect(read.message).not.toContain("in progress");
+      const change = yield* Effect.flip(
+        account.teams("owner-session", {
+          action: "remove-member",
+          teamId: "b284157c-032d-4c05-98e7-df7b47023ee3",
+          revision: 3,
+          identityId: "x".repeat(43),
+        }),
+      );
+      expect(change).toMatchObject({ code: "unavailable" });
+      expect(change.message).toContain("may still be in progress");
+    }),
+  );
   it.effect("rejects an expired campus session before contacting team storage", () =>
     Effect.gen(function* () {
       const f = fixture();

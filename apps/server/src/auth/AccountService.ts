@@ -545,7 +545,11 @@ export const make = (
               () =>
                 new TeamsError({
                   code: "unavailable",
-                  message: "Teams could not be reached. Refresh before retrying a change.",
+                  // An unanswered change can still be running on the account service.
+                  message:
+                    command.action === "list" || command.action === "get"
+                      ? "Teams could not be reached. Refresh before retrying a change."
+                      : "Teams did not confirm this change, and it may still be in progress. Refresh before trying again.",
                 }),
             ),
           );
