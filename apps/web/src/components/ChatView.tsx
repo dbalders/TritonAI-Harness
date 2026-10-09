@@ -252,11 +252,20 @@ import {
   GitBranchIcon,
   Minimize2Icon,
   PaperclipIcon,
+  UsersIcon,
   WifiOffIcon,
 } from "lucide-react";
 import { cn, randomHex, randomUUID } from "~/lib/utils";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { ShareToTeamDialog, TeamMemoryDialog } from "./teams/ThreadTeamDialogs";
+import {
+  addDraftTeamMemory,
+  draftTeamMemoryInPrompt,
+  pruneDraftTeamMemory,
+  removeDraftTeamMemory,
+  setDraftTeamMemoryProblem,
+  useDraftTeamMemorySummary,
+} from "./teams/teamMemoryDrafts";
 import { decodeProjectScriptKeybindingRule } from "~/lib/projectScriptKeybindings";
 import { type NewProjectScriptInput } from "./ProjectScriptsControl";
 import {
@@ -311,6 +320,7 @@ import {
   beginBackgroundDraftSubmissionByRef,
   clearBackgroundDraftSubmissionByRef,
   composerDraftHasUserContent,
+  composerTargetKey,
   type ComposerFileAttachment,
   type ComposerImageAttachment,
   type DraftThreadEnvMode,
@@ -1613,6 +1623,9 @@ export default function ChatView(props: ChatViewProps) {
   const setThreadGoal = useAtomCommand(threadEnvironment.setGoal, { reportFailure: false });
   const clearThreadGoal = useAtomCommand(threadEnvironment.clearGoal, { reportFailure: false });
   const startThreadTurn = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
+  const teamProjectsRequest = useAtomCommand(serverEnvironment.teamProjects, {
+    reportFailure: false,
+  });
   const createAttachmentAssetUrl = useAtomQueryRunner(assetEnvironment.createUrl, {
     reportFailure: false,
     refresh: true,
@@ -6620,7 +6633,33 @@ export default function ChatView(props: ChatViewProps) {
       }),
     [feedbackSubmissions, routeThreadKey],
   );
+  const draftTeamMemory = useDraftTeamMemorySummary(composerDraftTarget);
+  // Team memory in an unsent draft stays visible with a way out until it is sent or removed.
+  const teamMemoryBannerItem = useMemo<ComposerBannerStackItem | null>(() => {
+    if (!draftTeamMemory.teams) return null;
+    return {
+      id: `team-memory:${composerTargetKey(composerDraftTarget)}`,
+      variant: draftTeamMemory.problem ? "warning" : "info",
+      icon: <UsersIcon />,
+      title: draftTeamMemory.problem
+        ? "Team memory in this draft can’t be sent"
+        : `Team memory from ${draftTeamMemory.teams}`,
+      description:
+        draftTeamMemory.problem ??
+        "Your access is checked again when you send. Once sent, it stays in this conversation and can’t be taken back.",
+      actions: (
+        <Button
+          size="xs"
+          variant="outline"
+          onClick={() => removeDraftTeamMemory(composerDraftTarget)}
+        >
+          Remove
+        </Button>
+      ),
+    };
+  }, [composerDraftTarget, draftTeamMemory.problem, draftTeamMemory.teams]);
   const composerBannerItems = useMemo<ComposerBannerStackItem[]>(() => {
+    const teamMemoryItems = teamMemoryBannerItem === null ? [] : [teamMemoryBannerItem];
     const backgroundLivenessItems =
       backgroundLivenessBannerItem === null ? [] : [backgroundLivenessBannerItem];
     const resumeCompactionItems =
@@ -6632,6 +6671,7 @@ export default function ChatView(props: ChatViewProps) {
     const projectCloneItems = projectCloneBannerItem === null ? [] : [projectCloneBannerItem];
     if (!localCheckoutBranchMismatch || !showBranchMismatchBanner || !activeBranchMismatchKey) {
       return [
+        ...teamMemoryItems,
         ...feedbackBannerItems,
         ...usageLimitsItems,
         ...projectCloneItems,
@@ -6643,6 +6683,7 @@ export default function ChatView(props: ChatViewProps) {
       ];
     }
     return [
+      ...teamMemoryItems,
       ...feedbackBannerItems,
       ...usageLimitsItems,
       ...projectCloneItems,
@@ -6702,6 +6743,7 @@ export default function ChatView(props: ChatViewProps) {
     resumeCompactionBannerItem,
     showBranchMismatchBanner,
     systemComposerBannerItems,
+    teamMemoryBannerItem,
     usageLimitsBanner,
     wokeThreadBannerItem,
   ]);
@@ -7712,6 +7754,43 @@ export default function ChatView(props: ChatViewProps) {
       terminalContexts: composerTerminalContexts,
       elementContextCount: composerPreviewAnnotations.length + composerReviewComments.length,
     });
+    // Team memory in this draft is rechecked by the server before anything leaves; the dispatch
+    // itself is checked again on the server for blocks it issued.
+    pruneDraftTeamMemory(composerDraftTarget, promptForSend);
+    const teamMemory = draftTeamMemoryInPrompt(composerDraftTarget, promptForSend);
+    if (teamMemory.length === 0) setDraftTeamMemoryProblem(composerDraftTarget, null);
+    else {
+      const draftBeforeCheck = useComposerDraftStore
+        .getState()
+        .getComposerDraft(composerDraftTarget);
+      const composerBeforeCheck = composerRef.current;
+      sendInFlightRef.current = true;
+      let problem: string | null = null;
+      try {
+        const result = await teamProjectsRequest({
+          environmentId,
+          input: { action: "memory-verify", references: teamMemory.map((entry) => entry.id) },
+        });
+        if (result._tag !== "Success") {
+          const cause = squashAtomCommandFailure(result);
+          problem =
+            cause instanceof Error && cause.message
+              ? cause.message
+              : "Team memory could not be checked. Try again.";
+        }
+      } finally {
+        sendInFlightRef.current = false;
+      }
+      // An edit, account change, or thread switch during the check wins; nothing is sent.
+      if (
+        promptRef.current !== promptForSend ||
+        composerRef.current !== composerBeforeCheck ||
+        useComposerDraftStore.getState().getComposerDraft(composerDraftTarget) !== draftBeforeCheck
+      )
+        return;
+      setDraftTeamMemoryProblem(composerDraftTarget, problem);
+      if (problem !== null) return;
+    }
     const trimmed = computerUsePrompt(rawTrimmed);
     if (isComputerUseRequest(rawTrimmed) && !directAnnotation) {
       if (ctxSelectedProvider !== "codex") {
@@ -10356,9 +10435,21 @@ export default function ChatView(props: ChatViewProps) {
               onOpenChange={(open) => {
                 if (!open) setTeamDialog(null);
               }}
-              onInsert={(text) =>
-                composerRef.current?.insertTextAtEnd(text, { ensureLeadingBoundary: true }) ?? false
-              }
+              onInsert={(reference, identity) => {
+                if (
+                  !composerRef.current?.insertTextAtEnd(reference.block, {
+                    ensureLeadingBoundary: true,
+                  })
+                )
+                  return false;
+                addDraftTeamMemory({
+                  ...reference,
+                  thread: composerDraftTarget,
+                  environmentId: activeThread.environmentId,
+                  identity,
+                });
+                return true;
+              }}
             />
           </>
         ) : null}

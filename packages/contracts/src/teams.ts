@@ -150,6 +150,23 @@ export type TeamStorageCommand = typeof TeamStorageCommand.Type;
 /** The exact text a published team note is saved with, so a share preview matches storage. */
 export const formatTeamNote = (note: { title: string; project: string; text: string }) =>
   `# ${note.title.replace(/[\r\n]/gu, " ")}\n\n${note.project.trim() ? `Project: ${note.project.replace(/[\r\n]/gu, " ")}\n\n` : ""}${note.text}`;
+/**
+ * Wraps a team note for a user's message. The block names its team and note so the conversation
+ * records where the text came from; a closing tag inside the note cannot end it early. The server
+ * formats every block it hands out, so the composer receives exactly the text it later checks.
+ */
+export const formatTeamMemoryContext = (input: {
+  teamName: string;
+  path: string;
+  text: string;
+}) => {
+  const attribute = (value: string) => value.replace(/["<>\r\n]/gu, " ");
+  return [
+    `<team-memory team="${attribute(input.teamName)}" note="${attribute(input.path)}">`,
+    input.text.replace(/\r\n?/gu, "\n").replace(/<\/team-memory>/giu, "<\\/team-memory>"),
+    "</team-memory>",
+  ].join("\n");
+};
 export const TeamDocument = Schema.Struct({
   path: Schema.String,
   etag: Schema.String,
@@ -189,6 +206,20 @@ export const TeamProjectCommand = Schema.Union([
   /** The link for a project, only when the caller can open its team. */
   Schema.Struct({ action: Schema.Literal("project-link"), projectId: ProjectId }),
   Schema.Struct({ action: Schema.Literal("memory-read"), projectId: ProjectId, path: MemoryPath }),
+  /**
+   * Rereads a note and issues a reference to the exact block the composer inserts. The reference is
+   * bound to this session, campus identity, and the project's current team link.
+   */
+  Schema.Struct({
+    action: Schema.Literal("memory-attach"),
+    projectId: ProjectId,
+    path: MemoryPath,
+  }),
+  /** Rechecks references before a message holding them is sent; fails if any no longer holds. */
+  Schema.Struct({
+    action: Schema.Literal("memory-verify"),
+    references: Schema.Array(Id).check(Schema.isMinLength(1), Schema.isMaxLength(20)),
+  }),
   /** Publishes text the user chose in a thread as a memory note; provenance comes from the server. */
   Schema.Struct({
     action: Schema.Literal("share"),
@@ -230,8 +261,18 @@ export const TeamProjectLink = Schema.Struct({
   linkedAt: Schema.String,
 });
 export type TeamProjectLink = typeof TeamProjectLink.Type;
+/** Team-memory text issued for one draft; `block` is exactly what the composer inserts. */
+export const TeamMemoryReference = Schema.Struct({
+  id: Id,
+  projectId: ProjectId,
+  teamName: Schema.String,
+  path: Schema.String,
+  block: Schema.String,
+});
+export type TeamMemoryReference = typeof TeamMemoryReference.Type;
 export const TeamProjectResult = Schema.Struct({
   projects: Schema.Array(TeamProjectLink),
   storage: Schema.NullOr(TeamStorageStatus),
+  reference: Schema.optionalKey(TeamMemoryReference),
 });
 export type TeamProjectResult = typeof TeamProjectResult.Type;

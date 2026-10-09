@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
-import { formatTeamMemoryContext, teamNoteTitle } from "./threadTeamContext";
+import { formatTeamMemoryContext } from "@t3tools/contracts";
+import { teamNoteTitle } from "./threadTeamContext";
 
 describe("team memory context", () => {
   it("keeps note text inside one attributed block", () => {

@@ -1,12 +1,15 @@
 // @effect-diagnostics cryptoRandomUUID:off - Browser-generated record IDs; this component does not run in an Effect runtime.
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import {
+  formatTeamMemoryContext,
   formatTeamNote,
   type EnvironmentId,
   type ProjectId,
   type TeamDocument,
+  type TeamMemoryReference,
   type TeamProjectCommand,
   type TeamProjectLink,
+  type TeamProjectResult,
   type TeamsResult,
   type ThreadId,
 } from "@t3tools/contracts";
@@ -30,10 +33,23 @@ import { Textarea } from "../ui/textarea";
 import { toastManager } from "../ui/toast";
 import { teamDocumentDeviceId } from "./TeamDocuments";
 import { useTeamProjectRequest } from "./TeamProjects";
-import { formatTeamMemoryContext, teamNoteTitle } from "./threadTeamContext";
+import { teamNoteTitle } from "./threadTeamContext";
 
 const MAX_NOTE_BYTES = 64 * 1024;
 type Share = Extract<TeamProjectCommand, { action: "share" }>;
+
+/** Storage answers without the requested content when Microsoft is not ready; say why. */
+function storageProblem(result: TeamProjectResult): string | null {
+  switch (result.storage?.status) {
+    case "not-configured":
+      return "Microsoft storage is not set up for this environment yet.";
+    case "disconnected":
+    case "pending":
+      return "Connect Microsoft in Teams → your team → Shared storage, then try again.";
+    default:
+      return null;
+  }
+}
 
 /**
  * Team dialogs are mounted per signed-in campus identity, so an account change discards
@@ -127,6 +143,7 @@ function ShareForm({
   const [title, setTitle] = useState("");
   const [text, setText] = useState(initialText);
   const [reviewing, setReviewing] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
   const pending = useRef<Share | null>(null);
   const [deviceId] = useState(teamDocumentDeviceId);
   const loadTeams = async () => {
@@ -170,16 +187,20 @@ function ShareForm({
             text,
           };
     pending.current = command;
+    setNotice(null);
     const result = await run(command);
-    if (result && !("error" in result) && result.storage?.document) {
-      pending.current = null;
-      toastManager.add({
-        type: "success",
-        title: `Shared to ${team.name}`,
-        description: "Find or remove it under Teams → Team projects or shared storage.",
-      });
-      onDone();
+    if (!result || "error" in result) return;
+    if (!result.storage?.document) {
+      setNotice(storageProblem(result) ?? "The note was not saved. Try again.");
+      return;
     }
+    pending.current = null;
+    toastManager.add({
+      type: "success",
+      title: `Shared to ${team.name}`,
+      description: "Find or remove it under Teams → Team projects or shared storage.",
+    });
+    onDone();
   };
   if (teams === null)
     return (
@@ -286,9 +307,9 @@ function ShareForm({
               ) : null}
             </>
           )}
-          {error ? (
+          {error || notice ? (
             <p role="alert" className="text-sm text-destructive">
-              {error} Your text has been kept.
+              {error ?? notice} Your text has been kept.
             </p>
           ) : null}
         </div>
@@ -324,8 +345,8 @@ export function TeamMemoryDialog({
   projectId: ProjectId;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** Returns false when the composer could not take the text. */
-  onInsert: (text: string) => boolean;
+  /** Inserts the server-issued block; returns false when the composer could not take it. */
+  onInsert: (reference: TeamMemoryReference, identity: string) => boolean;
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -334,7 +355,8 @@ export function TeamMemoryDialog({
           <DialogTitle>Add team memory</DialogTitle>
           <DialogDescription>
             Choose one note from this project’s team. It is added to your message where you can edit
-            it, and is sent only if you send the message.
+            it. Your team access is checked again when you send, and the note is removed from the
+            draft if you sign out or switch accounts.
           </DialogDescription>
         </DialogHeader>
         <SignedIn environmentId={environmentId}>
@@ -343,8 +365,8 @@ export function TeamMemoryDialog({
               key={`${identity}:${projectId}`}
               environmentId={environmentId}
               projectId={projectId}
-              onInsert={(text) => {
-                if (!onInsert(text)) return false;
+              onInsert={(reference) => {
+                if (!onInsert(reference, identity)) return false;
                 onOpenChange(false);
                 return true;
               }}
@@ -363,15 +385,20 @@ function MemoryPicker({
 }: {
   environmentId: EnvironmentId;
   projectId: ProjectId;
-  onInsert: (text: string) => boolean;
+  onInsert: (reference: TeamMemoryReference) => boolean;
 }) {
   const { run, busy, error } = useTeamProjectRequest(environmentId);
   const [link, setLink] = useState<TeamProjectLink | null | "unlinked">(null);
   const [files, setFiles] = useState<readonly string[] | null>(null);
   const [note, setNote] = useState<TeamDocument | null>(null);
   const [changed, setChanged] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  // A changed note's issued block, shown for review and inserted as-is if the user confirms.
+  const [issued, setIssued] = useState<TeamMemoryReference | null>(null);
   const load = async () => {
     setNote(null);
+    setIssued(null);
+    setNotice(null);
     const found = await run({ action: "project-link", projectId });
     if (!found) return;
     if ("error" in found) {
@@ -383,33 +410,46 @@ function MemoryPicker({
     if (!current) return setLink("unlinked");
     setLink(current);
     const listed = await run({ action: "memory-list", projectId });
-    if (listed && !("error" in listed))
-      setFiles((listed.storage?.files ?? []).map((file) => file.path).toSorted());
+    if (!listed || "error" in listed) return;
+    const problem = storageProblem(listed);
+    if (problem) return setNotice(problem);
+    setFiles((listed.storage?.files ?? []).map((file) => file.path).toSorted());
   };
   useEffect(() => {
     void load();
     // Loads once per mount; the dialog remounts for another account or project.
   }, []);
   const read = async (path: string) => {
+    setNotice(null);
     const result = await run({ action: "memory-read", projectId, path });
     if (!result || "error" in result) return null;
-    return result.storage?.document ?? null;
+    const document = result.storage?.document ?? null;
+    if (!document) setNotice(storageProblem(result) ?? "This note could not be opened.");
+    return document;
   };
+  const shown =
+    issued?.block ??
+    (note && typeof link === "object" && link
+      ? formatTeamMemoryContext({ teamName: link.teamName, path: note.path, text: note.text })
+      : null);
   const add = async () => {
-    if (!note || typeof link !== "object" || !link) return;
-    // Reread so membership is checked again and the user adds what the team has now.
-    const fresh = await read(note.path);
-    if (!fresh) return;
-    if (fresh.text !== note.text) {
-      setNote(fresh);
-      setChanged(true);
-      return;
+    if (!note || shown === null) return;
+    setNotice(null);
+    let reference = issued;
+    if (!reference) {
+      // The server rereads the note, rechecks access, and issues the exact block to insert.
+      // `run` drops responses that land after an account change or close unmounted this picker.
+      const result = await run({ action: "memory-attach", projectId, path: note.path });
+      if (!result || "error" in result) return;
+      if (!result.reference) return setNotice("This note could not be added. Try again.");
+      reference = result.reference;
+      if (reference.block !== shown) {
+        setIssued(reference);
+        setChanged(true);
+        return;
+      }
     }
-    if (
-      !onInsert(
-        formatTeamMemoryContext({ teamName: link.teamName, path: fresh.path, text: fresh.text }),
-      )
-    )
+    if (!onInsert(reference))
       toastManager.add({
         type: "warning",
         title: "The composer is not ready",
@@ -437,10 +477,10 @@ function MemoryPicker({
               Team: <span className="text-foreground">{link.teamName}</span>
             </p>
           ) : null}
-          {error ? (
+          {error || notice ? (
             <div className="space-y-2">
               <p role="alert" className="text-sm text-destructive">
-                {error}
+                {error ?? notice}
               </p>
               <Button variant="outline" size="sm" disabled={busy} onClick={() => void load()}>
                 Retry
@@ -461,21 +501,15 @@ function MemoryPicker({
                 aria-label="Team memory to add"
                 className="max-h-80 overflow-auto rounded-lg border border-border bg-muted/40 p-3 text-xs whitespace-pre-wrap"
               >
-                {typeof link === "object" && link
-                  ? formatTeamMemoryContext({
-                      teamName: link.teamName,
-                      path: note.path,
-                      text: note.text,
-                    })
-                  : note.text}
+                {shown ?? note.text}
               </pre>
               <p className="text-xs text-muted-foreground">
-                Once sent, the text stays in this conversation and the agent’s context even if the
-                note or your team access is later removed.
+                Once sent, the text stays in this conversation and the agent’s context. Removing the
+                note or your team access later does not take it back.
               </p>
             </>
           ) : files === null ? (
-            error ? null : (
+            error || notice ? null : (
               <p className="text-sm text-muted-foreground">Loading team memory…</p>
             )
           ) : files.length === 0 ? (
@@ -496,6 +530,7 @@ function MemoryPicker({
                     onClick={() =>
                       void read(path).then((document) => {
                         setChanged(false);
+                        setIssued(null);
                         if (document) setNote(document);
                       })
                     }
@@ -510,7 +545,14 @@ function MemoryPicker({
       </DialogPanel>
       {note ? (
         <DialogFooter>
-          <Button variant="outline" disabled={busy} onClick={() => setNote(null)}>
+          <Button
+            variant="outline"
+            disabled={busy}
+            onClick={() => {
+              setNote(null);
+              setIssued(null);
+            }}
+          >
             Back
           </Button>
           <Button disabled={busy} onClick={() => void add()}>

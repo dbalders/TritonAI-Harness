@@ -2216,6 +2216,14 @@ const makeWsRpcLayer = (
             ORCHESTRATION_WS_METHODS.dispatchCommand,
             Effect.gen(function* () {
               yield* ProjectCloneTracker.rejectCommandsDuringClone(projectCloneTracker, command);
+              // Team memory this server issued leaves only while this session can still open it.
+              yield* teamProject
+                .authorizeOutgoingCommand(currentSessionId, command)
+                .pipe(
+                  Effect.mapError(
+                    (error) => new OrchestrationDispatchCommandError({ message: error.message }),
+                  ),
+                );
               const normalizedCommand = yield* normalizeDispatchCommand(command);
               // Archive removes the thread from the client, so this transport
               // closes its session and terminals after the command lands.

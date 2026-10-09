@@ -7,6 +7,8 @@ import type { EnvironmentId } from "@t3tools/contracts";
 import { accountCallbackId } from "@t3tools/shared/accountCallback";
 import { useEffect, useMemo, useSyncExternalStore } from "react";
 
+import { reconcileDraftTeamMemoryAccount } from "../components/teams/teamMemoryDrafts";
+import { toastManager } from "../components/ui/toast";
 import { ensureLocalApi } from "../localApi";
 import { serverEnvironment } from "../state/server";
 import { usePreparedConnection } from "../state/session";
@@ -77,8 +79,24 @@ export function useUcsdAccount(environmentId: EnvironmentId): AccountLoginState 
     };
   }, [controller]);
 
+  const accountStatus = state.account?.status;
+  const identity = state.account?.profile
+    ? `${state.account.profile.issuer}:${state.account.profile.subject}`
+    : null;
   useEffect(() => {
     window.dispatchEvent(new Event("tritonai-account-changed"));
-  }, [state.account?.status, state.account?.profile?.issuer, state.account?.profile?.subject]);
+    if (accountStatus === undefined) return;
+    // Unsent team memory belongs to the account that added it; sign-out or a switch removes it.
+    const removed = reconcileDraftTeamMemoryAccount(
+      environmentId,
+      accountStatus === "signed-in" ? identity : null,
+    );
+    if (removed > 0)
+      toastManager.add({
+        type: "info",
+        title: "Team memory removed from unsent drafts",
+        description: "Your campus account changed. The rest of each draft was kept.",
+      });
+  }, [accountStatus, environmentId, identity]);
   return { ...state, controller };
 }

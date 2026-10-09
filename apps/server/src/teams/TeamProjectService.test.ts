@@ -1,7 +1,9 @@
 import { describe, expect, it } from "@effect/vitest";
 import {
   type AccountStatus,
+  CommandId,
   formatTeamNote,
+  MessageId,
   ProjectId,
   ThreadId,
   type TeamRole,
@@ -9,6 +11,7 @@ import {
   TeamsError,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as TestClock from "effect/testing/TestClock";
 import * as Option from "effect/Option";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import { AccountService } from "../auth/AccountService.ts";
@@ -48,6 +51,8 @@ function fixture() {
   const graph: string[] = [];
   // Runs once, inside the next Graph request, to interleave another call with an in-flight one.
   let duringGraph: Effect.Effect<unknown, TeamsError> | null = null;
+  // Runs once, after the next membership read is answered, to land a change behind that read.
+  let afterTeams: (() => void) | null = null;
   const writes: { method: string; url: string; body: string }[] = [];
   const status = (): AccountStatus => ({
     configured: true,
@@ -77,6 +82,9 @@ function fixture() {
         const role = signedIn ? roles[teamId]?.[subject] : undefined;
         if (!role)
           return Effect.fail(new TeamsError({ code: "not_found", message: "Team unavailable" }));
+        const landed = afterTeams;
+        afterTeams = null;
+        landed?.();
         return Effect.succeed({
           teams: [],
           invitations: [],
@@ -260,6 +268,9 @@ function fixture() {
     interleave: (effect: Effect.Effect<unknown, TeamsError>) => {
       duringGraph = effect;
     },
+    afterMembershipRead: (change: () => void) => {
+      afterTeams = change;
+    },
     switchTo: (next: string) => {
       subject = next;
     },
@@ -271,6 +282,26 @@ function fixture() {
 
 const code = <A>(effect: Effect.Effect<A, TeamsError>) =>
   Effect.flip(effect).pipe(Effect.map((error) => error.code));
+const createdAt = "2026-10-09T00:00:00.000Z";
+/** A client's send of `text`, as it reaches the dispatch boundary. */
+const turn = (text: string) =>
+  ({
+    type: "thread.turn.start",
+    commandId: CommandId.make("cmd-send"),
+    threadId,
+    message: { messageId: MessageId.make("msg-send"), role: "user", text, attachments: [] },
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    createdAt,
+  }) as const;
+const goal = (objective: string) =>
+  ({
+    type: "thread.goal.set",
+    commandId: CommandId.make("cmd-goal"),
+    threadId,
+    objective,
+    createdAt,
+  }) as const;
 
 describe("Team project memory", () => {
   it.effect("reads and publishes only the linked team's memory with project provenance", () =>
@@ -543,6 +574,139 @@ describe("Team project memory", () => {
       f.graph.length = 0;
       expect(yield* code(share(teamA))).toBe("conflict");
       expect(f.graph).toHaveLength(0);
+    }),
+  );
+});
+
+describe("Team memory in unsent messages", () => {
+  const path = `Memory/${"a".repeat(43)}/${deviceId}/${recordId}.md`;
+  const linked = Effect.gen(function* () {
+    const f = fixture();
+    const { service, connect } = yield* f.make;
+    yield* connect(teamA);
+    yield* service.execute("s", { action: "bind", teamId: teamA, projectId });
+    const attach = () =>
+      service
+        .execute("s", { action: "memory-attach", projectId, path })
+        .pipe(Effect.map((result) => result.reference!));
+    const verify = (id: string, session = "s") =>
+      service.execute(session, { action: "memory-verify", references: [id] });
+    return { f, service, attach, verify };
+  });
+
+  it.effect("issues the exact attributed block and accepts it while access holds", () =>
+    Effect.gen(function* () {
+      const { f, service, attach, verify } = yield* linked;
+      const reference = yield* attach();
+      // The team name and note come from the server, never from the client.
+      expect(reference).toMatchObject({ projectId, teamName: "Team A", path });
+      expect(reference.block).toBe(
+        `<team-memory team="Team A" note="${path}">\nShared note from rootA:${path}\n</team-memory>`,
+      );
+      f.graph.length = 0;
+      yield* verify(reference.id);
+      yield* service.authorizeOutgoingCommand(
+        "s",
+        turn(`Please use this:\n\n${reference.block}\n\nThanks`),
+      );
+      // Rechecking access needs no Graph request.
+      expect(f.graph).toHaveLength(0);
+    }),
+  );
+
+  it.effect("refuses a member removed between adding and sending", () =>
+    Effect.gen(function* () {
+      const { f, service, attach, verify } = yield* linked;
+      const reference = yield* attach();
+      delete f.roles[teamA]!.alice;
+      expect(yield* code(verify(reference.id))).toBe("not_found");
+      // The server refuses the stale block at dispatch even if the client skipped its check.
+      expect(
+        yield* code(service.authorizeOutgoingCommand("s", turn(`Draft\n${reference.block}`))),
+      ).toBe("not_found");
+      // Ordinary messages are unaffected.
+      expect(
+        yield* code(service.authorizeOutgoingCommand("s", goal(`Finish ${reference.block}`))),
+      ).toBe("not_found");
+      yield* service.authorizeOutgoingCommand("s", turn("Draft without team memory"));
+    }),
+  );
+
+  it.effect("refuses memory after unlinking, relinking, or moving the team's root", () =>
+    Effect.gen(function* () {
+      const { f, service, attach, verify } = yield* linked;
+      const reference = yield* attach();
+      yield* service.execute("s", { action: "unbind", teamId: teamA, projectId });
+      expect(yield* code(verify(reference.id))).toBe("not_found");
+      // Relinking the project to another team the user belongs to cannot launder team A's text.
+      f.roles[teamB]!.alice = "editor";
+      yield* service.execute("s", { action: "bind", teamId: teamB, projectId });
+      expect(yield* code(verify(reference.id))).toBe("not_found");
+      expect(yield* code(service.authorizeOutgoingCommand("s", turn(reference.block)))).toBe(
+        "not_found",
+      );
+      // A later link to the same team is a new link; memory must be added again under it.
+      yield* service.execute("s", { action: "unbind", teamId: teamB, projectId });
+      yield* TestClock.adjust("1 second");
+      yield* service.execute("s", { action: "bind", teamId: teamA, projectId });
+      expect(yield* code(verify(reference.id))).toBe("not_found");
+      const fresh = yield* attach();
+      yield* verify(fresh.id);
+      // The same note added again under the new link sends, despite its stale earlier issuance.
+      yield* service.authorizeOutgoingCommand("s", turn(fresh.block));
+      // An administrator moving the team folder invalidates memory added from the old root.
+      f.storage[teamA] = { ...f.storage[teamA]!, folderId: "rootMoved" };
+      expect(yield* code(verify(fresh.id))).toBe("conflict");
+    }),
+  );
+
+  it.effect("binds references to the session and account that added them", () =>
+    Effect.gen(function* () {
+      const { f, service, attach, verify } = yield* linked;
+      const reference = yield* attach();
+      expect(yield* code(verify(reference.id, "another-session"))).toBe("sign_in_required");
+      // Bob can open team A, but the draft reference was issued to Alice.
+      f.roles[teamA]!.bob = "editor";
+      f.switchTo("bob");
+      expect(yield* code(verify(reference.id))).toBe("sign_in_required");
+      f.switchTo("alice");
+      yield* verify(reference.id);
+      f.signOut();
+      expect(yield* code(verify(reference.id))).toBe("sign_in_required");
+      expect(yield* code(service.authorizeOutgoingCommand("s", turn(reference.block)))).toBe(
+        "sign_in_required",
+      );
+    }),
+  );
+
+  it.effect("treats forged references and look-alike blocks as unauthorized text", () =>
+    Effect.gen(function* () {
+      const { service, verify } = yield* linked;
+      expect(yield* code(verify("99999999-9999-4999-a999-999999999999"))).toBe("not_found");
+      // A hand-written block naming a team grants nothing and is just the user's own text.
+      yield* service.authorizeOutgoingCommand(
+        "s",
+        turn(`<team-memory team="Team B" note="Memory/x.md">\nmade up\n</team-memory>`),
+      );
+    }),
+  );
+
+  it.effect("issues nothing when access changes while the note is being read", () =>
+    Effect.gen(function* () {
+      const { f, service, attach } = yield* linked;
+      f.interleave(service.execute("s", { action: "unbind", teamId: teamA, projectId }));
+      expect(yield* code(attach())).toBe("not_found");
+      yield* service.execute("s", { action: "bind", teamId: teamA, projectId });
+      f.roles[teamA]!.bob = "editor";
+      f.interleave(Effect.sync(() => f.switchTo("bob")));
+      expect(yield* code(attach())).toBe("sign_in_required");
+      f.switchTo("alice");
+      // An account switch that lands behind the send-time membership read also wins.
+      const reference = yield* attach();
+      f.afterMembershipRead(() => f.switchTo("bob"));
+      expect(
+        yield* code(service.execute("s", { action: "memory-verify", references: [reference.id] })),
+      ).toBe("conflict");
     }),
   );
 });

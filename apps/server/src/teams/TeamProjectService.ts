@@ -1,12 +1,16 @@
 import {
+  type ClientOrchestrationCommand,
+  formatTeamMemoryContext,
   type ProjectId,
   type ThreadId,
   type TeamProjectCommand,
   type TeamProjectLink,
   type TeamProjectResult,
   TeamStorage,
+  type TeamStorageStatus,
   TeamsError,
 } from "@t3tools/contracts";
+import * as NodeCrypto from "node:crypto";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -20,6 +24,8 @@ import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSna
 import { TeamStorageService } from "./TeamStorageService.ts";
 
 const MAX_LINKS = 500;
+/** Team-memory blocks handed to composers, newest last; older ones must be added again. */
+const MAX_ISSUED = 256;
 const SECRET_NAME = "team-project-links";
 const Link = Schema.Struct({
   projectId: Schema.String,
@@ -45,6 +51,24 @@ const notLinked = () =>
     code: "not_found",
     message: "This project is not linked to a team you can open. Link it from Teams.",
   });
+const storageUnavailable = (status: TeamStorageStatus["status"]) =>
+  new TeamsError({
+    code: "unavailable",
+    message:
+      status === "not-configured"
+        ? "Microsoft storage is not set up for this environment yet."
+        : "Connect Microsoft in Teams → your team → Shared storage, then try again.",
+  });
+/** A team-memory block this server issued, and the authority it was issued under. */
+interface Issued {
+  readonly id: string;
+  readonly sessionId: string;
+  readonly issuer: string;
+  readonly subject: string;
+  readonly projectId: ProjectId;
+  readonly link: Link;
+  readonly block: string;
+}
 
 /**
  * Links a local Harness project to one team's shared memory. The link is local metadata, not a
@@ -59,6 +83,14 @@ export class TeamProjectService extends Context.Service<
       sessionId: string,
       command: TeamProjectCommand,
     ) => Effect.Effect<TeamProjectResult, TeamsError>;
+    /**
+     * Refuses a client's message or goal text that contains a team-memory block this server issued
+     * unless the sending session can still open that block's team through the same link and root.
+     */
+    readonly authorizeOutgoingCommand: (
+      sessionId: string,
+      command: ClientOrchestrationCommand,
+    ) => Effect.Effect<void, TeamsError>;
   }
 >()("t3/teams/TeamProjectService") {}
 
@@ -68,6 +100,8 @@ export const make = Effect.gen(function* () {
   const secrets = yield* ServerSecretStore;
   const projects = yield* ProjectionSnapshotQuery;
   const lock = yield* Semaphore.make(1);
+  // In memory on purpose: a restart expires every reference, which only ever blocks a send.
+  const issued = new Map<string, Issued>();
 
   const readLinks = secrets.get(SECRET_NAME).pipe(
     Effect.flatMap((value) =>
@@ -118,6 +152,163 @@ export const make = Effect.gen(function* () {
       return result;
     });
 
+  const signedInProfile = (sessionId: string) =>
+    account.getStatus(sessionId).pipe(
+      Effect.mapError(() => failure("Your UC San Diego account could not be verified.")),
+      Effect.flatMap((status) =>
+        status.status === "signed-in" && status.profile
+          ? Effect.succeed(status.profile)
+          : Effect.fail(
+              new TeamsError({
+                code: "sign_in_required",
+                message: "Sign in with UC San Diego to use team memory.",
+              }),
+            ),
+      ),
+    );
+  const linkFor = (projectId: string) =>
+    readLinks.pipe(Effect.map((links) => links.find((entry) => entry.projectId === projectId)));
+  const memoryChanged = () =>
+    new TeamsError({
+      code: "conflict",
+      message: "Team access changed while this was checked. Try again.",
+    });
+  /**
+   * Whether this session can still send an issued block: signed in, the project still linked to
+   * the same team and root it was issued under, and a ready member of that exact team now.
+   * Owned references must also come from the same session and campus identity that received them.
+   */
+  const authorizeIssued = (sessionId: string, entry: Issued, owned: boolean) =>
+    Effect.gen(function* () {
+      const profile = yield* signedInProfile(sessionId);
+      if (
+        owned &&
+        (entry.sessionId !== sessionId ||
+          entry.issuer !== profile.issuer ||
+          entry.subject !== profile.subject)
+      )
+        return yield* new TeamsError({
+          code: "sign_in_required",
+          message: "This team memory was added under another account. Remove it to send.",
+        });
+      const unchangedLink = Effect.gen(function* () {
+        if (!sameLink(entry.link, yield* linkFor(entry.projectId)))
+          return yield* new TeamsError({
+            code: "not_found",
+            message: "This project's team link changed since the memory was added.",
+          });
+        if (!(yield* activeProject(entry.projectId))) return yield* notLinked();
+      });
+      yield* unchangedLink;
+      const team = yield* readyTeam(sessionId, entry.link.teamId);
+      const root = entry.link.storage;
+      if (
+        team.storage.tenantId.toLowerCase() !== root.tenantId.toLowerCase() ||
+        team.storage.siteId !== root.siteId ||
+        team.storage.driveId !== root.driveId ||
+        team.storage.folderId !== root.folderId
+      )
+        return yield* new TeamsError({
+          code: "conflict",
+          message: "This team's folder changed since the memory was added.",
+        });
+      // An account switch or unlink that landed during the membership check wins.
+      const after = yield* signedInProfile(sessionId);
+      if (after.issuer !== profile.issuer || after.subject !== profile.subject)
+        return yield* memoryChanged();
+      yield* unchangedLink;
+    });
+  const attach = Effect.fn("TeamProjectService.attach")(function* (
+    sessionId: string,
+    command: Extract<TeamProjectCommand, { action: "memory-attach" }>,
+  ) {
+    const profile = yield* signedInProfile(sessionId);
+    const link = yield* linkFor(command.projectId);
+    if (!link || !(yield* activeProject(command.projectId))) return yield* notLinked();
+    const team = yield* readyTeam(sessionId, link.teamId);
+    const status = yield* storage.execute(
+      sessionId,
+      { action: "read-file", teamId: link.teamId, path: command.path },
+      { storage: link.storage },
+    );
+    const document = status.document;
+    if (!document) return yield* storageUnavailable(status.status);
+    const entry: Issued = {
+      id: NodeCrypto.randomUUID(),
+      sessionId,
+      issuer: profile.issuer,
+      subject: profile.subject,
+      projectId: command.projectId,
+      link,
+      block: formatTeamMemoryContext({
+        teamName: team.name,
+        path: document.path,
+        text: document.text,
+      }),
+    };
+    // The read must still hold for the same account and link when it is handed out.
+    yield* authorizeIssued(sessionId, entry, true);
+    issued.set(entry.id, entry);
+    for (const id of issued.keys()) {
+      if (issued.size <= MAX_ISSUED) break;
+      issued.delete(id);
+    }
+    return {
+      projects: [],
+      storage: null,
+      reference: {
+        id: entry.id,
+        projectId: entry.projectId,
+        teamName: team.name,
+        path: document.path,
+        block: entry.block,
+      },
+    };
+  });
+  const verify = Effect.fn("TeamProjectService.verify")(function* (
+    sessionId: string,
+    references: readonly string[],
+  ) {
+    for (const id of new Set(references)) {
+      const entry = issued.get(id);
+      if (!entry)
+        return yield* new TeamsError({
+          code: "not_found",
+          message: "This team memory has expired. Remove it and add it again.",
+        });
+      yield* authorizeIssued(sessionId, entry, true);
+    }
+    return { projects: [], storage: null };
+  });
+  const authorizeOutgoingCommand = Effect.fn("TeamProjectService.authorizeOutgoingCommand")(
+    function* (sessionId: string, command: ClientOrchestrationCommand) {
+      const text =
+        command.type === "thread.turn.start"
+          ? command.message.text
+          : command.type === "thread.goal.set"
+            ? (command.objective ?? "")
+            : "";
+      if (!text || issued.size === 0) return;
+      // A block passes when any issuance of it, newest first, still holds for this session, so
+      // memory added again after a relink is not refused for its older, stale issuance.
+      const refused = new Map<string, TeamsError | null>();
+      for (const entry of [...issued.values()].toReversed()) {
+        if (refused.get(entry.block) === null || !text.includes(entry.block)) continue;
+        const result = yield* Effect.result(authorizeIssued(sessionId, entry, false));
+        refused.set(
+          entry.block,
+          result._tag === "Success" ? null : (refused.get(entry.block) ?? result.failure),
+        );
+      }
+      for (const error of refused.values())
+        if (error)
+          return yield* new TeamsError({
+            code: error.code,
+            message: `This message contains team memory you can no longer send. ${error.message}`,
+          });
+    },
+  );
+
   const share = Effect.fn("TeamProjectService.share")(function* (
     sessionId: string,
     command: Extract<TeamProjectCommand, { action: "share" }>,
@@ -162,6 +353,8 @@ export const make = Effect.gen(function* () {
       return { projects: yield* listFor(team, yield* readLinks), storage: null };
     }
     if (command.action === "share") return yield* share(sessionId, command);
+    if (command.action === "memory-attach") return yield* attach(sessionId, command);
+    if (command.action === "memory-verify") return yield* verify(sessionId, command.references);
     if (command.action === "bind" || command.action === "unbind") {
       const team = yield* readyTeam(sessionId, command.teamId);
       return yield* lock.withPermits(1)(
@@ -279,7 +472,7 @@ export const make = Effect.gen(function* () {
       return yield* notLinked();
     return { projects: [], storage: status };
   });
-  return TeamProjectService.of({ execute });
+  return TeamProjectService.of({ execute, authorizeOutgoingCommand });
 });
 
 export const layer = Layer.effect(TeamProjectService, make);

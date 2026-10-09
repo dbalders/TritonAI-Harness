@@ -36,8 +36,12 @@ From a project thread, choose **Team** in the thread header, or select text in
 a reply and choose **Share**. **Share text to a team** publishes only the text
 you review, as a memory note labeled with the thread's project, to a team where
 you are an editor or owner. **Add team memory to message** previews one note
-from the project's linked team and adds it to your draft. Text you send stays
-in that conversation and the agent's context even if the note or your access is
+from the project's linked team and adds it to your draft. When you send, your
+team access is checked again: if you were removed, the project was
+unlinked or relinked, or the team folder moved, the message is held and you can
+remove the team memory and keep the rest of your draft. Signing out or switching
+campus accounts removes unsent team memory from drafts. Text you send stays in
+that conversation and the agent's context even if the note or your access is
 later removed; removing a shared note does not remove copies people already
 made.
 
