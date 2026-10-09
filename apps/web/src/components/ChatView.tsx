@@ -257,7 +257,7 @@ import {
 } from "lucide-react";
 import { cn, randomHex, randomUUID } from "~/lib/utils";
 import { stackedThreadToast, toastManager } from "./ui/toast";
-import { ShareToTeamDialog, TeamMemoryDialog } from "./teams/ThreadTeamDialogs";
+import { ShareToTeamDialog, TeamContextDialog } from "./teams/ThreadTeamDialogs";
 import {
   addDraftTeamMemory,
   beginDraftTeamMemorySend,
@@ -1795,7 +1795,7 @@ export default function ChatView(props: ChatViewProps) {
   // Bound to the thread it was opened from, so switching threads closes it and drops its draft.
   const [teamDialog, setTeamDialog] = useState<
     | { kind: "share"; threadId: ThreadId; text: string }
-    | { kind: "memory"; threadId: ThreadId }
+    | { kind: "memory" | "skill"; threadId: ThreadId }
     | null
   >(null);
   const [isWorkspaceFileDragActive, setIsWorkspaceFileDragActive] = useState(false);
@@ -6644,15 +6644,17 @@ export default function ChatView(props: ChatViewProps) {
       variant: draftTeamMemory.problem || draftTeamMemory.unresolvedTeams ? "warning" : "info",
       icon: <UsersIcon />,
       title: draftTeamMemory.problem
-        ? "Team memory in this draft can’t be sent"
+        ? `${draftTeamMemory.label} in this draft can’t be sent`
         : draftTeamMemory.unresolvedTeams
-          ? `Edited team memory from ${draftTeamMemory.unresolvedTeams}`
-          : `Team memory from ${draftTeamMemory.teams}`,
+          ? `Edited ${draftTeamMemory.label.toLowerCase()} from ${draftTeamMemory.unresolvedTeams}`
+          : `${draftTeamMemory.label} from ${draftTeamMemory.teams}`,
       description:
         draftTeamMemory.problem ??
         (draftTeamMemory.unresolvedTeams
-          ? "Harness can’t tell where this note ends, so Remove and signing out leave it in your draft. Delete the rest of it yourself, or put back its </team-memory> line. Your access is still checked when you send."
-          : "Your access is checked again when you send. Once sent, it stays in this conversation and can’t be taken back."),
+          ? "Harness can’t tell where it ends, so Remove and signing out leave it in your draft. Delete the rest of it yourself, or put back its closing line. Your access is still checked when you send."
+          : draftTeamMemory.label === "Team memory"
+            ? "Your access is checked again when you send. Once sent, it stays in this conversation and can’t be taken back."
+            : "Skill instructions apply to this message only and aren’t installed. Your access is checked again when you send. Once sent, they stay in this conversation and can’t be taken back."),
       actions: (
         <Button
           size="xs"
@@ -6665,6 +6667,7 @@ export default function ChatView(props: ChatViewProps) {
     };
   }, [
     composerDraftTarget,
+    draftTeamMemory.label,
     draftTeamMemory.problem,
     draftTeamMemory.teams,
     draftTeamMemory.unresolvedTeams,
@@ -7767,9 +7770,9 @@ export default function ChatView(props: ChatViewProps) {
       terminalContexts: composerTerminalContexts,
       elementContextCount: composerPreviewAnnotations.length + composerReviewComments.length,
     });
-    // Team memory in this draft, including edited notes that can't be separated, is rechecked by
-    // the server before anything leaves. The dispatch is checked again on the server only for
-    // unedited blocks it still remembers issuing.
+    // Team memory and skills in this draft, including edited ones that can't be separated, are
+    // rechecked by the server before anything leaves. The dispatch is checked again on the server
+    // only for unedited blocks it still remembers issuing.
     const teamMemory = draftTeamMemoryInPrompt(composerDraftTarget, promptForSend);
     if (teamMemory.length === 0) setDraftTeamMemoryProblem(composerDraftTarget, null);
     else {
@@ -10436,6 +10439,7 @@ export default function ChatView(props: ChatViewProps) {
                     onShare: () =>
                       setTeamDialog({ kind: "share", threadId: activeThread.id, text: "" }),
                     onAddMemory: () => setTeamDialog({ kind: "memory", threadId: activeThread.id }),
+                    onUseSkill: () => setTeamDialog({ kind: "skill", threadId: activeThread.id }),
                   }
                 : undefined
             }
@@ -10446,6 +10450,7 @@ export default function ChatView(props: ChatViewProps) {
             <ShareToTeamDialog
               environmentId={activeThread.environmentId}
               threadId={activeThread.id}
+              projectId={activeProject.id}
               projectTitle={activeProject.title}
               initialText={teamDialog?.kind === "share" ? teamDialog.text : ""}
               open={teamDialog?.kind === "share" && teamDialog.threadId === activeThread.id}
@@ -10453,28 +10458,32 @@ export default function ChatView(props: ChatViewProps) {
                 if (!open) setTeamDialog(null);
               }}
             />
-            <TeamMemoryDialog
-              environmentId={activeThread.environmentId}
-              projectId={activeProject.id}
-              open={teamDialog?.kind === "memory" && teamDialog.threadId === activeThread.id}
-              onOpenChange={(open) => {
-                if (!open) setTeamDialog(null);
-              }}
-              onInsert={(reference, identity) =>
-                addDraftTeamMemory(
-                  {
-                    ...reference,
-                    thread: composerDraftTarget,
-                    environmentId: activeThread.environmentId,
-                    identity,
-                  },
-                  () =>
-                    composerRef.current?.insertTextAtEnd(reference.block, {
-                      ensureLeadingBoundary: true,
-                    }) ?? false,
-                )
-              }
-            />
+            {(["memory", "skill"] as const).map((kind) => (
+              <TeamContextDialog
+                key={kind}
+                kind={kind}
+                environmentId={activeThread.environmentId}
+                projectId={activeProject.id}
+                open={teamDialog?.kind === kind && teamDialog.threadId === activeThread.id}
+                onOpenChange={(open) => {
+                  if (!open) setTeamDialog(null);
+                }}
+                onInsert={(reference, identity) =>
+                  addDraftTeamMemory(
+                    {
+                      ...reference,
+                      thread: composerDraftTarget,
+                      environmentId: activeThread.environmentId,
+                      identity,
+                    },
+                    () =>
+                      composerRef.current?.insertTextAtEnd(reference.block, {
+                        ensureLeadingBoundary: true,
+                      }) ?? false,
+                  )
+                }
+              />
+            ))}
           </>
         ) : null}
 

@@ -64,7 +64,7 @@ export interface TeamStorageScope {
   /** The exact root recorded at binding time; any other root for the team is refused. */
   readonly storage: TeamStorage;
   /** Lists only this top-level folder instead of the whole team folder. */
-  readonly listRoot?: "Memory";
+  readonly listRoot?: "Memory" | "Skills";
 }
 interface Connection {
   readonly sessionId: string;

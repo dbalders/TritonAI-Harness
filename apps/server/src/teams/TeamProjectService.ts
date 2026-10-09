@@ -1,7 +1,9 @@
 import {
   type ClientOrchestrationCommand,
-  formatTeamMemoryContext,
+  formatTeamContext,
+  hasHiddenTeamText,
   type ProjectId,
+  type TeamContextKind,
   type ThreadId,
   type TeamProjectCommand,
   type TeamProjectLink,
@@ -24,7 +26,7 @@ import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSna
 import { TeamStorageService } from "./TeamStorageService.ts";
 
 const MAX_LINKS = 500;
-/** Team-memory blocks handed to composers, newest last; older ones must be added again. */
+/** Memory and skill blocks handed to composers, newest last; older ones must be added again. */
 const MAX_ISSUED = 256;
 const SECRET_NAME = "team-project-links";
 const Link = Schema.Struct({
@@ -59,7 +61,28 @@ const storageUnavailable = (status: TeamStorageStatus["status"]) =>
         ? "Microsoft storage is not set up for this environment yet."
         : "Connect Microsoft in Teams → your team → Shared storage, then try again.",
   });
-/** A team-memory block this server issued, and the authority it was issued under. */
+const folders = { memory: "Memory", skill: "Skills" } as const;
+/** The one top-level team folder a project command may touch; the contract pins its path too. */
+const folderOf = (
+  command: Extract<TeamProjectCommand, { projectId: ProjectId }>,
+): (typeof folders)[TeamContextKind] | null =>
+  command.action.startsWith("skill-")
+    ? folders.skill
+    : command.action.startsWith("memory-")
+      ? folders.memory
+      : null;
+const wrongFolder = () =>
+  new TeamsError({
+    code: "invalid_request",
+    message: "Only this team's memory notes and skills can be opened here.",
+  });
+const hiddenSkillText = () =>
+  new TeamsError({
+    code: "invalid_request",
+    message:
+      "This skill contains hidden or control characters, so Harness won't use it. Ask its author to remove them in Teams → Shared storage.",
+  });
+/** A team memory or skill block this server issued, and the authority it was issued under. */
 interface Issued {
   readonly id: string;
   readonly sessionId: string;
@@ -71,10 +94,11 @@ interface Issued {
 }
 
 /**
- * Links a local Harness project to one team's shared memory. The link is local metadata, not a
- * filesystem boundary: every memory call reresolves the team from this server-side record and
- * rechecks the caller's campus identity, membership, role, and the exact storage root.
- * Team content is never written into the project workspace, personal memory, or provider state.
+ * Links a local Harness project to one team's shared memory and skills. The link is local
+ * metadata, not a filesystem boundary: every call reresolves the team from this server-side
+ * record and rechecks the caller's campus identity, membership, role, and the exact storage root.
+ * Team content is never written into the project workspace, personal memory, provider homes, or
+ * installed skills; it reaches an agent only as text the user adds to one message.
  */
 export class TeamProjectService extends Context.Service<
   TeamProjectService,
@@ -84,8 +108,9 @@ export class TeamProjectService extends Context.Service<
       command: TeamProjectCommand,
     ) => Effect.Effect<TeamProjectResult, TeamsError>;
     /**
-     * Refuses a client's message or goal text that contains a team-memory block this server issued
-     * unless the sending session can still open that block's team through the same link and root.
+     * Refuses a client's message or goal text that contains a team memory or skill block this
+     * server issued unless the sending session can still open that block's team through the same
+     * link and root.
      * Defense in depth for the WebSocket and HTTP client dispatch only: it recognizes blocks still
      * in memory (not after a restart or once evicted), and host MCP tools do not pass through it.
      * The client's `memory-verify` before each send is what holds edited and older notes.
@@ -224,8 +249,10 @@ export const make = Effect.gen(function* () {
     });
   const attach = Effect.fn("TeamProjectService.attach")(function* (
     sessionId: string,
-    command: Extract<TeamProjectCommand, { action: "memory-attach" }>,
+    command: Extract<TeamProjectCommand, { action: "memory-attach" | "skill-attach" }>,
   ) {
+    const kind: TeamContextKind = command.action === "skill-attach" ? "skill" : "memory";
+    if (!command.path.startsWith(`${folders[kind]}/`)) return yield* wrongFolder();
     const profile = yield* signedInProfile(sessionId);
     const link = yield* linkFor(command.projectId);
     if (!link || !(yield* activeProject(command.projectId))) return yield* notLinked();
@@ -237,6 +264,7 @@ export const make = Effect.gen(function* () {
     );
     const document = status.document;
     if (!document) return yield* storageUnavailable(status.status);
+    if (kind === "skill" && hasHiddenTeamText(document.text)) return yield* hiddenSkillText();
     const entry: Issued = {
       id: NodeCrypto.randomUUID(),
       sessionId,
@@ -244,7 +272,8 @@ export const make = Effect.gen(function* () {
       subject: profile.subject,
       projectId: command.projectId,
       link,
-      block: formatTeamMemoryContext({
+      block: formatTeamContext({
+        kind,
         teamName: team.name,
         path: document.path,
         text: document.text,
@@ -262,6 +291,7 @@ export const make = Effect.gen(function* () {
       storage: null,
       reference: {
         id: entry.id,
+        kind,
         projectId: entry.projectId,
         teamName: team.name,
         path: document.path,
@@ -357,7 +387,8 @@ export const make = Effect.gen(function* () {
       return { projects: yield* listFor(team, yield* readLinks), storage: null };
     }
     if (command.action === "share") return yield* share(sessionId, command);
-    if (command.action === "memory-attach") return yield* attach(sessionId, command);
+    if (command.action === "memory-attach" || command.action === "skill-attach")
+      return yield* attach(sessionId, command);
     if (command.action === "memory-verify") return yield* verify(sessionId, command.references);
     if (command.action === "bind" || command.action === "unbind") {
       const team = yield* readyTeam(sessionId, command.teamId);
@@ -409,41 +440,55 @@ export const make = Effect.gen(function* () {
       const team = yield* readyTeam(sessionId, link.teamId);
       return { projects: yield* listFor(team, [link]), storage: null };
     }
+    const folder = folderOf(command);
+    if (folder === null || ("path" in command && !command.path.startsWith(`${folder}/`)))
+      return yield* wrongFolder();
     const scope = { storage: link.storage };
     const teamId = link.teamId;
+    const browsing =
+      command.action === "memory-list" ||
+      command.action === "memory-read" ||
+      command.action === "skill-list" ||
+      command.action === "skill-read";
+    const reading = browsing || command.action === "memory-status";
     const status = yield* (() => {
       switch (command.action) {
         case "memory-status":
           return storage.execute(sessionId, { action: "status", teamId }, scope);
         case "memory-list":
+        case "skill-list":
           return storage.execute(
             sessionId,
             { action: "list-files", teamId },
-            { ...scope, listRoot: "Memory" },
+            { ...scope, listRoot: folder },
           );
         case "memory-read":
+        case "skill-read":
           return storage.execute(
             sessionId,
             { action: "read-file", teamId, path: command.path },
             scope,
           );
         case "memory-publish":
+        case "skill-publish":
           // The project label comes from the linked project, not the client.
           return storage.execute(
             sessionId,
             {
               action: "publish",
               teamId,
-              kind: "memory",
+              kind: command.action === "skill-publish" ? "skill" : "memory",
               recordId: command.recordId,
               deviceId: command.deviceId,
               title: command.title,
+              ...(command.action === "skill-publish" ? { description: command.description } : {}),
               project: project.title.slice(0, 80),
               text: command.text,
             },
             scope,
           );
         case "memory-update":
+        case "skill-update":
           return storage.execute(
             sessionId,
             {
@@ -456,6 +501,7 @@ export const make = Effect.gen(function* () {
             scope,
           );
         case "memory-delete":
+        case "skill-delete":
           return storage.execute(
             sessionId,
             { action: "delete-file", teamId, path: command.path, etag: command.etag },
@@ -463,18 +509,32 @@ export const make = Effect.gen(function* () {
           );
       }
     })();
+    // Names for author folders, from the same membership read every call makes.
+    const authors =
+      browsing && status.status === "connected"
+        ? Object.fromEntries(
+            (yield* readyTeam(sessionId, teamId)).members.map((member) => [
+              member.identityId,
+              member.displayName,
+            ]),
+          )
+        : undefined;
     // An unlink or relink that landed while a read was in flight wins: its content is withheld.
     if (
-      (command.action === "memory-status" ||
-        command.action === "memory-list" ||
-        command.action === "memory-read") &&
+      reading &&
       !sameLink(
         link,
         (yield* readLinks).find((entry) => entry.projectId === command.projectId),
       )
     )
       return yield* notLinked();
-    return { projects: [], storage: status };
+    if (
+      command.action === "skill-read" &&
+      status.document &&
+      hasHiddenTeamText(status.document.text)
+    )
+      return yield* hiddenSkillText();
+    return { projects: [], storage: status, ...(authors ? { authors } : {}) };
   });
   return TeamProjectService.of({ execute, authorizeOutgoingCommand });
 });

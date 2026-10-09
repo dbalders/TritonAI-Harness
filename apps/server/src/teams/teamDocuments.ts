@@ -3,6 +3,7 @@ import {
   type TeamStorage,
   type TeamStorageCommand,
   formatTeamNote,
+  hasHiddenTeamText,
   TeamsError,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -168,6 +169,24 @@ export const executeDocument = (input: {
         code: "forbidden",
         message: "Only the author or a team owner can remove this memory note.",
       });
+    // Skills become agent instructions: say what they are for, and keep nothing out of review.
+    // Checked before any folder is created.
+    if (
+      match[1] === "Skills" &&
+      (command.action === "publish" || command.action === "update-file")
+    ) {
+      if (command.action === "publish" && !command.description?.trim())
+        return yield* new TeamsError({
+          code: "invalid_request",
+          message: "Describe what this skill is for before publishing it.",
+        });
+      if (hasHiddenTeamText(command.action === "publish" ? formatTeamNote(command) : command.text))
+        return yield* new TeamsError({
+          code: "invalid_request",
+          message:
+            "Skill documents can't contain hidden or control characters. Remove them and try again.",
+        });
+    }
     const parts = path.split("/");
     const locateParent = (create: boolean) =>
       Effect.gen(function* () {

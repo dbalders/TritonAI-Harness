@@ -1,4 +1,9 @@
-import type { EnvironmentId, TeamMemoryReference } from "@t3tools/contracts";
+import {
+  type EnvironmentId,
+  TEAM_SKILL_PREAMBLE,
+  type TeamContextKind,
+  type TeamMemoryReference,
+} from "@t3tools/contracts";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { useShallow } from "zustand/react/shallow";
@@ -10,17 +15,19 @@ import {
 import { createMemoryStorage } from "../../lib/storage";
 import { useQueuedMessageStore } from "../../queuedMessageStore";
 
-/** Unsent team memory tracked at once. Beyond it a new note is refused; a live one is never dropped. */
+/**
+ * Unsent team memory and skills tracked at once. Beyond it a new one is refused; a live one is
+ * never dropped.
+ */
 export const MAX_DRAFT_TEAM_MEMORY = 50;
 const NO_ENTRIES: readonly DraftTeamMemory[] = [];
-const CLOSING_TAG = "</team-memory>";
 /** Note lines shorter than this are too common to attribute leftover text to a note. */
 const MIN_NOTE_LINE = 8;
 
 /**
- * Team memory inserted into one thread's unsent draft. The text lives in the draft like any
- * other text; this record is what lets the server recheck the reference before sending and lets
- * the client remove the text when the campus account changes.
+ * Team memory or a team skill inserted into one thread's unsent draft. The text lives in the
+ * draft like any other text; this record is what lets the server recheck the reference before
+ * sending and lets the client remove the text when the campus account changes.
  */
 export interface DraftTeamMemory extends TeamMemoryReference {
   readonly thread: ComposerThreadTarget;
@@ -36,15 +43,19 @@ interface DraftTeamMemoryState {
 }
 
 const header = (block: string) => block.slice(0, block.indexOf("\n"));
+const closingTag = (block: string) => block.slice(block.lastIndexOf("\n") + 1);
+/** Lines that came from the note itself; the preamble every skill block shares is not one. */
 const noteLines = (block: string) =>
   block
     .split("\n")
     .slice(1, -1)
     .map((line) => line.trim())
-    .filter((line) => line.length >= MIN_NOTE_LINE);
+    .filter((line) => line.length >= MIN_NOTE_LINE && line !== TEAM_SKILL_PREAMBLE);
+export const draftTeamContextKind = (entry: DraftTeamMemory): TeamContextKind =>
+  entry.kind ?? "memory";
 
 function nextOpeningTag(text: string, from: number): number {
-  const pattern = /<team-memory[\s>]/gu;
+  const pattern = /<team-(?:memory|skill)[\s>]/gu;
   pattern.lastIndex = from;
   return pattern.exec(text)?.index ?? -1;
 }
@@ -52,7 +63,7 @@ function nextOpeningTag(text: string, from: number): number {
 /** A closing tag with no opening tag before it, left behind when an attribution line was deleted. */
 function hasOrphanClosingTag(text: string): boolean {
   let open = false;
-  for (const match of text.matchAll(/<(\/?)team-memory[\s>]/gu)) {
+  for (const match of text.matchAll(/<(\/?)team-(?:memory|skill)[\s>]/gu)) {
     if (!match[1]) open = true;
     else if (!open) return true;
     else open = false;
@@ -65,7 +76,7 @@ function leftoverOf(text: string): (block: string) => boolean {
   const lines = new Set(text.split("\n").map((line) => line.trim()));
   const orphanClosingTag = hasOrphanClosingTag(text);
   return (block) => {
-    const note = /note="([^"]+)"/u.exec(header(block))?.[1];
+    const note = /(?:note|skill)="([^"]+)"/u.exec(header(block))?.[1];
     return (
       orphanClosingTag ||
       (note !== undefined && text.includes(note)) ||
@@ -75,7 +86,7 @@ function leftoverOf(text: string): (block: string) => boolean {
 }
 
 /**
- * Removes inserted team-memory blocks and keeps the rest of the text. A block goes when it is
+ * Removes inserted team memory and skill blocks and keeps the rest of the text. A block goes when it is
  * unchanged, or from its attribution line through the first closing tag before any other block
  * starts. A block whose end can't be found, or whose attribution line was edited away while its
  * text remains, stays and is reported as unresolved: removing more could delete the user's own
@@ -95,14 +106,14 @@ export function removeTeamMemoryBlocks(
       if (start < 0) break;
       let end = start + block.length;
       if (!next.startsWith(block, start)) {
-        const close = next.indexOf(CLOSING_TAG, start + opening.length);
+        const close = next.indexOf(closingTag(block), start + opening.length);
         const following = nextOpeningTag(next, start + opening.length);
         if (close < 0 || (following >= 0 && following < close)) {
           openEnded.add(block);
           from = start + opening.length;
           continue;
         }
-        end = close + CLOSING_TAG.length;
+        end = close + closingTag(block).length;
       }
       const before = next.slice(0, start);
       const after = next.slice(end);
@@ -365,10 +376,15 @@ export function reconcileDraftTeamMemoryAccount(
   );
 }
 
-/** Teams whose memory is in this draft now, which of them can't be separated, and why its last send was refused. */
+/**
+ * Teams whose memory or skills are in this draft now, which of them can't be separated, what
+ * kind of team text it is, and why its last send was refused.
+ */
 export function useDraftTeamMemorySummary(thread: ComposerThreadTarget | null): {
   teams: string;
   unresolvedTeams: string;
+  /** "Team memory", "Team skill(s)", or both, for the draft's notice. */
+  label: string;
   problem: string | null;
 } {
   const key = thread ? draftKey(thread) : null;
@@ -382,16 +398,23 @@ export function useDraftTeamMemorySummary(thread: ComposerThreadTarget | null): 
   );
   // Joined strings keep typing elsewhere in the draft from rerendering the caller.
   const summary = useComposerDraftStore((store) => {
-    if (thread === null || entries.length === 0) return "\u0000";
+    if (thread === null || entries.length === 0) return "\u0000\u0000";
     const presence = presenceIn(store.getComposerDraft(thread)?.prompt ?? "", entries);
-    const teams = (present: (value: Presence | undefined) => boolean) =>
-      [
-        ...new Set(
-          entries.filter((entry) => present(presence.get(entry))).map((entry) => entry.teamName),
-        ),
-      ].join(", ");
-    return `${teams((value) => value !== "gone")}\u0000${teams((value) => value === "unresolved")}`;
+    const present = entries.filter((entry) => presence.get(entry) !== "gone");
+    const teams = (list: readonly DraftTeamMemory[]) =>
+      [...new Set(list.map((entry) => entry.teamName))].join(", ");
+    const kinds = new Set(present.map(draftTeamContextKind));
+    const label =
+      kinds.size > 1
+        ? "Team memory and skills"
+        : kinds.has("skill")
+          ? present.length > 1
+            ? "Team skills"
+            : "Team skill"
+          : "Team memory";
+    const unresolved = present.filter((entry) => presence.get(entry) === "unresolved");
+    return `${teams(present)}\u0000${teams(unresolved)}\u0000${label}`;
   });
-  const [teams = "", unresolvedTeams = ""] = summary.split("\u0000");
-  return { teams, unresolvedTeams, problem };
+  const [teams = "", unresolvedTeams = "", label = "Team memory"] = summary.split("\u0000");
+  return { teams, unresolvedTeams, label, problem };
 }

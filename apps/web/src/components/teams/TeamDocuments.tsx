@@ -18,7 +18,10 @@ export function teamDocumentDeviceId() {
   }
 }
 
-/** Drafts live only in this account/team's mounted view; shared text never executes as a skill. */
+/**
+ * Drafts live only in this account/team's mounted view. Skill documents are shared text: nothing
+ * here installs or runs them, and an agent sees one only when a user adds it to a message.
+ */
 export function TeamDocuments({
   teamId,
   document,
@@ -27,6 +30,7 @@ export function TeamDocuments({
   busy,
   run,
   projectTitle,
+  projectKind = "memory",
 }: {
   teamId: string;
   document: TeamDocument | null;
@@ -34,11 +38,13 @@ export function TeamDocuments({
   canWrite: boolean;
   busy: boolean;
   run: (command: TeamStorageCommand) => Promise<TeamStorageStatus | null>;
-  /** Set when shown for a linked Harness project: only team memory, labeled with this project. */
+  /** Set when shown for a linked Harness project: one kind of document, labeled with it. */
   projectTitle?: string;
+  projectKind?: "memory" | "skill";
 }) {
-  const [kind, setKind] = useState<Publish["kind"]>("memory");
+  const [kind, setKind] = useState<Publish["kind"]>(projectKind);
   const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
   const [project, setProject] = useState("");
   const [text, setText] = useState("");
   const [edit, setEdit] = useState("");
@@ -55,6 +61,7 @@ export function TeamDocuments({
       previous &&
       previous.kind === kind &&
       previous.title === title &&
+      (previous.description ?? "") === (kind === "skill" ? description : "") &&
       previous.project === project &&
       previous.text === text
         ? previous
@@ -65,6 +72,7 @@ export function TeamDocuments({
             deviceId: ownDevice,
             kind,
             title,
+            ...(kind === "skill" ? { description } : {}),
             project,
             text,
           };
@@ -73,6 +81,7 @@ export function TeamDocuments({
     if (result?.document) {
       pending.current = null;
       setTitle("");
+      setDescription("");
       setText("");
     }
   };
@@ -84,8 +93,9 @@ export function TeamDocuments({
           <h4 className="text-sm font-medium">Team knowledge</h4>
           <p className="text-xs text-muted-foreground">
             Share a work summary, SOP, or skill document with this team. Project labels organize
-            notes; all team members can read them. Skill documents are shared text; publishing does
-            not install them.
+            notes; all team members can read them. Skill documents are shared instructions;
+            publishing does not install them. Members use one by adding it to a message in a linked
+            project.
           </p>
         </div>
       ) : null}
@@ -140,8 +150,22 @@ export function TeamDocuments({
               required
             />
           </label>
+          {kind === "skill" ? (
+            <label className="block space-y-1 text-xs">
+              What it’s for
+              <Input
+                aria-label="Skill description"
+                value={description}
+                maxLength={200}
+                disabled={busy}
+                onChange={(event) => setDescription(event.target.value)}
+                placeholder="When a teammate should use this skill"
+                required
+              />
+            </label>
+          ) : null}
           <label className="block space-y-1 text-xs">
-            Content
+            {kind === "skill" ? "Instructions" : "Content"}
             <Textarea
               aria-label="New document content"
               value={text}
@@ -149,11 +173,20 @@ export function TeamDocuments({
               disabled={busy}
               onChange={(event) => setText(event.target.value)}
               className="min-h-32"
-              placeholder="Write a summary or reusable instructions…"
+              placeholder={
+                kind === "skill"
+                  ? "Write the steps an agent should follow. Scripts and attachments aren’t supported."
+                  : "Write a summary or reusable instructions…"
+              }
               required
             />
           </label>
-          <Button type="submit" disabled={busy || !title.trim() || !text.trim()}>
+          <Button
+            type="submit"
+            disabled={
+              busy || !title.trim() || !text.trim() || (kind === "skill" && !description.trim())
+            }
+          >
             Publish to team
           </Button>
           <p className="text-xs text-muted-foreground">

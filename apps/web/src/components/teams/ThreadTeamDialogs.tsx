@@ -1,10 +1,11 @@
 // @effect-diagnostics cryptoRandomUUID:off - Browser-generated record IDs; this component does not run in an Effect runtime.
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import {
-  formatTeamMemoryContext,
+  formatTeamContext,
   formatTeamNote,
   type EnvironmentId,
   type ProjectId,
+  type TeamContextKind,
   type TeamDocument,
   type TeamMemoryReference,
   type TeamProjectCommand,
@@ -34,7 +35,7 @@ import { Textarea } from "../ui/textarea";
 import { toastManager } from "../ui/toast";
 import { teamDocumentDeviceId } from "./TeamDocuments";
 import { useTeamProjectRequest } from "./TeamProjects";
-import { teamNoteTitle } from "./threadTeamContext";
+import { teamDocumentAuthor, teamNoteDetails, teamNoteTitle } from "./threadTeamContext";
 
 const MAX_NOTE_BYTES = 64 * 1024;
 type Share = Extract<TeamProjectCommand, { action: "share" }>;
@@ -73,7 +74,7 @@ function SignedIn({
         <Link to="/teams" className="underline">
           Teams
         </Link>{" "}
-        to use team memory.
+        to use your teams here.
       </p>
     );
   return children(`${profile.issuer}:${profile.subject}`);
@@ -83,6 +84,7 @@ function SignedIn({
 export function ShareToTeamDialog({
   environmentId,
   threadId,
+  projectId,
   projectTitle,
   initialText,
   open,
@@ -90,6 +92,8 @@ export function ShareToTeamDialog({
 }: {
   environmentId: EnvironmentId;
   threadId: ThreadId;
+  /** Its linked team, when the user can write to it, is the default destination. */
+  projectId: ProjectId;
   /** Shown in the preview; the server sets the saved label from the thread's project. */
   projectTitle: string;
   initialText: string;
@@ -112,6 +116,7 @@ export function ShareToTeamDialog({
               key={`${identity}:${threadId}`}
               environmentId={environmentId}
               threadId={threadId}
+              projectId={projectId}
               projectTitle={projectTitle}
               initialText={initialText}
               onDone={() => onOpenChange(false)}
@@ -126,17 +131,22 @@ export function ShareToTeamDialog({
 function ShareForm({
   environmentId,
   threadId,
+  projectId,
   projectTitle,
   initialText,
   onDone,
 }: {
   environmentId: EnvironmentId;
   threadId: ThreadId;
+  projectId: ProjectId;
   projectTitle: string;
   initialText: string;
   onDone: () => void;
 }) {
   const teamsRequest = useAtomCommand(serverEnvironment.teams, { reportFailure: false });
+  // Separate from `run`, so an unlinked project isn't reported as a sharing error.
+  const linkRequest = useAtomCommand(serverEnvironment.teamProjects, { reportFailure: false });
+  const [linkedTeamId, setLinkedTeamId] = useState<string | null>(null);
   const { run, busy, error } = useTeamProjectRequest(environmentId);
   const [teams, setTeams] = useState<TeamsResult["teams"] | null>(null);
   const [teamsError, setTeamsError] = useState<string | null>(null);
@@ -149,7 +159,10 @@ function ShareForm({
   const [deviceId] = useState(teamDocumentDeviceId);
   const loadTeams = async () => {
     setTeamsError(null);
-    const response = await teamsRequest({ environmentId, input: { action: "list" } });
+    const [response, linked] = await Promise.all([
+      teamsRequest({ environmentId, input: { action: "list" } }),
+      linkRequest({ environmentId, input: { action: "project-link", projectId } }),
+    ]);
     if (response._tag !== "Success") {
       const cause = squashAtomCommandFailure(response);
       setTeamsError(cause instanceof Error ? cause.message : "Teams could not be reached.");
@@ -158,9 +171,13 @@ function ShareForm({
     const writable = response.value.teams.filter(
       (team) => team.state === "ready" && (team.role !== "reader" || team.canManage),
     );
+    const linkedId = linked._tag === "Success" ? (linked.value.projects[0]?.teamId ?? null) : null;
+    setLinkedTeamId(linkedId);
     setTeams(writable);
     setTeamId((current) =>
-      writable.some((team) => team.id === current) ? current : (writable[0]?.id ?? ""),
+      writable.some((team) => team.id === current)
+        ? current
+        : ((writable.find((team) => team.id === linkedId) ?? writable[0])?.id ?? ""),
     );
   };
   useEffect(() => {
@@ -273,7 +290,9 @@ function ShareForm({
                 >
                   {teams.map((entry) => (
                     <option key={entry.id} value={entry.id}>
-                      {entry.name}
+                      {entry.id === linkedTeamId
+                        ? `${entry.name} (linked to this project)`
+                        : entry.name}
                     </option>
                   ))}
                 </select>
@@ -334,14 +353,47 @@ function ShareForm({
   );
 }
 
-/** Loads one note from the project's linked team and adds it to the draft after review. */
-export function TeamMemoryDialog({
+const copy = {
+  memory: {
+    title: "Add team memory",
+    description:
+      "Choose one note from this project’s team. It is added to your message where you can edit it. Your team access is checked again when you send, and the note is removed from the draft if you sign out or switch accounts unless an edit hides where it ends.",
+    loading: "Loading team memory…",
+    empty: "This team has no memory notes yet. Share one from a thread or from Teams.",
+    changed: "This note changed since you opened it. Review the current text below.",
+    exact: "Exactly this will be added to your message:",
+    after:
+      "Once sent, the text stays in this conversation and the agent’s context. Removing the note or your team access later does not take it back.",
+    add: (title: string) => `Add “${title}” to message`,
+  },
+  skill: {
+    title: "Use a team skill",
+    description:
+      "Choose one skill document from this project’s team and review its instructions. They are added to this message only. Harness doesn’t install the skill or add it to the project, other threads, or your providers. Your team access is checked again when you send, and the skill is removed from the draft if you sign out or switch accounts.",
+    loading: "Loading team skills…",
+    empty:
+      "This team has no skill documents yet. Editors can publish one from Teams → your team → Team projects → Open team skills.",
+    changed: "This skill changed since you opened it. Review the current instructions below.",
+    exact: "Exactly this will be added to your message, and the agent may act on it:",
+    after:
+      "Read the instructions before sending. Once sent, they stay in this conversation and the agent’s context; removing the skill or your team access later does not take them back.",
+    add: (title: string) => `Use “${title}” in this message`,
+  },
+} as const;
+
+/**
+ * Loads one memory note or skill from the project's linked team and adds it to the draft after
+ * review. The draft tracks both kinds the same way until they are sent or removed.
+ */
+export function TeamContextDialog({
+  kind,
   environmentId,
   projectId,
   open,
   onOpenChange,
   onInsert,
 }: {
+  kind: TeamContextKind;
   environmentId: EnvironmentId;
   projectId: ProjectId;
   open: boolean;
@@ -353,17 +405,14 @@ export function TeamMemoryDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogPopup className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Add team memory</DialogTitle>
-          <DialogDescription>
-            Choose one note from this project’s team. It is added to your message where you can edit
-            it. Your team access is checked again when you send, and the note is removed from the
-            draft if you sign out or switch accounts unless an edit hides where it ends.
-          </DialogDescription>
+          <DialogTitle>{copy[kind].title}</DialogTitle>
+          <DialogDescription>{copy[kind].description}</DialogDescription>
         </DialogHeader>
         <SignedIn environmentId={environmentId}>
           {(identity) => (
-            <MemoryPicker
-              key={`${identity}:${projectId}`}
+            <ContextPicker
+              key={`${identity}:${projectId}:${kind}`}
+              kind={kind}
               environmentId={environmentId}
               projectId={projectId}
               onInsert={(reference) => {
@@ -379,11 +428,13 @@ export function TeamMemoryDialog({
   );
 }
 
-function MemoryPicker({
+function ContextPicker({
+  kind,
   environmentId,
   projectId,
   onInsert,
 }: {
+  kind: TeamContextKind;
   environmentId: EnvironmentId;
   projectId: ProjectId;
   onInsert: (reference: TeamMemoryReference) => "added" | "full" | "not-inserted";
@@ -391,11 +442,13 @@ function MemoryPicker({
   const { run, busy, error } = useTeamProjectRequest(environmentId);
   const [link, setLink] = useState<TeamProjectLink | null | "unlinked">(null);
   const [files, setFiles] = useState<readonly string[] | null>(null);
+  const [authors, setAuthors] = useState<Readonly<Record<string, string>>>();
   const [note, setNote] = useState<TeamDocument | null>(null);
   const [changed, setChanged] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
-  // A changed note's issued block, shown for review and inserted as-is if the user confirms.
+  // A changed document's issued block, shown for review and inserted as-is if the user confirms.
   const [issued, setIssued] = useState<TeamMemoryReference | null>(null);
+  const text = copy[kind];
   const load = async () => {
     setNote(null);
     setIssued(null);
@@ -410,39 +463,52 @@ function MemoryPicker({
     const current = found.projects[0];
     if (!current) return setLink("unlinked");
     setLink(current);
-    const listed = await run({ action: "memory-list", projectId });
+    const listed = await run({
+      action: kind === "skill" ? "skill-list" : "memory-list",
+      projectId,
+    });
     if (!listed || "error" in listed) return;
     const problem = storageProblem(listed);
     if (problem) return setNotice(problem);
+    setAuthors(listed.authors);
     setFiles((listed.storage?.files ?? []).map((file) => file.path).toSorted());
   };
   useEffect(() => {
     void load();
-    // Loads once per mount; the dialog remounts for another account or project.
+    // Loads once per mount; the dialog remounts for another account, project, or kind.
   }, []);
   const read = async (path: string) => {
     setNotice(null);
-    const result = await run({ action: "memory-read", projectId, path });
+    const result = await run(
+      kind === "skill"
+        ? { action: "skill-read", projectId, path }
+        : { action: "memory-read", projectId, path },
+    );
     if (!result || "error" in result) return null;
     const document = result.storage?.document ?? null;
-    if (!document) setNotice(storageProblem(result) ?? "This note could not be opened.");
+    if (!document) setNotice(storageProblem(result) ?? "This document could not be opened.");
+    if (result.authors) setAuthors(result.authors);
     return document;
   };
   const shown =
     issued?.block ??
     (note && typeof link === "object" && link
-      ? formatTeamMemoryContext({ teamName: link.teamName, path: note.path, text: note.text })
+      ? formatTeamContext({ kind, teamName: link.teamName, path: note.path, text: note.text })
       : null);
   const add = async () => {
     if (!note || shown === null) return;
     setNotice(null);
     let reference = issued;
     if (!reference) {
-      // The server rereads the note, rechecks access, and issues the exact block to insert.
+      // The server rereads the document, rechecks access, and issues the exact block to insert.
       // `run` drops responses that land after an account change or close unmounted this picker.
-      const result = await run({ action: "memory-attach", projectId, path: note.path });
+      const result = await run(
+        kind === "skill"
+          ? { action: "skill-attach", projectId, path: note.path }
+          : { action: "memory-attach", projectId, path: note.path },
+      );
       if (!result || "error" in result) return;
-      if (!result.reference) return setNotice("This note could not be added. Try again.");
+      if (!result.reference) return setNotice("This could not be added. Try again.");
       reference = result.reference;
       if (reference.block !== shown) {
         setIssued(reference);
@@ -453,7 +519,7 @@ function MemoryPicker({
     const result = onInsert(reference);
     if (result === "full")
       setNotice(
-        `Team memory is already in ${MAX_DRAFT_TEAM_MEMORY} unsent drafts or queued messages. Send or remove it from one of them, then add this note.`,
+        `Team memory or skills are already in ${MAX_DRAFT_TEAM_MEMORY} unsent drafts or queued messages. Send or remove one of them, then try again.`,
       );
     else if (result === "not-inserted")
       toastManager.add({
@@ -474,6 +540,8 @@ function MemoryPicker({
         </p>
       </DialogPanel>
     );
+  const title = note ? teamNoteTitle(note.text, note.path) : "";
+  const details = note ? teamNoteDetails(note.text) : null;
   return (
     <>
       <DialogPanel>
@@ -493,41 +561,60 @@ function MemoryPicker({
               </Button>
             </div>
           ) : null}
-          {note ? (
+          {note && details && typeof link === "object" && link ? (
             <>
               {changed ? (
                 <p role="status" className="text-sm">
-                  This note changed since you opened it. Review the current text below.
+                  {text.changed}
                 </p>
               ) : null}
-              <p className="text-xs text-muted-foreground">
-                Exactly this will be added to your message:
-              </p>
+              {kind === "skill" ? (
+                <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 rounded-lg border border-border p-3 text-xs">
+                  <dt className="text-muted-foreground">Skill</dt>
+                  <dd>{title}</dd>
+                  <dt className="text-muted-foreground">For</dt>
+                  <dd>{details.description || "No description"}</dd>
+                  {details.project ? (
+                    <>
+                      <dt className="text-muted-foreground">Project label</dt>
+                      <dd>{details.project}</dd>
+                    </>
+                  ) : null}
+                  <dt className="text-muted-foreground">Source</dt>
+                  <dd>
+                    {link.teamName} shared Skills folder, in{" "}
+                    {teamDocumentAuthor(note.path, authors)}
+                    ’s folder
+                  </dd>
+                  <dt className="text-muted-foreground">Who can see it</dt>
+                  <dd>
+                    Every member of {link.teamName} can read it, and editors can change it, so
+                    review it each time you use it.
+                  </dd>
+                </dl>
+              ) : null}
+              <p className="text-xs text-muted-foreground">{text.exact}</p>
               <pre
-                aria-label="Team memory to add"
+                aria-label={kind === "skill" ? "Team skill to use" : "Team memory to add"}
                 className="max-h-80 overflow-auto rounded-lg border border-border bg-muted/40 p-3 text-xs whitespace-pre-wrap"
               >
                 {shown ?? note.text}
               </pre>
-              <p className="text-xs text-muted-foreground">
-                Once sent, the text stays in this conversation and the agent’s context. Removing the
-                note or your team access later does not take it back.
-              </p>
+              <p className="text-xs text-muted-foreground">{text.after}</p>
             </>
           ) : files === null ? (
             error || notice ? null : (
-              <p className="text-sm text-muted-foreground">Loading team memory…</p>
+              <p className="text-sm text-muted-foreground">{text.loading}</p>
             )
           ) : files.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              This team has no memory notes yet. Share one from a thread or from Teams.
-            </p>
+            <p className="text-sm text-muted-foreground">{text.empty}</p>
           ) : (
             <ul className="max-h-72 divide-y divide-border overflow-auto rounded-lg border border-border px-3">
               {files.map((path) => (
                 <li key={path} className="flex items-center gap-2 py-2">
-                  <span className="min-w-0 flex-1 truncate font-mono text-xs">
-                    {path.split("/").slice(1).join("/")}
+                  <span className="min-w-0 flex-1 truncate text-xs">
+                    From {teamDocumentAuthor(path, authors)} ·{" "}
+                    <span className="font-mono">{path.split("/").at(-1)?.slice(0, 8)}</span>
                   </span>
                   <Button
                     size="sm"
@@ -562,7 +649,7 @@ function MemoryPicker({
             Back
           </Button>
           <Button disabled={busy} onClick={() => void add()}>
-            Add “{teamNoteTitle(note.text, note.path)}” to message
+            {text.add(title)}
           </Button>
         </DialogFooter>
       ) : null}

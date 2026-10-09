@@ -76,7 +76,7 @@ export function TeamProjects({
   const projects = useProjects();
   const [links, setLinks] = useState<readonly TeamProjectLink[] | null>(null);
   const [choice, setChoice] = useState<string>("");
-  const [open, setOpen] = useState<ProjectId | null>(null);
+  const [open, setOpen] = useState<{ projectId: ProjectId; kind: "memory" | "skill" } | null>(null);
   const [confirmUnlink, setConfirmUnlink] = useState<ProjectId | null>(null);
   const apply = useCallback(
     async (command: TeamProjectCommand) => {
@@ -89,7 +89,7 @@ export function TeamProjects({
       setLinks(result.projects);
       setConfirmUnlink(null);
       setOpen((current) =>
-        result.projects.some((link) => link.projectId === current) ? current : null,
+        result.projects.some((link) => link.projectId === current?.projectId) ? current : null,
       );
     },
     [run],
@@ -101,14 +101,19 @@ export function TeamProjects({
   const available = projects.filter(
     (project) => project.environmentId === environmentId && !linked.has(project.id),
   );
-  const openLink = links?.find((link) => link.projectId === open) ?? null;
+  const openLink = links?.find((link) => link.projectId === open?.projectId) ?? null;
+  const toggle = (projectId: ProjectId, kind: "memory" | "skill") =>
+    setOpen(open?.projectId === projectId && open.kind === kind ? null : { projectId, kind });
+  const isOpen = (projectId: ProjectId, kind: "memory" | "skill") =>
+    open?.projectId === projectId && open.kind === kind;
   return (
     <section className="space-y-3 border-t border-border pt-4">
       <div className="space-y-1">
         <h4 className="text-sm font-medium">Team projects</h4>
         <p className="text-xs text-muted-foreground">
-          Link a Harness project on this computer to work in this team’s memory. Linking does not
-          share the project’s files or chats, and other members link their own projects.
+          Link a project in this Harness environment to work with this team’s memory and skills.
+          Linking does not share the project’s files or chats, and other members link their own
+          projects.
         </p>
       </div>
       {error ? (
@@ -133,11 +138,19 @@ export function TeamProjects({
                   <span className="min-w-0 flex-1 truncate text-sm">{link.projectTitle}</span>
                   <Button
                     size="sm"
-                    variant={open === link.projectId ? "secondary" : "outline"}
+                    variant={isOpen(link.projectId, "memory") ? "secondary" : "outline"}
                     disabled={busy}
-                    onClick={() => setOpen(open === link.projectId ? null : link.projectId)}
+                    onClick={() => toggle(link.projectId, "memory")}
                   >
-                    {open === link.projectId ? "Close team memory" : "Open team memory"}
+                    {isOpen(link.projectId, "memory") ? "Close team memory" : "Open team memory"}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={isOpen(link.projectId, "skill") ? "secondary" : "outline"}
+                    disabled={busy}
+                    onClick={() => toggle(link.projectId, "skill")}
+                  >
+                    {isOpen(link.projectId, "skill") ? "Close team skills" : "Open team skills"}
                   </Button>
                   {confirmUnlink === link.projectId ? (
                     <Button
@@ -203,9 +216,10 @@ export function TeamProjects({
           ) : null}
         </>
       )}
-      {openLink ? (
-        <TeamProjectMemory
-          key={`${teamId}:${openLink.projectId}`}
+      {openLink && open ? (
+        <TeamProjectDocuments
+          key={`${teamId}:${openLink.projectId}:${open.kind}`}
+          kind={open.kind}
           environmentId={environmentId}
           teamId={teamId}
           link={openLink}
@@ -216,13 +230,18 @@ export function TeamProjects({
   );
 }
 
-/** Team memory for one linked project. Notes stay in shared storage and this view's memory. */
-function TeamProjectMemory({
+/**
+ * Team memory or skills for one linked project. Documents stay in shared storage and this view's
+ * memory; the server resolves the team and folder from the project's link.
+ */
+function TeamProjectDocuments({
+  kind,
   environmentId,
   teamId,
   link,
   canWrite,
 }: {
+  kind: "memory" | "skill";
   environmentId: EnvironmentId;
   teamId: string;
   link: TeamProjectLink;
@@ -235,31 +254,7 @@ function TeamProjectMemory({
   // shared document editor's command shape.
   const runStorage = useCallback(
     async (command: TeamStorageCommand) => {
-      const input: TeamProjectCommand | null =
-        command.action === "list-files"
-          ? { action: "memory-list", projectId }
-          : command.action === "read-file"
-            ? { action: "memory-read", projectId, path: command.path }
-            : command.action === "update-file"
-              ? {
-                  action: "memory-update",
-                  projectId,
-                  path: command.path,
-                  etag: command.etag,
-                  text: command.text,
-                }
-              : command.action === "delete-file"
-                ? { action: "memory-delete", projectId, path: command.path, etag: command.etag }
-                : command.action === "publish"
-                  ? {
-                      action: "memory-publish",
-                      projectId,
-                      recordId: command.recordId,
-                      deviceId: command.deviceId,
-                      title: command.title,
-                      text: command.text,
-                    }
-                  : null;
+      const input = projectCommand(kind, projectId, command);
       if (!input) return null;
       const result = await run(input);
       if (!result) return null;
@@ -272,7 +267,10 @@ function TeamProjectMemory({
       setState((previous) => mergeTeamStorageResult(previous, next, command));
       if (command.action === "publish" && next.document) {
         // Show the new note in the list; the listing keeps the open document.
-        const listed = await run({ action: "memory-list", projectId });
+        const listed = await run({
+          action: kind === "skill" ? "skill-list" : "memory-list",
+          projectId,
+        });
         if (listed && !("error" in listed) && listed.storage) {
           const files = listed.storage;
           setState((previous) =>
@@ -282,7 +280,7 @@ function TeamProjectMemory({
       }
       return next;
     },
-    [projectId, run, teamId],
+    [kind, projectId, run, teamId],
   );
   useEffect(() => {
     void runStorage({ action: "list-files", teamId });
@@ -290,11 +288,13 @@ function TeamProjectMemory({
   return (
     <div className="space-y-3 rounded-lg border border-border p-3">
       <div className="space-y-1">
-        <h5 className="text-sm font-medium">Team memory for {link.projectTitle}</h5>
+        <h5 className="text-sm font-medium">
+          Team {kind === "skill" ? "skills" : "memory"} for {link.projectTitle}
+        </h5>
         <p className="text-xs text-muted-foreground">
-          Everyone on this team can read these notes. New notes are labeled with this project.
-          Harness does not copy them into the project folder, your personal memory, or agent
-          conversations.
+          {kind === "skill"
+            ? "Everyone on this team can read these skills, and editors can change them. To use one, open a thread in this project and choose Team → Use a team skill in message. Harness never installs them or adds them to agents on its own."
+            : "Everyone on this team can read these notes. New notes are labeled with this project. Harness does not copy them into the project folder, your personal memory, or agent conversations."}
         </p>
       </div>
       {error ? (
@@ -317,12 +317,18 @@ function TeamProjectMemory({
         disabled={busy}
         onClick={() => void runStorage({ action: "list-files", teamId })}
       >
-        {busy ? "Loading team memory…" : "Refresh team memory"}
+        {busy
+          ? `Loading team ${kind === "skill" ? "skills" : "memory"}…`
+          : `Refresh team ${kind === "skill" ? "skills" : "memory"}`}
       </Button>
       {state?.status === "connected" ? (
         <>
           {state.files.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No team memory has been published yet.</p>
+            <p className="text-sm text-muted-foreground">
+              {kind === "skill"
+                ? "No skills have been published to this team yet."
+                : "No team memory has been published yet."}
+            </p>
           ) : null}
           <TeamDocuments
             teamId={teamId}
@@ -332,9 +338,56 @@ function TeamProjectMemory({
             busy={busy}
             run={runStorage}
             projectTitle={link.projectTitle}
+            projectKind={kind}
           />
         </>
       ) : null}
     </div>
   );
+}
+
+/** The project command for a shared-document action; the server pins it to the linked team. */
+function projectCommand(
+  kind: "memory" | "skill",
+  projectId: ProjectId,
+  command: TeamStorageCommand,
+): TeamProjectCommand | null {
+  switch (command.action) {
+    case "list-files":
+      return { action: kind === "skill" ? "skill-list" : "memory-list", projectId };
+    case "read-file":
+      return kind === "skill"
+        ? { action: "skill-read", projectId, path: command.path }
+        : { action: "memory-read", projectId, path: command.path };
+    case "update-file":
+      return {
+        action: kind === "skill" ? "skill-update" : "memory-update",
+        projectId,
+        path: command.path,
+        etag: command.etag,
+        text: command.text,
+      };
+    case "delete-file":
+      return {
+        action: kind === "skill" ? "skill-delete" : "memory-delete",
+        projectId,
+        path: command.path,
+        etag: command.etag,
+      };
+    case "publish": {
+      const document = {
+        projectId,
+        recordId: command.recordId,
+        deviceId: command.deviceId,
+        title: command.title,
+        text: command.text,
+      };
+      if (kind !== "skill") return { action: "memory-publish", ...document };
+      return command.description
+        ? { action: "skill-publish", ...document, description: command.description }
+        : null;
+    }
+    default:
+      return null;
+  }
 }

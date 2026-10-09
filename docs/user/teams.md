@@ -18,24 +18,28 @@ administrator; access is not confirmed until the check succeeds.
 
 Connect the matching UCSD Microsoft account to open shared storage. Publish a
 work summary, SOP, or skill document explicitly; all team members can read it.
+A skill document needs a short description of what it's for, and can't contain
+hidden or control characters.
 Project labels organize documents within a team. They do not restrict access
 within that team. If someone edits a document before you save, keep your draft
 and reload its latest version before retrying.
 
-To work in a team's memory from a Harness project, open the team, choose a
-project under **Team projects**, and select **Link to team**. Then choose
-**Open team memory** to read the team's work summaries and publish new ones
-labeled with that project. Each project links to one team; unlink it before
+To work with a team's memory and skills from a Harness project, open the team,
+choose a project in this Harness environment under **Team projects**, and
+select **Link to team**. Then choose **Open team memory** or **Open team
+skills** to read the team's work summaries or skill documents and publish new
+ones labeled with that project. Each project links to one team; unlink it before
 linking it to a different team. Linking does not share the project's files or
 chats, and other members link their own projects. Every read and save checks
 your current UCSD account and team role, so removed members and accounts outside
-the team cannot use the link. Team memory is not added to agent
-conversations automatically.
+the team cannot use the link. Team memory and skills are not added to
+agent conversations automatically.
 
 From a project thread, choose **Team** in the thread header, or select text in
 a reply and choose **Share**. **Share text to a team** publishes only the text
 you review, as a memory note labeled with the thread's project, to a team where
-you are an editor or owner. **Add team memory to message** previews one note
+you are an editor or owner; the project's linked team is chosen first when you
+can write to it. **Add team memory to message** previews one note
 from the project's linked team and adds it to your draft. When you send, your
 team access is checked again: if you were removed, the project was
 unlinked or relinked, or the team folder moved, the message is held and you can
@@ -48,6 +52,16 @@ text and is not tracked. Text you send stays in
 that conversation and the agent's context even if the note or your access is
 later removed; removing a shared note does not remove copies people already
 made.
+
+**Use a team skill in message** works the same way for skill documents from the
+project's linked team. The preview shows the skill's title, description,
+project label, whose folder it is in, and exactly what will be added to your
+message. Editors can change a skill, so read it each time; if it changed since
+your preview, you're asked to review it again. The skill applies only to the
+message you add it to. Harness doesn't install it, add it to your providers or
+other projects, or run anything it mentions, but the agent may act on its
+instructions once you send them. Your access is checked again when you send,
+and signing out removes it from unsent drafts, as with team memory.
 
 Publishing never captures a conversation automatically, copies personal memory,
 or installs an executable skill. Signing out clears the Teams view and this

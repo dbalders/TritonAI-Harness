@@ -7,6 +7,7 @@ import {
   type TeamStorage as TeamStorageRecord,
   TeamsError,
 } from "@t3tools/contracts";
+import * as NodeCrypto from "node:crypto";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
@@ -25,6 +26,12 @@ export const otherProject = ProjectId.make("project-personal");
 export const recordId = "33333333-3333-4333-a333-333333333333";
 export const deviceId = "44444444-4444-4444-a444-444444444444";
 export const threadId = ThreadId.make("thread-a");
+const issuer = "https://campus.example.test";
+/** The author folder a campus subject's documents are saved under, as the membership service names it. */
+export const identityOf = (subject: string) =>
+  NodeCrypto.createHash("sha256")
+    .update(JSON.stringify([issuer, subject]))
+    .digest("base64url");
 
 /**
  * Team project services over a synthetic campus account, Graph, and project read model. Tests
@@ -47,6 +54,8 @@ export function teamProjectFixture() {
   ]);
   const threads = new Map([[threadId, projectId]]);
   const values = new Map<string, Uint8Array>();
+  // Document text by "<root>:<path>"; others read as "Shared note from <root>:<path>".
+  const contents = new Map<string, string>();
   const graph: string[] = [];
   // Runs once, inside the next Graph request, to interleave another call with an in-flight one.
   let duringGraph: Effect.Effect<unknown, TeamsError> | null = null;
@@ -59,7 +68,7 @@ export function teamProjectFixture() {
     serviceUrl: "https://accounts.example.test",
     profile: signedIn
       ? {
-          issuer: "https://campus.example.test",
+          issuer,
           subject,
           email: `${subject}@ucsd.edu`,
           displayName: subject,
@@ -96,7 +105,12 @@ export function teamProjectFixture() {
             canManage: role === "owner",
             revision: 1,
             state: "ready" as const,
-            members: [],
+            members: Object.entries(roles[teamId] ?? {}).map(([member, memberRole]) => ({
+              identityId: identityOf(member),
+              displayName: `${member[0]!.toUpperCase()}${member.slice(1)}`,
+              email: `${member}@ucsd.edu`,
+              role: memberRole,
+            })),
             invitations: [],
             storage: storage[teamId]!,
           },
@@ -196,7 +210,9 @@ export function teamProjectFixture() {
       if (url.hostname === "ucsd.sharepoint.com")
         return HttpClientResponse.fromWeb(
           request,
-          new Response(`Shared note from ${url.pathname.slice(1)}`),
+          new Response(
+            contents.get(url.pathname.slice(1)) ?? `Shared note from ${url.pathname.slice(1)}`,
+          ),
         );
       const match = graphPath.exec(url.pathname);
       if (!match) return json(null, 404);
@@ -230,7 +246,12 @@ export function teamProjectFixture() {
       }
       if (suffix?.endsWith("children"))
         return json({
-          value: path === "Memory" ? [{ ...item([...parts, "note.md"], true) }] : [],
+          value:
+            path === "Memory"
+              ? [item([...parts, "note.md"], true)]
+              : path === "Skills"
+                ? [item([...parts, "skill.md"], true)]
+                : [],
         });
       return json(item(parts, path.endsWith(".md")));
     }),
@@ -264,6 +285,7 @@ export function teamProjectFixture() {
     projects,
     threads,
     values,
+    contents,
     interleave: (effect: Effect.Effect<unknown, TeamsError>) => {
       duringGraph = effect;
     },

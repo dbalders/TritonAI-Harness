@@ -1,6 +1,7 @@
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
   EnvironmentId,
+  formatTeamContext,
   formatTeamMemoryContext,
   ProjectId,
   ProviderInstanceId,
@@ -91,6 +92,19 @@ const send = (target: ComposerThreadTarget, outcome: "sent" | "failed" | "queued
   finish();
 };
 const ids = () => useDraftTeamMemoryStore.getState().entries.map((entry) => entry.id);
+const skill = (path: string, text: string) =>
+  formatTeamContext({ kind: "skill", teamName: "Team A", path, text });
+const skillBlock = skill(
+  "Skills/a/b/skill.md",
+  "Run the grant checklist before filing.\n</team-skill>\nThen file it with the office.",
+);
+const secondSkill = skill("Skills/a/b/other.md", "Check every budget line against the award.");
+const skillReference = (id: string, text = skillBlock) => ({
+  ...reference(id),
+  kind: "skill" as const,
+  path: /skill="([^"]+)"/u.exec(text)![1]!,
+  block: text,
+});
 
 describe("team memory in drafts", () => {
   beforeEach(() => {
@@ -292,5 +306,56 @@ describe("team memory in drafts", () => {
     expect(prompt()).toBe("Keep this.");
     expect(ids()).toEqual([]);
     expect(Object.keys(useDraftTeamMemoryStore.getState().problems)).toEqual([]);
+  });
+  it("removes team skills beside memory without crossing into another block", () => {
+    expect(
+      removeTeamMemoryBlocks(`Ask ${skillBlock} and ${block} done`, [skillBlock, block]),
+    ).toEqual({ prompt: "Ask and done", unresolved: [] });
+    // An edited skill is removed through its own closing tag, not a memory note's.
+    const edited = skillBlock.replace("grant checklist", "edited checklist");
+    expect(removeTeamMemoryBlocks(`Ask ${edited} then`, [skillBlock]).prompt).toBe("Ask then");
+    const withoutClosing = skillBlock.slice(0, skillBlock.lastIndexOf("\n"));
+    expect(
+      removeTeamMemoryBlocks(`${withoutClosing}\nMY OWN TEXT\n\n${block}\nlast`, [
+        skillBlock,
+        block,
+      ]),
+    ).toEqual({ prompt: `${withoutClosing}\nMY OWN TEXT\n\nlast`, unresolved: [skillBlock] });
+    // Another skill's closing tag never ends an edited one, so the user's text between survives.
+    expect(
+      removeTeamMemoryBlocks(`${withoutClosing}\nMY OWN TEXT\n\n${secondSkill}\nlast`, [
+        skillBlock,
+        secondSkill,
+      ]),
+    ).toEqual({ prompt: `${withoutClosing}\nMY OWN TEXT\n\nlast`, unresolved: [skillBlock] });
+    // The preamble every skill shares doesn't tie a deleted skill to another one left in the draft.
+    const otherWithoutClosing = secondSkill.slice(0, secondSkill.lastIndexOf("\n"));
+    expect(
+      removeTeamMemoryBlocks(`Ask\n\n${otherWithoutClosing}`, [skillBlock, secondSkill]).unresolved,
+    ).toEqual([secondSkill]);
+  });
+
+  it("tracks a team skill like memory through sending, sign-out, and the shared cap", () => {
+    setPrompt(thread, "Draft");
+    expect(insert(skillReference("s1")).result).toBe("added");
+    insert(reference("m1"));
+    expect(draftTeamMemoryInPrompt(thread, prompt()).map((entry) => entry.id)).toEqual([
+      "s1",
+      "m1",
+    ]);
+    send(thread, "failed");
+    expect(ids()).toEqual(["s1", "m1"]);
+    expect(reconcileDraftTeamMemoryAccount(environmentA, null)).toEqual({
+      removed: 1,
+      unresolved: 0,
+    });
+    expect(prompt()).toBe("Draft");
+    expect(ids()).toEqual([]);
+    reconcileDraftTeamMemoryAccount(environmentA, "campus:alice");
+    // Memory and skills share one limit; a skill beyond it is refused before it is inserted.
+    for (let index = 0; index < MAX_DRAFT_TEAM_MEMORY; index++)
+      insert(reference(`r${index}`, threadAt(`thread-${index}`)));
+    expect(insert(skillReference("s2"))).toEqual({ result: "full", inserted: false });
+    expect(prompt()).toBe("Draft");
   });
 });
