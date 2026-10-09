@@ -12,7 +12,12 @@ can cancel pending invitations.
 
 Owners manage names and membership, editors can publish and edit documents,
 and readers can view them. Assign another owner before the last owner leaves
-or changes roles. Renaming preserves the team reference and its files. If a
+or changes roles. Your own row is marked **You**. Choosing a new role only
+stages it: select **Review change** and confirm it. Removing a member, leaving,
+and cancelling an invitation also ask for confirmation, and none of them can
+be undone in place: a removed member or someone who left needs a new
+invitation, and if you give up the owner role, only another owner can restore
+it. To remove yourself, use **Leave team**. Renaming preserves the team reference and its files. If a
 membership change reports that permissions need checking, contact your
 administrator; access is not confirmed until the check succeeds.
 

@@ -4,18 +4,38 @@ import { TeamProjects } from "./TeamProjects";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createTeamsController } from "@t3tools/client-runtime/state/server";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-import type { EnvironmentId, TeamCommand, TeamRole } from "@t3tools/contracts";
+import type { AccountProfile, EnvironmentId, TeamCommand, TeamRole } from "@t3tools/contracts";
 import { LockKeyholeIcon, UsersIcon } from "lucide-react";
 import { useUcsdAccount } from "../../hooks/useUcsdAccount";
 import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
+import {
+  AlertDialog,
+  AlertDialogClose,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogPopup,
+  AlertDialogTitle,
+} from "../ui/alert-dialog";
+import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { SidebarInset, SidebarTrigger } from "../ui/sidebar";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { WorkspacePageContainer } from "../WorkspacePageContainer";
 import { isElectron } from "../../env";
+import {
+  accountKey,
+  isCurrentReview,
+  isOwnMember,
+  type MembershipReview,
+  type MembershipReviewCopy,
+  type MembershipReviewTarget,
+  membershipReviewCommand,
+  membershipReviewCopy,
+} from "./teamMembershipReview";
 
 export function TeamsPage() {
   const { environments } = useEnvironments();
@@ -139,6 +159,7 @@ function TeamAccount({ environmentId }: { environmentId: EnvironmentId }) {
         <TeamWorkspace
           key={`${account.profile!.issuer}:${account.profile!.subject}`}
           environmentId={environmentId}
+          profile={account.profile!}
         />
       ) : null}
     </>
@@ -174,7 +195,71 @@ function RoleSelect({
   );
 }
 
-function TeamWorkspace({ environmentId }: { environmentId: EnvironmentId }) {
+/** Confirms one membership change. Focus starts on the safe choice. */
+function MembershipReviewDialog({
+  copy,
+  busy,
+  error,
+  onDismiss,
+  onConfirm,
+}: {
+  copy: MembershipReviewCopy | null;
+  busy: boolean;
+  error: string | null;
+  onDismiss: () => void;
+  onConfirm: () => void;
+}) {
+  const dismissRef = useRef<HTMLButtonElement>(null);
+  // Keep the last wording on screen while the dialog animates closed.
+  const [shown, setShown] = useState(copy);
+  if (copy && copy !== shown) setShown(copy);
+  return (
+    <AlertDialog
+      open={copy !== null}
+      onOpenChange={(open) => {
+        if (!open && !busy) onDismiss();
+      }}
+    >
+      {shown ? (
+        <AlertDialogPopup initialFocus={dismissRef}>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{shown.title}</AlertDialogTitle>
+            <AlertDialogDescription>{shown.description}</AlertDialogDescription>
+          </AlertDialogHeader>
+          {error ? (
+            <p role="alert" className="px-6 pb-4 text-sm text-destructive">
+              {error}
+            </p>
+          ) : null}
+          <AlertDialogFooter>
+            <AlertDialogClose
+              ref={dismissRef}
+              disabled={busy}
+              render={<Button variant="outline" />}
+            >
+              {shown.dismiss}
+            </AlertDialogClose>
+            <Button
+              variant={shown.destructive ? "destructive" : "default"}
+              disabled={busy}
+              onClick={onConfirm}
+            >
+              {busy ? shown.working : shown.confirm}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogPopup>
+      ) : null}
+    </AlertDialog>
+  );
+}
+
+export function TeamWorkspace({
+  environmentId,
+  profile,
+}: {
+  environmentId: EnvironmentId;
+  profile: AccountProfile;
+}) {
   const request = useAtomCommand(serverEnvironment.teams, { reportFailure: false });
   const controller = useMemo(
     () =>
@@ -205,6 +290,55 @@ function TeamWorkspace({ environmentId }: { environmentId: EnvironmentId }) {
   const run = (command: TeamCommand) => {
     setCopied(null);
     return controller.run(command);
+  };
+  const account = accountKey(profile);
+  // Role picks are staged per team revision; only a confirmed review sends one.
+  const draftKey = team ? `${team.id}:${team.revision}` : "";
+  const [roleDrafts, setRoleDrafts] = useState<{
+    key: string;
+    roles: Readonly<Record<string, TeamRole>>;
+  }>({ key: "", roles: {} });
+  const drafts = roleDrafts.key === draftKey ? roleDrafts.roles : {};
+  const stageRole = (identityId: string, value: TeamRole | null) =>
+    setRoleDrafts({
+      key: draftKey,
+      roles: Object.fromEntries(
+        Object.entries({ ...drafts, [identityId]: value }).filter(
+          (entry): entry is [string, TeamRole] => entry[1] !== null,
+        ),
+      ),
+    });
+  const [review, setReview] = useState<MembershipReview | null>(null);
+  const [reviewFailed, setReviewFailed] = useState(false);
+  const reviewing = isCurrentReview(review, account, team);
+  // A review never survives a change of account, team, revision, or target.
+  if (review && !reviewing) setReview(null);
+  const reviewCopy =
+    reviewing && team
+      ? membershipReviewCopy(
+          review,
+          team.name,
+          review.kind === "role" && isOwnMember(review.member, profile),
+        )
+      : null;
+  const openReview = (target: MembershipReviewTarget) => {
+    if (!team || busy) return;
+    setReviewFailed(false);
+    setReview({ account, teamId: team.id, revision: team.revision, ...target });
+  };
+  const dismissReview = () => {
+    if (review?.kind === "role") stageRole(review.member.identityId, null);
+    setReview(null);
+  };
+  const confirmReview = () => {
+    // Recheck against the controller's latest snapshot, not this render's.
+    const latest = controller.getSnapshot();
+    if (latest.busy || !isCurrentReview(review, account, latest.result?.team)) return;
+    setReviewFailed(false);
+    void run(membershipReviewCommand(review)).then((ok) => {
+      if (ok) setReview((current) => (current === review ? null : current));
+      else setReviewFailed(true);
+    });
   };
   const copy = async (text: string, message: string) => {
     try {
@@ -433,51 +567,58 @@ function TeamWorkspace({ environmentId }: { environmentId: EnvironmentId }) {
           <div>
             <h4 className="text-sm font-medium">Members</h4>
             <ul className="mt-2 divide-y divide-border">
-              {team.members.map((member) => (
-                <li
-                  key={member.identityId}
-                  className="flex flex-wrap items-center justify-between gap-3 py-3"
-                >
-                  <div className="min-w-0">
-                    <p className="text-sm">{member.displayName}</p>
-                    <p className="break-all text-xs text-muted-foreground">{member.email}</p>
-                  </div>
-                  {owner ? (
-                    <div className="flex items-center gap-2">
-                      <RoleSelect
-                        label={`Role for ${member.displayName}`}
-                        value={member.role}
-                        disabled={!ready}
-                        onChange={(value) =>
-                          void run({
-                            action: "set-role",
-                            teamId: team.id,
-                            identityId: member.identityId,
-                            role: value,
-                            revision: team.revision,
-                          })
-                        }
-                      />
-                      <Button
-                        variant="ghost"
-                        disabled={!ready}
-                        onClick={() =>
-                          void run({
-                            action: "remove-member",
-                            teamId: team.id,
-                            identityId: member.identityId,
-                            revision: team.revision,
-                          })
-                        }
-                      >
-                        Remove
-                      </Button>
+              {team.members.map((member) => {
+                const self = isOwnMember(member, profile);
+                const staged = drafts[member.identityId];
+                const name = self ? `${member.displayName} (you)` : member.displayName;
+                return (
+                  <li
+                    key={member.identityId}
+                    className="flex flex-wrap items-center justify-between gap-3 py-3"
+                  >
+                    <div className="min-w-0">
+                      <p className="flex items-center gap-2 text-sm">
+                        {member.displayName}
+                        {self ? <Badge variant="outline">You</Badge> : null}
+                      </p>
+                      <p className="break-all text-xs text-muted-foreground">{member.email}</p>
                     </div>
-                  ) : (
-                    <span className="text-xs text-muted-foreground">{member.role}</span>
-                  )}
-                </li>
-              ))}
+                    {owner ? (
+                      <div className="flex items-center gap-2">
+                        <RoleSelect
+                          label={`Role for ${name}`}
+                          value={staged ?? member.role}
+                          disabled={!ready}
+                          onChange={(value) =>
+                            stageRole(member.identityId, value === member.role ? null : value)
+                          }
+                        />
+                        {staged ? (
+                          <Button
+                            disabled={!ready}
+                            aria-label={`Review change for ${name}`}
+                            onClick={() => openReview({ kind: "role", member, role: staged })}
+                          >
+                            Review change
+                          </Button>
+                        ) : null}
+                        {self ? null : (
+                          <Button
+                            variant="ghost"
+                            disabled={!ready}
+                            aria-label={`Remove ${member.displayName} (${member.email}) from ${team.name}`}
+                            onClick={() => openReview({ kind: "remove", member })}
+                          >
+                            Remove
+                          </Button>
+                        )}
+                      </div>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">{member.role}</span>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           </div>
           {owner ? (
@@ -546,14 +687,8 @@ function TeamWorkspace({ environmentId }: { environmentId: EnvironmentId }) {
                   <Button
                     variant="ghost"
                     disabled={!ready}
-                    onClick={() =>
-                      void run({
-                        action: "cancel-invite",
-                        teamId: team.id,
-                        invitationId: invite.id,
-                        revision: team.revision,
-                      })
-                    }
+                    aria-label={`Cancel invitation for ${invite.email}`}
+                    onClick={() => openReview({ kind: "cancel-invite", invitation: invite })}
                   >
                     Cancel invitation
                   </Button>
@@ -592,12 +727,20 @@ function TeamWorkspace({ environmentId }: { environmentId: EnvironmentId }) {
           <Button
             variant="ghost"
             disabled={!ready}
-            onClick={() => void run({ action: "leave", teamId: team.id, revision: team.revision })}
+            aria-label={`Leave team ${team.name}`}
+            onClick={() => openReview({ kind: "leave" })}
           >
             Leave team
           </Button>
         </section>
       ) : null}
+      <MembershipReviewDialog
+        copy={reviewCopy}
+        busy={busy}
+        error={reviewFailed ? error : null}
+        onDismiss={dismissReview}
+        onConfirm={confirmReview}
+      />
       {copied ? (
         <p role="status" className="text-sm text-muted-foreground">
           {copied}
