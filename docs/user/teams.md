@@ -40,7 +40,11 @@ from the project's linked team and adds it to your draft. When you send, your
 team access is checked again: if you were removed, the project was
 unlinked or relinked, or the team folder moved, the message is held and you can
 remove the team memory and keep the rest of your draft. Signing out or switching
-campus accounts removes unsent team memory from drafts. Text you send stays in
+campus accounts removes unsent team memory from drafts. If you edit a note so
+its end can't be found, such as by deleting its `</team-memory>` line, it is
+left in your draft and marked until you delete it yourself; your access is
+still checked when you send. Text you copy out of a note by hand is your own
+text and is not tracked. Text you send stays in
 that conversation and the agent's context even if the note or your access is
 later removed; removing a shared note does not remove copies people already
 made.

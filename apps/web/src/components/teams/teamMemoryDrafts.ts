@@ -8,10 +8,14 @@ import {
   useComposerDraftStore,
 } from "../../composerDraftStore";
 import { createMemoryStorage } from "../../lib/storage";
+import { useQueuedMessageStore } from "../../queuedMessageStore";
 
-const MAX_ENTRIES = 50;
+/** Unsent team memory tracked at once. Beyond it a new note is refused; a live one is never dropped. */
+export const MAX_DRAFT_TEAM_MEMORY = 50;
 const NO_ENTRIES: readonly DraftTeamMemory[] = [];
 const CLOSING_TAG = "</team-memory>";
+/** Note lines shorter than this are too common to attribute leftover text to a note. */
+const MIN_NOTE_LINE = 8;
 
 /**
  * Team memory inserted into one thread's unsent draft. The text lives in the draft like any
@@ -32,41 +36,119 @@ interface DraftTeamMemoryState {
 }
 
 const header = (block: string) => block.slice(0, block.indexOf("\n"));
+const noteLines = (block: string) =>
+  block
+    .split("\n")
+    .slice(1, -1)
+    .map((line) => line.trim())
+    .filter((line) => line.length >= MIN_NOTE_LINE);
 
-/** Whether a draft still carries the block's attribution line. */
-export const draftHoldsTeamMemory = (prompt: string, block: string) =>
-  prompt.includes(header(block));
+function nextOpeningTag(text: string, from: number): number {
+  const pattern = /<team-memory[\s>]/gu;
+  pattern.lastIndex = from;
+  return pattern.exec(text)?.index ?? -1;
+}
+
+/** A closing tag with no opening tag before it, left behind when an attribution line was deleted. */
+function hasOrphanClosingTag(text: string): boolean {
+  let open = false;
+  for (const match of text.matchAll(/<(\/?)team-memory[\s>]/gu)) {
+    if (!match[1]) open = true;
+    else if (!open) return true;
+    else open = false;
+  }
+  return false;
+}
+
+/** Whether text left after removal still carries part of a note: its path, a line, or a stray tag. */
+function leftoverOf(text: string): (block: string) => boolean {
+  const lines = new Set(text.split("\n").map((line) => line.trim()));
+  const orphanClosingTag = hasOrphanClosingTag(text);
+  return (block) => {
+    const note = /note="([^"]+)"/u.exec(header(block))?.[1];
+    return (
+      orphanClosingTag ||
+      (note !== undefined && text.includes(note)) ||
+      noteLines(block).some((line) => lines.has(line))
+    );
+  };
+}
 
 /**
- * Removes inserted team-memory blocks and keeps the rest of the draft. An edited block is removed
- * from its attribution line through its closing tag; a block whose attribution line the user
- * deleted is no longer recognizable and stays as the user's own text.
+ * Removes inserted team-memory blocks and keeps the rest of the text. A block goes when it is
+ * unchanged, or from its attribution line through the first closing tag before any other block
+ * starts. A block whose end can't be found, or whose attribution line was edited away while its
+ * text remains, stays and is reported as unresolved: removing more could delete the user's own
+ * text, and removing less would leave team text looking like the user's.
  */
-export function removeTeamMemoryBlocks(prompt: string, blocks: readonly string[]): string {
+export function removeTeamMemoryBlocks(
+  prompt: string,
+  blocks: readonly string[],
+): { prompt: string; unresolved: string[] } {
   let next = prompt;
+  const openEnded = new Set<string>();
   for (const block of blocks) {
     const opening = header(block);
+    let from = 0;
     for (;;) {
-      let start = next.indexOf(block);
+      const start = next.indexOf(opening, from);
+      if (start < 0) break;
       let end = start + block.length;
-      if (start < 0) {
-        start = next.indexOf(opening);
-        if (start < 0) break;
+      if (!next.startsWith(block, start)) {
         const close = next.indexOf(CLOSING_TAG, start + opening.length);
-        end = close < 0 ? start + opening.length : close + CLOSING_TAG.length;
+        const following = nextOpeningTag(next, start + opening.length);
+        if (close < 0 || (following >= 0 && following < close)) {
+          openEnded.add(block);
+          from = start + opening.length;
+          continue;
+        }
+        end = close + CLOSING_TAG.length;
       }
       const before = next.slice(0, start);
       const after = next.slice(end);
-      const kept = [before.trimEnd(), after.trimStart()];
+      const kept = [before.trimEnd(), after.trimStart()] as const;
       const gap = /\n/u.test(
-        before.slice(kept[0]!.length) + after.slice(0, after.length - kept[1]!.length),
+        before.slice(kept[0].length) + after.slice(0, after.length - kept[1].length),
       )
         ? "\n\n"
         : " ";
-      next = kept[0] && kept[1] ? `${kept[0]}${gap}${kept[1]}` : kept[0] || kept[1]!;
+      next = kept[0] && kept[1] ? `${kept[0]}${gap}${kept[1]}` : kept[0] || kept[1];
+      from = kept[0].length;
     }
   }
-  return next;
+  const missing = blocks.filter((block) => !openEnded.has(block) && !next.includes(header(block)));
+  const leftover = missing.length > 0 ? leftoverOf(next) : () => false;
+  return {
+    prompt: next,
+    unresolved: blocks.filter(
+      (block) => openEnded.has(block) || (missing.includes(block) && leftover(block)),
+    ),
+  };
+}
+
+type Presence = "tracked" | "unresolved" | "gone";
+
+/** Where each of one draft's references stands in `prompt`. */
+function presenceIn(
+  prompt: string,
+  entries: readonly DraftTeamMemory[],
+): Map<DraftTeamMemory, Presence> {
+  const presence = new Map<DraftTeamMemory, Presence>();
+  if (entries.length === 0) return presence;
+  const { unresolved } = removeTeamMemoryBlocks(
+    prompt,
+    entries.map((entry) => entry.block),
+  );
+  for (const entry of entries)
+    presence.set(
+      entry,
+      unresolved.includes(entry.block)
+        ? "unresolved"
+        : prompt.includes(header(entry.block))
+          ? "tracked"
+          : "gone",
+    );
+  return presence;
 }
 
 export const useDraftTeamMemoryStore = create<DraftTeamMemoryState>()(
@@ -81,43 +163,86 @@ export const useDraftTeamMemoryStore = create<DraftTeamMemoryState>()(
 );
 
 const draftKey = (thread: ComposerThreadTarget) => composerTargetKey(thread);
+const draftPrompt = (thread: ComposerThreadTarget) =>
+  useComposerDraftStore.getState().getComposerDraft(thread)?.prompt ?? "";
+// Drafts whose text a send has taken out; their references stay until the send finishes.
+const sending = new Map<string, number>();
+// The campus account last seen per environment, so team memory that returns to a draft after a
+// switch (a failed send, a stopped queue) is removed too.
+const accounts = new Map<string, string | null>();
 
-/** References whose attribution line is still in this draft's text. */
+const groupByDraft = (entries: readonly DraftTeamMemory[]) => {
+  const groups = new Map<string, DraftTeamMemory[]>();
+  for (const entry of entries) {
+    const key = draftKey(entry.thread);
+    groups.set(key, [...(groups.get(key) ?? []), entry]);
+  }
+  return groups;
+};
+
+/**
+ * References whose text is still somewhere it can be sent from: a draft, a queued message, or a
+ * send under way. The rest were sent or deleted and are forgotten.
+ */
+function liveEntries(entries: readonly DraftTeamMemory[]): DraftTeamMemory[] {
+  let queued: string[] | null = null;
+  const live: DraftTeamMemory[] = [];
+  for (const [key, group] of groupByDraft(entries)) {
+    if (sending.has(key)) {
+      live.push(...group);
+      continue;
+    }
+    const presence = presenceIn(draftPrompt(group[0]!.thread), group);
+    for (const entry of group) {
+      if (presence.get(entry) !== "gone") {
+        live.push(entry);
+        continue;
+      }
+      queued ??= Object.values(useQueuedMessageStore.getState().queuesByThreadKey).flatMap(
+        (queue) => queue.map((message) => message.prompt),
+      );
+      if (queued.some((prompt) => presenceIn(prompt, [entry]).get(entry) !== "gone"))
+        live.push(entry);
+    }
+  }
+  return live;
+}
+
+/** References whose text is in this draft, including edited text that can't be separated. */
 export function draftTeamMemoryInPrompt(
   thread: ComposerThreadTarget,
   prompt: string,
 ): DraftTeamMemory[] {
   const key = draftKey(thread);
-  return useDraftTeamMemoryStore
+  const entries = useDraftTeamMemoryStore
     .getState()
-    .entries.filter(
-      (entry) => draftKey(entry.thread) === key && draftHoldsTeamMemory(prompt, entry.block),
-    );
+    .entries.filter((entry) => draftKey(entry.thread) === key);
+  const presence = presenceIn(prompt, entries);
+  return entries.filter((entry) => presence.get(entry) !== "gone");
 }
 
-/** Records an inserted block; an earlier reference to the same block in this draft is replaced. */
-export function addDraftTeamMemory(entry: DraftTeamMemory): void {
+/**
+ * Records a note before `insertText` puts it in the draft, so a note is never inserted untracked.
+ * An earlier reference to the same note in this draft is replaced. Refused with "full" when
+ * {@link MAX_DRAFT_TEAM_MEMORY} references are still live.
+ */
+export function addDraftTeamMemory(
+  entry: DraftTeamMemory,
+  insertText: () => boolean,
+): "added" | "full" | "not-inserted" {
   const key = draftKey(entry.thread);
-  useDraftTeamMemoryStore.setState((state) => ({
-    entries: [
-      ...state.entries.filter(
-        (existing) =>
-          existing.id !== entry.id &&
-          !(draftKey(existing.thread) === key && header(existing.block) === header(entry.block)),
-      ),
-      entry,
-    ].slice(-MAX_ENTRIES),
-  }));
-}
-
-/** Forgets references whose text is no longer in this draft, such as after it was sent. */
-export function pruneDraftTeamMemory(thread: ComposerThreadTarget, prompt: string): void {
-  const key = draftKey(thread);
-  const { entries } = useDraftTeamMemoryStore.getState();
-  const kept = entries.filter(
-    (entry) => draftKey(entry.thread) !== key || draftHoldsTeamMemory(prompt, entry.block),
+  const live = liveEntries(useDraftTeamMemoryStore.getState().entries).filter(
+    (existing) =>
+      existing.id !== entry.id &&
+      !(draftKey(existing.thread) === key && header(existing.block) === header(entry.block)),
   );
-  if (kept.length !== entries.length) useDraftTeamMemoryStore.setState({ entries: kept });
+  if (live.length >= MAX_DRAFT_TEAM_MEMORY) {
+    useDraftTeamMemoryStore.setState({ entries: live });
+    return "full";
+  }
+  if (!insertText()) return "not-inserted";
+  useDraftTeamMemoryStore.setState({ entries: [...live, entry] });
+  return "added";
 }
 
 export function setDraftTeamMemoryProblem(
@@ -132,60 +257,118 @@ export function setDraftTeamMemoryProblem(
   });
 }
 
-/** Strips the matching entries' text from their drafts and forgets them; returns drafts changed. */
-function removeEntries(matches: (entry: DraftTeamMemory) => boolean): number {
+/**
+ * Strips the matching entries' text from their drafts and forgets them. An entry stays tracked
+ * when its draft is mid-send, its text is in a queued message, or its edited text can't be
+ * separated from the user's.
+ */
+function removeEntries(matches: (entry: DraftTeamMemory) => boolean): {
+  removed: number;
+  unresolved: number;
+} {
   const { entries, problems } = useDraftTeamMemoryStore.getState();
-  const removed = entries.filter(matches);
-  if (removed.length === 0) return 0;
+  const targeted = entries.filter(matches);
+  if (targeted.length === 0) return { removed: 0, unresolved: 0 };
   const drafts = useComposerDraftStore.getState();
-  const byDraft = new Map<string, DraftTeamMemory[]>();
-  for (const entry of removed) {
-    const key = draftKey(entry.thread);
-    byDraft.set(key, [...(byDraft.get(key) ?? []), entry]);
-  }
-  let changed = 0;
+  const kept = new Set<DraftTeamMemory>();
   const nextProblems = { ...problems };
-  for (const [key, group] of byDraft) {
-    delete nextProblems[key];
+  let removed = 0;
+  let unresolved = 0;
+  for (const [key, group] of groupByDraft(targeted)) {
+    if (sending.has(key)) {
+      for (const entry of group) kept.add(entry);
+      continue;
+    }
     const thread = group[0]!.thread;
     const prompt = drafts.getComposerDraft(thread)?.prompt ?? "";
-    const next = removeTeamMemoryBlocks(
+    const result = removeTeamMemoryBlocks(
       prompt,
       group.map((entry) => entry.block),
     );
-    if (next === prompt) continue;
-    drafts.setPrompt(thread, next);
-    changed++;
+    if (result.prompt !== prompt) {
+      drafts.setPrompt(thread, result.prompt);
+      removed++;
+      delete nextProblems[key];
+    }
+    if (result.unresolved.length > 0) unresolved++;
+    for (const entry of group) if (result.unresolved.includes(entry.block)) kept.add(entry);
   }
+  // Queued text can't be edited here; keeping its reference tracks it if it returns to a draft.
+  const live = new Set(liveEntries(targeted.filter((entry) => !kept.has(entry))));
   useDraftTeamMemoryStore.setState({
-    entries: entries.filter((entry) => !matches(entry)),
+    entries: entries.filter((entry) => !matches(entry) || kept.has(entry) || live.has(entry)),
     problems: nextProblems,
   });
-  return changed;
+  return { removed, unresolved };
 }
 
-/** Removes every team memory inserted into this thread's draft. */
+/** Removes every team memory inserted into this thread's draft that can be separated from it. */
 export function removeDraftTeamMemory(thread: ComposerThreadTarget): void {
   const key = draftKey(thread);
   removeEntries((entry) => draftKey(entry.thread) === key);
 }
 
 /**
+ * Removes team memory added under an account other than the one now on its environment, then
+ * forgets references whose text was sent or deleted.
+ */
+export function settleDraftTeamMemory(): void {
+  removeEntries(
+    (entry) =>
+      accounts.has(entry.environmentId) && accounts.get(entry.environmentId) !== entry.identity,
+  );
+  const { entries } = useDraftTeamMemoryStore.getState();
+  const live = liveEntries(entries);
+  if (live.length !== entries.length) useDraftTeamMemoryStore.setState({ entries: live });
+}
+
+/**
+ * Holds this draft's references while a send has its text, and settles them when it finishes:
+ * kept if the text came back to the draft or went to the queue, forgotten once it was sent.
+ */
+export function beginDraftTeamMemorySend(thread: ComposerThreadTarget): () => void {
+  const key = draftKey(thread);
+  sending.set(key, (sending.get(key) ?? 0) + 1);
+  let finished = false;
+  return () => {
+    if (finished) return;
+    finished = true;
+    const count = (sending.get(key) ?? 1) - 1;
+    if (count > 0) sending.set(key, count);
+    else sending.delete(key);
+    settleDraftTeamMemory();
+  };
+}
+
+/** Tracks references again for text a failed send restored after its own send had finished. */
+export function restoreDraftTeamMemory(restored: readonly DraftTeamMemory[]): void {
+  useDraftTeamMemoryStore.setState((state) => {
+    const ids = new Set(state.entries.map((entry) => entry.id));
+    const missing = restored.filter((entry) => !ids.has(entry.id));
+    return missing.length === 0 ? state : { entries: [...state.entries, ...missing] };
+  });
+  settleDraftTeamMemory();
+}
+
+/**
  * Called whenever an environment's campus account is known. Team memory added under any other
- * account, or while now signed out, is removed from unsent drafts on that environment.
+ * account, or while now signed out, is removed from unsent drafts on that environment. Edited
+ * text that can't be separated stays tracked and marked, and is counted as `unresolved`.
  */
 export function reconcileDraftTeamMemoryAccount(
   environmentId: string,
   identity: string | null,
-): number {
+): { removed: number; unresolved: number } {
+  accounts.set(environmentId, identity);
   return removeEntries(
     (entry) => entry.environmentId === environmentId && entry.identity !== identity,
   );
 }
 
-/** Teams whose memory is in this draft now, and why its last send was refused, for the composer. */
+/** Teams whose memory is in this draft now, which of them can't be separated, and why its last send was refused. */
 export function useDraftTeamMemorySummary(thread: ComposerThreadTarget | null): {
   teams: string;
+  unresolvedTeams: string;
   problem: string | null;
 } {
   const key = thread ? draftKey(thread) : null;
@@ -197,17 +380,18 @@ export function useDraftTeamMemorySummary(thread: ComposerThreadTarget | null): 
   const problem = useDraftTeamMemoryStore((state) =>
     key === null ? null : (state.problems[key] ?? null),
   );
-  // A joined string keeps typing elsewhere in the draft from rerendering the caller.
-  const teams = useComposerDraftStore((store) => {
-    if (thread === null || entries.length === 0) return "";
-    const prompt = store.getComposerDraft(thread)?.prompt ?? "";
-    return [
-      ...new Set(
-        entries
-          .filter((entry) => draftHoldsTeamMemory(prompt, entry.block))
-          .map((entry) => entry.teamName),
-      ),
-    ].join(", ");
+  // Joined strings keep typing elsewhere in the draft from rerendering the caller.
+  const summary = useComposerDraftStore((store) => {
+    if (thread === null || entries.length === 0) return "\u0000";
+    const presence = presenceIn(store.getComposerDraft(thread)?.prompt ?? "", entries);
+    const teams = (present: (value: Presence | undefined) => boolean) =>
+      [
+        ...new Set(
+          entries.filter((entry) => present(presence.get(entry))).map((entry) => entry.teamName),
+        ),
+      ].join(", ");
+    return `${teams((value) => value !== "gone")}\u0000${teams((value) => value === "unresolved")}`;
   });
-  return { teams, problem };
+  const [teams = "", unresolvedTeams = ""] = summary.split("\u0000");
+  return { teams, unresolvedTeams, problem };
 }

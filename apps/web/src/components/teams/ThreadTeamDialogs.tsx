@@ -16,6 +16,7 @@ import {
 import { Link } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { useUcsdAccount } from "../../hooks/useUcsdAccount";
+import { MAX_DRAFT_TEAM_MEMORY } from "./teamMemoryDrafts";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
@@ -345,8 +346,8 @@ export function TeamMemoryDialog({
   projectId: ProjectId;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** Inserts the server-issued block; returns false when the composer could not take it. */
-  onInsert: (reference: TeamMemoryReference, identity: string) => boolean;
+  /** Inserts the server-issued block unless the composer can't take it or can't track another. */
+  onInsert: (reference: TeamMemoryReference, identity: string) => "added" | "full" | "not-inserted";
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -356,7 +357,7 @@ export function TeamMemoryDialog({
           <DialogDescription>
             Choose one note from this project’s team. It is added to your message where you can edit
             it. Your team access is checked again when you send, and the note is removed from the
-            draft if you sign out or switch accounts.
+            draft if you sign out or switch accounts unless an edit hides where it ends.
           </DialogDescription>
         </DialogHeader>
         <SignedIn environmentId={environmentId}>
@@ -366,9 +367,9 @@ export function TeamMemoryDialog({
               environmentId={environmentId}
               projectId={projectId}
               onInsert={(reference) => {
-                if (!onInsert(reference, identity)) return false;
-                onOpenChange(false);
-                return true;
+                const result = onInsert(reference, identity);
+                if (result === "added") onOpenChange(false);
+                return result;
               }}
             />
           )}
@@ -385,7 +386,7 @@ function MemoryPicker({
 }: {
   environmentId: EnvironmentId;
   projectId: ProjectId;
-  onInsert: (reference: TeamMemoryReference) => boolean;
+  onInsert: (reference: TeamMemoryReference) => "added" | "full" | "not-inserted";
 }) {
   const { run, busy, error } = useTeamProjectRequest(environmentId);
   const [link, setLink] = useState<TeamProjectLink | null | "unlinked">(null);
@@ -449,7 +450,12 @@ function MemoryPicker({
         return;
       }
     }
-    if (!onInsert(reference))
+    const result = onInsert(reference);
+    if (result === "full")
+      setNotice(
+        `Team memory is already in ${MAX_DRAFT_TEAM_MEMORY} unsent drafts or queued messages. Send or remove it from one of them, then add this note.`,
+      );
+    else if (result === "not-inserted")
       toastManager.add({
         type: "warning",
         title: "The composer is not ready",

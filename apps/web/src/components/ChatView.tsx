@@ -260,10 +260,12 @@ import { stackedThreadToast, toastManager } from "./ui/toast";
 import { ShareToTeamDialog, TeamMemoryDialog } from "./teams/ThreadTeamDialogs";
 import {
   addDraftTeamMemory,
+  beginDraftTeamMemorySend,
   draftTeamMemoryInPrompt,
-  pruneDraftTeamMemory,
   removeDraftTeamMemory,
+  restoreDraftTeamMemory,
   setDraftTeamMemoryProblem,
+  settleDraftTeamMemory,
   useDraftTeamMemorySummary,
 } from "./teams/teamMemoryDrafts";
 import { decodeProjectScriptKeybindingRule } from "~/lib/projectScriptKeybindings";
@@ -6639,14 +6641,18 @@ export default function ChatView(props: ChatViewProps) {
     if (!draftTeamMemory.teams) return null;
     return {
       id: `team-memory:${composerTargetKey(composerDraftTarget)}`,
-      variant: draftTeamMemory.problem ? "warning" : "info",
+      variant: draftTeamMemory.problem || draftTeamMemory.unresolvedTeams ? "warning" : "info",
       icon: <UsersIcon />,
       title: draftTeamMemory.problem
         ? "Team memory in this draft can’t be sent"
-        : `Team memory from ${draftTeamMemory.teams}`,
+        : draftTeamMemory.unresolvedTeams
+          ? `Edited team memory from ${draftTeamMemory.unresolvedTeams}`
+          : `Team memory from ${draftTeamMemory.teams}`,
       description:
         draftTeamMemory.problem ??
-        "Your access is checked again when you send. Once sent, it stays in this conversation and can’t be taken back.",
+        (draftTeamMemory.unresolvedTeams
+          ? "Harness can’t tell where this note ends, so Remove and signing out leave it in your draft. Delete the rest of it yourself, or put back its </team-memory> line. Your access is still checked when you send."
+          : "Your access is checked again when you send. Once sent, it stays in this conversation and can’t be taken back."),
       actions: (
         <Button
           size="xs"
@@ -6657,7 +6663,12 @@ export default function ChatView(props: ChatViewProps) {
         </Button>
       ),
     };
-  }, [composerDraftTarget, draftTeamMemory.problem, draftTeamMemory.teams]);
+  }, [
+    composerDraftTarget,
+    draftTeamMemory.problem,
+    draftTeamMemory.teams,
+    draftTeamMemory.unresolvedTeams,
+  ]);
   const composerBannerItems = useMemo<ComposerBannerStackItem[]>(() => {
     const teamMemoryItems = teamMemoryBannerItem === null ? [] : [teamMemoryBannerItem];
     const backgroundLivenessItems =
@@ -7572,9 +7583,11 @@ export default function ChatView(props: ChatViewProps) {
       prompt: nextPrompt,
       detectTrigger: true,
     });
+    // Team memory queued under an account that has since changed leaves the draft again.
+    settleDraftTeamMemory();
   };
 
-  const onSend = async (
+  const sendComposerMessage = async (
     e?: { preventDefault: () => void },
     submissionIntent: ComposerSubmissionIntent = "foreground",
     directAnnotation?: {
@@ -7754,9 +7767,9 @@ export default function ChatView(props: ChatViewProps) {
       terminalContexts: composerTerminalContexts,
       elementContextCount: composerPreviewAnnotations.length + composerReviewComments.length,
     });
-    // Team memory in this draft is rechecked by the server before anything leaves; the dispatch
-    // itself is checked again on the server for blocks it issued.
-    pruneDraftTeamMemory(composerDraftTarget, promptForSend);
+    // Team memory in this draft, including edited notes that can't be separated, is rechecked by
+    // the server before anything leaves. The dispatch is checked again on the server only for
+    // unedited blocks it still remembers issuing.
     const teamMemory = draftTeamMemoryInPrompt(composerDraftTarget, promptForSend);
     if (teamMemory.length === 0) setDraftTeamMemoryProblem(composerDraftTarget, null);
     else {
@@ -8739,6 +8752,8 @@ export default function ChatView(props: ChatViewProps) {
           setMultipleModelSelections(failedSelections);
           if (clearedDraft) {
             setComposerDraftPrompt(composerDraftTarget, messageTextForSend);
+            // A restore from the toast comes after this send settled and forgot the references.
+            restoreDraftTeamMemory(teamMemory);
             addComposerDraftImages(
               composerDraftTarget,
               composerImagesSnapshot.map(cloneComposerImageForRetry),
@@ -9200,6 +9215,16 @@ export default function ChatView(props: ChatViewProps) {
         currentThreadKey === activeThreadKey ? null : currentThreadKey,
       );
       resetLocalDispatch();
+    }
+  };
+  // Team memory references stay while a send holds the draft's text. Afterwards only those whose
+  // text is back in a draft or in the queue remain; sent ones are forgotten.
+  const onSend = async (...args: Parameters<typeof sendComposerMessage>) => {
+    const finishTeamMemorySend = beginDraftTeamMemorySend(composerDraftTarget);
+    try {
+      await sendComposerMessage(...args);
+    } finally {
+      finishTeamMemorySend();
     }
   };
 
@@ -10435,21 +10460,20 @@ export default function ChatView(props: ChatViewProps) {
               onOpenChange={(open) => {
                 if (!open) setTeamDialog(null);
               }}
-              onInsert={(reference, identity) => {
-                if (
-                  !composerRef.current?.insertTextAtEnd(reference.block, {
-                    ensureLeadingBoundary: true,
-                  })
+              onInsert={(reference, identity) =>
+                addDraftTeamMemory(
+                  {
+                    ...reference,
+                    thread: composerDraftTarget,
+                    environmentId: activeThread.environmentId,
+                    identity,
+                  },
+                  () =>
+                    composerRef.current?.insertTextAtEnd(reference.block, {
+                      ensureLeadingBoundary: true,
+                    }) ?? false,
                 )
-                  return false;
-                addDraftTeamMemory({
-                  ...reference,
-                  thread: composerDraftTarget,
-                  environmentId: activeThread.environmentId,
-                  identity,
-                });
-                return true;
-              }}
+              }
             />
           </>
         ) : null}

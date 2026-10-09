@@ -87,11 +87,17 @@ export function useUcsdAccount(environmentId: EnvironmentId): AccountLoginState 
     window.dispatchEvent(new Event("tritonai-account-changed"));
     if (accountStatus === undefined) return;
     // Unsent team memory belongs to the account that added it; sign-out or a switch removes it.
-    const removed = reconcileDraftTeamMemoryAccount(
+    const { removed, unresolved } = reconcileDraftTeamMemoryAccount(
       environmentId,
       accountStatus === "signed-in" ? identity : null,
     );
-    if (removed > 0)
+    if (unresolved > 0)
+      toastManager.add({
+        type: "warning",
+        title: "Some team memory is still in your drafts",
+        description: `Your campus account changed. In ${unresolved === 1 ? "one draft" : `${unresolved} drafts`}, the team memory was edited and Harness can’t tell where it ends, so it was left in place and marked. Delete it before sending.`,
+      });
+    else if (removed > 0)
       toastManager.add({
         type: "info",
         title: "Team memory removed from unsent drafts",
