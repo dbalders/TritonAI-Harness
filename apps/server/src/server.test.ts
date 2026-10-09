@@ -135,6 +135,7 @@ import { AccountService } from "./auth/AccountService.ts";
 import { TeamProjectService } from "./teams/TeamProjectService.ts";
 import { TeamStorageService } from "./teams/TeamStorageService.ts";
 import * as TeamFixture from "./teams/testing/teamProjectFixture.ts";
+import * as SyntheticTeams from "./teams/testing/syntheticTeams.ts";
 import { ThreadDeletionReactor } from "./orchestration/Services/ThreadDeletionReactor.ts";
 import * as PullRequestSyncReactor from "./orchestration/PullRequestSyncReactor.ts";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
@@ -2398,6 +2399,109 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         dispatched.map((command) => command.type),
         ["thread.turn.start"],
       );
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("serves the synthetic Teams fixture through the routes and both dispatch gates", () =>
+    Effect.gen(function* () {
+      const world = SyntheticTeams.makeSyntheticTeamsWorld();
+      let services: SyntheticTeams.SyntheticTeamServices | null = null;
+      const projectId = ProjectId.make("synthetic-project");
+      const threadId = ThreadId.make("synthetic-thread");
+      const dispatched: Array<OrchestrationCommand> = [];
+      yield* buildAppUnderTest({
+        layers: {
+          teamServices: SyntheticTeams.syntheticTeamServicesLayer(world, (ready) => {
+            services = ready;
+          }),
+          projectionSnapshotQuery: {
+            getProjectShellById: (id) =>
+              Effect.succeed(
+                id === projectId
+                  ? Option.some({
+                      id,
+                      title: "synthetic-grant-reports",
+                      workspaceRoot: "/synthetic/workspace",
+                      defaultModelSelection: null,
+                      scripts: [],
+                      createdAt: "2026-10-09T00:00:00.000Z",
+                      updatedAt: "2026-10-09T00:00:00.000Z",
+                    })
+                  : Option.none(),
+              ),
+          },
+          orchestrationEngine: {
+            dispatch: (command) =>
+              Effect.sync(() => {
+                dispatched.push(command);
+                return { sequence: dispatched.length };
+              }),
+            readEvents: () => Stream.empty,
+          },
+        },
+      });
+      const alpha = SyntheticTeams.SYNTHETIC_TEAMS.alpha.id;
+      const wsUrl = yield* getWsServerUrl("/ws");
+      world.switchTo("editor");
+      const block = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          Effect.gen(function* () {
+            yield* client[WS_METHODS.serverTeamProjects]({
+              action: "bind",
+              teamId: alpha,
+              projectId,
+            });
+            // The editor is not in Beta, so its root is refused before any Graph request.
+            const beta = yield* client[WS_METHODS.serverTeamProjects]({
+              action: "list",
+              teamId: SyntheticTeams.SYNTHETIC_TEAMS.beta.id,
+            }).pipe(Effect.flip);
+            assert.ok(beta._tag === "TeamsError" && beta.code === "not_found");
+            assert.equal(yield* services!.connectMicrosoft, 1);
+            const issued = yield* client[WS_METHODS.serverTeamProjects]({
+              action: "memory-attach",
+              projectId,
+              path: SyntheticTeams.syntheticDocumentPath(0),
+            });
+            return issued.reference!.block;
+          }),
+        ),
+      );
+      assertInclude(block, "SYNTHETIC grant report checklist");
+      for (const entry of world.trace.filter((entry) => entry.kind === "graph"))
+        assert.ok(entry.team === null || entry.team === "alpha");
+      world.setRole("alpha", "editor", "none");
+
+      const turn = (text: string) => ({
+        type: "thread.turn.start" as const,
+        commandId: CommandId.make(`cmd-synthetic-${dispatched.length}`),
+        threadId,
+        message: {
+          messageId: MessageId.make(`msg-synthetic-${dispatched.length}`),
+          role: "user" as const,
+          text,
+          attachments: [],
+        },
+        runtimeMode: "full-access" as const,
+        interactionMode: "default" as const,
+        createdAt: "2026-10-09T00:00:00.000Z",
+      });
+      const response = yield* fetchEffect(yield* getHttpServerUrl("/api/orchestration/dispatch"), {
+        method: "POST",
+        headers: {
+          cookie: yield* getAuthenticatedSessionCookieHeader(),
+          "content-type": "application/json",
+        },
+        body: encodeTestJson(turn(`Draft\n${block}`)),
+      });
+      assert.equal(response.status, 403);
+      const refusedOverWs = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand](turn(`Draft\n${block}`)),
+        ),
+      ).pipe(Effect.flip);
+      assertInclude(refusedOverWs.message, "team memory you can no longer send");
+      assert.deepEqual(dispatched, []);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

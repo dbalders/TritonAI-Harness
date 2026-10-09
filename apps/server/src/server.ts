@@ -11,6 +11,7 @@ import {
 import type { RelayManagedEndpointRuntimeConfig } from "@t3tools/contracts/relay";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
+import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -674,6 +675,15 @@ export const teamServicesLayer = TeamProject.layer.pipe(
   Layer.provideMerge(Account.layer.pipe(Layer.provide(ServerSecretStore.layer))),
 );
 
+/**
+ * The Teams services the running server's routes use. Only the synthetic Teams content fixture
+ * (`apps/server/scripts/teams-content-fixture.ts`) provides another layer.
+ */
+export class ServerTeamServices extends Context.Reference<typeof teamServicesLayer>(
+  "t3/server/ServerTeamServices",
+  { defaultValue: () => teamServicesLayer },
+) {}
+
 export const makeRoutesLayerFor = (
   loadIntegrationRegistry?: Parameters<typeof McpHttpServer.makeLayer>[0],
   teamServices: typeof teamServicesLayer = teamServicesLayer,
@@ -1056,10 +1066,14 @@ const makeServerLayer = Layer.unwrap(
       ).pipe(Effect.asVoid),
     }).pipe(Layer.provideMerge(RuntimeDependenciesLive), Layer.provide(launcherLayer));
 
-    const routesLayer = HttpRouter.serve(makeRoutesLayer.pipe(Layer.provide(launcherLayer)), {
-      disableLogger: !config.logWebSocketEvents,
-      routerConfig: HTTP_ROUTER_CONFIG,
-    }).pipe(Layer.tap(() => Deferred.succeed(routesReady, undefined).pipe(Effect.orDie)));
+    const teamServices = yield* ServerTeamServices;
+    const routesLayer = HttpRouter.serve(
+      makeRoutesLayerFor(undefined, teamServices).pipe(Layer.provide(launcherLayer)),
+      {
+        disableLogger: !config.logWebSocketEvents,
+        routerConfig: HTTP_ROUTER_CONFIG,
+      },
+    ).pipe(Layer.tap(() => Deferred.succeed(routesReady, undefined).pipe(Effect.orDie)));
     const serverApplicationLayer = Layer.mergeAll(
       routesLayer,
       httpListeningLayer,
