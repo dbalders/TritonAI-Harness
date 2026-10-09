@@ -155,6 +155,12 @@ export const make = (config: Microsoft.MicrosoftOAuthConfig | null) =>
           const profile = signedIn.profile;
           const result = yield* account.teams(sessionId, { action: "get", teamId: command.teamId });
           const team = result.team;
+          // Storage is used only when bound to the exact team the caller asked for.
+          if (team && team.id !== command.teamId)
+            return yield* new TeamsError({
+              code: "not_found",
+              message: "This team is not available to your account.",
+            });
           if (!team || !team.storage || team.state !== "ready")
             return yield* failure("The team's private folder is not ready.");
           const storage = team.storage;
@@ -225,7 +231,13 @@ export const make = (config: Microsoft.MicrosoftOAuthConfig | null) =>
               action: "get",
               teamId: command.teamId,
             });
-            if (refreshed.team?.revision !== team.revision || refreshed.team.state !== "ready")
+            if (
+              refreshed.team?.id !== team.id ||
+              refreshed.team.revision !== team.revision ||
+              refreshed.team.state !== "ready" ||
+              refreshed.team.storage?.driveId !== storage.driveId ||
+              refreshed.team.storage.folderId !== storage.folderId
+            )
               return yield* new TeamsError({
                 code: "conflict",
                 message: "Team access changed. Refresh before continuing.",

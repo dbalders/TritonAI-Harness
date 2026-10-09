@@ -18,6 +18,9 @@ function fixture() {
   let moveFolder = false;
   let folderListed = false;
   let microsoftUnavailable = false;
+  let demoteOnGraph = false;
+  let teamOverride: Partial<NonNullable<TeamsResult["team"]>> = {};
+  const graphWrites: string[] = [];
   const values = new Map<string, Uint8Array>();
   const graphRequests: string[] = [];
   const status = (): AccountStatus => ({
@@ -66,7 +69,7 @@ function fixture() {
     teams: () =>
       Effect.suspend(() =>
         member
-          ? Effect.succeed(teams)
+          ? Effect.succeed({ ...teams, team: { ...teams.team!, ...teamOverride } })
           : Effect.fail(new TeamsError({ code: "not_found", message: "Team unavailable" })),
       ),
   });
@@ -91,7 +94,12 @@ function fixture() {
       const path = new URL(request.url).pathname;
       if (microsoftUnavailable && path.endsWith("/me"))
         return HttpClientResponse.fromWeb(request, Response.json({}, { status: 429 }));
-      if (path.includes("/drives/")) graphRequests.push(request.url);
+      if (path.includes("/drives/")) {
+        graphRequests.push(request.url);
+        if (request.method !== "GET") graphWrites.push(`${request.method} ${request.url}`);
+        // A concurrent owner action demotes the caller after the operation has started.
+        if (demoteOnGraph) teamOverride = { role: "reader", canManage: false, revision: 3 };
+      }
       if (moveFolder && path.includes("/drives/")) {
         if (path.endsWith("/items/root/children"))
           return HttpClientResponse.fromWeb(
@@ -188,6 +196,13 @@ function fixture() {
     connect,
     values,
     graphRequests,
+    graphWrites,
+    setTeam: (override: Partial<NonNullable<TeamsResult["team"]>>) => {
+      teamOverride = override;
+    },
+    demoteOnGraph: () => {
+      demoteOnGraph = true;
+    },
     setMicrosoftUnavailable: (value: boolean) => {
       microsoftUnavailable = value;
     },
@@ -297,3 +312,63 @@ it.effect("anchors nested listings and discards metadata when a folder moves bef
     expect(f.graphRequests.some((url) => url.includes("/items/root:/Nested:/children"))).toBe(true);
   }),
 );
+
+describe("Teams storage role and team binding", () => {
+  const recordId = "33333333-3333-4333-a333-333333333333";
+  const deviceId = "44444444-4444-4444-a444-444444444444";
+  const publish = {
+    action: "publish",
+    teamId,
+    recordId,
+    deviceId,
+    kind: "sop",
+    title: "Synthetic",
+    project: "",
+    text: "Synthetic body",
+  } as const;
+  const path = `SOPs/${"a".repeat(43)}/${deviceId}/${recordId}.md`;
+
+  it.effect("denies every reader write before any Graph request", () =>
+    Effect.gen(function* () {
+      const f = fixture();
+      const service = yield* f.make;
+      yield* f.connect(service);
+      f.setTeam({ role: "reader", canManage: false });
+      for (const command of [
+        publish,
+        { action: "update-file", teamId, path, etag: "v1", text: "Changed" },
+        { action: "delete-file", teamId, path, etag: "v1" },
+      ] as const)
+        expect((yield* Effect.flip(service.execute("a", command))).code).toBe("forbidden");
+      expect(f.graphRequests).toHaveLength(0);
+    }),
+  );
+
+  it.effect("aborts a write before any Graph mutation when a demotion lands mid-operation", () =>
+    Effect.gen(function* () {
+      const f = fixture();
+      const service = yield* f.make;
+      yield* f.connect(service);
+      f.demoteOnGraph();
+      expect((yield* Effect.flip(service.execute("a", publish))).code).toBe("conflict");
+      expect(f.graphRequests.length).toBeGreaterThan(0);
+      expect(f.graphWrites).toEqual([]);
+    }),
+  );
+
+  it.effect("never uses storage from a membership response for a different team", () =>
+    Effect.gen(function* () {
+      const f = fixture();
+      const service = yield* f.make;
+      yield* f.connect(service);
+      f.setTeam({
+        id: "55555555-5555-4555-a555-555555555555",
+        storage: { tenantId: config.tenantId, siteId: "site", driveId: "drive", folderId: "other" },
+      });
+      expect(
+        (yield* Effect.flip(service.execute("a", { action: "list-files", teamId }))).code,
+      ).toBe("not_found");
+      expect(f.graphRequests).toHaveLength(0);
+    }),
+  );
+});
