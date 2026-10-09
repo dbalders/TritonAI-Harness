@@ -32,6 +32,7 @@ import {
   GROVE_THEME,
   IRIS_THEME,
   OCEAN_THEME,
+  UCSD_THEME,
   updateCustomTheme,
   CUSTOM_THEMES_STORAGE_KEY,
   createVividThemeColors,
@@ -80,6 +81,43 @@ function contrastRatio(first: string, second: string): number {
 }
 
 describe("theme files", () => {
+  it("keeps saved UCSD choices on the Quiet Workspace pair", () => {
+    for (const preference of ["ucsd", "ucsd-light", "ucsd-dark"]) {
+      expect(getThemeDefinition(preference)?.id).toBe(UCSD_THEME.id);
+      expect(getThemeModes(getThemeDefinition(preference)!)).toEqual(["light", "dark"]);
+      expect(themeAllowsSidebarArtwork(preference)).toBe(false);
+    }
+    expect(resolveThemeAppearance("ucsd-light", true)).toBe("light");
+    expect(resolveThemeAppearance("ucsd-dark", false)).toBe("dark");
+  });
+
+  it.each(["light", "dark"] as const)(
+    "keeps Quiet Workspace text readable on its %s surfaces",
+    (appearance) => {
+      const colors = getThemeColorsForMode(UCSD_THEME, appearance)!;
+      const pairs = [
+        ["text", "canvas"],
+        ["textMuted", "canvas"],
+        ["textMuted", "surface"],
+        ["placeholder", "surface"],
+        ["toolbarControlForeground", "toolbarControl"],
+        ["sidebarForeground", "sidebar"],
+        ["sidebarMutedForeground", "sidebar"],
+        ["sidebarMutedForeground", "sidebarRowSelected"],
+        ["messageForeground", "messageSurface"],
+        ["messageActionForeground", "messageAction"],
+        ["messageActionForeground", "messageActionHover"],
+        ["codeForeground", "codeBackground"],
+        ["terminalForeground", "terminalBackground"],
+        ["errorForeground", "errorSurface"],
+        ["warningForeground", "warningSurface"],
+      ] as const;
+      for (const [foreground, background] of pairs) {
+        expect(contrastRatio(colors[foreground], colors[background])).toBeGreaterThanOrEqual(4.5);
+      }
+    },
+  );
+
   it("keeps every built-in palette value in canonical OKLCH form", () => {
     for (const theme of BUILT_IN_THEMES) {
       for (const colors of [theme.colors, ...Object.values(theme.variants ?? {})]) {

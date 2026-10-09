@@ -93,20 +93,103 @@ Configure Xcode Cloud for the shared `TritonAIHarness` scheme in
 - Use the UCSD team (`G789749RTK`) and existing production app (`6813147394`).
 - Set the branch-change start condition to `mobile-stable` only.
 - Archive for iOS distribution and add the existing internal TestFlight group
-  as a post-action. Keep App Store review and release manual.
+  as a post-action. The archive must be App Store eligible; internal-only
+  TestFlight builds cannot be submitted to the App Store.
 
 Xcode Cloud assigns every app/extension build number from `CI_BUILD_NUMBER`.
-The mobile marketing version remains in `app.config.ts`; advance it before
-building a new train after its App Store release. Stable cloud builds disable
+Stable release handoffs allocate their own monotonically increasing iOS marketing
+version, starting one patch above the configured `app.config.ts` version (currently
+`1.4.0`). The native receipt persists that allocation: the same release/source
+keeps its version on retries, and newer releases increment it. A higher configured
+version advances the baseline. After a stable allocation exists, manual main
+builds are refused; retry the published stable tag instead so its identity and
+version cannot be overwritten. Xcode
+Cloud applies the allocated version to all native targets and to the build
+checkout’s Expo config, so About, diagnostics, and the uploaded binary agree.
+Published release source commits are not rewritten. Stable cloud builds disable
 Expo OTA updates so their installed code stays tied to the recorded release.
 The separately operated EAS production workflow retains its own build/update
 behavior and credentials; this Xcode Cloud lane does not require `EXPO_TOKEN`.
 
 GitHub success establishes native branch preparation. Xcode Cloud archive and
 upload, Apple processing, TestFlight availability, and installed-device
-verification remain separate checks. This workflow never adds or submits an
-App Store version for review. Nightly continues to use the separate Preview
+verification remain separate checks. The native preparation workflow only builds;
+the separate App Review workflow described below performs submission when enabled. Nightly continues to use the separate Preview
 app and `mobile-nightly` branch.
+
+## Stable App Store review automation
+
+`mobile-stable-app-review.yml` runs on published releases, manual dispatch, and
+at minutes 17 and 47 of every hour. Scheduled runs discover releases published
+by `GITHUB_TOKEN`, which do not trigger another release-event workflow. There
+is no AI runtime, laptop process, or per-release approval prompt in this lane.
+The workflow is disabled until configured on the repository’s default branch.
+
+Repository secrets:
+
+- `ASC_KEY_ID`, `ASC_PRIVATE_KEY`: the key ID and literal multiline `.p8`
+  contents for the UCSD App Store Connect key. Never commit this key.
+- `ASC_ISSUER_ID`: required only for a team key; individual keys do not use it.
+
+The key needs access to the production app, Xcode Cloud builds, version metadata,
+and review submissions. An individual key inherits its user's roles/app access;
+App Manager is appropriate for review submission. Individual authentication uses
+`sub=user` and omits the team issuer claim. Set the key type explicitly below.
+A UCSD individual key was verified with GET access to the production app, iOS
+versions, review records, and Xcode Cloud product/build runs on 2026-10-08, and
+configured in GitHub Secrets. No review write was performed. Existing desktop
+notarization secrets failed production-app access and remain unchanged.
+
+Repository variables:
+
+- `IOS_APP_STORE_KEY_TYPE=individual`: use the configured individual key. `team`
+  (the default) instead requires `ASC_ISSUER_ID`.
+- `IOS_APP_REVIEW_AUTOMATION=true`: enable automatic review submission for
+  TritonAI Harness production only. Enabling this represents explicit standing
+  authorization to add and submit the eligible stable versions for review.
+- `IOS_APP_REVIEW_FIRST_TAG=vMAJOR.MINOR.PATCH`: first eligible stable release.
+  Choose a release containing this automation, or a future release; this prevents
+  accidental submissions of earlier stable releases when enabling the schedule.
+- `IOS_RELEASE_AFTER_APPROVAL=true`: separately opt into automatic App Store
+  publication after approval. By default approved versions await manual release,
+  and the next queued version waits until the approved version is released.
+
+Initialize the production App Store listing, screenshots, privacy disclosures,
+export compliance, and reviewer access before enabling automation. The job uses
+existing listing metadata and populates every version locale’s What’s New with
+published GitHub release notes, truncated to Apple’s 4,000-character limit.
+English GitHub notes are used for all locales; add translated release-note
+support before relying on this for localized copy. Apple remains the final
+validator and returns an error for missing submission requirements.
+
+The queue is derived from published stable GitHub releases: the highest stable
+version at or above the activation floor wins. Drafts and prereleases never
+qualify. If newer releases arrive while a review is active, they supersede the
+pending candidate; the current Apple review is never withdrawn. A run snapshots
+its candidate, so a release arriving after that snapshot waits for the next run.
+
+Before submission, the reconciler checks the production bundle ID, exact release
+source in `mobile-stable`’s receipt, and Xcode Cloud’s native commit SHA. It selects
+only an unexpired, fully processed, App Store eligible iOS build for the allocated
+marketing version from that matching Cloud run. It never selects the globally
+latest TestFlight build. GitHub serializes submission jobs; Apple state readback
+prevents duplicate submissions, and interrupted drafts for the same version
+can resume. Apple API errors fail the job without logging reviewer credentials.
+
+Waiting for Cloud, processing, review, contracts, or manual release appears in
+GitHub’s job summary and is retried on the next schedule. Rejections, failed
+Cloud builds, version regressions, missing metadata, and unrelated editable
+drafts fail visibly in Actions. Enable GitHub Actions failure notifications for
+this repository to receive those failures; no separate email service is used.
+Resolve Apple rejections manually, then resume via manual dispatch or schedule.
+Rebuild a failed Cloud archive with the stable TestFlight workflow’s exact tag.
+Set `IOS_APP_REVIEW_AUTOMATION=false` to stop submissions immediately; builds
+and any review already submitted continue normally.
+
+Automatic submission does not establish mobile/desktop protocol compatibility.
+Stable desktop/server changes must continue to support installed mobile versions
+while Apple review and user updates are pending. This lane adds no runtime
+compatibility handshake or cross-version test matrix.
 
 ## Nightly TestFlight automation
 
