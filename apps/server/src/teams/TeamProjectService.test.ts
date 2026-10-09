@@ -47,7 +47,7 @@ function fixture() {
   const values = new Map<string, Uint8Array>();
   const graph: string[] = [];
   // Runs once, inside the next Graph request, to interleave another call with an in-flight one.
-  let duringGraph: Effect.Effect<unknown, unknown> | null = null;
+  let duringGraph: Effect.Effect<unknown, TeamsError> | null = null;
   const writes: { method: string; url: string; body: string }[] = [];
   const status = (): AccountStatus => ({
     configured: true,
@@ -257,7 +257,7 @@ function fixture() {
     projects,
     threads,
     values,
-    interleave: (effect: Effect.Effect<unknown, unknown>) => {
+    interleave: (effect: Effect.Effect<unknown, TeamsError>) => {
       duringGraph = effect;
     },
     switchTo: (next: string) => {
