@@ -51,6 +51,8 @@ export function teamProjectFixture() {
     [teamA]: { tenantId, siteId: "ucsd.sharepoint.com,site", driveId: "driveA", folderId: "rootA" },
     [teamB]: { tenantId, siteId: "ucsd.sharepoint.com,site", driveId: "driveB", folderId: "rootB" },
   };
+  // Teams absent here are ready; a team that isn't has its storage withheld, as the service does.
+  const states: Record<string, TeamsResult["teams"][number]["state"]> = {};
   const projects = new Map([
     [projectId, "Grant reports"],
     [otherProject, "Personal notes"],
@@ -103,7 +105,7 @@ export function teamProjectFixture() {
                 name: teamId === teamA ? "Team A" : "Team B",
                 role: roles[teamId]![subject]!,
                 canManage: roles[teamId]![subject] === "owner",
-                state: "ready" as const,
+                state: states[teamId] ?? "ready",
                 revision: 1,
               })),
             invitations: [],
@@ -128,7 +130,7 @@ export function teamProjectFixture() {
             role,
             canManage: role === "owner",
             revision: 1,
-            state: "ready" as const,
+            state: states[teamId] ?? "ready",
             members: Object.entries(roles[teamId] ?? {}).map(([member, memberRole]) => ({
               identityId: identityOf(member),
               displayName: `${member[0]!.toUpperCase()}${member.slice(1)}`,
@@ -136,7 +138,7 @@ export function teamProjectFixture() {
               role: memberRole,
             })),
             invitations: [],
-            storage: storage[teamId]!,
+            storage: (states[teamId] ?? "ready") === "ready" ? storage[teamId]! : null,
           },
         });
       }),
@@ -307,6 +309,7 @@ export function teamProjectFixture() {
     writes,
     roles,
     storage,
+    states,
     projects,
     threads,
     values,

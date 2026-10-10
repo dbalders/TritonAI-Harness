@@ -5,6 +5,7 @@ import {
   MAX_TEAM_PROJECT_SKILL_CHARS,
   MAX_TEAM_PROJECT_SKILLS,
   type ProjectId,
+  type StuckTeamProjectLink,
   type TeamContextKind,
   type ThreadId,
   type TeamProjectCommand,
@@ -752,6 +753,74 @@ export const make = Effect.gen(function* () {
     return { projects: result, storage: null };
   });
 
+  /**
+   * Links in this environment that the caller can't use or unlink from a team page: their team
+   * isn't one the caller belongs to, or isn't ready. A link to a ready team is never listed.
+   */
+  const stuckLinks = Effect.fn("TeamProjectService.stuckLinks")(function* (sessionId: string) {
+    yield* signedInProfile(sessionId);
+    const teams = new Map(
+      (yield* account.teams(sessionId, { action: "list" })).teams.map(
+        (team) => [team.id, team] as const,
+      ),
+    );
+    const result: StuckTeamProjectLink[] = [];
+    for (const link of yield* readLinks) {
+      const team = teams.get(link.teamId);
+      if (team?.state === "ready") continue;
+      const project = yield* activeProject(link.projectId as ProjectId);
+      if (project)
+        result.push({
+          projectId: project.id,
+          projectTitle: project.title,
+          teamName: team?.name ?? null,
+          reason: team ? "held" : "no-access",
+          linkedAt: link.linkedAt,
+        });
+    }
+    return { projects: [], storage: null, stuckLinks: result };
+  });
+  /**
+   * Removes a link whose team the caller can't open or that isn't ready. The link is this
+   * environment's own record and removing it only reduces access, so it needs no team; a team the
+   * caller can open is unlinked from its page instead, so that stays the one ordinary path.
+   */
+  const removeLink = Effect.fn("TeamProjectService.removeLink")(function* (
+    sessionId: string,
+    projectId: ProjectId,
+  ) {
+    yield* signedInProfile(sessionId);
+    const link = yield* linkFor(projectId);
+    if (!link) return { projects: [], storage: null };
+    const team = yield* account.teams(sessionId, { action: "get", teamId: link.teamId }).pipe(
+      Effect.map((result) => result.team),
+      // A check that can't complete is not evidence the team is gone.
+      Effect.catch((error) => (lostTeam(error) ? Effect.succeed(null) : Effect.fail(error))),
+    );
+    if (team?.id === link.teamId && team.state === "ready")
+      return yield* new TeamsError({
+        code: "conflict",
+        message: "You can open this project's team now. Unlink the project from that team.",
+      });
+    return yield* lock.withPermits(1)(
+      Effect.gen(function* () {
+        const links = yield* readLinks;
+        const current = links.find((entry) => entry.projectId === projectId);
+        if (!current) return { projects: [], storage: null };
+        // A relink landed during the check: that link wasn't the one checked.
+        if (!sameLink(link, current))
+          return yield* new TeamsError({
+            code: "conflict",
+            message: "This project's team link changed. Refresh and try again.",
+          });
+        yield* writeLinks(links.filter((entry) => entry.projectId !== projectId));
+        // As with unlinking, skills turned on under the removed link never apply again.
+        yield* removeEnabled((entry) => entry.link.projectId === projectId);
+        return { projects: [], storage: null };
+      }),
+    );
+  });
+
   const attach = Effect.fn("TeamProjectService.attach")(function* (
     sessionId: string,
     command: Extract<TeamProjectCommand, { action: "memory-attach" | "skill-attach" }>,
@@ -893,6 +962,8 @@ export const make = Effect.gen(function* () {
       return yield* attach(sessionId, command);
     if (command.action === "memory-verify") return yield* verify(sessionId, command.references);
     if (command.action === "project-links") return yield* projectLinks(sessionId);
+    if (command.action === "stuck-links") return yield* stuckLinks(sessionId);
+    if (command.action === "remove-link") return yield* removeLink(sessionId, command.projectId);
     if (command.action === "skill-enabled")
       return yield* enabledSkills(sessionId, command.projectId);
     if (command.action === "skill-enable") return yield* enableSkill(sessionId, command);
@@ -923,7 +994,8 @@ export const make = Effect.gen(function* () {
           if (existing && existing.teamId !== team.id)
             return yield* new TeamsError({
               code: "conflict",
-              message: "This project is already linked to another team. Unlink it there first.",
+              message:
+                "This project is already linked to another team. Unlink it there first, or remove it under Stuck project links if you can't open that team.",
             });
           let next = links;
           if (!existing) {

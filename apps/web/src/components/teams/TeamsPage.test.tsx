@@ -37,7 +37,7 @@ vi.mock("../../state/environments", () => ({
 }));
 vi.mock("../../hooks/useUcsdAccount", () => ({ useUcsdAccount: vi.fn() }));
 vi.mock("./TeamSharedStorage", () => ({ TeamSharedStorage: () => null }));
-vi.mock("./TeamProjects", () => ({ TeamProjects: () => null }));
+vi.mock("./TeamProjects", () => ({ TeamProjects: () => null, StuckProjectLinks: () => null }));
 
 import { TeamWorkspace } from "./TeamsPage";
 
@@ -350,4 +350,76 @@ it("clears the review when access is refused", async () => {
   expect(container.querySelector('[role="alert"]')?.textContent).toBe(
     "Only team owners can do this.",
   );
+});
+
+const heldTeam = {
+  id: "77777777-8888-4999-8aaa-bbbbbbbbbbbb",
+  reference: "TEAM-HELD",
+  name: "Held",
+  role: "owner" as const,
+  canManage: true,
+  state: "needs-attention" as const,
+  revision: 7,
+};
+const pageButton = (text: string) =>
+  [...container.querySelectorAll("button")].find((entry) => entry.textContent === text);
+
+it("shows held teams only to administrators", async () => {
+  await renderWorkspace();
+  expect(container.textContent).not.toContain("Teams needing attention");
+  expect(mocks.calls).toEqual([]);
+});
+
+it("rechecks a held team only after confirmation, at its listed revision", async () => {
+  mocks.reply = (command) =>
+    command.action === "admin-list"
+      ? { ...teamResult(3), teams: [heldTeam], team: null }
+      : { ...teamResult(3), administrator: true };
+  await act(async () =>
+    root.render(<TeamWorkspace environmentId={EnvironmentId.make("env")} profile={profile} />),
+  );
+  expect(mocks.calls).toEqual([{ action: "list" }, { action: "admin-list" }]);
+  expect(container.textContent).toContain("TEAM-HELD · Needs attention");
+  mocks.calls = [];
+
+  await press(byLabel("Check Held again"));
+  expect(mocks.calls).toEqual([]);
+  expect(dialog()?.textContent).toContain("Check Held again?");
+  expect(dialog()?.textContent).toContain("isn’t applied");
+  await press(buttonNamed("Cancel"));
+  expect(mocks.calls).toEqual([]);
+
+  await press(byLabel("Check Held again"));
+  await press(buttonNamed("Check again"));
+  // The list reloads once the team is ready.
+  expect(mocks.calls).toEqual([
+    { action: "recheck", teamId: heldTeam.id, revision: 7 },
+    { action: "admin-list" },
+  ]);
+  expect(dialog()).toBeNull();
+});
+
+it("offers a refresh, not a second check, when a recheck isn't confirmed", async () => {
+  mocks.reply = (command) =>
+    command.action === "admin-list"
+      ? { ...teamResult(3), teams: [heldTeam], team: null }
+      : command.action === "recheck"
+        ? new TeamsError({ code: "unavailable", message: "Teams did not confirm this change." })
+        : { ...teamResult(3), administrator: true };
+  await act(async () =>
+    root.render(<TeamWorkspace environmentId={EnvironmentId.make("env")} profile={profile} />),
+  );
+  mocks.calls = [];
+  await press(byLabel("Check Held again"));
+  await press(buttonNamed("Check again"));
+  expect(dialog()?.textContent).toContain("Teams did not confirm this change.");
+  expect(buttonNamed("Check again")).toBeUndefined();
+  await press(buttonNamed("Refresh team"));
+  expect(dialog()).toBeNull();
+  expect(mocks.calls).toEqual([
+    { action: "recheck", teamId: heldTeam.id, revision: 7 },
+    { action: "get", teamId: heldTeam.id },
+    { action: "admin-list" },
+  ]);
+  expect(pageButton("Refresh list")).toBeDefined();
 });

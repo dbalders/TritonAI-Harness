@@ -57,6 +57,13 @@ export const TeamCommand = Schema.Union([
     revision: Schema.Int,
   }),
   Schema.Struct({ action: Schema.Literal("leave"), teamId: Id, revision: Schema.Int }),
+  /** Administrators only: every team that isn't ready, in `teams`. */
+  Schema.Struct({ action: Schema.Literal("admin-list") }),
+  /**
+   * Administrators only: rechecks a held team's folder permissions against its recorded members
+   * and, when they verify, makes it ready. A join or promotion that didn't finish isn't applied.
+   */
+  Schema.Struct({ action: Schema.Literal("recheck"), teamId: Id, revision: Schema.Int }),
 ]);
 export type TeamCommand = typeof TeamCommand.Type;
 export const TeamMember = Schema.Struct({
@@ -102,6 +109,8 @@ export const TeamsResult = Schema.Struct({
   invitations: Schema.Array(TeamInvitation),
   team: Schema.NullOr(TeamDetail),
   invitationCode: Schema.NullOr(Schema.String),
+  /** Whether the caller is a Teams administrator; absent means no. */
+  administrator: Schema.optionalKey(Schema.Boolean),
 });
 export type TeamsResult = typeof TeamsResult.Type;
 export class TeamsError extends Schema.TaggedError<TeamsError>()("TeamsError", {
@@ -400,6 +409,13 @@ export const TeamProjectCommand = Schema.Union([
   }),
   /** Every project in this environment linked to a team the caller can open now. */
   Schema.Struct({ action: Schema.Literal("project-links") }),
+  /** Projects in this environment linked to a team the caller can't open, or one that isn't ready. */
+  Schema.Struct({ action: Schema.Literal("stuck-links") }),
+  /**
+   * Removes a stuck link without opening its team, turning its skills off for everyone. Refused
+   * while the caller can open the team, which unlinks it from the team instead.
+   */
+  Schema.Struct({ action: Schema.Literal("remove-link"), projectId: ProjectId }),
   /**
    * The skills the caller turned on for a project, each checked now against the caller's access
    * and the skill's current version.
@@ -492,6 +508,16 @@ export const TeamProjectLink = Schema.Struct({
   linkedAt: Schema.String,
 });
 export type TeamProjectLink = typeof TeamProjectLink.Type;
+/** A project link whose team the caller can't open (`no-access`) or that isn't ready (`held`). */
+export const StuckTeamProjectLink = Schema.Struct({
+  projectId: ProjectId,
+  projectTitle: Schema.String,
+  /** Known only while the caller still belongs to the team. */
+  teamName: Schema.NullOr(Schema.String),
+  reason: Schema.Literals(["no-access", "held"]),
+  linkedAt: Schema.String,
+});
+export type StuckTeamProjectLink = typeof StuckTeamProjectLink.Type;
 /** Team text issued for one draft; `block` is exactly what the composer inserts. */
 export const TeamMemoryReference = Schema.Struct({
   id: Id,
@@ -542,5 +568,7 @@ export const TeamProjectResult = Schema.Struct({
    * and skill lists and previews. Former members are absent.
    */
   authors: Schema.optionalKey(Schema.Record(Identity, Schema.String)),
+  /** From `stuck-links`. */
+  stuckLinks: Schema.optionalKey(Schema.Array(StuckTeamProjectLink)),
 });
 export type TeamProjectResult = typeof TeamProjectResult.Type;

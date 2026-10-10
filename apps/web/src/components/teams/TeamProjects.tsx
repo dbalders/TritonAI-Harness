@@ -3,6 +3,7 @@ import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime"
 import type {
   EnvironmentId,
   ProjectId,
+  StuckTeamProjectLink,
   TeamProjectCommand,
   TeamProjectLink,
   TeamProjectResult,
@@ -230,6 +231,80 @@ export function TeamProjects({
           canWrite={canWrite}
         />
       ) : null}
+    </section>
+  );
+}
+
+/**
+ * Projects in this environment linked to a team the signed-in account can't open, or one that
+ * isn't ready. No team page can unlink them, so this is their way out. Shows nothing without any.
+ */
+export function StuckProjectLinks({ environmentId }: { environmentId: EnvironmentId }) {
+  const { run, busy, error } = useTeamProjectRequest(environmentId);
+  const [links, setLinks] = useState<readonly StuckTeamProjectLink[]>([]);
+  const [confirmRemove, setConfirmRemove] = useState<ProjectId | null>(null);
+  useEffect(() => {
+    void run({ action: "stuck-links" }).then((result) => {
+      if (result && !("error" in result)) setLinks(result.stuckLinks ?? []);
+    });
+  }, [run]);
+  const remove = async (projectId: ProjectId) => {
+    const result = await run({ action: "remove-link", projectId });
+    if (!result) return;
+    setConfirmRemove(null);
+    if (!("error" in result))
+      setLinks((current) => current.filter((link) => link.projectId !== projectId));
+  };
+  if (!links.length) return null;
+  return (
+    <section className="space-y-3 rounded-xl border border-border p-4">
+      <div className="space-y-1">
+        <h3 className="font-medium">Stuck project links</h3>
+        <p className="text-xs text-muted-foreground">
+          These projects are linked to a team you can’t open, or one waiting for an administrator
+          check, so their team memory and skills can’t be used. Removing a link turns its team
+          skills off for everyone using the project. You can then link the project to a team again.
+        </p>
+      </div>
+      {error ? (
+        <p role="alert" className="text-sm text-destructive">
+          {error}
+        </p>
+      ) : null}
+      <ul className="divide-y divide-border rounded-lg border border-border px-3">
+        {links.map((link) => (
+          <li key={link.projectId} className="flex flex-wrap items-center gap-2 py-2">
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm">{link.projectTitle}</p>
+              <p className="text-xs text-muted-foreground">
+                {link.reason === "held"
+                  ? `${link.teamName ?? "Its team"} is waiting for an administrator check`
+                  : "Linked to a team you can’t open"}
+              </p>
+            </div>
+            {confirmRemove === link.projectId ? (
+              <Button
+                size="sm"
+                variant="destructive"
+                disabled={busy}
+                onClick={() => void remove(link.projectId)}
+              >
+                Confirm remove
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={busy}
+                aria-label={`Remove team link from ${link.projectTitle}`}
+                onClick={() => setConfirmRemove(link.projectId)}
+              >
+                Remove link
+              </Button>
+            )}
+          </li>
+        ))}
+      </ul>
     </section>
   );
 }

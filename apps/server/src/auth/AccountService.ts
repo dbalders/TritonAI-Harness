@@ -547,7 +547,9 @@ export const make = (
                   code: "unavailable",
                   // An unanswered change can still be running on the account service.
                   message:
-                    command.action === "list" || command.action === "get"
+                    command.action === "list" ||
+                    command.action === "get" ||
+                    command.action === "admin-list"
                       ? "Teams could not be reached. Refresh before retrying a change."
                       : "Teams did not confirm this change, and it may still be in progress. Refresh before trying again.",
                 }),

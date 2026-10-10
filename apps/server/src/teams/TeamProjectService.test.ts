@@ -1138,3 +1138,95 @@ describe("Team skills turned on for a project", () => {
     }),
   );
 });
+
+describe("Stuck project links", () => {
+  const skillPath = `Skills/${identityOf("alice")}/${deviceId}/${recordId}.md`;
+  const skillText = "# Grant summary\n\nDescription: Summarize a report.\n\nUse the 2025 template.";
+  const stuck = (service: TeamProject.TeamProjectService["Service"]) =>
+    service.execute("s", { action: "stuck-links" }).pipe(Effect.map((result) => result.stuckLinks));
+  const savedSkills = (values: Map<string, Uint8Array>) =>
+    JSON.parse(new TextDecoder().decode(values.get("team-project-skills"))) as unknown[];
+
+  it.effect("removes a link to a team the caller lost, so the project can link elsewhere", () =>
+    Effect.gen(function* () {
+      const f = fixture();
+      const { service, connect } = yield* f.make;
+      yield* connect(teamA);
+      yield* service.execute("s", { action: "bind", teamId: teamA, projectId });
+      f.contents.set(`rootA:${skillPath}`, skillText);
+      yield* service.execute("s", {
+        action: "skill-enable",
+        projectId,
+        path: skillPath,
+        version: NodeCrypto.createHash("sha256").update(skillText).digest("hex"),
+      });
+      expect(yield* stuck(service)).toEqual([]);
+      // A team the caller can open is unlinked from its page, not removed here.
+      expect(yield* code(service.execute("s", { action: "remove-link", projectId }))).toBe(
+        "conflict",
+      );
+      expect(savedSkills(f.values)).toHaveLength(1);
+
+      delete f.roles[teamA]!.alice;
+      f.roles[teamB]!.alice = "owner";
+      expect(yield* stuck(service)).toEqual([
+        expect.objectContaining({ projectId, teamName: null, reason: "no-access" }),
+      ]);
+      // Without it the project is stuck: its team can't be opened to unlink it, and it can't move.
+      expect(
+        yield* code(service.execute("s", { action: "unbind", teamId: teamA, projectId })),
+      ).toBe("not_found");
+      expect(yield* code(service.execute("s", { action: "bind", teamId: teamB, projectId }))).toBe(
+        "conflict",
+      );
+
+      yield* service.execute("s", { action: "remove-link", projectId });
+      expect(yield* stuck(service)).toEqual([]);
+      expect(savedSkills(f.values)).toEqual([]);
+      const relinked = yield* service.execute("s", { action: "bind", teamId: teamB, projectId });
+      expect(relinked.projects).toEqual([expect.objectContaining({ projectId, teamId: teamB })]);
+    }),
+  );
+
+  it.effect("removes a held team's link only once the team has been checked", () =>
+    Effect.gen(function* () {
+      const f = fixture();
+      const { service, connect } = yield* f.make;
+      yield* connect(teamA);
+      yield* service.execute("s", { action: "bind", teamId: teamA, projectId });
+      f.states[teamA] = "needs-attention";
+      expect(yield* code(service.execute("s", { action: "memory-list", projectId }))).toBe(
+        "unavailable",
+      );
+      expect(yield* stuck(service)).toEqual([
+        expect.objectContaining({ projectId, teamName: "Team A", reason: "held" }),
+      ]);
+      // An unreachable membership service is not evidence the team is gone.
+      f.setTeamsDown(true);
+      expect(yield* code(stuck(service))).toBe("unavailable");
+      expect(yield* code(service.execute("s", { action: "remove-link", projectId }))).toBe(
+        "unavailable",
+      );
+      f.setTeamsDown(false);
+      expect(yield* stuck(service)).toHaveLength(1);
+      // A relink that lands during the check wins over the removal.
+      f.afterMembershipRead(() => {
+        const links = JSON.parse(new TextDecoder().decode(f.values.get("team-project-links"))) as {
+          linkedAt: string;
+        }[];
+        links[0]!.linkedAt = "2026-10-10T00:00:00.000Z";
+        f.values.set("team-project-links", new TextEncoder().encode(JSON.stringify(links)));
+      });
+      expect(yield* code(service.execute("s", { action: "remove-link", projectId }))).toBe(
+        "conflict",
+      );
+      expect(yield* stuck(service)).toHaveLength(1);
+      yield* service.execute("s", { action: "remove-link", projectId });
+      expect(yield* stuck(service)).toEqual([]);
+      f.states[teamA] = "ready";
+      expect(yield* code(service.execute("s", { action: "memory-list", projectId }))).toBe(
+        "not_found",
+      );
+    }),
+  );
+});

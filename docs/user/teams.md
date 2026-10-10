@@ -32,7 +32,12 @@ it. To remove yourself, use **Leave team**. If a confirmed change fails or
 Teams doesn't answer, the change may still be in progress, so the dialog
 offers **Refresh team** instead of a second try. Renaming preserves the team reference and its files. If a
 membership change reports that permissions need checking, contact your
-administrator; access is not confirmed until the check succeeds.
+administrator; access is not confirmed until the check succeeds. Teams
+administrators see **Teams needing attention** on the Teams page and can choose
+**Check again**, which verifies the team folder's permissions against the
+team's recorded members and makes the team ready if they match. A join or role
+promotion that didn't finish isn't applied: the person accepts the invitation
+again, or an owner repeats the change.
 
 Connect the matching UCSD Microsoft account to open shared storage. Publish a
 work summary, SOP, or skill document explicitly; all team members can read it.
@@ -57,7 +62,11 @@ choose a project in this Harness environment under **Team projects**, and
 select **Link to team**. Then choose **Open team memory** or **Open team
 skills** to read the team's work summaries or skill documents and publish new
 ones labeled with that project. Each project links to one team; unlink it before
-linking it to a different team. Linking does not share the project's files or
+linking it to a different team. If you leave or lose access to a team, or its
+team needs an administrator check, its projects appear under **Stuck project
+links** on the Teams page. Choose **Remove link** to free a project so you can
+link it again. Removing a link turns that project's team skills off for
+everyone. Linking does not share the project's files or
 chats, and other members link their own projects. Every read and save checks
 your current UCSD account and team role, so removed members and accounts outside
 the team cannot use the link. Team memory is never added to agent

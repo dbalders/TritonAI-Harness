@@ -1,7 +1,8 @@
 import { TeamSharedStorage } from "./TeamSharedStorage";
-import { TeamProjects } from "./TeamProjects";
+import { StuckProjectLinks, TeamProjects } from "./TeamProjects";
+import { HeldTeams, type HeldTeam } from "./TeamAdmin";
 // @effect-diagnostics cryptoRandomUUID:off - Browser event creates a retry-stable request ID before dispatch.
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createTeamsController } from "@t3tools/client-runtime/state/server";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type {
@@ -311,16 +312,16 @@ export function TeamWorkspace({
   linkProjectId?: ProjectId | null;
 }) {
   const request = useAtomCommand(serverEnvironment.teams, { reportFailure: false });
-  const controller = useMemo(
-    () =>
-      createTeamsController(async (input) => {
-        const response = await request({ environmentId, input });
-        if (response._tag === "Success") return response.value;
-        const error = squashAtomCommandFailure(response);
-        throw error instanceof Error ? error : new Error("Teams could not be reached.");
-      }),
+  const execute = useCallback(
+    async (input: TeamCommand) => {
+      const response = await request({ environmentId, input });
+      if (response._tag === "Success") return response.value;
+      const error = squashAtomCommandFailure(response);
+      throw error instanceof Error ? error : new Error("Teams could not be reached.");
+    },
     [environmentId, request],
   );
+  const controller = useMemo(() => createTeamsController(execute), [execute]);
   const { result, busy, error } = useSyncExternalStore(
     controller.subscribe,
     controller.getSnapshot,
@@ -396,6 +397,46 @@ export function TeamWorkspace({
     dismissReview();
     void run({ action: "get", teamId: team.id });
   };
+  const administrator = result?.administrator === true;
+  // Remounting the held-teams list reloads it after a recheck settles.
+  const [heldVersion, setHeldVersion] = useState(0);
+  const [recheck, setRecheck] = useState<HeldTeam | null>(null);
+  const [recheckFailed, setRecheckFailed] = useState(false);
+  const openRecheck = (target: HeldTeam) => {
+    if (busy) return;
+    setRecheckFailed(false);
+    setRecheck(target);
+  };
+  const confirmRecheck = () => {
+    if (!recheck || controller.getSnapshot().busy) return;
+    setRecheckFailed(false);
+    void run({ action: "recheck", teamId: recheck.id, revision: recheck.revision }).then((ok) => {
+      if (!ok) {
+        setRecheckFailed(true);
+        return;
+      }
+      setRecheck(null);
+      setHeldVersion((version) => version + 1);
+    });
+  };
+  // A failed recheck may still be running, so it is never retried against the same revision.
+  const refreshAfterRecheck = () => {
+    if (!recheck) return;
+    const teamId = recheck.id;
+    setRecheck(null);
+    setHeldVersion((version) => version + 1);
+    void run({ action: "get", teamId });
+  };
+  const recheckCopy: MembershipReviewCopy | null = recheck
+    ? {
+        title: `Check ${recheck.name} again?`,
+        description: `Teams verifies the ${recheck.reference} folder’s SharePoint permissions against the team’s recorded members, and makes the team ready if they match. A join or promotion that didn’t finish isn’t applied: the person accepts again, or an owner repeats the change.`,
+        confirm: "Check again",
+        working: "Checking…",
+        dismiss: "Cancel",
+        destructive: false,
+      }
+    : null;
   const copy = async (text: string, message: string) => {
     try {
       await navigator.clipboard.writeText(text);
@@ -569,6 +610,19 @@ export function TeamWorkspace({
               {codeError}
             </p>
           ) : null}
+          <StuckProjectLinks
+            key={result.teams.map((entry) => `${entry.id}:${entry.state}`).join()}
+            environmentId={environmentId}
+          />
+          {administrator ? (
+            <HeldTeams
+              key={heldVersion}
+              execute={execute}
+              disabled={busy}
+              onOpen={(teamId) => void run({ action: "get", teamId })}
+              onRecheck={openRecheck}
+            />
+          ) : null}
         </>
       ) : busy ? (
         <p role="status" className="text-sm text-muted-foreground">
@@ -595,8 +649,9 @@ export function TeamWorkspace({
           </div>
           {team.state !== "ready" ? (
             <p role="status" className="text-sm">
-              This team’s storage permissions need to be verified before it can be used. Give a
-              system administrator the team reference above.
+              {administrator
+                ? "This team’s storage permissions need to be verified before it can be used. Use Check again under Teams needing attention."
+                : "This team’s storage permissions need to be verified before it can be used. Give a system administrator the team reference above."}
             </p>
           ) : (
             <p className="text-sm text-muted-foreground">
@@ -824,6 +879,14 @@ export function TeamWorkspace({
         onDismiss={dismissReview}
         onConfirm={confirmReview}
         onRefresh={reviewFailed ? refreshAfterFailure : null}
+      />
+      <MembershipReviewDialog
+        copy={recheckCopy}
+        busy={busy}
+        error={recheckFailed ? error : null}
+        onDismiss={() => setRecheck(null)}
+        onConfirm={confirmRecheck}
+        onRefresh={recheckFailed ? refreshAfterRecheck : null}
       />
       {copied ? (
         <p role="status" className="text-sm text-muted-foreground">
