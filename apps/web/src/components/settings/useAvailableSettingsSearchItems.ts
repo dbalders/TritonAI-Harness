@@ -9,11 +9,12 @@ import { hasCloudPublicConfig } from "~/cloud/publicConfig";
 import { isElectron } from "~/env";
 import { isLocalEnvironmentDisabled } from "~/localEnvironment";
 import { desktopWslStateAtom } from "~/state/desktopWslState";
-import { useEnvironments } from "~/state/environments";
+import { useEnvironments, usePrimaryEnvironmentId } from "~/state/environments";
 import { useEnvironmentQuery } from "~/state/query";
 import { usePrimarySessionState } from "~/environments/primary";
 import { isWslSettingsRowVisible } from "./ConnectionsSettings.logic";
 import { isProviderSettingsEnvironmentAvailable } from "./ProviderSettingsPanel.logic";
+import { useTeamsConfigured } from "../teams/useTeamsConfigured";
 import type { SettingsScopeSearch } from "./settingsScope";
 import {
   filterAvailableSettingsSearchItems,
@@ -24,6 +25,7 @@ export function useAvailableSettingsSearchItems(scopeSearch: SettingsScopeSearch
   const stageLabel = useEnvironmentStageLabel();
   const { environments } = useEnvironments();
   const primarySessionState = usePrimarySessionState();
+  const hasTeams = useTeamsConfigured(usePrimaryEnvironmentId());
   const localEnvironmentDisabled = isLocalEnvironmentDisabled();
   const desktopWsl = useEnvironmentQuery(
     isElectron && !localEnvironmentDisabled ? desktopWslStateAtom : null,
@@ -65,6 +67,7 @@ export function useAvailableSettingsSearchItems(scopeSearch: SettingsScopeSearch
         }),
         hasThreadAutoSettlement:
           getThreadAutoSettlementSearchAvailability(environments).eligibleEnvironmentIds.length > 0,
+        hasTeams,
       }),
     [
       stageLabel,
@@ -72,6 +75,7 @@ export function useAvailableSettingsSearchItems(scopeSearch: SettingsScopeSearch
       desktopWsl.data,
       desktopWsl.error,
       environments,
+      hasTeams,
       localEnvironmentDisabled,
       scopeSearch.machine,
     ],

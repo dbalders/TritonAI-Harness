@@ -4,9 +4,16 @@ import { TeamProjects } from "./TeamProjects";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createTeamsController } from "@t3tools/client-runtime/state/server";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-import type { AccountProfile, EnvironmentId, TeamCommand, TeamRole } from "@t3tools/contracts";
+import type {
+  AccountProfile,
+  EnvironmentId,
+  ProjectId,
+  TeamCommand,
+  TeamRole,
+} from "@t3tools/contracts";
 import { LockKeyholeIcon, UsersIcon } from "lucide-react";
 import { useUcsdAccount } from "../../hooks/useUcsdAccount";
+import { useProject } from "../../state/entities";
 import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -39,11 +46,19 @@ import {
   membershipReviewCopy,
 } from "./teamMembershipReview";
 
-export function TeamsPage() {
+export function TeamsPage({
+  linkProject,
+}: {
+  /** Opens on this project's environment with the project chosen in each team's link form. */
+  linkProject: { environmentId: EnvironmentId; projectId: ProjectId } | null;
+}) {
   const { environments } = useEnvironments();
   const primary = usePrimaryEnvironmentId();
-  const [selected, setSelected] = useState<EnvironmentId | null>(null);
+  const [selected, setSelected] = useState<EnvironmentId | null>(
+    linkProject?.environmentId ?? null,
+  );
   const environmentId = selected ?? primary;
+  const linkProjectTitle = useProject(linkProject)?.title ?? null;
   return (
     <SidebarInset>
       <WorkspacePageHeader electron={isElectron}>
@@ -81,8 +96,20 @@ export function TeamsPage() {
               </label>
             ) : null}
           </div>
+          {linkProjectTitle !== null && environmentId === linkProject?.environmentId ? (
+            <p className="text-sm text-muted-foreground">
+              To link {linkProjectTitle}, open a team below and choose <strong>Link to team</strong>{" "}
+              under Team projects.
+            </p>
+          ) : null}
           {environmentId ? (
-            <TeamAccount key={environmentId} environmentId={environmentId} />
+            <TeamAccount
+              key={environmentId}
+              environmentId={environmentId}
+              linkProjectId={
+                environmentId === linkProject?.environmentId ? linkProject.projectId : null
+              }
+            />
           ) : (
             <p>Connect to an environment to use Teams.</p>
           )}
@@ -92,7 +119,13 @@ export function TeamsPage() {
   );
 }
 
-function TeamAccount({ environmentId }: { environmentId: EnvironmentId }) {
+function TeamAccount({
+  environmentId,
+  linkProjectId,
+}: {
+  environmentId: EnvironmentId;
+  linkProjectId: ProjectId | null;
+}) {
   const { account, busy, error, controller } = useUcsdAccount(environmentId);
   const signedIn = account?.status === "signed-in" && account.profile;
   return (
@@ -162,6 +195,7 @@ function TeamAccount({ environmentId }: { environmentId: EnvironmentId }) {
           key={`${account.profile!.issuer}:${account.profile!.subject}`}
           environmentId={environmentId}
           profile={account.profile!}
+          linkProjectId={linkProjectId}
         />
       ) : null}
     </>
@@ -270,9 +304,11 @@ function MembershipReviewDialog({
 export function TeamWorkspace({
   environmentId,
   profile,
+  linkProjectId = null,
 }: {
   environmentId: EnvironmentId;
   profile: AccountProfile;
+  linkProjectId?: ProjectId | null;
 }) {
   const request = useAtomCommand(serverEnvironment.teams, { reportFailure: false });
   const controller = useMemo(
@@ -581,6 +617,7 @@ export function TeamWorkspace({
               key={`${team.id}:${team.storage?.folderId ?? ""}`}
               environmentId={environmentId}
               teamId={team.id}
+              linkProjectId={linkProjectId}
               canWrite={team.role !== "reader" || team.canManage}
             />
           ) : null}

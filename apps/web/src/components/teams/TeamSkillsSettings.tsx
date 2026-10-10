@@ -13,6 +13,7 @@ import { UsersIcon } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useOptionalSettingsScope } from "../settings/SettingsScopeContext";
 import { SettingsRow, SettingsSection } from "../settings/settingsLayout";
+import { searchableSetting } from "../settings/settingsSearch";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import {
@@ -53,7 +54,10 @@ export function TeamSkillsSettingsSection() {
       ? scope.scope.group.displayName
       : null;
   return (
-    <SettingsSection title="Team Skills" icon={<UsersIcon className="size-3.5" />}>
+    <SettingsSection
+      {...searchableSetting("team-skills")}
+      icon={<UsersIcon className="size-3.5" />}
+    >
       {projectTitle !== null ? (
         projectTargets.length === 0 ? (
           <SettingsRow

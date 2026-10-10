@@ -258,6 +258,7 @@ import {
 import { cn, randomHex, randomUUID } from "~/lib/utils";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { ShareToTeamDialog, TeamContextDialog } from "./teams/ThreadTeamDialogs";
+import { onOpenThreadTeamDialog } from "./teams/threadTeamDialogBus";
 import {
   addDraftTeamMemory,
   beginDraftTeamMemorySend,
@@ -2278,6 +2279,15 @@ export default function ChatView(props: ChatViewProps) {
     [activeThread?.environmentId, activeThread?.projectId],
   );
   const activeProject = useProject(activeProjectRef);
+  // The command palette opens this thread's team dialogs through the same state as the header.
+  const teamDialogsAvailable = isServerThread && activeProject !== null;
+  useEffect(
+    () =>
+      onOpenThreadTeamDialog((request) => {
+        if (teamDialogsAvailable && request.threadId === activeThreadId) setTeamDialog(request);
+      }),
+    [activeThreadId, teamDialogsAvailable],
+  );
   // Environment settings with the active project's overrides applied.
   const activeProjectSettings = useMemo(
     () => resolveProjectSettings(settings, activeProject?.id ?? null, activeProject ?? undefined),

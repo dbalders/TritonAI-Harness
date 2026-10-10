@@ -2,7 +2,10 @@
 
 Open **Teams** in the sidebar and sign in with UC San Diego. Your administrator
 must enable your account and the team storage service for this staff pilot.
-Teams is available in the web and desktop clients.
+Teams is available in the web and desktop clients. Once Teams is set up, the
+command palette offers **Open Teams**, **Link project to a team** for the
+current project, and, in a project thread, the share, team memory, and team
+skill actions described below.
 
 Create a team, or accept a pending invitation in Teams. Owners invite specific
 UCSD addresses; creating an invitation sends no email and grants no access.

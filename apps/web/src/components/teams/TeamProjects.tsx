@@ -66,16 +66,19 @@ export function useTeamProjectRequest(environmentId: EnvironmentId) {
 export function TeamProjects({
   environmentId,
   teamId,
+  linkProjectId,
   canWrite,
 }: {
   environmentId: EnvironmentId;
   teamId: string;
+  /** Chosen in the link form when it can still be linked. */
+  linkProjectId: ProjectId | null;
   canWrite: boolean;
 }) {
   const { run, busy, error } = useTeamProjectRequest(environmentId);
   const projects = useProjects();
   const [links, setLinks] = useState<readonly TeamProjectLink[] | null>(null);
-  const [choice, setChoice] = useState<string>("");
+  const [preferredChoice, setChoice] = useState<string>(linkProjectId ?? "");
   const [open, setOpen] = useState<{ projectId: ProjectId; kind: "memory" | "skill" } | null>(null);
   const [confirmUnlink, setConfirmUnlink] = useState<ProjectId | null>(null);
   const apply = useCallback(
@@ -101,6 +104,7 @@ export function TeamProjects({
   const available = projects.filter(
     (project) => project.environmentId === environmentId && !linked.has(project.id),
   );
+  const choice = available.some((project) => project.id === preferredChoice) ? preferredChoice : "";
   const openLink = links?.find((link) => link.projectId === open?.projectId) ?? null;
   const toggle = (projectId: ProjectId, kind: "memory" | "skill") =>
     setOpen(open?.projectId === projectId && open.kind === kind ? null : { projectId, kind });
