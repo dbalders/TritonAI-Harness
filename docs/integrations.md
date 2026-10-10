@@ -42,11 +42,14 @@ Every tool also declares `effect: "read" | "write"`, which must agree with the p
 metadata. Write tools follow the task's selected runtime mode: supervised modes request approval,
 while Full access preauthorizes them.
 
-A Codex approval prompt shows the tool name and, when present, the call's string `summary`
-argument. A write tool that accepts `summary` must reject any value that does not exactly match the
-change it will make, typically a summary the provider generated in an earlier preview, because the
-agent supplies the argument. Choosing **Always allow this session** or Full access skips later prompts for
-that tool.
+Codex and Claude approval prompts for a Harness tool show its name and the call's actual
+arguments, one bounded line each, with secret-looking arguments hidden
+([formatter](../apps/server/src/integrations/IntegrationToolPreview.ts)). A call with a non-empty
+string `summary` argument shows that summary alone instead, so a write tool that accepts `summary`
+must reject any value that does not exactly match the change it will make, typically a summary the
+provider generated in an earlier preview. ACP providers (Cursor, Grok, Antigravity) and OpenCode
+still show their own permission titles, because their requests do not reliably identify a Harness
+tool. Choosing **Always allow this session** or Full access skips later prompts for that tool.
 
 The Registry passes that approval only to declared write tools and runs each write through the same
 bounded commit-admission machinery used by provider lifecycle mutations. A write provider must call

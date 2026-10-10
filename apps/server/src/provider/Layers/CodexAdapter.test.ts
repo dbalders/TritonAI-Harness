@@ -3379,48 +3379,52 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
     }),
   );
 
-  it.effect("shows a dynamic tool's change summary under its name in the approval", () =>
-    Effect.gen(function* () {
-      const { adapter, runtime } = yield* startLifecycleRuntime();
-      const events = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 3)).pipe(
-        Effect.forkChild,
-      );
+  it.effect(
+    "shows a dynamic tool's arguments or change summary under its name in the approval",
+    () =>
+      Effect.gen(function* () {
+        const { adapter, runtime } = yield* startLifecycleRuntime();
+        const events = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 4)).pipe(
+          Effect.forkChild,
+        );
 
-      const emitCall = (id: string, args: unknown) =>
-        runtime.emit({
-          id: asEventId(`evt-${id}`),
-          kind: "request",
-          provider: ProviderDriverKind.make("codex"),
-          threadId: asThreadId("thread-1"),
-          createdAt: "2026-10-09T00:00:00.000Z",
-          method: "item/tool/call",
-          requestKind: "command",
-          requestId: ApprovalRequestId.make(`req-${id}`),
-          turnId: asTurnId("turn-1"),
-          payload: {
-            arguments: args,
-            callId: `call-${id}`,
-            threadId: "provider-thread-1",
-            tool: "jira_changes_apply",
-            turnId: "turn-1",
-          },
-        } satisfies ProviderEvent);
-      yield* emitCall("summary", {
-        planId: "plan",
-        summary: 'Move ITS-1 "Printer is down" from "In Progress" to "Resolved" (Resolve)',
-      });
-      yield* emitCall("blank", { summary: "   " });
-      yield* emitCall("long", { summary: "x".repeat(700) });
+        const emitCall = (id: string, args: unknown) =>
+          runtime.emit({
+            id: asEventId(`evt-${id}`),
+            kind: "request",
+            provider: ProviderDriverKind.make("codex"),
+            threadId: asThreadId("thread-1"),
+            createdAt: "2026-10-09T00:00:00.000Z",
+            method: "item/tool/call",
+            requestKind: "command",
+            requestId: ApprovalRequestId.make(`req-${id}`),
+            turnId: asTurnId("turn-1"),
+            payload: {
+              arguments: args,
+              callId: `call-${id}`,
+              threadId: "provider-thread-1",
+              tool: "jira_changes_apply",
+              turnId: "turn-1",
+            },
+          } satisfies ProviderEvent);
+        yield* emitCall("summary", {
+          planId: "plan",
+          summary: 'Move ITS-1 "Printer is down" from "In Progress" to "Resolved" (Resolve)',
+        });
+        yield* emitCall("blank", { summary: "   " });
+        yield* emitCall("long", { summary: "x".repeat(700) });
+        yield* emitCall("arguments", { issueKey: "ITS-1", body: "Replaced the toner." });
 
-      const details = Array.from(yield* Fiber.join(events), (event) =>
-        event.type === "request.opened" ? event.payload.detail : undefined,
-      );
-      NodeAssert.deepEqual(details, [
-        'jira_changes_apply\nMove ITS-1 "Printer is down" from "In Progress" to "Resolved" (Resolve)',
-        "jira_changes_apply",
-        `jira_changes_apply\n${"x".repeat(600)}…`,
-      ]);
-    }),
+        const details = Array.from(yield* Fiber.join(events), (event) =>
+          event.type === "request.opened" ? event.payload.detail : undefined,
+        );
+        NodeAssert.deepEqual(details, [
+          'jira_changes_apply\nMove ITS-1 "Printer is down" from "In Progress" to "Resolved" (Resolve)',
+          "jira_changes_apply",
+          `jira_changes_apply\n${"x".repeat(600)}…`,
+          'jira_changes_apply\nissueKey: "ITS-1"\nbody: "Replaced the toner."',
+        ]);
+      }),
   );
 
   it.effect("prefers the edited files over a blank apply-patch reason", () =>
