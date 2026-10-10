@@ -23,7 +23,7 @@ concurrency:
   group: harness-nightly
   cancel-in-progress: false
 env:
-  TRITONAI_INSTALLER_COMPOSITION_COMMIT: 0c12d6f2294ae4e750222778a96156a0e05deac2
+  TRITONAI_INSTALLER_COMPOSITION_COMMIT: 1f1e820b450e073a54ced0873bc51d74b38f63bb
 jobs:
   preflight:
     runs-on: ubuntu-24.04
@@ -149,7 +149,7 @@ jobs:
         run: |-
           set -euo pipefail
           vp exec tsc --project .release-input/installer/tsconfig.plugin-producer.json --typeRoots "$GITHUB_WORKSPACE/node_modules/@types"
-          node .release-input/installer/dist/scripts/prepare-plugins-vendor.js --production
+          node .release-input/installer/dist/scripts/prepare-plugins-vendor.js --production --nightly
       - name: Upload exact pinned composition before provider execution
         uses: actions/upload-artifact@v7
         with:

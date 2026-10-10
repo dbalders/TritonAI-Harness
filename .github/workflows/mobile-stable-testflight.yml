@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Published stable tag to build or retry; leave empty for current main
+        description: Published stable tag to build or retry; leave empty for initial main setup
         required: false
         type: string
   release:
@@ -42,6 +42,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           path: automation
+          ref: main
           persist-credentials: false
 
       - name: Resolve stable release or initial main source
@@ -107,11 +108,13 @@ jobs:
           generator_sha="$(git -C ../automation rev-parse HEAD)"
           previous="$(git -c credential.helper='!gh auth git-credential' ls-remote origin refs/heads/mobile-stable | cut -f1)"
           parents=(-p "$SOURCE_SHA")
+          previous_receipt="null"
           if [ -n "$previous" ]; then
             git -c credential.helper='!gh auth git-credential' fetch origin "$previous"
+            previous_receipt="$(git show "$previous:apps/mobile/ios/ci_scripts/stable-source.json")"
             if [ "$MANUAL_REBUILD" != true ]; then
               if git show "$previous:apps/mobile/ios/ci_scripts/stable-source.json" | \
-                jq -e --arg tag "$RELEASE_TAG" --arg sha "$SOURCE_SHA" '.tag == $tag and .sourceSha == $sha' >/dev/null; then
+                jq -e --arg tag "$RELEASE_TAG" --arg sha "$SOURCE_SHA" '.tag == $tag and .sourceSha == $sha and .marketingVersion != null' >/dev/null; then
                 echo "Stable release already prepared for Xcode Cloud"
                 echo "commit=$previous" >> "$GITHUB_OUTPUT"
                 exit 0
@@ -119,7 +122,20 @@ jobs:
             fi
             parents=(-p "$previous" -p "$SOURCE_SHA")
           fi
-          tree="$(node ../automation/.github/scripts/prepare-mobile-native.cjs "$PWD" "$RELEASE_TAG" "$SOURCE_SHA" "$generator_sha" production)"
+          export PREVIOUS_RECEIPT="$previous_receipt"
+          marketing_version="$(node - <<'NODE'
+          const fs = require('node:fs');
+          const { nextMarketingVersion } = require('../automation/.github/scripts/stable-ios-review.cjs');
+          const config = fs.readFileSync('apps/mobile/app.config.ts', 'utf8');
+          const configuredVersion = config.match(/version:\s*"(\d+\.\d+\.\d+)"/)?.[1];
+          if (!configuredVersion) throw new Error('Cannot resolve mobile marketing version');
+          console.log(nextMarketingVersion({
+            tag: process.env.RELEASE_TAG, sourceSha: process.env.SOURCE_SHA,
+            configuredVersion, previous: JSON.parse(process.env.PREVIOUS_RECEIPT),
+          }));
+          NODE
+          )"
+          tree="$(node ../automation/.github/scripts/prepare-mobile-native.cjs "$PWD" "$RELEASE_TAG" "$SOURCE_SHA" "$generator_sha" production "$marketing_version")"
           commit="$(git commit-tree "$tree" "${parents[@]}" -m "build(mobile): prepare $RELEASE_TAG for TestFlight")"
           git -c credential.helper='!gh auth git-credential' push origin "$commit:refs/heads/mobile-stable"
           echo "commit=$commit" >> "$GITHUB_OUTPUT"

@@ -56,7 +56,7 @@ jobs:
         run: vpr typecheck
 
       - name: Release publication guards
-        run: node --test .github/scripts/*nightly*.test.cjs .github/scripts/controlled-release-assets.test.cjs
+        run: node --test .github/scripts/*nightly*.test.cjs .github/scripts/*stable*.test.cjs .github/scripts/prepare-mobile-native.test.cjs .github/scripts/controlled-release-assets.test.cjs
       - name: Install browser secret helper build libraries
         run: |
           sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config

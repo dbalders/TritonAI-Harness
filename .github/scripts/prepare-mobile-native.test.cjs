@@ -162,3 +162,74 @@ test("prepares an explicitly requested current-main production build", (t) => {
   assert.equal(receipt.tag, "main");
   assert.equal(receipt.variant, "production");
 });
+
+test("records the allocated stable marketing version without editing release sources", (t) => {
+  const f = fixture(t);
+  const tree = prepareMobileNative({ ...f.options, marketingVersion: "1.4.2" });
+  const receipt = JSON.parse(
+    f.git("show", `${tree}:apps/mobile/ios/ci_scripts/stable-source.json`),
+  );
+  assert.equal(receipt.marketingVersion, "1.4.2");
+  assert.equal(f.git("rev-parse", "HEAD"), f.options.sourceSha);
+  assert.equal(f.git("diff", "--name-only", "HEAD", "--", "source.txt"), "");
+  assert.throws(
+    () => prepareMobileNative({ ...f.options, marketingVersion: "1.4.2; unsafe" }),
+    /Marketing version/,
+  );
+});
+
+test("Xcode Cloud applies the stable marketing version and build number to every target", (t) => {
+  const f = fixture(t);
+  const scripts = path.join(f.ios, "ci_scripts");
+  fs.mkdirSync(scripts, { recursive: true });
+  fs.writeFileSync(
+    path.join(scripts, "stable-source.json"),
+    JSON.stringify({ tag: "v0.3.7", sourceSha: f.options.sourceSha, marketingVersion: "1.4.2" }),
+  );
+  fs.writeFileSync(
+    path.join(f.root, "apps/mobile/app.config.ts"),
+    'export default { version: "1.4.0" };\n',
+  );
+  const targets = ["TritonAIHarness", "ExpoWidgetsTarget", "expo-sharing-extension"];
+  for (const target of targets) {
+    fs.mkdirSync(path.join(f.ios, target), { recursive: true });
+    fs.writeFileSync(
+      path.join(f.ios, target, "Info.plist"),
+      '<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleVersion</key><string>1</string><key>CFBundleShortVersionString</key><string>1.4.0</string></dict></plist>',
+    );
+  }
+  fs.appendFileSync(
+    f.project,
+    "\n" + "CURRENT_PROJECT_VERSION = 1;\nMARKETING_VERSION = 1.4.0;\n".repeat(6),
+  );
+  const hook = fs.readFileSync(path.join(__dirname, "xcode-cloud/ci_post_clone.sh"), "utf8");
+  const python = hook.split("python3 - <<'PY'\n")[1].split("\nPY")[0];
+  execFileSync("python3", ["-c", python], {
+    cwd: f.ios,
+    env: { ...process.env, APP_VARIANT: "production", CI_BUILD_NUMBER: "42" },
+  });
+  const values = JSON.parse(
+    execFileSync(
+      "python3",
+      [
+        "-c",
+        'import json,plistlib; from pathlib import Path; print(json.dumps([plistlib.loads(p.read_bytes()) for p in Path(".").glob("*/Info.plist")]))',
+      ],
+      { cwd: f.ios, encoding: "utf8" },
+    ),
+  );
+  assert.match(
+    fs.readFileSync(path.join(f.root, "apps/mobile/app.config.ts"), "utf8"),
+    /version: "1\.4\.2"/,
+  );
+  assert.equal(values.length, 3);
+  assert.ok(
+    values.every(
+      (info) => info.CFBundleShortVersionString === "1.4.2" && info.CFBundleVersion === "42",
+    ),
+  );
+  assert.equal(
+    [...fs.readFileSync(f.project, "utf8").matchAll(/MARKETING_VERSION = 1\.4\.2;/g)].length,
+    6,
+  );
+});
