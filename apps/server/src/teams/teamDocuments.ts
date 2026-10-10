@@ -30,6 +30,8 @@ const documentPath = new RegExp(
   `^(Memory|SOPs|Skills)/([A-Za-z0-9_-]{43})/(${uuid})/(${uuid})\\.md$`,
   "u",
 );
+/** Whether a path is one of the Harness documents under `Memory`, `SOPs`, or `Skills`. */
+export const isTeamDocumentPath = (path: string) => documentPath.test(path);
 const Modifier = Schema.Struct({
   displayName: Schema.optionalKey(Schema.String),
   email: Schema.optionalKey(Schema.String),

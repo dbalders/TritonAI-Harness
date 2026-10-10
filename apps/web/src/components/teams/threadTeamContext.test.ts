@@ -7,7 +7,7 @@ import {
   TEAM_SKILL_PREAMBLE,
   teamNoteHeader,
 } from "@t3tools/contracts";
-import { teamContextRows, teamDocumentAuthor } from "./threadTeamContext";
+import { filterTeamDocumentRows, teamDocumentAuthor, teamDocumentRows } from "./threadTeamContext";
 
 describe("team memory context", () => {
   it("keeps note text inside one attributed block", () => {
@@ -88,12 +88,25 @@ describe("team memory context", () => {
     expect(summarizeTeamNote(skill)).toEqual({
       title: "Formatter",
       description: "Formats reports.",
+      project: "Grants",
       hidden: false,
     });
     // Hidden text in the body flags the document but keeps a clean title readable.
     expect(summarizeTeamNote(`${skill}\u200b`)).toEqual({
       title: "Formatter",
       description: "Formats reports.",
+      project: "Grants",
+      hidden: true,
+    });
+    // An unlabeled note has no project; a spoofable label hides the whole header.
+    expect(summarizeTeamNote("# Note\n\nBody")).toEqual({
+      title: "Note",
+      description: "",
+      hidden: false,
+    });
+    expect(summarizeTeamNote("# Note\n\nProject: Gr\u202eants\n\nBody")).toEqual({
+      title: "",
+      description: "",
       hidden: true,
     });
     // A spoofable title is never shown.
@@ -112,8 +125,7 @@ describe("team memory context", () => {
   it("lists documents by title and author, naming record ids only when needed", () => {
     const authors = { "alice-id": "Alice" };
     const summary = (title: string, description = "") => ({ title, description, hidden: false });
-    const rows = teamContextRows(
-      "skill",
+    const rows = teamDocumentRows(
       [
         { path: "Skills/alice-id/d/99999999-r.md" },
         { path: "Skills/alice-id/d/bbbbbbbb-r.md", summary: summary("Report", "Second") },
@@ -135,5 +147,50 @@ describe("team memory context", () => {
     ]);
     expect(rows[4]?.warning).toMatch(/hidden or control characters/u);
     expect(rows.every((row) => !row.label.includes("Skills/"))).toBe(true);
+  });
+
+  it("filters listed documents by every word across kind, title, description, author, and project", () => {
+    const authors = { "alice-id": "Alice Nguyen", "bob-id": "Bob" };
+    const rows = teamDocumentRows(
+      [
+        {
+          path: "Memory/alice-id/d/aaaaaaaa-r.md",
+          summary: { title: "Grant checklist", description: "", project: "Grants", hidden: false },
+        },
+        {
+          path: "SOPs/bob-id/d/bbbbbbbb-r.md",
+          summary: { title: "Résumé intake", description: "Hiring steps", hidden: false },
+        },
+        {
+          path: "Skills/bob-id/d/cccccccc-r.md",
+          summary: {
+            title: "Report formatter",
+            description: "Formats a grant report as a table.",
+            project: "Reporting",
+            hidden: false,
+          },
+        },
+        // Not summarized: found only by its author, kind, or record-id label.
+        { path: "Memory/alice-id/d/dddddddd-r.md" },
+      ],
+      authors,
+    );
+    const titles = (query: string) => filterTeamDocumentRows(rows, query).map((row) => row.label);
+    expect(titles("")).toHaveLength(4);
+    expect(titles("   ")).toHaveLength(4);
+    expect(titles("grant")).toEqual(["Grant checklist", "Report formatter"]);
+    expect(titles("GRANT bob")).toEqual(["Report formatter"]);
+    expect(titles("reporting")).toEqual(["Report formatter"]);
+    expect(titles("resume")).toEqual(["Résumé intake"]);
+    expect(titles("sop")).toEqual(["Résumé intake"]);
+    expect(titles("nguyen")).toEqual(["Grant checklist", "Note dddddddd"]);
+    expect(titles("grant nobody")).toEqual([]);
+    // The placeholder shown for an unsummarized document is not searched.
+    expect(titles("preview")).toEqual([]);
+    expect(rows.find((row) => row.label === "Grant checklist")).toMatchObject({
+      kind: "memory",
+      project: "Grants",
+      source: "From Alice Nguyen",
+    });
   });
 });

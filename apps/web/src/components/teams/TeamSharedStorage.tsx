@@ -12,10 +12,13 @@ import { TeamDocuments } from "./TeamDocuments";
 export function TeamSharedStorage({
   environmentId,
   teamId,
+  authors,
   canWrite,
 }: {
   environmentId: EnvironmentId;
   teamId: string;
+  /** Current members' names by author folder. */
+  authors: Readonly<Record<string, string>>;
   canWrite: boolean;
 }) {
   const request = useAtomCommand(serverEnvironment.teamStorage, { reportFailure: false });
@@ -177,6 +180,7 @@ export function TeamSharedStorage({
           teamId={teamId}
           document={state.document}
           files={state.files}
+          authors={authors}
           canWrite={canWrite}
           busy={busy}
           run={run}

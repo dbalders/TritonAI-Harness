@@ -57,7 +57,12 @@ work summary, SOP, or skill document explicitly; all team members can read it.
 A skill document needs a short description of what it's for, and can't contain
 hidden or control characters.
 Project labels organize documents within a team. They do not restrict access
-within that team. If someone edits a document before you save, keep your draft
+within that team. To find a document, type in the search box above a team's
+documents, in Teams or in a thread's team memory and skill pickers. It matches
+every word you type against each document's type, title, description, author,
+and project label. Lists show these details for up to 100 documents; past that,
+a document's title appears and becomes searchable once you preview it. Search
+doesn't look inside document text. If someone edits a document before you save, keep your draft
 and reload its latest version before retrying.
 
 Every open document and preview shows who last changed it and when. Choose
@@ -92,8 +97,7 @@ you review, as a memory note labeled with the thread's project, to a team where
 you are an editor or owner; the project's linked team is chosen first when you
 can write to it. **Add team memory to message** previews one note
 from the project's linked team and adds it to your draft. The list names each
-note by its title and author; when a team has many documents, some show their
-title only after you preview them. When you send, your
+note by its title, author, and project label, and you can search it. When you send, your
 team access is checked again: if you were removed, the project was
 unlinked or relinked, or the team folder moved, the message is held and you can
 remove the team memory and keep the rest of your draft. Signing out or switching

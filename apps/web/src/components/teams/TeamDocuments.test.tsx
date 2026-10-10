@@ -65,6 +65,7 @@ const render = (document = current) =>
         teamId={teamId}
         document={document}
         files={[]}
+        authors={{}}
         canWrite={false}
         busy={false}
         run={run}

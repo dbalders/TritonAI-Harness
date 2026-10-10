@@ -1,5 +1,5 @@
 import { shortTeamSkillVersion, type TeamProjectSkill } from "@t3tools/contracts";
-import { teamContextRows, type TeamListedDocument } from "./threadTeamContext";
+import { teamDocumentRows, type TeamListedDocument } from "./threadTeamContext";
 
 export type TeamProjectSkillState = "off" | "on" | "needs-review" | "not-applied";
 
@@ -34,9 +34,7 @@ export function teamProjectSkillRows(
   authors: Readonly<Record<string, string>> | undefined,
   enabled: readonly TeamProjectSkill[],
 ): TeamProjectSkillRow[] {
-  const listed = new Map(
-    teamContextRows("skill", files ?? [], authors).map((row) => [row.path, row]),
-  );
+  const listed = new Map(teamDocumentRows(files ?? [], authors).map((row) => [row.path, row]));
   const titled = new Set(
     (files ?? []).filter((file) => file.summary?.title).map((file) => file.path),
   );
@@ -60,7 +58,11 @@ export function teamProjectSkillRows(
   const off = [...listed.values()]
     .filter((row) => !enabledPaths.has(row.path))
     .map((row): TeamProjectSkillRow => ({
-      ...row,
+      path: row.path,
+      label: row.label,
+      description: row.description,
+      source: row.source,
+      warning: row.warning,
       state: "off",
       reason: null,
       version: null,

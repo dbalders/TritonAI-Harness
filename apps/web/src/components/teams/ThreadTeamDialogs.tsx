@@ -17,7 +17,7 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useUcsdAccount } from "../../hooks/useUcsdAccount";
 import { MAX_DRAFT_TEAM_MEMORY } from "./teamMemoryDrafts";
 import { serverEnvironment } from "../../state/server";
@@ -35,12 +35,13 @@ import {
 import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
 import { toastManager } from "../ui/toast";
-import { teamDocumentDeviceId } from "./TeamDocuments";
+import { TeamDocumentSearch, teamDocumentDeviceId } from "./TeamDocuments";
 import { useTeamProjectRequest } from "./TeamProjects";
 import {
-  teamContextRows,
+  filterTeamDocumentRows,
   teamDocumentAuthor,
   teamDocumentChange,
+  teamDocumentRows,
   type TeamListedDocument,
 } from "./threadTeamContext";
 
@@ -457,6 +458,9 @@ function ContextPicker({
   const [notice, setNotice] = useState<string | null>(null);
   // A changed document's issued block, shown for review and inserted as-is if the user confirms.
   const [issued, setIssued] = useState<TeamMemoryReference | null>(null);
+  const [query, setQuery] = useState("");
+  const rows = useMemo(() => teamDocumentRows(files ?? [], authors), [files, authors]);
+  const shownRows = filterTeamDocumentRows(rows, query);
   const text = copy[kind];
   const load = async () => {
     setNote(null);
@@ -649,37 +653,52 @@ function ContextPicker({
           ) : files.length === 0 ? (
             <p className="text-sm text-muted-foreground">{text.empty}</p>
           ) : (
-            <ul className="max-h-72 divide-y divide-border overflow-auto rounded-lg border border-border px-3">
-              {teamContextRows(kind, files, authors).map((row) => (
-                <li key={row.path} className="flex items-start gap-2 py-2">
-                  <div className="min-w-0 flex-1 space-y-0.5">
-                    <p className="truncate text-sm">{row.label}</p>
-                    {row.description ? (
-                      <p className="line-clamp-2 text-xs text-muted-foreground">
-                        {row.description}
-                      </p>
-                    ) : null}
-                    <p className="truncate text-xs text-muted-foreground">{row.source}</p>
-                    {row.warning ? <p className="text-xs text-destructive">{row.warning}</p> : null}
-                  </div>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={busy}
-                    aria-label={`Preview ${row.label}`}
-                    onClick={() =>
-                      void read(row.path).then((document) => {
-                        setChanged(false);
-                        setIssued(null);
-                        if (document) setNote(document);
-                      })
-                    }
-                  >
-                    Preview
-                  </Button>
-                </li>
-              ))}
-            </ul>
+            <div className="space-y-2">
+              <TeamDocumentSearch
+                query={query}
+                onQueryChange={setQuery}
+                matches={shownRows.length}
+                unsummarized={files.filter((file) => !file.summary).length}
+              />
+              {shownRows.length ? (
+                <ul className="max-h-72 divide-y divide-border overflow-auto rounded-lg border border-border px-3">
+                  {shownRows.map((row) => (
+                    <li key={row.path} className="flex items-start gap-2 py-2">
+                      <div className="min-w-0 flex-1 space-y-0.5">
+                        <p className="truncate text-sm">{row.label}</p>
+                        {row.description ? (
+                          <p className="line-clamp-2 text-xs text-muted-foreground">
+                            {row.description}
+                          </p>
+                        ) : null}
+                        <p className="truncate text-xs text-muted-foreground">
+                          {row.source}
+                          {row.project ? ` · Project: ${row.project}` : ""}
+                        </p>
+                        {row.warning ? (
+                          <p className="text-xs text-destructive">{row.warning}</p>
+                        ) : null}
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={busy}
+                        aria-label={`Preview ${row.label}`}
+                        onClick={() =>
+                          void read(row.path).then((document) => {
+                            setChanged(false);
+                            setIssued(null);
+                            if (document) setNote(document);
+                          })
+                        }
+                      >
+                        Preview
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
           )}
         </div>
       </DialogPanel>

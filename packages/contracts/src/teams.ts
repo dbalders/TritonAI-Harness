@@ -279,20 +279,22 @@ export const formatTeamMemoryContext = (input: { teamName: string; path: string;
  */
 export const hasHiddenTeamText = (text: string) => /(?![\t\n\r])[\p{Cc}\p{Cf}]/u.test(text);
 /**
- * What a list shows for a document before it is opened, read from the start of the document.
- * `hidden` means the text that was read contains hidden or control characters; a title or
- * description that contains them is left empty rather than shown.
+ * What a list shows and searches for a document before it is opened, read from the start of the
+ * document. `hidden` means the text that was read contains hidden or control characters; a title,
+ * description, or project label that contains them is left empty rather than shown. `project` is
+ * absent when the document has no label, and from servers that predate it.
  */
 export const TeamDocumentSummary = Schema.Struct({
   title: Schema.String.check(Schema.isMaxLength(80)),
   description: Schema.String.check(Schema.isMaxLength(200)),
+  project: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(80))),
   hidden: Schema.Boolean,
 });
 export type TeamDocumentSummary = typeof TeamDocumentSummary.Type;
 /** Summarizes a document's own header; titles and descriptions longer than publishing allows are cut. */
 export const summarizeTeamNote = (text: string): TeamDocumentSummary => {
   const header = teamNoteHeader(text);
-  const shown = !hasHiddenTeamText(`${header.title}\n${header.description}`);
+  const shown = !hasHiddenTeamText(`${header.title}\n${header.description}\n${header.project}`);
   // Lengths are UTF-16 units, as the schema counts them; a surrogate pair is never split.
   const cut = (value: string, max: number) => {
     if (value.length <= max) return value;
@@ -303,6 +305,7 @@ export const summarizeTeamNote = (text: string): TeamDocumentSummary => {
   return {
     title: shown ? cut(header.title, 80) : "",
     description: shown ? cut(header.description, 200) : "",
+    ...(shown && header.project ? { project: cut(header.project, 80) } : {}),
     hidden: hasHiddenTeamText(text),
   };
 };
