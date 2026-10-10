@@ -243,10 +243,11 @@ it("warns before you lower your own role and keeps the review open on a refusal"
   expect(dialog()?.querySelector('[role="alert"]')?.textContent).toBe(
     "Assign another owner before changing roles.",
   );
-  expect(buttonNamed("Change role")?.disabled).toBe(false);
+  expect(buttonNamed("Change role")).toBeUndefined();
+  expect(buttonNamed("Refresh team")?.disabled).toBe(false);
 });
 
-it("leaves only after confirmation and keeps the review recoverable after a transient failure", async () => {
+it("leaves only after confirmation and offers a refresh, not a retry, after a transient failure", async () => {
   await renderWorkspace();
   await press(byLabel("Leave team Alpha"));
   expect(mocks.calls).toEqual([]);
@@ -257,11 +258,16 @@ it("leaves only after confirmation and keeps the review recoverable after a tran
     new TeamsError({ code: "unavailable", message: "Teams did not confirm this change." });
   await press(buttonNamed("Leave team"));
   expect(dialog()?.textContent).toContain("Teams did not confirm this change.");
+  // The leave may still be in progress, so the dialog can't send it again.
+  expect(buttonNamed("Leave team")).toBeUndefined();
+  expect(buttonNamed("Refresh team")?.disabled).toBe(false);
 
   mocks.reply = () => ({ ...teamResult(4), teams: [], team: null });
-  await press(buttonNamed("Leave team"));
-  const leave = { action: "leave", teamId: TEAM_ID, revision: 3 };
-  expect(mocks.calls).toEqual([leave, leave]);
+  await press(buttonNamed("Refresh team"));
+  expect(mocks.calls).toEqual([
+    { action: "leave", teamId: TEAM_ID, revision: 3 },
+    { action: "get", teamId: TEAM_ID },
+  ]);
   expect(dialog()).toBeNull();
 });
 

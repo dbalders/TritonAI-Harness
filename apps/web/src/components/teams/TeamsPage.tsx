@@ -195,19 +195,25 @@ function RoleSelect({
   );
 }
 
-/** Confirms one membership change. Focus starts on the safe choice. */
+/**
+ * Confirms one membership change. Focus starts on the safe choice. After a
+ * failed confirm the change may still be in progress, so the only way forward
+ * is a refresh, never a retry against the same snapshot.
+ */
 function MembershipReviewDialog({
   copy,
   busy,
   error,
   onDismiss,
   onConfirm,
+  onRefresh,
 }: {
   copy: MembershipReviewCopy | null;
   busy: boolean;
   error: string | null;
   onDismiss: () => void;
   onConfirm: () => void;
+  onRefresh: (() => void) | null;
 }) {
   const dismissRef = useRef<HTMLButtonElement>(null);
   // Keep the last wording on screen while the dialog animates closed.
@@ -239,13 +245,19 @@ function MembershipReviewDialog({
             >
               {shown.dismiss}
             </AlertDialogClose>
-            <Button
-              variant={shown.destructive ? "destructive" : "default"}
-              disabled={busy}
-              onClick={onConfirm}
-            >
-              {busy ? shown.working : shown.confirm}
-            </Button>
+            {onRefresh ? (
+              <Button disabled={busy} onClick={onRefresh}>
+                Refresh team
+              </Button>
+            ) : (
+              <Button
+                variant={shown.destructive ? "destructive" : "default"}
+                disabled={busy}
+                onClick={onConfirm}
+              >
+                {busy ? shown.working : shown.confirm}
+              </Button>
+            )}
           </AlertDialogFooter>
         </AlertDialogPopup>
       ) : null}
@@ -339,6 +351,11 @@ export function TeamWorkspace({
       if (ok) setReview((current) => (current === review ? null : current));
       else setReviewFailed(true);
     });
+  };
+  const refreshAfterFailure = () => {
+    if (!team) return;
+    dismissReview();
+    void run({ action: "get", teamId: team.id });
   };
   const copy = async (text: string, message: string) => {
     try {
@@ -740,6 +757,7 @@ export function TeamWorkspace({
         error={reviewFailed ? error : null}
         onDismiss={dismissReview}
         onConfirm={confirmReview}
+        onRefresh={reviewFailed ? refreshAfterFailure : null}
       />
       {copied ? (
         <p role="status" className="text-sm text-muted-foreground">

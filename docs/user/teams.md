@@ -17,7 +17,9 @@ stages it: select **Review change** and confirm it. Removing a member, leaving,
 and cancelling an invitation also ask for confirmation, and none of them can
 be undone in place: a removed member or someone who left needs a new
 invitation, and if you give up the owner role, only another owner can restore
-it. To remove yourself, use **Leave team**. Renaming preserves the team reference and its files. If a
+it. To remove yourself, use **Leave team**. If a confirmed change fails or
+Teams doesn't answer, the change may still be in progress, so the dialog
+offers **Refresh team** instead of a second try. Renaming preserves the team reference and its files. If a
 membership change reports that permissions need checking, contact your
 administrator; access is not confirmed until the check succeeds.
 
