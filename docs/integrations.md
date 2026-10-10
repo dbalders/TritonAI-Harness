@@ -42,6 +42,12 @@ Every tool also declares `effect: "read" | "write"`, which must agree with the p
 metadata. Write tools follow the task's selected runtime mode: supervised modes request approval,
 while Full access preauthorizes them.
 
+A Codex approval prompt shows the tool name and, when present, the call's string `summary`
+argument. A write tool that accepts `summary` must reject any value that does not exactly match the
+change it will make, typically a summary the provider generated in an earlier preview, because the
+agent supplies the argument. Choosing **Always allow this session** or Full access skips later prompts for
+that tool.
+
 The Registry passes that approval only to declared write tools and runs each write through the same
 bounded commit-admission machinery used by provider lifecycle mutations. A write provider must call
 `beginCommit()` immediately before its external mutation and use the returned commit-tail signal.
@@ -165,6 +171,16 @@ system-browser button before the secure key field. A successful API-key submissi
 `kind: "connected"`; the key is never included in a result. Other connection experiences must
 extend the union with their own secure submission contract and rendering instead of pretending to
 use another flow's fields.
+
+Some providers only issue confidential OAuth clients that require a client secret on every token
+request (UCSD Jira Data Center is one). That secret cannot ship in Harness, because configuration
+embedded in a desktop build is extractable. Such a provider registers a private HTTPS relay as its
+redirect URI. The relay holds only the secret, stores no codes or tokens, and redirects the browser
+to the provider's one-use `127.0.0.1` listener, whose port travels in `state`. Harness redeems the
+code through the relay with a PKCE verifier that never leaves the backend, so a code delivered
+anywhere else is useless. Relay source and deployment live outside this repository. Like every
+loopback flow, the browser must run on the backend's machine, so a remote web or mobile client
+cannot complete that sign-in; the resulting connection still serves every client.
 
 Connecting requests the plugin's enabled Harness-managed capabilities plus every
 provider-authorized capability offered by its sign-in flow. Enabling an `opt-in` ability whose

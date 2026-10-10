@@ -927,6 +927,25 @@ function nonEmptyDetail(value: string | null | undefined): string | undefined {
   return trimmed === undefined || trimmed.length === 0 ? undefined : trimmed;
 }
 
+const MAX_DYNAMIC_TOOL_SUMMARY_CHARS = 600;
+
+// A plugin write tool can take a human-readable `summary` argument describing the exact change,
+// such as a prepared Jira preview. Showing it under the tool name lets the user approve the
+// change itself rather than an opaque tool name.
+function describeDynamicToolCall(
+  payload: EffectCodexSchema.ServerRequest__DynamicToolCallParams | undefined,
+): string | undefined {
+  if (!payload) return undefined;
+  const args = asUnknownRecord(payload.arguments);
+  const summary = typeof args?.summary === "string" ? nonEmptyDetail(args.summary) : undefined;
+  if (!summary) return payload.tool;
+  const bounded =
+    summary.length > MAX_DYNAMIC_TOOL_SUMMARY_CHARS
+      ? `${summary.slice(0, MAX_DYNAMIC_TOOL_SUMMARY_CHARS)}…`
+      : summary;
+  return `${payload.tool}\n${bounded}`;
+}
+
 // Keeps one oversized patch from pushing a wall of paths through every consumer
 // of the approval, while still saying how much it covers.
 const MAX_DESCRIBED_FILE_CHANGES = 20;
@@ -1545,7 +1564,7 @@ function mapToRuntimeEvents(
             EffectCodexSchema.ServerRequest__DynamicToolCallParams,
             event.payload,
           );
-          return payload?.tool ?? undefined;
+          return describeDynamicToolCall(payload);
         }
         default:
           return undefined;
