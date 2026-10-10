@@ -499,10 +499,10 @@ export const make = Effect.gen(function* () {
         return command;
       return yield* cannotCheck(context.failure);
     }
-    const { link, team, mine } = context.success;
+    const { link, team, identity: owner, mine } = context.success;
     if (mine.length === 0) return command;
     const checked = yield* checkSkills(sessionId, link, mine).pipe(Effect.mapError(cannotCheck));
-    const entries: Issued[] = [];
+    const entries: (Issued & { readonly path: string; readonly version: string })[] = [];
     for (const { skill, text: skillText } of checked) {
       if (skill.state !== "active" || skillText === undefined) continue;
       // A skill the user also added to this message by hand is already there.
@@ -514,6 +514,8 @@ export const make = Effect.gen(function* () {
       });
       if (text.includes(added.slice(0, added.indexOf(">")))) continue;
       entries.push({
+        path: skill.path,
+        version: skill.version,
         id: NodeCrypto.randomUUID(),
         sessionId,
         issuer: profile.issuer,
@@ -537,8 +539,22 @@ export const make = Effect.gen(function* () {
       if (held.failure.code === "unavailable") return yield* cannotCheck(held.failure);
       return command;
     }
-    for (const entry of entries) rememberApplied(entry);
-    const blocks = entries.map((entry) => entry.block).join("\n\n");
+    // A skill turned off, or an update approved, while it was being read is decided by the
+    // approval as it stands now: only the exact version still approved is added.
+    const approved = yield* readEnabled.pipe(Effect.orElseSucceed((): readonly Enabled[] => []));
+    const applied = entries.filter((entry) =>
+      approved.some(
+        (current) =>
+          current.identity === owner &&
+          current.link.projectId === projectId &&
+          sameLink(current.link, link) &&
+          current.path === entry.path &&
+          current.version === entry.version,
+      ),
+    );
+    if (applied.length === 0) return command;
+    for (const { path: _path, version: _version, ...entry } of applied) rememberApplied(entry);
+    const blocks = applied.map((entry) => entry.block).join("\n\n");
     return {
       ...command,
       message: { ...command.message, text: text.trim() ? `${text}\n\n${blocks}` : blocks },

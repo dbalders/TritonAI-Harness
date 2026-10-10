@@ -922,6 +922,33 @@ describe("Team skills turned on for a project", () => {
     }),
   );
 
+  it.effect("adds nothing a disable or approved update overtook while the skill was read", () =>
+    Effect.gen(function* () {
+      const { f, service, enable, enabled, sent } = yield* linked;
+      yield* enable();
+      f.interleave(service.execute("s", { action: "skill-disable", projectId, path: skillPath }));
+      expect(yield* sent("Go.")).toBe("Go.");
+      expect(yield* enabled()).toEqual([]);
+      // An update approved in another session during the read replaces the version this send
+      // checked. (Approving here would wait on this session's storage read.)
+      yield* enable();
+      const edited = `${skillText}\nAlso cite the award number.`;
+      // This read still returns the old text, which is no longer the approved version.
+      f.interleave(
+        Effect.sync(() => {
+          const stored = new TextDecoder().decode(f.values.get("team-project-skills")!);
+          f.values.set(
+            "team-project-skills",
+            new TextEncoder().encode(stored.replace(versionOf(skillText), versionOf(edited))),
+          );
+        }),
+      );
+      expect(yield* sent("Go.")).toBe("Go.");
+      f.contents.set(`rootA:${skillPath}`, edited);
+      expect(yield* sent("Go.")).toBe(`Go.\n\n${appliedBlock(edited)}`);
+    }),
+  );
+
   it.effect("never applies an approval made under an earlier link of the project", () =>
     Effect.gen(function* () {
       const { f, enable, enabled, sent } = yield* linked;
