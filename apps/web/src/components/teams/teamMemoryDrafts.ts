@@ -51,8 +51,7 @@ const noteLines = (block: string) =>
     .slice(1, -1)
     .map((line) => line.trim())
     .filter((line) => line.length >= MIN_NOTE_LINE && line !== TEAM_SKILL_PREAMBLE);
-export const draftTeamContextKind = (entry: DraftTeamMemory): TeamContextKind =>
-  entry.kind ?? "memory";
+const draftTeamContextKind = (entry: DraftTeamMemory): TeamContextKind => entry.kind ?? "memory";
 
 function nextOpeningTag(text: string, from: number): number {
   const pattern = /<team-(?:memory|skill)[\s>]/gu;

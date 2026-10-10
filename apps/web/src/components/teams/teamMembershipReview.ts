@@ -88,7 +88,7 @@ export function membershipReviewCommand(review: MembershipReview): TeamCommand {
   }
 }
 
-export const roleLabel = (role: TeamRole) =>
+const roleLabel = (role: TeamRole) =>
   role === "owner" ? "Owner" : role === "editor" ? "Editor" : "Reader";
 
 const MANAGE = "manage members, invitations, and the team name";

@@ -20,7 +20,7 @@ import * as TeamStorage from "../TeamStorageService.ts";
 
 export const teamA = "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa";
 export const teamB = "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb";
-export const tenantId = "22222222-2222-4222-a222-222222222222";
+const tenantId = "22222222-2222-4222-a222-222222222222";
 const config = { clientId: "11111111-1111-4111-a111-111111111111", tenantId };
 export const projectId = ProjectId.make("project-a");
 export const otherProject = ProjectId.make("project-personal");
