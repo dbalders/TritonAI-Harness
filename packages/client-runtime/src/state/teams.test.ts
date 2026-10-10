@@ -94,6 +94,14 @@ it("preserves the open document and its draft identity through list and status r
   );
   expect(status.document).toBe(opened.document);
   expect(status.files).toBe(opened.files);
+  const history = mergeTeamStorageResult(
+    opened,
+    { ...opened, document: null, files: [], history: { path: "SOPs/example.md", versions: [] } },
+    { action: "list-versions", teamId: "team", path: "SOPs/example.md" },
+  );
+  expect(history.document).toBe(opened.document);
+  expect(history.files).toBe(opened.files);
+  expect(history.history?.versions).toEqual([]);
   const disconnected = mergeTeamStorageResult(
     opened,
     { ...opened, status: "disconnected", document: null, files: [] },

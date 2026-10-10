@@ -260,3 +260,65 @@ it("drops the earlier team listing when a reload can't check the team", async ()
   expect(text()).not.toContain("Skills from Alpha");
   expect(switches()).toHaveLength(1);
 });
+
+it("shows who last changed a skill when its update is reviewed", async () => {
+  mocks.reply = (command) => {
+    if (command.action === "skill-enabled")
+      return {
+        projects: [link],
+        storage: null,
+        enabledSkills: [
+          {
+            path,
+            title: "Grant summary",
+            version: "1".repeat(64),
+            state: "needs-review",
+            currentVersion: "2".repeat(64),
+          },
+        ],
+      };
+    if (command.action === "skill-list")
+      return {
+        projects: [],
+        storage: {
+          status: "connected",
+          account: null,
+          flowId: null,
+          userCode: null,
+          verificationUri: null,
+          expiresAt: null,
+          retryAfterSeconds: null,
+          document: null,
+          files: [{ id: "1", path, etag: "e", size: 1 }],
+        },
+      };
+    if (command.action === "skill-read")
+      return {
+        projects: [],
+        version: "2".repeat(64),
+        storage: {
+          status: "connected",
+          account: null,
+          flowId: null,
+          userCode: null,
+          verificationUri: null,
+          expiresAt: null,
+          retryAfterSeconds: null,
+          files: [],
+          document: {
+            path,
+            etag: "e2",
+            text: "# Grant summary\n\nDescription: Summaries\n\nRewritten steps.",
+            lastChange: { by: "Bob Editor", at: "2026-10-09T12:00:00.000Z" },
+          },
+        },
+      };
+    throw new Error(`Unexpected ${command.action}`);
+  };
+  await render();
+  await press(button("Review update"));
+  const review = document.body.textContent ?? "";
+  expect(review).toContain("Review the update to “Grant summary”");
+  expect(review).toContain("Last changed by");
+  expect(review).toContain("Bob Editor");
+});

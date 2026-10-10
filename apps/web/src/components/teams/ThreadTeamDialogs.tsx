@@ -37,7 +37,12 @@ import { Textarea } from "../ui/textarea";
 import { toastManager } from "../ui/toast";
 import { teamDocumentDeviceId } from "./TeamDocuments";
 import { useTeamProjectRequest } from "./TeamProjects";
-import { teamContextRows, teamDocumentAuthor, type TeamListedDocument } from "./threadTeamContext";
+import {
+  teamContextRows,
+  teamDocumentAuthor,
+  teamDocumentChange,
+  type TeamListedDocument,
+} from "./threadTeamContext";
 
 const MAX_NOTE_BYTES = 64 * 1024;
 type Share = Extract<TeamProjectCommand, { action: "share" }>;
@@ -616,6 +621,8 @@ function ContextPicker({
                   {teamDocumentAuthor(note.path, authors)}
                   ’s folder
                 </dd>
+                <dt className="text-muted-foreground">Last changed by</dt>
+                <dd>{teamDocumentChange(note.lastChange)}</dd>
                 {kind === "skill" ? (
                   <>
                     <dt className="text-muted-foreground">Who can see it</dt>

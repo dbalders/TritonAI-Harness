@@ -338,12 +338,14 @@ export const make = (config: Microsoft.MicrosoftOAuthConfig | null) =>
               command.action === "publish" ||
               command.action === "read-file" ||
               command.action === "update-file" ||
-              command.action === "delete-file"
+              command.action === "delete-file" ||
+              command.action === "list-versions" ||
+              command.action === "read-version"
             ) {
               const actorId = NodeCrypto.createHash("sha256")
                 .update(encodeIdentity([profile.issuer, profile.subject]))
                 .digest("base64url");
-              const document = yield* executeDocument({
+              const result = yield* executeDocument({
                 command,
                 storage,
                 actorId,
@@ -352,7 +354,7 @@ export const make = (config: Microsoft.MicrosoftOAuthConfig | null) =>
                 send,
                 verifyCurrent,
               }).pipe(Effect.provideService(HttpClient.HttpClient, http));
-              return { ...connected, document };
+              return { ...connected, ...result };
             }
             if (command.action !== "list-files") return connected;
             const files: TeamStorageStatus["files"][number][] = [];

@@ -1,4 +1,4 @@
-import type { TeamContextKind, TeamDocumentSummary } from "@t3tools/contracts";
+import type { TeamContextKind, TeamDocumentChange, TeamDocumentSummary } from "@t3tools/contracts";
 
 /**
  * Who a team document's folder belongs to: `Memory|Skills/<author>/<device>/<record>.md`. Names
@@ -10,6 +10,16 @@ export function teamDocumentAuthor(
 ): string {
   const author = path.split("/")[1] ?? "";
   return authors?.[author] ?? "a former member";
+}
+
+/**
+ * Who last saved a document or version and when, as shared storage recorded it. The name is the
+ * Microsoft account's, and may differ from the member name shown for the document's folder.
+ */
+export function teamDocumentChange(change: TeamDocumentChange | undefined): string {
+  if (!change) return "Not recorded";
+  const at = new Date(change.at);
+  return `${change.by}, ${at.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}`;
 }
 
 /** A listed memory note or skill, with the summary the server or a preview read from it. */

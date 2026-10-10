@@ -118,6 +118,10 @@ export class TeamsError extends Schema.TaggedError<TeamsError>()("TeamsError", {
 }) {}
 
 const SkillDescription = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(200));
+/** A SharePoint version id of one document, such as `3.0`. */
+export const TeamDocumentVersionId = Schema.String.check(
+  Schema.isPattern(/^[A-Za-z0-9._-]{1,32}$/u),
+);
 export const TeamStorageCommand = Schema.Union([
   Schema.Struct({
     action: Schema.Literals(["status", "connect", "disconnect", "list-files"]),
@@ -157,6 +161,19 @@ export const TeamStorageCommand = Schema.Union([
     teamId: Id,
     path: Schema.String.check(Schema.isMaxLength(512)),
     etag: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(512)),
+  }),
+  /** The versions shared storage kept of one document, newest first. Read-only. */
+  Schema.Struct({
+    action: Schema.Literal("list-versions"),
+    teamId: Id,
+    path: Schema.String.check(Schema.isMaxLength(512)),
+  }),
+  /** The text of one kept version of a document. Read-only; there is no restore. */
+  Schema.Struct({
+    action: Schema.Literal("read-version"),
+    teamId: Id,
+    path: Schema.String.check(Schema.isMaxLength(512)),
+    versionId: TeamDocumentVersionId,
   }),
 ]);
 export type TeamStorageCommand = typeof TeamStorageCommand.Type;
@@ -274,12 +291,30 @@ export const summarizeTeamNote = (text: string): TeamDocumentSummary => {
     hidden: hasHiddenTeamText(text),
   };
 };
+/**
+ * Who last saved a document or version and when, as SharePoint records it. The name is the
+ * Microsoft account's display name, not a Harness or campus identity.
+ */
+export const TeamDocumentChange = Schema.Struct({
+  by: Schema.String.check(Schema.isMaxLength(120)),
+  at: Schema.String,
+});
+export type TeamDocumentChange = typeof TeamDocumentChange.Type;
 export const TeamDocument = Schema.Struct({
   path: Schema.String,
   etag: Schema.String,
   text: Schema.String,
+  /** Absent when shared storage didn't say, or from servers before document history. */
+  lastChange: Schema.optionalKey(TeamDocumentChange),
 });
 export type TeamDocument = typeof TeamDocument.Type;
+/** One version shared storage kept of a document; the newest is the current text. */
+export const TeamDocumentVersion = Schema.Struct({
+  id: TeamDocumentVersionId,
+  size: Schema.Int,
+  change: Schema.optionalKey(TeamDocumentChange),
+});
+export type TeamDocumentVersion = typeof TeamDocumentVersion.Type;
 export const TeamStorageStatus = Schema.Struct({
   status: Schema.Literals(["not-configured", "disconnected", "pending", "connected"]),
   account: Schema.NullOr(Schema.String),
@@ -289,6 +324,18 @@ export const TeamStorageStatus = Schema.Struct({
   expiresAt: Schema.NullOr(Schema.String),
   retryAfterSeconds: Schema.NullOr(Schema.Int),
   document: Schema.NullOr(TeamDocument),
+  /** From `list-versions`: a document's kept versions, newest first. */
+  history: Schema.optionalKey(
+    Schema.Struct({ path: Schema.String, versions: Schema.Array(TeamDocumentVersion) }),
+  ),
+  /** From `read-version`: the text of one kept version. */
+  priorVersion: Schema.optionalKey(
+    Schema.Struct({
+      path: Schema.String,
+      version: TeamDocumentVersion,
+      text: Schema.String,
+    }),
+  ),
   files: Schema.Array(
     Schema.Struct({
       id: Schema.String,
@@ -328,6 +375,29 @@ export const TeamProjectCommand = Schema.Union([
   /** The skill counterparts read and issue only documents under the team's Skills folder. */
   Schema.Struct({ action: Schema.Literal("skill-read"), projectId: ProjectId, path: SkillPath }),
   Schema.Struct({ action: Schema.Literal("skill-attach"), projectId: ProjectId, path: SkillPath }),
+  /** A note's or skill's kept versions, and one version's text; read-only, like `list-versions`. */
+  Schema.Struct({
+    action: Schema.Literal("memory-versions"),
+    projectId: ProjectId,
+    path: MemoryPath,
+  }),
+  Schema.Struct({
+    action: Schema.Literal("skill-versions"),
+    projectId: ProjectId,
+    path: SkillPath,
+  }),
+  Schema.Struct({
+    action: Schema.Literal("memory-read-version"),
+    projectId: ProjectId,
+    path: MemoryPath,
+    versionId: TeamDocumentVersionId,
+  }),
+  Schema.Struct({
+    action: Schema.Literal("skill-read-version"),
+    projectId: ProjectId,
+    path: SkillPath,
+    versionId: TeamDocumentVersionId,
+  }),
   /** Every project in this environment linked to a team the caller can open now. */
   Schema.Struct({ action: Schema.Literal("project-links") }),
   /**

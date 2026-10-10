@@ -363,6 +363,19 @@ function projectCommand(
       return kind === "skill"
         ? { action: "skill-read", projectId, path: command.path }
         : { action: "memory-read", projectId, path: command.path };
+    case "list-versions":
+      return {
+        action: kind === "skill" ? "skill-versions" : "memory-versions",
+        projectId,
+        path: command.path,
+      };
+    case "read-version":
+      return {
+        action: kind === "skill" ? "skill-read-version" : "memory-read-version",
+        projectId,
+        path: command.path,
+        versionId: command.versionId,
+      };
     case "update-file":
       return {
         action: kind === "skill" ? "skill-update" : "memory-update",

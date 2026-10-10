@@ -1,9 +1,15 @@
 // @effect-diagnostics cryptoRandomUUID:off - Browser-generated request/device IDs; this component does not run in an Effect runtime.
-import type { TeamDocument, TeamStorageCommand, TeamStorageStatus } from "@t3tools/contracts";
+import {
+  hasHiddenTeamText,
+  type TeamDocument,
+  type TeamStorageCommand,
+  type TeamStorageStatus,
+} from "@t3tools/contracts";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
+import { teamDocumentChange } from "./threadTeamContext";
 
 type Publish = Extract<TeamStorageCommand, { action: "publish" }>;
 export function teamDocumentDeviceId() {
@@ -49,12 +55,30 @@ export function TeamDocuments({
   const [text, setText] = useState("");
   const [edit, setEdit] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [history, setHistory] = useState<TeamStorageStatus["history"] | null>(null);
+  const [prior, setPrior] = useState<TeamStorageStatus["priorVersion"] | null>(null);
   const [ownDevice] = useState(teamDocumentDeviceId);
   const pending = useRef<Publish | null>(null);
   useEffect(() => {
     setEdit(document?.text ?? "");
     setConfirmDelete(false);
+    // Another document, or a newer version of this one, has a different history.
+    setHistory(null);
+    setPrior(null);
   }, [document]);
+  const showHistory = async (path: string) => {
+    if (history) {
+      setHistory(null);
+      setPrior(null);
+      return;
+    }
+    const result = await run({ action: "list-versions", teamId, path });
+    if (result?.history?.path === path) setHistory(result.history);
+  };
+  const readVersion = async (path: string, versionId: string) => {
+    const result = await run({ action: "read-version", teamId, path, versionId });
+    if (result?.priorVersion?.path === path) setPrior(result.priorVersion);
+  };
   const publish = async () => {
     const previous = pending.current;
     const command: Publish =
@@ -221,6 +245,9 @@ export function TeamDocuments({
       {document ? (
         <div className="space-y-3 rounded-lg border border-border p-3">
           <p className="break-all text-xs text-muted-foreground">{document.path}</p>
+          <p className="text-xs text-muted-foreground">
+            Last changed by {teamDocumentChange(document.lastChange)}
+          </p>
           <label className="block space-y-1 text-xs">
             Document content
             <Textarea
@@ -280,6 +307,64 @@ export function TeamDocuments({
                 >
                   Confirm removal from team
                 </Button>
+              ) : null}
+            </div>
+          ) : null}
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={busy}
+            onClick={() => void showHistory(document.path)}
+          >
+            {history ? "Close history" : "History"}
+          </Button>
+          {history ? (
+            <div className="space-y-2 rounded-lg bg-muted/40 p-3">
+              <p className="text-xs text-muted-foreground">
+                Versions shared storage kept, newest first. History is read-only: to bring back
+                earlier text, copy it into the document and save it as a new version.
+              </p>
+              {history.versions.length ? (
+                <ul className="divide-y divide-border text-xs">
+                  {history.versions.map((version, index) => (
+                    <li key={version.id} className="flex items-center gap-2 py-1.5">
+                      <span className="min-w-0 flex-1">
+                        {teamDocumentChange(version.change)}
+                        <span className="block text-muted-foreground">
+                          Version {version.id}
+                          {index === 0 ? " · current" : ""}
+                        </span>
+                      </span>
+                      <Button
+                        size="xs"
+                        variant={prior?.version.id === version.id ? "secondary" : "ghost"}
+                        disabled={busy}
+                        aria-label={`Read version ${version.id}`}
+                        onClick={() => void readVersion(document.path, version.id)}
+                      >
+                        Read
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-xs text-muted-foreground">No versions were recorded.</p>
+              )}
+              {prior ? (
+                <label className="block space-y-1 text-xs">
+                  Version {prior.version.id}, saved by {teamDocumentChange(prior.version.change)}
+                  {hasHiddenTeamText(prior.text) ? (
+                    <span className="block text-destructive">
+                      This version contains hidden or control characters.
+                    </span>
+                  ) : null}
+                  <Textarea
+                    aria-label="Earlier version content"
+                    className="min-h-40"
+                    value={prior.text}
+                    readOnly
+                  />
+                </label>
               ) : null}
             </div>
           ) : null}

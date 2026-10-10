@@ -8,6 +8,7 @@ import {
 } from "@t3tools/contracts";
 import * as NodeCrypto from "node:crypto";
 import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -191,6 +192,11 @@ interface Item {
   readonly kind: "folder" | "file";
   text: string;
   version: number;
+  /** Who saved the current version, and when. */
+  modifiedBy: SyntheticIdentity;
+  modifiedAt: string;
+  /** Earlier versions, oldest first, as SharePoint keeps them. */
+  readonly history: Array<{ version: number; text: string; by: SyntheticIdentity; at: string }>;
   /** Text a seeded document is restored to. */
   readonly seeded?: string;
 }
@@ -218,7 +224,11 @@ export function makeSyntheticTeamsWorld() {
   const accessTokens = new Map<string, SyntheticIdentity>();
   const refreshTokens = new Map<string, SyntheticIdentity>();
   const deviceCodes = new Map<string, SyntheticIdentity>();
-  const downloads = new Map<string, { itemId: string; version: number }>();
+  /** A version's grant carries its text; the current text's grant goes stale when it changes. */
+  const downloads = new Map<string, { itemId: string; version: number; text?: string }>();
+  /** A fixed clock: each save is one second after the previous one. */
+  const now = () =>
+    DateTime.formatIso(DateTime.makeUnsafe(Date.UTC(2026, 9, 9, 12, 0, 0) + next() * 1000));
   const teams = Object.fromEntries(
     Object.entries(SYNTHETIC_TEAMS).map(([key, team]) => [
       key,
@@ -245,9 +255,21 @@ export function makeSyntheticTeamsWorld() {
   >;
   const teamOfDrive = (driveId: string) =>
     Object.values(teams).find((team) => team.driveId === driveId) ?? null;
-  const addItem = (item: Omit<Item, "id" | "version"> & { id?: string }) => {
+  const addItem = (
+    item: Omit<Item, "id" | "version" | "modifiedBy" | "modifiedAt" | "history"> & {
+      id?: string;
+      modifiedBy?: SyntheticIdentity;
+    },
+  ) => {
     const id = item.id ?? `01SYNTH${next().toString().padStart(6, "0")}`;
-    const created: Item = { ...item, id, version: 1 };
+    const created: Item = {
+      ...item,
+      id,
+      version: 1,
+      modifiedBy: item.modifiedBy ?? "owner",
+      modifiedAt: now(),
+      history: [],
+    };
     items.set(id, created);
     return created;
   };
@@ -289,6 +311,7 @@ export function makeSyntheticTeamsWorld() {
       kind: "file",
       text: seed.text,
       seeded: seed.text,
+      modifiedBy: seed.author,
     });
     seedPaths.push({ team: seed.team, path });
   });
@@ -423,6 +446,34 @@ export function makeSyntheticTeamsWorld() {
       }),
   });
 
+  /** Saves new text as the next version, keeping the current one in the item's history. */
+  const save = (item: Item, text: string, by: SyntheticIdentity) => {
+    item.history.push({
+      version: item.version,
+      text: item.text,
+      by: item.modifiedBy,
+      at: item.modifiedAt,
+    });
+    item.text = text;
+    item.version++;
+    item.modifiedBy = by;
+    item.modifiedAt = now();
+  };
+  const modifiedJson = (by: SyntheticIdentity, at: string) => ({
+    lastModifiedDateTime: at,
+    lastModifiedBy: {
+      user: { displayName: SYNTHETIC_IDENTITIES[by].displayName, email: emailOf(by) },
+    },
+  });
+  const versionsOf = (item: Item) => [
+    { version: item.version, text: item.text, by: item.modifiedBy, at: item.modifiedAt },
+    ...item.history.toReversed(),
+  ];
+  const versionJson = (version: ReturnType<typeof versionsOf>[number]) => ({
+    id: `${version.version}.0`,
+    size: encoder.encode(version.text).byteLength,
+    ...modifiedJson(version.by, version.at),
+  });
   const itemJson = (item: Item, withDownload: boolean) => {
     const team = teamOfDrive(item.driveId)!;
     let download: string | undefined;
@@ -436,6 +487,7 @@ export function makeSyntheticTeamsWorld() {
       name: item.name,
       eTag: `"{${item.id}},${item.version}"`,
       size: encoder.encode(item.text).byteLength,
+      ...modifiedJson(item.modifiedBy, item.modifiedAt),
       parentReference: { id: item.parentId ?? "", driveId: item.driveId },
       ...(item.kind === "folder"
         ? {
@@ -448,7 +500,7 @@ export function makeSyntheticTeamsWorld() {
     };
   };
   const itemPath =
-    /^\/v1\.0\/drives\/([^/]+)\/items\/([^/:]+)(?::\/(.+?))?(:\/children|:\/content|\/children)?$/u;
+    /^\/v1\.0\/drives\/([^/]+)\/items\/([^/:]+)(?::\/(.+?))?(:\/children|:\/content|\/children|\/versions(?:\/[^/]+(?:\/content)?)?)?$/u;
 
   const http = HttpClient.make((request, url) =>
     Effect.sync(() => {
@@ -559,6 +611,7 @@ export function makeSyntheticTeamsWorld() {
         if (request.headers.authorization) return download(400, "bearer sent to download host");
         if (url.hostname !== SYNTHETIC_SITE_HOST || !team || url.hostname !== team.downloadHost)
           return download(404, "unknown download host");
+        if (grant?.text !== undefined) return download(200, "served version", grant.text);
         if (!item || item.version !== grant!.version) return download(410, "stale download URL");
         return download(200, "served", item.text);
       }
@@ -637,8 +690,7 @@ export function makeSyntheticTeamsWorld() {
             graph(412, "stale eTag");
             return graphError(412, "preconditionFailed");
           }
-          target.text = bodyText();
-          target.version++;
+          save(target, bodyText(), identity);
           graph(200, "updated");
           return respond(itemJson(target, false));
         }
@@ -652,6 +704,7 @@ export function makeSyntheticTeamsWorld() {
           parentId: parent.id,
           kind: "file",
           text: bodyText(),
+          modifiedBy: identity,
         });
         graph(201, "created");
         return respond(itemJson(created, false), 201);
@@ -693,6 +746,41 @@ export function makeSyntheticTeamsWorld() {
         items.delete(target.id);
         graph(204, "deleted");
         return respond(null, 204);
+      }
+      if (suffix?.startsWith("/versions") && request.method === "GET") {
+        if (!target || target.kind !== "file") {
+          graph(404);
+          return graphError(404, "itemNotFound");
+        }
+        const [, , id, content] = suffix.split("/");
+        if (id === undefined) {
+          graph(200, "versions");
+          return respond({ value: versionsOf(target).map(versionJson) });
+        }
+        const version = versionsOf(target).find(
+          (entry) => `${entry.version}.0` === decodeURIComponent(id),
+        );
+        if (!version) {
+          graph(404, "no such version");
+          return graphError(404, "itemNotFound");
+        }
+        if (content === undefined) {
+          graph(200, "version");
+          return respond(versionJson(version));
+        }
+        // Graph redirects to a signed download on the site host, as it does for current content.
+        const token = `synthetic-download-${next()}`;
+        downloads.set(token, { itemId: target.id, version: version.version, text: version.text });
+        graph(302, "version content");
+        return HttpClientResponse.fromWeb(
+          request,
+          new Response(null, {
+            status: 302,
+            headers: {
+              location: `https://${team.downloadHost}/_layouts/15/download.aspx?UniqueId=${encodeURIComponent(target.id)}&tempauth=${token}`,
+            },
+          }),
+        );
       }
       if (request.method !== "GET" || suffix === ":/content") {
         graph(405);
@@ -817,17 +905,16 @@ export function makeSyntheticTeamsWorld() {
     setDownloadHost: (team: string, host: string) => {
       teamOrFail(team).downloadHost = host;
     },
-    editDocument: (team: string, path: string, text: string) => {
+    /** Saves a new version as `by`, as an edit made outside Harness would; defaults to the current identity. */
+    editDocument: (team: string, path: string, text: string, by: string = current) => {
       const item = documentAt(teamOrFail(team).key, path);
       if (!item) throw new Error("No synthetic document at that path.");
-      item.text = text;
-      item.version++;
+      save(item, text, identityOrFail(by));
     },
     restoreDocument: (team: string, path: string) => {
       const item = documentAt(teamOrFail(team).key, path);
       if (!item?.seeded) throw new Error("No seeded synthetic document at that path.");
-      item.text = item.seeded;
-      item.version++;
+      save(item, item.seeded, current);
     },
     readDocument: (team: string, path: string) => documentAt(teamOrFail(team).key, path)?.text,
     /** Runs `effect` while app-initiated device codes are allowed. */

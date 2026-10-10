@@ -29,7 +29,11 @@ import { Switch } from "../ui/switch";
 import { teamProjectSkillRows, type TeamProjectSkillState } from "./teamProjectSkills";
 import { useTeamProjectRequest } from "./TeamProjects";
 import { SignedIn, storageProblem } from "./ThreadTeamDialogs";
-import { teamDocumentAuthor, type TeamListedDocument } from "./threadTeamContext";
+import {
+  teamDocumentAuthor,
+  teamDocumentChange,
+  type TeamListedDocument,
+} from "./threadTeamContext";
 
 const badges: Record<
   TeamProjectSkillState,
@@ -466,6 +470,8 @@ function SkillReviewDialog({
                     {teamName} shared Skills folder, in{" "}
                     {teamDocumentAuthor(review.document.path, authors)}’s folder
                   </dd>
+                  <dt className="text-muted-foreground">Last changed by</dt>
+                  <dd>{teamDocumentChange(review.document.lastChange)}</dd>
                   <dt className="text-muted-foreground">Version</dt>
                   <dd>{shortTeamSkillVersion(review.version)}</dd>
                   <dt className="text-muted-foreground">Who can change it</dt>

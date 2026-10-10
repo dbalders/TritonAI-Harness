@@ -42,6 +42,16 @@ Project labels organize documents within a team. They do not restrict access
 within that team. If someone edits a document before you save, keep your draft
 and reload its latest version before retrying.
 
+Every open document and preview shows who last changed it and when. Choose
+**History** on an open document to list the versions shared storage kept,
+newest first, with who saved each one, and to read an earlier version's text.
+Any team member can view history. History is read-only in the pilot: a restore
+would replace the document without the checks a save makes, that no one else
+changed it first and that a skill has no hidden characters. To bring back
+earlier text, copy it into the document and save it. Names come from the
+Microsoft account that saved the version, so they can differ from the member
+name on the document's folder.
+
 To work with a team's memory and skills from a Harness project, open the team,
 choose a project in this Harness environment under **Team projects**, and
 select **Link to team**. Then choose **Open team memory** or **Open team
@@ -95,7 +105,9 @@ UCSD account, team membership, and the project's link every time. The
 composer shows which team skills are on and which are being held back.
 
 A skill's version identifies its exact text. If anyone edits the skill, Harness
-stops adding it until you choose **Review update** and approve the new text; a
+stops adding it until you choose **Review update** and approve the new text. The
+review shows who last changed it; to compare with earlier text, open the skill's
+**History** in Teams → your team → Team projects → **Open team skills**. A
 skill that gains hidden characters or is removed from the team is also held
 back. Up to five skills, together at most 32,000 characters, can be on for one
 project. If you leave or are removed from the team, its skills are turned off

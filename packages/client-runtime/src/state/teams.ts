@@ -95,6 +95,9 @@ export function mergeTeamStorageResult(
       files: command.action === "list-files" ? next.files : previous.files,
     };
   }
+  // A history read leaves the open document and the list as they were.
+  if (command.action === "list-versions" || command.action === "read-version")
+    return { ...next, document: previous.document, files: previous.files };
   if (["publish", "read-file", "update-file", "delete-file"].includes(command.action)) {
     return {
       ...next,

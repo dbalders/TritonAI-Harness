@@ -174,7 +174,10 @@ function fixture() {
           ? Effect.void
           : Effect.fail(new TeamsError({ code: "forbidden", message: "Membership revoked" })),
       ),
-    }).pipe(Effect.provideService(HttpClient.HttpClient, http));
+    }).pipe(
+      Effect.map((result) => result.document),
+      Effect.provideService(HttpClient.HttpClient, http),
+    );
   return {
     execute,
     items,

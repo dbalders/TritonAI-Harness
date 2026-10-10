@@ -961,7 +961,12 @@ export const make = Effect.gen(function* () {
       command.action === "memory-read" ||
       command.action === "skill-list" ||
       command.action === "skill-read";
-    const reading = browsing || command.action === "memory-status";
+    const history =
+      command.action === "memory-versions" ||
+      command.action === "skill-versions" ||
+      command.action === "memory-read-version" ||
+      command.action === "skill-read-version";
+    const reading = browsing || history || command.action === "memory-status";
     const status = yield* (() => {
       switch (command.action) {
         case "memory-status":
@@ -978,6 +983,20 @@ export const make = Effect.gen(function* () {
           return storage.execute(
             sessionId,
             { action: "read-file", teamId, path: command.path },
+            scope,
+          );
+        case "memory-versions":
+        case "skill-versions":
+          return storage.execute(
+            sessionId,
+            { action: "list-versions", teamId, path: command.path },
+            scope,
+          );
+        case "memory-read-version":
+        case "skill-read-version":
+          return storage.execute(
+            sessionId,
+            { action: "read-version", teamId, path: command.path, versionId: command.versionId },
             scope,
           );
         case "memory-publish":

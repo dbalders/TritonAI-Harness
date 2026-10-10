@@ -449,3 +449,161 @@ describe("Team document list summaries", () => {
     }),
   );
 });
+
+describe("Team document history", () => {
+  const edited = "# SYNTHETIC report formatter\n\nRewritten by the editor.";
+
+  it.effect("shows who changed a skill and reads its earlier text through the real services", () =>
+    Effect.gen(function* () {
+      const { world, project } = yield* linkedAlpha("owner");
+      const before = yield* project.execute("s", {
+        action: "skill-read",
+        projectId,
+        path: ownerSkill,
+      });
+      expect(before.storage?.document?.lastChange?.by).toBe("Synthetic Owner");
+      world.editDocument("alpha", ownerSkill, edited, "editor");
+      const after = yield* project.execute("s", {
+        action: "skill-read",
+        projectId,
+        path: ownerSkill,
+      });
+      expect(after.storage?.document?.text).toBe(edited);
+      expect(after.storage?.document?.lastChange?.by).toBe("Synthetic Editor");
+      expect(after.version).not.toBe(before.version);
+      const history = yield* project.execute("s", {
+        action: "skill-versions",
+        projectId,
+        path: ownerSkill,
+      });
+      const versions = history.storage?.history?.versions ?? [];
+      expect(history.storage?.history?.path).toBe(ownerSkill);
+      expect(versions.map((version) => [version.id, version.change?.by])).toEqual([
+        ["2.0", "Synthetic Editor"],
+        ["1.0", "Synthetic Owner"],
+      ]);
+      expect(Date.parse(versions[0]!.change!.at)).toBeGreaterThan(
+        Date.parse(versions[1]!.change!.at),
+      );
+      world.trace.length = 0;
+      const prior = yield* project.execute("s", {
+        action: "skill-read-version",
+        projectId,
+        path: ownerSkill,
+        versionId: "1.0",
+      });
+      expect(prior.storage?.priorVersion?.text).toBe(before.storage?.document?.text);
+      expect(prior.storage?.priorVersion?.version.change?.by).toBe("Synthetic Owner");
+      // A history read neither opens nor changes the document.
+      expect(prior.storage?.document).toBeNull();
+      expect(world.readDocument("alpha", ownerSkill)).toBe(edited);
+      // Graph redirected to the team's site, and the download carried no Graph bearer.
+      expect(world.trace.some((entry) => entry.status === 302)).toBe(true);
+      expect(world.trace.filter((entry) => entry.kind === "download")).toEqual([
+        expect.objectContaining({ team: "alpha", note: "served version" }),
+      ]);
+      expect(
+        yield* code(
+          project.execute("s", {
+            action: "skill-read-version",
+            projectId,
+            path: ownerSkill,
+            versionId: "9.0",
+          }),
+        ),
+      ).toBe("conflict");
+    }),
+  );
+
+  it.effect("lets readers see history and refuses it after access is lost", () =>
+    Effect.gen(function* () {
+      const { world, project, storage } = yield* linkedAlpha("reader");
+      world.editDocument(
+        "alpha",
+        ownerNote,
+        "# SYNTHETIC grant report checklist\n\nNew.",
+        "editor",
+      );
+      const listed = yield* storage.execute("s", {
+        action: "list-versions",
+        teamId: alpha,
+        path: ownerNote,
+      });
+      expect(listed.history?.versions).toHaveLength(2);
+      // Only this team's documents: another team's path and a non-document are refused.
+      expect(
+        yield* code(
+          storage.execute("s", {
+            action: "read-version",
+            teamId: beta,
+            path: betaNote,
+            versionId: "1.0",
+          }),
+        ),
+      ).toBe("not_found");
+      expect(
+        yield* code(
+          storage.execute("s", { action: "list-versions", teamId: alpha, path: "Memory/x.md" }),
+        ),
+      ).toBe("invalid_request");
+      world.setRole("alpha", "reader", "none");
+      expect(
+        yield* code(
+          project.execute("s", { action: "memory-versions", projectId, path: ownerNote }),
+        ),
+      ).toBe("not_found");
+    }),
+  );
+
+  it.effect("withholds a version read when the account switches mid-read", () =>
+    Effect.gen(function* () {
+      values.clear();
+      const world = makeSyntheticTeamsWorld();
+      world.switchTo("editor");
+      let switchOnDownload = false;
+      const http = HttpClient.make((request) =>
+        Effect.suspend(() => {
+          if (switchOnDownload && new URL(request.url).hostname.endsWith(".sharepoint.com")) {
+            switchOnDownload = false;
+            world.switchTo("owner");
+          }
+          return world.http.execute(request);
+        }),
+      );
+      const { project, connectMicrosoft } = yield* makeSyntheticTeamServices({ ...world, http });
+      yield* project.execute("s", { action: "bind", teamId: alpha, projectId });
+      yield* connectMicrosoft;
+      world.editDocument("alpha", ownerNote, "# SYNTHETIC grant report checklist\n\nNew.");
+      switchOnDownload = true;
+      const error = yield* Effect.flip(
+        project.execute("s", {
+          action: "memory-read-version",
+          projectId,
+          path: ownerNote,
+          versionId: "1.0",
+        }),
+      );
+      expect(switchOnDownload).toBe(false);
+      expect(["sign_in_required", "conflict"]).toContain(error.code);
+    }).pipe(Effect.provide(environment)),
+  );
+
+  it.effect("refuses a version redirect off the team's site before downloading", () =>
+    Effect.gen(function* () {
+      const { world, project } = yield* linkedAlpha();
+      world.editDocument("alpha", ownerNote, "# SYNTHETIC grant report checklist\n\nNew.");
+      world.setDownloadHost("alpha", "synthetic-elsewhere.sharepoint.com");
+      world.trace.length = 0;
+      const error = yield* Effect.flip(
+        project.execute("s", {
+          action: "memory-read-version",
+          projectId,
+          path: ownerNote,
+          versionId: "1.0",
+        }),
+      );
+      expect(error.message).toContain("unexpected download host");
+      expect(world.trace.some((entry) => entry.kind === "download")).toBe(false);
+    }),
+  );
+});
