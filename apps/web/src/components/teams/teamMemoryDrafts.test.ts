@@ -1,4 +1,8 @@
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import {
+  scopedThreadKey,
+  scopeProjectRef,
+  scopeThreadRef,
+} from "@t3tools/client-runtime/environment";
 import {
   EnvironmentId,
   formatTeamContext,
@@ -8,7 +12,12 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
-import { type ComposerThreadTarget, useComposerDraftStore } from "../../composerDraftStore";
+import {
+  type ComposerThreadTarget,
+  composerTargetKey,
+  DraftId,
+  useComposerDraftStore,
+} from "../../composerDraftStore";
 import { useQueuedMessageStore } from "../../queuedMessageStore";
 import {
   addDraftTeamMemory,
@@ -67,13 +76,17 @@ const insert = (entry: ReturnType<typeof reference>) => {
   return { result, inserted };
 };
 /** A send from the composer: the draft is cleared, then restored, queued, or gone. */
-const send = (target: ComposerThreadTarget, outcome: "sent" | "failed" | "queued") => {
+const send = (
+  target: ComposerThreadTarget,
+  outcome: "sent" | "failed" | "queued",
+  queueKey = composerTargetKey(target),
+) => {
   const finish = beginDraftTeamMemorySend(target);
   const text = prompt(target);
   setPrompt(target, "");
   if (outcome === "failed") setPrompt(target, text);
   if (outcome === "queued")
-    useQueuedMessageStore.getState().enqueue("queue-key", {
+    useQueuedMessageStore.getState().enqueue(queueKey, {
       prompt: text,
       images: [],
       files: [],
@@ -271,10 +284,42 @@ describe("team memory in drafts", () => {
     expect(insert(reference("extra", threadAt("thread-extra"))).result).toBe("full");
     expect(ids()).toContain("r1");
     // Stop puts the queued text back in the draft, still tracked.
-    const [restored] = useQueuedMessageStore.getState().drain("queue-key");
+    const [restored] = useQueuedMessageStore.getState().drain(composerTargetKey(thread));
     setPrompt(thread, restored!.prompt);
     settleDraftTeamMemory();
     expect(draftTeamMemoryInPrompt(thread, prompt()).map((entry) => entry.id)).toEqual(["r1"]);
+  });
+
+  it("holds a queued note only for its own thread", () => {
+    insert(reference("queued"));
+    send(thread, "queued");
+    // The same note sent from other threads is forgotten even while thread A's copy is queued.
+    for (let index = 0; index < MAX_DRAFT_TEAM_MEMORY; index++) {
+      const target = threadAt(`thread-${index}`);
+      expect(insert(reference(`r${index}`, target)).result).toBe("added");
+      send(target, "sent");
+    }
+    expect(ids()).toEqual(["queued"]);
+    // Once the queued message goes out, its reference is released too.
+    const queueKey = composerTargetKey(thread);
+    const [message] = useQueuedMessageStore.getState().queuesByThreadKey[queueKey]!;
+    useQueuedMessageStore.getState().finishSend(queueKey, message!.id);
+    settleDraftTeamMemory();
+    expect(ids()).toEqual([]);
+    // A local draft queues under its session's thread, and its note is held there.
+    const draftId = DraftId.make("draft-a");
+    useComposerDraftStore
+      .getState()
+      .setProjectDraftThreadId(
+        scopeProjectRef(environmentA, ProjectId.make("project-a")),
+        draftId,
+        {
+          threadId: ThreadId.make("thread-draft"),
+        },
+      );
+    insert(reference("draft", draftId));
+    send(draftId, "queued", scopedThreadKey(threadAt("thread-draft")));
+    expect(ids()).toEqual(["draft"]);
   });
 
   it("removes team memory that returns to a draft after the account changed", () => {

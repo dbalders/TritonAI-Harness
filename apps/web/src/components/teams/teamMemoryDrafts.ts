@@ -1,3 +1,4 @@
+import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
   type EnvironmentId,
   TEAM_SKILL_PREAMBLE,
@@ -175,6 +176,17 @@ export const useDraftTeamMemoryStore = create<DraftTeamMemoryState>()(
 const draftKey = (thread: ComposerThreadTarget) => composerTargetKey(thread);
 const draftPrompt = (thread: ComposerThreadTarget) =>
   useComposerDraftStore.getState().getComposerDraft(thread)?.prompt ?? "";
+/** Prompts queued on this draft's thread; a local draft queues under its session's thread. */
+const queuedPrompts = (thread: ComposerThreadTarget) => {
+  const session =
+    typeof thread === "string" ? useComposerDraftStore.getState().getDraftSession(thread) : null;
+  const key = session
+    ? scopedThreadKey(scopeThreadRef(session.environmentId, session.threadId))
+    : draftKey(thread);
+  return (useQueuedMessageStore.getState().queuesByThreadKey[key] ?? []).map(
+    (message) => message.prompt,
+  );
+};
 // Drafts whose text a send has taken out; their references stay until the send finishes.
 const sending = new Map<string, number>();
 // The campus account last seen per environment, so team memory that returns to a draft after a
@@ -195,7 +207,6 @@ const groupByDraft = (entries: readonly DraftTeamMemory[]) => {
  * send under way. The rest were sent or deleted and are forgotten.
  */
 function liveEntries(entries: readonly DraftTeamMemory[]): DraftTeamMemory[] {
-  let queued: string[] | null = null;
   const live: DraftTeamMemory[] = [];
   for (const [key, group] of groupByDraft(entries)) {
     if (sending.has(key)) {
@@ -203,14 +214,13 @@ function liveEntries(entries: readonly DraftTeamMemory[]): DraftTeamMemory[] {
       continue;
     }
     const presence = presenceIn(draftPrompt(group[0]!.thread), group);
+    let queued: string[] | null = null;
     for (const entry of group) {
       if (presence.get(entry) !== "gone") {
         live.push(entry);
         continue;
       }
-      queued ??= Object.values(useQueuedMessageStore.getState().queuesByThreadKey).flatMap(
-        (queue) => queue.map((message) => message.prompt),
-      );
+      queued ??= queuedPrompts(entry.thread);
       if (queued.some((prompt) => presenceIn(prompt, [entry]).get(entry) !== "gone"))
         live.push(entry);
     }
