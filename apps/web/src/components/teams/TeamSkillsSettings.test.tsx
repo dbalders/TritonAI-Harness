@@ -190,3 +190,73 @@ it("doesn't call a team empty when its skills couldn't be listed", async () => {
   expect(text()).toContain("Connect Microsoft");
   expect(text()).not.toContain("No team skills yet");
 });
+
+it("drops the earlier team listing when a reload can't check the team", async () => {
+  const other = `Skills/${"a".repeat(43)}/device/other.md`;
+  let disabled = false;
+  const listing = {
+    status: "connected" as const,
+    account: null,
+    flowId: null,
+    userCode: null,
+    verificationUri: null,
+    expiresAt: null,
+    retryAfterSeconds: null,
+    document: null,
+    files: [
+      {
+        id: "1",
+        path,
+        etag: "e",
+        size: 1,
+        summary: { title: "Grant summary", description: "Summaries", hidden: false },
+      },
+      {
+        id: "2",
+        path: other,
+        etag: "e",
+        size: 1,
+        summary: { title: "Agenda", description: "Meetings", hidden: false },
+      },
+    ],
+  };
+  const second = `Skills/${"a".repeat(43)}/device/second.md`;
+  mocks.reply = (command) => {
+    if (command.action === "skill-disable") {
+      disabled = true;
+      return { projects: [], storage: null };
+    }
+    if (command.action === "skill-list")
+      return { projects: [], storage: listing, authors: { ["a".repeat(43)]: "Alice" } };
+    if (command.action !== "skill-enabled") throw new Error(`Unexpected ${command.action}`);
+    return disabled
+      ? {
+          projects: [],
+          storage: null,
+          problem: moved,
+          enabledSkills: [
+            { path: second, title: "Second skill", version: "2".repeat(64), state: "unavailable" },
+          ],
+        }
+      : {
+          projects: [link],
+          storage: null,
+          enabledSkills: [
+            { path, title: "Grant summary", version: "1".repeat(64), state: "active" },
+            { path: second, title: "Second skill", version: "2".repeat(64), state: "active" },
+          ],
+        };
+  };
+  await render();
+  expect(text()).toContain("Agenda");
+  expect(text()).toContain("From Alice");
+  // Turning one off reloads; this time the team can't be checked.
+  await press(switches()[0]);
+  expect(text()).toContain("Team skills can’t be checked");
+  expect(text()).toContain("Second skill");
+  expect(text()).toContain("Previously reviewed skill");
+  expect(text()).not.toContain("Agenda");
+  expect(text()).not.toContain("From Alice");
+  expect(text()).not.toContain("Skills from Alpha");
+  expect(switches()).toHaveLength(1);
+});

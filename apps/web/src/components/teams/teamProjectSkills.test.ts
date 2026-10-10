@@ -41,6 +41,15 @@ describe("teamProjectSkillRows", () => {
     // A hidden-text skill can't be turned on, and says so.
     expect(rows.find((row) => row.label === "Hidden")!.warning).toContain("hidden or control");
   });
+
+  it("doesn't say a skill left the folder when the folder couldn't be listed", () => {
+    const rows = teamProjectSkillRows(null, undefined, [
+      skill({ path: path("a"), title: "Agenda", state: "unavailable" }),
+    ]);
+    expect(rows.map((row) => [row.label, row.source, row.state])).toEqual([
+      ["Agenda", "Previously reviewed skill", "not-applied"],
+    ]);
+  });
 });
 
 describe("teamProjectSkillsNotice", () => {

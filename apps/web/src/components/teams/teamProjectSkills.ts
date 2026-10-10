@@ -27,15 +27,19 @@ const states = {
 /**
  * One row per skill in the linked team's Skills folder, plus any skill the user turned on that
  * the folder no longer lists. Skills that are on come first, in the order they are added to
- * messages.
+ * messages. `files` is null when the folder couldn't be listed.
  */
 export function teamProjectSkillRows(
-  files: readonly TeamListedDocument[],
+  files: readonly TeamListedDocument[] | null,
   authors: Readonly<Record<string, string>> | undefined,
   enabled: readonly TeamProjectSkill[],
 ): TeamProjectSkillRow[] {
-  const listed = new Map(teamContextRows("skill", files, authors).map((row) => [row.path, row]));
-  const titled = new Set(files.filter((file) => file.summary?.title).map((file) => file.path));
+  const listed = new Map(
+    teamContextRows("skill", files ?? [], authors).map((row) => [row.path, row]),
+  );
+  const titled = new Set(
+    (files ?? []).filter((file) => file.summary?.title).map((file) => file.path),
+  );
   const on = enabled.map((skill): TeamProjectSkillRow => {
     const row = listed.get(skill.path);
     return {
@@ -43,7 +47,9 @@ export function teamProjectSkillRows(
       // A listing that didn't read the skill's title shows the one it had when approved.
       label: row && titled.has(skill.path) ? row.label : skill.title,
       description: row && titled.has(skill.path) ? row.description : "",
-      source: row?.source ?? "No longer in the team’s Skills folder",
+      source:
+        row?.source ??
+        (files === null ? "Previously reviewed skill" : "No longer in the team’s Skills folder"),
       warning: null,
       state: states[skill.state],
       reason: skill.reason ?? null,

@@ -1016,6 +1016,18 @@ describe("Team skills turned on for a project", () => {
         restore();
         expect((yield* status()).enabledSkills).toEqual([]);
       }
+      // An account switch or sign-out that lands during the failed lookup withholds the record.
+      yield* enable();
+      f.storage[teamA] = { ...f.storage[teamA]!, folderId: "rootMoved" };
+      f.roles[teamA]!.bob = "editor";
+      f.afterMembershipRead(() => f.switchTo("bob"));
+      expect(yield* code(status())).toBe("conflict");
+      f.switchTo("alice");
+      f.afterMembershipRead(() => f.signOut());
+      expect(["conflict", "sign_in_required"]).toContain(yield* code(status()));
+      f.signIn();
+      f.storage[teamA] = { ...f.storage[teamA]!, folderId: "rootA" };
+      yield* service.execute("s", { action: "skill-disable-all", projectId });
       // Another account's approvals are neither shown nor turned off.
       yield* enable();
       f.roles[teamA]!.bob = "editor";

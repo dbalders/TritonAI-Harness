@@ -324,6 +324,9 @@ export function teamProjectFixture() {
     signOut: () => {
       signedIn = false;
     },
+    signIn: () => {
+      signedIn = true;
+    },
     setTeamsDown: (down: boolean) => {
       teamsDown = down;
     },

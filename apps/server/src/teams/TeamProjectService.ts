@@ -582,6 +582,15 @@ export const make = Effect.gen(function* () {
         : [];
       if ((error.code !== "unavailable" && error.code !== "conflict") || own.length === 0)
         return yield* error;
+      // An account switch, sign-out, or unlink that landed during the failed lookup wins.
+      const after = yield* signedInProfile(sessionId);
+      if (
+        after.issuer !== profile.issuer ||
+        after.subject !== profile.subject ||
+        link === undefined ||
+        !sameLink(link, yield* linkFor(projectId))
+      )
+        return yield* memoryChanged();
       return {
         projects: [],
         storage: null,

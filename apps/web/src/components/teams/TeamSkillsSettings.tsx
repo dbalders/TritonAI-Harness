@@ -205,7 +205,13 @@ function ProjectTeamSkills({
     }
     setEnabled(current.enabledSkills ?? []);
     setProblem(current.problem ?? null);
-    if (current.problem) return;
+    if (current.problem) {
+      // Only the user's own records are current; an earlier listing of the team isn't.
+      setLink(null);
+      setFiles(null);
+      setAuthors(undefined);
+      return;
+    }
     setLink(current.projects[0] ?? "unlinked");
     const listed = await run({ action: "skill-list", projectId });
     if (!listed || "error" in listed) return;
@@ -274,7 +280,7 @@ function ProjectTeamSkills({
       />
     );
   const teamName = link?.teamName ?? "your team";
-  const rows = teamProjectSkillRows(files ?? [], authors, enabled);
+  const rows = teamProjectSkillRows(files, authors, enabled);
   return (
     <>
       <SettingsRow
