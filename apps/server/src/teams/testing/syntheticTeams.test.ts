@@ -159,6 +159,41 @@ describe("Synthetic Teams world", () => {
     }),
   );
 
+  it.effect("transfers ownership in one change and keeps the former owner's file access", () =>
+    Effect.gen(function* () {
+      const { world, account, project } = yield* linkedAlpha("owner");
+      const before = yield* account.teams("s", { action: "get", teamId: alpha });
+      const editor = before.team!.members.find((entry) => entry.role === "editor")!;
+      const after = yield* account.teams("s", {
+        action: "transfer-ownership",
+        teamId: alpha,
+        identityId: editor.identityId,
+        revision: before.team!.revision,
+      });
+      expect(after.team).toMatchObject({ role: "editor", canManage: false });
+      expect(after.team!.revision).toBe(before.team!.revision + 1);
+      expect(
+        after.team!.members.find((entry) => entry.identityId === editor.identityId)?.role,
+      ).toBe("owner");
+      // Owners and editors share storage access, so the project link keeps working.
+      const listed = yield* project.execute("s", { action: "memory-list", projectId });
+      expect(listed.storage?.files.length).toBe(2);
+      expect(
+        yield* code(
+          account.teams("s", {
+            action: "transfer-ownership",
+            teamId: alpha,
+            identityId: editor.identityId,
+            revision: after.team!.revision,
+          }),
+        ),
+      ).toBe("forbidden");
+      world.switchTo("editor");
+      const promoted = yield* account.teams("s", { action: "get", teamId: alpha });
+      expect(promoted.team).toMatchObject({ role: "owner", canManage: true });
+    }),
+  );
+
   it.effect("answers a cross-team Graph request as SharePoint would, without a network", () =>
     Effect.gen(function* () {
       const world = makeSyntheticTeamsWorld();

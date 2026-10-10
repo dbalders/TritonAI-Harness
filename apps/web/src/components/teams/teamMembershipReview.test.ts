@@ -3,7 +3,9 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   accountKey,
+  canTransferOwnership,
   isCurrentReview,
+  isOnlyOwner,
   isOwnMember,
   type MembershipReview,
   membershipReviewCopy,
@@ -79,6 +81,42 @@ describe("isCurrentReview", () => {
   });
 });
 
+describe("ownership transfer", () => {
+  const me = { email: "alice@ucsd.edu" };
+  const transfer: MembershipReview = { ...bound, kind: "transfer", member: team.members[1]! };
+
+  it("is offered by a member owner to a member who isn't an owner", () => {
+    expect(canTransferOwnership(team, team.members[1]!, me)).toBe(true);
+    expect(canTransferOwnership(team, team.members[0]!, me)).toBe(false);
+    // A system administrator outside the team reassigns owners with role changes instead.
+    expect(canTransferOwnership(team, team.members[1]!, { email: "admin@ucsd.edu" })).toBe(false);
+    const demoted = { ...team, members: [{ ...alice, role: "editor" as const }, team.members[1]!] };
+    expect(canTransferOwnership(demoted, team.members[1]!, me)).toBe(false);
+  });
+
+  it("drops the review once the target's role changes", () => {
+    expect(isCurrentReview(transfer, account, team)).toBe(true);
+    const promoted = { ...team, members: [team.members[0]!, { ...carol, role: "owner" as const }] };
+    expect(isCurrentReview(transfer, account, promoted)).toBe(false);
+  });
+
+  it("knows when you are the only owner", () => {
+    expect(isOnlyOwner(team, me)).toBe(true);
+    const shared = { ...team, members: [team.members[0]!, { ...carol, role: "owner" as const }] };
+    expect(isOnlyOwner(shared, me)).toBe(false);
+    expect(isOnlyOwner(team, { email: "carol@ucsd.edu" })).toBe(false);
+  });
+
+  it("names the target and says you become an editor", () => {
+    const copy = membershipReviewCopy(transfer, "Alpha", false);
+    expect(copy.title).toBe("Transfer ownership of Alpha to Carol?");
+    expect(copy.description).toContain("Carol (carol@ucsd.edu) will become an owner");
+    expect(copy.description).toContain("You'll become an editor");
+    expect(copy.description).toContain("pending invitations stay with the team");
+    expect(copy.destructive).toBe(true);
+  });
+});
+
 it("recognizes your row by campus email regardless of case", () => {
   expect(isOwnMember({ ...alice, role: "owner" }, { email: " Alice@UCSD.edu" })).toBe(true);
   expect(isOwnMember({ ...carol, role: "editor" }, { email: "alice@ucsd.edu" })).toBe(false);
@@ -101,6 +139,21 @@ describe("membershipReviewCopy", () => {
     expect(promotion.destructive).toBe(false);
     expect(promotion.description).toContain("Carol will be able to manage members");
     expect(promotion.description).toContain("Owners can also change your role or remove you.");
+  });
+
+  it("tells an owner that a removed or demoted owner's invitations stay valid", () => {
+    const owner = { ...carol, role: "owner" as const };
+    expect(
+      membershipReviewCopy({ ...bound, kind: "remove", member: owner }, "Alpha", false).description,
+    ).toContain("Pending invitations they created stay valid");
+    expect(
+      membershipReviewCopy(
+        { ...bound, kind: "role", member: owner, role: "editor" },
+        "Alpha",
+        false,
+      ).description,
+    ).toContain("Pending invitations they created stay valid");
+    expect(membershipReviewCopy(remove, "Alpha", false).description).not.toContain("invitations");
   });
 
   it("describes removal as Harness access, not storage permission changes", () => {

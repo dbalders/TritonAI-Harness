@@ -28,7 +28,9 @@ import { WorkspacePageContainer } from "../WorkspacePageContainer";
 import { isElectron } from "../../env";
 import {
   accountKey,
+  canTransferOwnership,
   isCurrentReview,
+  isOnlyOwner,
   isOwnMember,
   type MembershipReview,
   type MembershipReviewCopy,
@@ -298,6 +300,7 @@ export function TeamWorkspace({
   const creation = useRef<{ name: string; requestId: string } | null>(null);
   const team = result?.team;
   const owner = team?.canManage === true;
+  const onlyOwner = team ? isOnlyOwner(team, profile) : false;
   const ready = team?.state === "ready" && !busy;
   const run = (command: TeamCommand) => {
     setCopied(null);
@@ -583,6 +586,15 @@ export function TeamWorkspace({
           ) : null}
           <div>
             <h4 className="text-sm font-medium">Members</h4>
+            {owner ? (
+              <p className="mt-1 text-xs text-muted-foreground">
+                To hand this team to someone else, choose Transfer ownership: they become an owner
+                and you become an editor, and only an owner can make you an owner again. A team
+                always keeps at least one owner. Pending invitations stay with the team. If an owner
+                leaves UC San Diego, another owner can remove them; if they were the only owner,
+                give a system administrator the team reference to assign a new one.
+              </p>
+            ) : null}
             <ul className="mt-2 divide-y divide-border">
               {team.members.map((member) => {
                 const self = isOwnMember(member, profile);
@@ -617,6 +629,16 @@ export function TeamWorkspace({
                             onClick={() => openReview({ kind: "role", member, role: staged })}
                           >
                             Review change
+                          </Button>
+                        ) : null}
+                        {canTransferOwnership(team, member, profile) ? (
+                          <Button
+                            variant="outline"
+                            disabled={!ready}
+                            aria-label={`Transfer ownership of ${team.name} to ${member.displayName} (${member.email})`}
+                            onClick={() => openReview({ kind: "transfer", member })}
+                          >
+                            Transfer ownership
                           </Button>
                         ) : null}
                         {self ? null : (
@@ -741,14 +763,21 @@ export function TeamWorkspace({
               </form>
             </>
           ) : null}
-          <Button
-            variant="ghost"
-            disabled={!ready}
-            aria-label={`Leave team ${team.name}`}
-            onClick={() => openReview({ kind: "leave" })}
-          >
-            Leave team
-          </Button>
+          <div className="flex flex-wrap items-center gap-3">
+            <Button
+              variant="ghost"
+              disabled={!ready || onlyOwner}
+              aria-label={`Leave team ${team.name}`}
+              onClick={() => openReview({ kind: "leave" })}
+            >
+              Leave team
+            </Button>
+            {onlyOwner ? (
+              <p className="text-xs text-muted-foreground">
+                You’re the only owner. Transfer ownership to another member before you leave.
+              </p>
+            ) : null}
+          </div>
         </section>
       ) : null}
       <MembershipReviewDialog

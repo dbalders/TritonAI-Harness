@@ -7,15 +7,23 @@ Teams is available in the web and desktop clients.
 Create a team, or accept a pending invitation in Teams. Owners invite specific
 UCSD addresses; creating an invitation sends no email and grants no access.
 The recipient must sign in with that account and choose **Accept** before
-joining. You can also paste an invitation code from the team owner. Owners
-can cancel pending invitations.
+joining. You can also paste an invitation code from the team owner.
+Invitations belong to the team, not the owner who created them: they stay
+valid if that person stops being an owner, and any owner can cancel one. To
+replace a lost invitation code, cancel the invitation and invite the person
+again.
 
 Owners manage names and membership, editors can publish and edit documents,
-and readers can view them. Assign another owner before the last owner leaves
-or changes roles. Your own row is marked **You**. Choosing a new role only
-stages it: select **Review change** and confirm it. Removing a member, leaving,
-and cancelling an invitation also ask for confirmation, and none of them can
-be undone in place: a removed member or someone who left needs a new
+and readers can view them. A team always keeps at least one owner. To hand a
+team to someone else, choose **Transfer ownership** on their row and confirm:
+they become an owner and you become an editor in one step, and other owners
+keep their role. The only owner can't leave until they transfer ownership. If
+an owner leaves UC San Diego, another owner can remove them; if they were the
+only owner, give a system administrator the team reference so they can assign
+a new owner. Your own row is marked **You**. Choosing a new role only stages
+it: select **Review change** and confirm it. Transferring ownership, removing a
+member, leaving, and cancelling an invitation also ask for confirmation, and
+none of them can be undone in place: a removed member or someone who left needs a new
 invitation, and if you give up the owner role, only another owner can restore
 it. To remove yourself, use **Leave team**. If a confirmed change fails or
 Teams doesn't answer, the change may still be in progress, so the dialog

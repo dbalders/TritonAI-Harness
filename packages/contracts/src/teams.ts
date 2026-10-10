@@ -40,6 +40,16 @@ export const TeamCommand = Schema.Union([
     role: TeamRole,
     revision: Schema.Int,
   }),
+  /**
+   * Makes another member an owner and the caller an editor in one change. Only a member who is an
+   * owner can transfer; other owners keep their role.
+   */
+  Schema.Struct({
+    action: Schema.Literal("transfer-ownership"),
+    teamId: Id,
+    identityId: Identity,
+    revision: Schema.Int,
+  }),
   Schema.Struct({
     action: Schema.Literal("remove-member"),
     teamId: Id,

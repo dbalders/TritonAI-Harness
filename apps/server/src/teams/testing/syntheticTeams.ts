@@ -384,6 +384,17 @@ export function makeSyntheticTeamsWorld() {
         const after = team.roles.get(current);
         return Effect.succeed(result(after ? detail(team, after) : null));
       }
+      if (command.action === "transfer-ownership") {
+        const member = identityOfMember(team, command.identityId);
+        if (!member || member === current) return fail("not_found", "Member unavailable");
+        if (team.roles.get(member) === "owner")
+          return fail("conflict", "This member is already an owner.");
+        // Owners and editors have the same storage access, so no permission changes are needed.
+        team.roles.set(member, "owner");
+        team.roles.set(current, "editor");
+        team.revision++;
+        return Effect.succeed(result(detail(team, "editor")));
+      }
       return fail("invalid_request", "This action is disabled in the synthetic Teams fixture.");
     });
 

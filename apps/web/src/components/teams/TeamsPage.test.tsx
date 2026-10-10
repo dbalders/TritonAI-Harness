@@ -271,6 +271,45 @@ it("leaves only after confirmation and offers a refresh, not a retry, after a tr
   expect(dialog()).toBeNull();
 });
 
+it("transfers ownership to a named member in one confirmed change", async () => {
+  await renderWorkspace();
+  // Only members who aren't owners yet can receive ownership.
+  expect(document.querySelector('[aria-label^="Transfer ownership of Alpha to Bob"]')).toBeNull();
+  expect(document.querySelector('[aria-label^="Transfer ownership of Alpha to Alice"]')).toBeNull();
+  await press(byLabel("Transfer ownership of Alpha to Carol (carol@ucsd.edu)"));
+  expect(mocks.calls).toEqual([]);
+  expect(dialog()?.textContent).toContain("Transfer ownership of Alpha to Carol?");
+  expect(dialog()?.textContent).toContain("carol@ucsd.edu");
+  expect(dialog()?.textContent).toContain("You'll become an editor");
+  expect(dialog()?.textContent).toContain("only an owner can make you an owner again");
+  expect(document.activeElement?.textContent).toBe("Cancel");
+
+  mocks.reply = () => ({
+    ...teamResult(4, [
+      member("Alice", "a", "editor"),
+      member("Bob", "b", "owner"),
+      member("Carol", "c", "owner"),
+    ]),
+  });
+  await press(buttonNamed("Transfer ownership"));
+  expect(mocks.calls).toEqual([
+    { action: "transfer-ownership", teamId: TEAM_ID, identityId: id("c"), revision: 3 },
+  ]);
+  expect(dialog()).toBeNull();
+});
+
+it("asks the only owner to transfer ownership before leaving", async () => {
+  mocks.reply = () =>
+    teamResult(3, [member("Alice", "a", "owner"), member("Carol", "c", "editor")]);
+  await renderWorkspace();
+  const leave = byLabel("Leave team Alpha") as HTMLButtonElement;
+  expect(leave.disabled).toBe(true);
+  expect(leave.parentElement?.textContent).toContain(
+    "Transfer ownership to another member before you leave.",
+  );
+  expect(byLabel("Transfer ownership of Alpha to Carol (carol@ucsd.edu)")).not.toBeNull();
+});
+
 it("cancels an invitation only after confirmation", async () => {
   await renderWorkspace();
   await press(byLabel("Cancel invitation for dan@ucsd.edu"));

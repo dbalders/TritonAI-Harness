@@ -22,6 +22,7 @@ export type MembershipReview = {
 export type MembershipReviewTarget =
   | { readonly kind: "remove"; readonly member: TeamMember }
   | { readonly kind: "role"; readonly member: TeamMember; readonly role: TeamRole }
+  | { readonly kind: "transfer"; readonly member: TeamMember }
   | { readonly kind: "leave" }
   | { readonly kind: "cancel-invite"; readonly invitation: TeamInvitation };
 
@@ -64,9 +65,25 @@ export function isCurrentReview(
   return (
     member !== undefined &&
     member.role === review.member.role &&
-    (review.kind === "remove" || review.role !== member.role)
+    (review.kind === "remove" || review.kind === "transfer" || review.role !== member.role)
   );
 }
+
+/** The caller's own row; absent for a system administrator managing a team they aren't in. */
+export const ownMember = (team: TeamDetail, profile: Pick<AccountProfile, "email">) =>
+  team.members.find((entry) => isOwnMember(entry, profile));
+
+/** Only a member who is an owner can hand ownership to another member who isn't one yet. */
+export const canTransferOwnership = (
+  team: TeamDetail,
+  member: TeamMember,
+  profile: Pick<AccountProfile, "email">,
+) => member.role !== "owner" && ownMember(team, profile)?.role === "owner";
+
+/** The last owner can't leave or step down; they transfer ownership first. */
+export const isOnlyOwner = (team: TeamDetail, profile: Pick<AccountProfile, "email">) =>
+  ownMember(team, profile)?.role === "owner" &&
+  team.members.filter((entry) => entry.role === "owner").length === 1;
 
 export function membershipReviewCommand(review: MembershipReview): TeamCommand {
   const { teamId, revision } = review;
@@ -79,6 +96,13 @@ export function membershipReviewCommand(review: MembershipReview): TeamCommand {
         teamId,
         identityId: review.member.identityId,
         role: review.role,
+        revision,
+      };
+    case "transfer":
+      return {
+        action: "transfer-ownership",
+        teamId,
+        identityId: review.member.identityId,
         revision,
       };
     case "leave":
@@ -94,6 +118,9 @@ const roleLabel = (role: TeamRole) =>
 const MANAGE = "manage members, invitations, and the team name";
 const WRITE = "add and edit team files";
 const access = (role: TeamRole) => ({ manage: role === "owner", write: role !== "reader" });
+// Invitations belong to the team, so one an owner created outlives their owner role.
+const INVITATIONS_STAY =
+  "Pending invitations they created stay valid; cancel any you no longer want.";
 
 /** Plain, target-specific wording. Access is described as Harness access only. */
 export function membershipReviewCopy(
@@ -107,7 +134,12 @@ export function membershipReviewCopy(
       const { displayName: name, email } = review.member;
       return {
         title: `Remove ${name} from ${teamName}?`,
-        description: `${name} (${email}) will lose access to ${teamName} in Harness, ${loses}. Files they added stay with the team. To add them back, invite them again; they'll need to accept.`,
+        description: [
+          `${name} (${email}) will lose access to ${teamName} in Harness, ${loses}. Files they added stay with the team. To add them back, invite them again; they'll need to accept.`,
+          review.member.role === "owner" && INVITATIONS_STAY,
+        ]
+          .filter(Boolean)
+          .join(" "),
         confirm: "Remove member",
         working: "Removing…",
         dismiss: "Cancel",
@@ -123,6 +155,17 @@ export function membershipReviewCopy(
         dismiss: "Cancel",
         destructive: true,
       };
+    case "transfer": {
+      const { displayName: name, email } = review.member;
+      return {
+        title: `Transfer ownership of ${teamName} to ${name}?`,
+        description: `${name} (${email}) will become an owner and be able to ${MANAGE}. You'll become an editor: you can still ${WRITE}, but only an owner can make you an owner again. Other owners keep their role, and pending invitations stay with the team.`,
+        confirm: "Transfer ownership",
+        working: "Transferring…",
+        dismiss: "Cancel",
+        destructive: true,
+      };
+    }
     case "cancel-invite":
       return {
         title: `Cancel the invitation for ${review.invitation.email}?`,
@@ -151,6 +194,7 @@ export function membershipReviewCopy(
           `${subject} will be able to ${gained.filter(Boolean).join(" and ")}.`,
         !self && after.manage && "Owners can also change your role or remove you.",
         self && before.manage && !after.manage && "Only another owner can make you an owner again.",
+        !self && before.manage && !after.manage && INVITATIONS_STAY,
       ].filter(Boolean);
       return {
         title: self
