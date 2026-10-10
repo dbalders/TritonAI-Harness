@@ -4,7 +4,6 @@ import { createRoot, type Root } from "react-dom/client";
 import * as Cause from "effect/Cause";
 import * as Schema from "effect/Schema";
 import {
-  EnvironmentId,
   ProjectId,
   type TeamProjectCommand,
   type TeamProjectResult,
