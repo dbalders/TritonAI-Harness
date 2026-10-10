@@ -6,6 +6,7 @@ import {
   type TeamRole,
   type TeamStorage as TeamStorageRecord,
   TeamsError,
+  type TeamsResult,
 } from "@t3tools/contracts";
 import * as NodeCrypto from "node:crypto";
 import * as Effect from "effect/Effect";
@@ -56,6 +57,8 @@ export function teamProjectFixture() {
   const values = new Map<string, Uint8Array>();
   // Document text by "<root>:<path>"; others read as "Shared note from <root>:<path>".
   const contents = new Map<string, string>();
+  // Documents by "<root>:<path>" that Graph answers as not found.
+  const removed = new Set<string>();
   const graph: string[] = [];
   // Runs once, inside the next Graph request, to interleave another call with an in-flight one.
   let duringGraph: Effect.Effect<unknown, TeamsError> | null = null;
@@ -85,7 +88,24 @@ export function teamProjectFixture() {
     pollLogin: () => Effect.sync(status),
     signOut: () => Effect.sync(status),
     teams: (_sessionId, command) =>
-      Effect.suspend(() => {
+      Effect.suspend((): Effect.Effect<TeamsResult, TeamsError> => {
+        if (command.action === "list")
+          return Effect.succeed({
+            teams: (signedIn ? [teamA, teamB] : [])
+              .filter((teamId) => roles[teamId]?.[subject])
+              .map((teamId) => ({
+                id: teamId,
+                reference: "T-12345678",
+                name: teamId === teamA ? "Team A" : "Team B",
+                role: roles[teamId]![subject]!,
+                canManage: roles[teamId]![subject] === "owner",
+                state: "ready" as const,
+                revision: 1,
+              })),
+            invitations: [],
+            team: null,
+            invitationCode: null,
+          });
         const teamId = "teamId" in command ? command.teamId : "";
         const role = signedIn ? roles[teamId]?.[subject] : undefined;
         if (!role)
@@ -244,6 +264,7 @@ export function teamProjectFixture() {
         writes.push({ method: request.method, url: request.url, body: "" });
         return json(null, 404);
       }
+      if (removed.has(`${root}:${path}`)) return json(null, 404);
       if (suffix?.endsWith("children"))
         return json({
           value:
@@ -286,6 +307,7 @@ export function teamProjectFixture() {
     threads,
     values,
     contents,
+    removed,
     interleave: (effect: Effect.Effect<unknown, TeamsError>) => {
       duringGraph = effect;
     },

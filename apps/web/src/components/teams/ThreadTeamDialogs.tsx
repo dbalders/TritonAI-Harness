@@ -43,7 +43,7 @@ const MAX_NOTE_BYTES = 64 * 1024;
 type Share = Extract<TeamProjectCommand, { action: "share" }>;
 
 /** Storage answers without the requested content when Microsoft is not ready; say why. */
-function storageProblem(result: TeamProjectResult): string | null {
+export function storageProblem(result: TeamProjectResult): string | null {
   switch (result.storage?.status) {
     case "not-configured":
       return "Microsoft storage is not set up for this environment yet.";
@@ -59,7 +59,7 @@ function storageProblem(result: TeamProjectResult): string | null {
  * Team dialogs are mounted per signed-in campus identity, so an account change discards
  * every unsent team draft, preview, and loaded note.
  */
-function SignedIn({
+export function SignedIn({
   environmentId,
   children,
 }: {

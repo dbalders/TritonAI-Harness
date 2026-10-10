@@ -2,12 +2,16 @@ import {
   type ClientOrchestrationCommand,
   formatTeamContext,
   hasHiddenTeamText,
+  MAX_TEAM_PROJECT_SKILL_CHARS,
+  MAX_TEAM_PROJECT_SKILLS,
   type ProjectId,
   type TeamContextKind,
   type ThreadId,
   type TeamProjectCommand,
   type TeamProjectLink,
   type TeamProjectResult,
+  type TeamProjectSkill,
+  teamNoteHeader,
   TeamStorage,
   type TeamStorageStatus,
   TeamsError,
@@ -47,6 +51,36 @@ const sameLink = (a: Link, b: Link | undefined) =>
   a.storage.folderId === b.storage.folderId;
 const decodeLinks = Schema.decodeUnknownEffect(Links);
 const encodeLinks = Schema.encodeEffect(Links);
+const ENABLED_SECRET_NAME = "team-project-skills";
+const MAX_ENABLED = 2_000;
+/**
+ * A skill one campus identity turned on for one project. It applies only while the project keeps
+ * the exact link it was approved under and the document's text still has the approved version.
+ */
+const Enabled = Schema.Struct({
+  /** The caller's author-folder id: sha256 of `[issuer, subject]`, as the membership service names it. */
+  identity: Schema.String,
+  link: Link,
+  path: Schema.String,
+  /** SHA-256 hex of the exact document text that was reviewed. */
+  version: Schema.String,
+  title: Schema.String,
+  chars: Schema.Int,
+  approvedAt: Schema.String,
+});
+type Enabled = typeof Enabled.Type;
+const EnabledList = Schema.fromJsonString(
+  Schema.Array(Enabled).check(Schema.isMaxLength(MAX_ENABLED)),
+);
+const decodeEnabled = Schema.decodeUnknownEffect(EnabledList);
+const encodeEnabled = Schema.encodeEffect(EnabledList);
+const identityOf = (profile: { issuer: string; subject: string }) =>
+  NodeCrypto.createHash("sha256")
+    .update(JSON.stringify([profile.issuer, profile.subject]))
+    .digest("base64url");
+const versionOf = (text: string) => NodeCrypto.createHash("sha256").update(text).digest("hex");
+/** Losing the team itself, as opposed to failing to check it. */
+const lostTeam = (error: TeamsError) => error.code === "not_found" || error.code === "forbidden";
 const failure = (message: string) => new TeamsError({ code: "unavailable", message });
 const notLinked = () =>
   new TeamsError({
@@ -93,6 +127,13 @@ interface Issued {
   readonly projectId: ProjectId;
   readonly link: Link;
   readonly block: string;
+  /** Added by the server to a message because its skill is on for the project; never handed out. */
+  readonly applied?: true;
+}
+/** An enabled skill as checked for one request, with the approved text when it can be used. */
+interface CheckedSkill {
+  readonly skill: TeamProjectSkill;
+  readonly text?: string;
 }
 
 /**
@@ -100,7 +141,8 @@ interface Issued {
  * metadata, not a filesystem boundary: every call reresolves the team from this server-side
  * record and rechecks the caller's campus identity, membership, role, and the exact storage root.
  * Team content is never written into the project workspace, personal memory, provider homes, or
- * installed skills; it reaches an agent only as text the user adds to one message.
+ * installed skills. It reaches an agent only as text in a user's message: added by the user, or
+ * added by the server to each message in a project where that user turned an approved skill on.
  */
 export class TeamProjectService extends Context.Service<
   TeamProjectService,
@@ -121,6 +163,17 @@ export class TeamProjectService extends Context.Service<
       sessionId: string,
       command: ClientOrchestrationCommand,
     ) => Effect.Effect<void, TeamsError>;
+    /**
+     * What a client dispatch sends: `authorizeOutgoingCommand`, then, for a user message in a
+     * linked project, the approved skills this session's campus identity turned on for that
+     * project, each rechecked now. A skill whose access is gone, whose document changed or was
+     * removed, is left out; a check that can't complete fails the send. Slash commands and other
+     * commands pass unchanged.
+     */
+    readonly prepareOutgoingCommand: (
+      sessionId: string,
+      command: ClientOrchestrationCommand,
+    ) => Effect.Effect<ClientOrchestrationCommand, TeamsError>;
   }
 >()("t3/teams/TeamProjectService") {}
 
@@ -147,6 +200,28 @@ export const make = Effect.gen(function* () {
       Effect.flatMap((encoded) => secrets.set(SECRET_NAME, new TextEncoder().encode(encoded))),
       Effect.mapError(() => failure("Team project links could not be saved securely.")),
     );
+  const readEnabled = secrets.get(ENABLED_SECRET_NAME).pipe(
+    Effect.flatMap((value) =>
+      Option.isSome(value)
+        ? decodeEnabled(new TextDecoder().decode(value.value))
+        : Effect.succeed([] as readonly Enabled[]),
+    ),
+    Effect.mapError(() => failure("Team skill settings could not be read securely.")),
+  );
+  const writeEnabled = (entries: readonly Enabled[]) =>
+    encodeEnabled(entries).pipe(
+      Effect.flatMap((encoded) =>
+        secrets.set(ENABLED_SECRET_NAME, new TextEncoder().encode(encoded)),
+      ),
+      Effect.mapError(() => failure("Team skill settings could not be saved securely.")),
+    );
+  /** Turns off the matching skills; callers hold `lock`. */
+  const removeEnabled = (matches: (entry: Enabled) => boolean) =>
+    Effect.gen(function* () {
+      const entries = yield* readEnabled;
+      const next = entries.filter((entry) => !matches(entry));
+      if (next.length !== entries.length) yield* writeEnabled(next);
+    });
   const activeProject = (projectId: ProjectId) =>
     projects.getProjectShellById(projectId).pipe(
       Effect.mapError(() => failure("Harness projects could not be read.")),
@@ -249,6 +324,368 @@ export const make = Effect.gen(function* () {
         return yield* memoryChanged();
       yield* unchangedLink;
     });
+  const remember = (entry: Issued) => {
+    issued.set(entry.id, entry);
+    for (const id of issued.keys()) {
+      if (issued.size <= MAX_ISSUED) break;
+      issued.delete(id);
+    }
+  };
+  /** Holds a block the server added to a message, replacing its earlier copy for the same authority. */
+  const rememberApplied = (entry: Issued) => {
+    for (const [id, existing] of issued)
+      if (
+        existing.applied &&
+        existing.block === entry.block &&
+        existing.sessionId === entry.sessionId &&
+        existing.issuer === entry.issuer &&
+        existing.subject === entry.subject &&
+        existing.projectId === entry.projectId &&
+        sameLink(existing.link, entry.link)
+      )
+        issued.delete(id);
+    remember(entry);
+  };
+
+  /**
+   * The caller's link, team, and own skills for a project, after the membership check every use
+   * of them makes. Losing the team turns the caller's skills for the project off.
+   */
+  const projectSkills = (
+    sessionId: string,
+    projectId: ProjectId,
+    profile: { issuer: string; subject: string },
+  ) =>
+    Effect.gen(function* () {
+      const link = yield* linkFor(projectId);
+      if (!link || !(yield* activeProject(projectId))) return yield* notLinked();
+      const identity = identityOf(profile);
+      const mineFor = (entry: Enabled) =>
+        entry.identity === identity && entry.link.projectId === projectId;
+      const team = yield* readyTeam(sessionId, link.teamId).pipe(
+        Effect.tapError((error) =>
+          lostTeam(error) ? lock.withPermits(1)(removeEnabled(mineFor)) : Effect.void,
+        ),
+      );
+      const root = link.storage;
+      if (
+        team.storage.tenantId.toLowerCase() !== root.tenantId.toLowerCase() ||
+        team.storage.siteId !== root.siteId ||
+        team.storage.driveId !== root.driveId ||
+        team.storage.folderId !== root.folderId
+      )
+        return yield* new TeamsError({
+          code: "conflict",
+          message: "This project's team folder changed. Unlink the project and link it again.",
+        });
+      // Skills approved under an earlier link of this project never apply to the current one.
+      const mine = (yield* readEnabled).filter(
+        (entry) => mineFor(entry) && sameLink(entry.link, link),
+      );
+      return { link, team, identity, mine };
+    });
+  /**
+   * Rereads each of the caller's skills for the project now. A removed, changed, or hidden-text
+   * document is withheld with its reason, as are all of them when this session has no working
+   * Microsoft connection; a read that can't complete fails.
+   */
+  const checkSkills = (
+    sessionId: string,
+    link: Link,
+    mine: readonly Enabled[],
+  ): Effect.Effect<CheckedSkill[], TeamsError> =>
+    Effect.forEach(mine, (entry) =>
+      Effect.gen(function* () {
+        const base = { path: entry.path, title: entry.title, version: entry.version } as const;
+        const read = yield* storage
+          .execute(
+            sessionId,
+            { action: "read-file", teamId: link.teamId, path: entry.path },
+            { storage: link.storage },
+          )
+          .pipe(Effect.result);
+        if (read._tag === "Failure") {
+          if (read.failure.code === "sign_in_required")
+            return {
+              skill: { ...base, state: "unavailable", reason: read.failure.message },
+            } satisfies CheckedSkill;
+          if (read.failure.code !== "not_found") return yield* read.failure;
+          return {
+            skill: {
+              ...base,
+              state: "unavailable",
+              reason: "This skill is no longer in the team's Skills folder.",
+            },
+          } satisfies CheckedSkill;
+        }
+        const document = read.success.document;
+        if (!document)
+          return {
+            skill: {
+              ...base,
+              state: "unavailable",
+              reason: storageUnavailable(read.success.status).message,
+            },
+          } satisfies CheckedSkill;
+        const current = versionOf(document.text);
+        if (hasHiddenTeamText(document.text))
+          return {
+            skill: {
+              ...base,
+              state: "unavailable",
+              reason:
+                "This skill now contains hidden or control characters, so Harness won't use it.",
+              currentVersion: current,
+            },
+          } satisfies CheckedSkill;
+        if (current !== entry.version)
+          return {
+            skill: {
+              ...base,
+              state: "needs-review",
+              reason:
+                "This skill changed since you turned it on. Review the update to use it again.",
+              currentVersion: current,
+            },
+          } satisfies CheckedSkill;
+        return { skill: { ...base, state: "active" }, text: document.text } satisfies CheckedSkill;
+      }),
+    );
+  const projectOf = (command: Extract<ClientOrchestrationCommand, { type: "thread.turn.start" }>) =>
+    projects.getThreadShellById(command.threadId).pipe(
+      Effect.mapError(() => failure("The thread could not be read.")),
+      Effect.map((thread) =>
+        Option.isSome(thread)
+          ? thread.value.projectId
+          : (command.bootstrap?.createThread?.projectId ?? null),
+      ),
+    );
+  /** Adds the session's active project skills to a user message; see `prepareOutgoingCommand`. */
+  const applyProjectSkills = Effect.fn("TeamProjectService.applyProjectSkills")(function* (
+    sessionId: string,
+    command: ClientOrchestrationCommand,
+  ) {
+    if (command.type !== "thread.turn.start") return command;
+    const text = command.message.text;
+    // A slash command must reach the provider exactly as typed.
+    if (text.trimStart().startsWith("/")) return command;
+    // Unreadable settings add nothing rather than stop every message on this server; Settings →
+    // Skills reports the error.
+    const enabled = yield* readEnabled.pipe(
+      Effect.tapError((error) => Effect.logWarning("team skill settings unreadable", error)),
+      Effect.orElseSucceed((): readonly Enabled[] => []),
+    );
+    if (enabled.length === 0) return command;
+    const projectId = yield* projectOf(command);
+    if (!projectId || !enabled.some((entry) => entry.link.projectId === projectId)) return command;
+    const status = yield* account
+      .getStatus(sessionId)
+      .pipe(Effect.mapError(() => failure("Your UC San Diego account could not be verified.")));
+    // Only the signed-in identity's own choices apply; nobody else's ever do.
+    if (status.status !== "signed-in" || !status.profile) return command;
+    const profile = status.profile;
+    const identity = identityOf(profile);
+    if (!enabled.some((entry) => entry.identity === identity && entry.link.projectId === projectId))
+      return command;
+    const cannotCheck = (error: TeamsError) =>
+      new TeamsError({
+        code: "unavailable",
+        message: `Team skills are on for this project, but they couldn't be checked. ${error.message} Try again, or turn them off in Settings → Skills.`,
+      });
+    const context = yield* projectSkills(sessionId, projectId, profile).pipe(Effect.result);
+    if (context._tag === "Failure") {
+      // A team the caller lost, or a link that's gone, withholds its skills; the message goes.
+      if (context.failure.code !== "unavailable" && context.failure.code !== "conflict")
+        return command;
+      return yield* cannotCheck(context.failure);
+    }
+    const { link, team, mine } = context.success;
+    if (mine.length === 0) return command;
+    const checked = yield* checkSkills(sessionId, link, mine).pipe(Effect.mapError(cannotCheck));
+    const entries: Issued[] = [];
+    for (const { skill, text: skillText } of checked) {
+      if (skill.state !== "active" || skillText === undefined) continue;
+      // A skill the user also added to this message by hand is already there.
+      const added = formatTeamContext({
+        kind: "skill",
+        teamName: team.name,
+        path: skill.path,
+        text: "",
+      });
+      if (text.includes(added.slice(0, added.indexOf(">")))) continue;
+      entries.push({
+        id: NodeCrypto.randomUUID(),
+        sessionId,
+        issuer: profile.issuer,
+        subject: profile.subject,
+        projectId,
+        link,
+        applied: true,
+        block: formatTeamContext({
+          kind: "skill",
+          teamName: team.name,
+          path: skill.path,
+          text: skillText,
+          projectVersion: skill.version,
+        }),
+      });
+    }
+    if (entries.length === 0) return command;
+    // The same check the dispatch gate makes: an account switch or unlink during the reads wins.
+    const held = yield* authorizeIssued(sessionId, entries[0]!, true).pipe(Effect.result);
+    if (held._tag === "Failure") {
+      if (held.failure.code === "unavailable") return yield* cannotCheck(held.failure);
+      return command;
+    }
+    for (const entry of entries) rememberApplied(entry);
+    const blocks = entries.map((entry) => entry.block).join("\n\n");
+    return {
+      ...command,
+      message: { ...command.message, text: text.trim() ? `${text}\n\n${blocks}` : blocks },
+    };
+  });
+  const enabledSkills = Effect.fn("TeamProjectService.enabledSkills")(function* (
+    sessionId: string,
+    projectId: ProjectId,
+  ) {
+    const profile = yield* signedInProfile(sessionId);
+    const { link, team, mine } = yield* projectSkills(sessionId, projectId, profile);
+    const checked = yield* checkSkills(sessionId, link, mine).pipe(
+      Effect.catch((error) =>
+        Effect.succeed(
+          mine.map((entry): CheckedSkill => ({
+            skill: {
+              path: entry.path,
+              title: entry.title,
+              version: entry.version,
+              state: "unavailable",
+              reason: error.message,
+            },
+          })),
+        ),
+      ),
+    );
+    // An unlink or account switch that landed during the reads wins.
+    const after = yield* signedInProfile(sessionId);
+    if (
+      after.issuer !== profile.issuer ||
+      after.subject !== profile.subject ||
+      !sameLink(link, yield* linkFor(projectId))
+    )
+      return yield* memoryChanged();
+    return {
+      projects: yield* listFor(team, [link]),
+      storage: null,
+      enabledSkills: checked.map((entry) => entry.skill),
+    };
+  });
+  const enableSkill = Effect.fn("TeamProjectService.enableSkill")(function* (
+    sessionId: string,
+    command: Extract<TeamProjectCommand, { action: "skill-enable" }>,
+  ) {
+    if (!command.path.startsWith(`${folders.skill}/`)) return yield* wrongFolder();
+    const profile = yield* signedInProfile(sessionId);
+    const { link, identity } = yield* projectSkills(sessionId, command.projectId, profile);
+    const status = yield* storage.execute(
+      sessionId,
+      { action: "read-file", teamId: link.teamId, path: command.path },
+      { storage: link.storage },
+    );
+    const document = status.document;
+    if (!document) return yield* storageUnavailable(status.status);
+    if (hasHiddenTeamText(document.text)) return yield* hiddenSkillText();
+    if (versionOf(document.text) !== command.version)
+      return yield* new TeamsError({
+        code: "conflict",
+        message: "This skill changed since you reviewed it. Review it again to turn it on.",
+      });
+    // An account switch or unlink that landed during the read wins.
+    const after = yield* signedInProfile(sessionId);
+    if (
+      after.issuer !== profile.issuer ||
+      after.subject !== profile.subject ||
+      !sameLink(link, yield* linkFor(command.projectId))
+    )
+      return yield* memoryChanged();
+    const approvedAt = DateTime.formatIso(yield* DateTime.now);
+    return yield* lock.withPermits(1)(
+      Effect.gen(function* () {
+        const entries = yield* readEnabled;
+        const mineFor = (entry: Enabled) =>
+          entry.identity === identity && entry.link.projectId === command.projectId;
+        const others = entries.filter(
+          (entry) => mineFor(entry) && sameLink(entry.link, link) && entry.path !== command.path,
+        );
+        if (others.length >= MAX_TEAM_PROJECT_SKILLS)
+          return yield* new TeamsError({
+            code: "invalid_request",
+            message: `At most ${MAX_TEAM_PROJECT_SKILLS} team skills can be on for one project, because each is added to every message. Turn one off first.`,
+          });
+        if (
+          others.reduce((total, entry) => total + entry.chars, 0) + document.text.length >
+          MAX_TEAM_PROJECT_SKILL_CHARS
+        )
+          return yield* new TeamsError({
+            code: "invalid_request",
+            message: `Team skills on for one project can total at most ${MAX_TEAM_PROJECT_SKILL_CHARS.toLocaleString("en-US")} characters, because they're added to every message. Turn another off, or use this one in a single message instead.`,
+          });
+        const approved: Enabled = {
+          identity,
+          link,
+          path: command.path,
+          version: command.version,
+          title: teamNoteHeader(document.text).title || command.path.split("/").at(-1)!,
+          chars: document.text.length,
+          approvedAt,
+        };
+        // An approved update keeps its place; skills from an earlier link of the project go.
+        let replaced = false;
+        const next = entries.flatMap((entry) => {
+          if (!mineFor(entry)) return [entry];
+          if (!sameLink(entry.link, link)) return [];
+          if (entry.path !== command.path) return [entry];
+          replaced = true;
+          return [approved];
+        });
+        if (!replaced) next.push(approved);
+        if (next.length > MAX_ENABLED)
+          return yield* failure("Too many team skills are on in this environment.");
+        yield* writeEnabled(next);
+        return { projects: [], storage: null };
+      }),
+    );
+  });
+  const disableSkill = Effect.fn("TeamProjectService.disableSkill")(function* (
+    sessionId: string,
+    command: Extract<TeamProjectCommand, { action: "skill-disable" }>,
+  ) {
+    // Turning a skill off only reduces what is sent, so it needs no team or link.
+    const identity = identityOf(yield* signedInProfile(sessionId));
+    yield* lock.withPermits(1)(
+      removeEnabled(
+        (entry) =>
+          entry.identity === identity &&
+          entry.link.projectId === command.projectId &&
+          entry.path === command.path,
+      ),
+    );
+    return { projects: [], storage: null };
+  });
+  const projectLinks = Effect.fn("TeamProjectService.projectLinks")(function* (sessionId: string) {
+    yield* signedInProfile(sessionId);
+    const teams = new Map(
+      (yield* account.teams(sessionId, { action: "list" })).teams
+        .filter((team) => team.state === "ready")
+        .map((team) => [team.id, team] as const),
+    );
+    const result: TeamProjectLink[] = [];
+    for (const link of yield* readLinks) {
+      const team = teams.get(link.teamId);
+      if (team) result.push(...(yield* listFor(team, [link])));
+    }
+    return { projects: result, storage: null };
+  });
+
   const attach = Effect.fn("TeamProjectService.attach")(function* (
     sessionId: string,
     command: Extract<TeamProjectCommand, { action: "memory-attach" | "skill-attach" }>,
@@ -283,11 +720,7 @@ export const make = Effect.gen(function* () {
     };
     // The read must still hold for the same account and link when it is handed out.
     yield* authorizeIssued(sessionId, entry, true);
-    issued.set(entry.id, entry);
-    for (const id of issued.keys()) {
-      if (issued.size <= MAX_ISSUED) break;
-      issued.delete(id);
-    }
+    remember(entry);
     return {
       projects: [],
       // The document the block was made from, so a changed one is reviewed under its current title.
@@ -393,6 +826,11 @@ export const make = Effect.gen(function* () {
     if (command.action === "memory-attach" || command.action === "skill-attach")
       return yield* attach(sessionId, command);
     if (command.action === "memory-verify") return yield* verify(sessionId, command.references);
+    if (command.action === "project-links") return yield* projectLinks(sessionId);
+    if (command.action === "skill-enabled")
+      return yield* enabledSkills(sessionId, command.projectId);
+    if (command.action === "skill-enable") return yield* enableSkill(sessionId, command);
+    if (command.action === "skill-disable") return yield* disableSkill(sessionId, command);
     if (command.action === "bind" || command.action === "unbind") {
       const team = yield* readyTeam(sessionId, command.teamId);
       return yield* lock.withPermits(1)(
@@ -404,6 +842,8 @@ export const make = Effect.gen(function* () {
             if (existing && existing.teamId !== team.id) return yield* notLinked();
             const next = links.filter((link) => link.projectId !== command.projectId);
             if (existing) yield* writeLinks(next);
+            // Skills turned on under the old link never apply to a later one.
+            yield* removeEnabled((entry) => entry.link.projectId === command.projectId);
             return { projects: yield* listFor(team, next), storage: null };
           }
           if (!(yield* activeProject(command.projectId)))
@@ -537,9 +977,23 @@ export const make = Effect.gen(function* () {
       hasHiddenTeamText(status.document.text)
     )
       return yield* hiddenSkillText();
-    return { projects: [], storage: status, ...(authors ? { authors } : {}) };
+    return {
+      projects: [],
+      storage: status,
+      ...(authors ? { authors } : {}),
+      ...(command.action === "skill-read" && status.document
+        ? { version: versionOf(status.document.text) }
+        : {}),
+    };
   });
-  return TeamProjectService.of({ execute, authorizeOutgoingCommand });
+  const prepareOutgoingCommand = Effect.fn("TeamProjectService.prepareOutgoingCommand")(function* (
+    sessionId: string,
+    command: ClientOrchestrationCommand,
+  ) {
+    yield* authorizeOutgoingCommand(sessionId, command);
+    return yield* applyProjectSkills(sessionId, command);
+  });
+  return TeamProjectService.of({ execute, authorizeOutgoingCommand, prepareOutgoingCommand });
 });
 
 export const layer = Layer.effect(TeamProjectService, make);

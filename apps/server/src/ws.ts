@@ -2211,15 +2211,19 @@ const makeWsRpcLayer = (
           .pipe(Effect.ignoreCause({ log: true }), Effect.forkDetach, Effect.asVoid);
 
       return WsRpcGroup.of({
-        [ORCHESTRATION_WS_METHODS.dispatchCommand]: (command) =>
+        [ORCHESTRATION_WS_METHODS.dispatchCommand]: (clientCommand) =>
           observeRpcEffect(
             ORCHESTRATION_WS_METHODS.dispatchCommand,
             Effect.gen(function* () {
-              yield* ProjectCloneTracker.rejectCommandsDuringClone(projectCloneTracker, command);
+              yield* ProjectCloneTracker.rejectCommandsDuringClone(
+                projectCloneTracker,
+                clientCommand,
+              );
               // Unedited team memory this server still remembers issuing leaves only while this
-              // session can still open it. The HTTP dispatch route runs the same check.
-              yield* teamProject
-                .authorizeOutgoingCommand(currentSessionId, command)
+              // session can still open it, and a message gets the team skills this session's
+              // account turned on for its project. The HTTP dispatch route does the same.
+              const command = yield* teamProject
+                .prepareOutgoingCommand(currentSessionId, clientCommand)
                 .pipe(
                   Effect.mapError(
                     (error) => new OrchestrationDispatchCommandError({ message: error.message }),

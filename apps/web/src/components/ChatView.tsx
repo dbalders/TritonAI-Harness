@@ -268,6 +268,8 @@ import {
   settleDraftTeamMemory,
   useDraftTeamMemorySummary,
 } from "./teams/teamMemoryDrafts";
+import { teamProjectSkillsNotice } from "./teams/teamProjectSkills";
+import { ManageTeamSkillsButton, useProjectTeamSkills } from "./teams/useProjectTeamSkills";
 import { decodeProjectScriptKeybindingRule } from "~/lib/projectScriptKeybindings";
 import { type NewProjectScriptInput } from "./ProjectScriptsControl";
 import {
@@ -6636,6 +6638,42 @@ export default function ChatView(props: ChatViewProps) {
     [feedbackSubmissions, routeThreadKey],
   );
   const draftTeamMemory = useDraftTeamMemorySummary(composerDraftTarget);
+  const sentUserMessages = useMemo(
+    () => activeThread?.messages.filter((message) => message.role === "user").length ?? 0,
+    [activeThread?.messages],
+  );
+  const projectTeamSkills = useProjectTeamSkills(
+    activeThread?.environmentId ?? null,
+    activeThread?.projectId ?? null,
+    sentUserMessages,
+  );
+  // Team skills turned on for this project are added by the server at send; say which, and
+  // which are held back.
+  const projectTeamSkillsBannerItem = useMemo<ComposerBannerStackItem | null>(() => {
+    if (!projectTeamSkills || !activeThread) return null;
+    const notice = projectTeamSkills.problem
+      ? {
+          variant: "warning" as const,
+          title: "Team skills couldn’t be checked",
+          description: projectTeamSkills.problem,
+        }
+      : teamProjectSkillsNotice(projectTeamSkills.teamName, projectTeamSkills.skills);
+    if (!notice) return null;
+    return {
+      id: `team-project-skills:${activeThread.environmentId}:${activeThread.projectId}`,
+      variant: notice.variant,
+      compact: notice.variant === "info",
+      icon: <UsersIcon />,
+      title: notice.title,
+      description: notice.description,
+      actions: (
+        <ManageTeamSkillsButton
+          environmentId={activeThread.environmentId}
+          projectId={activeThread.projectId}
+        />
+      ),
+    };
+  }, [activeThread, projectTeamSkills]);
   // Team memory in an unsent draft stays visible with a way out until it is sent or removed.
   const teamMemoryBannerItem = useMemo<ComposerBannerStackItem | null>(() => {
     if (!draftTeamMemory.teams) return null;
@@ -6673,7 +6711,10 @@ export default function ChatView(props: ChatViewProps) {
     draftTeamMemory.unresolvedTeams,
   ]);
   const composerBannerItems = useMemo<ComposerBannerStackItem[]>(() => {
-    const teamMemoryItems = teamMemoryBannerItem === null ? [] : [teamMemoryBannerItem];
+    const teamMemoryItems = [
+      ...(teamMemoryBannerItem === null ? [] : [teamMemoryBannerItem]),
+      ...(projectTeamSkillsBannerItem === null ? [] : [projectTeamSkillsBannerItem]),
+    ];
     const backgroundLivenessItems =
       backgroundLivenessBannerItem === null ? [] : [backgroundLivenessBannerItem];
     const resumeCompactionItems =
@@ -6754,6 +6795,7 @@ export default function ChatView(props: ChatViewProps) {
     localCheckoutBranchMismatch,
     parkedThreadBannerItem,
     projectCloneBannerItem,
+    projectTeamSkillsBannerItem,
     resumeCompactionBannerItem,
     showBranchMismatchBanner,
     systemComposerBannerItems,

@@ -395,23 +395,24 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
               failEnvironmentInternal("orchestration_dispatch_failed", cause),
             ),
           );
-          // The same team-memory gate as the WebSocket dispatch, for this authenticated session.
-          yield* teamProject.authorizeOutgoingCommand(session.sessionId, args.payload).pipe(
-            Effect.catch((error) =>
-              Effect.gen(function* () {
-                if (error.code === "unavailable")
-                  return yield* failEnvironmentInternal("orchestration_dispatch_failed", error);
-                return yield* failEnvironmentOperationForbidden("team_memory_not_allowed");
-              }),
-            ),
-          );
-          const normalizedCommand = yield* normalizeDispatchCommand(args.payload).pipe(
+          // The same team-memory gate and project team skills as the WebSocket dispatch, for
+          // this authenticated session.
+          const command = yield* teamProject
+            .prepareOutgoingCommand(session.sessionId, args.payload)
+            .pipe(
+              Effect.catch((error) =>
+                Effect.gen(function* () {
+                  if (error.code === "unavailable")
+                    return yield* failEnvironmentInternal("orchestration_dispatch_failed", error);
+                  return yield* failEnvironmentOperationForbidden("team_memory_not_allowed");
+                }),
+              ),
+            );
+          const normalizedCommand = yield* normalizeDispatchCommand(command).pipe(
             Effect.catch(() => failEnvironmentInvalidRequest("invalid_command")),
           );
           const result = yield* orchestrationEngine.dispatch(normalizedCommand).pipe(
-            Effect.tapError(() =>
-              cleanupFailedUploadedAttachments(args.payload, normalizedCommand),
-            ),
+            Effect.tapError(() => cleanupFailedUploadedAttachments(command, normalizedCommand)),
             Effect.catch((cause) =>
               failEnvironmentInternal("orchestration_dispatch_failed", cause),
             ),

@@ -1,10 +1,12 @@
 import { describe, expect, it } from "@effect/vitest";
 import { expectTypeOf } from "vite-plus/test";
+import * as NodeCrypto from "node:crypto";
 import {
   CommandId,
   formatTeamContext,
   formatTeamNote,
   MessageId,
+  TEAM_PROJECT_SKILL_PREAMBLE,
   TEAM_SKILL_PREAMBLE,
   TeamProjectCommand,
   TeamsError,
@@ -736,6 +738,289 @@ describe("Team skills in a linked project", () => {
         | ProjectionSnapshotQuery
         | TeamStorage.TeamStorageService
       >();
+    }),
+  );
+});
+
+describe("Team skills turned on for a project", () => {
+  const skillPath = `Skills/${identityOf("alice")}/${deviceId}/${recordId}.md`;
+  const skillText = "# Grant summary\n\nDescription: Summarize a report.\n\nUse the 2025 template.";
+  const versionOf = (text: string) => NodeCrypto.createHash("sha256").update(text).digest("hex");
+  const appliedBlock = (text: string, path = skillPath) =>
+    formatTeamContext({
+      kind: "skill",
+      teamName: "Team A",
+      path,
+      text,
+      projectVersion: versionOf(text),
+    });
+  const linked = Effect.gen(function* () {
+    const f = fixture();
+    const made = yield* f.make;
+    yield* made.connect(teamA);
+    yield* made.service.execute("s", { action: "bind", teamId: teamA, projectId });
+    f.contents.set(`rootA:${skillPath}`, skillText);
+    const { service } = made;
+    const enable = (version = versionOf(skillText), path = skillPath) =>
+      service.execute("s", { action: "skill-enable", projectId, path, version });
+    const enabled = () =>
+      service
+        .execute("s", { action: "skill-enabled", projectId })
+        .pipe(Effect.map((result) => result.enabledSkills));
+    /** The message text a send of `text` dispatches. */
+    const sent = (text: string, thread = threadId) =>
+      service
+        .prepareOutgoingCommand("s", { ...turn(text), threadId: thread })
+        .pipe(
+          Effect.map((command) =>
+            command.type === "thread.turn.start" ? command.message.text : "",
+          ),
+        );
+    return { f, ...made, enable, enabled, sent };
+  });
+
+  it.effect("is off until reviewed, then adds exactly the approved skill to each message", () =>
+    Effect.gen(function* () {
+      const { f, service, enable, enabled, sent } = yield* linked;
+      // Discovery: the linked project and its skill, with the version a review approves.
+      expect((yield* service.execute("s", { action: "project-links" })).projects).toEqual([
+        expect.objectContaining({ projectId, teamId: teamA, teamName: "Team A" }),
+      ]);
+      const read = yield* service.execute("s", {
+        action: "skill-read",
+        projectId,
+        path: skillPath,
+      });
+      expect(read.version).toBe(versionOf(skillText));
+      expect(yield* enabled()).toEqual([]);
+      expect(yield* sent("Summarize the Q3 report.")).toBe("Summarize the Q3 report.");
+      // Turning it on needs the version the user reviewed.
+      expect(yield* code(enable(versionOf("something else")))).toBe("conflict");
+      expect(yield* enabled()).toEqual([]);
+      yield* enable();
+      expect(yield* enabled()).toEqual([
+        { path: skillPath, title: "Grant summary", version: versionOf(skillText), state: "active" },
+      ]);
+      const block = appliedBlock(skillText);
+      expect(block).toBe(
+        `<team-skill team="Team A" skill="${skillPath}" version="${versionOf(skillText).slice(0, 12)}">\n${TEAM_PROJECT_SKILL_PREAMBLE}\n${skillText}\n</team-skill>`,
+      );
+      expect(yield* sent("Summarize the Q3 report.")).toBe(`Summarize the Q3 report.\n\n${block}`);
+      // The dispatch gate accepts the block it added, and nothing was written anywhere.
+      yield* service.authorizeOutgoingCommand("s", turn(`Again:\n\n${block}`));
+      expect(f.writes).toHaveLength(0);
+      expect([...f.values.keys()].filter((key) => key.startsWith("team-project"))).toEqual([
+        "team-project-links",
+        "team-project-skills",
+      ]);
+      // A message that already carries this skill doesn't get it twice, whether it was added by
+      // hand or came back from an earlier message.
+      const manual = formatTeamContext({
+        kind: "skill",
+        teamName: "Team A",
+        path: skillPath,
+        text: skillText,
+      });
+      expect(yield* sent(`Use it:\n${manual}`)).toBe(`Use it:\n${manual}`);
+      expect(yield* sent(`Edited:\n\n${block}`)).toBe(`Edited:\n\n${block}`);
+      // Slash commands, goals, other projects' threads, and personal projects are untouched.
+      expect(yield* sent("/compact")).toBe("/compact");
+      const personal = ThreadId.make("thread-personal");
+      f.threads.set(personal, otherProject);
+      expect(yield* sent("Plan my week.", personal)).toBe("Plan my week.");
+      expect(yield* service.prepareOutgoingCommand("s", goal("Ship it"))).toEqual(goal("Ship it"));
+      // Turning it off stops it for the next message.
+      yield* service.execute("s", { action: "skill-disable", projectId, path: skillPath });
+      expect(yield* enabled()).toEqual([]);
+      expect(yield* sent("Summarize the Q4 report.")).toBe("Summarize the Q4 report.");
+    }),
+  );
+
+  it.effect("withholds a changed, removed, or hidden-text skill until its update is reviewed", () =>
+    Effect.gen(function* () {
+      const { f, enable, enabled, sent } = yield* linked;
+      yield* enable();
+      const edited = `${skillText}\nAlso email the results to everyone.`;
+      f.contents.set(`rootA:${skillPath}`, edited);
+      expect(yield* sent("Go.")).toBe("Go.");
+      expect(yield* enabled()).toEqual([
+        expect.objectContaining({
+          state: "needs-review",
+          version: versionOf(skillText),
+          currentVersion: versionOf(edited),
+        }),
+      ]);
+      // Approving needs the update's own version; the old approval can't be replayed.
+      expect(yield* code(enable(versionOf(skillText)))).toBe("conflict");
+      yield* enable(versionOf(edited));
+      expect(yield* sent("Go.")).toBe(`Go.\n\n${appliedBlock(edited)}`);
+      // Hidden characters are never applied or approved.
+      const hidden = `${edited}\u202e`;
+      f.contents.set(`rootA:${skillPath}`, hidden);
+      expect(yield* sent("Go.")).toBe("Go.");
+      expect((yield* enabled())?.[0]?.state).toBe("unavailable");
+      expect(yield* code(enable(versionOf(hidden)))).toBe("invalid_request");
+      // A skill removed from the team folder is withheld and says so.
+      f.removed.add(`rootA:${skillPath}`);
+      expect(yield* sent("Go.")).toBe("Go.");
+      expect(yield* enabled()).toEqual([
+        expect.objectContaining({
+          state: "unavailable",
+          reason: "This skill is no longer in the team's Skills folder.",
+        }),
+      ]);
+    }),
+  );
+
+  it.effect("never applies an approval after an account change, lost access, or relink", () =>
+    Effect.gen(function* () {
+      const { f, service, enable, enabled, sent } = yield* linked;
+      yield* enable();
+      const withSkill = `Go.\n\n${appliedBlock(skillText)}`;
+      // Another member on this environment gets only their own choices.
+      f.roles[teamA]!.bob = "editor";
+      f.switchTo("bob");
+      expect(yield* sent("Go.")).toBe("Go.");
+      expect(yield* enabled()).toEqual([]);
+      f.switchTo("alice");
+      expect(yield* sent("Go.")).toBe(withSkill);
+      // Unlinking forgets the approval, so linking again starts with every skill off.
+      yield* service.execute("s", { action: "unbind", teamId: teamA, projectId });
+      expect(yield* sent("Go.")).toBe("Go.");
+      yield* service.execute("s", { action: "bind", teamId: teamA, projectId });
+      expect(yield* enabled()).toEqual([]);
+      expect(yield* sent("Go.")).toBe("Go.");
+      // Signed out, nothing is added and the message still goes.
+      yield* enable();
+      f.signOut();
+      expect(yield* sent("Go.")).toBe("Go.");
+      // A switch that lands during the skill read adds nothing.
+      const { f: g, enable: enableG, sent: sentG } = yield* linked;
+      yield* enableG();
+      g.roles[teamA]!.bob = "editor";
+      g.interleave(Effect.sync(() => g.switchTo("bob")));
+      const raced = yield* Effect.result(sentG("Go."));
+      if (raced._tag === "Success") expect(raced.success).toBe("Go.");
+      else expect(raced.failure.code).toBe("unavailable");
+      // Losing the team withholds the skill and turns it off; regaining access doesn't restore it.
+      const { f: h, enable: enableH, enabled: enabledH, sent: sentH } = yield* linked;
+      yield* enableH();
+      delete h.roles[teamA]!.alice;
+      expect(yield* sentH("Go.")).toBe("Go.");
+      h.roles[teamA]!.alice = "reader";
+      expect(yield* enabledH()).toEqual([]);
+      expect(yield* sentH("Go.")).toBe("Go.");
+    }),
+  );
+
+  it.effect("adds nothing when an unlink lands while the skill is read", () =>
+    Effect.gen(function* () {
+      const { f, service, enable, sent } = yield* linked;
+      yield* enable();
+      f.interleave(service.execute("s", { action: "unbind", teamId: teamA, projectId }));
+      expect(yield* sent("Go.")).toBe("Go.");
+    }),
+  );
+
+  it.effect("never applies an approval made under an earlier link of the project", () =>
+    Effect.gen(function* () {
+      const { f, enable, enabled, sent } = yield* linked;
+      yield* enable();
+      // As if a relink's cleanup never ran: the project's link now has a later date.
+      const links = new TextDecoder().decode(f.values.get("team-project-links")!);
+      f.values.set(
+        "team-project-links",
+        new TextEncoder().encode(
+          links.replace(/"linkedAt":"[^"]+"/u, '"linkedAt":"2026-10-10T00:00:00.000Z"'),
+        ),
+      );
+      expect(yield* sent("Go.")).toBe("Go.");
+      expect(yield* enabled()).toEqual([]);
+    }),
+  );
+
+  it.effect("fails the send when skills that are on can't be checked, until turned off", () =>
+    Effect.gen(function* () {
+      const { f, service, enable, sent } = yield* linked;
+      yield* enable();
+      f.storage[teamA] = { ...f.storage[teamA]!, folderId: "rootMoved" };
+      const refused = yield* Effect.flip(sent("Go."));
+      expect(refused.code).toBe("unavailable");
+      expect(refused.message).toContain("turn them off in Settings → Skills");
+      // Turning a skill off needs no team access, so the way out always works.
+      yield* service.execute("s", { action: "skill-disable", projectId, path: skillPath });
+      expect(yield* sent("Go.")).toBe("Go.");
+    }),
+  );
+
+  it.effect("withholds skills, without failing, for a session with no Microsoft connection", () =>
+    Effect.gen(function* () {
+      const { service, enable } = yield* linked;
+      yield* enable();
+      // Another session of the same account (another device) hasn't connected Microsoft.
+      const elsewhere = yield* service.prepareOutgoingCommand("s2", turn("Go."));
+      expect(elsewhere.type === "thread.turn.start" && elsewhere.message.text).toBe("Go.");
+      const status = yield* service.execute("s2", { action: "skill-enabled", projectId });
+      expect(status.enabledSkills).toEqual([
+        expect.objectContaining({
+          state: "unavailable",
+          reason: "Connect Microsoft in Teams → your team → Shared storage, then try again.",
+        }),
+      ]);
+    }),
+  );
+
+  it.effect("sends messages without skills when the skill settings can't be read", () =>
+    Effect.gen(function* () {
+      const { f, sent } = yield* linked;
+      f.values.set("team-project-skills", new TextEncoder().encode("not json"));
+      expect(yield* sent("Go.")).toBe("Go.");
+    }),
+  );
+
+  it.effect("keeps approvals across restarts and caps skills per project", () =>
+    Effect.gen(function* () {
+      const { f, enable, sent } = yield* linked;
+      const paths = [1, 2, 3, 4, 5, 6].map(
+        (n) => `Skills/${identityOf("alice")}/${deviceId}/${recordId.slice(0, -1)}${n}.md`,
+      );
+      for (const [n, path] of paths.entries())
+        f.contents.set(`rootA:${path}`, `# Skill ${n + 1}\n\nStep ${n + 1}.`);
+      for (const path of paths.slice(0, 5))
+        yield* enable(versionOf(f.contents.get(`rootA:${path}`)!), path);
+      expect(yield* code(enable(versionOf(f.contents.get(`rootA:${paths[5]}`)!), paths[5]))).toBe(
+        "invalid_request",
+      );
+      // Each applies once, in the order it was turned on.
+      expect(yield* sent("Go.")).toBe(
+        [
+          "Go.",
+          ...paths.slice(0, 5).map((path) => appliedBlock(f.contents.get(`rootA:${path}`)!, path)),
+        ].join("\n\n"),
+      );
+      // A restarted server applies the same approvals from storage.
+      const restarted = yield* f.make;
+      const after = yield* restarted.service.prepareOutgoingCommand("s", turn("Go."));
+      expect(after.type === "thread.turn.start" && after.message.text).toBe(yield* sent("Go."));
+      // Skill text on for one project is bounded, since it is added to every message.
+      const { f: g, enable: enableG } = yield* linked;
+      const long = `# Long\n\n${"x".repeat(32_000)}`;
+      g.contents.set(`rootA:${skillPath}`, long);
+      expect(yield* code(enableG(versionOf(long)))).toBe("invalid_request");
+    }),
+  );
+
+  it.effect("adds skills to every message without crowding out issued team memory", () =>
+    Effect.gen(function* () {
+      const { service, enable, sent } = yield* linked;
+      yield* enable();
+      const memory = (yield* service.execute("s", {
+        action: "memory-attach",
+        projectId,
+        path: `Memory/${identityOf("alice")}/${deviceId}/${recordId}.md`,
+      })).reference!;
+      for (let index = 0; index < 300; index++) yield* sent(`Message ${index}`);
+      yield* service.execute("s", { action: "memory-verify", references: [memory.id] });
     }),
   );
 });

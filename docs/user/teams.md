@@ -37,8 +37,9 @@ ones labeled with that project. Each project links to one team; unlink it before
 linking it to a different team. Linking does not share the project's files or
 chats, and other members link their own projects. Every read and save checks
 your current UCSD account and team role, so removed members and accounts outside
-the team cannot use the link. Team memory and skills are not added to
-agent conversations automatically.
+the team cannot use the link. Team memory is never added to agent
+conversations automatically; a team skill is added only after you turn it on
+for a project, as described below.
 
 From a project thread, choose **Team** in the thread header, or select text in
 a reply and choose **Share**. **Share text to a team** publishes only the text
@@ -69,6 +70,29 @@ message you add it to. Harness doesn't install it, add it to your providers or
 other projects, or run anything it mentions, but the agent may act on its
 instructions once you send them. Your access is checked again when you send,
 and signing out removes it from unsent drafts, as with team memory.
+
+To use a team skill in every message of a project, open **Settings → Skills**
+and choose the project in **Applying settings for** at the top; without a
+project chosen, **Team Skills** lists your linked projects. The linked team's
+skills are listed with their author and description, and all start off. Turning
+one on shows exactly what will be added to each message and its version; it is
+on only for you, only in that project, and nothing is installed. Harness then
+adds it after your text in each message you send in that project, checking your
+UCSD account, team membership, and the project's link every time. The
+composer shows which team skills are on and which are being held back.
+
+A skill's version identifies its exact text. If anyone edits the skill, Harness
+stops adding it until you choose **Review update** and approve the new text; a
+skill that gains hidden characters or is removed from the team is also held
+back. Up to five skills, together at most 32,000 characters, can be on for one
+project. If you leave or are removed from the team, its skills are turned off
+for you; unlinking the project turns them off for everyone. Skills you turned on
+apply only while you're signed in with the same UCSD account, and only to
+messages you send from Harness, not to slash commands, goals, scheduled tasks,
+or agent tools. A device where Microsoft isn't connected for Teams sends your
+messages without the team's skills. If Harness can't reach the team to check a
+skill that's on, the message isn't sent until you try again or turn the skill
+off.
 
 Publishing never captures a conversation automatically, copies personal memory,
 or installs an executable skill. Signing out clears the Teams view and this

@@ -293,7 +293,7 @@ function TeamProjectDocuments({
         </h5>
         <p className="text-xs text-muted-foreground">
           {kind === "skill"
-            ? "Everyone on this team can read these skills, and editors can change them. To use one, open a thread in this project and choose Team → Use a team skill in message. Harness never installs them or adds them to agents on its own."
+            ? "Everyone on this team can read these skills, and editors can change them. To use one, open a thread in this project and choose Team → Use a team skill in message, or turn it on for every message in Settings → Skills. Harness never installs them, and adds one to messages only after you review and turn it on."
             : "Everyone on this team can read these notes. New notes are labeled with this project. Harness does not copy them into the project folder, your personal memory, or agent conversations."}
         </p>
       </div>
