@@ -20,7 +20,7 @@
 export type VaultPathClass = "own" | "other" | "notes" | "team" | "ignored";
 
 /** A copy of one team's documents under `teams/<folder>/`. */
-export const isTeamMirrorPath = (relativePath: string) => {
+const isTeamMirrorPath = (relativePath: string) => {
   const segments = relativePath.split("/");
   return segments[0] === "teams" && segments.length >= 3;
 };

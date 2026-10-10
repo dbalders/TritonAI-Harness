@@ -29,7 +29,7 @@ export function useTeamMemoryCopies(environmentId: EnvironmentId): TeamMemoryCop
   return { mirrors, busy, error, apply };
 }
 
-export function describeTeamCopy(mirror: TeamMemoryMirror): string {
+function describeTeamCopy(mirror: TeamMemoryMirror): string {
   if (mirror.state === "detached") return mirror.message ?? "Detached. The local copy was removed.";
   const when = mirror.lastSyncedAt
     ? `Updated ${new Date(mirror.lastSyncedAt).toLocaleString()}.`

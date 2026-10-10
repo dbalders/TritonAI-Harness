@@ -56,13 +56,13 @@ const sameStorage = (a: TeamStorage, b: TeamStorage) =>
   a.driveId === b.driveId &&
   a.folderId === b.folderId;
 
-export const identityOf = (profile: { issuer: string; subject: string }) =>
+const identityOf = (profile: { issuer: string; subject: string }) =>
   NodeCrypto.createHash("sha256")
     .update(JSON.stringify([profile.issuer, profile.subject]))
     .digest("base64url");
 
 /** A readable folder name that stays with the copy when the team is renamed. */
-export const mirrorFolder = (teamId: string, teamName: string) => {
+const mirrorFolder = (teamId: string, teamName: string) => {
   const slug = teamName
     .normalize("NFKD")
     .toLowerCase()
