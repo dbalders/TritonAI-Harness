@@ -425,6 +425,15 @@ export const TeamProjectCommand = Schema.Union([
    * while the caller can open the team, which unlinks it from the team instead.
    */
   Schema.Struct({ action: Schema.Literal("remove-link"), projectId: ProjectId }),
+  /** The local copies of team memory this environment keeps for the caller's campus account. */
+  Schema.Struct({ action: Schema.Literal("mirror-list") }),
+  /**
+   * Keeps a read-only copy of a team's memory notes and SOPs in this environment's memory vault.
+   * A project here must be linked to the team; its link names the folder that is copied.
+   */
+  Schema.Struct({ action: Schema.Literal("mirror-on"), teamId: Id }),
+  /** Stops a copy and removes it from the vault, or dismisses one that was detached. */
+  Schema.Struct({ action: Schema.Literal("mirror-off"), teamId: Id }),
   /**
    * The skills the caller turned on for a project, each checked now against the caller's access
    * and the skill's current version.
@@ -559,6 +568,20 @@ export const TeamProjectSkill = Schema.Struct({
   currentVersion: Schema.optionalKey(TeamSkillVersion),
 });
 export type TeamProjectSkill = typeof TeamProjectSkill.Type;
+/** A team whose memory this environment copies into the memory vault, or did until access ended. */
+export const TeamMemoryMirror = Schema.Struct({
+  teamId: Id,
+  teamName: Schema.String,
+  /** The copy's folder inside the memory vault, such as `teams/grant-reports-3f2a1c`. */
+  folder: Schema.String,
+  /** `detached`: access ended, so the copy was removed and is no longer updated. */
+  state: Schema.Literals(["mirrored", "detached"]),
+  /** When the copy last matched the team's folder, since the server started. */
+  lastSyncedAt: Schema.NullOr(Schema.String),
+  /** Why a copy was detached, or what is holding up a mirrored one. */
+  message: Schema.NullOr(Schema.String),
+});
+export type TeamMemoryMirror = typeof TeamMemoryMirror.Type;
 export const TeamProjectResult = Schema.Struct({
   projects: Schema.Array(TeamProjectLink),
   storage: Schema.NullOr(TeamStorageStatus),
@@ -579,5 +602,7 @@ export const TeamProjectResult = Schema.Struct({
   authors: Schema.optionalKey(Schema.Record(Identity, Schema.String)),
   /** From `stuck-links`. */
   stuckLinks: Schema.optionalKey(Schema.Array(StuckTeamProjectLink)),
+  /** From the `mirror-*` actions: every local copy the caller's campus account has here. */
+  mirrors: Schema.optionalKey(Schema.Array(TeamMemoryMirror)),
 });
 export type TeamProjectResult = typeof TeamProjectResult.Type;

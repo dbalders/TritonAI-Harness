@@ -1,6 +1,7 @@
 import { TeamSharedStorage } from "./TeamSharedStorage";
 import { StuckProjectLinks, TeamProjects } from "./TeamProjects";
 import { HeldTeams, type HeldTeam } from "./TeamAdmin";
+import { TeamMemoryCopyControl, TeamMemoryCopyList, useTeamMemoryCopies } from "./TeamMemoryCopies";
 // @effect-diagnostics cryptoRandomUUID:off - Browser event creates a retry-stable request ID before dispatch.
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type {
@@ -315,6 +316,10 @@ export function TeamWorkspace({
     controller.getSnapshot,
   );
   useEffect(() => controller.activate(), [controller]);
+  const copies = useTeamMemoryCopies(environmentId);
+  const { apply: applyCopies } = copies;
+  // Whether a project here is linked to the open team, which a local copy needs.
+  const [linkedTeam, setLinkedTeam] = useState<{ teamId: string; linked: boolean } | null>(null);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<TeamRole>("editor");
@@ -527,6 +532,7 @@ export function TeamWorkspace({
               You haven’t joined a team yet. Create one or accept an invitation below.
             </p>
           )}
+          <TeamMemoryCopyList copies={copies} />
           {result.invitations.length ? (
             <section className="rounded-xl border border-border p-4">
               <h3 className="font-medium">Pending invitations</h3>
@@ -682,6 +688,17 @@ export function TeamWorkspace({
               linkProjectId={linkProjectId}
               authors={authors}
               canWrite={team.role !== "reader" || team.canManage}
+              onLinksChange={(linked) => {
+                setLinkedTeam({ teamId: team.id, linked });
+                void applyCopies({ action: "mirror-list" });
+              }}
+            />
+          ) : null}
+          {team.state === "ready" ? (
+            <TeamMemoryCopyControl
+              copies={copies}
+              teamId={team.id}
+              linked={linkedTeam?.teamId === team.id && linkedTeam.linked}
             />
           ) : null}
           <div>

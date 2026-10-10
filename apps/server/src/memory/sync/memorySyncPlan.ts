@@ -11,9 +11,19 @@
  * Nothing here deletes a file without a surviving copy. A missing local file
  * is only treated as deleted when the last sync saw it and Harness removed it
  * on purpose; otherwise it is downloaded again.
+ *
+ * `teams/<folder>/` holds read-only copies of team memory, planned by
+ * `planTeamMirror` against the team's folder. Those files are never uploaded
+ * or deleted in any cloud, and the OneDrive memory pass leaves them alone.
  */
 
-export type VaultPathClass = "own" | "other" | "notes" | "ignored";
+export type VaultPathClass = "own" | "other" | "notes" | "team" | "ignored";
+
+/** A copy of one team's documents under `teams/<folder>/`. */
+export const isTeamMirrorPath = (relativePath: string) => {
+  const segments = relativePath.split("/");
+  return segments[0] === "teams" && segments.length >= 3;
+};
 
 export interface SyncDevice {
   readonly id: string;
@@ -35,6 +45,7 @@ export function classifyVaultPath(relativePath: string, device: SyncDevice): Vau
     return "ignored";
   }
   if (segments.length < 2) return "ignored";
+  if (isTeamMirrorPath(relativePath)) return "team";
   switch (first) {
     case ".devices":
       return second === device.id ? "own" : "other";
@@ -157,12 +168,15 @@ function planOwn(
   return synced ? { kind: "forget", path } : null;
 }
 
+type TeamMirrorAction = Extract<SyncAction, { kind: "download" | "deleteLocal" | "forget" }>;
+
+/** Another computer's file, or a team document: take the cloud copy, never write back. */
 function planOther(
   path: string,
   local: LocalFile | undefined,
   cloud: CloudFile | undefined,
   synced: SyncedFile | undefined,
-): SyncAction | null {
+): TeamMirrorAction | null {
   if (cloud) {
     const current = local && synced && cloud.eTag === synced.eTag && local.sha256 === synced.sha256;
     return current ? null : { kind: "download", path };
@@ -258,7 +272,33 @@ export function planMemorySync(input: SyncPlanInput): ReadonlyArray<SyncAction> 
           ? planOther(path, local, cloud, synced)
           : pathClass === "notes"
             ? planNote(path, local, cloud, synced)
-            : null;
+            : // Team copies come from the team's folder, never this OneDrive.
+              null;
+    if (action) actions.push(action);
+  }
+  return actions.toSorted((left, right) => ACTION_ORDER[left.kind] - ACTION_ORDER[right.kind]);
+}
+
+/**
+ * Actions that keep a team's local copy equal to its folder: download what is
+ * new or changed (a local edit is replaced, since the copy is read-only), and
+ * remove a file the team removed. A local file sync never saw is left alone.
+ */
+export function planTeamMirror(input: {
+  readonly local: ReadonlyMap<string, LocalFile>;
+  readonly cloud: ReadonlyMap<string, CloudFile>;
+  readonly synced: ReadonlyMap<string, Omit<SyncedFile, "ownerId">>;
+}): ReadonlyArray<TeamMirrorAction> {
+  const paths = new Set([...input.local.keys(), ...input.cloud.keys(), ...input.synced.keys()]);
+  const actions: TeamMirrorAction[] = [];
+  for (const path of [...paths].toSorted()) {
+    if (!isTeamMirrorPath(path)) continue;
+    const action = planOther(
+      path,
+      input.local.get(path),
+      input.cloud.get(path),
+      input.synced.get(path),
+    );
     if (action) actions.push(action);
   }
   return actions.toSorted((left, right) => ACTION_ORDER[left.kind] - ACTION_ORDER[right.kind]);

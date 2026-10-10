@@ -38,6 +38,11 @@ vi.mock("../../state/environments", () => ({
 vi.mock("../../hooks/useUcsdAccount", () => ({ useUcsdAccount: vi.fn() }));
 vi.mock("./TeamSharedStorage", () => ({ TeamSharedStorage: () => null }));
 vi.mock("./TeamProjects", () => ({ TeamProjects: () => null, StuckProjectLinks: () => null }));
+vi.mock("./TeamMemoryCopies", () => ({
+  useTeamMemoryCopies: () => ({ mirrors: [], busy: false, error: null, apply: async () => {} }),
+  TeamMemoryCopyList: () => null,
+  TeamMemoryCopyControl: () => null,
+}));
 
 import { TeamWorkspace } from "./TeamsPage";
 

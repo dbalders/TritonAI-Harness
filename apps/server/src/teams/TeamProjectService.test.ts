@@ -28,6 +28,7 @@ import {
 } from "./testing/teamProjectFixture.ts";
 import type { AccountService } from "../auth/AccountService.ts";
 import type { ServerSecretStore } from "../auth/ServerSecretStore.ts";
+import type { TeamMirrorHost } from "../memory/sync/teamMirror.ts";
 import type { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import type * as TeamProject from "./TeamProjectService.ts";
 import type * as TeamStorage from "./TeamStorageService.ts";
@@ -732,11 +733,14 @@ describe("Team skills in a linked project", () => {
         { action: "skill-attach", projectId: otherProject, path: skillPath },
       ] as const)
         expect(yield* code(service.execute("s", command))).toBe("not_found");
+      // No file system: the only way team text reaches disk is a local copy the user turns on,
+      // which MemorySync writes through the mirror host.
       expectTypeOf<Effect.Services<typeof TeamProject.make>>().toEqualTypeOf<
         | AccountService
         | ServerSecretStore
         | ProjectionSnapshotQuery
         | TeamStorage.TeamStorageService
+        | TeamMirrorHost
       >();
     }),
   );

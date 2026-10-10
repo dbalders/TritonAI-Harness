@@ -1,4 +1,5 @@
 import {
+  type AccountStatus,
   type ClientOrchestrationCommand,
   formatTeamContext,
   hasHiddenTeamText,
@@ -6,6 +7,7 @@ import {
   MAX_TEAM_PROJECT_SKILLS,
   type ProjectId,
   type StuckTeamProjectLink,
+  ServerAccountError,
   type TeamContextKind,
   type ThreadId,
   type TeamProjectCommand,
@@ -29,7 +31,9 @@ import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import { AccountService } from "../auth/AccountService.ts";
 import { ServerSecretStore } from "../auth/ServerSecretStore.ts";
+import { TeamMirrorHost } from "../memory/sync/teamMirror.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { makeTeamMemoryMirror } from "./teamMemoryMirror.ts";
 import { TeamStorageService } from "./TeamStorageService.ts";
 
 const MAX_LINKS = 500;
@@ -144,6 +148,8 @@ interface CheckedSkill {
  * Team content is never written into the project workspace, personal memory, provider homes, or
  * installed skills. It reaches an agent only as text in a user's message: added by the user, or
  * added by the server to each message in a project where that user turned an approved skill on.
+ * The exception is a local copy the user turns on for a linked team: its memory notes and SOPs
+ * are copied read-only into the memory vault (see `teamMemoryMirror.ts`).
  */
 export class TeamProjectService extends Context.Service<
   TeamProjectService,
@@ -183,6 +189,10 @@ export class TeamProjectService extends Context.Service<
       sessionId: string,
       command: ClientOrchestrationCommand,
     ) => Effect.Effect<ClientOrchestrationCommand, TeamsError>;
+    /** Campus sign-out, which also removes the local team copies read through this session. */
+    readonly signOutAccount: (
+      sessionId: string,
+    ) => Effect.Effect<AccountStatus, ServerAccountError>;
   }
 >()("t3/teams/TeamProjectService") {}
 
@@ -195,6 +205,7 @@ export const make = Effect.gen(function* () {
   // In memory on purpose. After a restart or eviction `memory-verify` refuses the old reference,
   // while the dispatch gate no longer recognizes its block and treats it as ordinary text.
   const issued = new Map<string, Issued>();
+  const host = yield* TeamMirrorHost;
 
   const readLinks = secrets.get(SECRET_NAME).pipe(
     Effect.flatMap((value) =>
@@ -209,6 +220,13 @@ export const make = Effect.gen(function* () {
       Effect.flatMap((encoded) => secrets.set(SECRET_NAME, new TextEncoder().encode(encoded))),
       Effect.mapError(() => failure("Team project links could not be saved securely.")),
     );
+  const mirrors = yield* makeTeamMemoryMirror({
+    account,
+    storage,
+    secrets,
+    host,
+    links: readLinks,
+  });
   const readEnabled = secrets.get(ENABLED_SECRET_NAME).pipe(
     Effect.flatMap((value) =>
       Option.isSome(value)
@@ -855,6 +873,8 @@ export const make = Effect.gen(function* () {
         yield* writeLinks(links.filter((entry) => entry.projectId !== projectId));
         // As with unlinking, skills turned on under the removed link never apply again.
         yield* removeEnabled((entry) => entry.link.projectId === projectId);
+        // A team's local copy goes with its last link here.
+        yield* mirrors.linksChanged;
         return { projects: [], storage: null };
       }),
     );
@@ -1003,6 +1023,44 @@ export const make = Effect.gen(function* () {
     if (command.action === "project-links") return yield* projectLinks(sessionId);
     if (command.action === "stuck-links") return yield* stuckLinks(sessionId);
     if (command.action === "remove-link") return yield* removeLink(sessionId, command.projectId);
+    if (command.action === "mirror-list" || command.action === "mirror-off") {
+      // Stopping a copy only removes it, so it needs no team or link.
+      const profile = yield* signedInProfile(sessionId);
+      return {
+        projects: [],
+        storage: null,
+        mirrors:
+          command.action === "mirror-off"
+            ? yield* mirrors.disable(profile, command.teamId)
+            : yield* mirrors.list(profile),
+      };
+    }
+    if (command.action === "mirror-on") {
+      const profile = yield* signedInProfile(sessionId);
+      const team = yield* readyTeam(sessionId, command.teamId);
+      const link = (yield* readLinks).find((entry) => entry.teamId === team.id);
+      if (!link)
+        return yield* new TeamsError({
+          code: "invalid_request",
+          message: "Link a project in this environment to the team before keeping a local copy.",
+        });
+      const root = link.storage;
+      if (
+        team.storage.tenantId.toLowerCase() !== root.tenantId.toLowerCase() ||
+        team.storage.siteId !== root.siteId ||
+        team.storage.driveId !== root.driveId ||
+        team.storage.folderId !== root.folderId
+      )
+        return yield* new TeamsError({
+          code: "conflict",
+          message: "This team's folder changed. Unlink its projects and link one again.",
+        });
+      return {
+        projects: [],
+        storage: null,
+        mirrors: yield* mirrors.enable(sessionId, profile, team),
+      };
+    }
     if (command.action === "skill-enabled")
       return yield* enabledSkills(sessionId, command.projectId);
     if (command.action === "skill-enable") return yield* enableSkill(sessionId, command);
@@ -1022,6 +1080,8 @@ export const make = Effect.gen(function* () {
             if (existing) yield* writeLinks(next);
             // Skills turned on under the old link never apply to a later one.
             yield* removeEnabled((entry) => entry.link.projectId === command.projectId);
+            // A team's local copy goes with its last link here.
+            if (existing) yield* mirrors.linksChanged;
             return { projects: yield* listFor(team, next), storage: null };
           }
           if (!(yield* activeProject(command.projectId)))
@@ -1194,11 +1254,28 @@ export const make = Effect.gen(function* () {
     yield* authorizeOutgoingCommand(sessionId, prepared);
     return prepared;
   });
+  const signOutAccount = Effect.fn("TeamProjectService.signOutAccount")(function* (
+    sessionId: string,
+  ) {
+    const status = yield* storage.signOutAccount(sessionId);
+    yield* mirrors.signedOut(sessionId).pipe(
+      Effect.mapError(
+        () =>
+          new ServerAccountError({
+            code: "storage_error",
+            message:
+              "Your campus account is signed out, but local team copies could not be fully removed. Retry sign-out.",
+          }),
+      ),
+    );
+    return status;
+  });
   return TeamProjectService.of({
     teams,
     execute,
     authorizeOutgoingCommand,
     prepareOutgoingCommand,
+    signOutAccount,
   });
 });
 

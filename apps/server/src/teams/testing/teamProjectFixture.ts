@@ -14,6 +14,7 @@ import * as Option from "effect/Option";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import { AccountService } from "../../auth/AccountService.ts";
 import { ServerSecretStore } from "../../auth/ServerSecretStore.ts";
+import { TeamMirrorHost, type TeamMirrorSource } from "../../memory/sync/teamMirror.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as TeamProject from "../TeamProjectService.ts";
 import * as TeamStorage from "../TeamStorageService.ts";
@@ -63,6 +64,10 @@ export function teamProjectFixture() {
   const contents = new Map<string, string>();
   // Documents by "<root>:<path>" that Graph answers as not found.
   const removed = new Set<string>();
+  // Folder contents by "<root>:<path>", replacing the default listing; names ending `.md` are files.
+  const children = new Map<string, string[]>();
+  // Roots Graph refuses with 403, as after the membership service revokes access.
+  const denied = new Set<string>();
   const graph: string[] = [];
   // Runs once, inside the next Graph request, to interleave another call with an in-flight one.
   let duringGraph: Effect.Effect<unknown, TeamsError> | null = null;
@@ -275,7 +280,11 @@ export function teamProjectFixture() {
         writes.push({ method: request.method, url: request.url, body: "" });
         return json(null, 404);
       }
+      if (denied.has(root!)) return json({ error: { code: "accessDenied" } }, 403);
       if (removed.has(`${root}:${path}`)) return json(null, 404);
+      const listed = children.get(`${root}:${path}`);
+      if (suffix?.endsWith("children") && listed)
+        return json({ value: listed.map((name) => item([...parts, name], name.endsWith(".md"))) });
       if (suffix?.endsWith("children"))
         return json({
           value:
@@ -288,6 +297,16 @@ export function teamProjectFixture() {
       return json(item(parts, path.endsWith(".md")));
     }),
   );
+  // The memory sync engine's side of team copies: tests run the attached source themselves.
+  const mirror = { source: null as TeamMirrorSource | null, prunes: 0, syncs: 0 };
+  const mirrorHost = TeamMirrorHost.of({
+    attach: (source) =>
+      Effect.sync(() => {
+        mirror.source = source;
+      }),
+    sync: Effect.sync(() => void mirror.syncs++),
+    prune: Effect.sync(() => void mirror.prunes++),
+  });
   const make = Effect.gen(function* () {
     const storageService = yield* TeamStorage.make(config).pipe(
       Effect.provideService(AccountService, account),
@@ -299,6 +318,7 @@ export function teamProjectFixture() {
       Effect.provideService(ServerSecretStore, secrets),
       Effect.provideService(ProjectionSnapshotQuery, query),
       Effect.provideService(TeamStorage.TeamStorageService, storageService),
+      Effect.provideService(TeamMirrorHost, mirrorHost),
     );
     // Microsoft connection is per campus identity, as in the Teams page.
     const connect = (teamId: string) =>
@@ -310,6 +330,7 @@ export function teamProjectFixture() {
   });
   return {
     make,
+    mirror,
     graph,
     writes,
     roles,
@@ -320,6 +341,8 @@ export function teamProjectFixture() {
     values,
     contents,
     removed,
+    children,
+    denied,
     interleave: (effect: Effect.Effect<unknown, TeamsError>) => {
       duringGraph = effect;
     },

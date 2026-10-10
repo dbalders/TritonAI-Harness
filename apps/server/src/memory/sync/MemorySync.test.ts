@@ -23,6 +23,12 @@ import { DailyMemory } from "../DailyMemory.ts";
 import { generalVaultPaths, registerMemoryDevice } from "../memoryVault.ts";
 import * as MemorySync from "./MemorySync.ts";
 import * as MicrosoftSignIn from "./microsoftSignIn.ts";
+import type {
+  TeamMirrorDocument,
+  TeamMirrorListing,
+  TeamMirrorOutcome,
+  TeamMirrorSource,
+} from "./teamMirror.ts";
 
 const OAUTH = {
   clientId: "fcfe0e23-a675-4851-99a7-704dfd153b9c",
@@ -465,6 +471,48 @@ const connectSync = Effect.gen(function* () {
   yield* sync.start;
   return sync;
 });
+
+const FOLDER = "teams/grant-reports-3f2a1c";
+const TEAM_NOTE = `${FOLDER}/Memory/author/device/record.md`;
+
+/** One team's folder as the Teams side would report it; tests change it between passes. */
+const fakeTeamSource = () => {
+  const state = {
+    kept: true,
+    files: new Map<string, { eTag: string; text: string }>(),
+    /** Overrides the listing; null lists `files`. */
+    listing: null as TeamMirrorListing | null,
+    /** Overrides every read; null reads `files`. */
+    document: null as TeamMirrorDocument | null,
+    lists: 0,
+    reads: [] as string[],
+    reports: [] as TeamMirrorOutcome[],
+  };
+  const source: TeamMirrorSource = {
+    teams: Effect.sync(() =>
+      state.kept ? [{ teamId: "team-1", folder: FOLDER.slice("teams/".length) }] : [],
+    ),
+    list: () =>
+      Effect.sync(() => {
+        state.lists++;
+        return (
+          state.listing ?? {
+            kind: "files" as const,
+            files: [...state.files].map(([path, file]) => ({ path, eTag: file.eTag })),
+          }
+        );
+      }),
+    read: (_teamId, path) =>
+      Effect.sync((): TeamMirrorDocument => {
+        state.reads.push(path);
+        if (state.document) return state.document;
+        const file = state.files.get(path);
+        return file ? { kind: "file", ...file } : { kind: "skip" };
+      }),
+    report: (_teamId, outcome) => Effect.sync(() => void state.reports.push(outcome)),
+  };
+  return Object.assign(state, { source });
+};
 
 const DEVICE_CODE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
 const isDeviceCodeToken = (url: URL, params: URLSearchParams) =>
@@ -1234,6 +1282,113 @@ it.layer(NodeServices.layer)("MemorySync", (it) => {
           drive.file(`TritonAI Harness/memory/general/.devices/${MAC.environmentId}/device.json`),
         );
       }).pipe(Effect.provide(mac.layer));
+    }),
+  );
+
+  it.effect("never uploads a team copy to OneDrive", () =>
+    Effect.gen(function* () {
+      const drive = new FakeOneDrive();
+      const mac = yield* setup(drive, MAC);
+      yield* mac.registerDevice;
+      yield* mac.writeDay("2026-10-02", "My day");
+      yield* mac.write(TEAM_NOTE, "Team note");
+      const sync = yield* connectSync.pipe(Effect.provide(mac.layer));
+      yield* sync.syncNow;
+      assert.strictEqual((yield* sync.getStatus).sync.state, "idle");
+      assert.strictEqual(
+        drive.file(`TritonAI Harness/memory/general/Daily/2026/2026-10-02 ${mac.label}.md`),
+        "My day",
+      );
+      assert.isNull(drive.file("TritonAI Harness/memory/general/teams"));
+    }),
+  );
+
+  it.effect("copies a team's documents, follows its changes, and bounds each pass", () =>
+    Effect.gen(function* () {
+      const mac = yield* setup(new FakeOneDrive(), MAC);
+      const team = fakeTeamSource();
+      const sync = yield* MemorySync.MemorySync.pipe(Effect.provide(mac.layer));
+      yield* sync.teams.attach(team.source);
+      team.files.set("Memory/a/d/1.md", { eTag: "e1", text: "First" });
+      team.files.set("SOPs/a/d/2.md", { eTag: "e1", text: "Procedure" });
+      yield* sync.teams.sync;
+      assert.strictEqual(yield* mac.read(`${FOLDER}/Memory/a/d/1.md`), "First");
+      assert.strictEqual(yield* mac.read(`${FOLDER}/SOPs/a/d/2.md`), "Procedure");
+      assert.deepInclude(team.reports.at(-1), { kind: "synced", files: 2, pending: 0 });
+
+      // Changed and removed in the team; edited here, which a read-only copy replaces.
+      team.files.set("Memory/a/d/1.md", { eTag: "e2", text: "Second" });
+      team.files.delete("SOPs/a/d/2.md");
+      yield* mac.write(`${FOLDER}/Memory/a/d/1.md`, "Local edit");
+      team.reads.length = 0;
+      yield* sync.teams.sync;
+      assert.strictEqual(yield* mac.read(`${FOLDER}/Memory/a/d/1.md`), "Second");
+      assert.isNull(yield* mac.read(`${FOLDER}/SOPs/a/d/2.md`));
+      // An unchanged copy is not read again.
+      yield* sync.teams.sync;
+      assert.deepStrictEqual(team.reads, ["Memory/a/d/1.md"]);
+
+      // A large team catches up over several passes.
+      for (let index = 0; index < 60; index++)
+        team.files.set(`Memory/a/d/n${index}.md`, { eTag: "e1", text: `Note ${index}` });
+      yield* sync.teams.sync;
+      assert.deepInclude(team.reports.at(-1), { kind: "synced", pending: 10 });
+      yield* sync.teams.sync;
+      assert.deepInclude(team.reports.at(-1), { kind: "synced", pending: 0 });
+      assert.strictEqual(yield* mac.read(`${FOLDER}/Memory/a/d/n59.md`), "Note 59");
+    }),
+  );
+
+  it.effect(
+    "removes a team's copy when access ends and keeps it when access can't be checked",
+    () =>
+      Effect.gen(function* () {
+        const mac = yield* setup(new FakeOneDrive(), MAC);
+        const team = fakeTeamSource();
+        const sync = yield* MemorySync.MemorySync.pipe(Effect.provide(mac.layer));
+        yield* sync.teams.attach(team.source);
+        team.files.set("Memory/a/d/1.md", { eTag: "e1", text: "First" });
+        yield* sync.teams.sync;
+        team.listing = { kind: "unavailable" };
+        yield* sync.teams.sync;
+        assert.strictEqual(yield* mac.read(`${FOLDER}/Memory/a/d/1.md`), "First");
+
+        team.listing = { kind: "detached" };
+        yield* sync.teams.sync;
+        assert.isFalse(yield* mac.fs.exists(mac.path.join(mac.vault, FOLDER)));
+
+        // Ended between listing and reading: the copy goes as soon as a read says so.
+        team.listing = null;
+        yield* sync.teams.sync;
+        assert.strictEqual(yield* mac.read(`${FOLDER}/Memory/a/d/1.md`), "First");
+        team.files.set("Memory/a/d/1.md", { eTag: "e2", text: "Second" });
+        team.document = { kind: "detached" };
+        yield* sync.teams.sync;
+        assert.isFalse(yield* mac.fs.exists(mac.path.join(mac.vault, FOLDER)));
+      }),
+  );
+
+  it.effect("prunes copies of teams no longer kept, without reaching the team", () =>
+    Effect.gen(function* () {
+      const mac = yield* setup(new FakeOneDrive(), MAC);
+      const team = fakeTeamSource();
+      const sync = yield* MemorySync.MemorySync.pipe(Effect.provide(mac.layer));
+      // Before the Teams side attaches, nothing in the teams folder is touched.
+      yield* mac.write(`${FOLDER}/Memory/a/d/1.md`, "Earlier copy");
+      yield* sync.teams.prune;
+      assert.strictEqual(yield* mac.read(`${FOLDER}/Memory/a/d/1.md`), "Earlier copy");
+
+      yield* sync.teams.attach(team.source);
+      team.files.set("Memory/a/d/1.md", { eTag: "e1", text: "First" });
+      yield* sync.teams.sync;
+      yield* mac.write("teams/stray/note.md", "Not a team copy");
+      team.kept = false;
+      const reads = team.reads.length;
+      yield* sync.teams.prune;
+      assert.isFalse(yield* mac.fs.exists(mac.path.join(mac.vault, FOLDER)));
+      assert.isFalse(yield* mac.fs.exists(mac.path.join(mac.vault, "teams/stray")));
+      assert.strictEqual(team.reads.length, reads);
+      assert.strictEqual(team.lists, 1);
     }),
   );
 });

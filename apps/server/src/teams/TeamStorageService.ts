@@ -65,7 +65,7 @@ export interface TeamStorageScope {
   /** The exact root recorded at binding time; any other root for the team is refused. */
   readonly storage: TeamStorage;
   /** Lists only this top-level folder instead of the whole team folder. */
-  readonly listRoot?: "Memory" | "Skills";
+  readonly listRoot?: "Memory" | "SOPs" | "Skills";
 }
 /**
  * A list summarizes this many team documents, in path order, so they can be found by title,
@@ -374,14 +374,30 @@ export const make = (config: Microsoft.MicrosoftOAuthConfig | null) =>
                 ? `${root}${encodeURIComponent(storage.folderId)}:/${path.split("/").map(encodeURIComponent).join("/")}`
                 : `${root}${encodeURIComponent(storage.folderId)}`;
             const queue = [{ id: storage.folderId, path: "", depth: 0 }];
+            // Graph refusing the team folder itself means access ended, not a passing failure.
+            const lostFolder = (status: number) =>
+              status === 403 || status === 404
+                ? new TeamsError({
+                    code: status === 403 ? "forbidden" : "not_found",
+                    message: "This team's folder is no longer available to your account.",
+                  })
+                : null;
             if (scope?.listRoot) {
               const response = yield* send(
                 HttpClientRequest.get(
                   `${folderEndpoint(scope.listRoot)}?$select=id,name,parentReference,folder,remoteItem`,
                 ),
               );
-              // Nobody has published to this folder yet.
-              if (response.status === 404) return { ...connected, files };
+              if (response.status === 403) return yield* lostFolder(403)!;
+              if (response.status === 404) {
+                const root = yield* send(
+                  HttpClientRequest.get(`${folderEndpoint("")}?$select=id,folder`),
+                );
+                const lost = lostFolder(root.status);
+                if (lost) return yield* lost;
+                // Nobody has published to this folder yet.
+                return { ...connected, files };
+              }
               if (response.status !== 200)
                 return yield* failure(
                   "Shared storage access could not be verified. Refresh your team membership.",
@@ -453,6 +469,8 @@ export const make = (config: Microsoft.MicrosoftOAuthConfig | null) =>
                 const response: HttpClientResponse.HttpClientResponse = yield* send(
                   HttpClientRequest.get(url),
                 );
+                const lost = parent.path ? null : lostFolder(response.status);
+                if (lost) return yield* lost;
                 if (response.status !== 200)
                   return yield* failure(
                     "Shared storage access could not be verified. Refresh your team membership.",

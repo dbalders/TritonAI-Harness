@@ -3025,7 +3025,7 @@ const makeWsRpcLayer = (
         [WS_METHODS.serverSignOutAccount]: (_input) =>
           observeRpcEffect(
             WS_METHODS.serverSignOutAccount,
-            teamStorage.signOutAccount(currentSessionId),
+            teamProject.signOutAccount(currentSessionId),
           ),
         [WS_METHODS.serverGetMemoryStatus]: (_input) =>
           observeRpcEffect(WS_METHODS.serverGetMemoryStatus, memorySync.getStatus, {

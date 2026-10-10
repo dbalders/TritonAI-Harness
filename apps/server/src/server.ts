@@ -627,6 +627,7 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
 
 const RuntimeDependenciesLive = TritonAiCommonsAction.runtimeLayer.pipe(
   // Memory sync takes the summarizer's lock while it touches the vault.
+  Layer.provideMerge(MemorySync.teamMirrorHostLayer),
   Layer.provideMerge(MemorySync.layer.pipe(Layer.provide(MicrosoftSignIn.layer))),
   // Memory reads threads and calls text generation, so it sits above the core.
   Layer.provideMerge(DailyMemory.layer),

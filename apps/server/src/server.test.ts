@@ -123,6 +123,7 @@ import * as GitManager from "./git/GitManager.ts";
 import * as EnvironmentTheme from "./environmentTheme.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 import * as MemorySync from "./memory/sync/MemorySync.ts";
+import { noTeamMirrorHost, TeamMirrorHost } from "./memory/sync/teamMirror.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
@@ -827,7 +828,9 @@ const buildAppUnderTest = (options?: {
           }),
           // Server-lifetime in production; built from the provider mocks below.
           ProviderMaintenanceRunner.layer,
+          Layer.succeed(TeamMirrorHost, noTeamMirrorHost),
           Layer.mock(MemorySync.MemorySync)({
+            teams: { attach: () => Effect.void, sync: Effect.void, prune: Effect.void },
             getStatus: Effect.succeed({
               enabled: false,
               directoryPath: "/tmp/t3-memory",

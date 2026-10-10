@@ -87,9 +87,9 @@ link it again. Removing a link turns that project's team skills off for
 everyone. Linking does not share the project's files or
 chats, and other members link their own projects. Every read and save checks
 your current UCSD account and team role, so removed members and accounts outside
-the team cannot use the link. Team memory is never added to agent
-conversations automatically; a team skill is added only after you turn it on
-for a project, as described below.
+the team cannot use the link. Team memory reaches an agent only when you add a
+note to a message or keep a local copy for agents to search, and a team skill
+only after you turn it on for a project, both described below.
 
 From a project thread, choose **Team** in the thread header, or select text in
 a reply and choose **Share**. **Share text to a team** publishes only the text
@@ -150,3 +150,31 @@ Publishing never captures a conversation automatically, copies personal memory,
 or installs an executable skill. Signing out clears the Teams view and this
 connection's saved Teams Microsoft sign-in. Shared files remain with the team
 when a member leaves.
+
+## Local copy in memory
+
+To let agents look through a team's memory the way they look through your own,
+open the team and choose **Keep a local copy** under **Team projects**. A
+project in this environment must be linked to the team first, and Microsoft
+must be connected under **Shared storage**. Harness then keeps a read-only copy
+of the team's memory notes and SOPs in your memory folder, under
+`teams/<team name>-<code>/`, and updates it about every five minutes. Codex
+agents with Memory on find it through the memory skill. Team skills are never
+copied; they reach an agent only after you turn one on for a project in
+**Settings → Skills**. Harness replaces any change made inside the copy, so
+publish from Teams to share something with the team.
+
+**Local copies in memory** on the Teams page lists each copy with when it was
+last updated. Choose **Stop local copy** to remove it. The copy is also removed,
+and marked **Detached** with the reason, the next time Harness checks after you
+leave or are removed from the team, the team is archived, Microsoft refuses the team's folder, the
+team's folder changes, the last linked project in this environment is
+unlinked, or you sign out of UC San Diego or sign in with another account.
+Choose **Dismiss** to clear the notice. If Harness can't reach the team, the
+copy is kept as it was and updated once it can.
+
+Removing a local copy is best effort. It can't recall text an agent already
+read into a thread, copies someone made from the folder, or a copy on a
+computer that was off or offline when access ended; that copy is removed the
+next time Harness on that computer checks. Copies are read-only: publishing to
+the team is always something you do explicitly.

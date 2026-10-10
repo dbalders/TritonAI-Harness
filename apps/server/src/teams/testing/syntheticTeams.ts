@@ -16,6 +16,7 @@ import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import { AccountService } from "../../auth/AccountService.ts";
 import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
+import { noTeamMirrorHost, TeamMirrorHost } from "../../memory/sync/teamMirror.ts";
 import * as TeamProject from "../TeamProjectService.ts";
 import * as TeamStorage from "../TeamStorageService.ts";
 
@@ -960,9 +961,15 @@ export const makeSyntheticTeamServices = (world: SyntheticTeamsWorld) =>
       Effect.provideService(AccountService, world.account),
       Effect.provideService(HttpClient.HttpClient, world.http),
     );
+    // The running server's memory vault keeps team copies; standalone fixtures keep none.
+    const mirrorHost = Option.getOrElse(
+      yield* Effect.serviceOption(TeamMirrorHost),
+      () => noTeamMirrorHost,
+    );
     const project = yield* TeamProject.make.pipe(
       Effect.provideService(AccountService, world.account),
       Effect.provideService(TeamStorage.TeamStorageService, storage),
+      Effect.provideService(TeamMirrorHost, mirrorHost),
     );
     /** Connects Microsoft for every app session the account service has seen, as the current identity. */
     const connectMicrosoft = Effect.gen(function* () {

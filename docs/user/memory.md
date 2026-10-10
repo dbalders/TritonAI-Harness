@@ -12,6 +12,7 @@ Memory lives in a `memory` folder inside the TritonAI Harness home directory, su
 - `Projects/<project>/`: a note for each project with a line for every day it was worked on.
 - `Inbox/<code>/`: notes agents wrote during the day. The next daily note includes them and moves them to `processed/`.
 - `Notes/`: your own notes. Memory never changes them.
+- `teams/`: read-only copies of team memory, when you keep a local copy of a team (see [Teams](teams.md#local-copy-in-memory)). Harness manages this folder, and these copies don't sync to OneDrive.
 
 Every note Memory writes is named after the computer that wrote it, such as `Daily/2026/2026-09-29 MacBook Pro (3f2a).md`. The short code in parentheses tells two computers with the same name apart, and it is also the name of that computer's inbox folder. A folder that holds notes from more than one computer keeps each computer's notes separate.
 

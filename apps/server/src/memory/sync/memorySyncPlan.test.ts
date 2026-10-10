@@ -7,6 +7,7 @@ import {
   type CloudFile,
   type LocalFile,
   planMemorySync,
+  planTeamMirror,
   type SyncAction,
   type SyncDevice,
   type SyncedFile,
@@ -365,5 +366,82 @@ describe("full-ID provenance", () => {
     });
     expect(actions).toHaveLength(1);
     expect(actions[0]).toMatchObject({ kind: "ownerConflict" });
+  });
+});
+
+describe("team copies", () => {
+  const TEAM_NOTE = "teams/grant-reports-3f2a1c/Memory/author/device/record.md";
+  const mirror = (options: {
+    readonly local?: Record<string, string>;
+    readonly cloud?: Record<string, string>;
+    readonly synced?: Record<string, [sha: string, eTag: string]>;
+  }) =>
+    planTeamMirror({
+      local: new Map(
+        Object.entries(options.local ?? {}).map(([path, sha256]) => [path, { sha256 }]),
+      ),
+      cloud: new Map(Object.entries(options.cloud ?? {}).map(([path, eTag]) => [path, { eTag }])),
+      synced: new Map(
+        Object.entries(options.synced ?? {}).map(([path, [sha256, eTag]]) => [
+          path,
+          { sha256, eTag },
+        ]),
+      ),
+    });
+
+  it("classifies the teams folder apart from every computer's files", () => {
+    expect(classifyVaultPath(TEAM_NOTE, device)).toBe("team");
+    expect(classifyVaultPath("teams/README.md", device)).toBe("ignored");
+    expect(classifyVaultPath("teams/grant-reports-3f2a1c/.obsidian/app.json", device)).toBe(
+      "ignored",
+    );
+  });
+
+  it("never sends a team copy to OneDrive or takes one from it", () => {
+    expect(plan({ local: { [TEAM_NOTE]: "a" } })).toEqual([]);
+    expect(plan({ cloud: { [TEAM_NOTE]: "e1" } })).toEqual([]);
+    expect(plan({ local: { [TEAM_NOTE]: "a" }, synced: { [TEAM_NOTE]: ["a", "e1"] } })).toEqual([]);
+  });
+
+  it("downloads new and changed team documents and replaces local edits", () => {
+    expect(mirror({ cloud: { [TEAM_NOTE]: "e1" } })).toEqual([
+      { kind: "download", path: TEAM_NOTE },
+    ]);
+    expect(
+      mirror({
+        local: { [TEAM_NOTE]: "a" },
+        cloud: { [TEAM_NOTE]: "e2" },
+        synced: { [TEAM_NOTE]: ["a", "e1"] },
+      }),
+    ).toEqual([{ kind: "download", path: TEAM_NOTE }]);
+    // The copy is read-only: an edit here is replaced, never uploaded.
+    expect(
+      mirror({
+        local: { [TEAM_NOTE]: "edited" },
+        cloud: { [TEAM_NOTE]: "e1" },
+        synced: { [TEAM_NOTE]: ["a", "e1"] },
+      }),
+    ).toEqual([{ kind: "download", path: TEAM_NOTE }]);
+    expect(
+      mirror({
+        local: { [TEAM_NOTE]: "a" },
+        cloud: { [TEAM_NOTE]: "e1" },
+        synced: { [TEAM_NOTE]: ["a", "e1"] },
+      }),
+    ).toEqual([]);
+  });
+
+  it("removes a document the team removed, and only what it copied", () => {
+    expect(mirror({ local: { [TEAM_NOTE]: "a" }, synced: { [TEAM_NOTE]: ["a", "e1"] } })).toEqual([
+      { kind: "deleteLocal", path: TEAM_NOTE },
+    ]);
+    expect(mirror({ local: { [TEAM_NOTE]: "a" } })).toEqual([]);
+    expect(mirror({ synced: { [TEAM_NOTE]: ["a", "e1"] } })).toEqual([
+      { kind: "forget", path: TEAM_NOTE },
+    ]);
+  });
+
+  it("plans only paths inside the teams folder", () => {
+    expect(mirror({ cloud: { [NOTE]: "e1", [OTHER_DAY]: "e2" } })).toEqual([]);
   });
 });
