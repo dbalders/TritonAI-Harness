@@ -56,14 +56,20 @@ export const TeamCommand = Schema.Union([
     identityId: Identity,
     revision: Schema.Int,
   }),
+  /** On an archived team, only removes it from the caller's list. */
   Schema.Struct({ action: Schema.Literal("leave"), teamId: Id, revision: Schema.Int }),
-  /** Administrators only: every team that isn't ready, in `teams`. */
+  /** Administrators only: every team that is held (not ready and not archived), in `teams`. */
   Schema.Struct({ action: Schema.Literal("admin-list") }),
   /**
    * Administrators only: rechecks a held team's folder permissions against its recorded members
    * and, when they verify, makes it ready. A join or promotion that didn't finish isn't applied.
    */
   Schema.Struct({ action: Schema.Literal("recheck"), teamId: Id, revision: Schema.Int }),
+  /**
+   * Owners only. Removes every member's access and moves the team folder to the archive. An
+   * archived team stays listed for its members until they leave it; it can't be restored in place.
+   */
+  Schema.Struct({ action: Schema.Literal("archive"), teamId: Id, revision: Schema.Int }),
 ]);
 export type TeamCommand = typeof TeamCommand.Type;
 export const TeamMember = Schema.Struct({
@@ -79,7 +85,7 @@ export const TeamSummary = Schema.Struct({
   name: Name,
   role: TeamRole,
   canManage: Schema.Boolean,
-  state: Schema.Literals(["provisioning", "ready", "needs-attention"]),
+  state: Schema.Literals(["provisioning", "ready", "needs-attention", "archived"]),
   revision: Schema.Int,
 });
 export const TeamInvitation = Schema.Struct({

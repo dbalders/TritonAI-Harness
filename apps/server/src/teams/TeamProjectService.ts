@@ -12,10 +12,12 @@ import {
   type TeamProjectLink,
   type TeamProjectResult,
   type TeamProjectSkill,
+  type TeamCommand,
   teamNoteHeader,
   TeamStorage,
   type TeamStorageStatus,
   TeamsError,
+  type TeamsResult,
 } from "@t3tools/contracts";
 import * as NodeCrypto from "node:crypto";
 import * as Context from "effect/Context";
@@ -148,6 +150,14 @@ interface CheckedSkill {
 export class TeamProjectService extends Context.Service<
   TeamProjectService,
   {
+    /**
+     * A membership command, answered by the membership service. A team any answer shows as
+     * archived is unlinked from every project on this environment, as `unbind` does.
+     */
+    readonly teams: (
+      sessionId: string,
+      command: TeamCommand,
+    ) => Effect.Effect<TeamsResult, TeamsError>;
     readonly execute: (
       sessionId: string,
       command: TeamProjectCommand,
@@ -228,6 +238,34 @@ export const make = Effect.gen(function* () {
       Effect.mapError(() => failure("Harness projects could not be read.")),
       Effect.map(Option.getOrNull),
     );
+  /**
+   * Unlinks every project on this environment from the archived teams and turns off the skills
+   * anyone turned on under those links. Archiving is team-wide, so one member's answer is enough.
+   */
+  const detachArchived = (teamIds: readonly string[]) =>
+    teamIds.length === 0
+      ? Effect.void
+      : lock.withPermits(1)(
+          Effect.gen(function* () {
+            const links = yield* readLinks;
+            const next = links.filter((link) => !teamIds.includes(link.teamId));
+            if (next.length !== links.length) yield* writeLinks(next);
+            yield* removeEnabled((entry) => teamIds.includes(entry.link.teamId));
+          }),
+        );
+  const teams = Effect.fn("TeamProjectService.teams")(function* (
+    sessionId: string,
+    command: TeamCommand,
+  ) {
+    const result = yield* account.teams(sessionId, command);
+    yield* detachArchived(
+      [...result.teams, ...(result.team ? [result.team] : [])]
+        .filter((team) => team.state === "archived")
+        .map((team) => team.id),
+    );
+    return result;
+  });
+  const archived = () => new TeamsError({ code: "not_found", message: "This team was archived." });
   /** Membership for the exact requested team; non-members get the same answer as unknown teams. */
   const readyTeam = (sessionId: string, teamId: string) =>
     Effect.gen(function* () {
@@ -237,6 +275,10 @@ export const make = Effect.gen(function* () {
           code: "not_found",
           message: "This team is not available to your account.",
         });
+      if (team.state === "archived") {
+        yield* detachArchived([teamId]);
+        return yield* archived();
+      }
       if (team.state !== "ready" || !team.storage)
         return yield* failure("The team's private folder is not ready.");
       return { ...team, storage: team.storage };
@@ -740,14 +782,14 @@ export const make = Effect.gen(function* () {
   });
   const projectLinks = Effect.fn("TeamProjectService.projectLinks")(function* (sessionId: string) {
     yield* signedInProfile(sessionId);
-    const teams = new Map(
-      (yield* account.teams(sessionId, { action: "list" })).teams
+    const ready = new Map(
+      (yield* teams(sessionId, { action: "list" })).teams
         .filter((team) => team.state === "ready")
         .map((team) => [team.id, team] as const),
     );
     const result: TeamProjectLink[] = [];
     for (const link of yield* readLinks) {
-      const team = teams.get(link.teamId);
+      const team = ready.get(link.teamId);
       if (team) result.push(...(yield* listFor(team, [link])));
     }
     return { projects: result, storage: null };
@@ -759,14 +801,13 @@ export const make = Effect.gen(function* () {
    */
   const stuckLinks = Effect.fn("TeamProjectService.stuckLinks")(function* (sessionId: string) {
     yield* signedInProfile(sessionId);
-    const teams = new Map(
-      (yield* account.teams(sessionId, { action: "list" })).teams.map(
-        (team) => [team.id, team] as const,
-      ),
+    // Links to an archived team are removed by this read, so they are never listed as stuck.
+    const listed = new Map(
+      (yield* teams(sessionId, { action: "list" })).teams.map((team) => [team.id, team] as const),
     );
     const result: StuckTeamProjectLink[] = [];
     for (const link of yield* readLinks) {
-      const team = teams.get(link.teamId);
+      const team = listed.get(link.teamId);
       if (team?.state === "ready") continue;
       const project = yield* activeProject(link.projectId as ProjectId);
       if (project)
@@ -1155,7 +1196,12 @@ export const make = Effect.gen(function* () {
     yield* authorizeOutgoingCommand(sessionId, prepared);
     return prepared;
   });
-  return TeamProjectService.of({ execute, authorizeOutgoingCommand, prepareOutgoingCommand });
+  return TeamProjectService.of({
+    teams,
+    execute,
+    authorizeOutgoingCommand,
+    prepareOutgoingCommand,
+  });
 });
 
 export const layer = Layer.effect(TeamProjectService, make);

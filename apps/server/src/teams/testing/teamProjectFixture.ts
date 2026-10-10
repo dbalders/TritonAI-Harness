@@ -116,6 +116,11 @@ export function teamProjectFixture() {
         const role = signedIn ? roles[teamId]?.[subject] : undefined;
         if (!role)
           return Effect.fail(new TeamsError({ code: "not_found", message: "Team unavailable" }));
+        if (command.action === "archive") {
+          if (role !== "owner")
+            return Effect.fail(new TeamsError({ code: "forbidden", message: "Owners only." }));
+          states[teamId] = "archived";
+        }
         const landed = afterTeams;
         afterTeams = null;
         landed?.();
@@ -329,6 +334,10 @@ export function teamProjectFixture() {
     },
     signIn: () => {
       signedIn = true;
+    },
+    /** Archives a team, as an owner's `archive` on the membership service would. */
+    archive: (teamId: string) => {
+      states[teamId] = "archived";
     },
     setTeamsDown: (down: boolean) => {
       teamsDown = down;

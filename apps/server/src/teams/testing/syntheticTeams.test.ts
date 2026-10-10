@@ -194,6 +194,45 @@ describe("Synthetic Teams world", () => {
     }),
   );
 
+  it.effect("archives a team for every member, who can only remove it from their list", () =>
+    Effect.gen(function* () {
+      const { world, project, storage } = yield* linkedAlpha("owner");
+      const revision = world.snapshot().teams.find((team) => team.key === "alpha")!.revision;
+      world.switchTo("editor");
+      expect(yield* code(project.teams("s", { action: "archive", teamId: alpha, revision }))).toBe(
+        "forbidden",
+      );
+      world.switchTo("owner");
+      const before = world.trace.at(-1)?.seq ?? 0;
+      const archived = yield* project.teams("s", { action: "archive", teamId: alpha, revision });
+      expect(archived.team).toMatchObject({ state: "archived", storage: null });
+      // Harness refuses the archived team before asking Microsoft for anything.
+      expect(
+        yield* code(storage.execute("s", { action: "read-file", teamId: alpha, path: ownerNote })),
+      ).toBe("not_found");
+      expect(yield* code(project.execute("s", { action: "memory-list", projectId }))).toBe(
+        "not_found",
+      );
+      // Members still see it, as archived, and can do nothing with it but leave.
+      world.switchTo("editor");
+      const listed = yield* project.teams("s", { action: "list" });
+      expect(listed.teams.find((team) => team.id === alpha)?.state).toBe("archived");
+      const current = listed.teams.find((team) => team.id === alpha)!.revision;
+      expect(
+        yield* code(
+          project.teams("s", { action: "rename", teamId: alpha, name: "X", revision: current }),
+        ),
+      ).toBe("conflict");
+      yield* project.teams("s", { action: "leave", teamId: alpha, revision: current });
+      expect(
+        (yield* project.teams("s", { action: "list" })).teams.some((team) => team.id === alpha),
+      ).toBe(false);
+      expect(world.trace.filter((entry) => entry.seq > before && entry.team === "alpha")).toEqual(
+        [],
+      );
+    }),
+  );
+
   it.effect("answers a cross-team Graph request as SharePoint would, without a network", () =>
     Effect.gen(function* () {
       const world = makeSyntheticTeamsWorld();

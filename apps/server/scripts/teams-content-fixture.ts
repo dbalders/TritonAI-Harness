@@ -42,7 +42,8 @@ Control actions:
   switch identity=<owner|editor|reader|outsider> | sign-out | sign-in
   set-role team=<alpha|beta> identity=<...> role=<owner|editor|reader|none>
   edit team=<...> path=<Memory/...md> text=<new text> | restore team=<...> path=<...> | read team=<...> path=<...>
-  move-root team=<...> | restore-root team=<...> | download-host team=<...> host=<hostname>`;
+  move-root team=<...> | restore-root team=<...> | download-host team=<...> host=<hostname>
+  unarchive team=<...>`;
 
 const fail = (message: string): never => {
   process.stderr.write(`${prefix} ${message}\n`);
@@ -211,6 +212,9 @@ async function start(flags: Map<string, string | true>) {
         break;
       case "restore-root":
         world.restoreRoot(text("team"));
+        break;
+      case "unarchive":
+        world.unarchive(text("team"));
         break;
       case "download-host":
         world.setDownloadHost(text("team"), text("host"));

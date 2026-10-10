@@ -324,7 +324,9 @@ export function TeamWorkspace({
   const [rename, setRename] = useState("");
   const creation = useRef<{ name: string; requestId: string } | null>(null);
   const team = result?.team;
-  const owner = team?.canManage === true;
+  const archived = team?.state === "archived";
+  // An archived team can't be managed; members can only remove it from their list.
+  const owner = team?.canManage === true && !archived;
   const onlyOwner = team ? isOnlyOwner(team, profile) : false;
   const ready = team?.state === "ready" && !busy;
   const run = (command: TeamCommand) => {
@@ -506,7 +508,9 @@ export function TeamWorkspace({
                       ? "Private folder ready"
                       : entry.state === "provisioning"
                         ? "Setting up"
-                        : "Needs attention"}
+                        : entry.state === "archived"
+                          ? "Archived"
+                          : "Needs attention"}
                   </p>
                 </button>
               ))}
@@ -635,7 +639,14 @@ export function TeamWorkspace({
               Copy team reference
             </Button>
           </div>
-          {team.state !== "ready" ? (
+          {archived ? (
+            <p role="status" className="text-sm">
+              This team is archived. Its shared storage, team memory, and skills are no longer
+              available in Harness, and projects linked to it were unlinked. Its files are kept
+              under UC San Diego’s retention policy; ask a system administrator, with the team
+              reference above, if you need them.
+            </p>
+          ) : team.state !== "ready" ? (
             <p role="status" className="text-sm">
               {administrator
                 ? "This team’s storage permissions need to be verified before it can be used. Use Check again under Teams needing attention."
@@ -843,21 +854,44 @@ export function TeamWorkspace({
               </form>
             </>
           ) : null}
-          <div className="flex flex-wrap items-center gap-3">
+          {archived ? (
             <Button
-              variant="ghost"
-              disabled={!ready || onlyOwner}
-              aria-label={`Leave team ${team.name}`}
-              onClick={() => openReview({ kind: "leave" })}
+              variant="outline"
+              disabled={busy}
+              onClick={() =>
+                void run({ action: "leave", teamId: team.id, revision: team.revision })
+              }
             >
-              Leave team
+              Remove from your list
             </Button>
-            {onlyOwner ? (
-              <p className="text-xs text-muted-foreground">
-                You’re the only owner. Transfer ownership to another member before you leave.
-              </p>
-            ) : null}
-          </div>
+          ) : (
+            <div className="flex flex-wrap items-center gap-3">
+              <Button
+                variant="ghost"
+                disabled={!ready || onlyOwner}
+                aria-label={`Leave team ${team.name}`}
+                onClick={() => openReview({ kind: "leave" })}
+              >
+                Leave team
+              </Button>
+              {owner ? (
+                <Button
+                  variant="destructive-outline"
+                  disabled={!ready}
+                  aria-label={`Archive team ${team.name}`}
+                  onClick={() => openReview({ kind: "archive" })}
+                >
+                  Archive team
+                </Button>
+              ) : null}
+              {onlyOwner ? (
+                <p className="text-xs text-muted-foreground">
+                  You’re the only owner. Transfer ownership to another member before you leave, or
+                  archive the team.
+                </p>
+              ) : null}
+            </div>
+          )}
         </section>
       ) : null}
       <MembershipReviewDialog

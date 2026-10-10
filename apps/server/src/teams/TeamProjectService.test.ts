@@ -913,6 +913,65 @@ describe("Team skills turned on for a project", () => {
     }),
   );
 
+  it.effect("archiving a team unlinks its projects and turns its skills off for everyone", () =>
+    Effect.gen(function* () {
+      const { f, service, connect, enable, enabled, sent } = yield* linked;
+      yield* enable();
+      yield* service.execute("s", { action: "bind", teamId: teamA, projectId: otherProject });
+      f.roles[teamA]!.bob = "editor";
+      f.switchTo("bob");
+      yield* connect(teamA);
+      yield* enable();
+      f.switchTo("alice");
+      f.roles[teamA]!.alice = "owner";
+      const result = yield* service.teams("s", { action: "archive", teamId: teamA, revision: 1 });
+      expect(result.team?.state).toBe("archived");
+      expect((yield* service.execute("s", { action: "project-links" })).projects).toEqual([]);
+      expect(yield* code(service.execute("s", { action: "memory-list", projectId }))).toBe(
+        "not_found",
+      );
+      expect(yield* sent("Go.")).toBe("Go.");
+      f.switchTo("bob");
+      expect(yield* sent("Go.")).toBe("Go.");
+      expect(yield* code(enabled())).toBe("not_found");
+      // An unarchived team elsewhere keeps its link.
+      f.switchTo("alice");
+      f.roles[teamB]!.alice = "editor";
+      yield* service.execute("s", { action: "bind", teamId: teamB, projectId });
+      yield* service.teams("s", { action: "list" });
+      expect((yield* service.execute("s", { action: "project-links" })).projects).toEqual([
+        expect.objectContaining({ projectId, teamId: teamB }),
+      ]);
+    }),
+  );
+
+  it.effect("a member's environment detaches an archived team at its next use", () =>
+    Effect.gen(function* () {
+      const { f, service, enable, sent } = yield* linked;
+      yield* enable();
+      // Another owner archived the team; this environment hasn't been told.
+      f.archive(teamA);
+      expect(yield* sent("Go.")).toBe("Go.");
+      expect(yield* code(service.execute("s", { action: "project-link", projectId }))).toBe(
+        "not_found",
+      );
+      const links = new TextDecoder().decode(f.values.get("team-project-links"));
+      const skills = new TextDecoder().decode(f.values.get("team-project-skills"));
+      expect([links, skills]).toEqual(["[]", "[]"]);
+    }),
+  );
+
+  it.effect("never lists a link to an archived team as stuck; it removes it", () =>
+    Effect.gen(function* () {
+      const { f, service, enable } = yield* linked;
+      yield* enable();
+      f.archive(teamA);
+      expect((yield* service.execute("s", { action: "stuck-links" })).stuckLinks).toEqual([]);
+      expect(new TextDecoder().decode(f.values.get("team-project-links"))).toBe("[]");
+      expect(new TextDecoder().decode(f.values.get("team-project-skills"))).toBe("[]");
+    }),
+  );
+
   it.effect("adds nothing when an unlink lands while the skill is read", () =>
     Effect.gen(function* () {
       const { f, service, enable, sent } = yield* linked;

@@ -21,7 +21,8 @@ Owners manage names and membership, editors can publish and edit documents,
 and readers can view them. A team always keeps at least one owner. To hand a
 team to someone else, choose **Transfer ownership** on their row and confirm:
 they become an owner and you become an editor in one step, and other owners
-keep their role. The only owner can't leave until they transfer ownership. If
+keep their role. The only owner can't leave until they transfer ownership or
+archive the team. If
 an owner leaves UC San Diego, another owner can remove them; if they were the
 only owner, give a system administrator the team reference so they can assign
 a new owner. Your own row is marked **You**. Choosing a new role only stages
@@ -39,6 +40,17 @@ administrators see **Teams needing attention** on the Teams page and can choose
 team's recorded members and makes the team ready if they match. A join or role
 promotion that didn't finish isn't applied: the person accepts the invitation
 again, or an owner repeats the change.
+
+When a team's work is done, an owner can choose **Archive team** and confirm.
+Everyone, including owners, loses access to its shared storage, team memory,
+and skills. Projects linked to it are unlinked and its skills are turned off for
+everyone, as if each project were unlinked; another member's Harness does this
+the next time it checks the team. The team's files are moved to the team
+archive and kept under UC San Diego's retention policy. Archiving can't be undone
+in Harness, and Harness has no way to delete a team; ask a system administrator,
+with the team reference, to restore or delete an archived team's files.
+Members still see the team marked **Archived** until they choose **Remove from
+your list**.
 
 Connect the matching UCSD Microsoft account to open shared storage. Publish a
 work summary, SOP, or skill document explicitly; all team members can read it.

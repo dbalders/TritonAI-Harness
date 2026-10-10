@@ -24,7 +24,8 @@ export type MembershipReviewTarget =
   | { readonly kind: "role"; readonly member: TeamMember; readonly role: TeamRole }
   | { readonly kind: "transfer"; readonly member: TeamMember }
   | { readonly kind: "leave" }
-  | { readonly kind: "cancel-invite"; readonly invitation: TeamInvitation };
+  | { readonly kind: "cancel-invite"; readonly invitation: TeamInvitation }
+  | { readonly kind: "archive" };
 
 export interface MembershipReviewCopy {
   readonly title: string;
@@ -59,6 +60,7 @@ export function isCurrentReview(
     return false;
   if (review.kind === "leave") return true;
   if (!team.canManage) return false;
+  if (review.kind === "archive") return true;
   if (review.kind === "cancel-invite")
     return team.invitations.some((entry) => entry.id === review.invitation.id);
   const member = team.members.find((entry) => entry.identityId === review.member.identityId);
@@ -109,6 +111,8 @@ export function membershipReviewCommand(review: MembershipReview): TeamCommand {
       return { action: "leave", teamId, revision };
     case "cancel-invite":
       return { action: "cancel-invite", teamId, invitationId: review.invitation.id, revision };
+    case "archive":
+      return { action: "archive", teamId, revision };
   }
 }
 
@@ -173,6 +177,15 @@ export function membershipReviewCopy(
         confirm: "Cancel invitation",
         working: "Cancelling…",
         dismiss: "Keep invitation",
+        destructive: true,
+      };
+    case "archive":
+      return {
+        title: `Archive ${teamName}?`,
+        description: `Everyone in ${teamName}, including you, will lose access to it in Harness, ${loses}. Projects linked to it are unlinked and its skills are turned off for everyone. Its shared files are moved to the team archive and kept under UC San Diego's retention policy. This can't be undone in Harness; only an administrator can restore the files.`,
+        confirm: "Archive team",
+        working: "Archiving…",
+        dismiss: "Cancel",
         destructive: true,
       };
     case "role": {

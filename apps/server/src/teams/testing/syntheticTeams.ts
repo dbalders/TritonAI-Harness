@@ -236,6 +236,7 @@ export function makeSyntheticTeamsWorld() {
         ...team,
         key: key as SyntheticTeam,
         revision: 1,
+        archived: false,
         roles: new Map(Object.entries(team.roles)) as Map<SyntheticIdentity, TeamRole>,
         rootId: "",
         originalRootId: "",
@@ -247,6 +248,7 @@ export function makeSyntheticTeamsWorld() {
     (typeof SYNTHETIC_TEAMS)[SyntheticTeam] & {
       key: SyntheticTeam;
       revision: number;
+      archived: boolean;
       roles: Map<SyntheticIdentity, TeamRole>;
       rootId: string;
       originalRootId: string;
@@ -343,7 +345,7 @@ export function makeSyntheticTeamsWorld() {
     role,
     canManage: role === "owner",
     revision: team.revision,
-    state: "ready" as const,
+    state: team.archived ? ("archived" as const) : ("ready" as const),
     members: [...team.roles].map(([identity, memberRole]) => ({
       identityId: syntheticIdentityId(identity),
       displayName: SYNTHETIC_IDENTITIES[identity].displayName,
@@ -351,12 +353,14 @@ export function makeSyntheticTeamsWorld() {
       role: memberRole,
     })),
     invitations: [],
-    storage: {
-      tenantId: SYNTHETIC_TENANT_ID,
-      siteId: team.siteId,
-      driveId: team.driveId,
-      folderId: team.rootId,
-    },
+    storage: team.archived
+      ? null
+      : {
+          tenantId: SYNTHETIC_TENANT_ID,
+          siteId: team.siteId,
+          driveId: team.driveId,
+          folderId: team.rootId,
+        },
   });
   const memberTeams = () =>
     Object.values(teams).flatMap((team) => {
@@ -390,6 +394,13 @@ export function makeSyntheticTeamsWorld() {
         return fail("invalid_request", "This action is disabled in the synthetic Teams fixture.");
       if ("revision" in command && command.revision !== team.revision)
         return fail("conflict", "This team changed. Refresh and try again.");
+      // An archived team can only be removed from a member's list.
+      if (team.archived) {
+        if (command.action !== "leave") return fail("conflict", "This team is archived.");
+        team.roles.delete(current);
+        team.revision++;
+        return Effect.succeed(result(null));
+      }
       if (command.action === "leave") {
         if (role === "owner" && [...team.roles.values()].filter((r) => r === "owner").length < 2)
           return fail("conflict", "A team needs at least one owner.");
@@ -398,6 +409,11 @@ export function makeSyntheticTeamsWorld() {
         return Effect.succeed(result(null));
       }
       if (role !== "owner") return fail("forbidden", "Only team owners can do this.");
+      if (command.action === "archive") {
+        team.archived = true;
+        team.revision++;
+        return Effect.succeed(result(detail(team, role)));
+      }
       if (command.action === "set-role" || command.action === "remove-member") {
         const member = identityOfMember(team, command.identityId);
         if (!member) return fail("not_found", "Member unavailable");
@@ -650,8 +666,9 @@ export function makeSyntheticTeamsWorld() {
         graph(404, "unknown drive or route");
         return graphError(404, "itemNotFound");
       }
-      // Stands in for the team folder's SharePoint permissions: members only, readers read-only.
-      const role = team.roles.get(identity);
+      // Stands in for the team folder's SharePoint permissions: members only, readers read-only,
+      // and nobody once the team is archived.
+      const role = team.archived ? undefined : team.roles.get(identity);
       if (!role) {
         graph(403, "not a member of the drive's team");
         return graphError(403, "accessDenied");
@@ -847,6 +864,7 @@ export function makeSyntheticTeamsWorld() {
         id: team.id,
         name: team.name,
         revision: team.revision,
+        archived: team.archived,
         driveId: team.driveId,
         rootId: team.rootId,
         downloadHost: team.downloadHost,
@@ -899,6 +917,12 @@ export function makeSyntheticTeamsWorld() {
     restoreRoot: (team: string) => {
       const entry = teamOrFail(team);
       entry.rootId = entry.originalRootId;
+      entry.revision++;
+    },
+    /** Returns an archived team to use, as an administrator restoring its folder would. */
+    unarchive: (team: string) => {
+      const entry = teamOrFail(team);
+      entry.archived = false;
       entry.revision++;
     },
     /** Serves download URLs on another host, which TeamStorage must refuse before fetching. */

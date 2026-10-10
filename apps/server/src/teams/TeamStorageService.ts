@@ -177,6 +177,8 @@ export const make = (config: Microsoft.MicrosoftOAuthConfig | null) =>
               code: "not_found",
               message: "This team is not available to your account.",
             });
+          if (team?.state === "archived")
+            return yield* new TeamsError({ code: "not_found", message: "This team was archived." });
           if (!team || !team.storage || team.state !== "ready")
             return yield* failure("The team's private folder is not ready.");
           const storage = team.storage;

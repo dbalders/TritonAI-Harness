@@ -58,6 +58,14 @@ describe("isCurrentReview", () => {
     expect(isCurrentReview(remove, account, null)).toBe(false);
   });
 
+  it("lets only a manager of a ready team confirm archiving it", () => {
+    const archive: MembershipReview = { ...bound, kind: "archive" };
+    expect(isCurrentReview(archive, account, team)).toBe(true);
+    expect(isCurrentReview(archive, account, { ...team, canManage: false })).toBe(false);
+    expect(isCurrentReview(archive, account, { ...team, state: "archived" })).toBe(false);
+    expect(isCurrentReview(archive, account, { ...team, revision: 4 })).toBe(false);
+  });
+
   it("drops a role review once the member already has that role or a different starting role", () => {
     const role: MembershipReview = {
       ...bound,

@@ -3009,7 +3009,7 @@ const makeWsRpcLayer = (
             teamProject.execute(currentSessionId, input),
           ),
         [WS_METHODS.serverTeams]: (input) =>
-          observeRpcEffect(WS_METHODS.serverTeams, account.teams(currentSessionId, input)),
+          observeRpcEffect(WS_METHODS.serverTeams, teamProject.teams(currentSessionId, input)),
         [WS_METHODS.serverGetAccountStatus]: (_input) =>
           observeRpcEffect(WS_METHODS.serverGetAccountStatus, account.getStatus(currentSessionId)),
         [WS_METHODS.serverStartAccountLogin]: (input) =>

@@ -305,7 +305,7 @@ it("asks the only owner to transfer ownership before leaving", async () => {
   const leave = byLabel("Leave team Alpha") as HTMLButtonElement;
   expect(leave.disabled).toBe(true);
   expect(leave.parentElement?.textContent).toContain(
-    "Transfer ownership to another member before you leave.",
+    "Transfer ownership to another member before you leave, or archive the team.",
   );
   expect(byLabel("Transfer ownership of Alpha to Carol (carol@ucsd.edu)")).not.toBeNull();
 });
@@ -422,4 +422,40 @@ it("offers a refresh, not a second check, when a recheck isn't confirmed", async
     { action: "admin-list" },
   ]);
   expect(pageButton("Refresh list")).toBeDefined();
+});
+
+it("archives only after a confirmation naming the team, then offers only removal from your list", async () => {
+  await renderWorkspace();
+  await press(byLabel("Archive team Alpha"));
+  expect(mocks.calls).toEqual([]);
+  expect(dialog()?.textContent).toContain("Archive Alpha?");
+  expect(dialog()?.textContent).toContain("can't be undone in Harness");
+  expect(document.activeElement?.textContent).toBe("Cancel");
+
+  const archived = (revision: number): TeamsResult => {
+    const result = teamResult(revision);
+    return {
+      ...result,
+      teams: result.teams.map((entry) => ({ ...entry, state: "archived" })),
+      team: { ...result.team!, state: "archived", invitations: [] },
+    };
+  };
+  mocks.reply = () => archived(4);
+  await press(buttonNamed("Archive team"));
+  expect(mocks.calls).toEqual([{ action: "archive", teamId: TEAM_ID, revision: 3 }]);
+  expect(dialog()).toBeNull();
+  expect(container.textContent).toContain("This team is archived.");
+  // Nothing about the team can be managed any more, and there is no second archive.
+  for (const label of ["Remove", "Role for", "Cancel invitation", "Leave team", "Archive team"])
+    expect(document.querySelector(`[aria-label^="${label}"]`)).toBeNull();
+
+  mocks.calls = [];
+  mocks.reply = () => ({ ...archived(5), teams: [], team: null });
+  await press(
+    [...container.querySelectorAll("button")].find(
+      (entry) => entry.textContent === "Remove from your list",
+    ),
+  );
+  expect(mocks.calls).toEqual([{ action: "leave", teamId: TEAM_ID, revision: 4 }]);
+  expect(container.textContent).not.toContain("This team is archived.");
 });
