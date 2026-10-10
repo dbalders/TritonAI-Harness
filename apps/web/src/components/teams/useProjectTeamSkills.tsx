@@ -27,17 +27,19 @@ export function useProjectTeamSkills(
   const request = useAtomCommand(serverEnvironment.teamProjects, { reportFailure: false });
   const [accountChanges, setAccountChanges] = useState(0);
   const [state, setState] = useState<{ key: string; value: ProjectTeamSkills | null } | null>(null);
-  const key = environmentId && projectId ? `${environmentId}:${projectId}` : null;
+  const key = environmentId && projectId ? `${environmentId}:${projectId}:${accountChanges}` : null;
   // Read again whenever the project, the thread's sent messages, or the account changes.
-  const refresh = key === null ? null : `${key}\n${sentMessages}\n${accountChanges}`;
+  const refresh = key === null ? null : `${key}\n${sentMessages}`;
   useEffect(() => {
-    const changed = () => setAccountChanges((count) => count + 1);
+    const changed = () => {
+      setState(null);
+      setAccountChanges((count) => count + 1);
+    };
     window.addEventListener("tritonai-account-changed", changed);
     return () => window.removeEventListener("tritonai-account-changed", changed);
   }, []);
   useEffect(() => {
-    if (!environmentId || !projectId || refresh === null) return;
-    const key = refresh.slice(0, refresh.indexOf("\n"));
+    if (!environmentId || !projectId || key === null || refresh === null) return;
     let current = true;
     void request({ environmentId, input: { action: "skill-enabled", projectId } }).then(
       (result) => {
@@ -67,7 +69,7 @@ export function useProjectTeamSkills(
     return () => {
       current = false;
     };
-  }, [environmentId, projectId, refresh, request]);
+  }, [environmentId, projectId, key, refresh, request]);
   return state?.key === key ? state.value : null;
 }
 

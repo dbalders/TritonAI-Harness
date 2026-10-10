@@ -922,6 +922,32 @@ describe("Team skills turned on for a project", () => {
     }),
   );
 
+  for (const change of ["unlink", "sign-out", "switch"] as const)
+    it.effect(`refuses attached memory when ${change} lands during skill preparation`, () =>
+      Effect.gen(function* () {
+        const { f, service, enable, sent } = yield* linked;
+        const attached = yield* service.execute("s", {
+          action: "memory-attach",
+          projectId,
+          path: `Memory/${identityOf("alice")}/${deviceId}/${recordId}.md`,
+        });
+        const text = `Use this note:\n\n${attached.reference!.block}`;
+        yield* enable();
+        // The initial memory check passes; revoke access inside the following skill read.
+        f.interleave(
+          change === "unlink"
+            ? service.execute("s", { action: "unbind", teamId: teamA, projectId })
+            : Effect.sync(() => {
+                if (change === "sign-out") f.signOut();
+                else f.switchTo("bob");
+              }),
+        );
+        expect(yield* code(sent(text))).toBe(
+          change === "sign-out" ? "sign_in_required" : "not_found",
+        );
+      }),
+    );
+
   it.effect("adds nothing a disable or approved update overtook while the skill was read", () =>
     Effect.gen(function* () {
       const { f, service, enable, enabled, sent } = yield* linked;

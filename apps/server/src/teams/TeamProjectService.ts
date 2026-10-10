@@ -1059,7 +1059,10 @@ export const make = Effect.gen(function* () {
     command: ClientOrchestrationCommand,
   ) {
     yield* authorizeOutgoingCommand(sessionId, command);
-    return yield* applyProjectSkills(sessionId, command);
+    const prepared = yield* applyProjectSkills(sessionId, command);
+    // Skill reads can outlive an unlink or account change, even when they add no skills.
+    yield* authorizeOutgoingCommand(sessionId, prepared);
+    return prepared;
   });
   return TeamProjectService.of({ execute, authorizeOutgoingCommand, prepareOutgoingCommand });
 });
