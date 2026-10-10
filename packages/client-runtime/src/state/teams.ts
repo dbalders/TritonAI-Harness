@@ -11,11 +11,19 @@ export interface TeamsState {
   readonly error: string | null;
 }
 
-/** Owned by one visible account/environment. Closing or changing accounts discards all team data. */
-export function createTeamsController(execute: (command: TeamCommand) => Promise<TeamsResult>) {
+/**
+ * Owned by one account/environment and shared by the views that show it. Closing or changing
+ * accounts discards all team data.
+ */
+export function createTeamsController(
+  execute: (command: TeamCommand) => Promise<TeamsResult>,
+  now: () => number = Date.now,
+) {
   let state: TeamsState = { result: null, busy: false, error: null };
   let generation = 0;
   let active = false;
+  let users = 0;
+  let listedAt = -Infinity;
   const listeners = new Set<() => void>();
   const publish = (value: Partial<TeamsState>) => {
     state = { ...state, ...value };
@@ -24,6 +32,7 @@ export function createTeamsController(execute: (command: TeamCommand) => Promise
   const run = async (command: TeamCommand): Promise<boolean> => {
     if (!active || state.busy) return false;
     const request = ++generation;
+    if (command.action === "list") listedAt = now();
     publish({ busy: true, error: null });
     try {
       const result = await execute(command);
@@ -55,17 +64,59 @@ export function createTeamsController(execute: (command: TeamCommand) => Promise
         listeners.delete(listener);
       };
     },
+    /** Each view activates while it shows the account, which rereads the list. */
     activate() {
-      active = true;
-      publish({ result: null, busy: false, error: null });
+      if (users++ === 0) {
+        active = true;
+        publish({ result: null, busy: false, error: null });
+      }
       void run({ action: "list" });
+      let stopped = false;
       return () => {
-        active = false;
+        if (stopped) return;
+        stopped = true;
         generation++;
+        if (--users > 0) {
+          // The views left only need the list; the open team, any new code, and late replies
+          // close with the page.
+          publish({
+            result: state.result && { ...state.result, team: null, invitationCode: null },
+            busy: false,
+          });
+          return;
+        }
+        active = false;
         publish({ result: null, busy: false, error: null });
       };
     },
+    /**
+     * Rereads the list if it is older than `maxAgeMs` and no team is open, so an indicator can
+     * follow existing account checks instead of its own polling.
+     */
+    refreshList(maxAgeMs: number) {
+      if (state.result?.team || now() - listedAt < maxAgeMs) return Promise.resolve(false);
+      return run({ action: "list" });
+    },
     run,
+  };
+}
+
+export type TeamsController = ReturnType<typeof createTeamsController>;
+
+/** Invitations waiting for the signed-in account; none while teams are unknown or unavailable. */
+export const pendingTeamInvitationCount = (state: TeamsState) =>
+  state.result?.invitations.length ?? 0;
+
+/** One controller per key, so every view of an account shares one list and its requests. */
+export function createTeamsControllerCache() {
+  const controllers = new Map<string, TeamsController>();
+  return (key: string, execute: (command: TeamCommand) => Promise<TeamsResult>) => {
+    let controller = controllers.get(key);
+    if (!controller) {
+      controller = createTeamsController(execute);
+      controllers.set(key, controller);
+    }
+    return controller;
   };
 }
 

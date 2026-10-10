@@ -2,9 +2,7 @@ import { TeamSharedStorage } from "./TeamSharedStorage";
 import { StuckProjectLinks, TeamProjects } from "./TeamProjects";
 import { HeldTeams, type HeldTeam } from "./TeamAdmin";
 // @effect-diagnostics cryptoRandomUUID:off - Browser event creates a retry-stable request ID before dispatch.
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { createTeamsController } from "@t3tools/client-runtime/state/server";
-import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type {
   AccountProfile,
   EnvironmentId,
@@ -16,8 +14,6 @@ import { LockKeyholeIcon, UsersIcon } from "lucide-react";
 import { useUcsdAccount } from "../../hooks/useUcsdAccount";
 import { useProject } from "../../state/entities";
 import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
-import { serverEnvironment } from "../../state/server";
-import { useAtomCommand } from "../../state/use-atom-command";
 import {
   AlertDialog,
   AlertDialogClose,
@@ -46,6 +42,7 @@ import {
   membershipReviewCommand,
   membershipReviewCopy,
 } from "./teamMembershipReview";
+import { useTeamsCommand, useTeamsController } from "./useTeamsController";
 
 export function TeamsPage({
   linkProject,
@@ -311,17 +308,8 @@ export function TeamWorkspace({
   profile: AccountProfile;
   linkProjectId?: ProjectId | null;
 }) {
-  const request = useAtomCommand(serverEnvironment.teams, { reportFailure: false });
-  const execute = useCallback(
-    async (input: TeamCommand) => {
-      const response = await request({ environmentId, input });
-      if (response._tag === "Success") return response.value;
-      const error = squashAtomCommandFailure(response);
-      throw error instanceof Error ? error : new Error("Teams could not be reached.");
-    },
-    [environmentId, request],
-  );
-  const controller = useMemo(() => createTeamsController(execute), [execute]);
+  const execute = useTeamsCommand(environmentId);
+  const controller = useTeamsController(environmentId, profile)!;
   const { result, busy, error } = useSyncExternalStore(
     controller.subscribe,
     controller.getSnapshot,

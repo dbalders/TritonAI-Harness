@@ -1,4 +1,10 @@
-export { createTeamsController, mergeTeamStorageResult } from "./teams.ts";
+export {
+  createTeamsController,
+  createTeamsControllerCache,
+  mergeTeamStorageResult,
+  pendingTeamInvitationCount,
+  type TeamsController,
+} from "./teams.ts";
 import {
   type EnvironmentId,
   type ServerConfig,

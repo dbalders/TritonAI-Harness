@@ -1,17 +1,15 @@
 import { Link } from "@tanstack/react-router";
-import type { EnvironmentId } from "@t3tools/contracts";
-import { useUcsdAccount } from "../../hooks/useUcsdAccount";
-import { usePrimaryEnvironmentId } from "../../state/environments";
+import type { useUcsdAccount } from "../../hooks/useUcsdAccount";
 import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 
-export function SidebarAccount() {
-  const environmentId = usePrimaryEnvironmentId();
-  return environmentId ? <Account key={environmentId} environmentId={environmentId} /> : null;
-}
-
-function Account({ environmentId }: { environmentId: EnvironmentId }) {
-  const { account, busy, error, controller } = useUcsdAccount(environmentId);
+/** The primary environment's campus account, read once for the whole sidebar footer. */
+export function SidebarAccount({
+  account,
+  busy,
+  error,
+  controller,
+}: ReturnType<typeof useUcsdAccount>) {
   const profile = account?.status === "signed-in" ? account.profile : null;
   if (profile) {
     const initials = profile.displayName

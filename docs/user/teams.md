@@ -14,7 +14,8 @@ joining. You can also paste an invitation code from the team owner.
 Invitations belong to the team, not the owner who created them: they stay
 valid if that person stops being an owner, and any owner can cancel one. To
 replace a lost invitation code, cancel the invitation and invite the person
-again.
+again. While you're signed in, the **Teams** button in the sidebar shows how
+many invitations are waiting for you.
 
 Owners manage names and membership, editors can publish and edit documents,
 and readers can view them. A team always keeps at least one owner. To hand a
