@@ -631,3 +631,93 @@ describe("account session renewal", () => {
     }),
   );
 });
+
+describe("Teams account proxy", () => {
+  it.effect("uses only the owning environment session's campus credential", () =>
+    Effect.gen(function* () {
+      let teamRequests = 0;
+      const f = fixture({
+        fetch: async (input, init) => {
+          if (String(input).endsWith("/v1/teams")) {
+            teamRequests++;
+            expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${token}`);
+            expect(init?.redirect).toBe("error");
+            expect(JSON.parse(String(init?.body))).toEqual(
+              teamRequests === 1
+                ? { action: "list" }
+                : {
+                    action: "accept-pending",
+                    invitationId: "b284157c-032d-4c05-98e7-df7b47023ee3",
+                  },
+            );
+            return Response.json({ teams: [], invitations: [], team: null, invitationCode: null });
+          }
+          return f.defaultFetch(input, init);
+        },
+      });
+      const account = yield* f.make;
+      yield* account.startLogin("owner-session");
+      f.advance(5);
+      yield* account.pollLogin("owner-session");
+      expect((yield* Effect.flip(account.teams("another-session", { action: "list" }))).code).toBe(
+        "sign_in_required",
+      );
+      expect(teamRequests).toBe(0);
+      expect((yield* account.teams("owner-session", { action: "list" })).teams).toEqual([]);
+      expect(teamRequests).toBe(1);
+      const accept = {
+        action: "accept-pending",
+        invitationId: "b284157c-032d-4c05-98e7-df7b47023ee3",
+      } as const;
+      yield* account.teams("owner-session", accept);
+      expect(teamRequests).toBe(2);
+      yield* account.signOut("owner-session");
+      expect((yield* Effect.flip(account.teams("owner-session", { action: "list" }))).code).toBe(
+        "sign_in_required",
+      );
+      expect(teamRequests).toBe(2);
+    }),
+  );
+  it.effect("says an unanswered change may still be in progress", () =>
+    Effect.gen(function* () {
+      const f = fixture({
+        fetch: async (input, init) => {
+          if (String(input).endsWith("/v1/teams"))
+            throw new DOMException("timed out", "TimeoutError");
+          return f.defaultFetch(input, init);
+        },
+      });
+      const account = yield* f.make;
+      yield* account.startLogin("owner-session");
+      f.advance(5);
+      yield* account.pollLogin("owner-session");
+      const read = yield* Effect.flip(account.teams("owner-session", { action: "list" }));
+      expect(read).toMatchObject({ code: "unavailable" });
+      expect(read.message).not.toContain("in progress");
+      const change = yield* Effect.flip(
+        account.teams("owner-session", {
+          action: "remove-member",
+          teamId: "b284157c-032d-4c05-98e7-df7b47023ee3",
+          revision: 3,
+          identityId: "x".repeat(43),
+        }),
+      );
+      expect(change).toMatchObject({ code: "unavailable" });
+      expect(change.message).toContain("may still be in progress");
+    }),
+  );
+  it.effect("rejects an expired campus session before contacting team storage", () =>
+    Effect.gen(function* () {
+      const f = fixture();
+      const account = yield* f.make;
+      yield* account.startLogin("owner-session");
+      f.advance(5);
+      yield* account.pollLogin("owner-session");
+      f.advance(3601);
+      expect((yield* Effect.flip(account.teams("owner-session", { action: "list" }))).code).toBe(
+        "sign_in_required",
+      );
+      expect(f.calls.some((call) => call.url.endsWith("/v1/teams"))).toBe(false);
+    }),
+  );
+});

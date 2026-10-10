@@ -22,8 +22,10 @@ import {
   failEnvironmentInternal,
   failEnvironmentInvalidRequest,
   failEnvironmentNotFound,
+  failEnvironmentOperationForbidden,
   requireEnvironmentScope,
 } from "../auth/http.ts";
+import { TeamProjectService } from "../teams/TeamProjectService.ts";
 import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
@@ -79,6 +81,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
     const projectionThreadMessageRepository = yield* ProjectionThreadMessageRepository;
     const orchestrationEngine = yield* OrchestrationEngineService;
+    const teamProject = yield* TeamProjectService;
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const serverConfig = yield* ServerConfig;
@@ -383,7 +386,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
         "dispatch",
         Effect.fn("environment.orchestration.dispatch")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
-          yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
+          const session = yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
           yield* ProjectCloneTracker.rejectCommandsDuringClone(
             projectCloneTracker,
             args.payload,
@@ -392,13 +395,24 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
               failEnvironmentInternal("orchestration_dispatch_failed", cause),
             ),
           );
-          const normalizedCommand = yield* normalizeDispatchCommand(args.payload).pipe(
+          // The same team-memory gate and project team skills as the WebSocket dispatch, for
+          // this authenticated session.
+          const command = yield* teamProject
+            .prepareOutgoingCommand(session.sessionId, args.payload)
+            .pipe(
+              Effect.catch((error) =>
+                Effect.gen(function* () {
+                  if (error.code === "unavailable")
+                    return yield* failEnvironmentInternal("orchestration_dispatch_failed", error);
+                  return yield* failEnvironmentOperationForbidden("team_memory_not_allowed");
+                }),
+              ),
+            );
+          const normalizedCommand = yield* normalizeDispatchCommand(command).pipe(
             Effect.catch(() => failEnvironmentInvalidRequest("invalid_command")),
           );
           const result = yield* orchestrationEngine.dispatch(normalizedCommand).pipe(
-            Effect.tapError(() =>
-              cleanupFailedUploadedAttachments(args.payload, normalizedCommand),
-            ),
+            Effect.tapError(() => cleanupFailedUploadedAttachments(command, normalizedCommand)),
             Effect.catch((cause) =>
               failEnvironmentInternal("orchestration_dispatch_failed", cause),
             ),

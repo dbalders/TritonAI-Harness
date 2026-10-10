@@ -33,6 +33,7 @@ import ProjectScriptsControl, {
   type ProjectScriptActionResult,
 } from "../ProjectScriptsControl";
 import { OpenInPicker } from "./OpenInPicker";
+import { ThreadTeamControl } from "../teams/ThreadTeamControl";
 import { useRemoteOpenState, type RemoteOpenMode } from "../../remoteOpen";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { useT3ProjectFileScripts } from "~/hooks/useT3ProjectFileScripts";
@@ -78,6 +79,10 @@ interface ChatHeaderProps {
     input: NewProjectScriptInput,
   ) => Promise<ProjectScriptActionResult>;
   onDeleteProjectScript: (scriptId: string) => Promise<ProjectScriptActionResult>;
+  /** Present for project threads; each opens a review dialog before anything is shared or added. */
+  teamActions?:
+    | { onShare: () => void; onAddMemory: () => void; onUseSkill: () => void }
+    | undefined;
 }
 
 /**
@@ -144,6 +149,7 @@ export const ChatHeader = memo(function ChatHeader({
   onAddProjectScript,
   onUpdateProjectScript,
   onDeleteProjectScript,
+  teamActions,
 }: ChatHeaderProps) {
   const { active: panelAnimationsActive, durationMs: panelAnimationDurationMs } =
     usePanelAnimationSettings();
@@ -381,9 +387,22 @@ export const ChatHeader = memo(function ChatHeader({
           />
         </>
       )}
-      {activeProjectName && gitCwd && (
+      {teamActions && (
         <>
           {actionsCollapsed && (activeProjectScripts || showOpenInPicker) && <MenuSeparator />}
+          <ThreadTeamControl
+            presentation={actionsCollapsed ? "menu" : "toolbar"}
+            onShare={teamActions.onShare}
+            onAddMemory={teamActions.onAddMemory}
+            onUseSkill={teamActions.onUseSkill}
+          />
+        </>
+      )}
+      {activeProjectName && gitCwd && (
+        <>
+          {actionsCollapsed && (activeProjectScripts || showOpenInPicker || teamActions) && (
+            <MenuSeparator />
+          )}
           <GitActionsControl
             presentation={actionsCollapsed ? "menu" : "toolbar"}
             gitCwd={gitCwd}

@@ -44,6 +44,7 @@ import {
   WS_METHODS,
   WsRpcGroup,
   EditorId,
+  formatTeamContext,
   WorktreeSetupSnapshot,
   type WorktreeSetupStageId,
 } from "@t3tools/contracts";
@@ -122,6 +123,7 @@ import * as GitManager from "./git/GitManager.ts";
 import * as EnvironmentTheme from "./environmentTheme.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 import * as MemorySync from "./memory/sync/MemorySync.ts";
+import { noTeamMirrorHost, TeamMirrorHost } from "./memory/sync/teamMirror.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
@@ -131,6 +133,11 @@ import {
   OrchestrationThreadSettleBlockedError,
 } from "./orchestration/Errors.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
+import { AccountService } from "./auth/AccountService.ts";
+import { TeamProjectService } from "./teams/TeamProjectService.ts";
+import { TeamStorageService } from "./teams/TeamStorageService.ts";
+import * as TeamFixture from "./teams/testing/teamProjectFixture.ts";
+import * as SyntheticTeams from "./teams/testing/syntheticTeams.ts";
 import { ThreadDeletionReactor } from "./orchestration/Services/ThreadDeletionReactor.ts";
 import * as PullRequestSyncReactor from "./orchestration/PullRequestSyncReactor.ts";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
@@ -587,6 +594,7 @@ const buildAppUnderTest = (options?: {
     desktopTelemetryReceiver?: Partial<
       DesktopTelemetryReceiver.DesktopTelemetryReceiver["Service"]
     >;
+    teamServices?: Parameters<typeof makeRoutesLayerFor>[1];
   };
 }) =>
   Effect.gen(function* () {
@@ -785,9 +793,12 @@ const buildAppUnderTest = (options?: {
     const servedRoutesLayer = HttpRouter.serve(
       // Viewed-file marks for a host that keeps none of its own are rows, so the routes want a
       // database. Its own, in memory: nothing here shares a table with the auth store.
-      makeRoutesLayerFor(async () => ({
-        toolDefinitions: () => [],
-      })).pipe(Layer.provide(Layer.mergeAll(serviceLauncherClientLayer, SqlitePersistenceMemory))),
+      makeRoutesLayerFor(
+        async () => ({
+          toolDefinitions: () => [],
+        }),
+        options?.layers?.teamServices,
+      ).pipe(Layer.provide(Layer.mergeAll(serviceLauncherClientLayer, SqlitePersistenceMemory))),
       {
         disableListenLog: true,
         disableLogger: true,
@@ -817,7 +828,9 @@ const buildAppUnderTest = (options?: {
           }),
           // Server-lifetime in production; built from the provider mocks below.
           ProviderMaintenanceRunner.layer,
+          Layer.succeed(TeamMirrorHost, noTeamMirrorHost),
           Layer.mock(MemorySync.MemorySync)({
+            teams: { attach: () => Effect.void, sync: Effect.void, prune: Effect.void },
             getStatus: Effect.succeed({
               enabled: false,
               directoryPath: "/tmp/t3-memory",
@@ -2286,6 +2299,326 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       assert.equal(response.status, 200);
       assert.equal(snapshot.thread.id, threadId);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("refuses revoked team memory on both dispatch transports", () =>
+    Effect.gen(function* () {
+      const teams = TeamFixture.teamProjectFixture();
+      const { service, account, storage } = yield* teams.make;
+      yield* service.execute("s", {
+        action: "bind",
+        teamId: TeamFixture.teamA,
+        projectId: TeamFixture.projectId,
+      });
+      const dispatched: Array<OrchestrationCommand> = [];
+      yield* buildAppUnderTest({
+        layers: {
+          teamServices: Layer.mergeAll(
+            Layer.succeed(AccountService, account),
+            Layer.succeed(TeamStorageService, storage),
+            Layer.succeed(TeamProjectService, service),
+          ),
+          orchestrationEngine: {
+            dispatch: (command) =>
+              Effect.sync(() => {
+                dispatched.push(command);
+                return { sequence: dispatched.length };
+              }),
+            readEvents: () => Stream.empty,
+          },
+        },
+      });
+      const wsUrl = yield* getWsServerUrl("/ws");
+      // Microsoft storage is connected per session, so this session connects before adding.
+      const issued = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          Effect.gen(function* () {
+            const teamId = TeamFixture.teamA;
+            const flow = yield* client[WS_METHODS.serverTeamStorage]({ action: "connect", teamId });
+            yield* client[WS_METHODS.serverTeamStorage]({
+              action: "poll",
+              teamId,
+              flowId: flow.flowId!,
+            });
+            return yield* client[WS_METHODS.serverTeamProjects]({
+              action: "memory-attach",
+              projectId: TeamFixture.projectId,
+              path: `Memory/${"a".repeat(43)}/${TeamFixture.deviceId}/${TeamFixture.recordId}.md`,
+            });
+          }),
+        ),
+      );
+      const block = issued.reference!.block;
+      delete teams.roles[TeamFixture.teamA]!.alice;
+
+      const createdAt = "2026-10-09T00:00:00.000Z";
+      const turn = (text: string) => ({
+        type: "thread.turn.start" as const,
+        commandId: CommandId.make(`cmd-turn-${dispatched.length}`),
+        threadId: ThreadId.make(TeamFixture.threadId),
+        message: {
+          messageId: MessageId.make(`msg-${dispatched.length}`),
+          role: "user" as const,
+          text,
+          attachments: [],
+        },
+        runtimeMode: "full-access" as const,
+        interactionMode: "default" as const,
+        createdAt,
+      });
+      const goal = {
+        type: "thread.goal.set" as const,
+        commandId: CommandId.make("cmd-goal"),
+        threadId: ThreadId.make(TeamFixture.threadId),
+        objective: `Finish ${block}`,
+        createdAt,
+      };
+      const cookie = yield* getAuthenticatedSessionCookieHeader();
+      const dispatchUrl = yield* getHttpServerUrl("/api/orchestration/dispatch");
+      const post = (command: unknown) =>
+        fetchEffect(dispatchUrl, {
+          method: "POST",
+          headers: { cookie, "content-type": "application/json" },
+          body: encodeTestJson(command),
+        });
+
+      for (const command of [turn(`Draft\n${block}`), goal]) {
+        const response = yield* post(command);
+        assert.equal(response.status, 403);
+        const body = yield* responseJsonEffect<{ readonly reason: string }>(response);
+        assert.equal(body.reason, "team_memory_not_allowed");
+      }
+      const refusedOverWs = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand](turn(`Draft\n${block}`)),
+        ),
+      ).pipe(Effect.flip);
+      assertInclude(refusedOverWs.message, "team memory you can no longer send");
+      assert.deepEqual(dispatched, []);
+
+      const accepted = yield* post(turn("Draft without team memory"));
+      assert.equal(accepted.status, 200);
+      assert.deepEqual(
+        dispatched.map((command) => command.type),
+        ["thread.turn.start"],
+      );
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("adds a skill turned on for the project on both dispatch transports", () =>
+    Effect.gen(function* () {
+      const teams = TeamFixture.teamProjectFixture();
+      const { service, account, storage } = yield* teams.make;
+      yield* service.execute("s", {
+        action: "bind",
+        teamId: TeamFixture.teamA,
+        projectId: TeamFixture.projectId,
+      });
+      const path = `Skills/${TeamFixture.identityOf("alice")}/${TeamFixture.deviceId}/${TeamFixture.recordId}.md`;
+      const skillText = "# Grant summary\n\nUse the 2025 template.";
+      teams.contents.set(`rootA:${path}`, skillText);
+      const dispatched: Array<OrchestrationCommand> = [];
+      yield* buildAppUnderTest({
+        layers: {
+          teamServices: Layer.mergeAll(
+            Layer.succeed(AccountService, account),
+            Layer.succeed(TeamStorageService, storage),
+            Layer.succeed(TeamProjectService, service),
+          ),
+          orchestrationEngine: {
+            dispatch: (command) =>
+              Effect.sync(() => {
+                dispatched.push(command);
+                return { sequence: dispatched.length };
+              }),
+            readEvents: () => Stream.empty,
+          },
+        },
+      });
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const createdAt = "2026-10-09T00:00:00.000Z";
+      const turn = (text: string) => ({
+        type: "thread.turn.start" as const,
+        commandId: CommandId.make(`cmd-skill-${dispatched.length}`),
+        threadId: ThreadId.make(TeamFixture.threadId),
+        message: {
+          messageId: MessageId.make(`msg-skill-${dispatched.length}`),
+          role: "user" as const,
+          text,
+          attachments: [],
+        },
+        runtimeMode: "full-access" as const,
+        interactionMode: "default" as const,
+        createdAt,
+      });
+      // Review and turn the skill on, then send over WebSocket, all as this session.
+      const block = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          Effect.gen(function* () {
+            const teamId = TeamFixture.teamA;
+            const flow = yield* client[WS_METHODS.serverTeamStorage]({ action: "connect", teamId });
+            yield* client[WS_METHODS.serverTeamStorage]({
+              action: "poll",
+              teamId,
+              flowId: flow.flowId!,
+            });
+            const read = yield* client[WS_METHODS.serverTeamProjects]({
+              action: "skill-read",
+              projectId: TeamFixture.projectId,
+              path,
+            });
+            yield* client[WS_METHODS.serverTeamProjects]({
+              action: "skill-enable",
+              projectId: TeamFixture.projectId,
+              path,
+              version: read.version!,
+            });
+            yield* client[ORCHESTRATION_WS_METHODS.dispatchCommand](turn("Draft the summary."));
+            return formatTeamContext({
+              kind: "skill",
+              teamName: "Team A",
+              path,
+              text: skillText,
+              projectVersion: read.version!,
+            });
+          }),
+        ),
+      );
+      const cookie = yield* getAuthenticatedSessionCookieHeader();
+      const dispatchUrl = yield* getHttpServerUrl("/api/orchestration/dispatch");
+      const post = (command: unknown) =>
+        fetchEffect(dispatchUrl, {
+          method: "POST",
+          headers: { cookie, "content-type": "application/json" },
+          body: encodeTestJson(command),
+        });
+      // This HTTP session never connected Microsoft, so it can't read the skill: the message goes
+      // without it rather than failing.
+      assert.equal((yield* post(turn("Draft from another session."))).status, 200);
+      // Once the account loses the team, the next WebSocket message goes without the skill.
+      delete teams.roles[TeamFixture.teamA]!.alice;
+      yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand](turn("Draft without it.")),
+        ),
+      );
+      assert.deepEqual(
+        dispatched.map((command) =>
+          command.type === "thread.turn.start" ? command.message.text : command.type,
+        ),
+        [`Draft the summary.\n\n${block}`, "Draft from another session.", "Draft without it."],
+      );
+      // Losing the team turned the skill off; regaining it doesn't bring it back unreviewed.
+      teams.roles[TeamFixture.teamA]!.alice = "reader";
+      const after = yield* service.execute("s", {
+        action: "skill-enabled",
+        projectId: TeamFixture.projectId,
+      });
+      assert.deepEqual(after.enabledSkills, []);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("serves the synthetic Teams fixture through the routes and both dispatch gates", () =>
+    Effect.gen(function* () {
+      const world = SyntheticTeams.makeSyntheticTeamsWorld();
+      let services: SyntheticTeams.SyntheticTeamServices | null = null;
+      const projectId = ProjectId.make("synthetic-project");
+      const threadId = ThreadId.make("synthetic-thread");
+      const dispatched: Array<OrchestrationCommand> = [];
+      yield* buildAppUnderTest({
+        layers: {
+          teamServices: SyntheticTeams.syntheticTeamServicesLayer(world, (ready) => {
+            services = ready;
+          }),
+          projectionSnapshotQuery: {
+            getProjectShellById: (id) =>
+              Effect.succeed(
+                id === projectId
+                  ? Option.some({
+                      id,
+                      title: "synthetic-grant-reports",
+                      workspaceRoot: "/synthetic/workspace",
+                      defaultModelSelection: null,
+                      scripts: [],
+                      createdAt: "2026-10-09T00:00:00.000Z",
+                      updatedAt: "2026-10-09T00:00:00.000Z",
+                    })
+                  : Option.none(),
+              ),
+          },
+          orchestrationEngine: {
+            dispatch: (command) =>
+              Effect.sync(() => {
+                dispatched.push(command);
+                return { sequence: dispatched.length };
+              }),
+            readEvents: () => Stream.empty,
+          },
+        },
+      });
+      const alpha = SyntheticTeams.SYNTHETIC_TEAMS.alpha.id;
+      const wsUrl = yield* getWsServerUrl("/ws");
+      world.switchTo("editor");
+      const block = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          Effect.gen(function* () {
+            yield* client[WS_METHODS.serverTeamProjects]({
+              action: "bind",
+              teamId: alpha,
+              projectId,
+            });
+            // The editor is not in Beta, so its root is refused before any Graph request.
+            const beta = yield* client[WS_METHODS.serverTeamProjects]({
+              action: "list",
+              teamId: SyntheticTeams.SYNTHETIC_TEAMS.beta.id,
+            }).pipe(Effect.flip);
+            assert.ok(beta._tag === "TeamsError" && beta.code === "not_found");
+            assert.equal(yield* services!.connectMicrosoft, 1);
+            const issued = yield* client[WS_METHODS.serverTeamProjects]({
+              action: "memory-attach",
+              projectId,
+              path: SyntheticTeams.syntheticDocumentPath(0),
+            });
+            return issued.reference!.block;
+          }),
+        ),
+      );
+      assertInclude(block, "SYNTHETIC grant report checklist");
+      for (const entry of world.trace.filter((entry) => entry.kind === "graph"))
+        assert.ok(entry.team === null || entry.team === "alpha");
+      world.setRole("alpha", "editor", "none");
+
+      const turn = (text: string) => ({
+        type: "thread.turn.start" as const,
+        commandId: CommandId.make(`cmd-synthetic-${dispatched.length}`),
+        threadId,
+        message: {
+          messageId: MessageId.make(`msg-synthetic-${dispatched.length}`),
+          role: "user" as const,
+          text,
+          attachments: [],
+        },
+        runtimeMode: "full-access" as const,
+        interactionMode: "default" as const,
+        createdAt: "2026-10-09T00:00:00.000Z",
+      });
+      const response = yield* fetchEffect(yield* getHttpServerUrl("/api/orchestration/dispatch"), {
+        method: "POST",
+        headers: {
+          cookie: yield* getAuthenticatedSessionCookieHeader(),
+          "content-type": "application/json",
+        },
+        body: encodeTestJson(turn(`Draft\n${block}`)),
+      });
+      assert.equal(response.status, 403);
+      const refusedOverWs = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand](turn(`Draft\n${block}`)),
+        ),
+      ).pipe(Effect.flip);
+      assertInclude(refusedOverWs.message, "team memory you can no longer send");
+      assert.deepEqual(dispatched, []);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

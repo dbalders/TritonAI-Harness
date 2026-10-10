@@ -11,6 +11,7 @@ import {
 import type { RelayManagedEndpointRuntimeConfig } from "@t3tools/contracts/relay";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
+import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -142,6 +143,8 @@ import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import { authHttpApiLayer, environmentAuthenticatedAuthLayer } from "./auth/http.ts";
 import * as ReplayMarkers from "./auth/replayMarkers.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
+import * as TeamStorage from "./teams/TeamStorageService.ts";
+import * as TeamProject from "./teams/TeamProjectService.ts";
 import * as Account from "./auth/AccountService.ts";
 import { IntegrationCredentialKeepaliveLive } from "./integrations/IntegrationCredentialKeepalive.ts";
 import * as IntegrationRegistry from "./integrations/IntegrationRegistry.ts";
@@ -624,6 +627,7 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
 
 const RuntimeDependenciesLive = TritonAiCommonsAction.runtimeLayer.pipe(
   // Memory sync takes the summarizer's lock while it touches the vault.
+  Layer.provideMerge(MemorySync.teamMirrorHostLayer),
   Layer.provideMerge(MemorySync.layer.pipe(Layer.provide(MicrosoftSignIn.layer))),
   // Memory reads threads and calls text generation, so it sits above the core.
   Layer.provideMerge(DailyMemory.layer),
@@ -665,8 +669,25 @@ const commandReadinessLayer = HttpRouter.middleware(
   { global: true },
 );
 
+/** Campus account and Teams services; both transports share one instance of each. */
+export const teamServicesLayer = TeamProject.layer.pipe(
+  Layer.provide(ServerSecretStore.layer),
+  Layer.provideMerge(TeamStorage.layer.pipe(Layer.provide(ServerSecretStore.layer))),
+  Layer.provideMerge(Account.layer.pipe(Layer.provide(ServerSecretStore.layer))),
+);
+
+/**
+ * The Teams services the running server's routes use. Only the synthetic Teams content fixture
+ * (`apps/server/scripts/teams-content-fixture.ts`) provides another layer.
+ */
+export class ServerTeamServices extends Context.Reference<typeof teamServicesLayer>(
+  "t3/server/ServerTeamServices",
+  { defaultValue: () => teamServicesLayer },
+) {}
+
 export const makeRoutesLayerFor = (
   loadIntegrationRegistry?: Parameters<typeof McpHttpServer.makeLayer>[0],
+  teamServices: typeof teamServicesLayer = teamServicesLayer,
 ) =>
   Layer.mergeAll(
     Layer.mergeAll(
@@ -693,7 +714,7 @@ export const makeRoutesLayerFor = (
     // and mutations observed on WebSocket invalidate patches subsequently read over HTTP.
     Layer.provide(PullRequestServiceLive),
     Layer.provide(PreviewAutomationBroker.layer),
-    Layer.provide(Account.layer.pipe(Layer.provide(ServerSecretStore.layer))),
+    Layer.provide(teamServices),
     Layer.provide(ServerSelfUpdate.layer.pipe(Layer.provide(DesktopAppUpdateLayerLive))),
     Layer.provide(commandReadinessLayer),
     Layer.provide(browserApiCorsLayer),
@@ -1046,10 +1067,14 @@ const makeServerLayer = Layer.unwrap(
       ).pipe(Effect.asVoid),
     }).pipe(Layer.provideMerge(RuntimeDependenciesLive), Layer.provide(launcherLayer));
 
-    const routesLayer = HttpRouter.serve(makeRoutesLayer.pipe(Layer.provide(launcherLayer)), {
-      disableLogger: !config.logWebSocketEvents,
-      routerConfig: HTTP_ROUTER_CONFIG,
-    }).pipe(Layer.tap(() => Deferred.succeed(routesReady, undefined).pipe(Effect.orDie)));
+    const teamServices = yield* ServerTeamServices;
+    const routesLayer = HttpRouter.serve(
+      makeRoutesLayerFor(undefined, teamServices).pipe(Layer.provide(launcherLayer)),
+      {
+        disableLogger: !config.logWebSocketEvents,
+        routerConfig: HTTP_ROUTER_CONFIG,
+      },
+    ).pipe(Layer.tap(() => Deferred.succeed(routesReady, undefined).pipe(Effect.orDie)));
     const serverApplicationLayer = Layer.mergeAll(
       routesLayer,
       httpListeningLayer,

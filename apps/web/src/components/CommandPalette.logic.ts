@@ -184,6 +184,63 @@ export function enumerateCommandPaletteItems(
   });
 }
 
+export type TeamPaletteAction = "open" | "link-project" | "share" | "memory" | "skill";
+
+/**
+ * Teams actions. Teams stays off until an environment's account service is configured, so each
+ * action needs Teams on the environment it acts in: the one Teams opens to, or the current
+ * project's. Thread actions open the chat view's team dialogs for an active thread in a project.
+ */
+export function buildTeamActionItems(input: {
+  readonly teamsConfigured: boolean;
+  /** The active thread or draft's project, when there is one. */
+  readonly project: {
+    readonly title: string;
+    readonly teamsConfigured: boolean;
+    /** Present when the active server thread belongs to this project. */
+    readonly thread: { readonly selectedText: string } | null;
+  } | null;
+  readonly icon: (action: TeamPaletteAction) => ReactNode;
+  readonly run: (action: TeamPaletteAction) => Promise<void>;
+}): CommandPaletteActionItem[] {
+  const item = (
+    action: TeamPaletteAction,
+    title: string,
+    searchTerms: ReadonlyArray<string>,
+    description?: string,
+  ): CommandPaletteActionItem => ({
+    kind: "action",
+    value: `action:teams:${action}`,
+    searchTerms: [title, "teams", ...searchTerms],
+    title,
+    ...(description ? { description } : {}),
+    icon: input.icon(action),
+    run: () => input.run(action),
+  });
+  const items: CommandPaletteActionItem[] = [];
+  if (input.teamsConfigured) {
+    items.push(item("open", "Open Teams", ["team", "collaborate", "share", "members", "invite"]));
+  }
+  const project = input.project?.teamsConfigured ? input.project : null;
+  if (!project) return items;
+  items.push(item("link-project", "Link project to a team", ["team", "connect"], project.title));
+  if (!project.thread) return items;
+  const hasSelection = project.thread.selectedText.trim().length > 0;
+  items.push(
+    item("share", hasSelection ? "Share selection to a team" : "Share text to a team", [
+      "team",
+      "publish",
+      "memory",
+      "note",
+      "reply",
+      "selection",
+    ]),
+    item("memory", "Add team memory to message", ["team", "note", "context", "insert"]),
+    item("skill", "Use a team skill in message", ["team", "skill", "insert"]),
+  );
+  return items;
+}
+
 export type CommandPaletteMode = "root" | "root-browse" | "submenu" | "submenu-browse";
 
 // A project as the palette shows it. `displayName` is the grouped label (for

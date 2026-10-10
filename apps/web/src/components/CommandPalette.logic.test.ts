@@ -5,6 +5,7 @@ import {
   buildBrowseGroups,
   buildCommandPaletteProjectMetadata,
   buildProjectActionItems,
+  buildTeamActionItems,
   buildThreadActionItems,
   buildLinkedThreadActionItems,
   enumerateCommandPaletteItems,
@@ -54,6 +55,66 @@ describe("linked pull request thread navigation", () => {
     expect(items[0]?.description).toBe("Archived thread");
     await items[0]?.run();
     expect(runThread).toHaveBeenCalledWith({ environmentId, id });
+  });
+});
+
+describe("buildTeamActionItems", () => {
+  const build = (
+    input: Pick<Parameters<typeof buildTeamActionItems>[0], "teamsConfigured" | "project">,
+  ) => buildTeamActionItems({ ...input, icon: () => null, run: async () => {} });
+  const titles = (items: ReadonlyArray<CommandPaletteActionItem>) =>
+    items.map((item) => item.title);
+  const project = (thread: { selectedText: string } | null, teamsConfigured = true) => ({
+    title: "Harness",
+    teamsConfigured,
+    thread,
+  });
+
+  it("offers nothing until Teams is configured", () => {
+    expect(
+      build({ teamsConfigured: false, project: project({ selectedText: "" }, false) }),
+    ).toEqual([]);
+  });
+
+  it("offers project and thread actions only where the project's environment has Teams", () => {
+    expect(titles(build({ teamsConfigured: true, project: null }))).toEqual(["Open Teams"]);
+    expect(titles(build({ teamsConfigured: true, project: project(null, false) }))).toEqual([
+      "Open Teams",
+    ]);
+    expect(titles(build({ teamsConfigured: false, project: project(null) }))).toEqual([
+      "Link project to a team",
+    ]);
+  });
+
+  it("adds the thread's team dialogs only for an active thread in the project", () => {
+    expect(titles(build({ teamsConfigured: true, project: project(null) }))).toEqual([
+      "Open Teams",
+      "Link project to a team",
+    ]);
+    expect(
+      titles(build({ teamsConfigured: true, project: project({ selectedText: " " }) })),
+    ).toEqual([
+      "Open Teams",
+      "Link project to a team",
+      "Share text to a team",
+      "Add team memory to message",
+      "Use a team skill in message",
+    ]);
+    expect(
+      titles(build({ teamsConfigured: true, project: project({ selectedText: "A reply" }) })),
+    ).toContain("Share selection to a team");
+  });
+
+  it("is reachable by searching for teams", () => {
+    const items = build({ teamsConfigured: true, project: project({ selectedText: "" }) });
+    const groups = filterCommandPaletteGroups({
+      activeGroups: [{ value: "actions", label: "Actions", items }],
+      query: ">team memory",
+      isInSubmenu: false,
+      projectSearchItems: [],
+      threadSearchItems: [],
+    });
+    expect(groups[0]?.items[0]?.title).toBe("Add team memory to message");
   });
 });
 

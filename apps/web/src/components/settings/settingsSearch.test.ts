@@ -179,8 +179,30 @@ describe("searchSettings", () => {
       "auto-settle-inactive-threads",
       "auto-settle-merged-threads",
       "days-before-auto-settle",
+      "team-skills",
     ]);
     expect(available.map((item) => item.id).filter((id) => gatedIds.has(id))).toEqual([]);
+  });
+
+  it("finds Team Skills only where Teams is configured", () => {
+    const availability = {
+      hasCloudPublicConfig: false,
+      hasEnvironment: true,
+      hasProviderSettingsEnvironment: true,
+      hasMacProviderSettingsEnvironment: false,
+      canManageLocalBackend: false,
+      isWslSettingsRowVisible: false,
+      hasThreadAutoSettlement: false,
+    };
+    expect(searchSettings("team skills", filterAvailableSettingsSearchItems(availability))).toEqual(
+      [],
+    );
+    expect(
+      searchSettings(
+        "team skills",
+        filterAvailableSettingsSearchItems({ ...availability, hasTeams: true }),
+      )[0],
+    ).toMatchObject({ id: "team-skills", to: "/settings/skills" });
   });
 
   it("keeps the local toggle searchable without offering hidden host publishing controls", () => {

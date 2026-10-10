@@ -49,6 +49,7 @@ import {
 import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
 import {
   ArrowLeftIcon,
+  BookOpenIcon,
   ChartNoAxesColumnIcon,
   CheckIcon,
   ChevronRightIcon,
@@ -64,10 +65,13 @@ import {
   MoonIcon,
   PaletteIcon,
   RotateCcwIcon,
+  ScrollTextIcon,
   SettingsIcon,
+  ShareIcon,
   SquarePenIcon,
   SunIcon,
   TextSearchIcon,
+  UsersIcon,
 } from "lucide-react";
 import {
   useCallback,
@@ -159,6 +163,7 @@ import {
   buildCommandPaletteProjectMetadata,
   buildProjectActionItems,
   buildRootGroups,
+  buildTeamActionItems,
   buildThreadActionItems,
   buildLinkedThreadActionItems,
   enumerateCommandPaletteItems,
@@ -178,6 +183,9 @@ import {
 import { orderItemsByPreferredIds, sortLogicalProjectsForSidebar } from "./Sidebar.logic";
 import { resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
 import { CommandPaletteContent } from "./CommandPaletteContent";
+import { openThreadTeamDialog } from "./teams/threadTeamDialogBus";
+import { useTeamsConfigured } from "./teams/useTeamsConfigured";
+import { captureAssistantTextSelection } from "../lib/assistantTextSelection";
 import { CommandPaletteResults } from "./CommandPaletteResults";
 import { AzureDevOpsIcon, BitbucketIcon, GitHubIcon, GitLabIcon, ForgejoIcon } from "./Icons";
 import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
@@ -1012,6 +1020,18 @@ function OpenCommandPaletteDialog(props: {
   const currentProjectEnvironmentId =
     activeThread?.environmentId ?? activeDraftThread?.environmentId ?? null;
   const currentProjectId = activeThread?.projectId ?? activeDraftThread?.projectId ?? null;
+  const teamsConfigured = useTeamsConfigured(primaryEnvironmentId);
+  const currentProjectTeamsConfigured = useTeamsConfigured(currentProjectEnvironmentId);
+  // The palette takes focus once it opens, so read a selected reply before it does.
+  const [selectedReplyText] = useState(() => {
+    for (const viewport of document.querySelectorAll<HTMLElement>(
+      "[data-assistant-citation-viewport]",
+    )) {
+      const captured = captureAssistantTextSelection(viewport, window.getSelection());
+      if (captured) return captured.selector.text;
+    }
+    return "";
+  });
   // Where "without a project" threads start: the current environment when it
   // offers them, otherwise the first connected one that does.
   const scratchTargetEnvironmentId = scratchEnvironmentId(
@@ -2050,6 +2070,58 @@ function OpenCommandPaletteDialog(props: {
       },
     });
   }
+
+  const currentProject =
+    currentProjectEnvironmentId !== null && currentProjectId !== null
+      ? (projectByKey.get(`${currentProjectEnvironmentId}:${currentProjectId}`) ?? null)
+      : null;
+  actionItems.push(
+    ...buildTeamActionItems({
+      teamsConfigured,
+      project: currentProject && {
+        title: currentProject.title,
+        teamsConfigured: currentProjectTeamsConfigured,
+        thread: activeThread ? { selectedText: selectedReplyText } : null,
+      },
+      icon: (action) => {
+        switch (action) {
+          case "open":
+            return <UsersIcon className={ITEM_ICON_CLASS} />;
+          case "link-project":
+            return <LinkIcon className={ITEM_ICON_CLASS} />;
+          case "share":
+            return <ShareIcon className={ITEM_ICON_CLASS} />;
+          case "memory":
+            return <BookOpenIcon className={ITEM_ICON_CLASS} />;
+          case "skill":
+            return <ScrollTextIcon className={ITEM_ICON_CLASS} />;
+        }
+      },
+      run: async (action) => {
+        if (action === "open") {
+          await navigate({ to: "/teams" });
+          return;
+        }
+        if (action === "link-project") {
+          if (currentProject)
+            await navigate({
+              to: "/teams",
+              search: {
+                environmentId: currentProject.environmentId,
+                projectId: currentProject.id,
+              },
+            });
+          return;
+        }
+        if (!activeThread) return;
+        openThreadTeamDialog(
+          action === "share"
+            ? { kind: "share", threadId: activeThread.id, text: selectedReplyText }
+            : { kind: action, threadId: activeThread.id },
+        );
+      },
+    }),
+  );
 
   actionItems.push({
     kind: "action",

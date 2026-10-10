@@ -1,11 +1,15 @@
-import { ArrowLeftIcon, ChartNoAxesColumnIcon, SettingsIcon } from "lucide-react";
+import { ArrowLeftIcon, ChartNoAxesColumnIcon, SettingsIcon, UsersIcon } from "lucide-react";
+import { SidebarAccount } from "../teams/SidebarAccount";
+import { usePendingTeamInvitationCount } from "../teams/useTeamsController";
+import { useUcsdAccount } from "../../hooks/useUcsdAccount";
+import type { EnvironmentId } from "@t3tools/contracts";
 import type { ReactNode } from "react";
 import { memo, useCallback } from "react";
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
 
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
-import { useEnvironments } from "../../state/environments";
+import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
 import { T3Wordmark } from "../T3Wordmark";
 import {
   resolveEnvironmentIdentificationPillLabel,
@@ -21,6 +25,7 @@ import {
   SidebarTrigger,
   useSidebar,
 } from "../ui/sidebar";
+import { Badge } from "../ui/badge";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { readPullRequestListPreferences } from "../pullRequest/pullRequestListPreferences";
 import { isSidebarUtilityPage, useNavigateToMainApp } from "./mainAppLocation";
@@ -104,28 +109,42 @@ function SidebarUtilityItem({
   icon,
   label,
   onClick,
+  count = 0,
+  countLabel,
 }: {
   icon: ReactNode;
   label: string;
   onClick: () => void;
+  count?: number;
+  countLabel?: string;
 }) {
+  const description = count > 0 && countLabel ? `${label}, ${countLabel}` : label;
   return (
     <SidebarMenuItem className="shrink-0">
       <Tooltip>
         <TooltipTrigger
           render={
-            <SidebarMenuButton aria-label={label} onClick={onClick} size="icon">
+            <SidebarMenuButton aria-label={description} onClick={onClick} size="icon">
               {icon}
             </SidebarMenuButton>
           }
         />
-        <TooltipPopup side="top">{label}</TooltipPopup>
+        <TooltipPopup side="top">{description}</TooltipPopup>
       </Tooltip>
+      {count > 0 ? (
+        <span aria-hidden className="pointer-events-none absolute -top-1 -right-1">
+          <Badge size="sm">{count > 9 ? "9+" : count}</Badge>
+        </span>
+      ) : null}
     </SidebarMenuItem>
   );
 }
 
-export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
+export const SidebarUtilityMenu = memo(function SidebarUtilityMenu({
+  pendingTeamInvitations = 0,
+}: {
+  pendingTeamInvitations?: number;
+}) {
   const navigate = useNavigate();
   const navigateToMainApp = useNavigateToMainApp();
   const { isMobile, setOpenMobile } = useSidebar();
@@ -191,6 +210,16 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
             />
           ) : null}
           <SidebarUtilityItem
+            icon={<UsersIcon />}
+            label="Teams"
+            count={pendingTeamInvitations}
+            countLabel={`${pendingTeamInvitations} pending ${pendingTeamInvitations === 1 ? "invitation" : "invitations"}`}
+            onClick={() => {
+              closeMobileSidebar();
+              void navigate({ to: "/teams" });
+            }}
+          />
+          <SidebarUtilityItem
             icon={<ChartNoAxesColumnIcon />}
             label="Usage"
             onClick={handleUsageClick}
@@ -202,13 +231,30 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   );
 });
 
+/** The account and the Teams item's invitation count share one account check. */
+function SidebarAccountFooter({ environmentId }: { environmentId: EnvironmentId }) {
+  const account = useUcsdAccount(environmentId);
+  const pendingTeamInvitations = usePendingTeamInvitationCount(environmentId, account);
+  return (
+    <>
+      <SidebarAccount {...account} />
+      <SidebarUtilityMenu pendingTeamInvitations={pendingTeamInvitations} />
+    </>
+  );
+}
+
 export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
+  const environmentId = usePrimaryEnvironmentId();
   return (
     <SidebarFooter>
       <SidebarThreadUndoNotice />
       <SidebarProviderUpdatePill />
       <SidebarUpdateArchitectureWarning />
-      <SidebarUtilityMenu />
+      {environmentId ? (
+        <SidebarAccountFooter key={environmentId} environmentId={environmentId} />
+      ) : (
+        <SidebarUtilityMenu />
+      )}
     </SidebarFooter>
   );
 });

@@ -114,6 +114,8 @@ const decodeOAuthError = Schema.decodeUnknownEffect(OAuthError);
 const Me = Schema.Struct({
   id: Schema.String,
   userPrincipalName: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  mail: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  userType: Schema.optionalKey(Schema.String),
 });
 const decodeMe = Schema.decodeUnknownEffect(Me);
 
@@ -188,8 +190,20 @@ function describeOAuthError(error: {
 }
 
 /** @public Service construction is part of the canonical Effect module API. */
-export const make = (config: MicrosoftOAuthConfig | null) =>
+export interface MicrosoftSignInOptions {
+  readonly secretName: string;
+  readonly scopes: string;
+  readonly requiredAccount: { readonly email: string; readonly tenantId: string };
+}
+
+// Team connections use an explicit account/session namespace and never borrow the personal plugin credential.
+export const make = (
+  config: MicrosoftOAuthConfig | null,
+  teamConnection?: MicrosoftSignInOptions,
+) =>
   Effect.gen(function* () {
+    const ownSecret = teamConnection?.secretName ?? OWN_SECRET;
+    const scopes = teamConnection?.scopes ?? SCOPES;
     const httpClient = yield* HttpClient.HttpClient;
     const secrets = yield* ServerSecretStore.ServerSecretStore;
     const cached = yield* Ref.make<{ readonly token: string; readonly expiresAtMs: number } | null>(
@@ -240,7 +254,7 @@ export const make = (config: MicrosoftOAuthConfig | null) =>
         Effect.orElseSucceed(() => Option.none<string>()),
       );
 
-    const readOwnCredential = readSecret(OWN_SECRET).pipe(
+    const readOwnCredential = readSecret(ownSecret).pipe(
       Effect.flatMap((raw) =>
         Option.isSome(raw)
           ? decodeStoredCredential(raw.value).pipe(
@@ -253,7 +267,7 @@ export const make = (config: MicrosoftOAuthConfig | null) =>
 
     const saveOwnCredential = (credential: StoredCredential) =>
       encodeStoredCredential(credential).pipe(
-        Effect.flatMap((json) => secrets.set(OWN_SECRET, new TextEncoder().encode(json))),
+        Effect.flatMap((json) => secrets.set(ownSecret, new TextEncoder().encode(json))),
         Effect.mapError(() => failure("Could not save the Microsoft sign-in.")),
       );
 
@@ -261,12 +275,45 @@ export const make = (config: MicrosoftOAuthConfig | null) =>
       Effect.gen(function* () {
         const { status, json } = yield* send(
           HttpClientRequest.get(
-            "https://graph.microsoft.com/v1.0/me?$select=id,userPrincipalName",
+            "https://graph.microsoft.com/v1.0/me?$select=id,userPrincipalName,mail,userType",
           ).pipe(HttpClientRequest.bearerToken(accessToken)),
         );
         if (status !== 200) return null;
         return yield* decodeMe(json).pipe(Effect.orElseSucceed(() => null));
       }).pipe(Effect.orElseSucceed(() => null));
+
+    const accountMismatch = failure(
+      "Sign in with the Microsoft account that matches your UC San Diego account.",
+    );
+    const verifyTeamAccount = (accessToken: string, priorAccountId?: string | null) =>
+      Effect.gen(function* () {
+        if (!teamConnection) return;
+        const response = yield* send(
+          HttpClientRequest.get(
+            "https://graph.microsoft.com/v1.0/me?$select=id,userPrincipalName,mail,userType",
+          ).pipe(HttpClientRequest.bearerToken(accessToken)),
+        );
+        if (response.status !== 200)
+          return yield* failure("Microsoft could not verify your account. Try again shortly.");
+        const me = yield* decodeMe(response.json).pipe(
+          Effect.mapError(() =>
+            failure("Microsoft returned an invalid account response. Try again shortly."),
+          ),
+        );
+        const required = teamConnection.requiredAccount;
+        if (
+          !config ||
+          config.tenantId.toLowerCase() !== required.tenantId.toLowerCase() ||
+          !me ||
+          me.userType !== "Member" ||
+          (me.userPrincipalName?.toLowerCase() !== required.email.toLowerCase() &&
+            me.mail?.toLowerCase() !== required.email.toLowerCase()) ||
+          (priorAccountId && me.id !== priorAccountId)
+        ) {
+          return yield* accountMismatch;
+        }
+        return me;
+      });
 
     /** Exchanges a refresh token for OneDrive access; Entra may rotate the refresh token. */
     const redeem = (refreshToken: string) =>
@@ -274,7 +321,7 @@ export const make = (config: MicrosoftOAuthConfig | null) =>
         const { status, json } = yield* postForm("token", {
           grant_type: "refresh_token",
           refresh_token: refreshToken,
-          scope: SCOPES,
+          scope: scopes,
         });
         if (status === 200) {
           return yield* decodeTokenResponse(json).pipe(
@@ -313,7 +360,7 @@ export const make = (config: MicrosoftOAuthConfig | null) =>
         const token = yield* redeem(own.value.refreshToken).pipe(
           Effect.tapError((error) =>
             error._tag === "MemorySyncSignInRequired"
-              ? secrets.remove(OWN_SECRET).pipe(Effect.ignore)
+              ? secrets.remove(ownSecret).pipe(Effect.ignore)
               : Effect.void,
           ),
         );
@@ -322,12 +369,27 @@ export const make = (config: MicrosoftOAuthConfig | null) =>
           Effect.gen(function* () {
             const stored = yield* readOwnCredential;
             if (Option.isNone(stored)) return false;
-            if (stored.value.refreshToken !== own.value.refreshToken) return true;
+            if (stored.value.refreshToken !== own.value.refreshToken) {
+              yield* verifyTeamAccount(token.access_token, own.value.accountId);
+              return true;
+            }
             yield* saveOwnCredential({
               ...own.value,
               refreshToken: token.refresh_token ?? own.value.refreshToken,
               updatedAt: DateTime.formatIso(DateTime.makeUnsafe(now)),
             });
+            // Retain a rotated refresh credential through a temporary /me outage,
+            // but never expose or cache the access token before identity verification.
+            yield* verifyTeamAccount(token.access_token, own.value.accountId).pipe(
+              Effect.tapError((error) =>
+                error === accountMismatch
+                  ? Effect.all(
+                      [Ref.set(cached, null), secrets.remove(ownSecret).pipe(Effect.ignore)],
+                      { discard: true },
+                    )
+                  : Effect.void,
+              ),
+            );
             yield* cacheToken(token);
             return true;
           }),
@@ -341,7 +403,9 @@ export const make = (config: MicrosoftOAuthConfig | null) =>
       }
 
       // Reuse the Microsoft 365 plugin's sign-in when it is connected.
-      const plugin = yield* readSecret(PLUGIN_SECRET);
+      const plugin = yield* teamConnection
+        ? Effect.succeed(Option.none<string>())
+        : readSecret(PLUGIN_SECRET);
       if (Option.isSome(plugin)) {
         const pluginCredential = yield* decodePluginCredential(plugin.value).pipe(Effect.option);
         if (Option.isSome(pluginCredential)) {
@@ -379,7 +443,7 @@ export const make = (config: MicrosoftOAuthConfig | null) =>
 
     const startDeviceCode = (since: number) =>
       Effect.gen(function* () {
-        const { status, json } = yield* postForm("devicecode", { scope: SCOPES });
+        const { status, json } = yield* postForm("devicecode", { scope: scopes });
         if (status !== 200) {
           const error = yield* decodeOAuthError(json).pipe(
             Effect.orElseSucceed(() => ({ error: `http_${status}` })),
@@ -462,7 +526,9 @@ export const make = (config: MicrosoftOAuthConfig | null) =>
             return yield* failure("Microsoft did not return a lasting sign-in. Try again.");
           }
           const refreshToken = token.refresh_token;
-          const me = yield* fetchAccount(token.access_token);
+          const me = teamConnection
+            ? yield* verifyTeamAccount(token.access_token)
+            : yield* fetchAccount(token.access_token);
           const connected = yield* commit(
             flow.generation,
             Effect.gen(function* () {
@@ -521,7 +587,7 @@ export const make = (config: MicrosoftOAuthConfig | null) =>
         yield* cancel;
         yield* Ref.set(cached, null);
         yield* secrets
-          .remove(OWN_SECRET)
+          .remove(ownSecret)
           .pipe(Effect.mapError(() => failure("Could not remove the Microsoft sign-in.")));
       }),
     );

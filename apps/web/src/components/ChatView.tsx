@@ -252,10 +252,25 @@ import {
   GitBranchIcon,
   Minimize2Icon,
   PaperclipIcon,
+  UsersIcon,
   WifiOffIcon,
 } from "lucide-react";
 import { cn, randomHex, randomUUID } from "~/lib/utils";
 import { stackedThreadToast, toastManager } from "./ui/toast";
+import { ShareToTeamDialog, TeamContextDialog } from "./teams/ThreadTeamDialogs";
+import { onOpenThreadTeamDialog } from "./teams/threadTeamDialogBus";
+import {
+  addDraftTeamMemory,
+  beginDraftTeamMemorySend,
+  draftTeamMemoryInPrompt,
+  removeDraftTeamMemory,
+  restoreDraftTeamMemory,
+  setDraftTeamMemoryProblem,
+  settleDraftTeamMemory,
+  useDraftTeamMemorySummary,
+} from "./teams/teamMemoryDrafts";
+import { teamProjectSkillsNotice } from "./teams/teamProjectSkills";
+import { ManageTeamSkillsButton, useProjectTeamSkills } from "./teams/useProjectTeamSkills";
 import { decodeProjectScriptKeybindingRule } from "~/lib/projectScriptKeybindings";
 import { type NewProjectScriptInput } from "./ProjectScriptsControl";
 import {
@@ -310,6 +325,7 @@ import {
   beginBackgroundDraftSubmissionByRef,
   clearBackgroundDraftSubmissionByRef,
   composerDraftHasUserContent,
+  composerTargetKey,
   type ComposerFileAttachment,
   type ComposerImageAttachment,
   type DraftThreadEnvMode,
@@ -1612,6 +1628,9 @@ export default function ChatView(props: ChatViewProps) {
   const setThreadGoal = useAtomCommand(threadEnvironment.setGoal, { reportFailure: false });
   const clearThreadGoal = useAtomCommand(threadEnvironment.clearGoal, { reportFailure: false });
   const startThreadTurn = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
+  const teamProjectsRequest = useAtomCommand(serverEnvironment.teamProjects, {
+    reportFailure: false,
+  });
   const createAttachmentAssetUrl = useAtomQueryRunner(assetEnvironment.createUrl, {
     reportFailure: false,
     refresh: true,
@@ -1776,6 +1795,12 @@ export default function ChatView(props: ChatViewProps) {
     },
     [composerRef],
   );
+  // Bound to the thread it was opened from, so switching threads closes it and drops its draft.
+  const [teamDialog, setTeamDialog] = useState<
+    | { kind: "share"; threadId: ThreadId; text: string }
+    | { kind: "memory" | "skill"; threadId: ThreadId }
+    | null
+  >(null);
   const [isWorkspaceFileDragActive, setIsWorkspaceFileDragActive] = useState(false);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [expandedImage, setExpandedImage] = useState<ExpandedImagePreview | null>(null);
@@ -2254,6 +2279,15 @@ export default function ChatView(props: ChatViewProps) {
     [activeThread?.environmentId, activeThread?.projectId],
   );
   const activeProject = useProject(activeProjectRef);
+  // The command palette opens this thread's team dialogs through the same state as the header.
+  const teamDialogsAvailable = isServerThread && activeProject !== null;
+  useEffect(
+    () =>
+      onOpenThreadTeamDialog((request) => {
+        if (teamDialogsAvailable && request.threadId === activeThreadId) setTeamDialog(request);
+      }),
+    [activeThreadId, teamDialogsAvailable],
+  );
   // Environment settings with the active project's overrides applied.
   const activeProjectSettings = useMemo(
     () => resolveProjectSettings(settings, activeProject?.id ?? null, activeProject ?? undefined),
@@ -6613,7 +6647,84 @@ export default function ChatView(props: ChatViewProps) {
       }),
     [feedbackSubmissions, routeThreadKey],
   );
+  const draftTeamMemory = useDraftTeamMemorySummary(composerDraftTarget);
+  const sentUserMessages = useMemo(
+    () => activeThread?.messages.filter((message) => message.role === "user").length ?? 0,
+    [activeThread?.messages],
+  );
+  const projectTeamSkills = useProjectTeamSkills(
+    activeThread?.environmentId ?? null,
+    activeThread?.projectId ?? null,
+    sentUserMessages,
+  );
+  // Team skills turned on for this project are added by the server at send; say which, and
+  // which are held back.
+  const projectTeamSkillsBannerItem = useMemo<ComposerBannerStackItem | null>(() => {
+    if (!projectTeamSkills || !activeThread) return null;
+    const notice = projectTeamSkills.problem
+      ? {
+          variant: "warning" as const,
+          title: "Team skills couldn’t be checked",
+          description: projectTeamSkills.problem,
+        }
+      : teamProjectSkillsNotice(projectTeamSkills.teamName, projectTeamSkills.skills);
+    if (!notice) return null;
+    return {
+      id: `team-project-skills:${activeThread.environmentId}:${activeThread.projectId}`,
+      variant: notice.variant,
+      compact: notice.variant === "info",
+      icon: <UsersIcon />,
+      title: notice.title,
+      description: notice.description,
+      actions: (
+        <ManageTeamSkillsButton
+          environmentId={activeThread.environmentId}
+          projectId={activeThread.projectId}
+        />
+      ),
+    };
+  }, [activeThread, projectTeamSkills]);
+  // Team memory in an unsent draft stays visible with a way out until it is sent or removed.
+  const teamMemoryBannerItem = useMemo<ComposerBannerStackItem | null>(() => {
+    if (!draftTeamMemory.teams) return null;
+    return {
+      id: `team-memory:${composerTargetKey(composerDraftTarget)}`,
+      variant: draftTeamMemory.problem || draftTeamMemory.unresolvedTeams ? "warning" : "info",
+      icon: <UsersIcon />,
+      title: draftTeamMemory.problem
+        ? `${draftTeamMemory.label} in this draft can’t be sent`
+        : draftTeamMemory.unresolvedTeams
+          ? `Edited ${draftTeamMemory.label.toLowerCase()} from ${draftTeamMemory.unresolvedTeams}`
+          : `${draftTeamMemory.label} from ${draftTeamMemory.teams}`,
+      description:
+        draftTeamMemory.problem ??
+        (draftTeamMemory.unresolvedTeams
+          ? "Harness can’t tell where it ends, so Remove and signing out leave it in your draft. Delete the rest of it yourself, or put back its closing line. Your access is still checked when you send."
+          : draftTeamMemory.label === "Team memory"
+            ? "Your access is checked again when you send. Once sent, it stays in this conversation and can’t be taken back."
+            : "Skill instructions apply to this message only and aren’t installed. Your access is checked again when you send. Once sent, they stay in this conversation and can’t be taken back."),
+      actions: (
+        <Button
+          size="xs"
+          variant="outline"
+          onClick={() => removeDraftTeamMemory(composerDraftTarget)}
+        >
+          Remove
+        </Button>
+      ),
+    };
+  }, [
+    composerDraftTarget,
+    draftTeamMemory.label,
+    draftTeamMemory.problem,
+    draftTeamMemory.teams,
+    draftTeamMemory.unresolvedTeams,
+  ]);
   const composerBannerItems = useMemo<ComposerBannerStackItem[]>(() => {
+    const teamMemoryItems = [
+      ...(teamMemoryBannerItem === null ? [] : [teamMemoryBannerItem]),
+      ...(projectTeamSkillsBannerItem === null ? [] : [projectTeamSkillsBannerItem]),
+    ];
     const backgroundLivenessItems =
       backgroundLivenessBannerItem === null ? [] : [backgroundLivenessBannerItem];
     const resumeCompactionItems =
@@ -6625,6 +6736,7 @@ export default function ChatView(props: ChatViewProps) {
     const projectCloneItems = projectCloneBannerItem === null ? [] : [projectCloneBannerItem];
     if (!localCheckoutBranchMismatch || !showBranchMismatchBanner || !activeBranchMismatchKey) {
       return [
+        ...teamMemoryItems,
         ...feedbackBannerItems,
         ...usageLimitsItems,
         ...projectCloneItems,
@@ -6636,6 +6748,7 @@ export default function ChatView(props: ChatViewProps) {
       ];
     }
     return [
+      ...teamMemoryItems,
       ...feedbackBannerItems,
       ...usageLimitsItems,
       ...projectCloneItems,
@@ -6692,9 +6805,11 @@ export default function ChatView(props: ChatViewProps) {
     localCheckoutBranchMismatch,
     parkedThreadBannerItem,
     projectCloneBannerItem,
+    projectTeamSkillsBannerItem,
     resumeCompactionBannerItem,
     showBranchMismatchBanner,
     systemComposerBannerItems,
+    teamMemoryBannerItem,
     usageLimitsBanner,
     wokeThreadBannerItem,
   ]);
@@ -7523,9 +7638,11 @@ export default function ChatView(props: ChatViewProps) {
       prompt: nextPrompt,
       detectTrigger: true,
     });
+    // Team memory queued under an account that has since changed leaves the draft again.
+    settleDraftTeamMemory();
   };
 
-  const onSend = async (
+  const sendComposerMessage = async (
     e?: { preventDefault: () => void },
     submissionIntent: ComposerSubmissionIntent = "foreground",
     directAnnotation?: {
@@ -7705,6 +7822,43 @@ export default function ChatView(props: ChatViewProps) {
       terminalContexts: composerTerminalContexts,
       elementContextCount: composerPreviewAnnotations.length + composerReviewComments.length,
     });
+    // Team memory and skills in this draft, including edited ones that can't be separated, are
+    // rechecked by the server before anything leaves. The dispatch is checked again on the server
+    // only for unedited blocks it still remembers issuing.
+    const teamMemory = draftTeamMemoryInPrompt(composerDraftTarget, promptForSend);
+    if (teamMemory.length === 0) setDraftTeamMemoryProblem(composerDraftTarget, null);
+    else {
+      const draftBeforeCheck = useComposerDraftStore
+        .getState()
+        .getComposerDraft(composerDraftTarget);
+      const composerBeforeCheck = composerRef.current;
+      sendInFlightRef.current = true;
+      let problem: string | null = null;
+      try {
+        const result = await teamProjectsRequest({
+          environmentId,
+          input: { action: "memory-verify", references: teamMemory.map((entry) => entry.id) },
+        });
+        if (result._tag !== "Success") {
+          const cause = squashAtomCommandFailure(result);
+          problem =
+            cause instanceof Error && cause.message
+              ? cause.message
+              : "Team memory could not be checked. Try again.";
+        }
+      } finally {
+        sendInFlightRef.current = false;
+      }
+      // An edit, account change, or thread switch during the check wins; nothing is sent.
+      if (
+        promptRef.current !== promptForSend ||
+        composerRef.current !== composerBeforeCheck ||
+        useComposerDraftStore.getState().getComposerDraft(composerDraftTarget) !== draftBeforeCheck
+      )
+        return;
+      setDraftTeamMemoryProblem(composerDraftTarget, problem);
+      if (problem !== null) return;
+    }
     const trimmed = computerUsePrompt(rawTrimmed);
     if (isComputerUseRequest(rawTrimmed) && !directAnnotation) {
       if (ctxSelectedProvider !== "codex") {
@@ -8653,6 +8807,8 @@ export default function ChatView(props: ChatViewProps) {
           setMultipleModelSelections(failedSelections);
           if (clearedDraft) {
             setComposerDraftPrompt(composerDraftTarget, messageTextForSend);
+            // A restore from the toast comes after this send settled and forgot the references.
+            restoreDraftTeamMemory(teamMemory);
             addComposerDraftImages(
               composerDraftTarget,
               composerImagesSnapshot.map(cloneComposerImageForRetry),
@@ -9114,6 +9270,16 @@ export default function ChatView(props: ChatViewProps) {
         currentThreadKey === activeThreadKey ? null : currentThreadKey,
       );
       resetLocalDispatch();
+    }
+  };
+  // Team memory references stay while a send holds the draft's text. Afterwards only those whose
+  // text is back in a draft or in the queue remain; sent ones are forgotten.
+  const onSend = async (...args: Parameters<typeof sendComposerMessage>) => {
+    const finishTeamMemorySend = beginDraftTeamMemorySend(composerDraftTarget);
+    try {
+      await sendComposerMessage(...args);
+    } finally {
+      finishTeamMemorySend();
     }
   };
 
@@ -10319,8 +10485,59 @@ export default function ChatView(props: ChatViewProps) {
             onAddProjectScript={saveProjectScript}
             onUpdateProjectScript={updateProjectScript}
             onDeleteProjectScript={deleteProjectScript}
+            teamActions={
+              isServerThread && activeProject
+                ? {
+                    onShare: () =>
+                      setTeamDialog({ kind: "share", threadId: activeThread.id, text: "" }),
+                    onAddMemory: () => setTeamDialog({ kind: "memory", threadId: activeThread.id }),
+                    onUseSkill: () => setTeamDialog({ kind: "skill", threadId: activeThread.id }),
+                  }
+                : undefined
+            }
           />
         </WorkspacePageHeader>
+        {isServerThread && activeProject ? (
+          <>
+            <ShareToTeamDialog
+              environmentId={activeThread.environmentId}
+              threadId={activeThread.id}
+              projectId={activeProject.id}
+              projectTitle={activeProject.title}
+              initialText={teamDialog?.kind === "share" ? teamDialog.text : ""}
+              open={teamDialog?.kind === "share" && teamDialog.threadId === activeThread.id}
+              onOpenChange={(open) => {
+                if (!open) setTeamDialog(null);
+              }}
+            />
+            {(["memory", "skill"] as const).map((kind) => (
+              <TeamContextDialog
+                key={kind}
+                kind={kind}
+                environmentId={activeThread.environmentId}
+                projectId={activeProject.id}
+                open={teamDialog?.kind === kind && teamDialog.threadId === activeThread.id}
+                onOpenChange={(open) => {
+                  if (!open) setTeamDialog(null);
+                }}
+                onInsert={(reference, identity) =>
+                  addDraftTeamMemory(
+                    {
+                      ...reference,
+                      thread: composerDraftTarget,
+                      environmentId: activeThread.environmentId,
+                      identity,
+                    },
+                    () =>
+                      composerRef.current?.insertTextAtEnd(reference.block, {
+                        ensureLeadingBoundary: true,
+                      }) ?? false,
+                  )
+                }
+              />
+            ))}
+          </>
+        ) : null}
 
         {/* Main content area with optional plan sidebar */}
         <div className="flex min-h-0 min-w-0 flex-1">
@@ -10373,6 +10590,12 @@ export default function ChatView(props: ChatViewProps) {
                 {...(!paintOnlyDisplayedTimeline
                   ? {
                       onCiteAssistantText: citeAssistantText,
+                      ...(isServerThread && activeProject
+                        ? {
+                            onShareAssistantText: (text: string) =>
+                              setTeamDialog({ kind: "share", threadId: activeThread.id, text }),
+                          }
+                        : {}),
                       agentPanelModel,
                       onOpenAgents: addAgentsSurface,
                       onUseArtifactTemplate: useArtifactTemplate,
