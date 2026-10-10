@@ -13,10 +13,12 @@ import { Route as WelcomeRouteImport } from './routes/welcome'
 import { Route as UsageRouteImport } from './routes/usage'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as PairRouteImport } from './routes/pair'
+import { Route as DotRouteImport } from './routes/dot'
 import { Route as ConnectRouteImport } from './routes/connect'
 import { Route as ChatRouteImport } from './routes/_chat'
 import { Route as ChatIndexRouteImport } from './routes/_chat.index'
 import { Route as SettingsUsageRouteImport } from './routes/settings.usage'
+import { Route as SettingsTritonaiBotRouteImport } from './routes/settings.tritonai-bot'
 import { Route as SettingsStorageRouteImport } from './routes/settings.storage'
 import { Route as SettingsSourceControlRouteImport } from './routes/settings.source-control'
 import { Route as SettingsSnapShotRouteImport } from './routes/settings.snap-shot'
@@ -57,6 +59,11 @@ const PairRoute = PairRouteImport.update({
   path: '/pair',
   getParentRoute: () => rootRouteImport,
 } as any)
+const DotRoute = DotRouteImport.update({
+  id: '/dot',
+  path: '/dot',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ConnectRoute = ConnectRouteImport.update({
   id: '/connect',
   path: '/connect',
@@ -74,6 +81,11 @@ const ChatIndexRoute = ChatIndexRouteImport.update({
 const SettingsUsageRoute = SettingsUsageRouteImport.update({
   id: '/usage',
   path: '/usage',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsTritonaiBotRoute = SettingsTritonaiBotRouteImport.update({
+  id: '/tritonai-bot',
+  path: '/tritonai-bot',
   getParentRoute: () => SettingsRoute,
 } as any)
 const SettingsStorageRoute = SettingsStorageRouteImport.update({
@@ -177,6 +189,7 @@ const ChatEnvironmentIdThreadIdRoute =
 export interface FileRoutesByFullPath {
   '/': typeof ChatIndexRoute
   '/connect': typeof ConnectRoute
+  '/dot': typeof DotRoute
   '/pair': typeof PairRoute
   '/settings': typeof SettingsRouteWithChildren
   '/usage': typeof UsageRoute
@@ -198,12 +211,14 @@ export interface FileRoutesByFullPath {
   '/settings/snap-shot': typeof SettingsSnapShotRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
   '/settings/storage': typeof SettingsStorageRoute
+  '/settings/tritonai-bot': typeof SettingsTritonaiBotRoute
   '/settings/usage': typeof SettingsUsageRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
 }
 export interface FileRoutesByTo {
   '/connect': typeof ConnectRoute
+  '/dot': typeof DotRoute
   '/pair': typeof PairRoute
   '/settings': typeof SettingsRouteWithChildren
   '/usage': typeof UsageRoute
@@ -225,6 +240,7 @@ export interface FileRoutesByTo {
   '/settings/snap-shot': typeof SettingsSnapShotRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
   '/settings/storage': typeof SettingsStorageRoute
+  '/settings/tritonai-bot': typeof SettingsTritonaiBotRoute
   '/settings/usage': typeof SettingsUsageRoute
   '/': typeof ChatIndexRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
@@ -234,6 +250,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_chat': typeof ChatRouteWithChildren
   '/connect': typeof ConnectRoute
+  '/dot': typeof DotRoute
   '/pair': typeof PairRoute
   '/settings': typeof SettingsRouteWithChildren
   '/usage': typeof UsageRoute
@@ -255,6 +272,7 @@ export interface FileRoutesById {
   '/settings/snap-shot': typeof SettingsSnapShotRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
   '/settings/storage': typeof SettingsStorageRoute
+  '/settings/tritonai-bot': typeof SettingsTritonaiBotRoute
   '/settings/usage': typeof SettingsUsageRoute
   '/_chat/': typeof ChatIndexRoute
   '/_chat/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
@@ -265,6 +283,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/connect'
+    | '/dot'
     | '/pair'
     | '/settings'
     | '/usage'
@@ -286,12 +305,14 @@ export interface FileRouteTypes {
     | '/settings/snap-shot'
     | '/settings/source-control'
     | '/settings/storage'
+    | '/settings/tritonai-bot'
     | '/settings/usage'
     | '/$environmentId/$threadId'
     | '/draft/$draftId'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/connect'
+    | '/dot'
     | '/pair'
     | '/settings'
     | '/usage'
@@ -313,6 +334,7 @@ export interface FileRouteTypes {
     | '/settings/snap-shot'
     | '/settings/source-control'
     | '/settings/storage'
+    | '/settings/tritonai-bot'
     | '/settings/usage'
     | '/'
     | '/$environmentId/$threadId'
@@ -321,6 +343,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/_chat'
     | '/connect'
+    | '/dot'
     | '/pair'
     | '/settings'
     | '/usage'
@@ -342,6 +365,7 @@ export interface FileRouteTypes {
     | '/settings/snap-shot'
     | '/settings/source-control'
     | '/settings/storage'
+    | '/settings/tritonai-bot'
     | '/settings/usage'
     | '/_chat/'
     | '/_chat/$environmentId/$threadId'
@@ -351,6 +375,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   ChatRoute: typeof ChatRouteWithChildren
   ConnectRoute: typeof ConnectRoute
+  DotRoute: typeof DotRoute
   PairRoute: typeof PairRoute
   SettingsRoute: typeof SettingsRouteWithChildren
   UsageRoute: typeof UsageRoute
@@ -388,6 +413,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PairRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/dot': {
+      id: '/dot'
+      path: '/dot'
+      fullPath: '/dot'
+      preLoaderRoute: typeof DotRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/connect': {
       id: '/connect'
       path: '/connect'
@@ -414,6 +446,13 @@ declare module '@tanstack/react-router' {
       path: '/usage'
       fullPath: '/settings/usage'
       preLoaderRoute: typeof SettingsUsageRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/tritonai-bot': {
+      id: '/settings/tritonai-bot'
+      path: '/tritonai-bot'
+      fullPath: '/settings/tritonai-bot'
+      preLoaderRoute: typeof SettingsTritonaiBotRouteImport
       parentRoute: typeof SettingsRoute
     }
     '/settings/storage': {
@@ -584,6 +623,7 @@ interface SettingsRouteChildren {
   SettingsSnapShotRoute: typeof SettingsSnapShotRoute
   SettingsSourceControlRoute: typeof SettingsSourceControlRoute
   SettingsStorageRoute: typeof SettingsStorageRoute
+  SettingsTritonaiBotRoute: typeof SettingsTritonaiBotRoute
   SettingsUsageRoute: typeof SettingsUsageRoute
 }
 
@@ -603,6 +643,7 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsSnapShotRoute: SettingsSnapShotRoute,
   SettingsSourceControlRoute: SettingsSourceControlRoute,
   SettingsStorageRoute: SettingsStorageRoute,
+  SettingsTritonaiBotRoute: SettingsTritonaiBotRoute,
   SettingsUsageRoute: SettingsUsageRoute,
 }
 
@@ -613,6 +654,7 @@ const SettingsRouteWithChildren = SettingsRoute._addFileChildren(
 const rootRouteChildren: RootRouteChildren = {
   ChatRoute: ChatRouteWithChildren,
   ConnectRoute: ConnectRoute,
+  DotRoute: DotRoute,
   PairRoute: PairRoute,
   SettingsRoute: SettingsRouteWithChildren,
   UsageRoute: UsageRoute,

@@ -199,6 +199,11 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     read: (id) => ipcRenderer.invoke(IpcChannels.ACCOUNT_LOGIN_READ_CHANNEL, id),
     cancel: (id) => ipcRenderer.invoke(IpcChannels.ACCOUNT_LOGIN_CANCEL_CHANNEL, id),
   },
+  startDotSignIn: () => ipcRenderer.invoke(IpcChannels.START_DOT_SIGN_IN_CHANNEL, undefined),
+  awaitDotSignIn: (redirectUri) =>
+    ipcRenderer.invoke(IpcChannels.AWAIT_DOT_SIGN_IN_CHANNEL, redirectUri),
+  cancelDotSignIn: (redirectUri) =>
+    ipcRenderer.invoke(IpcChannels.CANCEL_DOT_SIGN_IN_CHANNEL, redirectUri),
   checkSystemPermission: (pane: string) =>
     ipcRenderer.invoke(IpcChannels.CHECK_SYSTEM_PERMISSION_CHANNEL, pane),
   openSystemSettings: (pane: string) =>

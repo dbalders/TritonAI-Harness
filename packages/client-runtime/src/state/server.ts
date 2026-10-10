@@ -1084,6 +1084,24 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:memory-sync-sign-out",
       tag: WS_METHODS.serverSignOutMemorySync,
     }),
+    botTaskComputer: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:bot-task-computer",
+      tag: WS_METHODS.serverGetBotTaskComputer,
+      // Check-ins and task progress happen in the background.
+      refreshIntervalMs: 15_000,
+    }),
+    allowBotTaskComputer: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:bot-task-computer-allow",
+      tag: WS_METHODS.serverAllowBotTaskComputer,
+    }),
+    stopBotTaskComputer: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:bot-task-computer-stop",
+      tag: WS_METHODS.serverStopBotTaskComputer,
+    }),
+    setBotTaskProject: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:bot-task-project",
+      tag: WS_METHODS.serverSetBotTaskProject,
+    }),
     memoryStatus: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:memory-status",
       tag: WS_METHODS.serverGetMemoryStatus,

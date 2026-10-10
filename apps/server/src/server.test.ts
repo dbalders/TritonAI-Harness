@@ -122,6 +122,7 @@ import * as GitManager from "./git/GitManager.ts";
 import * as EnvironmentTheme from "./environmentTheme.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 import * as MemorySync from "./memory/sync/MemorySync.ts";
+import * as BotTaskComputer from "./bot/BotTaskComputer.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
@@ -817,6 +818,19 @@ const buildAppUnderTest = (options?: {
           }),
           // Server-lifetime in production; built from the provider mocks below.
           ProviderMaintenanceRunner.layer,
+          Layer.mock(BotTaskComputer.BotTaskComputer)({
+            getStatus: Effect.succeed({
+              state: "off",
+              deviceId: "test-device-id",
+              deviceName: "Test computer",
+              apiUrl: null,
+              userId: null,
+              projectId: null,
+              currentTask: null,
+              lastCheckInAt: null,
+              message: null,
+            }),
+          }),
           Layer.mock(MemorySync.MemorySync)({
             getStatus: Effect.succeed({
               enabled: false,

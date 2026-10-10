@@ -342,6 +342,12 @@ describe("ClientSettings word wrap", () => {
     ).toBe(true);
   });
 
+  it("follows the build's TritonAI Bot service until the user changes or clears it", () => {
+    expect(decodeClientSettings({}).tritonAiBotUrl).toBeNull();
+    expect(decodeClientSettingsPatch({ tritonAiBotUrl: "" }).tritonAiBotUrl).toBe("");
+    expect(decodeClientSettingsPatch({ tritonAiBotUrl: null }).tritonAiBotUrl).toBeNull();
+  });
+
   it("defaults word wrap on", () => {
     expect(decodeClientSettings({}).wordWrap).toBe(true);
   });

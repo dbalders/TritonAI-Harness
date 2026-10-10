@@ -1349,6 +1349,20 @@ export interface DesktopBridge {
     cancel: (id: string) => Promise<void>;
   };
   /**
+   * TritonAI Bot sign-in return on a one-time loopback address.
+   * `startDotSignIn` returns the redirect URI; `awaitDotSignIn` resolves with
+   * the bot's one-time code, a refusal when the bot is not accepting new users,
+   * or null when cancelled or expired. Optional: web and older desktop builds
+   * fall back to confirming in the browser.
+   */
+  startDotSignIn?: () => Promise<string>;
+  awaitDotSignIn?: (
+    redirectUri: string,
+  ) => Promise<
+    { requestId: string; code: string } | { requestId: string; error: "signups_closed" } | null
+  >;
+  cancelDotSignIn?: (redirectUri: string) => Promise<void>;
+  /**
    * Open a System Settings pane by identifier. Optional: older desktop builds
    * lack it, and callers no-op when it is missing.
    */
