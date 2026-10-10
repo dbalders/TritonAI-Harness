@@ -29,6 +29,20 @@ it.layer(NodeServices.layer)("release workflow channel", (it) => {
         for (const step of producerCheckouts) {
           assert.equal(step.with?.ref, "${{ env.TRITONAI_INSTALLER_COMPOSITION_COMMIT }}");
         }
+        // Nightly reads the Installer's nightly plugin catalog; stable must only read production.
+        const compositionCommands = Object.values<{ steps?: { run?: string }[] }>(workflow.jobs)
+          .flatMap((job) => job.steps ?? [])
+          .flatMap((step) =>
+            (step.run ?? "")
+              .split("\n")
+              .filter((line) => line.includes("prepare-plugins-vendor.js")),
+          )
+          .map((line) => line.trim());
+        assert.deepEqual(compositionCommands, [
+          `node .release-input/installer/dist/scripts/prepare-plugins-vendor.js --production${
+            name === "nightly" ? " --nightly" : ""
+          }`,
+        ]);
       }
       assert.equal(pins[0], pins[1]);
     }),
