@@ -337,6 +337,11 @@ export const TeamProjectCommand = Schema.Union([
   }),
   Schema.Struct({ action: Schema.Literal("skill-disable"), projectId: ProjectId, path: SkillPath }),
   /**
+   * Turns off every skill the caller turned on for a project. Needs no team, link, or document,
+   * so it works while they can't be checked.
+   */
+  Schema.Struct({ action: Schema.Literal("skill-disable-all"), projectId: ProjectId }),
+  /**
    * Rechecks memory and skill references before a message holding them is sent; fails if any no
    * longer holds.
    */
@@ -447,6 +452,11 @@ export const TeamProjectResult = Schema.Struct({
   version: Schema.optionalKey(TeamSkillVersion),
   /** The caller's skills for a project, from `skill-enabled`, in the order they were turned on. */
   enabledSkills: Schema.optionalKey(Schema.Array(TeamProjectSkill)),
+  /**
+   * Why `skill-enabled` couldn't check the team. `enabledSkills` then lists only the caller's own
+   * approvals as recorded, so they can be turned off; sends in the project fail until then.
+   */
+  problem: Schema.optionalKey(Schema.String),
   /**
    * Current members' names by the author folder their documents are saved under, for the memory
    * and skill lists and previews. Former members are absent.

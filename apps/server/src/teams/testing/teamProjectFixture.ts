@@ -41,6 +41,8 @@ export const identityOf = (subject: string) =>
 export function teamProjectFixture() {
   let subject = "alice";
   let signedIn = true;
+  // The membership service is unreachable while set.
+  let teamsDown = false;
   const roles: Record<string, Record<string, TeamRole>> = {
     [teamA]: { alice: "editor" },
     [teamB]: { mallory: "owner" },
@@ -89,6 +91,8 @@ export function teamProjectFixture() {
     signOut: () => Effect.sync(status),
     teams: (_sessionId, command) =>
       Effect.suspend((): Effect.Effect<TeamsResult, TeamsError> => {
+        if (teamsDown)
+          return Effect.fail(new TeamsError({ code: "unavailable", message: "Teams is down." }));
         if (command.action === "list")
           return Effect.succeed({
             teams: (signedIn ? [teamA, teamB] : [])
@@ -319,6 +323,9 @@ export function teamProjectFixture() {
     },
     signOut: () => {
       signedIn = false;
+    },
+    setTeamsDown: (down: boolean) => {
+      teamsDown = down;
     },
   };
 }

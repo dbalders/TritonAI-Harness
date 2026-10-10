@@ -92,7 +92,8 @@ messages you send from Harness, not to slash commands, goals, scheduled tasks,
 or agent tools. A device where Microsoft isn't connected for Teams sends your
 messages without the team's skills. If Harness can't reach the team to check a
 skill that's on, the message isn't sent until you try again or turn the skill
-off.
+off. Settings → Skills still lists the skills you turned on for that project
+then, with **Turn all off**.
 
 Publishing never captures a conversation automatically, copies personal memory,
 or installs an executable skill. Signing out clears the Teams view and this

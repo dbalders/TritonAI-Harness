@@ -565,7 +565,37 @@ export const make = Effect.gen(function* () {
     projectId: ProjectId,
   ) {
     const profile = yield* signedInProfile(sessionId);
-    const { link, team, mine } = yield* projectSkills(sessionId, projectId, profile);
+    const context = yield* projectSkills(sessionId, projectId, profile).pipe(Effect.result);
+    if (context._tag === "Failure") {
+      // A team that can't be checked now fails sends that would carry the caller's skills, so
+      // show their own approvals, as recorded, to turn off. Nothing is read from the team.
+      const error = context.failure;
+      const link = yield* linkFor(projectId);
+      const identity = identityOf(profile);
+      const own = link
+        ? (yield* readEnabled).filter(
+            (entry) =>
+              entry.identity === identity &&
+              entry.link.projectId === projectId &&
+              sameLink(entry.link, link),
+          )
+        : [];
+      if ((error.code !== "unavailable" && error.code !== "conflict") || own.length === 0)
+        return yield* error;
+      return {
+        projects: [],
+        storage: null,
+        problem: error.message,
+        enabledSkills: own.map((entry): TeamProjectSkill => ({
+          path: entry.path,
+          title: entry.title,
+          version: entry.version,
+          state: "unavailable",
+          reason: error.message,
+        })),
+      };
+    }
+    const { link, team, mine } = context.success;
     const checked = yield* checkSkills(sessionId, link, mine).pipe(
       Effect.catch((error) =>
         Effect.succeed(
@@ -686,6 +716,17 @@ export const make = Effect.gen(function* () {
       ),
     );
     return { projects: [], storage: null };
+  });
+  const disableAllSkills = Effect.fn("TeamProjectService.disableAllSkills")(function* (
+    sessionId: string,
+    projectId: ProjectId,
+  ) {
+    // Like turning one off, this only reduces what is sent, so it needs no team, link, or read.
+    const identity = identityOf(yield* signedInProfile(sessionId));
+    yield* lock.withPermits(1)(
+      removeEnabled((entry) => entry.identity === identity && entry.link.projectId === projectId),
+    );
+    return { projects: [], storage: null, enabledSkills: [] };
   });
   const projectLinks = Effect.fn("TeamProjectService.projectLinks")(function* (sessionId: string) {
     yield* signedInProfile(sessionId);
@@ -847,6 +888,8 @@ export const make = Effect.gen(function* () {
       return yield* enabledSkills(sessionId, command.projectId);
     if (command.action === "skill-enable") return yield* enableSkill(sessionId, command);
     if (command.action === "skill-disable") return yield* disableSkill(sessionId, command);
+    if (command.action === "skill-disable-all")
+      return yield* disableAllSkills(sessionId, command.projectId);
     if (command.action === "bind" || command.action === "unbind") {
       const team = yield* readyTeam(sessionId, command.teamId);
       return yield* lock.withPermits(1)(

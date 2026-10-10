@@ -183,25 +183,34 @@ function ProjectTeamSkills({
 }) {
   const { run, busy, error } = useTeamProjectRequest(environmentId);
   const [link, setLink] = useState<TeamProjectLink | null | "unlinked">(null);
-  const [files, setFiles] = useState<readonly TeamListedDocument[]>([]);
+  // Null until the team's Skills folder has been listed.
+  const [files, setFiles] = useState<readonly TeamListedDocument[] | null>(null);
   const [authors, setAuthors] = useState<Readonly<Record<string, string>>>();
   const [enabled, setEnabled] = useState<readonly TeamProjectSkill[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
+  // Why the team couldn't be checked; the skills shown are then only the user's own approvals.
+  const [problem, setProblem] = useState<string | null>(null);
   const [review, setReview] = useState<Review | null>(null);
   const load = useCallback(async () => {
     const current = await run({ action: "skill-enabled", projectId });
     setNotice(null);
     if (!current) return;
     if ("error" in current) {
+      // Nothing about this project's skills can be shown as current.
+      setEnabled([]);
+      setProblem(null);
+      setFiles(null);
       if ((current.error as { code?: unknown }).code === "not_found") setLink("unlinked");
       return;
     }
-    setLink(current.projects[0] ?? "unlinked");
     setEnabled(current.enabledSkills ?? []);
+    setProblem(current.problem ?? null);
+    if (current.problem) return;
+    setLink(current.projects[0] ?? "unlinked");
     const listed = await run({ action: "skill-list", projectId });
     if (!listed || "error" in listed) return;
-    const problem = storageProblem(listed);
-    if (problem) return setNotice(problem);
+    const storage = storageProblem(listed);
+    if (storage) return setNotice(storage);
     setAuthors(listed.authors);
     setFiles((listed.storage?.files ?? []).map(({ path, summary }) => ({ path, summary })));
   }, [projectId, run]);
@@ -244,6 +253,11 @@ function ProjectTeamSkills({
     setReview(null);
     await load();
   };
+  const turnAllOff = async () => {
+    const result = await run({ action: "skill-disable-all", projectId });
+    if (!result || "error" in result) return;
+    await load();
+  };
   if (link === "unlinked")
     return (
       <SettingsRow
@@ -260,13 +274,34 @@ function ProjectTeamSkills({
       />
     );
   const teamName = link?.teamName ?? "your team";
-  const rows = teamProjectSkillRows(files, authors, enabled);
+  const rows = teamProjectSkillRows(files ?? [], authors, enabled);
   return (
     <>
       <SettingsRow
         title={`Skills from ${teamName} for ${projectTitle}${environmentLabel ? ` on ${environmentLabel}` : ""}`}
         description={`Turn a skill on to have Harness add it to each message you send in ${projectTitle}. It applies to you and this project only, after you review it, and nothing is installed. If someone edits it, Harness stops adding it until you review the update.`}
       />
+      {problem && enabled.length > 0 ? (
+        <SettingsRow
+          title="Team skills can’t be checked"
+          description={
+            <span role="alert">
+              {problem} Messages in {projectTitle} aren’t sent while these skills are on. Turn them
+              off to send without them, or try again.
+            </span>
+          }
+          control={
+            <div className="flex items-center gap-2">
+              <Button size="xs" variant="outline" disabled={busy} onClick={() => void load()}>
+                Retry
+              </Button>
+              <Button size="xs" variant="outline" disabled={busy} onClick={() => void turnAllOff()}>
+                Turn all off
+              </Button>
+            </div>
+          }
+        />
+      ) : null}
       {error || notice ? (
         <SettingsRow
           title="Team skills problem"
@@ -278,9 +313,9 @@ function ProjectTeamSkills({
           }
         />
       ) : null}
-      {link === null && !error ? (
+      {link === null && !error && !problem ? (
         <SettingsRow title="Team skills" description="Checking your team’s skills…" />
-      ) : rows.length === 0 && link !== null ? (
+      ) : rows.length === 0 && files !== null && !notice ? (
         <SettingsRow
           title="No team skills yet"
           description={`Editors of ${teamName} can publish one from Teams → ${teamName} → Team projects → Open team skills.`}

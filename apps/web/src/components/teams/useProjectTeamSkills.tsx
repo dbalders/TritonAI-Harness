@@ -48,7 +48,7 @@ export function useProjectTeamSkills(
             value: {
               teamName: result.value.projects[0]?.teamName ?? "your team",
               skills: result.value.enabledSkills ?? [],
-              problem: null,
+              problem: result.value.problem ?? null,
             },
           });
         const cause = squashAtomCommandFailure(result) as { code?: unknown; message?: unknown };

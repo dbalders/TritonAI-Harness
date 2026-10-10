@@ -980,6 +980,55 @@ describe("Team skills turned on for a project", () => {
     }),
   );
 
+  it.effect("shows the caller's own approvals to turn off when the team can't be checked", () =>
+    Effect.gen(function* () {
+      const { f, service, enable, sent } = yield* linked;
+      const status = () => service.execute("s", { action: "skill-enabled", projectId });
+      for (const [fail, restore] of [
+        [
+          () => (f.storage[teamA] = { ...f.storage[teamA]!, folderId: "rootMoved" }),
+          () => (f.storage[teamA] = { ...f.storage[teamA]!, folderId: "rootA" }),
+        ],
+        [() => f.setTeamsDown(true), () => f.setTeamsDown(false)],
+      ] as const) {
+        yield* enable();
+        fail();
+        expect((yield* Effect.flip(sent("Go."))).code).toBe("unavailable");
+        // Only the caller's own record is shown; nothing is read from the team folder.
+        f.graph.length = 0;
+        const degraded = yield* status();
+        expect(f.graph).toHaveLength(0);
+        expect(degraded.projects).toEqual([]);
+        expect(degraded.problem).toBeTruthy();
+        expect(degraded.enabledSkills).toEqual([
+          expect.objectContaining({
+            path: skillPath,
+            title: "Grant summary",
+            state: "unavailable",
+            reason: degraded.problem,
+          }),
+        ]);
+        // Turning them all off is the way out, and the next message goes without them.
+        yield* service.execute("s", { action: "skill-disable-all", projectId });
+        expect(yield* sent("Go.")).toBe("Go.");
+        // With nothing on, the problem is reported as the failure it is.
+        expect(["unavailable", "conflict"]).toContain(yield* code(status()));
+        restore();
+        expect((yield* status()).enabledSkills).toEqual([]);
+      }
+      // Another account's approvals are neither shown nor turned off.
+      yield* enable();
+      f.roles[teamA]!.bob = "editor";
+      f.switchTo("bob");
+      f.setTeamsDown(true);
+      expect(yield* code(status())).toBe("unavailable");
+      yield* service.execute("s", { action: "skill-disable-all", projectId });
+      f.setTeamsDown(false);
+      f.switchTo("alice");
+      expect(yield* sent("Go.")).toBe(`Go.\n\n${appliedBlock(skillText)}`);
+    }),
+  );
+
   it.effect("withholds skills, without failing, for a session with no Microsoft connection", () =>
     Effect.gen(function* () {
       const { service, enable } = yield* linked;
