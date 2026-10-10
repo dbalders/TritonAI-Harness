@@ -456,9 +456,12 @@ const withLiveProjectCliServer = <A, E, R>(baseDir: string, run: () => Effect.Ef
               discard: () => Effect.void,
             }),
           ),
-          // Project commands carry no message text for the team-memory gate to check.
+          // Project commands carry no message text for the team-memory gate or team skills.
           Layer.provide(
-            Layer.mock(TeamProjectService)({ authorizeOutgoingCommand: () => Effect.void }),
+            Layer.mock(TeamProjectService)({
+              authorizeOutgoingCommand: () => Effect.void,
+              prepareOutgoingCommand: (_sessionId, command) => Effect.succeed(command),
+            }),
           ),
         ),
       ),
