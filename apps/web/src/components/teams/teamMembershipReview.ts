@@ -23,7 +23,8 @@ export type MembershipReviewTarget =
   | { readonly kind: "remove"; readonly member: TeamMember }
   | { readonly kind: "role"; readonly member: TeamMember; readonly role: TeamRole }
   | { readonly kind: "transfer"; readonly member: TeamMember }
-  | { readonly kind: "leave" }
+  /** `owner` is whether you are an owner of the team, whose invitations leave with you. */
+  | { readonly kind: "leave"; readonly owner?: boolean }
   | { readonly kind: "cancel-invite"; readonly invitation: TeamInvitation }
   | { readonly kind: "archive" };
 
@@ -122,9 +123,11 @@ const roleLabel = (role: TeamRole) =>
 const MANAGE = "manage members, invitations, and the team name";
 const WRITE = "add and edit team files";
 const access = (role: TeamRole) => ({ manage: role === "owner", write: role !== "reader" });
-// Invitations belong to the team, so one an owner created outlives their owner role.
+// Invitations belong to the team: they outlive their creator's owner role, and are cancelled
+// when the creator leaves or is removed.
 const INVITATIONS_STAY =
   "Pending invitations they created stay valid; cancel any you no longer want.";
+const INVITATIONS_CANCELLED = "Pending invitations they created are cancelled.";
 
 /** Plain, target-specific wording. Access is described as Harness access only. */
 export function membershipReviewCopy(
@@ -140,7 +143,7 @@ export function membershipReviewCopy(
         title: `Remove ${name} from ${teamName}?`,
         description: [
           `${name} (${email}) will lose access to ${teamName} in Harness, ${loses}. Files they added stay with the team. To add them back, invite them again; they'll need to accept.`,
-          review.member.role === "owner" && INVITATIONS_STAY,
+          review.member.role === "owner" && INVITATIONS_CANCELLED,
         ]
           .filter(Boolean)
           .join(" "),
@@ -153,7 +156,13 @@ export function membershipReviewCopy(
     case "leave":
       return {
         title: `Leave ${teamName}?`,
-        description: `You'll lose access to ${teamName} in Harness, ${loses}. Files you added stay with the team. To rejoin, an owner has to invite you again.`,
+        description: [
+          `You'll lose access to ${teamName} in Harness, ${loses}. Files you added stay with the team.`,
+          review.owner && "Pending invitations you created are cancelled.",
+          "To rejoin, an owner has to invite you again.",
+        ]
+          .filter(Boolean)
+          .join(" "),
         confirm: "Leave team",
         working: "Leaving…",
         dismiss: "Cancel",

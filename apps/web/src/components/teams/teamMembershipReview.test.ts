@@ -149,11 +149,8 @@ describe("membershipReviewCopy", () => {
     expect(promotion.description).toContain("Owners can also change your role or remove you.");
   });
 
-  it("tells an owner that a removed or demoted owner's invitations stay valid", () => {
+  it("says a demoted owner's invitations stay valid and a departing owner's are cancelled", () => {
     const owner = { ...carol, role: "owner" as const };
-    expect(
-      membershipReviewCopy({ ...bound, kind: "remove", member: owner }, "Alpha", false).description,
-    ).toContain("Pending invitations they created stay valid");
     expect(
       membershipReviewCopy(
         { ...bound, kind: "role", member: owner, role: "editor" },
@@ -161,7 +158,16 @@ describe("membershipReviewCopy", () => {
         false,
       ).description,
     ).toContain("Pending invitations they created stay valid");
+    expect(
+      membershipReviewCopy({ ...bound, kind: "remove", member: owner }, "Alpha", false).description,
+    ).toContain("Pending invitations they created are cancelled.");
+    expect(
+      membershipReviewCopy({ ...bound, kind: "leave", owner: true }, "Alpha", false).description,
+    ).toContain("Pending invitations you created are cancelled.");
     expect(membershipReviewCopy(remove, "Alpha", false).description).not.toContain("invitations");
+    expect(
+      membershipReviewCopy({ ...bound, kind: "leave" }, "Alpha", false).description,
+    ).not.toContain("invitations");
   });
 
   it("describes removal as Harness access, not storage permission changes", () => {

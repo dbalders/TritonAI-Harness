@@ -36,6 +36,7 @@ import {
   canTransferOwnership,
   isCurrentReview,
   isOnlyOwner,
+  ownMember,
   isOwnMember,
   type MembershipReview,
   type MembershipReviewCopy,
@@ -707,7 +708,8 @@ export function TeamWorkspace({
               <p className="mt-1 text-xs text-muted-foreground">
                 To hand this team to someone else, choose Transfer ownership: they become an owner
                 and you become an editor, and only an owner can make you an owner again. A team
-                always keeps at least one owner. Pending invitations stay with the team. If an owner
+                always keeps at least one owner. Pending invitations stay valid when their creator’s
+                role changes, and are cancelled if their creator leaves or is removed. If an owner
                 leaves UC San Diego, another owner can remove them; if they were the only owner,
                 give a system administrator the team reference to assign a new one.
               </p>
@@ -896,7 +898,12 @@ export function TeamWorkspace({
                 variant="ghost"
                 disabled={!ready || onlyOwner}
                 aria-label={`Leave team ${team.name}`}
-                onClick={() => openReview({ kind: "leave" })}
+                onClick={() =>
+                  openReview({
+                    kind: "leave",
+                    owner: owner && ownMember(team, profile)?.role === "owner",
+                  })
+                }
               >
                 Leave team
               </Button>

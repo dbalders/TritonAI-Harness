@@ -429,7 +429,7 @@ export function makeSyntheticTeamsWorld() {
         if (!member || member === current) return fail("not_found", "Member unavailable");
         if (team.roles.get(member) === "owner")
           return fail("conflict", "This member is already an owner.");
-        // Owners and editors have the same storage access, so no permission changes are needed.
+        // The fixture doesn't model storage grants; the service verifies a reader's added access.
         team.roles.set(member, "owner");
         team.roles.set(current, "editor");
         team.revision++;
