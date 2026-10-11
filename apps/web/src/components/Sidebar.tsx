@@ -2067,10 +2067,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                   <span className="text-diff-deletion-foreground">−{diff.deletions}</span>
                 </span>
               ) : null}
-              <span
-                aria-hidden
-                className="pointer-events-none ml-auto inline-flex shrink-0 items-center gap-1"
-              >
+              <span className="pointer-events-none ml-auto inline-flex min-w-0 max-w-[45%] items-center gap-1">
                 {isRemote ? (
                   <span className="inline-flex shrink-0 items-center text-sidebar-muted-foreground/70">
                     <EnvironmentMachineIcon
@@ -2081,7 +2078,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                   </span>
                 ) : null}
                 {driverKind ? (
-                  <span className="inline-flex shrink-0 items-center">
+                  <span aria-hidden className="inline-flex shrink-0 items-center">
                     <ProviderInstanceIcon
                       instanceId={
                         thread.session?.providerInstanceId ?? thread.modelSelection.instanceId
@@ -2100,6 +2097,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                     />
                   </span>
                 ) : null}
+                <span className="truncate">{modelLabel}</span>
               </span>
             </div>
           </div>
