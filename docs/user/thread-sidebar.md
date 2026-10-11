@@ -173,6 +173,9 @@ finishes; the call's own result shows its status.
 
 ## Snooze until later
 
+On web and desktop, hover an active thread and click the clock beside its Done
+check to choose a wake time. The same controls are available with keyboard focus.
+
 Choose **Snooze → Custom…** from a thread's menu to pick a date and time in your
 local time zone, or a duration in minutes, hours, or days. Durations start when
 you confirm; one day means 24 hours. On web and desktop, you can also snooze
