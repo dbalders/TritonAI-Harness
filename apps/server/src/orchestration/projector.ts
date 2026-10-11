@@ -464,6 +464,7 @@ export function projectEvent(
             activeOrderKey: null,
             autoSettleDisabledAt: null,
             teamSharingOffAt: null,
+            teamSharingResumedAt: null,
             snoozedUntil: null,
             snoozedAt: null,
             deletedAt: null,
@@ -624,6 +625,7 @@ export function projectEvent(
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
             teamSharingOffAt: payload.teamSharingOffAt,
+            teamSharingResumedAt: payload.teamSharingResumedAt,
           }),
         })),
       );

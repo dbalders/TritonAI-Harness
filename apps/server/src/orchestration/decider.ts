@@ -893,8 +893,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
-      // Setting the current state again keeps the time it was first turned off.
+      // Setting the current state again keeps its times. Turning sharing back on records when, so
+      // work from before then, including while it was off, is never shared.
       const currentlyOffAt = thread.teamSharingOffAt ?? null;
+      const resumedAt = thread.teamSharingResumedAt ?? null;
       const occurredAt = yield* nowIso;
       return {
         ...(yield* withEventBase({
@@ -907,6 +909,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           teamSharingOffAt: command.shared ? null : (currentlyOffAt ?? occurredAt),
+          teamSharingResumedAt: command.shared && currentlyOffAt !== null ? occurredAt : resumedAt,
         },
       };
     }

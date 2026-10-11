@@ -51,6 +51,7 @@ import {
   teamDailyPath,
   type TeamDailyDay,
   TeamDailyState,
+  type TeamDailyThreadNow,
   type Writable,
 } from "./teamDaily.ts";
 import type {
@@ -72,22 +73,41 @@ const decodeState = Schema.decodeUnknownEffect(Schema.fromJsonString(TeamDailySt
 const encodeState = Schema.encodeEffect(Schema.fromJsonString(TeamDailyState));
 const encodeMarker = Schema.encodeEffect(Schema.fromJsonString(TeamDailyMarker));
 
-/** Threads among `threadIds` chosen as Don't share now. */
-const optedOutThreads = Effect.fn("teamMemory.optedOutThreads")(function* (
-  threadIds: ReadonlyArray<string>,
-) {
+/** How each of `threadIds` stands now; deleted threads are absent. */
+const threadsNow = Effect.fn("teamMemory.threadsNow")(function* (threadIds: ReadonlyArray<string>) {
   const sql = yield* SqlClient.SqlClient;
-  const optedOut = new Set<string>();
+  const threads = new Map<string, TeamDailyThreadNow>();
   for (let index = 0; index < threadIds.length; index += 500) {
-    const rows = yield* sql<{ readonly threadId: string }>`
-      SELECT thread_id AS "threadId" FROM projection_threads
-      WHERE team_sharing_off_at IS NOT NULL
+    const rows = yield* sql<{
+      readonly threadId: string;
+      readonly projectId: string;
+      readonly offAt: string | null;
+      readonly resumedAt: string | null;
+    }>`
+      SELECT
+        thread_id AS "threadId",
+        project_id AS "projectId",
+        team_sharing_off_at AS "offAt",
+        team_sharing_resumed_at AS "resumedAt"
+      FROM projection_threads
+      WHERE deleted_at IS NULL
         AND ${sql.in("thread_id", threadIds.slice(index, index + 500))}
     `;
-    for (const row of rows) optedOut.add(row.threadId);
+    for (const row of rows)
+      threads.set(row.threadId, {
+        projectId: row.projectId,
+        off: row.offAt !== null,
+        resumedAt: row.resumedAt,
+      });
   }
-  return optedOut;
+  return threads;
 });
+const sameThread = (a: TeamDailyThreadNow | undefined, b: TeamDailyThreadNow | undefined) =>
+  a !== undefined &&
+  b !== undefined &&
+  a.projectId === b.projectId &&
+  a.off === b.off &&
+  a.resumedAt === b.resumedAt;
 
 const scopeOf = (workspace: TeamDailyWorkspace): TeamActivityScope => ({
   projects: new Map(workspace.projects.map((p) => [p.projectId, p.sharingSince])),
@@ -257,18 +277,24 @@ export const makeTeamDailyPass = (input: {
             if (after.kind !== "signed-in" || after.author !== state.author || !fresh) return false;
             if (fresh.access !== "ready") return false;
             const stillLinked = scopeOf(fresh).projects;
-            const optedOut = yield* provide(optedOutThreads(changed.map((t) => t.threadId)));
+            const now = yield* provide(threadsNow(changed.map((t) => t.threadId)));
             for (const thread of changed) {
               const text = summaries.get(thread.threadId);
               const linkSince = scope.projects.get(thread.projectId)!;
+              const current = now.get(thread.threadId);
+              // The thread must still exist, in the same project, shared as it was when read.
               if (
                 text === undefined ||
-                optedOut.has(thread.threadId) ||
+                current === undefined ||
+                current.off ||
+                current.projectId !== thread.projectId ||
+                current.resumedAt !== thread.sharingResumedAt ||
                 stillLinked.get(thread.projectId) !== linkSince
               )
                 continue;
               record.sections[thread.threadId] = {
                 projectId: thread.projectId,
+                sharing: thread.sharingResumedAt,
                 linkSince,
                 text,
                 publishedText: record.sections[thread.threadId]?.publishedText ?? null,
@@ -285,38 +311,95 @@ export const makeTeamDailyPass = (input: {
         return true;
       });
 
-    /** Publishes the team's change marker when it says something new. */
-    const publishMarker = (attached: TeamDailySource, state: State, team: Team, teamId: string) =>
+    /** Publishes the team's change marker, in the team's current folder, when it changed. */
+    const publishMarker = (
+      attached: TeamDailySource,
+      state: State,
+      team: Team,
+      workspace: TeamDailyWorkspace,
+    ) =>
       Effect.gen(function* () {
-        const marker = team.marker;
-        if (!marker) return "done" as const;
+        const current = team.marker;
+        if (!current) return "done" as const;
+        if (Object.keys(current.months).length === 0) return "done" as const;
         const text = yield* encodeMarker({
           version: 1,
-          months: Object.fromEntries(Object.entries(marker.months).toSorted()),
+          months: Object.fromEntries(Object.entries(current.months).toSorted()),
         });
         const sha = sha256(text);
-        if (sha === marker.publishedSha) return "done" as const;
+        if (sha === current.publishedSha) return "done" as const;
         const result = yield* attached.write({
-          teamId,
+          teamId: workspace.teamId,
           author: state.author,
           path: teamDailyMarkerPath(state.author, state.deviceId),
           text,
-          etag: marker.etag,
+          etag: current.etag,
+          storageKey: current.storageKey ?? null,
           freshProjects: [],
           stillShared: Effect.succeed(true),
         });
         if (result.kind === "lost") return "lost" as const;
-        if (result.kind === "held") {
-          yield* setStatus(teamId, { state: "held", message: result.message });
+        if (result.kind === "held" || result.kind === "rejected") {
+          yield* setStatus(workspace.teamId, { state: "held", message: result.message });
           return "held" as const;
         }
-        marker.publishedSha = sha;
-        marker.etag = result.etag;
+        current.publishedSha = sha;
+        current.etag = result.etag;
+        current.storageKey = result.storageKey;
         yield* writeState(state);
         return "done" as const;
       });
 
-    /** Writes every day file whose content changed. */
+    /**
+     * Settles a write whose outcome isn't known by reading the file where it was written. Returns
+     * false when that can't be learned now, so the day is left as it is.
+     */
+    const settleAttempt = (
+      attached: TeamDailySource,
+      state: State,
+      record: Day,
+      day: string,
+      teamId: string,
+    ) =>
+      Effect.gen(function* () {
+        const attempt = record.attempt;
+        if (!attempt) return "settled" as const;
+        const found = yield* attached.inspect({
+          teamId,
+          author: state.author,
+          path: teamDailyPath(state.author, day, state.deviceId),
+          storageKey: record.storageKey ?? null,
+        });
+        if (found.kind === "lost") return "lost" as const;
+        if (found.kind === "held") return "held" as const;
+        if (found.kind === "file" && sha256(found.text) === attempt.sha) {
+          // The write landed: what it carried is now what the team has.
+          for (const [threadId, text] of Object.entries(attempt.included)) {
+            const section = record.sections[threadId];
+            if (section) section.publishedText = text;
+          }
+          record.publishedSha = attempt.sha;
+          record.etag = found.etag;
+        } else if (found.kind === "missing") {
+          // A removal landed, or nothing was ever written.
+          if (attempt.sha === null)
+            for (const section of Object.values(record.sections)) section.publishedText = null;
+          record.publishedSha = null;
+          record.etag = null;
+        } else if (found.kind === "file") {
+          // An earlier version is still there; the next write replaces it.
+          record.etag = found.etag;
+          if (record.publishedSha === null) record.publishedSha = sha256(found.text);
+        }
+        delete record.attempt;
+        yield* writeState(state);
+        return "settled" as const;
+      });
+
+    /**
+     * Writes every day file whose content changed. A day that can't be written now is reported
+     * and skipped, so it never holds back other days, withdrawals, or the change marker.
+     */
     const publishTeam = (
       attached: TeamDailySource,
       state: State,
@@ -327,46 +410,97 @@ export const makeTeamDailyPass = (input: {
     ) =>
       Effect.gen(function* () {
         const linkedProjects = scopeOf(workspace).projects;
-        const optedOut = yield* provide(
-          optedOutThreads([
+        // A folder that changed starts a new marker there; the old folder's files stay put.
+        if (
+          team.marker?.storageKey &&
+          workspace.storageKey &&
+          team.marker.storageKey !== workspace.storageKey
+        )
+          team.marker = { months: {}, publishedSha: null, etag: null, storageKey: null };
+        const threads = yield* provide(
+          threadsNow([
             ...new Set(Object.values(team.days).flatMap((day) => Object.keys(day.sections))),
           ]),
         );
+        const problems: string[] = [];
         for (const day of Object.keys(team.days).toSorted()) {
           const record = team.days[day]!;
+          // A file is only ever updated in the folder it was published to.
+          if (
+            (record.storageKey ?? null) !== null &&
+            workspace.storageKey !== null &&
+            record.storageKey !== workspace.storageKey
+          ) {
+            problems.push(
+              `Your shared memory for ${day} is in the team's previous folder, so Harness can't update or remove it there. Ask your administrator.`,
+            );
+            continue;
+          }
+          const settled = yield* settleAttempt(attached, state, record, day, workspace.teamId);
+          if (settled === "lost") return "lost" as const;
+          if (settled === "held") {
+            problems.push(
+              `Harness couldn't confirm whether ${day} was saved; it will check again.`,
+            );
+            continue;
+          }
           const rendered = renderTeamDailyFile(
             record,
             { day, author: state.author },
-            { optedOut, linkedProjects, publishedOnly: !allowFresh },
+            { threads, linkedProjects, publishedOnly: !allowFresh },
           );
-          // Sharing a thread again resummarizes it; unpublished text from a project no longer
-          // linked as before is never published.
-          let dropped = false;
-          for (const threadId of [...rendered.optedOut, ...rendered.unlinked]) {
+          // Sharing a thread again resummarizes it; unpublished text that can no longer be
+          // published leaves for good; a thread that no longer qualifies keeps only what was
+          // published.
+          let changed = false;
+          for (const threadId of [...rendered.withdrawn, ...rendered.dropped]) {
             delete record.sections[threadId];
-            dropped = true;
+            changed = true;
           }
+          for (const threadId of rendered.frozen) {
+            const section = record.sections[threadId]!;
+            section.text = section.publishedText!;
+            changed = true;
+          }
+          if (rendered.deferred.length > 0)
+            problems.push(
+              `Some of ${day}'s newest work is waiting because that day's shared memory reached its size limit.`,
+            );
           const sha = rendered.text === null ? null : sha256(rendered.text);
           if (sha === record.publishedSha) {
-            if (rendered.text === null && record.publishedSha === null) delete team.days[day];
-            if (dropped) yield* writeState(state);
+            if (rendered.text === null) delete team.days[day];
+            if (changed || rendered.text === null) yield* writeState(state);
             continue;
           }
-          // A thread can be chosen as Don't share any time: the Teams side asks again right
-          // before each request that changes the file.
+          // Each thread is asked about again right before each request that changes the file:
+          // still not withdrawn, and, for new text, still in the same project, shared the same way.
           const included = [...rendered.included.keys()];
           let changedSharing = false;
-          const stillShared = provide(optedOutThreads(included)).pipe(
+          const stillShared = provide(threadsNow(included)).pipe(
             Effect.map((now) => {
-              changedSharing = [...now].some((threadId) => !optedOut.has(threadId));
+              changedSharing =
+                included.some((threadId) => {
+                  const current = now.get(threadId);
+                  const section = record.sections[threadId];
+                  return (
+                    current !== undefined &&
+                    section !== undefined &&
+                    (current.off || current.resumedAt !== (section.sharing ?? null))
+                  );
+                }) ||
+                [...rendered.freshThreads].some(
+                  ([threadId, then]) => !sameThread(now.get(threadId), then),
+                );
               return !changedSharing;
             }),
             Effect.orElseSucceed(() => false),
           );
           if (!(yield* stillShared)) return "retry" as const;
-          // Stamped before the write, so a crash before the marker is published can't hide it.
+          // Recorded before the write, so a crash can neither hide the marker's month nor lose
+          // track of a file that may now exist.
           const marker = (team.marker ??= { months: {}, publishedSha: null, etag: null });
           marker.months[day.slice(0, 7)] = yield* nowIso;
+          record.attempt = { sha, included: Object.fromEntries(rendered.included) };
           yield* writeState(state);
           const result = yield* attached.write({
             teamId: workspace.teamId,
@@ -374,6 +508,7 @@ export const makeTeamDailyPass = (input: {
             path: teamDailyPath(state.author, day, state.deviceId),
             text: rendered.text,
             etag: record.etag,
+            storageKey: record.storageKey ?? null,
             freshProjects: [...rendered.freshProjects].map(([projectId, sharingSince]) => ({
               projectId,
               sharingSince,
@@ -383,10 +518,18 @@ export const makeTeamDailyPass = (input: {
           if (result.kind === "lost") return "lost" as const;
           if (result.kind === "held" && changedSharing) return "retry" as const;
           if (result.kind === "held") {
-            yield* writeState(state);
+            // The attempt stays recorded: the next pass learns whether it landed.
             yield* setStatus(workspace.teamId, { state: "held", message: result.message });
             return "held" as const;
           }
+          if (result.kind === "rejected") {
+            // Nothing was sent.
+            delete record.attempt;
+            yield* writeState(state);
+            problems.push(`${day}: ${result.message}`);
+            continue;
+          }
+          delete record.attempt;
           if (rendered.text === null) {
             delete team.days[day];
           } else {
@@ -396,11 +539,18 @@ export const makeTeamDailyPass = (input: {
             }
             record.etag = result.etag;
             record.publishedSha = sha;
+            record.storageKey = result.storageKey;
           }
           yield* writeState(state);
           yield* setStatus(workspace.teamId, { lastPublishedAt: yield* nowIso });
         }
-        return yield* publishMarker(attached, state, team, workspace.teamId);
+        const marker = yield* publishMarker(attached, state, team, workspace);
+        if (marker !== "done") return marker;
+        if (problems.length > 0) {
+          yield* setStatus(workspace.teamId, { state: "held", message: problems[0]! });
+          return "partial" as const;
+        }
+        return "done" as const;
       });
 
     const pass = Effect.gen(function* () {

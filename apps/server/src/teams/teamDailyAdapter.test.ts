@@ -1,5 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as TestClock from "effect/testing/TestClock";
 import { teamDailyPath } from "../memory/teamDaily.ts";
 import type { TeamDailyWorkspace } from "../memory/teamDailySource.ts";
 import {
@@ -38,6 +39,7 @@ const linkedWith = (options: { shortTokens?: boolean } = {}) =>
         path,
         text,
         etag: null,
+        storageKey: null,
         freshProjects: current.projects,
         stillShared: Effect.sync(() => shared),
       });
@@ -71,7 +73,7 @@ describe("Daily team memory writes", () => {
         access: "ready",
         projects: [{ projectId, sharingSince: expect.any(String) }],
       });
-      expect(yield* team.write("# shared")).toEqual({ kind: "written", etag: "v1" });
+      expect(yield* team.write("# shared")).toMatchObject({ kind: "written", etag: "v1" });
       expect(team.changes()).toEqual([
         expect.objectContaining({ method: "PUT", body: "# shared" }),
       ]);
@@ -124,6 +126,7 @@ describe("Daily team memory writes", () => {
         path: teamDailyPath(identityOf("bob"), day, deviceId),
         text: "# not mine",
         etag: null,
+        storageKey: null,
         freshProjects: [],
         stillShared: Effect.succeed(true),
       });
@@ -158,6 +161,70 @@ describe("Daily team memory writes", () => {
         expect.objectContaining({ teamId: teamA, access: "ready", projects: [] }),
       ]);
       expect(yield* team.write("# moved", team.workspace)).toMatchObject({ kind: "held" });
+      expect(team.changes()).toEqual([]);
+    }),
+  );
+
+  it.effect("shares nothing while the Teams account's session belongs to someone else", () =>
+    Effect.gen(function* () {
+      const team = yield* linked;
+      team.f.roles[teamA]!.bob = "member";
+      team.f.switchTo("bob");
+      // Nobody made Bob the Teams account here, so nothing is shared as him or as Alice.
+      expect(yield* team.source.account([teamA])).toEqual({ kind: "signed-out" });
+      expect(yield* team.write("# as Alice")).toMatchObject({ kind: "held" });
+      const asBob = yield* team.source.write({
+        teamId: teamA,
+        author: identityOf("bob"),
+        path: teamDailyPath(identityOf("bob"), day, deviceId),
+        text: "# as Bob",
+        etag: null,
+        storageKey: null,
+        freshProjects: [],
+        stillShared: Effect.succeed(true),
+      });
+      expect(asBob).toMatchObject({ kind: "held" });
+      expect(team.changes()).toEqual([]);
+    }),
+  );
+
+  it.effect(
+    "starts a reassigned account's sharing when it took over, not when the project was linked",
+    () =>
+      Effect.gen(function* () {
+        yield* TestClock.setTime(Date.parse("2026-10-01T09:00:00.000Z"));
+        const team = yield* linked;
+        expect(team.workspace.projects).toEqual([
+          { projectId, sharingSince: "2026-10-01T09:00:00.000Z" },
+        ]);
+        yield* TestClock.setTime(Date.parse("2026-10-05T09:00:00.000Z"));
+        team.f.roles[teamA]!.bob = "member";
+        team.f.switchTo("bob");
+        // Bob uses Teams here, which makes him the Teams account from now on.
+        yield* team.service.teams("s", { action: "list" });
+        const account = yield* team.source.account([]);
+        expect(account).toMatchObject({ kind: "signed-in", author: identityOf("bob") });
+        expect(account.kind === "signed-in" && account.workspaces[0]?.projects).toEqual([
+          { projectId, sharingSince: "2026-10-05T09:00:00.000Z" },
+        ]);
+      }),
+  );
+
+  it.effect("refuses to write a file anywhere but the folder it was published to", () =>
+    Effect.gen(function* () {
+      const team = yield* linked;
+      expect(team.workspace.storageKey).toEqual(expect.stringContaining("rootA"));
+      const result = yield* team.source.write({
+        teamId: teamA,
+        author,
+        path,
+        text: null,
+        etag: "v1",
+        storageKey: "an earlier folder",
+        freshProjects: [],
+        stillShared: Effect.succeed(true),
+      });
+      expect(result).toMatchObject({ kind: "rejected" });
       expect(team.changes()).toEqual([]);
     }),
   );

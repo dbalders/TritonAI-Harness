@@ -185,6 +185,13 @@ model, Microsoft connected for the team, and your UC San Diego sign-in. When
 something is missing, the composer says sharing is waiting and why, and
 nothing is lost: summaries are written once it's fixed. While Memory is off,
 Harness still removes threads you choose not to share, but adds nothing new.
+A day's file has a size limit; when a busy day reaches it, the newest work
+waits and the file says so, while what was already shared stays.
+
+Your work is shared under the UC San Diego account that uses Teams in this
+Harness. If someone else signs in here and uses Teams, sharing stops for your
+account, and their work is shared from that moment on, never yours or anything
+from before.
 
 Unlinking a project stops sharing its work. What was already shared stays with
 the team, and anything not yet shared is dropped. Leaving or being removed from

@@ -21,6 +21,8 @@ export interface TeamDailyWorkspace {
   readonly message?: string;
   /** Projects in this environment linked to the team now, and when sharing started for each. */
   readonly projects: ReadonlyArray<{ readonly projectId: string; readonly sharingSince: string }>;
+  /** The team's current folder, as an opaque key; files are only ever updated where written. */
+  readonly storageKey: string | null;
 }
 
 export type TeamDailyAccount =
@@ -38,10 +40,21 @@ export type TeamDailyAccount =
   | { readonly kind: "unavailable"; readonly message: string };
 
 export type TeamDailyWrite =
-  | { readonly kind: "written"; readonly etag: string | null }
-  /** Couldn't write now (signed out of Microsoft, offline, a project link changed): try later. */
+  | { readonly kind: "written"; readonly etag: string | null; readonly storageKey: string }
+  /**
+   * Couldn't write now (signed out of Microsoft, offline, a project link changed), and the file
+   * may or may not have changed: try later.
+   */
   | { readonly kind: "held"; readonly message: string }
+  /** Nothing was sent, and this exact write can never succeed (too large, folder changed). */
+  | { readonly kind: "rejected"; readonly message: string }
   /** Access to the team ended: stop, and write nothing more for it. */
+  | { readonly kind: "lost" };
+
+export type TeamDailyInspection =
+  | { readonly kind: "file"; readonly text: string; readonly etag: string }
+  | { readonly kind: "missing" }
+  | { readonly kind: "held"; readonly message: string }
   | { readonly kind: "lost" };
 
 export interface TeamDailyStatus {
@@ -57,8 +70,10 @@ export interface TeamDailySource {
    * Writes this device's file for a day (`text`), or removes it (`null`), after checking the
    * account and membership again and that every project in `freshProjects` is still linked to
    * the team by the same link (`sharingSince`). `etag` is the version this device last wrote.
-   * `stillShared` is run again immediately before each request that changes the file, including
-   * retries; when it answers false the write is abandoned and `held` returned.
+   * `storageKey` is the folder the file was written to, or null for the team's current folder; a
+   * file is never written anywhere else. `stillShared` is run again immediately before each
+   * request that changes the file, including retries; when it answers false the write is
+   * abandoned and `held` returned.
    */
   readonly write: (input: {
     readonly teamId: string;
@@ -66,6 +81,7 @@ export interface TeamDailySource {
     readonly path: string;
     readonly text: string | null;
     readonly etag: string | null;
+    readonly storageKey: string | null;
     readonly freshProjects: ReadonlyArray<{
       readonly projectId: string;
       readonly sharingSince: string;
@@ -73,6 +89,13 @@ export interface TeamDailySource {
     /** Whether every thread in `text` is still shared. */
     readonly stillShared: Effect.Effect<boolean>;
   }) => Effect.Effect<TeamDailyWrite>;
+  /** Reads this device's own file where it was written, to learn whether a write landed. */
+  readonly inspect: (input: {
+    readonly teamId: string;
+    readonly author: string;
+    readonly path: string;
+    readonly storageKey: string | null;
+  }) => Effect.Effect<TeamDailyInspection>;
 }
 
 /** The memory side, provided by the DailyMemory layer. */

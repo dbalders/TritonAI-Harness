@@ -937,6 +937,8 @@ export const OrchestrationThread = Schema.Struct({
   // Set while the user has chosen Don't share this thread. In a project linked to a team, the
   // thread's work is left out of the team's daily memory. Optional so older servers still decode.
   teamSharingOffAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  // When the user last chose Share this thread again; only work after it is shared.
+  teamSharingResumedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   // Pending-only state. Optional so older servers remain compatible.
   titleRegeneration: Schema.optional(Schema.NullOr(ThreadTitleRegeneration)),
   titleState: Schema.optional(Schema.NullOr(ThreadTitleState)),
@@ -1013,6 +1015,7 @@ export const OrchestrationThreadShell = Schema.Struct({
   activeOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   autoSettleDisabledAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   teamSharingOffAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  teamSharingResumedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   titleRegeneration: Schema.optional(Schema.NullOr(ThreadTitleRegeneration)),
   titleState: Schema.optional(Schema.NullOr(ThreadTitleState)),
   session: Schema.NullOr(OrchestrationSession),
@@ -2018,6 +2021,8 @@ export const ThreadTeamSharingSetPayload = Schema.Struct({
   threadId: ThreadId,
   // Null shares the thread with the project's team again.
   teamSharingOffAt: Schema.NullOr(IsoDateTime),
+  // When sharing was last turned back on: work before it, including while it was off, stays out.
+  teamSharingResumedAt: Schema.NullOr(IsoDateTime),
 });
 
 export const ThreadMetaUpdatedPayload = Schema.Struct({

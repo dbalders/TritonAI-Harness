@@ -609,6 +609,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             activeOrderKey: null,
             autoSettleDisabledAt: null,
             teamSharingOffAt: null,
+            teamSharingResumedAt: null,
             titleRegenerationRequestId: null,
             titleRegenerationStartedAt: null,
             latestUserMessageAt: null,
@@ -786,6 +787,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
             teamSharingOffAt: event.payload.teamSharingOffAt,
+            teamSharingResumedAt: event.payload.teamSharingResumedAt,
           });
           return;
         }

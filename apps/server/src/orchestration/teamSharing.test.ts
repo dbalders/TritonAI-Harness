@@ -19,6 +19,7 @@ const OFF_AT = "2025-12-30T00:00:00.000Z";
 
 function readModel(input: {
   readonly teamSharingOffAt?: string | null;
+  readonly teamSharingResumedAt?: string | null;
   readonly archivedAt?: string | null;
 }): OrchestrationReadModel {
   return {
@@ -42,6 +43,7 @@ function readModel(input: {
         settledOverride: null,
         settledAt: null,
         teamSharingOffAt: input.teamSharingOffAt ?? null,
+        teamSharingResumedAt: input.teamSharingResumedAt ?? null,
         deletedAt: null,
         messages: [],
         proposedPlans: [],
@@ -93,8 +95,23 @@ it.layer(NodeServices.layer)("thread.team-sharing.set", (it) => {
       if (again?.type === "thread.team-sharing-set")
         expect(again.payload.teamSharingOffAt).toBe(OFF_AT);
 
+      // Sharing again records when, so work from before then stays out.
       const on = yield* decide(true, readModel({ teamSharingOffAt: OFF_AT }));
-      if (on?.type === "thread.team-sharing-set") expect(on.payload.teamSharingOffAt).toBeNull();
+      if (on?.type === "thread.team-sharing-set") {
+        expect(on.payload.teamSharingOffAt).toBeNull();
+        expect(on.payload.teamSharingResumedAt).not.toBeNull();
+      }
+      // A thread that was never turned off has no cutoff, and sharing it again changes nothing.
+      const already = yield* decide(true, readModel({}));
+      if (already?.type === "thread.team-sharing-set")
+        expect(already.payload.teamSharingResumedAt).toBeNull();
+      // Turning it off again keeps the last cutoff until it is shared again.
+      const offAgain = yield* decide(
+        false,
+        readModel({ teamSharingResumedAt: "2025-12-31T00:00:00.000Z" }),
+      );
+      if (offAgain?.type === "thread.team-sharing-set")
+        expect(offAgain.payload.teamSharingResumedAt).toBe("2025-12-31T00:00:00.000Z");
     }),
   );
 
@@ -128,6 +145,7 @@ it.layer(NodeServices.layer)("thread.team-sharing.set", (it) => {
         event(2, "thread.team-sharing-set", {
           threadId: ThreadId.make("thread-1"),
           teamSharingOffAt: OFF_AT,
+          teamSharingResumedAt: null,
         }),
       );
       expect(off.threads[0]).toMatchObject({ teamSharingOffAt: OFF_AT, updatedAt: NOW });
@@ -136,9 +154,10 @@ it.layer(NodeServices.layer)("thread.team-sharing.set", (it) => {
         event(3, "thread.team-sharing-set", {
           threadId: ThreadId.make("thread-1"),
           teamSharingOffAt: null,
+          teamSharingResumedAt: NOW,
         }),
       );
-      expect(on.threads[0]?.teamSharingOffAt).toBeNull();
+      expect(on.threads[0]).toMatchObject({ teamSharingOffAt: null, teamSharingResumedAt: NOW });
     }),
   );
 });

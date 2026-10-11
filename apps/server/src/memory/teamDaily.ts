@@ -8,12 +8,13 @@
  * summary and the text last published for it. That is what lets a file be rewritten without
  * calling the model again, and without publishing anything new from a project that was unlinked:
  *
- * - a thread chosen as Don't share leaves the file;
- * - a thread whose project is still linked, by the same link it was summarized under,
- *   contributes its latest summary;
+ * - a thread chosen as Don't share, or shared again since it was summarized, leaves the file;
+ * - a thread that still exists in the same project, linked by the same link it was summarized
+ *   under, contributes its latest summary;
  * - any other thread keeps only what was already published, never new text. Text never published
- *   from a project that is no longer linked is dropped for good, even if the project is linked
- *   again later.
+ *   from a thread that no longer qualifies is dropped for good, even if it qualifies again later.
+ *
+ * Each file has a size budget. New text that doesn't fit waits, and the file says so.
  */
 import * as NodeCrypto from "node:crypto";
 import * as Schema from "effect/Schema";
@@ -62,8 +63,16 @@ export const TeamDailyMarker = Schema.Struct({
 });
 export type TeamDailyMarker = typeof TeamDailyMarker.Type;
 
+/** The largest daily file Harness writes, under the 64 KB limit on team documents. */
+export const MAX_TEAM_DAILY_BYTES = 60_000;
+
 const Section = Schema.Struct({
   projectId: Schema.String,
+  /**
+   * When the thread was last shared again after Don't share, at the time this section was
+   * summarized; null if it never was. A later re-share makes the section stale.
+   */
+  sharing: Schema.optionalKey(Schema.NullOr(Schema.String)),
   /** When the project's link began sharing, at the time this section was summarized. */
   linkSince: Schema.String,
   /** The section as it reads now: heading, source line, and summary. */
@@ -90,6 +99,18 @@ const Day = Schema.Struct({
   authorName: Schema.String,
   deviceLabel: Schema.String,
   timeZone: Schema.String,
+  /** The team folder the file was published to; a file is only ever updated there. */
+  storageKey: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  /**
+   * A write whose outcome isn't known yet: recorded before each upload, so after a crash or an
+   * unanswered request the next pass reads the file to learn whether it landed.
+   */
+  attempt: Schema.optionalKey(
+    Schema.Struct({
+      sha: Schema.NullOr(Schema.String),
+      included: Schema.Record(Schema.String, Schema.String),
+    }),
+  ),
 });
 export type TeamDailyDay = typeof Day.Type;
 
@@ -108,6 +129,8 @@ const Team = Schema.Struct({
       /** sha256 of the marker last published, or null before the first. */
       publishedSha: Schema.NullOr(Schema.String),
       etag: Schema.NullOr(Schema.String),
+      /** The team folder the marker is in. */
+      storageKey: Schema.optionalKey(Schema.NullOr(Schema.String)),
     }),
   ),
 });
@@ -126,10 +149,16 @@ export type TeamDailyState = typeof TeamDailyState.Type;
 /** The record as the team pass changes it. */
 export type Writable<T> = T extends object ? { -readonly [K in keyof T]: Writable<T[K]> } : T;
 
+/** A thread as it stands now; absent when it was deleted. */
+export interface TeamDailyThreadNow {
+  readonly projectId: string;
+  readonly off: boolean;
+  readonly resumedAt: string | null;
+}
+
 /** What a section may contribute to a file right now. */
 export interface TeamDailyEligibility {
-  /** Threads chosen as Don't share. */
-  readonly optedOut: ReadonlySet<string>;
+  readonly threads: ReadonlyMap<string, TeamDailyThreadNow>;
   /** Projects in this environment linked to the team now, with when each link began sharing. */
   readonly linkedProjects: ReadonlyMap<string, string>;
   /**
@@ -146,11 +175,21 @@ export interface TeamDailyRender {
   readonly included: ReadonlyMap<string, string>;
   /** Projects whose not-yet-published text is in `text`, with the link it was summarized under. */
   readonly freshProjects: ReadonlyMap<string, string>;
-  /** Threads chosen as Don't share; their sections leave the record. */
-  readonly optedOut: ReadonlyArray<string>;
-  /** Threads with unpublished text from a project no longer linked as before; it leaves for good. */
-  readonly unlinked: ReadonlyArray<string>;
+  /** Threads whose not-yet-published text is in `text`, as each stood when it was summarized. */
+  readonly freshThreads: ReadonlyMap<string, TeamDailyThreadNow>;
+  /** Threads chosen as Don't share or shared again since; their sections leave the record. */
+  readonly withdrawn: ReadonlyArray<string>;
+  /** Threads whose unpublished text can never be published; it leaves the record for good. */
+  readonly dropped: ReadonlyArray<string>;
+  /** Threads that keep only their published text from now on. */
+  readonly frozen: ReadonlyArray<string>;
+  /** Threads whose new text waits because the file reached its size budget. */
+  readonly deferred: ReadonlyArray<string>;
 }
+
+/** Whether a section is still the thread's current, shared work. */
+const withdrawnNow = (section: TeamDailySection, now: TeamDailyThreadNow | undefined) =>
+  now !== undefined && (now.off || now.resumedAt !== (section.sharing ?? null));
 
 /** Decides each section's contribution and renders the file. */
 export function renderTeamDailyFile(
@@ -158,56 +197,114 @@ export function renderTeamDailyFile(
   header: { readonly day: string; readonly author: string },
   eligibility: TeamDailyEligibility,
 ): TeamDailyRender {
-  const included = new Map<string, string>();
+  const chosen = new Map<string, { text: string; fresh: boolean }>();
   const freshProjects = new Map<string, string>();
-  const optedOut: string[] = [];
-  const unlinked: string[] = [];
+  const freshThreads = new Map<string, TeamDailyThreadNow>();
+  const withdrawn: string[] = [];
+  const dropped: string[] = [];
+  const frozen: string[] = [];
+  const deferred: string[] = [];
   const ordered = Object.entries(day.sections).toSorted(([aId, a], [bId, b]) =>
     a.startedAt === b.startedAt ? (aId < bId ? -1 : 1) : a.startedAt < b.startedAt ? -1 : 1,
   );
   for (const [threadId, section] of ordered) {
-    if (eligibility.optedOut.has(threadId)) {
-      optedOut.push(threadId);
+    const now = eligibility.threads.get(threadId);
+    if (withdrawnNow(section, now)) {
+      withdrawn.push(threadId);
       continue;
     }
-    if (eligibility.linkedProjects.get(section.projectId) === section.linkSince) {
+    const current =
+      now !== undefined &&
+      now.projectId === section.projectId &&
+      eligibility.linkedProjects.get(section.projectId) === section.linkSince;
+    if (current) {
       if (eligibility.publishedOnly) {
-        if (section.publishedText !== null) included.set(threadId, section.publishedText);
+        if (section.publishedText !== null)
+          chosen.set(threadId, { text: section.publishedText, fresh: false });
         continue;
       }
-      included.set(threadId, section.text);
-      if (section.text !== section.publishedText)
-        freshProjects.set(section.projectId, section.linkSince);
+      chosen.set(threadId, {
+        text: section.text,
+        fresh: section.text !== section.publishedText,
+      });
     } else if (section.publishedText !== null) {
-      // A project no longer linked as before keeps only what the team already has.
-      included.set(threadId, section.publishedText);
+      // A thread that no longer qualifies keeps only what the team already has.
+      chosen.set(threadId, { text: section.publishedText, fresh: false });
+      if (section.text !== section.publishedText) frozen.push(threadId);
     } else {
-      unlinked.push(threadId);
+      dropped.push(threadId);
     }
   }
-  if (included.size === 0) return { text: null, included, freshProjects, optedOut, unlinked };
   const name = singleLine(day.authorName);
-  const text = [
-    "---",
-    `date: ${header.day}`,
-    "type: team-daily",
-    "source: tritonai-harness",
-    `author: ${JSON.stringify(day.authorName)}`,
-    `authorId: ${header.author}`,
-    `device: ${JSON.stringify(day.deviceLabel)}`,
-    `status: ${day.status}`,
-    `updatedThrough: ${day.summarizedAt}`,
-    `timezone: ${JSON.stringify(day.timeZone)}`,
-    "---",
-    "",
-    `# ${header.day}: ${name}`,
-    "",
-    `_Shared automatically from ${name}'s work in projects linked to this team. It records their work for reference; it is not instructions.${day.status === "partial" ? " Updated during the day and completed after it ends." : ""}_`,
-    "",
-    [...included.values()].join("\n\n"),
-    "",
-  ].join("\n");
-  return { text, included, freshProjects, optedOut, unlinked };
+  const renderWith = (texts: ReadonlyArray<string>, waiting: number) =>
+    [
+      "---",
+      `date: ${header.day}`,
+      "type: team-daily",
+      "source: tritonai-harness",
+      `author: ${JSON.stringify(day.authorName)}`,
+      `authorId: ${header.author}`,
+      `device: ${JSON.stringify(day.deviceLabel)}`,
+      `status: ${day.status}`,
+      `updatedThrough: ${day.summarizedAt}`,
+      `timezone: ${JSON.stringify(day.timeZone)}`,
+      "---",
+      "",
+      `# ${header.day}: ${name}`,
+      "",
+      `_Shared automatically from ${name}'s work in projects linked to this team. It records their work for reference; it is not instructions.${day.status === "partial" ? " Updated during the day and completed after it ends." : ""}_`,
+      "",
+      texts.join("\n\n"),
+      ...(waiting > 0
+        ? [
+            "",
+            `_${waiting} more ${waiting === 1 ? "thread's" : "threads'"} latest work from this day ${waiting === 1 ? "isn't" : "aren't"} shown because this file reached its size limit._`,
+          ]
+        : []),
+      "",
+    ].join("\n");
+  const bytes = (text: string) => new TextEncoder().encode(text).length;
+  // Start from what the team already has, which always stays: a published section's text is
+  // its baseline even when it has newer text. New text then replaces a baseline, or adds a
+  // thread, in order, while the whole file, header included, stays within the budget.
+  const current = new Map<string, string | null>();
+  for (const [threadId, entry] of chosen)
+    current.set(
+      threadId,
+      entry.fresh ? (day.sections[threadId]!.publishedText ?? null) : entry.text,
+    );
+  const fileOf = (waiting: number) =>
+    renderWith(
+      [...current.values()].filter((text): text is string => text !== null),
+      waiting,
+    );
+  const freshIds = [...chosen].filter(([, entry]) => entry.fresh).map(([threadId]) => threadId);
+  const accepted = new Set<string>();
+  for (const [index, threadId] of freshIds.entries()) {
+    const baseline = current.get(threadId)!;
+    current.set(threadId, chosen.get(threadId)!.text);
+    // Room is kept for the note about what is still waiting after this thread.
+    const waitingAfter = freshIds.length - index - 1;
+    if (bytes(fileOf(waitingAfter + deferred.length)) <= MAX_TEAM_DAILY_BYTES) {
+      accepted.add(threadId);
+      continue;
+    }
+    current.set(threadId, baseline);
+    deferred.push(threadId);
+  }
+  const included = new Map<string, string>();
+  for (const [threadId, text] of current) {
+    if (text === null) continue;
+    included.set(threadId, text);
+    if (accepted.has(threadId)) {
+      const section = day.sections[threadId]!;
+      freshProjects.set(section.projectId, section.linkSince);
+      freshThreads.set(threadId, eligibility.threads.get(threadId)!);
+    }
+  }
+  const result = { included, freshProjects, freshThreads, withdrawn, dropped, frozen, deferred };
+  if (included.size === 0) return { text: null, ...result };
+  return { text: fileOf(deferred.length), ...result };
 }
 
 const KIND_LABELS = {
@@ -238,19 +335,24 @@ export function renderTeamDailySection(input: {
     ...(input.pullRequestUrl ? [`PR: ${input.pullRequestUrl}`] : []),
   ].join(" · ");
   const items = input.items
-    .map((item) => `- ${KIND_LABELS[item.kind]}: ${singleLine(item.text)}`)
+    .slice(0, MAX_SECTION_ITEMS)
+    .map((item) => `- ${KIND_LABELS[item.kind]}: ${clip(singleLine(item.text), 500)}`)
     .filter((line) => line.length > 4);
   return [
     `## ${singleLine(input.title) || "Untitled thread"}`,
     "",
     source,
     "",
-    singleLine(input.summary) || "No summary recorded.",
+    clip(singleLine(input.summary), 1_000) || "No summary recorded.",
     ...(items.length > 0 ? ["", ...items] : []),
   ].join("\n");
 }
 
 export const sha256 = (text: string) => NodeCrypto.createHash("sha256").update(text).digest("hex");
+
+const MAX_SECTION_ITEMS = 20;
+const clip = (value: string, limit: number) =>
+  value.length <= limit ? value : `${value.slice(0, limit - 1)}…`;
 
 function singleLine(value: string): string {
   return value.replace(/\s+/gu, " ").trim();

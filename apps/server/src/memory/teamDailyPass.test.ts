@@ -33,8 +33,9 @@ const BOB = "b".repeat(43);
 const TEAM_A = "11111111-1111-4111-8111-111111111111";
 const TEAM_B = "22222222-2222-4222-8222-222222222222";
 
-/** A Teams side whose access, links, and storage the test controls. */
+/** A Teams side whose access, links, folders, and storage the test controls. */
 function fakeTeams() {
+  /** Files by `<folder>/<team>/<path>`. */
   const files = new Map<string, { text: string; etag: string }>();
   const allWrites: Array<{ teamId: string; path: string; text: string | null }> = [];
   /** Writes of daily notes, without change markers. */
@@ -54,16 +55,35 @@ function fakeTeams() {
       authorName: "Alice",
       workspaces: [] as TeamDailyWorkspace[],
     } as TeamDailyAccount,
+    /** Each team's current folder. */
+    roots: new Map<string, string>(),
     /** Answers the next writes with this instead of writing. */
     hold: null as TeamDailyWrite | null,
     /** Holds writes to paths that match, as an outage between two requests would. */
     holdPaths: null as RegExp | null,
+    /** Writes to paths that match land, but their answer is lost, as after a crash. */
+    landThenLose: null as RegExp | null,
+    /** Refuses writes to paths that match, as a write that can never succeed. */
+    rejectPaths: null as RegExp | null,
     /** Stands in for the account, token, and membership checks the real write awaits. */
     beforeRequest: Effect.void as Effect.Effect<void>,
   };
+  const rootOf = (teamId: string) => state.roots.get(teamId) ?? "root-1";
   const workspaces = () => (state.account.kind === "signed-in" ? state.account.workspaces : []);
   const source: TeamDailySource = {
-    account: () => Effect.sync(() => structuredClone(state.account)),
+    account: () =>
+      Effect.sync(() => {
+        const account = structuredClone(state.account);
+        return account.kind === "signed-in"
+          ? {
+              ...account,
+              workspaces: account.workspaces.map((entry) => ({
+                ...entry,
+                storageKey: entry.access === "ready" ? rootOf(entry.teamId) : null,
+              })),
+            }
+          : account;
+      }),
     write: (input) =>
       Effect.gen(function* () {
         yield* state.beforeRequest;
@@ -73,9 +93,14 @@ function fakeTeams() {
         return yield* Effect.sync((): TeamDailyWrite => {
           if (state.hold) return state.hold;
           if (state.holdPaths?.test(input.path)) return { kind: "held", message: "offline" };
+          if (state.rejectPaths?.test(input.path))
+            return { kind: "rejected", message: "Too large." };
           const workspace = workspaces().find((entry) => entry.teamId === input.teamId);
           if (!workspace || workspace.access === "lost") return { kind: "lost" };
           if (workspace.access === "held") return { kind: "held", message: "offline" };
+          const root = rootOf(input.teamId);
+          if (input.storageKey !== null && input.storageKey !== root)
+            return { kind: "rejected", message: "The team's folder changed." };
           // The send-time link check: new text needs the same link it was summarized under.
           for (const fresh of input.freshProjects)
             if (
@@ -84,16 +109,29 @@ function fakeTeams() {
               )
             )
               return { kind: "held", message: "A project link changed." };
-          const key = `${input.teamId}/${input.path}`;
+          const key = `${root}/${input.teamId}/${input.path}`;
           allWrites.push({ teamId: input.teamId, path: input.path, text: input.text });
+          const lost = state.landThenLose?.test(input.path) ?? false;
           if (input.text === null) {
             files.delete(key);
-            return { kind: "written", etag: null };
+            return lost
+              ? { kind: "held", message: "No answer." }
+              : { kind: "written", etag: null, storageKey: root };
           }
           const etag = `v${++version}`;
           files.set(key, { text: input.text, etag });
-          return { kind: "written", etag };
+          return lost
+            ? { kind: "held", message: "No answer." }
+            : { kind: "written", etag, storageKey: root };
         });
+      }),
+    inspect: (input) =>
+      Effect.sync(() => {
+        const root = rootOf(input.teamId);
+        if (input.storageKey !== null && input.storageKey !== root)
+          return { kind: "held", message: "The team's folder changed." } as const;
+        const file = files.get(`${root}/${input.teamId}/${input.path}`);
+        return file ? ({ kind: "file", ...file } as const) : ({ kind: "missing" } as const);
       }),
   };
   const workspace = (
@@ -105,7 +143,9 @@ function fakeTeams() {
     teamName: teamId === TEAM_A ? "Alpha" : "Beta",
     access,
     projects: projects.map(([projectId, sharingSince]) => ({ projectId, sharingSince })),
+    storageKey: null,
   });
+  const inRoot = (teamId: string, root?: string) => `${root ?? rootOf(teamId)}/${teamId}/`;
   return {
     files,
     writes,
@@ -117,13 +157,16 @@ function fakeTeams() {
       if (state.account.kind === "signed-in")
         state.account = { ...state.account, workspaces: next };
     },
-    file: (teamId: string, day: string, deviceId: string, author = ALICE) =>
-      files.get(`${teamId}/${teamDailyPath(author, day, deviceId)}`)?.text ?? null,
+    file: (teamId: string, day: string, deviceId: string, author = ALICE, root?: string) =>
+      files.get(`${inRoot(teamId, root)}${teamDailyPath(author, day, deviceId)}`)?.text ?? null,
     /** Daily notes only, without change markers. */
-    teamFiles: (teamId: string) =>
-      [...files.entries()].filter(([key]) => key.startsWith(`${teamId}/`) && key.endsWith(".md")),
-    marker: (teamId: string, deviceId: string, author = ALICE) =>
-      files.get(`${teamId}/Daily/${author}/${deviceId}.changes.json`)?.text ?? null,
+    teamFiles: (teamId: string, root?: string) =>
+      [...files.entries()]
+        .filter(([key]) => key.startsWith(inRoot(teamId, root)) && key.endsWith(".md"))
+        .map(([key, file]) => [key.slice(inRoot(teamId, root).length), file] as const)
+        .map(([key, file]) => [`${teamId}/${key}`, file] as const),
+    marker: (teamId: string, deviceId: string, author = ALICE, root?: string) =>
+      files.get(`${inRoot(teamId, root)}Daily/${author}/${deviceId}.changes.json`)?.text ?? null,
   };
 }
 
@@ -162,6 +205,21 @@ const setSharing = (threadId: string, shared: boolean) =>
       UPDATE projection_threads SET team_sharing_off_at = ${shared ? null : at(1, 9)}
       WHERE thread_id = ${threadId}
     `;
+  });
+
+/** Share this thread again, as the decider records it. */
+const reshare = (threadId: string, resumedAt: string) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`
+      UPDATE projection_threads SET team_sharing_off_at = NULL, team_sharing_resumed_at = ${resumedAt}
+      WHERE thread_id = ${threadId}
+    `;
+  });
+const deleteThread = (threadId: string) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`UPDATE projection_threads SET deleted_at = ${at(1, 9)} WHERE thread_id = ${threadId}`;
   });
 
 /** Lets hooks that run outside the test's layer change the test's database. */
@@ -701,6 +759,211 @@ it.layer(NodeServices.layer)("team daily memory", (it) => {
         yield* pass.run;
         const next = JSON.parse(teams.marker(TEAM_A, device)!) as typeof first;
         assert.isTrue(next.months["2026-10"]! > first.months["2026-10"]!);
+      }).pipe(Effect.provide(harness.layer));
+    }),
+  );
+  for (const passWhileOff of [true, false])
+    it.effect(
+      `shares only work after Share this thread${passWhileOff ? "" : ", even when no pass saw it turned off"}`,
+      () =>
+        Effect.gen(function* () {
+          const harness = yield* makeHarness({});
+          yield* Effect.gen(function* () {
+            yield* TestClock.setTime(new Date(2026, 9, 10, 11).getTime());
+            yield* seedWorld;
+            yield* say("t-a1", "shared at first", at(10, 10));
+            const teams = fakeTeams();
+            teams.setWorkspaces([teams.workspace(TEAM_A, [["p-a1", at(1, 9)]])]);
+            const pass = yield* makePass(harness.baseDir);
+            yield* pass.attach(teams.source);
+            yield* pass.run;
+            const device = yield* deviceIdOf(harness.baseDir);
+            assert.include(teams.file(TEAM_A, dayOf(10), device)!, "shared at first");
+
+            yield* setSharing("t-a1", false);
+            yield* say("t-a1", "written while off", at(10, 12));
+            if (passWhileOff) {
+              yield* TestClock.setTime(new Date(2026, 9, 10, 12, 30).getTime());
+              yield* pass.run;
+            }
+            yield* reshare("t-a1", at(10, 13));
+            yield* say("t-a1", "after sharing again", at(10, 14));
+            yield* TestClock.setTime(new Date(2026, 9, 10, 16).getTime());
+            yield* pass.run;
+            const text = teams.file(TEAM_A, dayOf(10), device)!;
+            assert.include(text, "after sharing again");
+            assert.notInclude(text, "written while off");
+            assert.notInclude(text, "shared at first");
+          }).pipe(Effect.provide(harness.layer));
+        }),
+    );
+
+  it.effect(
+    "removes a day's section when its thread is turned off and on again with no new work",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* makeHarness({});
+        yield* Effect.gen(function* () {
+          yield* TestClock.setTime(new Date(2026, 9, 10, 11).getTime());
+          yield* seedWorld;
+          yield* say("t-a1", "withdrawn then shared again", at(10, 10));
+          yield* say("t-a1-other", "kept", at(10, 10));
+          const teams = fakeTeams();
+          teams.setWorkspaces([teams.workspace(TEAM_A, [["p-a1", at(1, 9)]])]);
+          const pass = yield* makePass(harness.baseDir);
+          yield* pass.attach(teams.source);
+          yield* pass.run;
+          // Off and on again before any pass; nothing new happens in the thread.
+          yield* setSharing("t-a1", false);
+          yield* reshare("t-a1", at(10, 12));
+          yield* pass.run;
+          const text = teams.file(TEAM_A, dayOf(10), yield* deviceIdOf(harness.baseDir))!;
+          assert.include(text, "kept");
+          assert.notInclude(text, "withdrawn then shared again");
+        }).pipe(Effect.provide(harness.layer));
+      }),
+  );
+
+  for (const after of ["Don't share", "unlink"] as const)
+    it.effect(
+      `settles a write whose answer was lost before ${after === "unlink" ? "an unlink" : "Don't share"}`,
+      () =>
+        Effect.gen(function* () {
+          const harness = yield* makeHarness({});
+          yield* Effect.gen(function* () {
+            yield* TestClock.setTime(new Date(2026, 9, 10, 20).getTime());
+            yield* seedWorld;
+            yield* say("t-a1", "landed but unconfirmed", at(10, 12));
+            const teams = fakeTeams();
+            teams.setWorkspaces([teams.workspace(TEAM_A, [["p-a1", at(1, 9)]])]);
+            const pass = yield* makePass(harness.baseDir);
+            yield* pass.attach(teams.source);
+            // The upload lands, but its answer never arrives.
+            teams.state.landThenLose = /\.md$/u;
+            yield* pass.run;
+            const device = yield* deviceIdOf(harness.baseDir);
+            assert.include(teams.file(TEAM_A, dayOf(10), device)!, "landed but unconfirmed");
+            teams.state.landThenLose = null;
+
+            if (after === "unlink") {
+              teams.setWorkspaces([teams.workspace(TEAM_A, [])]);
+              yield* pass.run;
+              // It was published, so it stays with the team.
+              assert.include(teams.file(TEAM_A, dayOf(10), device)!, "landed but unconfirmed");
+            } else {
+              yield* setSharing("t-a1", false);
+              yield* pass.run;
+              // The file it may have created is found and removed.
+              assert.isNull(teams.file(TEAM_A, dayOf(10), device));
+            }
+          }).pipe(Effect.provide(harness.layer));
+        }),
+    );
+
+  it.effect(
+    "never publishes a deleted thread's waiting text, and keeps what it already published",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* makeHarness({
+          during: (input) =>
+            input.threads.some((thread) => thread.activity.includes("deleted mid-model"))
+              ? withSql(deleteThread("t-a2"))
+              : Effect.void,
+        });
+        yield* Effect.gen(function* () {
+          yield* TestClock.setTime(new Date(2026, 9, 10, 11).getTime());
+          yield* seedWorld;
+          yield* say("t-a1", "published first", at(10, 10));
+          sqlHolder.current = yield* SqlClient.SqlClient;
+          const teams = fakeTeams();
+          teams.setWorkspaces([
+            teams.workspace(TEAM_A, [
+              ["p-a1", at(1, 9)],
+              ["p-a2", at(1, 9)],
+            ]),
+          ]);
+          const pass = yield* makePass(harness.baseDir);
+          yield* pass.attach(teams.source);
+          yield* pass.run;
+          const device = yield* deviceIdOf(harness.baseDir);
+
+          // Waiting text from a thread deleted before its upload never goes out.
+          yield* say("t-a1-other", "waiting then deleted", at(10, 12));
+          yield* say("t-a2", "deleted mid-model", at(10, 12));
+          yield* TestClock.setTime(new Date(2026, 9, 10, 16).getTime());
+          teams.state.hold = { kind: "held", message: "offline" };
+          yield* pass.run;
+          teams.state.hold = null;
+          yield* deleteThread("t-a1-other");
+          // The published thread is deleted too; what the team has stays.
+          yield* deleteThread("t-a1");
+          yield* pass.run;
+          const text = teams.file(TEAM_A, dayOf(10), device)!;
+          assert.include(text, "published first");
+          assert.notInclude(text, "waiting then deleted");
+          assert.notInclude(text, "deleted mid-model");
+        }).pipe(Effect.provide(harness.layer));
+      }),
+  );
+
+  it.effect(
+    "leaves a day in the team's previous folder alone, and writes new days to the new one",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* makeHarness({});
+        yield* Effect.gen(function* () {
+          yield* TestClock.setTime(new Date(2026, 9, 10, 20).getTime());
+          yield* seedWorld;
+          yield* say("t-a1", "in the first folder", at(10, 12));
+          const teams = fakeTeams();
+          teams.setWorkspaces([teams.workspace(TEAM_A, [["p-a1", at(1, 9)]])]);
+          const pass = yield* makePass(harness.baseDir);
+          yield* pass.attach(teams.source);
+          yield* pass.run;
+          const device = yield* deviceIdOf(harness.baseDir);
+
+          teams.state.roots.set(TEAM_A, "root-2");
+          yield* setSharing("t-a1", false);
+          yield* setSharing("t-a1-other", true);
+          yield* say("t-a1-other", "in the new folder", at(11, 12));
+          yield* TestClock.setTime(new Date(2026, 9, 11, 20).getTime());
+          yield* pass.run;
+          // Nothing is removed from, or copied into, the wrong folder.
+          assert.include(
+            teams.file(TEAM_A, dayOf(10), device, ALICE, "root-1")!,
+            "in the first folder",
+          );
+          assert.isNull(teams.file(TEAM_A, dayOf(10), device, ALICE, "root-2"));
+          assert.include(
+            teams.file(TEAM_A, dayOf(11), device, ALICE, "root-2")!,
+            "in the new folder",
+          );
+          assert.isNotNull(teams.marker(TEAM_A, device, ALICE, "root-2"));
+          assert.deepInclude(yield* pass.status(TEAM_A), { state: "held" });
+          assert.include((yield* pass.status(TEAM_A))!.message!, "previous folder");
+        }).pipe(Effect.provide(harness.layer));
+      }),
+  );
+
+  it.effect("keeps writing other days, withdrawals, and the marker when one day is refused", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({});
+      yield* Effect.gen(function* () {
+        yield* TestClock.setTime(new Date(2026, 9, 10, 20).getTime());
+        yield* seedWorld;
+        yield* say("t-a1", "refused day", at(9, 12));
+        yield* say("t-a1", "fine day", at(10, 12));
+        const teams = fakeTeams();
+        teams.setWorkspaces([teams.workspace(TEAM_A, [["p-a1", at(1, 9)]])]);
+        const pass = yield* makePass(harness.baseDir);
+        yield* pass.attach(teams.source);
+        teams.state.rejectPaths = /2026-10-09 /u;
+        yield* pass.run;
+        const device = yield* deviceIdOf(harness.baseDir);
+        assert.isNull(teams.file(TEAM_A, dayOf(9), device));
+        assert.include(teams.file(TEAM_A, dayOf(10), device)!, "fine day");
+        assert.isNotNull(teams.marker(TEAM_A, device));
+        assert.deepInclude(yield* pass.status(TEAM_A), { state: "held" });
       }).pipe(Effect.provide(harness.layer));
     }),
   );

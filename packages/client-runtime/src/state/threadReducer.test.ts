@@ -490,7 +490,11 @@ describe("applyThreadDetailEvent", () => {
           aggregateKind: "thread",
           aggregateId: ThreadId.make("thread-1"),
           type: "thread.team-sharing-set",
-          payload: { threadId: ThreadId.make("thread-1"), teamSharingOffAt },
+          payload: {
+            threadId: ThreadId.make("thread-1"),
+            teamSharingOffAt,
+            teamSharingResumedAt: null,
+          },
         }) as const;
       const off = applyThreadDetailEvent(baseThread, event(offAt, 7));
       expect(off.kind).toBe("updated");

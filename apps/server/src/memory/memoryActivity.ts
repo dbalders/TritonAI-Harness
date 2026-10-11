@@ -28,6 +28,7 @@ interface ActivityRow {
   readonly projectTitle: string;
   readonly workspaceRoot: string;
   readonly codexThreadId: string | null;
+  readonly sharingResumedAt: string | null;
 }
 
 function pullRequestUrl(json: string | null): string | null {
@@ -59,6 +60,8 @@ export interface ActivityExtent {
   readonly firstAt: string;
   readonly lastAt: string;
   readonly fingerprint: string;
+  /** When the thread was last shared again after Don't share, or null if it never was. */
+  readonly sharingResumedAt: string | null;
 }
 
 /**
@@ -82,6 +85,7 @@ export const loadDayActivity = Effect.fn("memory.loadDayActivity")(function* (
       m.text,
       m.created_at AS "createdAt",
       m.updated_at AS "updatedAt",
+      t.team_sharing_resumed_at AS "sharingResumedAt",
       t.title AS "threadTitle",
       t.branch,
       t.linked_pull_request_json AS "linkedPullRequest",
@@ -104,7 +108,9 @@ export const loadDayActivity = Effect.fn("memory.loadDayActivity")(function* (
       AND p.deleted_at IS NULL
       ${
         scope
-          ? sql`AND t.team_sharing_off_at IS NULL AND ${sql.in("p.project_id", [...scope.projects.keys()])}`
+          ? sql`AND t.team_sharing_off_at IS NULL
+              AND (t.team_sharing_resumed_at IS NULL OR m.created_at >= t.team_sharing_resumed_at)
+              AND ${sql.in("p.project_id", [...scope.projects.keys()])}`
           : sql``
       }
     ORDER BY m.created_at ASC, m.message_id ASC
@@ -119,6 +125,7 @@ export const loadDayActivity = Effect.fn("memory.loadDayActivity")(function* (
       lastAt: string;
       count: number;
       latest: string;
+      sharingResumedAt: string | null;
     }
   >();
   for (const row of rows) {
@@ -143,6 +150,7 @@ export const loadDayActivity = Effect.fn("memory.loadDayActivity")(function* (
         lastAt: row.createdAt,
         count: 0,
         latest: "",
+        sharingResumedAt: row.sharingResumedAt,
       };
       threads.set(row.threadId, entry);
     }
@@ -164,6 +172,7 @@ export const loadDayActivity = Effect.fn("memory.loadDayActivity")(function* (
       firstAt: entry.firstAt,
       lastAt: entry.lastAt,
       fingerprint: `${entry.count}:${entry.latest}:${entry.activity.title}`,
+      sharingResumedAt: entry.sharingResumedAt,
     }))
     .filter((thread) => thread.messages.length > 0);
 });

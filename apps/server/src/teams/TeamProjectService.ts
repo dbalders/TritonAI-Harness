@@ -67,7 +67,12 @@ const decodeLinks = Schema.decodeUnknownEffect(Links);
 const ACCOUNT_SECRET_NAME = "team-memory-account";
 /** The campus session whose account shares and copies team memory in this environment. */
 const MemoryAccount = Schema.fromJsonString(
-  Schema.Struct({ sessionId: Schema.String, identity: Schema.String }),
+  Schema.Struct({
+    sessionId: Schema.String,
+    identity: Schema.String,
+    /** When the identity became the Teams account here; its work is shared from then on. */
+    since: Schema.optionalKey(Schema.String),
+  }),
 );
 const decodeMemoryAccount = Schema.decodeUnknownEffect(MemoryAccount);
 const encodeMemoryAccount = Schema.encodeEffect(MemoryAccount);
@@ -269,7 +274,13 @@ export const make = Effect.gen(function* () {
         )
           return;
       }
-      const encoded = yield* encodeMemoryAccount({ sessionId, identity });
+      // The same person on a newer session keeps their start; anyone else starts now, so work
+      // done here before they became the Teams account is never shared as theirs.
+      const since =
+        current?.identity === identity && current.since !== undefined
+          ? current.since
+          : DateTime.formatIso(yield* DateTime.now);
+      const encoded = yield* encodeMemoryAccount({ sessionId, identity, since });
       yield* secrets.set(ACCOUNT_SECRET_NAME, new TextEncoder().encode(encoded));
     }).pipe(Effect.ignore);
   const mirrors = yield* makeTeamMemoryMirror({

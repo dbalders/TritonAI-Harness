@@ -98,6 +98,8 @@ const RESTARTABLE = new Set<string>([reasons.signedOut, reasons.otherAccount, re
 export interface TeamMemoryAccount {
   readonly sessionId: string;
   readonly identity: string;
+  /** When this identity became the Teams account here; its work is shared from then on. */
+  readonly since?: string;
 }
 
 /** What a copy has seen of each member's daily memory, for this server's life. */
@@ -413,7 +415,12 @@ export const makeTeamMemoryMirror = (input: {
         yield* detachWhere(() => true, reasons.signedOut);
         return [];
       }
-      if (identityOf(status.success.profile) !== identity) return keep;
+      // The session now belongs to someone else: the recorded account's copies go, and nothing is
+      // copied for the newcomer until they are made the Teams account here.
+      if (identityOf(status.success.profile) !== identity) {
+        yield* detachWhere(() => true, reasons.otherAccount);
+        return [];
+      }
       yield* detachWhere((mirror) => mirror.identity !== identity, reasons.otherAccount);
       const listed = yield* account.teams(sessionId, { action: "list" }).pipe(Effect.result);
       if (listed._tag === "Failure") return keep.filter((mirror) => mirror.identity === identity);

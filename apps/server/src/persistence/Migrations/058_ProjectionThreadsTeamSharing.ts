@@ -12,4 +12,10 @@ export default Effect.gen(function* () {
       ADD COLUMN team_sharing_off_at TEXT
     `;
   }
+  if (!columns.some((column) => column.name === "team_sharing_resumed_at")) {
+    yield* sql`
+      ALTER TABLE projection_threads
+      ADD COLUMN team_sharing_resumed_at TEXT
+    `;
+  }
 });

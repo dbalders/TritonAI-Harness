@@ -135,6 +135,7 @@ export function applyThreadDetailEvent(
           activeOrderKey: null,
           autoSettleDisabledAt: null,
           teamSharingOffAt: null,
+          teamSharingResumedAt: null,
           snoozedUntil: null,
           snoozedAt: null,
           deletedAt: null,
@@ -269,7 +270,11 @@ export function applyThreadDetailEvent(
     case "thread.team-sharing-set":
       return {
         kind: "updated",
-        thread: { ...thread, teamSharingOffAt: event.payload.teamSharingOffAt },
+        thread: {
+          ...thread,
+          teamSharingOffAt: event.payload.teamSharingOffAt,
+          teamSharingResumedAt: event.payload.teamSharingResumedAt,
+        },
       };
 
     // ── Thread metadata ─────────────────────────────────────────────
