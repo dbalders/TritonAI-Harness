@@ -27,11 +27,13 @@ or is removed, it is cancelled. To replace a lost invitation code, cancel the
 invitation and invite the person again. While you're signed in, the **Teams** button in the sidebar shows how
 many invitations are waiting for you.
 
-Owners manage names and membership, editors can publish and edit documents,
-and readers can view them. A team always keeps at least one owner. To hand a
-team to someone else, choose **Transfer ownership** on their row and confirm:
-they become an owner and you become an editor in one step, and other owners
-keep their role. The only owner can't leave until they transfer ownership or
+Teams have two roles. Owners manage the name and membership, and owners and
+members can both add and edit the team's files. Someone recorded as a reader
+before teams had only these two roles is shown as **Reader (read-only)** and
+can still only read; an owner can make them a member or remove them. A team
+always keeps at least one owner. To hand a team to someone else, choose
+**Transfer ownership** on their row and confirm: they become an owner and you
+become a member in one step, and other owners keep their role. The only owner can't leave until they transfer ownership or
 archive the team. If
 an owner leaves UC San Diego, another owner can remove them; if they were the
 only owner, give a system administrator the team reference so they can assign
@@ -63,8 +65,9 @@ with the team reference, to restore or delete an archived team's files.
 Members still see the team marked **Archived** until they choose **Remove from
 your list**.
 
-Connect the matching UCSD Microsoft account to open shared storage. Publish a
-work summary, SOP, or skill document explicitly; all team members can read it.
+Connect the matching UCSD Microsoft account to open shared storage. Besides the
+daily team memory described below, you can publish a work summary, SOP, or
+skill document yourself; all team members can read it.
 A skill document needs a short description of what it's for, and can't contain
 hidden or control characters.
 Project labels organize documents within a team. They do not restrict access
@@ -81,26 +84,28 @@ earlier text, copy it into the document and save it. Names come from the
 Microsoft account that saved the version, so they can differ from the member
 name on the document's folder.
 
-To work with a team's memory and skills from a Harness project, open the team,
-choose a project in this Harness environment under **Team projects**, and
-select **Link to team**. Then choose **Open team memory** or **Open team
+To make a Harness project a team workspace, open the team, choose the project
+in this Harness environment under **Team projects**, and select **Link to
+team**. Your work in it is then shared with the team's daily memory, as
+described below. Then choose **Open team memory** or **Open team
 skills** to read the team's work summaries or skill documents and publish new
 ones labeled with that project. Each project links to one team; unlink it before
 linking it to a different team. If you leave or lose access to a team, or its
 team needs an administrator check, its projects appear under **Stuck project
 links** on the Teams page. Choose **Remove link** to free a project so you can
 link it again. Removing a link turns that project's team skills off for
-everyone. Linking does not share the project's files or
-chats, and other members link their own projects. Every read and save checks
-your current UCSD account and team role, so removed members and accounts outside
-the team cannot use the link. Team memory reaches an agent only through a local
-copy for agents to search, and a team skill only after you choose it for a
+everyone. Linking shares summaries of your work, never the project's files or
+full chats, and other members link their own projects. Every read and save
+checks your current UCSD account and team role, so removed members and accounts
+outside the team cannot use the link. Team memory reaches an agent through the
+local copy agents search, and a team skill only after you choose it for a
 message or turn it on for a project, all described below.
 
 From a project thread, choose **Team** in the thread header, or select text in
 a reply and choose **Share**. **Share text to a team** publishes only the text
 you review, as a memory note labeled with the thread's project, to a team where
-you are an editor or owner. Any such team can receive it, whether or not the
+you are a member or owner. Use it to share something from a project that isn't
+linked to the team. Any such team can receive it, whether or not the
 project is linked to it; the project's linked team is chosen first when you can
 write to it. Nothing else from the thread is shared, and removing a shared note
 does not remove copies people already made.
@@ -109,7 +114,7 @@ does not remove copies people already made.
 linked team. The list names each skill by its title and author; when a team has
 many documents, some show their title only after you preview them. The preview shows the skill's title, description,
 project label, whose folder it is in, and exactly what will be added to your
-message. Editors can change a skill, so read it each time; if it changed since
+message. Members can change a skill, so read it each time; if it changed since
 your preview, you're asked to review it again. The skill applies only to the
 message you add it to. Harness doesn't install it, add it to your providers or
 other projects, or run anything it mentions, but the agent may act on its
@@ -149,35 +154,75 @@ skill that's on, the message isn't sent until you try again or turn the skill
 off. Settings → Skills still lists the skills you turned on for that project
 then, with **Turn all off**.
 
-Publishing never captures a conversation automatically, copies personal memory,
-or installs an executable skill. Signing out clears the Teams view and this
-connection's saved Teams Microsoft sign-in. Shared files remain with the team
-when a member leaves.
+Harness never copies your personal memory to a team or installs an executable
+skill. Signing out clears the Teams view and this connection's saved Teams
+Microsoft sign-in. Shared files remain with the team when a member leaves.
+
+## Daily team memory
+
+Work in a project linked to a team is shared automatically. Harness summarizes
+each thread you work on there into your daily file in the team's folder, one
+file for each person, computer, and day, the same way your own daily memory
+works. Each thread's section names its project, the thread, and the times you
+worked on it, and marks each point as proposed, tried, done, decided, or open,
+so readers can tell an idea or a failed attempt from a result. Full chats,
+files, and work in projects that aren't linked are never shared, and nothing
+from before a project was linked is shared. A project linked before automatic
+sharing started shares only work from then on. A reader's work isn't shared.
+
+The composer in a linked project says the thread is shared with the team.
+Choose **Don't share this thread** there, or in the thread header's **Team**
+menu, to keep a thread out. Its section is removed from every day it appears
+in, including older days, and nothing more from it is shared; other members'
+copies drop it the next time they sync. Choose **Share this thread** to share it
+again; work from then on is included. Text an agent already read can't be
+recalled.
+
+Summaries are written by your own Harness with your text generation model, at
+most every four hours during the day and once more after the day ends. They
+need Memory on under **Settings → General → Memory**, a Codex text generation
+model, Microsoft connected for the team, and your UC San Diego sign-in. When
+something is missing, the composer says sharing is waiting and why, and
+nothing is lost: summaries are written once it's fixed. While Memory is off,
+Harness still removes threads you choose not to share, but adds nothing new.
+
+Unlinking a project stops sharing its work. What was already shared stays with
+the team, and anything not yet shared is dropped. Leaving or being removed from
+a team stops sharing too; your earlier daily files stay with the team, as all
+team files do. Owners and members can change or delete any file in the team,
+including daily files: Harness only writes its own, but the shared folder trusts
+every member.
+
+Team storage is a SharePoint site owned by your administrator, who can read
+every team's documents, including teams they don't belong to.
 
 ## Local copy in memory
 
-To let agents look through a team's memory the way they look through your own,
-open the team and choose **Keep a local copy** under **Team projects**. A
-project in this environment must be linked to the team first, and Microsoft
-must be connected under **Shared storage**. Harness then keeps a read-only copy
-of the team's memory notes and SOPs in your memory folder, under
-`teams/<team name>-<code>/`, and updates it about every five minutes. Codex
-agents with Memory on find it through the memory skill. Team skills are never
-copied; they reach an agent only after you turn one on for a project in
-**Settings → Skills**. Harness replaces any change made inside the copy, so
-publish from Teams to share something with the team.
+Harness keeps a read-only copy of every team you belong to in your memory
+folder, under `teams/<team name>-<code>/`: everyone's daily team memory, shared
+notes, and SOPs. Microsoft must be connected under **Shared storage**. Codex
+agents with Memory on search it through the memory skill, from any project,
+including projects that aren't linked to a team, and cite who did the work and
+when. Team skills are never copied; they reach an agent only after you turn one
+on for a project in **Settings → Skills**. Harness replaces any change made
+inside the copy.
+
+The copy is updated about every five minutes. Recent months of daily memory
+are checked each time, and an older day that a member's Harness rewrote, for
+example after they chose **Don't share this thread**, is updated on the next
+sync. Changes someone makes directly in SharePoint to older daily files can
+take up to a day to reach your copy.
 
 **Local copies in memory** on the Teams page lists each copy with when it was
-last updated. Choose **Stop local copy** to remove it. The copy is also removed,
-and marked **Detached** with the reason, the next time Harness checks after you
-leave or are removed from the team, the team is archived, Microsoft refuses the team's folder, the
-team's folder changes, the last linked project in this environment is
-unlinked, or you sign out of UC San Diego or sign in with another account.
-Choose **Dismiss** to clear the notice. If Harness can't reach the team, the
-copy is kept as it was and updated once it can.
+last updated. Choose **Stop local copy** to remove one, and **Keep a local
+copy** to bring it back. The copy is also removed, and marked **Detached** with
+the reason, the next time Harness checks after you leave or are removed from
+the team, the team is archived, Microsoft refuses the team's folder, or you
+sign out of UC San Diego or sign in with another account. Choose **Dismiss** to
+clear the notice. If Harness can't reach the team, the copy is kept as it was
+and updated once it can.
 
 Removing a local copy is best effort. It can't recall text an agent already
 read into a thread, copies someone made from the folder, or a copy on a
 computer that was off or offline when access ended; that copy is removed the
-next time Harness on that computer checks. Copies are read-only: publishing to
-the team is always something you do explicitly.
+next time Harness on that computer checks.
