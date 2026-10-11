@@ -271,6 +271,11 @@ import {
 } from "./teams/teamMemoryDrafts";
 import { teamProjectSkillsNotice } from "./teams/teamProjectSkills";
 import { ManageTeamSkillsButton, useProjectTeamSkills } from "./teams/useProjectTeamSkills";
+import {
+  threadTeamSharingNotice,
+  useProjectTeamSharing,
+  useSetThreadTeamSharing,
+} from "./teams/useProjectTeamSharing";
 import { decodeProjectScriptKeybindingRule } from "~/lib/projectScriptKeybindings";
 import { type NewProjectScriptInput } from "./ProjectScriptsControl";
 import {
@@ -6657,6 +6662,38 @@ export default function ChatView(props: ChatViewProps) {
     activeThread?.projectId ?? null,
     sentUserMessages,
   );
+  const projectTeamSharing = useProjectTeamSharing(
+    activeThread?.environmentId ?? null,
+    activeThread?.projectId ?? null,
+    sentUserMessages,
+  );
+  const setThreadTeamSharing = useSetThreadTeamSharing();
+  const threadTeamShared = activeThread?.teamSharingOffAt == null;
+  // In a project linked to a team, say that this thread's work is shared, and offer the way out
+  // (or back in).
+  const teamSharingBannerItem = useMemo<ComposerBannerStackItem | null>(() => {
+    if (!projectTeamSharing || !activeThread) return null;
+    const notice = threadTeamSharingNotice(projectTeamSharing, threadTeamShared);
+    return {
+      id: `team-sharing:${activeThread.environmentId}:${activeThread.id}`,
+      variant: notice.variant,
+      compact: notice.variant === "info",
+      icon: <UsersIcon />,
+      title: notice.title,
+      description: notice.description,
+      actions: (
+        <Button
+          size="xs"
+          variant="outline"
+          onClick={() =>
+            setThreadTeamSharing(activeThread.environmentId, activeThread.id, !threadTeamShared)
+          }
+        >
+          {notice.action}
+        </Button>
+      ),
+    };
+  }, [activeThread, projectTeamSharing, setThreadTeamSharing, threadTeamShared]);
   // Team skills turned on for this project are added by the server at send; say which, and
   // which are held back.
   const projectTeamSkillsBannerItem = useMemo<ComposerBannerStackItem | null>(() => {
@@ -6723,6 +6760,7 @@ export default function ChatView(props: ChatViewProps) {
   const composerBannerItems = useMemo<ComposerBannerStackItem[]>(() => {
     const teamMemoryItems = [
       ...(teamMemoryBannerItem === null ? [] : [teamMemoryBannerItem]),
+      ...(teamSharingBannerItem === null ? [] : [teamSharingBannerItem]),
       ...(projectTeamSkillsBannerItem === null ? [] : [projectTeamSkillsBannerItem]),
     ];
     const backgroundLivenessItems =
@@ -6806,6 +6844,7 @@ export default function ChatView(props: ChatViewProps) {
     parkedThreadBannerItem,
     projectCloneBannerItem,
     projectTeamSkillsBannerItem,
+    teamSharingBannerItem,
     resumeCompactionBannerItem,
     showBranchMismatchBanner,
     systemComposerBannerItems,
@@ -10491,6 +10530,19 @@ export default function ChatView(props: ChatViewProps) {
                     onShare: () =>
                       setTeamDialog({ kind: "share", threadId: activeThread.id, text: "" }),
                     onUseSkill: () => setTeamDialog({ kind: "skill", threadId: activeThread.id }),
+                    ...(projectTeamSharing
+                      ? {
+                          sharing: {
+                            shared: threadTeamShared,
+                            onToggle: () =>
+                              setThreadTeamSharing(
+                                activeThread.environmentId,
+                                activeThread.id,
+                                !threadTeamShared,
+                              ),
+                          },
+                        }
+                      : {}),
                   }
                 : undefined
             }

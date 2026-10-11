@@ -327,8 +327,6 @@ export function TeamWorkspace({
   useEffect(() => controller.activate(), [controller]);
   const copies = useTeamMemoryCopies(environmentId);
   const { apply: applyCopies } = copies;
-  // Whether a project here is linked to the open team, which a local copy needs.
-  const [linkedTeam, setLinkedTeam] = useState<{ teamId: string; linked: boolean } | null>(null);
   const [name, setName] = useState("");
   const [role, setRole] = useState<TeamRole>("member");
   const [code, setCode] = useState("");
@@ -687,18 +685,11 @@ export function TeamWorkspace({
               teamId={team.id}
               linkProjectId={linkProjectId}
               canWrite={team.role !== "reader" || team.canManage}
-              onLinksChange={(linked) => {
-                setLinkedTeam({ teamId: team.id, linked });
-                void applyCopies({ action: "mirror-list" });
-              }}
+              onLinksChange={() => void applyCopies({ action: "mirror-list" })}
             />
           ) : null}
           {team.state === "ready" ? (
-            <TeamMemoryCopyControl
-              copies={copies}
-              teamId={team.id}
-              linked={linkedTeam?.teamId === team.id && linkedTeam.linked}
-            />
+            <TeamMemoryCopyControl copies={copies} teamId={team.id} />
           ) : null}
           <div>
             <h4 className="text-sm font-medium">Members</h4>

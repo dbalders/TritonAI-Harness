@@ -76,10 +76,7 @@ export function TeamProjects({
   /** Chosen in the link form when it can still be linked. */
   linkProjectId: ProjectId | null;
   canWrite: boolean;
-  /**
-   * Whether any project here is linked, after each load, link, or unlink. A local copy of the team
-   * needs a link, and losing the last one detaches it.
-   */
+  /** Whether any project here is linked, after each load, link, or unlink. */
   onLinksChange?: (linked: boolean) => void;
 }) {
   const { run, busy, error } = useTeamProjectRequest(environmentId);
@@ -380,7 +377,7 @@ function TeamProjectDocuments({
         <p className="text-xs text-muted-foreground">
           {kind === "skill"
             ? "Everyone on this team can read and change these skills. To use one, open a thread in this project and choose Team → Use a team skill in message, or turn it on for every message in Settings → Skills. Harness never installs them, and adds one to messages only after you review and turn it on."
-            : "Everyone on this team can read these notes. New notes are labeled with this project. Harness copies them into your memory folder only while you keep a local copy of the team, and never into the project folder or agent conversations."}
+            : "Everyone on this team can read these notes. New notes are labeled with this project. Harness keeps a read-only copy of them, and of the team's daily memory, in your memory folder for agents to search; it never adds them to the project folder or straight into conversations."}
         </p>
       </div>
       {error ? (

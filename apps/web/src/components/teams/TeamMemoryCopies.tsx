@@ -31,6 +31,8 @@ export function useTeamMemoryCopies(environmentId: EnvironmentId): TeamMemoryCop
 
 function describeTeamCopy(mirror: TeamMemoryMirror): string {
   if (mirror.state === "detached") return mirror.message ?? "Detached. The local copy was removed.";
+  if (mirror.state === "off")
+    return "Off. You stopped this copy, so agents here don't see this team's memory.";
   const when = mirror.lastSyncedAt
     ? `Updated ${new Date(mirror.lastSyncedAt).toLocaleString()}.`
     : "Waiting for the first copy.";
@@ -50,8 +52,9 @@ export function TeamMemoryCopyList({ copies }: { copies: TeamMemoryCopies }) {
         <div className="space-y-1">
           <h3 className="font-medium">Local copies in memory</h3>
           <p className="text-xs text-muted-foreground">
-            Read-only copies of team memory notes and SOPs in this environment’s memory folder, so
-            agents can look through them. Skills are never copied.
+            Read-only copies of each of your teams’ daily memory, notes, and SOPs in this
+            environment’s memory folder, so agents in any project can look through them. Skills are
+            never copied.
           </p>
         </div>
         <Button
@@ -74,7 +77,11 @@ export function TeamMemoryCopyList({ copies }: { copies: TeamMemoryCopies }) {
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm">
                 {mirror.teamName}
-                {mirror.state === "detached" ? " · Detached" : ""}
+                {mirror.state === "detached"
+                  ? " · Detached"
+                  : mirror.state === "off"
+                    ? " · Off"
+                    : ""}
               </p>
               <p className="text-xs text-muted-foreground">
                 <code>{mirror.folder}</code> · {describeTeamCopy(mirror)}
@@ -84,9 +91,18 @@ export function TeamMemoryCopyList({ copies }: { copies: TeamMemoryCopies }) {
               size="sm"
               variant="ghost"
               disabled={busy}
-              onClick={() => void apply({ action: "mirror-off", teamId: mirror.teamId })}
+              onClick={() =>
+                void apply({
+                  action: mirror.state === "off" ? "mirror-on" : "mirror-off",
+                  teamId: mirror.teamId,
+                })
+              }
             >
-              {mirror.state === "detached" ? "Dismiss" : "Stop local copy"}
+              {mirror.state === "detached"
+                ? "Dismiss"
+                : mirror.state === "off"
+                  ? "Keep a local copy"
+                  : "Stop local copy"}
             </Button>
           </li>
         ))}
@@ -95,16 +111,13 @@ export function TeamMemoryCopyList({ copies }: { copies: TeamMemoryCopies }) {
   );
 }
 
-/** The way in and out of a local copy for one team, beside its project links. */
+/** The way out of a team's automatic local copy, and back in, beside its project links. */
 export function TeamMemoryCopyControl({
   copies,
   teamId,
-  linked,
 }: {
   copies: TeamMemoryCopies;
   teamId: string;
-  /** Whether a project in this environment is linked to the team; its link names the folder. */
-  linked: boolean;
 }) {
   const { mirrors, busy, apply } = copies;
   const mirror = mirrors?.find((entry) => entry.teamId === teamId);
@@ -116,9 +129,7 @@ export function TeamMemoryCopyControl({
         <p className="text-xs text-muted-foreground">
           {mirror
             ? describeTeamCopy(mirror)
-            : linked
-              ? "Off. Keep a read-only copy of this team’s memory notes and SOPs in your memory folder so agents can look through them. Skills are never copied."
-              : "Link a project to this team to keep a local copy of its memory."}
+            : "Harness keeps a read-only copy of this team’s daily memory, notes, and SOPs in your memory folder, starting with the next sync."}
         </p>
       </div>
       {on ? (
@@ -134,7 +145,7 @@ export function TeamMemoryCopyControl({
         <Button
           size="sm"
           variant="outline"
-          disabled={busy || !linked || mirrors === null}
+          disabled={busy || mirrors === null || mirror?.state === "detached"}
           onClick={() => void apply({ action: "mirror-on", teamId })}
         >
           Keep a local copy

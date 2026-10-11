@@ -214,8 +214,8 @@ export function TeamDocuments({
             Publish to team
           </Button>
           <p className="text-xs text-muted-foreground">
-            Each new note gets its own file. Automatic capture from agent conversations is not
-            enabled yet.
+            Each new note gets its own file. Work in projects linked to the team is also summarized
+            into its daily memory automatically.
           </p>
         </form>
       ) : null}
