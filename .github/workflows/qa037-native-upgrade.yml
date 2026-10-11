@@ -1,0 +1,30 @@
+name: QA 0.3.6 to 0.3.7 native Windows
+on:
+  push:
+    branches: [qa/harness-037-native-upgrade]
+permissions:
+  contents: read
+jobs:
+  upgrade:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download exact stable and draft packages
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download v0.3.6 --repo dbalders/TritonAI-Harness --pattern 'TritonAI-Harness-0.3.6-x64.exe' --dir old
+          if ($LASTEXITCODE -ne 0) { throw 'Stable download failed' }
+          gh release download v0.3.7 --repo dbalders/TritonAI-Harness --pattern 'TritonAI-Harness-0.3.7-x64.exe' --dir candidate
+          if ($LASTEXITCODE -ne 0) { throw 'Draft download failed' }
+      - name: Verify stable upgrade, visible window, and plugins
+        shell: pwsh
+        run: ./.github/scripts/qa037-native-upgrade.ps1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-windows-037-qa
+          path: qa-evidence/*.json
+          if-no-files-found: warn
