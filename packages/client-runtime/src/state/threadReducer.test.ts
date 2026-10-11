@@ -479,6 +479,29 @@ describe("applyThreadDetailEvent", () => {
     });
   });
 
+  describe("thread.team-sharing-set", () => {
+    it("stores and clears teamSharingOffAt without touching updatedAt", () => {
+      const offAt = "2026-04-01T05:00:00.000Z";
+      const event = (teamSharingOffAt: string | null, sequence: number) =>
+        ({
+          ...baseEventFields,
+          sequence,
+          occurredAt: offAt,
+          aggregateKind: "thread",
+          aggregateId: ThreadId.make("thread-1"),
+          type: "thread.team-sharing-set",
+          payload: { threadId: ThreadId.make("thread-1"), teamSharingOffAt },
+        }) as const;
+      const off = applyThreadDetailEvent(baseThread, event(offAt, 7));
+      expect(off.kind).toBe("updated");
+      if (off.kind !== "updated") return;
+      expect(off.thread.teamSharingOffAt).toBe(offAt);
+      expect(off.thread.updatedAt).toBe(baseThread.updatedAt);
+      const on = applyThreadDetailEvent(off.thread, event(null, 8));
+      if (on.kind === "updated") expect(on.thread.teamSharingOffAt).toBeNull();
+    });
+  });
+
   describe("thread.meta-updated", () => {
     it.each(["f", null] as const)(
       "updates the active key to %s without activity",

@@ -886,6 +886,31 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "thread.team-sharing.set": {
+      // Archived threads can still be in a team's daily memory, so they can be left out too.
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      // Setting the current state again keeps the time it was first turned off.
+      const currentlyOffAt = thread.teamSharingOffAt ?? null;
+      const occurredAt = yield* nowIso;
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.team-sharing-set",
+        payload: {
+          threadId: command.threadId,
+          teamSharingOffAt: command.shared ? null : (currentlyOffAt ?? occurredAt),
+        },
+      };
+    }
+
     case "thread.active.reorder": {
       const thread = yield* requireThreadNotArchived({
         readModel,
