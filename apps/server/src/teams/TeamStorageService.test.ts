@@ -22,6 +22,8 @@ function fixture() {
   let switchAccountOnGraph = false;
   let subject = "alice";
   let teamOverride: Partial<NonNullable<TeamsResult["team"]>> = {};
+  let directory: { status: number; body: unknown } = { status: 200, body: { value: [] } };
+  const directoryRequests: URL[] = [];
   const graphWrites: string[] = [];
   const values = new Map<string, Uint8Array>();
   const graphRequests: string[] = [];
@@ -96,6 +98,13 @@ function fixture() {
       const path = new URL(request.url).pathname;
       if (microsoftUnavailable && path.endsWith("/me"))
         return HttpClientResponse.fromWeb(request, Response.json({}, { status: 429 }));
+      if (path === "/v1.0/users") {
+        directoryRequests.push(new URL(request.url));
+        return HttpClientResponse.fromWeb(
+          request,
+          Response.json(directory.body, { status: directory.status }),
+        );
+      }
       if (path.includes("/drives/")) {
         graphRequests.push(request.url);
         if (request.method !== "GET") graphWrites.push(`${request.method} ${request.url}`);
@@ -184,11 +193,13 @@ function fixture() {
       return HttpClientResponse.fromWeb(request, Response.json(body, { status: body ? 200 : 404 }));
     }),
   );
-  const make = TeamStorage.make(config).pipe(
-    Effect.provideService(AccountService, account),
-    Effect.provideService(ServerSecretStore, secrets),
-    Effect.provideService(HttpClient.HttpClient, http),
-  );
+  const makeWithScopes = (scopes?: string) =>
+    TeamStorage.make(config, scopes).pipe(
+      Effect.provideService(AccountService, account),
+      Effect.provideService(ServerSecretStore, secrets),
+      Effect.provideService(HttpClient.HttpClient, http),
+    );
+  const make = makeWithScopes();
   const connect = (service: TeamStorage.TeamStorageService["Service"], sessionId = "a") =>
     Effect.gen(function* () {
       const flow = yield* service.execute(sessionId, { action: "connect", teamId });
@@ -197,7 +208,12 @@ function fixture() {
     });
   return {
     make,
+    makeWithScopes,
     connect,
+    directoryRequests,
+    setDirectory: (status: number, body: unknown) => {
+      directory = { status, body };
+    },
     values,
     graphRequests,
     graphWrites,
@@ -426,6 +442,107 @@ describe("Teams storage role and team binding", () => {
         (yield* Effect.flip(service.execute("a", { action: "list-files", teamId }))).code,
       ).toBe("sign_in_required");
       expect(f.graphRequests).toHaveLength(1);
+    }),
+  );
+});
+
+describe("invitee lookup", () => {
+  const lookup = { action: "lookup-invitee", teamId, email: "Bob@UCSD.edu" } as const;
+  const withLookup = `${TeamStorage.TEAM_MICROSOFT_SCOPES} User.ReadBasic.All`;
+  const person = (upn: string, extra: object = {}) => ({
+    id: `${upn}-id`,
+    displayName: "Bob Example",
+    mail: upn,
+    userPrincipalName: upn,
+    ...extra,
+  });
+
+  it.effect("stays off without the directory scope and never queries the directory", () =>
+    Effect.gen(function* () {
+      expect(TeamStorage.TEAM_MICROSOFT_SCOPES.split(" ")).not.toContain("User.ReadBasic.All");
+      const f = fixture();
+      const service = yield* f.make;
+      expect((yield* service.execute("a", lookup)).invitee).toEqual({
+        email: "bob@ucsd.edu",
+        status: "off",
+      });
+      yield* f.connect(service);
+      const connected = yield* service.execute("a", lookup);
+      expect(connected.status).toBe("connected");
+      expect(connected.invitee?.status).toBe("off");
+      expect(f.directoryRequests).toHaveLength(0);
+    }),
+  );
+
+  it.effect("needs a Microsoft connection and an owner before looking anyone up", () =>
+    Effect.gen(function* () {
+      const f = fixture();
+      const service = yield* f.makeWithScopes(withLookup);
+      expect((yield* service.execute("a", lookup)).invitee?.status).toBe("connect");
+      yield* f.connect(service);
+      f.setTeam({ role: "editor", canManage: false });
+      expect((yield* Effect.flip(service.execute("a", lookup))).code).toBe("forbidden");
+      expect(f.directoryRequests).toHaveLength(0);
+    }),
+  );
+
+  it.effect("resolves one member account with one request for basic profile fields only", () =>
+    Effect.gen(function* () {
+      const f = fixture();
+      const service = yield* f.makeWithScopes(withLookup);
+      yield* f.connect(service);
+      f.setDirectory(200, { value: [person("bob@ucsd.edu", { mail: null })] });
+      expect((yield* service.execute("a", lookup)).invitee).toEqual({
+        email: "bob@ucsd.edu",
+        status: "found",
+        displayName: "Bob Example",
+        userPrincipalName: "bob@ucsd.edu",
+        mail: null,
+      });
+      expect(f.directoryRequests).toHaveLength(1);
+      const query = f.directoryRequests[0]!.searchParams;
+      expect(query.get("$select")).toBe("id,displayName,mail,userPrincipalName");
+      expect(query.get("$filter")).toBe(
+        "userPrincipalName eq 'bob@ucsd.edu' or mail eq 'bob@ucsd.edu'",
+      );
+      yield* service.execute("a", { ...lookup, email: "o'neil@ucsd.edu" });
+      expect(f.directoryRequests[1]!.searchParams.get("$filter")).toBe(
+        "userPrincipalName eq 'o''neil@ucsd.edu' or mail eq 'o''neil@ucsd.edu'",
+      );
+    }),
+  );
+
+  it.effect("refuses missing, ambiguous, guest, and unconsented results", () =>
+    Effect.gen(function* () {
+      const f = fixture();
+      const service = yield* f.makeWithScopes(withLookup);
+      yield* f.connect(service);
+      const cases: ReadonlyArray<readonly [number, unknown, string]> = [
+        [200, { value: [] }, "not-found"],
+        // A result that doesn't carry the typed address isn't the person asked for.
+        [200, { value: [person("robert@ucsd.edu")] }, "not-found"],
+        [
+          200,
+          {
+            value: [person("bob@ucsd.edu"), person("robert@ucsd.edu", { mail: "bob@ucsd.edu" })],
+          },
+          "ambiguous",
+        ],
+        [
+          200,
+          {
+            value: [person("bob_example.com#EXT#@ucsd.onmicrosoft.com", { mail: "bob@ucsd.edu" })],
+          },
+          "guest",
+        ],
+        [403, { error: { code: "Authorization_RequestDenied" } }, "not-permitted"],
+      ];
+      for (const [status, body, expected] of cases) {
+        f.setDirectory(status, body);
+        expect((yield* service.execute("a", lookup)).invitee?.status).toBe(expected);
+      }
+      f.setDirectory(503, {});
+      expect((yield* Effect.flip(service.execute("a", lookup))).code).toBe("unavailable");
     }),
   );
 });

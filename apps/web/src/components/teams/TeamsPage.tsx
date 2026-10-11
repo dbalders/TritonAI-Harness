@@ -1,4 +1,5 @@
 import { TeamSharedStorage } from "./TeamSharedStorage";
+import { TeamInviteForm } from "./TeamInviteForm";
 import { StuckProjectLinks, TeamProjects } from "./TeamProjects";
 import { HeldTeams, type HeldTeam } from "./TeamAdmin";
 import { TeamMemoryCopyControl, TeamMemoryCopyList, useTeamMemoryCopies } from "./TeamMemoryCopies";
@@ -322,7 +323,6 @@ export function TeamWorkspace({
   // Whether a project here is linked to the open team, which a local copy needs.
   const [linkedTeam, setLinkedTeam] = useState<{ teamId: string; linked: boolean } | null>(null);
   const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
   const [role, setRole] = useState<TeamRole>("editor");
   const [code, setCode] = useState("");
   const [codeError, setCodeError] = useState<string | null>(null);
@@ -781,42 +781,23 @@ export function TeamWorkspace({
           </div>
           {owner ? (
             <>
-              <form
-                className="flex flex-wrap items-end gap-3"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  void run({
-                    action: "invite",
-                    teamId: team.id,
-                    email: email.trim(),
-                    role,
-                    revision: team.revision,
-                  }).then((ok) => {
-                    if (ok) setEmail("");
-                  });
-                }}
+              <TeamInviteForm
+                key={team.id}
+                environmentId={environmentId}
+                account={account}
+                teamId={team.id}
+                ready={ready}
+                invite={(email) =>
+                  run({ action: "invite", teamId: team.id, email, role, revision: team.revision })
+                }
               >
-                <label className="min-w-44 flex-1 text-sm">
-                  Invite UCSD staff
-                  <Input
-                    className="mt-1"
-                    type="email"
-                    required
-                    value={email}
-                    onChange={(event) => setEmail(event.target.value)}
-                    placeholder="name@ucsd.edu"
-                  />
-                </label>
                 <RoleSelect
                   label="Invitation role"
                   value={role}
                   onChange={setRole}
                   disabled={!ready}
                 />
-                <Button type="submit" disabled={!ready || !email.trim()}>
-                  Create invitation
-                </Button>
-              </form>
+              </TeamInviteForm>
               {result?.invitationCode ? (
                 <div className="rounded-lg bg-muted/40 p-3">
                   <p className="text-sm">

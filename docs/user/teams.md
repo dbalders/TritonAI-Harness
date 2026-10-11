@@ -9,6 +9,14 @@ skill actions described below.
 
 Create a team, or accept a pending invitation in Teams. Owners invite specific
 UCSD addresses; creating an invitation sends no email and grants no access.
+Enter an address and choose **Check address** first. Where your administrator
+has turned on directory lookup, Harness shows the name of the UCSD account
+that uses the address, and you can invite only after it's found. Addresses
+with no account, more than one account, or a guest account can't be invited.
+Lookup uses the team's Microsoft connection, so connect Microsoft under
+**Shared storage** first. Where lookup isn't on, Harness says it hasn't
+confirmed the address and offers **Create unconfirmed invitation**: check
+the spelling, because whoever signs in as that address can accept.
 The recipient must sign in with that account and choose **Accept** before
 joining. You can also paste an invitation code from the team owner.
 Invitations belong to the team, not the owner who created them: they stay

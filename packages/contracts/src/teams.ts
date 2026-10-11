@@ -177,6 +177,12 @@ export const TeamStorageCommand = Schema.Union([
     path: Schema.String.check(Schema.isMaxLength(512)),
     etag: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(512)),
   }),
+  /**
+   * Owners only. Finds who uses a UCSD address in the directory, so an owner can check the person
+   * before inviting them. A typo guard for the owner, not an access check: the invitee still has to
+   * sign in as that account to join.
+   */
+  Schema.Struct({ action: Schema.Literal("lookup-invitee"), teamId: Id, email: Email }),
   /** The versions shared storage kept of one document, newest first. Read-only. */
   Schema.Struct({
     action: Schema.Literal("list-versions"),
@@ -333,6 +339,28 @@ export const TeamDocumentVersion = Schema.Struct({
   change: Schema.optionalKey(TeamDocumentChange),
 });
 export type TeamDocumentVersion = typeof TeamDocumentVersion.Type;
+/**
+ * Who a UCSD address belongs to, for the address as looked up (lowercased).
+ * - `found`: one member account; `displayName` is the directory's name for it.
+ * - `off`: this Harness doesn't look addresses up, so an invitation goes out unconfirmed.
+ * - `connect`: Microsoft isn't connected for this team; connect it and look up again.
+ * - `not-found`, `ambiguous` (more than one account), `guest` (an external account).
+ * - `not-permitted`: Microsoft refused the directory lookup for this connection.
+ */
+export const TeamInviteeLookup = Schema.Union([
+  Schema.Struct({
+    email: Email,
+    status: Schema.Literal("found"),
+    displayName: Schema.String,
+    userPrincipalName: Schema.String,
+    mail: Schema.NullOr(Schema.String),
+  }),
+  Schema.Struct({
+    email: Email,
+    status: Schema.Literals(["off", "connect", "not-found", "ambiguous", "guest", "not-permitted"]),
+  }),
+]);
+export type TeamInviteeLookup = typeof TeamInviteeLookup.Type;
 export const TeamStorageStatus = Schema.Struct({
   status: Schema.Literals(["not-configured", "disconnected", "pending", "connected"]),
   account: Schema.NullOr(Schema.String),
@@ -346,6 +374,8 @@ export const TeamStorageStatus = Schema.Struct({
   history: Schema.optionalKey(
     Schema.Struct({ path: Schema.String, versions: Schema.Array(TeamDocumentVersion) }),
   ),
+  /** From `lookup-invitee`. */
+  invitee: Schema.optionalKey(TeamInviteeLookup),
   /** From `read-version`: the text of one kept version. */
   priorVersion: Schema.optionalKey(
     Schema.Struct({
