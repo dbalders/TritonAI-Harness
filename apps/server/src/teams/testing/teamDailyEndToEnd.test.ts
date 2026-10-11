@@ -1,0 +1,203 @@
+// @effect-diagnostics globalDate:off globalDateInEffect:off - fixtures use host-local times.
+/**
+ * Daily team memory end to end over the synthetic campus and SharePoint world: the real team pass
+ * writes a member's day through the real TeamProject and TeamStorage services, and another member's
+ * local copy lists and reads it. The model is a stand-in that echoes what it was given; nothing
+ * here proves real Microsoft Graph, SharePoint permission, or model behavior.
+ */
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { describe, expect, it } from "@effect/vitest";
+import { type OrchestrationProjectShell, ProjectId } from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as TestClock from "effect/testing/TestClock";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
+
+import { ServerSecretStore } from "../../auth/ServerSecretStore.ts";
+import * as ServerConfig from "../../config.ts";
+import { MAX_CATCH_UP_DAYS, PARTIAL_INTERVAL_MS } from "../../memory/DailyMemory.ts";
+import { TeamMirrorHost, type TeamMirrorSource } from "../../memory/sync/teamMirror.ts";
+import { makeTeamDailyPass } from "../../memory/teamDailyPass.ts";
+import { TeamDailyHost } from "../../memory/teamDailySource.ts";
+import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
+import * as ServerSettings from "../../serverSettings.ts";
+import { TextGeneration } from "../../textGeneration/TextGeneration.ts";
+import {
+  makeSyntheticTeamServices,
+  makeSyntheticTeamsWorld,
+  SYNTHETIC_TEAMS,
+} from "./syntheticTeams.ts";
+
+const projectId = ProjectId.make("synthetic-project");
+const alpha = SYNTHETIC_TEAMS.alpha.id;
+const at = (day: number, hour: number) => new Date(2026, 9, day, hour).toISOString();
+
+const values = new Map<string, Uint8Array>();
+const layer = (baseDir: string) =>
+  Layer.mergeAll(
+    Layer.mock(ServerSecretStore)({
+      get: (name) => Effect.sync(() => Option.fromNullishOr(values.get(name))),
+      set: (name, value) => Effect.sync(() => void values.set(name, value)),
+      remove: (name) => Effect.sync(() => void values.delete(name)),
+    }),
+    Layer.mock(ProjectionSnapshotQuery)({
+      getProjectShellById: (id) =>
+        Effect.succeed(
+          id === projectId
+            ? Option.some({ id, title: "Grant reports" } as unknown as OrchestrationProjectShell)
+            : Option.none(),
+        ),
+    }),
+    ServerSettings.layerTest({ memoryEnabled: true }),
+    Layer.mock(TextGeneration)({
+      generateTeamDailyMemory: (input) =>
+        Effect.succeed({
+          threads: input.threads.map((thread) => ({
+            key: thread.key,
+            summary: thread.activity.replace(/\s+/gu, " "),
+            items: [{ kind: "outcome" as const, text: "Finished." }],
+          })),
+        }),
+    }),
+  ).pipe(
+    Layer.provideMerge(SqlitePersistenceMemory),
+    Layer.provideMerge(ServerConfig.layerTest(baseDir, baseDir)),
+  );
+
+const seed = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  const created = at(1, 9);
+  for (const [id, title] of [
+    [projectId, "Grant reports"],
+    ["personal", "Personal"],
+  ] as const)
+    yield* sql`
+      INSERT INTO projection_projects (project_id, title, workspace_root, scripts_json, created_at, updated_at)
+      VALUES (${id}, ${title}, ${`/code/${id}`}, '[]', ${created}, ${created})
+    `;
+  for (const [thread, project, title] of [
+    ["kept", projectId, "Budget checklist"],
+    ["withdrawn", projectId, "Draft reply"],
+    ["private", "personal", "Personal errand"],
+  ] as const)
+    yield* sql`
+      INSERT INTO projection_threads (thread_id, project_id, title, created_at, updated_at)
+      VALUES (${thread}, ${project}, ${title}, ${created}, ${created})
+    `;
+});
+const say = (id: string, thread: string, text: string, createdAt: string) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`
+      INSERT INTO projection_thread_messages (message_id, thread_id, turn_id, role, text, is_streaming, created_at, updated_at)
+      VALUES (${id}, ${thread}, ${`turn-${id}`}, 'user', ${text}, 0, ${createdAt}, ${createdAt})
+    `;
+  });
+
+describe("Daily team memory over the synthetic world", () => {
+  it.layer(NodeServices.layer)("end to end", (it) => {
+    it.effect("shares a member's linked work, and a teammate's copy follows a withdrawal", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-team-e2e-" });
+        yield* Effect.gen(function* () {
+          values.clear();
+          yield* TestClock.setTime(new Date(2026, 9, 10, 9).getTime());
+          const world = makeSyntheticTeamsWorld();
+          world.switchTo("member");
+          const pass = yield* makeTeamDailyPass({
+            stateDir: baseDir,
+            deviceLabel: "Synthetic Mac",
+            settings: yield* ServerSettings.ServerSettingsService,
+            textGeneration: yield* TextGeneration,
+            maxCatchUpDays: MAX_CATCH_UP_DAYS,
+            partialIntervalMs: PARTIAL_INTERVAL_MS,
+            streamingGraceMs: 2 * 60 * 60_000,
+          });
+          let mirror: TeamMirrorSource | null = null;
+          const services = yield* makeSyntheticTeamServices(world).pipe(
+            Effect.provideService(TeamDailyHost, TeamDailyHost.of(pass)),
+            Effect.provideService(
+              TeamMirrorHost,
+              TeamMirrorHost.of({
+                attach: (source) => Effect.sync(() => void (mirror = source)),
+                sync: Effect.void,
+                prune: Effect.void,
+              }),
+            ),
+          );
+          yield* services.project.teams("s", { action: "list" });
+          yield* services.project.execute("s", { action: "bind", teamId: alpha, projectId });
+          expect(yield* services.connectMicrosoft).toBe(1);
+
+          // Work after the link, in the linked project and in a personal one.
+          yield* seed;
+          yield* TestClock.setTime(new Date(2026, 9, 10, 15).getTime());
+          yield* say("m1", "kept", "Checked the budget lines", at(10, 11));
+          yield* say("m2", "withdrawn", "Drafted the sponsor reply", at(10, 12));
+          yield* say("m3", "private", "Booked a dentist", at(10, 12));
+          yield* pass.run;
+          expect(yield* pass.status(alpha)).toMatchObject({ state: "sharing" });
+
+          // The owner's Harness copies the team, including the member's day.
+          world.switchTo("owner");
+          yield* services.project.teams("s", { action: "list" });
+          yield* services.connectMicrosoft;
+          // Every team the owner belongs to is copied, without a project link of their own.
+          const copies = yield* mirror!.teams;
+          expect(copies.map((copy) => copy.teamId)).toContain(alpha);
+          const listing = yield* mirror!.list(alpha);
+          const daily =
+            listing.kind === "files"
+              ? listing.files.filter((f) => f.path.startsWith("Daily/"))
+              : [];
+          expect(daily).toHaveLength(1);
+          const first = yield* mirror!.read(alpha, daily[0]!.path);
+          expect(first.kind === "file" && first.text).toContain("Checked the budget lines");
+          expect(first.kind === "file" && first.text).toContain("Drafted the sponsor reply");
+          expect(first.kind === "file" && first.text).not.toContain("dentist");
+          yield* mirror!.report(alpha, {
+            kind: "synced",
+            at: at(10, 15),
+            files: 1,
+            skipped: 0,
+            pending: 0,
+          });
+
+          // Back on the member's Harness: one thread is withdrawn.
+          world.switchTo("member");
+          yield* services.project.teams("s", { action: "list" });
+          const sql = yield* SqlClient.SqlClient;
+          yield* sql`UPDATE projection_threads SET team_sharing_off_at = ${at(10, 16)} WHERE thread_id = 'withdrawn'`;
+          yield* pass.run;
+
+          world.switchTo("owner");
+          yield* services.project.teams("s", { action: "list" });
+          const again = yield* mirror!.list(alpha);
+          const updated =
+            again.kind === "files" ? again.files.find((f) => f.path === daily[0]!.path) : undefined;
+          expect(updated?.eTag).not.toBe(daily[0]!.eTag);
+          const second = yield* mirror!.read(alpha, daily[0]!.path);
+          expect(second.kind === "file" && second.text).toContain("Checked the budget lines");
+          expect(second.kind === "file" && second.text).not.toContain("Drafted the sponsor reply");
+
+          // Unlinking the project shares nothing new; the published day stays with the team.
+          world.switchTo("member");
+          yield* services.project.teams("s", { action: "list" });
+          yield* services.project.execute("s", { action: "unbind", teamId: alpha, projectId });
+          yield* say("m4", "kept", "After unlinking", at(10, 17));
+          yield* TestClock.adjust(PARTIAL_INTERVAL_MS + 60_000);
+          yield* pass.run;
+          world.switchTo("owner");
+          yield* services.project.teams("s", { action: "list" });
+          const third = yield* mirror!.read(alpha, daily[0]!.path);
+          expect(third.kind === "file" && third.text).toContain("Checked the budget lines");
+          expect(third.kind === "file" && third.text).not.toContain("After unlinking");
+        }).pipe(Effect.provide(layer(baseDir)));
+      }),
+    );
+  });
+});
