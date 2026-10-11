@@ -1,3 +1,5 @@
+// @effect-diagnostics nodeBuiltinImport:off -- Profile creation must stay synchronous before Clerk protocol registration; its test exercises that startup boundary.
+import * as NodeFS from "node:fs";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -150,6 +152,9 @@ export const make = ElectronApp.of({
     }),
   setPath: (name, path) =>
     Effect.sync(() => {
+      // Clerk registers privileged protocols immediately after setting userData.
+      // Yielding to asynchronous I/O here lets Electron become ready too early.
+      if (name === "userData") NodeFS.mkdirSync(path, { recursive: true });
       Electron.app.setPath(name, path);
     }),
   setName: (name) =>

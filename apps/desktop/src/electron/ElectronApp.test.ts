@@ -1,3 +1,7 @@
+// @effect-diagnostics nodeBuiltinImport:off -- Profile creation must stay synchronous before Clerk protocol registration; its test exercises that startup boundary.
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { beforeEach, vi } from "vite-plus/test";
@@ -94,6 +98,26 @@ describe("ElectronApp", () => {
     removeListenerMock.mockClear();
     removeSwitchMock.mockClear();
     setPathMock.mockClear();
+  });
+
+  it("creates userData synchronously before configuring Electron", () => {
+    const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "desktop-profile-"));
+    const profile = NodePath.join(directory, "fresh", "electron");
+    try {
+      setPathMock.mockImplementationOnce((_name: string, value: string) => {
+        assert.isTrue(NodeFS.statSync(value).isDirectory());
+      });
+      // oxlint-disable-next-line t3code/no-manual-effect-runtime-in-tests -- This startup regression must fail if profile setup yields before protocol registration.
+      Effect.runSync(
+        Effect.gen(function* () {
+          const app = yield* ElectronApp.ElectronApp;
+          yield* app.setPath("userData", profile);
+        }).pipe(Effect.provide(ElectronApp.layer)),
+      );
+      assert.deepEqual(setPathMock.mock.calls, [["userData", profile]]);
+    } finally {
+      NodeFS.rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it.effect("reads app metadata through the service", () =>

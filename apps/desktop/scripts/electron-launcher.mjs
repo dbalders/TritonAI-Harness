@@ -1,5 +1,6 @@
 // This file mostly exists because we want dev mode to say "TritonAI Harness" instead of "electron"
 
+import * as NodeCrypto from "node:crypto";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodeModule from "node:module";
@@ -12,13 +13,16 @@ const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
 const __dirname = NodePath.dirname(NodeURL.fileURLToPath(import.meta.url));
 export const desktopDir = NodePath.resolve(__dirname, "..");
 const repoRoot = NodePath.resolve(desktopDir, "..", "..");
-const devBundleIdSuffix = NodePath.basename(repoRoot)
-  .toLowerCase()
-  .replaceAll(/[^a-z0-9]+/g, "");
-export const APP_DISPLAY_NAME = "TritonAI Harness";
-export const APP_BUNDLE_ID = isDevelopment
-  ? `edu.ucsd.tritonai.harness.dev.${devBundleIdSuffix || "local"}`
-  : "edu.ucsd.tritonai.harness";
+export function resolveDevIdentity(root) {
+  const id = NodeCrypto.createHash("sha256").update(root).digest("hex").slice(0, 12);
+  return {
+    displayName: `TritonAI Harness (Dev ${id})`,
+    bundleId: `edu.ucsd.tritonai.harness.dev.${id}`,
+  };
+}
+const devIdentity = resolveDevIdentity(repoRoot);
+export const APP_DISPLAY_NAME = isDevelopment ? devIdentity.displayName : "TritonAI Harness";
+export const APP_BUNDLE_ID = isDevelopment ? devIdentity.bundleId : "edu.ucsd.tritonai.harness";
 const APP_PROTOCOL_SCHEMES = isDevelopment ? ["t3code-dev"] : ["t3code"];
 const LAUNCHER_VERSION = 19;
 const MICROPHONE_USAGE_DESCRIPTION =
@@ -122,6 +126,7 @@ export function makeDevelopmentEnvironmentScript(environment) {
     ["VITE_DEV_SERVER_URL", environment.VITE_DEV_SERVER_URL],
     ["T3CODE_PORT", environment.T3CODE_PORT],
     ["T3CODE_COMMIT_HASH", environment.T3CODE_COMMIT_HASH],
+    ["T3CODE_DEV_INSTANCE_NAME", environment.T3CODE_DEV_INSTANCE_NAME],
     ["T3CODE_OTLP_TRACES_URL", environment.T3CODE_OTLP_TRACES_URL],
     ["T3CODE_OTLP_EXPORT_INTERVAL_MS", environment.T3CODE_OTLP_EXPORT_INTERVAL_MS],
     ["T3CODE_OTLP_HEADERS", environment.T3CODE_OTLP_HEADERS],

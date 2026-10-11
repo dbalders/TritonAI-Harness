@@ -10,6 +10,7 @@ import {
   APP_DISPLAY_NAME,
   makeDevelopmentEnvironmentScript,
   makeDevelopmentLauncherScript,
+  resolveDevIdentity,
   resolveElectronBinaryPath,
   resolveMacBundleInfoPlistStrings,
   resolveMacCodeSignArguments,
@@ -51,6 +52,15 @@ function executeLauncher({ capturedEnvironment, runtimeEnvironment }) {
     NodeFS.rmSync(tempDir, { recursive: true, force: true });
   }
 }
+
+it("keeps dev identity stable per checkout and separates equal folder names", () => {
+  const first = resolveDevIdentity("/work/one/harness");
+  assert.deepEqual(resolveDevIdentity("/work/one/harness"), first);
+  const second = resolveDevIdentity("/work/two/harness");
+  assert.notEqual(first.bundleId, second.bundleId);
+  assert.notEqual(first.displayName, second.displayName);
+  assert.notEqual(first.displayName, "TritonAI Harness");
+});
 
 describe("electron development launcher", () => {
   it("keeps the downstream desktop identity", () => {

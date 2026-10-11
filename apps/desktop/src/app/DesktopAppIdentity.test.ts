@@ -145,6 +145,55 @@ const withIdentity = <A, E, R>(
 };
 
 describe("DesktopAppIdentity", () => {
+  it.effect("isolates development Chromium profiles by the selected app home", () =>
+    Effect.gen(function* () {
+      const first = yield* withIdentity(DesktopAppIdentity.resolveUserDataPath, {
+        environment: {
+          isPackaged: false,
+          env: {
+            VITE_DEV_SERVER_URL: "http://127.0.0.1:5733",
+            TRITONAI_HOME: "/worktrees/first/.t3",
+          },
+        },
+      });
+      const second = yield* withIdentity(DesktopAppIdentity.resolveUserDataPath, {
+        environment: {
+          isPackaged: false,
+          env: {
+            VITE_DEV_SERVER_URL: "http://127.0.0.1:5734",
+            TRITONAI_HOME: "/worktrees/second/.t3",
+          },
+        },
+      });
+      assert.equal(first, "/worktrees/first/.t3/userdata/electron");
+      assert.equal(second, "/worktrees/second/.t3/userdata/electron");
+      assert.notEqual(first, second);
+    }),
+  );
+
+  it.effect("labels a development window while leaving installed identity unchanged", () =>
+    Effect.gen(function* () {
+      const readName = Effect.map(
+        DesktopEnvironment.DesktopEnvironment,
+        (environment) => environment.displayName,
+      );
+      const dev = yield* withIdentity(readName, {
+        environment: {
+          isPackaged: false,
+          env: {
+            VITE_DEV_SERVER_URL: "http://127.0.0.1:5733",
+            T3CODE_DEV_INSTANCE_NAME: "feature-a abc1234",
+          },
+        },
+      });
+      const installed = yield* withIdentity(readName, {
+        environment: { env: { T3CODE_DEV_INSTANCE_NAME: "feature-a abc1234" } },
+      });
+      assert.equal(dev, "TritonAI Harness (Dev: feature-a abc1234)");
+      assert.equal(installed, "TritonAI Harness");
+    }),
+  );
+
   it.effect("keeps using the legacy userData path when it already exists", () =>
     withIdentity(
       Effect.gen(function* () {
