@@ -3,7 +3,7 @@ import {
   ProjectId,
   ThreadId,
   type OrchestrationThreadShell,
-  type TeamRole,
+  type TeamMemberRole,
   type TeamStorage as TeamStorageRecord,
   TeamsError,
   type TeamsResult,
@@ -44,8 +44,8 @@ export function teamProjectFixture() {
   let signedIn = true;
   // The membership service is unreachable while set.
   let teamsDown = false;
-  const roles: Record<string, Record<string, TeamRole>> = {
-    [teamA]: { alice: "editor" },
+  const roles: Record<string, Record<string, TeamMemberRole>> = {
+    [teamA]: { alice: "member" },
     [teamB]: { mallory: "owner" },
   };
   const storage: Record<string, TeamStorageRecord> = {

@@ -2559,7 +2559,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       });
       const alpha = SyntheticTeams.SYNTHETIC_TEAMS.alpha.id;
       const wsUrl = yield* getWsServerUrl("/ws");
-      world.switchTo("editor");
+      world.switchTo("member");
       const block = yield* Effect.scoped(
         withWsRpcClient(wsUrl, (client) =>
           Effect.gen(function* () {
@@ -2568,7 +2568,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               teamId: alpha,
               projectId,
             });
-            // The editor is not in Beta, so its root is refused before any Graph request.
+            // The member is not in Beta, so its root is refused before any Graph request.
             const beta = yield* client[WS_METHODS.serverTeamProjects]({
               action: "list",
               teamId: SyntheticTeams.SYNTHETIC_TEAMS.beta.id,
@@ -2587,7 +2587,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assertInclude(block, "SYNTHETIC grant report checklist");
       for (const entry of world.trace.filter((entry) => entry.kind === "graph"))
         assert.ok(entry.team === null || entry.team === "alpha");
-      world.setRole("alpha", "editor", "none");
+      world.setRole("alpha", "member", "none");
 
       const turn = (text: string) => ({
         type: "thread.turn.start" as const,

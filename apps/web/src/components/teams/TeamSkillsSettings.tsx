@@ -332,7 +332,7 @@ function ProjectTeamSkills({
       ) : rows.length === 0 && files !== null && !notice ? (
         <SettingsRow
           title="No team skills yet"
-          description={`Editors of ${teamName} can publish one from Teams → ${teamName} → Team projects → Open team skills.`}
+          description={`Members of ${teamName} can publish one from Teams → ${teamName} → Team projects → Open team skills.`}
         />
       ) : (
         rows.map((row) => {
@@ -476,8 +476,8 @@ function SkillReviewDialog({
                   <dd>{shortTeamSkillVersion(review.version)}</dd>
                   <dt className="text-muted-foreground">Who can change it</dt>
                   <dd>
-                    Every member of {teamName} can read it, and editors can change it. After a
-                    change, Harness stops adding it until you review the new version.
+                    Every member of {teamName} can read and change it. After a change, Harness stops
+                    adding it until you review the new version.
                   </dd>
                 </dl>
                 <pre

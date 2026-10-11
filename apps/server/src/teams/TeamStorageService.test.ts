@@ -561,12 +561,12 @@ describe("invitee lookup", () => {
   it.effect("needs an owner, and drops a result when access changes mid-lookup", () =>
     Effect.gen(function* () {
       const { f, service } = yield* ready;
-      f.setTeam({ role: "editor", canManage: false });
+      f.setTeam({ role: "member", canManage: false });
       expect((yield* Effect.flip(service.execute("a", lookup))).code).toBe("forbidden");
       expect(f.tokenForms).toHaveLength(0);
       f.setTeam({});
       f.setDirectory(200, { value: [person("bob@ucsd.edu")] });
-      f.onDirectory(() => f.setTeam({ role: "editor", canManage: false, revision: 3 }));
+      f.onDirectory(() => f.setTeam({ role: "member", canManage: false, revision: 3 }));
       expect((yield* Effect.flip(service.execute("a", lookup))).code).toBe("conflict");
     }),
   );

@@ -1,7 +1,7 @@
 import {
   type AccountStatus,
   type TeamCommand,
-  type TeamRole,
+  type TeamMemberRole,
   type TeamsResult,
   TeamsError,
   formatTeamNote,
@@ -38,7 +38,8 @@ const SYNTHETIC_SITE_HOST = "synthetic-fixture.sharepoint.com";
 
 const SYNTHETIC_IDENTITIES = {
   owner: { subject: "synthetic-owner", displayName: "Synthetic Owner" },
-  editor: { subject: "synthetic-editor", displayName: "Synthetic Editor" },
+  member: { subject: "synthetic-member", displayName: "Synthetic Member" },
+  // A read-only role recorded before teams had only owners and members.
   reader: { subject: "synthetic-reader", displayName: "Synthetic Reader" },
   outsider: { subject: "synthetic-outsider", displayName: "Synthetic Outsider" },
 } as const;
@@ -60,7 +61,7 @@ export const SYNTHETIC_TEAMS = {
     name: "SYNTHETIC Alpha Team",
     driveId: "b!synthetic-alpha-drive",
     siteId: `${SYNTHETIC_SITE_HOST},a1a1a1a1-0000-4000-a000-0000000000a1,a1a1a1a1-0000-4000-a000-0000000000a2`,
-    roles: { owner: "owner", editor: "editor", reader: "reader" },
+    roles: { owner: "owner", member: "member", reader: "reader" },
   },
   beta: {
     id: "b2b2b2b2-0000-4000-a000-000000000002",
@@ -78,7 +79,7 @@ export const SYNTHETIC_TEAMS = {
     name: string;
     driveId: string;
     siteId: string;
-    roles: Partial<Record<SyntheticIdentity, TeamRole>>;
+    roles: Partial<Record<SyntheticIdentity, TeamMemberRole>>;
   }
 >;
 type SyntheticTeam = keyof typeof SYNTHETIC_TEAMS;
@@ -110,7 +111,7 @@ const SEED: readonly SeedDocument[] = [
   {
     team: "alpha",
     folder: "Memory",
-    author: "editor",
+    author: "member",
     record: recordId(2),
     text: formatTeamNote({
       title: "SYNTHETIC reviewer contacts",
@@ -133,7 +134,7 @@ const SEED: readonly SeedDocument[] = [
   {
     team: "alpha",
     folder: "Skills",
-    author: "editor",
+    author: "member",
     record: recordId(4),
     text: formatTeamNote({
       title: "SYNTHETIC hidden-character skill",
@@ -238,7 +239,7 @@ export function makeSyntheticTeamsWorld() {
         key: key as SyntheticTeam,
         revision: 1,
         archived: false,
-        roles: new Map(Object.entries(team.roles)) as Map<SyntheticIdentity, TeamRole>,
+        roles: new Map(Object.entries(team.roles)) as Map<SyntheticIdentity, TeamMemberRole>,
         rootId: "",
         originalRootId: "",
         downloadHost: SYNTHETIC_SITE_HOST as string,
@@ -250,7 +251,7 @@ export function makeSyntheticTeamsWorld() {
       key: SyntheticTeam;
       revision: number;
       archived: boolean;
-      roles: Map<SyntheticIdentity, TeamRole>;
+      roles: Map<SyntheticIdentity, TeamMemberRole>;
       rootId: string;
       originalRootId: string;
       downloadHost: string;
@@ -339,7 +340,7 @@ export function makeSyntheticTeamsWorld() {
     userCode: null,
     pollIntervalSeconds: null,
   });
-  const detail = (team: (typeof teams)[SyntheticTeam], role: TeamRole) => ({
+  const detail = (team: (typeof teams)[SyntheticTeam], role: TeamMemberRole) => ({
     id: team.id,
     reference: team.reference,
     name: team.name,
@@ -431,9 +432,9 @@ export function makeSyntheticTeamsWorld() {
           return fail("conflict", "This member is already an owner.");
         // The fixture doesn't model storage grants; the service verifies a reader's added access.
         team.roles.set(member, "owner");
-        team.roles.set(current, "editor");
+        team.roles.set(current, "member");
         team.revision++;
-        return Effect.succeed(result(detail(team, "editor")));
+        return Effect.succeed(result(detail(team, "member")));
       }
       return fail("invalid_request", "This action is disabled in the synthetic Teams fixture.");
     });
@@ -894,7 +895,7 @@ export function makeSyntheticTeamsWorld() {
       signedIn = true;
     },
     /** Sets or removes (role `none`) a member, as an owner's action on the membership service would. */
-    setRole: (team: string, identity: string, role: TeamRole | "none") => {
+    setRole: (team: string, identity: string, role: TeamMemberRole | "none") => {
       const entry = teamOrFail(team);
       const member = identityOrFail(identity);
       if (role === "none") entry.roles.delete(member);

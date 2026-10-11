@@ -10,6 +10,7 @@ import type {
   EnvironmentId,
   ProjectId,
   TeamCommand,
+  TeamMemberRole,
   TeamRole,
 } from "@t3tools/contracts";
 import { LockKeyholeIcon, UsersIcon } from "lucide-react";
@@ -44,6 +45,7 @@ import {
   type MembershipReviewTarget,
   membershipReviewCommand,
   membershipReviewCopy,
+  roleLabel,
 } from "./teamMembershipReview";
 import { useTeamsCommand, useTeamsController } from "./useTeamsController";
 
@@ -209,7 +211,7 @@ function RoleSelect({
   disabled,
   label,
 }: {
-  value: TeamRole;
+  value: TeamMemberRole;
   onChange: (role: TeamRole) => void;
   disabled: boolean;
   label: string;
@@ -222,11 +224,16 @@ function RoleSelect({
       disabled={disabled}
       onChange={(event) => {
         const role = event.target.value;
-        if (role === "owner" || role === "editor" || role === "reader") onChange(role);
+        if (role === "owner" || role === "member") onChange(role);
       }}
     >
-      <option value="reader">Reader</option>
-      <option value="editor">Editor</option>
+      {/* Read-only access from before teams had only owners and members; it can't be given. */}
+      {value === "reader" ? (
+        <option value="reader" disabled>
+          Reader (read-only)
+        </option>
+      ) : null}
+      <option value="member">Member</option>
       <option value="owner">Owner</option>
     </select>
   );
@@ -323,7 +330,7 @@ export function TeamWorkspace({
   // Whether a project here is linked to the open team, which a local copy needs.
   const [linkedTeam, setLinkedTeam] = useState<{ teamId: string; linked: boolean } | null>(null);
   const [name, setName] = useState("");
-  const [role, setRole] = useState<TeamRole>("editor");
+  const [role, setRole] = useState<TeamRole>("member");
   const [code, setCode] = useState("");
   const [codeError, setCodeError] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
@@ -698,7 +705,7 @@ export function TeamWorkspace({
             {owner ? (
               <p className="mt-1 text-xs text-muted-foreground">
                 To hand this team to someone else, choose Transfer ownership: they become an owner
-                and you become an editor, and only an owner can make you an owner again. A team
+                and you become a member, and only an owner can make you an owner again. A team
                 always keeps at least one owner. Pending invitations stay valid when their creator’s
                 role changes, and are cancelled if their creator leaves or is removed. If an owner
                 leaves UC San Diego, another owner can remove them; if they were the only owner,
@@ -763,7 +770,9 @@ export function TeamWorkspace({
                         )}
                       </div>
                     ) : (
-                      <span className="text-xs text-muted-foreground">{member.role}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {roleLabel(member.role)}
+                      </span>
                     )}
                   </li>
                 );

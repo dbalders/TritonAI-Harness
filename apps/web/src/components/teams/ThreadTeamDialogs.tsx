@@ -250,7 +250,7 @@ function ShareForm({
     return (
       <DialogPanel>
         <p className="text-sm text-muted-foreground">
-          You can share once you are an editor or owner of a ready team. Manage teams in{" "}
+          You can share once you are a member of a ready team. Manage teams in{" "}
           <Link to="/teams" className="underline">
             Teams
           </Link>
@@ -274,8 +274,8 @@ function ShareForm({
             <>
               <p className="text-sm">
                 This note will be saved in <strong>{team.name}</strong>’s shared Memory folder.
-                Every team member, including readers, can open and copy it. Removing it later
-                deletes the note, but not copies people already made.
+                Every team member can open and copy it. Removing it later deletes the note, but not
+                copies people already made.
               </p>
               <pre
                 aria-label="Exact note to share"
@@ -380,7 +380,7 @@ const copy = {
       "Choose one skill document from this project’s team and review its instructions. They are added to this message only. Harness doesn’t install the skill or add it to the project, other threads, or your providers. Your team access is checked again when you send, and the skill is removed from the draft if you sign out or switch accounts.",
     loading: "Loading team skills…",
     empty:
-      "This team has no skill documents yet. Editors can publish one from Teams → your team → Team projects → Open team skills.",
+      "This team has no skill documents yet. Members can publish one from Teams → your team → Team projects → Open team skills.",
     changed: "This skill changed since you opened it. Review the current instructions below.",
     exact: "Exactly this will be added to your message, and the agent may act on it:",
     after:
@@ -627,8 +627,8 @@ function ContextPicker({
                   <>
                     <dt className="text-muted-foreground">Who can see it</dt>
                     <dd>
-                      Every member of {link.teamName} can read it, and editors can change it, so
-                      review it each time you use it.
+                      Every member of {link.teamName} can read and change it, so review it each time
+                      you use it.
                     </dd>
                   </>
                 ) : null}

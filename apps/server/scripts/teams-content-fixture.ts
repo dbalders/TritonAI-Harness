@@ -26,7 +26,7 @@ import {
   prepareFixtureHome,
 } from "../src/teams/testing/contentFixtureHome.ts";
 import type { SyntheticTeamServices } from "../src/teams/testing/syntheticTeams.ts";
-import type { TeamRole } from "@t3tools/contracts";
+import type { TeamMemberRole } from "@t3tools/contracts";
 
 const scriptDir = NodePath.dirname(NodeURL.fileURLToPath(import.meta.url));
 const sourceRoot = NodePath.resolve(scriptDir, "../../..");
@@ -39,8 +39,8 @@ const usage = `Usage:
 
 Control actions:
   state | trace [since=<seq>] | sent | connect-microsoft
-  switch identity=<owner|editor|reader|outsider> | sign-out | sign-in
-  set-role team=<alpha|beta> identity=<...> role=<owner|editor|reader|none>
+  switch identity=<owner|member|reader|outsider> | sign-out | sign-in
+  set-role team=<alpha|beta> identity=<...> role=<owner|member|reader|none>
   edit team=<...> path=<Memory/...md> text=<new text> | restore team=<...> path=<...> | read team=<...> path=<...>
   move-root team=<...> | restore-root team=<...> | download-host team=<...> host=<hostname>
   unarchive team=<...>`;
@@ -194,9 +194,9 @@ async function start(flags: Map<string, string | true>) {
         break;
       case "set-role": {
         const role = text("role");
-        if (!["owner", "editor", "reader", "none"].includes(role))
-          throw new Error("role must be owner, editor, reader, or none.");
-        world.setRole(text("team"), text("identity"), role as TeamRole | "none");
+        if (!["owner", "member", "reader", "none"].includes(role))
+          throw new Error("role must be owner, member, reader, or none.");
+        world.setRole(text("team"), text("identity"), role as TeamMemberRole | "none");
         break;
       }
       case "edit":

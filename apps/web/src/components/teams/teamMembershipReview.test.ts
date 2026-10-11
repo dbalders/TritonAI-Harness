@@ -9,6 +9,7 @@ import {
   isOwnMember,
   type MembershipReview,
   membershipReviewCopy,
+  roleLabel,
 } from "./teamMembershipReview";
 
 const alice = { identityId: "a".repeat(43), displayName: "Alice", email: "alice@ucsd.edu" };
@@ -19,7 +20,7 @@ const invitation = {
   teamName: "Alpha",
   teamReference: "TEAM-ALPHA",
   email: "dan@ucsd.edu",
-  role: "reader" as const,
+  role: "member" as const,
   expiresAt: 4_102_444_800,
 };
 const team: NonNullable<TeamsResult["team"]> = {
@@ -32,7 +33,8 @@ const team: NonNullable<TeamsResult["team"]> = {
   revision: 3,
   members: [
     { ...alice, role: "owner" },
-    { ...carol, role: "editor" },
+    // A read-only role recorded before teams had only owners and members.
+    { ...carol, role: "reader" },
   ],
   invitations: [invitation],
   storage: null,
@@ -71,10 +73,10 @@ describe("isCurrentReview", () => {
       ...bound,
       kind: "role",
       member: team.members[1]!,
-      role: "reader",
+      role: "member",
     };
     expect(isCurrentReview(role, account, team)).toBe(true);
-    const changed = { ...team, members: [team.members[0]!, { ...carol, role: "reader" as const }] };
+    const changed = { ...team, members: [team.members[0]!, { ...carol, role: "member" as const }] };
     expect(isCurrentReview(role, account, changed)).toBe(false);
   });
 
@@ -98,7 +100,7 @@ describe("ownership transfer", () => {
     expect(canTransferOwnership(team, team.members[0]!, me)).toBe(false);
     // A system administrator outside the team reassigns owners with role changes instead.
     expect(canTransferOwnership(team, team.members[1]!, { email: "admin@ucsd.edu" })).toBe(false);
-    const demoted = { ...team, members: [{ ...alice, role: "editor" as const }, team.members[1]!] };
+    const demoted = { ...team, members: [{ ...alice, role: "member" as const }, team.members[1]!] };
     expect(canTransferOwnership(demoted, team.members[1]!, me)).toBe(false);
   });
 
@@ -115,11 +117,11 @@ describe("ownership transfer", () => {
     expect(isOnlyOwner(team, { email: "carol@ucsd.edu" })).toBe(false);
   });
 
-  it("names the target and says you become an editor", () => {
+  it("names the target and says you become a member", () => {
     const copy = membershipReviewCopy(transfer, "Alpha", false);
     expect(copy.title).toBe("Transfer ownership of Alpha to Carol?");
     expect(copy.description).toContain("Carol (carol@ucsd.edu) will become an owner");
-    expect(copy.description).toContain("You'll become an editor");
+    expect(copy.description).toContain("You'll become a member");
     expect(copy.description).toContain("pending invitations stay with the team");
     expect(copy.destructive).toBe(true);
   });
@@ -127,13 +129,13 @@ describe("ownership transfer", () => {
 
 it("recognizes your row by campus email regardless of case", () => {
   expect(isOwnMember({ ...alice, role: "owner" }, { email: " Alice@UCSD.edu" })).toBe(true);
-  expect(isOwnMember({ ...carol, role: "editor" }, { email: "alice@ucsd.edu" })).toBe(false);
+  expect(isOwnMember({ ...carol, role: "member" }, { email: "alice@ucsd.edu" })).toBe(false);
 });
 
 describe("membershipReviewCopy", () => {
   it("warns about losing ownership only when you lower your own role", () => {
     const self = membershipReviewCopy(
-      { ...bound, kind: "role", member: team.members[0]!, role: "editor" },
+      { ...bound, kind: "role", member: team.members[0]!, role: "member" },
       "Alpha",
       true,
     );
@@ -153,7 +155,7 @@ describe("membershipReviewCopy", () => {
     const owner = { ...carol, role: "owner" as const };
     expect(
       membershipReviewCopy(
-        { ...bound, kind: "role", member: owner, role: "editor" },
+        { ...bound, kind: "role", member: owner, role: "member" },
         "Alpha",
         false,
       ).description,
@@ -175,4 +177,16 @@ describe("membershipReviewCopy", () => {
     expect(copy.description).toContain("lose access to Alpha in Harness");
     expect(copy.description).not.toMatch(/SharePoint|permission/iu);
   });
+});
+
+it("labels a read-only reader recorded before owners and members, and says a promotion adds write access", () => {
+  expect(roleLabel("reader")).toBe("Reader (read-only)");
+  expect(roleLabel("member")).toBe("Member");
+  const promotion = membershipReviewCopy(
+    { ...bound, kind: "role", member: team.members[1]!, role: "member" },
+    "Alpha",
+    false,
+  );
+  expect(promotion.title).toBe("Change Carol's role to Member?");
+  expect(promotion.destructive).toBe(false);
 });

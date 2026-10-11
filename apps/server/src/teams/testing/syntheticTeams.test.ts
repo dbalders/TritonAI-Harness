@@ -75,7 +75,7 @@ const turn = (text: string) =>
   }) as const;
 
 /** A fresh world and services with session "s" linked to Alpha and connected to Microsoft. */
-const linkedAlpha = (as: "owner" | "editor" | "reader" = "editor") =>
+const linkedAlpha = (as: "owner" | "member" | "reader" = "member") =>
   Effect.gen(function* () {
     values.clear();
     const world = makeSyntheticTeamsWorld();
@@ -133,7 +133,7 @@ describe("Synthetic Teams world", () => {
   it.effect("refuses another team's root and a member removed before sending", () =>
     Effect.gen(function* () {
       const { world, project, storage } = yield* linkedAlpha();
-      // The editor is not in Beta: no link, and no read with Alpha's root either.
+      // The member is not in Beta: no link, and no read with Alpha's root either.
       expect(yield* code(project.execute("s", { action: "bind", teamId: beta, projectId }))).toBe(
         "not_found",
       );
@@ -145,7 +145,7 @@ describe("Synthetic Teams world", () => {
         projectId,
         path: ownerNote,
       });
-      world.setRole("alpha", "editor", "none");
+      world.setRole("alpha", "member", "none");
       expect(
         yield* code(
           project.execute("s", { action: "memory-verify", references: [memory.reference!.id] }),
@@ -163,19 +163,19 @@ describe("Synthetic Teams world", () => {
     Effect.gen(function* () {
       const { world, account, project } = yield* linkedAlpha("owner");
       const before = yield* account.teams("s", { action: "get", teamId: alpha });
-      const editor = before.team!.members.find((entry) => entry.role === "editor")!;
+      const teammate = before.team!.members.find((entry) => entry.role === "member")!;
       const after = yield* account.teams("s", {
         action: "transfer-ownership",
         teamId: alpha,
-        identityId: editor.identityId,
+        identityId: teammate.identityId,
         revision: before.team!.revision,
       });
-      expect(after.team).toMatchObject({ role: "editor", canManage: false });
+      expect(after.team).toMatchObject({ role: "member", canManage: false });
       expect(after.team!.revision).toBe(before.team!.revision + 1);
       expect(
-        after.team!.members.find((entry) => entry.identityId === editor.identityId)?.role,
+        after.team!.members.find((entry) => entry.identityId === teammate.identityId)?.role,
       ).toBe("owner");
-      // Owners and editors share storage access, so the project link keeps working.
+      // Owners and members share storage access, so the project link keeps working.
       const listed = yield* project.execute("s", { action: "memory-list", projectId });
       expect(listed.storage?.files.length).toBe(2);
       expect(
@@ -183,12 +183,12 @@ describe("Synthetic Teams world", () => {
           account.teams("s", {
             action: "transfer-ownership",
             teamId: alpha,
-            identityId: editor.identityId,
+            identityId: teammate.identityId,
             revision: after.team!.revision,
           }),
         ),
       ).toBe("forbidden");
-      world.switchTo("editor");
+      world.switchTo("member");
       const promoted = yield* account.teams("s", { action: "get", teamId: alpha });
       expect(promoted.team).toMatchObject({ role: "owner", canManage: true });
     }),
@@ -198,7 +198,7 @@ describe("Synthetic Teams world", () => {
     Effect.gen(function* () {
       const { world, project, storage } = yield* linkedAlpha("owner");
       const revision = world.snapshot().teams.find((team) => team.key === "alpha")!.revision;
-      world.switchTo("editor");
+      world.switchTo("member");
       expect(yield* code(project.teams("s", { action: "archive", teamId: alpha, revision }))).toBe(
         "forbidden",
       );
@@ -214,7 +214,7 @@ describe("Synthetic Teams world", () => {
         "not_found",
       );
       // Members still see it, as archived, and can do nothing with it but leave.
-      world.switchTo("editor");
+      world.switchTo("member");
       const listed = yield* project.teams("s", { action: "list" });
       expect(listed.teams.find((team) => team.id === alpha)?.state).toBe("archived");
       const current = listed.teams.find((team) => team.id === alpha)!.revision;
@@ -249,7 +249,7 @@ describe("Synthetic Teams world", () => {
       // An unarmed device flow never yields a Microsoft URL for a browser to open.
       const refused = yield* form("devicecode", { scope: "Sites.Selected" });
       expect(refused).toMatchObject({ error: "invalid_request" });
-      world.switchTo("editor");
+      world.switchTo("member");
       const { access_token } = (yield* world.withDeviceFlow(
         Effect.gen(function* () {
           const { device_code } = (yield* form("devicecode", {})) as { device_code: string };
@@ -427,13 +427,13 @@ describe("Team document list summaries", () => {
     Effect.gen(function* () {
       values.clear();
       const world = makeSyntheticTeamsWorld();
-      world.switchTo("editor");
+      world.switchTo("member");
       let revokeOnDownload = false;
       const http = HttpClient.make((request) =>
         Effect.suspend(() => {
           if (revokeOnDownload && new URL(request.url).hostname.endsWith(".sharepoint.com")) {
             revokeOnDownload = false;
-            world.setRole("alpha", "editor", "none");
+            world.setRole("alpha", "member", "none");
           }
           return world.http.execute(request);
         }),
@@ -446,7 +446,7 @@ describe("Team document list summaries", () => {
         "not_found",
       );
       expect(revokeOnDownload).toBe(false);
-      world.setRole("alpha", "editor", "editor");
+      world.setRole("alpha", "member", "member");
       expect(
         (yield* project.execute("s", { action: "memory-list", projectId })).storage?.files,
       ).toHaveLength(2);
@@ -490,7 +490,7 @@ describe("Team document list summaries", () => {
 });
 
 describe("Team document history", () => {
-  const edited = "# SYNTHETIC report formatter\n\nRewritten by the editor.";
+  const edited = "# SYNTHETIC report formatter\n\nRewritten by a member.";
 
   it.effect("shows who changed a skill and reads its earlier text through the real services", () =>
     Effect.gen(function* () {
@@ -501,14 +501,14 @@ describe("Team document history", () => {
         path: ownerSkill,
       });
       expect(before.storage?.document?.lastChange?.by).toBe("Synthetic Owner");
-      world.editDocument("alpha", ownerSkill, edited, "editor");
+      world.editDocument("alpha", ownerSkill, edited, "member");
       const after = yield* project.execute("s", {
         action: "skill-read",
         projectId,
         path: ownerSkill,
       });
       expect(after.storage?.document?.text).toBe(edited);
-      expect(after.storage?.document?.lastChange?.by).toBe("Synthetic Editor");
+      expect(after.storage?.document?.lastChange?.by).toBe("Synthetic Member");
       expect(after.version).not.toBe(before.version);
       const history = yield* project.execute("s", {
         action: "skill-versions",
@@ -518,7 +518,7 @@ describe("Team document history", () => {
       const versions = history.storage?.history?.versions ?? [];
       expect(history.storage?.history?.path).toBe(ownerSkill);
       expect(versions.map((version) => [version.id, version.change?.by])).toEqual([
-        ["2.0", "Synthetic Editor"],
+        ["2.0", "Synthetic Member"],
         ["1.0", "Synthetic Owner"],
       ]);
       expect(Date.parse(versions[0]!.change!.at)).toBeGreaterThan(
@@ -561,7 +561,7 @@ describe("Team document history", () => {
         "alpha",
         ownerNote,
         "# SYNTHETIC grant report checklist\n\nNew.",
-        "editor",
+        "member",
       );
       const listed = yield* storage.execute("s", {
         action: "list-versions",
@@ -598,7 +598,7 @@ describe("Team document history", () => {
     Effect.gen(function* () {
       values.clear();
       const world = makeSyntheticTeamsWorld();
-      world.switchTo("editor");
+      world.switchTo("member");
       let switchOnDownload = false;
       const http = HttpClient.make((request) =>
         Effect.suspend(() => {

@@ -2,6 +2,7 @@ import type {
   AccountProfile,
   TeamCommand,
   TeamMember,
+  TeamMemberRole,
   TeamRole,
   TeamsResult,
 } from "@t3tools/contracts";
@@ -117,12 +118,12 @@ export function membershipReviewCommand(review: MembershipReview): TeamCommand {
   }
 }
 
-const roleLabel = (role: TeamRole) =>
-  role === "owner" ? "Owner" : role === "editor" ? "Editor" : "Reader";
+export const roleLabel = (role: TeamMemberRole) =>
+  role === "owner" ? "Owner" : role === "member" ? "Member" : "Reader (read-only)";
 
 const MANAGE = "manage members, invitations, and the team name";
 const WRITE = "add and edit team files";
-const access = (role: TeamRole) => ({ manage: role === "owner", write: role !== "reader" });
+const access = (role: TeamMemberRole) => ({ manage: role === "owner", write: role !== "reader" });
 // Invitations belong to the team: they outlive their creator's owner role, and are cancelled
 // when the creator leaves or is removed.
 const INVITATIONS_STAY =
@@ -172,7 +173,7 @@ export function membershipReviewCopy(
       const { displayName: name, email } = review.member;
       return {
         title: `Transfer ownership of ${teamName} to ${name}?`,
-        description: `${name} (${email}) will become an owner and be able to ${MANAGE}. You'll become an editor: you can still ${WRITE}, but only an owner can make you an owner again. Other owners keep their role, and pending invitations stay with the team.`,
+        description: `${name} (${email}) will become an owner and be able to ${MANAGE}. You'll become a member: you can still ${WRITE}, but only an owner can make you an owner again. Other owners keep their role, and pending invitations stay with the team.`,
         confirm: "Transfer ownership",
         working: "Transferring…",
         dismiss: "Cancel",

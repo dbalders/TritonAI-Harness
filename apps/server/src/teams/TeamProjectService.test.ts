@@ -150,7 +150,7 @@ describe("Team project memory", () => {
           "not_found",
         ]);
       // Another campus identity in the same environment is a member of team B only.
-      f.roles[teamA]!.alice = "editor";
+      f.roles[teamA]!.alice = "member";
       f.switchTo("mallory");
       for (const attempt of attempts)
         expect([attempt.action, yield* code(service.execute("s", attempt))]).toEqual([
@@ -250,7 +250,7 @@ describe("Team project memory", () => {
         yield* service.execute("s", { action: "bind", teamId: teamA, projectId });
       }
       // Moved to team B mid-read: team A's listing is not returned under the new link.
-      f.roles[teamB]!.alice = "editor";
+      f.roles[teamB]!.alice = "member";
       f.interleave(
         service
           .execute("s", { action: "unbind", teamId: teamA, projectId })
@@ -306,7 +306,7 @@ describe("Team project memory", () => {
       f.roles[teamA]!.alice = "reader";
       expect(yield* code(share(teamA))).toBe("forbidden");
       expect(f.writes).toHaveLength(0);
-      f.roles[teamA]!.alice = "editor";
+      f.roles[teamA]!.alice = "member";
       const shared = yield* share(teamA);
       // The saved note is exactly what the preview shows, labelled with the thread's project.
       const expected = formatTeamNote({
@@ -392,7 +392,7 @@ describe("Team memory in unsent messages", () => {
       yield* service.execute("s", { action: "unbind", teamId: teamA, projectId });
       expect(yield* code(verify(reference.id))).toBe("not_found");
       // Relinking the project to another team the user belongs to cannot launder team A's text.
-      f.roles[teamB]!.alice = "editor";
+      f.roles[teamB]!.alice = "member";
       yield* service.execute("s", { action: "bind", teamId: teamB, projectId });
       expect(yield* code(verify(reference.id))).toBe("not_found");
       expect(yield* code(service.authorizeOutgoingCommand("s", turn(reference.block)))).toBe(
@@ -419,7 +419,7 @@ describe("Team memory in unsent messages", () => {
       const reference = yield* attach();
       expect(yield* code(verify(reference.id, "another-session"))).toBe("sign_in_required");
       // Bob can open team A, but the draft reference was issued to Alice.
-      f.roles[teamA]!.bob = "editor";
+      f.roles[teamA]!.bob = "member";
       f.switchTo("bob");
       expect(yield* code(verify(reference.id))).toBe("sign_in_required");
       f.switchTo("alice");
@@ -450,7 +450,7 @@ describe("Team memory in unsent messages", () => {
       f.interleave(service.execute("s", { action: "unbind", teamId: teamA, projectId }));
       expect(yield* code(attach())).toBe("not_found");
       yield* service.execute("s", { action: "bind", teamId: teamA, projectId });
-      f.roles[teamA]!.bob = "editor";
+      f.roles[teamA]!.bob = "member";
       f.interleave(Effect.sync(() => f.switchTo("bob")));
       expect(yield* code(attach())).toBe("sign_in_required");
       f.switchTo("alice");
@@ -498,7 +498,7 @@ describe("Team skills in a linked project", () => {
       const { f, service, storage } = yield* linked;
       f.roles[teamA]!.alice = "reader";
       expect(yield* code(service.execute("s", publish()))).toBe("forbidden");
-      f.roles[teamA]!.alice = "editor";
+      f.roles[teamA]!.alice = "member";
       // Bidirectional overrides and zero-width characters would hide text from the review.
       expect(yield* code(service.execute("s", publish("Use the template\u202e.")))).toBe(
         "invalid_request",
@@ -679,10 +679,10 @@ describe("Team skills in a linked project", () => {
       expect(yield* code(service.authorizeOutgoingCommand("s", goal(reference.block)))).toBe(
         "not_found",
       );
-      f.roles[teamA]!.alice = "editor";
+      f.roles[teamA]!.alice = "member";
       yield* verify(reference.id);
       // Bob can open team A too, but this skill was added to Alice's draft.
-      f.roles[teamA]!.bob = "editor";
+      f.roles[teamA]!.bob = "member";
       f.switchTo("bob");
       expect(yield* code(verify(reference.id))).toBe("sign_in_required");
       f.switchTo("alice");
@@ -882,7 +882,7 @@ describe("Team skills turned on for a project", () => {
       yield* enable();
       const withSkill = `Go.\n\n${appliedBlock(skillText)}`;
       // Another member on this environment gets only their own choices.
-      f.roles[teamA]!.bob = "editor";
+      f.roles[teamA]!.bob = "member";
       f.switchTo("bob");
       expect(yield* sent("Go.")).toBe("Go.");
       expect(yield* enabled()).toEqual([]);
@@ -901,7 +901,7 @@ describe("Team skills turned on for a project", () => {
       // A switch that lands during the skill read adds nothing.
       const { f: g, enable: enableG, sent: sentG } = yield* linked;
       yield* enableG();
-      g.roles[teamA]!.bob = "editor";
+      g.roles[teamA]!.bob = "member";
       g.interleave(Effect.sync(() => g.switchTo("bob")));
       const raced = yield* Effect.result(sentG("Go."));
       if (raced._tag === "Success") expect(raced.success).toBe("Go.");
@@ -922,7 +922,7 @@ describe("Team skills turned on for a project", () => {
       const { f, service, connect, enable, enabled, sent } = yield* linked;
       yield* enable();
       yield* service.execute("s", { action: "bind", teamId: teamA, projectId: otherProject });
-      f.roles[teamA]!.bob = "editor";
+      f.roles[teamA]!.bob = "member";
       f.switchTo("bob");
       yield* connect(teamA);
       yield* enable();
@@ -940,7 +940,7 @@ describe("Team skills turned on for a project", () => {
       expect(yield* code(enabled())).toBe("not_found");
       // An unarchived team elsewhere keeps its link.
       f.switchTo("alice");
-      f.roles[teamB]!.alice = "editor";
+      f.roles[teamB]!.alice = "member";
       yield* service.execute("s", { action: "bind", teamId: teamB, projectId });
       yield* service.teams("s", { action: "list" });
       expect((yield* service.execute("s", { action: "project-links" })).projects).toEqual([
@@ -1108,7 +1108,7 @@ describe("Team skills turned on for a project", () => {
       // An account switch or sign-out that lands during the failed lookup withholds the record.
       yield* enable();
       f.storage[teamA] = { ...f.storage[teamA]!, folderId: "rootMoved" };
-      f.roles[teamA]!.bob = "editor";
+      f.roles[teamA]!.bob = "member";
       f.afterMembershipRead(() => f.switchTo("bob"));
       expect(yield* code(status())).toBe("conflict");
       f.switchTo("alice");
@@ -1119,7 +1119,7 @@ describe("Team skills turned on for a project", () => {
       yield* service.execute("s", { action: "skill-disable-all", projectId });
       // Another account's approvals are neither shown nor turned off.
       yield* enable();
-      f.roles[teamA]!.bob = "editor";
+      f.roles[teamA]!.bob = "member";
       f.switchTo("bob");
       f.setTeamsDown(true);
       expect(yield* code(status())).toBe("unavailable");

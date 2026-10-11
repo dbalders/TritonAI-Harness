@@ -1,4 +1,5 @@
 import * as Schema from "effect/Schema";
+import * as SchemaTransformation from "effect/SchemaTransformation";
 import { ProjectId, ThreadId } from "./baseSchemas.ts";
 
 const Id = Schema.String.check(
@@ -10,8 +11,29 @@ const Email = Schema.String.check(
   Schema.isMaxLength(254),
   Schema.isPattern(/^[^\s@]+@ucsd\.edu$/iu),
 );
-export const TeamRole = Schema.Literals(["owner", "editor", "reader"]);
+/** A role an owner can give: owners manage the team, and owners and members write to it. */
+export const TeamRole = Schema.Literals(["owner", "member"]);
 export type TeamRole = typeof TeamRole.Type;
+/** A membership service from before teams had only owners and members calls a member `editor`. */
+const LegacyEditorRole = Schema.Literal("editor").pipe(
+  Schema.decodeTo(
+    Schema.Literal("member"),
+    SchemaTransformation.transform({
+      decode: () => "member" as const,
+      encode: () => "editor" as const,
+    }),
+  ),
+);
+/**
+ * A member's or invitation's role as the membership service reports it. `reader` is read-only
+ * access recorded before teams had only owners and members: it can't be given anymore, and an
+ * owner can make a reader a member or remove them.
+ */
+export const TeamMemberRole = Schema.Union([
+  Schema.Literals(["owner", "member", "reader"]),
+  LegacyEditorRole,
+]);
+export type TeamMemberRole = typeof TeamMemberRole.Type;
 export const TeamCommand = Schema.Union([
   Schema.Struct({ action: Schema.Literal("list") }),
   Schema.Struct({ action: Schema.Literal("create"), requestId: Id, name: Name }),
@@ -41,7 +63,7 @@ export const TeamCommand = Schema.Union([
     revision: Schema.Int,
   }),
   /**
-   * Makes another member an owner and the caller an editor in one change. Only a member who is an
+   * Makes another member an owner and the caller a member in one change. Only a member who is an
    * owner can transfer; other owners keep their role.
    */
   Schema.Struct({
@@ -77,14 +99,14 @@ export const TeamMember = Schema.Struct({
   identityId: Identity,
   displayName: Schema.String,
   email: Email,
-  role: TeamRole,
+  role: TeamMemberRole,
 });
 export type TeamMember = typeof TeamMember.Type;
 export const TeamSummary = Schema.Struct({
   id: Id,
   reference: Schema.String,
   name: Name,
-  role: TeamRole,
+  role: TeamMemberRole,
   canManage: Schema.Boolean,
   state: Schema.Literals(["provisioning", "ready", "needs-attention", "archived"]),
   revision: Schema.Int,
@@ -95,7 +117,7 @@ export const TeamInvitation = Schema.Struct({
   teamName: Name,
   teamReference: Schema.String,
   email: Email,
-  role: TeamRole,
+  role: TeamMemberRole,
   expiresAt: Schema.Int,
 });
 export const TeamStorage = Schema.Struct({

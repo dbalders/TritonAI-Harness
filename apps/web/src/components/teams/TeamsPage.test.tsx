@@ -8,7 +8,7 @@ import {
   type TeamCommand,
   TeamsError,
   type TeamsResult,
-  type TeamRole,
+  type TeamMemberRole,
 } from "@t3tools/contracts";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
@@ -55,7 +55,7 @@ const profile = {
   email: "Alice@ucsd.edu",
   displayName: "Alice",
 };
-const member = (name: string, letter: string, role: TeamRole) => ({
+const member = (name: string, letter: string, role: TeamMemberRole) => ({
   identityId: id(letter),
   displayName: name,
   email: `${name.toLowerCase()}@ucsd.edu`,
@@ -66,7 +66,7 @@ const teamResult = (
   members = [
     member("Alice", "a", "owner"),
     member("Bob", "b", "owner"),
-    member("Carol", "c", "editor"),
+    member("Carol", "c", "member"),
   ],
 ): TeamsResult => {
   const summary = {
@@ -91,7 +91,7 @@ const teamResult = (
           teamName: "Alpha",
           teamReference: "TEAM-ALPHA",
           email: "dan@ucsd.edu",
-          role: "reader",
+          role: "member",
           expiresAt: 4_102_444_800,
         },
       ],
@@ -200,30 +200,28 @@ it("stages a role choice and sends it only from the confirmed review", async () 
   await renderWorkspace();
   const select = byLabel("Role for Carol") as HTMLSelectElement;
   await act(async () => {
-    select.value = "reader";
+    select.value = "owner";
     select.dispatchEvent(new Event("change", { bubbles: true }));
   });
   expect(mocks.calls).toEqual([]);
-  expect(select.value).toBe("reader");
+  expect(select.value).toBe("owner");
 
   await press(byLabel("Review change for Carol"));
-  expect(dialog()?.textContent).toContain("Change Carol's role to Reader?");
-  expect(dialog()?.textContent).toContain(
-    "Carol will no longer be able to add and edit team files.",
-  );
+  expect(dialog()?.textContent).toContain("Change Carol's role to Owner?");
+  expect(dialog()?.textContent).toContain("Carol will be able to manage members");
   await press(buttonNamed("Cancel"));
   expect(mocks.calls).toEqual([]);
-  expect((byLabel("Role for Carol") as HTMLSelectElement).value).toBe("editor");
+  expect((byLabel("Role for Carol") as HTMLSelectElement).value).toBe("member");
 
   await act(async () => {
-    select.value = "reader";
+    select.value = "owner";
     select.dispatchEvent(new Event("change", { bubbles: true }));
   });
   mocks.reply = () => teamResult(4);
   await press(byLabel("Review change for Carol"));
   await press(buttonNamed("Change role"));
   expect(mocks.calls).toEqual([
-    { action: "set-role", teamId: TEAM_ID, identityId: id("c"), role: "reader", revision: 3 },
+    { action: "set-role", teamId: TEAM_ID, identityId: id("c"), role: "owner", revision: 3 },
   ]);
   expect(dialog()).toBeNull();
 });
@@ -232,18 +230,18 @@ it("warns before you lower your own role and keeps the review open on a refusal"
   await renderWorkspace();
   const select = byLabel("Role for Alice (you)") as HTMLSelectElement;
   await act(async () => {
-    select.value = "editor";
+    select.value = "member";
     select.dispatchEvent(new Event("change", { bubbles: true }));
   });
   await press(byLabel("Review change for Alice (you)"));
-  expect(dialog()?.textContent).toContain("Change your role in Alpha to Editor?");
+  expect(dialog()?.textContent).toContain("Change your role in Alpha to Member?");
   expect(dialog()?.textContent).toContain("Only another owner can make you an owner again.");
 
   mocks.reply = () =>
     new TeamsError({ code: "conflict", message: "Assign another owner before changing roles." });
   await press(buttonNamed("Change role"));
   expect(mocks.calls).toEqual([
-    { action: "set-role", teamId: TEAM_ID, identityId: id("a"), role: "editor", revision: 3 },
+    { action: "set-role", teamId: TEAM_ID, identityId: id("a"), role: "member", revision: 3 },
   ]);
   expect(dialog()?.querySelector('[role="alert"]')?.textContent).toBe(
     "Assign another owner before changing roles.",
@@ -285,13 +283,13 @@ it("transfers ownership to a named member in one confirmed change", async () => 
   expect(mocks.calls).toEqual([]);
   expect(dialog()?.textContent).toContain("Transfer ownership of Alpha to Carol?");
   expect(dialog()?.textContent).toContain("carol@ucsd.edu");
-  expect(dialog()?.textContent).toContain("You'll become an editor");
+  expect(dialog()?.textContent).toContain("You'll become a member");
   expect(dialog()?.textContent).toContain("only an owner can make you an owner again");
   expect(document.activeElement?.textContent).toBe("Cancel");
 
   mocks.reply = () => ({
     ...teamResult(4, [
-      member("Alice", "a", "editor"),
+      member("Alice", "a", "member"),
       member("Bob", "b", "owner"),
       member("Carol", "c", "owner"),
     ]),
@@ -305,7 +303,7 @@ it("transfers ownership to a named member in one confirmed change", async () => 
 
 it("asks the only owner to transfer ownership before leaving", async () => {
   mocks.reply = () =>
-    teamResult(3, [member("Alice", "a", "owner"), member("Carol", "c", "editor")]);
+    teamResult(3, [member("Alice", "a", "owner"), member("Carol", "c", "member")]);
   await renderWorkspace();
   const leave = byLabel("Leave team Alpha") as HTMLButtonElement;
   expect(leave.disabled).toBe(true);
@@ -463,4 +461,18 @@ it("archives only after a confirmation naming the team, then offers only removal
   );
   expect(mocks.calls).toEqual([{ action: "leave", teamId: TEAM_ID, revision: 4 }]);
   expect(container.textContent).not.toContain("This team is archived.");
+});
+
+it("shows a reader recorded before owners and members as read-only and offers only member or owner", async () => {
+  mocks.reply = () =>
+    teamResult(3, [member("Alice", "a", "owner"), member("Carol", "c", "reader")]);
+  await renderWorkspace();
+  const select = byLabel("Role for Carol") as HTMLSelectElement;
+  expect(select.value).toBe("reader");
+  const options = [...select.options].map((option) => [option.value, option.disabled]);
+  expect(options).toEqual([
+    ["reader", true],
+    ["member", false],
+    ["owner", false],
+  ]);
 });
