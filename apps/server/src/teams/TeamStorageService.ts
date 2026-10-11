@@ -24,7 +24,7 @@ import {
 import { AccountService } from "../auth/AccountService.ts";
 import { ServerSecretStore } from "../auth/ServerSecretStore.ts";
 import * as Microsoft from "../memory/sync/microsoftSignIn.ts";
-import { executeDocument, summarizeDocument } from "./teamDocuments.ts";
+import { executeDocument, summarizeDocument, type TeamDailyWriteCommand } from "./teamDocuments.ts";
 import { lookupInvitee } from "./teamInvitee.ts";
 
 const Guid = Schema.String.check(Schema.isPattern(/^[a-f0-9-]{36}$/iu));
@@ -66,7 +66,13 @@ export interface TeamStorageScope {
   /** The exact root recorded at binding time; any other root for the team is refused. */
   readonly storage: TeamStorage;
   /** Lists only this top-level folder instead of the whole team folder. */
-  readonly listRoot?: "Memory" | "SOPs" | "Skills";
+  readonly listRoot?: "Memory" | "SOPs" | "Skills" | "Daily";
+  /**
+   * Which folders below `listRoot` to list. A folder it refuses isn't opened, and its path is
+   * added to `skipped`, so callers know which parts of the folder they didn't see.
+   */
+  readonly descend?: (path: string) => boolean;
+  readonly skipped?: string[];
   /**
    * Also reads the start of this many listed documents, in path order, for their titles and
    * descriptions. Each costs one Graph lookup and one partial download.
@@ -88,6 +94,16 @@ export class TeamStorageService extends Context.Service<
       command: TeamStorageCommand,
       scope?: TeamStorageScope,
     ) => Effect.Effect<TeamStorageStatus, TeamsError>;
+    /**
+     * Writes or removes the signed-in author's own daily team memory file or change marker, with
+     * the same account, membership, and storage checks as every other file operation. Returns the
+     * written version, or null after a removal.
+     */
+    readonly writeDaily: (
+      sessionId: string,
+      command: TeamDailyWriteCommand,
+      scope: TeamStorageScope,
+    ) => Effect.Effect<string | null, TeamsError>;
   }
 >()("t3/teams/TeamStorageService") {}
 
@@ -163,7 +179,7 @@ export const make = (
     });
     const execute = Effect.fn("TeamStorageService.execute")(function* (
       sessionId: string,
-      command: TeamStorageCommand,
+      command: TeamStorageCommand | TeamDailyWriteCommand,
       scope?: TeamStorageScope,
     ) {
       return yield* getLane(sessionId).withPermit(
@@ -393,6 +409,11 @@ export const make = (
                       : failure("Microsoft could not verify the connection. Try again."),
                   ),
                 );
+                // A daily team memory write's last check, after any token refresh and immediately
+                // before each request that changes storage, so nothing that stopped qualifying
+                // while the token was refreshed goes out.
+                if (command.action === "daily-write" && request.method !== "GET")
+                  yield* command.guard;
                 const response = yield* http
                   .execute(request.pipe(HttpClientRequest.bearerToken(token)))
                   .pipe(
@@ -409,6 +430,7 @@ export const make = (
                 return response;
               });
             if (
+              command.action === "daily-write" ||
               command.action === "publish" ||
               command.action === "read-file" ||
               command.action === "update-file" ||
@@ -555,9 +577,10 @@ export const make = (
                   )
                     return yield* failure("Shared storage contained an unexpected item.");
                   const path = parent.path ? `${parent.path}/${item.name}` : item.name;
-                  if (item.folder !== undefined)
-                    queue.push({ id: item.id, path, depth: parent.depth + 1 });
-                  else if (item.file !== undefined && item.eTag) {
+                  if (item.folder !== undefined) {
+                    if (scope?.descend && !scope.descend(path)) scope.skipped?.push(path);
+                    else queue.push({ id: item.id, path, depth: parent.depth + 1 });
+                  } else if (item.file !== undefined && item.eTag) {
                     files.push({ id: item.id, path, etag: item.eTag, size: item.size ?? 0 });
                     parents.set(path, parent.id);
                   }
@@ -605,7 +628,15 @@ export const make = (
         }),
       );
     });
-    return TeamStorageService.of({ execute, signOutAccount });
+    const writeDaily = (
+      sessionId: string,
+      command: TeamDailyWriteCommand,
+      scope: TeamStorageScope,
+    ) =>
+      execute(sessionId, command, scope).pipe(
+        Effect.map((status) => status.document?.etag ?? null),
+      );
+    return TeamStorageService.of({ execute, writeDaily, signOutAccount });
   });
 
 export const layer = Layer.effect(

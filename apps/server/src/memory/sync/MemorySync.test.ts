@@ -1370,6 +1370,39 @@ it.layer(NodeServices.layer)("MemorySync", (it) => {
       }),
   );
 
+  it.effect(
+    "leaves a month nobody listed alone, and removes its withdrawn note once it is listed",
+    () =>
+      Effect.gen(function* () {
+        const mac = yield* setup(new FakeOneDrive(), MAC);
+        const team = fakeTeamSource();
+        const sync = yield* MemorySync.MemorySync.pipe(Effect.provide(mac.layer));
+        yield* sync.teams.attach(team.source);
+        const old = "Daily/bob/2025-01/2025-01-05 device.md";
+        const recent = "Daily/bob/2026-10/2026-10-09 device.md";
+        team.files.set(old, { eTag: "e1", text: "Old day with a withdrawn thread" });
+        team.files.set(recent, { eTag: "e1", text: "Recent day" });
+        yield* sync.teams.sync;
+        assert.strictEqual(yield* mac.read(`${FOLDER}/${old}`), "Old day with a withdrawn thread");
+
+        // Bob removed the old note. An ordinary pass doesn't list that month: the copy stays.
+        team.files.delete(old);
+        team.listing = {
+          kind: "files",
+          files: [{ path: recent, eTag: "e1" }],
+          unlisted: ["Daily/bob/2025-01"],
+        };
+        yield* sync.teams.sync;
+        assert.strictEqual(yield* mac.read(`${FOLDER}/${old}`), "Old day with a withdrawn thread");
+
+        // Bob's marker says the month changed, so the next pass lists it and the note goes.
+        team.listing = { kind: "files", files: [{ path: recent, eTag: "e1" }], unlisted: [] };
+        yield* sync.teams.sync;
+        assert.isNull(yield* mac.read(`${FOLDER}/${old}`));
+        assert.strictEqual(yield* mac.read(`${FOLDER}/${recent}`), "Recent day");
+      }),
+  );
+
   it.effect("prunes copies of teams no longer kept, without reaching the team", () =>
     Effect.gen(function* () {
       const mac = yield* setup(new FakeOneDrive(), MAC);

@@ -40,6 +40,28 @@ export function teamDailyAuthor(path: string): string | null {
   return isTeamDailyPath(path) ? (dailyPath.exec(path)?.[1] ?? null) : null;
 }
 
+const markerPath = new RegExp(`^Daily/([A-Za-z0-9_-]{43})/(${uuid})\\.changes\\.json$`, "u");
+
+/**
+ * Where one author's device says which months it last changed. Copies read it on every sync to
+ * find older months to look at again, since listing every month every time would be too slow.
+ */
+export function teamDailyMarkerPath(author: string, deviceId: string): string {
+  return `Daily/${author}/${deviceId}.changes.json`;
+}
+
+/** The author folder a change marker belongs to, or null when it isn't a marker path. */
+export function teamDailyMarkerAuthor(path: string): string | null {
+  return markerPath.exec(path)?.[1] ?? null;
+}
+
+/** A change marker: month (`YYYY-MM`) to when this device last changed a file in it. */
+export const TeamDailyMarker = Schema.Struct({
+  version: Schema.Literal(1),
+  months: Schema.Record(Schema.String, Schema.String),
+});
+export type TeamDailyMarker = typeof TeamDailyMarker.Type;
+
 const Section = Schema.Struct({
   projectId: Schema.String,
   /** When the project's link began sharing, at the time this section was summarized. */
@@ -76,6 +98,18 @@ const Team = Schema.Struct({
   /** The last finished day summarized for the team. */
   lastFinishedDay: Schema.NullOr(Schema.String),
   days: Schema.Record(Schema.String, Day),
+  /**
+   * The change marker this device keeps in the team. A month is stamped here before a file in it
+   * is written, so a marker not yet published after a crash is published on the next pass.
+   */
+  marker: Schema.optionalKey(
+    Schema.Struct({
+      months: Schema.Record(Schema.String, Schema.String),
+      /** sha256 of the marker last published, or null before the first. */
+      publishedSha: Schema.NullOr(Schema.String),
+      etag: Schema.NullOr(Schema.String),
+    }),
+  ),
 });
 export type TeamDailyTeam = typeof Team.Type;
 

@@ -17,6 +17,7 @@ import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import { AccountService } from "../../auth/AccountService.ts";
 import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
 import { noTeamMirrorHost, TeamMirrorHost } from "../../memory/sync/teamMirror.ts";
+import { noTeamDailyHost, TeamDailyHost } from "../../memory/teamDailySource.ts";
 import * as TeamProject from "../TeamProjectService.ts";
 import * as TeamStorage from "../TeamStorageService.ts";
 
@@ -967,10 +968,15 @@ export const makeSyntheticTeamServices = (world: SyntheticTeamsWorld) =>
       yield* Effect.serviceOption(TeamMirrorHost),
       () => noTeamMirrorHost,
     );
+    const dailyHost = Option.getOrElse(
+      yield* Effect.serviceOption(TeamDailyHost),
+      () => noTeamDailyHost,
+    );
     const project = yield* TeamProject.make.pipe(
       Effect.provideService(AccountService, world.account),
       Effect.provideService(TeamStorage.TeamStorageService, storage),
       Effect.provideService(TeamMirrorHost, mirrorHost),
+      Effect.provideService(TeamDailyHost, dailyHost),
     );
     /** Connects Microsoft for every app session the account service has seen, as the current identity. */
     const connectMicrosoft = Effect.gen(function* () {

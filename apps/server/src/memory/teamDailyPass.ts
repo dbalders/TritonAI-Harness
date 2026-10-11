@@ -46,6 +46,8 @@ import {
   renderTeamDailyFile,
   renderTeamDailySection,
   sha256,
+  TeamDailyMarker,
+  teamDailyMarkerPath,
   teamDailyPath,
   type TeamDailyDay,
   TeamDailyState,
@@ -68,6 +70,7 @@ type Activity = MemoryThreadActivity & ActivityExtent;
 
 const decodeState = Schema.decodeUnknownEffect(Schema.fromJsonString(TeamDailyState));
 const encodeState = Schema.encodeEffect(Schema.fromJsonString(TeamDailyState));
+const encodeMarker = Schema.encodeEffect(Schema.fromJsonString(TeamDailyMarker));
 
 /** Threads among `threadIds` chosen as Don't share now. */
 const optedOutThreads = Effect.fn("teamMemory.optedOutThreads")(function* (
@@ -282,6 +285,37 @@ export const makeTeamDailyPass = (input: {
         return true;
       });
 
+    /** Publishes the team's change marker when it says something new. */
+    const publishMarker = (attached: TeamDailySource, state: State, team: Team, teamId: string) =>
+      Effect.gen(function* () {
+        const marker = team.marker;
+        if (!marker) return "done" as const;
+        const text = yield* encodeMarker({
+          version: 1,
+          months: Object.fromEntries(Object.entries(marker.months).toSorted()),
+        });
+        const sha = sha256(text);
+        if (sha === marker.publishedSha) return "done" as const;
+        const result = yield* attached.write({
+          teamId,
+          author: state.author,
+          path: teamDailyMarkerPath(state.author, state.deviceId),
+          text,
+          etag: marker.etag,
+          freshProjects: [],
+          stillShared: Effect.succeed(true),
+        });
+        if (result.kind === "lost") return "lost" as const;
+        if (result.kind === "held") {
+          yield* setStatus(teamId, { state: "held", message: result.message });
+          return "held" as const;
+        }
+        marker.publishedSha = sha;
+        marker.etag = result.etag;
+        yield* writeState(state);
+        return "done" as const;
+      });
+
     /** Writes every day file whose content changed. */
     const publishTeam = (
       attached: TeamDailySource,
@@ -330,6 +364,10 @@ export const makeTeamDailyPass = (input: {
             Effect.orElseSucceed(() => false),
           );
           if (!(yield* stillShared)) return "retry" as const;
+          // Stamped before the write, so a crash before the marker is published can't hide it.
+          const marker = (team.marker ??= { months: {}, publishedSha: null, etag: null });
+          marker.months[day.slice(0, 7)] = yield* nowIso;
+          yield* writeState(state);
           const result = yield* attached.write({
             teamId: workspace.teamId,
             author: state.author,
@@ -362,7 +400,7 @@ export const makeTeamDailyPass = (input: {
           yield* writeState(state);
           yield* setStatus(workspace.teamId, { lastPublishedAt: yield* nowIso });
         }
-        return "done" as const;
+        return yield* publishMarker(attached, state, team, workspace.teamId);
       });
 
     const pass = Effect.gen(function* () {

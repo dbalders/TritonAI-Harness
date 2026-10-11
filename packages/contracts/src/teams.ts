@@ -485,15 +485,17 @@ export const TeamProjectCommand = Schema.Union([
    * while the caller can open the team, which unlinks it from the team instead.
    */
   Schema.Struct({ action: Schema.Literal("remove-link"), projectId: ProjectId }),
-  /** The local copies of team memory this environment keeps for the caller's campus account. */
-  Schema.Struct({ action: Schema.Literal("mirror-list") }),
   /**
-   * Keeps a read-only copy of a team's memory notes and SOPs in this environment's memory vault.
-   * A project here must be linked to the team; its link names the folder that is copied.
+   * The local copies of team memory this environment keeps for the caller's campus account. Every
+   * team the account belongs to gets one automatically.
    */
+  Schema.Struct({ action: Schema.Literal("mirror-list") }),
+  /** Keeps a team's local copy again after it was stopped. */
   Schema.Struct({ action: Schema.Literal("mirror-on"), teamId: Id }),
-  /** Stops a copy and removes it from the vault, or dismisses one that was detached. */
+  /** Stops a team's local copy and removes it from the vault, or dismisses a detached one. */
   Schema.Struct({ action: Schema.Literal("mirror-off"), teamId: Id }),
+  /** Whether work in a project is shared with its linked team now, for the composer. */
+  Schema.Struct({ action: Schema.Literal("sharing-status"), projectId: ProjectId }),
   /**
    * The skills the caller turned on for a project, each checked now against the caller's access
    * and the skill's current version.
@@ -628,14 +630,28 @@ export const TeamProjectSkill = Schema.Struct({
   currentVersion: Schema.optionalKey(TeamSkillVersion),
 });
 export type TeamProjectSkill = typeof TeamProjectSkill.Type;
+/** How work in a project linked to a team reaches the team's daily memory. */
+export const TeamProjectSharing = Schema.Struct({
+  teamId: Id,
+  teamName: Schema.String,
+  /** `sharing`: summaries are written; `held`: they wait, and `message` says why. */
+  state: Schema.Literals(["sharing", "held"]),
+  message: Schema.NullOr(Schema.String),
+  /** When this device last published to the team, since the server started. */
+  lastPublishedAt: Schema.NullOr(Schema.String),
+});
+export type TeamProjectSharing = typeof TeamProjectSharing.Type;
 /** A team whose memory this environment copies into the memory vault, or did until access ended. */
 export const TeamMemoryMirror = Schema.Struct({
   teamId: Id,
   teamName: Schema.String,
   /** The copy's folder inside the memory vault, such as `teams/grant-reports-3f2a1c`. */
   folder: Schema.String,
-  /** `detached`: access ended, so the copy was removed and is no longer updated. */
-  state: Schema.Literals(["mirrored", "detached"]),
+  /**
+   * `detached`: access ended, so the copy was removed and is no longer updated. `off`: the caller
+   * stopped the copy.
+   */
+  state: Schema.Literals(["mirrored", "detached", "off"]),
   /** When the copy last matched the team's folder, since the server started. */
   lastSyncedAt: Schema.NullOr(Schema.String),
   /** Why a copy was detached, or what is holding up a mirrored one. */
@@ -664,5 +680,7 @@ export const TeamProjectResult = Schema.Struct({
   stuckLinks: Schema.optionalKey(Schema.Array(StuckTeamProjectLink)),
   /** From the `mirror-*` actions: every local copy the caller's campus account has here. */
   mirrors: Schema.optionalKey(Schema.Array(TeamMemoryMirror)),
+  /** From `sharing-status`: null when the project isn't linked to a team. */
+  sharing: Schema.optionalKey(Schema.NullOr(TeamProjectSharing)),
 });
 export type TeamProjectResult = typeof TeamProjectResult.Type;

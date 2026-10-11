@@ -883,6 +883,9 @@ export const make = Effect.gen(function* () {
     if (listing.kind === "detached") return yield* detach;
     if (listing.kind === "unavailable") return;
     const prefix = `teams/${team.folder}/`;
+    const unlisted = (listing.unlisted ?? []).map((folder) => `${prefix}${folder}/`);
+    const listed = (relativePath: string) =>
+      !unlisted.some((folder) => relativePath.startsWith(folder));
     const cloud = new Map(
       listing.files
         .filter((file) => isPlainRelativePath(file.path))
@@ -899,6 +902,7 @@ export const make = Effect.gen(function* () {
     const local = new Map<string, { readonly sha256: string }>();
     for (const entry of entries) {
       const relativePath = `${prefix}${entry.split(path.sep).join("/")}`;
+      if (!listed(relativePath)) continue;
       const bytes = yield* readLocal(relativePath);
       if (bytes !== null) local.set(relativePath, { sha256: sha256Bytes(bytes) });
     }
@@ -920,7 +924,9 @@ export const make = Effect.gen(function* () {
     for (const action of planTeamMirror({
       local,
       cloud,
-      synced: new Map(Object.entries(entry.synced)),
+      synced: new Map(
+        Object.entries(entry.synced).filter(([relativePath]) => listed(relativePath)),
+      ),
     })) {
       switch (action.kind) {
         case "download": {

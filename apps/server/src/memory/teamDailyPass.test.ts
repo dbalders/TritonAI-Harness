@@ -36,7 +36,16 @@ const TEAM_B = "22222222-2222-4222-8222-222222222222";
 /** A Teams side whose access, links, and storage the test controls. */
 function fakeTeams() {
   const files = new Map<string, { text: string; etag: string }>();
-  const writes: Array<{ teamId: string; path: string; text: string | null }> = [];
+  const allWrites: Array<{ teamId: string; path: string; text: string | null }> = [];
+  /** Writes of daily notes, without change markers. */
+  const writes = {
+    get length() {
+      return allWrites.filter((write) => write.path.endsWith(".md")).length;
+    },
+    some: (test: (write: (typeof allWrites)[number]) => boolean) =>
+      allWrites.some((write) => write.path.endsWith(".md") && test(write)),
+    every: (test: (write: (typeof allWrites)[number]) => boolean) => allWrites.every(test),
+  };
   let version = 0;
   const state = {
     account: {
@@ -47,6 +56,8 @@ function fakeTeams() {
     } as TeamDailyAccount,
     /** Answers the next writes with this instead of writing. */
     hold: null as TeamDailyWrite | null,
+    /** Holds writes to paths that match, as an outage between two requests would. */
+    holdPaths: null as RegExp | null,
     /** Stands in for the account, token, and membership checks the real write awaits. */
     beforeRequest: Effect.void as Effect.Effect<void>,
   };
@@ -61,6 +72,7 @@ function fakeTeams() {
           return { kind: "held", message: "Sharing changed." } satisfies TeamDailyWrite;
         return yield* Effect.sync((): TeamDailyWrite => {
           if (state.hold) return state.hold;
+          if (state.holdPaths?.test(input.path)) return { kind: "held", message: "offline" };
           const workspace = workspaces().find((entry) => entry.teamId === input.teamId);
           if (!workspace || workspace.access === "lost") return { kind: "lost" };
           if (workspace.access === "held") return { kind: "held", message: "offline" };
@@ -73,7 +85,7 @@ function fakeTeams() {
             )
               return { kind: "held", message: "A project link changed." };
           const key = `${input.teamId}/${input.path}`;
-          writes.push({ teamId: input.teamId, path: input.path, text: input.text });
+          allWrites.push({ teamId: input.teamId, path: input.path, text: input.text });
           if (input.text === null) {
             files.delete(key);
             return { kind: "written", etag: null };
@@ -97,6 +109,7 @@ function fakeTeams() {
   return {
     files,
     writes,
+    allWrites,
     state,
     source,
     workspace,
@@ -106,8 +119,11 @@ function fakeTeams() {
     },
     file: (teamId: string, day: string, deviceId: string, author = ALICE) =>
       files.get(`${teamId}/${teamDailyPath(author, day, deviceId)}`)?.text ?? null,
+    /** Daily notes only, without change markers. */
     teamFiles: (teamId: string) =>
-      [...files.entries()].filter(([key]) => key.startsWith(`${teamId}/`)),
+      [...files.entries()].filter(([key]) => key.startsWith(`${teamId}/`) && key.endsWith(".md")),
+    marker: (teamId: string, deviceId: string, author = ALICE) =>
+      files.get(`${teamId}/Daily/${author}/${deviceId}.changes.json`)?.text ?? null,
   };
 }
 
@@ -335,7 +351,7 @@ it.layer(NodeServices.layer)("team daily memory", (it) => {
         const pass = yield* makePass(harness.baseDir);
         yield* pass.attach(teams.source);
         yield* pass.run;
-        assert.deepStrictEqual(teams.writes, []);
+        assert.strictEqual(teams.writes.length, 0);
       }).pipe(Effect.provide(harness.layer));
     }),
   );
@@ -361,7 +377,7 @@ it.layer(NodeServices.layer)("team daily memory", (it) => {
           yield* pass.attach(teams.source);
           teams.state.hold = { kind: "held", message: "Microsoft is offline." };
           yield* pass.run;
-          assert.deepStrictEqual(teams.writes, []);
+          assert.strictEqual(teams.writes.length, 0);
 
           // The project is unlinked while the upload waits; its work predates the unlink.
           teams.state.hold = null;
@@ -498,7 +514,7 @@ it.layer(NodeServices.layer)("team daily memory", (it) => {
           yield* pass.attach(teams.source);
           teams.state.account = { kind: "unavailable", message: "Campus sign-in is unreachable." };
           yield* pass.run;
-          assert.deepStrictEqual(teams.writes, []);
+          assert.strictEqual(teams.writes.length, 0);
 
           teams.state.account = {
             kind: "signed-in",
@@ -559,7 +575,7 @@ it.layer(NodeServices.layer)("team daily memory", (it) => {
         const pass = yield* makePass(harness.baseDir);
         yield* pass.attach(teams.source);
         yield* pass.run;
-        assert.deepStrictEqual(teams.writes, []);
+        assert.strictEqual(teams.writes.length, 0);
         assert.deepInclude(yield* pass.status(TEAM_A), { state: "held" });
 
         failing = false;
@@ -594,7 +610,7 @@ it.layer(NodeServices.layer)("team daily memory", (it) => {
           );
           yield* pass.run;
           assert.isFalse(
-            teams.writes.some((write) => write.text?.includes("withdrawn during refresh")),
+            teams.writes.some((write) => write.text?.includes("withdrawn during refresh") === true),
           );
           const text = teams.file(TEAM_A, dayOf(10), yield* deviceIdOf(harness.baseDir))!;
           assert.include(text, "still shared");
@@ -649,5 +665,43 @@ it.layer(NodeServices.layer)("team daily memory", (it) => {
           assert.include(text, "published");
         }).pipe(Effect.provide(on.layer));
       }),
+  );
+  it.effect("marks each changed month, and publishes a marker left unpublished by an outage", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({});
+      yield* Effect.gen(function* () {
+        yield* TestClock.setTime(new Date(2026, 9, 10, 20).getTime());
+        yield* seedWorld;
+        yield* say("t-a1", "october work", at(10, 12));
+        yield* say("t-a1-other", "later withdrawn", at(10, 12));
+        const teams = fakeTeams();
+        teams.setWorkspaces([teams.workspace(TEAM_A, [["p-a1", at(1, 9)]])]);
+        const pass = yield* makePass(harness.baseDir);
+        yield* pass.attach(teams.source);
+        yield* pass.run;
+        const device = yield* deviceIdOf(harness.baseDir);
+        const first = JSON.parse(teams.marker(TEAM_A, device)!) as {
+          months: Record<string, string>;
+        };
+        assert.deepStrictEqual(Object.keys(first.months), ["2026-10"]);
+
+        // Months later the old note is rewritten, but the marker's write fails after it.
+        yield* TestClock.adjust(90 * 24 * 60 * 60_000);
+        yield* setSharing("t-a1-other", false);
+        teams.state.holdPaths = /\.changes\.json$/u;
+        yield* pass.run;
+        assert.notInclude(teams.file(TEAM_A, dayOf(10), device)!, "later withdrawn");
+        assert.strictEqual(
+          (JSON.parse(teams.marker(TEAM_A, device)!) as typeof first).months["2026-10"],
+          first.months["2026-10"],
+        );
+
+        // The next pass has nothing else to write and still publishes the newer stamp.
+        teams.state.holdPaths = null;
+        yield* pass.run;
+        const next = JSON.parse(teams.marker(TEAM_A, device)!) as typeof first;
+        assert.isTrue(next.months["2026-10"]! > first.months["2026-10"]!);
+      }).pipe(Effect.provide(harness.layer));
+    }),
   );
 });

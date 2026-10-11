@@ -32,8 +32,10 @@ import * as Semaphore from "effect/Semaphore";
 import { AccountService } from "../auth/AccountService.ts";
 import { ServerSecretStore } from "../auth/ServerSecretStore.ts";
 import { TeamMirrorHost } from "../memory/sync/teamMirror.ts";
+import { TeamDailyHost } from "../memory/teamDailySource.ts";
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
-import { makeTeamMemoryMirror } from "./teamMemoryMirror.ts";
+import { makeTeamDailySource } from "./teamDailyAdapter.ts";
+import { identityOf as mirrorIdentityOf, makeTeamMemoryMirror } from "./teamMemoryMirror.ts";
 import { TeamStorageService } from "./TeamStorageService.ts";
 
 const MAX_LINKS = 500;
@@ -45,6 +47,11 @@ const Link = Schema.Struct({
   teamId: Schema.String,
   storage: TeamStorage,
   linkedAt: Schema.String,
+  /**
+   * When work in the project began being shared with the team's daily memory: when it was
+   * linked, or for a link made before automatic sharing, when Harness first saw it afterwards.
+   */
+  sharingSince: Schema.optionalKey(Schema.String),
 });
 type Link = typeof Link.Type;
 const Links = Schema.fromJsonString(Schema.Array(Link).check(Schema.isMaxLength(MAX_LINKS)));
@@ -57,6 +64,13 @@ const sameLink = (a: Link, b: Link | undefined) =>
   a.storage.driveId === b.storage.driveId &&
   a.storage.folderId === b.storage.folderId;
 const decodeLinks = Schema.decodeUnknownEffect(Links);
+const ACCOUNT_SECRET_NAME = "team-memory-account";
+/** The campus session whose account shares and copies team memory in this environment. */
+const MemoryAccount = Schema.fromJsonString(
+  Schema.Struct({ sessionId: Schema.String, identity: Schema.String }),
+);
+const decodeMemoryAccount = Schema.decodeUnknownEffect(MemoryAccount);
+const encodeMemoryAccount = Schema.encodeEffect(MemoryAccount);
 const encodeLinks = Schema.encodeEffect(Links);
 const ENABLED_SECRET_NAME = "team-project-skills";
 const MAX_ENABLED = 2_000;
@@ -144,14 +158,16 @@ interface CheckedSkill {
 }
 
 /**
- * Links a local Harness project to one team's shared memory and skills. The link is local
- * metadata, not a filesystem boundary: every call reresolves the team from this server-side
- * record and rechecks the caller's campus identity, membership, role, and the exact storage root.
- * Team content is never written into the project workspace, personal memory, provider homes, or
- * installed skills. It reaches an agent only as text in a user's message: added by the user, or
- * added by the server to each message in a project where that user turned an approved skill on.
- * The exception is a local copy the user turns on for a linked team: its memory notes and SOPs
- * are copied read-only into the memory vault (see `teamMemoryMirror.ts`).
+ * Links a local Harness project to one team, which makes it a team workspace: work in it is
+ * summarized into the team's daily memory (see `teamDailyAdapter.ts` and
+ * `memory/teamDailyPass.ts`). The link is local metadata, not a filesystem boundary: every call
+ * reresolves the team from this server-side record and rechecks the caller's campus identity,
+ * membership, role, and the exact storage root.
+ *
+ * Team content is never written into the project workspace, provider homes, or installed skills.
+ * Every team the environment's Teams account belongs to is copied read-only into the memory
+ * vault's `teams/` folder (see `teamMemoryMirror.ts`), where agents search it. A skill reaches an
+ * agent only as text the server adds to messages in a project where that user approved it.
  */
 export class TeamProjectService extends Context.Service<
   TeamProjectService,
@@ -208,6 +224,7 @@ export const make = Effect.gen(function* () {
   // while the dispatch gate no longer recognizes its block and treats it as ordinary text.
   const issued = new Map<string, Issued>();
   const host = yield* TeamMirrorHost;
+  const daily = yield* TeamDailyHost;
 
   const readLinks = secrets.get(SECRET_NAME).pipe(
     Effect.flatMap((value) =>
@@ -222,13 +239,74 @@ export const make = Effect.gen(function* () {
       Effect.flatMap((encoded) => secrets.set(SECRET_NAME, new TextEncoder().encode(encoded))),
       Effect.mapError(() => failure("Team project links could not be saved securely.")),
     );
+  const readMemoryAccount = secrets.get(ACCOUNT_SECRET_NAME).pipe(
+    Effect.flatMap((value) =>
+      Option.isSome(value)
+        ? decodeMemoryAccount(new TextDecoder().decode(value.value)).pipe(Effect.map(Option.some))
+        : Effect.succeed(Option.none()),
+    ),
+    Effect.map(Option.getOrNull),
+    Effect.mapError(() => failure("The Teams account for team memory could not be read.")),
+  );
+  /**
+   * Makes a signed-in session the one team memory uses here. Another account only takes over
+   * once the current one's session is no longer signed in as that account.
+   */
+  const noteAccount = (sessionId: string) =>
+    Effect.gen(function* () {
+      const status = yield* account.getStatus(sessionId);
+      if (status.status !== "signed-in" || !status.profile) return;
+      const identity = mirrorIdentityOf(status.profile);
+      const current = yield* readMemoryAccount;
+      if (current?.sessionId === sessionId && current.identity === identity) return;
+      if (current && current.identity !== identity) {
+        const holder = yield* account.getStatus(current.sessionId).pipe(Effect.option);
+        if (
+          Option.isSome(holder) &&
+          holder.value.status === "signed-in" &&
+          holder.value.profile &&
+          mirrorIdentityOf(holder.value.profile) === current.identity
+        )
+          return;
+      }
+      const encoded = yield* encodeMemoryAccount({ sessionId, identity });
+      yield* secrets.set(ACCOUNT_SECRET_NAME, new TextEncoder().encode(encoded));
+    }).pipe(Effect.ignore);
   const mirrors = yield* makeTeamMemoryMirror({
     account,
     storage,
     secrets,
     host,
-    links: readLinks,
+    memoryAccount: readMemoryAccount,
   });
+  /**
+   * Links with when each began sharing, for projects that still exist. A link made before
+   * automatic sharing starts sharing now: earlier work in it is never shared.
+   */
+  const dailyLinks = Effect.gen(function* () {
+    let links = yield* readLinks;
+    if (links.some((link) => link.sharingSince === undefined)) {
+      const since = DateTime.formatIso(yield* DateTime.now);
+      links = yield* lock.withPermits(1)(
+        Effect.gen(function* () {
+          const current = yield* readLinks;
+          const next = current.map((link) =>
+            link.sharingSince === undefined ? { ...link, sharingSince: since } : link,
+          );
+          yield* writeLinks(next);
+          return next;
+        }),
+      );
+    }
+    const result = [];
+    for (const link of links)
+      if (yield* activeProject(link.projectId as ProjectId))
+        result.push({ ...link, sharingSince: link.sharingSince ?? link.linkedAt });
+    return result;
+  });
+  yield* daily.attach(
+    makeTeamDailySource({ account, storage, memoryAccount: readMemoryAccount, links: dailyLinks }),
+  );
   const readEnabled = secrets.get(ENABLED_SECRET_NAME).pipe(
     Effect.flatMap((value) =>
       Option.isSome(value)
@@ -276,6 +354,7 @@ export const make = Effect.gen(function* () {
     command: TeamCommand,
   ) {
     const result = yield* account.teams(sessionId, command);
+    yield* noteAccount(sessionId);
     yield* detachArchived(
       [...result.teams, ...(result.team ? [result.team] : [])]
         .filter((team) => team.state === "archived")
@@ -875,8 +954,6 @@ export const make = Effect.gen(function* () {
         yield* writeLinks(links.filter((entry) => entry.projectId !== projectId));
         // As with unlinking, skills turned on under the removed link never apply again.
         yield* removeEnabled((entry) => entry.link.projectId === projectId);
-        // A team's local copy goes with its last link here.
-        yield* mirrors.linksChanged;
         return { projects: [], storage: null };
       }),
     );
@@ -1040,27 +1117,28 @@ export const make = Effect.gen(function* () {
     if (command.action === "mirror-on") {
       const profile = yield* signedInProfile(sessionId);
       const team = yield* readyTeam(sessionId, command.teamId);
-      const link = (yield* readLinks).find((entry) => entry.teamId === team.id);
-      if (!link)
-        return yield* new TeamsError({
-          code: "invalid_request",
-          message: "Link a project in this environment to the team before keeping a local copy.",
-        });
-      const root = link.storage;
-      if (
-        team.storage.tenantId.toLowerCase() !== root.tenantId.toLowerCase() ||
-        team.storage.siteId !== root.siteId ||
-        team.storage.driveId !== root.driveId ||
-        team.storage.folderId !== root.folderId
-      )
-        return yield* new TeamsError({
-          code: "conflict",
-          message: "This team's folder changed. Unlink its projects and link one again.",
-        });
       return {
         projects: [],
         storage: null,
-        mirrors: yield* mirrors.enable(sessionId, profile, team),
+        mirrors: yield* mirrors.enable(profile, team.id),
+      };
+    }
+    if (command.action === "sharing-status") {
+      const link = yield* linkFor(command.projectId);
+      if (!link || !(yield* activeProject(command.projectId)))
+        return { projects: [], storage: null, sharing: null };
+      const team = yield* readyTeam(sessionId, link.teamId);
+      const status = yield* daily.status(team.id);
+      return {
+        projects: [],
+        storage: null,
+        sharing: {
+          teamId: team.id,
+          teamName: team.name,
+          state: status?.state ?? "sharing",
+          message: status?.message ?? null,
+          lastPublishedAt: status?.lastPublishedAt ?? null,
+        },
       };
     }
     if (command.action === "skill-enabled")
@@ -1082,8 +1160,6 @@ export const make = Effect.gen(function* () {
             if (existing) yield* writeLinks(next);
             // Skills turned on under the old link never apply to a later one.
             yield* removeEnabled((entry) => entry.link.projectId === command.projectId);
-            // A team's local copy goes with its last link here.
-            if (existing) yield* mirrors.linksChanged;
             return { projects: yield* listFor(team, next), storage: null };
           }
           if (!(yield* activeProject(command.projectId)))
@@ -1102,13 +1178,15 @@ export const make = Effect.gen(function* () {
           if (!existing) {
             if (links.length >= MAX_LINKS)
               return yield* failure("Too many projects are linked on this environment.");
+            const linkedAt = DateTime.formatIso(yield* DateTime.now);
             next = [
               ...links,
               {
                 projectId: command.projectId,
                 teamId: team.id,
                 storage: team.storage,
-                linkedAt: DateTime.formatIso(yield* DateTime.now),
+                linkedAt,
+                sharingSince: linkedAt,
               },
             ];
             yield* writeLinks(next);
@@ -1260,6 +1338,11 @@ export const make = Effect.gen(function* () {
     sessionId: string,
   ) {
     const status = yield* storage.signOutAccount(sessionId);
+    // Team memory stops with the session that shared it; the next pass forgets its record.
+    const owner = yield* readMemoryAccount.pipe(Effect.orElseSucceed(() => null));
+    if (owner?.sessionId === sessionId)
+      yield* secrets.remove(ACCOUNT_SECRET_NAME).pipe(Effect.ignore);
+    yield* daily.run.pipe(Effect.forkDetach);
     yield* mirrors.signedOut(sessionId).pipe(
       Effect.mapError(
         () =>

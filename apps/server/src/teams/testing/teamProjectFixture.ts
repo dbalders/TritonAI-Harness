@@ -15,6 +15,7 @@ import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import { AccountService } from "../../auth/AccountService.ts";
 import { ServerSecretStore } from "../../auth/ServerSecretStore.ts";
 import { TeamMirrorHost, type TeamMirrorSource } from "../../memory/sync/teamMirror.ts";
+import { TeamDailyHost, type TeamDailySource } from "../../memory/teamDailySource.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as TeamProject from "../TeamProjectService.ts";
 import * as TeamStorage from "../TeamStorageService.ts";
@@ -71,6 +72,11 @@ export function teamProjectFixture() {
   const graph: string[] = [];
   // Runs once, inside the next Graph request, to interleave another call with an in-flight one.
   let duringGraph: Effect.Effect<unknown, TeamsError> | null = null;
+  // Microsoft access token lifetime; a short one makes every Graph request refresh it.
+  let tokenSeconds = 3600;
+  // Runs once, inside the first token refresh for which `when` holds, holding the refresh.
+  let duringToken: { when: () => boolean; effect: Effect.Effect<unknown, TeamsError> } | null =
+    null;
   // Runs once, after the next membership read is answered, to land a change behind that read.
   let afterTeams: (() => void) | null = null;
   const writes: { method: string; url: string; body: string }[] = [];
@@ -206,6 +212,7 @@ export function teamProjectFixture() {
     getThreadDetailSnapshot: unused,
     searchThreads: unused,
   });
+  const isFile = (name: string) => name.endsWith(".md") || name.endsWith(".json");
   // Synthetic Graph: every item id is "<root>:<path>", so a response always names its own root.
   const graphPath =
     /^\/v1\.0\/drives\/([^/]+)\/items\/([^:/]+)(?::\/(.*?))?(:\/children|:\/content|\/children)?$/u;
@@ -231,12 +238,18 @@ export function teamProjectFixture() {
           expires_in: 600,
           interval: 5,
         });
-      if (url.pathname.endsWith("/token"))
+      if (url.pathname.endsWith("/token")) {
+        if (duringToken?.when()) {
+          const interleaved = duringToken.effect;
+          duringToken = null;
+          yield* Effect.ignore(interleaved);
+        }
         return json({
           access_token: "synthetic-graph-token",
           refresh_token: "synthetic-refresh-token",
-          expires_in: 3600,
+          expires_in: tokenSeconds,
         });
+      }
       if (url.pathname.endsWith("/me"))
         return json({
           id: `${subject}-object`,
@@ -284,7 +297,7 @@ export function teamProjectFixture() {
       if (removed.has(`${root}:${path}`)) return json(null, 404);
       const listed = children.get(`${root}:${path}`);
       if (suffix?.endsWith("children") && listed)
-        return json({ value: listed.map((name) => item([...parts, name], name.endsWith(".md"))) });
+        return json({ value: listed.map((name) => item([...parts, name], isFile(name))) });
       if (suffix?.endsWith("children"))
         return json({
           value:
@@ -294,7 +307,7 @@ export function teamProjectFixture() {
                 ? [item([...parts, "skill.md"], true)]
                 : [],
         });
-      return json(item(parts, path.endsWith(".md")));
+      return json(item(parts, isFile(path)));
     }),
   );
   // The memory sync engine's side of team copies: tests run the attached source themselves.
@@ -306,6 +319,16 @@ export function teamProjectFixture() {
       }),
     sync: Effect.sync(() => void mirror.syncs++),
     prune: Effect.sync(() => void mirror.prunes++),
+  });
+  // Daily team memory's host: tests drive the attached Teams-side source themselves.
+  const daily = { source: null as TeamDailySource | null, runs: 0 };
+  const dailyHost = TeamDailyHost.of({
+    attach: (source) =>
+      Effect.sync(() => {
+        daily.source = source;
+      }),
+    run: Effect.sync(() => void daily.runs++),
+    status: () => Effect.succeed(null),
   });
   const make = Effect.gen(function* () {
     const storageService = yield* TeamStorage.make(config).pipe(
@@ -319,6 +342,7 @@ export function teamProjectFixture() {
       Effect.provideService(ProjectionSnapshotQuery, query),
       Effect.provideService(TeamStorage.TeamStorageService, storageService),
       Effect.provideService(TeamMirrorHost, mirrorHost),
+      Effect.provideService(TeamDailyHost, dailyHost),
     );
     // Microsoft connection is per campus identity, as in the Teams page.
     const connect = (teamId: string) =>
@@ -331,6 +355,7 @@ export function teamProjectFixture() {
   return {
     make,
     mirror,
+    daily,
     graph,
     writes,
     roles,
@@ -345,6 +370,13 @@ export function teamProjectFixture() {
     denied,
     interleave: (effect: Effect.Effect<unknown, TeamsError>) => {
       duringGraph = effect;
+    },
+    shortTokens: () => {
+      tokenSeconds = 1;
+    },
+    /** Holds the next token refresh for which `when` holds while `effect` runs. */
+    duringTokenRefresh: (when: () => boolean, effect: Effect.Effect<unknown, TeamsError>) => {
+      duringToken = { when, effect };
     },
     afterMembershipRead: (change: () => void) => {
       afterTeams = change;

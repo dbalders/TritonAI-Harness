@@ -16,6 +16,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import { isTeamDailyPath, teamDailyAuthor, teamDailyMarkerAuthor } from "../memory/teamDaily.ts";
 import {
   FetchHttpClient,
   HttpClient,
@@ -156,6 +157,21 @@ const signedUrl = (address: string, storage: TeamStorage) =>
     return url;
   });
 
+/**
+ * Writes (`text`) or removes (`null`) the caller's own daily team memory file or change marker.
+ * Internal: Harness writes these on the author's behalf; no client sends this command.
+ */
+export interface TeamDailyWriteCommand {
+  readonly action: "daily-write";
+  readonly teamId: string;
+  readonly path: string;
+  readonly text: string | null;
+  /** The version this device last wrote, or null. */
+  readonly etag: string | null;
+  /** Runs immediately before each request that changes the file; failing abandons the write. */
+  readonly guard: Effect.Effect<void, TeamsError>;
+}
+
 type DocumentCommand = Extract<
   TeamStorageCommand,
   {
@@ -175,11 +191,12 @@ type Send = (
 ) => Effect.Effect<HttpClientResponse.HttpClientResponse, TeamsError>;
 
 /**
- * Team content never enters the personal memory directory or provider home. Version history is
- * read-only: SharePoint keeps it, and Harness lists and reads it but never restores a version.
+ * Documents are read for the team's local copy and the Teams page, never written into a provider
+ * home. Version history is read-only: SharePoint keeps it, and Harness lists and reads it but
+ * never restores a version.
  */
 export const executeDocument = (input: {
-  command: DocumentCommand;
+  command: DocumentCommand | TeamDailyWriteCommand;
   storage: TeamStorage;
   actorId: string;
   canWrite: boolean;
@@ -263,10 +280,16 @@ export const executeDocument = (input: {
         ? `${roots[command.kind]}/${input.actorId}/${command.deviceId}/${command.recordId}.md`
         : command.path;
     const match = documentPath.exec(path);
-    if (!match) return yield* invalid();
+    // Daily team memory can be read by every member, and written only by its author's devices.
+    const dailyAuthor = isTeamDailyPath(path) ? teamDailyAuthor(path) : teamDailyMarkerAuthor(path);
+    if (command.action === "daily-write") {
+      if (dailyAuthor !== input.actorId) return yield* invalid();
+    } else if (!match && !(dailyAuthor !== null && command.action === "read-file")) {
+      return yield* invalid();
+    }
     if (
       command.action === "delete-file" &&
-      match[1] === "Memory" &&
+      match?.[1] === "Memory" &&
       match[2] !== input.actorId &&
       !input.canManage
     )
@@ -277,7 +300,7 @@ export const executeDocument = (input: {
     // Skills become agent instructions: say what they are for, and keep nothing out of review.
     // Checked before any folder is created.
     if (
-      match[1] === "Skills" &&
+      match?.[1] === "Skills" &&
       (command.action === "publish" || command.action === "update-file")
     ) {
       if (command.action === "publish" && !command.description?.trim())
@@ -300,10 +323,72 @@ export const executeDocument = (input: {
           id = (yield* child(id, parts.slice(0, depth), true, create)).id;
         return id;
       });
-    const parentId = yield* locateParent(command.action === "publish");
     const filename = parts.at(-1)!;
     // Resolve mutations from the authorized team root, so a moved parent ID cannot redirect a write into another team.
     const anchoredPath = `${endpoint(storage.folderId)}:/${parts.map(encodeURIComponent).join("/")}`;
+    if (command.action === "daily-write") {
+      // Only the author's devices write these files, so the device's own text replaces a copy
+      // someone changed in SharePoint; SharePoint keeps the earlier version. The guard is checked
+      // here and, last, inside `send` after any token refresh, before each changing request.
+      const guarded = verifyCurrent.pipe(Effect.andThen(command.guard));
+      const missing = (error: TeamsError) => error.code === "not_found";
+      const currentTag = (parent: string) =>
+        child(parent, parts, false, false).pipe(
+          Effect.map((item) => item.eTag ?? null),
+          Effect.catchIf(missing, () => Effect.succeed(null)),
+        );
+      const ifMatch = (etag: string | null) => (request: HttpClientRequest.HttpClientRequest) =>
+        etag ? request.pipe(HttpClientRequest.setHeader("if-match", etag)) : request;
+      if (command.text === null) {
+        const parent = yield* locateParent(false).pipe(
+          Effect.catchIf(missing, () => Effect.succeed(null)),
+        );
+        if (parent === null) return null;
+        let etag = command.etag;
+        for (let attempt = 0; attempt < 2; attempt++) {
+          yield* guarded;
+          const response = yield* send(ifMatch(etag)(HttpClientRequest.delete(anchoredPath)));
+          if (response.status === 204 || response.status === 404) {
+            yield* verifyCurrent;
+            return null;
+          }
+          if (response.status !== 412) break;
+          etag = yield* currentTag(parent);
+          if (etag === null) return null;
+        }
+        return yield* unavailable("The daily note could not be removed. Harness will try again.");
+      }
+      const bytes = new TextEncoder().encode(command.text);
+      if (bytes.byteLength > MAX_BYTES)
+        return yield* new TeamsError({
+          code: "invalid_request",
+          message: "This day's team memory is larger than 64 KB, so it can't be shared.",
+        });
+      const parent = yield* locateParent(true);
+      let etag = command.etag;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        yield* guarded;
+        const response = yield* send(
+          ifMatch(etag)(
+            HttpClientRequest.put(`${anchoredPath}:/content`).pipe(
+              HttpClientRequest.bodyUint8Array(bytes, "text/markdown; charset=utf-8"),
+            ),
+          ),
+        );
+        if (response.status === 200 || response.status === 201) {
+          const saved = yield* checked(yield* parse(response), parent, filename, false);
+          if (!saved.eTag)
+            return yield* unavailable("Shared storage did not confirm the daily note's version.");
+          yield* verifyCurrent;
+          return { path, etag: saved.eTag, text: command.text } satisfies TeamDocument;
+        }
+        if (response.status === 412) etag = yield* currentTag(parent);
+        else if (response.status === 404 && etag) etag = null;
+        else break;
+      }
+      return yield* unavailable("The daily note could not be saved. Harness will try again.");
+    }
+    const parentId = yield* locateParent(command.action === "publish");
     const read = () =>
       Effect.gen(function* () {
         if ((yield* locateParent(false)) !== parentId) return yield* conflict();

@@ -21,6 +21,11 @@ export type TeamMirrorListing =
   | {
       readonly kind: "files";
       readonly files: ReadonlyArray<{ readonly path: string; readonly eTag: string }>;
+      /**
+       * Folders inside the team folder that this listing didn't open. Copies under them are left
+       * exactly as they are: a folder not listed says nothing about what it holds.
+       */
+      readonly unlisted?: ReadonlyArray<string>;
     }
   /** Access ended and the source recorded why: the copy is removed now. */
   | { readonly kind: "detached" }
