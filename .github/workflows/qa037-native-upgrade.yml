@@ -4,6 +4,7 @@ on:
     branches: [qa/harness-037-native-upgrade]
 permissions:
   contents: read
+  actions: read
 jobs:
   upgrade:
     runs-on: windows-latest
@@ -17,7 +18,7 @@ jobs:
         run: |
           gh release download v0.3.6 --repo dbalders/TritonAI-Harness --pattern 'TritonAI-Harness-0.3.6-x64.exe' --dir old
           if ($LASTEXITCODE -ne 0) { throw 'Stable download failed' }
-          gh release download v0.3.7 --repo dbalders/TritonAI-Harness --pattern 'TritonAI-Harness-0.3.7-x64.exe' --dir candidate
+          gh run download 38113803624 --repo dbalders/TritonAI-Harness --name desktop-win-x64 --dir candidate
           if ($LASTEXITCODE -ne 0) { throw 'Draft download failed' }
       - name: Verify stable upgrade, visible window, and plugins
         shell: pwsh
