@@ -46,9 +46,10 @@ membership change reports that permissions need checking, contact your
 administrator; access is not confirmed until the check succeeds. Teams
 administrators see **Teams needing attention** on the Teams page and can choose
 **Check again**, which verifies the team folder's permissions against the
-team's recorded members and makes the team ready if they match. A join or role
-promotion that didn't finish isn't applied: the person accepts the invitation
-again, or an owner repeats the change.
+team's recorded members and makes the team ready if they match. A join, role
+promotion, or ownership transfer that didn't finish isn't applied: the person
+accepts the invitation again, or an owner repeats the change. A team that was
+being archived finishes archiving instead, and no one regains access.
 
 When a team's work is done, an owner can choose **Archive team** and confirm.
 Everyone, including owners, loses access to its shared storage, team memory,

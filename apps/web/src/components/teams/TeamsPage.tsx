@@ -426,7 +426,7 @@ export function TeamWorkspace({
   const recheckCopy: MembershipReviewCopy | null = recheck
     ? {
         title: `Check ${recheck.name} again?`,
-        description: `Teams verifies the ${recheck.reference} folder’s SharePoint permissions against the team’s recorded members, and makes the team ready if they match. A join or promotion that didn’t finish isn’t applied: the person accepts again, or an owner repeats the change.`,
+        description: `Teams verifies the ${recheck.reference} folder’s SharePoint permissions against the team’s recorded members, and makes the team ready if they match. A join, promotion, or ownership transfer that didn’t finish isn’t applied: the person accepts again, or an owner repeats the change. A team that was being archived finishes archiving instead.`,
         confirm: "Check again",
         working: "Checking…",
         dismiss: "Cancel",

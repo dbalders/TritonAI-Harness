@@ -62,7 +62,8 @@ export const TeamCommand = Schema.Union([
   Schema.Struct({ action: Schema.Literal("admin-list") }),
   /**
    * Administrators only: rechecks a held team's folder permissions against its recorded members
-   * and, when they verify, makes it ready. A join or promotion that didn't finish isn't applied.
+   * and, when they verify, makes it ready. A join, promotion, or transfer that didn't finish isn't
+   * applied; a held archive is finished instead, with no member access.
    */
   Schema.Struct({ action: Schema.Literal("recheck"), teamId: Id, revision: Schema.Int }),
   /**
