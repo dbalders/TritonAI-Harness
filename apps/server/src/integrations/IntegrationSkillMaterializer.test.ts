@@ -21,6 +21,43 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 });
 
 describe("integration Codex skill homes", () => {
+  it("keeps shared skills until the last configured home is removed", async () => {
+    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-shared-homes-"));
+    const first = NodePath.join(root, "first");
+    const second = NodePath.join(root, "second");
+    const shared = NodePath.join(first, "skills");
+    const packageRoot = NodePath.join(root, "package");
+    const source = NodePath.join(packageRoot, "skills", "fixture-reader", "SKILL.md");
+    const target = NodePath.join(shared, "fixture-reader", "SKILL.md");
+    try {
+      await NodeFSP.mkdir(shared, { recursive: true });
+      await NodeFSP.mkdir(second);
+      await NodeFSP.symlink(shared, NodePath.join(second, "skills"), "junction");
+      await NodeFSP.mkdir(NodePath.dirname(source), { recursive: true });
+      await NodeFSP.writeFile(source, "---\nname: fixture-reader\ndescription: Fixture.\n---\n");
+      await NodeFSP.writeFile(NodePath.join(shared, "personal.txt"), "Preserve me.\n");
+      const materializer = new CodexIntegrationSkillMaterializer([first, second]);
+      const active = { integrationId: "fixture", packageRoot, activeSkills: ["fixture-reader"] };
+      await materializer.sync(active);
+      const original = await NodeFSP.stat(target);
+
+      await materializer.setCodexHomes([second, NodePath.join(root, "not-created")]);
+      // No registry refresh or subsequent sync may be needed to restore the retained skill.
+      expect((await NodeFSP.stat(target)).ino).toBe(original.ino);
+      expect(await NodeFSP.readFile(target, "utf8")).toContain("fixture-reader");
+      await materializer.reconcileCatalog(new Set(["fixture"]));
+      expect((await NodeFSP.stat(target)).ino).toBe(original.ino);
+      await materializer.setCodexHomes([]);
+      await expect(NodeFSP.access(target)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await NodeFSP.readFile(NodePath.join(shared, "personal.txt"), "utf8")).toBe(
+        "Preserve me.\n",
+      );
+      expect((await NodeFSP.lstat(NodePath.join(second, "skills"))).isSymbolicLink()).toBe(true);
+    } finally {
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("reconciles, updates, and retires managed skills through a linked skills root", async () => {
     const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-linked-skills-"));
     const home = NodePath.join(root, "codex");
