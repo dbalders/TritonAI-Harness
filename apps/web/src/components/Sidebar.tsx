@@ -2068,6 +2068,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                 </span>
               ) : null}
               <span className="pointer-events-none ml-auto inline-flex min-w-0 max-w-[45%] items-center gap-1">
+                <span className="truncate">{modelLabel}</span>
                 {isRemote ? (
                   <span className="inline-flex shrink-0 items-center text-sidebar-muted-foreground/70">
                     <EnvironmentMachineIcon
@@ -2097,7 +2098,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                     />
                   </span>
                 ) : null}
-                <span className="truncate">{modelLabel}</span>
               </span>
             </div>
           </div>
