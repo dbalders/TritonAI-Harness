@@ -35,6 +35,10 @@ const REQUEST_TIMEOUT = Duration.seconds(20);
 const ACCESS_TOKEN_SKEW_MS = 60_000;
 const ENTRA_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
+/** The failure message when a team sign-in's Microsoft account isn't the campus account's. */
+export const MICROSOFT_ACCOUNT_MISMATCH =
+  "Sign in with the Microsoft account that matches your UC San Diego account.";
+
 export interface MicrosoftOAuthConfig {
   readonly clientId: string;
   readonly tenantId: string;
@@ -54,7 +58,7 @@ function parseOAuthJson(raw: string | undefined): unknown {
  * server run from source reads the same `TRITONAI_MICROSOFT_OAUTH_JSON` the
  * build does.
  */
-function builtMicrosoftOAuthConfig(): MicrosoftOAuthConfig | null {
+export function builtMicrosoftOAuthConfig(): MicrosoftOAuthConfig | null {
   const value: unknown =
     typeof __TRITONAI_BUILD_MICROSOFT_OAUTH__ === "undefined"
       ? parseOAuthJson(process.env.TRITONAI_MICROSOFT_OAUTH_JSON)
@@ -194,6 +198,12 @@ export interface MicrosoftSignInOptions {
   readonly secretName: string;
   readonly scopes: string;
   readonly requiredAccount: { readonly email: string; readonly tenantId: string };
+  /**
+   * Gets each token from the Microsoft 365 plugin's current sign-in instead of one of its own, and
+   * only after `requiredAccount` matches it. Saves and caches nothing, so disconnecting the plugin
+   * ends access; never use `start` or `pollDeviceCode` with it.
+   */
+  readonly pluginOnly?: boolean;
 }
 
 // Team connections use an explicit account/session namespace and never borrow the personal plugin credential.
@@ -282,9 +292,7 @@ export const make = (
         return yield* decodeMe(json).pipe(Effect.orElseSucceed(() => null));
       }).pipe(Effect.orElseSucceed(() => null));
 
-    const accountMismatch = failure(
-      "Sign in with the Microsoft account that matches your UC San Diego account.",
-    );
+    const accountMismatch = failure(MICROSOFT_ACCOUNT_MISMATCH);
     const verifyTeamAccount = (accessToken: string, priorAccountId?: string | null) =>
       Effect.gen(function* () {
         if (!teamConnection) return;
@@ -349,7 +357,22 @@ export const make = (
         ),
       );
 
+    const pluginToken = Effect.gen(function* () {
+      const plugin = yield* readSecret(PLUGIN_SECRET);
+      const credential = Option.isSome(plugin)
+        ? yield* decodePluginCredential(plugin.value).pipe(Effect.option)
+        : Option.none();
+      if (Option.isNone(credential))
+        return yield* new MemorySyncSignInRequired({
+          message: "Connect the Microsoft 365 plugin to continue.",
+        });
+      const token = yield* redeem(credential.value.refreshToken);
+      yield* verifyTeamAccount(token.access_token);
+      return token.access_token;
+    });
+
     const accessToken = Effect.gen(function* () {
+      if (teamConnection?.pluginOnly) return yield* pluginToken;
       const since = yield* Ref.get(generation);
       const now = yield* Clock.currentTimeMillis;
       const current = yield* Ref.get(cached);

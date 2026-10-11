@@ -49,7 +49,14 @@ export function inviteeGate(
     case "connect":
       return {
         kind: "blocked",
-        message: "Connect Microsoft under Shared storage, then check the address again.",
+        message:
+          "Harness looks people up through your Microsoft 365 plugin. Connect or reconnect it under Settings → Plugins, then check the address again.",
+      };
+    case "mismatch":
+      return {
+        kind: "blocked",
+        message:
+          "Your Microsoft 365 plugin is signed in with a different account than your UC San Diego sign-in. Reconnect it with your UCSD account, then check again.",
       };
     case "not-found":
       return { kind: "blocked", message: `No UCSD account uses ${email}. Check the spelling.` };
@@ -67,7 +74,7 @@ export function inviteeGate(
       return {
         kind: "blocked",
         message:
-          "Microsoft didn't let Harness look up UCSD accounts. Disconnect and reconnect Microsoft under Shared storage to approve it, or ask your administrator.",
+          "Microsoft didn't let Harness look up UCSD accounts for your account. Ask your administrator.",
       };
   }
 }

@@ -3,12 +3,6 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { HttpClientRequest, type HttpClientResponse } from "effect/unstable/http";
 
-/**
- * The delegated permission that lets a team connection read other users' basic profiles. Invitee
- * lookup stays off until a connection's scopes include it.
- */
-export const DIRECTORY_LOOKUP_SCOPE = "User.ReadBasic.All";
-
 // User.ReadBasic.All returns only displayName, givenName, id, mail, photo, securityIdentifier,
 // surname, and userPrincipalName. userType, accountEnabled, jobTitle, and department need broader
 // directory permissions, so a guest is recognized by its `#EXT#` principal name instead.
@@ -27,7 +21,7 @@ const failure = () =>
 
 /**
  * Finds the one directory account whose sign-in name or mail is `email`, with a single Graph
- * request made through the caller's own delegated connection.
+ * request sent by `send` with a delegated User.ReadBasic.All token.
  */
 export const lookupInvitee = (
   email: string,

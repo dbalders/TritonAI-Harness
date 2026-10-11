@@ -37,6 +37,13 @@ it("keeps the unconfirmed path honest when lookup is off", () => {
 });
 
 it("blocks addresses the directory couldn't resolve to one member account", () => {
-  for (const status of ["connect", "not-found", "ambiguous", "guest", "not-permitted"] as const)
+  for (const status of [
+    "connect",
+    "mismatch",
+    "not-found",
+    "ambiguous",
+    "guest",
+    "not-permitted",
+  ] as const)
     expect(inviteeGate(check({ email: "bob@ucsd.edu", status }), current).kind).toBe("blocked");
 });

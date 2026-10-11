@@ -3,13 +3,15 @@ import type { AccountStatus, TeamsResult } from "@t3tools/contracts";
 import { TeamsError } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import { HttpClient, HttpClientResponse } from "effect/unstable/http";
+import { HttpClient, type HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 import { AccountService } from "../auth/AccountService.ts";
 import { ServerSecretStore } from "../auth/ServerSecretStore.ts";
 import * as TeamStorage from "./TeamStorageService.ts";
 
 const teamId = "11111111-1111-4111-a111-111111111111";
 const config = { clientId: teamId, tenantId: "22222222-2222-4222-a222-222222222222" };
+// The main Harness Microsoft app, which the Microsoft 365 plugin signs in to.
+const directoryConfig = { ...config, clientId: "33333333-3333-4333-a333-333333333333" };
 function fixture() {
   let signedIn = true;
   let member = true;
@@ -23,7 +25,10 @@ function fixture() {
   let subject = "alice";
   let teamOverride: Partial<NonNullable<TeamsResult["team"]>> = {};
   let directory: { status: number; body: unknown } = { status: 200, body: { value: [] } };
-  const directoryRequests: URL[] = [];
+  const directoryRequests: { url: URL; token: string | undefined }[] = [];
+  const tokenForms: URLSearchParams[] = [];
+  let me = { id: "alice-object", userPrincipalName: "alice@ucsd.edu", userType: "Member" };
+  let onDirectory = () => {};
   const graphWrites: string[] = [];
   const values = new Map<string, Uint8Array>();
   const graphRequests: string[] = [];
@@ -99,7 +104,8 @@ function fixture() {
       if (microsoftUnavailable && path.endsWith("/me"))
         return HttpClientResponse.fromWeb(request, Response.json({}, { status: 429 }));
       if (path === "/v1.0/users") {
-        directoryRequests.push(new URL(request.url));
+        directoryRequests.push({ url: new URL(request.url), token: request.headers.authorization });
+        onDirectory();
         return HttpClientResponse.fromWeb(
           request,
           Response.json(directory.body, { status: directory.status }),
@@ -162,16 +168,16 @@ function fixture() {
           }
         : path.endsWith("/token")
           ? {
-              access_token: "synthetic-graph-token",
+              // The main Harness app's tokens are told apart from the Teams storage app's.
+              access_token:
+                tokenForm(request)?.get("client_id") === directoryConfig.clientId
+                  ? "synthetic-directory-token"
+                  : "synthetic-graph-token",
               refresh_token: "synthetic-refresh-token",
               expires_in: 3600,
             }
           : path.endsWith("/me")
-            ? {
-                id: "alice-object",
-                userPrincipalName: "alice@ucsd.edu",
-                userType: "Member",
-              }
+            ? me
             : path.endsWith("/children")
               ? {
                   value: [
@@ -193,13 +199,19 @@ function fixture() {
       return HttpClientResponse.fromWeb(request, Response.json(body, { status: body ? 200 : 404 }));
     }),
   );
-  const makeWithScopes = (scopes?: string) =>
-    TeamStorage.make(config, scopes).pipe(
+  const tokenForm = (request: HttpClientRequest.HttpClientRequest) => {
+    if (request.body._tag !== "Uint8Array") return null;
+    const form = new URLSearchParams(new TextDecoder().decode(request.body.body));
+    tokenForms.push(form);
+    return form;
+  };
+  const makeWithDirectory = (directory: typeof config | null) =>
+    TeamStorage.make(config, directory).pipe(
       Effect.provideService(AccountService, account),
       Effect.provideService(ServerSecretStore, secrets),
       Effect.provideService(HttpClient.HttpClient, http),
     );
-  const make = makeWithScopes();
+  const make = makeWithDirectory(null);
   const connect = (service: TeamStorage.TeamStorageService["Service"], sessionId = "a") =>
     Effect.gen(function* () {
       const flow = yield* service.execute(sessionId, { action: "connect", teamId });
@@ -208,9 +220,21 @@ function fixture() {
     });
   return {
     make,
-    makeWithScopes,
+    makeWithDirectory,
     connect,
     directoryRequests,
+    tokenForms,
+    connectPlugin: () =>
+      values.set(
+        "integration-microsoft-365--oauth",
+        new TextEncoder().encode(JSON.stringify({ refreshToken: "plugin-refresh-token" })),
+      ),
+    setMe: (next: Partial<typeof me>) => {
+      me = { ...me, ...next };
+    },
+    onDirectory: (hook: () => void) => {
+      onDirectory = hook;
+    },
     setDirectory: (status: number, body: unknown) => {
       directory = { status, body };
     },
@@ -448,7 +472,6 @@ describe("Teams storage role and team binding", () => {
 
 describe("invitee lookup", () => {
   const lookup = { action: "lookup-invitee", teamId, email: "Bob@UCSD.edu" } as const;
-  const withLookup = `${TeamStorage.TEAM_MICROSOFT_SCOPES} User.ReadBasic.All`;
   const person = (upn: string, extra: object = {}) => ({
     id: `${upn}-id`,
     displayName: "Bob Example",
@@ -456,67 +479,101 @@ describe("invitee lookup", () => {
     userPrincipalName: upn,
     ...extra,
   });
+  const ready = Effect.gen(function* () {
+    const f = fixture();
+    f.connectPlugin();
+    return { f, service: yield* f.makeWithDirectory(directoryConfig) };
+  });
 
-  it.effect("stays off without the directory scope and never queries the directory", () =>
+  it.effect("is off without the main Microsoft app and never queries the directory", () =>
     Effect.gen(function* () {
-      expect(TeamStorage.TEAM_MICROSOFT_SCOPES.split(" ")).not.toContain("User.ReadBasic.All");
       const f = fixture();
+      f.connectPlugin();
       const service = yield* f.make;
       expect((yield* service.execute("a", lookup)).invitee).toEqual({
         email: "bob@ucsd.edu",
         status: "off",
       });
-      yield* f.connect(service);
-      const connected = yield* service.execute("a", lookup);
-      expect(connected.status).toBe("connected");
-      expect(connected.invitee?.status).toBe("off");
+      const otherTenant = yield* f.makeWithDirectory({
+        ...directoryConfig,
+        tenantId: "44444444-4444-4444-a444-444444444444",
+      });
+      expect((yield* otherTenant.execute("a", lookup)).invitee?.status).toBe("off");
       expect(f.directoryRequests).toHaveLength(0);
+      expect(f.tokenForms).toHaveLength(0);
     }),
   );
 
-  it.effect("needs a Microsoft connection and an owner before looking anyone up", () =>
+  it.effect("reads the directory through the plugin sign-in, saving nothing of its own", () =>
     Effect.gen(function* () {
-      const f = fixture();
-      const service = yield* f.makeWithScopes(withLookup);
-      expect((yield* service.execute("a", lookup)).invitee?.status).toBe("connect");
-      yield* f.connect(service);
-      f.setTeam({ role: "editor", canManage: false });
-      expect((yield* Effect.flip(service.execute("a", lookup))).code).toBe("forbidden");
-      expect(f.directoryRequests).toHaveLength(0);
-    }),
-  );
-
-  it.effect("resolves one member account with one request for basic profile fields only", () =>
-    Effect.gen(function* () {
-      const f = fixture();
-      const service = yield* f.makeWithScopes(withLookup);
-      yield* f.connect(service);
+      const { f, service } = yield* ready;
       f.setDirectory(200, { value: [person("bob@ucsd.edu", { mail: null })] });
-      expect((yield* service.execute("a", lookup)).invitee).toEqual({
+      // The team storage connection isn't needed and stays disconnected.
+      const result = yield* service.execute("a", lookup);
+      expect(result.status).toBe("disconnected");
+      expect(result.invitee).toEqual({
         email: "bob@ucsd.edu",
         status: "found",
         displayName: "Bob Example",
         userPrincipalName: "bob@ucsd.edu",
         mail: null,
       });
+      // The only saved sign-in is still the plugin's; the index lists no credentials.
+      expect(
+        [...f.values.keys()].filter((key) => !key.startsWith("team-microsoft-index-")),
+      ).toEqual(["integration-microsoft-365--oauth"]);
+      const form = f.tokenForms.at(-1)!;
+      expect(form.get("client_id")).toBe(directoryConfig.clientId);
+      expect(form.get("refresh_token")).toBe("plugin-refresh-token");
+      expect(form.get("scope")).toBe("User.ReadBasic.All User.Read");
       expect(f.directoryRequests).toHaveLength(1);
-      const query = f.directoryRequests[0]!.searchParams;
-      expect(query.get("$select")).toBe("id,displayName,mail,userPrincipalName");
-      expect(query.get("$filter")).toBe(
+      const request = f.directoryRequests[0]!;
+      expect(request.token).toBe("Bearer synthetic-directory-token");
+      expect(request.url.searchParams.get("$select")).toBe("id,displayName,mail,userPrincipalName");
+      expect(request.url.searchParams.get("$filter")).toBe(
         "userPrincipalName eq 'bob@ucsd.edu' or mail eq 'bob@ucsd.edu'",
       );
       yield* service.execute("a", { ...lookup, email: "o'neil@ucsd.edu" });
-      expect(f.directoryRequests[1]!.searchParams.get("$filter")).toBe(
+      expect(f.directoryRequests[1]!.url.searchParams.get("$filter")).toBe(
         "userPrincipalName eq 'o''neil@ucsd.edu' or mail eq 'o''neil@ucsd.edu'",
       );
+      // Nothing is cached, so disconnecting the plugin ends lookup at once.
+      f.values.delete("integration-microsoft-365--oauth");
+      expect((yield* service.execute("a", lookup)).invitee?.status).toBe("connect");
+      expect(f.directoryRequests).toHaveLength(2);
+    }),
+  );
+
+  it.effect("refuses a missing, mismatched, or guest plugin account before the directory", () =>
+    Effect.gen(function* () {
+      const f = fixture();
+      const service = yield* f.makeWithDirectory(directoryConfig);
+      expect((yield* service.execute("a", lookup)).invitee?.status).toBe("connect");
+      f.connectPlugin();
+      f.setMe({ userPrincipalName: "mallory@ucsd.edu" });
+      expect((yield* service.execute("a", lookup)).invitee?.status).toBe("mismatch");
+      f.setMe({ userPrincipalName: "alice@ucsd.edu", userType: "Guest" });
+      expect((yield* service.execute("a", lookup)).invitee?.status).toBe("mismatch");
+      expect(f.directoryRequests).toHaveLength(0);
+    }),
+  );
+
+  it.effect("needs an owner, and drops a result when access changes mid-lookup", () =>
+    Effect.gen(function* () {
+      const { f, service } = yield* ready;
+      f.setTeam({ role: "editor", canManage: false });
+      expect((yield* Effect.flip(service.execute("a", lookup))).code).toBe("forbidden");
+      expect(f.tokenForms).toHaveLength(0);
+      f.setTeam({});
+      f.setDirectory(200, { value: [person("bob@ucsd.edu")] });
+      f.onDirectory(() => f.setTeam({ role: "editor", canManage: false, revision: 3 }));
+      expect((yield* Effect.flip(service.execute("a", lookup))).code).toBe("conflict");
     }),
   );
 
   it.effect("refuses missing, ambiguous, guest, and unconsented results", () =>
     Effect.gen(function* () {
-      const f = fixture();
-      const service = yield* f.makeWithScopes(withLookup);
-      yield* f.connect(service);
+      const { f, service } = yield* ready;
       const cases: ReadonlyArray<readonly [number, unknown, string]> = [
         [200, { value: [] }, "not-found"],
         // A result that doesn't carry the typed address isn't the person asked for.

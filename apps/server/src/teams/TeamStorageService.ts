@@ -1,5 +1,6 @@
 import * as NodeCrypto from "node:crypto";
 import {
+  type TeamInviteeLookup,
   type TeamStorage,
   type TeamStorageCommand,
   type TeamStorageStatus,
@@ -24,7 +25,7 @@ import { AccountService } from "../auth/AccountService.ts";
 import { ServerSecretStore } from "../auth/ServerSecretStore.ts";
 import * as Microsoft from "../memory/sync/microsoftSignIn.ts";
 import { executeDocument, summarizeDocument } from "./teamDocuments.ts";
-import { DIRECTORY_LOOKUP_SCOPE, lookupInvitee } from "./teamInvitee.ts";
+import { lookupInvitee } from "./teamInvitee.ts";
 
 const Guid = Schema.String.check(Schema.isPattern(/^[a-f0-9-]{36}$/iu));
 const OAuth = Schema.Struct({ clientId: Guid, tenantId: Guid });
@@ -72,11 +73,6 @@ export interface TeamStorageScope {
    */
   readonly summaries?: number;
 }
-/**
- * Delegated Graph scopes a team connection requests. Add `DIRECTORY_LOOKUP_SCOPE` here once its
- * consent is approved to turn on invitee lookup.
- */
-export const TEAM_MICROSOFT_SCOPES = "Sites.Selected User.Read offline_access";
 interface Connection {
   readonly sessionId: string;
   readonly signIn: Microsoft.MicrosoftSignIn["Service"];
@@ -95,12 +91,16 @@ export class TeamStorageService extends Context.Service<
   }
 >()("t3/teams/TeamStorageService") {}
 
+/**
+ * `config` is the Teams storage app. `directory` is the Harness's main Microsoft app, which the
+ * Microsoft 365 plugin signs in to; invitee lookup reads the directory through that plugin's
+ * sign-in, and is off without it. Team files never use it.
+ */
 export const make = (
   config: Microsoft.MicrosoftOAuthConfig | null,
-  scopes: string = TEAM_MICROSOFT_SCOPES,
+  directory: Microsoft.MicrosoftOAuthConfig | null = null,
 ) =>
   Effect.gen(function* () {
-    const inviteeLookup = scopes.split(" ").includes(DIRECTORY_LOOKUP_SCOPE);
     const account = yield* AccountService;
     const http = yield* HttpClient.HttpClient;
     const secrets = yield* ServerSecretStore;
@@ -196,11 +196,6 @@ export const make = (
               code: "forbidden",
               message: "Only team owners can look up people to invite.",
             });
-          // A lookup that can't reach the directory says so, so the owner knows it was skipped.
-          const lookupSkipped = (status: "off" | "connect") =>
-            command.action === "lookup-invitee"
-              ? { invitee: { email: command.email.toLowerCase(), status } }
-              : {};
           const storage = team.storage;
           const expected = scope?.storage;
           if (
@@ -214,8 +209,94 @@ export const make = (
               code: "conflict",
               message: "This project's team folder changed. Unlink the project and link it again.",
             });
+          const verifyCurrent = Effect.gen(function* () {
+            const current = yield* account
+              .getStatus(sessionId)
+              .pipe(Effect.mapError(() => failure("Your account could not be verified.")));
+            if (
+              current.status !== "signed-in" ||
+              current.profile?.issuer !== profile.issuer ||
+              current.profile.subject !== profile.subject
+            )
+              return yield* new TeamsError({
+                code: "sign_in_required",
+                message: "Your account changed. Reopen this team.",
+              });
+            const refreshed = yield* account.teams(sessionId, {
+              action: "get",
+              teamId: command.teamId,
+            });
+            if (
+              refreshed.team?.id !== team.id ||
+              refreshed.team.revision !== team.revision ||
+              refreshed.team.state !== "ready" ||
+              refreshed.team.storage?.driveId !== storage.driveId ||
+              refreshed.team.storage.folderId !== storage.folderId
+            )
+              return yield* new TeamsError({
+                code: "conflict",
+                message: "Team access changed. Refresh before continuing.",
+              });
+          });
+          // Lookup reads the directory as the campus account, through the Microsoft 365 plugin's
+          // sign-in on the main app, rechecking the campus account and team around each step.
+          const directoryLookup = (email: string) =>
+            Effect.gen(function* () {
+              const address = email.toLowerCase();
+              const skipped = (status: "off" | "connect" | "mismatch") =>
+                ({ email: address, status }) satisfies TeamInviteeLookup;
+              if (!directory || directory.tenantId.toLowerCase() !== storage.tenantId.toLowerCase())
+                return skipped("off");
+              const signIn = yield* Microsoft.make(directory, {
+                secretName: "",
+                scopes: "User.ReadBasic.All User.Read",
+                requiredAccount: { email: profile.email, tenantId: storage.tenantId },
+                pluginOnly: true,
+              }).pipe(
+                Effect.provideService(HttpClient.HttpClient, http),
+                Effect.provideService(ServerSecretStore, secrets),
+              );
+              yield* verifyCurrent;
+              const token = yield* signIn.accessToken.pipe(
+                Effect.map((value) => ({ value })),
+                Effect.catchTags({
+                  MemorySyncSignInRequired: () => Effect.succeed(skipped("connect")),
+                  MemorySyncFailure: (error) =>
+                    error.message === Microsoft.MICROSOFT_ACCOUNT_MISMATCH
+                      ? Effect.succeed(skipped("mismatch"))
+                      : Effect.fail(failure(error.message)),
+                }),
+              );
+              if (!("value" in token)) return token;
+              const invitee = yield* lookupInvitee(address, (request) =>
+                verifyCurrent.pipe(
+                  Effect.andThen(
+                    http.execute(request.pipe(HttpClientRequest.bearerToken(token.value))),
+                  ),
+                  Effect.provideService(FetchHttpClient.RequestInit, { redirect: "manual" }),
+                  Effect.mapError((error) =>
+                    error._tag === "TeamsError"
+                      ? error
+                      : failure("Microsoft couldn't look up this address. Try again."),
+                  ),
+                ),
+              );
+              yield* verifyCurrent;
+              return invitee;
+            }).pipe(
+              Effect.timeout("30 seconds"),
+              Effect.catchTag("TimeoutError", () =>
+                Effect.fail(failure("Microsoft couldn't look up this address. Try again.")),
+              ),
+            );
+          const withLookup = (status: TeamStorageStatus) =>
+            command.action === "lookup-invitee"
+              ? directoryLookup(command.email).pipe(
+                  Effect.map((invitee) => ({ ...status, invitee })),
+                )
+              : Effect.succeed(status);
           if (!config || config.tenantId.toLowerCase() !== storage.tenantId.toLowerCase())
-            return { ...empty("not-configured"), ...lookupSkipped("off") };
+            return yield* withLookup(empty("not-configured"));
           const key = NodeCrypto.createHash("sha256")
             .update(
               encodeIdentity([
@@ -254,7 +335,7 @@ export const make = (
             }
             const signIn = yield* Microsoft.make(config, {
               secretName: `team-microsoft-${key}`,
-              scopes,
+              scopes: "Sites.Selected User.Read offline_access",
               requiredAccount: { email: profile.email, tenantId: storage.tenantId },
             }).pipe(
               Effect.provideService(HttpClient.HttpClient, http),
@@ -264,35 +345,6 @@ export const make = (
             connections.set(key, connection);
           }
           const signIn = connection.signIn;
-          const verifyCurrent = Effect.gen(function* () {
-            const current = yield* account
-              .getStatus(sessionId)
-              .pipe(Effect.mapError(() => failure("Your account could not be verified.")));
-            if (
-              current.status !== "signed-in" ||
-              current.profile?.issuer !== profile.issuer ||
-              current.profile.subject !== profile.subject
-            )
-              return yield* new TeamsError({
-                code: "sign_in_required",
-                message: "Your account changed. Reopen this team.",
-              });
-            const refreshed = yield* account.teams(sessionId, {
-              action: "get",
-              teamId: command.teamId,
-            });
-            if (
-              refreshed.team?.id !== team.id ||
-              refreshed.team.revision !== team.revision ||
-              refreshed.team.state !== "ready" ||
-              refreshed.team.storage?.driveId !== storage.driveId ||
-              refreshed.team.storage.folderId !== storage.folderId
-            )
-              return yield* new TeamsError({
-                code: "conflict",
-                message: "Team access changed. Refresh before continuing.",
-              });
-          });
           const action = Effect.gen(function* () {
             if (command.action === "disconnect") {
               yield* signIn.signOut;
@@ -326,11 +378,7 @@ export const make = (
                 return yield* failure(poll.message ?? "Microsoft sign-in expired. Try again.");
             }
             const who = yield* signIn.account;
-            if (!who?.accountId)
-              return {
-                ...empty("disconnected"),
-                ...lookupSkipped(inviteeLookup ? "connect" : "off"),
-              };
+            if (!who?.accountId) return yield* withLookup(empty("disconnected"));
             const connected = { ...empty("connected"), account: who.account };
             const send = (request: HttpClientRequest.HttpClientRequest) =>
               Effect.gen(function* () {
@@ -382,10 +430,7 @@ export const make = (
               }).pipe(Effect.provideService(HttpClient.HttpClient, http));
               return { ...connected, ...result };
             }
-            if (command.action === "lookup-invitee")
-              return inviteeLookup
-                ? { ...connected, invitee: yield* lookupInvitee(command.email, send) }
-                : { ...connected, ...lookupSkipped("off") };
+            if (command.action === "lookup-invitee") return yield* withLookup(connected);
             if (command.action !== "list-files") return connected;
             const files: TeamStorageStatus["files"][number][] = [];
             const parents = new Map<string, string>();
@@ -570,6 +615,9 @@ export const layer = Layer.effect(
       Config.withDefault(""),
     );
     const config = decodeOAuth(json);
-    return yield* make(config._tag === "Some" ? config.value : null);
+    return yield* make(
+      config._tag === "Some" ? config.value : null,
+      Microsoft.builtMicrosoftOAuthConfig(),
+    );
   }),
 );

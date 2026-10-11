@@ -338,12 +338,14 @@ export const TeamDocumentVersion = Schema.Struct({
 });
 export type TeamDocumentVersion = typeof TeamDocumentVersion.Type;
 /**
- * Who a UCSD address belongs to, for the address as looked up (lowercased).
+ * Who a UCSD address belongs to, for the address as looked up (lowercased). Lookup reads the
+ * directory through the caller's Microsoft 365 plugin sign-in, not the team storage connection.
  * - `found`: one member account; `displayName` is the directory's name for it.
  * - `off`: this Harness doesn't look addresses up, so an invitation goes out unconfirmed.
- * - `connect`: Microsoft isn't connected for this team; connect it and look up again.
+ * - `connect`: the Microsoft 365 plugin isn't connected, or its sign-in expired.
+ * - `mismatch`: the plugin is signed in as a different account than the caller's campus account.
  * - `not-found`, `ambiguous` (more than one account), `guest` (an external account).
- * - `not-permitted`: Microsoft refused the directory lookup for this connection.
+ * - `not-permitted`: Microsoft refused the directory lookup for this account.
  */
 export const TeamInviteeLookup = Schema.Union([
   Schema.Struct({
@@ -355,7 +357,15 @@ export const TeamInviteeLookup = Schema.Union([
   }),
   Schema.Struct({
     email: Email,
-    status: Schema.Literals(["off", "connect", "not-found", "ambiguous", "guest", "not-permitted"]),
+    status: Schema.Literals([
+      "off",
+      "connect",
+      "mismatch",
+      "not-found",
+      "ambiguous",
+      "guest",
+      "not-permitted",
+    ]),
   }),
 ]);
 export type TeamInviteeLookup = typeof TeamInviteeLookup.Type;
