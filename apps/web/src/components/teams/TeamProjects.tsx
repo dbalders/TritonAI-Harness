@@ -68,7 +68,6 @@ export function TeamProjects({
   environmentId,
   teamId,
   linkProjectId,
-  authors,
   canWrite,
   onLinksChange,
 }: {
@@ -76,8 +75,6 @@ export function TeamProjects({
   teamId: string;
   /** Chosen in the link form when it can still be linked. */
   linkProjectId: ProjectId | null;
-  /** Current members' names by author folder. */
-  authors: Readonly<Record<string, string>>;
   canWrite: boolean;
   /**
    * Whether any project here is linked, after each load, link, or unlink. A local copy of the team
@@ -238,7 +235,6 @@ export function TeamProjects({
           environmentId={environmentId}
           teamId={teamId}
           link={openLink}
-          authors={authors}
           canWrite={canWrite}
         />
       ) : null}
@@ -329,14 +325,12 @@ function TeamProjectDocuments({
   environmentId,
   teamId,
   link,
-  authors,
   canWrite,
 }: {
   kind: "memory" | "skill";
   environmentId: EnvironmentId;
   teamId: string;
   link: TeamProjectLink;
-  authors: Readonly<Record<string, string>>;
   canWrite: boolean;
 }) {
   const { run, busy, error } = useTeamProjectRequest(environmentId);
@@ -426,7 +420,6 @@ function TeamProjectDocuments({
             teamId={teamId}
             document={state.document}
             files={state.files}
-            authors={authors}
             canWrite={canWrite}
             busy={busy}
             run={runStorage}

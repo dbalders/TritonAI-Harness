@@ -1,6 +1,5 @@
 import * as NodeCrypto from "node:crypto";
 import {
-  type TeamDocumentSummary,
   type TeamStorage,
   type TeamStorageCommand,
   type TeamStorageStatus,
@@ -24,7 +23,7 @@ import {
 import { AccountService } from "../auth/AccountService.ts";
 import { ServerSecretStore } from "../auth/ServerSecretStore.ts";
 import * as Microsoft from "../memory/sync/microsoftSignIn.ts";
-import { executeDocument, isTeamDocumentPath, summarizeDocument } from "./teamDocuments.ts";
+import { executeDocument, summarizeDocument } from "./teamDocuments.ts";
 import { DIRECTORY_LOOKUP_SCOPE, lookupInvitee } from "./teamInvitee.ts";
 
 const Guid = Schema.String.check(Schema.isPattern(/^[a-f0-9-]{36}$/iu));
@@ -67,14 +66,12 @@ export interface TeamStorageScope {
   readonly storage: TeamStorage;
   /** Lists only this top-level folder instead of the whole team folder. */
   readonly listRoot?: "Memory" | "SOPs" | "Skills";
+  /**
+   * Also reads the start of this many listed documents, in path order, for their titles and
+   * descriptions. Each costs one Graph lookup and one partial download.
+   */
+  readonly summaries?: number;
 }
-/**
- * A list summarizes this many team documents, in path order, so they can be found by title,
- * description, and project label without being opened. Others show their title once previewed.
- */
-export const LIST_SUMMARIES = 100;
-/** Summaries kept per server, by exact document version, so an unchanged document is read once. */
-const SUMMARY_CACHE = 2_000;
 /**
  * Delegated Graph scopes a team connection requests. Add `DIRECTORY_LOOKUP_SCOPE` here once its
  * consent is approved to turn on invitee lookup.
@@ -108,9 +105,6 @@ export const make = (
     const http = yield* HttpClient.HttpClient;
     const secrets = yield* ServerSecretStore;
     const connections = new Map<string, Connection>();
-    // Keyed by drive, path, item, version, and folder. An entry is used only for an item that a
-    // list just returned, with the caller's own token, at that same version and place.
-    const summaryCache = new Map<string, TeamDocumentSummary>();
     const lanes = new Map<string, Semaphore.Semaphore>();
     const credentialIndex = (sessionId: string) =>
       `team-microsoft-index-${NodeCrypto.createHash("sha256").update(sessionId).digest("hex")}`;
@@ -530,30 +524,18 @@ export const make = (
             }
             for (const parent of queue) yield* verifyFolder(parent);
             const summarized = files
-              .filter((file) => isTeamDocumentPath(file.path))
               .toSorted((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
-              .slice(0, LIST_SUMMARIES);
+              .slice(0, scope?.summaries ?? 0);
             const summaries = new Map(
               yield* Effect.forEach(
                 summarized,
-                (file) => {
-                  const parentId = parents.get(file.path)!;
-                  const key = [storage.driveId, file.path, file.id, file.etag, parentId].join("\n");
-                  const cached = summaryCache.get(key);
-                  if (cached) return Effect.succeed([file.path, cached] as const);
-                  return summarizeDocument({ storage, file: { ...file, parentId }, send }).pipe(
-                    Effect.tap((summary) =>
-                      Effect.sync(() => {
-                        if (!summary) return;
-                        if (summaryCache.size >= SUMMARY_CACHE)
-                          summaryCache.delete(summaryCache.keys().next().value!);
-                        summaryCache.set(key, summary);
-                      }),
-                    ),
-                    Effect.map((summary) => [file.path, summary] as const),
-                  );
-                },
-                { concurrency: 8 },
+                (file) =>
+                  summarizeDocument({
+                    storage,
+                    file: { ...file, parentId: parents.get(file.path)! },
+                    send,
+                  }).pipe(Effect.map((summary) => [file.path, summary] as const)),
+                { concurrency: 4 },
               ).pipe(Effect.provideService(HttpClient.HttpClient, http)),
             );
             yield* verifyCurrent;

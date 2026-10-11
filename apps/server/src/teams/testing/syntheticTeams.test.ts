@@ -21,7 +21,6 @@ import {
   makeSyntheticTeamsWorld,
   syntheticDocumentPath,
 } from "./syntheticTeams.ts";
-import { LIST_SUMMARIES } from "../TeamStorageService.ts";
 
 const projectId = ProjectId.make("synthetic-project");
 const threadId = ThreadId.make("synthetic-thread");
@@ -359,16 +358,10 @@ describe("Team document list summaries", () => {
       world.trace.length = 0;
       const memory = yield* project.execute("s", { action: "memory-list", projectId });
       expect(summaries(memory.storage?.files)).toEqual({
-        [ownerNote]: {
-          title: "SYNTHETIC grant report checklist",
-          description: "",
-          project: "synthetic-grant-reports",
-          hidden: false,
-        },
+        [ownerNote]: { title: "SYNTHETIC grant report checklist", description: "", hidden: false },
         [syntheticDocumentPath(1)]: {
           title: "SYNTHETIC reviewer contacts",
           description: "",
-          project: "synthetic-grant-reports",
           hidden: false,
         },
       });
@@ -377,14 +370,12 @@ describe("Team document list summaries", () => {
         [ownerSkill]: {
           title: "SYNTHETIC report formatter",
           description: "Formats a synthetic grant report summary as a short table.",
-          project: "synthetic-grant-reports",
           hidden: false,
         },
         // Listed and titled, but flagged: using it is still refused.
         [hiddenSkill]: {
           title: "SYNTHETIC hidden-character skill",
           description: "Contains a zero-width character; Harness should refuse to use it.",
-          project: "synthetic-grant-reports",
           hidden: true,
         },
       });
@@ -399,10 +390,10 @@ describe("Team document list summaries", () => {
     }),
   );
 
-  it.effect(`summarizes at most ${LIST_SUMMARIES} documents per list`, () =>
+  it.effect("summarizes at most twenty documents per list", () =>
     Effect.gen(function* () {
       const { world, project } = yield* linkedAlpha();
-      for (let index = 0; index < LIST_SUMMARIES; index++)
+      for (let index = 0; index < 22; index++)
         yield* project.execute("s", {
           action: "memory-publish",
           projectId,
@@ -414,52 +405,9 @@ describe("Team document list summaries", () => {
       world.trace.length = 0;
       const listed = yield* project.execute("s", { action: "memory-list", projectId });
       const files = listed.storage?.files ?? [];
-      expect(files).toHaveLength(LIST_SUMMARIES + 2);
-      expect(files.filter((file) => file.summary)).toHaveLength(LIST_SUMMARIES);
-      expect(world.trace.filter((entry) => entry.kind === "download")).toHaveLength(LIST_SUMMARIES);
-    }),
-  );
-
-  it.effect("reads an unchanged document's summary once, and again after it is edited", () =>
-    Effect.gen(function* () {
-      const { world, project } = yield* linkedAlpha();
-      yield* project.execute("s", { action: "memory-list", projectId });
-      world.trace.length = 0;
-      const again = yield* project.execute("s", { action: "memory-list", projectId });
-      expect(summaries(again.storage?.files)[ownerNote]).toMatchObject({
-        title: "SYNTHETIC grant report checklist",
-      });
-      expect(world.trace.filter((entry) => entry.kind === "download")).toHaveLength(0);
-      world.editDocument("alpha", ownerNote, "# SYNTHETIC renamed checklist\n\nEdited text.");
-      world.trace.length = 0;
-      const edited = yield* project.execute("s", { action: "memory-list", projectId });
-      expect(summaries(edited.storage?.files)[ownerNote]).toEqual({
-        title: "SYNTHETIC renamed checklist",
-        description: "",
-        hidden: false,
-      });
-      expect(world.trace.filter((entry) => entry.kind === "download")).toHaveLength(1);
-    }),
-  );
-
-  it.effect("summarizes every kind of document in the whole team's list", () =>
-    Effect.gen(function* () {
-      const { storage } = yield* linkedAlpha();
-      const listed = yield* storage.execute("s", { action: "list-files", teamId: alpha });
-      const files = listed.files.filter((file) => /^(Memory|Skills)\//u.test(file.path));
-      expect(files.length).toBeGreaterThanOrEqual(4);
-      expect(files.every((file) => file.summary?.title.startsWith("SYNTHETIC"))).toBe(true);
-    }),
-  );
-
-  it.effect("withholds a cached summary when access is revoked", () =>
-    Effect.gen(function* () {
-      const { world, project } = yield* linkedAlpha();
-      yield* project.execute("s", { action: "memory-list", projectId });
-      world.setRole("alpha", "editor", "none");
-      expect(yield* code(project.execute("s", { action: "memory-list", projectId }))).toBe(
-        "not_found",
-      );
+      expect(files).toHaveLength(24);
+      expect(files.filter((file) => file.summary)).toHaveLength(20);
+      expect(world.trace.filter((entry) => entry.kind === "download")).toHaveLength(20);
     }),
   );
 

@@ -4,7 +4,7 @@ import { StuckProjectLinks, TeamProjects } from "./TeamProjects";
 import { HeldTeams, type HeldTeam } from "./TeamAdmin";
 import { TeamMemoryCopyControl, TeamMemoryCopyList, useTeamMemoryCopies } from "./TeamMemoryCopies";
 // @effect-diagnostics cryptoRandomUUID:off - Browser event creates a retry-stable request ID before dispatch.
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type {
   AccountProfile,
   EnvironmentId,
@@ -330,13 +330,6 @@ export function TeamWorkspace({
   const [rename, setRename] = useState("");
   const creation = useRef<{ name: string; requestId: string } | null>(null);
   const team = result?.team;
-  // Names for the author folders team documents are saved under; former members have none.
-  const members = team?.members;
-  const authors = useMemo(
-    () =>
-      Object.fromEntries((members ?? []).map((member) => [member.identityId, member.displayName])),
-    [members],
-  );
   const archived = team?.state === "archived";
   // An archived team can't be managed; members can only remove it from their list.
   const owner = team?.canManage === true && !archived;
@@ -677,7 +670,6 @@ export function TeamWorkspace({
               key={`${team.id}:${team.storage?.folderId ?? ""}`}
               environmentId={environmentId}
               teamId={team.id}
-              authors={authors}
               canWrite={team.role !== "reader" || team.canManage}
             />
           ) : null}
@@ -687,7 +679,6 @@ export function TeamWorkspace({
               environmentId={environmentId}
               teamId={team.id}
               linkProjectId={linkProjectId}
-              authors={authors}
               canWrite={team.role !== "reader" || team.canManage}
               onLinksChange={(linked) => {
                 setLinkedTeam({ teamId: team.id, linked });

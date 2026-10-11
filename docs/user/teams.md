@@ -66,12 +66,7 @@ work summary, SOP, or skill document explicitly; all team members can read it.
 A skill document needs a short description of what it's for, and can't contain
 hidden or control characters.
 Project labels organize documents within a team. They do not restrict access
-within that team. To find a document, type in the search box above a team's
-documents, in Teams or in a thread's team skill picker. It matches
-every word you type against each document's type, title, description, author,
-and project label. Lists show these details for up to 100 documents; past that,
-a document's title appears and becomes searchable once you preview it. Search
-doesn't look inside document text. If someone edits a document before you save, keep your draft
+within that team. If someone edits a document before you save, keep your draft
 and reload its latest version before retrying.
 
 Every open document and preview shows who last changed it and when. Choose
@@ -109,8 +104,8 @@ write to it. Nothing else from the thread is shared, and removing a shared note
 does not remove copies people already made.
 
 **Use a team skill in message** previews one skill document from the project's
-linked team. The list names each skill by its title, author, and project label,
-and you can search it. The preview shows the skill's title, description,
+linked team. The list names each skill by its title and author; when a team has
+many documents, some show their title only after you preview them. The preview shows the skill's title, description,
 project label, whose folder it is in, and exactly what will be added to your
 message. Editors can change a skill, so read it each time; if it changed since
 your preview, you're asked to review it again. The skill applies only to the

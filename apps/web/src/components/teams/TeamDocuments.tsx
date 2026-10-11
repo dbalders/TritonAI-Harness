@@ -1,22 +1,15 @@
 // @effect-diagnostics cryptoRandomUUID:off - Browser-generated request/device IDs; this component does not run in an Effect runtime.
 import {
   hasHiddenTeamText,
-  summarizeTeamNote,
   type TeamDocument,
   type TeamStorageCommand,
   type TeamStorageStatus,
 } from "@t3tools/contracts";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
-import {
-  filterTeamDocumentRows,
-  teamDocumentChange,
-  teamDocumentKindLabels,
-  teamDocumentRows,
-  type TeamListedDocument,
-} from "./threadTeamContext";
+import { teamDocumentChange } from "./threadTeamContext";
 
 type Publish = Extract<TeamStorageCommand, { action: "publish" }>;
 export function teamDocumentDeviceId() {
@@ -32,43 +25,6 @@ export function teamDocumentDeviceId() {
 }
 
 /**
- * Filters a team's already-listed documents as the user types. Nothing is fetched, so it only
- * finds documents by what their listing carries.
- */
-export function TeamDocumentSearch({
-  query,
-  onQueryChange,
-  matches,
-  unsummarized,
-}: {
-  query: string;
-  onQueryChange: (query: string) => void;
-  matches: number;
-  /** Listed documents without a summary, which can be found only by author until previewed. */
-  unsummarized: number;
-}) {
-  return (
-    <div className="space-y-1">
-      <Input
-        type="search"
-        aria-label="Search team documents"
-        placeholder="Search by title, description, author, or project"
-        value={query}
-        onChange={(event) => onQueryChange(event.target.value)}
-      />
-      {query.trim() ? (
-        <p role="status" className="text-xs text-muted-foreground">
-          {matches === 0 ? "No documents match." : `${matches} matching`}
-          {unsummarized > 0
-            ? ` ${unsummarized} untitled ${unsummarized === 1 ? "document is" : "documents are"} searched by author only; preview one to search its title.`
-            : ""}
-        </p>
-      ) : null}
-    </div>
-  );
-}
-
-/**
  * Drafts live only in this account/team's mounted view. Skill documents are shared text: nothing
  * here installs or runs them, and an agent sees one only when a user adds it to a message.
  */
@@ -81,13 +37,10 @@ export function TeamDocuments({
   run,
   projectTitle,
   projectKind = "memory",
-  authors,
 }: {
   teamId: string;
   document: TeamDocument | null;
   files: TeamStorageStatus["files"];
-  /** Current members' names by author folder; former members have none. */
-  authors: Readonly<Record<string, string>>;
   canWrite: boolean;
   busy: boolean;
   run: (command: TeamStorageCommand) => Promise<TeamStorageStatus | null>;
@@ -104,7 +57,6 @@ export function TeamDocuments({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [history, setHistory] = useState<TeamStorageStatus["history"] | null>(null);
   const [prior, setPrior] = useState<TeamStorageStatus["priorVersion"] | null>(null);
-  const [query, setQuery] = useState("");
   const [ownDevice] = useState(teamDocumentDeviceId);
   const pending = useRef<Publish | null>(null);
   useEffect(() => {
@@ -157,20 +109,7 @@ export function TeamDocuments({
       setText("");
     }
   };
-  // The open document's row shows what was just read from it, even past the listing's summaries.
-  const listed = useMemo(
-    () =>
-      files
-        .filter((file) => /^(Memory|SOPs|Skills)\/.+\.md$/u.test(file.path))
-        .map((file): TeamListedDocument =>
-          file.path === document?.path
-            ? { path: file.path, summary: summarizeTeamNote(document.text) }
-            : file,
-        ),
-    [files, document],
-  );
-  const rows = useMemo(() => teamDocumentRows(listed, authors), [listed, authors]);
-  const shownRows = filterTeamDocumentRows(rows, query);
+  const managedFiles = files.filter((file) => /^(Memory|SOPs|Skills)\/.+\.md$/u.test(file.path));
   return (
     <div className="space-y-4">
       {projectTitle === undefined ? (
@@ -280,39 +219,28 @@ export function TeamDocuments({
           </p>
         </form>
       ) : null}
-      {rows.length ? (
-        <div className="space-y-2">
-          <TeamDocumentSearch
-            query={query}
-            onQueryChange={setQuery}
-            matches={shownRows.length}
-            unsummarized={listed.filter((file) => !file.summary).length}
-          />
-          {shownRows.length ? (
-            <ul className="divide-y divide-border rounded-lg border border-border px-3">
-              {shownRows.map((row) => (
-                <li key={row.path} className="py-2">
-                  <button
-                    type="button"
-                    disabled={busy}
-                    className="w-full text-left text-xs disabled:opacity-50"
-                    onClick={() => void run({ action: "read-file", teamId, path: row.path })}
-                  >
-                    <span className="block truncate text-primary">{row.label}</span>
-                    {row.description ? (
-                      <span className="line-clamp-2 text-muted-foreground">{row.description}</span>
-                    ) : null}
-                    <span className="block truncate text-muted-foreground">
-                      {projectTitle === undefined ? `${teamDocumentKindLabels[row.kind]} · ` : ""}
-                      {row.source}
-                      {row.project ? ` · Project: ${row.project}` : ""}
-                    </span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          ) : null}
-        </div>
+      {managedFiles.length ? (
+        <ul className="divide-y divide-border rounded-lg border border-border px-3">
+          {managedFiles.map((file) => (
+            <li key={file.id} className="py-2">
+              <button
+                type="button"
+                disabled={busy}
+                className="w-full break-all text-left text-xs text-primary underline-offset-4 hover:underline disabled:opacity-50"
+                onClick={() => void run({ action: "read-file", teamId, path: file.path })}
+              >
+                {file.summary?.title ? (
+                  <>
+                    {file.summary.title}
+                    <span className="block text-muted-foreground">{file.path}</span>
+                  </>
+                ) : (
+                  file.path
+                )}
+              </button>
+            </li>
+          ))}
+        </ul>
       ) : null}
       {document ? (
         <div className="space-y-3 rounded-lg border border-border p-3">
