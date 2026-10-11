@@ -52,7 +52,10 @@ The workflow:
 
 Stable and nightly workflows both build macOS and Windows on standard GitHub-hosted runners.
 Stable uses the same signing credentials, plugin configuration, and managed API URL as nightly,
-but stamps the stable version and produces stable app identity and update manifests. The
+but stamps the stable version and produces stable app identity and update manifests.
+Before validation and packaging, stable selects configuration only for the package IDs in its
+immutable composition. Nightly-only entries in the shared secret are excluded; missing selected
+configuration still fails, and validation receipts bind the exact selected configuration. The
 separate `nightly.yml` workflow cannot publish a stable release or update stable version metadata.
 
 ## Local source staging and release scope

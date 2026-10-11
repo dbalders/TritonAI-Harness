@@ -140,6 +140,7 @@ import { PersistenceSqlError } from "./persistence/Errors.ts";
 import * as ProjectionThreadMessages from "./persistence/Services/ProjectionThreadMessages.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 import * as ModelManifest from "./provider/ModelManifest.ts";
+import * as PublicSkillRepository from "./provider/publicSkillRepository.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
 import * as ProviderService from "./provider/Services/ProviderService.ts";
 import { ProviderAuthService } from "./provider/Services/ProviderAuthService.ts";
@@ -841,6 +842,7 @@ const buildAppUnderTest = (options?: {
             forceRefresh: Effect.succeed(ModelManifest.BUNDLED_MODEL_MANIFEST),
             ...options?.layers?.modelManifest,
           }),
+          Layer.mock(PublicSkillRepository.PublicSkillRepository)({}),
           Layer.mock(ProviderRegistry.ProviderRegistry)({
             getProviders: Effect.succeed([]),
             refresh: () => Effect.succeed([]),

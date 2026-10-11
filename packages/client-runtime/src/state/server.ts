@@ -1191,8 +1191,14 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:signal-process",
       tag: WS_METHODS.serverSignalProcess,
     }),
-    listProviderSkillCatalog: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:server:list-provider-skill-catalog",
+    // Kept after Settings unmounts, so revisiting Skills renders the last list at once.
+    providerSkillCatalog: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:provider-skill-catalog",
+      tag: WS_METHODS.serverListProviderSkillCatalog,
+    }),
+    // The Refresh button: fetch from GitHub now, then re-read providerSkillCatalog.
+    forceRefreshProviderSkillCatalog: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:force-refresh-provider-skill-catalog",
       tag: WS_METHODS.serverListProviderSkillCatalog,
     }),
     installProviderSkill: createEnvironmentRpcCommand(runtime, {

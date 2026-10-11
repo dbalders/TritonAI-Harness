@@ -6,10 +6,10 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import type {
   ProviderInstanceId,
+  ServerListProviderSkillCatalogResult,
   ServerManagedSkillsStatus,
   ServerProvider,
   ServerProviderSkill,
-  ServerProviderSkillCatalog,
   ServerProviderSkillCatalogEntry,
   ServerSubmitProviderSkillToTritonAiCommonsResult,
 } from "@t3tools/contracts";
@@ -25,7 +25,7 @@ import {
   Trash2Icon,
   UsersIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 
 import {
   formatProviderSkillDisplayName,
@@ -47,6 +47,7 @@ import {
 } from "../../tritonAiCommonsSubmission";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { primaryServerProvidersAtom, serverEnvironment } from "../../state/server";
+import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
@@ -433,14 +434,25 @@ function CatalogSkillSection({
   );
 }
 
+/** Prefer the refreshed catalog unless the base query has since seen a newer one. */
+function newerCatalog(
+  base: ServerListProviderSkillCatalogResult["catalog"],
+  refreshed: ServerListProviderSkillCatalogResult["catalog"],
+) {
+  if (!refreshed) return base ?? null;
+  if (!base) return refreshed;
+  return refreshed.fetchedAt >= base.fetchedAt ? refreshed : base;
+}
+
 export function SkillsSettingsPanel() {
   const navigate = useNavigate();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const providers = useAtomValue(primaryServerProvidersAtom);
-  const listCatalogCommand = useAtomCommand(serverEnvironment.listProviderSkillCatalog, {
-    label: "skill catalog list",
-    reportFailure: false,
-  });
+  const forceRefreshCatalogCommand = useAtomCommand(
+    serverEnvironment.forceRefreshProviderSkillCatalog,
+    { label: "skill catalog refresh", reportFailure: false },
+  );
+  const [forcingCatalogRefresh, setForcingCatalogRefresh] = useState(false);
   const installSkillCommand = useAtomCommand(serverEnvironment.installProviderSkill, {
     label: "skill install",
     reportFailure: false,
@@ -469,13 +481,39 @@ export function SkillsSettingsPanel() {
     label: "commons GitHub setup enable",
     reportFailure: false,
   });
-  const [catalog, setCatalog] = useState<ServerProviderSkillCatalog | null>(null);
-  const [managedSkillNames, setManagedSkillNames] = useState<ReadonlySet<string>>(new Set());
-  const [managedSkillsStatus, setManagedSkillsStatus] =
-    useState<ServerManagedSkillsStatus>("unknown");
-  const [catalogLoading, setCatalogLoading] = useState(false);
-  const [catalogError, setCatalogError] = useState<string | null>(null);
-  const [managedManifestWarning, setManagedManifestWarning] = useState<string | null>(null);
+  const catalogQuery = useEnvironmentQuery(
+    primaryEnvironmentId
+      ? serverEnvironment.providerSkillCatalog({ environmentId: primaryEnvironmentId, input: {} })
+      : null,
+  );
+  // A saved copy renders at once while the server refreshes it; wait for that
+  // refresh and swap in any added or removed skills.
+  const refreshedCatalogQuery = useEnvironmentQuery(
+    primaryEnvironmentId && catalogQuery.data?.catalogStale
+      ? serverEnvironment.providerSkillCatalog({
+          environmentId: primaryEnvironmentId,
+          input: { refresh: "wait" },
+        })
+      : null,
+  );
+  // Only the catalog comes from the refresh; ownership, warnings, and receipts
+  // always come from the latest base response.
+  const catalogResult = catalogQuery.data;
+  const catalog = newerCatalog(catalogResult?.catalog, refreshedCatalogQuery.data?.catalog);
+  // A failed request keeps the last list on screen but cannot vouch for ownership.
+  const catalogLoadError = catalogQuery.error;
+  const managedSkillNames = useMemo<ReadonlySet<string>>(
+    () => new Set(catalogResult?.managedSkillNames),
+    [catalogResult],
+  );
+  const managedSkillsStatus: ServerManagedSkillsStatus = catalogLoadError
+    ? "unknown"
+    : (catalogResult?.managedSkillsStatus ?? "unknown");
+  const catalogLoading = catalogQuery.isPending || forcingCatalogRefresh;
+  const catalogError = catalogLoadError ?? catalogResult?.unavailableReason ?? null;
+  const managedManifestWarning = catalogLoadError
+    ? "Managed skill ownership could not be verified."
+    : (catalogResult?.managedManifestWarning ?? null);
   const [installUrl, setInstallUrl] = useState("");
   const [installingSkillKey, setInstallingSkillKey] = useState<string | null>(null);
   const [removingSkillKey, setRemovingSkillKey] = useState<string | null>(null);
@@ -485,9 +523,25 @@ export function SkillsSettingsPanel() {
   const [commonsSubmissionErrors, setCommonsSubmissionErrors] = useState<
     ReadonlyMap<string, string>
   >(new Map());
-  const [commonsSubmissions, setCommonsSubmissions] = useState<
+  // Receipts from submissions made on this page, until the next catalog read includes them.
+  const [newCommonsSubmissions, setNewCommonsSubmissions] = useState<{
+    readonly environmentId: typeof primaryEnvironmentId;
+    readonly byPath: ReadonlyMap<string, ServerSubmitProviderSkillToTritonAiCommonsResult>;
+  }>({ environmentId: null, byPath: new Map() });
+  const commonsSubmissions = useMemo<
     ReadonlyMap<string, ServerSubmitProviderSkillToTritonAiCommonsResult>
-  >(new Map());
+  >(
+    () =>
+      new Map([
+        ...(catalogResult?.commonsSubmissions.map(
+          (submission) => [submission.skillPath, submission] as const,
+        ) ?? []),
+        ...(newCommonsSubmissions.environmentId === primaryEnvironmentId
+          ? newCommonsSubmissions.byPath
+          : []),
+      ]),
+    [catalogResult, newCommonsSubmissions, primaryEnvironmentId],
+  );
 
   const codexProviders = useMemo(() => providers.filter(isCodexProvider), [providers]);
   const installProvider = codexProviders[0] ?? null;
@@ -525,42 +579,18 @@ export function SkillsSettingsPanel() {
   const catalogInstallDisabled = installDisabled || catalogError !== null;
   const removalBlocked = ownershipBlocked;
 
-  const loadCatalog = useCallback(async () => {
-    setCatalogLoading(true);
-    setCatalogError(null);
-    try {
-      if (!primaryEnvironmentId) {
-        setCatalog(null);
-        setManagedSkillNames(new Set());
-        setManagedSkillsStatus("unknown");
-        setManagedManifestWarning(null);
-        return;
-      }
-      const result = unwrapAtomCommandResult(
-        await listCatalogCommand({ environmentId: primaryEnvironmentId, input: {} }),
-      );
-      setCatalog(result.catalog ?? null);
-      setManagedSkillNames(new Set(result.managedSkillNames));
-      setManagedSkillsStatus(result.managedSkillsStatus);
-      setCommonsSubmissions(
-        new Map(result.commonsSubmissions.map((submission) => [submission.skillPath, submission])),
-      );
-      setCatalogError(result.unavailableReason ?? null);
-      setManagedManifestWarning(result.managedManifestWarning ?? null);
-    } catch (error) {
-      setCatalog(null);
-      setManagedSkillNames(new Set());
-      setManagedSkillsStatus("unknown");
-      setManagedManifestWarning("Managed skill ownership could not be verified.");
-      setCatalogError(error instanceof Error ? error.message : "Failed to load skill catalog.");
-    } finally {
-      setCatalogLoading(false);
+  // The server otherwise checks GitHub only at startup and once a day.
+  const loadCatalog = async () => {
+    if (primaryEnvironmentId) {
+      setForcingCatalogRefresh(true);
+      await forceRefreshCatalogCommand({
+        environmentId: primaryEnvironmentId,
+        input: { refresh: "force" },
+      });
+      setForcingCatalogRefresh(false);
     }
-  }, [listCatalogCommand, primaryEnvironmentId]);
-
-  useEffect(() => {
-    void loadCatalog();
-  }, [loadCatalog]);
+    catalogQuery.refresh();
+  };
 
   const installSkill = useCallback(
     async (
@@ -746,7 +776,13 @@ export function SkillsSettingsPanel() {
           throw squashAtomCommandFailure(commandResult);
         }
         const result = commandResult.value;
-        setCommonsSubmissions((current) => new Map(current).set(skill.path, result));
+        setNewCommonsSubmissions((current) => ({
+          environmentId: primaryEnvironmentId,
+          byPath: new Map(current.environmentId === primaryEnvironmentId ? current.byPath : []).set(
+            skill.path,
+            result,
+          ),
+        }));
         const openReview = await ensureLocalApi().dialogs.confirm(
           `${displayName} was shared with UCSD. Harness opened a public, ready-for-review pull request and will keep this skill marked as shared.\n\nOpen the pull request now to review it and participate in the submission?`,
         );

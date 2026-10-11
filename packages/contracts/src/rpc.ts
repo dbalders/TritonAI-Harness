@@ -249,6 +249,7 @@ import {
   ServerProcessResourceHistoryResult,
   ServerInstallProviderSkillInput,
   ServerInstallProviderSkillResult,
+  ServerListProviderSkillCatalogInput,
   ServerListProviderSkillCatalogResult,
   ServerMarketplaceAddInput,
   ServerMarketplaceRemoveInput,
@@ -855,7 +856,7 @@ const WsServerSignalProcessRpc = Rpc.make(WS_METHODS.serverSignalProcess, {
 });
 
 const WsServerListProviderSkillCatalogRpc = Rpc.make(WS_METHODS.serverListProviderSkillCatalog, {
-  payload: Schema.Struct({}),
+  payload: ServerListProviderSkillCatalogInput,
   success: ServerListProviderSkillCatalogResult,
   error: Schema.Union([ServerProviderSkillCatalogError, EnvironmentAuthorizationError]),
 });

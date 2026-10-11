@@ -27,6 +27,17 @@ afterEach(() => {
 });
 
 describe("theme failure handling", () => {
+  it("starts a fresh client on Quiet Workspace and respects another saved theme", async () => {
+    const storage = createStorage();
+    vi.stubGlobal("window", { localStorage: storage });
+    const { readThemePreference } = await import("./useTheme");
+    const { getThemeDefinition } = await import("../themePalette");
+
+    expect(getThemeDefinition(readThemePreference())?.label).toBe("Quiet Workspace");
+    storage.setItem("t3code:theme", "t3-chat");
+    expect(readThemePreference()).toBe("t3-chat");
+  });
+
   it("preserves exact storage causes and operation context", async () => {
     const readCause = new Error("storage read blocked");
     const writeCause = new Error("storage quota exceeded");

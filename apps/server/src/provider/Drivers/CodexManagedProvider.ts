@@ -20,6 +20,7 @@ import { type ProviderDriverCreateInput, type ProviderInstance } from "../Provid
 import { codexContinuationIdentity } from "./CodexHomeLayout.ts";
 import { withInstanceIdentity } from "./instanceIdentity.ts";
 import { HttpClient } from "effect/unstable/http";
+import { OPENAI_FEEDBACK_COMMAND_NAME } from "@t3tools/shared/tritonAiFeedback";
 const DRIVER = ProviderDriverKind.make("codex");
 
 export const makeManagedCodexProvider = Effect.fn("makeManagedCodexProvider")(function* (
@@ -151,7 +152,9 @@ export const makeManagedCodexProvider = Effect.fn("makeManagedCodexProvider")(fu
           runtimePaths,
           ...(draft.slashCommands
             ? {
-                slashCommands: draft.slashCommands.filter((command) => command.name !== "feedback"),
+                slashCommands: draft.slashCommands.filter(
+                  (command) => command.name !== OPENAI_FEEDBACK_COMMAND_NAME,
+                ),
               }
             : {}),
         }),

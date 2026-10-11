@@ -25,6 +25,10 @@ import type {
 } from "@t3tools/contracts";
 import { PREFERRED_DEFAULT_CODEX_MODELS } from "@t3tools/contracts";
 import {
+  OPENAI_FEEDBACK_COMMAND_NAME,
+  TRITONAI_FEEDBACK_COMMAND_NAME,
+} from "@t3tools/shared/tritonAiFeedback";
+import {
   DEFAULT_TRITONAI_CODEX_MODEL,
   DEFAULT_TRITONAI_CODEX_MODEL_DISPLAY_NAME,
   ServerSettingsError,
@@ -906,7 +910,12 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
     slashCommands: [
       COMPACT_SLASH_COMMAND,
       {
-        name: "feedback",
+        name: TRITONAI_FEEDBACK_COMMAND_NAME,
+        description: "Report a problem or idea to the TritonAI team",
+        input: { hint: "Describe the problem or idea (optional)" },
+      },
+      {
+        name: OPENAI_FEEDBACK_COMMAND_NAME,
         description: "Send this thread and Codex logs to OpenAI",
         input: { hint: "Describe the issue (optional)" },
       },

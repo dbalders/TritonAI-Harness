@@ -115,6 +115,7 @@ import {
   type ProviderAdapterError,
 } from "../Errors.ts";
 import { type ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
+import { describeToolCallForApproval } from "../../integrations/IntegrationToolPreview.ts";
 import { spawnAndCollect } from "../providerSnapshot.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.fromJsonString(Schema.Unknown));
@@ -1494,6 +1495,9 @@ function workflowAgentStatus(entry: ClaudeWorkflowAgentEntry): RuntimeTaskStatus
       return entry.startedAt === undefined ? "pending" : "running";
   }
 }
+
+// Harness's own MCP server is registered as "t3-code", so Claude names its tools this way.
+const HARNESS_MCP_TOOL_PREFIX = "mcp__t3-code__";
 
 function summarizeToolRequest(toolName: string, input: Record<string, unknown>): string {
   const imagePath = readToolImagePath(toolName, input);
@@ -4786,7 +4790,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
         const requestId = ApprovalRequestId.make(yield* randomUUIDv4);
         const requestType = classifyRequestType(toolName);
-        const detail = summarizeToolRequest(toolName, toolInput);
+        const detail = toolName.startsWith(HARNESS_MCP_TOOL_PREFIX)
+          ? describeToolCallForApproval(toolName.slice(HARNESS_MCP_TOOL_PREFIX.length), toolInput)
+          : summarizeToolRequest(toolName, toolInput);
         const decisionDeferred = yield* Deferred.make<ProviderApprovalDecision>();
         const pendingApproval: PendingApproval = {
           requestType,

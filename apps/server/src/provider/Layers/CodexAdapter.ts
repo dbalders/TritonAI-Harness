@@ -61,6 +61,7 @@ import { getCodexServiceTierOptionValue } from "../../codexModelOptions.ts";
 import * as Integrations from "../../integrations/IntegrationRegistry.ts";
 import { integrationToolJsonSchema } from "../../integrations/IntegrationTool.ts";
 import { IntegrationToolUnavailableError } from "../../integrations/IntegrationToolFailure.ts";
+import { describeToolCallForApproval } from "../../integrations/IntegrationToolPreview.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import * as PreviewAutomationBroker from "../../mcp/PreviewAutomationBroker.ts";
 import {
@@ -927,6 +928,12 @@ function nonEmptyDetail(value: string | null | undefined): string | undefined {
   return trimmed === undefined || trimmed.length === 0 ? undefined : trimmed;
 }
 
+function describeDynamicToolCall(
+  payload: EffectCodexSchema.ServerRequest__DynamicToolCallParams | undefined,
+): string | undefined {
+  return payload ? describeToolCallForApproval(payload.tool, payload.arguments) : undefined;
+}
+
 // Keeps one oversized patch from pushing a wall of paths through every consumer
 // of the approval, while still saying how much it covers.
 const MAX_DESCRIBED_FILE_CHANGES = 20;
@@ -1545,7 +1552,7 @@ function mapToRuntimeEvents(
             EffectCodexSchema.ServerRequest__DynamicToolCallParams,
             event.payload,
           );
-          return payload?.tool ?? undefined;
+          return describeDynamicToolCall(payload);
         }
         default:
           return undefined;
