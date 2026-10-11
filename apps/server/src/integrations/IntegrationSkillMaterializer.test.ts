@@ -21,6 +21,69 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 });
 
 describe("integration Codex skill homes", () => {
+  it("reconciles, updates, and retires managed skills through a linked skills root", async () => {
+    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-linked-skills-"));
+    const home = NodePath.join(root, "codex");
+    const shared = NodePath.join(root, "shared-skills");
+    const packageRoot = NodePath.join(root, "package");
+    const source = NodePath.join(packageRoot, "skills", "fixture-reader", "SKILL.md");
+    const target = NodePath.join(shared, "fixture-reader", "SKILL.md");
+    const personal = NodePath.join(shared, "personal", "SKILL.md");
+    const active = { integrationId: "fixture", packageRoot, activeSkills: ["fixture-reader"] };
+    try {
+      await NodeFSP.mkdir(home);
+      await NodeFSP.mkdir(NodePath.dirname(personal), { recursive: true });
+      await NodeFSP.writeFile(personal, "Personal skill, not owned by Harness.\n");
+      await NodeFSP.symlink("../shared-skills", NodePath.join(home, "skills"), "junction");
+      await NodeFSP.mkdir(NodePath.dirname(source), { recursive: true });
+      await NodeFSP.writeFile(
+        source,
+        "---\nname: fixture-reader\ndescription: Fixture.\n---\nv1\n",
+      );
+      const materializer = new CodexIntegrationSkillMaterializer([home]);
+
+      // This is the startup operation that previously rejected the user's linked root.
+      await materializer.reconcileCatalog(new Set(["fixture"]));
+      await materializer.sync(active);
+      expect(await NodeFSP.readFile(target, "utf8")).toContain("v1");
+      await NodeFSP.writeFile(
+        source,
+        "---\nname: fixture-reader\ndescription: Fixture.\n---\nv2\n",
+      );
+      await materializer.sync(active);
+      expect(await NodeFSP.readFile(target, "utf8")).toContain("v2");
+      await materializer.reconcileCatalog(new Set());
+      await expect(NodeFSP.access(target)).rejects.toMatchObject({ code: "ENOENT" });
+      await materializer.sync(active);
+      await materializer.setCodexHomes([]);
+      await expect(NodeFSP.access(target)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await NodeFSP.readFile(personal, "utf8")).toBe(
+        "Personal skill, not owned by Harness.\n",
+      );
+      expect((await NodeFSP.lstat(NodePath.join(home, "skills"))).isSymbolicLink()).toBe(true);
+    } finally {
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a skills root linked to a file without modifying it", async () => {
+    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-skills-file-"));
+    try {
+      const home = NodePath.join(root, "codex");
+      const file = NodePath.join(root, "personal.txt");
+      await NodeFSP.mkdir(home);
+      await NodeFSP.writeFile(file, "Preserve me.\n");
+      await NodeFSP.symlink(file, NodePath.join(home, "skills"));
+      const materializer = new CodexIntegrationSkillMaterializer([home]);
+      await expect(materializer.reconcileCatalog(new Set())).rejects.toThrow(
+        /must be a.*directory/u,
+      );
+      expect(await NodeFSP.readFile(file, "utf8")).toBe("Preserve me.\n");
+    } finally {
+      await NodeFSP.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("resolves the managed default and every configured Codex instance home", () => {
     const baseDir = NodePath.resolve("/tmp/tritonai-home-test");
     const codex = ProviderDriverKind.make("codex");
@@ -110,48 +173,60 @@ describe("integration Codex skill homes", () => {
     }
   });
 
-  it("refuses to replace a matching but unmanaged skill target symlink", async () => {
-    const root = await NodeFSP.mkdtemp(
-      NodePath.join(NodeOS.tmpdir(), "tritonai-skill-target-symlink-"),
-    );
-    const packageRoot = NodePath.join(root, "package");
-    const source = NodePath.join(packageRoot, "skills", "fixture-reader");
-    const home = NodePath.join(root, "home");
-    const target = NodePath.join(home, "skills", "fixture-reader");
-    const external = NodePath.join(root, "external-skill");
-    const skillContent = "---\nname: fixture-reader\ndescription: Fixture.\n---\ncontained\n";
-    const active = {
-      integrationId: "fixture",
-      packageRoot,
-      activeSkills: ["fixture-reader"],
-    };
-    try {
-      await NodeFSP.mkdir(source, { recursive: true });
-      await NodeFSP.writeFile(NodePath.join(source, "SKILL.md"), skillContent);
-      await NodeFSP.cp(source, external, { recursive: true });
-      await NodeFSP.writeFile(
-        NodePath.join(external, ".tritonai-integration-skill.json"),
-        JSON.stringify({ version: 1, integrationId: "fixture", skill: "fixture-reader" }),
+  it.each([false, true])(
+    "preserves individual skill symlinks with linked root: %s",
+    async (linked) => {
+      const root = await NodeFSP.mkdtemp(
+        NodePath.join(NodeOS.tmpdir(), "tritonai-skill-target-symlink-"),
       );
-      await NodeFSP.mkdir(NodePath.dirname(target), { recursive: true });
-      await NodeFSP.symlink(external, target);
+      const packageRoot = NodePath.join(root, "package");
+      const source = NodePath.join(packageRoot, "skills", "fixture-reader");
+      const home = NodePath.join(root, "home");
+      const target = NodePath.join(home, "skills", "fixture-reader");
+      const external = NodePath.join(root, "external-skill");
+      const skillContent = "---\nname: fixture-reader\ndescription: Fixture.\n---\ncontained\n";
+      const active = {
+        integrationId: "fixture",
+        packageRoot,
+        activeSkills: ["fixture-reader"],
+      };
+      try {
+        await NodeFSP.mkdir(source, { recursive: true });
+        await NodeFSP.writeFile(NodePath.join(source, "SKILL.md"), skillContent);
+        await NodeFSP.cp(source, external, { recursive: true });
+        await NodeFSP.writeFile(
+          NodePath.join(external, ".tritonai-integration-skill.json"),
+          JSON.stringify({ version: 1, integrationId: "fixture", skill: "fixture-reader" }),
+        );
+        if (linked) {
+          const shared = NodePath.join(root, "shared-skills");
+          await NodeFSP.mkdir(home);
+          await NodeFSP.mkdir(shared);
+          await NodeFSP.symlink(shared, NodePath.join(home, "skills"), "junction");
+        } else {
+          await NodeFSP.mkdir(NodePath.dirname(target), { recursive: true });
+        }
+        await NodeFSP.symlink(external, target);
 
-      const materializer = new CodexIntegrationSkillMaterializer([home]);
-      await expect(materializer.sync(active)).rejects.toThrow(
-        /unmanaged Codex skill fixture-reader/u,
-      );
+        const materializer = new CodexIntegrationSkillMaterializer([home]);
+        await expect(materializer.sync(active)).rejects.toThrow(
+          /unmanaged Codex skill fixture-reader/u,
+        );
 
-      const targetEntry = await NodeFSP.lstat(target);
-      expect(targetEntry.isSymbolicLink()).toBe(true);
-      expect(await NodeFSP.readFile(NodePath.join(target, "SKILL.md"), "utf8")).toBe(skillContent);
+        const targetEntry = await NodeFSP.lstat(target);
+        expect(targetEntry.isSymbolicLink()).toBe(true);
+        expect(await NodeFSP.readFile(NodePath.join(target, "SKILL.md"), "utf8")).toBe(
+          skillContent,
+        );
 
-      await materializer.sync({ integrationId: "fixture", packageRoot: null, activeSkills: [] });
-      expect((await NodeFSP.lstat(target)).isSymbolicLink()).toBe(true);
-      await expect(NodeFSP.access(external)).resolves.toBeUndefined();
-    } finally {
-      await NodeFSP.rm(root, { recursive: true, force: true });
-    }
-  });
+        await materializer.sync({ integrationId: "fixture", packageRoot: null, activeSkills: [] });
+        expect((await NodeFSP.lstat(target)).isSymbolicLink()).toBe(true);
+        await expect(NodeFSP.access(external)).resolves.toBeUndefined();
+      } finally {
+        await NodeFSP.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("repairs missing or changed managed skills and follows package content updates", async () => {
     const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "tritonai-skill-repair-"));
@@ -371,42 +446,6 @@ describe("integration Codex skill homes", () => {
       await expect(NodeFSP.access(active)).resolves.toBeUndefined();
       await expect(NodeFSP.access(retired)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(NodeFSP.access(unmanaged)).resolves.toBeUndefined();
-    } finally {
-      await NodeFSP.rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it("refuses a symlinked Codex skills root without touching its target", async () => {
-    const root = await NodeFSP.mkdtemp(
-      NodePath.join(NodeOS.tmpdir(), "tritonai-symlinked-skills-root-"),
-    );
-    const home = NodePath.join(root, "home");
-    const external = NodePath.join(root, "external-skills");
-    const externalSkill = NodePath.join(external, "fixture-reader");
-    try {
-      await NodeFSP.mkdir(externalSkill, { recursive: true });
-      await NodeFSP.writeFile(NodePath.join(externalSkill, "SKILL.md"), "external\n");
-      await NodeFSP.writeFile(
-        NodePath.join(externalSkill, ".tritonai-integration-skill.json"),
-        JSON.stringify({ version: 1, integrationId: "fixture", skill: "fixture-reader" }),
-      );
-      await NodeFSP.mkdir(home, { recursive: true });
-      await NodeFSP.symlink(external, NodePath.join(home, "skills"));
-      const materializer = new CodexIntegrationSkillMaterializer([home]);
-
-      await expect(materializer.reconcileCatalog(new Set())).rejects.toThrow(
-        /skills root must be a real directory/u,
-      );
-      await expect(
-        materializer.sync({
-          integrationId: "fixture",
-          packageRoot: NodePath.join(root, "package"),
-          activeSkills: ["fixture-reader"],
-        }),
-      ).rejects.toThrow(/skills root must be a real directory/u);
-      expect(await NodeFSP.readFile(NodePath.join(externalSkill, "SKILL.md"), "utf8")).toBe(
-        "external\n",
-      );
     } finally {
       await NodeFSP.rm(root, { recursive: true, force: true });
     }

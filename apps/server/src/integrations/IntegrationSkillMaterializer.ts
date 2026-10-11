@@ -113,20 +113,25 @@ async function exists(path: string): Promise<boolean> {
   }
 }
 
-async function ensureRealSkillsRoot(path: string, create: boolean): Promise<boolean> {
+async function resolveSkillsRoot(path: string, create: boolean): Promise<string | null> {
   let entry: NodeFS.Stats;
   try {
     entry = await NodeFSP.lstat(path);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    if (!create) return false;
+    if (!create) return null;
     await NodeFSP.mkdir(path, { recursive: true, mode: 0o700 });
     entry = await NodeFSP.lstat(path);
   }
-  if (entry.isSymbolicLink() || !entry.isDirectory()) {
-    throw new Error("The configured Codex skills root must be a real directory.");
+  // The configured root may share a user's skills directory (e.g. ~/.agents/skills).
+  // Resolve it once so mutations do not traverse the root link again. Individual
+  // skill directories and ownership markers still retain their no-symlink checks.
+  const resolved = await NodeFSP.realpath(path);
+  if (entry.isSymbolicLink()) entry = await NodeFSP.lstat(resolved);
+  if (!entry.isDirectory()) {
+    throw new Error("The configured Codex skills root must be a directory.");
   }
-  return true;
+  return resolved;
 }
 
 async function directoryContentsMatch(
@@ -241,8 +246,8 @@ export class CodexIntegrationSkillMaterializer implements IntegrationSkillMateri
     home: string,
     shouldRemove: (marker: Required<SkillMarker>) => boolean,
   ): Promise<void> {
-    const skillsRoot = NodePath.join(home, "skills");
-    if (!(await ensureRealSkillsRoot(skillsRoot, false))) return;
+    const skillsRoot = await resolveSkillsRoot(NodePath.join(home, "skills"), false);
+    if (skillsRoot === null) return;
     const entries = await NodeFSP.readdir(skillsRoot, { withFileTypes: true });
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
@@ -261,11 +266,14 @@ export class CodexIntegrationSkillMaterializer implements IntegrationSkillMateri
   }
 
   async #syncHome(home: string, input: IntegrationSkillSync): Promise<void> {
-    const skillsRoot = NodePath.join(home, "skills");
+    const skillsRoot = await resolveSkillsRoot(
+      NodePath.join(home, "skills"),
+      input.activeSkills.length > 0,
+    );
+    if (skillsRoot === null) return;
     const expected = new Map(
       input.activeSkills.map((name) => [name, NodePath.join(skillsRoot, name)]),
     );
-    if (!(await ensureRealSkillsRoot(skillsRoot, expected.size > 0))) return;
 
     for (const entry of await NodeFSP.readdir(skillsRoot, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
