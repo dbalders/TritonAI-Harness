@@ -149,9 +149,13 @@ export type TeamDailyState = typeof TeamDailyState.Type;
 /** The record as the team pass changes it. */
 export type Writable<T> = T extends object ? { -readonly [K in keyof T]: Writable<T[K]> } : T;
 
-/** A thread as it stands now; absent when it was deleted. */
+/**
+ * A thread as it stands now, deleted ones included: deleting a thread doesn't undo choosing Don't
+ * share for it. Absent only when no record of the thread is left.
+ */
 export interface TeamDailyThreadNow {
   readonly projectId: string;
+  readonly deleted: boolean;
   readonly off: boolean;
   readonly resumedAt: string | null;
 }
@@ -215,6 +219,7 @@ export function renderTeamDailyFile(
     }
     const current =
       now !== undefined &&
+      !now.deleted &&
       now.projectId === section.projectId &&
       eligibility.linkedProjects.get(section.projectId) === section.linkSince;
     if (current) {

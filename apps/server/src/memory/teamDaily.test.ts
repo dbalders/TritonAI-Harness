@@ -33,7 +33,9 @@ const dayWith = (
   timeZone: "America/Los_Angeles",
 });
 const shared = (ids: ReadonlyArray<string>): ReadonlyMap<string, TeamDailyThreadNow> =>
-  new Map(ids.map((id) => [id, { projectId: "project", off: false, resumedAt: null }]));
+  new Map(
+    ids.map((id) => [id, { projectId: "project", deleted: false, off: false, resumedAt: null }]),
+  );
 const bytes = (text: string) => new TextEncoder().encode(text).length;
 const header = { day: "2026-10-10", author: "a".repeat(43) };
 
@@ -70,7 +72,7 @@ describe("renderTeamDailyFile size budget", () => {
       ),
     });
     const threads = new Map(shared(["grown", "withdrawn"]));
-    threads.set("withdrawn", { projectId: "project", off: true, resumedAt: null });
+    threads.set("withdrawn", { projectId: "project", deleted: false, off: true, resumedAt: null });
     const rendered = renderTeamDailyFile(day, header, { threads, linkedProjects: LINKED });
     expect(rendered.withdrawn).toEqual(["withdrawn"]);
     expect(rendered.text).not.toContain("## withdrawn");
@@ -105,13 +107,41 @@ describe("renderTeamDailyFile size budget", () => {
         moved: section("## moved waiting", null, "2026-10-10T11:00:00.000Z"),
       });
       const threads = new Map<string, TeamDailyThreadNow>([
-        ["moved", { projectId: "another project", off: false, resumedAt: null }],
+        ["deleted", { projectId: "project", deleted: true, off: false, resumedAt: null }],
+        ["deletedPublished", { projectId: "project", deleted: true, off: false, resumedAt: null }],
+        ["moved", { projectId: "another project", deleted: false, off: false, resumedAt: null }],
       ]);
       const rendered = renderTeamDailyFile(day, header, { threads, linkedProjects: LINKED });
       expect(rendered.dropped.toSorted()).toEqual(["deleted", "moved"]);
       expect(rendered.frozen).toEqual(["deletedPublished"]);
       expect([...rendered.included]).toEqual([["deletedPublished", "## published"]]);
       expect(rendered.freshThreads.size).toBe(0);
+    });
+  });
+
+  describe("renderTeamDailyFile withdrawal of deleted threads", () => {
+    it("withdraws a deleted thread's published section when it was chosen as Don't share", () => {
+      const day = dayWith({
+        offThenDeleted: section("## off", "## off", "2026-10-10T09:00:00.000Z"),
+        resharedThenDeleted: section("## reshared", "## reshared", "2026-10-10T10:00:00.000Z"),
+        deletedOnly: section("## kept", "## kept", "2026-10-10T11:00:00.000Z"),
+      });
+      const threads = new Map<string, TeamDailyThreadNow>([
+        ["offThenDeleted", { projectId: "project", deleted: true, off: true, resumedAt: null }],
+        [
+          "resharedThenDeleted",
+          {
+            projectId: "project",
+            deleted: true,
+            off: false,
+            resumedAt: "2026-10-10T12:00:00.000Z",
+          },
+        ],
+        ["deletedOnly", { projectId: "project", deleted: true, off: false, resumedAt: null }],
+      ]);
+      const rendered = renderTeamDailyFile(day, header, { threads, linkedProjects: LINKED });
+      expect(rendered.withdrawn.toSorted()).toEqual(["offThenDeleted", "resharedThenDeleted"]);
+      expect([...rendered.included.keys()]).toEqual(["deletedOnly"]);
     });
   });
 });

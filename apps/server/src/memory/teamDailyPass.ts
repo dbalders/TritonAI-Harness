@@ -73,7 +73,7 @@ const decodeState = Schema.decodeUnknownEffect(Schema.fromJsonString(TeamDailySt
 const encodeState = Schema.encodeEffect(Schema.fromJsonString(TeamDailyState));
 const encodeMarker = Schema.encodeEffect(Schema.fromJsonString(TeamDailyMarker));
 
-/** How each of `threadIds` stands now; deleted threads are absent. */
+/** How each of `threadIds` stands now, deleted threads included. */
 const threadsNow = Effect.fn("teamMemory.threadsNow")(function* (threadIds: ReadonlyArray<string>) {
   const sql = yield* SqlClient.SqlClient;
   const threads = new Map<string, TeamDailyThreadNow>();
@@ -81,21 +81,23 @@ const threadsNow = Effect.fn("teamMemory.threadsNow")(function* (threadIds: Read
     const rows = yield* sql<{
       readonly threadId: string;
       readonly projectId: string;
+      readonly deletedAt: string | null;
       readonly offAt: string | null;
       readonly resumedAt: string | null;
     }>`
       SELECT
         thread_id AS "threadId",
         project_id AS "projectId",
+        deleted_at AS "deletedAt",
         team_sharing_off_at AS "offAt",
         team_sharing_resumed_at AS "resumedAt"
       FROM projection_threads
-      WHERE deleted_at IS NULL
-        AND ${sql.in("thread_id", threadIds.slice(index, index + 500))}
+      WHERE ${sql.in("thread_id", threadIds.slice(index, index + 500))}
     `;
     for (const row of rows)
       threads.set(row.threadId, {
         projectId: row.projectId,
+        deleted: row.deletedAt !== null,
         off: row.offAt !== null,
         resumedAt: row.resumedAt,
       });
@@ -106,6 +108,7 @@ const sameThread = (a: TeamDailyThreadNow | undefined, b: TeamDailyThreadNow | u
   a !== undefined &&
   b !== undefined &&
   a.projectId === b.projectId &&
+  a.deleted === b.deleted &&
   a.off === b.off &&
   a.resumedAt === b.resumedAt;
 
@@ -321,6 +324,12 @@ export const makeTeamDailyPass = (input: {
       Effect.gen(function* () {
         const current = team.marker;
         if (!current) return "done" as const;
+        // Bound before the first write, like day files: the marker is only updated where it is.
+        if ((current.storageKey ?? null) === null) {
+          if (workspace.storageKey === null) return "done" as const;
+          current.storageKey = workspace.storageKey;
+          yield* writeState(state);
+        }
         if (Object.keys(current.months).length === 0) return "done" as const;
         const text = yield* encodeMarker({
           version: 1,
@@ -386,10 +395,14 @@ export const makeTeamDailyPass = (input: {
             for (const section of Object.values(record.sections)) section.publishedText = null;
           record.publishedSha = null;
           record.etag = null;
-        } else if (found.kind === "file") {
-          // An earlier version is still there; the next write replaces it.
+        } else if (record.publishedSha !== null && sha256(found.text) === record.publishedSha) {
+          // The write didn't land: the version last confirmed is still there.
           record.etag = found.etag;
-          if (record.publishedSha === null) record.publishedSha = sha256(found.text);
+        } else {
+          // Someone changed the file, so it can't be known whether the write landed. Nothing is
+          // assumed published or unpublished: the day waits, with its attempt kept, until the
+          // file matches a known version again or is removed.
+          return "ambiguous" as const;
         }
         delete record.attempt;
         yield* writeState(state);
@@ -425,12 +438,8 @@ export const makeTeamDailyPass = (input: {
         const problems: string[] = [];
         for (const day of Object.keys(team.days).toSorted()) {
           const record = team.days[day]!;
-          // A file is only ever updated in the folder it was published to.
-          if (
-            (record.storageKey ?? null) !== null &&
-            workspace.storageKey !== null &&
-            record.storageKey !== workspace.storageKey
-          ) {
+          // A file is only ever updated, checked, or removed in the folder it was first sent to.
+          if ((record.storageKey ?? null) !== null && record.storageKey !== workspace.storageKey) {
             problems.push(
               `Your shared memory for ${day} is in the team's previous folder, so Harness can't update or remove it there. Ask your administrator.`,
             );
@@ -441,6 +450,19 @@ export const makeTeamDailyPass = (input: {
           if (settled === "held") {
             problems.push(
               `Harness couldn't confirm whether ${day} was saved; it will check again.`,
+            );
+            continue;
+          }
+          if (settled === "ambiguous") {
+            const waiting = renderTeamDailyFile(
+              record,
+              { day, author: state.author },
+              { threads, linkedProjects },
+            ).withdrawn;
+            problems.push(
+              waiting.length > 0
+                ? `Your shared memory for ${day} was changed in SharePoint, so Harness can't tell what it holds and won't change it. A thread you chose not to share may still be in it; remove it there, or ask your administrator.`
+                : `Your shared memory for ${day} was changed in SharePoint, so Harness can't tell what it holds and won't change it.`,
             );
             continue;
           }
@@ -497,7 +519,14 @@ export const makeTeamDailyPass = (input: {
           );
           if (!(yield* stillShared)) return "retry" as const;
           // Recorded before the write, so a crash can neither hide the marker's month nor lose
-          // track of a file that may now exist.
+          // track of a file that may now exist, or of the folder it would be in.
+          if ((record.storageKey ?? null) === null) {
+            if (workspace.storageKey === null) {
+              problems.push(`Harness couldn't confirm the team's folder, so ${day} waits.`);
+              continue;
+            }
+            record.storageKey = workspace.storageKey;
+          }
           const marker = (team.marker ??= { months: {}, publishedSha: null, etag: null });
           marker.months[day.slice(0, 7)] = yield* nowIso;
           record.attempt = { sha, included: Object.fromEntries(rendered.included) };
@@ -523,8 +552,9 @@ export const makeTeamDailyPass = (input: {
             return "held" as const;
           }
           if (result.kind === "rejected") {
-            // Nothing was sent.
+            // Nothing was sent. A day the team has nothing of yet is bound again on a later try.
             delete record.attempt;
+            if (record.publishedSha === null) record.storageKey = null;
             yield* writeState(state);
             problems.push(`${day}: ${result.message}`);
             continue;

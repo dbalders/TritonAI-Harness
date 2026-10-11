@@ -165,6 +165,12 @@ function fakeTeams() {
         .filter(([key]) => key.startsWith(inRoot(teamId, root)) && key.endsWith(".md"))
         .map(([key, file]) => [key.slice(inRoot(teamId, root).length), file] as const)
         .map(([key, file]) => [`${teamId}/${key}`, file] as const),
+    /** Changes a file directly in SharePoint, as a teammate could. */
+    editRemote: (teamId: string, day: string, deviceId: string, text: string, root?: string) =>
+      files.set(`${inRoot(teamId, root)}${teamDailyPath(ALICE, day, deviceId)}`, {
+        text,
+        etag: `edited-${++version}`,
+      }),
     marker: (teamId: string, deviceId: string, author = ALICE, root?: string) =>
       files.get(`${inRoot(teamId, root)}Daily/${author}/${deviceId}.changes.json`)?.text ?? null,
   };
@@ -967,4 +973,145 @@ it.layer(NodeServices.layer)("team daily memory", (it) => {
       }).pipe(Effect.provide(harness.layer));
     }),
   );
+  for (const before of ["Don't share", "Don't share then Share"] as const)
+    it.effect(`withdraws a published thread deleted after ${before}, before any pass`, () =>
+      Effect.gen(function* () {
+        const harness = yield* makeHarness({});
+        yield* Effect.gen(function* () {
+          yield* TestClock.setTime(new Date(2026, 9, 10, 11).getTime());
+          yield* seedWorld;
+          yield* say("t-a1", "withdrawn and deleted", at(10, 10));
+          yield* say("t-a1-other", "kept", at(10, 10));
+          const teams = fakeTeams();
+          teams.setWorkspaces([teams.workspace(TEAM_A, [["p-a1", at(1, 9)]])]);
+          const pass = yield* makePass(harness.baseDir);
+          yield* pass.attach(teams.source);
+          yield* pass.run;
+          yield* setSharing("t-a1", false);
+          if (before === "Don't share then Share") yield* reshare("t-a1", at(10, 12));
+          yield* deleteThread("t-a1");
+          yield* pass.run;
+          const text = teams.file(TEAM_A, dayOf(10), yield* deviceIdOf(harness.baseDir))!;
+          assert.include(text, "kept");
+          assert.notInclude(text, "withdrawn and deleted");
+        }).pipe(Effect.provide(harness.layer));
+      }),
+    );
+
+  it.effect("finishes a withdrawal when the thread is deleted while the removal waits", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({});
+      yield* Effect.gen(function* () {
+        yield* TestClock.setTime(new Date(2026, 9, 10, 11).getTime());
+        yield* seedWorld;
+        yield* say("t-a1", "withdrawn", at(10, 10));
+        yield* say("t-a1-other", "kept", at(10, 10));
+        sqlHolder.current = yield* SqlClient.SqlClient;
+        const teams = fakeTeams();
+        teams.setWorkspaces([teams.workspace(TEAM_A, [["p-a1", at(1, 9)]])]);
+        const pass = yield* makePass(harness.baseDir);
+        yield* pass.attach(teams.source);
+        yield* pass.run;
+        yield* setSharing("t-a1", false);
+        let once = true;
+        teams.state.beforeRequest = Effect.suspend(() => {
+          if (!once) return Effect.void;
+          once = false;
+          return withSql(deleteThread("t-a1"));
+        });
+        yield* pass.run;
+        const text = teams.file(TEAM_A, dayOf(10), yield* deviceIdOf(harness.baseDir))!;
+        assert.include(text, "kept");
+        assert.notInclude(text, "withdrawn");
+      }).pipe(Effect.provide(harness.layer));
+    }),
+  );
+
+  for (const when of ["before", "after"] as const)
+    it.effect(
+      `keeps an unconfirmed first write in its folder when the folder changes ${when} it is checked`,
+      () =>
+        Effect.gen(function* () {
+          const harness = yield* makeHarness({});
+          yield* Effect.gen(function* () {
+            yield* TestClock.setTime(new Date(2026, 9, 10, 20).getTime());
+            yield* seedWorld;
+            yield* say("t-a1", "landed in the first folder", at(10, 12));
+            const teams = fakeTeams();
+            teams.setWorkspaces([teams.workspace(TEAM_A, [["p-a1", at(1, 9)]])]);
+            const pass = yield* makePass(harness.baseDir);
+            yield* pass.attach(teams.source);
+            teams.state.landThenLose = /\.md$/u;
+            yield* pass.run;
+            teams.state.landThenLose = null;
+            const device = yield* deviceIdOf(harness.baseDir);
+            if (when === "after") yield* pass.run;
+            teams.state.roots.set(TEAM_A, "root-2");
+            yield* setSharing("t-a1", false);
+            yield* pass.run;
+            // The first folder's file isn't forgotten, and the new folder isn't touched.
+            assert.include(
+              teams.file(TEAM_A, dayOf(10), device, ALICE, "root-1")!,
+              "landed in the first folder",
+            );
+            assert.isNull(teams.file(TEAM_A, dayOf(10), device, ALICE, "root-2"));
+            assert.include((yield* pass.status(TEAM_A))!.message!, "previous folder");
+            // The obligation is still there if the first folder comes back.
+            teams.state.roots.set(TEAM_A, "root-1");
+            yield* pass.run;
+            assert.isNull(teams.file(TEAM_A, dayOf(10), device, ALICE, "root-1"));
+          }).pipe(Effect.provide(harness.layer));
+        }),
+    );
+
+  for (const then of ["unlink", "Don't share"] as const)
+    it.effect(`holds an unconfirmed write that was edited in SharePoint, then ${then}`, () =>
+      Effect.gen(function* () {
+        const harness = yield* makeHarness({});
+        yield* Effect.gen(function* () {
+          yield* TestClock.setTime(new Date(2026, 9, 10, 11).getTime());
+          yield* seedWorld;
+          yield* say("t-a1", "confirmed earlier", at(10, 10));
+          const teams = fakeTeams();
+          teams.setWorkspaces([teams.workspace(TEAM_A, [["p-a1", at(1, 9)]])]);
+          const pass = yield* makePass(harness.baseDir);
+          yield* pass.attach(teams.source);
+          yield* pass.run;
+          const device = yield* deviceIdOf(harness.baseDir);
+          // New text lands but its answer is lost, then a teammate edits the file.
+          yield* say("t-a1-other", "landed unconfirmed", at(10, 12));
+          yield* TestClock.setTime(new Date(2026, 9, 10, 16).getTime());
+          teams.state.landThenLose = /\.md$/u;
+          yield* pass.run;
+          teams.state.landThenLose = null;
+          const sent = teams.file(TEAM_A, dayOf(10), device)!;
+          assert.include(sent, "landed unconfirmed");
+          const edited = `${sent}\nA teammate's note.`;
+          teams.editRemote(TEAM_A, dayOf(10), device, edited);
+          if (then === "unlink") teams.setWorkspaces([teams.workspace(TEAM_A, [])]);
+          else yield* setSharing("t-a1", false);
+          const writes = teams.allWrites.length;
+          yield* pass.run;
+          // Nothing is assumed: the edited file is left as it is, and the day says why.
+          assert.strictEqual(teams.file(TEAM_A, dayOf(10), device), edited);
+          assert.isFalse(teams.allWrites.slice(writes).some((write) => write.path.endsWith(".md")));
+          const message = (yield* pass.status(TEAM_A))!.message!;
+          assert.include(message, "changed in SharePoint");
+          if (then === "Don't share") assert.include(message, "chose not to share");
+
+          // Once the file matches what Harness sent, the day resolves and the choice applies.
+          teams.editRemote(TEAM_A, dayOf(10), device, sent);
+          yield* pass.run;
+          const text = teams.file(TEAM_A, dayOf(10), device);
+          if (then === "unlink") {
+            // Both sections were published, so they stay with the team.
+            assert.include(text!, "confirmed earlier");
+            assert.include(text!, "landed unconfirmed");
+          } else {
+            assert.include(text!, "landed unconfirmed");
+            assert.notInclude(text!, "confirmed earlier");
+          }
+        }).pipe(Effect.provide(harness.layer));
+      }),
+    );
 });
