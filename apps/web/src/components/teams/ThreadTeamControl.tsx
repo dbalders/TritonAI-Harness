@@ -1,17 +1,15 @@
-import { BookOpenIcon, ScrollTextIcon, ShareIcon, UsersIcon } from "lucide-react";
+import { ScrollTextIcon, ShareIcon, UsersIcon } from "lucide-react";
 import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuItemLabel, MenuPopup, MenuTrigger } from "../ui/menu";
 
-/** Thread header entry to share with a team or add team memory or a skill, each after review. */
+/** Thread header entry to share with a team or use a team skill, each after review. */
 export function ThreadTeamControl({
   presentation,
   onShare,
-  onAddMemory,
   onUseSkill,
 }: {
   presentation: "toolbar" | "menu";
   onShare: () => void;
-  onAddMemory: () => void;
   onUseSkill: () => void;
 }) {
   const density = presentation === "menu" ? "touch" : "default";
@@ -20,10 +18,6 @@ export function ThreadTeamControl({
       <MenuItem density={density} onClick={onShare}>
         <ShareIcon aria-hidden="true" className="size-4" />
         <MenuItemLabel>Share text to a team…</MenuItemLabel>
-      </MenuItem>
-      <MenuItem density={density} onClick={onAddMemory}>
-        <BookOpenIcon aria-hidden="true" className="size-4" />
-        <MenuItemLabel>Add team memory to message…</MenuItemLabel>
       </MenuItem>
       <MenuItem density={density} onClick={onUseSkill}>
         <ScrollTextIcon aria-hidden="true" className="size-4" />

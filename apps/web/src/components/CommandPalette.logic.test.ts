@@ -97,7 +97,6 @@ describe("buildTeamActionItems", () => {
       "Open Teams",
       "Link project to a team",
       "Share text to a team",
-      "Add team memory to message",
       "Use a team skill in message",
     ]);
     expect(
@@ -114,7 +113,10 @@ describe("buildTeamActionItems", () => {
       projectSearchItems: [],
       threadSearchItems: [],
     });
-    expect(groups[0]?.items[0]?.title).toBe("Add team memory to message");
+    // Searching for team memory finds sharing; no action adds team memory to a message.
+    expect(groups.flatMap((group) => group.items.map((item) => item.title))).toEqual([
+      "Share text to a team",
+    ]);
   });
 });
 

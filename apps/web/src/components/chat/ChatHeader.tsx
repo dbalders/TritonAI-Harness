@@ -80,9 +80,7 @@ interface ChatHeaderProps {
   ) => Promise<ProjectScriptActionResult>;
   onDeleteProjectScript: (scriptId: string) => Promise<ProjectScriptActionResult>;
   /** Present for project threads; each opens a review dialog before anything is shared or added. */
-  teamActions?:
-    | { onShare: () => void; onAddMemory: () => void; onUseSkill: () => void }
-    | undefined;
+  teamActions?: { onShare: () => void; onUseSkill: () => void } | undefined;
 }
 
 /**
@@ -393,7 +391,6 @@ export const ChatHeader = memo(function ChatHeader({
           <ThreadTeamControl
             presentation={actionsCollapsed ? "menu" : "toolbar"}
             onShare={teamActions.onShare}
-            onAddMemory={teamActions.onAddMemory}
             onUseSkill={teamActions.onUseSkill}
           />
         </>

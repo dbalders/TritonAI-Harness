@@ -1798,7 +1798,7 @@ export default function ChatView(props: ChatViewProps) {
   // Bound to the thread it was opened from, so switching threads closes it and drops its draft.
   const [teamDialog, setTeamDialog] = useState<
     | { kind: "share"; threadId: ThreadId; text: string }
-    | { kind: "memory" | "skill"; threadId: ThreadId }
+    | { kind: "skill"; threadId: ThreadId }
     | null
   >(null);
   const [isWorkspaceFileDragActive, setIsWorkspaceFileDragActive] = useState(false);
@@ -10490,7 +10490,6 @@ export default function ChatView(props: ChatViewProps) {
                 ? {
                     onShare: () =>
                       setTeamDialog({ kind: "share", threadId: activeThread.id, text: "" }),
-                    onAddMemory: () => setTeamDialog({ kind: "memory", threadId: activeThread.id }),
                     onUseSkill: () => setTeamDialog({ kind: "skill", threadId: activeThread.id }),
                   }
                 : undefined
@@ -10510,32 +10509,29 @@ export default function ChatView(props: ChatViewProps) {
                 if (!open) setTeamDialog(null);
               }}
             />
-            {(["memory", "skill"] as const).map((kind) => (
-              <TeamContextDialog
-                key={kind}
-                kind={kind}
-                environmentId={activeThread.environmentId}
-                projectId={activeProject.id}
-                open={teamDialog?.kind === kind && teamDialog.threadId === activeThread.id}
-                onOpenChange={(open) => {
-                  if (!open) setTeamDialog(null);
-                }}
-                onInsert={(reference, identity) =>
-                  addDraftTeamMemory(
-                    {
-                      ...reference,
-                      thread: composerDraftTarget,
-                      environmentId: activeThread.environmentId,
-                      identity,
-                    },
-                    () =>
-                      composerRef.current?.insertTextAtEnd(reference.block, {
-                        ensureLeadingBoundary: true,
-                      }) ?? false,
-                  )
-                }
-              />
-            ))}
+            <TeamContextDialog
+              kind="skill"
+              environmentId={activeThread.environmentId}
+              projectId={activeProject.id}
+              open={teamDialog?.kind === "skill" && teamDialog.threadId === activeThread.id}
+              onOpenChange={(open) => {
+                if (!open) setTeamDialog(null);
+              }}
+              onInsert={(reference, identity) =>
+                addDraftTeamMemory(
+                  {
+                    ...reference,
+                    thread: composerDraftTarget,
+                    environmentId: activeThread.environmentId,
+                    identity,
+                  },
+                  () =>
+                    composerRef.current?.insertTextAtEnd(reference.block, {
+                      ensureLeadingBoundary: true,
+                    }) ?? false,
+                )
+              }
+            />
           </>
         ) : null}
 

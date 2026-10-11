@@ -4,8 +4,8 @@ Open **Teams** in the sidebar and sign in with UC San Diego. Your administrator
 must enable your account and the team storage service for this staff pilot.
 Teams is available in the web and desktop clients. Once Teams is set up, the
 command palette offers **Open Teams**, **Link project to a team** for the
-current project, and, in a project thread, the share, team memory, and team
-skill actions described below.
+current project, and, in a project thread, the share and team skill actions
+described below.
 
 Create a team, or accept a pending invitation in Teams. Owners invite specific
 UCSD addresses; creating an invitation sends no email and grants no access.
@@ -67,7 +67,7 @@ A skill document needs a short description of what it's for, and can't contain
 hidden or control characters.
 Project labels organize documents within a team. They do not restrict access
 within that team. To find a document, type in the search box above a team's
-documents, in Teams or in a thread's team memory and skill pickers. It matches
+documents, in Teams or in a thread's team skill picker. It matches
 every word you type against each document's type, title, description, author,
 and project label. Lists show these details for up to 100 documents; past that,
 a document's title appears and becomes searchable once you preview it. Search
@@ -96,38 +96,35 @@ link it again. Removing a link turns that project's team skills off for
 everyone. Linking does not share the project's files or
 chats, and other members link their own projects. Every read and save checks
 your current UCSD account and team role, so removed members and accounts outside
-the team cannot use the link. Team memory reaches an agent only when you add a
-note to a message or keep a local copy for agents to search, and a team skill
-only after you turn it on for a project, both described below.
+the team cannot use the link. Team memory reaches an agent only through a local
+copy for agents to search, and a team skill only after you choose it for a
+message or turn it on for a project, all described below.
 
 From a project thread, choose **Team** in the thread header, or select text in
 a reply and choose **Share**. **Share text to a team** publishes only the text
 you review, as a memory note labeled with the thread's project, to a team where
-you are an editor or owner; the project's linked team is chosen first when you
-can write to it. **Add team memory to message** previews one note
-from the project's linked team and adds it to your draft. The list names each
-note by its title, author, and project label, and you can search it. When you send, your
-team access is checked again: if you were removed, the project was
-unlinked or relinked, or the team folder moved, the message is held and you can
-remove the team memory and keep the rest of your draft. Signing out or switching
-campus accounts removes unsent team memory from drafts. If you edit a note so
-its end can't be found, such as by deleting its `</team-memory>` line, it is
-left in your draft and marked until you delete it yourself; your access is
-still checked when you send. Text you copy out of a note by hand is your own
-text and is not tracked. Text you send stays in
-that conversation and the agent's context even if the note or your access is
-later removed; removing a shared note does not remove copies people already
-made.
+you are an editor or owner. Any such team can receive it, whether or not the
+project is linked to it; the project's linked team is chosen first when you can
+write to it. Nothing else from the thread is shared, and removing a shared note
+does not remove copies people already made.
 
-**Use a team skill in message** works the same way for skill documents from the
-project's linked team. The preview shows the skill's title, description,
+**Use a team skill in message** previews one skill document from the project's
+linked team. The list names each skill by its title, author, and project label,
+and you can search it. The preview shows the skill's title, description,
 project label, whose folder it is in, and exactly what will be added to your
 message. Editors can change a skill, so read it each time; if it changed since
 your preview, you're asked to review it again. The skill applies only to the
 message you add it to. Harness doesn't install it, add it to your providers or
 other projects, or run anything it mentions, but the agent may act on its
-instructions once you send them. Your access is checked again when you send,
-and signing out removes it from unsent drafts, as with team memory.
+instructions once you send them. When you send, your team access is checked
+again: if you were removed, the project was unlinked or relinked, or the team
+folder moved, the message is held and you can remove the skill and keep the
+rest of your draft. Signing out or switching campus accounts removes unsent
+team skills from drafts. If you edit a skill so its end can't be found, such as
+by deleting its `</team-skill>` line, it is left in your draft and marked until
+you delete it yourself; your access is still checked when you send. Text you
+send stays in that conversation and the agent's context even if the skill or
+your access is later removed.
 
 To use a team skill in every message of a project, open **Settings → Skills**
 and choose the project in **Applying settings for** at the top; without a

@@ -49,7 +49,6 @@ import {
 import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
 import {
   ArrowLeftIcon,
-  BookOpenIcon,
   ChartNoAxesColumnIcon,
   CheckIcon,
   ChevronRightIcon,
@@ -179,6 +178,7 @@ import {
   RECENT_THREAD_LIMIT,
   reduceCommandPaletteUiState,
   type SearchOverlayMode,
+  type TeamPaletteAction,
 } from "./CommandPalette.logic";
 import { orderItemsByPreferredIds, sortLogicalProjectsForSidebar } from "./Sidebar.logic";
 import { resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
@@ -583,6 +583,13 @@ function CommandPaletteDialog(props: {
     </CommandDialogPopup>
   );
 }
+
+const TEAM_ACTION_ICONS: Record<TeamPaletteAction, ReactNode> = {
+  open: <UsersIcon className={ITEM_ICON_CLASS} />,
+  "link-project": <LinkIcon className={ITEM_ICON_CLASS} />,
+  share: <ShareIcon className={ITEM_ICON_CLASS} />,
+  skill: <ScrollTextIcon className={ITEM_ICON_CLASS} />,
+};
 
 function OpenCommandPaletteDialog(props: {
   readonly openIntent: CommandPaletteOpenIntent | null;
@@ -2083,20 +2090,7 @@ function OpenCommandPaletteDialog(props: {
         teamsConfigured: currentProjectTeamsConfigured,
         thread: activeThread ? { selectedText: selectedReplyText } : null,
       },
-      icon: (action) => {
-        switch (action) {
-          case "open":
-            return <UsersIcon className={ITEM_ICON_CLASS} />;
-          case "link-project":
-            return <LinkIcon className={ITEM_ICON_CLASS} />;
-          case "share":
-            return <ShareIcon className={ITEM_ICON_CLASS} />;
-          case "memory":
-            return <BookOpenIcon className={ITEM_ICON_CLASS} />;
-          case "skill":
-            return <ScrollTextIcon className={ITEM_ICON_CLASS} />;
-        }
-      },
+      icon: (action) => TEAM_ACTION_ICONS[action],
       run: async (action) => {
         if (action === "open") {
           await navigate({ to: "/teams" });

@@ -6,7 +6,7 @@ const OPEN_THREAD_TEAM_DIALOG_EVENT = "t3code:open-thread-team-dialog";
 
 export type ThreadTeamDialogRequest =
   | { readonly kind: "share"; readonly threadId: ThreadId; readonly text: string }
-  | { readonly kind: "memory" | "skill"; readonly threadId: ThreadId };
+  | { readonly kind: "skill"; readonly threadId: ThreadId };
 
 export function openThreadTeamDialog(request: ThreadTeamDialogRequest): void {
   window.dispatchEvent(new CustomEvent(OPEN_THREAD_TEAM_DIALOG_EVENT, { detail: request }));

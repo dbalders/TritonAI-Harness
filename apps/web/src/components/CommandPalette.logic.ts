@@ -184,7 +184,7 @@ export function enumerateCommandPaletteItems(
   });
 }
 
-export type TeamPaletteAction = "open" | "link-project" | "share" | "memory" | "skill";
+export type TeamPaletteAction = "open" | "link-project" | "share" | "skill";
 
 /**
  * Teams actions. Teams stays off until an environment's account service is configured, so each
@@ -235,7 +235,6 @@ export function buildTeamActionItems(input: {
       "reply",
       "selection",
     ]),
-    item("memory", "Add team memory to message", ["team", "note", "context", "insert"]),
     item("skill", "Use a team skill in message", ["team", "skill", "insert"]),
   );
   return items;
