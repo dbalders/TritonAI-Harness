@@ -86,6 +86,28 @@ export interface DailyMemoryGenerationInput {
   modelSelection: ModelSelection;
 }
 
+export interface TeamDailyMemoryGenerationInput {
+  /** Working directory for the generation process. Nothing in it is read. */
+  cwd: string;
+  /** The local day being summarized, `YYYY-MM-DD`. */
+  day: string;
+  teamName: string;
+  /** Each thread's activity, under the key its summary comes back with. */
+  threads: ReadonlyArray<{ readonly key: string; readonly activity: string }>;
+  modelSelection: ModelSelection;
+}
+
+export interface TeamDailyMemoryGenerationResult {
+  threads: ReadonlyArray<{
+    readonly key: string;
+    readonly summary: string;
+    readonly items: ReadonlyArray<{
+      readonly kind: "proposal" | "attempt" | "outcome" | "decision" | "open";
+      readonly text: string;
+    }>;
+  }>;
+}
+
 export interface DailyMemoryGenerationResult {
   overview: string;
   projects: ReadonlyArray<{
@@ -136,6 +158,14 @@ export class TextGeneration extends Context.Service<
     readonly generateDailyMemory?: (
       input: DailyMemoryGenerationInput,
     ) => Effect.Effect<DailyMemoryGenerationResult, TextGenerationError>;
+
+    /**
+     * Summarize one person's day of work in a team's projects, thread by thread, for the team's
+     * shared memory. Only Codex implements this; other providers leave it undefined.
+     */
+    readonly generateTeamDailyMemory?: (
+      input: TeamDailyMemoryGenerationInput,
+    ) => Effect.Effect<TeamDailyMemoryGenerationResult, TextGenerationError>;
   }
 >()("t3/textGeneration/TextGeneration") {}
 
@@ -144,7 +174,8 @@ type TextGenerationOp =
   | "generatePrContent"
   | "generateBranchName"
   | "generateThreadTitle"
-  | "generateDailyMemory";
+  | "generateDailyMemory"
+  | "generateTeamDailyMemory";
 
 const resolveInstance = (
   registry: ProviderInstanceRegistry.ProviderInstanceRegistry["Service"],
@@ -207,6 +238,20 @@ export const make = Effect.gen(function* () {
                   operation: "generateDailyMemory",
                   detail:
                     "Daily memory needs a Codex text generation model. Choose one under Settings, Text generation.",
+                }),
+              ),
+        ),
+      ),
+    generateTeamDailyMemory: (input) =>
+      resolveInstance(registry, "generateTeamDailyMemory", input.modelSelection.instanceId).pipe(
+        Effect.flatMap((textGeneration) =>
+          textGeneration.generateTeamDailyMemory
+            ? textGeneration.generateTeamDailyMemory(input)
+            : Effect.fail(
+                new TextGenerationError({
+                  operation: "generateTeamDailyMemory",
+                  detail:
+                    "Team memory needs a Codex text generation model. Choose one under Settings, Text generation.",
                 }),
               ),
         ),

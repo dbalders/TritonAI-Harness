@@ -23,6 +23,7 @@ import { DailyMemory } from "../DailyMemory.ts";
 import { generalVaultPaths, registerMemoryDevice } from "../memoryVault.ts";
 import * as MemorySync from "./MemorySync.ts";
 import * as MicrosoftSignIn from "./microsoftSignIn.ts";
+import { noTeamDailyHost } from "../teamDailySource.ts";
 import type {
   TeamMirrorDocument,
   TeamMirrorListing,
@@ -413,6 +414,7 @@ const setup = (drive: FakeOneDrive, computer: Computer) =>
           }),
           Layer.mock(DailyMemory)({
             exclusive: (effect) => lock.withPermits(1)(effect),
+            teams: noTeamDailyHost,
             getStatus: Effect.succeed({
               enabled: true,
               directoryPath: path.join(baseDir, "memory"),
