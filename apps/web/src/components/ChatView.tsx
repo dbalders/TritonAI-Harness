@@ -28,6 +28,7 @@ import {
   type ApprovalRequestId,
   type ChatFileAttachment,
   DEFAULT_MODEL,
+  DEFAULT_SERVER_SETTINGS,
   type EnvironmentId,
   type MessageId,
   type ModelSelection,
@@ -39,6 +40,7 @@ import {
   type ServerProvider,
   type ResolvedKeybindingsConfig,
   type ScopedThreadRef,
+  type ScopedProjectRef,
   type ThreadId,
   type ThreadLinkedPullRequest,
   type TurnId,
@@ -2048,9 +2050,9 @@ export default function ChatView(props: ChatViewProps) {
   const defaultRuntimeMode =
     stickyRuntimeMode ??
     resolveProjectSettings(settings, activeThread?.projectId ?? null).settings.defaultRuntimeMode;
-  // A draft's initial mode can come from an old project default after retargeting.
-  // Explicit composer choices and existing server threads retain their permissions.
-  const runtimeMode = composerRuntimeMode ?? activeServerThread?.runtimeMode ?? defaultRuntimeMode;
+  // Retargeting refreshes an implicit draft's seed; choices in other threads
+  // must not change this draft's already displayed permissions.
+  const runtimeMode = composerRuntimeMode ?? activeThread?.runtimeMode ?? defaultRuntimeMode;
   const isLocalDraftThread = !isServerThread && localDraftThread !== undefined;
   const canCheckoutPullRequestIntoThread = isLocalDraftThread;
   const activeThreadId = activeThread?.id ?? null;
@@ -2435,6 +2437,35 @@ export default function ChatView(props: ChatViewProps) {
   // Compute the list of environments this logical project spans, used to
   // drive the environment picker in BranchToolbar.
   const allProjects = useProjects();
+  const resolveRetargetedDraftRuntimeMode = useCallback(
+    (projectRef: ScopedProjectRef, targetDraftId: DraftId): RuntimeMode => {
+      const store = useComposerDraftStore.getState();
+      const explicitMode = store.getComposerDraft(targetDraftId)?.runtimeMode;
+      if (explicitMode != null) return explicitMode;
+      const session = store.getDraftSession(targetDraftId);
+      if (
+        session?.environmentId === projectRef.environmentId &&
+        session.projectId === projectRef.projectId
+      ) {
+        return session.runtimeMode;
+      }
+      const project = allProjects.find(
+        (candidate) =>
+          candidate.environmentId === projectRef.environmentId &&
+          candidate.id === projectRef.projectId,
+      );
+      return (
+        store.stickyRuntimeMode ??
+        resolveProjectSettings(
+          environmentById.get(projectRef.environmentId)?.serverConfig?.settings ??
+            DEFAULT_SERVER_SETTINGS,
+          projectRef.projectId,
+          project,
+        ).settings.defaultRuntimeMode
+      );
+    },
+    [allProjects, environmentById],
+  );
   const primaryEnvironmentId = primaryEnvironment?.environmentId ?? null;
   useEffect(() => {
     if (!activeThreadRef || !activeProjectRef) return;
@@ -2628,6 +2659,15 @@ export default function ChatView(props: ChatViewProps) {
           {
             threadId: storedDraftSession.threadId,
             ...input,
+            ...(storedDraftSession.environmentId !== activeProjectRef.environmentId ||
+            storedDraftSession.projectId !== activeProjectRef.projectId
+              ? {
+                  runtimeMode: resolveRetargetedDraftRuntimeMode(
+                    activeProjectRef,
+                    storedDraftSession.draftId,
+                  ),
+                }
+              : {}),
           },
         );
         if (routeKind !== "draft" || draftId !== storedDraftSession.draftId) {
@@ -2683,6 +2723,7 @@ export default function ChatView(props: ChatViewProps) {
       navigate,
       projectGroupingSettings,
       routeKind,
+      resolveRetargetedDraftRuntimeMode,
       settings,
       setDraftThreadContext,
       setLogicalProjectDraftThreadId,
@@ -3944,6 +3985,10 @@ export default function ChatView(props: ChatViewProps) {
     if (!target) return;
     setDraftThreadContext(draftId, {
       projectRef: scopeProjectRef(target.environmentId, target.projectId),
+      runtimeMode: resolveRetargetedDraftRuntimeMode(
+        scopeProjectRef(target.environmentId, target.projectId),
+        draftId,
+      ),
       environmentSelection: "auto",
       loadBalancedEnvironmentId: target.environmentId,
     });
@@ -3954,6 +3999,7 @@ export default function ChatView(props: ChatViewProps) {
     draftId,
     logicalProjectEnvironments,
     setDraftThreadContext,
+    resolveRetargetedDraftRuntimeMode,
   ]);
   const onAutoEnvironment = useCallback(() => {
     if (envLocked || !draftId) return;
@@ -4006,11 +4052,21 @@ export default function ChatView(props: ChatViewProps) {
       if (!target) return;
       setDraftThreadContext(draftId, {
         projectRef: scopeProjectRef(target.environmentId, target.projectId),
+        runtimeMode: resolveRetargetedDraftRuntimeMode(
+          scopeProjectRef(target.environmentId, target.projectId),
+          draftId,
+        ),
         environmentSelection: "manual",
         loadBalancedEnvironmentId: null,
       });
     },
-    [draftId, envLocked, logicalProjectEnvironments, setDraftThreadContext],
+    [
+      draftId,
+      envLocked,
+      logicalProjectEnvironments,
+      setDraftThreadContext,
+      resolveRetargetedDraftRuntimeMode,
+    ],
   );
 
   const activeTerminalGroup =

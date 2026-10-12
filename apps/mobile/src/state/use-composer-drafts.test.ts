@@ -2001,6 +2001,40 @@ describe("mobile composer drafts", () => {
     );
   });
 
+  it.each(["approval-required", "auto-accept-edits", "auto", "full-access"] as const)(
+    "keeps a known %s queued-task or draft mode usable while preferences load",
+    async (runtimeMode) => {
+      composerDraftFileMocks.setDocument({
+        schemaVersion: 1,
+        drafts: {},
+        stickyRuntimeMode: "approval-required",
+      });
+      composerDraftFileMocks.blockRead();
+      const loading = waitForComposerDraftsLoaded();
+      appAtomRegistry.set(composerDraftsAtom, {
+        "pending-task:edited": { ...DRAFT, runtimeMode },
+      });
+      try {
+        expect(
+          getPendingTaskRuntimeMode("pending-task:untouched", "full-access", runtimeMode),
+        ).toBe(runtimeMode);
+        expect(getPendingTaskRuntimeMode("pending-task:edited", "full-access", "auto")).toBe(
+          runtimeMode,
+        );
+        expect(getPendingTaskRuntimeMode("new-task:unknown", "full-access")).toBeNull();
+      } finally {
+        composerDraftFileMocks.releaseRead();
+        await loading;
+      }
+      expect(getPendingTaskRuntimeMode("pending-task:untouched", "full-access", runtimeMode)).toBe(
+        runtimeMode,
+      );
+      expect(getPendingTaskRuntimeMode("pending-task:edited", "full-access", "auto")).toBe(
+        runtimeMode,
+      );
+    },
+  );
+
   it("allows retry after preference loading fails without submitting the fallback", async () => {
     composerDraftFileMocks.setReadError(new Error("Preferences temporarily unreadable"));
     await expect(waitForComposerDraftsLoaded()).rejects.toThrow();

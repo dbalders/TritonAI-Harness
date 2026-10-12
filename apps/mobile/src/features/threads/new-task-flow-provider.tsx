@@ -538,11 +538,10 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     failed: composerPreferencesLoadFailed,
   } = useStickyComposerRuntimeMode();
   const composerPermissionsReady =
+    selectedProjectDraft.runtimeMode !== undefined ||
+    editingPendingTask !== null ||
     composerPreferencesLoaded ||
-    (composerPreferencesLoadFailed &&
-      (selectedProjectDraft.runtimeMode !== undefined ||
-        editingPendingTask?.runtimeMode !== undefined ||
-        stickyRuntimeMode !== null));
+    (composerPreferencesLoadFailed && stickyRuntimeMode !== null);
   const defaultRuntimeMode = editingPendingTask
     ? (editingPendingTask.runtimeMode ?? DEFAULT_RUNTIME_MODE)
     : (stickyRuntimeMode ?? projectSettings.settings.defaultRuntimeMode);
