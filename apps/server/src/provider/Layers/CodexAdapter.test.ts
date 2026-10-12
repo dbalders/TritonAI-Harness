@@ -1471,6 +1471,43 @@ reconciliationLayer("CodexAdapter integration availability reconciliation", (it)
     }),
   );
 
+  it.effect("allows recovery after an automatic integration resume fails", () =>
+    Effect.gen(function* () {
+      reconciliationAvailability.generation = 85;
+      reconciliationAvailability.available = false;
+      reconciliationAvailability.advancesDuringPrepare = 0;
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("thread-failed-integration-resume");
+      yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
+      const previous = reconciliationRuntimeFactory.lastRuntime!;
+      const { resumeCursor } = yield* previous.getSession;
+      reconciliationRuntimeFactory.configureNextRuntime((runtime) => {
+        runtime.startImpl.mockRejectedValueOnce(new Error("replacement resume failed"));
+      });
+      reconciliationAvailability.generation = 86;
+      reconciliationAvailability.available = true;
+
+      const failed = yield* adapter
+        .sendTurn({ threadId, input: "use newly connected tools", attachments: [] })
+        .pipe(Effect.exit);
+      NodeAssert.equal(Exit.isFailure(failed), true);
+      NodeAssert.equal(yield* adapter.hasSession(threadId), false);
+      NodeAssert.equal(previous.closeImpl.mock.calls.length, 1);
+      NodeAssert.equal(previous.sendTurnImpl.mock.calls.length, 0);
+      NodeAssert.equal(reconciliationRuntimeFactory.lastRuntime?.closeImpl.mock.calls.length, 1);
+      NodeAssert.equal(reconciliationRuntimeFactory.lastRuntime?.sendTurnImpl.mock.calls.length, 0);
+
+      const recovered = yield* adapter.startSession({
+        threadId,
+        runtimeMode: "full-access",
+        resumeCursor,
+      });
+      NodeAssert.deepStrictEqual(recovered.resumeCursor, resumeCursor);
+      yield* adapter.sendTurn({ threadId, input: "retry the turn", attachments: [] });
+      NodeAssert.equal(reconciliationRuntimeFactory.lastRuntime?.sendTurnImpl.mock.calls.length, 1);
+    }),
+  );
+
   it.effect("recreates an idle session at its next turn boundary and preserves its model", () =>
     Effect.gen(function* () {
       reconciliationAvailability.generation = 0;
