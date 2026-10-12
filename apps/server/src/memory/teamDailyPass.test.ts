@@ -1265,6 +1265,74 @@ it.layer(NodeServices.layer)("team daily memory", (it) => {
       }),
     );
 
+  for (const where of ["edited in SharePoint", "in the team's previous folder"] as const)
+    it.effect(
+      `keeps an unconfirmed upload's withdrawn generation owed while its day is ${where}`,
+      () =>
+        Effect.gen(function* () {
+          const harness = yield* makeHarness({});
+          yield* Effect.gen(function* () {
+            yield* TestClock.setTime(new Date(2026, 9, 10, 11).getTime());
+            yield* seedWorld;
+            yield* say("t-a1", "first generation", at(10, 10));
+            const teams = fakeTeams();
+            teams.setWorkspaces([teams.workspace(TEAM_A, [["p-a1", at(1, 9)]])]);
+            const pass = yield* makePass(harness.baseDir);
+            yield* pass.attach(teams.source);
+            // The first upload lands, but its answer is lost: nothing is confirmed published.
+            teams.state.landThenLose = /\.md$/u;
+            yield* pass.run;
+            teams.state.landThenLose = null;
+            const device = yield* deviceIdOf(harness.baseDir);
+            const sent = teams.file(TEAM_A, dayOf(10), device)!;
+            assert.include(sent, "first generation");
+            assert.isNull(
+              (yield* sectionOf(harness.baseDir, TEAM_A, dayOf(10), "t-a1"))!.publishedText,
+            );
+
+            // Don't share, then Share again before any pass, then new work.
+            yield* setSharing("t-a1", false);
+            yield* reshare("t-a1", at(10, 12));
+            yield* say("t-a1", "second generation", at(10, 13));
+            yield* TestClock.setTime(new Date(2026, 9, 10, 16).getTime());
+            const edited = `${sent}\nA teammate's note.`;
+            if (where === "edited in SharePoint")
+              teams.editRemote(TEAM_A, dayOf(10), device, edited);
+            else teams.state.roots.set(TEAM_A, "root-2");
+
+            // Every check before the upload's outcome is known says the withdrawn text may be there.
+            for (let check = 0; check < 2; check++) {
+              yield* pass.run;
+              const message = (yield* pass.status(TEAM_A))!.message!;
+              assert.include(
+                message,
+                where === "edited in SharePoint" ? "changed in SharePoint" : "previous folder",
+              );
+              assert.include(message, "chose not to share");
+              assert.strictEqual(
+                teams.file(TEAM_A, dayOf(10), device, ALICE, "root-1"),
+                where === "edited in SharePoint" ? edited : sent,
+              );
+              assert.isTrue(
+                (yield* sectionOf(harness.baseDir, TEAM_A, dayOf(10), "t-a1"))!.owesRemoval,
+              );
+            }
+
+            // Once the outcome is known and the file can be replaced, the old generation leaves.
+            if (where === "edited in SharePoint") teams.editRemote(TEAM_A, dayOf(10), device, sent);
+            else teams.state.roots.set(TEAM_A, "root-1");
+            yield* pass.run;
+            const text = teams.file(TEAM_A, dayOf(10), device, ALICE, "root-1")!;
+            assert.include(text, "second generation");
+            assert.notInclude(text, "first generation");
+            assert.isUndefined(
+              (yield* sectionOf(harness.baseDir, TEAM_A, dayOf(10), "t-a1"))!.owesRemoval,
+            );
+            assert.notInclude((yield* pass.status(TEAM_A))?.message ?? "", "chose not to share");
+          }).pipe(Effect.provide(harness.layer));
+        }),
+    );
+
   it.effect("isn't held back by a turn still being written that the team would never see", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({});

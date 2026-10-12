@@ -297,6 +297,12 @@ export const makeTeamDailyPass = (input: {
                 continue;
               const previous = record.sections[thread.threadId];
               const sameGeneration = (previous?.sharing ?? null) === thread.sharingResumedAt;
+              // An unconfirmed write may have carried an earlier generation to the team.
+              const attempted = record.attempt?.included[thread.threadId] !== undefined;
+              const attemptedGeneration =
+                record.attempt?.generations && thread.threadId in record.attempt.generations
+                  ? record.attempt.generations[thread.threadId]
+                  : (previous?.sharing ?? null);
               record.sections[thread.threadId] = {
                 projectId: thread.projectId,
                 sharing: thread.sharingResumedAt,
@@ -307,7 +313,8 @@ export const makeTeamDailyPass = (input: {
                 // but its removal stays owed until a file without it is confirmed.
                 publishedText: sameGeneration ? (previous?.publishedText ?? null) : null,
                 ...(previous?.owesRemoval === true ||
-                (!sameGeneration && (previous?.publishedText ?? null) !== null)
+                (!sameGeneration && (previous?.publishedText ?? null) !== null) ||
+                (attempted && attemptedGeneration !== thread.sharingResumedAt)
                   ? { owesRemoval: true }
                   : {}),
                 startedAt: thread.firstAt,
