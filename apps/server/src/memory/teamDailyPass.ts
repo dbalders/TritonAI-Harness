@@ -468,17 +468,34 @@ export const makeTeamDailyPass = (input: {
         const problems: string[] = [];
         for (const day of Object.keys(team.days).toSorted()) {
           const record = team.days[day]!;
-          // Whether the team's file may still hold a thread chosen as Don't share.
-          const removalOwed = () =>
-            Object.values(record.sections).some((section) => section.owesRemoval === true) ||
-            renderTeamDailyFile(record, { day, author: state.author }, { threads, linkedProjects })
-              .withdrawn.length > 0;
+          /**
+           * Says so when the team's file may still hold a thread chosen as Don't share: one whose
+           * earlier generation was published or may have been sent, or a withdrawn one the team
+           * has or may have. It holds until a file without it is confirmed.
+           */
+          const withRemoval = (message: string) => {
+            const withdrawn = renderTeamDailyFile(
+              record,
+              { day, author: state.author },
+              { threads, linkedProjects },
+            ).withdrawn;
+            const owed = Object.entries(record.sections).some(
+              ([threadId, section]) =>
+                section.owesRemoval === true ||
+                (withdrawn.includes(threadId) &&
+                  (section.publishedText !== null ||
+                    record.attempt?.included[threadId] !== undefined)),
+            );
+            return owed
+              ? `${message} A thread you chose not to share may still be in it; remove it in SharePoint, or ask your administrator.`
+              : message;
+          };
           // A file is only ever updated, checked, or removed in the folder it was first sent to.
           if ((record.storageKey ?? null) !== null && record.storageKey !== workspace.storageKey) {
             problems.push(
-              removalOwed()
-                ? `Your shared memory for ${day} is in the team's previous folder, so Harness can't update or remove it there. A thread you chose not to share may still be in it; ask your administrator.`
-                : `Your shared memory for ${day} is in the team's previous folder, so Harness can't update or remove it there. Ask your administrator.`,
+              withRemoval(
+                `Your shared memory for ${day} is in the team's previous folder, so Harness can't update or remove it there. Ask your administrator.`,
+              ),
             );
             continue;
           }
@@ -486,15 +503,17 @@ export const makeTeamDailyPass = (input: {
           if (settled === "lost") return "lost" as const;
           if (settled === "held") {
             problems.push(
-              `Harness couldn't confirm whether ${day} was saved; it will check again.`,
+              withRemoval(
+                `Harness couldn't confirm whether ${day} was saved; it will check again.`,
+              ),
             );
             continue;
           }
           if (settled === "ambiguous") {
             problems.push(
-              removalOwed()
-                ? `Your shared memory for ${day} was changed in SharePoint, so Harness can't tell what it holds and won't change it. A thread you chose not to share may still be in it; remove it there, or ask your administrator.`
-                : `Your shared memory for ${day} was changed in SharePoint, so Harness can't tell what it holds and won't change it.`,
+              withRemoval(
+                `Your shared memory for ${day} was changed in SharePoint, so Harness can't tell what it holds and won't change it.`,
+              ),
             );
             continue;
           }
@@ -610,12 +629,15 @@ export const makeTeamDailyPass = (input: {
           if (result.kind === "held" && changedSharing) return "retry" as const;
           if (result.kind === "held") {
             // The attempt stays recorded: the next pass learns whether it landed.
-            yield* setStatus(workspace.teamId, { state: "held", message: result.message });
+            yield* setStatus(workspace.teamId, {
+              state: "held",
+              message: withRemoval(result.message),
+            });
             return "held" as const;
           }
           if (result.kind === "changed") {
             // Kept: the next pass reads the file to learn what it holds before doing anything.
-            problems.push(`${day}: ${result.message}`);
+            problems.push(withRemoval(`${day}: ${result.message}`));
             continue;
           }
           if (result.kind === "rejected") {
@@ -623,7 +645,7 @@ export const makeTeamDailyPass = (input: {
             delete record.attempt;
             if (record.publishedSha === null) record.storageKey = null;
             yield* writeState(state);
-            problems.push(`${day}: ${result.message}`);
+            problems.push(withRemoval(`${day}: ${result.message}`));
             continue;
           }
           delete record.attempt;
@@ -643,6 +665,9 @@ export const makeTeamDailyPass = (input: {
           yield* setStatus(workspace.teamId, { lastPublishedAt: yield* nowIso });
         }
         const marker = yield* publishMarker(attached, state, team, workspace);
+        if (marker === "held" && problems.length > 0)
+          // A day's problem, such as text the team may still have, says more than the marker's.
+          yield* setStatus(workspace.teamId, { state: "held", message: problems[0]! });
         if (marker !== "done") return marker;
         if (problems.length > 0) {
           yield* setStatus(workspace.teamId, { state: "held", message: problems[0]! });

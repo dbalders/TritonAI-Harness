@@ -65,6 +65,8 @@ function fakeTeams() {
     landThenLose: null as RegExp | null,
     /** Refuses writes to paths that match, as a write that can never succeed. */
     rejectPaths: null as RegExp | null,
+    /** Reading files fails, as when the file can't be reached. */
+    inspectHeld: false,
     /** Stands in for the account, token, and membership checks the real write awaits. */
     beforeRequest: Effect.void as Effect.Effect<void>,
   };
@@ -127,6 +129,7 @@ function fakeTeams() {
       }),
     inspect: (input) =>
       Effect.sync(() => {
+        if (state.inspectHeld) return { kind: "held", message: "Unreachable." } as const;
         const root = rootOf(input.teamId);
         if (input.storageKey !== null && input.storageKey !== root)
           return { kind: "held", message: "The team's folder changed." } as const;
@@ -1219,12 +1222,12 @@ it.layer(NodeServices.layer)("team daily memory", (it) => {
           if (where === "edited in SharePoint") {
             // A teammate edits the file, so the replacement is refused and kept unconfirmed.
             teams.editRemote(TEAM_A, dayOf(10), device, edited);
-            teams.state.hold = {
-              kind: "changed",
-              message: "This day's shared memory was changed in SharePoint.",
-            };
+            // The change marker is refused too, which mustn't hide what the day says.
+            teams.state.hold = { kind: "changed", message: "The file was changed in SharePoint." };
             yield* pass.run;
             teams.state.hold = null;
+            // Said from the first refused write on.
+            assert.include((yield* pass.status(TEAM_A))!.message!, "chose not to share");
           } else {
             // The team's folder changes, so the day stays in the original folder.
             teams.state.roots.set(TEAM_A, "root-2");
@@ -1332,6 +1335,85 @@ it.layer(NodeServices.layer)("team daily memory", (it) => {
           }).pipe(Effect.provide(harness.layer));
         }),
     );
+
+  for (const choice of ["Don't share", "Don't share then Share"] as const)
+    it.effect(
+      `says a lost upload may hold a thread after ${choice} while the file can't be read`,
+      () =>
+        Effect.gen(function* () {
+          const harness = yield* makeHarness({});
+          yield* Effect.gen(function* () {
+            yield* TestClock.setTime(new Date(2026, 9, 10, 11).getTime());
+            yield* seedWorld;
+            yield* say("t-a1", "first generation", at(10, 10));
+            yield* say("t-a1-other", "kept", at(10, 10));
+            const teams = fakeTeams();
+            teams.setWorkspaces([teams.workspace(TEAM_A, [["p-a1", at(1, 9)]])]);
+            const pass = yield* makePass(harness.baseDir);
+            yield* pass.attach(teams.source);
+            teams.state.landThenLose = /\.md$/u;
+            yield* pass.run;
+            teams.state.landThenLose = null;
+            const device = yield* deviceIdOf(harness.baseDir);
+
+            yield* setSharing("t-a1", false);
+            if (choice === "Don't share then Share") {
+              yield* reshare("t-a1", at(10, 12));
+              yield* say("t-a1", "second generation", at(10, 13));
+            }
+            yield* TestClock.setTime(new Date(2026, 9, 10, 16).getTime());
+            teams.state.inspectHeld = true;
+            for (let check = 0; check < 2; check++) {
+              yield* pass.run;
+              const message = (yield* pass.status(TEAM_A))!.message!;
+              assert.include(message, "couldn't confirm");
+              assert.include(message, "chose not to share");
+            }
+            teams.state.inspectHeld = false;
+            yield* pass.run;
+            const text = teams.file(TEAM_A, dayOf(10), device)!;
+            assert.include(text, "kept");
+            assert.notInclude(text, "first generation");
+            assert.notInclude((yield* pass.status(TEAM_A))?.message ?? "", "chose not to share");
+          }).pipe(Effect.provide(harness.layer));
+        }),
+    );
+
+  it.effect("says a withdrawn thread is still in the team's file while its removal waits", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({});
+      yield* Effect.gen(function* () {
+        yield* TestClock.setTime(new Date(2026, 9, 10, 11).getTime());
+        yield* seedWorld;
+        yield* say("t-a1", "withdrawn", at(10, 10));
+        yield* say("t-a1-other", "kept", at(10, 10));
+        const teams = fakeTeams();
+        teams.setWorkspaces([teams.workspace(TEAM_A, [["p-a1", at(1, 9)]])]);
+        const pass = yield* makePass(harness.baseDir);
+        yield* pass.attach(teams.source);
+        yield* pass.run;
+        const device = yield* deviceIdOf(harness.baseDir);
+        yield* setSharing("t-a1", false);
+        for (const [paths, expected] of [
+          ["holdPaths", "offline"],
+          ["rejectPaths", "Too large"],
+        ] as const) {
+          teams.state[paths] = /\.md$/u;
+          for (let check = 0; check < 2; check++) {
+            yield* pass.run;
+            const message = (yield* pass.status(TEAM_A))!.message!;
+            assert.include(message, expected);
+            assert.include(message, "chose not to share");
+            assert.include(teams.file(TEAM_A, dayOf(10), device)!, "withdrawn");
+          }
+          teams.state[paths] = null;
+        }
+        yield* pass.run;
+        assert.notInclude(teams.file(TEAM_A, dayOf(10), device)!, "withdrawn");
+        assert.notInclude((yield* pass.status(TEAM_A))?.message ?? "", "chose not to share");
+      }).pipe(Effect.provide(harness.layer));
+    }),
+  );
 
   it.effect("isn't held back by a turn still being written that the team would never see", () =>
     Effect.gen(function* () {
