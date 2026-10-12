@@ -2304,7 +2304,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("refuses revoked team memory on both dispatch transports", () =>
+  it.effect("refuses a revoked team skill on both dispatch transports", () =>
     Effect.gen(function* () {
       const teams = TeamFixture.teamProjectFixture();
       const { service, account, storage } = yield* teams.make;
@@ -2344,9 +2344,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               flowId: flow.flowId!,
             });
             return yield* client[WS_METHODS.serverTeamProjects]({
-              action: "memory-attach",
+              action: "skill-attach",
               projectId: TeamFixture.projectId,
-              path: `Memory/${"a".repeat(43)}/${TeamFixture.deviceId}/${TeamFixture.recordId}.md`,
+              path: `Skills/${"a".repeat(43)}/${TeamFixture.deviceId}/${TeamFixture.recordId}.md`,
             });
           }),
         ),
@@ -2578,15 +2578,15 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             assert.ok(beta._tag === "TeamsError" && beta.code === "not_found");
             assert.equal(yield* services!.connectMicrosoft, 1);
             const issued = yield* client[WS_METHODS.serverTeamProjects]({
-              action: "memory-attach",
+              action: "skill-attach",
               projectId,
-              path: SyntheticTeams.syntheticDocumentPath(0),
+              path: SyntheticTeams.syntheticDocumentPath(2),
             });
             return issued.reference!.block;
           }),
         ),
       );
-      assertInclude(block, "SYNTHETIC grant report checklist");
+      assertInclude(block, "SYNTHETIC report formatter");
       for (const entry of world.trace.filter((entry) => entry.kind === "graph"))
         assert.ok(entry.team === null || entry.team === "alpha");
       world.setRole("alpha", "member", "none");

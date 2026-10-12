@@ -441,17 +441,12 @@ export const TeamProjectCommand = Schema.Union([
   /** The link for a project, only when the caller can open its team. */
   Schema.Struct({ action: Schema.Literal("project-link"), projectId: ProjectId }),
   Schema.Struct({ action: Schema.Literal("memory-read"), projectId: ProjectId, path: MemoryPath }),
-  /**
-   * Rereads a note and issues a reference to the exact block the composer inserts. The reference is
-   * bound to this session, campus identity, and the project's current team link.
-   */
-  Schema.Struct({
-    action: Schema.Literal("memory-attach"),
-    projectId: ProjectId,
-    path: MemoryPath,
-  }),
-  /** The skill counterparts read and issue only documents under the team's Skills folder. */
+  /** Reads a document under the team's Skills folder. */
   Schema.Struct({ action: Schema.Literal("skill-read"), projectId: ProjectId, path: SkillPath }),
+  /**
+   * Rereads a skill and issues a reference to the exact block the composer inserts. The reference
+   * is bound to this session, campus identity, and the project's current team link.
+   */
   Schema.Struct({ action: Schema.Literal("skill-attach"), projectId: ProjectId, path: SkillPath }),
   /** A note's or skill's kept versions, and one version's text; read-only, like `list-versions`. */
   Schema.Struct({

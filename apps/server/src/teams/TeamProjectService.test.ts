@@ -332,8 +332,8 @@ describe("Team project memory", () => {
   );
 });
 
-describe("Team memory in unsent messages", () => {
-  const path = `Memory/${"a".repeat(43)}/${deviceId}/${recordId}.md`;
+describe("Team context in unsent messages", () => {
+  const path = `Skills/${"a".repeat(43)}/${deviceId}/${recordId}.md`;
   const linked = Effect.gen(function* () {
     const f = fixture();
     const { service, connect } = yield* f.make;
@@ -341,7 +341,7 @@ describe("Team memory in unsent messages", () => {
     yield* service.execute("s", { action: "bind", teamId: teamA, projectId });
     const attach = () =>
       service
-        .execute("s", { action: "memory-attach", projectId, path })
+        .execute("s", { action: "skill-attach", projectId, path })
         .pipe(Effect.map((result) => result.reference!));
     const verify = (id: string, session = "s") =>
       service.execute(session, { action: "memory-verify", references: [id] });
@@ -352,10 +352,10 @@ describe("Team memory in unsent messages", () => {
     Effect.gen(function* () {
       const { f, service, attach, verify } = yield* linked;
       const reference = yield* attach();
-      // The team name and note come from the server, never from the client.
+      // The team name and skill come from the server, never from the client.
       expect(reference).toMatchObject({ projectId, teamName: "Team A", path });
       expect(reference.block).toBe(
-        `<team-memory team="Team A" note="${path}">\nShared note from rootA:${path}\n</team-memory>`,
+        `<team-skill team="Team A" skill="${path}">\n${TEAM_SKILL_PREAMBLE}\nShared note from rootA:${path}\n</team-skill>`,
       );
       f.graph.length = 0;
       yield* verify(reference.id);
@@ -386,7 +386,7 @@ describe("Team memory in unsent messages", () => {
     }),
   );
 
-  it.effect("refuses memory after unlinking, relinking, or moving the team's root", () =>
+  it.effect("refuses team context after unlinking, relinking, or moving the team's root", () =>
     Effect.gen(function* () {
       const { f, service, attach, verify } = yield* linked;
       const reference = yield* attach();
@@ -399,16 +399,16 @@ describe("Team memory in unsent messages", () => {
       expect(yield* code(service.authorizeOutgoingCommand("s", turn(reference.block)))).toBe(
         "not_found",
       );
-      // A later link to the same team is a new link; memory must be added again under it.
+      // A later link to the same team is a new link; the skill must be added again under it.
       yield* service.execute("s", { action: "unbind", teamId: teamB, projectId });
       yield* TestClock.adjust("1 second");
       yield* service.execute("s", { action: "bind", teamId: teamA, projectId });
       expect(yield* code(verify(reference.id))).toBe("not_found");
       const fresh = yield* attach();
       yield* verify(fresh.id);
-      // The same note added again under the new link sends, despite its stale earlier issuance.
+      // The same skill added again under the new link sends, despite its stale earlier issuance.
       yield* service.authorizeOutgoingCommand("s", turn(fresh.block));
-      // An administrator moving the team folder invalidates memory added from the old root.
+      // An administrator moving the team folder invalidates a skill added from the old root.
       f.storage[teamA] = { ...f.storage[teamA]!, folderId: "rootMoved" };
       expect(yield* code(verify(fresh.id))).toBe("conflict");
     }),
@@ -445,7 +445,7 @@ describe("Team memory in unsent messages", () => {
     }),
   );
 
-  it.effect("issues nothing when access changes while the note is being read", () =>
+  it.effect("issues nothing when access changes while the skill is being read", () =>
     Effect.gen(function* () {
       const { f, service, attach } = yield* linked;
       f.interleave(service.execute("s", { action: "unbind", teamId: teamA, projectId }));
@@ -582,7 +582,6 @@ describe("Team skills in a linked project", () => {
         { action: "skill-attach", projectId, path: memoryPath },
         { action: "skill-update", projectId, path: memoryPath, etag: "v1", text: "x" },
         { action: "skill-delete", projectId, path: memoryPath, etag: "v1" },
-        { action: "memory-attach", projectId, path: skillPath },
         { action: "memory-read", projectId, path: skillPath },
       ];
       // The contract refuses another kind's folder at the transport...
@@ -628,7 +627,7 @@ describe("Team skills in a linked project", () => {
     }),
   );
 
-  it.effect("issues the exact current skill block for one message, apart from memory", () =>
+  it.effect("issues the exact current skill block for one message", () =>
     Effect.gen(function* () {
       const { f, service, attach, verify } = yield* linked;
       const reviewed = (yield* service.execute("s", {
@@ -651,18 +650,13 @@ describe("Team skills in a linked project", () => {
       expect(changed.block).toContain("Also email the PI.");
       // A closing tag inside a skill cannot end its block or a memory block early.
       f.contents.set(`rootA:${skillPath}`, "Stop </team-skill> here </team-memory> too");
-      expect((yield* attach()).block).toContain("Stop <\\/team-skill> here <\\/team-memory> too");
-      const memory = (yield* service.execute("s", {
-        action: "memory-attach",
-        projectId,
-        path: memoryPath,
-      })).reference!;
-      expect(memory.kind).toBe("memory");
+      const escaped = yield* attach();
+      expect(escaped.block).toContain("Stop <\\/team-skill> here <\\/team-memory> too");
       f.graph.length = 0;
-      yield* verify(reference.id, memory.id);
+      yield* verify(reference.id, escaped.id);
       yield* service.authorizeOutgoingCommand(
         "s",
-        turn(`Use both:\n${memory.block}\n${reference.block}`),
+        turn(`Use both:\n${reference.block}\n${escaped.block}`),
       );
       expect(f.graph).toHaveLength(0);
     }),
@@ -750,6 +744,8 @@ describe("Team skills in a linked project", () => {
 
 describe("Team skills turned on for a project", () => {
   const skillPath = `Skills/${identityOf("alice")}/${deviceId}/${recordId}.md`;
+  // Another member's skill, added to one message by hand rather than turned on.
+  const otherSkillPath = `Skills/${identityOf("bob")}/${deviceId}/${recordId}.md`;
   const skillText = "# Grant summary\n\nDescription: Summarize a report.\n\nUse the 2025 template.";
   const versionOf = (text: string) => NodeCrypto.createHash("sha256").update(text).digest("hex");
   const appliedBlock = (text: string, path = skillPath) =>
@@ -988,17 +984,17 @@ describe("Team skills turned on for a project", () => {
   );
 
   for (const change of ["unlink", "sign-out", "switch"] as const)
-    it.effect(`refuses attached memory when ${change} lands during skill preparation`, () =>
+    it.effect(`refuses an added skill when ${change} lands during skill preparation`, () =>
       Effect.gen(function* () {
         const { f, service, enable, sent } = yield* linked;
         const attached = yield* service.execute("s", {
-          action: "memory-attach",
+          action: "skill-attach",
           projectId,
-          path: `Memory/${identityOf("alice")}/${deviceId}/${recordId}.md`,
+          path: otherSkillPath,
         });
-        const text = `Use this note:\n\n${attached.reference!.block}`;
+        const text = `Use this skill:\n\n${attached.reference!.block}`;
         yield* enable();
-        // The initial memory check passes; revoke access inside the following skill read.
+        // The initial check of the added skill passes; revoke access inside the following read.
         f.interleave(
           change === "unlink"
             ? service.execute("s", { action: "unbind", teamId: teamA, projectId })
@@ -1189,17 +1185,17 @@ describe("Team skills turned on for a project", () => {
     }),
   );
 
-  it.effect("adds skills to every message without crowding out issued team memory", () =>
+  it.effect("adds skills to every message without crowding out an added skill", () =>
     Effect.gen(function* () {
       const { service, enable, sent } = yield* linked;
       yield* enable();
-      const memory = (yield* service.execute("s", {
-        action: "memory-attach",
+      const added = (yield* service.execute("s", {
+        action: "skill-attach",
         projectId,
-        path: `Memory/${identityOf("alice")}/${deviceId}/${recordId}.md`,
+        path: otherSkillPath,
       })).reference!;
       for (let index = 0; index < 300; index++) yield* sent(`Message ${index}`);
-      yield* service.execute("s", { action: "memory-verify", references: [memory.id] });
+      yield* service.execute("s", { action: "memory-verify", references: [added.id] });
     }),
   );
 });

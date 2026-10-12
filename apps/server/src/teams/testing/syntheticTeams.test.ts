@@ -87,7 +87,7 @@ const linkedAlpha = (as: "owner" | "member" | "reader" = "member") =>
   }).pipe(Effect.provide(environment));
 
 describe("Synthetic Teams world", () => {
-  it.effect("adds the linked team's memory and skill through the real services", () =>
+  it.effect("reads the linked team's memory and adds its skill through the real services", () =>
     Effect.gen(function* () {
       const { world, project } = yield* linkedAlpha();
       world.trace.length = 0;
@@ -97,11 +97,11 @@ describe("Synthetic Teams world", () => {
       );
       expect(Object.values(listed.authors ?? {})).toContain("Synthetic Owner");
       const memory = yield* project.execute("s", {
-        action: "memory-attach",
+        action: "memory-read",
         projectId,
         path: ownerNote,
       });
-      expect(memory.reference?.block).toContain("SYNTHETIC grant report checklist");
+      expect(memory.storage?.document?.text).toContain("SYNTHETIC grant report checklist");
       const skill = yield* project.execute("s", {
         action: "skill-attach",
         projectId,
@@ -110,7 +110,7 @@ describe("Synthetic Teams world", () => {
       expect(skill.reference?.block).toContain("<team-skill");
       yield* project.execute("s", {
         action: "memory-verify",
-        references: [memory.reference!.id, skill.reference!.id],
+        references: [skill.reference!.id],
       });
       expect(
         yield* code(project.execute("s", { action: "skill-attach", projectId, path: hiddenSkill })),
@@ -140,20 +140,20 @@ describe("Synthetic Teams world", () => {
       expect(
         yield* code(storage.execute("s", { action: "read-file", teamId: beta, path: betaNote })),
       ).toBe("not_found");
-      const memory = yield* project.execute("s", {
-        action: "memory-attach",
+      const skill = yield* project.execute("s", {
+        action: "skill-attach",
         projectId,
-        path: ownerNote,
+        path: ownerSkill,
       });
       world.setRole("alpha", "member", "none");
       expect(
         yield* code(
-          project.execute("s", { action: "memory-verify", references: [memory.reference!.id] }),
+          project.execute("s", { action: "memory-verify", references: [skill.reference!.id] }),
         ),
       ).toBe("not_found");
       expect(
         yield* code(
-          project.authorizeOutgoingCommand("s", turn(`Draft\n${memory.reference!.block}`)),
+          project.authorizeOutgoingCommand("s", turn(`Draft\n${skill.reference!.block}`)),
         ),
       ).toBe("not_found");
     }),
@@ -327,7 +327,7 @@ describe("Synthetic Teams world", () => {
       world.setDownloadHost("alpha", "synthetic-elsewhere.sharepoint.com");
       world.trace.length = 0;
       const error = yield* Effect.flip(
-        project.execute("s", { action: "memory-attach", projectId, path: ownerNote }),
+        project.execute("s", { action: "memory-read", projectId, path: ownerNote }),
       );
       expect(error.message).toContain("unexpected download host");
       expect(world.trace.some((entry) => entry.kind === "download")).toBe(false);
@@ -457,31 +457,31 @@ describe("Team document list summaries", () => {
     Effect.gen(function* () {
       const { world, project } = yield* linkedAlpha();
       const previewed = yield* project.execute("s", {
-        action: "memory-read",
+        action: "skill-read",
         projectId,
-        path: ownerNote,
+        path: ownerSkill,
       });
-      world.editDocument("alpha", ownerNote, "# SYNTHETIC renamed checklist\n\nEdited text.");
+      world.editDocument("alpha", ownerSkill, "# SYNTHETIC renamed formatter\n\nEdited text.");
       const attached = yield* project.execute("s", {
-        action: "memory-attach",
+        action: "skill-attach",
         projectId,
-        path: ownerNote,
+        path: ownerSkill,
       });
       const current = attached.storage?.document;
-      expect(current?.text).toBe("# SYNTHETIC renamed checklist\n\nEdited text.");
+      expect(current?.text).toBe("# SYNTHETIC renamed formatter\n\nEdited text.");
       expect(current?.etag).not.toBe(previewed.storage?.document?.etag);
       // The issued block is exactly the returned document, so its title labels what is added.
       expect(attached.reference?.block).toBe(
         formatTeamContext({
-          kind: "memory",
+          kind: "skill",
           teamName: attached.reference!.teamName,
-          path: ownerNote,
+          path: ownerSkill,
           text: current!.text,
         }),
       );
-      const listed = yield* project.execute("s", { action: "memory-list", projectId });
-      expect(summaries(listed.storage?.files)[ownerNote]).toEqual({
-        title: "SYNTHETIC renamed checklist",
+      const listed = yield* project.execute("s", { action: "skill-list", projectId });
+      expect(summaries(listed.storage?.files)[ownerSkill]).toEqual({
+        title: "SYNTHETIC renamed formatter",
         description: "",
         hidden: false,
       });

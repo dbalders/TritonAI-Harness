@@ -972,10 +972,9 @@ export const make = Effect.gen(function* () {
 
   const attach = Effect.fn("TeamProjectService.attach")(function* (
     sessionId: string,
-    command: Extract<TeamProjectCommand, { action: "memory-attach" | "skill-attach" }>,
+    command: Extract<TeamProjectCommand, { action: "skill-attach" }>,
   ) {
-    const kind: TeamContextKind = command.action === "skill-attach" ? "skill" : "memory";
-    if (!command.path.startsWith(`${folders[kind]}/`)) return yield* wrongFolder();
+    if (!command.path.startsWith(`${folders.skill}/`)) return yield* wrongFolder();
     const profile = yield* signedInProfile(sessionId);
     const link = yield* linkFor(command.projectId);
     if (!link || !(yield* activeProject(command.projectId))) return yield* notLinked();
@@ -987,7 +986,7 @@ export const make = Effect.gen(function* () {
     );
     const document = status.document;
     if (!document) return yield* storageUnavailable(status.status);
-    if (kind === "skill" && hasHiddenTeamText(document.text)) return yield* hiddenSkillText();
+    if (hasHiddenTeamText(document.text)) return yield* hiddenSkillText();
     const entry: Issued = {
       id: NodeCrypto.randomUUID(),
       sessionId,
@@ -996,7 +995,7 @@ export const make = Effect.gen(function* () {
       projectId: command.projectId,
       link,
       block: formatTeamContext({
-        kind,
+        kind: "skill",
         teamName: team.name,
         path: document.path,
         text: document.text,
@@ -1011,7 +1010,7 @@ export const make = Effect.gen(function* () {
       storage: status,
       reference: {
         id: entry.id,
-        kind,
+        kind: "skill",
         projectId: entry.projectId,
         teamName: team.name,
         path: document.path,
@@ -1107,8 +1106,7 @@ export const make = Effect.gen(function* () {
       return { projects: yield* listFor(team, yield* readLinks), storage: null };
     }
     if (command.action === "share") return yield* share(sessionId, command);
-    if (command.action === "memory-attach" || command.action === "skill-attach")
-      return yield* attach(sessionId, command);
+    if (command.action === "skill-attach") return yield* attach(sessionId, command);
     if (command.action === "memory-verify") return yield* verify(sessionId, command.references);
     if (command.action === "project-links") return yield* projectLinks(sessionId);
     if (command.action === "stuck-links") return yield* stuckLinks(sessionId);

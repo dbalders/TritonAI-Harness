@@ -10562,7 +10562,6 @@ export default function ChatView(props: ChatViewProps) {
               }}
             />
             <TeamContextDialog
-              kind="skill"
               environmentId={activeThread.environmentId}
               projectId={activeProject.id}
               open={teamDialog?.kind === "skill" && teamDialog.threadId === activeThread.id}

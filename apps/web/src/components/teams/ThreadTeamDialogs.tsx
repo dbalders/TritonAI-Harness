@@ -7,7 +7,6 @@ import {
   teamNoteHeader,
   type EnvironmentId,
   type ProjectId,
-  type TeamContextKind,
   type TeamDocument,
   type TeamMemoryReference,
   type TeamProjectCommand,
@@ -361,48 +360,31 @@ function ShareForm({
 }
 
 const copy = {
-  memory: {
-    title: "Add team memory",
-    description:
-      "Choose one note from this project’s team. It is added to your message where you can edit it. Your team access is checked again when you send, and the note is removed from the draft if you sign out or switch accounts unless an edit hides where it ends.",
-    loading: "Loading team memory…",
-    empty: "This team has no memory notes yet. Share one from a thread or from Teams.",
-    changed: "This note changed since you opened it. Review the current text below.",
-    exact: "Exactly this will be added to your message:",
-    after:
-      "Once sent, the text stays in this conversation and the agent’s context. Removing the note or your team access later does not take it back.",
-    add: (title: string | null) =>
-      title === null ? "Add the current note to message" : `Add “${title}” to message`,
-  },
-  skill: {
-    title: "Use a team skill",
-    description:
-      "Choose one skill document from this project’s team and review its instructions. They are added to this message only. Harness doesn’t install the skill or add it to the project, other threads, or your providers. Your team access is checked again when you send, and the skill is removed from the draft if you sign out or switch accounts.",
-    loading: "Loading team skills…",
-    empty:
-      "This team has no skill documents yet. Members can publish one from Teams → your team → Team projects → Open team skills.",
-    changed: "This skill changed since you opened it. Review the current instructions below.",
-    exact: "Exactly this will be added to your message, and the agent may act on it:",
-    after:
-      "Read the instructions before sending. Once sent, they stay in this conversation and the agent’s context; removing the skill or your team access later does not take them back.",
-    add: (title: string | null) =>
-      title === null ? "Use the current skill in this message" : `Use “${title}” in this message`,
-  },
+  title: "Use a team skill",
+  description:
+    "Choose one skill document from this project’s team and review its instructions. They are added to this message only. Harness doesn’t install the skill or add it to the project, other threads, or your providers. Your team access is checked again when you send, and the skill is removed from the draft if you sign out or switch accounts.",
+  loading: "Loading team skills…",
+  empty:
+    "This team has no skill documents yet. Members can publish one from Teams → your team → Team projects → Open team skills.",
+  changed: "This skill changed since you opened it. Review the current instructions below.",
+  exact: "Exactly this will be added to your message, and the agent may act on it:",
+  after:
+    "Read the instructions before sending. Once sent, they stay in this conversation and the agent’s context; removing the skill or your team access later does not take them back.",
+  add: (title: string | null) =>
+    title === null ? "Use the current skill in this message" : `Use “${title}” in this message`,
 } as const;
 
 /**
- * Loads one memory note or skill from the project's linked team and adds it to the draft after
- * review. The draft tracks both kinds the same way until they are sent or removed.
+ * Loads one skill from the project's linked team and adds it to the draft after review. The draft
+ * tracks it until it is sent or removed.
  */
 export function TeamContextDialog({
-  kind,
   environmentId,
   projectId,
   open,
   onOpenChange,
   onInsert,
 }: {
-  kind: TeamContextKind;
   environmentId: EnvironmentId;
   projectId: ProjectId;
   open: boolean;
@@ -414,14 +396,13 @@ export function TeamContextDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogPopup className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle>{copy[kind].title}</DialogTitle>
-          <DialogDescription>{copy[kind].description}</DialogDescription>
+          <DialogTitle>{copy.title}</DialogTitle>
+          <DialogDescription>{copy.description}</DialogDescription>
         </DialogHeader>
         <SignedIn environmentId={environmentId}>
           {(identity) => (
             <ContextPicker
-              key={`${identity}:${projectId}:${kind}`}
-              kind={kind}
+              key={`${identity}:${projectId}`}
               environmentId={environmentId}
               projectId={projectId}
               onInsert={(reference) => {
@@ -438,12 +419,10 @@ export function TeamContextDialog({
 }
 
 function ContextPicker({
-  kind,
   environmentId,
   projectId,
   onInsert,
 }: {
-  kind: TeamContextKind;
   environmentId: EnvironmentId;
   projectId: ProjectId;
   onInsert: (reference: TeamMemoryReference) => "added" | "full" | "not-inserted";
@@ -457,7 +436,6 @@ function ContextPicker({
   const [notice, setNotice] = useState<string | null>(null);
   // A changed document's issued block, shown for review and inserted as-is if the user confirms.
   const [issued, setIssued] = useState<TeamMemoryReference | null>(null);
-  const text = copy[kind];
   const load = async () => {
     setNote(null);
     setIssued(null);
@@ -472,10 +450,7 @@ function ContextPicker({
     const current = found.projects[0];
     if (!current) return setLink("unlinked");
     setLink(current);
-    const listed = await run({
-      action: kind === "skill" ? "skill-list" : "memory-list",
-      projectId,
-    });
+    const listed = await run({ action: "skill-list", projectId });
     if (!listed || "error" in listed) return;
     const problem = storageProblem(listed);
     if (problem) return setNotice(problem);
@@ -494,15 +469,11 @@ function ContextPicker({
     );
   useEffect(() => {
     void load();
-    // Loads once per mount; the dialog remounts for another account, project, or kind.
+    // Loads once per mount; the dialog remounts for another account or project.
   }, []);
   const read = async (path: string) => {
     setNotice(null);
-    const result = await run(
-      kind === "skill"
-        ? { action: "skill-read", projectId, path }
-        : { action: "memory-read", projectId, path },
-    );
+    const result = await run({ action: "skill-read", projectId, path });
     if (!result || "error" in result) return null;
     const document = result.storage?.document ?? null;
     if (!document) setNotice(storageProblem(result) ?? "This document could not be opened.");
@@ -513,7 +484,12 @@ function ContextPicker({
   const shown =
     issued?.block ??
     (note && typeof link === "object" && link
-      ? formatTeamContext({ kind, teamName: link.teamName, path: note.path, text: note.text })
+      ? formatTeamContext({
+          kind: "skill",
+          teamName: link.teamName,
+          path: note.path,
+          text: note.text,
+        })
       : null);
   const add = async () => {
     if (!note || shown === null) return;
@@ -522,11 +498,7 @@ function ContextPicker({
     if (!reference) {
       // The server rereads the document, rechecks access, and issues the exact block to insert.
       // `run` drops responses that land after an account change or close unmounted this picker.
-      const result = await run(
-        kind === "skill"
-          ? { action: "skill-attach", projectId, path: note.path }
-          : { action: "memory-attach", projectId, path: note.path },
-      );
+      const result = await run({ action: "skill-attach", projectId, path: note.path });
       if (!result || "error" in result) return;
       if (!result.reference) return setNotice("This could not be added. Try again.");
       reference = result.reference;
@@ -571,9 +543,14 @@ function ContextPicker({
     note &&
     issued &&
     issued.block !==
-      formatTeamContext({ kind, teamName: issued.teamName, path: note.path, text: note.text })
+      formatTeamContext({
+        kind: "skill",
+        teamName: issued.teamName,
+        path: note.path,
+        text: note.text,
+      })
       ? null
-      : details?.title || (kind === "skill" ? "Untitled skill" : "Untitled note");
+      : details?.title || "Untitled skill";
   return (
     <>
       <DialogPanel>
@@ -597,13 +574,13 @@ function ContextPicker({
             <>
               {changed ? (
                 <p role="status" className="text-sm">
-                  {text.changed}
+                  {copy.changed}
                 </p>
               ) : null}
               <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 rounded-lg border border-border p-3 text-xs">
-                <dt className="text-muted-foreground">{kind === "skill" ? "Skill" : "Note"}</dt>
+                <dt className="text-muted-foreground">Skill</dt>
                 <dd>{title ?? "Changed; see the current text below"}</dd>
-                {kind === "skill" && title !== null ? (
+                {title !== null ? (
                   <>
                     <dt className="text-muted-foreground">For</dt>
                     <dd>{details.description || "No description"}</dd>
@@ -617,40 +594,35 @@ function ContextPicker({
                 ) : null}
                 <dt className="text-muted-foreground">Source</dt>
                 <dd>
-                  {link.teamName} shared {kind === "skill" ? "Skills" : "Memory"} folder, in{" "}
-                  {teamDocumentAuthor(note.path, authors)}
+                  {link.teamName} shared Skills folder, in {teamDocumentAuthor(note.path, authors)}
                   ’s folder
                 </dd>
                 <dt className="text-muted-foreground">Last changed by</dt>
                 <dd>{teamDocumentChange(note.lastChange)}</dd>
-                {kind === "skill" ? (
-                  <>
-                    <dt className="text-muted-foreground">Who can see it</dt>
-                    <dd>
-                      Every member of {link.teamName} can read and change it, so review it each time
-                      you use it.
-                    </dd>
-                  </>
-                ) : null}
+                <dt className="text-muted-foreground">Who can see it</dt>
+                <dd>
+                  Every member of {link.teamName} can read and change it, so review it each time you
+                  use it.
+                </dd>
               </dl>
-              <p className="text-xs text-muted-foreground">{text.exact}</p>
+              <p className="text-xs text-muted-foreground">{copy.exact}</p>
               <pre
-                aria-label={kind === "skill" ? "Team skill to use" : "Team memory to add"}
+                aria-label="Team skill to use"
                 className="max-h-80 overflow-auto rounded-lg border border-border bg-muted/40 p-3 text-xs whitespace-pre-wrap"
               >
                 {shown ?? note.text}
               </pre>
-              <p className="text-xs text-muted-foreground">{text.after}</p>
+              <p className="text-xs text-muted-foreground">{copy.after}</p>
             </>
           ) : files === null ? (
             error || notice ? null : (
-              <p className="text-sm text-muted-foreground">{text.loading}</p>
+              <p className="text-sm text-muted-foreground">{copy.loading}</p>
             )
           ) : files.length === 0 ? (
-            <p className="text-sm text-muted-foreground">{text.empty}</p>
+            <p className="text-sm text-muted-foreground">{copy.empty}</p>
           ) : (
             <ul className="max-h-72 divide-y divide-border overflow-auto rounded-lg border border-border px-3">
-              {teamContextRows(kind, files, authors).map((row) => (
+              {teamContextRows("skill", files, authors).map((row) => (
                 <li key={row.path} className="flex items-start gap-2 py-2">
                   <div className="min-w-0 flex-1 space-y-0.5">
                     <p className="truncate text-sm">{row.label}</p>
@@ -696,7 +668,7 @@ function ContextPicker({
             Back
           </Button>
           <Button disabled={busy} onClick={() => void add()}>
-            {text.add(title)}
+            {copy.add(title)}
           </Button>
         </DialogFooter>
       ) : null}
