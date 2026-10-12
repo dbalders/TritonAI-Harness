@@ -67,6 +67,8 @@ export interface SettingsSearchItem {
    */
   readonly secondary?: boolean;
   readonly requiresThreadAutoSettlement?: boolean;
+  /** Teams stays off until the environment's account service is configured. */
+  readonly teamsOnly?: boolean;
 }
 
 export interface SettingsSearchAvailability {
@@ -79,6 +81,7 @@ export interface SettingsSearchAvailability {
   readonly isWslSettingsRowVisible: boolean;
   readonly hasThreadAutoSettlement: boolean;
   readonly hasStageArtwork?: boolean;
+  readonly hasTeams?: boolean;
 }
 
 /**
@@ -680,6 +683,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["agent opens browser device simulator pop into view hide"],
   },
   {
+    id: "team-skills",
+    title: "Team Skills",
+    to: "/settings/skills",
+    teamsOnly: true,
+    searchTerms: ["teams shared skill documents linked project turn on review update"],
+  },
+  {
     id: "automatic-pull",
     title: "Automatically pull",
     to: "/settings/source-control",
@@ -997,7 +1007,8 @@ export function filterAvailableSettingsSearchItems(
       (!item.localBackendManagementOnly || availability.canManageLocalBackend) &&
       (!item.localEnvironmentOnly || !availability.localEnvironmentDisabled) &&
       (!item.wslAvailableOnly || availability.isWslSettingsRowVisible) &&
-      (!item.requiresThreadAutoSettlement || availability.hasThreadAutoSettlement),
+      (!item.requiresThreadAutoSettlement || availability.hasThreadAutoSettlement) &&
+      (!item.teamsOnly || availability.hasTeams === true),
   );
 }
 

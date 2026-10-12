@@ -49,6 +49,7 @@ import {
   ThreadPinnedPayload,
   ThreadPinReorderedPayload,
   ThreadAutoSettleSetPayload,
+  ThreadTeamSharingSetPayload,
   ThreadPullRequestLinkedPayload,
   ThreadPullRequestSyncedPayload,
   ThreadPullRequestUnlinkedPayload,
@@ -462,6 +463,8 @@ export function projectEvent(
             unsettledAt: null,
             activeOrderKey: null,
             autoSettleDisabledAt: null,
+            teamSharingOffAt: null,
+            teamSharingResumedAt: null,
             snoozedUntil: null,
             snoozedAt: null,
             deletedAt: null,
@@ -612,6 +615,17 @@ export function projectEvent(
           threads: updateThread(nextBase.threads, payload.threadId, {
             autoSettleDisabledAt: payload.autoSettleDisabledAt,
             updatedAt: payload.updatedAt,
+          }),
+        })),
+      );
+
+    case "thread.team-sharing-set":
+      return decodeForEvent(ThreadTeamSharingSetPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            teamSharingOffAt: payload.teamSharingOffAt,
+            teamSharingResumedAt: payload.teamSharingResumedAt,
           }),
         })),
       );

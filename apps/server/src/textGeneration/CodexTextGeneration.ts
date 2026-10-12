@@ -26,6 +26,7 @@ import {
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
   buildDailyMemoryPrompt,
+  buildTeamDailyMemoryPrompt,
   buildPrContentPrompt,
   buildThreadTitlePrompt,
 } from "./TextGenerationPrompts.ts";
@@ -56,7 +57,8 @@ type CodexTextGenerationOperation =
   | "generatePrContent"
   | "generateBranchName"
   | "generateThreadTitle"
-  | "generateDailyMemory";
+  | "generateDailyMemory"
+  | "generateTeamDailyMemory";
 const encodeJsonString = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 /**
  * Build a Codex text-generation closure bound to a specific `CodexSettings`
@@ -494,11 +496,39 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
     } satisfies TextGeneration.DailyMemoryGenerationResult;
   });
 
+  const generateTeamDailyMemory = Effect.fn("CodexTextGeneration.generateTeamDailyMemory")(
+    function* (input: TextGeneration.TeamDailyMemoryGenerationInput) {
+      const { prompt, outputSchema } = buildTeamDailyMemoryPrompt({
+        day: input.day,
+        teamName: input.teamName,
+        threads: input.threads,
+      });
+      const generated = yield* runCodexJson({
+        operation: "generateTeamDailyMemory",
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson: outputSchema,
+        modelSelection: input.modelSelection,
+        timeoutMs: DAILY_MEMORY_TIMEOUT_MS,
+      });
+      return {
+        threads: generated.threads.map((thread) => ({
+          key: thread.key.trim(),
+          summary: thread.summary.trim(),
+          items: thread.items
+            .map((item) => ({ kind: item.kind, text: item.text.trim() }))
+            .filter((item) => item.text.length > 0),
+        })),
+      } satisfies TextGeneration.TeamDailyMemoryGenerationResult;
+    },
+  );
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
     generateDailyMemory,
+    generateTeamDailyMemory,
   } satisfies TextGeneration.TextGeneration["Service"];
 });

@@ -32,6 +32,7 @@
         "scripts/cli.ts",
         "scripts/evaluate-thread-titles.ts",
         "scripts/measure-pr-preview.ts",
+        "scripts/teams-content-fixture.ts",
         "scripts/update-test-shard-weights.ts",
         "src/provider/testFixtures/*.mjs",
         "src/integrations/pluginSdk/test-fixtures/**/*.mjs",

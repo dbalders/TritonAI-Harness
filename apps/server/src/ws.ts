@@ -163,6 +163,8 @@ import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
+import * as TeamStorage from "./teams/TeamStorageService.ts";
+import * as TeamProject from "./teams/TeamProjectService.ts";
 import * as Account from "./auth/AccountService.ts";
 import { requiredScopeForRpcMethod, requiredScopeForDeviceList } from "./auth/RpcAuthorization.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
@@ -707,6 +709,8 @@ const makeWsRpcLayer = (
       );
       const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
       const account = yield* Account.AccountService;
+      const teamStorage = yield* TeamStorage.TeamStorageService;
+      const teamProject = yield* TeamProject.TeamProjectService;
       const sourceControlDiscovery = yield* SourceControlDiscovery.SourceControlDiscovery;
       const automaticGitFetchInterval = serverSettings.getSettings.pipe(
         Effect.map(
@@ -2207,11 +2211,24 @@ const makeWsRpcLayer = (
           .pipe(Effect.ignoreCause({ log: true }), Effect.forkDetach, Effect.asVoid);
 
       return WsRpcGroup.of({
-        [ORCHESTRATION_WS_METHODS.dispatchCommand]: (command) =>
+        [ORCHESTRATION_WS_METHODS.dispatchCommand]: (clientCommand) =>
           observeRpcEffect(
             ORCHESTRATION_WS_METHODS.dispatchCommand,
             Effect.gen(function* () {
-              yield* ProjectCloneTracker.rejectCommandsDuringClone(projectCloneTracker, command);
+              yield* ProjectCloneTracker.rejectCommandsDuringClone(
+                projectCloneTracker,
+                clientCommand,
+              );
+              // Unedited team memory this server still remembers issuing leaves only while this
+              // session can still open it, and a message gets the team skills this session's
+              // account turned on for its project. The HTTP dispatch route does the same.
+              const command = yield* teamProject
+                .prepareOutgoingCommand(currentSessionId, clientCommand)
+                .pipe(
+                  Effect.mapError(
+                    (error) => new OrchestrationDispatchCommandError({ message: error.message }),
+                  ),
+                );
               const normalizedCommand = yield* normalizeDispatchCommand(command);
               // Archive removes the thread from the client, so this transport
               // closes its session and terminals after the command lands.
@@ -2981,6 +2998,18 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.serverGetTritonAiUsage, fetchTritonAiUsage(), {
             "rpc.aggregate": "server",
           }),
+        [WS_METHODS.serverTeamStorage]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverTeamStorage,
+            teamStorage.execute(currentSessionId, input),
+          ),
+        [WS_METHODS.serverTeamProjects]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverTeamProjects,
+            teamProject.execute(currentSessionId, input),
+          ),
+        [WS_METHODS.serverTeams]: (input) =>
+          observeRpcEffect(WS_METHODS.serverTeams, teamProject.teams(currentSessionId, input)),
         [WS_METHODS.serverGetAccountStatus]: (_input) =>
           observeRpcEffect(WS_METHODS.serverGetAccountStatus, account.getStatus(currentSessionId)),
         [WS_METHODS.serverStartAccountLogin]: (input) =>
@@ -2994,7 +3023,10 @@ const makeWsRpcLayer = (
             account.pollLogin(currentSessionId, input),
           ),
         [WS_METHODS.serverSignOutAccount]: (_input) =>
-          observeRpcEffect(WS_METHODS.serverSignOutAccount, account.signOut(currentSessionId)),
+          observeRpcEffect(
+            WS_METHODS.serverSignOutAccount,
+            teamProject.signOutAccount(currentSessionId),
+          ),
         [WS_METHODS.serverGetMemoryStatus]: (_input) =>
           observeRpcEffect(WS_METHODS.serverGetMemoryStatus, memorySync.getStatus, {
             "rpc.aggregate": "server",
@@ -4419,6 +4451,8 @@ const makeWsRpcLayer = (
 export const websocketRpcRouteLayer = Layer.unwrap(
   Effect.gen(function* () {
     const account = yield* Account.AccountService;
+    const teamStorage = yield* TeamStorage.TeamStorageService;
+    const teamProject = yield* TeamProject.TeamProjectService;
     const previewAutomationBroker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
     const baseServerSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
     const config = yield* ServerConfig.ServerConfig;
@@ -4490,6 +4524,8 @@ export const websocketRpcRouteLayer = Layer.unwrap(
             ).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
               Layer.provide(Layer.succeed(Account.AccountService, account)),
+              Layer.provide(Layer.succeed(TeamStorage.TeamStorageService, teamStorage)),
+              Layer.provide(Layer.succeed(TeamProject.TeamProjectService, teamProject)),
               Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),
               Layer.provide(AgentSessionScanner.layer),
               // Shared with the startup auto-update, so update locks and state span clients.

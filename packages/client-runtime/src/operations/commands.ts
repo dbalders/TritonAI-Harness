@@ -43,6 +43,7 @@ export type PinThreadInput = CommandInput<"thread.pin">;
 export type UnpinThreadInput = CommandInput<"thread.unpin">;
 export type ReorderPinnedThreadInput = CommandInput<"thread.pin.reorder">;
 export type SetThreadAutoSettleInput = CommandInput<"thread.auto-settle.set">;
+export type SetThreadTeamSharingInput = CommandInput<"thread.team-sharing.set">;
 export type ReorderActiveThreadInput = CommandInput<"thread.active.reorder">;
 export type UpdateThreadMetadataInput = CommandInput<"thread.meta.update">;
 export type LinkThreadPullRequestInput = CommandInput<"thread.pull-request.link">;
@@ -235,6 +236,16 @@ export const setThreadAutoSettle: (input: SetThreadAutoSettleInput) => CommandEf
   return yield* dispatch({
     ...input,
     type: "thread.auto-settle.set",
+    commandId: yield* commandId(input),
+  });
+});
+
+export const setThreadTeamSharing: (input: SetThreadTeamSharingInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.setThreadTeamSharing",
+)(function* (input) {
+  return yield* dispatch({
+    ...input,
+    type: "thread.team-sharing.set",
     commandId: yield* commandId(input),
   });
 });

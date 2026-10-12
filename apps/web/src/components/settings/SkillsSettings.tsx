@@ -54,6 +54,8 @@ import { Button } from "../ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
 import { Input } from "../ui/input";
 import { Switch } from "../ui/switch";
+import { TeamSkillsSettingsSection } from "../teams/TeamSkillsSettings";
+import { useOptionalSettingsScope } from "./SettingsScopeContext";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 
 const EMPTY_SKILL_ROWS: ReadonlyArray<CodexSkillRow> = [];
@@ -447,6 +449,9 @@ function newerCatalog(
 export function SkillsSettingsPanel() {
   const navigate = useNavigate();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const settingsScope = useOptionalSettingsScope()?.scope.kind;
+  // Team skills are turned on per project, so they lead when a project is chosen above.
+  const teamSkillsFirst = settingsScope === "project" || settingsScope === "checkout";
   const providers = useAtomValue(primaryServerProvidersAtom);
   const forceRefreshCatalogCommand = useAtomCommand(
     serverEnvironment.forceRefreshProviderSkillCatalog,
@@ -812,6 +817,8 @@ export function SkillsSettingsPanel() {
 
   return (
     <SettingsPageContainer>
+      {teamSkillsFirst ? <TeamSkillsSettingsSection /> : null}
+
       {catalogError ? (
         <SettingsSection
           title="TritonAI Commons"
@@ -995,6 +1002,8 @@ export function SkillsSettingsPanel() {
           })
         )}
       </SettingsSection>
+
+      {teamSkillsFirst ? null : <TeamSkillsSettingsSection />}
 
       {managedManifestWarning ? (
         <SettingsSection title="Managed Skills">

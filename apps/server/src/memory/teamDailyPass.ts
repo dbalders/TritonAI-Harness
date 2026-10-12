@@ -1,0 +1,792 @@
+/**
+ * The team pass of daily memory: writes this device's daily file in each team its campus account
+ * belongs to, from work in this environment's projects linked to that team. DailyMemory runs it
+ * after each personal catch-up and when a thread's sharing changes (see `DailyMemory.ts`).
+ *
+ * Only team work reaches the model: `loadDayActivity` is given the team's scope, so the query
+ * itself is limited to linked projects, to work after each link began sharing, and to threads not
+ * chosen as Don't share. It follows personal memory's rhythm: finished days up to a week back are
+ * summarized once, and today at most every four hours while it changes. Then:
+ *
+ * - summaries for threads or projects that stopped qualifying while the model ran are dropped;
+ * - every day file whose content changed is rendered (see `teamDaily.ts`) and written through the
+ *   Teams side, which checks the account, membership, and links again first.
+ *
+ * The record keeps what each published file says, for as long as the file exists, so choosing
+ * Don't share later still rewrites old files. It holds summaries only, never transcripts. Access
+ * that ended clears the team's record and writes nothing more; published files stay with the
+ * team. Access that couldn't be checked holds everything for a later pass.
+ */
+import { TextGenerationError } from "@t3tools/contracts";
+import * as NodeCrypto from "node:crypto";
+import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
+import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
+import * as Path from "effect/Path";
+import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
+
+import { writeFileStringAtomically } from "../atomicWrite.ts";
+import type { ServerSettingsService } from "../serverSettings.ts";
+import type { TextGeneration } from "../textGeneration/TextGeneration.ts";
+import {
+  type ActivityExtent,
+  hasStreamingMessages,
+  loadDayActivity,
+  type TeamActivityScope,
+} from "./memoryActivity.ts";
+import { addLocalDays, localDayAt, localDayRange } from "./memoryDays.ts";
+import { formatMemoryActivity, type MemoryThreadActivity } from "./memoryNotes.ts";
+import {
+  renderTeamDailyFile,
+  renderTeamDailySection,
+  sha256,
+  TeamDailyMarker,
+  teamDailyMarkerPath,
+  teamDailyPath,
+  type TeamDailyDay,
+  TeamDailyState,
+  type TeamDailyThreadNow,
+  type Writable,
+} from "./teamDaily.ts";
+import type {
+  TeamDailyAccount,
+  TeamDailySource,
+  TeamDailyStatus,
+  TeamDailyWorkspace,
+} from "./teamDailySource.ts";
+
+/** Threads one model call summarizes; a busier day takes more calls. */
+const THREADS_PER_CALL = 12;
+
+type State = Writable<TeamDailyState>;
+type Day = Writable<TeamDailyDay>;
+type Team = State["teams"][string];
+type Activity = MemoryThreadActivity & ActivityExtent;
+
+const decodeState = Schema.decodeUnknownEffect(Schema.fromJsonString(TeamDailyState));
+const encodeState = Schema.encodeEffect(Schema.fromJsonString(TeamDailyState));
+const encodeMarker = Schema.encodeEffect(Schema.fromJsonString(TeamDailyMarker));
+
+/** How each of `threadIds` stands now, deleted threads included. */
+const threadsNow = Effect.fn("teamMemory.threadsNow")(function* (threadIds: ReadonlyArray<string>) {
+  const sql = yield* SqlClient.SqlClient;
+  const threads = new Map<string, TeamDailyThreadNow>();
+  for (let index = 0; index < threadIds.length; index += 500) {
+    const rows = yield* sql<{
+      readonly threadId: string;
+      readonly projectId: string;
+      readonly deletedAt: string | null;
+      readonly offAt: string | null;
+      readonly resumedAt: string | null;
+    }>`
+      SELECT
+        thread_id AS "threadId",
+        project_id AS "projectId",
+        deleted_at AS "deletedAt",
+        team_sharing_off_at AS "offAt",
+        team_sharing_resumed_at AS "resumedAt"
+      FROM projection_threads
+      WHERE ${sql.in("thread_id", threadIds.slice(index, index + 500))}
+    `;
+    for (const row of rows)
+      threads.set(row.threadId, {
+        projectId: row.projectId,
+        deleted: row.deletedAt !== null,
+        off: row.offAt !== null,
+        resumedAt: row.resumedAt,
+      });
+  }
+  return threads;
+});
+const sameThread = (a: TeamDailyThreadNow | undefined, b: TeamDailyThreadNow | undefined) =>
+  a !== undefined &&
+  b !== undefined &&
+  a.projectId === b.projectId &&
+  a.deleted === b.deleted &&
+  a.off === b.off &&
+  a.resumedAt === b.resumedAt;
+
+const scopeOf = (workspace: TeamDailyWorkspace): TeamActivityScope => ({
+  projects: new Map(workspace.projects.map((p) => [p.projectId, p.sharingSince])),
+});
+
+export const makeTeamDailyPass = (input: {
+  readonly stateDir: string;
+  readonly deviceLabel: string;
+  readonly settings: ServerSettingsService["Service"];
+  readonly textGeneration: TextGeneration["Service"];
+  /** Same rhythm as personal memory. */
+  readonly maxCatchUpDays: number;
+  readonly partialIntervalMs: number;
+  readonly streamingGraceMs: number;
+}) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const sql = yield* SqlClient.SqlClient;
+    const lock = yield* Semaphore.make(1);
+    const source = yield* Ref.make<TeamDailySource | null>(null);
+    const statuses = new Map<string, TeamDailyStatus>();
+    const directory = path.join(input.stateDir, "team-daily");
+    const stateFile = path.join(directory, "state.json");
+
+    const provide = <A, E>(effect: Effect.Effect<A, E, SqlClient.SqlClient>) =>
+      effect.pipe(Effect.provideService(SqlClient.SqlClient, sql));
+    const nowIso = Clock.currentTimeMillis.pipe(
+      Effect.map((ms) => DateTime.formatIso(DateTime.makeUnsafe(ms))),
+    );
+
+    const readState = fs.readFileString(stateFile).pipe(
+      Effect.flatMap(decodeState),
+      Effect.map((state) => Option.some(structuredClone(state) as State)),
+      // A missing or unreadable record starts over: a fresh record publishes nothing old.
+      Effect.orElseSucceed(() => Option.none<State>()),
+    );
+    const writeState = (state: State) =>
+      encodeState(state).pipe(
+        Effect.flatMap((contents) =>
+          fs
+            .makeDirectory(directory, { recursive: true })
+            .pipe(Effect.andThen(writeFileStringAtomically({ filePath: stateFile, contents }))),
+        ),
+        Effect.provideService(FileSystem.FileSystem, fs),
+        Effect.provideService(Path.Path, path),
+      );
+
+    const setStatus = (teamId: string, next: Partial<TeamDailyStatus>) =>
+      Effect.sync(() => {
+        const current = statuses.get(teamId);
+        statuses.set(teamId, {
+          state: next.state ?? current?.state ?? "sharing",
+          message: next.message !== undefined ? next.message : (current?.message ?? null),
+          lastPublishedAt: next.lastPublishedAt ?? current?.lastPublishedAt ?? null,
+        });
+      });
+
+    /** Each thread's section for `day`, summarized through the model in batches. */
+    const summarize = (day: string, teamName: string, threads: ReadonlyArray<Activity>) =>
+      Effect.gen(function* () {
+        const generate = input.textGeneration.generateTeamDailyMemory;
+        if (!generate)
+          return yield* new TextGenerationError({
+            operation: "generateTeamDailyMemory",
+            detail: "Team memory needs a Codex text generation model.",
+          });
+        const settings = yield* input.settings.getSettings;
+        const sections = new Map<string, string>();
+        for (let index = 0; index < threads.length; index += THREADS_PER_CALL) {
+          const keyed = threads
+            .slice(index, index + THREADS_PER_CALL)
+            .map((thread, offset) => ({ key: `T${offset + 1}`, thread }));
+          const result = yield* generate({
+            cwd: directory,
+            day,
+            teamName,
+            threads: keyed.map(({ key, thread }) => ({
+              key,
+              activity: formatMemoryActivity(
+                [thread],
+                new Map([[thread.projectId, thread.projectTitle]]),
+              ),
+            })),
+            modelSelection: settings.textGenerationModelSelection,
+          });
+          for (const { key, thread } of keyed) {
+            const summary = result.threads.find((entry) => entry.key === key);
+            sections.set(
+              thread.threadId,
+              renderTeamDailySection({
+                threadId: thread.threadId,
+                title: thread.title,
+                projectTitle: thread.projectTitle,
+                firstAt: thread.firstAt,
+                lastAt: thread.lastAt,
+                branch: thread.branch,
+                pullRequestUrl: thread.pullRequestUrl,
+                summary: summary?.summary ?? "",
+                items: summary?.items ?? [],
+              }),
+            );
+          }
+        }
+        return sections;
+      });
+
+    const workspaceOf = (account: TeamDailyAccount, teamId: string) =>
+      account.kind === "signed-in"
+        ? account.workspaces.find((workspace) => workspace.teamId === teamId)
+        : undefined;
+
+    /**
+     * Summarizes the days that need it for one team and keeps only sections that still qualify
+     * once the model is done. Returns false when the team must be left alone this pass.
+     */
+    const summarizeTeam = (
+      attached: TeamDailySource,
+      state: State,
+      team: Team,
+      workspace: TeamDailyWorkspace,
+      authorName: string,
+      nowMs: number,
+    ) =>
+      Effect.gen(function* () {
+        const scope = scopeOf(workspace);
+        if (scope.projects.size === 0) return true;
+        const today = localDayAt(nowMs);
+        const earliest = addLocalDays(today, -input.maxCatchUpDays);
+        const firstShared = localDayAt(Date.parse([...scope.projects.values()].toSorted()[0]!));
+        const streamingSince = DateTime.formatIso(
+          DateTime.makeUnsafe(nowMs - input.streamingGraceMs),
+        );
+        const days: Array<{ day: string; status: "partial" | "final" }> = [];
+        let day = team.lastFinishedDay ? addLocalDays(team.lastFinishedDay, 1) : earliest;
+        for (const floor of [earliest, firstShared]) if (day < floor) day = floor;
+        for (; day < today; day = addLocalDays(day, 1)) days.push({ day, status: "final" });
+        const todayRecord = team.days[today];
+        if (!todayRecord || nowMs - Date.parse(todayRecord.summarizedAt) >= input.partialIntervalMs)
+          days.push({ day: today, status: "partial" });
+
+        for (const entry of days) {
+          const range = localDayRange(entry.day);
+          // A turn still being written would be summarized without its result.
+          if (yield* provide(hasStreamingMessages(range, streamingSince, scope))) return true;
+          const activity = yield* provide(loadDayActivity(range, scope));
+          const summarizedAt = DateTime.formatIso(DateTime.makeUnsafe(nowMs));
+          const record: Day = team.days[entry.day] ?? {
+            sections: {},
+            etag: null,
+            publishedSha: null,
+            status: entry.status,
+            summarizedAt,
+            authorName,
+            deviceLabel: input.deviceLabel,
+            timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          };
+          const changed = activity.filter(
+            (thread) => record.sections[thread.threadId]?.fingerprint !== thread.fingerprint,
+          );
+          if (changed.length > 0) {
+            yield* setStatus(workspace.teamId, { message: `Summarizing ${entry.day}.` });
+            const summaries = yield* summarize(entry.day, workspace.teamName, changed);
+            // Anything that stopped qualifying while the model ran is dropped, not recorded.
+            const after = yield* attached.account([workspace.teamId]);
+            const fresh = workspaceOf(after, workspace.teamId);
+            if (after.kind !== "signed-in" || after.author !== state.author || !fresh) return false;
+            if (fresh.access !== "ready") return false;
+            const stillLinked = scopeOf(fresh).projects;
+            const now = yield* provide(threadsNow(changed.map((t) => t.threadId)));
+            for (const thread of changed) {
+              const text = summaries.get(thread.threadId);
+              const linkSince = scope.projects.get(thread.projectId)!;
+              const current = now.get(thread.threadId);
+              // The thread must still exist, in the same project, shared as it was when read.
+              if (
+                text === undefined ||
+                current === undefined ||
+                current.off ||
+                current.projectId !== thread.projectId ||
+                current.resumedAt !== thread.sharingResumedAt ||
+                stillLinked.get(thread.projectId) !== linkSince
+              )
+                continue;
+              const previous = record.sections[thread.threadId];
+              const sameGeneration = (previous?.sharing ?? null) === thread.sharingResumedAt;
+              // An unconfirmed write may have carried an earlier generation to the team.
+              const attempted = record.attempt?.included[thread.threadId] !== undefined;
+              const attemptedGeneration =
+                record.attempt?.generations && thread.threadId in record.attempt.generations
+                  ? record.attempt.generations[thread.threadId]
+                  : (previous?.sharing ?? null);
+              record.sections[thread.threadId] = {
+                projectId: thread.projectId,
+                sharing: thread.sharingResumedAt,
+                linkSince,
+                text,
+                // Text published under an earlier sharing generation was withdrawn by Don't
+                // share; it is never this section's baseline, so it can't be published again,
+                // but its removal stays owed until a file without it is confirmed.
+                publishedText: sameGeneration ? (previous?.publishedText ?? null) : null,
+                ...(previous?.owesRemoval === true ||
+                (!sameGeneration && (previous?.publishedText ?? null) !== null) ||
+                (attempted && attemptedGeneration !== thread.sharingResumedAt)
+                  ? { owesRemoval: true }
+                  : {}),
+                startedAt: thread.firstAt,
+                fingerprint: thread.fingerprint,
+              };
+            }
+          }
+          if (Object.keys(record.sections).length > 0)
+            team.days[entry.day] = { ...record, status: entry.status, summarizedAt };
+          if (entry.status === "final") team.lastFinishedDay = entry.day;
+          yield* writeState(state);
+        }
+        return true;
+      });
+
+    /** Publishes the team's change marker, in the team's current folder, when it changed. */
+    const publishMarker = (
+      attached: TeamDailySource,
+      state: State,
+      team: Team,
+      workspace: TeamDailyWorkspace,
+    ) =>
+      Effect.gen(function* () {
+        const current = team.marker;
+        if (!current) return "done" as const;
+        // Bound before the first write, like day files: the marker is only updated where it is.
+        if ((current.storageKey ?? null) === null) {
+          if (workspace.storageKey === null) return "done" as const;
+          current.storageKey = workspace.storageKey;
+          yield* writeState(state);
+        }
+        if (Object.keys(current.months).length === 0) return "done" as const;
+        const text = yield* encodeMarker({
+          version: 1,
+          months: Object.fromEntries(Object.entries(current.months).toSorted()),
+        });
+        const sha = sha256(text);
+        if (sha === current.publishedSha) return "done" as const;
+        const result = yield* attached.write({
+          teamId: workspace.teamId,
+          author: state.author,
+          path: teamDailyMarkerPath(state.author, state.deviceId),
+          text,
+          etag: current.etag,
+          storageKey: current.storageKey ?? null,
+          freshProjects: [],
+          stillShared: Effect.succeed(true),
+        });
+        if (result.kind === "lost") return "lost" as const;
+        if (result.kind === "held" || result.kind === "rejected" || result.kind === "changed") {
+          yield* setStatus(workspace.teamId, { state: "held", message: result.message });
+          return "held" as const;
+        }
+        current.publishedSha = sha;
+        current.etag = result.etag;
+        current.storageKey = result.storageKey;
+        yield* writeState(state);
+        return "done" as const;
+      });
+
+    /**
+     * Settles a write whose outcome isn't known by reading the file where it was written. Returns
+     * false when that can't be learned now, so the day is left as it is.
+     */
+    const settleAttempt = (
+      attached: TeamDailySource,
+      state: State,
+      record: Day,
+      day: string,
+      teamId: string,
+    ) =>
+      Effect.gen(function* () {
+        const attempt = record.attempt;
+        if (!attempt) return "settled" as const;
+        const found = yield* attached.inspect({
+          teamId,
+          author: state.author,
+          path: teamDailyPath(state.author, day, state.deviceId),
+          storageKey: record.storageKey ?? null,
+        });
+        if (found.kind === "lost") return "lost" as const;
+        if (found.kind === "held") return "held" as const;
+        if (found.kind === "file" && sha256(found.text) === attempt.sha) {
+          // The write landed: what it carried is now what the team has.
+          for (const [threadId, section] of Object.entries(record.sections)) {
+            const text = attempt.included[threadId];
+            // Left out of the file, so no earlier generation of it is there either.
+            if (text === undefined) delete section.owesRemoval;
+            else if (
+              (section.sharing ?? null) ===
+              (attempt.generations && threadId in attempt.generations
+                ? attempt.generations[threadId]
+                : (section.sharing ?? null))
+            ) {
+              section.publishedText = text;
+              delete section.owesRemoval;
+            } else {
+              // An earlier generation's text landed: the team has it, so its removal is owed.
+              section.owesRemoval = true;
+            }
+          }
+          record.publishedSha = attempt.sha;
+          record.etag = found.etag;
+        } else if (found.kind === "missing") {
+          // A removal landed, or nothing was ever written.
+          for (const section of Object.values(record.sections)) delete section.owesRemoval;
+          if (attempt.sha === null)
+            for (const section of Object.values(record.sections)) section.publishedText = null;
+          record.publishedSha = null;
+          record.etag = null;
+        } else if (record.publishedSha !== null && sha256(found.text) === record.publishedSha) {
+          // The write didn't land: the version last confirmed is still there.
+          record.etag = found.etag;
+        } else {
+          // Someone changed the file, so it can't be known whether the write landed. Nothing is
+          // assumed published or unpublished: the day waits, with its attempt kept, until the
+          // file matches a known version again or is removed.
+          return "ambiguous" as const;
+        }
+        delete record.attempt;
+        yield* writeState(state);
+        return "settled" as const;
+      });
+
+    /**
+     * Writes every day file whose content changed. A day that can't be written now is reported
+     * and skipped, so it never holds back other days, withdrawals, or the change marker.
+     */
+    const publishTeam = (
+      attached: TeamDailySource,
+      state: State,
+      team: Team,
+      workspace: TeamDailyWorkspace,
+      /** False while Memory is off: files may lose content but gain none. */
+      allowFresh: boolean,
+    ) =>
+      Effect.gen(function* () {
+        const linkedProjects = scopeOf(workspace).projects;
+        // A folder that changed starts a new marker there; the old folder's files stay put.
+        if (
+          team.marker?.storageKey &&
+          workspace.storageKey &&
+          team.marker.storageKey !== workspace.storageKey
+        )
+          team.marker = { months: {}, publishedSha: null, etag: null, storageKey: null };
+        const threads = yield* provide(
+          threadsNow([
+            ...new Set(Object.values(team.days).flatMap((day) => Object.keys(day.sections))),
+          ]),
+        );
+        const problems: string[] = [];
+        for (const day of Object.keys(team.days).toSorted()) {
+          const record = team.days[day]!;
+          /**
+           * Says so when the team's file may still hold a thread chosen as Don't share: one whose
+           * earlier generation was published or may have been sent, or a withdrawn one the team
+           * has or may have. It holds until a file without it is confirmed.
+           */
+          const withRemoval = (message: string) => {
+            const withdrawn = renderTeamDailyFile(
+              record,
+              { day, author: state.author },
+              { threads, linkedProjects },
+            ).withdrawn;
+            const owed = Object.entries(record.sections).some(
+              ([threadId, section]) =>
+                section.owesRemoval === true ||
+                (withdrawn.includes(threadId) &&
+                  (section.publishedText !== null ||
+                    record.attempt?.included[threadId] !== undefined)),
+            );
+            return owed
+              ? `${message} A thread you chose not to share may still be in it; remove it in SharePoint, or ask your administrator.`
+              : message;
+          };
+          // A file is only ever updated, checked, or removed in the folder it was first sent to.
+          if ((record.storageKey ?? null) !== null && record.storageKey !== workspace.storageKey) {
+            problems.push(
+              withRemoval(
+                `Your shared memory for ${day} is in the team's previous folder, so Harness can't update or remove it there. Ask your administrator.`,
+              ),
+            );
+            continue;
+          }
+          const settled = yield* settleAttempt(attached, state, record, day, workspace.teamId);
+          if (settled === "lost") return "lost" as const;
+          if (settled === "held") {
+            problems.push(
+              withRemoval(
+                `Harness couldn't confirm whether ${day} was saved; it will check again.`,
+              ),
+            );
+            continue;
+          }
+          if (settled === "ambiguous") {
+            problems.push(
+              withRemoval(
+                `Your shared memory for ${day} was changed in SharePoint, so Harness can't tell what it holds and won't change it.`,
+              ),
+            );
+            continue;
+          }
+          const rendered = renderTeamDailyFile(
+            record,
+            { day, author: state.author },
+            { threads, linkedProjects, publishedOnly: !allowFresh },
+          );
+          // Sharing a thread again resummarizes it; unpublished text that can no longer be
+          // published leaves for good; a thread that no longer qualifies keeps only what was
+          // published.
+          let changed = false;
+          // A withdrawn or dropped section the team may have is kept, though never shown, until
+          // a write that leaves it out is confirmed: until then, its removal is owed and reported.
+          const owedRemovals = [...rendered.withdrawn, ...rendered.dropped].filter(
+            (threadId) =>
+              record.sections[threadId]?.publishedText != null ||
+              record.sections[threadId]?.owesRemoval === true,
+          );
+          for (const threadId of [...rendered.withdrawn, ...rendered.dropped]) {
+            if (owedRemovals.includes(threadId)) continue;
+            delete record.sections[threadId];
+            changed = true;
+          }
+          /** The team's file is confirmed to be `rendered`, which holds no earlier generation. */
+          const settleRemovals = () => {
+            for (const threadId of owedRemovals) delete record.sections[threadId];
+            let settled = owedRemovals.length > 0;
+            for (const section of Object.values(record.sections))
+              if (section.owesRemoval !== undefined) {
+                delete section.owesRemoval;
+                settled = true;
+              }
+            return settled;
+          };
+          for (const threadId of rendered.frozen) {
+            const section = record.sections[threadId]!;
+            section.text = section.publishedText!;
+            changed = true;
+          }
+          // Noted once the day's outcome is known, so it says only what the team may still have.
+          const noteWaiting = () => {
+            if (rendered.deferred.length > 0)
+              problems.push(
+                withRemoval(
+                  `Some of ${day}'s newest work is waiting because that day's shared memory reached its size limit.`,
+                ),
+              );
+          };
+          const sha = rendered.text === null ? null : sha256(rendered.text);
+          if (sha === record.publishedSha) {
+            // The team's file already leaves them out.
+            const settled = settleRemovals();
+            if (rendered.text === null) delete team.days[day];
+            if (changed || settled || rendered.text === null) yield* writeState(state);
+            noteWaiting();
+            continue;
+          }
+          // Each thread is asked about again right before each request that changes the file:
+          // still not withdrawn, and, for new text, still in the same project, shared the same way.
+          const included = [...rendered.included.keys()];
+          let changedSharing = false;
+          const stillShared = provide(threadsNow(included)).pipe(
+            Effect.map((now) => {
+              changedSharing =
+                included.some((threadId) => {
+                  const current = now.get(threadId);
+                  const section = record.sections[threadId];
+                  return (
+                    current !== undefined &&
+                    section !== undefined &&
+                    (current.off || current.resumedAt !== (section.sharing ?? null))
+                  );
+                }) ||
+                [...rendered.freshThreads].some(
+                  ([threadId, then]) => !sameThread(now.get(threadId), then),
+                );
+              return !changedSharing;
+            }),
+            Effect.orElseSucceed(() => false),
+          );
+          if (!(yield* stillShared)) return "retry" as const;
+          // Recorded before the write, so a crash can neither hide the marker's month nor lose
+          // track of a file that may now exist, or of the folder it would be in.
+          if ((record.storageKey ?? null) === null) {
+            if (workspace.storageKey === null) {
+              noteWaiting();
+              problems.push(
+                withRemoval(`Harness couldn't confirm the team's folder, so ${day} waits.`),
+              );
+              continue;
+            }
+            record.storageKey = workspace.storageKey;
+          }
+          const marker = (team.marker ??= { months: {}, publishedSha: null, etag: null });
+          marker.months[day.slice(0, 7)] = yield* nowIso;
+          record.attempt = {
+            sha,
+            included: Object.fromEntries(rendered.included),
+            generations: Object.fromEntries(
+              [...rendered.included.keys()].map((threadId) => [
+                threadId,
+                record.sections[threadId]?.sharing ?? null,
+              ]),
+            ),
+          };
+          yield* writeState(state);
+          const result = yield* attached.write({
+            teamId: workspace.teamId,
+            author: state.author,
+            path: teamDailyPath(state.author, day, state.deviceId),
+            text: rendered.text,
+            etag: record.etag,
+            storageKey: record.storageKey ?? null,
+            freshProjects: [...rendered.freshProjects].map(([projectId, sharingSince]) => ({
+              projectId,
+              sharingSince,
+            })),
+            stillShared,
+          });
+          if (result.kind === "lost") return "lost" as const;
+          if (result.kind === "held" && changedSharing) return "retry" as const;
+          if (result.kind === "held") {
+            // The attempt stays recorded: the next pass learns whether it landed.
+            yield* setStatus(workspace.teamId, {
+              state: "held",
+              message: withRemoval(result.message),
+            });
+            return "held" as const;
+          }
+          if (result.kind === "changed") {
+            // Kept: the next pass reads the file to learn what it holds before doing anything.
+            noteWaiting();
+            problems.push(withRemoval(`${day}: ${result.message}`));
+            continue;
+          }
+          if (result.kind === "rejected") {
+            // Nothing was sent. A day the team has nothing of yet is bound again on a later try.
+            delete record.attempt;
+            if (record.publishedSha === null) record.storageKey = null;
+            yield* writeState(state);
+            noteWaiting();
+            problems.push(withRemoval(`${day}: ${result.message}`));
+            continue;
+          }
+          delete record.attempt;
+          settleRemovals();
+          if (rendered.text === null) {
+            delete team.days[day];
+          } else {
+            for (const [threadId, text] of rendered.included) {
+              const section = record.sections[threadId];
+              if (section) section.publishedText = text;
+            }
+            record.etag = result.etag;
+            record.publishedSha = sha;
+            record.storageKey = result.storageKey;
+          }
+          yield* writeState(state);
+          yield* setStatus(workspace.teamId, { lastPublishedAt: yield* nowIso });
+          noteWaiting();
+        }
+        const marker = yield* publishMarker(attached, state, team, workspace);
+        if (marker === "held" && problems.length > 0)
+          // A day's problem, such as text the team may still have, says more than the marker's.
+          yield* setStatus(workspace.teamId, { state: "held", message: problems[0]! });
+        if (marker !== "done") return marker;
+        if (problems.length > 0) {
+          yield* setStatus(workspace.teamId, { state: "held", message: problems[0]! });
+          return "partial" as const;
+        }
+        return "done" as const;
+      });
+
+    const pass = Effect.gen(function* () {
+      const attached = yield* Ref.get(source);
+      if (!attached) return;
+      const settings = yield* input.settings.getSettings;
+      const stored = yield* readState;
+      const account = yield* attached.account(
+        Option.isSome(stored) ? Object.keys(stored.value.teams) : [],
+      );
+      if (account.kind === "unavailable") {
+        for (const teamId of statuses.keys())
+          yield* setStatus(teamId, { state: "held", message: account.message });
+        return;
+      }
+      if (account.kind === "signed-out") {
+        // Nothing is shared without an account; files already published stay with their teams.
+        yield* fs.remove(stateFile).pipe(Effect.ignore);
+        statuses.clear();
+        return;
+      }
+      // Another account starts with an empty record: nothing of the previous one is reused.
+      const state: State =
+        Option.isSome(stored) && stored.value.author === account.author
+          ? stored.value
+          : {
+              version: 1,
+              author: account.author,
+              deviceId: Option.isSome(stored) ? stored.value.deviceId : NodeCrypto.randomUUID(),
+              teams: {},
+            };
+      const nowMs = yield* Clock.currentTimeMillis;
+      for (const workspace of account.workspaces) {
+        const teamId = workspace.teamId;
+        if (workspace.access === "lost") {
+          delete state.teams[teamId];
+          statuses.delete(teamId);
+          continue;
+        }
+        if (workspace.access === "held") {
+          yield* setStatus(teamId, {
+            state: "held",
+            message:
+              workspace.message ?? "Team access couldn't be checked. Harness will try again.",
+          });
+          continue;
+        }
+        const team: Team = state.teams[teamId] ?? {
+          teamName: workspace.teamName,
+          lastFinishedDay: null,
+          days: {},
+        };
+        team.teamName = workspace.teamName;
+        state.teams[teamId] = team;
+        // Whether this pass left the team's newest work unsummarized.
+        let held = !settings.memoryEnabled;
+        if (!settings.memoryEnabled) {
+          yield* setStatus(teamId, {
+            state: "held",
+            message: "Memory is off, so your work isn't summarized for the team.",
+          });
+        } else {
+          const summarized = yield* summarizeTeam(
+            attached,
+            state,
+            team,
+            workspace,
+            account.authorName,
+            nowMs,
+          ).pipe(
+            Effect.catchTag("TextGenerationError", (error) => {
+              held = true;
+              return setStatus(teamId, { state: "held", message: error.detail }).pipe(
+                Effect.as(true),
+              );
+            }),
+          );
+          if (!summarized) continue;
+        }
+        let outcome = yield* publishTeam(attached, state, team, workspace, settings.memoryEnabled);
+        // A thread chosen as Don't share mid-pass: render again without it.
+        if (outcome === "retry")
+          outcome = yield* publishTeam(attached, state, team, workspace, settings.memoryEnabled);
+        if (outcome === "lost") {
+          delete state.teams[teamId];
+          statuses.delete(teamId);
+        } else if (outcome === "done" && !held) {
+          yield* setStatus(teamId, { state: "sharing", message: null });
+        }
+      }
+      yield* writeState(state);
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("team memory pass failed", { cause: Cause.pretty(cause) }),
+      ),
+    );
+
+    return {
+      attach: (next: TeamDailySource) => Ref.set(source, next),
+      /** One pass, after any pass in progress. */
+      run: lock.withPermits(1)(pass),
+      status: (teamId: string) => Effect.sync(() => statuses.get(teamId) ?? null),
+    };
+  });

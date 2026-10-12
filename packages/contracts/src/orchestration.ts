@@ -934,6 +934,11 @@ export const OrchestrationThread = Schema.Struct({
   // Survives manual settle, un-settle, and activity: only the user clears it.
   // Optional so payloads from older servers still decode.
   autoSettleDisabledAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  // Set while the user has chosen Don't share this thread. In a project linked to a team, the
+  // thread's work is left out of the team's daily memory. Optional so older servers still decode.
+  teamSharingOffAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  // When the user last chose Share this thread again; only work after it is shared.
+  teamSharingResumedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   // Pending-only state. Optional so older servers remain compatible.
   titleRegeneration: Schema.optional(Schema.NullOr(ThreadTitleRegeneration)),
   titleState: Schema.optional(Schema.NullOr(ThreadTitleState)),
@@ -1009,6 +1014,8 @@ export const OrchestrationThreadShell = Schema.Struct({
   pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   activeOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   autoSettleDisabledAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  teamSharingOffAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  teamSharingResumedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   titleRegeneration: Schema.optional(Schema.NullOr(ThreadTitleRegeneration)),
   titleState: Schema.optional(Schema.NullOr(ThreadTitleState)),
   session: Schema.NullOr(OrchestrationSession),
@@ -1330,6 +1337,14 @@ const ThreadAutoSettleSetCommand = Schema.Struct({
   enabled: Schema.Boolean,
 });
 
+const ThreadTeamSharingSetCommand = Schema.Struct({
+  type: Schema.Literal("thread.team-sharing.set"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  // false is Don't share this thread; true shares it with the project's team again.
+  shared: Schema.Boolean,
+});
+
 const ThreadActiveReorderCommand = Schema.Struct({
   type: Schema.Literal("thread.active.reorder"),
   commandId: CommandId,
@@ -1566,6 +1581,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadUnpinCommand,
   ThreadPinReorderCommand,
   ThreadAutoSettleSetCommand,
+  ThreadTeamSharingSetCommand,
   ThreadActiveReorderCommand,
   ThreadMetaUpdateCommand,
   ThreadPullRequestLinkCommand,
@@ -1602,6 +1618,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadUnpinCommand,
   ThreadPinReorderCommand,
   ThreadAutoSettleSetCommand,
+  ThreadTeamSharingSetCommand,
   ThreadActiveReorderCommand,
   ThreadMetaUpdateCommand,
   ThreadPullRequestLinkCommand,
@@ -1850,6 +1867,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.unpinned",
   "thread.pin-reordered",
   "thread.auto-settle-set",
+  "thread.team-sharing-set",
   "thread.meta-updated",
   "thread.pull-request-linked",
   "thread.pull-request-unlinked",
@@ -1997,6 +2015,14 @@ export const ThreadAutoSettleSetPayload = Schema.Struct({
   // Null re-enables automatic settlement.
   autoSettleDisabledAt: Schema.NullOr(IsoDateTime),
   updatedAt: IsoDateTime,
+});
+
+export const ThreadTeamSharingSetPayload = Schema.Struct({
+  threadId: ThreadId,
+  // Null shares the thread with the project's team again.
+  teamSharingOffAt: Schema.NullOr(IsoDateTime),
+  // When sharing was last turned back on: work before it, including while it was off, stays out.
+  teamSharingResumedAt: Schema.NullOr(IsoDateTime),
 });
 
 export const ThreadMetaUpdatedPayload = Schema.Struct({
@@ -2292,6 +2318,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.auto-settle-set"),
     payload: ThreadAutoSettleSetPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.team-sharing-set"),
+    payload: ThreadTeamSharingSetPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
