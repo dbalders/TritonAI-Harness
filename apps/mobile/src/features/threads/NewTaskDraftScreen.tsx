@@ -1203,7 +1203,7 @@ export function NewTaskDraftScreen(props: {
       attachmentBlockReason !== null ||
       !modelSelection ||
       initialMessageText.length === 0 ||
-      !flow.composerPreferencesLoaded ||
+      !flow.composerPermissionsReady ||
       flow.submitting ||
       (workspaceMode === "worktree" && !selectedBranchName)
     ) {
@@ -1345,6 +1345,8 @@ export function NewTaskDraftScreen(props: {
   }
 
   const isAndroid = Platform.OS === "android";
+  const needsComposerPreferencesRetry =
+    flow.composerPreferencesLoadFailed && !flow.composerPermissionsReady;
   const canStart =
     !isImportingContext &&
     !cloneBlocksStart &&
@@ -1355,7 +1357,7 @@ export function NewTaskDraftScreen(props: {
     flow.prompt.trim().length > 0 &&
     isIncomingShareReady &&
     !isImportingShare &&
-    flow.composerPreferencesLoaded &&
+    flow.composerPermissionsReady &&
     !flow.submitting &&
     pendingPastedTextAttachmentCount === 0 &&
     !voiceInput.blocksSubmission &&
@@ -1630,6 +1632,13 @@ export function NewTaskDraftScreen(props: {
           {flow.modelFallbackNotice}
         </Text>
       ) : null}
+      {flow.composerPreferencesLoadFailed ? (
+        <Text accessibilityRole="alert" className="px-2 pb-2 text-sm text-muted-foreground">
+          {flow.composerPermissionsReady
+            ? "Saved preferences could not load. This task uses the permission mode shown above."
+            : "Saved preferences could not load. Retry, or choose a permission mode to continue."}
+        </Text>
+      ) : null}
 
       {modelUnavailable ? (
         <Pressable
@@ -1769,7 +1778,7 @@ export function NewTaskDraftScreen(props: {
               {voicePresentation.showsSend ? (
                 <ComposerActionButton
                   accessibilityLabel={
-                    flow.composerPreferencesLoadFailed
+                    needsComposerPreferencesRetry
                       ? "Retry loading saved preferences"
                       : (attachmentBlockReason ??
                         (cloneBlocksStart
@@ -1778,7 +1787,7 @@ export function NewTaskDraftScreen(props: {
                             : "Repository not cloned"
                           : pendingPastedTextAttachmentCount > 0
                             ? "Attaching pasted text"
-                            : !flow.composerPreferencesLoaded
+                            : !flow.composerPermissionsReady
                               ? "Loading preferences"
                               : flow.submitting
                                 ? "Starting task"
@@ -1788,16 +1797,16 @@ export function NewTaskDraftScreen(props: {
                                     ? "Start task"
                                     : "Queue task"))
                   }
-                  disabled={!flow.composerPreferencesLoadFailed && !canStart}
+                  disabled={!needsComposerPreferencesRetry && !canStart}
                   icon={
-                    flow.composerPreferencesLoadFailed
+                    needsComposerPreferencesRetry
                       ? "arrow.clockwise"
                       : queuesInsteadOfStarting
                         ? "tray.and.arrow.up"
                         : "arrow.up"
                   }
                   onPress={() => {
-                    if (flow.composerPreferencesLoadFailed) {
+                    if (needsComposerPreferencesRetry) {
                       void waitForComposerDraftsLoaded().catch(() =>
                         Alert.alert(
                           "Could not load saved preferences",

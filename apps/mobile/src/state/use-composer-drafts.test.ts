@@ -2019,6 +2019,24 @@ describe("mobile composer drafts", () => {
     expect(getPendingTaskRuntimeMode("new-task:retry", "full-access")).toBe("approval-required");
   });
 
+  it("uses an explicit choice after a persistent read failure without overwriting saved drafts", async () => {
+    vi.useFakeTimers();
+    const savedDocument = { schemaVersion: 1, drafts: { "environment-1:thread-1": DRAFT } };
+    composerDraftFileMocks.setDocument(savedDocument);
+    composerDraftFileMocks.setReadError(new Error("Preferences remain unreadable"));
+    await expect(waitForComposerDraftsLoaded()).rejects.toThrow();
+    expect(getPendingTaskRuntimeMode("new-task:explicit", "full-access")).toBeNull();
+
+    appAtomRegistry.set(composerDraftsAtom, {
+      "new-task:explicit": { text: "New task", attachments: [], runtimeMode: "approval-required" },
+    });
+    setStickyComposerRuntimeMode("approval-required");
+    expect(getPendingTaskRuntimeMode("new-task:explicit", "full-access")).toBe("approval-required");
+    expect(getPendingTaskRuntimeMode("new-task:next", "full-access")).toBe("approval-required");
+    await expect(flushComposerDrafts()).rejects.toThrow();
+    expect(JSON.parse(composerDraftFileMocks.getDocument())).toEqual(savedDocument);
+  });
+
   it("waits for hydration before persisting the latest composer state", async () => {
     vi.useFakeTimers();
     composerDraftFileMocks.setDocument({

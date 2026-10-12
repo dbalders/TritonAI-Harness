@@ -549,13 +549,14 @@ export function getPendingTaskRuntimeMode(
   defaultRuntimeMode: RuntimeMode,
   queuedRuntimeMode?: RuntimeMode,
 ): RuntimeMode | null {
-  if (!appAtomRegistry.get(composerDraftsLoadedAtom)) return null;
-  return (
+  const knownMode =
     getComposerDraftSnapshot(draftKey).runtimeMode ??
     queuedRuntimeMode ??
-    appAtomRegistry.get(stickyComposerRuntimeModeAtom) ??
-    defaultRuntimeMode
-  );
+    appAtomRegistry.get(stickyComposerRuntimeModeAtom);
+  if (!appAtomRegistry.get(composerDraftsLoadedAtom)) {
+    return appAtomRegistry.get(composerDraftsLoadFailedAtom) ? (knownMode ?? null) : null;
+  }
+  return knownMode ?? defaultRuntimeMode;
 }
 
 export function isComposerDraftEmpty(draft: ComposerDraft): boolean {
