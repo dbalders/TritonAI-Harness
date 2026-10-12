@@ -9,6 +9,12 @@ on that device, including after restarting the app. Until you choose a mode, new
 your app or project default, which starts as **Supervised**. Existing threads and their explicit
 composer choices keep their mode.
 
+On web and desktop, an unsent draft also keeps the mode stored when it was created, including
+after an upgrade or a change to app/project defaults. A draft created earlier in Full access
+therefore stays in Full access until you change its mode. Changing the draft's project or
+machine applies the current remembered mode or destination default, unless you chose a mode
+specifically for that draft.
+
 ## The Modes
 
 **Supervised** (default): where supported, safe read-only work may proceed without a prompt. Commands that
