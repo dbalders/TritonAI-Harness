@@ -51,6 +51,7 @@ import {
   composerDraftsAtom,
   createNewTaskDraft,
   getComposerDraftSnapshot,
+  getPendingTaskRuntimeMode,
   isComposerDraftEmpty,
   isNewTaskDraftKey,
   removeComposerDraftAttachment,
@@ -182,6 +183,7 @@ type NewTaskFlowContextValue = {
   readonly availableBranches: ReadonlyArray<VcsRef>;
   readonly currentCheckoutBranchName: string | null;
   readonly runtimeMode: RuntimeMode;
+  readonly composerPreferencesLoaded: boolean;
   readonly interactionMode: ProviderInteractionMode;
   readonly planModeEnabled: boolean;
   readonly expandedProvider: string | null;
@@ -528,7 +530,8 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   const draftStartFromOrigin = selectedProjectDraft.workspaceSelection?.startFromOrigin;
   const startFromOrigin =
     draftStartFromOrigin ?? projectSettings.settings.newWorktreesStartFromOrigin;
-  const stickyRuntimeMode = useStickyComposerRuntimeMode();
+  const { runtimeMode: stickyRuntimeMode, loaded: composerPreferencesLoaded } =
+    useStickyComposerRuntimeMode();
   const defaultRuntimeMode = editingPendingTask
     ? (editingPendingTask.runtimeMode ?? DEFAULT_RUNTIME_MODE)
     : (stickyRuntimeMode ?? projectSettings.settings.defaultRuntimeMode);
@@ -1033,6 +1036,12 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       if (!selectedProject || !selectedProjectDraftKey) {
         return null;
       }
+      const pendingRuntimeMode = getPendingTaskRuntimeMode(
+        selectedProjectDraftKey,
+        projectSettings.settings.defaultRuntimeMode,
+        editingPendingTask ? (editingPendingTask.runtimeMode ?? DEFAULT_RUNTIME_MODE) : undefined,
+      );
+      if (pendingRuntimeMode === null) return null;
       const draft = getComposerDraftSnapshot(selectedProjectDraftKey);
       const text = draft.text.trim();
       // Use the displayed selection rules without substituting an unavailable
@@ -1071,7 +1080,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
         attachments: draft.attachments,
         context: draft.context,
         modelSelection: draftModelSelection,
-        runtimeMode: draft.runtimeMode ?? defaultRuntimeMode,
+        runtimeMode: pendingRuntimeMode,
         interactionMode: resolvePendingTaskInteractionMode({
           preferenceLoaded: planModePreferenceLoaded,
           planModeEnabled: legacyPlanModeEnabled,
@@ -1108,7 +1117,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     },
     [
       canChooseWorkspace,
-      defaultRuntimeMode,
+      projectSettings.settings.defaultRuntimeMode,
       editingPendingProject,
       editingPendingTask,
       selectedEnvironmentServerConfig,
@@ -1250,6 +1259,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       availableBranches,
       currentCheckoutBranchName,
       runtimeMode,
+      composerPreferencesLoaded,
       interactionMode,
       planModeEnabled,
       expandedProvider,
@@ -1299,6 +1309,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       branchesFetchingNextPage,
       buildPendingTaskMessage,
       cancelEditingPendingTask,
+      composerPreferencesLoaded,
       currentCheckoutBranchName,
       editingPendingTask,
       environments,

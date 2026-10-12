@@ -426,6 +426,8 @@ export const composerDraftsAtom = Atom.make<Record<string, ComposerDraft>>({}).p
   Atom.withLabel("mobile:composer-drafts"),
 );
 
+export const composerDraftsLoadedAtom = Atom.make(false).pipe(Atom.keepAlive);
+
 export const stickyComposerModelSelectionAtom = Atom.make<ModelSelection | null>(null).pipe(
   Atom.keepAlive,
   Atom.withLabel("mobile:sticky-composer-model-selection"),
@@ -460,6 +462,7 @@ const persistenceQueue = new SerializedAsyncQueue();
 export function resetComposerDraftsLoadState(): void {
   loadPromise = null;
   persistRetryNeeded = false;
+  appAtomRegistry.set(composerDraftsLoadedAtom, false);
 }
 
 function attachmentContextRecord(
@@ -537,6 +540,20 @@ function normalizeDraft(draft: ComposerDraft | undefined): ComposerDraft {
 
 export function getComposerDraftSnapshot(draftKey: string): ComposerDraft {
   return normalizeDraft(appAtomRegistry.get(composerDraftsAtom)[draftKey]);
+}
+
+export function getPendingTaskRuntimeMode(
+  draftKey: string,
+  defaultRuntimeMode: RuntimeMode,
+  queuedRuntimeMode?: RuntimeMode,
+): RuntimeMode | null {
+  if (!appAtomRegistry.get(composerDraftsLoadedAtom)) return null;
+  return (
+    getComposerDraftSnapshot(draftKey).runtimeMode ??
+    queuedRuntimeMode ??
+    appAtomRegistry.get(stickyComposerRuntimeModeAtom) ??
+    defaultRuntimeMode
+  );
 }
 
 export function isComposerDraftEmpty(draft: ComposerDraft): boolean {
@@ -1032,6 +1049,7 @@ export function ensureComposerDraftsLoaded(): void {
     ) {
       appAtomRegistry.set(stickyComposerRuntimeModeAtom, persisted.stickyRuntimeMode);
     }
+    appAtomRegistry.set(composerDraftsLoadedAtom, true);
   });
   loadPromise = loading;
   // Handle fire-and-forget hook loads without swallowing failures from the
@@ -1960,10 +1978,14 @@ export function useStickyComposerModelSelection(): ModelSelection | null {
   return selection;
 }
 
-export function useStickyComposerRuntimeMode(): RuntimeMode | null {
+export function useStickyComposerRuntimeMode(): {
+  readonly runtimeMode: RuntimeMode | null;
+  readonly loaded: boolean;
+} {
   const runtimeMode = useAtomValue(stickyComposerRuntimeModeAtom);
+  const loaded = useAtomValue(composerDraftsLoadedAtom);
   useEffect(() => {
     ensureComposerDraftsLoaded();
   }, []);
-  return runtimeMode;
+  return { runtimeMode, loaded };
 }

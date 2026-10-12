@@ -1203,6 +1203,7 @@ export function NewTaskDraftScreen(props: {
       attachmentBlockReason !== null ||
       !modelSelection ||
       initialMessageText.length === 0 ||
+      !flow.composerPreferencesLoaded ||
       flow.submitting ||
       (workspaceMode === "worktree" && !selectedBranchName)
     ) {
@@ -1354,6 +1355,7 @@ export function NewTaskDraftScreen(props: {
     flow.prompt.trim().length > 0 &&
     isIncomingShareReady &&
     !isImportingShare &&
+    flow.composerPreferencesLoaded &&
     !flow.submitting &&
     pendingPastedTextAttachmentCount === 0 &&
     !voiceInput.blocksSubmission &&
@@ -1774,13 +1776,15 @@ export function NewTaskDraftScreen(props: {
                         : "Repository not cloned"
                       : pendingPastedTextAttachmentCount > 0
                         ? "Attaching pasted text"
-                        : flow.submitting
-                          ? "Starting task"
-                          : attachmentsUploading
-                            ? "Queue task, sends when uploads finish"
-                            : environmentConnected
-                              ? "Start task"
-                              : "Queue task")
+                        : !flow.composerPreferencesLoaded
+                          ? "Loading preferences"
+                          : flow.submitting
+                            ? "Starting task"
+                            : attachmentsUploading
+                              ? "Queue task, sends when uploads finish"
+                              : environmentConnected
+                                ? "Start task"
+                                : "Queue task")
                   }
                   disabled={!canStart}
                   icon={queuesInsteadOfStarting ? "tray.and.arrow.up" : "arrow.up"}

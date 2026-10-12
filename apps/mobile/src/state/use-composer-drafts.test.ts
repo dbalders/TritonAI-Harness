@@ -173,6 +173,7 @@ import {
   findLocalComposerClipboardAttachment,
   flushComposerDrafts,
   getComposerDraftSnapshot,
+  getPendingTaskRuntimeMode,
   mergeComposerDraftContentState,
   migrateLegacyNewTaskDraft,
   releaseUnusedComposerAttachmentFiles,
@@ -1964,6 +1965,39 @@ describe("mobile composer drafts", () => {
     expect(
       decodePersistedComposerState({ schemaVersion: 1, drafts: {} }).stickyRuntimeMode,
     ).toBeNull();
+  });
+
+  it("does not freeze the project fallback into a pending task before preferences load", async () => {
+    composerDraftFileMocks.setDocument({
+      schemaVersion: 1,
+      drafts: {},
+      stickyRuntimeMode: "approval-required",
+    });
+    composerDraftFileMocks.blockRead();
+    const loading = waitForComposerDraftsLoaded();
+    try {
+      expect(getPendingTaskRuntimeMode("new-task:cold-start", "full-access")).toBeNull();
+    } finally {
+      composerDraftFileMocks.releaseRead();
+      await loading;
+    }
+    expect(getPendingTaskRuntimeMode("new-task:cold-start", "full-access")).toBe(
+      "approval-required",
+    );
+  });
+
+  it("preserves queued and explicit draft modes over a loaded remembered choice", async () => {
+    composerDraftFileMocks.setDocument({
+      schemaVersion: 1,
+      drafts: { "pending-task:edited": { ...DRAFT, runtimeMode: "full-access" } },
+      stickyRuntimeMode: "approval-required",
+    });
+    await waitForComposerDraftsLoaded();
+
+    expect(getPendingTaskRuntimeMode("pending-task:untouched", "full-access", "auto")).toBe("auto");
+    expect(getPendingTaskRuntimeMode("pending-task:edited", "approval-required", "auto")).toBe(
+      "full-access",
+    );
   });
 
   it("waits for hydration before persisting the latest composer state", async () => {
