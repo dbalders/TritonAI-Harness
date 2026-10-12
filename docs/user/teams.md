@@ -198,7 +198,9 @@ the team, and anything not yet shared is dropped. Leaving or being removed from
 a team stops sharing too; your earlier daily files stay with the team, as all
 team files do. Owners and members can change or delete any file in the team,
 including daily files: Harness only writes its own, but the shared folder trusts
-every member.
+every member. If someone changes one of your daily files in SharePoint, Harness leaves that
+day as it is, doesn't overwrite or remove the change, and says so, including
+when a thread you chose not to share may still be in it.
 
 Team storage is a SharePoint site owned by your administrator, who can read
 every team's documents, including teams they don't belong to.

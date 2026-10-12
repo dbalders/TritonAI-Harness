@@ -1,4 +1,4 @@
-// @effect-diagnostics globalDate:off globalDateInEffect:off - fixtures use host-local times.
+// @effect-diagnostics globalDate:off globalDateInEffect:off preferSchemaOverJson:off - fixtures use host-local times and read the record directly.
 /**
  * Daily team memory end to end over the synthetic campus and SharePoint world: the real team pass
  * writes a member's day through the real TeamProject and TeamStorage services, and another member's
@@ -19,6 +19,7 @@ import { ServerSecretStore } from "../../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../../config.ts";
 import { MAX_CATCH_UP_DAYS, PARTIAL_INTERVAL_MS } from "../../memory/DailyMemory.ts";
 import { TeamMirrorHost, type TeamMirrorSource } from "../../memory/sync/teamMirror.ts";
+import { teamDailyPath } from "../../memory/teamDaily.ts";
 import { makeTeamDailyPass } from "../../memory/teamDailyPass.ts";
 import { TeamDailyHost } from "../../memory/teamDailySource.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -196,6 +197,58 @@ describe("Daily team memory over the synthetic world", () => {
           const third = yield* mirror!.read(alpha, daily[0]!.path);
           expect(third.kind === "file" && third.text).toContain("Checked the budget lines");
           expect(third.kind === "file" && third.text).not.toContain("After unlinking");
+        }).pipe(Effect.provide(layer(baseDir)));
+      }),
+    );
+
+    it.effect("leaves a day file a teammate edited in SharePoint alone, and says so", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-team-e2e-" });
+        yield* Effect.gen(function* () {
+          values.clear();
+          yield* TestClock.setTime(new Date(2026, 9, 10, 9).getTime());
+          const world = makeSyntheticTeamsWorld();
+          world.switchTo("member");
+          const pass = yield* makeTeamDailyPass({
+            stateDir: baseDir,
+            deviceLabel: "Synthetic Mac",
+            settings: yield* ServerSettings.ServerSettingsService,
+            textGeneration: yield* TextGeneration,
+            maxCatchUpDays: MAX_CATCH_UP_DAYS,
+            partialIntervalMs: PARTIAL_INTERVAL_MS,
+            streamingGraceMs: 2 * 60 * 60_000,
+          });
+          const services = yield* makeSyntheticTeamServices(world).pipe(
+            Effect.provideService(TeamDailyHost, TeamDailyHost.of(pass)),
+          );
+          yield* services.project.teams("s", { action: "list" });
+          yield* services.project.execute("s", { action: "bind", teamId: alpha, projectId });
+          yield* services.connectMicrosoft;
+          yield* seed;
+          yield* TestClock.setTime(new Date(2026, 9, 10, 15).getTime());
+          yield* say("m1", "kept", "Checked the budget lines", at(10, 11));
+          yield* say("m2", "withdrawn", "Drafted the sponsor reply", at(10, 12));
+          yield* pass.run;
+          const state = JSON.parse(
+            yield* fs.readFileString(`${baseDir}/team-daily/state.json`),
+          ) as { author: string; deviceId: string };
+          const path = teamDailyPath(state.author, "2026-10-10", state.deviceId);
+          expect(world.readDocument("alpha", path)).toContain("Drafted the sponsor reply");
+
+          // The owner edits the member's file directly in SharePoint.
+          const edited = `${world.readDocument("alpha", path)!}\nOwner's note.`;
+          world.editDocument("alpha", path, edited, "owner");
+          // The member withdraws a thread; Harness won't overwrite the edited file.
+          const sql = yield* SqlClient.SqlClient;
+          yield* sql`UPDATE projection_threads SET team_sharing_off_at = ${at(10, 16)} WHERE thread_id = 'withdrawn'`;
+          yield* pass.run;
+          expect(world.readDocument("alpha", path)).toBe(edited);
+          expect((yield* pass.status(alpha))?.message).toContain("changed in SharePoint");
+          // It stays that way on later passes, and still says why.
+          yield* pass.run;
+          expect(world.readDocument("alpha", path)).toBe(edited);
+          expect((yield* pass.status(alpha))?.message).toContain("chose not to share");
         }).pipe(Effect.provide(layer(baseDir)));
       }),
     );

@@ -55,6 +55,23 @@ export interface TeamActivityScope {
   readonly projects: ReadonlyMap<string, string>;
 }
 
+/**
+ * What makes a message team work, for messages `m` in threads `t` of projects `p`: the thread and
+ * project still exist, the thread is shared, the message is after its last Share this thread, and
+ * the project is linked, with the message after its link began sharing. Reading activity and
+ * waiting for streaming turns both use it, so excluded work never holds back included work.
+ */
+const teamScopeCondition = (sql: SqlClient.SqlClient, scope: TeamActivityScope) =>
+  sql`AND t.deleted_at IS NULL
+    AND p.deleted_at IS NULL
+    AND t.team_sharing_off_at IS NULL
+    AND (t.team_sharing_resumed_at IS NULL OR m.created_at >= t.team_sharing_resumed_at)
+    AND ${sql.or(
+      [...scope.projects].map(
+        ([projectId, since]) => sql`(p.project_id = ${projectId} AND m.created_at >= ${since})`,
+      ),
+    )}`;
+
 /** When a thread's activity in the range began and ended, and a key that changes with it. */
 export interface ActivityExtent {
   readonly firstAt: string;
@@ -106,13 +123,7 @@ export const loadDayActivity = Effect.fn("memory.loadDayActivity")(function* (
       AND m.role IN ('user', 'assistant')
       AND t.deleted_at IS NULL
       AND p.deleted_at IS NULL
-      ${
-        scope
-          ? sql`AND t.team_sharing_off_at IS NULL
-              AND (t.team_sharing_resumed_at IS NULL OR m.created_at >= t.team_sharing_resumed_at)
-              AND ${sql.in("p.project_id", [...scope.projects.keys()])}`
-          : sql``
-      }
+      ${scope ? teamScopeCondition(sql, scope) : sql``}
     ORDER BY m.created_at ASC, m.message_id ASC
   `;
 
@@ -129,8 +140,6 @@ export const loadDayActivity = Effect.fn("memory.loadDayActivity")(function* (
     }
   >();
   for (const row of rows) {
-    // A team's work from before its project's sharing began is never read.
-    if (scope && row.createdAt < (scope.projects.get(row.projectId) ?? "\uffff")) continue;
     let entry = threads.get(row.threadId);
     if (!entry) {
       entry = {
@@ -188,22 +197,29 @@ export const hasStreamingMessages = Effect.fn("memory.hasStreamingMessages")(fun
 ) {
   if (scope && scope.projects.size === 0) return false;
   const sql = yield* SqlClient.SqlClient;
-  const [row] = yield* sql<{ readonly streaming: number }>`
-    SELECT EXISTS (
-      SELECT 1 FROM projection_thread_messages AS m
-      WHERE m.created_at >= ${range.startIso}
-        AND m.created_at < ${range.endIso}
-        AND m.is_streaming = 1
-        AND m.updated_at >= ${sinceIso}
-        ${
-          scope
-            ? sql`AND m.thread_id IN (
-                SELECT thread_id FROM projection_threads
-                WHERE ${sql.in("project_id", [...scope.projects.keys()])}
-              )`
-            : sql``
-        }
-    ) AS "streaming"
-  `;
+  const [row] = scope
+    ? // Only a turn whose work the team pass could read holds it back.
+      yield* sql<{ readonly streaming: number }>`
+        SELECT EXISTS (
+          SELECT 1 FROM projection_thread_messages AS m
+          JOIN projection_threads AS t ON t.thread_id = m.thread_id
+          JOIN projection_projects AS p ON p.project_id = t.project_id
+          WHERE m.created_at >= ${range.startIso}
+            AND m.created_at < ${range.endIso}
+            AND m.is_streaming = 1
+            AND m.updated_at >= ${sinceIso}
+            AND m.role IN ('user', 'assistant')
+            ${teamScopeCondition(sql, scope)}
+        ) AS "streaming"
+      `
+    : yield* sql<{ readonly streaming: number }>`
+        SELECT EXISTS (
+          SELECT 1 FROM projection_thread_messages AS m
+          WHERE m.created_at >= ${range.startIso}
+            AND m.created_at < ${range.endIso}
+            AND m.is_streaming = 1
+            AND m.updated_at >= ${sinceIso}
+        ) AS "streaming"
+      `;
   return Boolean(row?.streaming);
 });

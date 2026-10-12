@@ -300,7 +300,12 @@ export const makeTeamDailyPass = (input: {
                 sharing: thread.sharingResumedAt,
                 linkSince,
                 text,
-                publishedText: record.sections[thread.threadId]?.publishedText ?? null,
+                // Text published under an earlier sharing generation was withdrawn by Don't
+                // share; it is never this section's baseline, so it can't be published again.
+                publishedText:
+                  (record.sections[thread.threadId]?.sharing ?? null) === thread.sharingResumedAt
+                    ? (record.sections[thread.threadId]?.publishedText ?? null)
+                    : null,
                 startedAt: thread.firstAt,
                 fingerprint: thread.fingerprint,
               };
@@ -348,7 +353,7 @@ export const makeTeamDailyPass = (input: {
           stillShared: Effect.succeed(true),
         });
         if (result.kind === "lost") return "lost" as const;
-        if (result.kind === "held" || result.kind === "rejected") {
+        if (result.kind === "held" || result.kind === "rejected" || result.kind === "changed") {
           yield* setStatus(workspace.teamId, { state: "held", message: result.message });
           return "held" as const;
         }
@@ -385,7 +390,14 @@ export const makeTeamDailyPass = (input: {
           // The write landed: what it carried is now what the team has.
           for (const [threadId, text] of Object.entries(attempt.included)) {
             const section = record.sections[threadId];
-            if (section) section.publishedText = text;
+            if (
+              section &&
+              (section.sharing ?? null) ===
+                (attempt.generations && threadId in attempt.generations
+                  ? attempt.generations[threadId]
+                  : (section.sharing ?? null))
+            )
+              section.publishedText = text;
           }
           record.publishedSha = attempt.sha;
           record.etag = found.etag;
@@ -475,10 +487,19 @@ export const makeTeamDailyPass = (input: {
           // published leaves for good; a thread that no longer qualifies keeps only what was
           // published.
           let changed = false;
+          // A withdrawn section the team has is kept, though never shown, until a write that
+          // leaves it out is confirmed: until then, its removal is still owed and reported.
+          const owedRemovals = rendered.withdrawn.filter(
+            (threadId) => record.sections[threadId]?.publishedText != null,
+          );
           for (const threadId of [...rendered.withdrawn, ...rendered.dropped]) {
+            if (owedRemovals.includes(threadId)) continue;
             delete record.sections[threadId];
             changed = true;
           }
+          const settleRemovals = () => {
+            for (const threadId of owedRemovals) delete record.sections[threadId];
+          };
           for (const threadId of rendered.frozen) {
             const section = record.sections[threadId]!;
             section.text = section.publishedText!;
@@ -490,8 +511,11 @@ export const makeTeamDailyPass = (input: {
             );
           const sha = rendered.text === null ? null : sha256(rendered.text);
           if (sha === record.publishedSha) {
+            // The team's file already leaves them out.
+            settleRemovals();
             if (rendered.text === null) delete team.days[day];
-            if (changed || rendered.text === null) yield* writeState(state);
+            if (changed || owedRemovals.length > 0 || rendered.text === null)
+              yield* writeState(state);
             continue;
           }
           // Each thread is asked about again right before each request that changes the file:
@@ -529,7 +553,16 @@ export const makeTeamDailyPass = (input: {
           }
           const marker = (team.marker ??= { months: {}, publishedSha: null, etag: null });
           marker.months[day.slice(0, 7)] = yield* nowIso;
-          record.attempt = { sha, included: Object.fromEntries(rendered.included) };
+          record.attempt = {
+            sha,
+            included: Object.fromEntries(rendered.included),
+            generations: Object.fromEntries(
+              [...rendered.included.keys()].map((threadId) => [
+                threadId,
+                record.sections[threadId]?.sharing ?? null,
+              ]),
+            ),
+          };
           yield* writeState(state);
           const result = yield* attached.write({
             teamId: workspace.teamId,
@@ -551,6 +584,11 @@ export const makeTeamDailyPass = (input: {
             yield* setStatus(workspace.teamId, { state: "held", message: result.message });
             return "held" as const;
           }
+          if (result.kind === "changed") {
+            // Kept: the next pass reads the file to learn what it holds before doing anything.
+            problems.push(`${day}: ${result.message}`);
+            continue;
+          }
           if (result.kind === "rejected") {
             // Nothing was sent. A day the team has nothing of yet is bound again on a later try.
             delete record.attempt;
@@ -560,6 +598,7 @@ export const makeTeamDailyPass = (input: {
             continue;
           }
           delete record.attempt;
+          settleRemovals();
           if (rendered.text === null) {
             delete team.days[day];
           } else {

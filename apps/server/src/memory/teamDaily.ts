@@ -109,6 +109,11 @@ const Day = Schema.Struct({
     Schema.Struct({
       sha: Schema.NullOr(Schema.String),
       included: Schema.Record(Schema.String, Schema.String),
+      /**
+       * Each included thread's sharing generation (`sharing`) when the write was made. Text that
+       * landed counts as published only for a section still of that generation.
+       */
+      generations: Schema.optionalKey(Schema.Record(Schema.String, Schema.NullOr(Schema.String))),
     }),
   ),
 });

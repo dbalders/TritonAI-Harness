@@ -1,4 +1,5 @@
 import type { EnvironmentId, ProjectId, TeamProjectSharing, ThreadId } from "@t3tools/contracts";
+import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { useCallback, useEffect, useState } from "react";
 import { readEnvironmentSupportsTeamSharing } from "../../state/entities";
 import { serverEnvironment } from "../../state/server";
@@ -37,7 +38,31 @@ export function useProjectTeamSharing(
     void request({ environmentId, input: { action: "sharing-status", projectId } }).then(
       (result) => {
         if (!current) return;
-        setState({ key, value: result._tag === "Success" ? (result.value.sharing ?? null) : null });
+        if (result._tag === "Success")
+          return setState({ key, value: result.value.sharing ?? null });
+        const cause = squashAtomCommandFailure(result) as { code?: unknown; message?: unknown };
+        // Only a definite answer (unlinked, no access, signed out) clears what is known. A check
+        // that failed for this account and project keeps the team, marked as waiting, so the
+        // thread can still be kept out of it.
+        const settled =
+          cause.code === "not_found" ||
+          cause.code === "forbidden" ||
+          cause.code === "sign_in_required";
+        setState((previous) =>
+          !settled && previous?.key === key && previous.value
+            ? {
+                key,
+                value: {
+                  ...previous.value,
+                  state: "held",
+                  message:
+                    typeof cause.message === "string"
+                      ? cause.message
+                      : "Harness couldn't check sharing with your team. It will try again.",
+                },
+              }
+            : { key, value: null },
+        );
       },
     );
     return () => {

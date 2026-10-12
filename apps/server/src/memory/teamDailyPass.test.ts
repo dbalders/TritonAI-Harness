@@ -294,6 +294,31 @@ const deviceIdOf = (stateDir: string) =>
     return (JSON.parse(raw) as { deviceId: string }).deviceId;
   });
 
+/** The section the device's record keeps for a thread on a day. */
+const sectionOf = (stateDir: string, teamId: string, day: string, threadId: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const raw = yield* fs.readFileString(path.join(stateDir, "team-daily", "state.json"));
+    const state = JSON.parse(raw) as {
+      teams: Record<
+        string,
+        { days: Record<string, { sections: Record<string, { publishedText: string | null }> }> }
+      >;
+    };
+    return state.teams[teamId]?.days[day]?.sections[threadId] ?? null;
+  });
+/** A turn still being written. */
+const streaming = (threadId: string, createdAt: string) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const id = `m${++messageCount}`;
+    yield* sql`
+      INSERT INTO projection_thread_messages (message_id, thread_id, turn_id, role, text, is_streaming, created_at, updated_at)
+      VALUES (${id}, ${threadId}, ${`turn-${id}`}, 'assistant', 'partial', 1, ${createdAt}, ${createdAt})
+    `;
+  });
+
 /** Project Alpha 1 and 2 link to team A, Beta to team B, and Personal links nowhere. */
 const seedWorld = Effect.gen(function* () {
   yield* seedProject("p-a1", "Alpha One");
@@ -1114,4 +1139,99 @@ it.layer(NodeServices.layer)("team daily memory", (it) => {
         }).pipe(Effect.provide(harness.layer));
       }),
     );
+  for (const answer of ["held", "landed"] as const)
+    it.effect(
+      `never keeps withdrawn text as the baseline of a thread shared again (${answer} upload)`,
+      () =>
+        Effect.gen(function* () {
+          const harness = yield* makeHarness({});
+          yield* Effect.gen(function* () {
+            yield* TestClock.setTime(new Date(2026, 9, 10, 11).getTime());
+            yield* seedWorld;
+            yield* say("t-a1", "first generation", at(10, 10));
+            const teams = fakeTeams();
+            teams.setWorkspaces([teams.workspace(TEAM_A, [["p-a1", at(1, 9)]])]);
+            const pass = yield* makePass(harness.baseDir);
+            yield* pass.attach(teams.source);
+            if (answer === "landed") teams.state.landThenLose = /\.md$/u;
+            yield* pass.run;
+            teams.state.landThenLose = null;
+            const device = yield* deviceIdOf(harness.baseDir);
+            assert.include(teams.file(TEAM_A, dayOf(10), device)!, "first generation");
+
+            // Don't share, then Share again before any pass, then new work; the upload waits.
+            yield* setSharing("t-a1", false);
+            yield* reshare("t-a1", at(10, 12));
+            yield* say("t-a1", "second generation", at(10, 13));
+            yield* TestClock.setTime(new Date(2026, 9, 10, 16).getTime());
+            teams.state.hold = { kind: "held", message: "offline" };
+            yield* pass.run;
+            teams.state.hold = null;
+            // The record holds no published baseline for the new generation, so under size
+            // pressure nothing withdrawn could be put back.
+            const section = yield* sectionOf(harness.baseDir, TEAM_A, dayOf(10), "t-a1");
+            assert.isNotNull(section);
+            assert.isNull(section!.publishedText);
+
+            yield* pass.run;
+            const text = teams.file(TEAM_A, dayOf(10), device)!;
+            assert.include(text, "second generation");
+            assert.notInclude(text, "first generation");
+          }).pipe(Effect.provide(harness.layer));
+        }),
+    );
+
+  it.effect("isn't held back by a turn still being written that the team would never see", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({});
+      yield* Effect.gen(function* () {
+        yield* TestClock.setTime(new Date(2026, 9, 10, 20).getTime());
+        yield* seedWorld;
+        yield* say("t-a1", "eligible work", at(10, 12));
+        // Turns still streaming in work the team never reads: an opted-out thread, a deleted
+        // thread, a personal project, before the link began, and before Share this thread.
+        yield* streaming("t-a2", at(10, 19));
+        yield* setSharing("t-a2", false);
+        yield* streaming("t-b", at(10, 19));
+        yield* deleteThread("t-b");
+        yield* streaming("t-personal", at(10, 19));
+        yield* streaming("t-a1-other", at(10, 8));
+        yield* reshare("t-a1-other", at(10, 18));
+        yield* streaming("t-a1-other", at(10, 17));
+        const teams = fakeTeams();
+        teams.setWorkspaces([
+          teams.workspace(TEAM_A, [
+            ["p-a1", at(10, 9)],
+            ["p-a2", at(1, 9)],
+            ["p-b", at(1, 9)],
+          ]),
+        ]);
+        const pass = yield* makePass(harness.baseDir);
+        yield* pass.attach(teams.source);
+        yield* pass.run;
+        assert.include(
+          teams.file(TEAM_A, dayOf(10), yield* deviceIdOf(harness.baseDir))!,
+          "eligible work",
+        );
+      }).pipe(Effect.provide(harness.layer));
+    }),
+  );
+
+  it.effect("waits for a turn still being written that the team would see", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({});
+      yield* Effect.gen(function* () {
+        yield* TestClock.setTime(new Date(2026, 9, 10, 20).getTime());
+        yield* seedWorld;
+        yield* say("t-a1", "eligible work", at(10, 12));
+        yield* streaming("t-a1", at(10, 19));
+        const teams = fakeTeams();
+        teams.setWorkspaces([teams.workspace(TEAM_A, [["p-a1", at(1, 9)]])]);
+        const pass = yield* makePass(harness.baseDir);
+        yield* pass.attach(teams.source);
+        yield* pass.run;
+        assert.strictEqual(teams.writes.length, 0);
+      }).pipe(Effect.provide(harness.layer));
+    }),
+  );
 });

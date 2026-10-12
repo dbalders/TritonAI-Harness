@@ -19,6 +19,7 @@ import type {
   TeamDailyWorkspace,
   TeamDailyWrite,
 } from "../memory/teamDailySource.ts";
+import { teamDailyMarkerAuthor } from "../memory/teamDaily.ts";
 import { identityOf, type TeamMemoryAccount } from "./teamMemoryMirror.ts";
 import type { TeamStorageService } from "./TeamStorageService.ts";
 
@@ -241,6 +242,8 @@ export const makeTeamDailySource = (input: {
             text: request.text,
             etag: request.etag,
             guard,
+            // A change marker holds no memory, so a stale one is simply replaced.
+            replaceChanged: teamDailyMarkerAuthor(request.path) !== null,
           },
           { storage: folder },
         )
@@ -254,6 +257,9 @@ export const makeTeamDailySource = (input: {
       // Too large is the one answer that can't change by trying again; nothing was sent.
       if (result.failure.code === "invalid_request")
         return { kind: "rejected", message: result.failure.message } satisfies TeamDailyWrite;
+      // The file isn't the version last written; nothing was sent.
+      if (result.failure.code === "conflict" && result.failure.message.includes("SharePoint"))
+        return { kind: "changed", message: result.failure.message } satisfies TeamDailyWrite;
       // Membership was just confirmed: a failed write is held, never taken as access ending.
       return held(result.failure.message);
     }).pipe(

@@ -48,6 +48,11 @@ export type TeamDailyWrite =
   | { readonly kind: "held"; readonly message: string }
   /** Nothing was sent, and this exact write can never succeed (too large, folder changed). */
   | { readonly kind: "rejected"; readonly message: string }
+  /**
+   * Nothing was sent: the file isn't the version this device last wrote, because someone changed
+   * it in SharePoint. The day is checked before anything else is done with it.
+   */
+  | { readonly kind: "changed"; readonly message: string }
   /** Access to the team ended: stop, and write nothing more for it. */
   | { readonly kind: "lost" };
 

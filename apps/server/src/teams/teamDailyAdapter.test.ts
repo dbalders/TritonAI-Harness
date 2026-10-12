@@ -32,13 +32,14 @@ const linkedWith = (options: { shortTokens?: boolean } = {}) =>
     if (account.kind !== "signed-in") return yield* Effect.die("expected a signed-in account");
     const workspace = account.workspaces.find((entry) => entry.teamId === teamA)!;
     let shared = true;
+    // A removal names the version last written; the fixture reports every file as "v1".
     const write = (text: string | null, current: TeamDailyWorkspace = workspace) =>
       source.write({
         teamId: teamA,
         author,
         path,
         text,
-        etag: null,
+        etag: text === null ? "v1" : null,
         storageKey: null,
         freshProjects: current.projects,
         stillShared: Effect.sync(() => shared),
@@ -94,6 +95,25 @@ describe("Daily team memory writes", () => {
       name: "another campus account signs in",
       change: (team: Effect.Success<typeof linked>) =>
         Effect.sync(() => team.f.switchTo("mallory")),
+    },
+    {
+      name: "the member is removed from the team",
+      change: (team: Effect.Success<typeof linked>) =>
+        Effect.sync(() => void delete team.f.roles[teamA]!.alice),
+    },
+    {
+      name: "the member becomes read-only",
+      change: (team: Effect.Success<typeof linked>) =>
+        Effect.sync(() => {
+          team.f.roles[teamA]!.alice = "reader";
+        }),
+    },
+    {
+      name: "the team folder changes",
+      change: (team: Effect.Success<typeof linked>) =>
+        Effect.sync(() => {
+          team.f.storage[teamA] = { ...team.f.storage[teamA]!, folderId: "rootA2" };
+        }),
     },
   ];
   for (const scenario of changesDuringRefresh) {
@@ -228,4 +248,22 @@ describe("Daily team memory writes", () => {
       expect(team.changes()).toEqual([]);
     }),
   );
+
+  for (const kind of ["first upload", "withdrawal"] as const)
+    it.effect(
+      `never takes a ${kind} as done while Microsoft isn't connected, and finishes after reconnecting`,
+      () =>
+        Effect.gen(function* () {
+          const team = yield* linked;
+          yield* team.storage.execute("s", { action: "disconnect", teamId: teamA });
+          const text = kind === "first upload" ? "# shared" : null;
+          expect(yield* team.write(text)).toMatchObject({ kind: "held" });
+          expect(team.changes()).toEqual([]);
+          yield* team.connect(teamA);
+          expect(yield* team.write(text)).toMatchObject({ kind: "written" });
+          expect(team.changes()).toEqual([
+            expect.objectContaining({ method: kind === "first upload" ? "PUT" : "DELETE" }),
+          ]);
+        }),
+    );
 });

@@ -36,6 +36,7 @@ import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
 import { toastManager } from "../ui/toast";
 import { teamDocumentDeviceId } from "./TeamDocuments";
+import { shareLimitProblem } from "./teamShareLimits";
 import { useTeamProjectRequest } from "./TeamProjects";
 import {
   teamContextRows,
@@ -44,7 +45,6 @@ import {
   type TeamListedDocument,
 } from "./threadTeamContext";
 
-const MAX_NOTE_BYTES = 64 * 1024;
 type Share = Extract<TeamProjectCommand, { action: "share" }>;
 
 /** Storage answers without the requested content when Microsoft is not ready; say why. */
@@ -193,8 +193,8 @@ function ShareForm({
   }, []);
   const team = teams?.find((entry) => entry.id === teamId) ?? null;
   const note = formatTeamNote({ title, project: projectTitle.slice(0, 80), text });
-  const tooLarge = new TextEncoder().encode(note).byteLength > MAX_NOTE_BYTES;
-  const ready = team !== null && title.trim() !== "" && text.trim() !== "" && !tooLarge;
+  const limitProblem = shareLimitProblem({ text, note });
+  const ready = team !== null && title.trim() !== "" && text.trim() !== "" && !limitProblem;
   const share = async () => {
     if (!team) return;
     const previous = pending.current;
@@ -327,9 +327,9 @@ function ShareForm({
                   className="min-h-40"
                 />
               </label>
-              {tooLarge ? (
+              {limitProblem ? (
                 <p role="alert" className="text-xs text-destructive">
-                  Shared notes must be smaller than 64 KB.
+                  {limitProblem}
                 </p>
               ) : null}
             </>

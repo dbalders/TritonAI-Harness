@@ -225,35 +225,46 @@ export const make = (
               code: "conflict",
               message: "This project's team folder changed. Unlink the project and link it again.",
             });
-          const verifyCurrent = Effect.gen(function* () {
-            const current = yield* account
-              .getStatus(sessionId)
-              .pipe(Effect.mapError(() => failure("Your account could not be verified.")));
-            if (
-              current.status !== "signed-in" ||
-              current.profile?.issuer !== profile.issuer ||
-              current.profile.subject !== profile.subject
-            )
-              return yield* new TeamsError({
-                code: "sign_in_required",
-                message: "Your account changed. Reopen this team.",
+          /**
+           * The account, membership, revision, and folder are what they were when the request
+           * started; for a change, the caller can also still write to the team.
+           */
+          const verifyAuthorized = (changing: boolean) =>
+            Effect.gen(function* () {
+              const current = yield* account
+                .getStatus(sessionId)
+                .pipe(Effect.mapError(() => failure("Your account could not be verified.")));
+              if (
+                current.status !== "signed-in" ||
+                current.profile?.issuer !== profile.issuer ||
+                current.profile.subject !== profile.subject
+              )
+                return yield* new TeamsError({
+                  code: "sign_in_required",
+                  message: "Your account changed. Reopen this team.",
+                });
+              const refreshed = yield* account.teams(sessionId, {
+                action: "get",
+                teamId: command.teamId,
               });
-            const refreshed = yield* account.teams(sessionId, {
-              action: "get",
-              teamId: command.teamId,
+              if (
+                refreshed.team?.id !== team.id ||
+                refreshed.team.revision !== team.revision ||
+                refreshed.team.state !== "ready" ||
+                refreshed.team.storage?.driveId !== storage.driveId ||
+                refreshed.team.storage.folderId !== storage.folderId
+              )
+                return yield* new TeamsError({
+                  code: "conflict",
+                  message: "Team access changed. Refresh before continuing.",
+                });
+              if (changing && refreshed.team.role === "reader" && !refreshed.team.canManage)
+                return yield* new TeamsError({
+                  code: "forbidden",
+                  message: "You have read-only access to this team.",
+                });
             });
-            if (
-              refreshed.team?.id !== team.id ||
-              refreshed.team.revision !== team.revision ||
-              refreshed.team.state !== "ready" ||
-              refreshed.team.storage?.driveId !== storage.driveId ||
-              refreshed.team.storage.folderId !== storage.folderId
-            )
-              return yield* new TeamsError({
-                code: "conflict",
-                message: "Team access changed. Refresh before continuing.",
-              });
-          });
+          const verifyCurrent = verifyAuthorized(false);
           // Lookup reads the directory as the campus account, through the Microsoft 365 plugin's
           // sign-in on the main app, rechecking the campus account and team around each step.
           const directoryLookup = (email: string) =>
@@ -409,11 +420,14 @@ export const make = (
                       : failure("Microsoft could not verify the connection. Try again."),
                   ),
                 );
-                // A daily team memory write's last check, after any token refresh and immediately
-                // before each request that changes storage, so nothing that stopped qualifying
-                // while the token was refreshed goes out.
-                if (command.action === "daily-write" && request.method !== "GET")
-                  yield* command.guard;
+                // Checked again after any token refresh and immediately before each request that
+                // changes storage, retries included: removal, demotion, a folder change, another
+                // account, or (for daily team memory) a thread no longer shared while the token was
+                // refreshed means nothing goes out.
+                if (request.method !== "GET") {
+                  yield* verifyAuthorized(true);
+                  if (command.action === "daily-write") yield* command.guard;
+                }
                 const response = yield* http
                   .execute(request.pipe(HttpClientRequest.bearerToken(token)))
                   .pipe(
@@ -634,7 +648,23 @@ export const make = (
       scope: TeamStorageScope,
     ) =>
       execute(sessionId, command, scope).pipe(
-        Effect.map((status) => status.document?.etag ?? null),
+        // Only a connected, confirmed request counts: no Microsoft connection means nothing was
+        // written or removed.
+        Effect.flatMap((status) =>
+          status.status !== "connected"
+            ? Effect.fail(
+                new TeamsError({
+                  code: "sign_in_required",
+                  message:
+                    status.status === "not-configured"
+                      ? "Microsoft storage is not set up for this environment yet."
+                      : "Connect Microsoft in Teams to share your work.",
+                }),
+              )
+            : command.text !== null && !status.document
+              ? Effect.fail(failure("Shared storage did not confirm the daily note."))
+              : Effect.succeed(status.document?.etag ?? null),
+        ),
       );
     return TeamStorageService.of({ execute, writeDaily, signOutAccount });
   });

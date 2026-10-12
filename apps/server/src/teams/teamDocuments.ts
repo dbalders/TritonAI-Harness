@@ -166,10 +166,15 @@ export interface TeamDailyWriteCommand {
   readonly teamId: string;
   readonly path: string;
   readonly text: string | null;
-  /** The version this device last wrote, or null. */
+  /** The version this device last wrote, or null for a file it has never confirmed writing. */
   readonly etag: string | null;
   /** Runs immediately before each request that changes the file; failing abandons the write. */
   readonly guard: Effect.Effect<void, TeamsError>;
+  /**
+   * Replace the file even if it isn't the version last written. Only for change markers, which
+   * hold no memory; a daily file someone changed is never overwritten or removed.
+   */
+  readonly replaceChanged?: boolean;
 }
 
 type DocumentCommand = Extract<
@@ -327,32 +332,42 @@ export const executeDocument = (input: {
     // Resolve mutations from the authorized team root, so a moved parent ID cannot redirect a write into another team.
     const anchoredPath = `${endpoint(storage.folderId)}:/${parts.map(encodeURIComponent).join("/")}`;
     if (command.action === "daily-write") {
-      // Only the author's devices write these files, so the device's own text replaces a copy
-      // someone changed in SharePoint; SharePoint keeps the earlier version. The guard is checked
-      // here and, last, inside `send` after any token refresh, before each changing request.
+      // A daily file is only changed at the version this device last confirmed. If it isn't that
+      // version, someone changed it in SharePoint: nothing is sent, and the day is checked and
+      // held until what it holds is known. The guard is checked here and, last, inside `send`
+      // after any token refresh, before each changing request.
       const guarded = verifyCurrent.pipe(Effect.andThen(command.guard));
+      const changedElsewhere = () =>
+        new TeamsError({
+          code: "conflict",
+          message:
+            "This day's shared memory was changed in SharePoint, so Harness won't change it.",
+        });
       const missing = (error: TeamsError) => error.code === "not_found";
       const currentTag = (parent: string) =>
         child(parent, parts, false, false).pipe(
           Effect.map((item) => item.eTag ?? null),
           Effect.catchIf(missing, () => Effect.succeed(null)),
         );
-      const ifMatch = (etag: string | null) => (request: HttpClientRequest.HttpClientRequest) =>
-        etag ? request.pipe(HttpClientRequest.setHeader("if-match", etag)) : request;
       if (command.text === null) {
         const parent = yield* locateParent(false).pipe(
           Effect.catchIf(missing, () => Effect.succeed(null)),
         );
         if (parent === null) return null;
         let etag = command.etag;
+        if (etag === null && !command.replaceChanged) return yield* changedElsewhere();
         for (let attempt = 0; attempt < 2; attempt++) {
           yield* guarded;
-          const response = yield* send(ifMatch(etag)(HttpClientRequest.delete(anchoredPath)));
+          const request = HttpClientRequest.delete(anchoredPath);
+          const response = yield* send(
+            etag ? request.pipe(HttpClientRequest.setHeader("if-match", etag)) : request,
+          );
           if (response.status === 204 || response.status === 404) {
             yield* verifyCurrent;
             return null;
           }
           if (response.status !== 412) break;
+          if (!command.replaceChanged) return yield* changedElsewhere();
           etag = yield* currentTag(parent);
           if (etag === null) return null;
         }
@@ -368,12 +383,12 @@ export const executeDocument = (input: {
       let etag = command.etag;
       for (let attempt = 0; attempt < 3; attempt++) {
         yield* guarded;
+        // Without a confirmed version, only a new file is created; an existing one is left alone.
+        const request = HttpClientRequest.put(
+          `${anchoredPath}:/content${etag ? "" : "?@microsoft.graph.conflictBehavior=fail"}`,
+        ).pipe(HttpClientRequest.bodyUint8Array(bytes, "text/markdown; charset=utf-8"));
         const response = yield* send(
-          ifMatch(etag)(
-            HttpClientRequest.put(`${anchoredPath}:/content`).pipe(
-              HttpClientRequest.bodyUint8Array(bytes, "text/markdown; charset=utf-8"),
-            ),
-          ),
+          etag ? request.pipe(HttpClientRequest.setHeader("if-match", etag)) : request,
         );
         if (response.status === 200 || response.status === 201) {
           const saved = yield* checked(yield* parse(response), parent, filename, false);
@@ -382,9 +397,11 @@ export const executeDocument = (input: {
           yield* verifyCurrent;
           return { path, etag: saved.eTag, text: command.text } satisfies TeamDocument;
         }
-        if (response.status === 412) etag = yield* currentTag(parent);
-        else if (response.status === 404 && etag) etag = null;
-        else break;
+        const notTheVersion =
+          response.status === 409 || response.status === 412 || (response.status === 404 && etag);
+        if (!notTheVersion) break;
+        if (!command.replaceChanged) return yield* changedElsewhere();
+        etag = response.status === 404 ? null : yield* currentTag(parent);
       }
       return yield* unavailable("The daily note could not be saved. Harness will try again.");
     }
