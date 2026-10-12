@@ -79,6 +79,12 @@ const Section = Schema.Struct({
   text: Schema.String,
   /** The section's text in the last file this device published, or null if never published. */
   publishedText: Schema.NullOr(Schema.String),
+  /**
+   * Text from an earlier sharing generation of this thread may still be in the team's file. It is
+   * never this section's published text, so it can't be sent again, but its removal is owed and
+   * reported until a file without it is confirmed.
+   */
+  owesRemoval: Schema.optionalKey(Schema.Boolean),
   /** First activity included, so sections keep the thread order of the day. */
   startedAt: Schema.String,
   /** Changes when the thread's activity that day changes; an unchanged thread isn't resummarized. */

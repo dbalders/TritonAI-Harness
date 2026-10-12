@@ -295,17 +295,21 @@ export const makeTeamDailyPass = (input: {
                 stillLinked.get(thread.projectId) !== linkSince
               )
                 continue;
+              const previous = record.sections[thread.threadId];
+              const sameGeneration = (previous?.sharing ?? null) === thread.sharingResumedAt;
               record.sections[thread.threadId] = {
                 projectId: thread.projectId,
                 sharing: thread.sharingResumedAt,
                 linkSince,
                 text,
                 // Text published under an earlier sharing generation was withdrawn by Don't
-                // share; it is never this section's baseline, so it can't be published again.
-                publishedText:
-                  (record.sections[thread.threadId]?.sharing ?? null) === thread.sharingResumedAt
-                    ? (record.sections[thread.threadId]?.publishedText ?? null)
-                    : null,
+                // share; it is never this section's baseline, so it can't be published again,
+                // but its removal stays owed until a file without it is confirmed.
+                publishedText: sameGeneration ? (previous?.publishedText ?? null) : null,
+                ...(previous?.owesRemoval === true ||
+                (!sameGeneration && (previous?.publishedText ?? null) !== null)
+                  ? { owesRemoval: true }
+                  : {}),
                 startedAt: thread.firstAt,
                 fingerprint: thread.fingerprint,
               };
@@ -388,21 +392,28 @@ export const makeTeamDailyPass = (input: {
         if (found.kind === "held") return "held" as const;
         if (found.kind === "file" && sha256(found.text) === attempt.sha) {
           // The write landed: what it carried is now what the team has.
-          for (const [threadId, text] of Object.entries(attempt.included)) {
-            const section = record.sections[threadId];
-            if (
-              section &&
+          for (const [threadId, section] of Object.entries(record.sections)) {
+            const text = attempt.included[threadId];
+            // Left out of the file, so no earlier generation of it is there either.
+            if (text === undefined) delete section.owesRemoval;
+            else if (
               (section.sharing ?? null) ===
-                (attempt.generations && threadId in attempt.generations
-                  ? attempt.generations[threadId]
-                  : (section.sharing ?? null))
-            )
+              (attempt.generations && threadId in attempt.generations
+                ? attempt.generations[threadId]
+                : (section.sharing ?? null))
+            ) {
               section.publishedText = text;
+              delete section.owesRemoval;
+            } else {
+              // An earlier generation's text landed: the team has it, so its removal is owed.
+              section.owesRemoval = true;
+            }
           }
           record.publishedSha = attempt.sha;
           record.etag = found.etag;
         } else if (found.kind === "missing") {
           // A removal landed, or nothing was ever written.
+          for (const section of Object.values(record.sections)) delete section.owesRemoval;
           if (attempt.sha === null)
             for (const section of Object.values(record.sections)) section.publishedText = null;
           record.publishedSha = null;
@@ -450,10 +461,17 @@ export const makeTeamDailyPass = (input: {
         const problems: string[] = [];
         for (const day of Object.keys(team.days).toSorted()) {
           const record = team.days[day]!;
+          // Whether the team's file may still hold a thread chosen as Don't share.
+          const removalOwed = () =>
+            Object.values(record.sections).some((section) => section.owesRemoval === true) ||
+            renderTeamDailyFile(record, { day, author: state.author }, { threads, linkedProjects })
+              .withdrawn.length > 0;
           // A file is only ever updated, checked, or removed in the folder it was first sent to.
           if ((record.storageKey ?? null) !== null && record.storageKey !== workspace.storageKey) {
             problems.push(
-              `Your shared memory for ${day} is in the team's previous folder, so Harness can't update or remove it there. Ask your administrator.`,
+              removalOwed()
+                ? `Your shared memory for ${day} is in the team's previous folder, so Harness can't update or remove it there. A thread you chose not to share may still be in it; ask your administrator.`
+                : `Your shared memory for ${day} is in the team's previous folder, so Harness can't update or remove it there. Ask your administrator.`,
             );
             continue;
           }
@@ -466,13 +484,8 @@ export const makeTeamDailyPass = (input: {
             continue;
           }
           if (settled === "ambiguous") {
-            const waiting = renderTeamDailyFile(
-              record,
-              { day, author: state.author },
-              { threads, linkedProjects },
-            ).withdrawn;
             problems.push(
-              waiting.length > 0
+              removalOwed()
                 ? `Your shared memory for ${day} was changed in SharePoint, so Harness can't tell what it holds and won't change it. A thread you chose not to share may still be in it; remove it there, or ask your administrator.`
                 : `Your shared memory for ${day} was changed in SharePoint, so Harness can't tell what it holds and won't change it.`,
             );
@@ -487,18 +500,28 @@ export const makeTeamDailyPass = (input: {
           // published leaves for good; a thread that no longer qualifies keeps only what was
           // published.
           let changed = false;
-          // A withdrawn section the team has is kept, though never shown, until a write that
-          // leaves it out is confirmed: until then, its removal is still owed and reported.
-          const owedRemovals = rendered.withdrawn.filter(
-            (threadId) => record.sections[threadId]?.publishedText != null,
+          // A withdrawn or dropped section the team may have is kept, though never shown, until
+          // a write that leaves it out is confirmed: until then, its removal is owed and reported.
+          const owedRemovals = [...rendered.withdrawn, ...rendered.dropped].filter(
+            (threadId) =>
+              record.sections[threadId]?.publishedText != null ||
+              record.sections[threadId]?.owesRemoval === true,
           );
           for (const threadId of [...rendered.withdrawn, ...rendered.dropped]) {
             if (owedRemovals.includes(threadId)) continue;
             delete record.sections[threadId];
             changed = true;
           }
+          /** The team's file is confirmed to be `rendered`, which holds no earlier generation. */
           const settleRemovals = () => {
             for (const threadId of owedRemovals) delete record.sections[threadId];
+            let settled = owedRemovals.length > 0;
+            for (const section of Object.values(record.sections))
+              if (section.owesRemoval !== undefined) {
+                delete section.owesRemoval;
+                settled = true;
+              }
+            return settled;
           };
           for (const threadId of rendered.frozen) {
             const section = record.sections[threadId]!;
@@ -512,10 +535,9 @@ export const makeTeamDailyPass = (input: {
           const sha = rendered.text === null ? null : sha256(rendered.text);
           if (sha === record.publishedSha) {
             // The team's file already leaves them out.
-            settleRemovals();
+            const settled = settleRemovals();
             if (rendered.text === null) delete team.days[day];
-            if (changed || owedRemovals.length > 0 || rendered.text === null)
-              yield* writeState(state);
+            if (changed || settled || rendered.text === null) yield* writeState(state);
             continue;
           }
           // Each thread is asked about again right before each request that changes the file:
