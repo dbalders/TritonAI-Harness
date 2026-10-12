@@ -1769,26 +1769,45 @@ export function NewTaskDraftScreen(props: {
               {voicePresentation.showsSend ? (
                 <ComposerActionButton
                   accessibilityLabel={
-                    attachmentBlockReason ??
-                    (cloneBlocksStart
-                      ? projectClone === null || projectClone.phase === "running"
-                        ? "Cloning repository"
-                        : "Repository not cloned"
-                      : pendingPastedTextAttachmentCount > 0
-                        ? "Attaching pasted text"
-                        : !flow.composerPreferencesLoaded
-                          ? "Loading preferences"
-                          : flow.submitting
-                            ? "Starting task"
-                            : attachmentsUploading
-                              ? "Queue task, sends when uploads finish"
-                              : environmentConnected
-                                ? "Start task"
-                                : "Queue task")
+                    flow.composerPreferencesLoadFailed
+                      ? "Retry loading saved preferences"
+                      : (attachmentBlockReason ??
+                        (cloneBlocksStart
+                          ? projectClone === null || projectClone.phase === "running"
+                            ? "Cloning repository"
+                            : "Repository not cloned"
+                          : pendingPastedTextAttachmentCount > 0
+                            ? "Attaching pasted text"
+                            : !flow.composerPreferencesLoaded
+                              ? "Loading preferences"
+                              : flow.submitting
+                                ? "Starting task"
+                                : attachmentsUploading
+                                  ? "Queue task, sends when uploads finish"
+                                  : environmentConnected
+                                    ? "Start task"
+                                    : "Queue task"))
                   }
-                  disabled={!canStart}
-                  icon={queuesInsteadOfStarting ? "tray.and.arrow.up" : "arrow.up"}
-                  onPress={() => void handleStart()}
+                  disabled={!flow.composerPreferencesLoadFailed && !canStart}
+                  icon={
+                    flow.composerPreferencesLoadFailed
+                      ? "arrow.clockwise"
+                      : queuesInsteadOfStarting
+                        ? "tray.and.arrow.up"
+                        : "arrow.up"
+                  }
+                  onPress={() => {
+                    if (flow.composerPreferencesLoadFailed) {
+                      void waitForComposerDraftsLoaded().catch(() =>
+                        Alert.alert(
+                          "Could not load saved preferences",
+                          "Saved preferences are still unavailable. Try again.",
+                        ),
+                      );
+                    } else {
+                      void handleStart();
+                    }
+                  }}
                   variant="primary"
                 />
               ) : null}

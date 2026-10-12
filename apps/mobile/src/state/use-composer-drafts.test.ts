@@ -174,6 +174,7 @@ import {
   flushComposerDrafts,
   getComposerDraftSnapshot,
   getPendingTaskRuntimeMode,
+  composerDraftsLoadFailedAtom,
   mergeComposerDraftContentState,
   migrateLegacyNewTaskDraft,
   releaseUnusedComposerAttachmentFiles,
@@ -1998,6 +1999,24 @@ describe("mobile composer drafts", () => {
     expect(getPendingTaskRuntimeMode("pending-task:edited", "approval-required", "auto")).toBe(
       "full-access",
     );
+  });
+
+  it("allows retry after preference loading fails without submitting the fallback", async () => {
+    composerDraftFileMocks.setReadError(new Error("Preferences temporarily unreadable"));
+    await expect(waitForComposerDraftsLoaded()).rejects.toThrow();
+    expect(appAtomRegistry.get(composerDraftsLoadFailedAtom)).toBe(true);
+    expect(getPendingTaskRuntimeMode("new-task:retry", "full-access")).toBeNull();
+
+    composerDraftFileMocks.setReadError(null);
+    composerDraftFileMocks.setDocument({
+      schemaVersion: 1,
+      drafts: {},
+      stickyRuntimeMode: "approval-required",
+    });
+    await waitForComposerDraftsLoaded();
+
+    expect(appAtomRegistry.get(composerDraftsLoadFailedAtom)).toBe(false);
+    expect(getPendingTaskRuntimeMode("new-task:retry", "full-access")).toBe("approval-required");
   });
 
   it("waits for hydration before persisting the latest composer state", async () => {

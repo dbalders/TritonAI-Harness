@@ -184,6 +184,7 @@ type NewTaskFlowContextValue = {
   readonly currentCheckoutBranchName: string | null;
   readonly runtimeMode: RuntimeMode;
   readonly composerPreferencesLoaded: boolean;
+  readonly composerPreferencesLoadFailed: boolean;
   readonly interactionMode: ProviderInteractionMode;
   readonly planModeEnabled: boolean;
   readonly expandedProvider: string | null;
@@ -530,8 +531,11 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   const draftStartFromOrigin = selectedProjectDraft.workspaceSelection?.startFromOrigin;
   const startFromOrigin =
     draftStartFromOrigin ?? projectSettings.settings.newWorktreesStartFromOrigin;
-  const { runtimeMode: stickyRuntimeMode, loaded: composerPreferencesLoaded } =
-    useStickyComposerRuntimeMode();
+  const {
+    runtimeMode: stickyRuntimeMode,
+    loaded: composerPreferencesLoaded,
+    failed: composerPreferencesLoadFailed,
+  } = useStickyComposerRuntimeMode();
   const defaultRuntimeMode = editingPendingTask
     ? (editingPendingTask.runtimeMode ?? DEFAULT_RUNTIME_MODE)
     : (stickyRuntimeMode ?? projectSettings.settings.defaultRuntimeMode);
@@ -1260,6 +1264,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       currentCheckoutBranchName,
       runtimeMode,
       composerPreferencesLoaded,
+      composerPreferencesLoadFailed,
       interactionMode,
       planModeEnabled,
       expandedProvider,
@@ -1310,6 +1315,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       buildPendingTaskMessage,
       cancelEditingPendingTask,
       composerPreferencesLoaded,
+      composerPreferencesLoadFailed,
       currentCheckoutBranchName,
       editingPendingTask,
       environments,

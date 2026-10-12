@@ -427,6 +427,7 @@ export const composerDraftsAtom = Atom.make<Record<string, ComposerDraft>>({}).p
 );
 
 export const composerDraftsLoadedAtom = Atom.make(false).pipe(Atom.keepAlive);
+export const composerDraftsLoadFailedAtom = Atom.make(false).pipe(Atom.keepAlive);
 
 export const stickyComposerModelSelectionAtom = Atom.make<ModelSelection | null>(null).pipe(
   Atom.keepAlive,
@@ -463,6 +464,7 @@ export function resetComposerDraftsLoadState(): void {
   loadPromise = null;
   persistRetryNeeded = false;
   appAtomRegistry.set(composerDraftsLoadedAtom, false);
+  appAtomRegistry.set(composerDraftsLoadFailedAtom, false);
 }
 
 function attachmentContextRecord(
@@ -1028,6 +1030,7 @@ export function ensureComposerDraftsLoaded(): void {
   if (loadPromise !== null) {
     return;
   }
+  appAtomRegistry.set(composerDraftsLoadFailedAtom, false);
   const loading = loadPersistedComposerState().then((persisted) => {
     appAtomRegistry.set(composerCloudDraftsAtom, persisted.cloudDrafts);
     if (Object.keys(persisted.drafts).length > 0) {
@@ -1055,7 +1058,10 @@ export function ensureComposerDraftsLoaded(): void {
   // Handle fire-and-forget hook loads without swallowing failures from the
   // write and cleanup callers that await this same promise. A later call retries.
   void loading.catch((cause) => {
-    if (loadPromise === loading) loadPromise = null;
+    if (loadPromise === loading) {
+      loadPromise = null;
+      appAtomRegistry.set(composerDraftsLoadFailedAtom, true);
+    }
     console.warn(
       "[composer-drafts] failed to hydrate drafts",
       cause instanceof ComposerDraftPersistenceError
@@ -1981,11 +1987,13 @@ export function useStickyComposerModelSelection(): ModelSelection | null {
 export function useStickyComposerRuntimeMode(): {
   readonly runtimeMode: RuntimeMode | null;
   readonly loaded: boolean;
+  readonly failed: boolean;
 } {
   const runtimeMode = useAtomValue(stickyComposerRuntimeModeAtom);
   const loaded = useAtomValue(composerDraftsLoadedAtom);
+  const failed = useAtomValue(composerDraftsLoadFailedAtom);
   useEffect(() => {
     ensureComposerDraftsLoaded();
   }, []);
-  return { runtimeMode, loaded };
+  return { runtimeMode, loaded, failed };
 }
