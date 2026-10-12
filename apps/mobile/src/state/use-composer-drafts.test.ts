@@ -190,6 +190,8 @@ import {
   waitForComposerDraftsLoaded,
   setStickyComposerModelSelection,
   stickyComposerModelSelectionAtom,
+  setStickyComposerRuntimeMode,
+  stickyComposerRuntimeModeAtom,
   undoComposerDraftMerge,
   undoComposerDraftMergeState,
 } from "./use-composer-drafts";
@@ -214,6 +216,7 @@ afterEach(() => {
   appAtomRegistry.set(composerDraftsAtom, {});
   appAtomRegistry.set(composerCloudDraftsAtom, { accountId: null, signedOut: {} });
   appAtomRegistry.set(stickyComposerModelSelectionAtom, null);
+  appAtomRegistry.set(stickyComposerRuntimeModeAtom, null);
   appAtomRegistry.set(threadOutboxManager.queuedMessagesByThreadKeyAtom, {});
   composerAttachmentCleanupMocks.remove.mockClear();
   composerAttachmentCleanupMocks.releaseUploads.mockReset();
@@ -1914,6 +1917,53 @@ describe("mobile composer drafts", () => {
       instanceId: "codex",
       model: "gpt-5.6-sol",
     });
+  });
+
+  it.each(["approval-required", "auto-accept-edits", "auto", "full-access"] as const)(
+    "persists and reloads the last %s composer choice without changing existing drafts",
+    async (runtimeMode) => {
+      vi.useFakeTimers();
+      const existingDraft: ComposerDraft = { ...DRAFT, runtimeMode: "approval-required" };
+      composerDraftFileMocks.setDocument({
+        schemaVersion: 1,
+        drafts: { "environment-1:thread-1": existingDraft },
+      });
+      await waitForComposerDraftsLoaded();
+      setStickyComposerRuntimeMode(runtimeMode);
+      await flushComposerDrafts();
+
+      expect(JSON.parse(composerDraftFileMocks.getDocument()).stickyRuntimeMode).toBe(runtimeMode);
+      appAtomRegistry.set(stickyComposerRuntimeModeAtom, null);
+      resetComposerDraftsLoadState();
+      await waitForComposerDraftsLoaded();
+
+      expect(appAtomRegistry.get(stickyComposerRuntimeModeAtom)).toBe(runtimeMode);
+      expect(getComposerDraftSnapshot("environment-1:thread-1")).toEqual(existingDraft);
+    },
+  );
+
+  it("keeps a newer composer choice while an older saved choice is loading", async () => {
+    vi.useFakeTimers();
+    composerDraftFileMocks.setDocument({
+      schemaVersion: 1,
+      drafts: {},
+      stickyRuntimeMode: "full-access",
+    });
+    composerDraftFileMocks.blockRead();
+    const loading = waitForComposerDraftsLoaded();
+    setStickyComposerRuntimeMode("auto");
+    composerDraftFileMocks.releaseRead();
+    await loading;
+    await flushComposerDrafts();
+
+    expect(appAtomRegistry.get(stickyComposerRuntimeModeAtom)).toBe("auto");
+    expect(JSON.parse(composerDraftFileMocks.getDocument()).stickyRuntimeMode).toBe("auto");
+  });
+
+  it("loads older draft documents without inventing a remembered mode", () => {
+    expect(
+      decodePersistedComposerState({ schemaVersion: 1, drafts: {} }).stickyRuntimeMode,
+    ).toBeNull();
   });
 
   it("waits for hydration before persisting the latest composer state", async () => {

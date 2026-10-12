@@ -60,9 +60,11 @@ import {
   setComposerDraftText,
   setComposerDraftContext,
   setStickyComposerModelSelection,
+  setStickyComposerRuntimeMode,
   updateComposerDraftSettings,
   useComposerDraft,
   useStickyComposerModelSelection,
+  useStickyComposerRuntimeMode,
 } from "../../state/use-composer-drafts";
 import {
   capturePendingTaskEditorWriteBaseline,
@@ -526,9 +528,10 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   const draftStartFromOrigin = selectedProjectDraft.workspaceSelection?.startFromOrigin;
   const startFromOrigin =
     draftStartFromOrigin ?? projectSettings.settings.newWorktreesStartFromOrigin;
+  const stickyRuntimeMode = useStickyComposerRuntimeMode();
   const defaultRuntimeMode = editingPendingTask
     ? (editingPendingTask.runtimeMode ?? DEFAULT_RUNTIME_MODE)
-    : projectSettings.settings.defaultRuntimeMode;
+    : (stickyRuntimeMode ?? projectSettings.settings.defaultRuntimeMode);
   const runtimeMode = selectedProjectDraft.runtimeMode ?? defaultRuntimeMode;
 
   // Antigravity keeps unavailable selections so sign-out or a catalog change
@@ -970,6 +973,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     (value: RuntimeMode) => {
       if (selectedProjectDraftKey) {
         updateComposerDraftSettings(selectedProjectDraftKey, { runtimeMode: value });
+        setStickyComposerRuntimeMode(value);
       }
     },
     [selectedProjectDraftKey],

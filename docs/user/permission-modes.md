@@ -4,8 +4,10 @@ A permission mode controls how much the agent does on its own and when it stops 
 
 The mode is set per thread, from the mode control in the message composer. Changing it in one
 thread does not change any other thread. A thread created from inside another thread keeps that
-thread's mode; otherwise new threads start in **Supervised** unless you set a different app or
-project default, or pick another mode before sending. Existing threads keep their mode.
+thread's mode. New threads opened in the app remember the last mode you chose in the composer
+on that device, including after restarting the app. Until you choose a mode, new threads use
+your app or project default, which starts as **Supervised**. Existing threads and their explicit
+composer choices keep their mode.
 
 ## The Modes
 
@@ -28,8 +30,9 @@ Approvals appear inline in the conversation. Approve or reject one and the agent
 there.
 
 Choose an app or project default in **Settings > General > Permissions**. Saved overrides keep
-their selected mode. If no override is saved, new threads use **Supervised**, including after an
-upgrade; existing threads are unchanged.
+their selected mode and supply the fallback before you choose a composer mode. With no saved
+override or remembered choice, new threads use **Supervised**, including after an upgrade;
+existing threads are unchanged.
 
 For Grok, **Always allow this session** remembers the matching command or tool input. Other
 actions still ask for approval. It does not change the thread to **Full access**.

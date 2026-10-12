@@ -105,8 +105,8 @@ export function useNewThreadHandler() {
       const currentRouteTarget = getCurrentRouteTarget();
       // A new thread carries the user's working mode from the thread being
       // viewed. The target project's configured model still wins; interaction
-      // mode carries independently. Permissions, branch, worktree, and env mode
-      // come from configured defaults unless the caller passes them explicitly.
+      // mode carries independently. Permissions use the last composer choice,
+      // then configured defaults. Workspace options use configured defaults.
       const carrySourceShell =
         currentRouteTarget?.kind === "server"
           ? readThreadShell(currentRouteTarget.threadRef)
@@ -146,7 +146,9 @@ export function useNewThreadHandler() {
         project,
       );
       const projectDefaultModelSelection = projectSettings.settings.defaultModelSelection;
-      const defaultRuntimeMode = projectSettings.settings.defaultRuntimeMode;
+      const resolveDefaultRuntimeMode = () =>
+        useComposerDraftStore.getState().stickyRuntimeMode ??
+        projectSettings.settings.defaultRuntimeMode;
       const resolveModelSelectionOverride = () => {
         const state = useComposerDraftStore.getState();
         return resolveNewThreadModelSelectionOverride({
@@ -273,7 +275,13 @@ export function useNewThreadHandler() {
           if (workspaceContext) {
             setDraftThreadContext(emptyStoredDraftThread.draftId, {
               ...workspaceContext,
-              ...(!isDraftAlreadyOpen ? { runtimeMode: defaultRuntimeMode } : {}),
+              ...(!isDraftAlreadyOpen
+                ? {
+                    runtimeMode:
+                      getComposerDraft(emptyStoredDraftThread.draftId)?.runtimeMode ??
+                      resolveDefaultRuntimeMode(),
+                  }
+                : {}),
               ...(carryInteractionMode ? { interactionMode: carryInteractionMode } : {}),
             });
           }
@@ -308,7 +316,13 @@ export function useNewThreadHandler() {
             {
               threadId: emptyStoredDraftThread.threadId,
               ...workspaceContext,
-              ...(!isDraftAlreadyOpen ? { runtimeMode: defaultRuntimeMode } : {}),
+              ...(!isDraftAlreadyOpen
+                ? {
+                    runtimeMode:
+                      getComposerDraft(emptyStoredDraftThread.draftId)?.runtimeMode ??
+                      resolveDefaultRuntimeMode(),
+                  }
+                : {}),
               ...(carryInteractionMode ? { interactionMode: carryInteractionMode } : {}),
             },
           );
@@ -421,7 +435,7 @@ export function useNewThreadHandler() {
               envMode: initialEnvMode,
               newWorktreesStartFromOrigin: projectSettings.settings.newWorktreesStartFromOrigin,
             }),
-          runtimeMode: defaultRuntimeMode,
+          runtimeMode: resolveDefaultRuntimeMode(),
           ...(carryInteractionMode ? { interactionMode: carryInteractionMode } : {}),
         });
         applyStickyState(draftId);
