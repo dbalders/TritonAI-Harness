@@ -554,16 +554,22 @@ export const makeTeamDailyPass = (input: {
             section.text = section.publishedText!;
             changed = true;
           }
-          if (rendered.deferred.length > 0)
-            problems.push(
-              `Some of ${day}'s newest work is waiting because that day's shared memory reached its size limit.`,
-            );
+          // Noted once the day's outcome is known, so it says only what the team may still have.
+          const noteWaiting = () => {
+            if (rendered.deferred.length > 0)
+              problems.push(
+                withRemoval(
+                  `Some of ${day}'s newest work is waiting because that day's shared memory reached its size limit.`,
+                ),
+              );
+          };
           const sha = rendered.text === null ? null : sha256(rendered.text);
           if (sha === record.publishedSha) {
             // The team's file already leaves them out.
             const settled = settleRemovals();
             if (rendered.text === null) delete team.days[day];
             if (changed || settled || rendered.text === null) yield* writeState(state);
+            noteWaiting();
             continue;
           }
           // Each thread is asked about again right before each request that changes the file:
@@ -594,7 +600,10 @@ export const makeTeamDailyPass = (input: {
           // track of a file that may now exist, or of the folder it would be in.
           if ((record.storageKey ?? null) === null) {
             if (workspace.storageKey === null) {
-              problems.push(`Harness couldn't confirm the team's folder, so ${day} waits.`);
+              noteWaiting();
+              problems.push(
+                withRemoval(`Harness couldn't confirm the team's folder, so ${day} waits.`),
+              );
               continue;
             }
             record.storageKey = workspace.storageKey;
@@ -637,6 +646,7 @@ export const makeTeamDailyPass = (input: {
           }
           if (result.kind === "changed") {
             // Kept: the next pass reads the file to learn what it holds before doing anything.
+            noteWaiting();
             problems.push(withRemoval(`${day}: ${result.message}`));
             continue;
           }
@@ -645,6 +655,7 @@ export const makeTeamDailyPass = (input: {
             delete record.attempt;
             if (record.publishedSha === null) record.storageKey = null;
             yield* writeState(state);
+            noteWaiting();
             problems.push(withRemoval(`${day}: ${result.message}`));
             continue;
           }
@@ -663,6 +674,7 @@ export const makeTeamDailyPass = (input: {
           }
           yield* writeState(state);
           yield* setStatus(workspace.teamId, { lastPublishedAt: yield* nowIso });
+          noteWaiting();
         }
         const marker = yield* publishMarker(attached, state, team, workspace);
         if (marker === "held" && problems.length > 0)

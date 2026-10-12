@@ -1415,6 +1415,53 @@ it.layer(NodeServices.layer)("team daily memory", (it) => {
     }),
   );
 
+  it.effect("says a withdrawn thread may remain on a full day whose new work is waiting", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({});
+      yield* Effect.gen(function* () {
+        yield* TestClock.setTime(new Date(2026, 9, 10, 12).getTime());
+        yield* seedWorld;
+        yield* say("t-a1", "first generation", at(10, 10));
+        // More work than one day's file holds, so some of it always waits.
+        for (let index = 0; index < 60; index++) {
+          const threadId = `t-fill-${String(index).padStart(2, "0")}`;
+          yield* seedThread(threadId, "p-a1", `Filler ${index}`);
+          yield* say(threadId, `${threadId} ${"x".repeat(1_000)}`, at(10, 11));
+        }
+        const teams = fakeTeams();
+        teams.setWorkspaces([teams.workspace(TEAM_A, [["p-a1", at(1, 9)]])]);
+        const pass = yield* makePass(harness.baseDir);
+        yield* pass.attach(teams.source);
+        yield* pass.run;
+        const device = yield* deviceIdOf(harness.baseDir);
+        const published = teams.file(TEAM_A, dayOf(10), device)!;
+        assert.include(published, "first generation");
+        assert.include((yield* pass.status(TEAM_A))!.message!, "size limit");
+
+        yield* setSharing("t-a1", false);
+        yield* reshare("t-a1", at(10, 13));
+        yield* say("t-a1", "second generation", at(10, 14));
+        yield* TestClock.setTime(new Date(2026, 9, 10, 16).getTime());
+        teams.editRemote(TEAM_A, dayOf(10), device, `${published}\nA teammate's note.`);
+        teams.state.hold = { kind: "changed", message: "The file was changed in SharePoint." };
+        yield* pass.run;
+        // The day's first problem is the size limit; it still says what the team may have.
+        const message = (yield* pass.status(TEAM_A))!.message!;
+        assert.include(message, "size limit");
+        assert.include(message, "chose not to share");
+
+        // Once the withdrawal is confirmed, work still waiting for room says only that.
+        teams.state.hold = null;
+        teams.editRemote(TEAM_A, dayOf(10), device, published);
+        yield* pass.run;
+        assert.notInclude(teams.file(TEAM_A, dayOf(10), device)!, "first generation");
+        const after = (yield* pass.status(TEAM_A))!.message!;
+        assert.include(after, "size limit");
+        assert.notInclude(after, "chose not to share");
+      }).pipe(Effect.provide(harness.layer));
+    }),
+  );
+
   it.effect("isn't held back by a turn still being written that the team would never see", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({});
