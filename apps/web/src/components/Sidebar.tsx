@@ -1869,6 +1869,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
         >
           {accessibleTitle}
           <div
+            data-sidebar-row-content
             className={cn(
               "relative z-10 px-(--sidebar-row-content-inset) py-(--sidebar-content-inset)",
               variant === "grouped" && "pl-9",
@@ -5171,6 +5172,10 @@ export default function Sidebar() {
                                   data-thread-selection-safe
                                   className={cn(
                                     "list-none px-2.5 py-2",
+                                    // The list's 1px gap plus 7px above the first row's content
+                                    // keeps expanded folders 8px from their first thread.
+                                    isExpanded &&
+                                      "pb-0 [&+li[data-thread-item]]:pt-0 [&+li[data-thread-item]_[data-sidebar-row-content]]:pt-1.75",
                                     groupIndex > 0 && "mt-1 border-t border-sidebar-border/60 pt-3",
                                   )}
                                 >
