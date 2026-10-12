@@ -2052,7 +2052,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
               {thread.branch ? (
                 <>
                   <ThreadWorktreeIndicator thread={thread} />
-                  <span className="flex min-w-0 flex-1 text-muted-foreground/40">
+                  <span className="flex min-w-0 flex-initial text-muted-foreground/40">
                     <MiddleTruncate value={thread.branch} showTitle={false} />
                   </span>
                 </>
@@ -2067,8 +2067,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                   <span className="text-diff-deletion-foreground">−{diff.deletions}</span>
                 </span>
               ) : null}
-              <span className="pointer-events-none ml-auto inline-flex min-w-0 max-w-[45%] items-center gap-1">
-                <span className="truncate">{modelLabel}</span>
+              <span className="pointer-events-none ml-auto inline-flex min-w-min max-w-[45%] flex-1 items-center gap-1">
+                <span className="w-0 min-w-0 flex-1 truncate text-right">{modelLabel}</span>
                 {isRemote ? (
                   <span className="inline-flex shrink-0 items-center text-sidebar-muted-foreground/70">
                     <EnvironmentMachineIcon
