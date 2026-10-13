@@ -568,15 +568,7 @@ export const make = Effect.gen(function* () {
             return { ...stored, active: false, replaced: reply.value.json.replaced === true };
           }
           const evidence = outcome.structuredResult;
-          if (
-            reply.value.status === 404 ||
-            reply.value.status === 400 ||
-            reply.value.status === 403 ||
-            reply.value.status === 409 ||
-            reply.value.status === 413 ||
-            reply.value.status === 415 ||
-            reply.value.status === 422
-          ) {
+          if (permanentResultRejection(reply.value.status) || reply.value.status === 409) {
             yield* saveTask({
               ...task,
               pendingOutputs: reply.value.status === 404 ? [] : task.pendingOutputs.slice(1),

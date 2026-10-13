@@ -8,6 +8,7 @@ import { Cause } from "effect";
 const configuration = vi.hoisted(() => ({
   serviceUrl: "https://bot.example.test" as string | null,
   local: null as ServerBotTaskComputerStatus | null,
+  localListeners: new Set<() => void>(),
   projects: [] as Array<{ id: string; title: string; environmentId: string }>,
   command: vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => ({ _tag: "Success" })),
 }));
@@ -26,9 +27,23 @@ vi.mock("../../state/environments", () => ({
   usePrimaryEnvironment: () => null,
   useEnvironments: () => ({ environments: [] }),
 }));
-vi.mock("../../state/query", () => ({
-  useEnvironmentQuery: () => ({ data: configuration.local, refresh: vi.fn() }),
-}));
+vi.mock("../../state/query", async () => {
+  const { useSyncExternalStore } = await import("react");
+  return {
+    useEnvironmentQuery: () => ({
+      data: useSyncExternalStore(
+        (listener) => {
+          configuration.localListeners.add(listener);
+          return () => {
+            configuration.localListeners.delete(listener);
+          };
+        },
+        () => configuration.local,
+      ),
+      refresh: vi.fn(),
+    }),
+  };
+});
 vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => configuration.command }));
 
 import {
@@ -214,6 +229,13 @@ function projectPicker(): HTMLButtonElement {
   return container.querySelector('[aria-label="Project for tasks"]')!;
 }
 
+async function publishLocal(local: ServerBotTaskComputerStatus | null) {
+  await act(async () => {
+    configuration.local = local;
+    for (const listener of configuration.localListeners) listener();
+  });
+}
+
 async function chooseProject(title: string) {
   await act(async () => projectPicker().click());
   const option = Array.from(document.querySelectorAll<HTMLElement>('[role="option"]')).find(
@@ -222,6 +244,213 @@ async function chooseProject(title: string) {
   expect(option).toBeDefined();
   await act(async () => option!.click());
 }
+
+function setProjectSettings(localState: ServerBotTaskComputerStatus["state"] = "idle") {
+  configuration.projects = ["Saved", "Chosen", "External"].map((title) => ({
+    id: title.toLowerCase(),
+    title,
+    environmentId: "synthetic-environment",
+  }));
+  configuration.local = {
+    state: localState,
+    deviceId: "local-device",
+    deviceName: "This Mac",
+    apiUrl: firstUrl,
+    userId: firstSession.email,
+    projectId: "saved",
+    currentTask: null,
+    lastCheckInAt: null,
+    message: null,
+  };
+}
+
+it.each(["local first", "bot first"])(
+  "waits for pairing identity before saving an active computer project when %s loads",
+  async (order) => {
+    setProjectSettings();
+    const activeLocal = configuration.local;
+    let resolveState!: (value: DotState) => void;
+    if (order === "local first") {
+      vi.spyOn(DotClient.prototype, "state").mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveState = resolve;
+          }),
+      );
+    } else {
+      configuration.local = null;
+      vi.spyOn(DotClient.prototype, "state").mockResolvedValue(state(firstSession.email));
+    }
+    await act(async () => root.render(<BotSettings />));
+    expect(projectPicker().disabled).toBe(true);
+    await act(async () => projectPicker().click());
+    expect(configuration.command).not.toHaveBeenCalled();
+    if (order === "local first") await act(async () => resolveState(state(firstSession.email)));
+    else {
+      await publishLocal(activeLocal);
+    }
+    expect(projectPicker().textContent).toContain("Saved");
+    expect(projectPicker().disabled).toBe(false);
+    await chooseProject("Chosen");
+    expect(configuration.command).toHaveBeenCalledExactlyOnceWith({
+      environmentId: "synthetic-environment",
+      input: { projectId: "chosen" },
+    });
+    await publishLocal({ ...configuration.local!, projectId: "chosen" });
+    expect(projectPicker().textContent).toContain("Chosen");
+  },
+);
+
+it.each(["off", "replaced"] as const)(
+  "retains a pre-Allow project choice for an %s computer while Bot state loads",
+  async (localState) => {
+    setProjectSettings(localState);
+    let resolveState!: (value: DotState) => void;
+    vi.spyOn(DotClient.prototype, "state")
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveState = resolve;
+          }),
+      )
+      .mockResolvedValue(state(firstSession.email));
+    await act(async () => root.render(<BotSettings />));
+    expect(projectPicker().disabled).toBe(false);
+    await chooseProject("Chosen");
+    expect(configuration.command).not.toHaveBeenCalled();
+    expect(projectPicker().textContent).toContain("Chosen");
+    await act(async () => resolveState(state(firstSession.email)));
+    const allow = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent === "Allow",
+    )!;
+    await act(async () => allow.click());
+    expect(configuration.command).toHaveBeenCalledExactlyOnceWith({
+      environmentId: "synthetic-environment",
+      input: { apiUrl: firstUrl, ownerToken: firstSession.ownerToken, projectId: "chosen" },
+    });
+    await publishLocal({ ...configuration.local!, state: "idle", projectId: "chosen" });
+    await publishLocal({ ...configuration.local!, projectId: "external" });
+    expect(projectPicker().textContent).toContain("External");
+  },
+);
+
+it("follows authoritative local project status after a save and shows later local changes", async () => {
+  setProjectSettings();
+  vi.spyOn(DotClient.prototype, "state").mockResolvedValue(state(firstSession.email));
+  await act(async () => root.render(<BotSettings />));
+  await chooseProject("Chosen");
+  await publishLocal({ ...configuration.local!, projectId: "chosen" });
+  expect(projectPicker().textContent).toContain("Chosen");
+  await publishLocal({ ...configuration.local!, projectId: "external" });
+  expect(projectPicker().textContent).toContain("External");
+});
+
+it("shows another window's project when the first refresh after a successful save skips that saved project", async () => {
+  setProjectSettings();
+  vi.spyOn(DotClient.prototype, "state").mockResolvedValue(state(firstSession.email));
+  configuration.command.mockResolvedValueOnce({
+    _tag: "Success",
+    value: { ...configuration.local!, projectId: "chosen" },
+  });
+  await act(async () => root.render(<BotSettings />));
+  await chooseProject("Chosen");
+  await publishLocal({ ...configuration.local!, projectId: "external" });
+  expect(projectPicker().textContent).toContain("External");
+  expect(projectPicker().textContent).not.toContain("Chosen");
+  expect(configuration.command).toHaveBeenCalledExactlyOnceWith({
+    environmentId: "synthetic-environment",
+    input: { projectId: "chosen" },
+  });
+});
+
+it.each(["different service", "different account"])(
+  "keeps a new project as an Allow choice instead of modifying a pairing for a %s",
+  async (scenario) => {
+    setProjectSettings();
+    configuration.local = {
+      ...configuration.local!,
+      apiUrl: scenario === "different service" ? secondUrl : firstUrl,
+      userId: scenario === "different account" ? secondSession.email : firstSession.email,
+    };
+    vi.spyOn(DotClient.prototype, "state").mockResolvedValue(state(firstSession.email));
+    await act(async () => root.render(<BotSettings />));
+    await chooseProject("Chosen");
+    expect(configuration.command).not.toHaveBeenCalled();
+    const allow = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent === "Allow",
+    )!;
+    await act(async () => allow.click());
+    expect(configuration.command).toHaveBeenCalledExactlyOnceWith({
+      environmentId: "synthetic-environment",
+      input: { apiUrl: firstUrl, ownerToken: firstSession.ownerToken, projectId: "chosen" },
+    });
+  },
+);
+
+it("ignores an old account's project save after a replacement session becomes authoritative", async () => {
+  setProjectSettings();
+  vi.spyOn(DotClient.prototype, "state").mockImplementation(async (session) =>
+    state(session.email),
+  );
+  let settle!: (value: unknown) => void;
+  configuration.command.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        settle = resolve;
+      }),
+  );
+  await act(async () => root.render(<BotSettings />));
+  await chooseProject("Chosen");
+  saveDotSession(sessionStorage, firstUrl, secondSession);
+  configuration.local = {
+    ...configuration.local!,
+    userId: secondSession.email,
+    projectId: "external",
+  };
+  await act(async () => vi.advanceTimersByTimeAsync(30_000));
+  await act(async () => settle({ _tag: "Success" }));
+  expect(projectPicker().textContent).toContain("External");
+  expect(container.textContent).toContain(secondSession.email);
+  expect(configuration.command).toHaveBeenCalledTimes(1);
+});
+
+it("does not change an active project through a stale session before the next state refresh", async () => {
+  setProjectSettings();
+  vi.spyOn(DotClient.prototype, "state").mockResolvedValue(state(firstSession.email));
+  await act(async () => root.render(<BotSettings />));
+  saveDotSession(sessionStorage, firstUrl, secondSession);
+  await chooseProject("Chosen");
+  expect(configuration.command).not.toHaveBeenCalled();
+  expect(projectPicker().textContent).toContain("Saved");
+});
+
+it("ignores a prior service's pending project save after the settings service changes", async () => {
+  setProjectSettings();
+  vi.spyOn(DotClient.prototype, "state").mockImplementation(async (session) =>
+    state(session.email),
+  );
+  let settle!: (value: unknown) => void;
+  configuration.command.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        settle = resolve;
+      }),
+  );
+  await act(async () => root.render(<BotSettings />));
+  await chooseProject("Chosen");
+  configuration.serviceUrl = secondUrl;
+  configuration.local = {
+    ...configuration.local!,
+    apiUrl: secondUrl,
+    userId: secondSession.email,
+    projectId: "external",
+  };
+  await act(async () => root.render(<BotSettings />));
+  await act(async () => settle({ _tag: "Success" }));
+  expect(projectPicker().textContent).toContain("External");
+  expect(container.textContent).toContain(secondSession.email);
+  expect(configuration.command).toHaveBeenCalledTimes(1);
+});
 
 it("retains the saved project after a failed change and accepts a later successful selection", async () => {
   configuration.projects = ["Saved", "Rejected", "Accepted"].map((title) => ({
@@ -265,6 +494,7 @@ it("retains the saved project after a failed change and accepts a later successf
   expect(projectPicker().disabled).toBe(false);
   expect(container.textContent).toContain("Project save failed");
   await chooseProject("Accepted");
+  await publishLocal({ ...configuration.local!, projectId: "accepted" });
   expect(projectPicker().textContent).toContain("Accepted");
   expect(container.textContent).not.toContain("Project save failed");
 });

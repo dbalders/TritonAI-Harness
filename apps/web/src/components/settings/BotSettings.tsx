@@ -76,6 +76,19 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
     local?.apiUrl === serviceUrl && local.userId === state?.user.userId ? local : null;
   const thisComputer = isTaskComputer(state?.taskComputer, localForService);
   const otherComputer = state?.taskComputer && !thisComputer ? state.taskComputer.deviceName : null;
+  const projectSelectionReady = Boolean(
+    local && (local.state === "off" || local.state === "replaced" || (state && session)),
+  );
+
+  if (
+    chosenProjectId &&
+    localForService &&
+    localForService.state !== "off" &&
+    localForService.state !== "replaced"
+  ) {
+    // Drafts are only for Allow. Active pairings always follow the authoritative query.
+    setChosenProjectId(null);
+  }
 
   const isCurrentSession = useCallback(
     (token: string) =>
@@ -91,6 +104,7 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
         setSession(current);
         setState(null);
         setError(null);
+        setChosenProjectId(null);
       }
       return;
     }
@@ -104,6 +118,7 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
         saveDotSession(sessionStorage, serviceUrl, null);
         setSession(null);
         setState(null);
+        setChosenProjectId(null);
       }
       setError(cause instanceof Error ? cause.message : "Could not reach TritonAI Bot.");
     }
@@ -155,7 +170,13 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
   };
 
   const chooseProject = async (value: string) => {
-    if (busy || changingProject.current) return;
+    if (
+      busy ||
+      changingProject.current ||
+      !projectSelectionReady ||
+      (session && !isCurrentSession(session.ownerToken))
+    )
+      return;
     if (
       !environmentId ||
       !localForService ||
@@ -171,7 +192,7 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
     try {
       const result = await setTaskProject({ environmentId, input: { projectId: value } });
       if (!mounted.current || (session && !isCurrentSession(session.ownerToken))) return;
-      setChosenProjectId(result._tag === "Success" ? value : null);
+      setChosenProjectId(null);
       if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
         setError(failureMessage(result, "Could not change the project."));
       }
@@ -295,7 +316,7 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
           control={
             projects.length ? (
               <Select
-                disabled={busy}
+                disabled={busy || !projectSelectionReady}
                 value={projectId ?? ""}
                 onValueChange={(value) => {
                   if (typeof value === "string" && value) void chooseProject(value);

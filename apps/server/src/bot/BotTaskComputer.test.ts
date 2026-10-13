@@ -382,7 +382,7 @@ const allow = (computer: BotTaskComputer.BotTaskComputer["Service"]) =>
   computer.allow({ apiUrl: API, ownerToken: "owner-session", projectId: PROJECT });
 
 it.layer(NodeServices.layer)("BotTaskComputer", (it) => {
-  for (const rejection of [413, 415, 422]) {
+  for (const rejection of [400, 403, 404, 405, 409, 410, 412, 413, 414, 415, 422]) {
     it.effect.skipIf(HostProcessPlatform.defaultValue() === "win32")(
       `settles permanent upload ${rejection} per file and continues to the next assignment`,
       () => {
@@ -396,6 +396,7 @@ it.layer(NodeServices.layer)("BotTaskComputer", (it) => {
           yield* TestClock.setTime(START);
           const computer = yield* BotTaskComputer.BotTaskComputer;
           const config = yield* ServerConfig.ServerConfig;
+          const secrets = yield* ServerSecretStore.ServerSecretStore;
           yield* allow(computer);
           const turn = harness.commands.find((command) => command.type === "thread.turn.start")!;
           const output = taskOutputDirectory(config.stateDir, turn.threadId);
@@ -403,33 +404,58 @@ it.layer(NodeServices.layer)("BotTaskComputer", (it) => {
           yield* Effect.tryPromise(() => NodeFSP.writeFile(NodePath.join(output, "b.txt"), "B"));
           harness.finish(turn.threadId, reportWithBlockers());
           bot.artifactStatuses = [rejection, 200];
+          bot.resultStatus = 503;
           yield* TestClock.adjust("61 seconds");
           yield* computer.tick;
+          const raw = yield* secrets.get("tritonai-bot-task-computer");
+          const saved = yield* decodeSavedOutputJournal(
+            new TextDecoder().decode(Option.getOrThrow(raw)),
+          );
+          assert.lengthOf(saved.held, 1);
+          assert.lengthOf(saved.held[0]!.pendingOutputs, 0);
+          assert.strictEqual(saved.held[0]!.outcome.status, "completed");
+          assert.lengthOf(harness.commands, 2);
+          assert.lengthOf(bot.tasks, 1);
+          assert.strictEqual(
+            yield* Effect.tryPromise(() =>
+              NodeFSP.readFile(NodePath.join(output, "a.txt"), "utf8"),
+            ),
+            "A",
+          );
+          bot.resultStatus = 200;
+          const restarted = yield* BotTaskComputer.make;
+          yield* restarted.tick;
           assert.strictEqual(bot.results[0]!.status, "completed");
+          assert.include(String(bot.results[0]!.result), "Finished report");
           const evidence = bot.results[0]!.structuredResult as {
             artifacts: Array<{ label: string }>;
             blockers: string[];
           };
           assert.deepEqual(
             evidence.artifacts.map((item) => item.label),
-            ["b.txt"],
+            rejection === 404 ? [] : ["b.txt"],
           );
           assert.lengthOf(evidence.blockers, 10);
-          assert.include(evidence.blockers[0]!, "could not accept output a.txt");
+          assert.include(
+            evidence.blockers[0]!,
+            rejection === 404
+              ? "does not support downloadable task files"
+              : "could not accept output a.txt",
+          );
           assert.deepEqual(
             bot.calls
               .filter((call) => call.path.endsWith("/artifacts"))
               .map((call) => call.body.name),
-            ["a.txt", "b.txt"],
+            rejection === 404 ? ["a.txt"] : ["a.txt", "b.txt"],
           );
-          assert.strictEqual((yield* computer.getStatus).currentTask?.taskId, "next");
+          assert.strictEqual((yield* restarted.getStatus).currentTask?.taskId, "next");
           assert.lengthOf(harness.commands, 4);
         }).pipe(Effect.provide(services(bot, harness)));
       },
     );
   }
 
-  for (const failureKind of ["unavailable", "malformed", "transport"] as const) {
+  for (const failureKind of ["unavailable", "malformed", "transport", 408, 425, 429] as const) {
     it.effect.skipIf(HostProcessPlatform.defaultValue() === "win32")(
       `defers ${failureKind} uploads independently and settles a durable retry deadline`,
       () => {
@@ -451,7 +477,8 @@ it.layer(NodeServices.layer)("BotTaskComputer", (it) => {
             NodeFSP.writeFile(NodePath.join(output, "report.txt"), "Preserved bytes"),
           );
           harness.finish(turn.threadId, reportWithBlockers());
-          if (failureKind === "unavailable") bot.artifactStatus = 503;
+          if (typeof failureKind === "number") bot.artifactStatus = failureKind;
+          else if (failureKind === "unavailable") bot.artifactStatus = 503;
           else if (failureKind === "malformed") bot.malformedArtifactMetadata = true;
           else bot.failArtifactTransport = true;
           yield* computer.tick;
