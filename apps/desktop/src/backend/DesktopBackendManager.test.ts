@@ -409,7 +409,7 @@ describe("DesktopBackendManager", () => {
               }),
           }).pipe(Effect.provide(healthyHttpClientLayer));
           assert.deepEqual(result.code, Option.some(0));
-          const groups = Schema.decodeSync(
+          const groups = yield* Schema.decodeEffect(
             Schema.fromJsonString(Schema.Struct({ child: Schema.String, parent: Schema.String })),
           )(output);
           assert.equal(groups.child === groups.parent, detached === false);
