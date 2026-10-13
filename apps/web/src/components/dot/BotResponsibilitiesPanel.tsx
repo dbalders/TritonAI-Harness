@@ -4,8 +4,14 @@ import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
-import type { DotTask } from "./dotClient";
-import type { DotResponsibility, DotResponsibilityInput } from "./dotEnhancements";
+import type { DotRun, DotTask } from "./dotClient";
+import type {
+  DotHeldReply,
+  DotReplyIntent,
+  DotResponsibility,
+  DotResponsibilityInput,
+  DotResponsibilityReply,
+} from "./dotEnhancements";
 
 const STATUS: Record<DotResponsibility["status"], string> = {
   active: "Following",
@@ -15,6 +21,181 @@ const STATUS: Record<DotResponsibility["status"], string> = {
   completed: "Reviewed and completed",
   cancelled: "Cancelled",
 };
+
+const INTENT: Record<DotReplyIntent, string> = {
+  input: "Supplied input",
+  requirement: "Changed a requirement",
+  blocker: "Resolved a blocker",
+  cancel: "Asked to stop",
+  question: "Asked a question",
+};
+const HELD_REPLY_MS = 7 * 24 * 60 * 60 * 1000;
+
+function replyState(reply: DotResponsibilityReply): string {
+  if (!reply.handledByRunId) return "Waiting to continue";
+  return reply.notContinued ? `Not continued: ${reply.notContinued}` : "Continued";
+}
+
+/** Held messages that could belong to this responsibility and have not been used anywhere yet. */
+export function heldRepliesFor(
+  item: DotResponsibility,
+  responsibilities: readonly DotResponsibility[],
+  runs: readonly DotRun[],
+  now = Date.now(),
+): Array<{ run: DotRun; held: DotHeldReply }> {
+  const used = new Set(
+    responsibilities.flatMap((value) => value.replies?.log.map((reply) => reply.sourceId) ?? []),
+  );
+  return runs.flatMap((run) => {
+    const held = run.result?.detail?.replyHeld;
+    return held &&
+      !used.has(held.sourceId) &&
+      now - Date.parse(run.createdAt) < HELD_REPLY_MS &&
+      held.candidates.some((candidate) => candidate.responsibilityId === item.responsibilityId)
+      ? [{ run, held }]
+      : [];
+  });
+}
+
+function ResponsibilityReplies({
+  item,
+  held,
+  busy,
+  onAction,
+  onReply,
+}: {
+  readonly item: DotResponsibility;
+  readonly held: ReadonlyArray<{ run: DotRun; held: DotHeldReply }>;
+  readonly busy: boolean;
+  /** Resolves false when the change failed; the row shows the error. */
+  readonly onAction: (input: DotResponsibilityInput) => Promise<boolean>;
+  readonly onReply: () => void;
+}) {
+  const [input, setInput] = useState("");
+  const replies = item.replies;
+  const common = { responsibilityId: item.responsibilityId, expectedVersion: item.version };
+  const recent = [...(replies?.log ?? [])].slice(-5).toReversed();
+  return (
+    <section aria-label={`Replies for ${item.title}`} className="space-y-2 rounded-md border p-2">
+      <p className="text-xs text-muted-foreground">
+        {replies?.enabled
+          ? "Your next useful reply in this conversation continues this responsibility once. Thanks or OK here starts nothing, unrelated messages get an ordinary answer, and a reply never approves an action. Turning replies off, cancelling or reopening keeps assignments drafted from earlier replies from starting."
+          : "Replies are off. Your messages do not continue this responsibility."}
+      </p>
+      {replies?.awaiting && (
+        <p role="status" className="text-xs">
+          Waiting for your reply: {replies.awaiting.input} · since{" "}
+          {new Date(replies.awaiting.since).toLocaleString()}
+        </p>
+      )}
+      {!replies?.awaiting && replies?.received && (
+        <p className="text-xs text-muted-foreground">
+          Received {replies.received.input} in your reply ·{" "}
+          {new Date(replies.received.at).toLocaleString()}
+        </p>
+      )}
+      <div className="flex flex-wrap gap-2">
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={busy}
+          onClick={() =>
+            void onAction({ ...common, action: "replies", enabled: !replies?.enabled })
+          }
+        >
+          {replies?.enabled ? "Turn off replies" : "Continue from my replies"}
+        </Button>
+        {replies?.enabled && (
+          <Button size="sm" variant="outline" disabled={busy} onClick={onReply}>
+            Reply in chat
+          </Button>
+        )}
+        {replies?.awaiting && (
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={busy}
+            onClick={() => void onAction({ ...common, action: "stop-waiting" })}
+          >
+            Stop waiting
+          </Button>
+        )}
+      </div>
+      {!replies?.awaiting && item.status !== "snoozed" && (
+        <form
+          aria-label={`Wait for a reply for ${item.title}`}
+          className="flex flex-wrap items-end gap-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!input.trim()) return;
+            void onAction({ ...common, action: "wait", input: input.trim() }).then(
+              (saved) => saved && setInput(""),
+            );
+          }}
+        >
+          <label className="min-w-0 flex-1 space-y-1 text-xs">
+            Wait for
+            <Input
+              nativeInput
+              aria-label="Input to wait for"
+              placeholder="the signed budget spreadsheet"
+              value={input}
+              disabled={busy}
+              onChange={(event) => setInput(event.currentTarget.value)}
+            />
+          </label>
+          <Button type="submit" size="sm" variant="outline" disabled={busy || !input.trim()}>
+            Wait for this
+          </Button>
+        </form>
+      )}
+      {replies?.enabled &&
+        held.map(({ run, held: value }) => (
+          <div key={run.runId} className="space-y-1 text-xs">
+            <p>
+              Your message “{run.event.text}” could fit more than one responsibility, so nothing was
+              changed. {value.classification}
+            </p>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={busy}
+              onClick={() => void onAction({ ...common, action: "use-reply", runId: run.runId })}
+            >
+              Use that message here
+            </Button>
+          </div>
+        ))}
+      {!!replies?.revisions.length && (
+        <div className="text-xs">
+          <h4 className="font-medium">Your revisions</h4>
+          <ul className="space-y-1">
+            {replies.revisions.map((revision) => (
+              <li key={revision.seq} className="whitespace-pre-wrap break-words">
+                {revision.kind === "deadline" ? "Deadline" : "Requirement"} ·{" "}
+                {new Date(revision.at).toLocaleString()}: {revision.text}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {!!recent.length && (
+        <div className="text-xs">
+          <h4 className="font-medium">Recent replies</h4>
+          <ul className="space-y-1">
+            {recent.map((reply) => (
+              <li key={reply.seq}>
+                {INTENT[reply.intent]} · {new Date(reply.receivedAt).toLocaleString()} ·{" "}
+                {replyState(reply)}
+                <span className="block text-muted-foreground">{reply.reason}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </section>
+  );
+}
 
 function ResponsibilityEditor({
   responsibility,
@@ -171,48 +352,58 @@ function ResponsibilityEditor({
 function ResponsibilityRow({
   item,
   task,
+  replies,
+  held,
   onAction,
   onEdit,
   onOpen,
   onLoadTask,
+  onReply,
 }: {
   readonly item: DotResponsibility;
   readonly task: DotTask | undefined;
+  readonly replies: boolean;
+  readonly held: ReadonlyArray<{ run: DotRun; held: DotHeldReply }>;
   readonly onAction: (input: DotResponsibilityInput) => Promise<unknown>;
   readonly onEdit: () => void;
   readonly onOpen: (taskId: string) => void;
   readonly onLoadTask: (taskId: string) => Promise<unknown>;
+  readonly onReply: () => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [reviewed, setReviewed] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inFlight = useRef(false);
-  async function act(action: "cancel" | "resume" | "snooze" | "complete") {
+  async function change(input: DotResponsibilityInput) {
     if (inFlight.current) return;
     inFlight.current = true;
     setBusy(true);
     setError(null);
     try {
-      const common = { responsibilityId: item.responsibilityId, expectedVersion: item.version };
-      await onAction(
-        action === "snooze"
-          ? { ...common, action, until: new Date(Date.now() + 60 * 60 * 1000).toISOString() }
-          : action === "complete"
-            ? {
-                ...common,
-                action,
-                reviewedEvidence: true,
-                evidenceDigest: item.sourceEvidence?.digest ?? "",
-              }
-            : { ...common, action },
-      );
+      await onAction(input);
       setReviewed(false);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not update this responsibility.");
+      throw cause;
     } finally {
       inFlight.current = false;
       setBusy(false);
     }
+  }
+  async function act(action: "cancel" | "resume" | "snooze" | "complete" | "reopen") {
+    const common = { responsibilityId: item.responsibilityId, expectedVersion: item.version };
+    await change(
+      action === "snooze"
+        ? { ...common, action, until: new Date(Date.now() + 60 * 60 * 1000).toISOString() }
+        : action === "complete"
+          ? {
+              ...common,
+              action,
+              reviewedEvidence: true,
+              evidenceDigest: item.sourceEvidence?.digest ?? "",
+            }
+          : { ...common, action },
+    ).catch(() => undefined);
   }
   const terminal = ["cancelled", "completed"].includes(item.status);
   const evidenceMatchesTask =
@@ -311,7 +502,26 @@ function ResponsibilityRow({
             Cancel following
           </Button>
         )}
+        {replies && item.status === "cancelled" && (
+          <Button size="sm" variant="outline" disabled={busy} onClick={() => void act("reopen")}>
+            Reopen following
+          </Button>
+        )}
       </div>
+      {replies && !terminal && (
+        <ResponsibilityReplies
+          item={item}
+          held={held}
+          busy={busy}
+          onAction={(input) =>
+            change(input).then(
+              () => true,
+              () => false,
+            )
+          }
+          onReply={onReply}
+        />
+      )}
       {item.status === "needs-review" &&
         evidenceMatchesTask &&
         task?.status === "completed" &&
@@ -344,15 +554,22 @@ function ResponsibilityRow({
 export function BotResponsibilitiesPanel({
   responsibilities,
   tasks,
+  replies,
+  runs,
   onAction,
   onOpen,
   onLoadTask,
+  onReply,
 }: {
   readonly responsibilities: readonly DotResponsibility[];
   readonly tasks: readonly DotTask[];
+  /** The service supports continuing responsibilities from owner replies. */
+  readonly replies: boolean;
+  readonly runs: readonly DotRun[];
   readonly onAction: (input: DotResponsibilityInput) => Promise<unknown>;
   readonly onOpen: (taskId: string) => void;
   readonly onLoadTask: (taskId: string) => Promise<unknown>;
+  readonly onReply: (item: DotResponsibility) => void;
 }) {
   const [editing, setEditing] = useState<DotResponsibility | "new" | null>(null);
   const current =
@@ -411,10 +628,13 @@ export function BotResponsibilitiesPanel({
               key={`${item.responsibilityId}:${item.version}:${item.sourceEvidence?.digest ?? ""}`}
               item={item}
               task={tasks.find((task) => task.taskId === item.source.taskId)}
+              replies={replies}
+              held={replies ? heldRepliesFor(item, responsibilities, runs) : []}
               onAction={onAction}
               onEdit={() => setEditing(item)}
               onOpen={onOpen}
               onLoadTask={onLoadTask}
+              onReply={() => onReply(item)}
             />
           ))}
         </ul>

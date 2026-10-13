@@ -58,6 +58,25 @@ responsibility as work changes, or snooze it and resume following later.
 Cancel closes the responsibility. These controls do not approve new actions or
 cancel the underlying Harness task.
 
+To keep a responsibility moving from your replies, choose **Continue from my
+replies**, and optionally **Wait for** a named input such as a signed file. Then
+reply in your bot conversation, or use **Reply in chat** to address one
+responsibility directly. A reply that supplies the input, changes a requirement
+or deadline, resolves a blocker, asks a question, or asks to stop continues it
+once. Thanks or OK in that conversation starts nothing, unrelated messages get
+an ordinary answer, and a reply never approves an action; approvals work as
+before. A reply addressed to a responsibility that is cancelled, snoozed or has
+replies off is not sent, so you can send it as ordinary chat instead. An
+assignment drafted from earlier replies does not start after you change a
+requirement or deadline, cancel, reopen, or turn replies off; a pending approval
+for it can only be declined. Replies sent before you cancel or turn replies off
+don't continue it after you reopen it or turn replies back on, so send a new
+reply. A continuation already under way stops before its next step after any of
+these changes. Work a Harness worker already picked up is not recalled. If a
+message could fit more than one waiting responsibility, nothing changes until
+you choose one with **Use that message here**, or `/use` and its number in
+Teams. A responsibility stopped from a reply can be reopened.
+
 Task results keep execution status separate from verification. Expand a task to
 review its artifacts, source links, reported checks, and blockers. A finished run
 is not proof that the intended outcome is correct. Downloadable files come from

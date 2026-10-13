@@ -20,6 +20,7 @@ import {
   type DotAttachment,
   type DotMemoryInput,
   type DotResponsibilityInput,
+  replyRoutingText,
 } from "./dotEnhancements";
 import { BotRunStatus } from "./BotRunStatus";
 import { BotHandlingPanel } from "./BotHandlingPanel";
@@ -98,6 +99,10 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
   const [busyApproval, setBusyApproval] = useState<string | null>(null);
   const [busyFeedback, setBusyFeedback] = useState<string | null>(null);
   const pendingMessage = useRef<PendingMessage | null>(null);
+  // The responsibility the next message explicitly replies to, chosen from Responsibilities.
+  const [replyTarget, setReplyTarget] = useState<{ id: string; title: string } | null>(null);
+  const [replyStatus, setReplyStatus] = useState<string | null>(null);
+  const composerInput = useRef<HTMLInputElement>(null);
   const acceptedRunIds = useRef(new Set<string>());
   const stateRequestSequence = useRef(0);
   const latestSnapshot = useRef<DotState | null>(null);
@@ -138,6 +143,8 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
         setError(null);
         setConnected(false);
         pendingMessage.current = null;
+        setReplyTarget(null);
+        setReplyStatus(null);
         pendingPromptRuns.current.clear();
         setBusyFeedback(null);
         acceptedRunIds.current.clear();
@@ -333,12 +340,16 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
     const text = draft.trim() || (attachments.length ? "Please review the attached files." : "");
     if (!session || !text || sending || uploading) return;
     const attachmentIds = attachments.map((item) => item.attachmentId);
+    const responsibilityId =
+      state?.enhancements?.replyContinuation && replyTarget ? replyTarget.id : undefined;
     setSending(true);
     setError(null);
+    setReplyStatus(null);
     // Retain the command on an ambiguous network failure; retrying must not create another run.
     const message =
       pendingMessage.current?.text === text &&
       pendingMessage.current.threadId === threadId &&
+      pendingMessage.current.responsibilityId === responsibilityId &&
       JSON.stringify(pendingMessage.current.attachmentIds ?? []) === JSON.stringify(attachmentIds)
         ? pendingMessage.current
         : {
@@ -346,6 +357,7 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
             threadId,
             text,
             ...(attachmentIds.length ? { attachmentIds } : {}),
+            ...(responsibilityId ? { responsibilityId } : {}),
           };
     pendingMessage.current = message;
     try {
@@ -353,6 +365,8 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
       if (activeOwner.current !== session.ownerToken) return;
       acceptedRunIds.current.add(accepted.runId);
       pendingMessage.current = null;
+      if (responsibilityId) setReplyTarget(null);
+      setReplyStatus(replyRoutingText(accepted.reply));
       setDraft((current) => draftAfterSend(current, sentDraft));
       setAttachments((current) =>
         current.filter(
@@ -362,7 +376,17 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
       setUploadStatus(null);
       await refresh();
     } catch (cause) {
-      reportError(cause, session.ownerToken);
+      // A rejected reply queued nothing: keep the draft and target, and say why beside the composer.
+      if (
+        responsibilityId &&
+        cause instanceof DotApiError &&
+        (cause.status === 404 || cause.status === 409) &&
+        activeOwner.current === session.ownerToken
+      ) {
+        pendingMessage.current = null;
+        setReplyStatus(`Not sent: ${cause.message}`);
+        await refresh();
+      } else reportError(cause, session.ownerToken);
     } finally {
       if (activeOwner.current === session.ownerToken) setSending(false);
     }
@@ -986,6 +1010,12 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
                           className="mb-3 space-y-2 text-sm"
                         >
                           <p>{approval.summary}</p>
+                          {approval.notStartable && (
+                            <p role="status" className="text-xs">
+                              Can't start: {approval.notStartable} Approving won't run it; decline
+                              it and ask for an updated brief if it's still needed.
+                            </p>
+                          )}
                           {approval.action === "harness-task" &&
                             state &&
                             taskComputerNotice(state) && (
@@ -1009,13 +1039,15 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
                             </dl>
                           </details>
                           <div className="flex gap-2">
-                            <Button
-                              size="sm"
-                              disabled={busyApproval !== null || state?.user.paused}
-                              onClick={() => void decide(approval.approvalId, true)}
-                            >
-                              Approve
-                            </Button>
+                            {!approval.notStartable && (
+                              <Button
+                                size="sm"
+                                disabled={busyApproval !== null || state?.user.paused}
+                                onClick={() => void decide(approval.approvalId, true)}
+                              >
+                                Approve
+                              </Button>
+                            )}
                             <Button
                               variant="outline"
                               size="sm"
@@ -1120,6 +1152,27 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
                       )}
                     </div>
                   )}
+                  {replyTarget && (
+                    <div className="flex shrink-0 flex-wrap items-center gap-2 text-xs">
+                      <span id="bot-reply-target">
+                        Replying to “{replyTarget.title}”. Your message continues it once and never
+                        approves an action.
+                      </span>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={sending}
+                        onClick={() => setReplyTarget(null)}
+                      >
+                        Send as ordinary chat
+                      </Button>
+                    </div>
+                  )}
+                  {replyStatus && (
+                    <p role="status" className="shrink-0 text-xs text-muted-foreground">
+                      {replyStatus}
+                    </p>
+                  )}
                   <form
                     className="flex shrink-0 items-center gap-2"
                     onSubmit={(event) => {
@@ -1129,6 +1182,8 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
                   >
                     <Input
                       nativeInput
+                      ref={composerInput}
+                      aria-describedby={replyTarget ? "bot-reply-target" : undefined}
                       value={draft}
                       onChange={(event) => setDraft(event.currentTarget.value)}
                       placeholder="Message your bot..."
@@ -1206,9 +1261,16 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
                       <BotResponsibilitiesPanel
                         responsibilities={state.responsibilities ?? []}
                         tasks={state.tasks.filter((task) => task.detail?.kind === "harness-task")}
+                        replies={state.enhancements?.replyContinuation === true}
+                        runs={state.runs}
                         onAction={responsibilityAction}
                         onOpen={(taskId) => openItem("task", taskId)}
                         onLoadTask={loadTaskEvidence}
+                        onReply={(item) => {
+                          setReplyTarget({ id: item.responsibilityId, title: item.title });
+                          setReplyStatus(null);
+                          composerInput.current?.focus();
+                        }}
                       />
                     )}
                     <BotCapabilitiesPanel

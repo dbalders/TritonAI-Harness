@@ -1,6 +1,8 @@
 import type { DotRoutineInput } from "./BotRoutineEditor";
 import type {
   DotAttachment,
+  DotHeldReply,
+  DotReplyRouting,
   DotResponsibility,
   DotStructuredResult,
   DotMemoryInput,
@@ -36,7 +38,12 @@ export interface DotRun {
     | "cancelled";
   readonly createdAt: string;
   readonly updatedAt: string;
-  readonly result?: { readonly summary: string; readonly taskId?: string };
+  readonly result?: {
+    readonly summary: string;
+    readonly taskId?: string;
+    /** Only the fields this client reads; services may send more. */
+    readonly detail?: { readonly replyHeld?: DotHeldReply };
+  };
   readonly error?: string;
   /** Fixed service-authored status; absent from older services and terminal runs. */
   readonly activity?: {
@@ -70,6 +77,8 @@ export interface DotApproval {
   readonly summary: string;
   readonly action: string;
   readonly payload: Record<string, unknown>;
+  /** Why an assignment drafted from a responsibility reply can no longer start; it can only be declined. */
+  readonly notStartable?: string;
 }
 
 export interface DotMemory {
@@ -174,6 +183,7 @@ export interface DotState {
         | "resultCards"
         | "routineEditor"
         | "responsibilities"
+        | "replyContinuation"
         | "attachments"
         | "memoryCorrection",
         boolean
@@ -219,6 +229,8 @@ export interface PendingMessage {
   readonly threadId: string;
   readonly text: string;
   readonly attachmentIds?: readonly string[];
+  /** Sent only to services that advertise reply continuation. */
+  readonly responsibilityId?: string;
 }
 
 /**
@@ -397,7 +409,7 @@ export class DotClient {
   send(
     session: DotSession,
     message: PendingMessage,
-  ): Promise<{ runId: string; status: DotRun["status"] }> {
+  ): Promise<{ runId: string; status: DotRun["status"]; reply?: DotReplyRouting }> {
     return this.request("/message", session, message);
   }
 

@@ -62,7 +62,63 @@ export interface DotResponsibility {
     readonly available: boolean;
   };
   readonly reviewedAt?: string;
+  /** Absent on older services and on responsibilities that never used replies. */
+  readonly replies?: DotResponsibilityReplies;
 }
+
+export type DotReplyIntent = "input" | "requirement" | "blocker" | "cancel" | "question";
+
+/** One owner message the bot recorded for a responsibility. Its text lives in the message run. */
+export interface DotResponsibilityReply {
+  readonly seq: number;
+  readonly runId: string;
+  readonly sourceId: string;
+  readonly channel: "teams" | "harness";
+  readonly receivedAt: string;
+  readonly intent: DotReplyIntent;
+  readonly reason: string;
+  readonly association: "explicit" | "matched" | "owner-selected";
+  readonly handledByRunId?: string;
+  readonly handledAt?: string;
+  readonly notContinued?: string;
+}
+
+export interface DotResponsibilityReplies {
+  readonly enabled: boolean;
+  readonly awaiting?: { readonly input: string; readonly since: string };
+  readonly received?: { readonly input: string; readonly seq: number; readonly at: string };
+  readonly lastSeq: number;
+  readonly requirementVersion: number;
+  /** Advances on cancel, reopen and turning replies off; absent on older services. */
+  readonly epoch?: number;
+  readonly log: readonly DotResponsibilityReply[];
+  readonly revisions: ReadonlyArray<{
+    readonly seq: number;
+    readonly runId: string;
+    readonly at: string;
+    readonly kind: "requirement" | "deadline";
+    readonly text: string;
+  }>;
+}
+
+/** A message the bot did not attach to any responsibility because more than one could fit. */
+export interface DotHeldReply {
+  readonly sourceId: string;
+  readonly intent: DotReplyIntent;
+  readonly classification: string;
+  readonly reason: string;
+  readonly candidates: ReadonlyArray<{ readonly responsibilityId: string; readonly title: string }>;
+}
+
+/** How the bot routed a sent message; absent for ordinary chat and from older services. */
+export interface DotReplyRouting {
+  readonly outcome: "continued" | "held" | "cancelled" | "not-continued";
+  readonly reason: string;
+  readonly responsibilityId?: string;
+  readonly title?: string;
+  readonly intent?: DotReplyIntent;
+}
+
 export type DotResponsibilityInput =
   | {
       readonly action: "create";
@@ -84,9 +140,27 @@ export type DotResponsibilityInput =
       readonly nextAction: string;
     }
   | {
-      readonly action: "cancel" | "resume";
+      readonly action: "cancel" | "resume" | "reopen" | "stop-waiting";
       readonly responsibilityId: string;
       readonly expectedVersion: number;
+    }
+  | {
+      readonly action: "replies";
+      readonly responsibilityId: string;
+      readonly expectedVersion: number;
+      readonly enabled: boolean;
+    }
+  | {
+      readonly action: "wait";
+      readonly responsibilityId: string;
+      readonly expectedVersion: number;
+      readonly input: string;
+    }
+  | {
+      readonly action: "use-reply";
+      readonly responsibilityId: string;
+      readonly expectedVersion: number;
+      readonly runId: string;
     }
   | {
       readonly action: "snooze";
@@ -111,6 +185,18 @@ export interface DotMemoryInput {
   readonly scope: "owner";
   readonly reviewed?: true;
   readonly sourceRunId?: string;
+}
+
+/** Plain status after sending; ordinary chat and older services say nothing extra. */
+export function replyRoutingText(reply: DotReplyRouting | undefined): string | null {
+  if (!reply) return null;
+  const title = reply.title ? `“${reply.title}”` : "the responsibility";
+  if (reply.outcome === "continued") return `Continuing ${title}. ${reply.reason}`;
+  if (reply.outcome === "cancelled")
+    return `Stopped following ${title}. Reopen it under Responsibilities if this was a mistake.`;
+  if (reply.outcome === "held")
+    return `Not attached to a responsibility yet. ${reply.reason} Choose one under Responsibilities.`;
+  return `Not continued: ${reply.reason}`;
 }
 
 export function botWebUrl(value: string | undefined): string | undefined {

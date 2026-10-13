@@ -1859,3 +1859,259 @@ it.each(["task", "approval"] as const)(
     expect(button("Resume bot").disabled).toBe(false);
   },
 );
+
+it("continues a responsibility from an explicit reply, resolves a held message and keeps waiting state reversible", async () => {
+  const responsibility = (id: string, title: string, version: number) => ({
+    responsibilityId: id,
+    version,
+    title,
+    intendedOutcome: "Reviewed",
+    source: { kind: "harness-task" as const, taskId: `${id}-task` },
+    completionCriteria: "Checked",
+    nextAction: "Observe",
+    allowedActions: ["observe-task" as const, "notify-owner" as const],
+    status: "active" as const,
+    linkedTaskIds: [`${id}-task`],
+    linkedRunIds: [],
+  });
+  const replies = {
+    enabled: true,
+    lastSeq: 1,
+    requirementVersion: 1,
+    awaiting: { input: "the signed spreadsheet", since: at },
+    log: [
+      {
+        seq: 1,
+        runId: "earlier",
+        sourceId: "harness:earlier",
+        channel: "harness" as const,
+        receivedAt: at,
+        intent: "requirement" as const,
+        reason: "You revised the deadline.",
+        association: "matched" as const,
+        handledByRunId: "earlier",
+        handledAt: at,
+      },
+    ],
+    revisions: [
+      { seq: 1, runId: "earlier", at, kind: "deadline" as const, text: "Due Friday instead" },
+    ],
+  };
+  state = {
+    ...snapshot(),
+    enhancements: { responsibilities: true, replyContinuation: true },
+    responsibilities: [
+      { ...responsibility("budget", "Budget review", 4), replies },
+      responsibility("vendor", "Vendor summary", 2),
+    ],
+    runs: [
+      {
+        runId: "held1",
+        threadId: "dot",
+        event: { kind: "message", text: "Here are both signed files" },
+        status: "completed",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        result: {
+          summary: "I didn't change anything",
+          detail: {
+            replyHeld: {
+              sourceId: "harness:held1",
+              intent: "input",
+              classification: "You supplied information or a link.",
+              reason: "It could belong to 2 waiting responsibilities, so none was changed.",
+              candidates: [
+                { responsibilityId: "budget", title: "Budget review" },
+                { responsibilityId: "vendor", title: "Vendor summary" },
+              ],
+            },
+          },
+        },
+      },
+    ],
+  };
+  onPost = async (path) =>
+    path === "/message"
+      ? Response.json({
+          ok: true,
+          runId: "reply1",
+          status: "queued",
+          reply: {
+            outcome: "continued",
+            reason: "You supplied information or a link.",
+            responsibilityId: "budget",
+            title: "Budget review",
+            intent: "input",
+          },
+        })
+      : Response.json({ ok: true });
+  await render();
+  expect(container.textContent).toContain("Waiting for your reply: the signed spreadsheet");
+  expect(container.textContent).toContain("Deadline");
+  expect(container.textContent).toContain("Due Friday instead");
+  expect(container.textContent).toContain("Changed a requirement");
+
+  await click("Reply in chat");
+  expect(container.textContent).toContain("Replying to “Budget review”");
+  expect(document.activeElement?.getAttribute("aria-label")).toBe("Message your bot");
+  expect(
+    document.getElementById(document.activeElement!.getAttribute("aria-describedby")!)?.textContent,
+  ).toContain("Replying to “Budget review”");
+  await fill("Message your bot", "Here is the signed spreadsheet link");
+  await click("Send message");
+  expect(requests.find((item) => item.path === "/message")?.body).toMatchObject({
+    text: "Here is the signed spreadsheet link",
+    responsibilityId: "budget",
+  });
+  expect(container.querySelector('[role="status"]')?.textContent).toContain(
+    "Continuing “Budget review”",
+  );
+  expect(container.textContent).not.toContain("Replying to “Budget review”");
+
+  await click("Stop waiting");
+  expect(requests.at(-1)).toEqual({
+    path: "/responsibilities",
+    body: { action: "stop-waiting", responsibilityId: "budget", expectedVersion: 4 },
+  });
+  // The vendor row has replies off, so only the budget row offers the held message.
+  expect(
+    [...document.querySelectorAll("button")].filter(
+      (node) => node.textContent?.trim() === "Use that message here",
+    ),
+  ).toHaveLength(1);
+  await click("Use that message here");
+  expect(requests.at(-1)?.body).toEqual({
+    action: "use-reply",
+    responsibilityId: "budget",
+    expectedVersion: 4,
+    runId: "held1",
+  });
+  await fill("Input to wait for", "the vendor contract");
+  await submitForm("Wait for a reply for Vendor summary");
+  expect(requests.at(-1)?.body).toEqual({
+    action: "wait",
+    responsibilityId: "vendor",
+    expectedVersion: 2,
+    input: "the vendor contract",
+  });
+  await click("Continue from my replies");
+  expect(requests.at(-1)?.body).toEqual({
+    action: "replies",
+    responsibilityId: "vendor",
+    expectedVersion: 2,
+    enabled: true,
+  });
+});
+
+it("never sends a reply target to a service without reply continuation", async () => {
+  state = {
+    ...snapshot(),
+    enhancements: { responsibilities: true },
+    responsibilities: [
+      {
+        responsibilityId: "budget",
+        version: 1,
+        title: "Budget review",
+        intendedOutcome: "Reviewed",
+        source: { kind: "harness-task", taskId: "task" },
+        completionCriteria: "Checked",
+        nextAction: "Observe",
+        allowedActions: ["observe-task", "notify-owner"],
+        status: "cancelled",
+        linkedTaskIds: ["task"],
+        linkedRunIds: [],
+      },
+    ],
+  };
+  onPost = async () => Response.json({ ok: true, runId: "chat1", status: "queued" });
+  await render();
+  expect(() => button("Reply in chat")).toThrow();
+  expect(() => button("Reopen following")).toThrow();
+  await fill("Message your bot", "Here is the budget");
+  await click("Send message");
+  expect(requests.find((item) => item.path === "/message")?.body).not.toHaveProperty(
+    "responsibilityId",
+  );
+});
+
+it("keeps a rejected reply's draft and target, explains why beside the composer, and still sends ordinary chat", async () => {
+  state = {
+    ...snapshot(),
+    enhancements: { responsibilities: true, replyContinuation: true },
+    responsibilities: [
+      {
+        responsibilityId: "budget",
+        version: 3,
+        title: "Budget review",
+        intendedOutcome: "Reviewed",
+        source: { kind: "harness-task", taskId: "task" },
+        completionCriteria: "Checked",
+        nextAction: "Observe",
+        allowedActions: ["observe-task", "notify-owner"],
+        status: "active",
+        linkedTaskIds: ["task"],
+        linkedRunIds: [],
+        replies: {
+          enabled: true,
+          lastSeq: 0,
+          requirementVersion: 0,
+          epoch: 1,
+          log: [],
+          revisions: [],
+        },
+      },
+    ],
+  };
+  onPost = async (path, body) =>
+    path === "/message" && body.responsibilityId
+      ? Response.json(
+          {
+            ok: false,
+            error:
+              "“Budget review” is snoozed. Resume it first. Nothing was sent. Send it without choosing a responsibility for an ordinary answer.",
+          },
+          { status: 409 },
+        )
+      : Response.json({ ok: true, runId: "chat1", status: "queued" });
+  await render();
+  await click("Reply in chat");
+  await fill("Message your bot", "Here is the signed spreadsheet");
+  await click("Send message");
+  expect(container.querySelector('[role="status"]')?.textContent).toContain(
+    "Not sent: “Budget review” is snoozed.",
+  );
+  expect(container.querySelector<HTMLInputElement>('[aria-label="Message your bot"]')?.value).toBe(
+    "Here is the signed spreadsheet",
+  );
+  expect(container.textContent).toContain("Replying to “Budget review”");
+  await click("Send as ordinary chat");
+  await click("Send message");
+  const sent = requests.filter((item) => item.path === "/message");
+  expect(sent).toHaveLength(2);
+  expect(sent[0]?.body).toMatchObject({ responsibilityId: "budget" });
+  expect(sent[1]?.body).not.toHaveProperty("responsibilityId");
+  expect(sent[1]?.body.requestId).not.toBe(sent[0]?.body.requestId);
+});
+
+it("offers only Deny for an assignment approval that can no longer start", async () => {
+  state = {
+    ...snapshot(),
+    approvals: [
+      {
+        approvalId: "stale1",
+        summary: "Harness task: Old budget brief",
+        action: "harness-task",
+        payload: { title: "Old budget brief", responsibilityId: "budget" },
+        notStartable: "“Budget review” was cancelled.",
+      },
+    ],
+  };
+  onPost = async () => Response.json({ ok: true });
+  await render();
+  expect(container.textContent).toContain(
+    "Can't start: “Budget review” was cancelled. Approving won't run it",
+  );
+  expect(() => button("Approve")).toThrow();
+  await click("Deny");
+  expect(requests).toEqual([{ path: "/approvals/stale1", body: { approved: false } }]);
+});
