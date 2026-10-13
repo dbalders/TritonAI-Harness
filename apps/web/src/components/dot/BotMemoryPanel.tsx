@@ -154,7 +154,7 @@ export function BotMemoryPanel({
   const [error, setError] = useState<string | null>(null);
   const inFlight = useRef(false);
   const current = editing ? memories.find((item) => item.memoryId === editing.memoryId) : undefined;
-  const changed = editing && current?.version !== editing.version;
+  const changed = editing && (!current || current.version > editing.version);
   return (
     <details className="shrink-0 rounded-xl border px-3 py-2">
       <summary className="cursor-pointer text-sm font-medium">

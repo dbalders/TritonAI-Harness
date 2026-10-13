@@ -5,7 +5,7 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 
 export const MAX_BOT_ATTACHMENT_BYTES = 4 * 1024 * 1024;
-export const MAX_BOT_ATTACHMENTS = 3;
+const MAX_BOT_ATTACHMENTS = 3;
 const outputMimeTypes: Record<string, string> = {
   ".png": "image/png",
   ".jpg": "image/jpeg",

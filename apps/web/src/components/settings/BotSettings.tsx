@@ -59,6 +59,7 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [chosenProjectId, setChosenProjectId] = useState<string | null>(null);
+  const changingProject = useRef(false);
   const { data: local, refresh: refreshLocal } = useEnvironmentQuery(
     environmentId ? serverEnvironment.botTaskComputer({ environmentId, input: {} }) : null,
   );
@@ -154,19 +155,31 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
   };
 
   const chooseProject = async (value: string) => {
-    setChosenProjectId(value);
+    if (busy || changingProject.current) return;
     if (
       !environmentId ||
       !localForService ||
       localForService.state === "off" ||
       localForService.state === "replaced"
-    )
+    ) {
+      setChosenProjectId(value);
       return;
-    const result = await setTaskProject({ environmentId, input: { projectId: value } });
-    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-      setError(failureMessage(result, "Could not change the project."));
     }
-    refreshLocal();
+    changingProject.current = true;
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await setTaskProject({ environmentId, input: { projectId: value } });
+      if (!mounted.current || (session && !isCurrentSession(session.ownerToken))) return;
+      setChosenProjectId(result._tag === "Success" ? value : null);
+      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+        setError(failureMessage(result, "Could not change the project."));
+      }
+      refreshLocal();
+    } finally {
+      changingProject.current = false;
+      if (mounted.current) setBusy(false);
+    }
   };
 
   const setWarning = async (enabled: boolean) => {
@@ -246,10 +259,10 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
         <SettingsRow
           title={local ? `This computer · ${local.deviceName}` : "This computer"}
           description={
-            otherComputer && !thisComputer
-              ? `${describeThisComputer(localForService)} Allow moves task running here from ${otherComputer}.`
-              : local && !localForService && local.state !== "off"
-                ? "This Harness is paired with a different Bot service or account. Choose Allow to pair it with the signed-in account."
+            local && !localForService && local.state !== "off"
+              ? "This Harness is paired with a different Bot service or account. Choose Allow to pair it with the signed-in account."
+              : otherComputer && !thisComputer
+                ? `${describeThisComputer(localForService)} Allow moves task running here from ${otherComputer}.`
                 : describeThisComputer(local ?? null)
           }
           status={error ? <span className="text-destructive">{error}</span> : undefined}
@@ -282,6 +295,7 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
           control={
             projects.length ? (
               <Select
+                disabled={busy}
                 value={projectId ?? ""}
                 onValueChange={(value) => {
                   if (typeof value === "string" && value) void chooseProject(value);

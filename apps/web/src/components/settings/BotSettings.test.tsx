@@ -3,11 +3,13 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 import type { ServerBotTaskComputerStatus } from "@t3tools/contracts";
+import { Cause } from "effect";
 
 const configuration = vi.hoisted(() => ({
   serviceUrl: "https://bot.example.test" as string | null,
   local: null as ServerBotTaskComputerStatus | null,
-  command: vi.fn(async () => ({ _tag: "Success" })),
+  projects: [] as Array<{ id: string; title: string; environmentId: string }>,
+  command: vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => ({ _tag: "Success" })),
 }));
 vi.mock("../dot/botService", () => ({ useBotServiceUrl: () => configuration.serviceUrl }));
 vi.mock("@tanstack/react-router", () => ({
@@ -18,7 +20,7 @@ vi.mock("@tanstack/react-router", () => ({
     select: (location: { pathname: string; hash: string; state: object }) => unknown;
   }) => select({ pathname: "/settings/tritonai-bot", hash: "", state: {} }),
 }));
-vi.mock("../../state/entities", () => ({ useProjects: () => [] }));
+vi.mock("../../state/entities", () => ({ useProjects: () => configuration.projects }));
 vi.mock("../../state/environments", () => ({
   usePrimaryEnvironmentId: () => "synthetic-environment",
   usePrimaryEnvironment: () => null,
@@ -64,7 +66,9 @@ beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   configuration.serviceUrl = firstUrl;
   configuration.local = null;
-  configuration.command.mockClear();
+  configuration.projects = [];
+  configuration.command.mockReset();
+  configuration.command.mockResolvedValue({ _tag: "Success" });
   sessionStorage.clear();
   saveDotSession(sessionStorage, firstUrl, firstSession);
   saveDotSession(sessionStorage, secondUrl, secondSession);
@@ -162,5 +166,97 @@ it.each(["signed out", "different service", "service disabled", "unreachable", "
       environmentId: "synthetic-environment",
       input: { apiUrl: configuration.serviceUrl, ownerToken: null },
     });
+  },
+);
+
+function projectPicker(): HTMLButtonElement {
+  return container.querySelector('[aria-label="Project for tasks"]')!;
+}
+
+async function chooseProject(title: string) {
+  await act(async () => projectPicker().click());
+  const option = Array.from(document.querySelectorAll<HTMLElement>('[role="option"]')).find(
+    (item) => item.textContent === title,
+  );
+  expect(option).toBeDefined();
+  await act(async () => option!.click());
+}
+
+it("retains the saved project after a failed change and accepts a later successful selection", async () => {
+  configuration.projects = ["Saved", "Rejected", "Accepted"].map((title) => ({
+    id: title.toLowerCase(),
+    title,
+    environmentId: "synthetic-environment",
+  }));
+  configuration.local = {
+    state: "idle",
+    deviceId: "local-device",
+    deviceName: "This Mac",
+    apiUrl: firstUrl,
+    userId: firstSession.email,
+    projectId: "saved",
+    currentTask: null,
+    lastCheckInAt: null,
+    message: null,
+  };
+  vi.spyOn(DotClient.prototype, "state").mockResolvedValue(state(firstSession.email));
+  let settle!: (result: unknown) => void;
+  configuration.command.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        settle = resolve;
+      }),
+  );
+  await act(async () => root.render(<BotSettings />));
+  await chooseProject("Rejected");
+  expect(configuration.command).toHaveBeenCalledExactlyOnceWith({
+    environmentId: "synthetic-environment",
+    input: { projectId: "rejected" },
+  });
+  expect(projectPicker().textContent).toContain("Saved");
+  expect(projectPicker().disabled).toBe(true);
+  await act(async () => projectPicker().click());
+  expect(configuration.command).toHaveBeenCalledTimes(1);
+  await act(async () =>
+    settle({ _tag: "Failure", cause: Cause.fail(new Error("Project save failed")) }),
+  );
+  expect(projectPicker().textContent).toContain("Saved");
+  expect(projectPicker().disabled).toBe(false);
+  expect(container.textContent).toContain("Project save failed");
+  await chooseProject("Accepted");
+  expect(projectPicker().textContent).toContain("Accepted");
+  expect(container.textContent).not.toContain("Project save failed");
+});
+
+it.each(["different service", "different account"])(
+  "discloses an existing pairing for a %s before describing another task computer",
+  async (scenario) => {
+    configuration.local = {
+      state: "idle",
+      deviceId: "local-device",
+      deviceName: "This Mac",
+      apiUrl: scenario === "different service" ? secondUrl : firstUrl,
+      userId: scenario === "different account" ? secondSession.email : firstSession.email,
+      projectId: "saved",
+      currentTask: null,
+      lastCheckInAt: null,
+      message: null,
+    };
+    vi.spyOn(DotClient.prototype, "state").mockResolvedValue({
+      ...state(firstSession.email),
+      taskComputer: {
+        deviceId: "remote-device",
+        deviceName: "Other Mac",
+        pairedAt: "2026-10-12T12:00:00Z",
+        online: true,
+      },
+    });
+    await act(async () => root.render(<BotSettings />));
+    expect(container.textContent).toContain(
+      "This Harness is paired with a different Bot service or account",
+    );
+    expect(container.textContent).not.toContain("Checking this computer");
+    expect(container.textContent).not.toContain("Allow moves task running here");
+    expect(container.textContent).toContain("Other Mac is online");
   },
 );

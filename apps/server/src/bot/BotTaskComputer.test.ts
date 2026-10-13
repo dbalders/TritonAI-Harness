@@ -15,7 +15,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as TestClock from "effect/testing/TestClock";
-import { HttpClient, HttpClientResponse } from "effect/unstable/http";
+import { HttpClient, HttpClientError, HttpClientResponse } from "effect/unstable/http";
 
 import { resolveAttachmentPath } from "../attachmentStore.ts";
 import { taskOutputDirectory } from "./botTaskFiles.ts";
@@ -60,18 +60,60 @@ const SavedOutputJournal = Schema.fromJsonString(
           structuredResult: Schema.optional(
             Schema.Struct({
               artifacts: Schema.Array(Schema.Struct({ label: Schema.String })),
+              blockers: Schema.Array(Schema.String),
             }),
           ),
         }),
         pendingOutputs: Schema.Array(
           Schema.Struct({ name: Schema.String, dataBase64: Schema.String }),
         ),
+        outputRetryUntil: Schema.optional(Schema.Number),
       }),
     ),
   }),
 );
 
 const decodeSavedOutputJournal = Schema.decodeEffect(SavedOutputJournal);
+const RecoveryJournalJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown));
+const decodeRecoveryJournal = Schema.decodeEffect(RecoveryJournalJson);
+const encodeRecoveryJournal = Schema.encodeEffect(RecoveryJournalJson);
+const decodeRecoveryHeld = Schema.decodeUnknownEffect(Schema.Array(Schema.Unknown));
+const encodeReportedJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const reportWithBlockers = () =>
+  `Finished report.\n\`\`\`bot-result\n${encodeReportedJson({ summary: "Finished report", blockers: Array.from({ length: 10 }, (_, index) => `Reported blocker ${index}`) })}\n\`\`\``;
+const readRecoveryJournal = Effect.gen(function* () {
+  const secrets = yield* ServerSecretStore.ServerSecretStore;
+  const raw = yield* secrets.get("tritonai-bot-task-computer");
+  return yield* decodeRecoveryJournal(new TextDecoder().decode(Option.getOrThrow(raw)));
+});
+const writeRecoveryJournal = (value: Record<string, unknown>) =>
+  Effect.gen(function* () {
+    const secrets = yield* ServerSecretStore.ServerSecretStore;
+    const json = yield* encodeRecoveryJournal(value);
+    yield* secrets.set("tritonai-bot-task-computer", new TextEncoder().encode(json));
+  });
+const appendRecoveredResult = (taskId: string, result: string) =>
+  Effect.gen(function* () {
+    const state = yield* readRecoveryJournal;
+    const held = yield* decodeRecoveryHeld(state.held);
+    yield* writeRecoveryJournal({
+      ...state,
+      held: [
+        ...held,
+        {
+          taskId,
+          claimId: `claim-${taskId}`,
+          title: taskId,
+          threadId: `${taskId}-thread`,
+          messageId: `${taskId}-message`,
+          claimedAt: "2026-10-08T06:00:00.000Z",
+          started: true,
+          outcome: { status: "completed", result },
+          pendingOutputs: [],
+        },
+      ],
+    });
+  });
 
 interface Call {
   readonly path: string;
@@ -92,6 +134,8 @@ class FakeBot {
   corruptAttachment = false;
   artifactStatus = 200;
   artifactStatuses: number[] = [];
+  malformedArtifactMetadata = false;
+  failArtifactTransport = false;
   loseArtifactReply = false;
   readonly artifactWrites = new Map<string, Record<string, unknown>>();
   current = "token-1";
@@ -147,7 +191,7 @@ class FakeBot {
         status: responseLost ? 503 : status,
         json: {
           attachment: {
-            attachmentId: `att_${"b".repeat(64)}`,
+            attachmentId: this.malformedArtifactMetadata ? "invalid" : `att_${"b".repeat(64)}`,
             name: body.name,
             mimeType: body.mimeType,
             size: Buffer.from(String(body.dataBase64), "base64").length,
@@ -178,25 +222,36 @@ class FakeBot {
     return Layer.succeed(
       HttpClient.HttpClient,
       HttpClient.make((request) =>
-        Effect.sync(() => {
-          const raw =
-            request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "{}";
-          const headers = Object.fromEntries(
-            Object.entries(request.headers).map(([key, value]) => [
-              key.toLowerCase(),
-              String(value),
-            ]),
-          );
-          const url = new URL(request.url);
-          assert.strictEqual(url.origin, API);
-          // @effect-diagnostics-next-line preferSchemaOverJson:off - reads the fake request body.
-          const body = JSON.parse(raw) as Record<string, unknown>;
-          const reply = this.handle(url.pathname, headers, body);
-          return HttpClientResponse.fromWeb(
-            request,
-            Response.json(reply.json, { status: reply.status }),
-          );
-        }),
+        this.failArtifactTransport && new URL(request.url).pathname.endsWith("/artifacts")
+          ? Effect.fail(
+              new HttpClientError.HttpClientError({
+                reason: new HttpClientError.TransportError({
+                  request,
+                  description: "Synthetic disconnected transport",
+                }),
+              }),
+            )
+          : Effect.sync(() => {
+              const raw =
+                request.body._tag === "Uint8Array"
+                  ? new TextDecoder().decode(request.body.body)
+                  : "{}";
+              const headers = Object.fromEntries(
+                Object.entries(request.headers).map(([key, value]) => [
+                  key.toLowerCase(),
+                  String(value),
+                ]),
+              );
+              const url = new URL(request.url);
+              assert.strictEqual(url.origin, API);
+              // @effect-diagnostics-next-line preferSchemaOverJson:off - reads the fake request body.
+              const body = JSON.parse(raw) as Record<string, unknown>;
+              const reply = this.handle(url.pathname, headers, body);
+              return HttpClientResponse.fromWeb(
+                request,
+                Response.json(reply.json, { status: reply.status }),
+              );
+            }),
       ),
     );
   }
@@ -314,6 +369,163 @@ const allow = (computer: BotTaskComputer.BotTaskComputer["Service"]) =>
   computer.allow({ apiUrl: API, ownerToken: "owner-session", projectId: PROJECT });
 
 it.layer(NodeServices.layer)("BotTaskComputer", (it) => {
+  for (const rejection of [413, 415, 422]) {
+    it.effect.skipIf(HostProcessPlatform.defaultValue() === "win32")(
+      `settles permanent upload ${rejection} per file and continues to the next assignment`,
+      () => {
+        const bot = new FakeBot(),
+          harness = new FakeHarness();
+        bot.tasks = [
+          { taskId: "permanent", title: "Report", prompt: "Return report" },
+          { taskId: "next", title: "Next", prompt: "Next task" },
+        ];
+        return Effect.gen(function* () {
+          yield* TestClock.setTime(START);
+          const computer = yield* BotTaskComputer.BotTaskComputer;
+          const config = yield* ServerConfig.ServerConfig;
+          yield* allow(computer);
+          const turn = harness.commands.find((command) => command.type === "thread.turn.start")!;
+          const output = taskOutputDirectory(config.stateDir, turn.threadId);
+          yield* Effect.tryPromise(() => NodeFSP.writeFile(NodePath.join(output, "a.txt"), "A"));
+          yield* Effect.tryPromise(() => NodeFSP.writeFile(NodePath.join(output, "b.txt"), "B"));
+          harness.finish(turn.threadId, reportWithBlockers());
+          bot.artifactStatuses = [rejection, 200];
+          yield* TestClock.adjust("61 seconds");
+          yield* computer.tick;
+          assert.strictEqual(bot.results[0]!.status, "completed");
+          const evidence = bot.results[0]!.structuredResult as {
+            artifacts: Array<{ label: string }>;
+            blockers: string[];
+          };
+          assert.deepEqual(
+            evidence.artifacts.map((item) => item.label),
+            ["b.txt"],
+          );
+          assert.lengthOf(evidence.blockers, 10);
+          assert.include(evidence.blockers[0]!, "could not accept output a.txt");
+          assert.deepEqual(
+            bot.calls
+              .filter((call) => call.path.endsWith("/artifacts"))
+              .map((call) => call.body.name),
+            ["a.txt", "b.txt"],
+          );
+          assert.strictEqual((yield* computer.getStatus).currentTask?.taskId, "next");
+          assert.lengthOf(harness.commands, 4);
+        }).pipe(Effect.provide(services(bot, harness)));
+      },
+    );
+  }
+
+  for (const failureKind of ["unavailable", "malformed", "transport"] as const) {
+    it.effect.skipIf(HostProcessPlatform.defaultValue() === "win32")(
+      `defers ${failureKind} uploads independently and settles a durable retry deadline`,
+      () => {
+        const bot = new FakeBot(),
+          harness = new FakeHarness();
+        bot.tasks = [
+          { taskId: "deferred", title: "Report", prompt: "Return report" },
+          { taskId: "next", title: "Next", prompt: "Next task" },
+        ];
+        return Effect.gen(function* () {
+          yield* TestClock.setTime(START);
+          const computer = yield* BotTaskComputer.BotTaskComputer;
+          const config = yield* ServerConfig.ServerConfig;
+          const secrets = yield* ServerSecretStore.ServerSecretStore;
+          yield* allow(computer);
+          const turn = harness.commands.find((command) => command.type === "thread.turn.start")!;
+          const output = taskOutputDirectory(config.stateDir, turn.threadId);
+          yield* Effect.tryPromise(() =>
+            NodeFSP.writeFile(NodePath.join(output, "report.txt"), "Preserved bytes"),
+          );
+          harness.finish(turn.threadId, reportWithBlockers());
+          if (failureKind === "unavailable") bot.artifactStatus = 503;
+          else if (failureKind === "malformed") bot.malformedArtifactMetadata = true;
+          else bot.failArtifactTransport = true;
+          yield* computer.tick;
+          if (failureKind === "malformed") {
+            // Recover a legacy journal that predates persisted upload deadlines.
+            const state = yield* readRecoveryJournal;
+            const held = yield* decodeRecoveryHeld(state.held);
+            const { outputRetryUntil: _oldDeadline, ...legacy } = held[0] as Record<
+              string,
+              unknown
+            >;
+            yield* writeRecoveryJournal({ ...state, held: [legacy] });
+          }
+          yield* appendRecoveredResult("other", "Other completed result");
+          const heartbeats = bot.calls.filter((call) => call.path === "/harness/heartbeat").length;
+          const claims = bot.calls.filter((call) => call.path === "/harness/tasks/claim").length;
+          yield* TestClock.adjust("2 minutes");
+          const restarted = yield* BotTaskComputer.make;
+          yield* restarted.tick;
+          assert.deepEqual(
+            bot.results.map((result) => result.taskId),
+            ["other"],
+          );
+          assert.isAbove(
+            bot.calls.filter((call) => call.path === "/harness/heartbeat").length,
+            heartbeats,
+          );
+          assert.strictEqual(
+            bot.calls.filter((call) => call.path === "/harness/tasks/claim").length,
+            claims,
+          );
+          let raw = yield* secrets.get("tritonai-bot-task-computer");
+          let saved = yield* decodeSavedOutputJournal(
+            new TextDecoder().decode(Option.getOrThrow(raw)),
+          );
+          assert.lengthOf(saved.held, 1);
+          assert.strictEqual(
+            saved.held[0]!.pendingOutputs[0]!.dataBase64,
+            Buffer.from("Preserved bytes").toString("base64"),
+          );
+          const deadline = saved.held[0]!.outputRetryUntil!;
+          assert.isAbove(deadline, START);
+          yield* TestClock.setTime(START + 12 * 3_600_000);
+          const again = yield* BotTaskComputer.make;
+          yield* again.tick;
+          raw = yield* secrets.get("tritonai-bot-task-computer");
+          saved = yield* decodeSavedOutputJournal(new TextDecoder().decode(Option.getOrThrow(raw)));
+          assert.strictEqual(saved.held[0]!.outputRetryUntil, deadline);
+          assert.strictEqual(
+            saved.held[0]!.pendingOutputs[0]!.dataBase64,
+            Buffer.from("Preserved bytes").toString("base64"),
+          );
+          const uploadCalls = bot.calls.filter((call) => call.path.endsWith("/artifacts")).length;
+          bot.resultStatus = 503;
+          yield* TestClock.setTime(deadline + 1);
+          yield* again.tick;
+          assert.strictEqual(
+            bot.calls.filter((call) => call.path.endsWith("/artifacts")).length,
+            uploadCalls,
+          );
+          assert.strictEqual(
+            bot.calls.filter((call) => call.path === "/harness/tasks/claim").length,
+            claims,
+          );
+          raw = yield* secrets.get("tritonai-bot-task-computer");
+          saved = yield* decodeSavedOutputJournal(new TextDecoder().decode(Option.getOrThrow(raw)));
+          assert.lengthOf(saved.held[0]!.pendingOutputs, 0);
+          assert.lengthOf(saved.held[0]!.outcome.structuredResult!.blockers, 10);
+          assert.include(
+            saved.held[0]!.outcome.structuredResult!.blockers[0]!,
+            "24 hours of retries",
+          );
+          assert.strictEqual(saved.held[0]!.outcome.status, "completed");
+          bot.resultStatus = 200;
+          yield* again.tick;
+          assert.deepEqual(
+            bot.results.map((result) => result.taskId),
+            ["other", "deferred"],
+          );
+          assert.include(String(bot.results[1]!.result), "Finished report");
+          assert.strictEqual((yield* again.getStatus).currentTask?.taskId, "next");
+          assert.lengthOf(harness.commands, 4);
+        }).pipe(Effect.provide(services(bot, harness)));
+      },
+    );
+  }
+
   it.effect(
     "returns Windows text results and input files with an explicit generated-output blocker",
     () => {
@@ -354,7 +566,7 @@ it.layer(NodeServices.layer)("BotTaskComputer", (it) => {
     },
   );
 
-  for (const rejection of ["expired", "replaced"] as const) {
+  for (const rejection of ["expired", "replaced", "expired-after-window"] as const) {
     it.effect.skipIf(HostProcessPlatform.defaultValue() === "win32")(
       `stops pairing after ${rejection} artifact-upload authentication while keeping the saved result for re-pairing`,
       () => {
@@ -397,9 +609,19 @@ it.layer(NodeServices.layer)("BotTaskComputer", (it) => {
           bot.replaced = false;
           bot.current = "repaired-token";
           bot.artifactStatus = 200;
+          if (rejection === "expired-after-window")
+            yield* TestClock.setTime(START + 25 * 3_600_000);
           yield* allow(computer);
           assert.strictEqual(bot.results[0]!.status, "completed");
           assert.include(String(bot.results[0]!.result), "Finished report");
+          if (rejection === "expired-after-window") {
+            const evidence = bot.results[0]!.structuredResult as {
+              artifacts: unknown[];
+              blockers: string[];
+            };
+            assert.lengthOf(evidence.artifacts, 0);
+            assert.include(evidence.blockers[0]!, "24 hours of retries");
+          }
           assert.lengthOf(harness.commands, 2);
         }).pipe(Effect.provide(services(bot, harness)));
       },
@@ -863,7 +1085,6 @@ it.layer(NodeServices.layer)("BotTaskComputer", (it) => {
         harness = new FakeHarness();
       bot.tasks = [
         { taskId: "first", title: "First", prompt: "First task" },
-        { taskId: "second", title: "Second", prompt: "Second task" },
         { taskId: "next", title: "Next", prompt: "Later task" },
       ];
       return Effect.gen(function* () {
@@ -875,8 +1096,8 @@ it.layer(NodeServices.layer)("BotTaskComputer", (it) => {
         bot.resultStatus = 503;
         yield* TestClock.adjust("30 seconds");
         yield* computer.tick;
-        const second = harness.commands.filter((command) => command.type === "thread.create")[1]!;
-        harness.finish(second.threadId, "Second result");
+        // Import a terminal receipt retained by an older worker, rather than claiming through an outage.
+        yield* appendRecoveredResult("second", "Second result");
         bot.resultStatus = 401;
         const callsBefore = bot.calls.length;
         yield* TestClock.adjust("2 minutes");
@@ -898,7 +1119,7 @@ it.layer(NodeServices.layer)("BotTaskComputer", (it) => {
         assert.include(String(bot.results[1]!.result), "Second result");
         assert.strictEqual(
           harness.commands.filter((command) => command.type === "thread.create").length,
-          3,
+          2,
         );
       }).pipe(Effect.provide(services(bot, harness)));
     },

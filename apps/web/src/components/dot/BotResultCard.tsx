@@ -7,9 +7,11 @@ import { botWebUrl } from "./dotEnhancements";
 /** A finished run and evidence of a correct outcome are separate facts. */
 export function BotResultCard({
   result,
+  fullReply,
   onDownload,
 }: {
   readonly result: DotStructuredResult;
+  readonly fullReply?: string | undefined;
   readonly onDownload?: (attachmentId: string) => Promise<unknown>;
 }) {
   const [busy, setBusy] = useState(false);
@@ -31,6 +33,12 @@ export function BotResultCard({
         </Badge>
       </div>
       <p className="whitespace-pre-wrap break-words">{result.summary}</p>
+      {fullReply?.trim() && (
+        <details>
+          <summary className="cursor-pointer font-medium">Full task reply</summary>
+          <p className="mt-2 whitespace-pre-wrap break-words">{fullReply}</p>
+        </details>
+      )}
       {(["artifact", "source"] as const).map((kind) => {
         const entries = [
           ...new Map(

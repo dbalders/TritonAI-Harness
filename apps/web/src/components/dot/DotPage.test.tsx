@@ -1477,3 +1477,385 @@ it("keeps an unavailable inbox target retryable and refuses resolved approvals",
   expect(container.querySelector("#bot-approval-old-approval")).toBeNull();
   expect(requests).toHaveLength(0);
 });
+
+it.each(["snapshot", "401"] as const)(
+  "ignores an older background %s after an action refresh succeeds",
+  async (outcome) => {
+    state = {
+      ...withPanels(),
+      tasks: [
+        {
+          taskId: "report",
+          title: "Report",
+          status: "completed",
+          createdAt: at,
+          updatedAt: at,
+          result: "Older task result",
+        },
+      ],
+    };
+    const oldSnapshot = state;
+    const previousFetch = globalThis.fetch;
+    let reads = 0;
+    let finishPoll!: (response: Response) => void;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>((input, init) => {
+        if (new URL(String(input)).pathname === "/state" && ++reads === 2)
+          return new Promise<Response>((resolve) => {
+            finishPoll = resolve;
+          });
+        return previousFetch(input, init);
+      }),
+    );
+    onPost = async (path) => {
+      if (path === "/pause")
+        state = {
+          ...state,
+          user: { ...state.user, paused: true, controlVersion: 4 },
+          tasks: [
+            {
+              ...state.tasks[0]!,
+              result: "Updated task result",
+              updatedAt: "2026-10-08T13:00:00Z",
+            },
+          ],
+        };
+      return Response.json({ ok: true });
+    };
+    await render();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2500);
+    });
+    await click("Pause bot");
+    expect(button("Resume bot").disabled).toBe(false);
+    await act(async () =>
+      finishPoll(
+        outcome === "snapshot"
+          ? Response.json({ ok: true, ...oldSnapshot })
+          : Response.json({ ok: false, error: "Obsolete poll expired." }, { status: 401 }),
+      ),
+    );
+    expect(container.textContent).toContain("Updated task result");
+    expect(container.textContent).not.toContain("Older task result");
+    expect(container.textContent).not.toContain("Obsolete poll expired.");
+    expect(button("Resume bot").disabled).toBe(false);
+    expect(JSON.parse(sessionStorage.getItem(`dot-session:${serviceUrl}`)!).ownerToken).toBe(
+      session.ownerToken,
+    );
+  },
+);
+
+it("waits for a slow background read and eventually applies it without overlapping polls", async () => {
+  state = withPanels();
+  const previousFetch = globalThis.fetch;
+  let reads = 0;
+  let finishPoll!: (response: Response) => void;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn<typeof fetch>((input, init) => {
+      if (new URL(String(input)).pathname === "/state" && ++reads === 2)
+        return new Promise<Response>((resolve) => {
+          finishPoll = resolve;
+        });
+      return previousFetch(input, init);
+    }),
+  );
+  await render();
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(10_000);
+  });
+  expect(reads).toBe(2);
+  await act(async () =>
+    finishPoll(
+      Response.json({
+        ok: true,
+        ...state,
+        user: { ...state.user, paused: true, controlVersion: 4 },
+      }),
+    ),
+  );
+  expect(button("Resume bot").disabled).toBe(false);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(2500);
+  });
+  expect(reads).toBe(3);
+});
+
+it("keeps newly loaded task evidence when an older state read finishes later", async () => {
+  state = {
+    ...withPanels(),
+    enhancements: { decisionInbox: true },
+    handling: {
+      ...withPanels().handling!,
+      items: [
+        {
+          kind: "harness-assignment",
+          id: "older-task",
+          title: "Older report",
+          state: "failed",
+          version: at,
+          controls: ["open"],
+          target: { kind: "task", id: "older-task" },
+        },
+      ],
+    },
+  };
+  const oldSnapshot = state;
+  const previousFetch = globalThis.fetch;
+  let reads = 0;
+  let finishPoll!: (response: Response) => void;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn<typeof fetch>((input, init) => {
+      if (new URL(String(input)).pathname === "/state" && ++reads === 2)
+        return new Promise<Response>((resolve) => {
+          finishPoll = resolve;
+        });
+      return previousFetch(input, init);
+    }),
+  );
+  const read = vi.fn(async () =>
+    Response.json({
+      ok: true,
+      task: {
+        taskId: "older-task",
+        title: "Older report",
+        status: "completed",
+        createdAt: at,
+        updatedAt: "2026-10-08T13:00:00Z",
+        detail: { kind: "harness-task" },
+        result: "Latest returned evidence",
+      },
+    }),
+  );
+  onTaskRead = read;
+  await render();
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(2500);
+  });
+  await click("Open Older report");
+  await act(async () => finishPoll(Response.json({ ok: true, ...oldSnapshot })));
+  expect(container.textContent).toContain("Latest returned evidence");
+  expect(container.querySelector<HTMLDetailsElement>("#bot-task-older-task")!.open).toBe(true);
+  await click("Open Older report");
+  expect(read).toHaveBeenCalledTimes(1);
+});
+
+it("keeps the full long reply expandable alongside structured task evidence", async () => {
+  const fullReply = `${"Detailed report paragraph.\n".repeat(300)}Final recommendation beyond the summary.`;
+  state = {
+    ...snapshot(),
+    enhancements: { resultCards: true },
+    tasks: [
+      {
+        taskId: "long-report",
+        title: "Long report",
+        status: "completed",
+        createdAt: at,
+        updatedAt: at,
+        result: fullReply,
+        structuredResult: {
+          version: 1,
+          summary: fullReply.slice(0, 4000),
+          execution: {
+            status: "completed",
+            threadId: "report-thread",
+            messageId: "report-message",
+          },
+          verification: { status: "unverified" },
+          artifacts: [],
+          checks: [],
+          blockers: ["Review all recommendations"],
+        },
+      },
+    ],
+  };
+  await render();
+  const task = container.querySelector<HTMLDetailsElement>("#bot-task-long-report")!;
+  await act(async () => task.querySelector("summary")!.click());
+  const reply = [...task.querySelectorAll<HTMLDetailsElement>("details")].find(
+    (details) => details.querySelector("summary")?.textContent === "Full task reply",
+  )!;
+  expect(reply.open).toBe(false);
+  await act(async () => reply.querySelector("summary")!.click());
+  expect(reply.open).toBe(true);
+  expect(reply.querySelector("p")!.textContent).toBe(fullReply);
+  expect(task.textContent).toContain("Final recommendation beyond the summary.");
+  expect(task.textContent).toContain("Not independently verified");
+  expect(task.textContent).toContain("Review all recommendations");
+});
+
+it("edits a canonical memory newer than the poll but still rejects a later version conflict", async () => {
+  state = {
+    ...snapshot(),
+    enhancements: { memoryCorrection: true },
+    dotMemory: [
+      {
+        memoryId: "memory1",
+        version: 1,
+        text: "Older list wording",
+        status: "active",
+        kind: "fact",
+      },
+    ],
+  };
+  const previousFetch = globalThis.fetch;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn<typeof fetch>((input, init) =>
+      new URL(String(input)).pathname === "/owner-memory/memory1"
+        ? Promise.resolve(
+            Response.json({
+              ok: true,
+              memory: { ...state.dotMemory![0]!, version: 2, text: "Newest canonical wording" },
+            }),
+          )
+        : previousFetch(input, init),
+    ),
+  );
+  await render();
+  await click("Edit memory");
+  expect(
+    container.querySelector<HTMLTextAreaElement>('textarea[aria-label="Memory text"]')!.value,
+  ).toBe("Newest canonical wording");
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(2500);
+  });
+  expect(container.querySelector('form[aria-label="Correct memory"]')).not.toBeNull();
+  onPost = async () => {
+    state = {
+      ...state,
+      dotMemory: [{ ...state.dotMemory![0]!, version: 3, text: "Concurrent owner correction" }],
+    };
+    return Response.json({ ok: false, error: "This memory changed." }, { status: 409 });
+  };
+  await fill("Memory text", "My reviewed correction");
+  await act(async () =>
+    container
+      .querySelector<HTMLInputElement>('form[aria-label="Correct memory"] input[type="checkbox"]')!
+      .click(),
+  );
+  await submitForm("Correct memory");
+  expect(requests).toHaveLength(1);
+  expect(requests[0]!.body.expectedVersion).toBe(2);
+  expect(container.textContent).toContain("Concurrent owner correction");
+  expect(container.textContent).toContain("Close this correction and review its latest version");
+  expect(container.querySelector('form[aria-label="Correct memory"]')).toBeNull();
+});
+
+it("refuses a canonical memory response for another selected memory", async () => {
+  state = {
+    ...snapshot(),
+    enhancements: { memoryCorrection: true },
+    dotMemory: [{ memoryId: "memory1", version: 1, text: "Selected memory", status: "active" }],
+  };
+  const previousFetch = globalThis.fetch;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn<typeof fetch>((input, init) =>
+      new URL(String(input)).pathname === "/owner-memory/memory1"
+        ? Promise.resolve(
+            Response.json({ ok: true, memory: { ...state.dotMemory![0]!, memoryId: "memory2" } }),
+          )
+        : previousFetch(input, init),
+    ),
+  );
+  await render();
+  await click("Edit memory");
+  expect(container.querySelector('form[aria-label="Correct memory"]')).toBeNull();
+  expect(container.textContent).toContain(
+    "The selected memory is no longer available for editing.",
+  );
+  expect(requests).toHaveLength(0);
+});
+
+it.each(["task", "approval"] as const)(
+  "does not restore an older fetched %s over a newer action snapshot",
+  async (kind) => {
+    state = {
+      ...withPanels(),
+      enhancements: { decisionInbox: true },
+      handling: {
+        ...withPanels().handling!,
+        items: [
+          {
+            kind: kind === "task" ? "harness-assignment" : "approval",
+            id: "pending-read",
+            title: "Pending read",
+            state: "waiting-for-you",
+            version: at,
+            controls: ["open"],
+            target: { kind, id: "pending-read" },
+          },
+        ],
+      },
+    };
+    let finishRead!: (response: Response) => void;
+    const read = async () =>
+      new Promise<Response>((resolve) => {
+        finishRead = resolve;
+      });
+    if (kind === "task") onTaskRead = read;
+    else onApprovalRead = read;
+    onPost = async (path) => {
+      if (path === "/pause")
+        state = {
+          ...state,
+          user: { ...state.user, paused: true, controlVersion: 4 },
+          handling: { ...state.handling!, items: [] },
+          tasks:
+            kind === "task"
+              ? [
+                  {
+                    taskId: "pending-read",
+                    title: "Current report",
+                    status: "completed",
+                    createdAt: at,
+                    updatedAt: "2026-10-08T13:00:00Z",
+                    detail: { kind: "harness-task" },
+                    result: "Current task evidence",
+                  },
+                ]
+              : [],
+        };
+      return Response.json({ ok: true });
+    };
+    await render();
+    await click("Open Pending read");
+    await click("Pause bot");
+    await act(async () =>
+      finishRead(
+        Response.json(
+          kind === "task"
+            ? {
+                ok: true,
+                task: {
+                  taskId: "pending-read",
+                  title: "Old report",
+                  status: "completed",
+                  createdAt: at,
+                  updatedAt: at,
+                  detail: { kind: "harness-task" },
+                  result: "Obsolete task evidence",
+                },
+              }
+            : {
+                ok: true,
+                approval: {
+                  approvalId: "pending-read",
+                  status: "pending",
+                  summary: "Obsolete approval",
+                  action: "harness-task",
+                  payload: {},
+                },
+              },
+        ),
+      ),
+    );
+    expect(container.textContent).not.toContain("Obsolete");
+    if (kind === "task") expect(container.textContent).toContain("Current task evidence");
+    else expect(container.querySelector("#bot-approval-pending-read")).toBeNull();
+    expect(button("Resume bot").disabled).toBe(false);
+  },
+);

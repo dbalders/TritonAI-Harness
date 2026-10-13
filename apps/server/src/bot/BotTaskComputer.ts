@@ -91,6 +91,8 @@ const HEARTBEAT_INTERVAL_MS = 60_000;
 /** The longest claim the bot grants; a late result is still accepted after it lapses. */
 const LEASE_SECONDS = 7200;
 const REQUEST_TIMEOUT = Duration.seconds(15);
+/** Retry uploads for one day after capturing the completed turn, then report the missing files. */
+const OUTPUT_RETRY_WINDOW_MS = 24 * 3_600_000;
 const PROJECT_GONE = "The project for TritonAI Bot tasks no longer exists.";
 
 const Outcome = Schema.Struct({
@@ -116,6 +118,7 @@ const Held = Schema.Struct({
       }),
     ).check(Schema.isMaxLength(3)),
   ),
+  outputRetryUntil: Schema.optional(Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0))),
 });
 const Stored = Schema.Struct({
   version: Schema.Literal(1),
@@ -281,7 +284,8 @@ export const make = Effect.gen(function* () {
   const getStatus = Effect.gen(function* () {
     const stored = yield* readStored.pipe(Effect.orElseSucceed(() => null));
     const run = yield* Ref.get(status);
-    const current = stored?.held.find((task) => task.outcome === null) ?? null;
+    const current =
+      stored?.held.find((task) => task.outcome === null || task.pendingOutputs?.length) ?? null;
     const state: ServerBotTaskComputerState = !stored
       ? "off"
       : stored.replaced
@@ -332,7 +336,7 @@ export const make = Effect.gen(function* () {
   const settleHeld = (initial: Stored, now: number) =>
     Effect.gen(function* () {
       let stored = initial;
-      for (const original of initial.held) {
+      tasks: for (const original of initial.held) {
         let task = original;
         const saveTask = (next: typeof task) =>
           Effect.gen(function* () {
@@ -379,56 +383,95 @@ export const make = Effect.gen(function* () {
               ...outcome,
               structuredResult: {
                 ...outcome.structuredResult,
-                blockers: [...outcome.structuredResult.blockers, ...outputs.blockers].slice(0, 10),
+                blockers: [...outputs.blockers, ...outcome.structuredResult.blockers].slice(0, 10),
               },
             };
           // Capture the receipt and exact bytes atomically before any remote upload.
           // Later thread edits, deletion, or staged-file changes cannot alter delivery.
-          yield* saveTask({ ...task, outcome, pendingOutputs: outputs.files });
+          yield* saveTask({
+            ...task,
+            outcome,
+            pendingOutputs: outputs.files,
+            outputRetryUntil: now + OUTPUT_RETRY_WINDOW_MS,
+          });
         }
+        // Existing journals get one durable deadline; restarting never resets the retry window.
+        if (task.pendingOutputs?.length && task.outputRetryUntil === undefined)
+          yield* saveTask({ ...task, outputRetryUntil: now + OUTPUT_RETRY_WINDOW_MS });
         while (task.pendingOutputs?.length) {
           const file = task.pendingOutputs[0]!;
           const outcome = task.outcome!;
-          if (!outcome.structuredResult)
-            return yield* failure("Task output journal has no execution receipt.");
+          if (!outcome.structuredResult) {
+            yield* saveTask({
+              ...task,
+              pendingOutputs: [],
+              outcome: {
+                ...outcome,
+                result: `${outcome.result}\n\nTask output files could not be uploaded because their execution receipt is missing. Open the Harness thread for them.`,
+              },
+            });
+            break;
+          }
+          if (now > task.outputRetryUntil!) {
+            yield* saveTask({
+              ...task,
+              pendingOutputs: [],
+              outcome: {
+                ...outcome,
+                structuredResult: {
+                  ...outcome.structuredResult,
+                  blockers: [
+                    "Task output uploads could not be completed after 24 hours of retries. Open the Harness thread on the task computer to retrieve the files.",
+                    ...outcome.structuredResult.blockers,
+                  ].slice(0, 10),
+                },
+              },
+            });
+            break;
+          }
           const reply = yield* post(
             `${stored.apiUrl}/harness/tasks/${task.taskId}/artifacts`,
             workerHeaders(stored),
             { claimId: task.claimId, ...file },
-          );
-          if (yield* handleRejection(stored, reply)) {
-            return { ...stored, active: false, replaced: reply.json.replaced === true };
+          ).pipe(Effect.option);
+          if (Option.isNone(reply)) continue tasks;
+          if (yield* handleRejection(stored, reply.value)) {
+            return { ...stored, active: false, replaced: reply.value.json.replaced === true };
           }
           const evidence = outcome.structuredResult;
           if (
-            reply.status === 404 ||
-            reply.status === 400 ||
-            reply.status === 403 ||
-            reply.status === 409
+            reply.value.status === 404 ||
+            reply.value.status === 400 ||
+            reply.value.status === 403 ||
+            reply.value.status === 409 ||
+            reply.value.status === 413 ||
+            reply.value.status === 415 ||
+            reply.value.status === 422
           ) {
             yield* saveTask({
               ...task,
-              pendingOutputs: reply.status === 404 ? [] : task.pendingOutputs.slice(1),
+              pendingOutputs: reply.value.status === 404 ? [] : task.pendingOutputs.slice(1),
               outcome: {
                 ...outcome,
                 structuredResult: {
                   ...evidence,
                   blockers: [
-                    ...evidence.blockers,
-                    reply.status === 404
+                    reply.value.status === 404
                       ? "This Bot service does not support downloadable task files yet."
                       : `The Bot could not accept output ${file.name}. Open the Harness thread for that file.`,
+                    ...evidence.blockers,
                   ].slice(0, 10),
                 },
               },
             });
             continue;
           }
-          if (reply.status !== 200)
-            return yield* failure(
-              "Could not upload a task output. Retrying without rerunning the task.",
-            );
-          const attachment = yield* decodeAttachmentMetadata(reply.json.attachment);
+          if (reply.value.status !== 200) continue tasks;
+          const metadata = yield* decodeAttachmentMetadata(reply.value.json.attachment).pipe(
+            Effect.option,
+          );
+          if (Option.isNone(metadata)) continue tasks;
+          const attachment = metadata.value;
           // Persist each receipt before proceeding. If its acknowledgement or journal
           // write is lost, the service's task/content-scoped ID settles an identical retry.
           yield* saveTask({
@@ -663,7 +706,8 @@ export const make = Effect.gen(function* () {
       if (yield* handleRejection(stored, reply.value)) return;
       yield* note({ state: "idle", message: null, lastCheckInAt: isoAt(now), lastCheckInMs: now });
     }
-    if (stored.held.some((task) => task.outcome === null)) return;
+    // Do not accumulate more byte journals or delivery receipts during a service outage.
+    if (stored.held.length) return;
     if (now - run.lastClaimMs < CLAIM_INTERVAL_MS) return;
     if (!(yield* projectExists(stored.projectId))) {
       return yield* note({

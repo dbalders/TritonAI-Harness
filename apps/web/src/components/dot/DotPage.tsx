@@ -99,6 +99,8 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
   const [busyFeedback, setBusyFeedback] = useState<string | null>(null);
   const pendingMessage = useRef<PendingMessage | null>(null);
   const acceptedRunIds = useRef(new Set<string>());
+  const stateRequestSequence = useRef(0);
+  const latestSnapshot = useRef<DotState | null>(null);
   // Older followed tasks may fall outside /state's recent-task window. Load them only on demand.
   const taskEvidence = useRef(new Map<string, DotTask>());
   const approvalEvidence = useRef(new Map<string, DotApproval>());
@@ -143,6 +145,7 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
         approvalEvidence.current.clear();
         openingItems.current.clear();
         pendingOpen.current = null;
+        latestSnapshot.current = null;
       }
     },
     [serviceUrl],
@@ -167,10 +170,17 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
   );
 
   const refresh = useCallback(async () => {
-    if (!session || activeOwner.current !== session.ownerToken) return;
+    if (!session || activeOwner.current !== session.ownerToken || !mounted.current) return;
+    const requestSequence = ++stateRequestSequence.current;
     try {
       const result = await client.stateWithRunDetails(session, [...acceptedRunIds.current]);
-      if (activeOwner.current !== session.ownerToken) return;
+      if (
+        !mounted.current ||
+        activeOwner.current !== session.ownerToken ||
+        requestSequence !== stateRequestSequence.current
+      )
+        return;
+      latestSnapshot.current = result;
       for (const run of result.runs) {
         if (!isPendingDotRun(run)) acceptedRunIds.current.delete(run.runId);
       }
@@ -212,9 +222,14 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
       setState({ ...result, tasks: [...tasks.values()], approvals: [...approvals.values()] });
       setConnected(true);
     } catch (cause) {
-      if (activeOwner.current !== session.ownerToken) return;
+      if (
+        !mounted.current ||
+        activeOwner.current !== session.ownerToken ||
+        requestSequence !== stateRequestSequence.current
+      )
+        return;
       setConnected(false);
-      reportError(cause);
+      reportError(cause, session.ownerToken);
     }
   }, [client, reportError, session]);
 
@@ -546,6 +561,13 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
             throw new Error(
               "This approval is no longer pending. Refresh the inbox before continuing.",
             );
+          if (
+            !latestSnapshot.current?.handling?.items.some(
+              (value) => value.target?.kind === "approval" && value.target.id === target.id,
+            )
+          )
+            throw new Error("This approval changed. Refresh the inbox before continuing.");
+          stateRequestSequence.current += 1;
           cacheEvidence(approvalEvidence.current, target.id, approval);
           pendingOpen.current = { ...target, ownerToken };
           setState((current) =>
@@ -639,6 +661,19 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
         throw new Error("Your bot session changed. Sign in again to continue.");
       if (task.taskId !== taskId || task.detail?.kind !== "harness-task")
         throw new Error("The selected task evidence is unavailable.");
+      const knownTimes = [
+        taskEvidence.current.get(taskId)?.updatedAt,
+        latestSnapshot.current?.tasks.find((value) => value.taskId === taskId)?.updatedAt,
+        latestSnapshot.current?.handling?.items.find(
+          (value) => value.target?.kind === "task" && value.target.id === taskId,
+        )?.version,
+        ...(latestSnapshot.current?.responsibilities ?? [])
+          .filter((value) => value.source.taskId === taskId)
+          .map((value) => value.sourceEvidence?.updatedAt),
+      ];
+      if (knownTimes.some((value) => value && Date.parse(value) > Date.parse(task.updatedAt)))
+        throw new Error("The selected task evidence changed. Load it again before reviewing.");
+      stateRequestSequence.current += 1;
       cacheEvidence(taskEvidence.current, taskId, task);
       if (openAfterLoad)
         pendingOpen.current = { kind: "task", id: taskId, ownerToken: session.ownerToken };
@@ -922,6 +957,7 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
                               {state.enhancements?.resultCards && task.structuredResult ? (
                                 <BotResultCard
                                   result={task.structuredResult}
+                                  fullReply={task.result}
                                   onDownload={downloadAttachment}
                                 />
                               ) : (
@@ -1009,6 +1045,15 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
                         const result = await client.readEditableMemory(session, memoryId);
                         if (activeOwner.current !== session.ownerToken || !mounted.current)
                           throw new Error("Your bot session changed. Sign in again to continue.");
+                        if (
+                          result.memory.memoryId !== memoryId ||
+                          !Number.isSafeInteger(result.memory.version) ||
+                          result.memory.version < 1 ||
+                          result.memory.status !== "active"
+                        )
+                          throw new Error(
+                            "The selected memory is no longer available for editing.",
+                          );
                         return result;
                       } catch (cause) {
                         reportError(cause, session.ownerToken);
