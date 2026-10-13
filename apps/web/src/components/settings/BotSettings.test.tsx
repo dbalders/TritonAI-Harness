@@ -133,6 +133,27 @@ it("explains configuration when the Bot is off without sending any session", asy
   expect(fetchState).not.toHaveBeenCalled();
 });
 
+it("shows saved result delivery instead of claiming a finished task is still running", async () => {
+  configuration.local = {
+    state: "idle",
+    deviceId: "synthetic-device",
+    deviceName: "This Mac",
+    apiUrl: firstUrl,
+    userId: firstSession.email,
+    projectId: "synthetic-project",
+    currentTask: null,
+    lastCheckInAt: "2026-10-12T20:00:00Z",
+    message:
+      "Finished running “Report”. Its saved result and files are awaiting delivery to your bot. Retrying automatically.",
+  };
+  vi.spyOn(DotClient.prototype, "state").mockResolvedValue(state(firstSession.email));
+  await act(async () => root.render(<BotSettings />));
+  expect(container.textContent).toContain("Finished running “Report”");
+  expect(container.textContent).toContain("saved result and files are awaiting delivery");
+  expect(container.textContent).not.toContain("Running “Report” in a Harness thread");
+  expect(container.textContent).not.toContain("Waiting for approved tasks");
+});
+
 it.each(["signed out", "different service", "service disabled", "unreachable", "expired session"])(
   "can stop locally when %s without transmitting an unrelated owner token",
   async (scenario) => {

@@ -63,5 +63,8 @@ describe("bot settings wording", () => {
         currentTask: { taskId: "t", title: "Check releases", threadId: null, startedAt: "" },
       }),
     ).toBe("Running “Check releases” in a Harness thread.");
+    const deliveryMessage =
+      "Finished running “Report”. Its saved result and files are awaiting delivery to your bot. Retrying automatically.";
+    expect(describeThisComputer({ ...local, message: deliveryMessage })).toBe(deliveryMessage);
   });
 });

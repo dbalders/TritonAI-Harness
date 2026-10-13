@@ -284,8 +284,7 @@ export const make = Effect.gen(function* () {
   const getStatus = Effect.gen(function* () {
     const stored = yield* readStored.pipe(Effect.orElseSucceed(() => null));
     const run = yield* Ref.get(status);
-    const current =
-      stored?.held.find((task) => task.outcome === null || task.pendingOutputs?.length) ?? null;
+    const current = stored?.held.find((task) => task.outcome === null) ?? null;
     const state: ServerBotTaskComputerState = !stored
       ? "off"
       : stored.replaced
@@ -295,6 +294,11 @@ export const make = Effect.gen(function* () {
           : current
             ? "running"
             : (run.state ?? "idle");
+    const pendingDelivery =
+      state === "idle" ? stored?.held.find((task) => task.outcome !== null) : undefined;
+    const deliveryMessage = pendingDelivery
+      ? `Finished running “${taskThreadTitle(pendingDelivery.title)}”. Its saved result${pendingDelivery.pendingOutputs?.length ? " and files are" : " is"} awaiting delivery to your bot. Retrying automatically.`
+      : null;
     return {
       state,
       deviceId,
@@ -311,7 +315,7 @@ export const make = Effect.gen(function* () {
           }
         : null,
       lastCheckInAt: stored?.active ? run.lastCheckInAt : null,
-      message: run.message,
+      message: run.message ?? deliveryMessage,
     } satisfies ServerBotTaskComputerStatus;
   });
 

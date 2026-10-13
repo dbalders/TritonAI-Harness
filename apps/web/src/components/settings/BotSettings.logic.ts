@@ -37,9 +37,12 @@ export function describeThisComputer(status: ServerBotTaskComputerStatus | null)
         ? `Running “${status.currentTask.title}” in a Harness thread.`
         : "Running a task.";
     case "idle":
-      return status.lastCheckInAt
-        ? `Waiting for approved tasks. Last checked in ${formatRelativeTimeLabel(status.lastCheckInAt)}.`
-        : "Waiting for approved tasks.";
+      return (
+        status.message ??
+        (status.lastCheckInAt
+          ? `Waiting for approved tasks. Last checked in ${formatRelativeTimeLabel(status.lastCheckInAt)}.`
+          : "Waiting for approved tasks.")
+      );
   }
 }
 

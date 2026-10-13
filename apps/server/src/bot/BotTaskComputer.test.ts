@@ -458,6 +458,11 @@ it.layer(NodeServices.layer)("BotTaskComputer", (it) => {
           yield* TestClock.adjust("2 minutes");
           const restarted = yield* BotTaskComputer.make;
           yield* restarted.tick;
+          const status = yield* restarted.getStatus;
+          assert.strictEqual(status.state, "idle");
+          assert.isNull(status.currentTask);
+          assert.include(status.message!, "Finished running “Report”");
+          assert.include(status.message!, "saved result and files are awaiting delivery");
           assert.deepEqual(
             bot.results.map((result) => result.taskId),
             ["other"],
@@ -484,6 +489,11 @@ it.layer(NodeServices.layer)("BotTaskComputer", (it) => {
           yield* TestClock.setTime(START + 12 * 3_600_000);
           const again = yield* BotTaskComputer.make;
           yield* again.tick;
+          assert.isNull((yield* again.getStatus).currentTask);
+          assert.include(
+            (yield* again.getStatus).message!,
+            "saved result and files are awaiting delivery",
+          );
           raw = yield* secrets.get("tritonai-bot-task-computer");
           saved = yield* decodeSavedOutputJournal(new TextDecoder().decode(Option.getOrThrow(raw)));
           assert.strictEqual(saved.held[0]!.outputRetryUntil, deadline);
@@ -924,6 +934,10 @@ it.layer(NodeServices.layer)("BotTaskComputer", (it) => {
       bot.resultStatus = 503;
       yield* computer.tick;
       assert.lengthOf(bot.results, 0);
+      const awaitingResult = yield* computer.getStatus;
+      assert.strictEqual(awaitingResult.state, "idle");
+      assert.isNull(awaitingResult.currentTask);
+      assert.include(awaitingResult.message!, "saved result is awaiting delivery");
       bot.resultStatus = 200;
       yield* computer.tick;
       assert.deepInclude(bot.results[0]!, { taskId: "task-1", status: "failed" });
