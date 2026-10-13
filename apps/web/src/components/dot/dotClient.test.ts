@@ -69,6 +69,55 @@ describe("DotClient", () => {
     });
   });
 
+  it("uses the file recipe routes with a create request ID and the recipe's generation for changes", async () => {
+    const recipe = { recipeId: "fr_0123456789ab", generation: 4 } as Parameters<
+      DotClient["fileRecipeAction"]
+    >[1];
+    const mock = vi.fn<typeof fetch>().mockImplementation(async () =>
+      Response.json({
+        ok: true,
+        recipe,
+        runId: "run-1",
+        status: "queued",
+        folder: {},
+        subfolders: [],
+      }),
+    );
+    const client = new DotClient("https://bot.example.test", mock);
+    await client.recipeFolders(session);
+    await client.recipeFolders(session, "01ABC!12");
+    const input = {
+      name: "Inbox",
+      instructions: "Summarize",
+      expectedOutput: "Summary",
+      approval: "ask" as const,
+    };
+    await client.createFileRecipe(session, { ...input, folderId: "01ABC!12" }, "request-1");
+    await client.editFileRecipe(session, recipe, input);
+    await client.fileRecipeAction(session, recipe, "pause");
+    await client.fileRecipeAction(session, recipe, "stop");
+    await client.startFileRecipeEvent(session, recipe.recipeId, "0123456789abcdef01234567");
+    expect(mock.mock.calls.map(([url, init]) => [init?.method, url])).toEqual([
+      ["GET", "https://bot.example.test/file-recipes/folders"],
+      ["GET", "https://bot.example.test/file-recipes/folders?folderId=01ABC!12"],
+      ["POST", "https://bot.example.test/file-recipes"],
+      ["POST", "https://bot.example.test/file-recipes/fr_0123456789ab/edit"],
+      ["POST", "https://bot.example.test/file-recipes/fr_0123456789ab/pause"],
+      ["POST", "https://bot.example.test/file-recipes/fr_0123456789ab/stop"],
+      [
+        "POST",
+        "https://bot.example.test/file-recipes/fr_0123456789ab/events/0123456789abcdef01234567/start",
+      ],
+    ]);
+    expect(mock.mock.calls.slice(2).map(([, init]) => JSON.parse(String(init?.body)))).toEqual([
+      { ...input, folderId: "01ABC!12", requestId: "request-1" },
+      { ...input, expectedGeneration: 4 },
+      { expectedGeneration: 4 },
+      { expectedGeneration: 4 },
+      {},
+    ]);
+  });
+
   it("requires a stable Run now request ID and uses the scheduled-prompt routes", async () => {
     const mock = vi
       .fn<typeof fetch>()

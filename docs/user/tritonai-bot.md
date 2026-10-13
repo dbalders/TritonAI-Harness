@@ -50,6 +50,29 @@ Watches show their supported Teams commands. **What I can do** explains which
 features your account can use. If Microsoft access expires, **Reconnect Microsoft**
 opens the existing connections page.
 
+Use **File recipes** to turn each new file in one OneDrive folder into a Harness
+assignment. Choose a folder with at most 100 items, such as a dedicated inbox,
+then describe what to do with each file and the result you expect. Files already
+in the folder never start. The bot checks about every 5 minutes, waits until a
+new file stops changing, and sends its text to one assignment, with your
+approval or, if you choose, your Harness task rule and the automatic review.
+File text is treated as reference data, never as instructions. Each file shows
+what was read and what happened: waiting, needs your decision, assigned,
+skipped, or not started with a reason. Editing a file that already started does
+not start it again. Pause, Stop, or editing the instructions keeps drafted work
+from starting; work a Harness worker already picked up is not recalled. Files
+that arrive while the recipe or your bot is paused, or while the folder is too
+large to check, are listed but not started; use **Start** to run one. A recipe
+holds at most 20 unfinished files at once. When it is full, newer files stay in
+the folder, the recipe says how many are waiting, and they are picked up
+automatically once you approve or decline waiting decisions. Pausing also frees
+room, but then the waiting files are listed for you to start. A file the bot has
+handled, or one that was there when you created the recipe, never starts again
+on its own, even if it leaves the folder and comes back. If the bot can't
+confirm whether a file's decision or assignment was created, it shows
+**Checking what happened** and offers **Start** only after confirming that
+nothing was created.
+
 Use **Responsibilities** to follow a Harness task through an intended outcome.
 Describe what must be true before it is done and the next step you expect. The
 bot can observe the task and notify you when it needs attention. Review its

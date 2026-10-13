@@ -25,6 +25,8 @@ import {
 import { BotRunStatus } from "./BotRunStatus";
 import { BotHandlingPanel } from "./BotHandlingPanel";
 import { BotRoutinesPanel } from "./BotRoutinesPanel";
+import { BotFileRecipesPanel } from "./BotFileRecipesPanel";
+import type { DotFileRecipeInput } from "./dotFileRecipes";
 import { BotCapabilitiesPanel, BotMicrosoftBanner } from "./BotDiscoveryPanels";
 import type { DotHandlingItem } from "./dotHandling";
 import type { DotScheduledPrompt, DotScheduledPromptAction } from "./dotRoutines";
@@ -93,6 +95,7 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
   const fileInput = useRef<HTMLInputElement>(null);
   const [preferenceRun, setPreferenceRun] = useState<string | null>(null);
   const pendingRoutine = useRef<{ fingerprint: string; requestId: string } | null>(null);
+  const pendingFileRecipe = useRef<{ fingerprint: string; requestId: string } | null>(null);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -514,6 +517,17 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
       client.saveRoutine(owner, input, pendingRoutine.current!.requestId, prompt),
     );
     pendingRoutine.current = null;
+    return result;
+  };
+  // A retried create with the same input reuses its request ID, so the bot returns the same recipe.
+  const createFileRecipe = async (input: DotFileRecipeInput & { readonly folderId: string }) => {
+    const fingerprint = JSON.stringify(input);
+    if (!pendingFileRecipe.current || pendingFileRecipe.current.fingerprint !== fingerprint)
+      pendingFileRecipe.current = { fingerprint, requestId: randomUUID() };
+    const result = await mutate((owner) =>
+      client.createFileRecipe(owner, input, pendingFileRecipe.current!.requestId),
+    );
+    pendingFileRecipe.current = null;
     return result;
   };
   const responsibilityAction = (input: DotResponsibilityInput) =>
@@ -1257,6 +1271,44 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
                         return client.previewRoutine(session, input);
                       }}
                     />
+                    {state?.enhancements?.fileRecipes && (
+                      <BotFileRecipesPanel
+                        recipes={state.fileRecipes ?? []}
+                        approvals={state.approvals}
+                        tasks={state.tasks}
+                        oneDriveConnected={(() => {
+                          const capability = state.capabilities?.find(
+                            (item) => item.id === "onedrive",
+                          );
+                          return capability
+                            ? capability.availability.status === "available"
+                            : undefined;
+                        })()}
+                        onBrowse={(folderId) => {
+                          if (!session)
+                            return Promise.reject(new Error("Sign in again to continue."));
+                          return client.recipeFolders(session, folderId);
+                        }}
+                        onCreate={createFileRecipe}
+                        onEdit={(recipe, input) =>
+                          mutate((owner) => client.editFileRecipe(owner, recipe, input))
+                        }
+                        onAction={(recipe, action) =>
+                          mutate((owner) => client.fileRecipeAction(owner, recipe, action))
+                        }
+                        onStart={(recipe, event) =>
+                          mutate(async (owner) => {
+                            const started = await client.startFileRecipeEvent(
+                              owner,
+                              recipe.recipeId,
+                              event.key,
+                            );
+                            acceptedRunIds.current.add(started.runId);
+                            return started;
+                          })
+                        }
+                      />
+                    )}
                     {state?.enhancements?.responsibilities && (
                       <BotResponsibilitiesPanel
                         responsibilities={state.responsibilities ?? []}

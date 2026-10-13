@@ -11,6 +11,12 @@ import type {
 import type { DotCapability, DotMicrosoftState } from "./dotDiscovery";
 import type { DotHandlingItem, DotHandlingStopResult, DotHandlingView } from "./dotHandling";
 import type { DotScheduledPrompt, DotScheduledPromptAction, DotWatch } from "./dotRoutines";
+import type {
+  DotFileRecipe,
+  DotFileRecipeAction,
+  DotFileRecipeInput,
+  DotRecipeFolderListing,
+} from "./dotFileRecipes";
 
 export interface DotSession {
   readonly ownerToken: string;
@@ -185,7 +191,8 @@ export interface DotState {
         | "responsibilities"
         | "replyContinuation"
         | "attachments"
-        | "memoryCorrection",
+        | "memoryCorrection"
+        | "fileRecipes",
         boolean
       >
     >
@@ -210,6 +217,8 @@ export interface DotState {
   readonly handling?: DotHandlingView;
   readonly watches?: readonly DotWatch[];
   readonly scheduledPrompts?: readonly DotScheduledPrompt[];
+  /** Absent from bots without file recipes. */
+  readonly fileRecipes?: readonly DotFileRecipe[];
   readonly capabilities?: readonly DotCapability[];
   readonly capabilitiesError?: string;
 }
@@ -509,6 +518,57 @@ export class DotClient {
     input: Pick<DotRoutineInput, "schedule" | "timezone">,
   ): Promise<{ scheduleText: string; nextRunAt?: string }> {
     return this.request("/scheduled-prompts/preview", session, input);
+  }
+
+  /** One OneDrive folder level for choosing a recipe folder; omit the ID for the drive root. */
+  recipeFolders(session: DotSession, folderId?: string): Promise<DotRecipeFolderListing> {
+    return this.request(
+      `/file-recipes/folders${folderId ? `?folderId=${encodeURIComponent(folderId)}` : ""}`,
+      session,
+    );
+  }
+
+  /** The request ID makes a retried create return the same recipe. */
+  createFileRecipe(
+    session: DotSession,
+    input: DotFileRecipeInput & { readonly folderId: string },
+    requestId: string,
+  ): Promise<{ recipe: DotFileRecipe }> {
+    return this.request("/file-recipes", session, { ...input, requestId });
+  }
+
+  editFileRecipe(
+    session: DotSession,
+    recipe: DotFileRecipe,
+    input: DotFileRecipeInput,
+  ): Promise<{ recipe: DotFileRecipe }> {
+    return this.request(`/file-recipes/${encodeURIComponent(recipe.recipeId)}/edit`, session, {
+      ...input,
+      expectedGeneration: recipe.generation,
+    });
+  }
+
+  fileRecipeAction(
+    session: DotSession,
+    recipe: DotFileRecipe,
+    action: DotFileRecipeAction,
+  ): Promise<{ recipe: DotFileRecipe }> {
+    return this.request(`/file-recipes/${encodeURIComponent(recipe.recipeId)}/${action}`, session, {
+      expectedGeneration: recipe.generation,
+    });
+  }
+
+  /** The owner's explicit start for one file that did not start on its own. */
+  startFileRecipeEvent(
+    session: DotSession,
+    recipeId: string,
+    eventKey: string,
+  ): Promise<{ recipe: DotFileRecipe; runId: string; status: DotRun["status"] }> {
+    return this.request(
+      `/file-recipes/${encodeURIComponent(recipeId)}/events/${encodeURIComponent(eventKey)}/start`,
+      session,
+      {},
+    );
   }
 
   responsibility(
