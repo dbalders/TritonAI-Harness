@@ -320,6 +320,10 @@ function ServerSettingsDetail(props: { readonly page: SettingsPage }) {
                       />
                     ))}
                   </SettingsSection>
+                  <Text className="px-2 text-sm text-foreground-muted android:px-4">
+                    New threads remember your last composer mode. Default permissions apply until
+                    you choose one.
+                  </Text>
                 </>
               ) : null}
 

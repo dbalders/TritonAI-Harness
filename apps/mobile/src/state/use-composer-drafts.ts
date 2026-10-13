@@ -399,6 +399,7 @@ const PersistedComposerDraftsSchema = Schema.Struct({
   schemaVersion: Schema.Literal(COMPOSER_DRAFTS_SCHEMA_VERSION),
   drafts: Schema.Record(Schema.String, ComposerDraftSchema),
   stickyModelSelection: Schema.optional(ModelSelectionSchema),
+  stickyRuntimeMode: Schema.optional(RuntimeModeSchema),
   cloudAccountId: Schema.optional(Schema.String),
   signedOutDrafts: Schema.optional(
     Schema.Record(
@@ -425,9 +426,17 @@ export const composerDraftsAtom = Atom.make<Record<string, ComposerDraft>>({}).p
   Atom.withLabel("mobile:composer-drafts"),
 );
 
+export const composerDraftsLoadedAtom = Atom.make(false).pipe(Atom.keepAlive);
+export const composerDraftsLoadFailedAtom = Atom.make(false).pipe(Atom.keepAlive);
+
 export const stickyComposerModelSelectionAtom = Atom.make<ModelSelection | null>(null).pipe(
   Atom.keepAlive,
   Atom.withLabel("mobile:sticky-composer-model-selection"),
+);
+
+export const stickyComposerRuntimeModeAtom = Atom.make<RuntimeMode | null>(null).pipe(
+  Atom.keepAlive,
+  Atom.withLabel("mobile:sticky-composer-runtime-mode"),
 );
 
 interface SignedOutDrafts {
@@ -454,6 +463,8 @@ const persistenceQueue = new SerializedAsyncQueue();
 export function resetComposerDraftsLoadState(): void {
   loadPromise = null;
   persistRetryNeeded = false;
+  appAtomRegistry.set(composerDraftsLoadedAtom, false);
+  appAtomRegistry.set(composerDraftsLoadFailedAtom, false);
 }
 
 function attachmentContextRecord(
@@ -533,6 +544,20 @@ export function getComposerDraftSnapshot(draftKey: string): ComposerDraft {
   return normalizeDraft(appAtomRegistry.get(composerDraftsAtom)[draftKey]);
 }
 
+export function getPendingTaskRuntimeMode(
+  draftKey: string,
+  defaultRuntimeMode: RuntimeMode,
+  queuedRuntimeMode?: RuntimeMode,
+): RuntimeMode | null {
+  const explicitMode = getComposerDraftSnapshot(draftKey).runtimeMode ?? queuedRuntimeMode;
+  if (explicitMode !== undefined) return explicitMode;
+  const rememberedMode = appAtomRegistry.get(stickyComposerRuntimeModeAtom);
+  if (!appAtomRegistry.get(composerDraftsLoadedAtom)) {
+    return appAtomRegistry.get(composerDraftsLoadFailedAtom) ? rememberedMode : null;
+  }
+  return rememberedMode ?? defaultRuntimeMode;
+}
+
 export function isComposerDraftEmpty(draft: ComposerDraft): boolean {
   return isEmptyDraft(draft);
 }
@@ -608,6 +633,7 @@ export function migrateLegacyNewTaskDraft(
 export function decodePersistedComposerState(value: unknown): {
   readonly drafts: Record<string, ComposerDraft>;
   readonly stickyModelSelection: ModelSelection | null;
+  readonly stickyRuntimeMode: RuntimeMode | null;
   readonly cloudDrafts: ComposerCloudDraftState;
 } {
   const parsed = decodePersistedComposerDraftsDocument(value);
@@ -642,6 +668,7 @@ export function decodePersistedComposerState(value: unknown): {
         .filter(([, draft]) => !isEmptyDraft(draft) || (draft.importedShareIds?.length ?? 0) > 0),
     ),
     stickyModelSelection: parsed.stickyModelSelection ?? null,
+    stickyRuntimeMode: parsed.stickyRuntimeMode ?? null,
     cloudDrafts: {
       accountId: parsed.cloudAccountId ?? null,
       signedOut: Object.fromEntries(
@@ -680,6 +707,7 @@ async function loadPersistedComposerState(): Promise<
       return {
         drafts: {},
         stickyModelSelection: null,
+        stickyRuntimeMode: null,
         cloudDrafts: { accountId: null, signedOut: {} },
       };
     }
@@ -701,6 +729,7 @@ async function writePersistedComposerState(
   drafts: Record<string, ComposerDraft>,
   stickyModelSelection: ModelSelection | null,
   cloudDrafts = appAtomRegistry.get(composerCloudDraftsAtom),
+  stickyRuntimeMode = appAtomRegistry.get(stickyComposerRuntimeModeAtom),
 ): Promise<void> {
   let operation: ComposerDraftPersistenceError["operation"] = "open";
   try {
@@ -713,6 +742,7 @@ async function writePersistedComposerState(
       schemaVersion: COMPOSER_DRAFTS_SCHEMA_VERSION,
       drafts: nonEmptyDrafts,
       ...(stickyModelSelection ? { stickyModelSelection } : {}),
+      ...(stickyRuntimeMode ? { stickyRuntimeMode } : {}),
       ...(cloudDrafts.accountId ? { cloudAccountId: cloudDrafts.accountId } : {}),
       ...(Object.keys(cloudDrafts.signedOut).length > 0
         ? {
@@ -1000,6 +1030,7 @@ export function ensureComposerDraftsLoaded(): void {
   if (loadPromise !== null) {
     return;
   }
+  appAtomRegistry.set(composerDraftsLoadFailedAtom, false);
   const loading = loadPersistedComposerState().then((persisted) => {
     appAtomRegistry.set(composerCloudDraftsAtom, persisted.cloudDrafts);
     if (Object.keys(persisted.drafts).length > 0) {
@@ -1015,12 +1046,22 @@ export function ensureComposerDraftsLoaded(): void {
     ) {
       appAtomRegistry.set(stickyComposerModelSelectionAtom, persisted.stickyModelSelection);
     }
+    if (
+      persisted.stickyRuntimeMode !== null &&
+      appAtomRegistry.get(stickyComposerRuntimeModeAtom) === null
+    ) {
+      appAtomRegistry.set(stickyComposerRuntimeModeAtom, persisted.stickyRuntimeMode);
+    }
+    appAtomRegistry.set(composerDraftsLoadedAtom, true);
   });
   loadPromise = loading;
   // Handle fire-and-forget hook loads without swallowing failures from the
   // write and cleanup callers that await this same promise. A later call retries.
   void loading.catch((cause) => {
-    if (loadPromise === loading) loadPromise = null;
+    if (loadPromise === loading) {
+      loadPromise = null;
+      appAtomRegistry.set(composerDraftsLoadFailedAtom, true);
+    }
     console.warn(
       "[composer-drafts] failed to hydrate drafts",
       cause instanceof ComposerDraftPersistenceError
@@ -1248,6 +1289,11 @@ function updateComposerDrafts(
 
 export function setStickyComposerModelSelection(modelSelection: ModelSelection): void {
   appAtomRegistry.set(stickyComposerModelSelectionAtom, modelSelection);
+  schedulePersistComposerState();
+}
+
+export function setStickyComposerRuntimeMode(runtimeMode: RuntimeMode): void {
+  appAtomRegistry.set(stickyComposerRuntimeModeAtom, runtimeMode);
   schedulePersistComposerState();
 }
 
@@ -1936,4 +1982,18 @@ export function useStickyComposerModelSelection(): ModelSelection | null {
     ensureComposerDraftsLoaded();
   }, []);
   return selection;
+}
+
+export function useStickyComposerRuntimeMode(): {
+  readonly runtimeMode: RuntimeMode | null;
+  readonly loaded: boolean;
+  readonly failed: boolean;
+} {
+  const runtimeMode = useAtomValue(stickyComposerRuntimeModeAtom);
+  const loaded = useAtomValue(composerDraftsLoadedAtom);
+  const failed = useAtomValue(composerDraftsLoadFailedAtom);
+  useEffect(() => {
+    ensureComposerDraftsLoaded();
+  }, []);
+  return { runtimeMode, loaded, failed };
 }

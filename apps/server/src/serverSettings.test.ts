@@ -112,6 +112,50 @@ const recordProviderUsage = (provider: string, instanceId: string | null = provi
   });
 
 it.layer(NodeServices.layer)("server settings", (it) => {
+  it.effect("starts a fresh managed installation in supervised mode", () =>
+    Effect.gen(function* () {
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      const settings = yield* serverSettings.getSettings;
+
+      assert.equal(settings.defaultRuntimeMode, "approval-required");
+    }).pipe(Effect.provide(makeManagedServerSettingsLayer())),
+  );
+
+  for (const defaultRuntimeMode of [
+    "approval-required",
+    "auto-accept-edits",
+    "auto",
+    "full-access",
+  ] as const) {
+    it.effect(`preserves the ${defaultRuntimeMode} default and project override after reload`, () =>
+      Effect.gen(function* () {
+        const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+        const projectId = ProjectId.make("permission-preference-project");
+        yield* serverSettings.updateSettings({
+          defaultRuntimeMode,
+          projectSettingsOverrides: { [projectId]: { defaultRuntimeMode } },
+        });
+
+        const reloaded = yield* Effect.gen(function* () {
+          const fresh = yield* ServerSettingsModule.ServerSettingsService;
+          return yield* fresh.getSettings;
+        }).pipe(
+          Effect.provide(
+            Layer.fresh(
+              ServerSettingsModule.layerManagedTest({ TRITONAI_API_KEY: "managed-test-key" }),
+            ),
+          ),
+        );
+
+        assert.equal(reloaded.defaultRuntimeMode, defaultRuntimeMode);
+        assert.equal(
+          reloaded.projectSettingsOverrides[projectId]?.defaultRuntimeMode,
+          defaultRuntimeMode,
+        );
+      }).pipe(Effect.provide(makeManagedServerSettingsLayer())),
+    );
+  }
+
   it.effect("preserves context when reading a provider environment secret fails", () => {
     const platformCause = PlatformError.systemError({
       _tag: "PermissionDenied",

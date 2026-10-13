@@ -7,7 +7,6 @@ import { CommandId, ProjectId, ThreadId } from "./baseSchemas.ts";
 import {
   ProjectIconOverride,
   DEFAULT_PROVIDER_INTERACTION_MODE,
-  DEFAULT_RUNTIME_MODE,
   type ChatImageAttachment,
   ClientOrchestrationCommand,
   ModelSelection,
@@ -264,7 +263,7 @@ it.effect("decodes thread.turn.start defaults for provider and runtime mode", ()
       createdAt: "2026-01-01T00:00:00.000Z",
     });
     assert.strictEqual(parsed.modelSelection, undefined);
-    assert.strictEqual(parsed.runtimeMode, DEFAULT_RUNTIME_MODE);
+    assert.strictEqual(parsed.runtimeMode, "approval-required");
     assert.strictEqual(parsed.interactionMode, DEFAULT_PROVIDER_INTERACTION_MODE);
   }),
 );
@@ -719,7 +718,7 @@ it.effect("accepts bootstrap metadata in thread.turn.start", () =>
   }),
 );
 
-it.effect("decodes thread.created runtime mode for historical events", () =>
+it.effect("keeps full access for historical thread.created payloads without runtime mode", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeThreadCreatedPayload({
       threadId: "thread-1",
@@ -736,7 +735,7 @@ it.effect("decodes thread.created runtime mode for historical events", () =>
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
 
-    assert.strictEqual(parsed.runtimeMode, DEFAULT_RUNTIME_MODE);
+    assert.strictEqual(parsed.runtimeMode, "full-access");
     assert.strictEqual(parsed.modelSelection.instanceId, "codex");
   }),
 );
@@ -1432,7 +1431,7 @@ it.effect("accepts a source proposed plan reference in thread.turn.start", () =>
 );
 
 it.effect(
-  "decodes thread.turn-start-requested defaults for provider, runtime mode, and interaction mode",
+  "keeps full access for historical thread.turn-start-requested payloads without runtime mode",
   () =>
     Effect.gen(function* () {
       const parsed = yield* decodeThreadTurnStartRequestedPayload({
@@ -1441,7 +1440,7 @@ it.effect(
         createdAt: "2026-01-01T00:00:00.000Z",
       });
       assert.strictEqual(parsed.modelSelection, undefined);
-      assert.strictEqual(parsed.runtimeMode, DEFAULT_RUNTIME_MODE);
+      assert.strictEqual(parsed.runtimeMode, "full-access");
       assert.strictEqual(parsed.interactionMode, DEFAULT_PROVIDER_INTERACTION_MODE);
       assert.strictEqual(parsed.sourceProposedPlan, undefined);
     }),
@@ -1498,7 +1497,7 @@ it.effect("decodes latest turn source proposed plan metadata when present", () =
   }),
 );
 
-it.effect("decodes orchestration session runtime mode defaults", () =>
+it.effect("keeps full access for historical sessions without runtime mode", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeOrchestrationSession({
       threadId: "thread-1",
@@ -1510,7 +1509,7 @@ it.effect("decodes orchestration session runtime mode defaults", () =>
       lastError: null,
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
-    assert.strictEqual(parsed.runtimeMode, DEFAULT_RUNTIME_MODE);
+    assert.strictEqual(parsed.runtimeMode, "full-access");
   }),
 );
 
