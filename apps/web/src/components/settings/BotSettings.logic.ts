@@ -33,9 +33,11 @@ export function describeThisComputer(status: ServerBotTaskComputerStatus | null)
     case "error":
       return status.message ?? "TritonAI Bot tasks hit a problem. Retrying.";
     case "running":
-      return status.currentTask
-        ? `Running “${status.currentTask.title}” in a Harness thread.`
-        : "Running a task.";
+      return `${
+        status.currentTask
+          ? `Running “${status.currentTask.title}” in a Harness thread.`
+          : "Running a task."
+      }${status.message ? ` ${status.message}` : ""}`;
     case "idle":
       return (
         status.message ??

@@ -92,6 +92,17 @@ const writeRecoveryJournal = (value: Record<string, unknown>) =>
     const json = yield* encodeRecoveryJournal(value);
     yield* secrets.set("tritonai-bot-task-computer", new TextEncoder().encode(json));
   });
+const resultRecoveryKey = (taskId: string) =>
+  "tritonai-bot-result-recovery-" +
+  NodeCrypto.createHash("sha256")
+    .update(JSON.stringify([API, "owner@ucsd.edu", taskId, "claim-" + taskId]))
+    .digest("hex");
+const readResultRecovery = (taskId: string) =>
+  Effect.gen(function* () {
+    const secrets = yield* ServerSecretStore.ServerSecretStore;
+    const raw = yield* secrets.get(resultRecoveryKey(taskId));
+    return yield* decodeRecoveryJournal(new TextDecoder().decode(Option.getOrThrow(raw)));
+  });
 const appendRecoveredResult = (taskId: string, result: string) =>
   Effect.gen(function* () {
     const state = yield* readRecoveryJournal;
@@ -141,6 +152,7 @@ class FakeBot {
   current = "token-1";
   replaced = false;
   resultStatus = 200;
+  resultStatuses: number[] = [];
   sessionValid = true;
   ownerId = "owner@ucsd.edu";
 
@@ -160,8 +172,9 @@ class FakeBot {
     if (path === "/harness/pairing/revoke")
       return { status: 200, json: { ok: true, taskComputer: null } };
     if (path === "/harness/results") {
-      if (this.resultStatus === 200) this.results.push(body);
-      return { status: this.resultStatus, json: {} };
+      const status = this.resultStatuses.shift() ?? this.resultStatus;
+      if (status === 200) this.results.push(body);
+      return { status, json: {} };
     }
     if (this.replaced || worker !== this.current) {
       return { status: 401, json: { ok: false, replaced: this.replaced } };
@@ -945,6 +958,191 @@ it.layer(NodeServices.layer)("BotTaskComputer", (it) => {
       assert.strictEqual(harness.commands.length, 2);
     }).pipe(Effect.provide(services(bot, harness)));
   });
+
+  for (const rejection of [400, 413, 422] as const) {
+    it.effect(
+      "retains original evidence and settles result " +
+        rejection +
+        " with a text-only fallback before claiming new work",
+      () => {
+        const bot = new FakeBot(),
+          harness = new FakeHarness();
+        bot.tasks = [
+          { taskId: "rejected", title: "Rejected report", prompt: "Write report" },
+          { taskId: "next", title: "Next", prompt: "Continue work" },
+        ];
+        return Effect.gen(function* () {
+          yield* TestClock.setTime(START);
+          const computer = yield* BotTaskComputer.BotTaskComputer;
+          yield* allow(computer);
+          const first = harness.commands.find((command) => command.type === "thread.create")!;
+          harness.finish(first.threadId, reportWithBlockers());
+          bot.resultStatuses = [rejection, 200];
+          yield* TestClock.adjust("30 seconds");
+          yield* computer.tick;
+          const [original, fallback] = bot.calls.filter((call) => call.path === "/harness/results");
+          assert.exists(original!.body.structuredResult);
+          assert.isUndefined(fallback!.body.structuredResult);
+          assert.strictEqual(fallback!.body.status, original!.body.status);
+          assert.include(String(fallback!.body.result), String(original!.body.result));
+          assert.include(String(fallback!.body.result), "Structured evidence was not delivered");
+          assert.include(String(fallback!.body.result), first.threadId);
+          const receipt = yield* readResultRecovery("rejected");
+          assert.deepEqual(receipt.outcome, {
+            status: original!.body.status,
+            result: original!.body.result,
+            structuredResult: original!.body.structuredResult,
+          });
+          assert.strictEqual(receipt.rejectedStatus, rejection);
+          assert.isFalse(Object.hasOwn(receipt, "token"));
+          assert.isFalse(Object.hasOwn(receipt, "pendingOutputs"));
+          assert.notInclude(encodeReportedJson(receipt), "dataBase64");
+          assert.notInclude(encodeReportedJson(receipt), bot.current);
+          assert.strictEqual((yield* computer.getStatus).currentTask?.taskId, "next");
+          assert.strictEqual(harness.commands.length, 4);
+          const restarted = yield* BotTaskComputer.make;
+          yield* restarted.tick;
+          assert.deepEqual(yield* readResultRecovery("rejected"), receipt);
+          assert.strictEqual(harness.commands.length, 4);
+        }).pipe(Effect.provide(services(bot, harness)));
+      },
+    );
+  }
+
+  it.effect(
+    "retains a minimal delivery through temporary failure and restart without overwriting the immutable receipt",
+    () => {
+      const bot = new FakeBot(),
+        harness = new FakeHarness();
+      bot.tasks = [{ taskId: "retry", title: "Report", prompt: "Write report" }];
+      return Effect.gen(function* () {
+        yield* TestClock.setTime(START);
+        const computer = yield* BotTaskComputer.BotTaskComputer;
+        yield* allow(computer);
+        const thread = harness.commands.find((command) => command.type === "thread.create")!;
+        harness.finish(thread.threadId, reportWithBlockers());
+        bot.resultStatuses = [422, 503];
+        yield* computer.tick;
+        const receipt = yield* readResultRecovery("retry");
+        const saved = yield* readRecoveryJournal;
+        const held = yield* decodeRecoveryHeld(saved.held);
+        assert.deepInclude(held[0], { deliveryMode: "minimal" });
+        const firstFallback = bot.calls.filter((call) => call.path === "/harness/results")[1]!.body;
+        const restarted = yield* BotTaskComputer.make;
+        yield* restarted.tick;
+        assert.deepEqual(bot.results[0], firstFallback);
+        assert.deepEqual(yield* readResultRecovery("retry"), receipt);
+        assert.strictEqual(harness.commands.length, 2);
+        // A lost mode write must reuse the first archive rather than replace its timestamp/evidence.
+        yield* writeRecoveryJournal({
+          ...saved,
+          held: held.map((value) => {
+            const {
+              deliveryMode: _mode,
+              minimalResult: _minimal,
+              ...original
+            } = value as Record<string, unknown>;
+            return original;
+          }),
+        });
+        yield* TestClock.adjust("2 minutes");
+        bot.resultStatuses = [400, 409];
+        const again = yield* BotTaskComputer.make;
+        yield* again.tick;
+        assert.deepEqual(yield* readResultRecovery("retry"), receipt);
+        assert.lengthOf(yield* decodeRecoveryHeld((yield* readRecoveryJournal).held), 0);
+        assert.strictEqual(harness.commands.length, 2);
+      }).pipe(Effect.provide(services(bot, harness)));
+    },
+  );
+
+  it.effect(
+    "settles a permanently rejected minimal receipt locally with a persistent scoped warning while future work continues",
+    () => {
+      const bot = new FakeBot(),
+        harness = new FakeHarness();
+      bot.tasks = [
+        { taskId: "unaccepted", title: "Unaccepted report", prompt: "Write report" },
+        { taskId: "next", title: "Next", prompt: "Continue work" },
+      ];
+      return Effect.gen(function* () {
+        yield* TestClock.setTime(START);
+        const computer = yield* BotTaskComputer.BotTaskComputer;
+        yield* allow(computer);
+        const thread = harness.commands.find((command) => command.type === "thread.create")!;
+        harness.finish(thread.threadId, "Complete original report");
+        bot.resultStatuses = [400, 422];
+        yield* TestClock.adjust("30 seconds");
+        yield* computer.tick;
+        const receipt = yield* readResultRecovery("unaccepted");
+        assert.lengthOf(bot.results, 0);
+        let status = yield* computer.getStatus;
+        assert.strictEqual(status.currentTask?.taskId, "next");
+        assert.include(status.message!, "could not accept the result for “Unaccepted report”");
+        assert.notInclude(status.message!, "HTTP");
+        const nextThread = harness.commands.filter(
+          (command) => command.type === "thread.create",
+        )[1]!;
+        harness.finish(nextThread.threadId, "Next result");
+        yield* computer.tick;
+        yield* computer.stop({ ownerToken: null, apiUrl: null });
+        const restarted = yield* BotTaskComputer.make;
+        assert.notInclude((yield* restarted.getStatus).message ?? "", "Unaccepted report");
+        yield* allow(restarted);
+        status = yield* restarted.getStatus;
+        assert.include(status.message!, "Unaccepted report");
+        assert.deepEqual(yield* readResultRecovery("unaccepted"), receipt);
+        assert.strictEqual(
+          bot.calls.filter(
+            (call) => call.path === "/harness/results" && call.body.taskId === "unaccepted",
+          ).length,
+          2,
+        );
+        bot.ownerId = "different-owner@ucsd.edu";
+        yield* allow(restarted);
+        assert.notInclude((yield* restarted.getStatus).message ?? "", "Unaccepted report");
+        assert.deepEqual(yield* readResultRecovery("unaccepted"), receipt);
+        assert.strictEqual(harness.commands.length, 4);
+      }).pipe(Effect.provide(services(bot, harness)));
+    },
+  );
+
+  it.effect(
+    "keeps the original held receipt and sends no fallback when recovery storage fails",
+    () => {
+      const bot = new FakeBot(),
+        harness = new FakeHarness();
+      bot.tasks = [{ taskId: "retain", title: "Report", prompt: "Write report" }];
+      return Effect.gen(function* () {
+        yield* TestClock.setTime(START);
+        const real = yield* ServerSecretStore.ServerSecretStore;
+        const computer = yield* BotTaskComputer.make.pipe(
+          Effect.provideService(ServerSecretStore.ServerSecretStore, {
+            ...real,
+            create: (name, bytes) =>
+              name.startsWith("tritonai-bot-result-recovery-")
+                ? Effect.fail(
+                    new ServerSecretStore.SecretStorePersistError({
+                      resource: "synthetic recovery receipt",
+                    }),
+                  )
+                : real.create(name, bytes),
+          }),
+        );
+        yield* allow(computer);
+        const thread = harness.commands.find((command) => command.type === "thread.create")!;
+        harness.finish(thread.threadId, "Preserve this original result");
+        bot.resultStatuses = [400];
+        yield* computer.tick;
+        assert.strictEqual(bot.calls.filter((call) => call.path === "/harness/results").length, 1);
+        const held = yield* decodeRecoveryHeld((yield* readRecoveryJournal).held);
+        assert.lengthOf(held, 1);
+        assert.isFalse(Object.hasOwn(held[0] as object, "deliveryMode"));
+        assert.lengthOf(bot.results, 0);
+        assert.strictEqual(harness.commands.length, 2);
+      }).pipe(Effect.provide(services(bot, harness)));
+    },
+  );
 
   it.effect("reports a task whose turn was rejected as not run", () => {
     const bot = new FakeBot(),

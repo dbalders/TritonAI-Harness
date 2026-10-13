@@ -15,6 +15,7 @@
  */
 // @effect-diagnostics nodeBuiltinImport:off - The computer's name labels it for the owner.
 import * as NodeOS from "node:os";
+import * as NodeCrypto from "node:crypto";
 
 import {
   BotTaskResult,
@@ -109,6 +110,8 @@ const Held = Schema.Struct({
   claimedAt: Schema.String,
   started: Schema.Boolean,
   outcome: Schema.NullOr(Outcome),
+  deliveryMode: Schema.optional(Schema.Literal("minimal")),
+  minimalResult: Schema.optional(Schema.String.check(Schema.isMinLength(1))),
   pendingOutputs: Schema.optional(
     Schema.Array(
       Schema.Struct({
@@ -119,7 +122,13 @@ const Held = Schema.Struct({
     ).check(Schema.isMaxLength(3)),
   ),
   outputRetryUntil: Schema.optional(Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0))),
-});
+}).check(
+  Schema.makeFilter(
+    (task) =>
+      (task.deliveryMode === "minimal") === (task.minimalResult !== undefined) ||
+      "Incomplete saved result delivery mode.",
+  ),
+);
 const Stored = Schema.Struct({
   version: Schema.Literal(1),
   apiUrl: Schema.String,
@@ -130,11 +139,55 @@ const Stored = Schema.Struct({
   active: Schema.Boolean,
   replaced: Schema.Boolean,
   held: Schema.Array(Held),
+  deliveryWarning: Schema.optional(
+    Schema.Struct({
+      title: Schema.String,
+      threadId: Schema.String,
+      status: Schema.Literals([400, 413, 422]),
+    }),
+  ),
 });
 type Stored = typeof Stored.Type;
 const StoredJson = Schema.fromJsonString(Stored);
 const decodeStored = Schema.decodeUnknownEffect(StoredJson);
 const encodeStored = Schema.encodeEffect(StoredJson);
+const RecoveryReceipt = Schema.Struct({
+  version: Schema.Literal(1),
+  apiUrl: Schema.String,
+  userId: Schema.String,
+  taskId: Schema.String,
+  claimId: Schema.String,
+  title: Schema.String,
+  threadId: Schema.String,
+  messageId: Schema.String,
+  claimedAt: Schema.String,
+  outcome: Outcome,
+  rejectedAt: Schema.String,
+  rejectedStatus: Schema.Literals([400, 413, 422]),
+});
+const RecoveryReceiptJson = Schema.fromJsonString(RecoveryReceipt);
+const encodeRecoveryReceipt = Schema.encodeEffect(RecoveryReceiptJson);
+const decodeRecoveryReceipt = Schema.decodeUnknownEffect(RecoveryReceiptJson);
+const permanentResultRejection = (status: number): status is 400 | 413 | 422 =>
+  status === 400 || status === 413 || status === 422;
+
+function recoveryReceiptKey(stored: Stored, task: HeldTask): string {
+  return `tritonai-bot-result-recovery-${NodeCrypto.createHash("sha256")
+    .update(JSON.stringify([stored.apiUrl, stored.userId, task.taskId, task.claimId]))
+    .digest("hex")}`;
+}
+
+function minimalTaskResult(task: HeldTask & { readonly outcome: TaskOutcome }): string {
+  const notice = `The Bot rejected the detailed completion receipt. Structured evidence was not delivered. The original receipt is retained on this task computer. Open Harness thread “${taskThreadTitle(task.title)}” (${task.threadId}) for the full reply.`;
+  const complete = `${task.outcome.result}\n\n${notice}`;
+  // Check both the text limit and JSON escaping; control-heavy replies can exceed the request limit.
+  if (
+    Buffer.byteLength(complete) <= 95_000 &&
+    Buffer.byteLength(JSON.stringify(complete)) <= 250_000
+  )
+    return complete;
+  return `${task.outcome.result.slice(0, 4000)}\n\n[Reply truncated for delivery.]\n${notice}`;
+}
 
 const AttachmentMetadata = Schema.Struct({
   attachmentId: Schema.String.check(Schema.isPattern(/^att_[a-f0-9]{64}$/u)),
@@ -299,6 +352,10 @@ export const make = Effect.gen(function* () {
     const deliveryMessage = pendingDelivery
       ? `Finished running “${taskThreadTitle(pendingDelivery.title)}”. Its saved result${pendingDelivery.pendingOutputs?.length ? " and files are" : " is"} awaiting delivery to your bot. Retrying automatically.`
       : null;
+    const rejectedMessage =
+      stored?.active && stored.deliveryWarning
+        ? `Your bot could not accept the result for “${taskThreadTitle(stored.deliveryWarning.title)}”. The full result and evidence remain saved on this computer. Open “${taskThreadTitle(stored.deliveryWarning.title)}” in Harness to review it. Other assignments can continue.`
+        : null;
     return {
       state,
       deviceId,
@@ -315,18 +372,74 @@ export const make = Effect.gen(function* () {
           }
         : null,
       lastCheckInAt: stored?.active ? run.lastCheckInAt : null,
-      message: run.message ?? deliveryMessage,
+      message: run.message ?? rejectedMessage ?? deliveryMessage,
     } satisfies ServerBotTaskComputerStatus;
   });
 
   /** Saves the outcome first, so a failed delivery is retried rather than the task rerun. */
-  const deliver = (stored: Stored, task: HeldTask & { readonly outcome: TaskOutcome }) =>
+  const retainRejectedReceipt = (
+    stored: Stored,
+    task: HeldTask & { readonly outcome: TaskOutcome },
+    rejectedStatus: 400 | 413 | 422,
+    now: number,
+  ) =>
+    Effect.gen(function* () {
+      const key = recoveryReceiptKey(stored, task);
+      const validateExisting = (bytes: Uint8Array) =>
+        Effect.gen(function* () {
+          const receipt = yield* decodeRecoveryReceipt(new TextDecoder().decode(bytes));
+          if (
+            receipt.apiUrl !== stored.apiUrl ||
+            receipt.userId !== stored.userId ||
+            receipt.taskId !== task.taskId ||
+            receipt.claimId !== task.claimId
+          )
+            return yield* failure("Could not validate the retained original task receipt.");
+        });
+      const existing = yield* secrets.get(key);
+      if (Option.isSome(existing)) {
+        yield* validateExisting(existing.value);
+        return;
+      }
+      const json = yield* encodeRecoveryReceipt({
+        version: 1,
+        apiUrl: stored.apiUrl,
+        userId: stored.userId,
+        taskId: task.taskId,
+        claimId: task.claimId,
+        title: task.title,
+        threadId: task.threadId,
+        messageId: task.messageId,
+        claimedAt: task.claimedAt,
+        outcome: task.outcome,
+        rejectedAt: isoAt(now),
+        rejectedStatus,
+      });
+      yield* secrets.create(key, new TextEncoder().encode(json)).pipe(
+        Effect.catchIf(ServerSecretStore.isSecretAlreadyExistsError, () =>
+          Effect.gen(function* () {
+            const saved = yield* secrets.get(key);
+            if (Option.isNone(saved))
+              return yield* failure("Could not confirm the retained original task receipt.");
+            yield* validateExisting(saved.value);
+          }),
+        ),
+      );
+    });
+
+  const deliver = (
+    stored: Stored,
+    task: HeldTask & { readonly outcome: TaskOutcome },
+    minimalResult?: string,
+  ) =>
     post(`${stored.apiUrl}/harness/results`, workerHeaders(stored), {
       taskId: task.taskId,
       claimId: task.claimId,
       status: task.outcome.status,
-      result: task.outcome.result,
-      ...(task.outcome.structuredResult ? { structuredResult: task.outcome.structuredResult } : {}),
+      result: minimalResult ?? task.outcome.result,
+      ...(minimalResult === undefined && task.outcome.structuredResult
+        ? { structuredResult: task.outcome.structuredResult }
+        : {}),
     }).pipe(
       // 409 settles a completed or replaced claim. Keep results on 401 so re-pairing can redeliver them.
       Effect.tap((reply) =>
@@ -499,12 +612,47 @@ export const make = Effect.gen(function* () {
             },
           });
         }
-        const reply = yield* deliver(stored, { ...task, outcome: task.outcome! });
+        let reply = yield* deliver(
+          stored,
+          { ...task, outcome: task.outcome! },
+          task.deliveryMode === "minimal" ? task.minimalResult : undefined,
+        );
         if (reply === null) continue;
         if (yield* handleRejection(stored, reply)) {
           return { ...stored, active: false, replaced: reply.json.replaced === true };
         }
-        if (reply.status === 200 || reply.status === 409) {
+        if (permanentResultRejection(reply.status) && task.deliveryMode !== "minimal") {
+          // Preserve exact evidence, without credentials or staged file bytes, before changing delivery.
+          yield* retainRejectedReceipt(
+            stored,
+            { ...task, outcome: task.outcome! },
+            reply.status,
+            now,
+          );
+          yield* saveTask({
+            ...task,
+            deliveryMode: "minimal",
+            minimalResult: minimalTaskResult({ ...task, outcome: task.outcome! }),
+          });
+          reply = yield* deliver(stored, { ...task, outcome: task.outcome! }, task.minimalResult);
+          if (reply === null) continue;
+          if (yield* handleRejection(stored, reply))
+            return { ...stored, active: false, replaced: reply.json.replaced === true };
+        }
+        if (
+          reply.status === 200 ||
+          reply.status === 409 ||
+          (task.deliveryMode === "minimal" && permanentResultRejection(reply.status))
+        ) {
+          if (permanentResultRejection(reply.status))
+            stored = {
+              ...stored,
+              deliveryWarning: {
+                title: task.title,
+                threadId: task.threadId,
+                status: reply.status,
+              },
+            };
           stored = { ...stored, held: stored.held.filter((item) => item.taskId !== task.taskId) };
           yield* writeStored(stored);
         }
@@ -672,7 +820,11 @@ export const make = Effect.gen(function* () {
 
   const stopClaiming = (stored: Stored, replaced: boolean, message: string) =>
     Effect.gen(function* () {
-      yield* writeStored(stored.held.length ? { ...stored, active: false, replaced } : null);
+      yield* writeStored(
+        stored.held.length || stored.deliveryWarning
+          ? { ...stored, active: false, replaced }
+          : null,
+      );
       yield* note({ state: null, message, lastCheckInAt: null });
     });
 
@@ -694,7 +846,7 @@ export const make = Effect.gen(function* () {
     const now = yield* Clock.currentTimeMillis;
     const stored = yield* settleHeld(initial, now);
     if (!stored.active) {
-      if (!stored.held.length) yield* writeStored(null);
+      if (!stored.held.length && !stored.deliveryWarning) yield* writeStored(null);
       return;
     }
     const run = yield* Ref.get(status);
@@ -823,6 +975,9 @@ export const make = Effect.gen(function* () {
           active: true,
           replaced: false,
           held,
+          ...(previous?.apiUrl === apiUrl && previous.userId === userId && previous.deliveryWarning
+            ? { deliveryWarning: previous.deliveryWarning }
+            : {}),
         }).pipe(
           Effect.mapError(() => failure("Could not save this computer's TritonAI Bot pairing.")),
         );
@@ -855,7 +1010,9 @@ export const make = Effect.gen(function* () {
           }
         }
         yield* writeStored(
-          stored.held.length ? { ...stored, active: false, replaced: false } : null,
+          stored.held.length || stored.deliveryWarning
+            ? { ...stored, active: false, replaced: false }
+            : null,
         ).pipe(Effect.mapError(() => failure("Could not stop running TritonAI Bot tasks here.")));
         yield* note({ state: null, message, lastCheckInAt: null, lastCheckInMs: 0 });
       }),

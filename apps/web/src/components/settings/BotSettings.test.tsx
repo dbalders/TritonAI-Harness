@@ -154,6 +154,26 @@ it("shows saved result delivery instead of claiming a finished task is still run
   expect(container.textContent).not.toContain("Waiting for approved tasks");
 });
 
+it("keeps a rejected result notice visible while another Harness task is running", async () => {
+  configuration.local = {
+    state: "running",
+    deviceId: "synthetic-device",
+    deviceName: "This Mac",
+    apiUrl: firstUrl,
+    userId: firstSession.email,
+    projectId: "synthetic-project",
+    currentTask: { taskId: "next", title: "Next report", threadId: "next-thread", startedAt: "" },
+    lastCheckInAt: null,
+    message:
+      "Your bot could not accept the result for “Earlier report”. The full result and evidence remain saved on this computer. Open “Earlier report” in Harness to review it. Other assignments can continue.",
+  };
+  vi.spyOn(DotClient.prototype, "state").mockResolvedValue(state(firstSession.email));
+  await act(async () => root.render(<BotSettings />));
+  expect(container.textContent).toContain("Running “Next report” in a Harness thread");
+  expect(container.textContent).toContain("could not accept the result for “Earlier report”");
+  expect(container.textContent).toContain("full result and evidence remain saved");
+});
+
 it.each(["signed out", "different service", "service disabled", "unreachable", "expired session"])(
   "can stop locally when %s without transmitting an unrelated owner token",
   async (scenario) => {

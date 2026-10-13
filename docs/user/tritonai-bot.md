@@ -75,6 +75,14 @@ If uploads still fail, the Bot returns the original result with a missing-files
 blocker; retrieve those files from the output directory. The computer waits for
 saved results to be delivered before claiming another assignment.
 
+If your bot cannot accept a completed result, the task computer retains the full
+receipt and evidence locally in encrypted recovery storage before trying a
+text-only reply. This reply explains any missing structured evidence or shortened
+text. Open the original task thread in Harness to review the complete reply.
+If the text-only reply is also rejected, Settings shows a notice and later
+assignments can continue. The saved recovery receipt survives restarts; the task
+is not run again.
+
 Choose **Attach files** to include up to three documents or screenshots in a
 message, with a 4 MB limit per file. Supported files are TXT, Markdown, CSV, JSON,
 PDF, Word DOCX, PNG, JPEG, and WebP. Wait for the upload to finish, then send your
