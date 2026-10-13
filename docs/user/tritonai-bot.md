@@ -30,20 +30,53 @@ If the service is not accepting new users, sign-in tells you so; existing users
 can still sign in. The service also has daily usage limits per person and for
 all users together, and replies when a limit is reached.
 
-When your bot service supports it, the **Handling** panel shows work needing
-your attention, work in progress, upcoming items and recent results. Stop ends
-one item after confirmation. A stop request cannot recall an assignment already
-running in Harness or undo an action sent to another service. Pause keeps your
-saved work and blocks new execution until you resume.
+When your bot service supports it, the **Decision inbox** brings together work
+needing your attention, work in progress, upcoming items, and recent results.
+Review opens the existing approval or result. Approve and Deny still control
+whether an action may proceed. Stop ends one item after confirmation; it cannot
+recall an assignment already running or undo an action sent to another service.
+Pause keeps your saved work and blocks new execution until you resume. Older
+services show the original Handling view and the controls they support.
 
 Open **Watches & routines** to check monitoring freshness and manage scheduled
-prompts. Run now requests a run; its result arrives separately. Stop deletes a
-saved routine while keeping past results. Watches show their supported Teams
-commands. **What I can do** explains which features your account can use and
-which need a connection. Mark recent Handling results seen after reviewing them.
-For routines, mark results read after reading them in your conversation to reset
-the unread spending limit; a paused routine still needs Resume. If Microsoft access expires, **Reconnect Microsoft**
+prompts. Create a routine from a recipe or your own instructions, choose its
+schedule and timezone, and preview what it will ask the bot to produce. You can
+edit the instructions before saving and choose whether to hear about every run
+or only notable results. Connection notices explain when a recipe's sources
+need access. Run now requests a run; its result arrives separately. Stop deletes
+a saved routine while keeping past results. Mark results read after reviewing
+them to reset the unread spending limit; a paused routine still needs Resume.
+Watches show their supported Teams commands. **What I can do** explains which
+features your account can use. If Microsoft access expires, **Reconnect Microsoft**
 opens the existing connections page.
+
+Use **Responsibilities** to follow a Harness task through an intended outcome.
+Describe what must be true before it is done and the next step you expect. The
+bot can observe the task and notify you when it needs attention. Review its
+result against your criteria before marking the responsibility complete. Edit a
+responsibility as work changes, or snooze it and resume following later.
+Cancel closes the responsibility. These controls do not approve new actions or
+cancel the underlying Harness task.
+
+Task results keep execution status separate from verification. Expand a task to
+review its artifacts, source links, reported checks, and blockers. A finished run
+is not proof that the intended outcome is correct. Downloadable files come from
+the task computer; other artifacts and checks may be reported by the task agent.
+Review them before relying on the result.
+
+Choose **Attach files** to include up to three documents or screenshots in a
+message, with a 4 MB limit per file. Supported files are TXT, Markdown, CSV, JSON,
+PDF, Word DOCX, PNG, JPEG, and WebP. Wait for the upload to finish, then send your
+message. You can remove a selected file before sending. A failed send keeps your
+files selected so you can retry. Stored files are retained for 30 days.
+
+Open **Bot memory** to inspect a saved fact, preference, or instruction and its
+source. Edit a memory to correct its wording, then explicitly review the change
+before saving. Forget removes it from the bot's memory while leaving past chat
+messages intact. Useful and Not useful ratings record your judgment without
+changing the bot's instructions. To make feedback a lasting preference, choose
+**Save a preference…**, write what you want remembered, and review that wording.
+These memories are private to your bot.
 
 When your service supports task computers, open **Settings → TritonAI Bot** on
 that computer, choose a project and select **Allow**. This authorizes that Harness

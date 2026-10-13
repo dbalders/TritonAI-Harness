@@ -1,3 +1,11 @@
+import type { DotRoutineInput } from "./BotRoutineEditor";
+import type {
+  DotAttachment,
+  DotResponsibility,
+  DotStructuredResult,
+  DotMemoryInput,
+  DotResponsibilityInput,
+} from "./dotEnhancements";
 import type { DotCapability, DotMicrosoftState } from "./dotDiscovery";
 import type { DotHandlingItem, DotHandlingStopResult, DotHandlingView } from "./dotHandling";
 import type { DotScheduledPrompt, DotScheduledPromptAction, DotWatch } from "./dotRoutines";
@@ -11,7 +19,13 @@ export interface DotSession {
 export interface DotRun {
   readonly runId: string;
   readonly threadId: string;
-  readonly event: { readonly kind: string; readonly text?: string; readonly phase?: string };
+  readonly event: {
+    readonly kind: string;
+    readonly text?: string;
+    readonly phase?: string;
+    readonly attachmentIds?: readonly string[];
+    readonly attachments?: readonly DotAttachment[];
+  };
   readonly status:
     | "queued"
     | "running"
@@ -46,11 +60,13 @@ export interface DotTask {
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly result?: string;
-  readonly detail?: { readonly channel?: string; readonly text?: string };
+  readonly detail?: { readonly kind?: string; readonly channel?: string; readonly text?: string };
+  readonly structuredResult?: DotStructuredResult;
 }
 
 export interface DotApproval {
   readonly approvalId: string;
+  readonly status?: string;
   readonly summary: string;
   readonly action: string;
   readonly payload: Record<string, unknown>;
@@ -62,6 +78,15 @@ export interface DotMemory {
   readonly text: string;
   readonly status: "active" | "completed";
   readonly remindAt?: string;
+  readonly kind?: "fact" | "preference" | "instruction";
+  readonly scope?: "owner";
+  readonly provenance?: {
+    readonly source: "owner" | "model" | "alert" | "email-follow-up";
+    readonly dataOnly: true;
+    readonly observations: readonly string[];
+  };
+  readonly sourceRunId?: string;
+  readonly ownerReviewedAt?: string;
 }
 
 export type DotFeedbackRating = "useful" | "not-useful";
@@ -142,6 +167,20 @@ export interface DotTaskComputer {
 
 export interface DotState {
   readonly streamId?: string;
+  readonly enhancements?: Partial<
+    Readonly<
+      Record<
+        | "decisionInbox"
+        | "resultCards"
+        | "routineEditor"
+        | "responsibilities"
+        | "attachments"
+        | "memoryCorrection",
+        boolean
+      >
+    >
+  >;
+  readonly responsibilities?: readonly DotResponsibility[];
   readonly dotMemory?: readonly DotMemory[];
   readonly user: {
     readonly userId: string;
@@ -179,6 +218,7 @@ export interface PendingMessage {
   readonly requestId: string;
   readonly threadId: string;
   readonly text: string;
+  readonly attachmentIds?: readonly string[];
 }
 
 /**
@@ -361,6 +401,18 @@ export class DotClient {
     return this.request("/message", session, message);
   }
 
+  task(session: DotSession, taskId: string): Promise<{ task: DotTask }> {
+    return this.request(`/tasks/${encodeURIComponent(taskId)}`, session);
+  }
+
+  approval(session: DotSession, approvalId: string): Promise<{ approval: DotApproval }> {
+    return this.request(`/approvals/${encodeURIComponent(approvalId)}`, session);
+  }
+
+  readEditableMemory(session: DotSession, memoryId: string): Promise<{ memory: DotMemory }> {
+    return this.request(`/owner-memory/${encodeURIComponent(memoryId)}`, session);
+  }
+
   run(session: DotSession, runId: string): Promise<{ run: DotRun }> {
     return this.request(`/runs/${encodeURIComponent(runId)}`, session);
   }
@@ -420,6 +472,90 @@ export class DotClient {
       session,
       action === "run" ? { requestId } : {},
     );
+  }
+
+  saveRoutine(
+    session: DotSession,
+    input: DotRoutineInput,
+    requestId: string,
+    prompt?: DotScheduledPrompt,
+  ): Promise<{ prompt: DotScheduledPrompt }> {
+    return this.request(
+      prompt
+        ? `/scheduled-prompts/${encodeURIComponent(prompt.promptId)}/edit`
+        : "/scheduled-prompts",
+      session,
+      {
+        ...input,
+        ...(prompt ? { expectedVersion: prompt.version } : { requestId }),
+      },
+    );
+  }
+
+  previewRoutine(
+    session: DotSession,
+    input: Pick<DotRoutineInput, "schedule" | "timezone">,
+  ): Promise<{ scheduleText: string; nextRunAt?: string }> {
+    return this.request("/scheduled-prompts/preview", session, input);
+  }
+
+  responsibility(
+    session: DotSession,
+    input: DotResponsibilityInput,
+  ): Promise<{ responsibility: DotResponsibility }> {
+    return this.request("/responsibilities", session, input);
+  }
+
+  editMemory(session: DotSession, input: DotMemoryInput): Promise<{ memory: DotMemory }> {
+    return this.request("/owner-memory", session, input);
+  }
+
+  async downloadAttachment(
+    session: DotSession,
+    attachmentId: string,
+  ): Promise<{ name: string; blob: Blob }> {
+    const result = await this.request<{ attachment: DotAttachment; dataBase64: string }>(
+      `/attachments/${encodeURIComponent(attachmentId)}`,
+      session,
+    );
+    const bytes = Uint8Array.from(atob(result.dataBase64), (character) => character.charCodeAt(0));
+    return {
+      name: result.attachment.name,
+      blob: new Blob([bytes], { type: result.attachment.mimeType }),
+    };
+  }
+
+  async uploadAttachment(session: DotSession, file: File): Promise<DotAttachment> {
+    if (file.size > 4 * 1024 * 1024) throw new Error(`${file.name} is larger than 4 MB.`);
+    const dataBase64 = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.addEventListener("error", () => reject(new Error(`Could not read ${file.name}.`)), {
+        once: true,
+      });
+      reader.addEventListener("load", () => resolve(String(reader.result).split(",")[1] ?? ""), {
+        once: true,
+      });
+      reader.readAsDataURL(file);
+    });
+    const extensions: Record<string, string> = {
+      txt: "text/plain",
+      md: "text/markdown",
+      csv: "text/csv",
+      json: "application/json",
+      pdf: "application/pdf",
+      docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      png: "image/png",
+      jpg: "image/jpeg",
+      jpeg: "image/jpeg",
+      webp: "image/webp",
+    };
+    const mimeType = extensions[file.name.split(".").at(-1)?.toLowerCase() ?? ""] ?? file.type;
+    const result = await this.request<{ attachment: DotAttachment }>("/attachments", session, {
+      name: file.name,
+      mimeType,
+      dataBase64,
+    });
+    return result.attachment;
   }
 
   rate(

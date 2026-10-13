@@ -1,3 +1,7 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeCrypto from "node:crypto";
+import * as NodeFSP from "node:fs/promises";
+import * as NodePath from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import type {
@@ -8,19 +12,65 @@ import type {
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
+import { resolveAttachmentPath } from "../attachmentStore.ts";
+import { taskOutputDirectory } from "./botTaskFiles.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as OrchestrationEngine from "../orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import * as BotTaskComputer from "./BotTaskComputer.ts";
 
 const API = "https://bot.example.ucsd.edu";
 const START = Date.parse("2026-10-08T06:00:00.000Z");
 const PROJECT = "project-1";
+const screenshotBytes = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a0pEAAAAASUVORK5CYII=",
+  "base64",
+);
+const screenshot = {
+  attachmentId: `att_${"a".repeat(64)}`,
+  name: "screen.png",
+  mimeType: "image/png",
+  size: screenshotBytes.length,
+  sha256: NodeCrypto.createHash("sha256").update(screenshotBytes).digest("hex"),
+};
+
+const documentBytes = Buffer.from("This is the complete original document.");
+const document = {
+  attachmentId: `att_${"c".repeat(64)}`,
+  name: "notes.txt",
+  mimeType: "text/plain",
+  size: documentBytes.length,
+  sha256: NodeCrypto.createHash("sha256").update(documentBytes).digest("hex"),
+};
+
+const SavedOutputJournal = Schema.fromJsonString(
+  Schema.Struct({
+    held: Schema.Array(
+      Schema.Struct({
+        outcome: Schema.Struct({
+          status: Schema.Literals(["completed", "failed"]),
+          structuredResult: Schema.optional(
+            Schema.Struct({
+              artifacts: Schema.Array(Schema.Struct({ label: Schema.String })),
+            }),
+          ),
+        }),
+        pendingOutputs: Schema.Array(
+          Schema.Struct({ name: Schema.String, dataBase64: Schema.String }),
+        ),
+      }),
+    ),
+  }),
+);
+
+const decodeSavedOutputJournal = Schema.decodeEffect(SavedOutputJournal);
 
 interface Call {
   readonly path: string;
@@ -32,7 +82,17 @@ interface Call {
 class FakeBot {
   readonly calls: Array<Call> = [];
   readonly results: Array<Record<string, unknown>> = [];
-  tasks: Array<{ taskId: string; title: string; prompt: string }> = [];
+  tasks: Array<{
+    taskId: string;
+    title: string;
+    prompt: string;
+    attachments?: Array<typeof screenshot>;
+  }> = [];
+  corruptAttachment = false;
+  artifactStatus = 200;
+  artifactStatuses: number[] = [];
+  loseArtifactReply = false;
+  readonly artifactWrites = new Map<string, Record<string, unknown>>();
   current = "token-1";
   replaced = false;
   resultStatus = 200;
@@ -60,6 +120,42 @@ class FakeBot {
     }
     if (this.replaced || worker !== this.current) {
       return { status: 401, json: { ok: false, replaced: this.replaced } };
+    }
+    if (/^\/harness\/tasks\/[^/]+\/attachments\//u.test(path)) {
+      const isDocument = path.endsWith(document.attachmentId);
+      return {
+        status: 200,
+        json: {
+          attachment: isDocument ? document : screenshot,
+          dataBase64: this.corruptAttachment
+            ? "Y29ycnVwdA=="
+            : (isDocument ? documentBytes : screenshotBytes).toString("base64"),
+        },
+      };
+    }
+    if (/^\/harness\/tasks\/[^/]+\/artifacts$/u.test(path)) {
+      const status = this.artifactStatuses.shift() ?? this.artifactStatus;
+      if (status === 200)
+        this.artifactWrites.set(
+          JSON.stringify([path, body.name, body.mimeType, body.dataBase64]),
+          body,
+        );
+      const responseLost = this.loseArtifactReply;
+      this.loseArtifactReply = false;
+      return {
+        status: responseLost ? 503 : status,
+        json: {
+          attachment: {
+            attachmentId: `att_${"b".repeat(64)}`,
+            name: body.name,
+            mimeType: body.mimeType,
+            size: Buffer.from(String(body.dataBase64), "base64").length,
+            sha256: NodeCrypto.createHash("sha256")
+              .update(Buffer.from(String(body.dataBase64), "base64"))
+              .digest("hex"),
+          },
+        },
+      };
     }
     if (path === "/harness/heartbeat") return { status: 200, json: { ok: true } };
     if (path === "/harness/tasks/claim") {
@@ -205,9 +301,10 @@ class FakeHarness {
 
 const services = (bot: FakeBot, harness: FakeHarness) =>
   Layer.effect(BotTaskComputer.BotTaskComputer, BotTaskComputer.make).pipe(
-    Layer.provide(bot.layer()),
-    Layer.provide(harness.layer()),
-    Layer.provide(ServerSettings.layerTest({})),
+    Layer.provideMerge(WorkspacePaths.layer),
+    Layer.provideMerge(bot.layer()),
+    Layer.provideMerge(harness.layer()),
+    Layer.provideMerge(ServerSettings.layerTest({})),
     Layer.provideMerge(ServerSecretStore.layer),
     Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-bot-task-test-" })),
   );
@@ -216,6 +313,209 @@ const allow = (computer: BotTaskComputer.BotTaskComputer["Service"]) =>
   computer.allow({ apiUrl: API, ownerToken: "owner-session", projectId: PROJECT });
 
 it.layer(NodeServices.layer)("BotTaskComputer", (it) => {
+  for (const laterChange of ["follow-up", "deleted"] as const) {
+    it.effect(
+      `preserves a finished receipt and exact file bytes after a lost upload response and ${laterChange}`,
+      () => {
+        const bot = new FakeBot(),
+          harness = new FakeHarness();
+        bot.tasks = [{ taskId: "upload-recovery", title: "Report", prompt: "Return report" }];
+        return Effect.gen(function* () {
+          yield* TestClock.setTime(START);
+          const config = yield* ServerConfig.ServerConfig;
+          const computer = yield* BotTaskComputer.BotTaskComputer;
+          const secrets = yield* ServerSecretStore.ServerSecretStore;
+          yield* allow(computer);
+          const turn = harness.commands.find((command) => command.type === "thread.turn.start")!;
+          const output = taskOutputDirectory(config.stateDir, turn.threadId);
+          yield* Effect.tryPromise(() =>
+            NodeFSP.writeFile(NodePath.join(output, "report.txt"), "Original bytes"),
+          );
+          harness.finish(turn.threadId, "Original finished report");
+          bot.loseArtifactReply = true;
+          yield* computer.tick;
+          const raw = yield* secrets.get("tritonai-bot-task-computer");
+          const saved = yield* decodeSavedOutputJournal(
+            new TextDecoder().decode(Option.getOrThrow(raw)),
+          );
+          assert.strictEqual(saved.held[0]!.outcome.status, "completed");
+          assert.strictEqual(
+            saved.held[0]!.pendingOutputs[0]!.dataBase64,
+            Buffer.from("Original bytes").toString("base64"),
+          );
+          yield* Effect.tryPromise(() => NodeFSP.rm(output, { recursive: true }));
+          if (laterChange === "deleted") harness.threads.delete(turn.threadId);
+          else {
+            const thread = harness.threads.get(turn.threadId)!;
+            harness.threads.set(turn.threadId, {
+              ...thread,
+              messages: [
+                ...thread.messages,
+                { id: "followup", role: "user", text: "New assignment", streaming: false },
+              ],
+            } as unknown as OrchestrationThread);
+          }
+          yield* TestClock.setTime(START + 86_400_000);
+          const restarted = yield* BotTaskComputer.make;
+          yield* restarted.tick;
+          const uploads = bot.calls.filter((call) => call.path.endsWith("/artifacts"));
+          assert.lengthOf(uploads, 2);
+          assert.deepEqual(uploads[0]!.body, uploads[1]!.body);
+          assert.strictEqual(bot.artifactWrites.size, 1);
+          assert.strictEqual(bot.results[0]!.status, "completed");
+          assert.include(String(bot.results[0]!.result), "Original finished report");
+          assert.lengthOf(
+            (bot.results[0]!.structuredResult as { artifacts: unknown[] }).artifacts,
+            1,
+          );
+          assert.lengthOf(harness.commands, 2);
+        }).pipe(Effect.provide(services(bot, harness)));
+      },
+    );
+  }
+
+  it.effect("journals each successful artifact receipt before retrying the next upload", () => {
+    const bot = new FakeBot(),
+      harness = new FakeHarness();
+    bot.tasks = [{ taskId: "partial-upload", title: "Two reports", prompt: "Return reports" }];
+    return Effect.gen(function* () {
+      yield* TestClock.setTime(START);
+      const config = yield* ServerConfig.ServerConfig;
+      const computer = yield* BotTaskComputer.BotTaskComputer;
+      const secrets = yield* ServerSecretStore.ServerSecretStore;
+      yield* allow(computer);
+      const turn = harness.commands.find((command) => command.type === "thread.turn.start")!;
+      const output = taskOutputDirectory(config.stateDir, turn.threadId);
+      yield* Effect.tryPromise(() => NodeFSP.writeFile(NodePath.join(output, "a.txt"), "A"));
+      yield* Effect.tryPromise(() => NodeFSP.writeFile(NodePath.join(output, "b.txt"), "B"));
+      harness.finish(turn.threadId, "Two reports completed");
+      bot.artifactStatuses = [200, 503];
+      yield* computer.tick;
+      const raw = yield* secrets.get("tritonai-bot-task-computer");
+      const saved = yield* decodeSavedOutputJournal(
+        new TextDecoder().decode(Option.getOrThrow(raw)),
+      );
+      assert.strictEqual(saved.held[0]!.outcome.structuredResult!.artifacts[0]!.label, "a.txt");
+      assert.deepEqual(
+        saved.held[0]!.pendingOutputs.map((file) => file.name),
+        ["b.txt"],
+      );
+      yield* Effect.tryPromise(() => NodeFSP.rm(output, { recursive: true }));
+      harness.threads.delete(turn.threadId);
+      const restarted = yield* BotTaskComputer.make;
+      yield* restarted.tick;
+      assert.deepEqual(
+        bot.calls.filter((call) => call.path.endsWith("/artifacts")).map((call) => call.body.name),
+        ["a.txt", "b.txt", "b.txt"],
+      );
+      assert.strictEqual(bot.artifactWrites.size, 2);
+      assert.strictEqual(bot.results[0]!.status, "completed");
+      assert.deepEqual(
+        (bot.results[0]!.structuredResult as { artifacts: Array<{ label: string }> }).artifacts.map(
+          (item) => item.label,
+        ),
+        ["b.txt", "a.txt"],
+      );
+    }).pipe(Effect.provide(services(bot, harness)));
+  });
+
+  it.effect(
+    "delivers real images and persists downloadable outputs before retrying a result",
+    () => {
+      const bot = new FakeBot(),
+        harness = new FakeHarness();
+      bot.tasks = [
+        {
+          taskId: "files-1",
+          title: "Review screenshot",
+          prompt: "Return a report",
+          attachments: [screenshot, document],
+        },
+      ];
+      return Effect.gen(function* () {
+        yield* TestClock.setTime(START);
+        const config = yield* ServerConfig.ServerConfig;
+        const computer = yield* BotTaskComputer.BotTaskComputer;
+        yield* allow(computer);
+        const turn = harness.commands.find((command) => command.type === "thread.turn.start")!;
+        const attachment = turn.message.attachments[0]!;
+        assert.strictEqual(attachment.type, "image");
+        assert.strictEqual(attachment.sizeBytes, screenshotBytes.length);
+        const imagePath = resolveAttachmentPath({
+          attachmentsDir: config.attachmentsDir,
+          attachment,
+        });
+        assert.isNotNull(imagePath);
+        const bytes = yield* Effect.tryPromise(() => NodeFSP.readFile(imagePath!));
+        assert.deepEqual(bytes, screenshotBytes);
+        const originalDocument = turn.message.attachments[1]!;
+        assert.strictEqual(originalDocument.type, "file");
+        const documentPath = resolveAttachmentPath({
+          attachmentsDir: config.attachmentsDir,
+          attachment: originalDocument,
+        });
+        const fullDocument = yield* Effect.tryPromise(() => NodeFSP.readFile(documentPath!));
+        assert.deepEqual(fullDocument, documentBytes);
+        const output = taskOutputDirectory(config.stateDir, turn.threadId);
+        assert.include(turn.message.text, output);
+        yield* Effect.tryPromise(() =>
+          NodeFSP.writeFile(NodePath.join(output, "report.txt"), "The screenshot shows a report."),
+        );
+        harness.finish(
+          turn.threadId,
+          'Report ready.\n```bot-result\n{"summary":"Report ready","checks":[{"label":"Read screenshot","status":"reported-pass"}]}\n```',
+        );
+        bot.resultStatus = 503;
+        yield* computer.tick;
+        const exported = bot.calls.filter((call) => call.path.endsWith("/artifacts"));
+        assert.lengthOf(exported, 1);
+        assert.strictEqual(exported[0]!.body.claimId, "claim-files-1");
+        assert.strictEqual(
+          exported[0]!.body.dataBase64,
+          Buffer.from("The screenshot shows a report.").toString("base64"),
+        );
+        // Recreating the worker reads its saved receipt; it does not rerun or reupload files.
+        bot.resultStatus = 200;
+        const restarted = yield* BotTaskComputer.make;
+        yield* restarted.tick;
+        assert.lengthOf(
+          bot.calls.filter((call) => call.path.endsWith("/artifacts")),
+          1,
+        );
+        assert.lengthOf(harness.commands, 2);
+        const result = bot.results[0]!.structuredResult as {
+          execution: { threadId: string };
+          verification: { status: string };
+          artifacts: Array<{ attachmentId: string; provenance: string }>;
+          checks: Array<{ provenance: string }>;
+        };
+        assert.strictEqual(result.execution.threadId, turn.threadId);
+        assert.strictEqual(result.verification.status, "unverified");
+        assert.strictEqual(result.artifacts[0]!.attachmentId, `att_${"b".repeat(64)}`);
+        assert.strictEqual(result.artifacts[0]!.provenance, "harness-upload");
+        assert.strictEqual(result.checks[0]!.provenance, "assistant-reported");
+      }).pipe(Effect.provide(services(bot, harness)));
+    },
+  );
+
+  it.effect("refuses damaged attachment bytes before any task turn can run", () => {
+    const bot = new FakeBot(),
+      harness = new FakeHarness();
+    bot.corruptAttachment = true;
+    bot.tasks = [
+      { taskId: "bad-file", title: "Inspect", prompt: "Inspect it", attachments: [screenshot] },
+    ];
+    return Effect.gen(function* () {
+      yield* TestClock.setTime(START);
+      const computer = yield* BotTaskComputer.BotTaskComputer;
+      yield* allow(computer);
+      yield* computer.tick;
+      assert.lengthOf(harness.commands, 0);
+      assert.strictEqual(bot.results[0]!.status, "failed");
+      assert.include(String(bot.results[0]!.result), "Nothing ran");
+    }).pipe(Effect.provide(services(bot, harness)));
+  });
+
   it.effect("runs an approved task as a Harness thread and returns its reply", () => {
     const bot = new FakeBot(),
       harness = new FakeHarness();

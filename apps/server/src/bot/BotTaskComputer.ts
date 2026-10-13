@@ -17,11 +17,13 @@
 import * as NodeOS from "node:os";
 
 import {
+  BotTaskResult,
   CommandId,
   DEFAULT_MODEL,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   MessageId,
   type ModelSelection,
+  type UploadChatAttachment,
   ProjectId,
   ProviderInstanceId,
   ServerBotTaskComputerError,
@@ -42,6 +44,8 @@ import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
@@ -49,6 +53,20 @@ import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import { HttpClient, HttpClientRequest } from "effect/unstable/http";
 
+import {
+  attachmentFileExtension,
+  createPendingAttachmentId,
+  resolveAttachmentPath,
+} from "../attachmentStore.ts";
+import { normalizeDispatchCommand } from "../orchestration/Normalizer.ts";
+import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
+import { ServerConfig } from "../config.ts";
+import {
+  collectTaskOutputFiles,
+  prepareTaskOutputDirectory,
+  taskOutputDirectory,
+  verifiedAttachmentBytes,
+} from "./botTaskFiles.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as OrchestrationEngine from "../orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -78,6 +96,7 @@ const PROJECT_GONE = "The project for TritonAI Bot tasks no longer exists.";
 const Outcome = Schema.Struct({
   status: Schema.Literals(["completed", "failed"]),
   result: Schema.String,
+  structuredResult: Schema.optional(BotTaskResult),
 });
 const Held = Schema.Struct({
   taskId: Schema.String,
@@ -88,6 +107,15 @@ const Held = Schema.Struct({
   claimedAt: Schema.String,
   started: Schema.Boolean,
   outcome: Schema.NullOr(Outcome),
+  pendingOutputs: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        name: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(180)),
+        mimeType: Schema.String,
+        dataBase64: Schema.String.check(Schema.isMaxLength(Math.ceil((4 * 1024 * 1024) / 3) * 4)),
+      }),
+    ).check(Schema.isMaxLength(3)),
+  ),
 });
 const Stored = Schema.Struct({
   version: Schema.Literal(1),
@@ -105,12 +133,30 @@ const StoredJson = Schema.fromJsonString(Stored);
 const decodeStored = Schema.decodeUnknownEffect(StoredJson);
 const encodeStored = Schema.encodeEffect(StoredJson);
 
+const AttachmentMetadata = Schema.Struct({
+  attachmentId: Schema.String.check(Schema.isPattern(/^att_[a-f0-9]{64}$/u)),
+  name: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(180)),
+  mimeType: Schema.String,
+  size: Schema.Number.check(
+    Schema.isInt(),
+    Schema.isGreaterThan(0),
+    Schema.isLessThanOrEqualTo(4 * 1024 * 1024),
+  ),
+  sha256: Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/u)),
+});
+const AttachmentBytes = Schema.Struct({
+  attachment: AttachmentMetadata,
+  dataBase64: Schema.String,
+});
+const decodeAttachmentMetadata = Schema.decodeUnknownEffect(AttachmentMetadata);
+const decodeAttachmentBytes = Schema.decodeUnknownEffect(AttachmentBytes);
 const ClaimedTask = Schema.Struct({
   taskId: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_-]{1,128}$/u)),
   userId: Schema.String,
   claimId: Schema.String.check(Schema.isMinLength(1)),
   title: Schema.String,
   prompt: Schema.String,
+  attachments: Schema.optional(Schema.Array(AttachmentMetadata).check(Schema.isMaxLength(3))),
 });
 const decodeClaimedTask = Schema.decodeUnknownEffect(ClaimedTask);
 
@@ -146,6 +192,10 @@ export class BotTaskComputer extends Context.Service<
 >()("t3/bot/BotTaskComputer") {}
 
 export const make = Effect.gen(function* () {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const serverConfig = yield* ServerConfig;
+  const workspacePaths = yield* WorkspacePaths.WorkspacePaths;
   const secrets = yield* ServerSecretStore.ServerSecretStore;
   const httpClient = yield* HttpClient.HttpClient;
   const engine = yield* OrchestrationEngine.OrchestrationEngineService;
@@ -268,6 +318,7 @@ export const make = Effect.gen(function* () {
       claimId: task.claimId,
       status: task.outcome.status,
       result: task.outcome.result,
+      ...(task.outcome.structuredResult ? { structuredResult: task.outcome.structuredResult } : {}),
     }).pipe(
       // 409 settles a completed or replaced claim. Keep results on 401 so re-pairing can redeliver them.
       Effect.tap((reply) =>
@@ -281,9 +332,19 @@ export const make = Effect.gen(function* () {
   const settleHeld = (initial: Stored, now: number) =>
     Effect.gen(function* () {
       let stored = initial;
-      for (const task of initial.held) {
-        let outcome = task.outcome;
-        if (outcome === null) {
+      for (const original of initial.held) {
+        let task = original;
+        const saveTask = (next: typeof task) =>
+          Effect.gen(function* () {
+            const nextStored = {
+              ...stored,
+              held: stored.held.map((item) => (item.taskId === next.taskId ? next : item)),
+            };
+            yield* writeStored(nextStored);
+            stored = nextStored;
+            task = next;
+          });
+        if (task.outcome === null) {
           const thread = task.started
             ? yield* projections
                 .getThreadDetailById(ThreadId.make(task.threadId), { activityKinds: [] })
@@ -293,16 +354,99 @@ export const make = Effect.gen(function* () {
           if (Option.isNone(thread)) continue;
           const progress = taskProgress(thread.value, task, now);
           if (progress.kind === "pending") continue;
-          outcome = { status: progress.status, result: progress.result };
-          stored = {
-            ...stored,
-            held: stored.held.map((item) =>
-              item.taskId === task.taskId ? { ...item, outcome } : item,
-            ),
+          let outcome: TaskOutcome = {
+            status: progress.status,
+            result: progress.result,
+            ...(progress.structuredResult ? { structuredResult: progress.structuredResult } : {}),
           };
-          yield* writeStored(stored);
+          const outputs = outcome.structuredResult
+            ? yield* Effect.tryPromise(() =>
+                collectTaskOutputFiles(taskOutputDirectory(serverConfig.stateDir, task.threadId)),
+              ).pipe(
+                Effect.orElseSucceed(() => ({
+                  files: [],
+                  blockers: [
+                    "Task output files could not be collected. Open the Harness thread for them.",
+                  ],
+                })),
+              )
+            : { files: [], blockers: [] };
+          if (outcome.structuredResult)
+            outcome = {
+              ...outcome,
+              structuredResult: {
+                ...outcome.structuredResult,
+                blockers: [...outcome.structuredResult.blockers, ...outputs.blockers].slice(0, 10),
+              },
+            };
+          // Capture the receipt and exact bytes atomically before any remote upload.
+          // Later thread edits, deletion, or staged-file changes cannot alter delivery.
+          yield* saveTask({ ...task, outcome, pendingOutputs: outputs.files });
         }
-        const reply = yield* deliver(stored, { ...task, outcome });
+        while (task.pendingOutputs?.length) {
+          const file = task.pendingOutputs[0]!;
+          const outcome = task.outcome!;
+          if (!outcome.structuredResult)
+            return yield* failure("Task output journal has no execution receipt.");
+          const reply = yield* post(
+            `${stored.apiUrl}/harness/tasks/${task.taskId}/artifacts`,
+            workerHeaders(stored),
+            { claimId: task.claimId, ...file },
+          );
+          const evidence = outcome.structuredResult;
+          if (
+            reply.status === 404 ||
+            reply.status === 400 ||
+            reply.status === 403 ||
+            reply.status === 409
+          ) {
+            yield* saveTask({
+              ...task,
+              pendingOutputs: reply.status === 404 ? [] : task.pendingOutputs.slice(1),
+              outcome: {
+                ...outcome,
+                structuredResult: {
+                  ...evidence,
+                  blockers: [
+                    ...evidence.blockers,
+                    reply.status === 404
+                      ? "This Bot service does not support downloadable task files yet."
+                      : `The Bot could not accept output ${file.name}. Open the Harness thread for that file.`,
+                  ].slice(0, 10),
+                },
+              },
+            });
+            continue;
+          }
+          if (reply.status !== 200)
+            return yield* failure(
+              "Could not upload a task output. Retrying without rerunning the task.",
+            );
+          const attachment = yield* decodeAttachmentMetadata(reply.json.attachment);
+          // Persist each receipt before proceeding. If its acknowledgement or journal
+          // write is lost, the service's task/content-scoped ID settles an identical retry.
+          yield* saveTask({
+            ...task,
+            pendingOutputs: task.pendingOutputs.slice(1),
+            outcome: {
+              ...outcome,
+              structuredResult: {
+                ...evidence,
+                artifacts: [
+                  {
+                    label: attachment.name,
+                    uri: `attachment:${attachment.attachmentId}`,
+                    kind: "artifact" as const,
+                    provenance: "harness-upload" as const,
+                    attachmentId: attachment.attachmentId,
+                  },
+                  ...evidence.artifacts,
+                ].slice(0, 20),
+              },
+            },
+          });
+        }
+        const reply = yield* deliver(stored, { ...task, outcome: task.outcome! });
         if (reply === null) continue;
         if (yield* handleRejection(stored, reply)) {
           return { ...stored, active: false, replaced: reply.json.replaced === true };
@@ -351,6 +495,61 @@ export const make = Effect.gen(function* () {
             instanceId: ProviderInstanceId.make("codex"),
             model: DEFAULT_MODEL,
           };
+        const outputDirectory = taskOutputDirectory(serverConfig.stateDir, held.threadId);
+        yield* Effect.tryPromise(() => prepareTaskOutputDirectory(outputDirectory));
+        const attachments: Array<UploadChatAttachment> = [];
+        for (const attachment of task.attachments ?? []) {
+          if (
+            attachment.mimeType.startsWith("image/") &&
+            !["image/png", "image/jpeg", "image/webp"].includes(attachment.mimeType)
+          )
+            return yield* failure("Unsupported task image format.");
+          const reply = yield* request(
+            HttpClientRequest.get(
+              `${stored.apiUrl}/harness/tasks/${task.taskId}/attachments/${attachment.attachmentId}?claimId=${encodeURIComponent(task.claimId)}`,
+            ).pipe(HttpClientRequest.setHeaders(workerHeaders(stored))),
+          );
+          if (reply.status !== 200)
+            return yield* failure("Could not retrieve a task attachment. Nothing ran.");
+          const downloaded = yield* decodeAttachmentBytes(reply.json);
+          if (
+            downloaded.attachment.attachmentId !== attachment.attachmentId ||
+            downloaded.attachment.sha256 !== attachment.sha256 ||
+            downloaded.attachment.mimeType !== attachment.mimeType
+          )
+            return yield* failure("Task attachment identity changed.");
+          const bytes = yield* Effect.try(() =>
+            verifiedAttachmentBytes({
+              dataBase64: downloaded.dataBase64,
+              size: attachment.size,
+              sha256: attachment.sha256,
+            }),
+          );
+          if (attachment.mimeType.startsWith("image/")) {
+            attachments.push({
+              type: "image",
+              name: attachment.name,
+              mimeType: attachment.mimeType,
+              sizeBytes: attachment.size,
+              dataUrl: `data:${attachment.mimeType};base64,${downloaded.dataBase64}`,
+            });
+          } else {
+            const file = {
+              type: "file" as const,
+              id: createPendingAttachmentId(attachmentFileExtension(attachment.name)),
+              name: attachment.name,
+              mimeType: attachment.mimeType,
+              sizeBytes: attachment.size,
+            };
+            const destination = resolveAttachmentPath({
+              attachmentsDir: serverConfig.attachmentsDir,
+              attachment: file,
+            });
+            if (!destination) return yield* failure("Could not store a task document.");
+            yield* fileSystem.writeFile(destination, bytes);
+            attachments.push(file);
+          }
+        }
         const createdAt = isoAt(now);
         yield* engine.dispatch({
           type: "thread.create",
@@ -365,22 +564,28 @@ export const make = Effect.gen(function* () {
           worktreePath: null,
           createdAt,
         });
-        // From here the turn may run, so a restart must wait for the thread rather than call it unstarted.
-        yield* markStarted();
-        yield* engine.dispatch({
+        const turn = yield* normalizeDispatchCommand({
           type: "thread.turn.start",
           commandId: CommandId.make(`bot-task:turn:${held.taskId}:${yield* crypto.randomUUIDv4}`),
           threadId: ThreadId.make(held.threadId),
           message: {
             messageId: MessageId.make(held.messageId),
             role: "user",
-            text: taskPrompt(task.title, task.prompt),
-            attachments: [],
+            text: taskPrompt(task.title, task.prompt, outputDirectory),
+            attachments,
           },
           runtimeMode: resolved.defaultRuntimeMode,
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           createdAt,
-        });
+        }).pipe(
+          Effect.provideService(WorkspacePaths.WorkspacePaths, workspacePaths),
+          Effect.provideService(FileSystem.FileSystem, fileSystem),
+          Effect.provideService(Path.Path, path),
+          Effect.provideService(ServerConfig, serverConfig),
+        );
+        // From here the turn may run, so a restart must wait for the thread rather than call it unstarted.
+        yield* markStarted();
+        yield* engine.dispatch(turn);
       }).pipe(
         Effect.as(null),
         Effect.catchCause((cause) => Effect.succeed(cause)),
@@ -463,6 +668,7 @@ export const make = Effect.gen(function* () {
     yield* note({ lastClaimMs: now });
     const reply = yield* post(`${stored.apiUrl}/harness/tasks/claim`, workerHeaders(stored), {
       leaseSeconds: LEASE_SECONDS,
+      capabilities: ["file-attachments-v1"],
     }).pipe(Effect.option);
     if (Option.isNone(reply) || (reply.value.status !== 200 && reply.value.status !== 401)) {
       return yield* note({ state: "error", message: "Could not reach TritonAI Bot. Retrying." });

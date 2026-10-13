@@ -8,7 +8,7 @@ export type DotHandlingState =
   | "failed"
   | "uncertain";
 
-export type DotHandlingControl = "stop" | "snooze" | "open" | "review";
+export type DotHandlingControl = "stop" | "snooze" | "resume" | "open" | "review";
 
 export interface DotHandlingItem {
   readonly kind: string;
@@ -20,6 +20,10 @@ export interface DotHandlingItem {
   readonly upNext?: { readonly at?: string; readonly what: string };
   readonly lastActivityAt?: string;
   readonly note?: string;
+  readonly target?: {
+    readonly kind: "approval" | "run" | "task" | "routine" | "responsibility";
+    readonly id: string;
+  };
   readonly source?: { readonly label: string; readonly link?: string };
   /** Only offer Stop when the server includes `stop`. */
   readonly controls: readonly DotHandlingControl[];

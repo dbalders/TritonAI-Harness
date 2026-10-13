@@ -38,10 +38,10 @@ const thread = (overrides: Partial<Record<string, unknown>> = {}) =>
 describe("taskProgress", () => {
   it("returns the task's reply with a pointer to its thread", () => {
     const progress = taskProgress(thread(), held, NOW);
-    expect(progress).toEqual({
+    expect(progress).toMatchObject({
       kind: "done",
       status: "completed",
-      result: "Release 1.4 shipped.\n\nHarness thread: Check releases",
+      result: "Release 1.4 shipped.\n\nHarness thread: Check releases (thread-1)",
     });
   });
 
@@ -125,6 +125,29 @@ describe("taskProgress", () => {
     expect(progress.kind === "done" && progress.result).toContain(
       "Provider failed\n\nPartial reply:\nRelease 1.4 shipped.",
     );
+  });
+
+  it.each(["error", "stopped", "interrupted"])(
+    "settles an assignment when its session is %s without a terminal turn record",
+    (status) => {
+      const progress = taskProgress(
+        thread({ latestTurn: null, session: { status, lastError: "Provider disconnected" } }),
+        held,
+        NOW,
+      );
+      expect(progress).toMatchObject({ kind: "done", status: "failed" });
+      expect(progress.kind === "done" && progress.result).toContain("Provider disconnected");
+      expect(progress.kind === "done" && progress.result).toContain(
+        "turn outcome could not be confirmed",
+      );
+      expect(progress.kind === "done" && progress.result).toContain(
+        "Partial reply (unconfirmed):\nRelease 1.4 shipped.",
+      );
+    },
+  );
+
+  it("does not infer completion from a ready session without a turn record", () => {
+    expect(taskProgress(thread({ latestTurn: null }), held, NOW)).toEqual({ kind: "pending" });
   });
 
   it("never treats an unstarted or vanished task as run", () => {

@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { BotIcon, SendIcon } from "lucide-react";
+import { BotIcon, SendIcon, PaperclipIcon } from "lucide-react";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { isElectron } from "../../env";
@@ -11,6 +11,16 @@ import { Input } from "../ui/input";
 import { SidebarInset } from "../ui/sidebar";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { clearBotSessions, useBotServiceUrl } from "./botService";
+import { BotResultCard } from "./BotResultCard";
+import { BotMemoryPanel, BotMemoryEditor } from "./BotMemoryPanel";
+import { BotResponsibilitiesPanel } from "./BotResponsibilitiesPanel";
+import type { DotRoutineInput } from "./BotRoutineEditor";
+import {
+  botWebUrl,
+  type DotAttachment,
+  type DotMemoryInput,
+  type DotResponsibilityInput,
+} from "./dotEnhancements";
 import { BotRunStatus } from "./BotRunStatus";
 import { BotHandlingPanel } from "./BotHandlingPanel";
 import { BotRoutinesPanel } from "./BotRoutinesPanel";
@@ -34,6 +44,8 @@ import {
   type DotQuality,
   type DotSession,
   type DotState,
+  type DotTask,
+  type DotApproval,
   type PendingConnection,
   type PendingMessage,
 } from "./dotClient";
@@ -73,7 +85,13 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
   const threadId = state?.streamId ?? "dot";
   const pendingPromptRuns = useRef(new Map<string, string>());
   const [busyPause, setBusyPause] = useState(false);
-  const [busyMemory, setBusyMemory] = useState<string | null>(null);
+  const [attachments, setAttachments] = useState<readonly DotAttachment[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState<string | null>(null);
+  const uploadingRef = useRef(false);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [preferenceRun, setPreferenceRun] = useState<string | null>(null);
+  const pendingRoutine = useRef<{ fingerprint: string; requestId: string } | null>(null);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -81,6 +99,15 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
   const [busyFeedback, setBusyFeedback] = useState<string | null>(null);
   const pendingMessage = useRef<PendingMessage | null>(null);
   const acceptedRunIds = useRef(new Set<string>());
+  // Older followed tasks may fall outside /state's recent-task window. Load them only on demand.
+  const taskEvidence = useRef(new Map<string, DotTask>());
+  const approvalEvidence = useRef(new Map<string, DotApproval>());
+  const openingItems = useRef(new Set<string>());
+  const pendingOpen = useRef<{
+    kind: string;
+    id: string;
+    ownerToken: string;
+  } | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const activeOwner = useRef(session?.ownerToken);
   const mounted = useRef(true);
@@ -96,7 +123,11 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
         setDraft("");
         setSending(false);
         setBusyApproval(null);
-        setBusyMemory(null);
+        setAttachments([]);
+        setUploading(false);
+        setUploadStatus(null);
+        setPreferenceRun(null);
+        pendingRoutine.current = null;
         setBusyPause(false);
         setError(null);
         setConnected(false);
@@ -104,6 +135,10 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
         pendingPromptRuns.current.clear();
         setBusyFeedback(null);
         acceptedRunIds.current.clear();
+        taskEvidence.current.clear();
+        approvalEvidence.current.clear();
+        openingItems.current.clear();
+        pendingOpen.current = null;
       }
     },
     [serviceUrl],
@@ -134,7 +169,42 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
       for (const run of result.runs) {
         if (!isPendingDotRun(run)) acceptedRunIds.current.delete(run.runId);
       }
-      setState(result);
+      const followed = new Map(
+        (result.responsibilities ?? []).map((item) => [item.source.taskId, item.sourceEvidence]),
+      );
+      for (const [taskId, cached] of taskEvidence.current) {
+        const evidence = followed.get(taskId);
+        const recent = result.tasks.find((task) => task.taskId === taskId);
+        const inbox = result.handling?.items.find(
+          (item) => item.target?.kind === "task" && item.target.id === taskId,
+        );
+        if (
+          (!followed.has(taskId) && !inbox) ||
+          (evidence && evidence.updatedAt !== (recent ?? cached).updatedAt) ||
+          (inbox && inbox.version !== (recent ?? cached).updatedAt)
+        )
+          taskEvidence.current.delete(taskId);
+        else if (recent) taskEvidence.current.set(taskId, recent);
+      }
+      const tasks = new Map([
+        ...taskEvidence.current,
+        ...result.tasks.map((task) => [task.taskId, task] as const),
+      ]);
+      for (const [approvalId] of approvalEvidence.current) {
+        const recent = result.approvals.find((approval) => approval.approvalId === approvalId);
+        if (
+          !result.handling?.items.some(
+            (item) => item.target?.kind === "approval" && item.target.id === approvalId,
+          )
+        )
+          approvalEvidence.current.delete(approvalId);
+        else if (recent) approvalEvidence.current.set(approvalId, recent);
+      }
+      const approvals = new Map([
+        ...approvalEvidence.current,
+        ...result.approvals.map((approval) => [approval.approvalId, approval] as const),
+      ]);
+      setState({ ...result, tasks: [...tasks.values()], approvals: [...approvals.values()] });
       setConnected(true);
     } catch (cause) {
       if (activeOwner.current !== session.ownerToken) return;
@@ -239,15 +309,24 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
 
   const send = async () => {
     const sentDraft = draft;
-    const text = draft.trim();
-    if (!session || !text || sending) return;
+    const sentAttachments = attachments;
+    const text = draft.trim() || (attachments.length ? "Please review the attached files." : "");
+    if (!session || !text || sending || uploading) return;
+    const attachmentIds = attachments.map((item) => item.attachmentId);
     setSending(true);
     setError(null);
     // Retain the command on an ambiguous network failure; retrying must not create another run.
     const message =
-      pendingMessage.current?.text === text && pendingMessage.current.threadId === threadId
+      pendingMessage.current?.text === text &&
+      pendingMessage.current.threadId === threadId &&
+      JSON.stringify(pendingMessage.current.attachmentIds ?? []) === JSON.stringify(attachmentIds)
         ? pendingMessage.current
-        : { requestId: randomUUID(), threadId, text };
+        : {
+            requestId: randomUUID(),
+            threadId,
+            text,
+            ...(attachmentIds.length ? { attachmentIds } : {}),
+          };
     pendingMessage.current = message;
     try {
       const accepted = await client.send(session, message);
@@ -255,6 +334,12 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
       acceptedRunIds.current.add(accepted.runId);
       pendingMessage.current = null;
       setDraft((current) => draftAfterSend(current, sentDraft));
+      setAttachments((current) =>
+        current.filter(
+          (item) => !sentAttachments.some((sent) => sent.attachmentId === item.attachmentId),
+        ),
+      );
+      setUploadStatus(null);
       await refresh();
     } catch (cause) {
       reportError(cause, session.ownerToken);
@@ -360,7 +445,223 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
     }
   };
 
+  async function mutate<T>(operation: (owner: DotSession) => Promise<T>): Promise<T> {
+    if (!session || activeOwner.current !== session.ownerToken)
+      throw new Error("Sign in again to continue.");
+    setError(null);
+    try {
+      const result = await operation(session);
+      if (activeOwner.current !== session.ownerToken)
+        throw new Error("Your bot session changed. Sign in again to continue.");
+      await refresh();
+      return result;
+    } catch (cause) {
+      if (cause instanceof DotApiError && cause.status === 409) await refresh();
+      reportError(cause, session.ownerToken);
+      throw cause;
+    }
+  }
+
+  const saveRoutine = async (input: DotRoutineInput, prompt?: DotScheduledPrompt) => {
+    const fingerprint = JSON.stringify(input);
+    if (!pendingRoutine.current || pendingRoutine.current.fingerprint !== fingerprint)
+      pendingRoutine.current = { fingerprint, requestId: randomUUID() };
+    const result = await mutate((owner) =>
+      client.saveRoutine(owner, input, pendingRoutine.current!.requestId, prompt),
+    );
+    pendingRoutine.current = null;
+    return result;
+  };
+  const responsibilityAction = (input: DotResponsibilityInput) =>
+    mutate((owner) => client.responsibility(owner, input));
+  const memoryEdit = (input: DotMemoryInput) => mutate((owner) => client.editMemory(owner, input));
+
+  const openItem = useCallback((kind: string, id: string) => {
+    const element = document.getElementById(`bot-${kind}-${id}`);
+    if (!element) return;
+    if (element instanceof HTMLDetailsElement) element.open = true;
+    let parent = element.parentElement;
+    while (parent) {
+      if (parent instanceof HTMLDetailsElement) parent.open = true;
+      parent = parent.parentElement;
+    }
+    element.scrollIntoView({ block: "nearest" });
+    element.focus();
+  }, []);
+  useEffect(() => {
+    const target = pendingOpen.current;
+    if (!target || activeOwner.current !== target.ownerToken) return;
+    if (!document.getElementById(`bot-${target.kind}-${target.id}`)) return;
+    openItem(target.kind, target.id);
+    pendingOpen.current = null;
+  }, [state, openItem]);
+
+  function cacheEvidence<T>(cache: Map<string, T>, id: string, value: T) {
+    cache.delete(id);
+    cache.set(id, value);
+    while (cache.size > 20) cache.delete(cache.keys().next().value!);
+  }
+  function handlingTarget(item: DotHandlingItem) {
+    if (item.target) return item.target;
+    if (item.kind === "approval" && state?.approvals.some((value) => value.approvalId === item.id))
+      return { kind: "approval", id: item.id };
+    if (item.kind === "run" && state?.runs.some((value) => value.runId === item.id))
+      return { kind: "run", id: item.id };
+    if (
+      item.kind === "harness-assignment" &&
+      state?.tasks.some((value) => value.taskId === item.id)
+    )
+      return { kind: "task", id: item.id };
+    return undefined;
+  }
+  async function handlingOpen(item: DotHandlingItem) {
+    const target = handlingTarget(item);
+    if (target && document.getElementById(`bot-${target.kind}-${target.id}`)) {
+      openItem(target.kind, target.id);
+      return;
+    }
+    if (
+      target &&
+      state?.enhancements?.decisionInbox &&
+      session &&
+      (target.kind === "task" || target.kind === "approval")
+    ) {
+      const ownerToken = session.ownerToken;
+      const key = `${ownerToken}:${target.kind}:${target.id}`;
+      if (activeOwner.current !== ownerToken || openingItems.current.has(key)) return;
+      openingItems.current.add(key);
+      setError(null);
+      try {
+        if (target.kind === "task") {
+          await loadTaskEvidence(target.id, true);
+        } else {
+          const { approval } = await client.approval(session, target.id);
+          if (activeOwner.current !== ownerToken || !mounted.current) return;
+          if (approval.approvalId !== target.id || approval.status !== "pending")
+            throw new Error(
+              "This approval is no longer pending. Refresh the inbox before continuing.",
+            );
+          cacheEvidence(approvalEvidence.current, target.id, approval);
+          pendingOpen.current = { ...target, ownerToken };
+          setState((current) =>
+            current
+              ? {
+                  ...current,
+                  approvals: [
+                    ...current.approvals.filter((value) => value.approvalId !== target.id),
+                    approval,
+                  ],
+                }
+              : current,
+          );
+        }
+      } catch (cause) {
+        reportError(cause, ownerToken);
+      } finally {
+        openingItems.current.delete(key);
+      }
+    } else {
+      const link = botWebUrl(item.source?.link);
+      if (link) void ensureLocalApi().shell.openExternal(link).catch(reportError);
+    }
+  }
+  const handlingResponsibility = (item: DotHandlingItem, action: "snooze" | "resume") => {
+    const responsibility = state?.responsibilities?.find(
+      (value) => value.responsibilityId === (item.target?.id ?? item.id),
+    );
+    if (!responsibility) return Promise.reject(new Error("Refresh the inbox before trying again."));
+    // Use the version of the item the owner actually saw, never substitute a refreshed version.
+    const expectedVersion = responsibility.version;
+    if (
+      item.version !== `responsibility:${expectedVersion}` &&
+      item.version !== String(expectedVersion)
+    )
+      return Promise.reject(new Error("This item changed. Refresh the inbox before trying again."));
+    return responsibilityAction(
+      action === "snooze"
+        ? {
+            action,
+            responsibilityId: responsibility.responsibilityId,
+            expectedVersion,
+            until: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+          }
+        : { action, responsibilityId: responsibility.responsibilityId, expectedVersion },
+    );
+  };
+
+  async function attachFiles(files: FileList | null) {
+    if (!session || !files || uploadingRef.current) return;
+    if (files.length + attachments.length > 3) {
+      setUploadStatus("Attach up to three files per message.");
+      return;
+    }
+    uploadingRef.current = true;
+    setUploading(true);
+    setUploadStatus(null);
+    try {
+      for (const file of Array.from(files)) {
+        setUploadStatus(`Uploading ${file.name}…`);
+        const attachment = await client.uploadAttachment(session, file);
+        if (activeOwner.current !== session.ownerToken) return;
+        setAttachments((current) =>
+          current.some((item) => item.attachmentId === attachment.attachmentId)
+            ? current
+            : [...current, attachment],
+        );
+      }
+      setUploadStatus(
+        "Files ready to send. They are shared with your bot when you send this message.",
+      );
+    } catch (cause) {
+      if (activeOwner.current === session.ownerToken)
+        setUploadStatus(
+          cause instanceof Error ? cause.message : "Upload failed. Choose the file again to retry.",
+        );
+      if (cause instanceof DotApiError && cause.status === 401)
+        reportError(cause, session.ownerToken);
+    } finally {
+      uploadingRef.current = false;
+      if (activeOwner.current === session.ownerToken) setUploading(false);
+      if (fileInput.current) fileInput.current.value = "";
+    }
+  }
+  async function loadTaskEvidence(taskId: string, openAfterLoad = false) {
+    if (!session || activeOwner.current !== session.ownerToken)
+      throw new Error("Sign in again to continue.");
+    try {
+      const { task } = await client.task(session, taskId);
+      if (activeOwner.current !== session.ownerToken || !mounted.current)
+        throw new Error("Your bot session changed. Sign in again to continue.");
+      if (task.taskId !== taskId || task.detail?.kind !== "harness-task")
+        throw new Error("The selected task evidence is unavailable.");
+      cacheEvidence(taskEvidence.current, taskId, task);
+      if (openAfterLoad)
+        pendingOpen.current = { kind: "task", id: taskId, ownerToken: session.ownerToken };
+      setState((current) =>
+        current
+          ? { ...current, tasks: [...current.tasks.filter((item) => item.taskId !== taskId), task] }
+          : current,
+      );
+    } catch (cause) {
+      reportError(cause, session.ownerToken);
+      throw cause;
+    }
+  }
+
+  async function downloadAttachment(attachmentId: string) {
+    if (!session) throw new Error("Sign in again to continue.");
+    const result = await client.downloadAttachment(session, attachmentId);
+    if (activeOwner.current !== session.ownerToken) return;
+    const url = URL.createObjectURL(result.blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = result.name;
+    anchor.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
   const hasPanels =
+    state?.enhancements?.responsibilities === true ||
     state?.handling !== undefined ||
     state?.watches !== undefined ||
     state?.scheduledPrompts !== undefined ||
@@ -512,7 +813,7 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
               <div className="flex min-h-0 flex-1 flex-col gap-4 lg:flex-row">
                 <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-4">
                   <div className="min-h-0 flex-1 overflow-y-auto">
-                    {runs.length === 0 ? (
+                    {runs.length === 0 && !state?.tasks.length ? (
                       <div className="flex h-full min-h-40 items-center justify-center text-sm text-muted-foreground">
                         {connected ? "Say hello to your bot." : "Connecting to your bot…"}
                       </div>
@@ -524,6 +825,31 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
                               <div className="flex justify-end">
                                 <div className="max-w-[85%] rounded-2xl bg-primary px-4 py-2.5 text-sm leading-relaxed text-primary-foreground">
                                   {run.event.text}
+                                  {run.event.attachments?.length ? (
+                                    <div className="mt-2 flex flex-wrap gap-2">
+                                      {run.event.attachments.map((attachment) => (
+                                        <Button
+                                          key={attachment.attachmentId}
+                                          variant="secondary"
+                                          size="sm"
+                                          onClick={() =>
+                                            void downloadAttachment(attachment.attachmentId).catch(
+                                              (cause) => reportError(cause, session.ownerToken),
+                                            )
+                                          }
+                                        >
+                                          {attachment.name}
+                                        </Button>
+                                      ))}
+                                    </div>
+                                  ) : (
+                                    Boolean(run.event.attachmentIds?.length) && (
+                                      <p className="mt-1 text-xs">
+                                        {run.event.attachmentIds?.length} attached{" "}
+                                        {run.event.attachmentIds?.length === 1 ? "file" : "files"}
+                                      </p>
+                                    )
+                                  )}
                                 </div>
                               </div>
                             )}
@@ -536,10 +862,13 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
                                     : "bg-muted text-foreground",
                                 )}
                               >
+                                <span id={`bot-run-${run.runId}`} tabIndex={-1} />
                                 {run.result?.summary ??
                                   run.error ??
                                   (isPendingDotRun(run)
-                                    ? "Message pending"
+                                    ? run.event.kind === "responsibility"
+                                      ? "Checking your followed task…"
+                                      : "Message pending"
                                     : runStatusLabel(run.status))}
                                 <BotRunStatus run={run} />
                                 {run.result?.summary &&
@@ -556,9 +885,47 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
                                 feedback={feedbackByRun.get(run.runId)}
                                 disabled={busyFeedback !== null || !connected}
                                 onRate={(rating, reasons) => void rate(run.runId, rating, reasons)}
+                                onSavePreference={
+                                  state.enhancements?.memoryCorrection &&
+                                  run.status === "completed" &&
+                                  feedbackByRun.get(run.runId)?.rating
+                                    ? () => setPreferenceRun(run.runId)
+                                    : undefined
+                                }
+                              />
+                            )}
+                            {preferenceRun === run.runId && (
+                              <BotMemoryEditor
+                                sourceRunId={run.runId}
+                                onSave={memoryEdit}
+                                onCancel={() => setPreferenceRun(null)}
                               />
                             )}
                           </Fragment>
+                        ))}
+                        {state?.tasks.map((task) => (
+                          <details
+                            key={task.taskId}
+                            id={`bot-task-${task.taskId}`}
+                            tabIndex={-1}
+                            className="rounded-xl border p-3 text-sm"
+                          >
+                            <summary className="cursor-pointer font-medium">
+                              {task.title} · {task.status}
+                            </summary>
+                            <div className="mt-2">
+                              {state.enhancements?.resultCards && task.structuredResult ? (
+                                <BotResultCard
+                                  result={task.structuredResult}
+                                  onDownload={downloadAttachment}
+                                />
+                              ) : (
+                                <p className="whitespace-pre-wrap break-words">
+                                  {task.result ?? "A result has not been reported yet."}
+                                </p>
+                              )}
+                            </div>
+                          </details>
                         ))}
                         <div ref={chatEndRef} />
                       </div>
@@ -571,7 +938,12 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
                     >
                       <h2 className="mb-2 text-sm font-semibold">Needs your approval</h2>
                       {state?.approvals.map((approval) => (
-                        <div key={approval.approvalId} className="mb-3 space-y-2 text-sm">
+                        <div
+                          key={approval.approvalId}
+                          id={`bot-approval-${approval.approvalId}`}
+                          tabIndex={-1}
+                          className="mb-3 space-y-2 text-sm"
+                        >
                           <p>{approval.summary}</p>
                           {approval.action === "harness-task" &&
                             state &&
@@ -617,64 +989,87 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
                     </section>
                   )}
                   {state?.quality && <QualitySummary quality={state.quality} />}
-                  <details className="shrink-0 rounded-xl border px-3 py-2">
-                    <summary className="cursor-pointer text-sm font-medium">
-                      Bot memory ·{" "}
-                      {(state?.dotMemory ?? []).filter((item) => item.status === "active").length}{" "}
-                      active
-                    </summary>
-                    <div className="mt-2 max-h-52 space-y-3 overflow-y-auto text-sm">
-                      <p className="text-xs text-muted-foreground">
-                        Ask your bot to remember something, set a reminder, or mark work done.
-                        Completed items stop reminders. Forget removes the memory; past chat
-                        messages remain.
-                      </p>
-                      {(state?.dotMemory ?? []).length === 0 && (
-                        <p className="text-muted-foreground">Nothing saved yet.</p>
-                      )}
-                      {(state?.dotMemory ?? []).map((item) => (
-                        <div
-                          key={item.memoryId}
-                          className="flex items-start justify-between gap-3 border-t pt-2"
+                  <BotMemoryPanel
+                    memories={state?.dotMemory ?? []}
+                    editable={state?.enhancements?.memoryCorrection === true}
+                    disabled={!connected}
+                    onChange={(memory, action) =>
+                      mutate((owner) => client.changeMemory(owner, memory, action))
+                    }
+                    onEdit={memoryEdit}
+                    onRead={async (memoryId) => {
+                      if (!session || activeOwner.current !== session.ownerToken)
+                        throw new Error("Sign in again to continue.");
+                      try {
+                        const result = await client.readEditableMemory(session, memoryId);
+                        if (activeOwner.current !== session.ownerToken || !mounted.current)
+                          throw new Error("Your bot session changed. Sign in again to continue.");
+                        return result;
+                      } catch (cause) {
+                        reportError(cause, session.ownerToken);
+                        throw cause;
+                      }
+                    }}
+                    sourceRuns={runs.map((run) => ({
+                      runId: run.runId,
+                      label: run.event.text ?? run.result?.summary ?? "Bot conversation",
+                    }))}
+                    onOpenSource={(runId) => openItem("run", runId)}
+                  />
+                  {state?.enhancements?.attachments && (
+                    <div className="shrink-0 space-y-2 text-xs">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <input
+                          ref={fileInput}
+                          type="file"
+                          multiple
+                          accept=".txt,.md,.csv,.json,.pdf,.docx,.png,.jpg,.jpeg,.webp"
+                          aria-label="Choose files for your bot"
+                          className="sr-only"
+                          disabled={uploading || sending || !connected}
+                          onChange={(event) => void attachFiles(event.currentTarget.files)}
+                        />
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={uploading || sending || !connected || attachments.length >= 3}
+                          onClick={() => fileInput.current?.click()}
                         >
-                          <div className="min-w-0 whitespace-pre-wrap break-words">
-                            <p>{item.text}</p>
-                            <p className="mt-1 text-xs text-muted-foreground">
-                              {item.status === "completed"
-                                ? "Completed"
-                                : item.remindAt
-                                  ? `Reminder: ${new Date(item.remindAt).toLocaleString()}`
-                                  : "Active context"}
-                            </p>
-                          </div>
-                          <div className="flex shrink-0 gap-1">
-                            {(item.status === "active"
-                              ? (["complete", "forget"] as const)
-                              : (["forget"] as const)
-                            ).map((action) => (
-                              <Button
-                                key={action}
-                                variant="ghost"
-                                size="sm"
-                                disabled={busyMemory !== null || !connected}
-                                onClick={() => {
-                                  if (!session) return;
-                                  setBusyMemory(item.memoryId);
-                                  void client
-                                    .changeMemory(session, item, action)
-                                    .then(refresh)
-                                    .catch((cause) => reportError(cause, session.ownerToken))
-                                    .finally(() => setBusyMemory(null));
-                                }}
-                              >
-                                {action === "complete" ? "Done" : "Forget"}
-                              </Button>
-                            ))}
-                          </div>
+                          <PaperclipIcon className="size-3.5" />
+                          {uploading ? "Uploading…" : "Attach files"}
+                        </Button>
+                        <span className="text-muted-foreground">
+                          Up to 3 files · 4 MB each · documents or screenshots
+                        </span>
+                      </div>
+                      {attachments.map((item) => (
+                        <div key={item.attachmentId} className="flex flex-wrap items-center gap-2">
+                          <span>
+                            {item.name} · {Math.ceil(item.size / 1024)} KB
+                            {item.truncated ? " · Only part of the text can be read" : ""}
+                          </span>
+                          <Button
+                            variant="ghost"
+                            size="xs"
+                            disabled={uploading || sending}
+                            aria-label={`Remove ${item.name}`}
+                            onClick={() =>
+                              setAttachments((current) =>
+                                current.filter((value) => value.attachmentId !== item.attachmentId),
+                              )
+                            }
+                          >
+                            Remove
+                          </Button>
                         </div>
                       ))}
+                      {uploadStatus && (
+                        <p role="status" className="text-muted-foreground">
+                          {uploadStatus}
+                        </p>
+                      )}
                     </div>
-                  </details>
+                  )}
                   <form
                     className="flex shrink-0 items-center gap-2"
                     onSubmit={(event) => {
@@ -695,7 +1090,9 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
                       size="icon-sm"
                       variant="ghost"
                       aria-label="Send message"
-                      disabled={!draft.trim() || sending || !connected}
+                      disabled={
+                        (!draft.trim() && !attachments.length) || sending || uploading || !connected
+                      }
                     >
                       <SendIcon className="size-4" />
                     </Button>
@@ -715,12 +1112,55 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
                       handling={state?.handling}
                       onStop={stopHandling}
                       onSeen={markHandlingSeen}
+                      decisionInbox={state?.enhancements?.decisionInbox === true}
+                      onOpen={handlingOpen}
+                      canOpen={(item) => {
+                        const target = handlingTarget(item);
+                        return Boolean(
+                          (target &&
+                            (target.kind === "approval"
+                              ? state?.approvals.some((value) => value.approvalId === target.id) ||
+                                state?.enhancements?.decisionInbox
+                              : target.kind === "run"
+                                ? runs.some((value) => value.runId === target.id)
+                                : target.kind === "task"
+                                  ? state?.tasks.some((value) => value.taskId === target.id) ||
+                                    state?.enhancements?.decisionInbox
+                                  : target.kind === "routine"
+                                    ? state?.scheduledPrompts?.some(
+                                        (value) => value.promptId === target.id,
+                                      )
+                                    : state?.responsibilities?.some(
+                                        (value) => value.responsibilityId === target.id,
+                                      ))) ||
+                          botWebUrl(item.source?.link),
+                        );
+                      }}
+                      onSnooze={(item) => handlingResponsibility(item, "snooze")}
+                      onResume={(item) => handlingResponsibility(item, "resume")}
                     />
                     <BotRoutinesPanel
                       watches={state?.watches}
                       scheduledPrompts={state?.scheduledPrompts}
                       onPromptAction={promptAction}
+                      editable={state?.enhancements?.routineEditor === true}
+                      capabilities={state?.capabilities}
+                      onSave={saveRoutine}
+                      onPreview={(input) => {
+                        if (!session)
+                          return Promise.reject(new Error("Sign in again to continue."));
+                        return client.previewRoutine(session, input);
+                      }}
                     />
+                    {state?.enhancements?.responsibilities && (
+                      <BotResponsibilitiesPanel
+                        responsibilities={state.responsibilities ?? []}
+                        tasks={state.tasks.filter((task) => task.detail?.kind === "harness-task")}
+                        onAction={responsibilityAction}
+                        onOpen={(taskId) => openItem("task", taskId)}
+                        onLoadTask={loadTaskEvidence}
+                      />
+                    )}
                     <BotCapabilitiesPanel
                       capabilities={state?.capabilities}
                       capabilitiesError={state?.capabilitiesError}
@@ -746,7 +1186,9 @@ function RunFeedback({
   feedback,
   disabled,
   onRate,
+  onSavePreference,
 }: {
+  readonly onSavePreference?: (() => void) | undefined;
   readonly feedback: DotFeedback | undefined;
   readonly disabled: boolean;
   readonly onRate: (rating: DotFeedbackRating, reasons: readonly DotFeedbackReason[]) => void;
@@ -772,6 +1214,11 @@ function RunFeedback({
       >
         👎 Not useful
       </Button>
+      {onSavePreference && (
+        <Button variant="ghost" size="compact" disabled={disabled} onClick={onSavePreference}>
+          Save a preference…
+        </Button>
+      )}
       {feedback?.rating === "not-useful" &&
         DOT_FEEDBACK_REASONS.map((reason) => {
           const selected = reasons.includes(reason.id);

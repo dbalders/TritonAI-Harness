@@ -11,9 +11,17 @@ import {
 } from "../ui/alert-dialog";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
+import { BotRoutineEditor, type DotRoutineInput } from "./BotRoutineEditor";
+import type { DotCapability } from "./dotDiscovery";
 import type { DotScheduledPrompt, DotScheduledPromptAction, DotWatch } from "./dotRoutines";
 
 export interface BotRoutinesPanelProps {
+  readonly editable?: boolean;
+  readonly capabilities?: readonly DotCapability[] | undefined;
+  readonly onSave?: (input: DotRoutineInput, prompt?: DotScheduledPrompt) => Promise<unknown>;
+  readonly onPreview?: (
+    input: Pick<DotRoutineInput, "schedule" | "timezone">,
+  ) => Promise<{ scheduleText: string; nextRunAt?: string }>;
   readonly watches: readonly DotWatch[] | undefined;
   readonly scheduledPrompts: readonly DotScheduledPrompt[] | undefined;
   /** Return the server acknowledgement after attempting a state refresh; reject request failures. */
@@ -174,9 +182,11 @@ function runMessage(response: unknown): string {
 function PromptRow({
   prompt,
   onPromptAction,
+  onEdit,
 }: {
   readonly prompt: DotScheduledPrompt;
   readonly onPromptAction: BotRoutinesPanelProps["onPromptAction"];
+  readonly onEdit?: (() => void) | undefined;
 }) {
   const [busy, setBusy] = useState<DotScheduledPromptAction | null>(null);
   const [confirmStop, setConfirmStop] = useState(false);
@@ -232,7 +242,7 @@ function PromptRow({
   };
 
   return (
-    <li className="space-y-2 border-t pt-2">
+    <li id={`bot-routine-${prompt.promptId}`} tabIndex={-1} className="space-y-2 border-t pt-2">
       <div className="flex flex-wrap items-center gap-2">
         <h4 className="break-words font-medium">{prompt.name}</h4>
         <Badge variant="outline">{prompt.enabled ? "Active" : "Paused"}</Badge>
@@ -274,6 +284,11 @@ function PromptRow({
         <DueNotice at={prompt.nextRunAt} message="Run due; completion is not confirmed." />
       )}
       <div className="flex flex-wrap gap-2" role="group" aria-label={`Actions for ${prompt.name}`}>
+        {onEdit && (
+          <Button variant="outline" size="sm" disabled={busy !== null} onClick={onEdit}>
+            Edit routine
+          </Button>
+        )}
         <Button
           variant="outline"
           size="sm"
@@ -374,12 +389,47 @@ export function BotRoutinesPanel({
   watches,
   scheduledPrompts,
   onPromptAction,
+  editable,
+  capabilities,
+  onSave,
+  onPreview,
 }: BotRoutinesPanelProps) {
+  const [editing, setEditing] = useState<DotScheduledPrompt | "new" | null>(null);
+  const current =
+    editing && editing !== "new"
+      ? scheduledPrompts?.find((item) => item.promptId === editing.promptId)
+      : undefined;
+  const changed = editing && editing !== "new" && current?.version !== editing.version;
   if (watches === undefined && scheduledPrompts === undefined) return null;
   return (
     <details className="shrink-0 rounded-xl border px-3 py-2">
       <summary className="cursor-pointer text-sm font-medium">Watches &amp; routines</summary>
-      <div className="mt-2 max-h-64 space-y-3 overflow-y-auto text-sm">
+      <div className="mt-2 space-y-3 text-sm">
+        {editable && onSave && onPreview && (
+          <>
+            <Button variant="outline" size="sm" onClick={() => setEditing("new")}>
+              Create routine
+            </Button>
+            {editing &&
+              (changed ? (
+                <div role="alert">
+                  <p>This routine changed. Close the editor and review its latest version.</p>
+                  <Button variant="ghost" size="sm" onClick={() => setEditing(null)}>
+                    Close editor
+                  </Button>
+                </div>
+              ) : (
+                <BotRoutineEditor
+                  key={editing === "new" ? "new" : `${editing.promptId}:${editing.version}`}
+                  prompt={editing === "new" ? undefined : editing}
+                  capabilities={capabilities}
+                  onSave={onSave}
+                  onPreview={onPreview}
+                  onCancel={() => setEditing(null)}
+                />
+              ))}
+          </>
+        )}
         <p className="text-xs text-muted-foreground">
           Times show the last reported state. Active means enabled; it does not confirm a recent
           successful check or run.
@@ -416,6 +466,11 @@ export function BotRoutinesPanel({
                     key={prompt.promptId}
                     prompt={prompt}
                     onPromptAction={onPromptAction}
+                    onEdit={
+                      editable && prompt.version !== undefined
+                        ? () => setEditing(prompt)
+                        : undefined
+                    }
                   />
                 ))}
               </ul>

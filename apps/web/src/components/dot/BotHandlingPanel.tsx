@@ -77,7 +77,17 @@ export function BotHandlingPanel({
   handling,
   onStop,
   onSeen,
+  decisionInbox,
+  onOpen,
+  canOpen,
+  onSnooze,
+  onResume,
 }: {
+  readonly decisionInbox?: boolean;
+  readonly canOpen?: (item: DotHandlingItem) => boolean;
+  readonly onOpen?: (item: DotHandlingItem) => void;
+  readonly onSnooze?: (item: DotHandlingItem) => Promise<unknown>;
+  readonly onResume?: (item: DotHandlingItem) => Promise<unknown>;
   readonly handling: DotHandlingView | undefined;
   /** Parent refreshes state after the action and rejects API errors (including HTTP 409). */
   readonly onStop: (item: DotHandlingItem) => Promise<DotHandlingStopResult>;
@@ -135,7 +145,7 @@ export function BotHandlingPanel({
     <section aria-labelledby={headingId} className="shrink-0 rounded-xl border p-3 text-sm">
       <div className="mb-3 flex items-center gap-2">
         <h2 id={headingId} className="font-semibold">
-          What the bot is handling
+          {decisionInbox ? "Decision inbox" : "What the bot is handling"}
         </h2>
         {handling.paused && (
           <Badge variant="warning" size="sm">
@@ -172,6 +182,11 @@ export function BotHandlingPanel({
       <p role="status" aria-live="polite" className="wrap-anywhere">
         {notice}
       </p>
+      {error && !selected && (
+        <p role="alert" className="text-destructive">
+          {error}
+        </p>
+      )}
       {onSeen && handling.items.some((item) => item.state === "done-unseen") && (
         <div className="mb-3 space-y-2">
           <Button
@@ -223,13 +238,66 @@ export function BotHandlingPanel({
                   return (
                     <li key={`${item.kind}:${item.id}`} className="space-y-1 py-2">
                       <div className="flex flex-wrap items-center gap-2">
-                        <p className="min-w-0 flex-1 wrap-anywhere font-medium">{item.title}</p>
+                        <p className="min-w-0 basis-full wrap-anywhere font-medium">{item.title}</p>
                         <Badge
                           variant={group.label === "Needs you" ? "warning" : "secondary"}
                           size="sm"
                         >
                           {STATE_LABELS[item.state]}
                         </Badge>
+                        {(item.controls.includes("review") || item.controls.includes("open")) &&
+                          onOpen &&
+                          canOpen?.(item) && (
+                            <Button
+                              size="xs"
+                              variant="outline"
+                              disabled={busy}
+                              aria-label={`${item.controls.includes("review") ? "Review" : "Open"} ${item.title}`}
+                              onClick={() => onOpen(item)}
+                            >
+                              {item.controls.includes("review") ? "Review" : "Open"}
+                            </Button>
+                          )}
+                        {(["snooze", "resume"] as const).map((action) => {
+                          const handler = action === "snooze" ? onSnooze : onResume;
+                          return (
+                            item.controls.includes(action) &&
+                            handler && (
+                              <Button
+                                key={action}
+                                size="xs"
+                                variant="outline"
+                                disabled={busy}
+                                onClick={async () => {
+                                  if (stopping.current) return;
+                                  stopping.current = true;
+                                  setBusy(true);
+                                  setError(null);
+                                  setNotice(null);
+                                  try {
+                                    await handler(item);
+                                    setNotice(
+                                      action === "snooze"
+                                        ? "Snoozed for one hour."
+                                        : "Following resumed.",
+                                    );
+                                  } catch (cause) {
+                                    setError(
+                                      cause instanceof Error
+                                        ? cause.message
+                                        : "Could not update this item.",
+                                    );
+                                  } finally {
+                                    stopping.current = false;
+                                    setBusy(false);
+                                  }
+                                }}
+                              >
+                                {action === "snooze" ? "Snooze 1 hour" : "Resume"}
+                              </Button>
+                            )
+                          );
+                        })}
                         {item.controls.includes("stop") && (
                           <Button
                             size="xs"

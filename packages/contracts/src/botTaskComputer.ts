@@ -67,3 +67,37 @@ export class ServerBotTaskComputerError extends Schema.TaggedError<ServerBotTask
   "ServerBotTaskComputerError",
   { message: TrimmedNonEmptyString },
 ) {}
+
+/** Worker receipts describe execution; assistant claims never become provider verification. */
+export const BotTaskResult = Schema.Struct({
+  version: Schema.Literal(1),
+  summary: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(4000)),
+  execution: Schema.Struct({
+    status: Schema.Literals(["completed", "failed"]),
+    threadId: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(128)),
+    messageId: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(128)),
+    turnId: Schema.optional(Schema.String.check(Schema.isMaxLength(128))),
+    completedAt: Schema.optional(Schema.String),
+  }),
+  verification: Schema.Struct({ status: Schema.Literal("unverified") }),
+  artifacts: Schema.Array(
+    Schema.Struct({
+      label: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(240)),
+      uri: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(2048)),
+      kind: Schema.Literals(["artifact", "source"]),
+      provenance: Schema.Literals(["assistant-reported", "harness-upload"]),
+      attachmentId: Schema.optional(Schema.String),
+    }),
+  ).check(Schema.isMaxLength(20)),
+  checks: Schema.Array(
+    Schema.Struct({
+      label: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(500)),
+      status: Schema.Literals(["reported-pass", "reported-fail", "not-run"]),
+      provenance: Schema.Literal("assistant-reported"),
+    }),
+  ).check(Schema.isMaxLength(20)),
+  blockers: Schema.Array(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(500))).check(
+    Schema.isMaxLength(10),
+  ),
+});
+export type BotTaskResult = typeof BotTaskResult.Type;

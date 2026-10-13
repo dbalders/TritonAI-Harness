@@ -32,6 +32,7 @@ export interface DotPromptSchedule {
 /** Public scheduled-prompt projection; contains no storage or deduplication state. */
 export interface DotScheduledPrompt {
   readonly promptId: string;
+  readonly version?: number;
   readonly name: string;
   readonly prompt: string;
   readonly schedule: DotPromptSchedule;

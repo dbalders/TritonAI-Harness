@@ -4,7 +4,9 @@
  * testable: a task is never started twice, and a task whose thread cannot show
  * it ran is reported as not run rather than retried.
  */
-import type { OrchestrationThread } from "@t3tools/contracts";
+import type { BotTaskResult, OrchestrationThread } from "@t3tools/contracts";
+
+import { taskResultEvidence } from "./botTaskResults.ts";
 
 /** A task this computer claimed. Saved before its thread is created. */
 export interface HeldTask {
@@ -21,11 +23,20 @@ export interface HeldTask {
   readonly started: boolean;
   /** Saved before delivery so a failed delivery is retried, never rerun. */
   readonly outcome: TaskOutcome | null;
+  /** Exact staged bytes saved with the terminal receipt before the first upload. */
+  readonly pendingOutputs?:
+    | readonly {
+        readonly name: string;
+        readonly mimeType: string;
+        readonly dataBase64: string;
+      }[]
+    | undefined;
 }
 
 export interface TaskOutcome {
   readonly status: "completed" | "failed";
   readonly result: string;
+  readonly structuredResult?: BotTaskResult | undefined;
 }
 
 export type TaskProgress = { readonly kind: "pending" } | ({ readonly kind: "done" } & TaskOutcome);
@@ -38,8 +49,8 @@ const NOTHING_RAN =
   "Harness stopped before this task started, so nothing ran. Ask for it again to retry.";
 const MAX_RESULT_BYTES = 90_000;
 
-export function taskPrompt(title: string, prompt: string): string {
-  return `TritonAI Bot assignment: ${title}\n\nThe owner reviewed and approved this brief. Return the deliverable as your final reply.\n\n${prompt}`;
+export function taskPrompt(title: string, prompt: string, outputDirectory?: string): string {
+  return `TritonAI Bot assignment: ${title}\n\nThe owner reviewed and approved this brief. Return the deliverable as your final reply.\n\n${prompt}\n\n${outputDirectory ? `Save downloadable deliverables directly in ${JSON.stringify(outputDirectory)} (up to 3 PNG/JPEG/WebP/PDF/DOCX/TXT/MD/CSV/JSON files, 4 MiB each). Only files in this task's output directory will be returned to the owner. Do not copy unrelated files there. Existing project and provider permissions still apply; request any required approval to write to this directory, and do not broaden permissions.\n\n` : ""}End with an optional fenced bot-result JSON block containing summary, artifacts [{label,uri,kind:"artifact"|"source"}], checks [{label,status:"reported-pass"|"reported-fail"|"not-run"}], blockers [string]. Include HTTPS sources. Clearly state unperformed checks and unresolved blockers. Your statements are reported evidence, not independent provider verification.`;
 }
 
 /** Bot task threads keep the bot's title; an empty title falls back to a generic one. */
@@ -84,7 +95,7 @@ export function taskProgress(
         "The Harness thread for this task was deleted before it finished, so its result is unknown. Check for any changes it made before asking again.",
     };
   }
-  const reference = `Harness thread: ${thread.title}`;
+  const reference = `Harness thread: ${thread.title} (${held.threadId})`;
   const start = thread.messages.findIndex((message) => message.id === held.messageId);
   if (start === -1 && now - Date.parse(held.claimedAt) > START_GRACE_MS) {
     return { kind: "done", status: "failed", result: `${NOTHING_RAN}\n\n${reference}` };
@@ -109,6 +120,26 @@ export function taskProgress(
     };
   }
   const sessionBusy = thread.session?.status === "running" || thread.session?.status === "starting";
+  if (
+    start !== -1 &&
+    thread.latestTurn === null &&
+    (thread.session?.status === "error" ||
+      thread.session?.status === "stopped" ||
+      thread.session?.status === "interrupted")
+  ) {
+    const partial = replies
+      .map((message) => message.text.trim())
+      .filter(Boolean)
+      .join("\n\n");
+    const reason = thread.session.lastError || `The provider session ${thread.session.status}.`;
+    return {
+      kind: "done",
+      status: "failed",
+      result: capResult(
+        `${reason} This assignment's turn outcome could not be confirmed. Check the Harness thread before asking again.${partial ? `\n\nPartial reply (unconfirmed):\n${partial}` : ""}\n\n${reference}`,
+      ),
+    };
+  }
   const turnRunning = thread.latestTurn === null || thread.latestTurn.state === "running";
   const finished =
     start !== -1 && !sessionBusy && !turnRunning && replies.every((message) => !message.streaming);
@@ -137,11 +168,25 @@ export function taskProgress(
       kind: "done",
       status: "failed",
       result: capResult(`${reason}${text ? `\n\nPartial reply:\n${text}` : ""}\n\n${reference}`),
+      structuredResult: taskResultEvidence(text || reason, {
+        status: "failed",
+        threadId: held.threadId,
+        messageId: held.messageId,
+        ...(thread.latestTurn?.turnId ? { turnId: thread.latestTurn.turnId } : {}),
+        ...(thread.latestTurn?.completedAt ? { completedAt: thread.latestTurn.completedAt } : {}),
+      }),
     };
   }
   return {
     kind: "done",
     status: "completed",
     result: capResult(`${text || "Finished without a written reply."}\n\n${reference}`),
+    structuredResult: taskResultEvidence(text, {
+      status: "completed",
+      threadId: held.threadId,
+      messageId: held.messageId,
+      ...(thread.latestTurn?.turnId ? { turnId: thread.latestTurn.turnId } : {}),
+      ...(thread.latestTurn?.completedAt ? { completedAt: thread.latestTurn.completedAt } : {}),
+    }),
   };
 }
