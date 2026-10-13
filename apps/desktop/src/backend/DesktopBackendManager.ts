@@ -93,6 +93,7 @@ export interface DesktopBackendStartConfig extends BackendProcessContext {
   // when false `env` is passed verbatim. WSL mode opts out so a leaking
   // T3CODE_HOME can't pin the WSL backend to /mnt/c/...\.t3.
   readonly extendEnv: boolean;
+  readonly detached?: boolean;
   readonly bootstrap: DesktopBackendBootstrapValue;
   readonly bootstrapDelivery: DesktopBackendBootstrapDelivery;
   readonly httpBaseUrl: URL;
@@ -490,6 +491,7 @@ export const runBackendProcess = Effect.fn("runBackendProcess")(function* (
     cwd: options.cwd,
     env: options.env,
     extendEnv: options.extendEnv,
+    detached: options.detached,
     // In Electron main, process.execPath points to the Electron binary.
     // Run the child in Node mode so this backend process does not become a GUI app instance.
     stdin: options.bootstrapDelivery === "stdin" ? bootstrapStream : "ignore",

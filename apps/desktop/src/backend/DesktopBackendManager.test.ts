@@ -377,6 +377,46 @@ describe("DesktopBackendManager", () => {
     ),
   );
 
+  for (const detached of [false, undefined]) {
+    it.effect.skipIf(HostProcessPlatform.defaultValue() === "win32")(
+      detached === false
+        ? "keeps a non-detached backend in the parent's process group"
+        : "preserves the default detached backend process group",
+      () =>
+        Effect.gen(function* () {
+          let output = "";
+          const script = `
+            const { execFileSync } = require("node:child_process");
+            const group = (pid) => execFileSync("ps", ["-o", "pgid=", "-p", String(pid)], { encoding: "utf8" }).trim();
+            process.stdin.resume();
+            process.stdin.on("end", () => {
+              process.stdout.write(JSON.stringify({ child: group(process.pid), parent: group(process.ppid) }), () => process.exit(0));
+            });
+          `;
+          const result = yield* DesktopBackendManager.runBackendProcess({
+            ...baseConfig,
+            executablePath: process.execPath,
+            args: ["-e", script],
+            entryPath: "process-group-fixture",
+            cwd: process.cwd(),
+            env: {},
+            ...(detached === undefined ? {} : { detached }),
+            bootstrapDelivery: "stdin",
+            desktopTelemetryStream: Stream.empty,
+            onOutput: (stream, chunk) =>
+              Effect.sync(() => {
+                if (stream === "stdout") output += new TextDecoder().decode(chunk);
+              }),
+          }).pipe(Effect.provide(healthyHttpClientLayer));
+          assert.deepEqual(result.code, Option.some(0));
+          const groups = Schema.decodeSync(
+            Schema.fromJsonString(Schema.Struct({ child: Schema.String, parent: Schema.String })),
+          )(output);
+          assert.equal(groups.child === groups.parent, detached === false);
+        }).pipe(Effect.provide(NodeServices.layer), TestClock.withLive),
+    );
+  }
+
   it.effect.skipIf(HostProcessPlatform.defaultValue() === "win32")(
     "force-kills a backend that ignores termination after readiness fails",
     () =>

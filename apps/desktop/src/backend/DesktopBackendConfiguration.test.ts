@@ -145,6 +145,7 @@ const withHarness = <A, E, R>(
     | DesktopBackendConfiguration.DesktopBackendConfiguration
   >,
   platform: NodeJS.Platform = "darwin",
+  isDevelopment = false,
 ) =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
@@ -159,7 +160,14 @@ const withHarness = <A, E, R>(
           Layer.provideMerge(DesktopAppSettings.layerTest()),
           Layer.provideMerge(DesktopWslEnvironment.layerTest()),
           Layer.provideMerge(DesktopWslServerTree.layerTest()),
-          Layer.provideMerge(makeEnvironmentLayer(baseDir, { platform })),
+          Layer.provideMerge(
+            makeEnvironmentLayer(baseDir, {
+              platform,
+              ...(isDevelopment
+                ? { isPackaged: false, devServerUrl: "http://localhost:5173" }
+                : {}),
+            }),
+          ),
         ),
       ),
     );
@@ -278,6 +286,7 @@ describe("DesktopBackendConfiguration", () => {
         assert.equal(first.entryPath, environment.backendEntryPath);
         assert.equal(first.cwd, environment.backendCwd);
         assert.equal(first.captureOutput, true);
+        assert.isUndefined(first.detached);
         assert.equal(first.env.ELECTRON_RUN_AS_NODE, "1");
         assert.isUndefined(first.env.T3CODE_PORT);
         assert.isUndefined(first.env.T3CODE_MODE);
@@ -293,6 +302,18 @@ describe("DesktopBackendConfiguration", () => {
         assert.match(first.bootstrap.desktopBootstrapToken, /^[0-9a-f]{48}$/i);
         assert.equal(second.bootstrap.desktopBootstrapToken, first.bootstrap.desktopBootstrapToken);
       }),
+    ),
+  );
+
+  it.effect("keeps development backends in the dev runner's process group", () =>
+    withHarness(
+      Effect.gen(function* () {
+        const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+        const config = yield* configuration.resolvePrimary;
+        assert.isFalse(config.detached);
+      }),
+      "darwin",
+      true,
     ),
   );
 

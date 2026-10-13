@@ -886,6 +886,9 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
       // Primary wants process.env (PATH, shells, etc.), but the bootstrap
       // envelope owns the resolved TritonAI home for the backend.
       extendEnv: true,
+      // Keep development backends inside the dev runner's owned process group
+      // so stopping an instance also cleans up a backend during desktop shutdown.
+      ...(environment.isDevelopment ? { detached: false } : {}),
       bootstrap,
       bootstrapDelivery: "fd3",
       httpBaseUrl: backendExposure.httpBaseUrl,
