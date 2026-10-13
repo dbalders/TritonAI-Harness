@@ -280,7 +280,7 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
         <SettingsRow
           title={local ? `This computer · ${local.deviceName}` : "This computer"}
           description={
-            local && !localForService && local.state !== "off"
+            local && state && !localForService && local.state !== "off"
               ? "This Harness is paired with a different Bot service or account. Choose Allow to pair it with the signed-in account."
               : otherComputer && !thisComputer
                 ? `${describeThisComputer(localForService)} Allow moves task running here from ${otherComputer}.`

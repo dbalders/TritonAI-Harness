@@ -189,6 +189,49 @@ it("keeps a rejected result notice visible while another Harness task is running
   expect(container.textContent).toContain("full result and evidence remain saved");
 });
 
+it.each(["loading", "signed out", "expired session", "unreachable"])(
+  "preserves the local running task and result recovery notice when Bot state is %s",
+  async (scenario) => {
+    configuration.local = {
+      state: "running",
+      deviceId: "synthetic-device",
+      deviceName: "This Mac",
+      apiUrl: firstUrl,
+      userId: firstSession.email,
+      projectId: "synthetic-project",
+      currentTask: { taskId: "next", title: "Next report", threadId: "next-thread", startedAt: "" },
+      lastCheckInAt: null,
+      message:
+        "Your bot could not accept the result for “Earlier report”. The full result and evidence remain saved on this computer. Open “Earlier report” in Harness to review it.",
+    };
+    const fetchState = vi.spyOn(DotClient.prototype, "state");
+    if (scenario === "loading")
+      fetchState.mockImplementation(() => new Promise<DotState>(() => {}));
+    else if (scenario === "unreachable") fetchState.mockRejectedValue(new Error("Unavailable"));
+    else fetchState.mockResolvedValue(state(firstSession.email));
+    if (scenario === "signed out") saveDotSession(sessionStorage, firstUrl, null);
+    await act(async () => root.render(<BotSettings />));
+    if (scenario === "expired session") {
+      fetchState.mockRejectedValue(new DotApiError("Expired", 401));
+      await act(async () => vi.advanceTimersByTimeAsync(30_000));
+      expect(readDotSession(sessionStorage, firstUrl)).toBeNull();
+    }
+    if (scenario === "signed out") expect(fetchState).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("Running “Next report” in a Harness thread");
+    expect(container.textContent).toContain("could not accept the result for “Earlier report”");
+    expect(container.textContent).toContain("full result and evidence remain saved");
+    expect(container.textContent).not.toContain("paired with a different Bot service or account");
+    const stop = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent === "Stop running tasks here",
+    )!;
+    await act(async () => stop.click());
+    expect(configuration.command).toHaveBeenCalledWith({
+      environmentId: "synthetic-environment",
+      input: { apiUrl: firstUrl, ownerToken: null },
+    });
+  },
+);
+
 it.each(["signed out", "different service", "service disabled", "unreachable", "expired session"])(
   "can stop locally when %s without transmitting an unrelated owner token",
   async (scenario) => {
