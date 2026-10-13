@@ -9,6 +9,8 @@ Use this checkout's launcher so its implementation matches the code under test. 
 
 Each checkout owns one retained dev runner. Different worktrees can run simultaneously. A second launch in the same checkout returns the existing instance instead of replacing it. Builds and Electron bundles are checkout-local, so use another worktree for a second instance of the same branch.
 
+On memory-constrained hosts, run repository-wide checks and cold builds one at a time, then keep the ready instances running together. Reduce concurrency before retrying after heavy swapping, renderer resource errors or load-related test timeouts.
+
 ## Launch and identify
 
 Run in a retained terminal:
