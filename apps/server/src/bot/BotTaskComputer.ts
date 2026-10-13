@@ -96,6 +96,16 @@ const REQUEST_TIMEOUT = Duration.seconds(15);
 const OUTPUT_RETRY_WINDOW_MS = 24 * 3_600_000;
 const PROJECT_GONE = "The project for TritonAI Bot tasks no longer exists.";
 
+function permanentResultRejection(status: number): boolean {
+  return (
+    Number.isInteger(status) &&
+    status >= 400 &&
+    status < 500 &&
+    ![401, 408, 409, 425, 429].includes(status)
+  );
+}
+const PermanentResultRejection = Schema.Number.check(Schema.makeFilter(permanentResultRejection));
+
 const Outcome = Schema.Struct({
   status: Schema.Literals(["completed", "failed"]),
   result: Schema.String,
@@ -143,7 +153,7 @@ const Stored = Schema.Struct({
     Schema.Struct({
       title: Schema.String,
       threadId: Schema.String,
-      status: Schema.Literals([400, 413, 422]),
+      status: PermanentResultRejection,
     }),
   ),
 });
@@ -163,13 +173,11 @@ const RecoveryReceipt = Schema.Struct({
   claimedAt: Schema.String,
   outcome: Outcome,
   rejectedAt: Schema.String,
-  rejectedStatus: Schema.Literals([400, 413, 422]),
+  rejectedStatus: PermanentResultRejection,
 });
 const RecoveryReceiptJson = Schema.fromJsonString(RecoveryReceipt);
 const encodeRecoveryReceipt = Schema.encodeEffect(RecoveryReceiptJson);
 const decodeRecoveryReceipt = Schema.decodeUnknownEffect(RecoveryReceiptJson);
-const permanentResultRejection = (status: number): status is 400 | 413 | 422 =>
-  status === 400 || status === 413 || status === 422;
 
 function recoveryReceiptKey(stored: Stored, task: HeldTask): string {
   return `tritonai-bot-result-recovery-${NodeCrypto.createHash("sha256")
@@ -347,14 +355,15 @@ export const make = Effect.gen(function* () {
           : current
             ? "running"
             : (run.state ?? "idle");
-    const pendingDelivery =
-      state === "idle" ? stored?.held.find((task) => task.outcome !== null) : undefined;
+    const pendingDelivery = stored?.active
+      ? stored.held.find((task) => task.outcome !== null)
+      : undefined;
     const deliveryMessage = pendingDelivery
-      ? `Finished running “${taskThreadTitle(pendingDelivery.title)}”. Its saved result${pendingDelivery.pendingOutputs?.length ? " and files are" : " is"} awaiting delivery to your bot. Retrying automatically.`
+      ? `Finished running “${taskThreadTitle(pendingDelivery.title)}”. Its saved result${pendingDelivery.pendingOutputs?.length ? " and files are" : " is"} awaiting delivery to your bot. Retrying automatically. New assignments wait until saved result delivery finishes.`
       : null;
     const rejectedMessage =
       stored?.active && stored.deliveryWarning
-        ? `Your bot could not accept the result for “${taskThreadTitle(stored.deliveryWarning.title)}”. The full result and evidence remain saved on this computer. Open “${taskThreadTitle(stored.deliveryWarning.title)}” in Harness to review it. Other assignments can continue.`
+        ? `Your bot could not accept the result for “${taskThreadTitle(stored.deliveryWarning.title)}”. The full result and evidence remain saved on this computer. Open “${taskThreadTitle(stored.deliveryWarning.title)}” in Harness to review it.${state === "idle" && stored.held.length === 0 ? " Other assignments can continue." : ""}`
         : null;
     return {
       state,
@@ -372,7 +381,10 @@ export const make = Effect.gen(function* () {
           }
         : null,
       lastCheckInAt: stored?.active ? run.lastCheckInAt : null,
-      message: run.message ?? rejectedMessage ?? deliveryMessage,
+      message:
+        [run.message, deliveryMessage, rejectedMessage]
+          .filter((message) => message !== null)
+          .join(" ") || null,
     } satisfies ServerBotTaskComputerStatus;
   });
 
@@ -380,7 +392,7 @@ export const make = Effect.gen(function* () {
   const retainRejectedReceipt = (
     stored: Stored,
     task: HeldTask & { readonly outcome: TaskOutcome },
-    rejectedStatus: 400 | 413 | 422,
+    rejectedStatus: typeof PermanentResultRejection.Type,
     now: number,
   ) =>
     Effect.gen(function* () {

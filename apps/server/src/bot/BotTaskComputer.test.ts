@@ -959,7 +959,7 @@ it.layer(NodeServices.layer)("BotTaskComputer", (it) => {
     }).pipe(Effect.provide(services(bot, harness)));
   });
 
-  for (const rejection of [400, 413, 422] as const) {
+  for (const rejection of [400, 403, 404, 410, 413, 415, 422] as const) {
     it.effect(
       "retains original evidence and settles result " +
         rejection +
@@ -1140,6 +1140,147 @@ it.layer(NodeServices.layer)("BotTaskComputer", (it) => {
         assert.isFalse(Object.hasOwn(held[0] as object, "deliveryMode"));
         assert.lengthOf(bot.results, 0);
         assert.strictEqual(harness.commands.length, 2);
+      }).pipe(Effect.provide(services(bot, harness)));
+    },
+  );
+
+  for (const rejection of [403, 404, 410, 415]) {
+    it.effect(
+      "retains a recovery receipt after both result deliveries return " +
+        rejection +
+        " and continues new work",
+      () => {
+        const bot = new FakeBot(),
+          harness = new FakeHarness();
+        bot.tasks = [
+          { taskId: "double-reject", title: "Rejected report", prompt: "Write report" },
+          { taskId: "next", title: "Next", prompt: "Continue work" },
+        ];
+        return Effect.gen(function* () {
+          yield* TestClock.setTime(START);
+          const computer = yield* BotTaskComputer.BotTaskComputer;
+          yield* allow(computer);
+          const first = harness.commands.find((command) => command.type === "thread.create")!;
+          harness.finish(first.threadId, reportWithBlockers());
+          bot.resultStatuses = [rejection, rejection];
+          yield* TestClock.adjust("30 seconds");
+          yield* computer.tick;
+          assert.lengthOf(bot.results, 0);
+          const receipt = yield* readResultRecovery("double-reject");
+          assert.strictEqual(receipt.rejectedStatus, rejection);
+          assert.deepInclude((yield* readRecoveryJournal).deliveryWarning, { status: rejection });
+          assert.strictEqual((yield* computer.getStatus).currentTask?.taskId, "next");
+          const restarted = yield* BotTaskComputer.make;
+          yield* restarted.tick;
+          assert.strictEqual((yield* restarted.getStatus).currentTask?.taskId, "next");
+          assert.include((yield* restarted.getStatus).message!, "could not accept the result");
+          assert.deepEqual(yield* readResultRecovery("double-reject"), receipt);
+          assert.strictEqual(
+            bot.calls.filter((call) => call.path === "/harness/results").length,
+            2,
+          );
+          assert.strictEqual(harness.commands.length, 4);
+        }).pipe(Effect.provide(services(bot, harness)));
+      },
+    );
+  }
+
+  for (const retryStatus of [408, 425, 429]) {
+    it.effect(
+      "keeps result " + retryStatus + " for retry without archiving or claiming more work",
+      () => {
+        const bot = new FakeBot(),
+          harness = new FakeHarness();
+        bot.tasks = [
+          { taskId: "retryable", title: "Report", prompt: "Write report" },
+          { taskId: "next", title: "Next", prompt: "Continue work" },
+        ];
+        return Effect.gen(function* () {
+          yield* TestClock.setTime(START);
+          const computer = yield* BotTaskComputer.BotTaskComputer;
+          const secrets = yield* ServerSecretStore.ServerSecretStore;
+          yield* allow(computer);
+          const first = harness.commands.find((command) => command.type === "thread.create")!;
+          harness.finish(first.threadId, reportWithBlockers());
+          bot.resultStatus = retryStatus;
+          yield* TestClock.adjust("30 seconds");
+          yield* computer.tick;
+          assert.isTrue(Option.isNone(yield* secrets.get(resultRecoveryKey("retryable"))));
+          const held = yield* decodeRecoveryHeld((yield* readRecoveryJournal).held);
+          assert.lengthOf(held, 1);
+          assert.isFalse(Object.hasOwn(held[0] as object, "deliveryMode"));
+          assert.strictEqual(bot.tasks.length, 1);
+          assert.strictEqual(harness.commands.length, 2);
+          const restarted = yield* BotTaskComputer.make;
+          yield* restarted.tick;
+          assert.isTrue(Option.isNone(yield* secrets.get(resultRecoveryKey("retryable"))));
+          assert.strictEqual(bot.tasks.length, 1);
+          assert.strictEqual(harness.commands.length, 2);
+          const requests = bot.calls.filter((call) => call.path === "/harness/results");
+          assert.lengthOf(requests, 2);
+          assert.deepEqual(requests[0]!.body, requests[1]!.body);
+          bot.resultStatus = 200;
+          yield* restarted.tick;
+          assert.strictEqual((yield* restarted.getStatus).currentTask?.taskId, "next");
+          assert.deepInclude(bot.results[0]!, { taskId: "retryable", status: "completed" });
+          assert.strictEqual(harness.commands.length, 4);
+        }).pipe(Effect.provide(services(bot, harness)));
+      },
+    );
+  }
+
+  it.effect(
+    "shows a current stalled delivery before an earlier rejection warning until new claims can resume",
+    () => {
+      const bot = new FakeBot(),
+        harness = new FakeHarness();
+      bot.tasks = [
+        { taskId: "rejected-old", title: "Earlier report", prompt: "Write report" },
+        { taskId: "stalled", title: "Current report", prompt: "Write report" },
+        { taskId: "next", title: "Next", prompt: "Continue work" },
+      ];
+      return Effect.gen(function* () {
+        yield* TestClock.setTime(START);
+        const computer = yield* BotTaskComputer.BotTaskComputer;
+        yield* allow(computer);
+        const first = harness.commands.find((command) => command.type === "thread.create")!;
+        harness.finish(first.threadId, "Earlier report");
+        bot.resultStatuses = [400, 422];
+        yield* TestClock.adjust("30 seconds");
+        yield* computer.tick;
+        const second = harness.commands.filter((command) => command.type === "thread.create")[1]!;
+        harness.finish(second.threadId, "Current report finished");
+        bot.resultStatus = 503;
+        yield* computer.tick;
+        let status = yield* computer.getStatus;
+        assert.include(status.message!, "Finished running “Current report”");
+        assert.include(status.message!, "saved result is awaiting delivery");
+        assert.include(
+          status.message!,
+          "New assignments wait until saved result delivery finishes",
+        );
+        assert.include(status.message!, "could not accept the result for “Earlier report”");
+        assert.notInclude(status.message!, "Other assignments can continue");
+        assert.isBelow(
+          status.message!.indexOf("Current report"),
+          status.message!.indexOf("Earlier report"),
+        );
+        assert.strictEqual(bot.tasks.length, 1);
+        assert.strictEqual(harness.commands.length, 4);
+        const restarted = yield* BotTaskComputer.make;
+        yield* restarted.tick;
+        status = yield* restarted.getStatus;
+        assert.include(status.message!, "Current report");
+        assert.include(status.message!, "Earlier report");
+        assert.notInclude(status.message!, "Other assignments can continue");
+        assert.strictEqual(bot.tasks.length, 1);
+        bot.resultStatus = 200;
+        yield* restarted.tick;
+        status = yield* restarted.getStatus;
+        assert.strictEqual(status.currentTask?.taskId, "next");
+        assert.include(status.message!, "Earlier report");
+        assert.notInclude(status.message!, "saved result is awaiting delivery");
+        assert.strictEqual(harness.commands.length, 6);
       }).pipe(Effect.provide(services(bot, harness)));
     },
   );
