@@ -194,6 +194,41 @@ describe("DesktopAppIdentity", () => {
     }),
   );
 
+  it.effect("keeps the native app name stable across development commit labels", () =>
+    Effect.gen(function* () {
+      const calls: ElectronAppCalls = {
+        setAboutPanelOptions: [],
+        setDockIcon: [],
+        setName: [],
+      };
+      for (const label of ["feature-a abc1234", "feature-a def5678"]) {
+        yield* withIdentity(
+          Effect.gen(function* () {
+            const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
+            yield* identity.configure;
+            const environment = yield* DesktopEnvironment.DesktopEnvironment;
+            assert.equal(environment.displayName, `TritonAI Harness (Dev: ${label})`);
+          }),
+          {
+            calls,
+            environment: {
+              isPackaged: false,
+              env: {
+                VITE_DEV_SERVER_URL: "http://127.0.0.1:5733",
+                T3CODE_DEV_INSTANCE_NAME: label,
+              },
+            },
+          },
+        );
+      }
+      assert.deepEqual(calls.setName, ["TritonAI Harness", "TritonAI Harness"]);
+      assert.deepEqual(
+        calls.setAboutPanelOptions.map((options) => options.applicationName),
+        ["TritonAI Harness", "TritonAI Harness"],
+      );
+    }),
+  );
+
   it.effect("keeps using the legacy userData path when it already exists", () =>
     withIdentity(
       Effect.gen(function* () {
