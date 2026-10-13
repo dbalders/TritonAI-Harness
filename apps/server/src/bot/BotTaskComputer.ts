@@ -361,7 +361,10 @@ export const make = Effect.gen(function* () {
           };
           const outputs = outcome.structuredResult
             ? yield* Effect.tryPromise(() =>
-                collectTaskOutputFiles(taskOutputDirectory(serverConfig.stateDir, task.threadId)),
+                collectTaskOutputFiles(
+                  taskOutputDirectory(serverConfig.stateDir, task.threadId),
+                  platform,
+                ),
               ).pipe(
                 Effect.orElseSucceed(() => ({
                   files: [],
@@ -393,6 +396,9 @@ export const make = Effect.gen(function* () {
             workerHeaders(stored),
             { claimId: task.claimId, ...file },
           );
+          if (yield* handleRejection(stored, reply)) {
+            return { ...stored, active: false, replaced: reply.json.replaced === true };
+          }
           const evidence = outcome.structuredResult;
           if (
             reply.status === 404 ||

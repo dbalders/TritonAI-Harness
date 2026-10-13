@@ -13,6 +13,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as TestClock from "effect/testing/TestClock";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
@@ -313,8 +314,100 @@ const allow = (computer: BotTaskComputer.BotTaskComputer["Service"]) =>
   computer.allow({ apiUrl: API, ownerToken: "owner-session", projectId: PROJECT });
 
 it.layer(NodeServices.layer)("BotTaskComputer", (it) => {
+  it.effect(
+    "returns Windows text results and input files with an explicit generated-output blocker",
+    () => {
+      const bot = new FakeBot(),
+        harness = new FakeHarness();
+      bot.tasks = [
+        {
+          taskId: "windows-output",
+          title: "Windows report",
+          prompt: "Review input",
+          attachments: [screenshot, document],
+        },
+      ];
+      return Effect.gen(function* () {
+        yield* TestClock.setTime(START);
+        const computer = yield* BotTaskComputer.BotTaskComputer;
+        yield* allow(computer);
+        const turn = harness.commands.find((command) => command.type === "thread.turn.start")!;
+        assert.lengthOf(turn.message.attachments, 2);
+        harness.finish(turn.threadId, "Windows text result");
+        yield* computer.tick;
+        assert.strictEqual(bot.results[0]!.status, "completed");
+        assert.include(String(bot.results[0]!.result), "Windows text result");
+        const result = bot.results[0]!.structuredResult as {
+          artifacts: unknown[];
+          blockers: string[];
+        };
+        assert.lengthOf(result.artifacts, 0);
+        assert.include(result.blockers[0]!, "cannot currently be safely exported on Windows");
+        assert.lengthOf(
+          bot.calls.filter((call) => call.path.endsWith("/artifacts")),
+          0,
+        );
+      }).pipe(
+        Effect.provide(services(bot, harness)),
+        Effect.provideService(HostProcessPlatform, "win32"),
+      );
+    },
+  );
+
+  for (const rejection of ["expired", "replaced"] as const) {
+    it.effect.skipIf(HostProcessPlatform.defaultValue() === "win32")(
+      `stops pairing after ${rejection} artifact-upload authentication while keeping the saved result for re-pairing`,
+      () => {
+        const bot = new FakeBot(),
+          harness = new FakeHarness();
+        bot.tasks = [{ taskId: "upload-auth", title: "Report", prompt: "Return report" }];
+        return Effect.gen(function* () {
+          yield* TestClock.setTime(START);
+          const config = yield* ServerConfig.ServerConfig;
+          const computer = yield* BotTaskComputer.BotTaskComputer;
+          const secrets = yield* ServerSecretStore.ServerSecretStore;
+          yield* allow(computer);
+          const turn = harness.commands.find((command) => command.type === "thread.turn.start")!;
+          const output = taskOutputDirectory(config.stateDir, turn.threadId);
+          yield* Effect.tryPromise(() =>
+            NodeFSP.writeFile(NodePath.join(output, "report.txt"), "Preserved bytes"),
+          );
+          harness.finish(turn.threadId, "Finished report");
+          if (rejection === "replaced") bot.replaced = true;
+          else bot.artifactStatus = 401;
+          yield* computer.tick;
+          const status = yield* computer.getStatus;
+          assert.strictEqual(status.state, rejection === "replaced" ? "replaced" : "off");
+          assert.include(
+            status.message!,
+            rejection === "replaced" ? "Another computer" : "Choose Allow",
+          );
+          const raw = yield* secrets.get("tritonai-bot-task-computer");
+          const saved = yield* decodeSavedOutputJournal(
+            new TextDecoder().decode(Option.getOrThrow(raw)),
+          );
+          assert.strictEqual(saved.held[0]!.outcome.status, "completed");
+          assert.strictEqual(
+            saved.held[0]!.pendingOutputs[0]!.dataBase64,
+            Buffer.from("Preserved bytes").toString("base64"),
+          );
+          assert.lengthOf(bot.results, 0);
+          yield* Effect.tryPromise(() => NodeFSP.rm(output, { recursive: true }));
+          harness.threads.delete(turn.threadId);
+          bot.replaced = false;
+          bot.current = "repaired-token";
+          bot.artifactStatus = 200;
+          yield* allow(computer);
+          assert.strictEqual(bot.results[0]!.status, "completed");
+          assert.include(String(bot.results[0]!.result), "Finished report");
+          assert.lengthOf(harness.commands, 2);
+        }).pipe(Effect.provide(services(bot, harness)));
+      },
+    );
+  }
+
   for (const laterChange of ["follow-up", "deleted"] as const) {
-    it.effect(
+    it.effect.skipIf(HostProcessPlatform.defaultValue() === "win32")(
       `preserves a finished receipt and exact file bytes after a lost upload response and ${laterChange}`,
       () => {
         const bot = new FakeBot(),
@@ -374,52 +467,57 @@ it.layer(NodeServices.layer)("BotTaskComputer", (it) => {
     );
   }
 
-  it.effect("journals each successful artifact receipt before retrying the next upload", () => {
-    const bot = new FakeBot(),
-      harness = new FakeHarness();
-    bot.tasks = [{ taskId: "partial-upload", title: "Two reports", prompt: "Return reports" }];
-    return Effect.gen(function* () {
-      yield* TestClock.setTime(START);
-      const config = yield* ServerConfig.ServerConfig;
-      const computer = yield* BotTaskComputer.BotTaskComputer;
-      const secrets = yield* ServerSecretStore.ServerSecretStore;
-      yield* allow(computer);
-      const turn = harness.commands.find((command) => command.type === "thread.turn.start")!;
-      const output = taskOutputDirectory(config.stateDir, turn.threadId);
-      yield* Effect.tryPromise(() => NodeFSP.writeFile(NodePath.join(output, "a.txt"), "A"));
-      yield* Effect.tryPromise(() => NodeFSP.writeFile(NodePath.join(output, "b.txt"), "B"));
-      harness.finish(turn.threadId, "Two reports completed");
-      bot.artifactStatuses = [200, 503];
-      yield* computer.tick;
-      const raw = yield* secrets.get("tritonai-bot-task-computer");
-      const saved = yield* decodeSavedOutputJournal(
-        new TextDecoder().decode(Option.getOrThrow(raw)),
-      );
-      assert.strictEqual(saved.held[0]!.outcome.structuredResult!.artifacts[0]!.label, "a.txt");
-      assert.deepEqual(
-        saved.held[0]!.pendingOutputs.map((file) => file.name),
-        ["b.txt"],
-      );
-      yield* Effect.tryPromise(() => NodeFSP.rm(output, { recursive: true }));
-      harness.threads.delete(turn.threadId);
-      const restarted = yield* BotTaskComputer.make;
-      yield* restarted.tick;
-      assert.deepEqual(
-        bot.calls.filter((call) => call.path.endsWith("/artifacts")).map((call) => call.body.name),
-        ["a.txt", "b.txt", "b.txt"],
-      );
-      assert.strictEqual(bot.artifactWrites.size, 2);
-      assert.strictEqual(bot.results[0]!.status, "completed");
-      assert.deepEqual(
-        (bot.results[0]!.structuredResult as { artifacts: Array<{ label: string }> }).artifacts.map(
-          (item) => item.label,
-        ),
-        ["b.txt", "a.txt"],
-      );
-    }).pipe(Effect.provide(services(bot, harness)));
-  });
+  it.effect.skipIf(HostProcessPlatform.defaultValue() === "win32")(
+    "journals each successful artifact receipt before retrying the next upload",
+    () => {
+      const bot = new FakeBot(),
+        harness = new FakeHarness();
+      bot.tasks = [{ taskId: "partial-upload", title: "Two reports", prompt: "Return reports" }];
+      return Effect.gen(function* () {
+        yield* TestClock.setTime(START);
+        const config = yield* ServerConfig.ServerConfig;
+        const computer = yield* BotTaskComputer.BotTaskComputer;
+        const secrets = yield* ServerSecretStore.ServerSecretStore;
+        yield* allow(computer);
+        const turn = harness.commands.find((command) => command.type === "thread.turn.start")!;
+        const output = taskOutputDirectory(config.stateDir, turn.threadId);
+        yield* Effect.tryPromise(() => NodeFSP.writeFile(NodePath.join(output, "a.txt"), "A"));
+        yield* Effect.tryPromise(() => NodeFSP.writeFile(NodePath.join(output, "b.txt"), "B"));
+        harness.finish(turn.threadId, "Two reports completed");
+        bot.artifactStatuses = [200, 503];
+        yield* computer.tick;
+        const raw = yield* secrets.get("tritonai-bot-task-computer");
+        const saved = yield* decodeSavedOutputJournal(
+          new TextDecoder().decode(Option.getOrThrow(raw)),
+        );
+        assert.strictEqual(saved.held[0]!.outcome.structuredResult!.artifacts[0]!.label, "a.txt");
+        assert.deepEqual(
+          saved.held[0]!.pendingOutputs.map((file) => file.name),
+          ["b.txt"],
+        );
+        yield* Effect.tryPromise(() => NodeFSP.rm(output, { recursive: true }));
+        harness.threads.delete(turn.threadId);
+        const restarted = yield* BotTaskComputer.make;
+        yield* restarted.tick;
+        assert.deepEqual(
+          bot.calls
+            .filter((call) => call.path.endsWith("/artifacts"))
+            .map((call) => call.body.name),
+          ["a.txt", "b.txt", "b.txt"],
+        );
+        assert.strictEqual(bot.artifactWrites.size, 2);
+        assert.strictEqual(bot.results[0]!.status, "completed");
+        assert.deepEqual(
+          (
+            bot.results[0]!.structuredResult as { artifacts: Array<{ label: string }> }
+          ).artifacts.map((item) => item.label),
+          ["b.txt", "a.txt"],
+        );
+      }).pipe(Effect.provide(services(bot, harness)));
+    },
+  );
 
-  it.effect(
+  it.effect.skipIf(HostProcessPlatform.defaultValue() === "win32")(
     "delivers real images and persists downloadable outputs before retrying a result",
     () => {
       const bot = new FakeBot(),

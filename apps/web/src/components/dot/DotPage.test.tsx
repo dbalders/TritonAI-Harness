@@ -422,6 +422,96 @@ describe("TritonAI Bot page integration", () => {
     expect(container.querySelector("aside")).not.toBeNull();
   });
 
+  it("keeps a reopened workspace's new session when an unmounted workspace receives a late 401", async () => {
+    vi.spyOn(crypto.subtle, "digest").mockResolvedValue(new ArrayBuffer(32));
+    const newSession = { ...session, ownerToken: "reopened-owner-token" };
+    state = {
+      ...withPanels(),
+      runs: [
+        {
+          runId: "brief",
+          threadId: "dot",
+          event: { kind: "routine" },
+          status: "completed",
+          createdAt: at,
+          updatedAt: at,
+          result: { summary: "Original output" },
+        },
+      ],
+    };
+    let finishRating!: (response: Response) => void;
+    onPost = async (path) => {
+      if (path.startsWith("/feedback/"))
+        return new Promise<Response>((resolve) => {
+          finishRating = resolve;
+        });
+      if (path === "/client/connect/start")
+        return Response.json({
+          ok: true,
+          requestId: "reopened-connection",
+          expiresAt: session.expiresAt,
+          verificationUrl: `${serviceUrl}/sign-in`,
+          userCode: "SYNTHETIC",
+        });
+      if (path === "/client/connect/token") return Response.json({ ok: true, ...newSession });
+      return Response.json({ ok: true });
+    };
+    await render();
+    await click("👍 Useful");
+    await act(async () => root.render(null));
+    await render();
+    await click("Disconnect");
+    await click("Sign in with UC San Diego");
+    await act(async () =>
+      finishRating(
+        Response.json({ ok: false, error: "Unmounted owner expired." }, { status: 401 }),
+      ),
+    );
+    expect(JSON.parse(sessionStorage.getItem(`dot-session:${serviceUrl}`)!).ownerToken).toBe(
+      newSession.ownerToken,
+    );
+    expect(container.textContent).not.toContain("Unmounted owner expired.");
+    expect(container.querySelector("aside")).not.toBeNull();
+    await act(async () => root.render(null));
+    await render();
+    expect(container.textContent).not.toContain("Connect to your TritonAI Bot");
+    expect(container.querySelector("aside")).not.toBeNull();
+  });
+
+  it("does not remove a replacement persisted session when the mounted workspace's old request fails", async () => {
+    const newSession = { ...session, ownerToken: "other-workspace-owner-token" };
+    state = {
+      ...withPanels(),
+      runs: [
+        {
+          runId: "brief",
+          threadId: "dot",
+          event: { kind: "routine" },
+          status: "completed",
+          createdAt: at,
+          updatedAt: at,
+          result: { summary: "Original output" },
+        },
+      ],
+    };
+    let finishRating!: (response: Response) => void;
+    onPost = async (path) =>
+      path.startsWith("/feedback/")
+        ? new Promise<Response>((resolve) => {
+            finishRating = resolve;
+          })
+        : Response.json({ ok: true });
+    await render();
+    await click("👍 Useful");
+    saveDotSession(sessionStorage, serviceUrl, newSession);
+    await act(async () =>
+      finishRating(Response.json({ ok: false, error: "Old owner expired." }, { status: 401 })),
+    );
+    expect(JSON.parse(sessionStorage.getItem(`dot-session:${serviceUrl}`)!).ownerToken).toBe(
+      newSession.ownerToken,
+    );
+  });
+
   it("sends the displayed controlVersion when pausing and uses the refreshed state", async () => {
     onPost = async (path) => {
       state = { ...state, user: { ...state.user, paused: path === "/pause", controlVersion: 4 } };

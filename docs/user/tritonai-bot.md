@@ -64,6 +64,11 @@ is not proof that the intended outcome is correct. Downloadable files come from
 the task computer; other artifacts and checks may be reported by the task agent.
 Review them before relying on the result.
 
+Generated task files can be returned automatically from macOS and Linux task
+computers. Windows task computers return text results and support input attachments,
+but generated file export is currently unavailable. The result lists this blocker;
+retrieve those files from the output directory named in the Harness assignment.
+
 Choose **Attach files** to include up to three documents or screenshots in a
 message, with a 4 MB limit per file. Supported files are TXT, Markdown, CSV, JSON,
 PDF, Word DOCX, PNG, JPEG, and WebP. Wait for the upload to finish, then send your

@@ -114,7 +114,11 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
 
   const saveSession = useCallback(
     (value: DotSession | null) => {
-      saveDotSession(sessionStorage, serviceUrl, value);
+      if (!mounted.current) return;
+      const storedSession = readDotSession(sessionStorage, serviceUrl);
+      // Another workspace may have replaced the persisted session while this one was waiting.
+      if (value || !storedSession || storedSession.ownerToken === activeOwner.current)
+        saveDotSession(sessionStorage, serviceUrl, value);
       const ownerChanged = activeOwner.current !== value?.ownerToken;
       activeOwner.current = value?.ownerToken;
       setSession(value);
@@ -154,6 +158,7 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
   const reportError = useCallback(
     // Pass the owner token a request used: a late failure from a replaced session must not touch the current one.
     (cause: unknown, ownerToken?: string) => {
+      if (!mounted.current) return;
       if (ownerToken !== undefined && ownerToken !== activeOwner.current) return;
       if (cause instanceof DotApiError && cause.status === 401) saveSession(null);
       setError(cause instanceof Error ? cause.message : "Could not reach your bot.");
