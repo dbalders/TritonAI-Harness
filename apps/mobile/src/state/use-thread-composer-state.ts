@@ -62,6 +62,7 @@ import {
   scheduleUnusedComposerAttachmentCleanup,
   setComposerDraftText,
   setStickyComposerModelSelection,
+  setStickyComposerRuntimeMode,
   updateComposerDraftSettings,
   useComposerDraft,
 } from "./use-composer-drafts";
@@ -775,6 +776,7 @@ export function useThreadComposerState() {
         return;
       }
       updateComposerDraftSettings(selectedThreadKey, { runtimeMode: value });
+      setStickyComposerRuntimeMode(value);
     },
     [selectedThreadKey],
   );

@@ -20,6 +20,8 @@ import {
   type ThemeVariants,
 } from "@t3tools/shared/themePalettes";
 
+import { QUIET_WORKSPACE_DARK_COLORS, QUIET_WORKSPACE_LIGHT_COLORS } from "./tritonaiThemeColors";
+
 export { EMBER_THEME, GROVE_THEME, IRIS_THEME, OCEAN_THEME, T3_CHAT_THEME, THEME_COLOR_ROLES };
 export type { ThemeAppearance, ThemeColorRole, ThemeColors, ThemeDefinition, ThemeVariants };
 
@@ -32,7 +34,7 @@ const EMBER_THEME_LABEL = "Ember";
 const IRIS_THEME_ID = "iris" as const;
 const IRIS_THEME_LABEL = "Iris";
 const UCSD_THEME_ID = "ucsd" as const;
-const UCSD_THEME_LABEL = "UC San Diego";
+const UCSD_THEME_LABEL = "Quiet Workspace";
 export const THEME_FILE_VERSION = 1 as const;
 export const CUSTOM_THEMES_STORAGE_KEY = "t3code:themes:v1";
 export const THEME_FOLLOW_SYSTEM_STORAGE_KEY = "t3code:theme-follow-system";
@@ -1083,37 +1085,14 @@ export function updateThemeColorFamily(
   }
 }
 
-function themeActionColors(
-  action: string,
-): Pick<ThemeColors, "messageAction" | "messageActionForeground" | "messageActionHover"> {
-  const rgb = parseThemeRgbColor(action, THEME_DARK_FOREGROUND);
-  const foreground = readableThemeForeground(rgb);
-  const towardOpposite =
-    foreground === THEME_LIGHT_FOREGROUND || foreground === THEME_WHITE_FOREGROUND
-      ? THEME_BLACK_FOREGROUND
-      : THEME_WHITE_FOREGROUND;
-  return {
-    messageAction: action,
-    messageActionForeground: themeRgbToHexColor(foreground),
-    messageActionHover: themeRgbToHexColor(mixThemeRgbColors(rgb, towardOpposite, 0.12)),
-  };
-}
-
-/** UC San Diego's TritonAI palette, kept as a first-class built-in theme. */
+/** The TritonAI default keeps its persisted UCSD ids readable. */
 export const UCSD_THEME: ThemeDefinition = {
   id: UCSD_THEME_ID,
   label: UCSD_THEME_LABEL,
-  sidebarArtwork: true,
   appearance: "light",
-  colors: {
-    ...createVividThemeColors("light", "#f7f9fb", "#00629b"),
-    ...themeActionColors("#182b49"),
-  },
+  colors: decodeThemeColors(QUIET_WORKSPACE_LIGHT_COLORS),
   variants: {
-    dark: {
-      ...createVividThemeColors("dark", "#101c30", "#ffcd00"),
-      ...themeActionColors("#00c6d7"),
-    },
+    dark: decodeThemeColors(QUIET_WORKSPACE_DARK_COLORS),
   },
 };
 

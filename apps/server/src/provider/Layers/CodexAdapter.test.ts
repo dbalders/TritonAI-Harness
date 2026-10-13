@@ -736,6 +736,71 @@ const reconciliationLayer = it.layer(
 );
 
 reconciliationLayer("CodexAdapter integration availability reconciliation", (it) => {
+  it.effect("releases the previous Codex writer before resuming with a new runtime mode", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("thread-writer-runtime-mode");
+      yield* adapter.startSession({ threadId, runtimeMode: "auto" });
+      const previous = reconciliationRuntimeFactory.lastRuntime!;
+      const { resumeCursor } = yield* previous.getSession;
+      let writerReleased = false;
+      previous.closeImpl.mockImplementationOnce(async () => {
+        writerReleased = true;
+      });
+      reconciliationRuntimeFactory.configureNextRuntime((runtime) => {
+        runtime.onStart = () =>
+          Effect.sync(() => NodeAssert.equal(writerReleased, true, "Codex writer is still active"));
+      });
+
+      const session = yield* adapter.startSession({
+        threadId,
+        runtimeMode: "full-access",
+        resumeCursor,
+      });
+
+      NodeAssert.equal(session.runtimeMode, "full-access");
+      NodeAssert.deepStrictEqual(session.resumeCursor, resumeCursor);
+      NodeAssert.equal(previous.closeImpl.mock.calls.length, 1);
+      yield* adapter.sendTurn({
+        threadId,
+        input: "continue the conversation",
+        attachments: [],
+      });
+      NodeAssert.equal(reconciliationRuntimeFactory.lastRuntime?.sendTurnImpl.mock.calls.length, 1);
+    }),
+  );
+
+  it.effect("releases the previous Codex writer before reconciling integration tools", () =>
+    Effect.gen(function* () {
+      reconciliationAvailability.generation = 90;
+      reconciliationAvailability.available = false;
+      reconciliationAvailability.advancesDuringPrepare = 0;
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("thread-writer-tool-reconciliation");
+      yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
+      const previous = reconciliationRuntimeFactory.lastRuntime!;
+      let writerReleased = false;
+      previous.closeImpl.mockImplementationOnce(async () => {
+        writerReleased = true;
+      });
+      reconciliationRuntimeFactory.configureNextRuntime((runtime) => {
+        runtime.onStart = () =>
+          Effect.sync(() => NodeAssert.equal(writerReleased, true, "Codex writer is still active"));
+      });
+      reconciliationAvailability.generation = 91;
+      reconciliationAvailability.available = true;
+
+      yield* adapter.sendTurn({ threadId, input: "use newly connected tools", attachments: [] });
+
+      const replacement = reconciliationRuntimeFactory.lastRuntime!;
+      NodeAssert.deepStrictEqual(replacement.options.resumeCursor, {
+        threadId: "provider-thread-1",
+      });
+      NodeAssert.equal(replacement.sendTurnImpl.mock.calls.length, 1);
+      NodeAssert.equal(previous.closeImpl.mock.calls.length, 1);
+    }),
+  );
+
   it.effect("forwards the registry result through the direct dynamic-tool path", () =>
     Effect.gen(function* () {
       reconciliationAvailability.generation = 1;
@@ -1221,7 +1286,7 @@ reconciliationLayer("CodexAdapter integration availability reconciliation", (it)
     }),
   );
 
-  it.effect("removes a published replacement when its restart is interrupted", () =>
+  it.effect("closes an unstarted replacement when its writer handoff is interrupted", () =>
     Effect.gen(function* () {
       reconciliationAvailability.generation = 65;
       reconciliationAvailability.available = false;
@@ -1250,7 +1315,8 @@ reconciliationLayer("CodexAdapter integration availability reconciliation", (it)
         replacementClosed.resolve();
         return undefined;
       });
-      NodeAssert.equal(yield* adapter.hasSession(threadId), true);
+      NodeAssert.equal(yield* adapter.hasSession(threadId), false);
+      NodeAssert.equal(replacement.startImpl.mock.calls.length, 0);
 
       yield* Fiber.interrupt(restart);
       NodeAssert.equal(yield* adapter.hasSession(threadId), false);
@@ -1260,6 +1326,75 @@ reconciliationLayer("CodexAdapter integration availability reconciliation", (it)
       yield* Effect.promise(() => initialRuntimeClosed.promise);
       NodeAssert.equal(yield* adapter.hasSession(threadId), false);
       NodeAssert.equal(replacement.closeImpl.mock.calls.length, 1);
+    }),
+  );
+
+  it.effect("waits for interrupted teardown before resuming the same Codex thread", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("thread-writer-interrupted-teardown");
+      yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
+      const previous = reconciliationRuntimeFactory.lastRuntime!;
+      const { resumeCursor } = yield* previous.getSession;
+      const closeStarted = Promise.withResolvers<void>();
+      const releaseClose = Promise.withResolvers<void>();
+      let writerReleased = false;
+      previous.closeImpl.mockImplementationOnce(async () => {
+        closeStarted.resolve();
+        await releaseClose.promise;
+        writerReleased = true;
+      });
+      const stop = yield* adapter.stopSession(threadId).pipe(Effect.forkChild);
+      yield* Effect.promise(() => closeStarted.promise);
+      yield* Fiber.interrupt(stop);
+
+      const prepared = Promise.withResolvers<void>();
+      reconciliationRuntimeFactory.configureNextRuntime((runtime) => {
+        runtime.onStart = () =>
+          Effect.sync(() => NodeAssert.equal(writerReleased, true, "Codex writer is still active"));
+        prepared.resolve();
+      });
+      const restart = yield* adapter
+        .startSession({ threadId, runtimeMode: "full-access", resumeCursor })
+        .pipe(Effect.forkChild);
+      yield* Effect.promise(() => prepared.promise);
+      NodeAssert.equal(yield* adapter.hasSession(threadId), false);
+      NodeAssert.equal(reconciliationRuntimeFactory.lastRuntime?.startImpl.mock.calls.length, 0);
+      releaseClose.resolve();
+
+      const session = yield* Fiber.join(restart);
+      NodeAssert.deepStrictEqual(session.resumeCursor, resumeCursor);
+      NodeAssert.equal(yield* adapter.hasSession(threadId), true);
+      NodeAssert.equal(previous.closeImpl.mock.calls.length, 1);
+    }),
+  );
+
+  it.effect("allows a resume retry after replacement startup fails", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("thread-writer-failed-resume");
+      yield* adapter.startSession({ threadId, runtimeMode: "approval-required" });
+      const previous = reconciliationRuntimeFactory.lastRuntime!;
+      const { resumeCursor } = yield* previous.getSession;
+      reconciliationRuntimeFactory.configureNextRuntime((runtime) => {
+        runtime.startImpl.mockRejectedValueOnce(new Error("resume failed"));
+      });
+
+      const failed = yield* adapter
+        .startSession({ threadId, runtimeMode: "full-access", resumeCursor })
+        .pipe(Effect.exit);
+      NodeAssert.equal(Exit.isFailure(failed), true);
+      NodeAssert.equal(previous.closeImpl.mock.calls.length, 1);
+      NodeAssert.equal(reconciliationRuntimeFactory.lastRuntime?.closeImpl.mock.calls.length, 1);
+      NodeAssert.equal(yield* adapter.hasSession(threadId), false);
+
+      const session = yield* adapter.startSession({
+        threadId,
+        runtimeMode: "full-access",
+        resumeCursor,
+      });
+      NodeAssert.equal(session.runtimeMode, "full-access");
+      NodeAssert.deepStrictEqual(session.resumeCursor, resumeCursor);
     }),
   );
 
@@ -1332,6 +1467,43 @@ reconciliationLayer("CodexAdapter integration availability reconciliation", (it)
 
       yield* adapter.sendTurn({ threadId, input: "retry again", attachments: [] });
       NodeAssert.equal(initialRuntime.closeImpl.mock.calls.length, 1);
+      NodeAssert.equal(reconciliationRuntimeFactory.lastRuntime?.sendTurnImpl.mock.calls.length, 1);
+    }),
+  );
+
+  it.effect("allows recovery after an automatic integration resume fails", () =>
+    Effect.gen(function* () {
+      reconciliationAvailability.generation = 85;
+      reconciliationAvailability.available = false;
+      reconciliationAvailability.advancesDuringPrepare = 0;
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("thread-failed-integration-resume");
+      yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
+      const previous = reconciliationRuntimeFactory.lastRuntime!;
+      const { resumeCursor } = yield* previous.getSession;
+      reconciliationRuntimeFactory.configureNextRuntime((runtime) => {
+        runtime.startImpl.mockRejectedValueOnce(new Error("replacement resume failed"));
+      });
+      reconciliationAvailability.generation = 86;
+      reconciliationAvailability.available = true;
+
+      const failed = yield* adapter
+        .sendTurn({ threadId, input: "use newly connected tools", attachments: [] })
+        .pipe(Effect.exit);
+      NodeAssert.equal(Exit.isFailure(failed), true);
+      NodeAssert.equal(yield* adapter.hasSession(threadId), false);
+      NodeAssert.equal(previous.closeImpl.mock.calls.length, 1);
+      NodeAssert.equal(previous.sendTurnImpl.mock.calls.length, 0);
+      NodeAssert.equal(reconciliationRuntimeFactory.lastRuntime?.closeImpl.mock.calls.length, 1);
+      NodeAssert.equal(reconciliationRuntimeFactory.lastRuntime?.sendTurnImpl.mock.calls.length, 0);
+
+      const recovered = yield* adapter.startSession({
+        threadId,
+        runtimeMode: "full-access",
+        resumeCursor,
+      });
+      NodeAssert.deepStrictEqual(recovered.resumeCursor, resumeCursor);
+      yield* adapter.sendTurn({ threadId, input: "retry the turn", attachments: [] });
       NodeAssert.equal(reconciliationRuntimeFactory.lastRuntime?.sendTurnImpl.mock.calls.length, 1);
     }),
   );
@@ -3377,6 +3549,54 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       NodeAssert.equal(firstEvent.value.payload.requestType, "file_change_approval");
       NodeAssert.equal(firstEvent.value.payload.detail, "/tmp/workspace");
     }),
+  );
+
+  it.effect(
+    "shows a dynamic tool's arguments or change summary under its name in the approval",
+    () =>
+      Effect.gen(function* () {
+        const { adapter, runtime } = yield* startLifecycleRuntime();
+        const events = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 4)).pipe(
+          Effect.forkChild,
+        );
+
+        const emitCall = (id: string, args: unknown) =>
+          runtime.emit({
+            id: asEventId(`evt-${id}`),
+            kind: "request",
+            provider: ProviderDriverKind.make("codex"),
+            threadId: asThreadId("thread-1"),
+            createdAt: "2026-10-09T00:00:00.000Z",
+            method: "item/tool/call",
+            requestKind: "command",
+            requestId: ApprovalRequestId.make(`req-${id}`),
+            turnId: asTurnId("turn-1"),
+            payload: {
+              arguments: args,
+              callId: `call-${id}`,
+              threadId: "provider-thread-1",
+              tool: "jira_changes_apply",
+              turnId: "turn-1",
+            },
+          } satisfies ProviderEvent);
+        yield* emitCall("summary", {
+          planId: "plan",
+          summary: 'Move ITS-1 "Printer is down" from "In Progress" to "Resolved" (Resolve)',
+        });
+        yield* emitCall("blank", { summary: "   " });
+        yield* emitCall("long", { summary: "x".repeat(700) });
+        yield* emitCall("arguments", { issueKey: "ITS-1", body: "Replaced the toner." });
+
+        const details = Array.from(yield* Fiber.join(events), (event) =>
+          event.type === "request.opened" ? event.payload.detail : undefined,
+        );
+        NodeAssert.deepEqual(details, [
+          'jira_changes_apply\nMove ITS-1 "Printer is down" from "In Progress" to "Resolved" (Resolve)',
+          "jira_changes_apply",
+          `jira_changes_apply\n${"x".repeat(600)}…`,
+          'jira_changes_apply\nissueKey: "ITS-1"\nbody: "Replaced the toner."',
+        ]);
+      }),
   );
 
   it.effect("prefers the edited files over a blank apply-patch reason", () =>

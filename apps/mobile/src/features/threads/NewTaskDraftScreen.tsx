@@ -1203,6 +1203,7 @@ export function NewTaskDraftScreen(props: {
       attachmentBlockReason !== null ||
       !modelSelection ||
       initialMessageText.length === 0 ||
+      !flow.composerPermissionsReady ||
       flow.submitting ||
       (workspaceMode === "worktree" && !selectedBranchName)
     ) {
@@ -1344,6 +1345,8 @@ export function NewTaskDraftScreen(props: {
   }
 
   const isAndroid = Platform.OS === "android";
+  const needsComposerPreferencesRetry =
+    flow.composerPreferencesLoadFailed && !flow.composerPermissionsReady;
   const canStart =
     !isImportingContext &&
     !cloneBlocksStart &&
@@ -1354,6 +1357,7 @@ export function NewTaskDraftScreen(props: {
     flow.prompt.trim().length > 0 &&
     isIncomingShareReady &&
     !isImportingShare &&
+    flow.composerPermissionsReady &&
     !flow.submitting &&
     pendingPastedTextAttachmentCount === 0 &&
     !voiceInput.blocksSubmission &&
@@ -1628,6 +1632,13 @@ export function NewTaskDraftScreen(props: {
           {flow.modelFallbackNotice}
         </Text>
       ) : null}
+      {flow.composerPreferencesLoadFailed ? (
+        <Text accessibilityRole="alert" className="px-2 pb-2 text-sm text-muted-foreground">
+          {flow.composerPermissionsReady
+            ? "Saved preferences could not load. This task uses the permission mode shown above."
+            : "Saved preferences could not load. Retry, or choose a permission mode to continue."}
+        </Text>
+      ) : null}
 
       {modelUnavailable ? (
         <Pressable
@@ -1767,24 +1778,45 @@ export function NewTaskDraftScreen(props: {
               {voicePresentation.showsSend ? (
                 <ComposerActionButton
                   accessibilityLabel={
-                    attachmentBlockReason ??
-                    (cloneBlocksStart
-                      ? projectClone === null || projectClone.phase === "running"
-                        ? "Cloning repository"
-                        : "Repository not cloned"
-                      : pendingPastedTextAttachmentCount > 0
-                        ? "Attaching pasted text"
-                        : flow.submitting
-                          ? "Starting task"
-                          : attachmentsUploading
-                            ? "Queue task, sends when uploads finish"
-                            : environmentConnected
-                              ? "Start task"
-                              : "Queue task")
+                    needsComposerPreferencesRetry
+                      ? "Retry loading saved preferences"
+                      : (attachmentBlockReason ??
+                        (cloneBlocksStart
+                          ? projectClone === null || projectClone.phase === "running"
+                            ? "Cloning repository"
+                            : "Repository not cloned"
+                          : pendingPastedTextAttachmentCount > 0
+                            ? "Attaching pasted text"
+                            : !flow.composerPermissionsReady
+                              ? "Loading preferences"
+                              : flow.submitting
+                                ? "Starting task"
+                                : attachmentsUploading
+                                  ? "Queue task, sends when uploads finish"
+                                  : environmentConnected
+                                    ? "Start task"
+                                    : "Queue task"))
                   }
-                  disabled={!canStart}
-                  icon={queuesInsteadOfStarting ? "tray.and.arrow.up" : "arrow.up"}
-                  onPress={() => void handleStart()}
+                  disabled={!needsComposerPreferencesRetry && !canStart}
+                  icon={
+                    needsComposerPreferencesRetry
+                      ? "arrow.clockwise"
+                      : queuesInsteadOfStarting
+                        ? "tray.and.arrow.up"
+                        : "arrow.up"
+                  }
+                  onPress={() => {
+                    if (needsComposerPreferencesRetry) {
+                      void waitForComposerDraftsLoaded().catch(() =>
+                        Alert.alert(
+                          "Could not load saved preferences",
+                          "Saved preferences are still unavailable. Try again.",
+                        ),
+                      );
+                    } else {
+                      void handleStart();
+                    }
+                  }}
                   variant="primary"
                 />
               ) : null}

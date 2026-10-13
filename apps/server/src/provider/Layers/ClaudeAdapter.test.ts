@@ -6280,6 +6280,52 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("approvals for Harness MCP tools list the call's arguments", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "approval-required",
+      });
+      yield* Stream.take(adapter.streamEvents, 3).pipe(Stream.runDrain);
+      yield* adapter.sendTurn({ threadId: session.threadId, input: "send it", attachments: [] });
+      yield* Stream.take(adapter.streamEvents, 1).pipe(Stream.runDrain);
+      harness.query.emit({
+        type: "stream_event",
+        session_id: "sdk-session-mcp-approval",
+        uuid: "stream-mcp-approval",
+        parent_tool_use_id: null,
+        event: { type: "message_start", message: { id: "msg-mcp-approval" } },
+      } as unknown as SDKMessage);
+      yield* Stream.take(adapter.streamEvents, 1).pipe(Stream.runDrain);
+
+      const canUseTool = harness.getLastCreateQueryInput()?.options.canUseTool;
+      assert.equal(typeof canUseTool, "function");
+      if (!canUseTool) return;
+      void canUseTool(
+        "mcp__t3-code__microsoft365_chat_message_send",
+        { chatId: "19:abc", content: "Lunch at noon?" },
+        {
+          signal: new AbortController().signal,
+          requestId: "request-mcp",
+          toolUseID: "tool-use-mcp",
+        },
+      );
+      const requested = yield* Stream.runHead(adapter.streamEvents);
+      assert.equal(requested._tag, "Some");
+      if (requested._tag !== "Some" || requested.value.type !== "request.opened") return;
+      assert.equal(
+        requested.value.payload.detail,
+        'microsoft365_chat_message_send\nchatId: "19:abc"\ncontent: "Lunch at noon?"',
+      );
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("acceptForSession returns session-scoped permission updates", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
