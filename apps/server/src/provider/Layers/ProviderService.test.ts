@@ -2791,6 +2791,63 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
+  it.effect("recovers the persisted conversation on the next send after a failed replacement", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const runtimeRepository = yield* ProviderSessionRuntime.ProviderSessionRuntimeRepository;
+      const threadId = asThreadId("thread-failed-replacement-recovery");
+      const cwd = fixtureCwd("failed-replacement-recovery");
+      const modelSelection = createModelSelection(codexInstanceId, "gpt-5.3-codex", [
+        { id: "reasoningEffort", value: "high" },
+      ]);
+      const initial = yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        cwd,
+        modelSelection,
+        runtimeMode: "full-access",
+      });
+      routing.codex.sendTurn.mockImplementationOnce(() =>
+        routing.codex.stopSession(threadId).pipe(
+          Effect.andThen(
+            Effect.fail(
+              new ProviderAdapterRequestError({
+                provider: CODEX_DRIVER,
+                method: "thread/resume",
+                detail: "replacement resume failed",
+              }),
+            ),
+          ),
+        ),
+      );
+
+      const failed = yield* provider
+        .sendTurn({ threadId, input: "use newly connected tools", attachments: [] })
+        .pipe(Effect.exit);
+      assert.equal(Exit.isFailure(failed), true);
+      assert.equal(yield* routing.codex.hasSession(threadId), false);
+      const persisted = yield* runtimeRepository.getByThreadId({ threadId });
+      assert.equal(Option.isSome(persisted), true);
+      if (Option.isSome(persisted)) {
+        assert.deepEqual(persisted.value.resumeCursor, initial.resumeCursor);
+      }
+      routing.codex.startSession.mockClear();
+      routing.codex.sendTurn.mockClear();
+
+      yield* provider.sendTurn({ threadId, input: "retry the turn", attachments: [] });
+
+      assert.equal(routing.codex.startSession.mock.calls.length, 1);
+      const recovered = routing.codex.startSession.mock.calls[0]?.[0];
+      assert.equal(recovered?.threadId, threadId);
+      assert.deepEqual(recovered?.resumeCursor, initial.resumeCursor);
+      assert.equal(recovered?.cwd, cwd);
+      assert.equal(recovered?.runtimeMode, "full-access");
+      assert.deepEqual(recovered?.modelSelection, modelSelection);
+      assert.equal(routing.codex.sendTurn.mock.calls.length, 1);
+    }),
+  );
+
   it.effect("preserves the persisted binding when stopping a session", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService.ProviderService;

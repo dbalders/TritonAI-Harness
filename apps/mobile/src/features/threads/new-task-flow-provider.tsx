@@ -51,6 +51,7 @@ import {
   composerDraftsAtom,
   createNewTaskDraft,
   getComposerDraftSnapshot,
+  getPendingTaskRuntimeMode,
   isComposerDraftEmpty,
   isNewTaskDraftKey,
   removeComposerDraftAttachment,
@@ -60,9 +61,11 @@ import {
   setComposerDraftText,
   setComposerDraftContext,
   setStickyComposerModelSelection,
+  setStickyComposerRuntimeMode,
   updateComposerDraftSettings,
   useComposerDraft,
   useStickyComposerModelSelection,
+  useStickyComposerRuntimeMode,
 } from "../../state/use-composer-drafts";
 import {
   capturePendingTaskEditorWriteBaseline,
@@ -180,6 +183,9 @@ type NewTaskFlowContextValue = {
   readonly availableBranches: ReadonlyArray<VcsRef>;
   readonly currentCheckoutBranchName: string | null;
   readonly runtimeMode: RuntimeMode;
+  readonly composerPreferencesLoaded: boolean;
+  readonly composerPreferencesLoadFailed: boolean;
+  readonly composerPermissionsReady: boolean;
   readonly interactionMode: ProviderInteractionMode;
   readonly planModeEnabled: boolean;
   readonly expandedProvider: string | null;
@@ -526,9 +532,19 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   const draftStartFromOrigin = selectedProjectDraft.workspaceSelection?.startFromOrigin;
   const startFromOrigin =
     draftStartFromOrigin ?? projectSettings.settings.newWorktreesStartFromOrigin;
+  const {
+    runtimeMode: stickyRuntimeMode,
+    loaded: composerPreferencesLoaded,
+    failed: composerPreferencesLoadFailed,
+  } = useStickyComposerRuntimeMode();
+  const composerPermissionsReady =
+    selectedProjectDraft.runtimeMode !== undefined ||
+    editingPendingTask !== null ||
+    composerPreferencesLoaded ||
+    (composerPreferencesLoadFailed && stickyRuntimeMode !== null);
   const defaultRuntimeMode = editingPendingTask
     ? (editingPendingTask.runtimeMode ?? DEFAULT_RUNTIME_MODE)
-    : projectSettings.settings.defaultRuntimeMode;
+    : (stickyRuntimeMode ?? projectSettings.settings.defaultRuntimeMode);
   const runtimeMode = selectedProjectDraft.runtimeMode ?? defaultRuntimeMode;
 
   // Antigravity keeps unavailable selections so sign-out or a catalog change
@@ -970,6 +986,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     (value: RuntimeMode) => {
       if (selectedProjectDraftKey) {
         updateComposerDraftSettings(selectedProjectDraftKey, { runtimeMode: value });
+        setStickyComposerRuntimeMode(value);
       }
     },
     [selectedProjectDraftKey],
@@ -1029,6 +1046,12 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       if (!selectedProject || !selectedProjectDraftKey) {
         return null;
       }
+      const pendingRuntimeMode = getPendingTaskRuntimeMode(
+        selectedProjectDraftKey,
+        projectSettings.settings.defaultRuntimeMode,
+        editingPendingTask ? (editingPendingTask.runtimeMode ?? DEFAULT_RUNTIME_MODE) : undefined,
+      );
+      if (pendingRuntimeMode === null) return null;
       const draft = getComposerDraftSnapshot(selectedProjectDraftKey);
       const text = draft.text.trim();
       // Use the displayed selection rules without substituting an unavailable
@@ -1067,7 +1090,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
         attachments: draft.attachments,
         context: draft.context,
         modelSelection: draftModelSelection,
-        runtimeMode: draft.runtimeMode ?? defaultRuntimeMode,
+        runtimeMode: pendingRuntimeMode,
         interactionMode: resolvePendingTaskInteractionMode({
           preferenceLoaded: planModePreferenceLoaded,
           planModeEnabled: legacyPlanModeEnabled,
@@ -1104,7 +1127,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     },
     [
       canChooseWorkspace,
-      defaultRuntimeMode,
+      projectSettings.settings.defaultRuntimeMode,
       editingPendingProject,
       editingPendingTask,
       selectedEnvironmentServerConfig,
@@ -1246,6 +1269,9 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       availableBranches,
       currentCheckoutBranchName,
       runtimeMode,
+      composerPreferencesLoaded,
+      composerPreferencesLoadFailed,
+      composerPermissionsReady,
       interactionMode,
       planModeEnabled,
       expandedProvider,
@@ -1295,6 +1321,9 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       branchesFetchingNextPage,
       buildPendingTaskMessage,
       cancelEditingPendingTask,
+      composerPreferencesLoaded,
+      composerPreferencesLoadFailed,
+      composerPermissionsReady,
       currentCheckoutBranchName,
       editingPendingTask,
       environments,

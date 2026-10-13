@@ -1563,7 +1563,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       className={cn(
         "min-w-0 flex-1 text-sm transition-opacity motion-reduce:transition-none",
         shouldRecede ? "font-normal" : "font-medium",
-        variant === "card"
+        variant !== "slim"
           ? cn(
               "truncate",
               shouldRecede
@@ -1674,8 +1674,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     )
   ) : null;
 
-  if (variant === "slim" || variant === "grouped") {
-    const showWokeStatus = variant === "grouped" ? isWokeStatus : isWoke;
+  if (variant === "slim") {
+    const showWokeStatus = isWoke;
     return (
       <li
         data-thread-item
@@ -1696,13 +1696,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                 tabIndex={0}
                 aria-label={accessibility.label}
                 aria-current={accessibility.current}
-                data-testid={variant === "grouped" ? "sidebar-row-grouped" : "sidebar-row-slim"}
+                data-testid="sidebar-row-slim"
                 aria-busy={isRegeneratingTitle || undefined}
-                className={cn(
-                  rowSurfaceClassName,
-                  "flex h-9 items-center gap-2.5 px-2.5",
-                  variant === "grouped" && "pl-9",
-                )}
+                className={cn(rowSurfaceClassName, "flex h-9 items-center gap-2.5 px-2.5")}
                 onClick={handleClick}
                 onDoubleClick={handleDoubleClick}
                 onKeyDown={handleKeyDown}
@@ -1716,14 +1712,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
             <span
               className={cn(
                 "shrink-0 transition-opacity",
-                variant === "grouped" && "hidden",
                 (!props.isActive || variantAction === "unsettle") &&
                   "opacity-40 grayscale group-focus-within/sidebar-row:opacity-100 group-focus-within/sidebar-row:grayscale-0 group-hover/sidebar-row:opacity-100 group-hover/sidebar-row:grayscale-0",
               )}
             >
-              {variant !== "grouped" && props.project ? (
-                <ProjectFavicon project={props.project} className="size-4" />
-              ) : null}
+              {props.project ? <ProjectFavicon project={props.project} className="size-4" /> : null}
             </span>
             {draftIndicator}
             {title}
@@ -1773,10 +1766,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                       />
                       <TooltipPopup side="top">Dismiss Woke notification</TooltipPopup>
                     </Tooltip>
-                  ) : variant === "grouped" && topStatus ? (
-                    <span role="status" className={cn("text-xs font-medium", topStatus.className)}>
-                      {topStatus.label}
-                    </span>
                   ) : (
                     <span className="text-xs">
                       {variantAction === "unsettle"
@@ -1843,6 +1832,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
 
   const diff = latestTurnDiff(thread);
   const driverKind = providerEntry?.driverKind ?? null;
+  const showProjectHeader = variant === "card" && Boolean(props.projectDisplayName);
 
   return (
     <li
@@ -1850,8 +1840,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       {...sortableRootProps}
       {...(fileDropHandlers ?? {})}
       className={cn(
-        // Matches the h-[4.875rem] content box; the py-0.5 padding is added on top.
-        "list-none py-0.5 [content-visibility:auto] [contain-intrinsic-size:auto_78px]",
+        // Grouped rows omit the project header already shown above their folder.
+        "list-none py-0.5 [content-visibility:auto]",
+        showProjectHeader
+          ? "[contain-intrinsic-size:auto_78px]"
+          : "[contain-intrinsic-size:auto_54px]",
         sortable?.isDragging && "relative z-20",
       )}
     >
@@ -1864,7 +1857,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
               tabIndex={0}
               aria-label={accessibility.label}
               aria-current={accessibility.current}
-              data-testid="sidebar-row-card"
+              data-testid={variant === "grouped" ? "sidebar-row-grouped" : "sidebar-row-card"}
               aria-busy={isRegeneratingTitle || undefined}
               className={rowSurfaceClassName}
               onClick={handleClick}
@@ -1875,13 +1868,19 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
           }
         >
           {accessibleTitle}
-          <div className="relative z-10 px-(--sidebar-row-content-inset) py-(--sidebar-content-inset)">
+          <div
+            data-sidebar-row-content
+            className={cn(
+              "relative z-10 px-(--sidebar-row-content-inset) py-(--sidebar-content-inset)",
+              variant === "grouped" && "pl-9",
+            )}
+          >
             <div className="flex h-5 min-w-0 items-center gap-1.5">
               {draftIndicator}
-              {props.project ? (
+              {showProjectHeader && props.project ? (
                 <ProjectFavicon project={props.project} className="size-4 shrink-0" />
               ) : null}
-              {props.projectDisplayName ? (
+              {showProjectHeader ? (
                 <span
                   className={cn(
                     "min-w-0 flex-1 truncate text-secondary-label text-xs",
@@ -1893,8 +1892,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
               ) : (
                 <>
                   {title}
-                  {terminalStatusIcon}
-                  {prBadge}
                   {isRegeneratingTitle ? (
                     <span role="status" className="sr-only">
                       Regenerating title
@@ -2029,7 +2026,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                             }
                           >
                             <CheckIcon className="size-3.5" />
-                            Done
+                            {variant === "card" ? "Done" : null}
                           </TooltipTrigger>
                           <TooltipPopup>Mark thread done</TooltipPopup>
                         </Tooltip>
@@ -2039,14 +2036,16 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                 </span>
               )}
             </div>
-            <div className="mt-1 flex min-w-0">
-              {title}
-              {isRegeneratingTitle ? (
-                <span role="status" className="sr-only">
-                  Regenerating title
-                </span>
-              ) : null}
-            </div>
+            {showProjectHeader ? (
+              <div className="mt-1 flex min-w-0">
+                {title}
+                {isRegeneratingTitle ? (
+                  <span role="status" className="sr-only">
+                    Regenerating title
+                  </span>
+                ) : null}
+              </div>
+            ) : null}
             <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-secondary-label text-xs">
               {/* Always the branch. The plan step used to take this slot while
                   working, but it truncated to a half-sentence and dropped the
@@ -2054,7 +2053,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
               {thread.branch ? (
                 <>
                   <ThreadWorktreeIndicator thread={thread} />
-                  <span className="flex min-w-0 flex-1 text-muted-foreground/40">
+                  <span className="flex min-w-0 flex-initial text-muted-foreground/40">
                     <MiddleTruncate value={thread.branch} showTitle={false} />
                   </span>
                 </>
@@ -2069,10 +2068,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                   <span className="text-diff-deletion-foreground">−{diff.deletions}</span>
                 </span>
               ) : null}
-              <span
-                aria-hidden
-                className="pointer-events-none ml-auto inline-flex shrink-0 items-center gap-1"
-              >
+              <span className="pointer-events-none ml-auto inline-flex min-w-min max-w-[45%] flex-1 items-center gap-1">
+                <span className="w-0 min-w-0 flex-1 truncate text-right">{modelLabel}</span>
                 {isRemote ? (
                   <span className="inline-flex shrink-0 items-center text-sidebar-muted-foreground/70">
                     <EnvironmentMachineIcon
@@ -2083,7 +2080,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                   </span>
                 ) : null}
                 {driverKind ? (
-                  <span className="inline-flex shrink-0 items-center">
+                  <span aria-hidden className="inline-flex shrink-0 items-center">
                     <ProviderInstanceIcon
                       instanceId={
                         thread.session?.providerInstanceId ?? thread.modelSelection.instanceId
@@ -5175,6 +5172,10 @@ export default function Sidebar() {
                                   data-thread-selection-safe
                                   className={cn(
                                     "list-none px-2.5 py-2",
+                                    // The list's 1px gap plus 7px above the first row's content
+                                    // keeps expanded folders 8px from their first thread.
+                                    isExpanded &&
+                                      "pb-0 [&+li[data-thread-item]]:pt-0 [&+li[data-thread-item]_[data-sidebar-row-content]]:pt-1.75",
                                     groupIndex > 0 && "mt-1 border-t border-sidebar-border/60 pt-3",
                                   )}
                                 >

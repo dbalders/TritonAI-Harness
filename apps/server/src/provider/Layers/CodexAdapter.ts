@@ -40,6 +40,7 @@ import * as Effect from "effect/Effect";
 import * as NodeCrypto from "node:crypto";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
@@ -164,6 +165,7 @@ interface CodexAdapterSessionContext {
   textOnlyImageContextSafe: boolean;
   readonly turnTokenUsage: CodexTurnTokenUsageState;
   readonly runtimeRevision?: string;
+  readonly closed: Deferred.Deferred<void>;
   stopped: boolean;
 }
 
@@ -2423,6 +2425,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     options?.nativeEventLogger === undefined ? nativeEventLogger : undefined;
   const runtimeEventQueue = yield* Queue.unbounded<ProviderRuntimeEvent>();
   const sessions = new Map<ThreadId, CodexAdapterSessionContext>();
+  const closingSessions = new Map<ThreadId, Set<CodexAdapterSessionContext>>();
   const threadLocksRef = yield* SynchronizedRef.make(
     new Map<string, { readonly semaphore: Semaphore.Semaphore; readonly users: number }>(),
   );
@@ -2543,6 +2546,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
 
         const existing = sessions.get(input.threadId);
 
+        const closed = yield* Deferred.make<void>();
         const sessionScope = yield* Scope.make("sequential");
         let sessionScopeTransferred = false;
         yield* Effect.addFinalizer(() =>
@@ -3061,7 +3065,20 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           }),
         ).pipe(Effect.forkIn(sessionScope));
 
-        const started = yield* runtime.start().pipe(
+        const started = yield* Effect.gen(function* () {
+          // Preflight the replacement first, but release Codex's writer before thread/resume.
+          if (existing && !existing.stopped) yield* stopSessionInternal(existing);
+          // Interrupted callers leave cleanup running; the next start must wait for it too.
+          yield* Effect.forEach(
+            Array.from(closingSessions.get(input.threadId) ?? []),
+            (session) => Deferred.await(session.closed),
+            { concurrency: "unbounded" },
+          );
+          if (currentThreadLifecycleEpoch(input.threadId) !== expectedLifecycleEpoch) {
+            return yield* Effect.interrupt;
+          }
+          return yield* runtime.start();
+        }).pipe(
           Effect.mapError(
             (cause) =>
               new ProviderAdapterProcessError({
@@ -3106,29 +3123,12 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           textOnlyImageContextSafe,
           turnTokenUsage,
           ...(resolved ? { runtimeRevision: resolved.revision } : {}),
+          closed,
           stopped: false,
         } satisfies CodexAdapterSessionContext;
         sessions.set(input.threadId, replacement);
         sessionScopeTransferred = true;
         integrationSkillRuntimeTransferred = true;
-
-        // Keep the prior runtime usable until its replacement is fully started and installed.
-        // A transient integration refresh failure must not destroy the user's live task.
-        if (existing && !existing.stopped) {
-          yield* Effect.suspend(() => stopSessionInternal(existing)).pipe(
-            Effect.onExit((exit) =>
-              Exit.isFailure(exit)
-                ? Effect.sync(() => claimSessionStop(replacement)).pipe(
-                    Effect.flatMap((claimed) =>
-                      claimed
-                        ? Effect.forkDetach(closeSessionResources(replacement)).pipe(Effect.asVoid)
-                        : Effect.void,
-                    ),
-                  )
-                : Effect.void,
-            ),
-          );
-        }
 
         return withTextOnlyImageContextResumeSafety(started, textOnlyImageContextSafe);
       }),
@@ -3681,24 +3681,37 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
   const claimSessionStop = (session: CodexAdapterSessionContext) => {
     if (session.stopped) return false;
     session.stopped = true;
+    const closing = closingSessions.get(session.threadId) ?? new Set<CodexAdapterSessionContext>();
+    closing.add(session);
+    closingSessions.set(session.threadId, closing);
     // A detached prior-session close may overlap replacement cleanup. Only the exact session
     // currently published for this thread is allowed to remove that map entry.
     if (sessions.get(session.threadId) === session) sessions.delete(session.threadId);
     return true;
   };
 
-  const closeSessionResources = Effect.fn("closeSessionResources")(function* (
-    session: CodexAdapterSessionContext,
-  ) {
-    yield* session.runtime.close.pipe(Effect.ignore);
-    yield* Effect.ignore(Scope.close(session.scope, Exit.void));
-    yield* Fiber.interrupt(session.eventFiber).pipe(Effect.ignore);
-    if (session.integrationRegistry && session.integrationSkillRuntimeRoot) {
-      yield* Effect.tryPromise(() =>
-        session.integrationRegistry!.releaseSkillRuntime(session.integrationSkillRuntimeRoot!),
-      ).pipe(Effect.ignore);
-    }
-  });
+  const closeSessionResources = Effect.fn("closeSessionResources")(
+    function* (session: CodexAdapterSessionContext) {
+      yield* session.runtime.close.pipe(Effect.ignore);
+      yield* Effect.ignore(Scope.close(session.scope, Exit.void));
+      yield* Fiber.interrupt(session.eventFiber).pipe(Effect.ignore);
+      if (session.integrationRegistry && session.integrationSkillRuntimeRoot) {
+        yield* Effect.tryPromise(() =>
+          session.integrationRegistry!.releaseSkillRuntime(session.integrationSkillRuntimeRoot!),
+        ).pipe(Effect.ignore);
+      }
+    },
+    (effect, session) =>
+      effect.pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            const closing = closingSessions.get(session.threadId);
+            closing?.delete(session);
+            if (closing?.size === 0) closingSessions.delete(session.threadId);
+          }).pipe(Effect.andThen(Deferred.succeed(session.closed, undefined))),
+        ),
+      ),
+  );
 
   const stopSessionInternal = Effect.fn("stopSessionInternal")(
     (session: CodexAdapterSessionContext) =>
