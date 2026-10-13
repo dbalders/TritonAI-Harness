@@ -127,6 +127,7 @@ export function makeDevelopmentEnvironmentScript(environment) {
     ["T3CODE_PORT", environment.T3CODE_PORT],
     ["T3CODE_COMMIT_HASH", environment.T3CODE_COMMIT_HASH],
     ["T3CODE_DEV_INSTANCE_NAME", environment.T3CODE_DEV_INSTANCE_NAME],
+    ["T3CODE_DEV_BACKEND_OWNERS_DIR", environment.T3CODE_DEV_BACKEND_OWNERS_DIR],
     ["T3CODE_OTLP_TRACES_URL", environment.T3CODE_OTLP_TRACES_URL],
     ["T3CODE_OTLP_EXPORT_INTERVAL_MS", environment.T3CODE_OTLP_EXPORT_INTERVAL_MS],
     ["T3CODE_OTLP_HEADERS", environment.T3CODE_OTLP_HEADERS],

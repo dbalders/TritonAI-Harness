@@ -5,8 +5,9 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeEvents from "node:events";
 import * as NodeUtil from "node:util";
+import * as NodeNet from "node:net";
 import * as NodeTest from "node:test";
-import { processBirth } from "./launch.mjs";
+import { processBirth, ownedBackendGroups, recordedBackendGroups } from "./launch.mjs";
 
 const execFile = NodeUtil.promisify(NodeChildProcess.execFile);
 
@@ -64,6 +65,10 @@ NodeTest.test("stale process identity never signals a reused PID", async (t) => 
   instance.write({ ...instance.record, ownerBirth: "a previous process at this PID" });
   await instance.stop();
   NodeAssert.equal(processBirth(instance.child.pid), instance.record.ownerBirth);
+  const owners = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "dev-stale-backend-"));
+  t.after(() => NodeFS.rmSync(owners, { recursive: true, force: true }));
+  NodeFS.writeFileSync(NodePath.join(owners, String(instance.child.pid)), "a previous birth");
+  NodeAssert.deepEqual(ownedBackendGroups(owners), []);
 });
 
 NodeTest.test("readiness watchdog terminates a stalled connection", async (t) => {
@@ -100,6 +105,44 @@ NodeTest.test("readiness watchdog terminates a stalled connection", async (t) =>
   );
 });
 
+NodeTest.test("stale ownership detects descendants after their backend leader exits", async (t) => {
+  const instance = await fixture(t);
+  const owners = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "dev-orphan-group-"));
+  const leader = NodeChildProcess.spawn(
+    process.execPath,
+    [
+      "-e",
+      `
+    const child = require("node:child_process").spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {stdio:"ignore"});
+    child.once("spawn", () => console.log("ready"));
+    process.stdin.once("data", () => process.exit(0));
+  `,
+    ],
+    { detached: true, stdio: ["pipe", "pipe", "ignore"] },
+  );
+  t.after(() => {
+    try {
+      process.kill(-leader.pid, "SIGKILL");
+    } catch (error) {
+      if (error.code !== "ESRCH") throw error;
+    }
+    NodeFS.rmSync(owners, { recursive: true, force: true });
+  });
+  await NodeEvents.once(leader.stdout, "data");
+  NodeFS.writeFileSync(NodePath.join(owners, String(leader.pid)), processBirth(leader.pid));
+  const exited = NodeEvents.once(leader, "exit");
+  leader.stdin.write("exit");
+  await exited;
+  NodeAssert.deepEqual(ownedBackendGroups(owners), []);
+  NodeAssert.deepEqual(recordedBackendGroups(owners), [leader.pid]);
+  instance.write({
+    ...instance.record,
+    ownerBirth: "stale supervisor",
+    backendOwnersDirectory: owners,
+  });
+  await NodeAssert.rejects(instance.stop(), /process group remains/);
+});
+
 NodeTest.test(
   "separate supervisors retain independent homes and reuse the same checkout",
   async (t) => {
@@ -112,7 +155,7 @@ NodeTest.test(
       }
       NodeFS.rmSync(root, { recursive: true, force: true });
     });
-    const create = async (name) => {
+    const create = async (name, delayRegistration = false) => {
       const repo = NodePath.join(root, name);
       NodeFS.mkdirSync(NodePath.join(repo, "apps/desktop/scripts"), { recursive: true });
       NodeFS.writeFileSync(
@@ -128,7 +171,28 @@ NodeTest.test(
       );
       NodeFS.writeFileSync(
         NodePath.join(repo, "runner.cjs"),
-        'require("node:fs").writeFileSync("observed.json", JSON.stringify({port: process.env.T3CODE_PORT ?? null, args: process.argv.slice(2)})); setInterval(() => {}, 1000);',
+        `
+        const fs = require("node:fs");
+        const { spawn, execFileSync } = require("node:child_process");
+        const grandchildScript = 'process.on("SIGTERM", () => {}); const server = require("node:net").createServer(); server.listen(0, "127.0.0.1", () => console.log(server.address().port));';
+        const backendScript = 'process.on("SIGTERM", () => {}); const child = require("node:child_process").spawn(process.execPath, ["-e", ' + JSON.stringify(grandchildScript) + '], {stdio:["ignore","pipe","ignore"]}); child.stdout.pipe(process.stdout); setInterval(() => {}, 1000);';
+        fs.writeFileSync(process.env.T3CODE_DEV_BACKEND_OWNERS_DIR + "/pending-fixture", "pending");
+        const backend = spawn(process.execPath, ["-e", backendScript], {detached:true, stdio:["ignore","pipe","ignore"]});
+        const birth = execFileSync("ps", ["-p", String(backend.pid), "-o", "lstart="], {encoding:"utf8", env:{...process.env, LC_ALL:"C"}}).trim();
+        const register = () => {
+          fs.writeFileSync(process.env.T3CODE_DEV_BACKEND_OWNERS_DIR + "/" + backend.pid, birth);
+          fs.unlinkSync(process.env.T3CODE_DEV_BACKEND_OWNERS_DIR + "/pending-fixture");
+        };
+        if (${delayRegistration}) {
+          const watcher = fs.watch(process.env.T3CODE_DEV_BACKEND_OWNERS_DIR, () => {
+            if (fs.existsSync(process.env.T3CODE_DEV_BACKEND_OWNERS_DIR + "/stopping")) { watcher.close(); register(); }
+          });
+        } else { register(); }
+        backend.stdout.once("data", (port) => {
+          fs.writeFileSync("observed.json", JSON.stringify({port:process.env.T3CODE_PORT ?? null, autoPort:process.env.T3CODE_DEV_AUTO_PORT, args:process.argv.slice(2), backendPid:backend.pid, grandchildPort:Number(port.toString().trim())}));
+        });
+        setInterval(() => {}, 1000);
+        `,
       );
       const mock = NodePath.join(
         repo,
@@ -196,7 +260,7 @@ NodeTest.test(
       });
       return instance;
     };
-    const first = await create("first");
+    const first = await create("first", true);
     const second = await create("second");
     const firstRecord = first.read();
     const secondRecord = second.read();
@@ -207,11 +271,21 @@ NodeTest.test(
       NodeFS.readFileSync(NodePath.join(first.repo, "observed.json"), "utf8"),
     );
     NodeAssert.equal(observed.port, null);
+    NodeAssert.equal(observed.autoPort, "1");
+    NodeAssert.deepEqual(ownedBackendGroups(firstRecord.backendOwnersDirectory), []);
     NodeAssert.deepEqual(observed.args, ["--home-dir", firstRecord.home]);
     await first.command("start");
     NodeAssert.equal(first.read().ownerPid, firstRecord.ownerPid);
     await first.command("stop");
     NodeAssert.equal(first.read().status, "stopped");
+    await new Promise((resolve, reject) => {
+      const socket = NodeNet.connect(observed.grandchildPort, "127.0.0.1");
+      socket.on("connect", () => {
+        socket.destroy();
+        reject(Error("backend grandchild survived stop"));
+      });
+      socket.on("error", (error) => (error.code === "ECONNREFUSED" ? resolve() : reject(error)));
+    });
     NodeAssert.equal(processBirth(secondRecord.ownerPid), secondRecord.ownerBirth);
     NodeAssert.equal(second.read().status, "ready");
   },

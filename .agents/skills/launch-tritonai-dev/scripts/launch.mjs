@@ -31,6 +31,35 @@ export function ownerAlive(record) {
   return Boolean(record?.ownerBirth && processBirth(record.ownerPid) === record.ownerBirth);
 }
 
+export function ownedBackendGroups(directory) {
+  if (!directory || !NodeFS.existsSync(directory)) return [];
+  return NodeFS.readdirSync(directory).flatMap((name) => {
+    if (!/^[1-9][0-9]*$/.test(name)) return [];
+    const pid = Number(name);
+    const birth = NodeFS.readFileSync(NodePath.join(directory, name), "utf8").trim();
+    return birth && processBirth(pid) === birth && groupAlive(pid) ? [pid] : [];
+  });
+}
+
+export function recordedBackendGroups(directory) {
+  if (!directory || !NodeFS.existsSync(directory)) return [];
+  return NodeFS.readdirSync(directory)
+    .filter((name) => /^[1-9][0-9]*$/.test(name))
+    .map(Number)
+    .filter(groupAlive);
+}
+
+async function finishBackendRegistrations(directory) {
+  if (!directory) return;
+  NodeFS.writeFileSync(NodePath.join(directory, "stopping"), "stopping", { mode: 0o600 });
+  const pending = () => NodeFS.readdirSync(directory).some((name) => name.startsWith("pending-"));
+  for (let i = 0; i < 30 && pending(); i += 1) await sleep(100);
+  if (pending())
+    throw new Error(
+      "Backend registration is still pending; inspect the owned instance before stopping it.",
+    );
+}
+
 function groupAlive(pid) {
   if (!Number.isSafeInteger(pid) || pid < 1) return false;
   try {
@@ -68,7 +97,10 @@ async function stop(file) {
     return;
   }
   if (!ownerAlive(record)) {
-    if (groupAlive(record.runnerPid))
+    if (
+      groupAlive(record.runnerPid) ||
+      recordedBackendGroups(record.backendOwnersDirectory).length > 0
+    )
       throw new Error(
         "The recorded supervisor exited but its process group remains. Inspect the recorded instance; no process was killed.",
       );
@@ -139,7 +171,11 @@ export async function main(args = process.argv.slice(2)) {
     console.log(JSON.stringify(previous, null, 2));
     return;
   }
-  if (previous && groupAlive(previous.runnerPid))
+  if (
+    previous &&
+    (groupAlive(previous.runnerPid) ||
+      recordedBackendGroups(previous.backendOwnersDirectory).length > 0)
+  )
     throw new Error(
       "An earlier owned process group remains; inspect instance.json before restarting.",
     );
@@ -167,11 +203,26 @@ export async function main(args = process.argv.slice(2)) {
   const cleanup = (code = 0) =>
     (stopping ??= (async () => {
       if (probe && probe.exitCode === null) probe.kill("SIGTERM");
-      if (runner?.pid && groupAlive(runner.pid)) {
-        process.kill(-runner.pid, "SIGTERM");
-        for (let i = 0; i < 80 && groupAlive(runner.pid); i += 1) await sleep(100);
-        if (groupAlive(runner.pid)) process.kill(-runner.pid, "SIGKILL");
+      await finishBackendRegistrations(record?.backendOwnersDirectory);
+      const groups = new Set(ownedBackendGroups(record?.backendOwnersDirectory));
+      if (recordedBackendGroups(record?.backendOwnersDirectory).some((pid) => !groups.has(pid))) {
+        throw new Error(
+          "A recorded backend group survives without a verifiable leader; inspect it before stopping.",
+        );
       }
+      if (runner?.pid) groups.add(runner.pid);
+      const signalGroups = (signal) => {
+        for (const pid of groups) {
+          try {
+            process.kill(-pid, signal);
+          } catch (error) {
+            if (error.code !== "ESRCH") throw error;
+          }
+        }
+      };
+      signalGroups("SIGTERM");
+      for (let i = 0; i < 80 && [...groups].some(groupAlive); i += 1) await sleep(100);
+      signalGroups("SIGKILL");
       if (record) {
         record.status = code ? "failed" : "stopped";
         save();
@@ -189,6 +240,7 @@ export async function main(args = process.argv.slice(2)) {
     const debugPort = await freePort();
     if (stopping) return await stopping;
     const home = NodePath.join(directory, "home");
+    const backendOwnersDirectory = NodeFS.mkdtempSync(NodePath.join(directory, "backend-owners-"));
     const { resolveDevIdentity } = await import(
       NodeURL.pathToFileURL(NodePath.join(repo, "apps/desktop/scripts/electron-launcher.mjs"))
     );
@@ -203,6 +255,7 @@ export async function main(args = process.argv.slice(2)) {
       startedAt: new Date().toISOString(),
       status: "starting",
       home,
+      backendOwnersDirectory,
       electronUserData: NodePath.join(home, "userdata", "electron"),
       appBundleId: appIdentity.bundleId,
       ...(platform === "darwin"
@@ -225,6 +278,8 @@ export async function main(args = process.argv.slice(2)) {
       T3CODE_DESKTOP_REMOTE_DEBUGGING_PORT: String(debugPort),
       T3CODE_COMMIT_HASH: commit,
       T3CODE_DEV_INSTANCE_NAME: `${NodePath.basename(repo)} ${commit.slice(0, 7)}`,
+      T3CODE_DEV_BACKEND_OWNERS_DIR: backendOwnersDirectory,
+      T3CODE_DEV_AUTO_PORT: "1",
     };
     env.PATH = `${NodePath.join(process.env.HOME, ".vite-plus", "bin")}:${env.PATH}`;
     delete env.ELECTRON_RUN_AS_NODE;

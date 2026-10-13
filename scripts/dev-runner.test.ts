@@ -26,12 +26,30 @@ import {
   findFirstAvailableOffset,
   getDevRunnerModeArgs,
   isBrowserAllowedPort,
+  loadDevRunnerEnv,
   resolveModePortOffsets,
   resolveOffset,
   runDevRunnerWithInput,
 } from "./dev-runner.ts";
 
 const emptyConfigLayer = ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} }));
+
+it("automatic launch ignores ambient and file-backed backend ports", () => {
+  const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "dev-auto-port-"));
+  try {
+    NodeFS.writeFileSync(NodePath.join(root, ".env"), "T3CODE_PORT=13773\n");
+    NodeFS.writeFileSync(NodePath.join(root, ".env.local"), "T3CODE_PORT=13774\n");
+    assert.equal(loadDevRunnerEnv({ repoRoot: root, baseEnv: {} }).T3CODE_PORT, "13774");
+    for (const baseEnv of [
+      { T3CODE_DEV_AUTO_PORT: "1" },
+      { T3CODE_DEV_AUTO_PORT: "1", T3CODE_PORT: "13775" },
+    ]) {
+      assert.isUndefined(loadDevRunnerEnv({ repoRoot: root, baseEnv }).T3CODE_PORT);
+    }
+  } finally {
+    NodeFS.rmSync(root, { recursive: true, force: true });
+  }
+});
 const netServiceLayer = Layer.succeed(NetService.NetService, {
   canListenOnHost: () => Effect.succeed(true),
   isPortAvailableOnLoopback: () => Effect.succeed(true),

@@ -56,7 +56,7 @@ TRITONAI_HARNESS_REPO=/absolute/pr-worktree /absolute/pr-worktree/.agents/skills
 TRITONAI_HARNESS_REPO=/absolute/pr-worktree /absolute/pr-worktree/.agents/skills/launch-tritonai-dev/scripts/launch.sh restart
 ```
 
-Stop addresses the recorded supervisor only after checking its process start identity. The supervisor stops its captured process group. No process-name search or global dev shutdown is used. Stale ownership with a surviving group is an inspection error, never permission to kill by pattern. Keep the instance running through the test/review loop; stop it when testing finishes unless it is being left for David to inspect.
+Stop addresses the recorded supervisor only after checking its process start identity. The supervisor stops its runner group and backend groups registered for that launch, checking each backend's recorded process start identity before capturing its group. Backends retain separate groups so recovery can stop their children independently. No process-name search or global dev shutdown is used. Stale ownership with a surviving group is an inspection error, never permission to kill by pattern. Keep the instance running through the test/review loop; stop it when testing finishes unless it is being left for David to inspect.
 
 Stopping preserves logs and instance state for another test. Delete only this task's isolated home when a fresh fixture is required, after confirming the instance stopped. Other worktrees, Stable and Nightly remain independent.
 
