@@ -206,8 +206,9 @@ Build-only, skipped, and failed nightly publications do not start a mobile build
 A published nightly also skips the mobile build when no mobile input changed
 since the newest `mobile-nightly` commit that Xcode Cloud archived successfully.
 Mobile inputs are `apps/mobile`, the workspace packages it depends on, root
-dependency manifests, patches, brand assets, and the native generator; tests
-and Markdown are ignored. Failed, pending, or never-started Xcode Cloud builds
+dependency manifests, patches, brand assets, the third-party license generator,
+its config and referenced notice files, and the native generator; tests are
+ignored. Failed, pending, or never-started Xcode Cloud builds
 do not count, so their changes are built by the next nightly. Running the
 workflow manually builds by default; clear `force` to apply the same check.
 Native preparation runs on macOS and commits the resolved Swift package pins,

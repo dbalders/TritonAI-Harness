@@ -5,7 +5,9 @@ const path = require("node:path");
 const NATIVE_BRANCH = "mobile-nightly";
 const RECEIPT = "apps/mobile/ios/ci_scripts/nightly-source.json";
 // Outside the mobile workspace closure, these files reach the Preview build:
-// app.config.ts imports the two script modules and reads icons from assets/.
+// app.config.ts imports the brand and config modules and reads icons from
+// assets/; metro.config.js generates the in-app notices from the license
+// config, whose notice files are added by licenseNoticeFiles.
 const SHARED_INPUTS = [
   "package.json",
   "pnpm-lock.yaml",
@@ -14,14 +16,15 @@ const SHARED_INPUTS = [
   "assets",
   "scripts/lib/brand-assets.ts",
   "scripts/lib/public-config.ts",
+  "scripts/lib/third-party-licenses.ts",
+  "third-party-licenses.config.json",
   ".github/scripts/prepare-mobile-native.cjs",
   ".github/scripts/prepare-nightly-mobile-native.cjs",
   ".github/scripts/xcode-cloud",
   ".github/workflows/mobile-nightly-testflight.yml",
 ];
-const IGNORED = ["**/*.test.ts", "**/*.test.tsx", "**/*.md"].map(
-  (glob) => `:(exclude,glob)${glob}`,
-);
+const LICENSE_CONFIG = "third-party-licenses.config.json";
+const IGNORED = ["**/*.test.ts", "**/*.test.tsx"].map((glob) => `:(exclude,glob)${glob}`);
 
 function workspacePackages(root) {
   const manifest = fs.readFileSync(path.join(root, "pnpm-workspace.yaml"), "utf8");
@@ -73,8 +76,34 @@ function mobileWorkspaceClosure(root) {
   return [...closure].toSorted();
 }
 
+function licenseNoticeFiles(root) {
+  const file = path.join(root, LICENSE_CONFIG);
+  if (!fs.existsSync(file)) return [];
+  const notices = new Set();
+  const visit = (value) => {
+    if (Array.isArray(value)) value.forEach(visit);
+    else if (value && typeof value === "object") {
+      for (const [key, entry] of Object.entries(value)) {
+        if (key === "noticeFile" && typeof entry === "string") notices.add(entry);
+        else if (key === "noticeFiles" && Array.isArray(entry))
+          entry.forEach((n) => notices.add(n));
+        else visit(entry);
+      }
+    }
+  };
+  try {
+    visit(JSON.parse(fs.readFileSync(file, "utf8")));
+  } catch {
+    // The config is itself an input, so a change that breaks it still builds.
+    return [];
+  }
+  return [...notices].filter((notice) => typeof notice === "string").toSorted();
+}
+
 function mobileInputPaths(root) {
-  return [...mobileWorkspaceClosure(root), ...SHARED_INPUTS];
+  return [
+    ...new Set([...mobileWorkspaceClosure(root), ...SHARED_INPUTS, ...licenseNoticeFiles(root)]),
+  ];
 }
 
 // The newest native commit that Xcode Cloud archived successfully. Failed,

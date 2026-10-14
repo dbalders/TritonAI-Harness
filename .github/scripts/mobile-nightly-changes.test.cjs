@@ -53,6 +53,15 @@ function repository(t) {
   write("apps/mobile/src/app.tsx", "export {};\n");
   write("apps/desktop/src/main.ts", "export {};\n");
   write("packages/contracts/src/index.ts", "export {};\n");
+  write(
+    "third-party-licenses.config.json",
+    JSON.stringify({
+      customNotices: [{ name: "libghostty-vt", noticeFile: "native/libghostty-vt/LICENSE" }],
+      packageOverrides: { fonts: { noticeFiles: ["apps/web/fonts/LICENSE.md"] } },
+    }),
+  );
+  write("native/libghostty-vt/LICENSE", "MIT\n");
+  write("apps/web/fonts/LICENSE.md", "OFL\n");
   const base = commit("base");
   return { root, write, commit, baseline: { tag: "v0.3.8-nightly.20261013.75", sourceSha: base } };
 }
@@ -66,12 +75,11 @@ test("follows workspace dependencies transitively from the mobile app", (t) => {
   ]);
 });
 
-test("skips desktop-only, test, and documentation changes", (t) => {
+test("skips desktop-only and test changes", (t) => {
   const { root, write, commit, baseline } = repository(t);
   write("apps/desktop/src/main.ts", "export const changed = true;\n");
   write("packages/shared/src/index.ts", "export {};\n");
   write("packages/contracts/src/index.test.ts", "export {};\n");
-  write("apps/mobile/README.md", "# Mobile\n");
   const decision = decideMobileBuild({ root, sourceSha: commit("desktop"), baseline });
   assert.equal(decision.build, false);
   assert.deepEqual(decision.changed, []);
@@ -84,6 +92,10 @@ test("builds when the app, its shared packages, or build inputs change", (t) => 
     "pnpm-lock.yaml",
     "assets/nightly/icon.png",
     ".github/scripts/xcode-cloud/ci_post_clone.sh",
+    "scripts/lib/third-party-licenses.ts",
+    "third-party-licenses.config.json",
+    "native/libghostty-vt/LICENSE",
+    "apps/web/fonts/LICENSE.md",
   ]) {
     const { root, write, commit, baseline } = repository(t);
     write(file, "changed\n");
