@@ -385,3 +385,60 @@ export function buildDailyMemoryPrompt(input: DailyMemoryPromptInput) {
     }),
   };
 }
+
+// ---------------------------------------------------------------------------
+// Ideas
+// ---------------------------------------------------------------------------
+
+export interface IdeasPromptInput {
+  /** How many ideas to return at most. */
+  count: number;
+  /** The user's context, formatted by the Ideas service with a reference id on every item. */
+  context: string;
+}
+
+export function buildIdeasPrompt(input: IdeasPromptInput) {
+  const prompt = [
+    "You suggest useful next tasks for a person using TritonAI, UC San Diego's AI workspace.",
+    "Many users are not technical. Each idea is a card offering to do one concrete thing for them.",
+    "Accepting a card opens a draft message to an AI agent, which the user reviews before sending.",
+    `Return a JSON object with key ideas: a list of at most ${input.count} ideas.`,
+    "Rules:",
+    "- base every idea only on the context below; never invent people, files, numbers, dates, or events it does not show",
+    "- ref: exactly one reference id from the context (thread:, note:, file:, plugin:, skill:, or starter:) that the idea is mainly about",
+    "- topic: two to four lowercase words naming what the idea does, such as chart enrollment data",
+    "- sources: every reference id the idea relies on, including ref",
+    "- icon: one emoji that fits the task",
+    '- title: under 70 characters, an offer in plain words such as "I can turn your meeting notes into a follow-up email"; no jargon',
+    "- body: one or two sentences under 240 characters saying what you noticed and what you will do",
+    "- action: resume-thread only when ref is a thread and the work continues in it; otherwise new-thread",
+    "- projectId: the project id from the context the new thread belongs in, or an empty string when none fits",
+    "- prompt: the full message the user would send, written in first person as the user, self-contained and specific; when the user must supply something, such as text to paste, include a clear placeholder in square brackets",
+    "- prefer open loops, unfinished threads, and recent files over generic ideas, and give each idea a different reference",
+    "- mix ideas from the user's own work with ideas that show something TritonAI can do, following the preference weights",
+    "- use starter ideas when there is not enough personal context; you may adapt a starter to the user's projects and tools",
+    "- never repeat or rephrase anything listed under Avoid",
+    "- never include secrets, tokens, keys, or credentials",
+    "",
+    limitSection(input.context, 90_000),
+  ].join("\n");
+
+  return {
+    prompt,
+    outputSchema: Schema.Struct({
+      ideas: Schema.Array(
+        Schema.Struct({
+          ref: Schema.String,
+          topic: Schema.String,
+          sources: Schema.Array(Schema.String),
+          icon: Schema.String,
+          title: Schema.String,
+          body: Schema.String,
+          action: Schema.Literals(["new-thread", "resume-thread"]),
+          projectId: Schema.String,
+          prompt: Schema.String,
+        }),
+      ),
+    }),
+  };
+}

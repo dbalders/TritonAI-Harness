@@ -478,6 +478,54 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGeneration", (it) => {
     ),
   );
 
+  it.effect("suggests ideas from the given context and trims the model's fields", () =>
+    withFakeCodexEnv(
+      {
+        output: JSON.stringify({
+          ideas: [
+            {
+              ref: " thread:thread-1 ",
+              topic: " finish reconciliation ",
+              sources: ["thread:thread-1", "  "],
+              icon: " 🧾 ",
+              title: " I can finish the reconciliation ",
+              body: " You stopped halfway. ",
+              action: "resume-thread",
+              projectId: " ",
+              prompt: " Please finish matching the travel lines. ",
+            },
+          ],
+        }),
+        stdinMustContain: "thread:thread-1",
+      },
+      (textGeneration) =>
+        Effect.gen(function* () {
+          const generated = yield* textGeneration.generateIdeas!({
+            cwd: process.cwd(),
+            count: 4,
+            context: "Recent threads:\n- thread:thread-1 Q1 travel reconciliation",
+            modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+          });
+
+          expect(generated).toEqual({
+            ideas: [
+              {
+                ref: "thread:thread-1",
+                topic: "finish reconciliation",
+                sources: ["thread:thread-1"],
+                icon: "🧾",
+                title: "I can finish the reconciliation",
+                body: "You stopped halfway.",
+                action: "resume-thread",
+                projectId: "",
+                prompt: "Please finish matching the travel lines.",
+              },
+            ],
+          });
+        }),
+    ),
+  );
+
   it.effect("returns the refinement signal for an unresolved subject", () =>
     withFakeCodexEnv(
       { output: JSON.stringify({ title: "Investigate issue", needsRefinement: true }) },

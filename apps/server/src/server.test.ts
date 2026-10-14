@@ -122,6 +122,7 @@ import * as GitManager from "./git/GitManager.ts";
 import * as EnvironmentTheme from "./environmentTheme.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 import * as MemorySync from "./memory/sync/MemorySync.ts";
+import * as Ideas from "./ideas/Ideas.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
@@ -834,6 +835,7 @@ const buildAppUnderTest = (options?: {
               },
             }),
           }),
+          Layer.mock(Ideas.Ideas)({}),
         ),
       ),
       Layer.provide(

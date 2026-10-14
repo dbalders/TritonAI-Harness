@@ -1090,6 +1090,24 @@ export function createServerEnvironmentAtoms<R, E>(
       // Summaries finish in the background, so an open settings page catches up.
       refreshIntervalMs: 30_000,
     }),
+    ideas: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:ideas:list",
+      tag: WS_METHODS.ideasList,
+      // Ideas are generated in the background; the sidebar badge catches up.
+      refreshIntervalMs: 5 * 60_000,
+    }),
+    markIdeasViewed: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:ideas:mark-viewed",
+      tag: WS_METHODS.ideasMarkViewed,
+    }),
+    suggestMoreIdeas: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:ideas:suggest-more",
+      tag: WS_METHODS.ideasSuggestMore,
+    }),
+    sendIdeaFeedback: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:ideas:feedback",
+      tag: WS_METHODS.ideasFeedback,
+    }),
     traceDiagnostics: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:trace-diagnostics",
       tag: WS_METHODS.serverGetTraceDiagnostics,

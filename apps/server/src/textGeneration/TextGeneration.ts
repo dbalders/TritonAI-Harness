@@ -97,6 +97,36 @@ export interface DailyMemoryGenerationResult {
   openLoops: ReadonlyArray<string>;
 }
 
+export interface IdeasGenerationInput {
+  /** Working directory for the generation process. Nothing in it is read. */
+  cwd: string;
+  /** How many ideas to return at most. */
+  count: number;
+  /** Everything the model may draw on, already formatted and trimmed by the Ideas service. */
+  context: string;
+  modelSelection: ModelSelection;
+}
+
+/** One idea as the model wrote it, before the Ideas service checks it against the context. */
+export interface GeneratedIdea {
+  /** The context reference the idea is mainly about, such as `thread:<id>`. */
+  readonly ref: string;
+  /** A few words naming what the idea does; tells apart ideas about the same reference. */
+  readonly topic: string;
+  readonly sources: ReadonlyArray<string>;
+  readonly icon: string;
+  readonly title: string;
+  readonly body: string;
+  readonly action: "new-thread" | "resume-thread";
+  /** A project id from the context, or empty. */
+  readonly projectId: string;
+  readonly prompt: string;
+}
+
+export interface IdeasGenerationResult {
+  ideas: ReadonlyArray<GeneratedIdea>;
+}
+
 /**
  * TextGeneration - Service tag for commit and change request text generation.
  */
@@ -136,6 +166,11 @@ export class TextGeneration extends Context.Service<
     readonly generateDailyMemory?: (
       input: DailyMemoryGenerationInput,
     ) => Effect.Effect<DailyMemoryGenerationResult, TextGenerationError>;
+
+    /** Suggest ideas for the Ideas page. Only Codex implements this. */
+    readonly generateIdeas?: (
+      input: IdeasGenerationInput,
+    ) => Effect.Effect<IdeasGenerationResult, TextGenerationError>;
   }
 >()("t3/textGeneration/TextGeneration") {}
 
@@ -144,7 +179,8 @@ type TextGenerationOp =
   | "generatePrContent"
   | "generateBranchName"
   | "generateThreadTitle"
-  | "generateDailyMemory";
+  | "generateDailyMemory"
+  | "generateIdeas";
 
 const resolveInstance = (
   registry: ProviderInstanceRegistry.ProviderInstanceRegistry["Service"],
@@ -207,6 +243,20 @@ export const make = Effect.gen(function* () {
                   operation: "generateDailyMemory",
                   detail:
                     "Daily memory needs a Codex text generation model. Choose one under Settings, Text generation.",
+                }),
+              ),
+        ),
+      ),
+    generateIdeas: (input) =>
+      resolveInstance(registry, "generateIdeas", input.modelSelection.instanceId).pipe(
+        Effect.flatMap((textGeneration) =>
+          textGeneration.generateIdeas
+            ? textGeneration.generateIdeas(input)
+            : Effect.fail(
+                new TextGenerationError({
+                  operation: "generateIdeas",
+                  detail:
+                    "Ideas need a Codex text generation model. Choose one under Settings, Text generation.",
                 }),
               ),
         ),

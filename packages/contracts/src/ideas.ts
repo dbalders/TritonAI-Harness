@@ -1,0 +1,109 @@
+import * as Schema from "effect/Schema";
+
+import {
+  IsoDateTime,
+  NonNegativeInt,
+  ProjectId,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
+
+/**
+ * Where an idea came from, which is also the heading it is listed under.
+ * `continue` and `projects` come from the user's own work; `tools`, `new`, and
+ * `starter` help them discover what TritonAI can do.
+ */
+export const IdeaSection = Schema.Literals(["continue", "projects", "tools", "new", "starter"]);
+export type IdeaSection = typeof IdeaSection.Type;
+
+export const IdeaSourceKind = Schema.Literals([
+  "thread",
+  "note",
+  "file",
+  "plugin",
+  "skill",
+  "starter",
+]);
+export type IdeaSourceKind = typeof IdeaSourceKind.Type;
+
+/** Something real the idea is based on, shown under "Why this?". */
+export const IdeaSource = Schema.Struct({
+  kind: IdeaSourceKind,
+  label: TrimmedNonEmptyString,
+});
+export type IdeaSource = typeof IdeaSource.Type;
+
+/** What accepting the idea does. Either way it opens a draft; nothing runs until the user sends it. */
+export const IdeaAction = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("new-thread"),
+    /** Null when the idea has no project of its own; the client picks the default one. */
+    projectId: Schema.NullOr(ProjectId),
+    prompt: TrimmedNonEmptyString,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("resume-thread"),
+    threadId: ThreadId,
+    prompt: TrimmedNonEmptyString,
+  }),
+]);
+export type IdeaAction = typeof IdeaAction.Type;
+
+export const Idea = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  section: IdeaSection,
+  /** A single emoji. */
+  icon: TrimmedNonEmptyString,
+  title: TrimmedNonEmptyString,
+  body: TrimmedNonEmptyString,
+  sources: Schema.Array(IdeaSource),
+  action: IdeaAction,
+  createdAt: IsoDateTime,
+  /** Set once the user opened its draft; the idea stays listed until the draft is sent. */
+  openedAt: Schema.NullOr(IsoDateTime),
+  snoozedUntil: Schema.NullOr(IsoDateTime),
+});
+export type Idea = typeof Idea.Type;
+
+export const IdeasGenerationState = Schema.Literals(["idle", "generating", "error"]);
+export type IdeasGenerationState = typeof IdeasGenerationState.Type;
+
+export const IdeasSnapshot = Schema.Struct({
+  ideas: Schema.Array(Idea),
+  snoozed: Schema.Array(Idea),
+  /** Ideas added since the user last opened the Ideas page. */
+  unseenCount: NonNegativeInt,
+  state: IdeasGenerationState,
+  message: Schema.NullOr(TrimmedNonEmptyString),
+  generatedAt: Schema.NullOr(IsoDateTime),
+});
+export type IdeasSnapshot = typeof IdeasSnapshot.Type;
+
+/**
+ * - `opened`: the user opened the idea's draft.
+ * - `dismissed`: not now; the same idea can come back after a while.
+ * - `rejected`: not relevant; never suggested again.
+ * - `less-like-this`: hides it and shows fewer ideas from its section.
+ * - `snoozed`: hidden until `snoozedUntil`.
+ * - `restored`: undoes the last of the above that hid it.
+ */
+export const IdeaFeedbackKind = Schema.Literals([
+  "opened",
+  "dismissed",
+  "rejected",
+  "less-like-this",
+  "snoozed",
+  "restored",
+]);
+export type IdeaFeedbackKind = typeof IdeaFeedbackKind.Type;
+
+export const IdeasFeedbackInput = Schema.Struct({
+  ideaId: TrimmedNonEmptyString,
+  kind: IdeaFeedbackKind,
+  snoozedUntil: Schema.optional(IsoDateTime),
+});
+export type IdeasFeedbackInput = typeof IdeasFeedbackInput.Type;
+
+export class IdeasError extends Schema.TaggedError<IdeasError>()("IdeasError", {
+  message: TrimmedNonEmptyString,
+}) {}
