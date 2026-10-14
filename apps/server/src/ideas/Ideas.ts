@@ -242,6 +242,7 @@ export const make = Effect.gen(function* () {
   const setGenerationStatus = (next: GenerationStatus) => Ref.set(status, next);
   const lock = yield* Semaphore.make(1);
   const seedLock = yield* Semaphore.make(1);
+  const feedbackLock = yield* Semaphore.make(1);
   const scope = yield* Effect.scope;
   // The generation started from the page, so callers can wait for it.
   const running = yield* Ref.make<Fiber.Fiber<void> | null>(null);
@@ -256,16 +257,20 @@ export const make = Effect.gen(function* () {
       ON CONFLICT (key) DO UPDATE SET value = excluded.value
     `;
 
-  const setStatus = (key: string, ideaId: string, nowIso: string, fields: Partial<IdeaRow>) =>
+  /**
+   * Moves an idea from the state `row` was read in. Applies only if nothing else
+   * changed it since, so a background retirement is never silently undone.
+   */
+  const setStatus = (row: IdeaRow, status: string, nowIso: string, fields: Partial<IdeaRow>) =>
     sql`
       UPDATE ideas SET
-        status = ${fields.status ?? key},
+        status = ${status},
         previous_status = ${fields.previousStatus ?? null},
         opened_at = COALESCE(${fields.openedAt ?? null}, opened_at),
         snoozed_until = ${fields.snoozedUntil ?? null},
         hidden_at = ${fields.hiddenAt ?? null},
         updated_at = ${nowIso}
-      WHERE idea_id = ${ideaId}
+      WHERE idea_id = ${row.ideaId} AND status = ${row.status} AND updated_at = ${row.updatedAt}
     `;
 
   const recordFeedback = (row: IdeaRow, kind: IdeaFeedbackKind, nowIso: string) =>
@@ -1002,34 +1007,38 @@ export const make = Effect.gen(function* () {
     return yield* snapshot;
   }).pipe(Effect.catch(toIdeasError("Couldn't load more ideas.")));
 
+  // One press at a time: each reads an idea and then changes it, and two clients
+  // pressing at once must not overwrite each other.
   const feedback = (input: IdeasFeedbackInput) =>
-    Effect.gen(function* () {
-      const nowMs = yield* Clock.currentTimeMillis;
-      const nowIso = toIso(nowMs);
-      const [row] = yield* sql<IdeaRow>`
+    feedbackLock
+      .withPermits(1)(
+        Effect.gen(function* () {
+          const nowMs = yield* Clock.currentTimeMillis;
+          const nowIso = toIso(nowMs);
+          const [row] = yield* sql<IdeaRow>`
         SELECT ${ideaColumns(sql)} FROM ideas WHERE idea_id = ${input.ideaId}
       `;
-      if (!row) {
-        return yield* new IdeasError({ message: "That idea is no longer available." });
-      }
-      const visible = row.status === "active" || row.status === "opened";
-      switch (input.kind) {
-        case "opened": {
-          if (!visible) break;
-          // Opening again must not erase the evidence that the first draft was sent.
-          if (row.openedAt !== null) {
-            const content = decodeContent(row.contentJson);
-            if (Option.isSome(content) && (yield* wasSent(row, content.value, row.openedAt))) {
-              yield* retire(row, "sent", nowIso);
-              break;
-            }
+          if (!row) {
+            return yield* new IdeasError({ message: "That idea is no longer available." });
           }
-          // The first open stays the start of tracking; reopening restarts only the timeout.
-          yield* setStatus("opened", row.ideaId, nowIso, { openedAt: row.openedAt ?? nowIso });
-          // Each client keeps its own draft; sending any of them uses the idea. One statement
-          // appends, so two clients opening at once both keep their drafts.
-          if (input.draftThreadId !== undefined) {
-            yield* sql`
+          const visible = row.status === "active" || row.status === "opened";
+          switch (input.kind) {
+            case "opened": {
+              if (!visible) break;
+              // Opening again must not erase the evidence that the first draft was sent.
+              if (row.openedAt !== null) {
+                const content = decodeContent(row.contentJson);
+                if (Option.isSome(content) && (yield* wasSent(row, content.value, row.openedAt))) {
+                  yield* retire(row, "sent", nowIso);
+                  break;
+                }
+              }
+              // The first open stays the start of tracking; reopening restarts only the timeout.
+              yield* setStatus(row, "opened", nowIso, { openedAt: row.openedAt ?? nowIso });
+              // Each client keeps its own draft; sending any of them uses the idea. One statement
+              // appends, so two clients opening at once both keep their drafts.
+              if (input.draftThreadId !== undefined) {
+                yield* sql`
               UPDATE ideas
               SET draft_thread_ids_json =
                 json_insert(COALESCE(draft_thread_ids_json, '[]'), '$[#]', ${input.draftThreadId})
@@ -1039,46 +1048,45 @@ export const make = Effect.gen(function* () {
                   WHERE value = ${input.draftThreadId}
                 )
             `;
-          }
-          if (row.status === "active") yield* recordFeedback(row, "opened", nowIso);
-          break;
-        }
-        case "dismissed":
-        case "rejected":
-        case "less-like-this": {
-          // A snoozed card is out of view; it can only be unsnoozed.
-          if (!visible) break;
-          yield* setStatus(
-            input.kind === "rejected" ? "rejected" : "dismissed",
-            row.ideaId,
-            nowIso,
-            {
-              previousStatus: row.status,
-              hiddenAt: nowIso,
-            },
-          );
-          yield* recordFeedback(row, input.kind, nowIso);
-          break;
-        }
-        case "snoozed": {
-          if (!visible) break;
-          if (input.snoozedUntil === undefined || input.snoozedUntil <= nowIso) {
-            return yield* new IdeasError({ message: "Choose a time in the future." });
-          }
-          yield* setStatus("snoozed", row.ideaId, nowIso, {
-            previousStatus: row.status,
-            snoozedUntil: input.snoozedUntil,
-          });
-          yield* recordFeedback(row, "snoozed", nowIso);
-          break;
-        }
-        case "restored": {
-          if (row.status !== "dismissed" && row.status !== "rejected" && row.status !== "snoozed") {
-            break;
-          }
-          yield* setStatus(row.previousStatus ?? "active", row.ideaId, nowIso, {});
-          // Undo takes back the press, so it no longer moves the mix of sections.
-          yield* sql`
+              }
+              if (row.status === "active") yield* recordFeedback(row, "opened", nowIso);
+              break;
+            }
+            case "dismissed":
+            case "rejected":
+            case "less-like-this": {
+              // A snoozed card is out of view; it can only be unsnoozed.
+              if (!visible) break;
+              yield* setStatus(row, input.kind === "rejected" ? "rejected" : "dismissed", nowIso, {
+                previousStatus: row.status,
+                hiddenAt: nowIso,
+              });
+              yield* recordFeedback(row, input.kind, nowIso);
+              break;
+            }
+            case "snoozed": {
+              if (!visible) break;
+              if (input.snoozedUntil === undefined || input.snoozedUntil <= nowIso) {
+                return yield* new IdeasError({ message: "Choose a time in the future." });
+              }
+              yield* setStatus(row, "snoozed", nowIso, {
+                previousStatus: row.status,
+                snoozedUntil: input.snoozedUntil,
+              });
+              yield* recordFeedback(row, "snoozed", nowIso);
+              break;
+            }
+            case "restored": {
+              if (
+                row.status !== "dismissed" &&
+                row.status !== "rejected" &&
+                row.status !== "snoozed"
+              ) {
+                break;
+              }
+              yield* setStatus(row, row.previousStatus ?? "active", nowIso, {});
+              // Undo takes back the press, so it no longer moves the mix of sections.
+              yield* sql`
             DELETE FROM idea_feedback WHERE rowid = (
               SELECT rowid FROM idea_feedback
               WHERE idea_id = ${row.ideaId}
@@ -1086,17 +1094,19 @@ export const make = Effect.gen(function* () {
               ORDER BY created_at DESC LIMIT 1
             )
           `;
-          break;
-        }
-      }
-      return yield* snapshot;
-    }).pipe(
-      Effect.catch((error) =>
-        isIdeasError(error)
-          ? Effect.fail(error)
-          : toIdeasError("Couldn't save that change.")(error),
-      ),
-    );
+              break;
+            }
+          }
+          return yield* snapshot;
+        }),
+      )
+      .pipe(
+        Effect.catch((error) =>
+          isIdeasError(error)
+            ? Effect.fail(error)
+            : toIdeasError("Couldn't save that change.")(error),
+        ),
+      );
 
   return Ideas.of({
     list,
