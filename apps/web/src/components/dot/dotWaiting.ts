@@ -79,12 +79,12 @@ export function usableWaiting(value: unknown): DotWaitingStatus | undefined {
 }
 
 /** A scheduled check whose time has passed is overdue; it is never shown as upcoming. */
-export function isOverdue(step: DotNextStep, now: number): boolean {
+function isOverdue(step: DotNextStep, now: number): boolean {
   return step.kind === "check" && (time(step.at) ?? Infinity) <= now;
 }
 
 /** The status's own time-driven change has passed without a newer snapshot replacing it. */
-export function hasExpired(status: DotWaitingStatus, now: number): boolean {
+function hasExpired(status: DotWaitingStatus, now: number): boolean {
   return (time(status.changesAt) ?? Infinity) <= now;
 }
 

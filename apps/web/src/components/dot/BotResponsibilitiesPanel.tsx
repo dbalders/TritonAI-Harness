@@ -41,7 +41,7 @@ function replyState(reply: DotResponsibilityReply): string {
 }
 
 /** Held messages that could belong to this responsibility and have not been used anywhere yet. */
-export function heldRepliesFor(
+function heldRepliesFor(
   item: DotResponsibility,
   responsibilities: readonly DotResponsibility[],
   runs: readonly DotRun[],
