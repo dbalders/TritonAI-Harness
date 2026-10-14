@@ -28,10 +28,9 @@ import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { SidebarInset } from "../ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import ChatMarkdown from "../ChatMarkdown";
 import { ComposerSurface } from "../chat/ComposerSurface";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
-import { remarkBotImagesAsLinks } from "./botMarkdown";
+import { BotReplyMarkdown } from "./BotReplyMarkdown";
 import { clearBotSessions, useBotDiagnostics, useBotServiceUrl } from "./botService";
 import { BotResultCard } from "./BotResultCard";
 import { BotMemoryPanel, BotMemoryEditor } from "./BotMemoryPanel";
@@ -79,7 +78,6 @@ import {
 } from "./dotClient";
 
 const SIGNUPS_CLOSED = "TritonAI Bot isn't accepting new users right now.";
-const BOT_REMARK_PLUGINS = [remarkBotImagesAsLinks];
 
 /**
  * Keeps the newer of two copies of each versioned record. Reads are ordered by request, but an older copy must never
@@ -1067,7 +1065,7 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
             )}
           </div>
         ) : (
-          <div className="flex min-h-0 flex-1">
+          <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
             <div className="flex min-h-0 min-w-0 flex-1 flex-col">
               <div className="min-h-0 flex-1 overflow-y-auto">
                 <div className="mx-auto flex w-full max-w-(--chat-max-width) flex-col gap-5 px-5 pt-4 pb-6 sm:px-6">
@@ -1125,12 +1123,7 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
                           <div className="min-w-0 px-1 py-0.5 text-sm">
                             <span id={`bot-run-${run.runId}`} tabIndex={-1} />
                             {run.result?.summary ? (
-                              <ChatMarkdown
-                                text={run.result.summary}
-                                cwd={undefined}
-                                lineBreaks
-                                extraRemarkPlugins={BOT_REMARK_PLUGINS}
-                              />
+                              <BotReplyMarkdown text={run.result.summary} />
                             ) : (
                               <p
                                 className={cn(
@@ -1456,7 +1449,7 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
             {showDiagnostics && (
               <aside
                 aria-label="Bot activity and capabilities"
-                className="flex w-80 min-h-0 shrink-0 flex-col gap-3 overflow-y-auto border-s px-4 py-4"
+                className="flex max-h-[40%] min-h-0 shrink-0 flex-col gap-3 overflow-y-auto border-t px-4 py-4 lg:max-h-none lg:w-80 lg:border-t-0 lg:border-s"
               >
                 <p className="text-xs font-medium text-muted-foreground">
                   Diagnostics · shown because of your developer setting

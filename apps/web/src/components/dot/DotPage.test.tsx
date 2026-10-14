@@ -10,8 +10,8 @@ vi.mock("./botService", async (importOriginal) => ({
   useBotDiagnostics: () => botView.diagnostics,
 }));
 // Markdown rendering has its own tests; here a reply only needs its text.
-vi.mock("../ChatMarkdown", () => ({
-  default: ({ text }: { text: string }) => <div data-testid="bot-markdown">{text}</div>,
+vi.mock("./BotReplyMarkdown", () => ({
+  BotReplyMarkdown: ({ text }: { text: string }) => <div data-testid="bot-markdown">{text}</div>,
 }));
 vi.mock("../../localApi", () => ({
   ensureLocalApi: () => ({ shell: { openExternal: vi.fn() } }),
@@ -2289,6 +2289,69 @@ describe("waiting reasons", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(2500);
     });
+    expect(container.textContent).toContain("Summary written next to the source.");
+  });
+
+  it("opens a finished file's assignment from its row when the service gives no waiting status", async () => {
+    state = {
+      ...withPanels(),
+      enhancements: { fileRecipes: true },
+      fileRecipes: [
+        {
+          recipeId: "fr_0123456789ab",
+          name: "Inbox summaries",
+          instructions: "Summarize each new report.",
+          expectedOutput: "A short summary.",
+          approval: "ask",
+          folder: { folderId: "folder-inbox", name: "Inbox", webUrl: "" },
+          status: "active",
+          generation: 1,
+          version: 4,
+          cadence: "about every 5 minutes",
+          events: [
+            {
+              key: "0123456789abcdef01234567",
+              version: {
+                itemId: "item-1",
+                name: "q3-report.md",
+                cTag: "c1",
+                size: 12,
+                lastModifiedDateTime: at,
+                webUrl: "",
+              },
+              status: "assigned",
+              seenAt: at,
+              updatedAt: at,
+              taskId: "old-task",
+              current: true,
+              startable: false,
+            },
+          ],
+          createdAt: at,
+          updatedAt: at,
+        },
+      ],
+    };
+    const read = vi.fn(async () =>
+      Response.json({
+        ok: true,
+        task: {
+          taskId: "old-task",
+          title: "Inbox summaries: q3-report.md",
+          status: "completed",
+          createdAt: at,
+          updatedAt: at,
+          detail: { kind: "harness-task" },
+          result: "Summary written next to the source.",
+        },
+      }),
+    );
+    onTaskRead = read;
+    await render();
+    expect(container.textContent).toContain("This assignment isn't in this view.");
+    await click("Open the assignment");
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(container.querySelector<HTMLDetailsElement>("#bot-task-old-task")!.open).toBe(true);
     expect(container.textContent).toContain("Summary written next to the source.");
   });
 

@@ -328,6 +328,15 @@ function EventRow({
   const waiting = usableWaiting(event.waiting);
   const progress = waiting ? undefined : fileRecipeEventProgress(event, approvals, tasks);
   const read = fileRecipeReadSummary(event);
+  const open: DotWaitingAction | undefined = event.taskId
+    ? { kind: "open", label: "Open the assignment", target: { kind: "task", id: event.taskId } }
+    : event.approvalId && event.status === "needs-decision"
+      ? {
+          kind: "open",
+          label: "Open the decision",
+          target: { kind: "approval", id: event.approvalId },
+        }
+      : undefined;
   return (
     <li className="space-y-1 border-t pt-1">
       <div className="flex flex-wrap items-center gap-2">
@@ -353,6 +362,12 @@ function EventRow({
         />
       )}
       {progress && <p className="text-xs text-muted-foreground">{progress}</p>}
+      {/* Without a waiting status (older services, finished files) the row still opens its own linked record. */}
+      {!waiting && open && onWaitingAction && (
+        <Button variant="outline" size="xs" onClick={() => onWaitingAction(open)}>
+          {open.label}
+        </Button>
+      )}
       {read && <p className="text-xs text-muted-foreground">{read}</p>}
       {event.startable && (
         <Button
