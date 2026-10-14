@@ -197,12 +197,17 @@ function toIdea(row: IdeaRow): Idea | null {
   };
 }
 
-/** The start of a prompt that a sent message would still contain, before any placeholder. */
+/**
+ * Text a sent message would still contain after the user fills in the
+ * prompt's `[placeholders]`: the start of its longest placeholder-free run.
+ */
 function promptSnippet(prompt: string): string {
-  const flat = prompt.replace(/\s+/gu, " ").trim();
-  const beforePlaceholder = flat.slice(0, flat.indexOf("[") === -1 ? undefined : flat.indexOf("["));
-  const snippet = beforePlaceholder.trim().length >= 16 ? beforePlaceholder : flat;
-  return snippet.slice(0, 48).trim();
+  const runs = prompt
+    .replace(/\s+/gu, " ")
+    .split(/\[[^\]]*\]/u)
+    .map((run) => run.trim());
+  const longest = runs.reduce((best, run) => (run.length > best.length ? run : best), "");
+  return longest.slice(0, 48).trim();
 }
 
 const ideaColumns = (sql: SqlClient.SqlClient) => sql`
@@ -232,6 +237,7 @@ export const make = Effect.gen(function* () {
   const status = yield* Ref.make<GenerationStatus>({ state: "idle", message: null });
   const setGenerationStatus = (next: GenerationStatus) => Ref.set(status, next);
   const lock = yield* Semaphore.make(1);
+  const seedLock = yield* Semaphore.make(1);
   const scope = yield* Effect.scope;
   // The generation started from the page, so callers can wait for it.
   const running = yield* Ref.make<Fiber.Fiber<void> | null>(null);
@@ -262,6 +268,13 @@ export const make = Effect.gen(function* () {
     sql`
       INSERT INTO idea_feedback (idea_id, section, kind, created_at)
       VALUES (${row.ideaId}, ${row.section}, ${kind}, ${nowIso})
+    `;
+
+  /** Retires an idea the user has not acted on since it was read, leaving any newer press alone. */
+  const retire = (row: IdeaRow, next: "sent" | "dismissed" | "expired", nowIso: string) =>
+    sql`
+      UPDATE ideas SET status = ${next}, previous_status = NULL, hidden_at = ${nowIso}, updated_at = ${nowIso}
+      WHERE idea_id = ${row.ideaId} AND status = ${row.status} AND updated_at = ${row.updatedAt}
     `;
 
   /** Whether a user message was sent from an opened idea's draft. */
@@ -314,21 +327,22 @@ export const make = Effect.gen(function* () {
       if (Option.isNone(content)) continue;
       if (row.status === "opened" && row.openedAt !== null) {
         if (yield* wasSent(content.value, row.openedAt)) {
-          yield* setStatus("sent", row.ideaId, nowIso, { hiddenAt: nowIso });
+          yield* retire(row, "sent", nowIso);
         } else if (nowMs - Date.parse(row.openedAt) > OPENED_TTL_MS) {
-          yield* setStatus("dismissed", row.ideaId, nowIso, { hiddenAt: nowIso });
+          yield* retire(row, "dismissed", nowIso);
         }
         continue;
       }
       const staleOwnWork =
         isSection(row.section) &&
         isPersonalSection(row.section) &&
-        nowMs - Date.parse(row.createdAt) > PERSONAL_TTL_MS;
+        // Since it was added, woken from a snooze, or restored.
+        nowMs - Date.parse(row.updatedAt) > PERSONAL_TTL_MS;
       const goneThread =
         content.value.action.kind === "resume-thread" &&
         (yield* threadIsGone(content.value.action.threadId));
       if (staleOwnWork || goneThread) {
-        yield* setStatus("expired", row.ideaId, nowIso, { hiddenAt: nowIso });
+        yield* retire(row, "expired", nowIso);
       }
     }
   });
@@ -353,11 +367,18 @@ export const make = Effect.gen(function* () {
   });
 
   /** Gives a first visit something to look at before anything has been generated. */
-  const seedStarters = Effect.fn("ideas.seedStarters")(function* (nowMs: number) {
-    const [row] = yield* sql<{ readonly count: number }>`SELECT COUNT(*) AS "count" FROM ideas`;
-    if ((row?.count ?? 0) > 0) return;
-    yield* insertIdeas(STARTER_IDEAS.slice(0, TARGET_IDEAS).map(starterCandidate), toIso(nowMs));
-  });
+  const seedStarters = (nowMs: number) =>
+    // Two first requests at once must not both find the table empty.
+    seedLock.withPermits(1)(
+      Effect.gen(function* () {
+        const [row] = yield* sql<{ readonly count: number }>`SELECT COUNT(*) AS "count" FROM ideas`;
+        if ((row?.count ?? 0) > 0) return;
+        yield* insertIdeas(
+          STARTER_IDEAS.slice(0, TARGET_IDEAS).map(starterCandidate),
+          toIso(nowMs),
+        );
+      }),
+    );
 
   const snapshot = Effect.gen(function* () {
     const nowMs = yield* Clock.currentTimeMillis;
@@ -605,7 +626,9 @@ export const make = Effect.gen(function* () {
   interface Exclusions {
     /** Keys that must not be suggested now: visible, used, rejected, or cooling down. */
     readonly excludedKeys: ReadonlySet<string>;
-    /** Dismissed or expired starter keys past nothing else, oldest first, for when all else is used. */
+    /** Starter keys never hidden, so a first showing comes before a repeat. */
+    readonly hiddenStarterKeys: ReadonlySet<string>;
+    /** Hidden starter keys whose cooldown has ended, longest-hidden first. */
     readonly recyclableStarterKeys: ReadonlyArray<string>;
     readonly avoid: ReadonlyArray<string>;
     readonly weights: Record<IdeaSection, number>;
@@ -641,9 +664,12 @@ export const make = Effect.gen(function* () {
       if (Option.isSome(content)) avoid.push(content.value.title);
     }
     const recyclableStarterKeys = [...cooling.entries()]
-      .filter(([key]) => key.startsWith("starter:") && !permanent.has(key))
+      .filter(([key]) => key.startsWith("starter:") && !excludedKeys.has(key))
       .toSorted((left, right) => left[1].localeCompare(right[1]))
       .map(([key]) => key);
+    const hiddenStarterKeys = new Set(
+      [...cooling.keys()].filter((key) => key.startsWith("starter:")),
+    );
 
     const feedbackStart = toIso(nowMs - FEEDBACK_WINDOW_MS);
     const counts = yield* sql<{
@@ -680,6 +706,7 @@ export const make = Effect.gen(function* () {
     }
     return {
       excludedKeys,
+      hiddenStarterKeys,
       recyclableStarterKeys,
       avoid,
       weights: sectionWeights(feedback),
@@ -753,7 +780,7 @@ export const make = Effect.gen(function* () {
     return true;
   });
 
-  /** Starter ideas for empty slots: unused ones first, then the longest-dismissed. */
+  /** Starter ideas for empty slots: unshown ones first, then those whose cooldown ended. */
   const starterFill = (
     count: number,
     exclusions: Exclusions,
@@ -762,11 +789,15 @@ export const make = Effect.gen(function* () {
     if (count <= 0) return [];
     const fresh = STARTER_IDEAS.filter((starter) => {
       const key = `starter:${starter.id}`;
-      return !exclusions.excludedKeys.has(key) && !taken.has(key);
+      return (
+        !exclusions.excludedKeys.has(key) &&
+        !exclusions.hiddenStarterKeys.has(key) &&
+        !taken.has(key)
+      );
     });
     const recycled = exclusions.recyclableStarterKeys.flatMap((key) => {
       const starter = STARTER_IDEAS.find((candidate) => `starter:${candidate.id}` === key);
-      return starter && !taken.has(key) && !fresh.includes(starter) ? [starter] : [];
+      return starter && !taken.has(key) ? [starter] : [];
     });
     return [...fresh, ...recycled].slice(0, count).map(starterCandidate);
   };
@@ -781,7 +812,7 @@ export const make = Effect.gen(function* () {
     yield* sql`
       UPDATE ideas SET status = 'expired', hidden_at = ${nowIso}, updated_at = ${nowIso}
       WHERE idea_id IN (
-        SELECT idea_id FROM ideas WHERE status = 'active'
+        SELECT idea_id FROM ideas WHERE status = 'active' AND created_at < ${nowIso}
         ORDER BY section = 'starter' DESC, created_at ASC
         LIMIT ${excess}
       )

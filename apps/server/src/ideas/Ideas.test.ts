@@ -300,6 +300,52 @@ it.layer(NodeServices.layer)("Ideas", (it) => {
     }),
   );
 
+  it.effect("counts a starter idea as used after its placeholders are filled in", () =>
+    Effect.gen(function* () {
+      const { layer } = yield* makeHarness(() => Effect.succeed([]));
+      yield* TestClock.setTime(NOW);
+      yield* Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const ideas = yield* Ideas.make;
+        const idea = (yield* ideas.list).ideas.find(
+          (entry) => entry.title === "Ask me questions about a long document",
+        );
+        assert.isDefined(idea);
+        yield* ideas.feedback({ ideaId: idea!.id, kind: "opened" });
+        yield* TestClock.adjust(HOUR);
+        const sent =
+          "Read the parking policy PDF and answer my questions about it. Quote the exact passage you relied on for each answer, and tell me when the document doesn't say.";
+        yield* sql`
+          INSERT INTO projection_thread_messages (message_id, thread_id, role, text, is_streaming, created_at, updated_at)
+          VALUES ('m-sent', 'thread-x', 'user', ${sent}, 0, ${iso(NOW + HOUR)}, ${iso(NOW + HOUR)})
+        `;
+        assert.isUndefined((yield* ideas.list).ideas.find((entry) => entry.id === idea!.id));
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    }),
+  );
+
+  it.effect("shows an idea from the user's work again when a long snooze ends", () =>
+    Effect.gen(function* () {
+      const { layer } = yield* makeHarness(() => Effect.succeed([threadIdea()]));
+      yield* TestClock.setTime(NOW);
+      yield* Effect.gen(function* () {
+        yield* seedWork;
+        const ideas = yield* Ideas.make;
+        yield* ideas.suggestMore;
+        yield* ideas.awaitIdle;
+        const idea = (yield* ideas.list).ideas.find((entry) => entry.section === "continue");
+        assert.isDefined(idea);
+        yield* ideas.feedback({
+          ideaId: idea!.id,
+          kind: "snoozed",
+          snoozedUntil: iso(NOW + 5 * DAY),
+        });
+        yield* TestClock.adjust(6 * DAY);
+        assert.isDefined((yield* ideas.list).ideas.find((entry) => entry.id === idea!.id));
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    }),
+  );
+
   it.effect("snoozes until the chosen time and undoes a dismissal", () =>
     Effect.gen(function* () {
       const { layer } = yield* makeHarness(() => Effect.succeed([]));
