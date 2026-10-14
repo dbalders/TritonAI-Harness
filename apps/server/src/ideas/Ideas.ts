@@ -1004,13 +1004,22 @@ export const make = Effect.gen(function* () {
       switch (input.kind) {
         case "opened": {
           if (!visible) break;
-          yield* setStatus("opened", row.ideaId, nowIso, { openedAt: nowIso });
+          // Opening again must not erase the evidence that the first draft was sent.
+          if (row.openedAt !== null) {
+            const content = decodeContent(row.contentJson);
+            if (Option.isSome(content) && (yield* wasSent(row, content.value, row.openedAt))) {
+              yield* retire(row, "sent", nowIso);
+              break;
+            }
+          }
+          // The first open stays the start of tracking; reopening restarts only the timeout.
+          yield* setStatus("opened", row.ideaId, nowIso, { openedAt: row.openedAt ?? nowIso });
           if (input.draftThreadId !== undefined) {
             yield* sql`
               UPDATE ideas SET draft_thread_id = ${input.draftThreadId} WHERE idea_id = ${row.ideaId}
             `;
           }
-          yield* recordFeedback(row, "opened", nowIso);
+          if (row.status === "active") yield* recordFeedback(row, "opened", nowIso);
           break;
         }
         case "dismissed":

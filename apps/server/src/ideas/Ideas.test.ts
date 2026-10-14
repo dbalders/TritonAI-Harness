@@ -493,6 +493,36 @@ it.layer(NodeServices.layer)("Ideas", (it) => {
     }),
   );
 
+  it.effect("still counts a sent draft as used when its card is opened again", () =>
+    Effect.gen(function* () {
+      const { layer } = yield* makeHarness(() => Effect.succeed([]));
+      yield* TestClock.setTime(NOW);
+      yield* Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const ideas = yield* Ideas.make;
+        const [idea] = (yield* ideas.list).ideas;
+        yield* ideas.feedback({
+          ideaId: idea!.id,
+          kind: "opened",
+          draftThreadId: ThreadId.make("draft-thread-4"),
+        });
+        yield* TestClock.adjust(HOUR);
+        yield* sql`
+          INSERT INTO projection_thread_messages (message_id, thread_id, role, text, is_streaming, created_at, updated_at)
+          VALUES ('m-first', 'draft-thread-4', 'user', 'Sent from the first draft.', 0, ${iso(NOW + HOUR)}, ${iso(NOW + HOUR)})
+        `;
+        yield* TestClock.adjust(HOUR);
+        // A card still on screen from before the send is opened again into a new draft.
+        const reopened = yield* ideas.feedback({
+          ideaId: idea!.id,
+          kind: "opened",
+          draftThreadId: ThreadId.make("draft-thread-5"),
+        });
+        assert.isUndefined(reopened.ideas.find((entry) => entry.id === idea!.id));
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    }),
+  );
+
   it.effect("keeps a snoozed idea snoozed when asked to dismiss it", () =>
     Effect.gen(function* () {
       const { layer } = yield* makeHarness(() => Effect.succeed([]));
