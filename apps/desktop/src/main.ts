@@ -52,6 +52,7 @@ import * as DesktopClientSettings from "./settings/DesktopClientSettings.ts";
 import * as DesktopComputerUse from "./computerUse/DesktopComputerUse.ts";
 import * as DesktopSavedEnvironments from "./settings/DesktopSavedEnvironments.ts";
 import * as DesktopSnapShot from "./snapShot/DesktopSnapShot.ts";
+import * as DesktopSkillRecording from "./skillRecording/DesktopSkillRecording.ts";
 import * as DesktopAppSettings from "./settings/DesktopAppSettings.ts";
 import * as DesktopPreReadyPlatform from "./app/DesktopPreReadyPlatform.ts";
 import * as DesktopShellEnvironment from "./shell/DesktopShellEnvironment.ts";
@@ -132,6 +133,7 @@ const desktopFoundationLayer = Layer.mergeAll(
   DesktopShutdown.layer,
   DesktopAppSettings.layer,
   DesktopComputerUse.layer,
+  DesktopSkillRecording.layer,
   DesktopClientSettings.layer,
   DesktopConnectionCatalogStore.layer.pipe(Layer.provideMerge(DesktopSavedEnvironments.layer)),
   DesktopAssets.layer,

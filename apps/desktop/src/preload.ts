@@ -174,6 +174,25 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   getComputerUseState: () => ipcRenderer.invoke(IpcChannels.GET_COMPUTER_USE_STATE_CHANNEL),
   setComputerUseEnabled: (enabled) =>
     ipcRenderer.invoke(IpcChannels.SET_COMPUTER_USE_ENABLED_CHANNEL, enabled),
+  requestSkillRecordingPermission: () =>
+    ipcRenderer.invoke(IpcChannels.REQUEST_SKILL_RECORDING_PERMISSION_CHANNEL),
+  startSkillRecording: () => ipcRenderer.invoke(IpcChannels.START_SKILL_RECORDING_CHANNEL),
+  stopSkillRecording: (sessionId) =>
+    ipcRenderer.invoke(IpcChannels.STOP_SKILL_RECORDING_CHANNEL, sessionId),
+  cancelSkillRecording: (sessionId) =>
+    ipcRenderer.invoke(IpcChannels.CANCEL_SKILL_RECORDING_CHANNEL, sessionId),
+  onSkillRecordingControl: (listener) => {
+    const wrappedListener = (_event: Electron.IpcRendererEvent, control: unknown) => {
+      if (typeof control !== "object" || control === null) return;
+      const { sessionId, action } = control as { sessionId?: unknown; action?: unknown };
+      if (typeof sessionId !== "string" || (action !== "stop" && action !== "discard")) return;
+      listener({ sessionId, action });
+    };
+    ipcRenderer.on(IpcChannels.SKILL_RECORDING_CONTROL_CHANNEL, wrappedListener);
+    return () => {
+      ipcRenderer.removeListener(IpcChannels.SKILL_RECORDING_CONTROL_CHANNEL, wrappedListener);
+    };
+  },
   getWslState: () => ipcRenderer.invoke(IpcChannels.GET_WSL_STATE_CHANNEL),
   setWslBackendEnabled: (enabled) =>
     ipcRenderer.invoke(IpcChannels.SET_WSL_BACKEND_ENABLED_CHANNEL, enabled),

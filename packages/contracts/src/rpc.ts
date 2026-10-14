@@ -301,6 +301,7 @@ import {
   ServerMemorySyncPollResult,
   ServerMemorySyncStartResult,
 } from "./memory.ts";
+import { IdeasError, IdeasFeedbackInput, IdeasSnapshot } from "./ideas.ts";
 import {
   ProjectCloneActionInput,
   ProjectCloneActionResult,
@@ -448,6 +449,10 @@ export const WS_METHODS = {
   serverSyncMemoryNow: "server.syncMemoryNow",
   serverStopMemorySync: "server.stopMemorySync",
   serverSignOutMemorySync: "server.signOutMemorySync",
+  ideasList: "ideas.list",
+  ideasMarkViewed: "ideas.markViewed",
+  ideasSuggestMore: "ideas.suggestMore",
+  ideasFeedback: "ideas.feedback",
   serverDiscoverSourceControl: "server.discoverSourceControl",
   serverGetTraceDiagnostics: "server.getTraceDiagnostics",
   serverGetProcessDiagnostics: "server.getProcessDiagnostics",
@@ -786,6 +791,30 @@ const WsServerSignOutMemorySyncRpc = Rpc.make(WS_METHODS.serverSignOutMemorySync
   payload: Schema.Struct({}),
   success: ServerMemoryStatus,
   error: Schema.Union([ServerMemorySyncError, EnvironmentAuthorizationError]),
+});
+
+const WsIdeasListRpc = Rpc.make(WS_METHODS.ideasList, {
+  payload: Schema.Struct({}),
+  success: IdeasSnapshot,
+  error: Schema.Union([IdeasError, EnvironmentAuthorizationError]),
+});
+
+const WsIdeasMarkViewedRpc = Rpc.make(WS_METHODS.ideasMarkViewed, {
+  payload: Schema.Struct({}),
+  success: IdeasSnapshot,
+  error: Schema.Union([IdeasError, EnvironmentAuthorizationError]),
+});
+
+const WsIdeasSuggestMoreRpc = Rpc.make(WS_METHODS.ideasSuggestMore, {
+  payload: Schema.Struct({}),
+  success: IdeasSnapshot,
+  error: Schema.Union([IdeasError, EnvironmentAuthorizationError]),
+});
+
+const WsIdeasFeedbackRpc = Rpc.make(WS_METHODS.ideasFeedback, {
+  payload: IdeasFeedbackInput,
+  success: IdeasSnapshot,
+  error: Schema.Union([IdeasError, EnvironmentAuthorizationError]),
 });
 
 const WsServerDiscoverSourceControlRpc = Rpc.make(WS_METHODS.serverDiscoverSourceControl, {
@@ -1756,6 +1785,10 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerSyncMemoryNowRpc,
   WsServerStopMemorySyncRpc,
   WsServerSignOutMemorySyncRpc,
+  WsIdeasListRpc,
+  WsIdeasMarkViewedRpc,
+  WsIdeasSuggestMoreRpc,
+  WsIdeasFeedbackRpc,
   WsServerDiscoverSourceControlRpc,
   WsServerGetTraceDiagnosticsRpc,
   WsServerGetProcessDiagnosticsRpc,

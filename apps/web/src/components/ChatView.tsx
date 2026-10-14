@@ -312,6 +312,7 @@ import {
   beginBackgroundDraftSubmissionByRef,
   clearBackgroundDraftSubmissionByRef,
   composerDraftHasUserContent,
+  composerTargetKey,
   type ComposerFileAttachment,
   type ComposerImageAttachment,
   type DraftThreadEnvMode,
@@ -528,6 +529,7 @@ import {
 } from "./ui/alert-dialog";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { ServerUpdateAction } from "./ServerUpdateAction";
+import { takePendingRecordedSkillPrompt, usePendingRecordedSkillPrompt } from "./RecordSkill";
 import { useAutoBalanceUpdateBanner } from "./chat/useAutoBalanceUpdateBanner";
 import {
   ComposerServerUpdateIcon,
@@ -9176,6 +9178,72 @@ export default function ChatView(props: ChatViewProps) {
       resetLocalDispatch();
     }
   };
+
+  // A skill recording stopped from this conversation is sent as its next
+  // message once the composer can send, and waits while a question is open so
+  // it never answers one. Text the user was writing is set aside and put back
+  // afterward. A draft with attachments keeps them out of the recording's
+  // message: the recording is added for the user to send.
+  const recordedSkillTargetKey = composerTargetKey(composerDraftTarget);
+  const recordedSkillPrompt = usePendingRecordedSkillPrompt(recordedSkillTargetKey);
+  const [recordedSkillPass, setRecordedSkillPass] = useState(0);
+  const recordedSkillSendReady =
+    recordedSkillPrompt !== null &&
+    activeThread !== undefined &&
+    activeThread !== null &&
+    !isSendBusy &&
+    !isConnecting &&
+    !isRevertingCheckpoint &&
+    !activeEnvironmentUnavailable &&
+    !activePendingProgress &&
+    !needsLoadBalancing &&
+    clientSettingsHydrated &&
+    !threadDetailLoading;
+  // `pass` counts recordings handled here, so the next queued one is picked up
+  // even when nothing else changes.
+  const sendRecordedSkill = useEffectEvent(async (pass: number) => {
+    const prompt = takePendingRecordedSkillPrompt(recordedSkillTargetKey);
+    if (prompt === null) return;
+    try {
+      const target = composerDraftTarget;
+      const threadKey = routeThreadKey;
+      const existing = promptRef.current.trim();
+      const setPrompt = (next: string) => {
+        // The user may have moved to another conversation while the send ran.
+        if (currentRouteThreadKeyRef.current === threadKey) promptRef.current = next;
+        setComposerDraftPrompt(target, next);
+      };
+      if (composerHasNonPromptContent) {
+        setPrompt(existing ? `${existing}\n\n${prompt}` : prompt);
+        toastManager.add({
+          type: "info",
+          title: "Recording added to your message",
+          description: "Your message has attachments, so send it when you're ready.",
+        });
+        return;
+      }
+      setPrompt(prompt);
+      await onSend();
+      // A send that didn't go out leaves the recording in place, after the user's text.
+      const unsent = (
+        useComposerDraftStore.getState().getComposerDraft(target)?.prompt ?? ""
+      ).trim();
+      if (unsent.includes(prompt.trim())) {
+        toastManager.add({
+          type: "info",
+          title: "Recording added to your message",
+          description: "Harness couldn't send it yet, so send it when you're ready.",
+        });
+      }
+      if (!existing) return;
+      setPrompt(unsent ? `${existing}\n\n${unsent}` : existing);
+    } finally {
+      setRecordedSkillPass(pass + 1);
+    }
+  });
+  useEffect(() => {
+    if (recordedSkillSendReady) void sendRecordedSkill(recordedSkillPass);
+  }, [recordedSkillSendReady, recordedSkillPass]);
 
   // Queued messages go out from QueuedMessageSender, which also covers
   // threads that are not on screen. Send now uses the same path but skips the

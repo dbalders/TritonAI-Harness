@@ -10,7 +10,13 @@ import {
 } from "./composer-editor-mentions";
 
 export type ComposerTriggerKind = "path" | "pull-request" | "slash-command" | "skill";
-export type ComposerSlashCommand = "model" | "plan" | "default" | "goal" | "computer-use";
+export type ComposerSlashCommand =
+  | "model"
+  | "plan"
+  | "default"
+  | "goal"
+  | "computer-use"
+  | "record-skill";
 export type ComposerSubmissionIntent = "foreground" | "background" | "alternate";
 export type GoalComposerCommand =
   | { readonly type: "view" }

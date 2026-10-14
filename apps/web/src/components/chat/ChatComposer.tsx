@@ -1002,8 +1002,10 @@ import {
   type VoiceRecorderSession,
 } from "../../voiceInput";
 import { insertVoiceTranscript } from "../../voiceInsertion";
+import { readRecordSkillBridge, recordSkill } from "../RecordSkill";
 
 const WORKSPACE_SNAPSHOT_RETRY_COOLDOWN_MS = 10_000;
+const SKILL_MENU_REFRESH_INTERVAL_MS = 60_000;
 
 const extendReplacementRangeForTrailingSpace = (
   text: string,
@@ -2458,6 +2460,21 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // Derived: composer trigger / menu
   // ------------------------------------------------------------------
   const composerTriggerKind = composerTrigger?.kind ?? null;
+  // A skill written since this folder's list was loaded, such as one from
+  // Record a skill, appears when the $ menu opens. At most once a minute.
+  const skillMenuRefreshRef = useRef<{ key: string; at: number } | null>(null);
+  useEffect(() => {
+    if (composerTriggerKind !== "skill" || !gitCwd || !selectedProviderEntry) return;
+    const key = `${environmentId}:${selectedProviderEntry.instanceId}:${gitCwd}`;
+    const last = skillMenuRefreshRef.current;
+    if (last?.key === key && Date.now() - last.at < SKILL_MENU_REFRESH_INTERVAL_MS) return;
+    skillMenuRefreshRef.current = { key, at: Date.now() };
+    // Without `fresh`, the server keeps the folder's earlier scan.
+    void refreshProviders({
+      environmentId,
+      input: { instanceId: selectedProviderEntry.instanceId, cwd: gitCwd, fresh: true },
+    });
+  }, [composerTriggerKind, environmentId, gitCwd, refreshProviders, selectedProviderEntry]);
   const pathTriggerQuery = composerTrigger?.kind === "path" ? composerTrigger.query : "";
   const pullRequestTriggerQuery =
     composerTrigger?.kind === "pull-request" ? composerTrigger.query : "";
@@ -2570,6 +2587,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           label: "/computer-use",
           description: "Use desktop apps · checks permissions before starting",
         },
+        ...(readRecordSkillBridge()
+          ? ([
+              {
+                id: "slash:record-skill",
+                type: "slash-command",
+                command: "record-skill",
+                label: "/record-skill",
+                description: "Do a task in other apps and turn it into a skill",
+              },
+            ] as const)
+          : []),
         {
           id: "slash:model",
           type: "slash-command",
@@ -3923,6 +3951,35 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           if (applied) setComposerHighlightedItemId(null);
           return;
         }
+        if (item.command === "record-skill") {
+          const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
+            expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
+            focusEditorAfterReplace: false,
+          });
+          if (applied) {
+            setComposerHighlightedItemId(null);
+            // The recording comes back here. A new thread isn't on the server
+            // yet, so its recording starts a conversation in the same project.
+            const draft =
+              typeof composerDraftTarget === "string"
+                ? useComposerDraftStore.getState().getDraftSession(composerDraftTarget)
+                : null;
+            void recordSkill(
+              routeKind === "server"
+                ? { kind: "thread", threadRef: routeThreadRef }
+                : draft
+                  ? {
+                      kind: "project",
+                      projectRef: {
+                        environmentId: draft.environmentId,
+                        projectId: draft.projectId,
+                      },
+                    }
+                  : null,
+            );
+          }
+          return;
+        }
         if (item.command === "model") {
           const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
             expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
@@ -4040,6 +4097,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       planModeUiEnabled,
       onUsageLimitsCommand,
       resolveActiveComposerTrigger,
+      routeKind,
+      routeThreadRef,
     ],
   );
 

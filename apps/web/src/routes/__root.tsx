@@ -20,6 +20,7 @@ import { AppSidebarLayout } from "../components/AppSidebarLayout";
 import { CommandPalette } from "../components/CommandPalette";
 import { CustomSnoozeDialogHost } from "../components/CustomSnoozeDialog";
 import { ConfirmDialogHost } from "../components/ConfirmDialogHost";
+import { RecordSkillHost } from "../components/RecordSkill";
 import { FirstRunGate } from "../components/onboarding/FirstRunGate";
 import { ConnectOnboardingDialog } from "../components/cloud/ConnectOnboardingDialog";
 import { RelayClientInstallDialog } from "../components/cloud/RelayClientInstallDialog";
@@ -239,6 +240,7 @@ function RootRouteView() {
           <QueuedMessageSender />
           <ConfirmDialogHost />
           <CustomSnoozeDialogHost />
+          {primaryEnvironmentAuthenticated ? <RecordSkillHost /> : null}
           <SlowRpcRequestToastCoordinator />
           <ProjectCloneToastCoordinator />
           <HostedStaticEnvironmentBootstrap />

@@ -26,6 +26,7 @@ import {
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
   buildDailyMemoryPrompt,
+  buildIdeasPrompt,
   buildPrContentPrompt,
   buildThreadTitlePrompt,
 } from "./TextGenerationPrompts.ts";
@@ -50,13 +51,16 @@ import {
 const CODEX_TIMEOUT_MS = 180_000;
 // A day of activity is a much larger prompt than a title or commit message.
 const DAILY_MEMORY_TIMEOUT_MS = 600_000;
+// Ideas read a week of context and write several cards.
+const IDEAS_TIMEOUT_MS = 300_000;
 
 type CodexTextGenerationOperation =
   | "generateCommitMessage"
   | "generatePrContent"
   | "generateBranchName"
   | "generateThreadTitle"
-  | "generateDailyMemory";
+  | "generateDailyMemory"
+  | "generateIdeas";
 const encodeJsonString = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 /**
  * Build a Codex text-generation closure bound to a specific `CodexSettings`
@@ -494,11 +498,44 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
     } satisfies TextGeneration.DailyMemoryGenerationResult;
   });
 
+  const generateIdeas = Effect.fn("CodexTextGeneration.generateIdeas")(function* (
+    input: TextGeneration.IdeasGenerationInput,
+  ) {
+    const { prompt, outputSchema } = buildIdeasPrompt({
+      count: input.count,
+      context: input.context,
+    });
+
+    const generated = yield* runCodexJson({
+      operation: "generateIdeas",
+      cwd: input.cwd,
+      prompt,
+      outputSchemaJson: outputSchema,
+      modelSelection: input.modelSelection,
+      timeoutMs: IDEAS_TIMEOUT_MS,
+    });
+
+    return {
+      ideas: generated.ideas.map((idea) => ({
+        ref: idea.ref.trim(),
+        topic: idea.topic.trim(),
+        sources: idea.sources.map((source) => source.trim()).filter((source) => source.length > 0),
+        icon: idea.icon.trim(),
+        title: idea.title.trim(),
+        body: idea.body.trim(),
+        action: idea.action,
+        projectId: idea.projectId.trim(),
+        prompt: idea.prompt.trim(),
+      })),
+    } satisfies TextGeneration.IdeasGenerationResult;
+  });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
     generateDailyMemory,
+    generateIdeas,
   } satisfies TextGeneration.TextGeneration["Service"];
 });
