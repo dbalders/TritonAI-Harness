@@ -9195,6 +9195,7 @@ export default function ChatView(props: ChatViewProps) {
     !isRevertingCheckpoint &&
     !activeEnvironmentUnavailable &&
     !activePendingProgress &&
+    !needsLoadBalancing &&
     clientSettingsHydrated &&
     !threadDetailLoading;
   const sendRecordedSkill = useEffectEvent(async () => {
@@ -9219,9 +9220,16 @@ export default function ChatView(props: ChatViewProps) {
     }
     setPrompt(prompt);
     await onSend();
-    if (!existing) return;
     // A send that didn't go out leaves the recording in place, after the user's text.
     const unsent = (useComposerDraftStore.getState().getComposerDraft(target)?.prompt ?? "").trim();
+    if (unsent.includes(prompt.trim())) {
+      toastManager.add({
+        type: "info",
+        title: "Recording added to your message",
+        description: "Harness couldn't send it yet, so send it when you're ready.",
+      });
+    }
+    if (!existing) return;
     setPrompt(unsent ? `${existing}\n\n${unsent}` : existing);
   });
   useEffect(() => {
