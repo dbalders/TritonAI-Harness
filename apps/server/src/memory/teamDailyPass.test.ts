@@ -986,6 +986,239 @@ it.layer(NodeServices.layer)("team daily memory", (it) => {
       }),
   );
 
+  it.effect(
+    "keeps writing other days, withdrawals, and the marker while one day's write waits",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* makeHarness({});
+        yield* Effect.gen(function* () {
+          yield* TestClock.setTime(new Date(2026, 9, 11, 11).getTime());
+          yield* seedWorld;
+          yield* say("t-a1", "kept on the ninth", at(9, 12));
+          yield* say("t-a1-other", "withdrawn on the ninth", at(9, 12));
+          yield* say("t-a1-other", "withdrawn later", at(10, 12));
+          yield* say("t-a1", "kept", at(10, 12));
+          const teams = fakeTeams();
+          teams.setWorkspaces([teams.workspace(TEAM_A, [["p-a1", at(1, 9)]])]);
+          const pass = yield* makePass(harness.baseDir);
+          yield* pass.attach(teams.source);
+          yield* pass.run;
+          const device = yield* deviceIdOf(harness.baseDir);
+          const before = teams.marker(TEAM_A, device);
+
+          // The 9th's file keeps failing after it was checked; the 10th's withdrawal still goes.
+          yield* setSharing("t-a1-other", false);
+          yield* TestClock.adjust(60_000);
+          teams.state.holdPaths = /2026-10-09 /u;
+          for (let check = 0; check < 2; check++) yield* pass.run;
+          assert.include(teams.file(TEAM_A, dayOf(9), device)!, "withdrawn on the ninth");
+          assert.notInclude(teams.file(TEAM_A, dayOf(10), device)!, "withdrawn later");
+          assert.notStrictEqual(teams.marker(TEAM_A, device), before);
+          const status = (yield* pass.status(TEAM_A))!;
+          assert.strictEqual(status.state, "held");
+          assert.include(status.message!, "chose not to share");
+
+          teams.state.holdPaths = null;
+          yield* pass.run;
+          assert.notInclude(teams.file(TEAM_A, dayOf(9), device)!, "withdrawn on the ninth");
+        }).pipe(Effect.provide(harness.layer));
+      }),
+  );
+
+  it.effect("sends no more activity to the model once Memory is turned off", () =>
+    Effect.gen(function* () {
+      const settingsHolder: { current?: ServerSettings.ServerSettingsService["Service"] } = {};
+      const harness = yield* makeHarness({
+        during: () =>
+          settingsHolder.current!.updateSettings({ memoryEnabled: false }).pipe(Effect.orDie),
+      });
+      yield* Effect.gen(function* () {
+        settingsHolder.current = yield* ServerSettings.ServerSettingsService;
+        yield* TestClock.setTime(new Date(2026, 9, 10, 20).getTime());
+        yield* seedWorld;
+        yield* say("t-a1", "first team", at(10, 12));
+        yield* say("t-b", "second team", at(10, 12));
+        const teams = fakeTeams();
+        teams.setWorkspaces([
+          teams.workspace(TEAM_A, [["p-a1", at(1, 9)]]),
+          teams.workspace(TEAM_B, [["p-b", at(1, 9)]]),
+        ]);
+        const pass = yield* makePass(harness.baseDir);
+        yield* pass.attach(teams.source);
+        yield* pass.run;
+        // Turned off during the first model call: nothing more is summarized or shared.
+        assert.strictEqual(harness.prompts.length, 1);
+        assert.strictEqual(teams.writes.length, 0);
+      }).pipe(Effect.provide(harness.layer));
+    }),
+  );
+
+  it.effect("publishes no new summary when Memory is turned off while the model runs", () =>
+    Effect.gen(function* () {
+      const settingsHolder: { current?: ServerSettings.ServerSettingsService["Service"] } = {};
+      const harness = yield* makeHarness({
+        during: (input) =>
+          input.threads.some((thread) => thread.activity.includes("new work"))
+            ? settingsHolder.current!.updateSettings({ memoryEnabled: false }).pipe(Effect.orDie)
+            : Effect.void,
+      });
+      yield* Effect.gen(function* () {
+        settingsHolder.current = yield* ServerSettings.ServerSettingsService;
+        yield* TestClock.setTime(new Date(2026, 9, 10, 12).getTime());
+        yield* seedWorld;
+        yield* say("t-a1", "published", at(10, 10));
+        yield* say("t-a1-other", "withdrawn", at(10, 10));
+        const teams = fakeTeams();
+        teams.setWorkspaces([teams.workspace(TEAM_A, [["p-a1", at(1, 9)]])]);
+        const pass = yield* makePass(harness.baseDir);
+        yield* pass.attach(teams.source);
+        yield* pass.run;
+        const device = yield* deviceIdOf(harness.baseDir);
+
+        yield* say("t-a1", "new work", at(10, 13));
+        yield* setSharing("t-a1-other", false);
+        yield* TestClock.adjust(PARTIAL_INTERVAL_MS + 60_000);
+        yield* pass.run;
+        const text = teams.file(TEAM_A, dayOf(10), device)!;
+        assert.isFalse(teams.writes.some((write) => write.text?.includes("new work") === true));
+        // Withdrawals still go while Memory is off.
+        assert.notInclude(text, "withdrawn");
+        assert.include(text, "published");
+        assert.deepInclude(yield* pass.status(TEAM_A), { state: "held" });
+      }).pipe(Effect.provide(harness.layer));
+    }),
+  );
+
+  it.effect(
+    "abandons a new summary's upload when Memory is turned off during the account checks",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* makeHarness({});
+        yield* Effect.gen(function* () {
+          const settings = yield* ServerSettings.ServerSettingsService;
+          yield* TestClock.setTime(new Date(2026, 9, 10, 12).getTime());
+          yield* seedWorld;
+          yield* say("t-a1", "published", at(10, 10));
+          yield* say("t-a1-other", "withdrawn", at(10, 10));
+          const teams = fakeTeams();
+          teams.setWorkspaces([teams.workspace(TEAM_A, [["p-a1", at(1, 9)]])]);
+          const pass = yield* makePass(harness.baseDir);
+          yield* pass.attach(teams.source);
+          yield* pass.run;
+          const device = yield* deviceIdOf(harness.baseDir);
+
+          yield* say("t-a1", "new work", at(10, 13));
+          yield* setSharing("t-a1-other", false);
+          yield* TestClock.adjust(PARTIAL_INTERVAL_MS + 60_000);
+          let refreshes = 0;
+          teams.state.beforeRequest = Effect.suspend(() =>
+            refreshes++ === 0
+              ? settings.updateSettings({ memoryEnabled: false }).pipe(Effect.orDie, Effect.asVoid)
+              : Effect.void,
+          );
+          yield* pass.run;
+          assert.isFalse(teams.writes.some((write) => write.text?.includes("new work") === true));
+          const text = teams.file(TEAM_A, dayOf(10), device)!;
+          assert.notInclude(text, "withdrawn");
+          assert.include(text, "published");
+        }).pipe(Effect.provide(harness.layer));
+      }),
+  );
+
+  for (const between of ["no one", "another account"] as const)
+    it.effect(
+      `withdraws earlier files after signing out and back in, with ${between} signed in between`,
+      () =>
+        Effect.gen(function* () {
+          const harness = yield* makeHarness({});
+          yield* Effect.gen(function* () {
+            yield* TestClock.setTime(new Date(2026, 9, 10, 20).getTime());
+            yield* seedWorld;
+            yield* say("t-a1", "kept", at(10, 12));
+            yield* say("t-a1-other", "regretted", at(10, 12));
+            const teams = fakeTeams();
+            teams.setWorkspaces([teams.workspace(TEAM_A, [["p-a1", at(1, 9)]])]);
+            const alice = teams.state.account;
+            const pass = yield* makePass(harness.baseDir);
+            yield* pass.attach(teams.source);
+            yield* pass.run;
+            const device = yield* deviceIdOf(harness.baseDir);
+            assert.include(teams.file(TEAM_A, dayOf(10), device)!, "regretted");
+
+            teams.state.account = { kind: "signed-out" };
+            yield* pass.run;
+            if (between === "another account") {
+              teams.state.account = {
+                kind: "signed-in",
+                author: BOB,
+                authorName: "Bob",
+                workspaces: [teams.workspace(TEAM_A, [["p-a1", at(10, 21)]])],
+              };
+              yield* pass.run;
+            }
+            // Nothing is written while no account or another account is signed in.
+            yield* setSharing("t-a1-other", false);
+            yield* pass.run;
+            assert.include(teams.file(TEAM_A, dayOf(10), device)!, "regretted");
+            assert.isTrue(teams.writes.every((write) => write.path.startsWith(`Daily/${ALICE}/`)));
+
+            teams.state.account = alice;
+            yield* pass.run;
+            assert.strictEqual(yield* deviceIdOf(harness.baseDir), device);
+            const text = teams.file(TEAM_A, dayOf(10), device)!;
+            assert.include(text, "kept");
+            assert.notInclude(text, "regretted");
+          }).pipe(Effect.provide(harness.layer));
+        }),
+    );
+
+  it.effect("gives each account back its own record when accounts take turns signing in", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({});
+      yield* Effect.gen(function* () {
+        yield* TestClock.setTime(new Date(2026, 9, 10, 20).getTime());
+        yield* seedWorld;
+        yield* say("t-a1", "alice work", at(10, 12));
+        yield* say("t-b", "bob work", at(10, 12));
+        const teams = fakeTeams();
+        const alice = {
+          kind: "signed-in",
+          author: ALICE,
+          authorName: "Alice",
+          workspaces: [teams.workspace(TEAM_A, [["p-a1", at(1, 9)]])],
+        } as const;
+        const bob = {
+          kind: "signed-in",
+          author: BOB,
+          authorName: "Bob",
+          workspaces: [teams.workspace(TEAM_B, [["p-b", at(1, 9)]])],
+        } as const;
+        const pass = yield* makePass(harness.baseDir);
+        yield* pass.attach(teams.source);
+        teams.state.account = alice;
+        yield* pass.run;
+        const aliceDevice = yield* deviceIdOf(harness.baseDir);
+        teams.state.account = bob;
+        yield* pass.run;
+        const bobDevice = yield* deviceIdOf(harness.baseDir);
+        assert.notStrictEqual(bobDevice, aliceDevice);
+        assert.include(teams.file(TEAM_B, dayOf(10), bobDevice, BOB)!, "bob work");
+
+        teams.state.account = alice;
+        yield* pass.run;
+        assert.strictEqual(yield* deviceIdOf(harness.baseDir), aliceDevice);
+        teams.state.account = bob;
+        yield* pass.run;
+        assert.strictEqual(yield* deviceIdOf(harness.baseDir), bobDevice);
+        // Bob's own earlier file is still his to change.
+        yield* setSharing("t-b", false);
+        yield* pass.run;
+        assert.isNull(teams.file(TEAM_B, dayOf(10), bobDevice, BOB));
+        assert.include(teams.file(TEAM_A, dayOf(10), aliceDevice)!, "alice work");
+      }).pipe(Effect.provide(harness.layer));
+    }),
+  );
+
   it.effect("keeps writing other days, withdrawals, and the marker when one day is refused", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({});

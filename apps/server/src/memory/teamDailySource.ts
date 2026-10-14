@@ -34,7 +34,7 @@ export type TeamDailyAccount =
       readonly authorName: string;
       readonly workspaces: ReadonlyArray<TeamDailyWorkspace>;
     }
-  /** No campus account uses Teams here now, so nothing is shared and records are cleared. */
+  /** No campus account uses Teams here now, so nothing is shared; records wait, unused. */
   | { readonly kind: "signed-out" }
   /** The account couldn't be checked; keep everything and try later. */
   | { readonly kind: "unavailable"; readonly message: string };

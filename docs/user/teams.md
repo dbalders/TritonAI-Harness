@@ -191,7 +191,8 @@ waits and the file says so, while what was already shared stays.
 Your work is shared under the UC San Diego account that uses Teams in this
 Harness. If someone else signs in here and uses Teams, sharing stops for your
 account, and their work is shared from that moment on, never yours or anything
-from before.
+from before. When you sign back in with your own account, choosing **Don't
+share this thread** still removes your earlier work from the team's files.
 
 Unlinking a project stops sharing its work. What was already shared stays with
 the team, and anything not yet shared is dropped. Leaving or being removed from
@@ -227,8 +228,8 @@ last updated. Choose **Stop local copy** to remove one, and **Keep a local
 copy** to bring it back. The copy is also removed, and marked **Detached** with
 the reason, the next time Harness checks after you leave or are removed from
 the team, the team is archived, Microsoft refuses the team's folder, or you
-sign out of UC San Diego or sign in with another account. Choose **Dismiss** to
-clear the notice. If Harness can't reach the team, the copy is kept as it was
+sign out of UC San Diego or sign in with another account. A copy you stopped
+stays stopped when you sign back in. Choose **Dismiss** to clear the notice. If Harness can't reach the team, the copy is kept as it was
 and updated once it can.
 
 Removing a local copy is best effort. It can't recall text an agent already

@@ -194,6 +194,73 @@ describe("Local team copies", () => {
     }),
   );
 
+  it.effect("keeps a stopped copy stopped when the same account signs out and back in", () =>
+    Effect.gen(function* () {
+      const team = yield* memberOfTeam;
+      yield* team.service.execute("s", { action: "mirror-off", teamId: teamA });
+      team.f.signOut();
+      expect(yield* team.source.teams).toEqual([]);
+      team.f.signIn();
+      expect(yield* team.source.teams).toEqual([]);
+      expect(yield* team.source.list(teamA)).toEqual({ kind: "detached" });
+      expect(yield* team.mirrors).toEqual([expect.objectContaining({ state: "off" })]);
+
+      // Nor when another campus account uses the session in between.
+      team.f.switchTo("mallory");
+      yield* team.source.teams;
+      team.f.switchTo("alice");
+      expect(yield* team.mirrors).toEqual([expect.objectContaining({ state: "off" })]);
+    }),
+  );
+
+  it.effect("keeps each account's own choice when another account copies the same team", () =>
+    Effect.gen(function* () {
+      const team = yield* memberOfTeam;
+      yield* team.service.execute("s", { action: "mirror-off", teamId: teamA });
+
+      // Bob becomes the Teams account here: his copy starts, untouched by Alice's choice.
+      team.f.switchTo("bob");
+      team.f.roles[teamA]!.bob = "member";
+      yield* team.service.teams("s", { action: "list" });
+      expect(yield* team.source.teams).toEqual([expect.objectContaining({ teamId: teamA })]);
+      yield* team.service.execute("s", { action: "mirror-off", teamId: teamA });
+      yield* team.service.execute("s", { action: "mirror-on", teamId: teamA });
+
+      // Alice is back: her copy stays stopped, and Bob's choice stays his.
+      team.f.switchTo("alice");
+      yield* team.service.teams("s", { action: "list" });
+      expect(yield* team.source.teams).toEqual([]);
+      expect(yield* team.mirrors).toEqual([expect.objectContaining({ state: "off" })]);
+      team.f.switchTo("bob");
+      yield* team.service.teams("s", { action: "list" });
+      expect(yield* team.source.teams).toEqual([expect.objectContaining({ teamId: teamA })]);
+    }),
+  );
+
+  it.effect("keeps a stop when the notice of a detached copy is dismissed", () =>
+    Effect.gen(function* () {
+      const team = yield* memberOfTeam;
+      yield* team.service.execute("s", { action: "mirror-off", teamId: teamA });
+
+      // Bob's copy of the team carries Alice's stop; his membership ends and he dismisses it.
+      team.f.switchTo("bob");
+      team.f.roles[teamA]!.bob = "member";
+      yield* team.service.teams("s", { action: "list" });
+      yield* team.source.teams;
+      delete team.f.roles[teamA]!.bob;
+      expect(yield* team.source.teams).toEqual([]);
+      expect(yield* team.mirrors).toEqual([expect.objectContaining({ state: "detached" })]);
+      const dismissed = yield* team.service.execute("s", { action: "mirror-off", teamId: teamA });
+      expect(dismissed.mirrors).toEqual([]);
+
+      // Alice's copy is still stopped when she's back.
+      team.f.switchTo("alice");
+      yield* team.service.teams("s", { action: "list" });
+      expect(yield* team.source.teams).toEqual([]);
+      expect(yield* team.mirrors).toEqual([expect.objectContaining({ state: "off" })]);
+    }),
+  );
+
   it.effect("keeps the copy as it is when access can't be checked", () =>
     Effect.gen(function* () {
       const team = yield* memberOfTeam;

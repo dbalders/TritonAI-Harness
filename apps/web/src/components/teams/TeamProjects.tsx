@@ -85,6 +85,12 @@ export function TeamProjects({
   const [preferredChoice, setChoice] = useState<string>(linkProjectId ?? "");
   const [open, setOpen] = useState<{ projectId: ProjectId; kind: "memory" | "skill" } | null>(null);
   const [confirmUnlink, setConfirmUnlink] = useState<ProjectId | null>(null);
+  // The latest callback, kept out of `apply`: a parent's new callback must not reload the list,
+  // or a parent that refreshes its own state from the notice would make every load trigger another.
+  const onLinksChangeRef = useRef(onLinksChange);
+  useEffect(() => {
+    onLinksChangeRef.current = onLinksChange;
+  }, [onLinksChange]);
   const apply = useCallback(
     async (command: TeamProjectCommand) => {
       const result = await run(command);
@@ -95,12 +101,12 @@ export function TeamProjects({
       }
       setLinks(result.projects);
       setConfirmUnlink(null);
-      onLinksChange?.(result.projects.length > 0);
+      onLinksChangeRef.current?.(result.projects.length > 0);
       setOpen((current) =>
         result.projects.some((link) => link.projectId === current?.projectId) ? current : null,
       );
     },
-    [onLinksChange, run],
+    [run],
   );
   useEffect(() => {
     void apply({ action: "list", teamId });

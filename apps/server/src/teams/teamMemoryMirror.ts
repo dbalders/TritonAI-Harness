@@ -42,6 +42,8 @@ import type { TeamStorageService } from "./TeamStorageService.ts";
 
 const SECRET_NAME = "team-memory-mirrors";
 const MAX_MIRRORS = 100;
+/** Other accounts' stopped copies remembered per team; the oldest are forgotten first. */
+const MAX_STOPPED_BY = 10;
 /** The folders copied. Skills stay out: an agent gets one only after per-project approval. */
 const ROOTS = ["Memory", "SOPs"] as const;
 /** How often every month of daily memory is listed, to catch changes made directly in SharePoint. */
@@ -57,6 +59,8 @@ const Mirror = Schema.Struct({
   since: Schema.String,
   /** The user stopped this copy; it stays off until they keep it again. */
   off: Schema.optionalKey(Schema.Literal(true)),
+  /** Other identities that stopped their copy of this team, kept for when they're back. */
+  stoppedBy: Schema.optionalKey(Schema.Array(Schema.String)),
   detached: Schema.optionalKey(Schema.Struct({ reason: Schema.String, at: Schema.String })),
 });
 type Mirror = typeof Mirror.Type;
@@ -90,9 +94,16 @@ const reasons = {
   lostTeam: "You no longer have access to this team, so the local copy was removed.",
   archived: "The team was archived, so the local copy was removed.",
   lostFolder: "The team's folder is no longer available to you, so the local copy was removed.",
+  /** A dismissed notice kept, hidden, only to remember who stopped the team's copy. */
+  dismissed: "dismissed",
 } as const;
 
-const RESTARTABLE = new Set<string>([reasons.signedOut, reasons.otherAccount, reasons.lostTeam]);
+const RESTARTABLE = new Set<string>([
+  reasons.signedOut,
+  reasons.otherAccount,
+  reasons.lostTeam,
+  reasons.dismissed,
+]);
 
 /** The campus session and identity that share and copy team memory in this environment. */
 export interface TeamMemoryAccount {
@@ -440,7 +451,7 @@ export const makeTeamMemoryMirror = (input: {
           const index = result.findIndex((mirror) => mirror.teamId === team.id);
           const existing = index >= 0 ? result[index] : undefined;
           // A stopped copy stays stopped. A copy detached because the account changed or the
-          // membership ended starts over once they're back; one whose folder was refused or
+          // membership ended starts over once they're back, still stopped if it was; one whose folder was refused or
           // whose team was archived stays a notice until it is dismissed.
           if (existing && !existing.detached) {
             if (existing.sessionId !== sessionId || existing.teamName !== team.name) {
@@ -462,7 +473,23 @@ export const makeTeamMemoryMirror = (input: {
           let folder = existing?.folder ?? mirrorFolder(team.id, team.name);
           for (let attempt = 2; taken.has(folder); attempt++)
             folder = `${mirrorFolder(team.id, team.name)}-${attempt}`;
-          result.push({ teamId: team.id, teamName: team.name, folder, sessionId, identity, since });
+          // An account's choice to stop the copy outlasts signing out and other accounts' copies
+          // of the team, and never applies to anyone else.
+          const stopped = [
+            ...(existing?.stoppedBy ?? []),
+            ...(existing?.off ? [existing.identity] : []),
+          ].filter((who, index, all) => all.indexOf(who) === index);
+          const others = stopped.filter((who) => who !== identity).slice(-MAX_STOPPED_BY);
+          result.push({
+            teamId: team.id,
+            teamName: team.name,
+            folder,
+            sessionId,
+            identity,
+            since,
+            ...(stopped.includes(identity) ? { off: true as const } : {}),
+            ...(others.length > 0 ? { stoppedBy: others } : {}),
+          });
           changed = true;
         }
         return changed ? result : mirrors;
@@ -567,7 +594,12 @@ export const makeTeamMemoryMirror = (input: {
     const listFor = (identity: string) =>
       read.pipe(
         Effect.map((mirrors) =>
-          mirrors.filter((mirror) => mirror.identity === identity).map(toContract),
+          mirrors
+            .filter(
+              (mirror) =>
+                mirror.identity === identity && mirror.detached?.reason !== reasons.dismissed,
+            )
+            .map(toContract),
         ),
       );
 
@@ -596,10 +628,15 @@ export const makeTeamMemoryMirror = (input: {
       disable: (profile: { issuer: string; subject: string }, teamId: string) =>
         Effect.gen(function* () {
           const identity = identityOf(profile);
+          const at = yield* now;
           yield* update((mirrors) =>
             mirrors.flatMap((mirror) => {
               if (mirror.teamId !== teamId || mirror.identity !== identity) return [mirror];
-              return mirror.detached ? [] : [{ ...mirror, off: true as const }];
+              if (!mirror.detached) return [{ ...mirror, off: true as const }];
+              // Dismissing the notice doesn't undo anyone's choice to stop the copy.
+              return mirror.off || mirror.stoppedBy?.length
+                ? [{ ...mirror, detached: { reason: reasons.dismissed, at } }]
+                : [];
             }),
           );
           yield* forget(teamId);

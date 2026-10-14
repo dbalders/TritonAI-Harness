@@ -15,7 +15,9 @@
  * The record keeps what each published file says, for as long as the file exists, so choosing
  * Don't share later still rewrites old files. It holds summaries only, never transcripts. Access
  * that ended clears the team's record and writes nothing more; published files stay with the
- * team. Access that couldn't be checked holds everything for a later pass.
+ * team. Access that couldn't be checked holds everything for a later pass. Signing out keeps the
+ * record unused until the same account signs in again; another account's sign-in sets it aside
+ * for its own account and never reads or writes with it.
  */
 import { TextGenerationError } from "@t3tools/contracts";
 import * as NodeCrypto from "node:crypto";
@@ -142,22 +144,35 @@ export const makeTeamDailyPass = (input: {
       Effect.map((ms) => DateTime.formatIso(DateTime.makeUnsafe(ms))),
     );
 
-    const readState = fs.readFileString(stateFile).pipe(
-      Effect.flatMap(decodeState),
-      Effect.map((state) => Option.some(structuredClone(state) as State)),
-      // A missing or unreadable record starts over: a fresh record publishes nothing old.
-      Effect.orElseSucceed(() => Option.none<State>()),
-    );
-    const writeState = (state: State) =>
+    /**
+     * Where an account's record waits while another account is signed in here: outside
+     * `directory`, which the model runs in, so it never sees another account's summaries.
+     */
+    const setAsideFile = (author: string) =>
+      path.join(input.stateDir, "team-daily-accounts", `${sha256(author)}.json`);
+
+    const readStateAt = (file: string) =>
+      fs.readFileString(file).pipe(
+        Effect.flatMap(decodeState),
+        Effect.map((state) => Option.some(structuredClone(state) as State)),
+        // A missing or unreadable record starts over: a fresh record publishes nothing old.
+        Effect.orElseSucceed(() => Option.none<State>()),
+      );
+    const readState = readStateAt(stateFile);
+    const writeStateAt = (file: string, state: State) =>
       encodeState(state).pipe(
         Effect.flatMap((contents) =>
           fs
-            .makeDirectory(directory, { recursive: true })
-            .pipe(Effect.andThen(writeFileStringAtomically({ filePath: stateFile, contents }))),
+            .makeDirectory(path.dirname(file), { recursive: true })
+            .pipe(Effect.andThen(writeFileStringAtomically({ filePath: file, contents }))),
         ),
         Effect.provideService(FileSystem.FileSystem, fs),
         Effect.provideService(Path.Path, path),
       );
+    const writeState = (state: State) => writeStateAt(stateFile, state);
+    const memoryEnabled = input.settings.getSettings.pipe(
+      Effect.map((settings) => settings.memoryEnabled),
+    );
 
     const setStatus = (teamId: string, next: Partial<TeamDailyStatus>) =>
       Effect.sync(() => {
@@ -181,6 +196,8 @@ export const makeTeamDailyPass = (input: {
         const settings = yield* input.settings.getSettings;
         const sections = new Map<string, string>();
         for (let index = 0; index < threads.length; index += THREADS_PER_CALL) {
+          // Memory turned off: no more activity reaches the model, and nothing is recorded.
+          if (!(yield* memoryEnabled)) return null;
           const keyed = threads
             .slice(index, index + THREADS_PER_CALL)
             .map((thread, offset) => ({ key: `T${offset + 1}`, thread }));
@@ -274,11 +291,14 @@ export const makeTeamDailyPass = (input: {
           if (changed.length > 0) {
             yield* setStatus(workspace.teamId, { message: `Summarizing ${entry.day}.` });
             const summaries = yield* summarize(entry.day, workspace.teamName, changed);
+            if (summaries === null) return true;
             // Anything that stopped qualifying while the model ran is dropped, not recorded.
             const after = yield* attached.account([workspace.teamId]);
             const fresh = workspaceOf(after, workspace.teamId);
             if (after.kind !== "signed-in" || after.author !== state.author || !fresh) return false;
             if (fresh.access !== "ready") return false;
+            // Memory turned off while the model ran: nothing new is recorded for the team.
+            if (!(yield* memoryEnabled)) return true;
             const stillLinked = scopeOf(fresh).projects;
             const now = yield* provide(threadsNow(changed.map((t) => t.threadId)));
             for (const thread of changed) {
@@ -448,8 +468,6 @@ export const makeTeamDailyPass = (input: {
       state: State,
       team: Team,
       workspace: TeamDailyWorkspace,
-      /** False while Memory is off: files may lose content but gain none. */
-      allowFresh: boolean,
     ) =>
       Effect.gen(function* () {
         const linkedProjects = scopeOf(workspace).projects;
@@ -517,6 +535,8 @@ export const makeTeamDailyPass = (input: {
             );
             continue;
           }
+          // While Memory is off, files may lose content but gain none.
+          const allowFresh = yield* memoryEnabled;
           const rendered = renderTeamDailyFile(
             record,
             { day, author: state.author },
@@ -573,28 +593,28 @@ export const makeTeamDailyPass = (input: {
             continue;
           }
           // Each thread is asked about again right before each request that changes the file:
-          // still not withdrawn, and, for new text, still in the same project, shared the same way.
+          // still not withdrawn, and, for new text, still in the same project, shared the same way,
+          // with Memory still on.
           const included = [...rendered.included.keys()];
           let changedSharing = false;
-          const stillShared = provide(threadsNow(included)).pipe(
-            Effect.map((now) => {
-              changedSharing =
-                included.some((threadId) => {
-                  const current = now.get(threadId);
-                  const section = record.sections[threadId];
-                  return (
-                    current !== undefined &&
-                    section !== undefined &&
-                    (current.off || current.resumedAt !== (section.sharing ?? null))
-                  );
-                }) ||
-                [...rendered.freshThreads].some(
-                  ([threadId, then]) => !sameThread(now.get(threadId), then),
+          const stillShared = Effect.gen(function* () {
+            const now = yield* provide(threadsNow(included));
+            changedSharing =
+              included.some((threadId) => {
+                const current = now.get(threadId);
+                const section = record.sections[threadId];
+                return (
+                  current !== undefined &&
+                  section !== undefined &&
+                  (current.off || current.resumedAt !== (section.sharing ?? null))
                 );
-              return !changedSharing;
-            }),
-            Effect.orElseSucceed(() => false),
-          );
+              }) ||
+              [...rendered.freshThreads].some(
+                ([threadId, then]) => !sameThread(now.get(threadId), then),
+              ) ||
+              (rendered.freshThreads.size > 0 && !(yield* memoryEnabled));
+            return !changedSharing;
+          }).pipe(Effect.orElseSucceed(() => false));
           if (!(yield* stillShared)) return "retry" as const;
           // Recorded before the write, so a crash can neither hide the marker's month nor lose
           // track of a file that may now exist, or of the folder it would be in.
@@ -637,12 +657,11 @@ export const makeTeamDailyPass = (input: {
           if (result.kind === "lost") return "lost" as const;
           if (result.kind === "held" && changedSharing) return "retry" as const;
           if (result.kind === "held") {
-            // The attempt stays recorded: the next pass learns whether it landed.
-            yield* setStatus(workspace.teamId, {
-              state: "held",
-              message: withRemoval(result.message),
-            });
-            return "held" as const;
+            // The attempt stays recorded: the next pass learns whether it landed. Other days, and
+            // the marker, are still written; each write checks the account and access again.
+            noteWaiting();
+            problems.push(withRemoval(`${day}: ${result.message}`));
+            continue;
           }
           if (result.kind === "changed") {
             // Kept: the next pass reads the file to learn what it holds before doing anything.
@@ -688,10 +707,14 @@ export const makeTeamDailyPass = (input: {
         return "done" as const;
       });
 
+    const memoryOff = {
+      state: "held",
+      message: "Memory is off, so your work isn't summarized for the team.",
+    } as const;
+
     const pass = Effect.gen(function* () {
       const attached = yield* Ref.get(source);
       if (!attached) return;
-      const settings = yield* input.settings.getSettings;
       const stored = yield* readState;
       const account = yield* attached.account(
         Option.isSome(stored) ? Object.keys(stored.value.teams) : [],
@@ -703,20 +726,31 @@ export const makeTeamDailyPass = (input: {
       }
       if (account.kind === "signed-out") {
         // Nothing is shared without an account; files already published stay with their teams.
-        yield* fs.remove(stateFile).pipe(Effect.ignore);
+        // The record stays, unused, so the same account can still withdraw them after signing in.
         statuses.clear();
         return;
       }
-      // Another account starts with an empty record: nothing of the previous one is reused.
-      const state: State =
-        Option.isSome(stored) && stored.value.author === account.author
-          ? stored.value
-          : {
-              version: 1,
-              author: account.author,
-              deviceId: Option.isSome(stored) ? stored.value.deviceId : NodeCrypto.randomUUID(),
-              teams: {},
-            };
+      let state: State;
+      if (Option.isSome(stored) && stored.value.author === account.author) state = stored.value;
+      else {
+        // Another account never uses this record: it is set aside for its own account, and this
+        // account's own record, if it set one aside earlier, comes back.
+        if (Option.isSome(stored))
+          yield* writeStateAt(setAsideFile(stored.value.author), stored.value);
+        statuses.clear();
+        const restored = yield* readStateAt(setAsideFile(account.author));
+        state =
+          Option.isSome(restored) && restored.value.author === account.author
+            ? restored.value
+            : {
+                version: 1,
+                author: account.author,
+                deviceId: NodeCrypto.randomUUID(),
+                teams: {},
+              };
+        yield* writeState(state);
+        yield* fs.remove(setAsideFile(account.author)).pipe(Effect.ignore);
+      }
       const nowMs = yield* Clock.currentTimeMillis;
       for (const workspace of account.workspaces) {
         const teamId = workspace.teamId;
@@ -741,12 +775,10 @@ export const makeTeamDailyPass = (input: {
         team.teamName = workspace.teamName;
         state.teams[teamId] = team;
         // Whether this pass left the team's newest work unsummarized.
-        let held = !settings.memoryEnabled;
-        if (!settings.memoryEnabled) {
-          yield* setStatus(teamId, {
-            state: "held",
-            message: "Memory is off, so your work isn't summarized for the team.",
-          });
+        const enabled = yield* memoryEnabled;
+        let held = !enabled;
+        if (!enabled) {
+          yield* setStatus(teamId, memoryOff);
         } else {
           const summarized = yield* summarizeTeam(
             attached,
@@ -765,15 +797,18 @@ export const makeTeamDailyPass = (input: {
           );
           if (!summarized) continue;
         }
-        let outcome = yield* publishTeam(attached, state, team, workspace, settings.memoryEnabled);
-        // A thread chosen as Don't share mid-pass: render again without it.
-        if (outcome === "retry")
-          outcome = yield* publishTeam(attached, state, team, workspace, settings.memoryEnabled);
+        let outcome = yield* publishTeam(attached, state, team, workspace);
+        // A thread chosen as Don't share, or Memory turned off, mid-pass: render again.
+        if (outcome === "retry") outcome = yield* publishTeam(attached, state, team, workspace);
         if (outcome === "lost") {
           delete state.teams[teamId];
           statuses.delete(teamId);
         } else if (outcome === "done" && !held) {
-          yield* setStatus(teamId, { state: "sharing", message: null });
+          // Memory may have been turned off while this pass ran.
+          yield* setStatus(
+            teamId,
+            (yield* memoryEnabled) ? { state: "sharing", message: null } : memoryOff,
+          );
         }
       }
       yield* writeState(state);
