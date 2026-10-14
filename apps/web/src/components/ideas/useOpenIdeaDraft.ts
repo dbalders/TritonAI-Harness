@@ -1,11 +1,5 @@
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
-import {
-  type EnvironmentId,
-  type Idea,
-  ideaPromptSnippet,
-  type ScopedProjectRef,
-  type ThreadId,
-} from "@t3tools/contracts";
+import type { EnvironmentId, Idea, ScopedProjectRef, ThreadId } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback } from "react";
 
@@ -45,17 +39,15 @@ export function useOpenIdeaDraft(environmentId: EnvironmentId | null) {
         return { draftThreadId: null };
       }
 
-      // Opening the same idea again returns to the draft it already started, even
-      // after the user edited it: by its thread when known, else by its fixed text.
-      const snippet = ideaPromptSnippet(action.prompt);
-      const drafts = Object.entries(store.draftThreadsByThreadKey).filter(
-        ([, session]) => session.promotedTo == null && session.environmentId === environmentId,
+      // Opening the same idea again returns to the draft it already started, even after
+      // the user edited it. Drafts are matched by the thread recorded when the idea was
+      // opened, never by text, which another idea's draft could share.
+      const reopened = Object.entries(store.draftThreadsByThreadKey).find(
+        ([, session]) =>
+          session.promotedTo == null &&
+          session.environmentId === environmentId &&
+          session.threadId === idea.draftThreadId,
       );
-      const reopened =
-        drafts.find(([, session]) => session.threadId === idea.draftThreadId) ??
-        (snippet.length >= 12
-          ? drafts.find(([draftKey]) => store.draftsByThreadKey[draftKey]?.prompt.includes(snippet))
-          : undefined);
       if (reopened) {
         const [draftKey, session] = reopened;
         await navigate({ to: "/draft/$draftId", params: { draftId: DraftId.make(draftKey) } });
