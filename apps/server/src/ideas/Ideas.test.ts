@@ -5,6 +5,7 @@ import {
   type ExecutionEnvironmentDescriptor,
   type IdeasSnapshot,
   TextGenerationError,
+  ThreadId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -342,6 +343,104 @@ it.layer(NodeServices.layer)("Ideas", (it) => {
         });
         yield* TestClock.adjust(6 * DAY);
         assert.isDefined((yield* ideas.list).ideas.find((entry) => entry.id === idea!.id));
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    }),
+  );
+
+  it.effect("counts an idea as used when its draft's thread gets a message, whatever it says", () =>
+    Effect.gen(function* () {
+      const { layer } = yield* makeHarness(() => Effect.succeed([]));
+      yield* TestClock.setTime(NOW);
+      yield* Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const ideas = yield* Ideas.make;
+        const [idea] = (yield* ideas.list).ideas;
+        assert.isDefined(idea);
+        const opened = yield* ideas.feedback({
+          ideaId: idea!.id,
+          kind: "opened",
+          draftThreadId: ThreadId.make("draft-thread-1"),
+        });
+        assert.strictEqual(
+          opened.ideas.find((entry) => entry.id === idea!.id)?.draftThreadId,
+          "draft-thread-1",
+        );
+        yield* TestClock.adjust(HOUR);
+        yield* sql`
+          INSERT INTO projection_thread_messages (message_id, thread_id, role, text, is_streaming, created_at, updated_at)
+          VALUES ('m-rewritten', 'draft-thread-1', 'user', 'Something else entirely.', 0, ${iso(NOW + HOUR)}, ${iso(NOW + HOUR)})
+        `;
+        assert.isUndefined((yield* ideas.list).ideas.find((entry) => entry.id === idea!.id));
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    }),
+  );
+
+  it.effect("never counts an all-placeholder prompt as used by an unrelated message", () =>
+    Effect.gen(function* () {
+      const { layer } = yield* makeHarness(() =>
+        Effect.succeed([
+          threadIdea({
+            ref: "starter:proofread",
+            title: "Proofread whatever you paste",
+            action: "new-thread",
+            prompt: "[paste your text]",
+          }),
+        ]),
+      );
+      yield* TestClock.setTime(NOW);
+      yield* Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const ideas = yield* Ideas.make;
+        yield* ideas.suggestMore;
+        yield* ideas.awaitIdle;
+        const idea = (yield* ideas.list).ideas.find(
+          (entry) => entry.title === "Proofread whatever you paste",
+        );
+        assert.isDefined(idea);
+        yield* ideas.feedback({ ideaId: idea!.id, kind: "opened" });
+        yield* TestClock.adjust(HOUR);
+        yield* sql`
+          INSERT INTO projection_thread_messages (message_id, thread_id, role, text, is_streaming, created_at, updated_at)
+          VALUES ('m-other', 'thread-y', 'user', 'Unrelated question.', 0, ${iso(NOW + HOUR)}, ${iso(NOW + HOUR)})
+        `;
+        assert.isDefined((yield* ideas.list).ideas.find((entry) => entry.id === idea!.id));
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    }),
+  );
+
+  it.effect("keeps a snoozed idea snoozed when asked to dismiss it", () =>
+    Effect.gen(function* () {
+      const { layer } = yield* makeHarness(() => Effect.succeed([]));
+      yield* TestClock.setTime(NOW);
+      yield* Effect.gen(function* () {
+        const ideas = yield* Ideas.make;
+        const [idea] = (yield* ideas.list).ideas;
+        yield* ideas.feedback({ ideaId: idea!.id, kind: "snoozed", snoozedUntil: iso(NOW + DAY) });
+        const after = yield* ideas.feedback({ ideaId: idea!.id, kind: "dismissed" });
+        assert.deepStrictEqual(
+          after.snoozed.map((entry) => entry.id),
+          [idea!.id],
+        );
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    }),
+  );
+
+  it.effect("refreshes a full page at least daily while Ideas is in use", () =>
+    Effect.gen(function* () {
+      const { calls, layer } = yield* makeHarness(() => Effect.succeed([threadIdea()]));
+      yield* TestClock.setTime(NOW);
+      yield* Effect.gen(function* () {
+        yield* seedWork;
+        const ideas = yield* Ideas.make;
+        yield* ideas.markViewed;
+        yield* ideas.awaitIdle;
+        assert.strictEqual(calls.length, 1);
+        yield* TestClock.adjust(5 * HOUR);
+        yield* ideas.refresh;
+        assert.strictEqual(calls.length, 1);
+        yield* TestClock.adjust(20 * HOUR);
+        yield* ideas.refresh;
+        assert.strictEqual(calls.length, 2);
       }).pipe(Effect.scoped, Effect.provide(layer));
     }),
   );

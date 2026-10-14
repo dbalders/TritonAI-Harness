@@ -61,6 +61,8 @@ export const Idea = Schema.Struct({
   createdAt: IsoDateTime,
   /** Set once the user opened its draft; the idea stays listed until the draft is sent. */
   openedAt: Schema.NullOr(IsoDateTime),
+  /** The thread a new-thread idea's draft becomes when sent, so reopening finds that draft. */
+  draftThreadId: Schema.NullOr(ThreadId),
   snoozedUntil: Schema.NullOr(IsoDateTime),
 });
 export type Idea = typeof Idea.Type;
@@ -101,9 +103,25 @@ export const IdeasFeedbackInput = Schema.Struct({
   ideaId: TrimmedNonEmptyString,
   kind: IdeaFeedbackKind,
   snoozedUntil: Schema.optional(IsoDateTime),
+  /** With `opened`: the thread id of the draft the idea was opened in. */
+  draftThreadId: Schema.optional(ThreadId),
 });
 export type IdeasFeedbackInput = typeof IdeasFeedbackInput.Type;
 
 export class IdeasError extends Schema.TaggedError<IdeasError>()("IdeasError", {
   message: TrimmedNonEmptyString,
 }) {}
+
+/**
+ * Text a message sent from an idea's draft still contains after the user fills
+ * in its `[placeholders]`: the start of the prompt's longest placeholder-free
+ * run. Empty when the prompt is all placeholders.
+ */
+export function ideaPromptSnippet(prompt: string): string {
+  const runs = prompt
+    .replace(/\s+/gu, " ")
+    .split(/\[[^\]]*\]/u)
+    .map((run) => run.trim());
+  const longest = runs.reduce((best, run) => (run.length > best.length ? run : best), "");
+  return longest.slice(0, 48).trim();
+}

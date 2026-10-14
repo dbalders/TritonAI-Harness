@@ -8,7 +8,13 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import type { Idea, IdeaFeedbackKind, IdeaSection } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  Idea,
+  IdeaFeedbackKind,
+  IdeaSection,
+  IdeasFeedbackInput,
+} from "@t3tools/contracts";
 import { ChevronRightIcon, ClockIcon, EllipsisIcon, SparklesIcon, XIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -81,17 +87,23 @@ export function IdeasPage() {
   const [actionError, setActionError] = useState<string | null>(null);
 
   // Opening the page clears the sidebar badge; a first visit also starts personal ideas.
+  const [viewedEnvironmentId, setViewedEnvironmentId] = useState<EnvironmentId | null>(null);
   useEffect(() => {
     if (environmentId === null) return;
-    void markViewed({ environmentId, input: {} }).then(() => refresh());
+    void markViewed({ environmentId, input: {} }).then(() => {
+      setViewedEnvironmentId(environmentId);
+      refresh();
+    });
   }, [environmentId, markViewed, refresh]);
 
   // Ideas that arrive while the page is open have been seen, so they don't badge the sidebar.
   const unseenCount = data?.unseenCount ?? 0;
   useEffect(() => {
-    if (environmentId === null || unseenCount === 0) return;
+    if (environmentId === null || viewedEnvironmentId !== environmentId || unseenCount === 0) {
+      return;
+    }
     void markViewed({ environmentId, input: {} }).then(() => refresh());
-  }, [environmentId, markViewed, refresh, unseenCount]);
+  }, [environmentId, markViewed, refresh, unseenCount, viewedEnvironmentId]);
 
   useEffect(() => {
     if (data?.state !== "generating") return;
@@ -100,7 +112,11 @@ export function IdeasPage() {
   }, [data, refresh]);
 
   const runFeedback = useCallback(
-    async (idea: Idea, kind: IdeaFeedbackKind, snoozedUntil?: string): Promise<boolean> => {
+    async (
+      idea: Idea,
+      kind: IdeaFeedbackKind,
+      extra: Pick<IdeasFeedbackInput, "snoozedUntil" | "draftThreadId"> = {},
+    ): Promise<boolean> => {
       if (environmentId === null) return false;
       const hides = kind !== "opened" && kind !== "restored";
       if (hides) setHidden((ids) => new Set(ids).add(idea.id));
@@ -109,7 +125,7 @@ export function IdeasPage() {
         input: {
           ideaId: idea.id,
           kind,
-          ...(snoozedUntil !== undefined ? { snoozedUntil } : {}),
+          ...extra,
         },
       });
       if (result._tag === "Failure") {
@@ -134,7 +150,9 @@ export function IdeasPage() {
 
   const hideIdea = useCallback(
     async (idea: Idea, kind: HideKind, snoozedUntil?: string) => {
-      if (!(await runFeedback(idea, kind, snoozedUntil))) return;
+      if (!(await runFeedback(idea, kind, snoozedUntil === undefined ? {} : { snoozedUntil }))) {
+        return;
+      }
       const title =
         kind === "snoozed" && snoozedUntil !== undefined
           ? `Snoozed until ${snoozeWakeDescription(snoozedUntil, new Date(), timestampFormat)}`
@@ -161,11 +179,16 @@ export function IdeasPage() {
   const handleOpen = useCallback(
     async (idea: Idea) => {
       setActionError(null);
-      if (!(await openDraft(idea))) {
+      const opened = await openDraft(idea);
+      if (!opened) {
         setActionError("Add a project first, then open this idea.");
         return;
       }
-      void runFeedback(idea, "opened");
+      void runFeedback(
+        idea,
+        "opened",
+        opened.draftThreadId === null ? {} : { draftThreadId: opened.draftThreadId },
+      );
     },
     [openDraft, runFeedback],
   );

@@ -21,11 +21,13 @@ import {
   IdeaAction,
   type IdeaFeedbackKind,
   type IdeaSection,
+  ideaPromptSnippet,
   IdeaSource,
   IdeasError,
   type IdeasFeedbackInput,
   type IdeasGenerationState,
   type IdeasSnapshot,
+  ThreadId,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
@@ -91,6 +93,7 @@ const FILE_WINDOW_MS = 60 * DAY_MS;
 /** Background generation only runs for someone who has opened the page lately. */
 const VIEW_WINDOW_MS = 7 * DAY_MS;
 const REFRESH_AFTER_MS = 4 * 60 * 60_000;
+const DAILY_REFRESH_MS = DAY_MS;
 const DAILY_MODEL_CALLS = 20;
 const CHECK_INTERVAL = Duration.hours(1);
 // Let startup work finish before the first check competes with it.
@@ -99,6 +102,7 @@ const NOTE_COUNT = 5;
 const PROJECT_COUNT = 8;
 const FILES_PER_PROJECT = 8;
 const DIRECTORY_ENTRY_LIMIT = 300;
+const PROJECT_SCAN_LIMIT = 1_500;
 const DOCUMENT_EXTENSIONS = new Set([
   ".csv",
   ".tsv",
@@ -149,6 +153,7 @@ interface IdeaRow {
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly openedAt: string | null;
+  readonly draftThreadId: string | null;
   readonly snoozedUntil: string | null;
   readonly hiddenAt: string | null;
 }
@@ -193,21 +198,9 @@ function toIdea(row: IdeaRow): Idea | null {
     action: content.value.action,
     createdAt: row.createdAt,
     openedAt: row.openedAt,
+    draftThreadId: row.draftThreadId === null ? null : ThreadId.make(row.draftThreadId),
     snoozedUntil: row.status === "snoozed" ? row.snoozedUntil : null,
   };
-}
-
-/**
- * Text a sent message would still contain after the user fills in the
- * prompt's `[placeholders]`: the start of its longest placeholder-free run.
- */
-function promptSnippet(prompt: string): string {
-  const runs = prompt
-    .replace(/\s+/gu, " ")
-    .split(/\[[^\]]*\]/u)
-    .map((run) => run.trim());
-  const longest = runs.reduce((best, run) => (run.length > best.length ? run : best), "");
-  return longest.slice(0, 48).trim();
 }
 
 const ideaColumns = (sql: SqlClient.SqlClient) => sql`
@@ -220,6 +213,7 @@ const ideaColumns = (sql: SqlClient.SqlClient) => sql`
   created_at AS "createdAt",
   updated_at AS "updatedAt",
   opened_at AS "openedAt",
+  draft_thread_id AS "draftThreadId",
   snoozed_until AS "snoozedUntil",
   hidden_at AS "hiddenAt"
 `;
@@ -277,25 +271,32 @@ export const make = Effect.gen(function* () {
       WHERE idea_id = ${row.ideaId} AND status = ${row.status} AND updated_at = ${row.updatedAt}
     `;
 
-  /** Whether a user message was sent from an opened idea's draft. */
-  const wasSent = (content: IdeaContent, openedAt: string) =>
-    content.action.kind === "resume-thread"
-      ? sql<{ readonly found: number }>`
-          SELECT EXISTS (
-            SELECT 1 FROM projection_thread_messages
-            WHERE thread_id = ${content.action.threadId}
-              AND role = 'user'
-              AND created_at > ${openedAt}
-          ) AS "found"
-        `.pipe(Effect.map(([row]) => Boolean(row?.found)))
-      : sql<{ readonly found: number }>`
-          SELECT EXISTS (
-            SELECT 1 FROM projection_thread_messages
-            WHERE role = 'user'
-              AND created_at > ${openedAt}
-              AND instr(text, ${promptSnippet(content.action.prompt)}) > 0
-          ) AS "found"
-        `.pipe(Effect.map(([row]) => Boolean(row?.found)));
+  /**
+   * Whether a message was sent from an opened idea's draft: any user message in
+   * the idea's thread, or in the thread its draft becomes. Without a known draft
+   * thread, a message containing the prompt's fixed text counts.
+   */
+  const wasSent = (row: IdeaRow, content: IdeaContent, openedAt: string) => {
+    const threadId =
+      content.action.kind === "resume-thread" ? content.action.threadId : row.draftThreadId;
+    if (threadId !== null) {
+      return sql<{ readonly found: number }>`
+        SELECT EXISTS (
+          SELECT 1 FROM projection_thread_messages
+          WHERE thread_id = ${threadId} AND role = 'user' AND created_at > ${openedAt}
+        ) AS "found"
+      `.pipe(Effect.map(([found]) => Boolean(found?.found)));
+    }
+    const snippet = ideaPromptSnippet(content.action.prompt);
+    // Too little fixed text would match unrelated messages.
+    if (snippet.length < 12) return Effect.succeed(false);
+    return sql<{ readonly found: number }>`
+      SELECT EXISTS (
+        SELECT 1 FROM projection_thread_messages
+        WHERE role = 'user' AND created_at > ${openedAt} AND instr(text, ${snippet}) > 0
+      ) AS "found"
+    `.pipe(Effect.map(([found]) => Boolean(found?.found)));
+  };
 
   const threadIsGone = (threadId: string) =>
     sql<{ readonly gone: number }>`
@@ -326,7 +327,7 @@ export const make = Effect.gen(function* () {
       const content = decodeContent(row.contentJson);
       if (Option.isNone(content)) continue;
       if (row.status === "opened" && row.openedAt !== null) {
-        if (yield* wasSent(content.value, row.openedAt)) {
+        if (yield* wasSent(row, content.value, row.openedAt)) {
           yield* retire(row, "sent", nowIso);
         } else if (nowMs - Date.parse(row.openedAt) > OPENED_TTL_MS) {
           yield* retire(row, "dismissed", nowIso);
@@ -533,13 +534,17 @@ export const make = Effect.gen(function* () {
     nowMs: number,
   ) {
     const found: Array<ContextFile & { readonly modifiedMs: number }> = [];
+    // A large folder must not hold up a request for ideas.
+    let budget = PROJECT_SCAN_LIMIT;
     const walk = (directory: string, relative: string, depth: number): Effect.Effect<void> =>
       Effect.gen(function* () {
         const names = yield* fs
           .readDirectory(directory)
           .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
         for (const name of names.slice(0, DIRECTORY_ENTRY_LIMIT)) {
+          if (budget <= 0) return;
           if (name.startsWith(".")) continue;
+          budget--;
           const filePath = path.join(directory, name);
           const info = yield* fs.stat(filePath).pipe(Effect.option);
           if (Option.isNone(info)) continue;
@@ -829,7 +834,6 @@ export const make = Effect.gen(function* () {
     requested: boolean,
   ) {
     const nowMs = yield* Clock.currentTimeMillis;
-    const nowIso = toIso(nowMs);
     yield* tidy(nowMs);
     const exclusions = yield* loadExclusions(nowMs);
     const context = yield* gatherContext(nowMs, exclusions);
@@ -876,9 +880,11 @@ export const make = Effect.gen(function* () {
       ? starterFill(count - picked.length, exclusions, new Set(picked.map((idea) => idea.key)))
       : [];
     const added = [...picked, ...fill];
-    yield* insertIdeas(added, nowIso);
-    yield* trim(nowIso);
-    yield* writeState("last_generated_at", nowIso);
+    // Stamped after the model call, so a visit during the run doesn't hide them from the badge.
+    const addedAt = toIso(yield* Clock.currentTimeMillis);
+    yield* insertIdeas(added, addedAt);
+    yield* trim(addedAt);
+    yield* writeState("last_generated_at", addedAt);
     yield* writeState("activity_fingerprint", yield* activityFingerprint);
     if (!requested) return null;
     if (added.length === 0) {
@@ -923,7 +929,10 @@ export const make = Effect.gen(function* () {
     `;
     const visible = row?.count ?? 0;
     const changed = (yield* readState("activity_fingerprint")) !== (yield* activityFingerprint);
-    if (visible >= TARGET_IDEAS && !changed) return;
+    // Thread activity is cheap to watch; files, notes, and tools are picked up at least daily.
+    const dayOld =
+      lastGeneratedAt === null || nowMs - Date.parse(lastGeneratedAt) >= DAILY_REFRESH_MS;
+    if (visible >= TARGET_IDEAS && !changed && !dayOld) return;
     yield* generate(Math.max(2, TARGET_IDEAS - visible), false);
   }).pipe(
     Effect.catchCause((cause) =>
@@ -980,19 +989,25 @@ export const make = Effect.gen(function* () {
         case "opened": {
           if (!visible) break;
           yield* setStatus("opened", row.ideaId, nowIso, { openedAt: nowIso });
+          if (input.draftThreadId !== undefined) {
+            yield* sql`
+              UPDATE ideas SET draft_thread_id = ${input.draftThreadId} WHERE idea_id = ${row.ideaId}
+            `;
+          }
           yield* recordFeedback(row, "opened", nowIso);
           break;
         }
         case "dismissed":
         case "rejected":
         case "less-like-this": {
-          if (!visible && row.status !== "snoozed") break;
+          // A snoozed card is out of view; it can only be unsnoozed.
+          if (!visible) break;
           yield* setStatus(
             input.kind === "rejected" ? "rejected" : "dismissed",
             row.ideaId,
             nowIso,
             {
-              previousStatus: row.status === "snoozed" ? row.previousStatus : row.status,
+              previousStatus: row.status,
               hiddenAt: nowIso,
             },
           );

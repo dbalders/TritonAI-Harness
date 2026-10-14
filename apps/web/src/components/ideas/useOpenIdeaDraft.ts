@@ -1,5 +1,11 @@
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
-import type { EnvironmentId, Idea, ScopedProjectRef } from "@t3tools/contracts";
+import {
+  type EnvironmentId,
+  type Idea,
+  ideaPromptSnippet,
+  type ScopedProjectRef,
+  type ThreadId,
+} from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback } from "react";
 
@@ -13,7 +19,8 @@ import { mergeIdeaPrompt } from "./ideaDraft";
  * Opens an idea as a draft the user reviews before sending. Ideas about a
  * thread fill that thread's composer; the rest start a new thread in the
  * idea's project, else the scratch project, else the first project.
- * Resolves false when there is nowhere to put the draft.
+ * Resolves with the thread the new draft becomes when sent, or null when there
+ * is nowhere to put the draft.
  */
 export function useOpenIdeaDraft(environmentId: EnvironmentId | null) {
   const navigate = useNavigate();
@@ -22,8 +29,8 @@ export function useOpenIdeaDraft(environmentId: EnvironmentId | null) {
   const projects = useProjects();
 
   return useCallback(
-    async (idea: Idea): Promise<boolean> => {
-      if (environmentId === null) return false;
+    async (idea: Idea): Promise<{ readonly draftThreadId: ThreadId | null } | null> => {
+      if (environmentId === null) return null;
       const { action } = idea;
       const store = useComposerDraftStore.getState();
 
@@ -35,16 +42,24 @@ export function useOpenIdeaDraft(environmentId: EnvironmentId | null) {
           to: "/$environmentId/$threadId",
           params: { environmentId, threadId: action.threadId },
         });
-        return true;
+        return { draftThreadId: null };
       }
 
-      // Opening the same idea again returns to the draft it already started.
-      for (const [draftKey, session] of Object.entries(store.draftThreadsByThreadKey)) {
-        if (session.promotedTo != null || session.environmentId !== environmentId) continue;
-        if (store.draftsByThreadKey[draftKey]?.prompt.includes(action.prompt)) {
-          await navigate({ to: "/draft/$draftId", params: { draftId: DraftId.make(draftKey) } });
-          return true;
-        }
+      // Opening the same idea again returns to the draft it already started, even
+      // after the user edited it: by its thread when known, else by its fixed text.
+      const snippet = ideaPromptSnippet(action.prompt);
+      const drafts = Object.entries(store.draftThreadsByThreadKey).filter(
+        ([, session]) => session.promotedTo == null && session.environmentId === environmentId,
+      );
+      const reopened =
+        drafts.find(([, session]) => session.threadId === idea.draftThreadId) ??
+        (snippet.length >= 12
+          ? drafts.find(([draftKey]) => store.draftsByThreadKey[draftKey]?.prompt.includes(snippet))
+          : undefined);
+      if (reopened) {
+        const [draftKey, session] = reopened;
+        await navigate({ to: "/draft/$draftId", params: { draftId: DraftId.make(draftKey) } });
+        return { draftThreadId: session.threadId };
       }
 
       let projectRef: ScopedProjectRef | null =
@@ -60,16 +75,16 @@ export function useOpenIdeaDraft(environmentId: EnvironmentId | null) {
       }
       const fallback = projects.find((project) => project.environmentId === environmentId);
       projectRef ??= fallback ? scopeProjectRef(environmentId, fallback.id) : null;
-      if (projectRef === null) return false;
+      if (projectRef === null) return null;
 
       const opened = await handleNewThread(projectRef, { newDraftPrompt: action.prompt });
-      if (!opened) return false;
+      if (!opened) return null;
       // A reused draft keeps its own text, so the idea is added after it.
       const existing =
         useComposerDraftStore.getState().getComposerDraft(opened.draftId)?.prompt ?? "";
       const merged = mergeIdeaPrompt(existing, action.prompt);
       if (merged !== existing) store.setPrompt(opened.draftId, merged);
-      return true;
+      return { draftThreadId: opened.threadId };
     },
     [environmentId, handleNewThread, navigate, openScratchProject, projects, scratchEnvironmentId],
   );
