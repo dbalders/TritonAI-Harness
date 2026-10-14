@@ -58,6 +58,7 @@ import {
   FolderGit2Icon,
   FolderIcon,
   FolderPlusIcon,
+  LightbulbIcon,
   MessageSquareDashedIcon,
   LinkIcon,
   MessageSquareIcon,
@@ -2081,6 +2082,17 @@ function OpenCommandPaletteDialog(props: {
       },
     });
   }
+
+  actionItems.push({
+    kind: "action",
+    value: "action:ideas",
+    searchTerms: ["ideas", "suggestions", "what can i do", "examples", "get started", "help"],
+    title: "Open ideas",
+    icon: <LightbulbIcon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await navigate({ to: "/ideas" });
+    },
+  });
 
   actionItems.push({
     kind: "action",
