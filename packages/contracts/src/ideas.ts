@@ -61,8 +61,11 @@ export const Idea = Schema.Struct({
   createdAt: IsoDateTime,
   /** Set once the user opened its draft; the idea stays listed until the draft is sent. */
   openedAt: Schema.NullOr(IsoDateTime),
-  /** The thread a new-thread idea's draft becomes when sent, so reopening finds that draft. */
-  draftThreadId: Schema.NullOr(ThreadId),
+  /**
+   * The threads a new-thread idea's drafts become when sent, one per client that
+   * opened it, so reopening finds that client's draft.
+   */
+  draftThreadIds: Schema.Array(ThreadId),
   snoozedUntil: Schema.NullOr(IsoDateTime),
 });
 export type Idea = typeof Idea.Type;

@@ -153,7 +153,7 @@ interface IdeaRow {
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly openedAt: string | null;
-  readonly draftThreadId: string | null;
+  readonly draftThreadIdsJson: string | null;
   readonly snoozedUntil: string | null;
   readonly hiddenAt: string | null;
 }
@@ -185,6 +185,16 @@ function isSection(value: string): value is IdeaSection {
   return IDEA_SECTIONS.some((section) => section === value);
 }
 
+const ThreadIdsJson = Schema.fromJsonString(Schema.Array(Schema.String));
+const decodeThreadIds = Schema.decodeUnknownOption(ThreadIdsJson);
+const encodeThreadIds = Schema.encodeSync(ThreadIdsJson);
+
+/** The draft threads recorded for an idea, oldest first. */
+function draftThreadIds(row: IdeaRow): ReadonlyArray<string> {
+  if (row.draftThreadIdsJson === null) return [];
+  return Option.getOrElse(decodeThreadIds(row.draftThreadIdsJson), () => []);
+}
+
 function toIdea(row: IdeaRow): Idea | null {
   const content = decodeContent(row.contentJson);
   if (Option.isNone(content) || !isSection(row.section)) return null;
@@ -198,7 +208,7 @@ function toIdea(row: IdeaRow): Idea | null {
     action: content.value.action,
     createdAt: row.createdAt,
     openedAt: row.openedAt,
-    draftThreadId: row.draftThreadId === null ? null : ThreadId.make(row.draftThreadId),
+    draftThreadIds: draftThreadIds(row).map((threadId) => ThreadId.make(threadId)),
     snoozedUntil: row.status === "snoozed" ? row.snoozedUntil : null,
   };
 }
@@ -213,7 +223,7 @@ const ideaColumns = (sql: SqlClient.SqlClient) => sql`
   created_at AS "createdAt",
   updated_at AS "updatedAt",
   opened_at AS "openedAt",
-  draft_thread_id AS "draftThreadId",
+  draft_thread_ids_json AS "draftThreadIdsJson",
   snoozed_until AS "snoozedUntil",
   hidden_at AS "hiddenAt"
 `;
@@ -273,17 +283,19 @@ export const make = Effect.gen(function* () {
 
   /**
    * Whether a message was sent from an opened idea's draft: any user message in
-   * the idea's thread, or in the thread its draft becomes. Without a known draft
-   * thread, a message containing the prompt's fixed text counts.
+   * the idea's thread, or in a thread one of its drafts becomes. Without a known
+   * draft thread, a message containing the prompt's fixed text counts.
    */
   const wasSent = (row: IdeaRow, content: IdeaContent, openedAt: string) => {
-    const threadId =
-      content.action.kind === "resume-thread" ? content.action.threadId : row.draftThreadId;
-    if (threadId !== null) {
+    const threadIds =
+      content.action.kind === "resume-thread" ? [content.action.threadId] : draftThreadIds(row);
+    if (threadIds.length > 0) {
       return sql<{ readonly found: number }>`
         SELECT EXISTS (
           SELECT 1 FROM projection_thread_messages
-          WHERE thread_id = ${threadId} AND role = 'user' AND created_at > ${openedAt}
+          WHERE thread_id IN (SELECT value FROM json_each(${encodeThreadIds(threadIds)}))
+            AND role = 'user'
+            AND created_at > ${openedAt}
         ) AS "found"
       `.pipe(Effect.map(([found]) => Boolean(found?.found)));
     }
@@ -1014,9 +1026,12 @@ export const make = Effect.gen(function* () {
           }
           // The first open stays the start of tracking; reopening restarts only the timeout.
           yield* setStatus("opened", row.ideaId, nowIso, { openedAt: row.openedAt ?? nowIso });
-          if (input.draftThreadId !== undefined) {
+          // Each client keeps its own draft; sending any of them uses the idea.
+          const known = draftThreadIds(row);
+          if (input.draftThreadId !== undefined && !known.includes(input.draftThreadId)) {
+            const next = encodeThreadIds([...known, input.draftThreadId]);
             yield* sql`
-              UPDATE ideas SET draft_thread_id = ${input.draftThreadId} WHERE idea_id = ${row.ideaId}
+              UPDATE ideas SET draft_thread_ids_json = ${next} WHERE idea_id = ${row.ideaId}
             `;
           }
           if (row.status === "active") yield* recordFeedback(row, "opened", nowIso);

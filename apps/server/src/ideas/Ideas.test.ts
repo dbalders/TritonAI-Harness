@@ -361,9 +361,9 @@ it.layer(NodeServices.layer)("Ideas", (it) => {
           kind: "opened",
           draftThreadId: ThreadId.make("draft-thread-1"),
         });
-        assert.strictEqual(
-          opened.ideas.find((entry) => entry.id === idea!.id)?.draftThreadId,
-          "draft-thread-1",
+        assert.deepStrictEqual(
+          opened.ideas.find((entry) => entry.id === idea!.id)?.draftThreadIds,
+          [ThreadId.make("draft-thread-1")],
         );
         yield* TestClock.adjust(HOUR);
         yield* sql`
@@ -519,6 +519,38 @@ it.layer(NodeServices.layer)("Ideas", (it) => {
           draftThreadId: ThreadId.make("draft-thread-5"),
         });
         assert.isUndefined(reopened.ideas.find((entry) => entry.id === idea!.id));
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    }),
+  );
+
+  it.effect("counts an idea as used when a draft opened on another client is sent", () =>
+    Effect.gen(function* () {
+      const { layer } = yield* makeHarness(() => Effect.succeed([]));
+      yield* TestClock.setTime(NOW);
+      yield* Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const ideas = yield* Ideas.make;
+        const [idea] = (yield* ideas.list).ideas;
+        yield* ideas.feedback({
+          ideaId: idea!.id,
+          kind: "opened",
+          draftThreadId: ThreadId.make("desktop-draft"),
+        });
+        const both = yield* ideas.feedback({
+          ideaId: idea!.id,
+          kind: "opened",
+          draftThreadId: ThreadId.make("browser-draft"),
+        });
+        assert.deepStrictEqual(both.ideas.find((entry) => entry.id === idea!.id)?.draftThreadIds, [
+          ThreadId.make("desktop-draft"),
+          ThreadId.make("browser-draft"),
+        ]);
+        yield* TestClock.adjust(HOUR);
+        yield* sql`
+          INSERT INTO projection_thread_messages (message_id, thread_id, role, text, is_streaming, created_at, updated_at)
+          VALUES ('m-desktop', 'desktop-draft', 'user', 'Sent from the desktop draft.', 0, ${iso(NOW + HOUR)}, ${iso(NOW + HOUR)})
+        `;
+        assert.isUndefined((yield* ideas.list).ideas.find((entry) => entry.id === idea!.id));
       }).pipe(Effect.scoped, Effect.provide(layer));
     }),
   );

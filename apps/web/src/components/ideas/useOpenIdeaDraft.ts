@@ -46,7 +46,7 @@ export function useOpenIdeaDraft(environmentId: EnvironmentId | null) {
         ([, session]) =>
           session.promotedTo == null &&
           session.environmentId === environmentId &&
-          session.threadId === idea.draftThreadId,
+          idea.draftThreadIds.includes(session.threadId),
       );
       if (reopened) {
         const [draftKey, session] = reopened;

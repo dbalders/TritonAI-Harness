@@ -7,7 +7,8 @@ export default Effect.gen(function* () {
   // Every idea ever shown stays as a row: its `idea_key` names what it is about, so a dismissed,
   // rejected, or used idea is not suggested again even when the model words it differently.
   // `content_json` holds the card (icon, title, body, sources, action). `previous_status` is what
-  // an undo restores. `draft_thread_id` is the thread a new-thread idea's draft becomes when sent.
+  // an undo restores. `draft_thread_ids_json` lists the threads a new-thread idea's drafts become
+  // when sent, one per client that opened it.
   yield* sql`
     CREATE TABLE IF NOT EXISTS ideas (
       idea_id TEXT PRIMARY KEY,
@@ -19,7 +20,7 @@ export default Effect.gen(function* () {
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       opened_at TEXT,
-      draft_thread_id TEXT,
+      draft_thread_ids_json TEXT,
       snoozed_until TEXT,
       hidden_at TEXT
     )
