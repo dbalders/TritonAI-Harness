@@ -123,9 +123,12 @@ async function lastSuccessfulMobileSource({ github, context, limit = 15 }) {
       ref: commit.sha,
       per_page: 100,
     });
-    const archived = checks.check_runs.some(
-      (run) => run.app?.slug === "xcode-cloud" && run.conclusion === "success",
-    );
+    // Xcode Cloud reports each action (build, test, archive) as its own check,
+    // so a passing build must not mask a pending or failed archive.
+    const xcodeCloud = checks.check_runs.filter((run) => run.app?.slug === "xcode-cloud");
+    const archived =
+      xcodeCloud.some((run) => /\barchive\b/i.test(run.name ?? "")) &&
+      xcodeCloud.every((run) => run.conclusion === "success");
     if (archived) {
       const { data: file } = await github.rest.repos.getContent({
         ...context.repo,

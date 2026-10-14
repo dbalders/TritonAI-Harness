@@ -204,7 +204,8 @@ submodules are not mobile dependencies, and the generated branch only runs in
 Xcode Cloud.
 Build-only, skipped, and failed nightly publications do not start a mobile build.
 A published nightly also skips the mobile build when no mobile input changed
-since the newest `mobile-nightly` commit that Xcode Cloud archived successfully.
+since the newest `mobile-nightly` commit that Xcode Cloud archived successfully
+(every Xcode Cloud check on that commit passed, including an Archive action).
 Mobile inputs are `apps/mobile`, the workspace packages it depends on, root
 dependency manifests, patches, brand assets, the third-party license generator,
 its config and referenced notice files, the native generator, and

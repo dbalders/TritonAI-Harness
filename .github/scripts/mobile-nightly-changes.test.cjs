@@ -123,6 +123,9 @@ test("skips a source that already built and builds without a usable baseline", (
   );
 });
 
+const ARCHIVE = "TritonAIHarnessPreview | Nightly Preview | Archive - iOS";
+const BUILD = "TritonAIHarnessPreview | Nightly Preview | Build - iOS";
+
 function github(commits, { failChecks = false } = {}) {
   const sha = (name) => name.padEnd(40, "0");
   const calls = [];
@@ -158,9 +161,10 @@ function github(commits, { failChecks = false } = {}) {
             const commit = commits.find((entry) => sha(entry.name) === ref);
             return {
               data: {
-                check_runs: (commit.checks ?? []).map(([slug, conclusion]) => ({
+                check_runs: (commit.checks ?? []).map(([slug, conclusion, name = ARCHIVE]) => ({
                   app: { slug },
                   conclusion,
+                  name,
                 })),
               },
             };
@@ -175,6 +179,15 @@ const source = (letter) => letter.repeat(40);
 
 test("uses the newest native commit that Xcode Cloud archived", async () => {
   const options = github([
+    {
+      name: "c5",
+      parents: ["c4", "s5"],
+      checks: [
+        ["xcode-cloud", "success", BUILD],
+        ["xcode-cloud", null],
+      ],
+    },
+    { name: "c4", parents: ["c3", "s4"], checks: [["xcode-cloud", "success", BUILD]] },
     { name: "c3", parents: ["c2", "s3"], checks: [["xcode-cloud", "failure"]] },
     { name: "c2", parents: ["c1", "s2"], checks: [["github-actions", "success"]] },
     {
@@ -182,7 +195,11 @@ test("uses the newest native commit that Xcode Cloud archived", async () => {
       parents: ["s1"],
       tag: "v0.3.7-nightly.20261011.71",
       source: source("a"),
-      checks: [["xcode-cloud", "success"]],
+      checks: [
+        ["xcode-cloud", "success", BUILD],
+        ["xcode-cloud", "success"],
+        ["github-actions", "failure"],
+      ],
     },
   ]);
   assert.deepEqual(await lastSuccessfulMobileSource(options), {
