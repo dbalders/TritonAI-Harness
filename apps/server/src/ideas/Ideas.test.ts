@@ -408,6 +408,50 @@ it.layer(NodeServices.layer)("Ideas", (it) => {
     }),
   );
 
+  it.effect("shows an opened idea again when a long snooze ends", () =>
+    Effect.gen(function* () {
+      const { layer } = yield* makeHarness(() => Effect.succeed([]));
+      yield* TestClock.setTime(NOW);
+      yield* Effect.gen(function* () {
+        const ideas = yield* Ideas.make;
+        const [idea] = (yield* ideas.list).ideas;
+        yield* ideas.feedback({
+          ideaId: idea!.id,
+          kind: "opened",
+          draftThreadId: ThreadId.make("draft-thread-2"),
+        });
+        yield* ideas.feedback({
+          ideaId: idea!.id,
+          kind: "snoozed",
+          snoozedUntil: iso(NOW + 5 * DAY),
+        });
+        yield* TestClock.adjust(6 * DAY);
+        const woke = (yield* ideas.list).ideas.find((entry) => entry.id === idea!.id);
+        assert.isDefined(woke);
+        assert.isNotNull(woke!.openedAt);
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    }),
+  );
+
+  it.effect("retires an opened idea when the thread it continues is deleted", () =>
+    Effect.gen(function* () {
+      const { layer } = yield* makeHarness(() => Effect.succeed([threadIdea()]));
+      yield* TestClock.setTime(NOW);
+      yield* Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* seedWork;
+        const ideas = yield* Ideas.make;
+        yield* ideas.suggestMore;
+        yield* ideas.awaitIdle;
+        const idea = (yield* ideas.list).ideas.find((entry) => entry.section === "continue");
+        assert.isDefined(idea);
+        yield* ideas.feedback({ ideaId: idea!.id, kind: "opened" });
+        yield* sql`UPDATE projection_threads SET deleted_at = ${iso(NOW)} WHERE thread_id = 'thread-1'`;
+        assert.isUndefined((yield* ideas.list).ideas.find((entry) => entry.id === idea!.id));
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    }),
+  );
+
   it.effect("keeps a snoozed idea snoozed when asked to dismiss it", () =>
     Effect.gen(function* () {
       const { layer } = yield* makeHarness(() => Effect.succeed([]));

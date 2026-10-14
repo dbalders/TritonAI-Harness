@@ -326,23 +326,29 @@ export const make = Effect.gen(function* () {
     for (const row of rows) {
       const content = decodeContent(row.contentJson);
       if (Option.isNone(content)) continue;
+      // Sent counts from the original open, so a message sent while snoozed is still seen.
+      if (row.openedAt !== null && (yield* wasSent(row, content.value, row.openedAt))) {
+        yield* retire(row, "sent", nowIso);
+        continue;
+      }
+      const goneThread =
+        content.value.action.kind === "resume-thread" &&
+        (yield* threadIsGone(content.value.action.threadId));
+      if (goneThread) {
+        yield* retire(row, "expired", nowIso);
+        continue;
+      }
+      // Both clocks restart when the card is woken from a snooze or restored.
+      const since = Date.parse(row.updatedAt);
       if (row.status === "opened" && row.openedAt !== null) {
-        if (yield* wasSent(row, content.value, row.openedAt)) {
-          yield* retire(row, "sent", nowIso);
-        } else if (nowMs - Date.parse(row.openedAt) > OPENED_TTL_MS) {
+        if (nowMs - Math.max(Date.parse(row.openedAt), since) > OPENED_TTL_MS) {
           yield* retire(row, "dismissed", nowIso);
         }
         continue;
       }
       const staleOwnWork =
-        isSection(row.section) &&
-        isPersonalSection(row.section) &&
-        // Since it was added, woken from a snooze, or restored.
-        nowMs - Date.parse(row.updatedAt) > PERSONAL_TTL_MS;
-      const goneThread =
-        content.value.action.kind === "resume-thread" &&
-        (yield* threadIsGone(content.value.action.threadId));
-      if (staleOwnWork || goneThread) {
+        isSection(row.section) && isPersonalSection(row.section) && nowMs - since > PERSONAL_TTL_MS;
+      if (staleOwnWork) {
         yield* retire(row, "expired", nowIso);
       }
     }
