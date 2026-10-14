@@ -682,6 +682,7 @@ jobs:
     if: needs.preflight.outputs.publish == 'true'
     permissions:
       contents: write
+      checks: read
     uses: ./.github/workflows/mobile-nightly-testflight.yml
     with:
       nightly_tag: ${{ needs.preflight.outputs.tag }}

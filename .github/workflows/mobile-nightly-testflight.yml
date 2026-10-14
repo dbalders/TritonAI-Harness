@@ -1,7 +1,8 @@
 name: Mobile Nightly TestFlight
 
 # Called directly after publication: releases created with GITHUB_TOKEN do not
-# trigger a separate release-event workflow.
+# trigger a separate release-event workflow. Nightlies only rebuild the app
+# when mobile inputs changed since the last successful Xcode Cloud archive.
 on:
   workflow_call:
     inputs:
@@ -17,22 +18,30 @@ on:
         description: Published nightly tag to build or retry
         required: true
         type: string
+      force:
+        description: Build even when mobile inputs are unchanged
+        type: boolean
+        default: true
 
 permissions:
   contents: write
+  checks: read
 
 concurrency:
   group: mobile-nightly-native
   cancel-in-progress: false
 
 jobs:
-  prepare:
-    name: Prepare Harness Preview for Xcode Cloud
-    runs-on: macos-26
-    timeout-minutes: 45
-    env:
-      APP_VARIANT: preview
-      NODE_OPTIONS: --max-old-space-size=8192
+  changes:
+    name: Check for mobile changes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      checks: read
+    outputs:
+      sha: ${{ steps.source.outputs.sha }}
+      build: ${{ steps.decide.outputs.build }}
     steps:
       - name: Checkout workflow helpers
         uses: actions/checkout@v6
@@ -59,6 +68,52 @@ jobs:
         with:
           path: source
           ref: ${{ steps.source.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          sparse-checkout: |-
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Compare with the last successful mobile build
+        id: decide
+        uses: actions/github-script@v8
+        env:
+          FORCE: ${{ inputs.force == true }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        with:
+          script: |
+            const { resolveMobileBuild } = require('./automation/.github/scripts/mobile-nightly-changes.cjs');
+            await resolveMobileBuild({
+              github, context, core,
+              root: `${process.env.GITHUB_WORKSPACE}/source`,
+              sourceSha: process.env.SOURCE_SHA,
+              force: process.env.FORCE === 'true',
+            });
+
+  prepare:
+    name: Prepare Harness Preview for Xcode Cloud
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
+    runs-on: macos-26
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    env:
+      APP_VARIANT: preview
+      NODE_OPTIONS: --max-old-space-size=8192
+    steps:
+      - name: Checkout workflow helpers
+        uses: actions/checkout@v6
+        with:
+          path: automation
+          persist-credentials: false
+
+      - name: Checkout exact nightly source
+        uses: actions/checkout@v6
+        with:
+          path: source
+          ref: ${{ needs.changes.outputs.sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -94,7 +149,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           NIGHTLY_TAG: ${{ inputs.nightly_tag }}
-          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+          SOURCE_SHA: ${{ needs.changes.outputs.sha }}
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
@@ -113,7 +168,7 @@ jobs:
       - name: Record Xcode Cloud handoff
         env:
           NIGHTLY_TAG: ${{ inputs.nightly_tag }}
-          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+          SOURCE_SHA: ${{ needs.changes.outputs.sha }}
           NATIVE_SHA: ${{ steps.native.outputs.commit }}
         run: |
           {
