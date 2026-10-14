@@ -13,7 +13,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as TestClock from "effect/testing/TestClock";
 import { HttpClient, HttpClientError, HttpClientResponse } from "effect/unstable/http";
 
@@ -576,8 +576,8 @@ it.layer(NodeServices.layer)("BotTaskComputer", (it) => {
     );
   }
 
-  it.effect(
-    "returns Windows text results and input files with an explicit generated-output blocker",
+  it.effect.skipIf(HostProcessPlatform.defaultValue() === "win32")(
+    "returns Windows text results and input files with an explicit blocker when native file checks are unavailable",
     () => {
       const bot = new FakeBot(),
         harness = new FakeHarness();
@@ -591,10 +591,15 @@ it.layer(NodeServices.layer)("BotTaskComputer", (it) => {
       ];
       return Effect.gen(function* () {
         yield* TestClock.setTime(START);
+        const config = yield* ServerConfig.ServerConfig;
         const computer = yield* BotTaskComputer.BotTaskComputer;
         yield* allow(computer);
         const turn = harness.commands.find((command) => command.type === "thread.turn.start")!;
         assert.lengthOf(turn.message.attachments, 2);
+        const output = taskOutputDirectory(config.stateDir, turn.threadId);
+        yield* Effect.tryPromise(() =>
+          NodeFSP.writeFile(NodePath.join(output, "report.txt"), "Staged bytes"),
+        );
         harness.finish(turn.threadId, "Windows text result");
         yield* computer.tick;
         assert.strictEqual(bot.results[0]!.status, "completed");
@@ -604,7 +609,7 @@ it.layer(NodeServices.layer)("BotTaskComputer", (it) => {
           blockers: string[];
         };
         assert.lengthOf(result.artifacts, 0);
-        assert.include(result.blockers[0]!, "cannot currently be safely exported on Windows");
+        assert.include(result.blockers[0]!, "this Windows computer could not verify them safely");
         assert.lengthOf(
           bot.calls.filter((call) => call.path.endsWith("/artifacts")),
           0,
@@ -613,6 +618,54 @@ it.layer(NodeServices.layer)("BotTaskComputer", (it) => {
         Effect.provide(services(bot, harness)),
         Effect.provideService(HostProcessPlatform, "win32"),
       );
+    },
+  );
+
+  it.effect.runIf(
+    HostProcessPlatform.defaultValue() === "win32" &&
+      HostProcessArchitecture.defaultValue() === "x64",
+  )(
+    "uploads a staged Windows deliverable through native file checks alongside text results and input files",
+    () => {
+      const bot = new FakeBot(),
+        harness = new FakeHarness();
+      bot.tasks = [
+        {
+          taskId: "windows-output",
+          title: "Windows report",
+          prompt: "Review input",
+          attachments: [screenshot, document],
+        },
+      ];
+      return Effect.gen(function* () {
+        yield* TestClock.setTime(START);
+        const config = yield* ServerConfig.ServerConfig;
+        const computer = yield* BotTaskComputer.BotTaskComputer;
+        yield* allow(computer);
+        const turn = harness.commands.find((command) => command.type === "thread.turn.start")!;
+        assert.lengthOf(turn.message.attachments, 2);
+        const output = taskOutputDirectory(config.stateDir, turn.threadId);
+        yield* Effect.tryPromise(() =>
+          NodeFSP.writeFile(NodePath.join(output, "Résumé ✓.md"), "# Résumé ✓\n"),
+        );
+        harness.finish(turn.threadId, "Windows text result");
+        yield* computer.tick;
+        assert.include(String(bot.results[0]!.result), "Windows text result");
+        const exported = bot.calls.filter((call) => call.path.endsWith("/artifacts"));
+        assert.lengthOf(exported, 1);
+        assert.strictEqual(exported[0]!.body.name, "Résumé ✓.md");
+        assert.strictEqual(exported[0]!.body.mimeType, "text/markdown");
+        assert.strictEqual(
+          exported[0]!.body.dataBase64,
+          Buffer.from("# Résumé ✓\n").toString("base64"),
+        );
+        const result = bot.results[0]!.structuredResult as {
+          artifacts: Array<{ provenance: string }>;
+          blockers: string[];
+        };
+        assert.strictEqual(result.artifacts[0]!.provenance, "harness-upload");
+        assert.deepEqual(result.blockers, []);
+      }).pipe(Effect.provide(services(bot, harness)));
     },
   );
 

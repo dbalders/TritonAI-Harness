@@ -35,7 +35,7 @@ import {
   type ServerBotTaskComputerStopInput,
   ThreadId,
 } from "@t3tools/contracts";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
@@ -267,6 +267,7 @@ export const make = Effect.gen(function* () {
   const settingsService = yield* ServerSettingsService;
   const crypto = yield* Crypto.Crypto;
   const platform = yield* HostProcessPlatform;
+  const architecture = yield* HostProcessArchitecture;
   const lock = yield* Semaphore.make(1);
   const locked = lock.withPermits(1);
 
@@ -497,6 +498,7 @@ export const make = Effect.gen(function* () {
                 collectTaskOutputFiles(
                   taskOutputDirectory(serverConfig.stateDir, task.threadId),
                   platform,
+                  { architecture },
                 ),
               ).pipe(
                 Effect.orElseSucceed(() => ({

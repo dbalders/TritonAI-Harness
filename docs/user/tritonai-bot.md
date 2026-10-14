@@ -116,10 +116,12 @@ is not proof that the intended outcome is correct. Downloadable files come from
 the task computer; other artifacts and checks may be reported by the task agent.
 Review them before relying on the result.
 
-Generated task files can be returned automatically from macOS and Linux task
-computers. Windows task computers return text results and support input attachments,
-but generated file export is currently unavailable. The result lists this blocker;
-retrieve those files from the output directory named in the Harness assignment.
+Generated task files can be returned automatically from macOS, Linux, and Windows
+x64 task computers. On Windows, Harness's data folder must be on a local NTFS
+drive, and its path can't pass through links or junctions. A file that another
+program still has open for writing is not returned. Whenever a file isn't returned,
+the result lists a blocker; retrieve those files from the output directory named in
+the Harness assignment.
 
 Temporary file upload failures retry for up to 24 hours after the task computer
 saves the completed result. This window continues during restarts and re-pairing.
