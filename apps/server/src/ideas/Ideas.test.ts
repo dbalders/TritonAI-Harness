@@ -555,6 +555,32 @@ it.layer(NodeServices.layer)("Ideas", (it) => {
     }),
   );
 
+  it.effect("records each client's draft once, however often it is opened", () =>
+    Effect.gen(function* () {
+      const { layer } = yield* makeHarness(() => Effect.succeed([]));
+      yield* TestClock.setTime(NOW);
+      yield* Effect.gen(function* () {
+        const ideas = yield* Ideas.make;
+        const [idea] = (yield* ideas.list).ideas;
+        yield* Effect.all(
+          ["desktop-draft", "browser-draft", "desktop-draft"].map((draft) =>
+            ideas.feedback({
+              ideaId: idea!.id,
+              kind: "opened",
+              draftThreadId: ThreadId.make(draft),
+            }),
+          ),
+          { concurrency: "unbounded" },
+        );
+        const recorded = (yield* ideas.list).ideas.find((entry) => entry.id === idea!.id);
+        assert.sameMembers(
+          [...(recorded?.draftThreadIds ?? [])],
+          ["desktop-draft", "browser-draft"],
+        );
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    }),
+  );
+
   it.effect("keeps a snoozed idea snoozed when asked to dismiss it", () =>
     Effect.gen(function* () {
       const { layer } = yield* makeHarness(() => Effect.succeed([]));

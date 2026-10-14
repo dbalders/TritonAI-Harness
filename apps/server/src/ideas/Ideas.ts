@@ -1026,12 +1026,18 @@ export const make = Effect.gen(function* () {
           }
           // The first open stays the start of tracking; reopening restarts only the timeout.
           yield* setStatus("opened", row.ideaId, nowIso, { openedAt: row.openedAt ?? nowIso });
-          // Each client keeps its own draft; sending any of them uses the idea.
-          const known = draftThreadIds(row);
-          if (input.draftThreadId !== undefined && !known.includes(input.draftThreadId)) {
-            const next = encodeThreadIds([...known, input.draftThreadId]);
+          // Each client keeps its own draft; sending any of them uses the idea. One statement
+          // appends, so two clients opening at once both keep their drafts.
+          if (input.draftThreadId !== undefined) {
             yield* sql`
-              UPDATE ideas SET draft_thread_ids_json = ${next} WHERE idea_id = ${row.ideaId}
+              UPDATE ideas
+              SET draft_thread_ids_json =
+                json_insert(COALESCE(draft_thread_ids_json, '[]'), '$[#]', ${input.draftThreadId})
+              WHERE idea_id = ${row.ideaId}
+                AND NOT EXISTS (
+                  SELECT 1 FROM json_each(COALESCE(draft_thread_ids_json, '[]'))
+                  WHERE value = ${input.draftThreadId}
+                )
             `;
           }
           if (row.status === "active") yield* recordFeedback(row, "opened", nowIso);
