@@ -12,6 +12,12 @@ import {
 } from "./methods/connectionCatalog.ts";
 import { getComputerUseState, setComputerUseEnabled } from "./methods/computerUse.ts";
 import {
+  cancelSkillRecording,
+  requestSkillRecordingPermission,
+  startSkillRecording,
+  stopSkillRecording,
+} from "./methods/skillRecording.ts";
+import {
   getLocalEnvironmentEnabled,
   setLocalEnvironmentEnabled,
 } from "./methods/localEnvironment.ts";
@@ -135,6 +141,11 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
 
   yield* ipc.handle(getComputerUseState);
   yield* ipc.handle(setComputerUseEnabled);
+
+  yield* ipc.handle(requestSkillRecordingPermission);
+  yield* ipc.handle(startSkillRecording);
+  yield* ipc.handle(stopSkillRecording);
+  yield* ipc.handle(cancelSkillRecording);
 
   yield* ipc.handle(getWslState);
   yield* ipc.handle(setWslBackendEnabled);

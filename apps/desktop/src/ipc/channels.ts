@@ -130,3 +130,9 @@ export const PREVIEW_RECORDING_INPUT_CHANNEL = "desktop:preview-recording-input"
 
 export const RECEIVE_PROVIDER_AUTH_CALLBACK_CHANNEL = "desktop:receive-provider-auth-callback";
 export const CANCEL_PROVIDER_AUTH_CALLBACK_CHANNEL = "desktop:cancel-provider-auth-callback";
+export const REQUEST_SKILL_RECORDING_PERMISSION_CHANNEL =
+  "desktop:request-skill-recording-permission";
+export const START_SKILL_RECORDING_CHANNEL = "desktop:start-skill-recording";
+export const STOP_SKILL_RECORDING_CHANNEL = "desktop:stop-skill-recording";
+export const CANCEL_SKILL_RECORDING_CHANNEL = "desktop:cancel-skill-recording";
+export const SKILL_RECORDING_CONTROL_CHANNEL = "desktop:skill-recording-control";
