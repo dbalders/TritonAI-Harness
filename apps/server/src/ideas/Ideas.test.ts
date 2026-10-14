@@ -581,6 +581,42 @@ it.layer(NodeServices.layer)("Ideas", (it) => {
     }),
   );
 
+  it.effect("keeps Not relevant permanent when a background run retired the card first", () =>
+    Effect.gen(function* () {
+      const { layer } = yield* makeHarness(() =>
+        Effect.succeed([
+          threadIdea({
+            ref: "starter:meeting-follow-up",
+            title: "Draft the follow-up email from your meeting notes",
+            action: "new-thread",
+          }),
+        ]),
+      );
+      yield* TestClock.setTime(NOW);
+      yield* Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const ideas = yield* Ideas.make;
+        const idea = (yield* ideas.list).ideas.find(
+          (entry) => entry.title === "I can turn meeting notes into a follow-up email",
+        );
+        assert.isDefined(idea);
+        // A background batch retires the card while it is still on the user's screen.
+        yield* sql`
+          UPDATE ideas SET status = 'expired', hidden_at = ${iso(NOW)}, updated_at = ${iso(NOW)}
+          WHERE idea_id = ${idea!.id}
+        `;
+        yield* ideas.feedback({ ideaId: idea!.id, kind: "rejected" });
+        yield* TestClock.adjust(20 * DAY);
+        yield* ideas.suggestMore;
+        yield* ideas.awaitIdle;
+        assert.notInclude(
+          titles(yield* ideas.list),
+          "Draft the follow-up email from your meeting notes",
+        );
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    }),
+  );
+
   it.effect("keeps a snoozed idea snoozed when asked to dismiss it", () =>
     Effect.gen(function* () {
       const { layer } = yield* makeHarness(() => Effect.succeed([]));

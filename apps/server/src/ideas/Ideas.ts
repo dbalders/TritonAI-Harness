@@ -259,7 +259,8 @@ export const make = Effect.gen(function* () {
 
   /**
    * Moves an idea from the state `row` was read in. Applies only if nothing else
-   * changed it since, so a background retirement is never silently undone.
+   * changed it since, so a background retirement is never silently undone, and
+   * says whether it applied.
    */
   const setStatus = (row: IdeaRow, status: string, nowIso: string, fields: Partial<IdeaRow>) =>
     sql`
@@ -271,7 +272,8 @@ export const make = Effect.gen(function* () {
         hidden_at = ${fields.hiddenAt ?? null},
         updated_at = ${nowIso}
       WHERE idea_id = ${row.ideaId} AND status = ${row.status} AND updated_at = ${row.updatedAt}
-    `;
+      RETURNING idea_id AS "ideaId"
+    `.pipe(Effect.map((updated) => updated.length > 0));
 
   const recordFeedback = (row: IdeaRow, kind: IdeaFeedbackKind, nowIso: string) =>
     sql`
@@ -1009,95 +1011,124 @@ export const make = Effect.gen(function* () {
 
   // One press at a time: each reads an idea and then changes it, and two clients
   // pressing at once must not overwrite each other.
+  /**
+   * Applies one press to the idea as just read. Returns false when the idea
+   * changed underneath it, such as a background run retiring it, so the caller
+   * reads it again and retries.
+   */
+  const applyFeedback = Effect.fn("ideas.applyFeedback")(function* (
+    input: IdeasFeedbackInput,
+    row: IdeaRow,
+    nowIso: string,
+  ) {
+    const visible = row.status === "active" || row.status === "opened";
+    switch (input.kind) {
+      case "opened": {
+        if (!visible) return true;
+        // Opening again must not erase the evidence that the first draft was sent.
+        if (row.openedAt !== null) {
+          const content = decodeContent(row.contentJson);
+          if (Option.isSome(content) && (yield* wasSent(row, content.value, row.openedAt))) {
+            yield* retire(row, "sent", nowIso);
+            return true;
+          }
+        }
+        // The first open stays the start of tracking; reopening restarts only the timeout.
+        if (!(yield* setStatus(row, "opened", nowIso, { openedAt: row.openedAt ?? nowIso }))) {
+          return false;
+        }
+        // Each client keeps its own draft; sending any of them uses the idea. One statement
+        // appends, so two clients opening at once both keep their drafts.
+        if (input.draftThreadId !== undefined) {
+          yield* sql`
+            UPDATE ideas
+            SET draft_thread_ids_json =
+              json_insert(COALESCE(draft_thread_ids_json, '[]'), '$[#]', ${input.draftThreadId})
+            WHERE idea_id = ${row.ideaId}
+              AND NOT EXISTS (
+                SELECT 1 FROM json_each(COALESCE(draft_thread_ids_json, '[]'))
+                WHERE value = ${input.draftThreadId}
+              )
+          `;
+        }
+        if (row.status === "active") yield* recordFeedback(row, "opened", nowIso);
+        return true;
+      }
+      case "rejected": {
+        // Not relevant means never again, even if the card was retired in the meantime.
+        if (row.status === "rejected" || row.status === "sent" || row.status === "snoozed") {
+          return true;
+        }
+        const applied = yield* setStatus(row, "rejected", nowIso, {
+          previousStatus: visible ? row.status : null,
+          hiddenAt: nowIso,
+        });
+        if (applied) yield* recordFeedback(row, "rejected", nowIso);
+        return applied;
+      }
+      case "dismissed":
+      case "less-like-this": {
+        // A card already out of view stays hidden; Less like this still counts toward the mix.
+        if (!visible) {
+          if (input.kind === "less-like-this") yield* recordFeedback(row, input.kind, nowIso);
+          return true;
+        }
+        const applied = yield* setStatus(row, "dismissed", nowIso, {
+          previousStatus: row.status,
+          hiddenAt: nowIso,
+        });
+        if (applied) yield* recordFeedback(row, input.kind, nowIso);
+        return applied;
+      }
+      case "snoozed": {
+        if (!visible) return true;
+        if (input.snoozedUntil === undefined || input.snoozedUntil <= nowIso) {
+          return yield* new IdeasError({ message: "Choose a time in the future." });
+        }
+        const applied = yield* setStatus(row, "snoozed", nowIso, {
+          previousStatus: row.status,
+          snoozedUntil: input.snoozedUntil,
+        });
+        if (applied) yield* recordFeedback(row, "snoozed", nowIso);
+        return applied;
+      }
+      case "restored": {
+        if (row.status !== "dismissed" && row.status !== "rejected" && row.status !== "snoozed") {
+          return true;
+        }
+        if (!(yield* setStatus(row, row.previousStatus ?? "active", nowIso, {}))) return false;
+        // Undo takes back the press, so it no longer moves the mix of sections.
+        yield* sql`
+          DELETE FROM idea_feedback WHERE rowid = (
+            SELECT rowid FROM idea_feedback
+            WHERE idea_id = ${row.ideaId}
+              AND kind IN ('dismissed', 'rejected', 'less-like-this', 'snoozed')
+            ORDER BY created_at DESC LIMIT 1
+          )
+        `;
+        return true;
+      }
+    }
+  });
+
+  // One press at a time: each reads an idea and then changes it, and two clients
+  // pressing at once must not overwrite each other. A background change between the
+  // read and the write sends the press around again on the idea as it now is.
   const feedback = (input: IdeasFeedbackInput) =>
     feedbackLock
       .withPermits(1)(
         Effect.gen(function* () {
-          const nowMs = yield* Clock.currentTimeMillis;
-          const nowIso = toIso(nowMs);
-          const [row] = yield* sql<IdeaRow>`
-        SELECT ${ideaColumns(sql)} FROM ideas WHERE idea_id = ${input.ideaId}
-      `;
-          if (!row) {
-            return yield* new IdeasError({ message: "That idea is no longer available." });
-          }
-          const visible = row.status === "active" || row.status === "opened";
-          switch (input.kind) {
-            case "opened": {
-              if (!visible) break;
-              // Opening again must not erase the evidence that the first draft was sent.
-              if (row.openedAt !== null) {
-                const content = decodeContent(row.contentJson);
-                if (Option.isSome(content) && (yield* wasSent(row, content.value, row.openedAt))) {
-                  yield* retire(row, "sent", nowIso);
-                  break;
-                }
-              }
-              // The first open stays the start of tracking; reopening restarts only the timeout.
-              yield* setStatus(row, "opened", nowIso, { openedAt: row.openedAt ?? nowIso });
-              // Each client keeps its own draft; sending any of them uses the idea. One statement
-              // appends, so two clients opening at once both keep their drafts.
-              if (input.draftThreadId !== undefined) {
-                yield* sql`
-              UPDATE ideas
-              SET draft_thread_ids_json =
-                json_insert(COALESCE(draft_thread_ids_json, '[]'), '$[#]', ${input.draftThreadId})
-              WHERE idea_id = ${row.ideaId}
-                AND NOT EXISTS (
-                  SELECT 1 FROM json_each(COALESCE(draft_thread_ids_json, '[]'))
-                  WHERE value = ${input.draftThreadId}
-                )
+          const nowIso = toIso(yield* Clock.currentTimeMillis);
+          for (let attempt = 0; attempt < 3; attempt++) {
+            const [row] = yield* sql<IdeaRow>`
+              SELECT ${ideaColumns(sql)} FROM ideas WHERE idea_id = ${input.ideaId}
             `;
-              }
-              if (row.status === "active") yield* recordFeedback(row, "opened", nowIso);
-              break;
+            if (!row) {
+              return yield* new IdeasError({ message: "That idea is no longer available." });
             }
-            case "dismissed":
-            case "rejected":
-            case "less-like-this": {
-              // A snoozed card is out of view; it can only be unsnoozed.
-              if (!visible) break;
-              yield* setStatus(row, input.kind === "rejected" ? "rejected" : "dismissed", nowIso, {
-                previousStatus: row.status,
-                hiddenAt: nowIso,
-              });
-              yield* recordFeedback(row, input.kind, nowIso);
-              break;
-            }
-            case "snoozed": {
-              if (!visible) break;
-              if (input.snoozedUntil === undefined || input.snoozedUntil <= nowIso) {
-                return yield* new IdeasError({ message: "Choose a time in the future." });
-              }
-              yield* setStatus(row, "snoozed", nowIso, {
-                previousStatus: row.status,
-                snoozedUntil: input.snoozedUntil,
-              });
-              yield* recordFeedback(row, "snoozed", nowIso);
-              break;
-            }
-            case "restored": {
-              if (
-                row.status !== "dismissed" &&
-                row.status !== "rejected" &&
-                row.status !== "snoozed"
-              ) {
-                break;
-              }
-              yield* setStatus(row, row.previousStatus ?? "active", nowIso, {});
-              // Undo takes back the press, so it no longer moves the mix of sections.
-              yield* sql`
-            DELETE FROM idea_feedback WHERE rowid = (
-              SELECT rowid FROM idea_feedback
-              WHERE idea_id = ${row.ideaId}
-                AND kind IN ('dismissed', 'rejected', 'less-like-this', 'snoozed')
-              ORDER BY created_at DESC LIMIT 1
-            )
-          `;
-              break;
-            }
+            if (yield* applyFeedback(input, row, nowIso)) return yield* snapshot;
           }
-          return yield* snapshot;
+          return yield* new IdeasError({ message: "That idea changed. Try again." });
         }),
       )
       .pipe(
