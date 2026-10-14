@@ -617,6 +617,42 @@ it.layer(NodeServices.layer)("Ideas", (it) => {
     }),
   );
 
+  it.effect("counts a send from a client whose clock is behind the server", () =>
+    Effect.gen(function* () {
+      const { layer } = yield* makeHarness(() => Effect.succeed([threadIdea()]));
+      yield* TestClock.setTime(NOW);
+      yield* Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* seedWork;
+        const ideas = yield* Ideas.make;
+        yield* ideas.suggestMore;
+        yield* ideas.awaitIdle;
+        const snapshot = yield* ideas.list;
+        const starter = snapshot.ideas.find((entry) => entry.section === "starter");
+        const resume = snapshot.ideas.find((entry) => entry.section === "continue");
+        assert.isDefined(starter);
+        assert.isDefined(resume);
+        yield* ideas.feedback({
+          ideaId: starter!.id,
+          kind: "opened",
+          draftThreadId: ThreadId.make("skewed-draft"),
+        });
+        yield* ideas.feedback({ ideaId: resume!.id, kind: "opened" });
+        // Both messages carry a time from before the open, as a client running behind would.
+        const early = iso(NOW - 5 * 60_000);
+        yield* sql`
+          INSERT INTO projection_thread_messages (message_id, thread_id, role, text, is_streaming, created_at, updated_at)
+          VALUES
+            ('m-skew-1', 'skewed-draft', 'user', 'Sent from a slow clock.', 0, ${early}, ${early}),
+            ('m-skew-2', 'thread-1', 'user', 'Continuing from a slow clock.', 0, ${early}, ${early})
+        `;
+        const after = yield* ideas.list;
+        assert.isUndefined(after.ideas.find((entry) => entry.id === starter!.id));
+        assert.isUndefined(after.ideas.find((entry) => entry.id === resume!.id));
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    }),
+  );
+
   it.effect("keeps a snoozed idea snoozed when asked to dismiss it", () =>
     Effect.gen(function* () {
       const { layer } = yield* makeHarness(() => Effect.succeed([]));

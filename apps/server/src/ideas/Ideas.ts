@@ -154,6 +154,7 @@ interface IdeaRow {
   readonly updatedAt: string;
   readonly openedAt: string | null;
   readonly draftThreadIdsJson: string | null;
+  readonly openedMessageCount: number | null;
   readonly snoozedUntil: string | null;
   readonly hiddenAt: string | null;
 }
@@ -224,6 +225,7 @@ const ideaColumns = (sql: SqlClient.SqlClient) => sql`
   updated_at AS "updatedAt",
   opened_at AS "openedAt",
   draft_thread_ids_json AS "draftThreadIdsJson",
+  opened_message_count AS "openedMessageCount",
   snoozed_until AS "snoozedUntil",
   hidden_at AS "hiddenAt"
 `;
@@ -289,20 +291,33 @@ export const make = Effect.gen(function* () {
     `;
 
   /**
-   * Whether a message was sent from an opened idea's draft: any user message in
-   * the idea's thread, or in a thread one of its drafts becomes. Without a known
-   * draft thread, a message containing the prompt's fixed text counts.
+   * Whether a message was sent from an opened idea's draft, without trusting
+   * message times, which can come from a client with a skewed clock:
+   * - a draft thread recorded for the idea counts once it has any user message;
+   * - an existing thread counts once it has more user messages than when opened.
+   * Without either, a message after the open containing the prompt's fixed text counts.
    */
   const wasSent = (row: IdeaRow, content: IdeaContent, openedAt: string) => {
-    const threadIds =
-      content.action.kind === "resume-thread" ? [content.action.threadId] : draftThreadIds(row);
+    if (content.action.kind === "resume-thread") {
+      if (row.openedMessageCount !== null) {
+        return userMessageCount(content.action.threadId).pipe(
+          Effect.map((count) => count > (row.openedMessageCount ?? 0)),
+        );
+      }
+      return sql<{ readonly found: number }>`
+        SELECT EXISTS (
+          SELECT 1 FROM projection_thread_messages
+          WHERE thread_id = ${content.action.threadId} AND role = 'user' AND created_at > ${openedAt}
+        ) AS "found"
+      `.pipe(Effect.map(([found]) => Boolean(found?.found)));
+    }
+    const threadIds = draftThreadIds(row);
     if (threadIds.length > 0) {
       return sql<{ readonly found: number }>`
         SELECT EXISTS (
           SELECT 1 FROM projection_thread_messages
           WHERE thread_id IN (SELECT value FROM json_each(${encodeThreadIds(threadIds)}))
             AND role = 'user'
-            AND created_at > ${openedAt}
         ) AS "found"
       `.pipe(Effect.map(([found]) => Boolean(found?.found)));
     }
@@ -316,6 +331,12 @@ export const make = Effect.gen(function* () {
       ) AS "found"
     `.pipe(Effect.map(([found]) => Boolean(found?.found)));
   };
+
+  const userMessageCount = (threadId: string) =>
+    sql<{ readonly count: number }>`
+      SELECT COUNT(*) AS "count" FROM projection_thread_messages
+      WHERE thread_id = ${threadId} AND role = 'user'
+    `.pipe(Effect.map(([row]) => row?.count ?? 0));
 
   const threadIsGone = (threadId: string) =>
     sql<{ readonly gone: number }>`
@@ -1036,6 +1057,19 @@ export const make = Effect.gen(function* () {
         // The first open stays the start of tracking; reopening restarts only the timeout.
         if (!(yield* setStatus(row, "opened", nowIso, { openedAt: row.openedAt ?? nowIso }))) {
           return false;
+        }
+        // The thread's size at the first open is the baseline a later send is measured against.
+        const content = decodeContent(row.contentJson);
+        if (
+          row.openedMessageCount === null &&
+          Option.isSome(content) &&
+          content.value.action.kind === "resume-thread"
+        ) {
+          const count = yield* userMessageCount(content.value.action.threadId);
+          yield* sql`
+            UPDATE ideas SET opened_message_count = ${count}
+            WHERE idea_id = ${row.ideaId} AND opened_message_count IS NULL
+          `;
         }
         // Each client keeps its own draft; sending any of them uses the idea. One statement
         // appends, so two clients opening at once both keep their drafts.

@@ -179,6 +179,13 @@ export function IdeasPage() {
   const handleOpen = useCallback(
     async (idea: Idea) => {
       setActionError(null);
+      // An existing thread's message count is the baseline for noticing the send, so the
+      // open is recorded before its composer can send anything.
+      if (idea.action.kind === "resume-thread") {
+        await runFeedback(idea, "opened");
+        await openDraft(idea);
+        return;
+      }
       const opened = await openDraft(idea);
       if (!opened) {
         setActionError("Add a project first, then open this idea.");
@@ -433,33 +440,35 @@ function SnoozedIdeas({
   onWake: (idea: Idea) => void;
 }) {
   return (
-    <Collapsible className="mx-3">
-      <CollapsibleTrigger className="group flex items-center gap-1 text-sm font-semibold text-foreground">
-        <ChevronRightIcon className="size-4 transition-transform group-data-[panel-open]:rotate-90" />
-        Snoozed ({ideas.length})
-      </CollapsibleTrigger>
-      <CollapsiblePanel>
-        <ul className="mt-2 flex flex-col gap-2">
-          {ideas.map((idea) => (
-            <li key={idea.id} className="flex items-center gap-3">
-              <span aria-hidden className="w-7 shrink-0 text-center text-lg leading-none">
-                {idea.icon}
-              </span>
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm text-foreground">{idea.title}</p>
-                {idea.snoozedUntil ? (
-                  <p className="text-xs text-muted-foreground">
-                    Back {snoozeWakeDescription(idea.snoozedUntil, new Date(), timestampFormat)}
-                  </p>
-                ) : null}
-              </div>
-              <Button size="xs" variant="ghost" onClick={() => onWake(idea)}>
-                Unsnooze
-              </Button>
-            </li>
-          ))}
-        </ul>
-      </CollapsiblePanel>
-    </Collapsible>
+    <div className="mx-3">
+      <Collapsible>
+        <CollapsibleTrigger className="group flex items-center gap-1 text-sm font-semibold text-foreground">
+          <ChevronRightIcon className="size-4 transition-transform group-data-[panel-open]:rotate-90" />
+          Snoozed ({ideas.length})
+        </CollapsibleTrigger>
+        <CollapsiblePanel>
+          <ul className="mt-2 flex flex-col gap-2">
+            {ideas.map((idea) => (
+              <li key={idea.id} className="flex items-center gap-3">
+                <span aria-hidden className="w-7 shrink-0 text-center text-lg leading-none">
+                  {idea.icon}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm text-foreground">{idea.title}</p>
+                  {idea.snoozedUntil ? (
+                    <p className="text-xs text-muted-foreground">
+                      Back {snoozeWakeDescription(idea.snoozedUntil, new Date(), timestampFormat)}
+                    </p>
+                  ) : null}
+                </div>
+                <Button size="xs" variant="ghost" onClick={() => onWake(idea)}>
+                  Unsnooze
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </CollapsiblePanel>
+      </Collapsible>
+    </div>
   );
 }
