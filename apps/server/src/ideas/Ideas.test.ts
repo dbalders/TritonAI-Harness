@@ -452,6 +452,47 @@ it.layer(NodeServices.layer)("Ideas", (it) => {
     }),
   );
 
+  it.effect("never brings back an idea whose draft was sent after its card was dismissed", () =>
+    Effect.gen(function* () {
+      const { layer } = yield* makeHarness(() =>
+        Effect.succeed([
+          threadIdea({
+            ref: "starter:meeting-follow-up",
+            title: "Draft the follow-up email from your meeting notes",
+            action: "new-thread",
+          }),
+        ]),
+      );
+      yield* TestClock.setTime(NOW);
+      yield* Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const ideas = yield* Ideas.make;
+        const idea = (yield* ideas.list).ideas.find(
+          (entry) => entry.title === "I can turn meeting notes into a follow-up email",
+        );
+        assert.isDefined(idea);
+        yield* ideas.feedback({
+          ideaId: idea!.id,
+          kind: "opened",
+          draftThreadId: ThreadId.make("draft-thread-3"),
+        });
+        yield* ideas.feedback({ ideaId: idea!.id, kind: "dismissed" });
+        yield* TestClock.adjust(HOUR);
+        yield* sql`
+          INSERT INTO projection_thread_messages (message_id, thread_id, role, text, is_streaming, created_at, updated_at)
+          VALUES ('m-late', 'draft-thread-3', 'user', 'Here are my notes.', 0, ${iso(NOW + HOUR)}, ${iso(NOW + HOUR)})
+        `;
+        yield* TestClock.adjust(15 * DAY);
+        yield* ideas.suggestMore;
+        yield* ideas.awaitIdle;
+        assert.notInclude(
+          titles(yield* ideas.list),
+          "Draft the follow-up email from your meeting notes",
+        );
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    }),
+  );
+
   it.effect("keeps a snoozed idea snoozed when asked to dismiss it", () =>
     Effect.gen(function* () {
       const { layer } = yield* makeHarness(() => Effect.succeed([]));

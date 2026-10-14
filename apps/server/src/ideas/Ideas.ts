@@ -657,6 +657,16 @@ export const make = Effect.gen(function* () {
     for (const row of rows) {
       if (row.status === "dismissed" || row.status === "expired") {
         const hiddenAt = row.hiddenAt ?? row.updatedAt;
+        // A draft opened before the card was hidden may have been sent since. Check before its
+        // cooldown lets the idea return, so a used idea stays used.
+        if (row.openedAt !== null && hiddenAt < cooldownStart) {
+          const content = decodeContent(row.contentJson);
+          if (Option.isSome(content) && (yield* wasSent(row, content.value, row.openedAt))) {
+            yield* retire(row, "sent", toIso(nowMs));
+            permanent.add(row.ideaKey);
+            continue;
+          }
+        }
         const previous = cooling.get(row.ideaKey);
         if (previous === undefined || hiddenAt > previous) cooling.set(row.ideaKey, hiddenAt);
       } else {
