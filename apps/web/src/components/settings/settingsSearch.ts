@@ -870,6 +870,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/tritonai-bot",
     searchTerms: ["allow this computer run approved harness tasks bot pairing offline warning"],
   },
+  {
+    id: "tritonai-bot-developer",
+    title: "TritonAI Bot diagnostics",
+    to: "/settings/tritonai-bot",
+    searchTerms: [
+      "developer debug diagnostics decision inbox memory routines file inbox panels bot",
+    ],
+  },
 ] as const satisfies ReadonlyArray<SettingsSearchItem>;
 
 export type SettingsSearchItemId = (typeof SETTINGS_SEARCH_ITEMS)[number]["id"];

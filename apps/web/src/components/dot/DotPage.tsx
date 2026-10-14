@@ -1,16 +1,38 @@
 import { Link, useNavigate } from "@tanstack/react-router";
-import { BotIcon, SendIcon, PaperclipIcon } from "lucide-react";
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  ArrowUpIcon,
+  BotIcon,
+  LogOutIcon,
+  PaperclipIcon,
+  PauseIcon,
+  PlayIcon,
+  Settings2Icon,
+  ThumbsDownIcon,
+  ThumbsUpIcon,
+  XIcon,
+} from "lucide-react";
+import {
+  type ComponentProps,
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import { isElectron } from "../../env";
 import { ensureLocalApi } from "../../localApi";
 import { cn, randomUUID } from "../../lib/utils";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
-import { Input } from "../ui/input";
 import { SidebarInset } from "../ui/sidebar";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import ChatMarkdown from "../ChatMarkdown";
+import { ComposerSurface } from "../chat/ComposerSurface";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
-import { clearBotSessions, useBotServiceUrl } from "./botService";
+import { remarkBotImagesAsLinks } from "./botMarkdown";
+import { clearBotSessions, useBotDiagnostics, useBotServiceUrl } from "./botService";
 import { BotResultCard } from "./BotResultCard";
 import { BotMemoryPanel, BotMemoryEditor } from "./BotMemoryPanel";
 import { BotResponsibilitiesPanel } from "./BotResponsibilitiesPanel";
@@ -57,6 +79,7 @@ import {
 } from "./dotClient";
 
 const SIGNUPS_CLOSED = "TritonAI Bot isn't accepting new users right now.";
+const BOT_REMARK_PLUGINS = [remarkBotImagesAsLinks];
 
 /**
  * Keeps the newer of two copies of each versioned record. Reads are ordered by request, but an older copy must never
@@ -103,6 +126,7 @@ export function DotPage() {
 function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
   const client = useMemo(() => new DotClient(serviceUrl), [serviceUrl]);
   const navigate = useNavigate();
+  const diagnostics = useBotDiagnostics();
   const [session, setSession] = useState<DotSession | null>(() => {
     clearBotSessions(sessionStorage, serviceUrl);
     return readDotSession(sessionStorage, serviceUrl);
@@ -131,7 +155,7 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
   // The responsibility the next message explicitly replies to, chosen from Responsibilities.
   const [replyTarget, setReplyTarget] = useState<{ id: string; title: string } | null>(null);
   const [replyStatus, setReplyStatus] = useState<string | null>(null);
-  const composerInput = useRef<HTMLInputElement>(null);
+  const composerInput = useRef<HTMLTextAreaElement>(null);
   const acceptedRunIds = useRef(new Set<string>());
   const stateRequestSequence = useRef(0);
   const latestSnapshot = useRef<DotState | null>(null);
@@ -930,6 +954,14 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
     state?.scheduledPrompts !== undefined ||
     state?.capabilities !== undefined ||
     Boolean(state?.capabilitiesError);
+  // The chat is the product. Records and controls stay available beside it only with the developer setting.
+  const showDiagnostics =
+    diagnostics && (hasPanels || state?.dotMemory !== undefined || state?.quality !== undefined);
+  const paused = state?.user.paused === true;
+  const canSend =
+    Boolean(draft.trim() || attachments.length) && !sending && !uploading && connected;
+  const empty =
+    runs.length === 0 && !state?.approvals.length && !(diagnostics && state?.tasks.length);
 
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none isolate">
@@ -942,201 +974,202 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
             <div className="min-w-0">
               <h1 className="truncate text-sm font-semibold text-foreground">TritonAI Bot</h1>
               <p className="truncate text-xs text-muted-foreground">
-                {state?.user.email ?? session?.email ?? "Your campus bot"}
+                {!session
+                  ? "Your campus bot"
+                  : state?.microsoft?.available === false
+                    ? (state.user.email ?? session.email)
+                    : "Synced with Teams"}
               </p>
             </div>
           </div>
-          <Badge variant={connected ? "success" : "warning"} size="sm" className="ms-auto shrink-0">
-            {connected
-              ? state?.user.paused
-                ? "Paused"
-                : "Connected"
-              : session
-                ? "Connecting…"
-                : "Sign in"}
-          </Badge>
-          {session && state?.microsoft?.available !== false && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                void ensureLocalApi()
-                  .shell.openExternal(`${serviceUrl}/connections`)
-                  .catch(reportError);
-              }}
-            >
-              Microsoft calendar
-            </Button>
+          {session && (!connected || paused) && (
+            <Badge variant="warning" size="sm" className="shrink-0">
+              {paused ? "Paused" : "Connecting…"}
+            </Badge>
           )}
           {session && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                // Forget the session locally first; server sign-out is best effort (older bots lack it).
-                const current = session;
-                saveSession(null);
-                void client.signOut(current).catch(() => undefined);
-              }}
-            >
-              Disconnect
-            </Button>
+            <div className="flex shrink-0 items-center gap-0.5">
+              <IconAction
+                variant="ghost"
+                size="icon-sm"
+                label={paused ? "Resume bot" : "Pause bot"}
+                disabled={!state || !connected || busyPause}
+                onClick={() => state && togglePause(!paused)}
+              >
+                {paused ? <PlayIcon className="size-4" /> : <PauseIcon className="size-4" />}
+              </IconAction>
+              <IconAction
+                variant="ghost"
+                size="icon-sm"
+                label="Bot settings"
+                onClick={() => void navigate({ to: "/settings/tritonai-bot" })}
+              >
+                <Settings2Icon className="size-4" />
+              </IconAction>
+              <IconAction
+                variant="ghost"
+                size="icon-sm"
+                label="Sign out of TritonAI Bot"
+                onClick={() => {
+                  // Forget the session locally first; server sign-out is best effort (older bots lack it).
+                  const current = session;
+                  saveSession(null);
+                  void client.signOut(current).catch(() => undefined);
+                }}
+              >
+                <LogOutIcon className="size-4" />
+              </IconAction>
+            </div>
           )}
         </WorkspacePageHeader>
 
-        <div
-          className={cn(
-            "mx-auto flex min-h-0 w-full flex-1 flex-col gap-4 px-5 pb-4 sm:px-6",
-            hasPanels ? "max-w-6xl" : "max-w-3xl",
-          )}
-        >
-          {!session ? (
-            <div className="flex flex-1 flex-col items-center justify-center gap-4 text-center">
-              <h2 className="text-lg font-semibold">Connect to your TritonAI Bot</h2>
-              <p className="max-w-sm text-sm text-muted-foreground">
-                Sign in with your UC San Diego account to get your own personal bot: chat, review
-                approvals, and keep your work moving.
-              </p>
-              {connection ? (
-                <>
-                  {connection.redirectUri ? null : (
-                    <>
-                      <p className="text-sm">Confirm this code in the sign-in page:</p>
-                      <p className="font-mono text-2xl tracking-widest">{connection.userCode}</p>
-                    </>
-                  )}
-                  <p role="status" className="text-sm text-muted-foreground">
-                    {connection.redirectUri
-                      ? "Finish signing in with UC San Diego in your browser…"
-                      : "Waiting for you to connect…"}
-                  </p>
-                  <Button
-                    variant="outline"
-                    onClick={() =>
-                      void ensureLocalApi().shell.openExternal(connection.verificationUrl)
-                    }
-                  >
-                    Open sign-in page
-                  </Button>
-                  <Button variant="ghost" onClick={() => setConnection(null)}>
-                    Cancel
-                  </Button>
-                </>
-              ) : (
-                <Button onClick={() => void signIn()} disabled={connecting}>
-                  {connecting ? "Opening sign-in…" : "Sign in with UC San Diego"}
-                </Button>
-              )}
-            </div>
-          ) : (
-            <>
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-xs text-muted-foreground">
-                  {state?.microsoft?.available === false
-                    ? "Your ongoing conversation"
-                    : "Your ongoing conversation · synced with Teams"}
-                </span>
+        {!session ? (
+          <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col items-center justify-center gap-4 px-5 text-center">
+            <h2 className="text-lg font-semibold">Connect to your TritonAI Bot</h2>
+            <p className="max-w-sm text-sm text-muted-foreground">
+              Sign in with your UC San Diego account to get your own personal bot: chat, review
+              approvals, and keep your work moving.
+            </p>
+            {connection ? (
+              <>
+                {connection.redirectUri ? null : (
+                  <>
+                    <p className="text-sm">Confirm this code in the sign-in page:</p>
+                    <p className="font-mono text-2xl tracking-widest">{connection.userCode}</p>
+                  </>
+                )}
+                <p role="status" className="text-sm text-muted-foreground">
+                  {connection.redirectUri
+                    ? "Finish signing in with UC San Diego in your browser…"
+                    : "Waiting for you to connect…"}
+                </p>
                 <Button
                   variant="outline"
-                  size="sm"
-                  disabled={!state || !connected || busyPause}
-                  onClick={() => state && togglePause(!state.user.paused)}
+                  onClick={() =>
+                    void ensureLocalApi().shell.openExternal(connection.verificationUrl)
+                  }
                 >
-                  {state?.user.paused ? "Resume bot" : "Pause bot"}
+                  Open sign-in page
                 </Button>
-              </div>
-              {state?.microsoft?.available === false && (
-                <p role="status" className="text-xs text-muted-foreground">
-                  {state.microsoft.message ??
-                    "Outlook and calendar aren't available for your account."}
-                </p>
-              )}
-              {state?.user.paused && (
-                <p role="status" className="text-sm text-muted-foreground">
-                  Your bot is paused. Nothing new starts until you resume it. Reminders, monitors,
-                  routines and assignments remain saved. Work already running cannot be recalled.
-                </p>
-              )}
-              <BotMicrosoftBanner
-                microsoft={state?.microsoft}
-                connectionsUrl={`${serviceUrl}/connections`}
-              />
-              <div className="flex min-h-0 flex-1 flex-col gap-4 lg:flex-row">
-                <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-4">
-                  <div className="min-h-0 flex-1 overflow-y-auto">
-                    {runs.length === 0 && !state?.tasks.length ? (
-                      <div className="flex h-full min-h-40 items-center justify-center text-sm text-muted-foreground">
-                        {connected ? "Say hello to your bot." : "Connecting to your bot…"}
-                      </div>
-                    ) : (
-                      <div className="flex flex-col gap-3 py-2">
-                        {runs.map((run) => (
-                          <Fragment key={run.runId}>
-                            {run.event.kind === "message" && (
-                              <div className="flex justify-end">
-                                <div className="max-w-[85%] rounded-2xl bg-primary px-4 py-2.5 text-sm leading-relaxed text-primary-foreground">
-                                  {run.event.text}
-                                  {run.event.attachments?.length ? (
-                                    <div className="mt-2 flex flex-wrap gap-2">
-                                      {run.event.attachments.map((attachment) => (
-                                        <Button
-                                          key={attachment.attachmentId}
-                                          variant="secondary"
-                                          size="sm"
-                                          onClick={() =>
-                                            void downloadAttachment(attachment.attachmentId).catch(
-                                              (cause) => reportError(cause, session.ownerToken),
-                                            )
-                                          }
-                                        >
-                                          {attachment.name}
-                                        </Button>
-                                      ))}
-                                    </div>
-                                  ) : (
-                                    Boolean(run.event.attachmentIds?.length) && (
-                                      <p className="mt-1 text-xs">
-                                        {run.event.attachmentIds?.length} attached{" "}
-                                        {run.event.attachmentIds?.length === 1 ? "file" : "files"}
-                                      </p>
-                                    )
-                                  )}
-                                </div>
+                <Button variant="ghost" onClick={() => setConnection(null)}>
+                  Cancel
+                </Button>
+              </>
+            ) : (
+              <Button onClick={() => void signIn()} disabled={connecting}>
+                {connecting ? "Opening sign-in…" : "Sign in with UC San Diego"}
+              </Button>
+            )}
+            {error && (
+              <p role="alert" className="text-sm text-destructive">
+                {error}
+              </p>
+            )}
+          </div>
+        ) : (
+          <div className="flex min-h-0 flex-1">
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+              <div className="min-h-0 flex-1 overflow-y-auto">
+                <div className="mx-auto flex w-full max-w-(--chat-max-width) flex-col gap-5 px-5 pt-4 pb-6 sm:px-6">
+                  {empty ? (
+                    <div className="flex min-h-[50vh] flex-col items-center justify-center gap-2 text-center">
+                      <p className="text-lg font-medium">
+                        {connected ? "What can I help with?" : "Connecting to your bot…"}
+                      </p>
+                      {connected && (
+                        <p className="max-w-sm text-sm text-muted-foreground">
+                          {state?.microsoft?.available === false
+                            ? (state.microsoft.message ??
+                              "Ask a question or tell me something to remember. Outlook and calendar aren't available for your account.")
+                            : "Ask about your day, email or files, or tell me something to remember. Type /help to see what I can do."}
+                        </p>
+                      )}
+                    </div>
+                  ) : (
+                    <>
+                      {runs.map((run) => (
+                        <Fragment key={run.runId}>
+                          {run.event.kind === "message" && (
+                            <div className="flex justify-end">
+                              <div className="max-w-[80%] rounded-2xl bg-message p-3 text-sm leading-relaxed whitespace-pre-wrap break-words text-message-foreground">
+                                {run.event.text}
+                                {run.event.attachments?.length ? (
+                                  <div className="mt-2 flex flex-wrap gap-2">
+                                    {run.event.attachments.map((attachment) => (
+                                      <Button
+                                        key={attachment.attachmentId}
+                                        variant="outline"
+                                        size="xs"
+                                        onClick={() =>
+                                          void downloadAttachment(attachment.attachmentId).catch(
+                                            (cause) => reportError(cause, session.ownerToken),
+                                          )
+                                        }
+                                      >
+                                        <PaperclipIcon className="size-3" />
+                                        {attachment.name}
+                                      </Button>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  Boolean(run.event.attachmentIds?.length) && (
+                                    <p className="mt-1 text-xs opacity-80">
+                                      {run.event.attachmentIds?.length} attached{" "}
+                                      {run.event.attachmentIds?.length === 1 ? "file" : "files"}
+                                    </p>
+                                  )
+                                )}
                               </div>
-                            )}
-                            <div className="flex justify-start">
-                              <div
+                            </div>
+                          )}
+                          <div className="min-w-0 px-1 py-0.5 text-sm">
+                            <span id={`bot-run-${run.runId}`} tabIndex={-1} />
+                            {run.result?.summary ? (
+                              <ChatMarkdown
+                                text={run.result.summary}
+                                cwd={undefined}
+                                lineBreaks
+                                extraRemarkPlugins={BOT_REMARK_PLUGINS}
+                              />
+                            ) : (
+                              <p
                                 className={cn(
-                                  "max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed whitespace-pre-wrap",
-                                  ["failed", "uncertain"].includes(run.status)
-                                    ? "bg-destructive/10 text-destructive-foreground"
-                                    : "bg-muted text-foreground",
+                                  "leading-relaxed whitespace-pre-wrap break-words",
+                                  run.error || ["failed", "uncertain"].includes(run.status)
+                                    ? "text-destructive"
+                                    : "text-muted-foreground",
                                 )}
                               >
-                                <span id={`bot-run-${run.runId}`} tabIndex={-1} />
-                                {run.result?.summary ??
-                                  run.error ??
+                                {run.error ??
                                   (isPendingDotRun(run)
                                     ? run.event.kind === "responsibility"
                                       ? "Checking your followed task…"
-                                      : "Message pending"
+                                      : "Thinking…"
                                     : runStatusLabel(run.status))}
-                                <BotRunStatus run={run} />
-                                {run.result?.summary &&
-                                  !isPendingDotRun(run) &&
-                                  run.status !== "completed" && (
-                                    <p className="mt-2 text-xs text-muted-foreground">
-                                      {runStatusLabel(run.status)}
-                                    </p>
+                              </p>
+                            )}
+                            <BotRunStatus run={run} />
+                            {run.result?.summary &&
+                              !isPendingDotRun(run) &&
+                              run.status !== "completed" && (
+                                <p
+                                  className={cn(
+                                    "mt-1 text-xs",
+                                    ["failed", "uncertain"].includes(run.status)
+                                      ? "text-destructive"
+                                      : "text-muted-foreground",
                                   )}
-                              </div>
-                            </div>
+                                >
+                                  {runStatusLabel(run.status)}
+                                </p>
+                              )}
                             {state?.feedback !== undefined && isRateableRun(run) && (
                               <RunFeedback
                                 feedback={feedbackByRun.get(run.runId)}
                                 disabled={busyFeedback !== null || !connected}
                                 onRate={(rating, reasons) => void rate(run.runId, rating, reasons)}
                                 onSavePreference={
+                                  diagnostics &&
                                   state.enhancements?.memoryCorrection &&
                                   run.status === "completed" &&
                                   feedbackByRun.get(run.runId)?.rating
@@ -1145,16 +1178,18 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
                                 }
                               />
                             )}
-                            {preferenceRun === run.runId && (
-                              <BotMemoryEditor
-                                sourceRunId={run.runId}
-                                onSave={memoryEdit}
-                                onCancel={() => setPreferenceRun(null)}
-                              />
-                            )}
-                          </Fragment>
-                        ))}
-                        {state?.tasks.map((task) => (
+                          </div>
+                          {preferenceRun === run.runId && (
+                            <BotMemoryEditor
+                              sourceRunId={run.runId}
+                              onSave={memoryEdit}
+                              onCancel={() => setPreferenceRun(null)}
+                            />
+                          )}
+                        </Fragment>
+                      ))}
+                      {diagnostics &&
+                        state?.tasks.map((task) => (
                           <details
                             key={task.taskId}
                             id={`bot-task-${task.taskId}`}
@@ -1186,24 +1221,18 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
                             </div>
                           </details>
                         ))}
-                        <div ref={chatEndRef} />
-                      </div>
-                    )}
-                  </div>
-                  {(state?.approvals.length ?? 0) > 0 && (
-                    <section
-                      aria-label="Pending approvals"
-                      className="max-h-56 shrink-0 overflow-y-auto rounded-xl border p-3"
-                    >
-                      <h2 className="mb-2 text-sm font-semibold">Needs your approval</h2>
                       {state?.approvals.map((approval) => (
-                        <div
+                        <section
                           key={approval.approvalId}
                           id={`bot-approval-${approval.approvalId}`}
                           tabIndex={-1}
-                          className="mb-3 space-y-2 text-sm"
+                          aria-label="Pending approval"
+                          className="space-y-3 rounded-2xl border bg-card p-4 text-sm"
                         >
-                          <p>{approval.summary}</p>
+                          <h2 className="text-xs font-medium text-muted-foreground">
+                            Needs your approval
+                          </h2>
+                          <p className="leading-relaxed">{approval.summary}</p>
                           {approval.notStartable && (
                             <p role="status" className="text-xs">
                               Can't start: {approval.notStartable} Approving won't run it; decline
@@ -1218,7 +1247,7 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
                               </p>
                             )}
                           <details>
-                            <summary className="cursor-pointer text-muted-foreground">
+                            <summary className="cursor-pointer text-xs text-muted-foreground">
                               Review action details
                             </summary>
                             <dl className="space-y-1 py-2">
@@ -1236,7 +1265,7 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
                             {!approval.notStartable && (
                               <Button
                                 size="sm"
-                                disabled={busyApproval !== null || state?.user.paused}
+                                disabled={busyApproval !== null || paused}
                                 onClick={() => void decide(approval.approvalId, true)}
                               >
                                 Approve
@@ -1251,109 +1280,52 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
                               Deny
                             </Button>
                           </div>
-                        </div>
+                        </section>
                       ))}
-                    </section>
+                    </>
                   )}
-                  {state?.quality && <QualitySummary quality={state.quality} />}
-                  <BotMemoryPanel
-                    memories={state?.dotMemory ?? []}
-                    editable={state?.enhancements?.memoryCorrection === true}
-                    disabled={!connected}
-                    onChange={(memory, action) =>
-                      mutate((owner) => client.changeMemory(owner, memory, action))
-                    }
-                    onEdit={memoryEdit}
-                    onRead={async (memoryId) => {
-                      if (!session || activeOwner.current !== session.ownerToken)
-                        throw new Error("Sign in again to continue.");
-                      try {
-                        const result = await client.readEditableMemory(session, memoryId);
-                        if (activeOwner.current !== session.ownerToken || !mounted.current)
-                          throw new Error("Your bot session changed. Sign in again to continue.");
-                        if (
-                          result.memory.memoryId !== memoryId ||
-                          !Number.isSafeInteger(result.memory.version) ||
-                          result.memory.version < 1 ||
-                          result.memory.status !== "active"
-                        )
-                          throw new Error(
-                            "The selected memory is no longer available for editing.",
-                          );
-                        return result;
-                      } catch (cause) {
-                        reportError(cause, session.ownerToken);
-                        throw cause;
-                      }
-                    }}
-                    sourceRuns={runs.map((run) => ({
-                      runId: run.runId,
-                      label: run.event.text ?? run.result?.summary ?? "Bot conversation",
-                    }))}
-                    onOpenSource={(runId) => openItem("run", runId)}
-                  />
-                  {state?.enhancements?.attachments && (
-                    <div className="shrink-0 space-y-2 text-xs">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <input
-                          ref={fileInput}
-                          type="file"
-                          multiple
-                          accept=".txt,.md,.csv,.json,.pdf,.docx,.png,.jpg,.jpeg,.webp"
-                          aria-label="Choose files for your bot"
-                          className="sr-only"
-                          disabled={uploading || sending || !connected}
-                          onChange={(event) => void attachFiles(event.currentTarget.files)}
-                        />
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          disabled={uploading || sending || !connected || attachments.length >= 3}
-                          onClick={() => fileInput.current?.click()}
-                        >
-                          <PaperclipIcon className="size-3.5" />
-                          {uploading ? "Uploading…" : "Attach files"}
-                        </Button>
-                        <span className="text-muted-foreground">
-                          Up to 3 files · 4 MB each · documents or screenshots
-                        </span>
-                      </div>
-                      {attachments.map((item) => (
-                        <div key={item.attachmentId} className="flex flex-wrap items-center gap-2">
-                          <span>
-                            {item.name} · {Math.ceil(item.size / 1024)} KB
-                            {item.truncated ? " · Only part of the text can be read" : ""}
-                          </span>
-                          <Button
-                            variant="ghost"
-                            size="xs"
-                            disabled={uploading || sending}
-                            aria-label={`Remove ${item.name}`}
-                            onClick={() =>
-                              setAttachments((current) =>
-                                current.filter((value) => value.attachmentId !== item.attachmentId),
-                              )
-                            }
-                          >
-                            Remove
-                          </Button>
-                        </div>
-                      ))}
-                      {uploadStatus && (
-                        <p role="status" className="text-muted-foreground">
-                          {uploadStatus}
-                        </p>
-                      )}
+                  <div ref={chatEndRef} />
+                </div>
+              </div>
+
+              <div className="shrink-0 px-5 pb-4 sm:px-6">
+                <div className="mx-auto flex w-full max-w-(--chat-max-width) flex-col gap-2">
+                  {paused && (
+                    <div
+                      role="status"
+                      className="flex items-center justify-between gap-3 rounded-xl border bg-muted/40 px-3 py-2 text-sm"
+                    >
+                      <span>
+                        Your bot is paused. Nothing new starts until you resume it. Work already
+                        running cannot be recalled.
+                      </span>
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        disabled={!state || !connected || busyPause}
+                        onClick={() => togglePause(false)}
+                      >
+                        Resume
+                      </Button>
                     </div>
                   )}
+                  <BotMicrosoftBanner
+                    microsoft={state?.microsoft}
+                    connectionsUrl={`${serviceUrl}/connections`}
+                  />
+                  {error && (
+                    <p role="alert" className="px-2 text-sm text-destructive">
+                      {error}
+                    </p>
+                  )}
                   {replyTarget && (
-                    <div className="flex shrink-0 flex-wrap items-center gap-2 text-xs">
+                    <div className="flex flex-wrap items-center gap-2 px-2 text-xs">
                       <span id="bot-reply-target">
                         Replying to “{replyTarget.title}”. Your message continues it once and never
                         approves an action.
                       </span>
                       <Button
-                        size="sm"
+                        size="xs"
                         variant="ghost"
                         disabled={sending}
                         onClick={() => setReplyTarget(null)}
@@ -1363,172 +1335,296 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
                     </div>
                   )}
                   {replyStatus && (
-                    <p role="status" className="shrink-0 text-xs text-muted-foreground">
+                    <p role="status" className="px-2 text-xs text-muted-foreground">
                       {replyStatus}
                     </p>
                   )}
-                  <form
-                    className="flex shrink-0 items-center gap-2"
-                    onSubmit={(event) => {
-                      event.preventDefault();
-                      void send();
-                    }}
-                  >
-                    <Input
-                      nativeInput
-                      ref={composerInput}
-                      aria-describedby={replyTarget ? "bot-reply-target" : undefined}
-                      value={draft}
-                      onChange={(event) => setDraft(event.currentTarget.value)}
-                      placeholder="Message your bot..."
-                      aria-label="Message your bot"
-                      className="min-w-0 flex-1"
-                    />
-                    <Button
-                      type="submit"
-                      size="icon-sm"
-                      variant="ghost"
-                      aria-label="Send message"
-                      disabled={
-                        (!draft.trim() && !attachments.length) || sending || uploading || !connected
-                      }
-                    >
-                      <SendIcon className="size-4" />
-                    </Button>
-                  </form>
-                </div>
-                {hasPanels && (
-                  <aside
-                    aria-label="Bot activity and capabilities"
-                    className="flex max-h-[40%] min-h-0 shrink-0 flex-col gap-3 overflow-y-auto lg:max-h-none lg:w-80"
-                  >
-                    {!connected && (
-                      <p role="status" className="text-xs text-muted-foreground">
-                        Connection interrupted. These are the last received updates.
-                      </p>
-                    )}
-                    <BotHandlingPanel
-                      handling={state?.handling}
-                      onStop={stopHandling}
-                      onSeen={markHandlingSeen}
-                      decisionInbox={state?.enhancements?.decisionInbox === true}
-                      onOpen={handlingOpen}
-                      canOpen={(item) => {
-                        const target = handlingTarget(item);
-                        return Boolean(
-                          (target &&
-                            (target.kind === "approval"
-                              ? state?.approvals.some((value) => value.approvalId === target.id) ||
-                                state?.enhancements?.decisionInbox
-                              : target.kind === "run"
-                                ? runs.some((value) => value.runId === target.id)
-                                : target.kind === "task"
-                                  ? state?.tasks.some((value) => value.taskId === target.id) ||
-                                    state?.enhancements?.decisionInbox
-                                  : target.kind === "routine"
-                                    ? state?.scheduledPrompts?.some(
-                                        (value) => value.promptId === target.id,
+                  <ComposerSurface.Shell>
+                    <ComposerSurface.Host>
+                      <ComposerSurface.Main>
+                        <form
+                          className="flex flex-col"
+                          onSubmit={(event) => {
+                            event.preventDefault();
+                            void send();
+                          }}
+                        >
+                          {attachments.length > 0 && (
+                            <div className="flex flex-wrap gap-1.5 px-3 pt-3">
+                              {attachments.map((item) => (
+                                <span
+                                  key={item.attachmentId}
+                                  className="inline-flex max-w-full items-center gap-1 rounded-lg border bg-background px-2 py-1 text-xs"
+                                >
+                                  <PaperclipIcon className="size-3 shrink-0 text-muted-foreground" />
+                                  <span className="truncate">{item.name}</span>
+                                  {item.truncated && (
+                                    <span className="text-muted-foreground">· partly readable</span>
+                                  )}
+                                  <button
+                                    type="button"
+                                    className="ms-0.5 rounded text-muted-foreground hover:text-foreground disabled:opacity-50"
+                                    disabled={uploading || sending}
+                                    aria-label={`Remove ${item.name}`}
+                                    onClick={() =>
+                                      setAttachments((current) =>
+                                        current.filter(
+                                          (value) => value.attachmentId !== item.attachmentId,
+                                        ),
                                       )
-                                    : state?.responsibilities?.some(
-                                        (value) => value.responsibilityId === target.id,
-                                      ))) ||
-                          botWebUrl(item.source?.link),
-                        );
-                      }}
-                      onSnooze={(item) => handlingResponsibility(item, "snooze")}
-                      onResume={(item) => handlingResponsibility(item, "resume")}
-                      onWaitingAction={waitingAction}
-                    />
-                    <BotRoutinesPanel
-                      watches={state?.watches}
-                      scheduledPrompts={state?.scheduledPrompts}
-                      onPromptAction={promptAction}
-                      editable={state?.enhancements?.routineEditor === true}
-                      capabilities={state?.capabilities}
-                      onSave={saveRoutine}
-                      onPreview={(input) => {
-                        if (!session)
-                          return Promise.reject(new Error("Sign in again to continue."));
-                        return client.previewRoutine(session, input);
-                      }}
-                    />
-                    {state?.enhancements?.fileRecipes && (
-                      <BotFileRecipesPanel
-                        recipes={state.fileRecipes ?? []}
-                        approvals={state.approvals}
-                        tasks={state.tasks}
-                        oneDriveConnected={(() => {
-                          const capability = state.capabilities?.find(
-                            (item) => item.id === "onedrive",
-                          );
-                          return capability
-                            ? capability.availability.status === "available"
-                            : undefined;
-                        })()}
-                        onBrowse={(folderId) => {
-                          if (!session)
-                            return Promise.reject(new Error("Sign in again to continue."));
-                          return client.recipeFolders(session, folderId);
-                        }}
-                        onCreate={createFileRecipe}
-                        onEdit={(recipe, input) =>
-                          mutate((owner) => client.editFileRecipe(owner, recipe, input))
-                        }
-                        onAction={(recipe, action) =>
-                          mutate((owner) => client.fileRecipeAction(owner, recipe, action))
-                        }
-                        onStart={(recipe, event) =>
-                          mutate(async (owner) => {
-                            const started = await client.startFileRecipeEvent(
-                              owner,
-                              recipe.recipeId,
-                              event.key,
-                            );
-                            acceptedRunIds.current.add(started.runId);
-                            return started;
-                          })
-                        }
-                        onWaitingAction={waitingAction}
-                      />
-                    )}
-                    {state?.enhancements?.responsibilities && (
-                      <BotResponsibilitiesPanel
-                        responsibilities={state.responsibilities ?? []}
-                        tasks={state.tasks.filter((task) => task.detail?.kind === "harness-task")}
-                        replies={state.enhancements?.replyContinuation === true}
-                        runs={state.runs}
-                        onAction={responsibilityAction}
-                        onOpen={(taskId) => openItem("task", taskId)}
-                        onLoadTask={loadTaskEvidence}
-                        onReply={(item) => {
-                          setReplyTarget({ id: item.responsibilityId, title: item.title });
-                          setReplyStatus(null);
-                          composerInput.current?.focus();
-                        }}
-                        onWaitingAction={waitingAction}
-                      />
-                    )}
-                    <BotCapabilitiesPanel
-                      capabilities={state?.capabilities}
-                      capabilitiesError={state?.capabilitiesError}
-                    />
-                  </aside>
-                )}
+                                    }
+                                  >
+                                    <XIcon className="size-3" />
+                                  </button>
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                          <textarea
+                            ref={composerInput}
+                            rows={1}
+                            aria-describedby={replyTarget ? "bot-reply-target" : undefined}
+                            value={draft}
+                            onChange={(event) => setDraft(event.currentTarget.value)}
+                            onKeyDown={(event) => {
+                              if (
+                                event.key !== "Enter" ||
+                                event.shiftKey ||
+                                event.nativeEvent.isComposing
+                              )
+                                return;
+                              event.preventDefault();
+                              if (canSend) void send();
+                            }}
+                            placeholder="Message TritonAI Bot"
+                            aria-label="Message your bot"
+                            className="field-sizing-content max-h-48 min-h-12 w-full resize-none bg-transparent px-4 pt-3.5 pb-1 text-sm leading-relaxed outline-none placeholder:text-muted-foreground"
+                          />
+                          <div className="flex items-center justify-between gap-2 px-2 pb-2">
+                            <div className="flex items-center gap-1">
+                              {state?.enhancements?.attachments && (
+                                <>
+                                  <input
+                                    ref={fileInput}
+                                    type="file"
+                                    multiple
+                                    accept=".txt,.md,.csv,.json,.pdf,.docx,.png,.jpg,.jpeg,.webp"
+                                    aria-label="Choose files for your bot"
+                                    className="sr-only"
+                                    disabled={uploading || sending || !connected}
+                                    onChange={(event) =>
+                                      void attachFiles(event.currentTarget.files)
+                                    }
+                                  />
+                                  <IconAction
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon-sm"
+                                    label="Attach files (up to 3, 4 MB each)"
+                                    disabled={
+                                      uploading || sending || !connected || attachments.length >= 3
+                                    }
+                                    onClick={() => fileInput.current?.click()}
+                                  >
+                                    <PaperclipIcon className="size-4" />
+                                  </IconAction>
+                                </>
+                              )}
+                            </div>
+                            <Button
+                              type="submit"
+                              size="icon-sm"
+                              aria-label="Send message"
+                              disabled={!canSend}
+                            >
+                              <ArrowUpIcon className="size-4" />
+                            </Button>
+                          </div>
+                        </form>
+                      </ComposerSurface.Main>
+                    </ComposerSurface.Host>
+                  </ComposerSurface.Shell>
+                  {uploadStatus && (
+                    <p role="status" className="px-2 text-xs text-muted-foreground">
+                      {uploadStatus}
+                    </p>
+                  )}
+                </div>
               </div>
-            </>
-          )}
-          {error && (
-            <p role="alert" className="shrink-0 text-sm text-destructive">
-              {error}
-            </p>
-          )}
-        </div>
+            </div>
+
+            {showDiagnostics && (
+              <aside
+                aria-label="Bot activity and capabilities"
+                className="flex w-80 min-h-0 shrink-0 flex-col gap-3 overflow-y-auto border-s px-4 py-4"
+              >
+                <p className="text-xs font-medium text-muted-foreground">
+                  Diagnostics · shown because of your developer setting
+                </p>
+                {!connected && (
+                  <p role="status" className="text-xs text-muted-foreground">
+                    Connection interrupted. These are the last received updates.
+                  </p>
+                )}
+                {state?.quality && <QualitySummary quality={state.quality} />}
+                <BotMemoryPanel
+                  memories={state?.dotMemory ?? []}
+                  editable={state?.enhancements?.memoryCorrection === true}
+                  disabled={!connected}
+                  onChange={(memory, action) =>
+                    mutate((owner) => client.changeMemory(owner, memory, action))
+                  }
+                  onEdit={memoryEdit}
+                  onRead={async (memoryId) => {
+                    if (!session || activeOwner.current !== session.ownerToken)
+                      throw new Error("Sign in again to continue.");
+                    try {
+                      const result = await client.readEditableMemory(session, memoryId);
+                      if (activeOwner.current !== session.ownerToken || !mounted.current)
+                        throw new Error("Your bot session changed. Sign in again to continue.");
+                      if (
+                        result.memory.memoryId !== memoryId ||
+                        !Number.isSafeInteger(result.memory.version) ||
+                        result.memory.version < 1 ||
+                        result.memory.status !== "active"
+                      )
+                        throw new Error("The selected memory is no longer available for editing.");
+                      return result;
+                    } catch (cause) {
+                      reportError(cause, session.ownerToken);
+                      throw cause;
+                    }
+                  }}
+                  sourceRuns={runs.map((run) => ({
+                    runId: run.runId,
+                    label: run.event.text ?? run.result?.summary ?? "Bot conversation",
+                  }))}
+                  onOpenSource={(runId) => openItem("run", runId)}
+                />
+                <BotHandlingPanel
+                  handling={state?.handling}
+                  onStop={stopHandling}
+                  onSeen={markHandlingSeen}
+                  decisionInbox={state?.enhancements?.decisionInbox === true}
+                  onOpen={handlingOpen}
+                  canOpen={(item) => {
+                    const target = handlingTarget(item);
+                    return Boolean(
+                      (target &&
+                        (target.kind === "approval"
+                          ? state?.approvals.some((value) => value.approvalId === target.id) ||
+                            state?.enhancements?.decisionInbox
+                          : target.kind === "run"
+                            ? runs.some((value) => value.runId === target.id)
+                            : target.kind === "task"
+                              ? state?.tasks.some((value) => value.taskId === target.id) ||
+                                state?.enhancements?.decisionInbox
+                              : target.kind === "routine"
+                                ? state?.scheduledPrompts?.some(
+                                    (value) => value.promptId === target.id,
+                                  )
+                                : state?.responsibilities?.some(
+                                    (value) => value.responsibilityId === target.id,
+                                  ))) ||
+                      botWebUrl(item.source?.link),
+                    );
+                  }}
+                  onSnooze={(item) => handlingResponsibility(item, "snooze")}
+                  onResume={(item) => handlingResponsibility(item, "resume")}
+                  onWaitingAction={waitingAction}
+                />
+                <BotRoutinesPanel
+                  watches={state?.watches}
+                  scheduledPrompts={state?.scheduledPrompts}
+                  onPromptAction={promptAction}
+                  editable={state?.enhancements?.routineEditor === true}
+                  capabilities={state?.capabilities}
+                  onSave={saveRoutine}
+                  onPreview={(input) => {
+                    if (!session) return Promise.reject(new Error("Sign in again to continue."));
+                    return client.previewRoutine(session, input);
+                  }}
+                />
+                {state?.enhancements?.fileRecipes && (
+                  <BotFileRecipesPanel
+                    recipes={state.fileRecipes ?? []}
+                    approvals={state.approvals}
+                    tasks={state.tasks}
+                    oneDriveConnected={(() => {
+                      const capability = state.capabilities?.find((item) => item.id === "onedrive");
+                      return capability
+                        ? capability.availability.status === "available"
+                        : undefined;
+                    })()}
+                    onBrowse={(folderId) => {
+                      if (!session) return Promise.reject(new Error("Sign in again to continue."));
+                      return client.recipeFolders(session, folderId);
+                    }}
+                    onCreate={createFileRecipe}
+                    onEdit={(recipe, input) =>
+                      mutate((owner) => client.editFileRecipe(owner, recipe, input))
+                    }
+                    onAction={(recipe, action) =>
+                      mutate((owner) => client.fileRecipeAction(owner, recipe, action))
+                    }
+                    onStart={(recipe, event) =>
+                      mutate(async (owner) => {
+                        const started = await client.startFileRecipeEvent(
+                          owner,
+                          recipe.recipeId,
+                          event.key,
+                        );
+                        acceptedRunIds.current.add(started.runId);
+                        return started;
+                      })
+                    }
+                    onWaitingAction={waitingAction}
+                  />
+                )}
+                {state?.enhancements?.responsibilities && (
+                  <BotResponsibilitiesPanel
+                    responsibilities={state.responsibilities ?? []}
+                    tasks={state.tasks.filter((task) => task.detail?.kind === "harness-task")}
+                    replies={state.enhancements?.replyContinuation === true}
+                    runs={state.runs}
+                    onAction={responsibilityAction}
+                    onOpen={(taskId) => openItem("task", taskId)}
+                    onLoadTask={loadTaskEvidence}
+                    onReply={(item) => {
+                      setReplyTarget({ id: item.responsibilityId, title: item.title });
+                      setReplyStatus(null);
+                      composerInput.current?.focus();
+                    }}
+                    onWaitingAction={waitingAction}
+                  />
+                )}
+                <BotCapabilitiesPanel
+                  capabilities={state?.capabilities}
+                  capabilitiesError={state?.capabilitiesError}
+                />
+              </aside>
+            )}
+          </div>
+        )}
       </div>
     </SidebarInset>
   );
 }
 
 /** Ratings record the owner's judgment only; they never change what the bot sends. */
+/** An icon-only button whose label also shows as a tooltip. */
+function IconAction({
+  label,
+  ...props
+}: { readonly label: string } & ComponentProps<typeof Button>) {
+  return (
+    <Tooltip>
+      <TooltipTrigger render={<Button aria-label={label} {...props} />} />
+      <TooltipPopup>{label}</TooltipPopup>
+    </Tooltip>
+  );
+}
+
 function RunFeedback({
   feedback,
   disabled,
@@ -1542,25 +1638,27 @@ function RunFeedback({
 }) {
   const reasons = feedback?.rating === "not-useful" ? (feedback.reasons ?? []) : [];
   return (
-    <div className="-mt-1 flex flex-wrap items-center gap-1 ps-2 text-xs text-muted-foreground">
-      <Button
+    <div className="mt-1.5 flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
+      <IconAction
         variant={feedback?.rating === "useful" ? "secondary" : "ghost"}
-        size="compact"
+        size="icon-xs"
+        label="Useful"
         aria-pressed={feedback?.rating === "useful"}
         disabled={disabled}
         onClick={() => onRate("useful", [])}
       >
-        👍 Useful
-      </Button>
-      <Button
+        <ThumbsUpIcon className="size-3.5" />
+      </IconAction>
+      <IconAction
         variant={feedback?.rating === "not-useful" ? "secondary" : "ghost"}
-        size="compact"
+        size="icon-xs"
+        label="Not useful"
         aria-pressed={feedback?.rating === "not-useful"}
         disabled={disabled}
         onClick={() => onRate("not-useful", reasons)}
       >
-        👎 Not useful
-      </Button>
+        <ThumbsDownIcon className="size-3.5" />
+      </IconAction>
       {onSavePreference && (
         <Button variant="ghost" size="compact" disabled={disabled} onClick={onSavePreference}>
           Save a preference…

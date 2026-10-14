@@ -18,6 +18,8 @@ import {
   type DotSession,
   type DotState,
 } from "../dot/dotClient";
+import { useClientSettings, useUpdateClientSettings } from "../../hooks/useSettings";
+import { ensureLocalApi } from "../../localApi";
 import { useBotServiceUrl } from "../dot/botService";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
@@ -58,6 +60,8 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
   const [state, setState] = useState<DotState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const diagnostics = useClientSettings((settings) => settings.tritonAiBotDiagnostics);
+  const updateSettings = useUpdateClientSettings();
   const [chosenProjectId, setChosenProjectId] = useState<string | null>(null);
   const changingProject = useRef(false);
   const { data: local, refresh: refreshLocal } = useEnvironmentQuery(
@@ -263,6 +267,27 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
             }
           />
         ) : null}
+        {serviceUrl && session && state?.microsoft?.available !== false ? (
+          <SettingsRow
+            title="Microsoft connections"
+            description="Choose which Outlook, calendar, OneDrive and To Do access the bot may use, or reconnect it."
+            control={
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={() =>
+                  void ensureLocalApi()
+                    .shell.openExternal(`${serviceUrl}/connections`)
+                    .catch((cause: unknown) =>
+                      setError(cause instanceof Error ? cause.message : "Could not open the page."),
+                    )
+                }
+              >
+                Manage
+              </Button>
+            }
+          />
+        ) : null}
       </SettingsSection>
 
       <SettingsSection id="tritonai-bot-task-computer" title="Task computer">
@@ -348,6 +373,22 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
               disabled={busy || !session || !state}
               onCheckedChange={(checked) => void setWarning(Boolean(checked))}
               aria-label="Warn when the task computer is offline"
+            />
+          }
+        />
+      </SettingsSection>
+
+      <SettingsSection id="tritonai-bot-developer" title="Developer">
+        <SettingsRow
+          title="Show bot diagnostics"
+          description="Shows the bot's records and controls beside its chat: the decision inbox, assignments, memory, routines and file inbox. For testing; the chat works without them."
+          control={
+            <Switch
+              checked={diagnostics}
+              onCheckedChange={(checked) =>
+                void updateSettings({ tritonAiBotDiagnostics: Boolean(checked) })
+              }
+              aria-label="Show bot diagnostics"
             />
           }
         />

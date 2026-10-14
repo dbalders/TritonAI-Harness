@@ -386,6 +386,8 @@ export const ClientSettingsSchema = Schema.Struct({
   tritonAiBotUrl: Schema.NullOr(Schema.String).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
+  /** Shows TritonAI Bot's records and controls beside its chat. A testing aid; the chat alone is the product. */
+  tritonAiBotDiagnostics: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   diffLayout: DiffLayout.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_DIFF_LAYOUT))),
   environmentIdentificationMode: EnvironmentIdentificationMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_ENVIRONMENT_IDENTIFICATION_MODE)),
@@ -1673,6 +1675,7 @@ export const ClientSettingsPatch = Schema.Struct({
   diffIgnoreWhitespace: Schema.optionalKey(Schema.Boolean),
   tritonAiFirstRunOnboardingCompleted: Schema.optionalKey(Schema.Boolean),
   tritonAiBotUrl: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  tritonAiBotDiagnostics: Schema.optionalKey(Schema.Boolean),
   diffLayout: Schema.optionalKey(DiffLayout),
   environmentIdentificationMode: Schema.optionalKey(EnvironmentIdentificationMode),
   glassOpacity: Schema.optionalKey(GlassOpacity),

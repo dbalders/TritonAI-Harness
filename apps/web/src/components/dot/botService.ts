@@ -42,6 +42,11 @@ export function useBotServiceUrl(): string | null {
   return hydrated ? resolveBotServiceUrl(setting) : null;
 }
 
+/** Whether the bot page shows its records and controls beside the chat (Settings → TritonAI Bot → Developer). */
+export function useBotDiagnostics(): boolean {
+  return useClientSettings((settings) => settings.tritonAiBotDiagnostics);
+}
+
 /** Signs out of every bot service except `keep`, so a session never outlives its address. */
 export function clearBotSessions(
   storage: Pick<Storage, "length" | "key" | "removeItem">,

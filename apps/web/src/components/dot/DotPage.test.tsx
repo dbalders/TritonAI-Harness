@@ -3,9 +3,15 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
+const botView = vi.hoisted(() => ({ diagnostics: true }));
 vi.mock("./botService", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./botService")>()),
   useBotServiceUrl: () => "https://bot.example.test",
+  useBotDiagnostics: () => botView.diagnostics,
+}));
+// Markdown rendering has its own tests; here a reply only needs its text.
+vi.mock("../ChatMarkdown", () => ({
+  default: ({ text }: { text: string }) => <div data-testid="bot-markdown">{text}</div>,
 }));
 vi.mock("../../localApi", () => ({
   ensureLocalApi: () => ({ shell: { openExternal: vi.fn() } }),
@@ -99,6 +105,7 @@ let requests: { path: string; body: Record<string, unknown> }[];
 beforeEach(() => {
   vi.useFakeTimers();
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  botView.diagnostics = true;
   state = snapshot();
   requests = [];
   onPost = async () => Response.json({ ok: true });
@@ -407,8 +414,8 @@ describe("TritonAI Bot page integration", () => {
       return Response.json({ ok: true });
     };
     await render();
-    await click("👍 Useful");
-    await click("Disconnect");
+    await click("Useful");
+    await click("Sign out of TritonAI Bot");
     await click("Sign in with UC San Diego");
     expect(JSON.parse(sessionStorage.getItem(`dot-session:${serviceUrl}`)!).ownerToken).toBe(
       newSession.ownerToken,
@@ -458,10 +465,10 @@ describe("TritonAI Bot page integration", () => {
       return Response.json({ ok: true });
     };
     await render();
-    await click("👍 Useful");
+    await click("Useful");
     await act(async () => root.render(null));
     await render();
-    await click("Disconnect");
+    await click("Sign out of TritonAI Bot");
     await click("Sign in with UC San Diego");
     await act(async () =>
       finishRating(
@@ -503,7 +510,7 @@ describe("TritonAI Bot page integration", () => {
           })
         : Response.json({ ok: true });
     await render();
-    await click("👍 Useful");
+    await click("Useful");
     saveDotSession(sessionStorage, serviceUrl, newSession);
     await act(async () =>
       finishRating(Response.json({ ok: false, error: "Old owner expired." }, { status: 401 })),
@@ -521,7 +528,7 @@ describe("TritonAI Bot page integration", () => {
     await render();
     await click("Pause bot");
     expect(requests).toEqual([{ path: "/pause", body: { expectedControlVersion: 3 } }]);
-    expect(container.textContent).toContain("Resume bot");
+    expect(button("Resume bot").disabled).toBe(false);
     expect(container.textContent).toContain("Work already running cannot be recalled.");
   });
 });
@@ -713,7 +720,7 @@ it("requires reviewed memory wording, preserves its version, and does not mutate
       reviewed: true,
     },
   });
-  await click("👎 Not useful");
+  await click("Not useful");
   expect(requests.filter((item) => item.path === "/owner-memory")).toHaveLength(1);
   await click("Save a preference…");
   await fill("Memory text", "Skip empty briefings");
@@ -1399,7 +1406,7 @@ it.each(["task", "approval"] as const)(
     else onApprovalRead = read;
     await render();
     await click("Open Private inbox item");
-    await click("Disconnect");
+    await click("Sign out of TritonAI Bot");
     await click("Sign in with UC San Diego");
     await act(async () =>
       finish(
@@ -2439,7 +2446,7 @@ describe("waiting reasons", () => {
       await vi.advanceTimersByTimeAsync(2500);
     });
     const previousOwner = state;
-    await click("Disconnect");
+    await click("Sign out of TritonAI Bot");
     state = withFollowed(
       followed({
         responsibilityId: "other",
@@ -2495,5 +2502,125 @@ describe("waiting reasons", () => {
       await vi.advanceTimersByTimeAsync(3 * 60_000);
     });
     expect(container.textContent).toContain("This was expected to change at");
+  });
+});
+
+describe("chat-only view", () => {
+  beforeEach(() => {
+    botView.diagnostics = false;
+  });
+
+  function fullState(): DotState {
+    return {
+      ...withPanels(),
+      enhancements: { decisionInbox: true, memoryCorrection: true },
+      dotMemory: [
+        {
+          memoryId: "memory1",
+          version: 1,
+          text: "Prefer weekly summaries",
+          status: "active",
+          kind: "preference",
+          scope: "owner",
+          provenance: { source: "owner", dataOnly: true, observations: [] },
+        },
+      ],
+      quality: { windows: [] } as unknown as NonNullable<DotState["quality"]>,
+      tasks: [
+        {
+          taskId: "task1",
+          title: "Message via teams",
+          status: "completed",
+          createdAt: at,
+          updatedAt: at,
+        },
+      ],
+      runs: [
+        {
+          runId: "chat1",
+          threadId: "dot",
+          event: { kind: "message", text: "what about today" },
+          status: "completed",
+          createdAt: at,
+          updatedAt: at,
+          result: { summary: "**Still ahead:** Pickup at 2:00 PM" },
+        },
+      ],
+      approvals: [
+        {
+          approvalId: "approval1",
+          summary: "Draft a reply to Jane",
+          action: "harness-task",
+          payload: { title: "Reply" },
+        },
+      ],
+    };
+  }
+
+  it("shows only the conversation, with replies as markdown and approvals inline", async () => {
+    state = fullState();
+    onPost = async (path) => {
+      if (path === "/approvals/approval1") state = { ...state, approvals: [] };
+      return Response.json({ ok: true });
+    };
+    await render();
+    expect(container.querySelector("aside")).toBeNull();
+    expect(container.textContent).not.toContain("Message via teams");
+    expect(container.textContent).not.toContain("Prefer weekly summaries");
+    expect(container.textContent).toContain("what about today");
+    expect(container.querySelector('[data-testid="bot-markdown"]')?.textContent).toBe(
+      "**Still ahead:** Pickup at 2:00 PM",
+    );
+    expect(container.textContent).toContain("Draft a reply to Jane");
+    await click("Approve");
+    expect(requests).toEqual([{ path: "/approvals/approval1", body: { approved: true } }]);
+    expect(container.textContent).not.toContain("Draft a reply to Jane");
+  });
+
+  it("brings the records back beside the chat with the developer setting", async () => {
+    botView.diagnostics = true;
+    state = fullState();
+    await render();
+    expect(container.querySelector("aside")).not.toBeNull();
+    expect(container.textContent).toContain("Message via teams");
+    expect(container.textContent).toContain("Prefer weekly summaries");
+  });
+
+  it("sends on Enter and keeps Shift+Enter for a new line", async () => {
+    onPost = async (path) =>
+      path === "/message"
+        ? Response.json({ ok: true, runId: "message1", status: "queued" })
+        : Response.json({ ok: true });
+    await render();
+    await fill("Message your bot", "first line");
+    const composer = container.querySelector<HTMLTextAreaElement>(
+      'textarea[aria-label="Message your bot"]',
+    )!;
+    await act(async () => {
+      composer.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", shiftKey: true, bubbles: true }),
+      );
+    });
+    expect(requests).toHaveLength(0);
+    await act(async () => {
+      composer.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+    expect(requests.map((item) => [item.path, item.body.text])).toEqual([
+      ["/message", "first line"],
+    ]);
+  });
+
+  it("resumes from the paused notice and keeps pause in the header", async () => {
+    state = { ...snapshot(), user: { ...snapshot().user, paused: true } };
+    onPost = async (path) => {
+      state = { ...state, user: { ...state.user, paused: path === "/pause", controlVersion: 4 } };
+      return Response.json({ ok: true, paused: path === "/pause", controlVersion: 4 });
+    };
+    await render();
+    expect(container.textContent).toContain("Your bot is paused.");
+    await click("Resume");
+    expect(requests).toEqual([{ path: "/resume", body: { expectedControlVersion: 3 } }]);
+    expect(container.textContent).not.toContain("Your bot is paused.");
+    expect(button("Pause bot").disabled).toBe(false);
   });
 });
