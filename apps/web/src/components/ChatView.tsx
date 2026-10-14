@@ -312,6 +312,7 @@ import {
   beginBackgroundDraftSubmissionByRef,
   clearBackgroundDraftSubmissionByRef,
   composerDraftHasUserContent,
+  composerTargetKey,
   type ComposerFileAttachment,
   type ComposerImageAttachment,
   type DraftThreadEnvMode,
@@ -528,6 +529,7 @@ import {
 } from "./ui/alert-dialog";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { ServerUpdateAction } from "./ServerUpdateAction";
+import { takePendingRecordedSkillPrompt, usePendingRecordedSkillPrompt } from "./RecordSkill";
 import { useAutoBalanceUpdateBanner } from "./chat/useAutoBalanceUpdateBanner";
 import {
   ComposerServerUpdateIcon,
@@ -9176,6 +9178,48 @@ export default function ChatView(props: ChatViewProps) {
       resetLocalDispatch();
     }
   };
+
+  // A skill recording stopped from this conversation is sent as its next
+  // message once the composer can send. Text the user was writing is set
+  // aside and put back afterward. A draft with attachments keeps them out of
+  // the recording's message: the recording is added for the user to send.
+  const recordedSkillTargetKey = composerTargetKey(composerDraftTarget);
+  const recordedSkillPrompt = usePendingRecordedSkillPrompt(recordedSkillTargetKey);
+  const recordedSkillSendReady =
+    recordedSkillPrompt !== null &&
+    activeThread !== undefined &&
+    activeThread !== null &&
+    !isSendBusy &&
+    !isConnecting &&
+    clientSettingsHydrated &&
+    !threadDetailLoading;
+  const sendRecordedSkill = useEffectEvent(async () => {
+    const prompt = takePendingRecordedSkillPrompt(recordedSkillTargetKey);
+    if (prompt === null) return;
+    const existing = promptRef.current.trim();
+    const setPrompt = (next: string) => {
+      promptRef.current = next;
+      setComposerDraftPrompt(composerDraftTarget, next);
+    };
+    if (composerHasNonPromptContent) {
+      setPrompt(existing ? `${existing}\n\n${prompt}` : prompt);
+      toastManager.add({
+        type: "info",
+        title: "Recording added to your message",
+        description: "Your message has attachments, so send it when you're ready.",
+      });
+      return;
+    }
+    setPrompt(prompt);
+    await onSend();
+    if (!existing) return;
+    // A send that didn't go out leaves the recording in place, after the user's text.
+    const unsent = promptRef.current.trim();
+    setPrompt(unsent ? `${existing}\n\n${unsent}` : existing);
+  });
+  useEffect(() => {
+    if (recordedSkillSendReady) void sendRecordedSkill();
+  }, [recordedSkillSendReady]);
 
   // Queued messages go out from QueuedMessageSender, which also covers
   // threads that are not on screen. Send now uses the same path but skips the
