@@ -108,25 +108,31 @@ function SidebarUtilityItem({
   label,
   onClick,
   badge,
+  tooltip = true,
 }: {
   icon: ReactNode;
   label: string;
   onClick: () => void;
   /** A small count over the icon's corner. */
   badge?: ReactNode;
+  /** Off where the icon and its badge already say enough. */
+  tooltip?: boolean;
 }) {
+  const button = (
+    <SidebarMenuButton aria-label={label} onClick={onClick} size="icon">
+      {icon}
+    </SidebarMenuButton>
+  );
   return (
     <SidebarMenuItem className="relative shrink-0">
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <SidebarMenuButton aria-label={label} onClick={onClick} size="icon">
-              {icon}
-            </SidebarMenuButton>
-          }
-        />
-        <TooltipPopup side="top">{label}</TooltipPopup>
-      </Tooltip>
+      {tooltip ? (
+        <Tooltip>
+          <TooltipTrigger render={button} />
+          <TooltipPopup side="top">{label}</TooltipPopup>
+        </Tooltip>
+      ) : (
+        button
+      )}
       {badge ? (
         <span aria-hidden className="pointer-events-none absolute -top-1 -right-1">
           {badge}
@@ -150,6 +156,7 @@ function SidebarIdeasItem({ onClick }: { onClick: () => void }) {
       label={unseen > 0 ? `Ideas, ${unseen} new` : "Ideas"}
       onClick={onClick}
       badge={unseen > 0 ? <Badge size="sm">{unseen > 9 ? "9+" : unseen}</Badge> : undefined}
+      tooltip={false}
     />
   );
 }
