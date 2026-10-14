@@ -2,6 +2,7 @@ import { assert, it } from "@effect/vitest";
 
 import {
   makeSkillRecordingBuffer,
+  snapshotAccessibilityEvent,
   type RecordedAccessibilityEvent,
 } from "./skillRecordingSteps.ts";
 
@@ -333,4 +334,41 @@ it("drops a label that echoes typed text too long to show in full", () => {
   );
   const [step] = buffer.finish().steps;
   assert.strictEqual(step?.name, null);
+});
+
+it("never reads a password field's label or contents", () => {
+  const reads: Array<string> = [];
+  const forbidden = (field: string) => {
+    reads.push(field);
+    return "hunter2";
+  };
+  const nativeEvent = (role: string, raw: Record<string, unknown>) => ({
+    type: "valueChanged",
+    stateFlag: null,
+    stateValue: null,
+    target: {
+      role,
+      get name(): string | null {
+        return forbidden("name");
+      },
+      get value(): string | null {
+        return forbidden("value");
+      },
+      editable: true,
+      focused: true,
+      stableId: null,
+      raw,
+    },
+  });
+
+  for (const event of [
+    nativeEvent("password_field", {}),
+    nativeEvent("text_field", { ax_subrole: "AXSecureTextField", ax_value: "hunter2" }),
+  ]) {
+    const target = snapshotAccessibilityEvent(event).target;
+    assert.strictEqual(target?.name, null);
+    assert.strictEqual(target?.value, null);
+    assert.notInclude(JSON.stringify(target), "hunter2");
+  }
+  assert.deepEqual(reads, []);
 });

@@ -14,14 +14,17 @@ const capture: SkillRecordingCapture = {
 function harness(options: { permission?: boolean; started?: SkillRecordingStarted } = {}) {
   const started = Promise.withResolvers<SkillRecordingStarted>();
   if (options.started) started.resolve(options.started);
+  const ended = Promise.withResolvers<void>();
   const process = {
     started: started.promise,
+    ended: ended.promise,
     stop: vi.fn(() => Promise.resolve(capture)),
     cancel: vi.fn(),
   };
   const owners = new Map<number, () => void>();
   const unwatch = vi.fn();
   const shown: Array<string | null> = [];
+  const endedByItself: Array<string> = [];
   const dependencies: SkillRecorderDependencies = {
     hasPermission: () => options.permission ?? true,
     captureInput: false,
@@ -31,6 +34,7 @@ function harness(options: { permission?: boolean; started?: SkillRecordingStarte
       return unwatch;
     },
     onActiveChange: (recording) => shown.push(recording?.sessionId ?? null),
+    onCaptureEnded: (recording) => endedByItself.push(recording.sessionId),
   };
   return {
     recorder: makeSkillRecorder(dependencies),
@@ -39,6 +43,8 @@ function harness(options: { permission?: boolean; started?: SkillRecordingStarte
     started,
     unwatch,
     shown,
+    ended,
+    endedByItself,
     closeOwner: (ownerId: number) => owners.get(ownerId)?.(),
   };
 }
@@ -168,4 +174,21 @@ it("keeps each halted recording for its own window", async () => {
   recorder.halt("s2");
   assert.strictEqual((await recorder.stop("s1", 1)).status, "stopped");
   assert.strictEqual((await recorder.stop("s2", 2)).status, "stopped");
+});
+
+it("stops the recording when capture ends by itself, but not after Stop", async () => {
+  const limit = harness({ started: recording });
+  await limit.recorder.start(1, "s1");
+  limit.ended.resolve();
+  await limit.process.ended;
+  await Promise.resolve();
+  assert.deepEqual(limit.endedByItself, ["s1"]);
+
+  const stopped = harness({ started: recording });
+  await stopped.recorder.start(1, "s1");
+  await stopped.recorder.stop("s1", 1);
+  stopped.ended.resolve();
+  await stopped.process.ended;
+  await Promise.resolve();
+  assert.deepEqual(stopped.endedByItself, []);
 });

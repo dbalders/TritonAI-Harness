@@ -8,7 +8,7 @@ Do a task once in other apps on your computer, then talk it through with an agen
 2. Switch to the app and do the task once. You can move between apps; Harness follows whichever app is in front, except Harness itself. A small recording bar stays on top with a timer.
 3. Select **Stop** on the bar when you're done, or **Discard** to throw the recording away.
 
-Recording lasts until you stop, for at most 10 minutes or 300 steps. Harness reads apps' accessibility events, such as which control had focus and what you selected or turned on. On a Mac it also notes what you click and keyboard shortcuts that use Command or Control. Text you type is not recorded, nothing is read from password fields, and nothing is saved or sent while you record.
+Recording lasts until you stop. At 10 minutes or 300 steps it stops by itself and is sent like any other recording. Harness reads apps' accessibility events, such as which control had focus and what you selected or turned on. On a Mac it also notes what you click and keyboard shortcuts that use Command or Control. Text you type is not recorded, nothing is read from password fields, and nothing is saved or sent while you record.
 
 ## Turn it into a skill
 

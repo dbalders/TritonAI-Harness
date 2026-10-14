@@ -51,14 +51,33 @@ it("settles start and stop when the helper crashes mid-recording", async () => {
   worker.emit("message", { type: "started" });
   await recording.started;
   worker.emit("exit", null, "SIGABRT");
+  await recording.ended;
   assert.deepEqual(await recording.stop(), { status: "failed" });
 });
 
-it("passes through why the helper could not record the app", async () => {
+it("passes through why the helper could not record", async () => {
   const recording = startSkillRecordingProcess("worker.cjs", request);
   worker.emit("message", { type: "ready" });
-  worker.emit("message", { type: "error", reason: "app-not-found" });
-  assert.deepEqual(await recording.started, { status: "app-not-found" });
+  worker.emit("message", { type: "error", reason: "permission-required" });
+  assert.deepEqual(await recording.started, { status: "permission-required" });
+});
+
+it("reports a limit, then still hands back the capture on stop", async () => {
+  const recording = startSkillRecordingProcess("worker.cjs", request);
+  worker.emit("message", { type: "ready" });
+  worker.emit("message", { type: "started" });
+  await recording.started;
+  worker.emit("message", { type: "limit-reached" });
+  await recording.ended;
+
+  const stopped = recording.stop();
+  worker.emit("message", { type: "result", durationMs: 5, steps: [], limitReached: "steps" });
+  assert.deepEqual(await stopped, {
+    status: "stopped",
+    durationMs: 5,
+    steps: [],
+    limitReached: "steps",
+  });
 });
 
 it("ignores a late result after cancel", async () => {

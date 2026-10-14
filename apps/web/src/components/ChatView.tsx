@@ -9180,9 +9180,10 @@ export default function ChatView(props: ChatViewProps) {
   };
 
   // A skill recording stopped from this conversation is sent as its next
-  // message once the composer can send. Text the user was writing is set
-  // aside and put back afterward. A draft with attachments keeps them out of
-  // the recording's message: the recording is added for the user to send.
+  // message once the composer can send, and waits while a question is open so
+  // it never answers one. Text the user was writing is set aside and put back
+  // afterward. A draft with attachments keeps them out of the recording's
+  // message: the recording is added for the user to send.
   const recordedSkillTargetKey = composerTargetKey(composerDraftTarget);
   const recordedSkillPrompt = usePendingRecordedSkillPrompt(recordedSkillTargetKey);
   const recordedSkillSendReady =
@@ -9191,15 +9192,21 @@ export default function ChatView(props: ChatViewProps) {
     activeThread !== null &&
     !isSendBusy &&
     !isConnecting &&
+    !isRevertingCheckpoint &&
+    !activeEnvironmentUnavailable &&
+    !activePendingProgress &&
     clientSettingsHydrated &&
     !threadDetailLoading;
   const sendRecordedSkill = useEffectEvent(async () => {
     const prompt = takePendingRecordedSkillPrompt(recordedSkillTargetKey);
     if (prompt === null) return;
+    const target = composerDraftTarget;
+    const threadKey = routeThreadKey;
     const existing = promptRef.current.trim();
     const setPrompt = (next: string) => {
-      promptRef.current = next;
-      setComposerDraftPrompt(composerDraftTarget, next);
+      // The user may have moved to another conversation while the send ran.
+      if (currentRouteThreadKeyRef.current === threadKey) promptRef.current = next;
+      setComposerDraftPrompt(target, next);
     };
     if (composerHasNonPromptContent) {
       setPrompt(existing ? `${existing}\n\n${prompt}` : prompt);
@@ -9214,7 +9221,7 @@ export default function ChatView(props: ChatViewProps) {
     await onSend();
     if (!existing) return;
     // A send that didn't go out leaves the recording in place, after the user's text.
-    const unsent = promptRef.current.trim();
+    const unsent = (useComposerDraftStore.getState().getComposerDraft(target)?.prompt ?? "").trim();
     setPrompt(unsent ? `${existing}\n\n${unsent}` : existing);
   });
   useEffect(() => {

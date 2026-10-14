@@ -10,9 +10,9 @@ import * as Electron from "electron";
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import { SKILL_RECORDING_CONTROL_CHANNEL } from "../ipc/channels.ts";
-import { makeSkillRecordingBar } from "./SkillRecordingBar.ts";
+import { makeSkillRecordingBar, type SkillRecordingBarAction } from "./SkillRecordingBar.ts";
 import { startSkillRecordingProcess } from "./SkillRecordingProcess.ts";
-import { makeSkillRecorder } from "./skillRecorder.ts";
+import { type ActiveRecording, makeSkillRecorder } from "./skillRecorder.ts";
 
 /** Records an explicit, user-started demonstration in local apps for skill authoring. */
 export class DesktopSkillRecording extends Context.Service<
@@ -61,7 +61,7 @@ const make = Effect.gen(function* () {
     environment.platform !== "darwin" ||
     Electron.systemPreferences.isTrustedAccessibilityClient(false);
   // The page then collects a stopped capture, or resets after a discard.
-  const bar = makeSkillRecordingBar(environment.platform, (recording, action) => {
+  const control = (recording: ActiveRecording, action: SkillRecordingBarAction) => {
     // Both end capture here, so the bar works even if the page is unresponsive.
     if (action === "discard") recorder.cancel(recording.sessionId, recording.ownerId);
     else recorder.halt(recording.sessionId);
@@ -69,13 +69,15 @@ const make = Effect.gen(function* () {
     if (!contents || contents.isDestroyed()) return;
     if (action === "stop") focusOwner(contents, environment.platform);
     contents.send(SKILL_RECORDING_CONTROL_CHANNEL, { sessionId: recording.sessionId, action });
-  });
+  };
+  const bar = makeSkillRecordingBar(environment.platform, control);
   const recorder = makeSkillRecorder({
     hasPermission,
     captureInput: environment.platform === "darwin",
     startProcess: (request) => startSkillRecordingProcess(workerPath, request),
     watchOwner: watchWebContents,
     onActiveChange: (recording) => (recording ? bar.show(recording) : bar.hide()),
+    onCaptureEnded: (recording) => control(recording, "stop"),
   });
   yield* Effect.addFinalizer(() =>
     Effect.sync(() => {

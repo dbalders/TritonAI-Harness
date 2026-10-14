@@ -23,6 +23,8 @@ export type SkillRecordingWorkerRequest =
 export type SkillRecordingWorkerMessage =
   | { readonly type: "ready" }
   | { readonly type: "started" }
+  /** Capture stopped at a limit; the result waits for a stop request. */
+  | { readonly type: "limit-reached" }
   | {
       readonly type: "result";
       readonly durationMs: number;
@@ -46,6 +48,8 @@ export type SkillRecordingCapture =
 
 export type SkillRecordingProcess = {
   readonly started: Promise<SkillRecordingStarted>;
+  /** Settles once capture is over: at a limit, when the helper exits, or after stop or cancel. */
+  readonly ended: Promise<void>;
   /** Asks the helper for its capture, then ends it. Safe to call once. */
   readonly stop: () => Promise<SkillRecordingCapture>;
   /** Ends the helper and drops anything it captured. */
@@ -73,6 +77,7 @@ export function startSkillRecordingProcess(
   } catch {
     return {
       started: Promise.resolve({ status: "unavailable" }),
+      ended: Promise.resolve(),
       stop: () => Promise.resolve({ status: "failed" }),
       cancel: () => undefined,
     };
@@ -80,6 +85,7 @@ export function startSkillRecordingProcess(
 
   const started = Promise.withResolvers<SkillRecordingStarted>();
   const capture = Promise.withResolvers<SkillRecordingCapture>();
+  const captureEnded = Promise.withResolvers<void>();
   let ended = false;
   let stopTimeout: ReturnType<typeof setTimeout> | undefined;
   const startTimeout = setTimeout(() => end(), START_TIMEOUT_MS);
@@ -94,6 +100,7 @@ export function startSkillRecordingProcess(
     worker.kill();
     started.resolve({ status: failure });
     capture.resolve({ status: "failed" });
+    captureEnded.resolve();
   }
   const send = (message: SkillRecordingWorkerRequest) => {
     try {
@@ -116,6 +123,9 @@ export function startSkillRecordingProcess(
         clearTimeout(startTimeout);
         started.resolve({ status: "recording" });
         return;
+      case "limit-reached":
+        captureEnded.resolve();
+        return;
       case "result":
         capture.resolve({
           status: "stopped",
@@ -137,6 +147,7 @@ export function startSkillRecordingProcess(
 
   return {
     started: started.promise,
+    ended: captureEnded.promise,
     stop: () => {
       if (!ended && !stopTimeout) {
         stopTimeout = setTimeout(() => end(), STOP_TIMEOUT_MS);

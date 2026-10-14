@@ -56,11 +56,74 @@ function normalized(text: string | null): string | null {
   return text?.replace(/\s+/g, " ").trim().toLowerCase() || null;
 }
 
+function isPasswordField(role: string, raw: Record<string, unknown>): boolean {
+  if (/password|secure/i.test(role)) return true;
+  const subrole = raw.ax_subrole;
+  return typeof subrole === "string" && /secure/i.test(subrole);
+}
+
 function isProtected(target: Target): boolean {
   if (target.editable || TYPED_TEXT_ROLES.has(target.role)) return true;
-  if (/password|secure/i.test(target.role)) return true;
-  const subrole = target.raw.ax_subrole;
-  return typeof subrole === "string" && /secure/i.test(subrole);
+  return isPasswordField(target.role, target.raw);
+}
+
+function read<A>(getter: () => A, fallback: A): A {
+  try {
+    return getter();
+  } catch {
+    return fallback;
+  }
+}
+
+/** The getters of a native xa11y event that a recording reads. */
+export type NativeAccessibilityEvent = {
+  readonly type: string;
+  readonly stateFlag: string | null;
+  readonly stateValue: boolean | null;
+  readonly target: {
+    readonly role: string;
+    readonly name: string | null;
+    readonly value: string | null;
+    readonly editable: boolean;
+    readonly focused: boolean | null;
+    readonly stableId: string | null;
+    readonly raw: Record<string, unknown>;
+  } | null;
+};
+
+/**
+ * Copies a native event's getters once; each read crosses into the platform
+ * API. A password field's label and contents are never read.
+ */
+export function snapshotAccessibilityEvent(
+  event: NativeAccessibilityEvent,
+): RecordedAccessibilityEvent {
+  const target = read(() => event.target, null);
+  if (!target) {
+    return {
+      type: read(() => event.type, ""),
+      stateFlag: read(() => event.stateFlag, null),
+      stateValue: read(() => event.stateValue, null),
+      target: null,
+    };
+  }
+  const role = read(() => target.role, "");
+  const raw = read(() => target.raw, {});
+  const password = isPasswordField(role, raw);
+  return {
+    type: read(() => event.type, ""),
+    stateFlag: read(() => event.stateFlag, null),
+    stateValue: read(() => event.stateValue, null),
+    target: {
+      role,
+      name: password ? null : read(() => target.name, null),
+      value: password ? null : read(() => target.value, null),
+      editable: read(() => target.editable, true),
+      focused: read(() => target.focused, null),
+      stableId: read(() => target.stableId, null),
+      raw: password ? { ax_subrole: raw.ax_subrole } : raw,
+    },
+  };
 }
 
 /** A value the user selected or toggled, never text they typed. */

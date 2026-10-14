@@ -324,7 +324,21 @@ function RecordSkillFlow({ bridge }: { bridge: RecordSkillBridge }) {
           .catch(() => "Harness couldn't start the conversation.")
       : "Harness isn't connected.";
     if (failure) {
-      toastManager.add({ type: "error", title: "Recording not sent", description: failure });
+      // The capture is gone from the desktop app by now, so this copy is the
+      // user's way to keep it.
+      toastManager.add({
+        type: "error",
+        title: "Recording not sent",
+        description: `${failure} Copy the recording to paste it into a conversation yourself.`,
+        actionProps: {
+          children: "Copy recording",
+          onClick: () =>
+            void navigator.clipboard.writeText(prompt).then(
+              () => toastManager.add({ type: "success", title: "Recording copied" }),
+              () => toastManager.add({ type: "error", title: "Couldn't copy the recording" }),
+            ),
+        },
+      });
     }
   };
 

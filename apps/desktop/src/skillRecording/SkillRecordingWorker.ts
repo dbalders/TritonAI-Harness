@@ -2,10 +2,7 @@
 
 import { loadMacSkillInput } from "./MacSkillInput.ts";
 import { makeSkillInputSampler } from "./skillRecordingInput.ts";
-import {
-  makeSkillRecordingBuffer,
-  type RecordedAccessibilityEvent,
-} from "./skillRecordingSteps.ts";
+import { makeSkillRecordingBuffer, snapshotAccessibilityEvent } from "./skillRecordingSteps.ts";
 import type {
   SkillRecordingFailure,
   SkillRecordingWorkerMessage,
@@ -16,9 +13,6 @@ process.once("disconnect", () => process.exit(0));
 
 const INPUT_POLL_INTERVAL_MS = 10;
 const FOLLOW_INTERVAL_MS = 200;
-
-type Xa11y = typeof import("@crowecawcaw/xa11y");
-type NativeEvent = InstanceType<Xa11y["Event"]>;
 
 const send = (message: SkillRecordingWorkerMessage, exit = false) => {
   process.send?.(message, undefined, undefined, () => {
@@ -32,35 +26,6 @@ function failureReason(error: unknown): SkillRecordingFailure {
     return "permission-required";
   }
   return "unavailable";
-}
-
-function read<A>(getter: () => A, fallback: A): A {
-  try {
-    return getter();
-  } catch {
-    return fallback;
-  }
-}
-
-/** Copies the native event's getters once; each read crosses into the platform API. */
-function snapshotEvent(event: NativeEvent): RecordedAccessibilityEvent {
-  const target = read(() => event.target, null);
-  return {
-    type: read(() => event.type, ""),
-    stateFlag: read(() => event.stateFlag, null),
-    stateValue: read(() => event.stateValue, null),
-    target: target
-      ? {
-          role: read(() => target.role, ""),
-          name: read(() => target.name, null),
-          value: read(() => target.value, null),
-          editable: read(() => target.editable, true),
-          focused: read(() => target.focused, null),
-          stableId: read(() => target.stableId, null),
-          raw: read(() => target.raw, {}),
-        }
-      : null,
-  };
 }
 
 type MacInput = Awaited<ReturnType<typeof loadMacSkillInput>>;
@@ -128,13 +93,19 @@ async function record() {
     followed = null;
     native?.close();
   };
+  // At a limit, capture stops and Harness is told so it can stop the recording.
+  const endAtLimit = () => {
+    if (ended) return;
+    end();
+    send({ type: "limit-reached" });
+  };
   // Capture stops at the step cap instead of reading events it can't keep.
   const endIfFull = () => {
-    if (buffer.isFull()) end();
+    if (buffer.isFull()) endAtLimit();
   };
   const limitTimer = setTimeout(() => {
     buffer.markTimeLimit();
-    end();
+    endAtLimit();
   }, request.maxDurationMs);
 
   /**
@@ -162,7 +133,7 @@ async function record() {
     }
     subscription?.on("event", (event) => {
       if (ended || followed?.pid !== pid) return;
-      buffer.add(snapshotEvent(event), elapsed());
+      buffer.add(snapshotAccessibilityEvent(event), elapsed());
       endIfFull();
     });
     const stopInput = native

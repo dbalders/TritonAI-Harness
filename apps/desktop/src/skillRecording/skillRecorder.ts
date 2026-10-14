@@ -23,6 +23,8 @@ export type SkillRecorderDependencies = {
   readonly watchOwner: (ownerId: number, onGone: () => void) => () => void;
   /** Shows the recording while it runs, and hides it once it ends for any reason. */
   readonly onActiveChange: (recording: ActiveRecording | null) => void;
+  /** Capture ended without Stop, at a limit or because the helper failed; stop it like Stop would. */
+  readonly onCaptureEnded: (recording: ActiveRecording) => void;
 };
 
 export type ActiveRecording = {
@@ -117,10 +119,16 @@ export function makeSkillRecorder(dependencies: SkillRecorderDependencies) {
         return { status: started.status };
       }
       created.started = true;
-      dependencies.onActiveChange({
+      const recording = {
         sessionId: created.id,
         ownerId,
         maxDurationMs: request.maxDurationMs,
+      };
+      dependencies.onActiveChange(recording);
+      // Stop, Discard, and a closed window release the session first, so only
+      // capture ending by itself gets here.
+      void process.ended.then(() => {
+        if (active === created) dependencies.onCaptureEnded(recording);
       });
       return {
         status: "recording",
