@@ -689,6 +689,7 @@ export const make = Effect.gen(function* () {
       SELECT ${ideaColumns(sql)} FROM ideas ORDER BY updated_at DESC
     `;
     const permanent = new Set<string>();
+    const permanentlyHidden = new Set<string>();
     const cooling = new Map<string, string>();
     const avoid: string[] = [];
     const cooldownStart = toIso(nowMs - DISMISS_COOLDOWN_MS);
@@ -703,6 +704,7 @@ export const make = Effect.gen(function* () {
           if (Option.isSome(content) && (yield* wasSent(row, content.value, row.openedAt))) {
             yield* retire(row, "sent", toIso(nowMs));
             permanent.add(row.ideaKey);
+            permanentlyHidden.add(row.ideaKey);
             continue;
           }
         }
@@ -710,18 +712,27 @@ export const make = Effect.gen(function* () {
         if (previous === undefined || hiddenAt > previous) cooling.set(row.ideaKey, hiddenAt);
       } else {
         permanent.add(row.ideaKey);
+        if (row.status === "sent" || row.status === "rejected") {
+          permanentlyHidden.add(row.ideaKey);
+        }
       }
     }
     const excludedKeys = new Set(permanent);
     for (const [key, hiddenAt] of cooling) {
       if (hiddenAt >= cooldownStart) excludedKeys.add(key);
     }
-    // Rewordings of excluded ideas are excluded too; an idea whose cooldown ended may return.
+    // Permanent feedback keeps blocking rewordings regardless of age or recent-history size.
+    // Other excluded ideas have a bounded title history; an ended cooldown allows a repeat.
+    let recentTitles = 0;
     for (const row of rows) {
-      if (avoid.length >= 60) break;
-      if (row.updatedAt < avoidStart || !excludedKeys.has(row.ideaKey)) continue;
+      const hiddenPermanently = permanentlyHidden.has(row.ideaKey);
+      if (!hiddenPermanently && (recentTitles >= 60 || row.updatedAt < avoidStart)) continue;
+      if (!excludedKeys.has(row.ideaKey)) continue;
       const content = decodeContent(row.contentJson);
-      if (Option.isSome(content)) avoid.push(content.value.title);
+      if (Option.isSome(content)) {
+        avoid.push(content.value.title);
+        if (!hiddenPermanently) recentTitles++;
+      }
     }
     const recyclableStarterKeys = [...cooling.entries()]
       .filter(([key]) => key.startsWith("starter:") && !excludedKeys.has(key))

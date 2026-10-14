@@ -257,7 +257,8 @@ export function formatIdeasContext(context: IdeasContext): string {
 
   lines.push("Avoid (already shown, dismissed, rejected, or used):");
   if (context.avoid.length === 0) lines.push("(none)");
-  for (const title of context.avoid) lines.push(`- ${title}`);
+  // The model sees a bounded hint; validation still checks the entire permanent history.
+  for (const title of context.avoid.slice(0, 60)) lines.push(`- ${title}`);
 
   return lines.join("\n");
 }

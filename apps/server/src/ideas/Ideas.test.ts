@@ -11,6 +11,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -267,6 +268,65 @@ it.layer(NodeServices.layer)("Ideas", (it) => {
         assert.notInclude(later, "Turn your help desk questions into an FAQ");
       }).pipe(Effect.scoped, Effect.provide(layer));
     }),
+  );
+
+  it.effect(
+    "blocks reworded rejected and used ideas beyond the title window and recent-title limit",
+    () =>
+      Effect.gen(function* () {
+        const rejectedTitle = "Diagram the team's onboarding process";
+        const sentTitle = "Summarize the department's purchasing workflow";
+        const { layer } = yield* makeHarness(() =>
+          Effect.succeed([
+            threadIdea({ title: rejectedTitle, topic: "map onboarding" }),
+            threadIdea({ ref: "starter:faq", title: sentTitle, topic: "describe purchasing" }),
+          ]),
+        );
+        yield* TestClock.setTime(NOW);
+        yield* Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          yield* seedWork;
+          for (const [index, status, title] of [
+            [0, "rejected", rejectedTitle],
+            [1, "sent", sentTitle],
+          ] as const) {
+            const old = iso(NOW - 61 * DAY);
+            const content = Schema.encodeSync(Schema.UnknownFromJsonString)({
+              icon: "💡",
+              title,
+              body: "An earlier suggestion.",
+              sources: [],
+              action: { kind: "new-thread", projectId: null, prompt: "Help with this task." },
+            });
+            yield* sql`
+            INSERT INTO ideas (idea_id, idea_key, section, content_json, status, created_at, updated_at, hidden_at)
+            VALUES (${`old-${index}`}, ${`plugin:tool#old-topic-${index}`}, 'tools', ${content}, ${status}, ${old}, ${old}, ${old})
+          `;
+          }
+          // Recent history must not displace permanent feedback from repeat validation.
+          for (let index = 0; index < 60; index++) {
+            const content = Schema.encodeSync(Schema.UnknownFromJsonString)({
+              icon: "💡",
+              title: `Recent unrelated idea ${index}`,
+              body: "A different suggestion.",
+              sources: [],
+              action: { kind: "new-thread", projectId: null, prompt: "Help with another task." },
+            });
+            yield* sql`
+            INSERT INTO ideas (idea_id, idea_key, section, content_json, status, created_at, updated_at, hidden_at)
+            VALUES (${`recent-${index}`}, ${`plugin:other#topic-${index}`}, 'tools', ${content}, 'rejected', ${iso(NOW)}, ${iso(NOW)}, ${iso(NOW)})
+          `;
+          }
+          const ideas = yield* Ideas.make;
+          yield* ideas.suggestMore;
+          yield* ideas.awaitIdle;
+          const snapshot = yield* ideas.list;
+          assert.notInclude(titles(snapshot), rejectedTitle);
+          assert.notInclude(titles(snapshot), sentTitle);
+          assert.isNull(snapshot.message);
+          assert.isAbove(snapshot.ideas.length, 0);
+        }).pipe(Effect.scoped, Effect.provide(layer));
+      }),
   );
 
   it.effect("keeps an opened idea until its draft is sent, then never suggests it again", () =>
