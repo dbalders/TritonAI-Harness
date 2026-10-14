@@ -69,8 +69,11 @@ approval or, if you choose, your Harness task rule and the automatic review.
 File text is treated as reference data, never as instructions. Each file shows
 what was read and what happened: waiting, needs your decision, assigned,
 skipped, or not started with a reason. Editing a file that already started does
-not start it again. Pause, Stop, or editing the instructions keeps drafted work
-from starting; work a Harness worker already picked up is not recalled. Files
+not start it again. If you edit a file after its decision or assignment was
+drafted, that older version doesn't start unless a Harness worker already picked
+it up; use **Start** to run the edited file. Pause, Stop, or editing the
+instructions keeps drafted work from starting; work a Harness worker already
+picked up is not recalled. Files
 that arrive while the recipe or your bot is paused, or while the folder is too
 large to check, are listed but not started; use **Start** to run one. A recipe
 holds at most 20 unfinished files at once. When it is full, newer files stay in
