@@ -78,7 +78,9 @@ function stepFromEvent(event: RecordedAccessibilityEvent, atMs: number): Pending
   const typed = normalized(target.value);
   const echoesTyping = isProtected(target) && !!typed && !!normalized(target.name)?.includes(typed);
   const base = { atMs, role: clip(target.role), name: echoesTyping ? null : clip(target.name) };
-  const elementKey = target.stableId ?? `${target.role}\u0000${target.name ?? ""}`;
+  // An echoed label changes with every keystroke, so it can't identify the field.
+  const elementKey =
+    target.stableId ?? `${target.role}\u0000${echoesTyping ? "" : (target.name ?? "")}`;
   switch (event.type) {
     case "focusChanged":
       return { elementKey, step: { ...base, kind: "focus", value: null } };

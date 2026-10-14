@@ -243,6 +243,24 @@ it("drops a text control's label when it repeats the typed text", () => {
   );
 });
 
+it("collapses typing into one step when the label echoes it", () => {
+  const buffer = makeSkillRecordingBuffer();
+  for (const [atMs, typed] of [
+    [10, "a"],
+    [20, "ab"],
+    [30, "abc"],
+  ] as const) {
+    buffer.add(
+      event("valueChanged", { role: "text_field", name: typed, value: typed, focused: true }),
+      atMs,
+    );
+  }
+  assert.deepEqual(
+    buffer.finish().steps.map((step) => [step.kind, step.name, step.value]),
+    [["edit", null, null]],
+  );
+});
+
 it("keeps focus moving between unnamed fields after a click", () => {
   const buffer = makeSkillRecordingBuffer();
   buffer.addInput({ kind: "click", role: "text_field", name: null, value: null }, 100);

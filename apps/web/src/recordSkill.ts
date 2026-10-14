@@ -74,7 +74,8 @@ export function buildRecordSkillPrompt(input: {
     `Harness noted these steps while I worked (${formatOffset(input.durationMs)} long).${limitNote} This list is everything Harness captured; there is no screen recording or video. Treat it as a rough outline, not an exact record: some clicks, shortcuts, and anything an app does not expose can be missing, text I typed was not captured, and some steps may be detours or mistakes.`,
     "",
     "<recorded_steps>",
-    input.steps.trim(),
+    // Labels come from other apps, so one can't close the block early.
+    input.steps.trim().replace(/<\/\s*recorded_steps\s*>/gi, "[/recorded_steps]"),
     "</recorded_steps>",
     "",
     "Before writing anything, we'll trim and finalize the steps together:",
