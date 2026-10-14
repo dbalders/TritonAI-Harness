@@ -26,22 +26,20 @@ export const SidebarIdeasRow = memo(function SidebarIdeasRow() {
 
   if (environmentId === null) return null;
   return (
-    <SidebarMenu className="mt-1">
-      <SidebarMenuItem>
-        <SidebarMenuButton
-          isActive={onIdeasPage}
-          onClick={handleClick}
-          aria-label={unseen > 0 ? `Ideas, ${unseen} new` : "Ideas"}
-        >
-          <LightbulbIcon />
-          <span className="min-w-0 flex-1 truncate">Ideas</span>
-          {unseen > 0 ? (
-            <Badge size="sm" className="ml-auto">
-              {unseen > 9 ? "9+" : unseen}
-            </Badge>
-          ) : null}
-        </SidebarMenuButton>
-      </SidebarMenuItem>
-    </SidebarMenu>
+    <div className="mt-1">
+      <SidebarMenu>
+        <SidebarMenuItem>
+          <SidebarMenuButton
+            isActive={onIdeasPage}
+            onClick={handleClick}
+            aria-label={unseen > 0 ? `Ideas, ${unseen} new` : "Ideas"}
+          >
+            <LightbulbIcon />
+            <span className="min-w-0 flex-1 truncate">Ideas</span>
+            {unseen > 0 ? <Badge size="sm">{unseen > 9 ? "9+" : unseen}</Badge> : null}
+          </SidebarMenuButton>
+        </SidebarMenuItem>
+      </SidebarMenu>
+    </div>
   );
 });
