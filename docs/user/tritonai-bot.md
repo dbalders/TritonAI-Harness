@@ -38,6 +38,16 @@ recall an assignment already running or undo an action sent to another service.
 Pause keeps your saved work and blocks new execution until you resume. Older
 services show the original Handling view and the controls they support.
 
+Services that support it also say why each responsibility, file, assignment or
+pending message is waiting: on you (a reply, a decision, a review, or resuming),
+on your task computer (none chosen, offline, busy with another assignment, or
+claimed with no result yet), on your Microsoft connection, or on the bot's own
+retry. Each status shows the last update a record confirms and its actual next
+check. When nothing is scheduled it says so, and a check whose time has passed is
+marked overdue rather than shown as upcoming. A returned result is never shown as
+verified; only your review completes a responsibility. If a status's own change
+time passes while Harness can't reach the bot, it says it may be out of date.
+
 Open **Watches & routines** to check monitoring freshness and manage scheduled
 prompts. Create a routine from a recipe or your own instructions, choose its
 schedule and timezone, and preview what it will ask the bot to produce. You can

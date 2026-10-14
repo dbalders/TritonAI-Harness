@@ -1,4 +1,4 @@
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { BotIcon, SendIcon, PaperclipIcon } from "lucide-react";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -23,6 +23,8 @@ import {
   replyRoutingText,
 } from "./dotEnhancements";
 import { BotRunStatus } from "./BotRunStatus";
+import { BotWaitingStatus } from "./BotWaitingStatus";
+import { usableWaiting, type DotWaitingAction } from "./dotWaiting";
 import { BotHandlingPanel } from "./BotHandlingPanel";
 import { BotRoutinesPanel } from "./BotRoutinesPanel";
 import { BotFileRecipesPanel } from "./BotFileRecipesPanel";
@@ -49,11 +51,34 @@ import {
   type DotState,
   type DotTask,
   type DotApproval,
+  type DotRun,
   type PendingConnection,
   type PendingMessage,
 } from "./dotClient";
 
 const SIGNUPS_CLOSED = "TritonAI Bot isn't accepting new users right now.";
+
+/**
+ * Keeps the newer of two copies of each versioned record. Reads are ordered by request, but an older copy must never
+ * replace a newer one this workspace has already shown for the same owner.
+ */
+function keepNewest<T>(
+  previous: readonly T[] | undefined,
+  next: readonly T[] | undefined,
+  id: (item: T) => string,
+  version: (item: T) => number | undefined,
+): readonly T[] | undefined {
+  if (!previous || !next) return next;
+  const shown = new Map(previous.map((item) => [id(item), item]));
+  return next.map((item) => {
+    const before = shown.get(id(item));
+    const older = before === undefined ? undefined : version(before);
+    const current = version(item);
+    return before !== undefined && older !== undefined && current !== undefined && older > current
+      ? before
+      : item;
+  });
+}
 
 export function DotPage() {
   const serviceUrl = useBotServiceUrl();
@@ -77,6 +102,7 @@ export function DotPage() {
 
 function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
   const client = useMemo(() => new DotClient(serviceUrl), [serviceUrl]);
+  const navigate = useNavigate();
   const [session, setSession] = useState<DotSession | null>(() => {
     clearBotSessions(sessionStorage, serviceUrl);
     return readDotSession(sessionStorage, serviceUrl);
@@ -112,6 +138,8 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
   // Older followed tasks may fall outside /state's recent-task window. Load them only on demand.
   const taskEvidence = useRef(new Map<string, DotTask>());
   const approvalEvidence = useRef(new Map<string, DotApproval>());
+  // Finished conversation runs outside the newest page, loaded on demand to show how a reply's continuation ended.
+  const runEvidence = useRef(new Map<string, DotRun>());
   const openingItems = useRef(new Set<string>());
   const pendingOpen = useRef<{
     kind: string;
@@ -153,6 +181,7 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
         acceptedRunIds.current.clear();
         taskEvidence.current.clear();
         approvalEvidence.current.clear();
+        runEvidence.current.clear();
         openingItems.current.clear();
         pendingOpen.current = null;
         latestSnapshot.current = null;
@@ -190,21 +219,52 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
         requestSequence !== stateRequestSequence.current
       )
         return;
-      latestSnapshot.current = result;
-      for (const run of result.runs) {
+      const merged: DotState = {
+        ...result,
+        ...(result.responsibilities
+          ? {
+              responsibilities: keepNewest(
+                latestSnapshot.current?.responsibilities,
+                result.responsibilities,
+                (item) => item.responsibilityId,
+                (item) => item.version,
+              )!,
+            }
+          : {}),
+        ...(result.fileRecipes
+          ? {
+              fileRecipes: keepNewest(
+                latestSnapshot.current?.fileRecipes,
+                result.fileRecipes,
+                (item) => item.recipeId,
+                (item) => item.version,
+              )!,
+            }
+          : {}),
+      };
+      latestSnapshot.current = merged;
+      for (const run of merged.runs) {
         if (!isPendingDotRun(run)) acceptedRunIds.current.delete(run.runId);
       }
       const followed = new Map(
-        (result.responsibilities ?? []).map((item) => [item.source.taskId, item.sourceEvidence]),
+        (merged.responsibilities ?? []).map((item) => [item.source.taskId, item.sourceEvidence]),
+      );
+      // A finished assignment a file recipe links to stays loaded; finished results don't change.
+      const recipeTasks = new Set(
+        (merged.fileRecipes ?? []).flatMap((recipe) =>
+          recipe.events.flatMap((event) => (event.taskId ? [event.taskId] : [])),
+        ),
       );
       for (const [taskId, cached] of taskEvidence.current) {
         const evidence = followed.get(taskId);
-        const recent = result.tasks.find((task) => task.taskId === taskId);
-        const inbox = result.handling?.items.find(
+        const recent = merged.tasks.find((task) => task.taskId === taskId);
+        const inbox = merged.handling?.items.find(
           (item) => item.target?.kind === "task" && item.target.id === taskId,
         );
+        const recipeResult =
+          recipeTasks.has(taskId) && ["completed", "failed", "cancelled"].includes(cached.status);
         if (
-          (!followed.has(taskId) && !inbox) ||
+          (!followed.has(taskId) && !inbox && !recipeResult) ||
           (evidence && evidence.updatedAt !== (recent ?? cached).updatedAt) ||
           (inbox && inbox.version !== (recent ?? cached).updatedAt)
         )
@@ -213,12 +273,12 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
       }
       const tasks = new Map([
         ...taskEvidence.current,
-        ...result.tasks.map((task) => [task.taskId, task] as const),
+        ...merged.tasks.map((task) => [task.taskId, task] as const),
       ]);
       for (const [approvalId] of approvalEvidence.current) {
-        const recent = result.approvals.find((approval) => approval.approvalId === approvalId);
+        const recent = merged.approvals.find((approval) => approval.approvalId === approvalId);
         if (
-          !result.handling?.items.some(
+          !merged.handling?.items.some(
             (item) => item.target?.kind === "approval" && item.target.id === approvalId,
           )
         )
@@ -227,9 +287,17 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
       }
       const approvals = new Map([
         ...approvalEvidence.current,
-        ...result.approvals.map((approval) => [approval.approvalId, approval] as const),
+        ...merged.approvals.map((approval) => [approval.approvalId, approval] as const),
       ]);
-      setState({ ...result, tasks: [...tasks.values()], approvals: [...approvals.values()] });
+      // A loaded older run stays in the conversation until the newest page includes it; finished runs don't change.
+      for (const [runId] of runEvidence.current)
+        if (merged.runs.some((run) => run.runId === runId)) runEvidence.current.delete(runId);
+      setState({
+        ...merged,
+        tasks: [...tasks.values()],
+        approvals: [...approvals.values()],
+        runs: [...merged.runs, ...runEvidence.current.values()],
+      });
       setConnected(true);
     } catch (cause) {
       if (
@@ -726,6 +794,123 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
     }
   }
 
+  /** Pauses or resumes against the displayed control version; a newer change since then is refused, not overwritten. */
+  function togglePause(paused: boolean) {
+    if (!session || !state || busyPause || state.user.paused === paused) return;
+    setError(null);
+    setBusyPause(true);
+    void client
+      .pause(session, paused, state.user.controlVersion)
+      .then(refresh)
+      .catch(async (cause) => {
+        if (cause instanceof DotApiError && cause.status === 409) await refresh();
+        reportError(cause, session.ownerToken);
+      })
+      .finally(() => setBusyPause(false));
+  }
+
+  /**
+   * Opens a conversation run outside the newest page through the owner-scoped run route, so an outcome the snapshot
+   * couldn't confirm is read from the run's own record where it was answered.
+   */
+  async function openRun(runId: string) {
+    if (document.getElementById(`bot-run-${runId}`)) {
+      openItem("run", runId);
+      return;
+    }
+    if (!session) return;
+    const ownerToken = session.ownerToken;
+    const key = `${ownerToken}:run:${runId}`;
+    if (activeOwner.current !== ownerToken || openingItems.current.has(key)) return;
+    openingItems.current.add(key);
+    setError(null);
+    try {
+      const { run } = await client.run(session, runId);
+      if (activeOwner.current !== ownerToken || !mounted.current) return;
+      if (run.runId !== runId) throw new Error("That conversation message is unavailable.");
+      stateRequestSequence.current += 1;
+      if (!isPendingDotRun(run)) cacheEvidence(runEvidence.current, runId, run);
+      pendingOpen.current = { kind: "run", id: runId, ownerToken };
+      setState((current) =>
+        current
+          ? { ...current, runs: [...current.runs.filter((value) => value.runId !== runId), run] }
+          : current,
+      );
+    } catch (cause) {
+      reportError(cause, ownerToken);
+    } finally {
+      openingItems.current.delete(key);
+    }
+  }
+
+  /**
+   * Opens a decision outside the current page of pending approvals through the owner-scoped approval route. Only a
+   * still-pending decision is shown for action; anything else is reported, never displayed as pending.
+   */
+  async function openApproval(approvalId: string) {
+    if (document.getElementById(`bot-approval-${approvalId}`)) {
+      openItem("approval", approvalId);
+      return;
+    }
+    if (!session) return;
+    const ownerToken = session.ownerToken;
+    const key = `${ownerToken}:approval:${approvalId}`;
+    if (activeOwner.current !== ownerToken || openingItems.current.has(key)) return;
+    openingItems.current.add(key);
+    setError(null);
+    try {
+      const { approval } = await client.approval(session, approvalId);
+      if (activeOwner.current !== ownerToken || !mounted.current) return;
+      if (approval.approvalId !== approvalId || approval.status !== "pending")
+        throw new Error("This decision is no longer pending. Refresh to see its outcome.");
+      stateRequestSequence.current += 1;
+      cacheEvidence(approvalEvidence.current, approvalId, approval);
+      pendingOpen.current = { kind: "approval", id: approvalId, ownerToken };
+      setState((current) =>
+        current
+          ? {
+              ...current,
+              approvals: [
+                ...current.approvals.filter((value) => value.approvalId !== approvalId),
+                approval,
+              ],
+            }
+          : current,
+      );
+    } catch (cause) {
+      reportError(cause, ownerToken);
+    } finally {
+      openingItems.current.delete(key);
+    }
+  }
+
+  /** Recovery from a waiting status: each action goes to the existing control for it. */
+  function waitingAction(action: DotWaitingAction) {
+    const target = action.target;
+    if (action.kind === "resume-bot") return togglePause(false);
+    if (action.kind === "reconnect")
+      return void ensureLocalApi()
+        .shell.openExternal(`${serviceUrl}/connections`)
+        .catch(reportError);
+    if (action.kind === "task-computer") return void navigate({ to: "/settings/tritonai-bot" });
+    if (action.kind === "reply") {
+      const item = state?.responsibilities?.find((value) => value.responsibilityId === target?.id);
+      if (!item || !state?.enhancements?.replyContinuation) return;
+      setReplyTarget({ id: item.responsibilityId, title: item.title });
+      setReplyStatus(null);
+      composerInput.current?.focus();
+      return;
+    }
+    if (!target) return;
+    if (target.kind === "approval") return void openApproval(target.id);
+    if (target.kind === "run") return void openRun(target.id);
+    if (target.kind === "task") {
+      if (document.getElementById(`bot-task-${target.id}`)) return openItem("task", target.id);
+      return void loadTaskEvidence(target.id, true).catch(() => undefined);
+    }
+    openItem(target.kind === "recipe" ? "file-recipe" : target.kind, target.id);
+  }
+
   async function downloadAttachment(attachmentId: string) {
     if (!session) throw new Error("Sign in again to continue.");
     const result = await client.downloadAttachment(session, attachmentId);
@@ -855,19 +1040,7 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
                   variant="outline"
                   size="sm"
                   disabled={!state || !connected || busyPause}
-                  onClick={() => {
-                    if (!state || busyPause) return;
-                    setError(null);
-                    setBusyPause(true);
-                    void client
-                      .pause(session, !state.user.paused, state.user.controlVersion)
-                      .then(refresh)
-                      .catch(async (cause) => {
-                        if (cause instanceof DotApiError && cause.status === 409) await refresh();
-                        reportError(cause, session.ownerToken);
-                      })
-                      .finally(() => setBusyPause(false));
-                  }}
+                  onClick={() => state && togglePause(!state.user.paused)}
                 >
                   {state?.user.paused ? "Resume bot" : "Pause bot"}
                 </Button>
@@ -991,7 +1164,14 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
                             <summary className="cursor-pointer font-medium">
                               {task.title} · {task.status}
                             </summary>
-                            <div className="mt-2">
+                            <div className="mt-2 space-y-2">
+                              {usableWaiting(task.waiting) && (
+                                <BotWaitingStatus
+                                  waiting={usableWaiting(task.waiting)!}
+                                  subject={task.title}
+                                  timezone={state.handling?.timezone}
+                                />
+                              )}
                               {state.enhancements?.resultCards && task.structuredResult ? (
                                 <BotResultCard
                                   result={task.structuredResult}
@@ -1257,6 +1437,7 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
                       }}
                       onSnooze={(item) => handlingResponsibility(item, "snooze")}
                       onResume={(item) => handlingResponsibility(item, "resume")}
+                      onWaitingAction={waitingAction}
                     />
                     <BotRoutinesPanel
                       watches={state?.watches}
@@ -1307,6 +1488,7 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
                             return started;
                           })
                         }
+                        onWaitingAction={waitingAction}
                       />
                     )}
                     {state?.enhancements?.responsibilities && (
@@ -1323,6 +1505,7 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
                           setReplyStatus(null);
                           composerInput.current?.focus();
                         }}
+                        onWaitingAction={waitingAction}
                       />
                     )}
                     <BotCapabilitiesPanel

@@ -1,3 +1,5 @@
+import type { DotWaitingStatus } from "./dotWaiting";
+
 /** Public owner-client contract for the optional `GET /state` handling view. */
 export type DotHandlingState =
   | "working"
@@ -27,6 +29,8 @@ export interface DotHandlingItem {
   readonly source?: { readonly label: string; readonly link?: string };
   /** Only offer Stop when the server includes `stop`. */
   readonly controls: readonly DotHandlingControl[];
+  /** Why it waits and its real next check; absent for kinds the service doesn't explain and on older services. */
+  readonly waiting?: DotWaitingStatus;
 }
 
 export interface DotHandlingView {

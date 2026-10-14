@@ -13,7 +13,9 @@ import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
+import { BotWaitingStatus } from "./BotWaitingStatus";
 import type { DotApproval, DotTask } from "./dotClient";
+import { usableWaiting, type DotWaitingAction } from "./dotWaiting";
 import {
   fileRecipeBlockedText,
   fileRecipeEventLabel,
@@ -40,6 +42,8 @@ export interface BotFileRecipesPanelProps {
   readonly onEdit: (recipe: DotFileRecipe, input: DotFileRecipeInput) => Promise<unknown>;
   readonly onAction: (recipe: DotFileRecipe, action: DotFileRecipeAction) => Promise<unknown>;
   readonly onStart: (recipe: DotFileRecipe, event: DotFileRecipeEvent) => Promise<unknown>;
+  /** Opens a file's decision or assignment (loading it when it is outside the snapshot), or another recovery. */
+  readonly onWaitingAction?: ((action: DotWaitingAction) => void) | undefined;
 }
 
 const SHOWN_EVENTS = 10;
@@ -307,18 +311,22 @@ function EventRow({
   approvals,
   tasks,
   onStart,
+  onWaitingAction,
 }: {
   readonly event: DotFileRecipeEvent;
   readonly recipe: DotFileRecipe;
   readonly approvals: readonly DotApproval[];
   readonly tasks: readonly DotTask[];
   readonly onStart: BotFileRecipesPanelProps["onStart"];
+  readonly onWaitingAction: BotFileRecipesPanelProps["onWaitingAction"];
 }) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const link = safeRecipeLink(event.version.webUrl);
-  const progress = fileRecipeEventProgress(event, approvals, tasks);
+  // The service reads the file's run, decision and assignment; older services fall back to this snapshot's records.
+  const waiting = usableWaiting(event.waiting);
+  const progress = waiting ? undefined : fileRecipeEventProgress(event, approvals, tasks);
   const read = fileRecipeReadSummary(event);
   return (
     <li className="space-y-1 border-t pt-1">
@@ -336,6 +344,14 @@ function EventRow({
       </div>
       <p className="text-xs text-muted-foreground">Seen {timestamp(event.seenAt)}</p>
       {event.reason && <p className="text-xs text-muted-foreground">{event.reason}</p>}
+      {waiting && (
+        <BotWaitingStatus
+          waiting={waiting}
+          subject={event.version.name}
+          onAction={onWaitingAction}
+          canAct={() => onWaitingAction !== undefined}
+        />
+      )}
       {progress && <p className="text-xs text-muted-foreground">{progress}</p>}
       {read && <p className="text-xs text-muted-foreground">{read}</p>}
       {event.startable && (
@@ -384,6 +400,7 @@ function RecipeRow({
   onEdit,
   onAction,
   onStart,
+  onWaitingAction,
 }: {
   readonly recipe: DotFileRecipe;
   readonly approvals: readonly DotApproval[];
@@ -391,6 +408,7 @@ function RecipeRow({
   readonly onEdit: () => void;
   readonly onAction: BotFileRecipesPanelProps["onAction"];
   readonly onStart: BotFileRecipesPanelProps["onStart"];
+  readonly onWaitingAction: BotFileRecipesPanelProps["onWaitingAction"];
 }) {
   const [busy, setBusy] = useState<DotFileRecipeAction | null>(null);
   const [confirmStop, setConfirmStop] = useState(false);
@@ -420,6 +438,7 @@ function RecipeRow({
     }
   };
   const folderLink = safeRecipeLink(recipe.folder.webUrl);
+  const waiting = usableWaiting(recipe.waiting);
   const events = showAll ? recipe.events : recipe.events.slice(0, SHOWN_EVENTS);
   return (
     <li id={`bot-file-recipe-${recipe.recipeId}`} tabIndex={-1} className="space-y-2 border-t pt-2">
@@ -452,8 +471,21 @@ function RecipeRow({
       <p className="whitespace-pre-wrap break-words text-xs text-muted-foreground">
         Expected result: {recipe.expectedOutput}
       </p>
-      {recipe.status === "paused" && (
-        <p className="text-xs text-muted-foreground">{PAUSED[recipe.pausedReason ?? "owner"]}</p>
+      {waiting ? (
+        <BotWaitingStatus
+          waiting={waiting}
+          subject={recipe.name}
+          onAction={(action) =>
+            action.kind === "resume-recipe" ? void act("resume") : onWaitingAction?.(action)
+          }
+          canAct={(action) =>
+            action.kind === "resume-recipe" ? busy === null : onWaitingAction !== undefined
+          }
+        />
+      ) : (
+        recipe.status === "paused" && (
+          <p className="text-xs text-muted-foreground">{PAUSED[recipe.pausedReason ?? "owner"]}</p>
+        )
       )}
       <dl className="space-y-1 text-xs text-muted-foreground">
         <div>
@@ -472,12 +504,14 @@ function RecipeRow({
             {recipe.lastSuccessAt ? timestamp(recipe.lastSuccessAt) : "No successful check yet"}
           </dd>
         </div>
-        <div>
-          <dt className="inline">Next check: </dt>
-          <dd className="inline">
-            {recipe.status === "active" ? timestamp(recipe.nextCheckAt) : "Not scheduled"}
-          </dd>
-        </div>
+        {!waiting && (
+          <div>
+            <dt className="inline">Next check: </dt>
+            <dd className="inline">
+              {recipe.status === "active" ? timestamp(recipe.nextCheckAt) : "Not scheduled"}
+            </dd>
+          </div>
+        )}
         {recipe.lastError && (
           <div>
             <dt className="inline">Problem: </dt>
@@ -485,7 +519,7 @@ function RecipeRow({
           </div>
         )}
       </dl>
-      {recipe.blocked && (
+      {recipe.blocked && waiting?.code !== "recipe-full" && (
         <p role="status" className="text-xs text-muted-foreground">
           {fileRecipeBlockedText(recipe.blocked)}
         </p>
@@ -555,6 +589,7 @@ function RecipeRow({
                 approvals={approvals}
                 tasks={tasks}
                 onStart={onStart}
+                onWaitingAction={onWaitingAction}
               />
             ))}
           </ul>
@@ -611,6 +646,7 @@ export function BotFileRecipesPanel({
   onEdit,
   onAction,
   onStart,
+  onWaitingAction,
 }: BotFileRecipesPanelProps) {
   const [editing, setEditing] = useState<DotFileRecipe | "new" | null>(null);
   const current =
@@ -669,6 +705,7 @@ export function BotFileRecipesPanel({
                 onEdit={() => setEditing(recipe)}
                 onAction={onAction}
                 onStart={onStart}
+                onWaitingAction={onWaitingAction}
               />
             ))}
           </ul>

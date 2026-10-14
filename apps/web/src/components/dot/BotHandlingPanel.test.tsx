@@ -283,3 +283,72 @@ it("keeps an in-flight action busy, prevents duplicate stops, and announces fail
   expect(button("Confirm stop").disabled).toBe(false);
   expect(button("Cancel").disabled).toBe(false);
 });
+
+it("explains a waiting item with its reason and real next check, offering only recoveries its own controls lack", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(Date.parse("2026-10-08T12:00:00.000Z"));
+  const onWaitingAction = vi.fn();
+  const waiting = item({
+    kind: "responsibility",
+    id: "budget",
+    title: "Quarterly budget review",
+    state: "waiting-on-system",
+    controls: ["open", "snooze", "stop"],
+    note: "Generic note that the waiting status replaces.",
+    waiting: {
+      code: "computer-offline",
+      on: "computer",
+      phase: "queued",
+      text: "The selected task is queued. Synthetic Mac is offline, so it waits until that computer checks in.",
+      action: { kind: "task-computer", label: "Open task computer settings" },
+      confirmed: { at: "2026-10-08T11:56:00.000Z", what: "Synthetic Mac checked in" },
+      next: [{ kind: "check", at: "2026-10-08T12:05:00.000Z", what: "Check the selected task" }],
+    },
+  });
+  const decision = item({
+    kind: "approval",
+    id: "approval-1",
+    title: "Rebuild the summary",
+    state: "waiting-for-you",
+    controls: ["review", "stop"],
+    waiting: {
+      code: "decision-needed",
+      on: "you",
+      text: "This request is waiting for your decision. Nothing starts until you approve it.",
+      action: {
+        kind: "decide",
+        label: "Review and decide",
+        target: { kind: "approval", id: "approval-1" },
+      },
+      next: [{ kind: "event", what: "Waits for your decision; nothing is checked on a schedule" }],
+    },
+  });
+  await act(async () =>
+    root.render(
+      <BotHandlingPanel
+        handling={view([waiting, decision])}
+        onStop={vi.fn()}
+        onOpen={vi.fn()}
+        canOpen={() => true}
+        onWaitingAction={onWaitingAction}
+      />,
+    ),
+  );
+  const text = container.textContent ?? "";
+  expect(text).toContain("Synthetic Mac is offline");
+  expect(text).toContain("Last confirmed: Synthetic Mac checked in");
+  expect(text).toContain("Next check: Check the selected task ·");
+  expect(text).not.toContain("Generic note that the waiting status replaces.");
+  const labels = [...container.querySelectorAll("button")].map((node) => node.textContent);
+  // The approval's own Review control covers deciding; the status doesn't add a second one.
+  expect(labels).not.toContain("Review and decide");
+  const settings = [...container.querySelectorAll("button")].find(
+    (node) => node.textContent === "Open task computer settings",
+  )!;
+  await act(async () => settings.click());
+  expect(onWaitingAction).toHaveBeenCalledWith({
+    kind: "task-computer",
+    label: "Open task computer settings",
+  });
+  vi.useRealTimers();
+});

@@ -10,6 +10,7 @@ import type {
 } from "./dotEnhancements";
 import type { DotCapability, DotMicrosoftState } from "./dotDiscovery";
 import type { DotHandlingItem, DotHandlingStopResult, DotHandlingView } from "./dotHandling";
+import type { DotWaitingStatus } from "./dotWaiting";
 import type { DotScheduledPrompt, DotScheduledPromptAction, DotWatch } from "./dotRoutines";
 import type {
   DotFileRecipe,
@@ -60,6 +61,10 @@ export interface DotRun {
     readonly step: number;
   };
   readonly activityFresh?: boolean;
+  /** When a running run's lease ends (epoch milliseconds); after it, its progress is no longer current. */
+  readonly leaseExpiresAt?: number;
+  /** Where an unfinished run is: queued, deferred to a recorded retry time, quiet or interrupted. */
+  readonly waiting?: DotWaitingStatus;
 }
 
 export function isPendingDotRun(run: DotRun): boolean {
@@ -75,6 +80,8 @@ export interface DotTask {
   readonly result?: string;
   readonly detail?: { readonly kind?: string; readonly channel?: string; readonly text?: string };
   readonly structuredResult?: DotStructuredResult;
+  /** Queued, claimed, returned or uncertain, and what it waits on; Harness assignments only. */
+  readonly waiting?: DotWaitingStatus;
 }
 
 export interface DotApproval {
@@ -85,6 +92,7 @@ export interface DotApproval {
   readonly payload: Record<string, unknown>;
   /** Why an assignment drafted from a responsibility reply can no longer start; it can only be declined. */
   readonly notStartable?: string;
+  readonly waiting?: DotWaitingStatus;
 }
 
 export interface DotMemory {
@@ -181,6 +189,8 @@ export interface DotTaskComputer {
 }
 
 export interface DotState {
+  /** When the service read this snapshot; absent on older services. */
+  readonly generatedAt?: string;
   readonly streamId?: string;
   readonly enhancements?: Partial<
     Readonly<
@@ -192,7 +202,8 @@ export interface DotState {
         | "replyContinuation"
         | "attachments"
         | "memoryCorrection"
-        | "fileRecipes",
+        | "fileRecipes"
+        | "waitingReasons",
         boolean
       >
     >

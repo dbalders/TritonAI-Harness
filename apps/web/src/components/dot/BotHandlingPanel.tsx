@@ -11,6 +11,8 @@ import {
 } from "../ui/alert-dialog";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
+import { BotWaitingStatus } from "./BotWaitingStatus";
+import { usableWaiting, type DotWaitingAction } from "./dotWaiting";
 import type {
   DotHandlingItem,
   DotHandlingState,
@@ -82,7 +84,10 @@ export function BotHandlingPanel({
   canOpen,
   onSnooze,
   onResume,
+  onWaitingAction,
 }: {
+  /** Recoveries the row's own Review, Open and Stop controls don't cover: resume the bot, reply, reconnect, choose a computer. */
+  readonly onWaitingAction?: ((action: DotWaitingAction) => void) | undefined;
   readonly decisionInbox?: boolean;
   readonly canOpen?: (item: DotHandlingItem) => boolean;
   readonly onOpen?: (item: DotHandlingItem) => void;
@@ -235,6 +240,7 @@ export function BotHandlingPanel({
               <ul className="divide-y">
                 {items.map((item) => {
                   const link = sourceUrl(item.source?.link);
+                  const waiting = usableWaiting(item.waiting);
                   return (
                     <li key={`${item.kind}:${item.id}`} className="space-y-1 py-2">
                       <div className="flex flex-wrap items-center gap-2">
@@ -314,21 +320,38 @@ export function BotHandlingPanel({
                           </Button>
                         )}
                       </div>
-                      {item.note && (
-                        <p className="wrap-anywhere text-muted-foreground">{item.note}</p>
-                      )}
-                      {item.upNext && (
-                        <p className="wrap-anywhere text-muted-foreground">
-                          Next: {item.upNext.what}
-                          {" · "}
-                          <HandlingTime at={item.upNext.at} timezone={handling.timezone} />
-                        </p>
-                      )}
-                      {item.lastActivityAt && (
-                        <p className="text-xs text-muted-foreground">
-                          Last activity:{" "}
-                          <HandlingTime at={item.lastActivityAt} timezone={handling.timezone} />
-                        </p>
+                      {waiting ? (
+                        <BotWaitingStatus
+                          waiting={waiting}
+                          subject={item.title}
+                          timezone={handling.timezone}
+                          onAction={onWaitingAction}
+                          canAct={(action) =>
+                            onWaitingAction !== undefined &&
+                            ["reply", "resume-bot", "reconnect", "task-computer"].includes(
+                              action.kind,
+                            )
+                          }
+                        />
+                      ) : (
+                        <>
+                          {item.note && (
+                            <p className="wrap-anywhere text-muted-foreground">{item.note}</p>
+                          )}
+                          {item.upNext && (
+                            <p className="wrap-anywhere text-muted-foreground">
+                              Next: {item.upNext.what}
+                              {" · "}
+                              <HandlingTime at={item.upNext.at} timezone={handling.timezone} />
+                            </p>
+                          )}
+                          {item.lastActivityAt && (
+                            <p className="text-xs text-muted-foreground">
+                              Last activity:{" "}
+                              <HandlingTime at={item.lastActivityAt} timezone={handling.timezone} />
+                            </p>
+                          )}
+                        </>
                       )}
                       {item.source && (
                         <p className="wrap-anywhere text-xs text-muted-foreground">

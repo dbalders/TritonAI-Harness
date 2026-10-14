@@ -1,3 +1,5 @@
+import type { DotReplyOutcome, DotWaitingStatus } from "./dotWaiting";
+
 /** Optional owner-service features; clients keep older services usable. */
 export interface DotAttachment {
   readonly attachmentId: string;
@@ -64,6 +66,8 @@ export interface DotResponsibility {
   readonly reviewedAt?: string;
   /** Absent on older services and on responsibilities that never used replies. */
   readonly replies?: DotResponsibilityReplies;
+  /** Why it waits and its real next check; absent on older services. */
+  readonly waiting?: DotWaitingStatus;
 }
 
 export type DotReplyIntent = "input" | "requirement" | "blocker" | "cancel" | "question";
@@ -81,6 +85,14 @@ export interface DotResponsibilityReply {
   readonly handledByRunId?: string;
   readonly handledAt?: string;
   readonly notContinued?: string;
+  /** How the continuation that took it ended when it stopped partway, failed or was interrupted. */
+  readonly continuation?: {
+    readonly status: "halted" | "failed" | "uncertain";
+    readonly at: string;
+    readonly reason?: string;
+  };
+  /** The service's reading of this reply's outcome; absent on older services. */
+  readonly outcome?: DotReplyOutcome;
 }
 
 export interface DotResponsibilityReplies {

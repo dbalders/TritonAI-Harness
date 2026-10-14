@@ -4,7 +4,9 @@ import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
+import { BotWaitingStatus } from "./BotWaitingStatus";
 import type { DotRun, DotTask } from "./dotClient";
+import { usableWaiting, type DotWaitingAction } from "./dotWaiting";
 import type {
   DotHeldReply,
   DotReplyIntent,
@@ -32,6 +34,8 @@ const INTENT: Record<DotReplyIntent, string> = {
 const HELD_REPLY_MS = 7 * 24 * 60 * 60 * 1000;
 
 function replyState(reply: DotResponsibilityReply): string {
+  // The service reads the outcome from the reply and its run, so a turn that stopped partway isn't shown as continued.
+  if (reply.outcome?.text) return reply.outcome.text;
   if (!reply.handledByRunId) return "Waiting to continue";
   return reply.notContinued ? `Not continued: ${reply.notContinued}` : "Continued";
 }
@@ -63,6 +67,7 @@ function ResponsibilityReplies({
   busy,
   onAction,
   onReply,
+  onWaitingAction,
 }: {
   readonly item: DotResponsibility;
   readonly held: ReadonlyArray<{ run: DotRun; held: DotHeldReply }>;
@@ -70,6 +75,8 @@ function ResponsibilityReplies({
   /** Resolves false when the change failed; the row shows the error. */
   readonly onAction: (input: DotResponsibilityInput) => Promise<boolean>;
   readonly onReply: () => void;
+  /** Opens the run behind an outcome the snapshot couldn't confirm. */
+  readonly onWaitingAction?: ((action: DotWaitingAction) => void) | undefined;
 }) {
   const [input, setInput] = useState("");
   const replies = item.replies;
@@ -187,6 +194,16 @@ function ResponsibilityReplies({
               <li key={reply.seq}>
                 {INTENT[reply.intent]} · {new Date(reply.receivedAt).toLocaleString()} ·{" "}
                 {replyState(reply)}
+                {reply.outcome?.action?.target?.kind === "run" && onWaitingAction && (
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    className="ms-2"
+                    onClick={() => onWaitingAction(reply.outcome!.action!)}
+                  >
+                    {reply.outcome.action.label}
+                  </Button>
+                )}
                 <span className="block text-muted-foreground">{reply.reason}</span>
               </li>
             ))}
@@ -359,6 +376,7 @@ function ResponsibilityRow({
   onOpen,
   onLoadTask,
   onReply,
+  onWaitingAction,
 }: {
   readonly item: DotResponsibility;
   readonly task: DotTask | undefined;
@@ -369,6 +387,7 @@ function ResponsibilityRow({
   readonly onOpen: (taskId: string) => void;
   readonly onLoadTask: (taskId: string) => Promise<unknown>;
   readonly onReply: () => void;
+  readonly onWaitingAction?: ((action: DotWaitingAction) => void) | undefined;
 }) {
   const [busy, setBusy] = useState(false);
   const [reviewed, setReviewed] = useState(false);
@@ -412,6 +431,7 @@ function ResponsibilityRow({
     task.updatedAt === item.sourceEvidence.updatedAt &&
     task.status === item.sourceEvidence.status;
   const needsEvidence = !task || (item.sourceEvidence !== undefined && !evidenceMatchesTask);
+  const waiting = usableWaiting(item.waiting);
   return (
     <li
       id={`bot-responsibility-${item.responsibilityId}`}
@@ -438,15 +458,33 @@ function ResponsibilityRow({
           <dd className="whitespace-pre-wrap break-words">{item.completionCriteria}</dd>
         </div>
       </dl>
-      <p className="text-xs text-muted-foreground">
-        Allowed: observe task and notify you.
-        {item.nextWakeAt ? ` Next check: ${new Date(item.nextWakeAt).toLocaleString()}.` : ""}
-      </p>
-      <p className="text-xs text-muted-foreground">
-        {item.sourceEvidence?.available
-          ? `Latest task: ${item.sourceEvidence.status} · ${new Date(item.sourceEvidence.updatedAt).toLocaleString()}`
-          : "Task evidence unavailable; completion is unconfirmed."}
-      </p>
+      {waiting ? (
+        <>
+          <BotWaitingStatus
+            waiting={waiting}
+            subject={item.title}
+            onAction={(action) => (action.kind === "reply" ? onReply() : onWaitingAction?.(action))}
+            canAct={(action) =>
+              action.kind === "reply"
+                ? replies && item.replies?.enabled === true
+                : onWaitingAction !== undefined
+            }
+          />
+          <p className="text-xs text-muted-foreground">Allowed: observe task and notify you.</p>
+        </>
+      ) : (
+        <>
+          <p className="text-xs text-muted-foreground">
+            Allowed: observe task and notify you.
+            {item.nextWakeAt ? ` Next check: ${new Date(item.nextWakeAt).toLocaleString()}.` : ""}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            {item.sourceEvidence?.available
+              ? `Latest task: ${item.sourceEvidence.status} · ${new Date(item.sourceEvidence.updatedAt).toLocaleString()}`
+              : "Task evidence unavailable; completion is unconfirmed."}
+          </p>
+        </>
+      )}
       {task && needsEvidence && (
         <p role="status" className="text-xs text-muted-foreground">
           The task evidence changed. Load the latest result before reviewing completion.
@@ -520,6 +558,7 @@ function ResponsibilityRow({
             )
           }
           onReply={onReply}
+          onWaitingAction={onWaitingAction}
         />
       )}
       {item.status === "needs-review" &&
@@ -560,6 +599,7 @@ export function BotResponsibilitiesPanel({
   onOpen,
   onLoadTask,
   onReply,
+  onWaitingAction,
 }: {
   readonly responsibilities: readonly DotResponsibility[];
   readonly tasks: readonly DotTask[];
@@ -570,6 +610,8 @@ export function BotResponsibilitiesPanel({
   readonly onOpen: (taskId: string) => void;
   readonly onLoadTask: (taskId: string) => Promise<unknown>;
   readonly onReply: (item: DotResponsibility) => void;
+  /** Recovery for a waiting status: open the decision or task, resume the bot, or go to task computer settings. */
+  readonly onWaitingAction?: ((action: DotWaitingAction) => void) | undefined;
 }) {
   const [editing, setEditing] = useState<DotResponsibility | "new" | null>(null);
   const current =
@@ -635,6 +677,7 @@ export function BotResponsibilitiesPanel({
               onOpen={onOpen}
               onLoadTask={onLoadTask}
               onReply={() => onReply(item)}
+              onWaitingAction={onWaitingAction}
             />
           ))}
         </ul>

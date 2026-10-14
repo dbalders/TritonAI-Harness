@@ -13,6 +13,7 @@ vi.mock("../../localApi", () => ({
 
 import { DotPage } from "./DotPage";
 import { saveDotSession, type DotState } from "./dotClient";
+import type { DotResponsibility } from "./dotEnhancements";
 import type { DotScheduledPrompt } from "./dotRoutines";
 
 const serviceUrl = "https://bot.example.test";
@@ -2114,4 +2115,385 @@ it("offers only Deny for an assignment approval that can no longer start", async
   expect(() => button("Approve")).toThrow();
   await click("Deny");
   expect(requests).toEqual([{ path: "/approvals/stale1", body: { approved: false } }]);
+});
+
+describe("waiting reasons", () => {
+  const minutes = (count: number) => new Date(Date.parse(at) + count * 60_000).toISOString();
+  function followed(overrides: Partial<DotResponsibility> = {}): DotResponsibility {
+    return {
+      responsibilityId: "budget",
+      version: 3,
+      title: "Quarterly budget review",
+      intendedOutcome: "A reviewed budget summary",
+      source: { kind: "harness-task", taskId: "budget-task" },
+      completionCriteria: "Totals match the signed spreadsheet.",
+      nextAction: "Observe this task and bring back its result for review.",
+      allowedActions: ["observe-task", "notify-owner"],
+      status: "active",
+      linkedTaskIds: ["budget-task"],
+      linkedRunIds: [],
+      ...overrides,
+    };
+  }
+  const claimedText =
+    "The selected task was claimed by your task computer. No result has come back yet.";
+  const offlineText =
+    "The selected task is queued. Synthetic Mac is offline, so it waits until that computer checks in.";
+  function withFollowed(responsibility: DotResponsibility): DotState {
+    return {
+      ...withPanels(),
+      enhancements: { responsibilities: true, replyContinuation: true, waitingReasons: true },
+      responsibilities: [responsibility],
+    };
+  }
+
+  it("explains why a followed task waits and resumes a paused bot from its recovery", async () => {
+    state = {
+      ...withFollowed(
+        followed({
+          waiting: {
+            code: "bot-paused",
+            on: "you",
+            text: "Your bot is paused, so this isn't checked and your replies don't continue it until you resume.",
+            action: { kind: "resume-bot", label: "Resume your bot" },
+            confirmed: { at, what: "Last change" },
+            next: [{ kind: "event", what: "Checks resume when you resume your bot" }],
+          },
+        }),
+      ),
+      user: { ...snapshot().user, paused: true, controlVersion: 7 },
+    };
+    await render();
+    const status = container.querySelector('[aria-label="Status of Quarterly budget review"]')!;
+    expect(status.textContent).toContain("Waiting on you");
+    expect(status.textContent).toContain("Next: Checks resume when you resume your bot");
+    expect(status.textContent).not.toContain("Next check:");
+    await click("Resume your bot");
+    expect(requests).toContainEqual({ path: "/resume", body: { expectedControlVersion: 7 } });
+  });
+
+  it("labels a reply whose continuation stopped partway with its real outcome, not as continued", async () => {
+    state = withFollowed(
+      followed({
+        replies: {
+          enabled: true,
+          lastSeq: 1,
+          requirementVersion: 1,
+          revisions: [],
+          log: [
+            {
+              seq: 1,
+              runId: "reply-run",
+              sourceId: "harness:first",
+              channel: "harness",
+              receivedAt: at,
+              intent: "input",
+              reason: "You supplied information or a link.",
+              association: "explicit",
+              handledByRunId: "reply-run",
+              handledAt: at,
+              continuation: { status: "halted", at, reason: "You changed the deadline." },
+              outcome: {
+                code: "halted",
+                text: "Continued, then stopped: You changed the deadline. Steps it took before stopping still stand.",
+              },
+            },
+          ],
+        },
+      }),
+    );
+    await render();
+    const replies = container.querySelector('[aria-label="Replies for Quarterly budget review"]')!;
+    expect(replies.textContent).toContain("Continued, then stopped: You changed the deadline.");
+    expect(replies.textContent).not.toMatch(/·\s*Continued(?!,)/);
+  });
+
+  it("opens a file's assignment outside the newest tasks through the scoped route and keeps its result", async () => {
+    state = {
+      ...withPanels(),
+      enhancements: { fileRecipes: true, waitingReasons: true },
+      fileRecipes: [
+        {
+          recipeId: "fr_0123456789ab",
+          name: "Inbox summaries",
+          instructions: "Summarize each new report.",
+          expectedOutput: "A short summary.",
+          approval: "ask",
+          folder: { folderId: "folder-inbox", name: "Inbox", webUrl: "" },
+          status: "active",
+          generation: 1,
+          version: 4,
+          cadence: "about every 5 minutes",
+          events: [
+            {
+              key: "0123456789abcdef01234567",
+              version: {
+                itemId: "item-1",
+                name: "q3-report.md",
+                cTag: "c1",
+                size: 12,
+                lastModifiedDateTime: at,
+                webUrl: "",
+              },
+              status: "assigned",
+              seenAt: at,
+              updatedAt: at,
+              taskId: "old-task",
+              current: true,
+              startable: false,
+              waiting: {
+                code: "not-in-snapshot",
+                on: "unknown",
+                text: "This file's assignment is no longer active. Open it to see its result.",
+                action: {
+                  kind: "open",
+                  label: "Open the assignment",
+                  target: { kind: "task", id: "old-task" },
+                },
+                next: [{ kind: "none", what: "Its assignment has its own status." }],
+              },
+            },
+          ],
+          createdAt: at,
+          updatedAt: at,
+        },
+      ],
+    };
+    const read = vi.fn(async () =>
+      Response.json({
+        ok: true,
+        task: {
+          taskId: "old-task",
+          title: "Inbox summaries: q3-report.md",
+          status: "completed",
+          createdAt: at,
+          updatedAt: at,
+          detail: { kind: "harness-task" },
+          result: "Summary written next to the source.",
+        },
+      }),
+    );
+    onTaskRead = read;
+    await render();
+    expect(container.textContent).not.toContain("Summary written next to the source.");
+    await click("Open the assignment");
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(container.querySelector<HTMLDetailsElement>("#bot-task-old-task")!.open).toBe(true);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2500);
+    });
+    expect(container.textContent).toContain("Summary written next to the source.");
+  });
+
+  it("checks a reply whose outcome the service couldn't confirm by loading its run into the conversation and keeping it", async () => {
+    state = withFollowed(
+      followed({
+        replies: {
+          enabled: true,
+          lastSeq: 1,
+          requirementVersion: 0,
+          revisions: [],
+          log: [
+            {
+              seq: 1,
+              runId: "old-reply-run",
+              sourceId: "harness:old",
+              channel: "harness",
+              receivedAt: at,
+              intent: "input",
+              reason: "You supplied information or a link.",
+              association: "explicit",
+              handledByRunId: "old-reply-run",
+              handledAt: at,
+              outcome: {
+                code: "unconfirmed",
+                text: "Taken to continue this. How the continuation ended isn't in this view; check how it ended before relying on it.",
+                action: {
+                  kind: "open",
+                  label: "Check how it ended",
+                  target: { kind: "run", id: "old-reply-run" },
+                },
+              },
+            },
+          ],
+        },
+      }),
+    );
+    const base = globalThis.fetch;
+    const read = vi.fn(async () =>
+      Response.json({
+        ok: true,
+        run: {
+          runId: "old-reply-run",
+          threadId: "dot",
+          event: { kind: "message", text: "Here is the budget spreadsheet" },
+          status: "failed",
+          createdAt: at,
+          updatedAt: at,
+          error: "The continuation failed before finishing.",
+        },
+      }),
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async (input, init) =>
+        new URL(String(input)).pathname === "/runs/old-reply-run" ? read() : base(input, init),
+      ),
+    );
+    await render();
+    const replies = container.querySelector('[aria-label="Replies for Quarterly budget review"]')!;
+    // Only the take is known: it is never shown as continued.
+    expect(replies.textContent).toContain("How the continuation ended isn't in this view");
+    expect(replies.textContent).not.toMatch(/·\s*Continued/);
+    expect(container.querySelector("#bot-run-old-reply-run")).toBeNull();
+    await click("Check how it ended");
+    expect(read).toHaveBeenCalledTimes(1);
+    // The run's own record answers in the conversation, where it is opened.
+    expect(container.querySelector("#bot-run-old-reply-run")).not.toBeNull();
+    expect(container.textContent).toContain("The continuation failed before finishing.");
+    expect(document.activeElement?.id).toBe("bot-run-old-reply-run");
+    // A refresh whose newest page doesn't include it keeps it in view.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2500);
+    });
+    expect(container.textContent).toContain("The continuation failed before finishing.");
+    await click("Check how it ended");
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  it("never replaces a newer responsibility it already showed with an older copy from a later read", async () => {
+    const claimed = followed({
+      version: 5,
+      waiting: {
+        code: "claimed",
+        on: "computer",
+        text: claimedText,
+        next: [{ kind: "event", what: "Its result returns here" }],
+      },
+    });
+    const older = followed({
+      version: 4,
+      waiting: {
+        code: "computer-offline",
+        on: "computer",
+        text: offlineText,
+        next: [{ kind: "event", what: "Starts when picked up" }],
+      },
+    });
+    state = withFollowed(claimed);
+    await render();
+    expect(container.textContent).toContain(claimedText);
+    state = withFollowed(older);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2500);
+    });
+    expect(container.textContent).toContain(claimedText);
+    expect(container.textContent).not.toContain(offlineText);
+    state = withFollowed({ ...older, version: 6 });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2500);
+    });
+    expect(container.textContent).toContain(offlineText);
+  });
+
+  it("drops a late read for the previous owner after switching owners", async () => {
+    vi.spyOn(crypto.subtle, "digest").mockResolvedValue(new ArrayBuffer(32));
+    const newSession = { ...session, ownerToken: "replacement-owner-token" };
+    state = withFollowed(
+      followed({
+        waiting: {
+          code: "claimed",
+          on: "computer",
+          text: claimedText,
+          next: [{ kind: "event", what: "x" }],
+        },
+      }),
+    );
+    const previousFetch = globalThis.fetch;
+    let reads = 0;
+    let finishPoll!: (response: Response) => void;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>((input, init) => {
+        if (new URL(String(input)).pathname === "/state" && ++reads === 2)
+          return new Promise<Response>((resolve) => {
+            finishPoll = resolve;
+          });
+        return previousFetch(input, init);
+      }),
+    );
+    onPost = async (path) => {
+      if (path === "/client/connect/start")
+        return Response.json({
+          ok: true,
+          requestId: "connection1",
+          expiresAt: session.expiresAt,
+          verificationUrl: `${serviceUrl}/sign-in`,
+          userCode: "SYNTHETIC",
+        });
+      if (path === "/client/connect/token") return Response.json({ ok: true, ...newSession });
+      return Response.json({ ok: true });
+    };
+    await render();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2500);
+    });
+    const previousOwner = state;
+    await click("Disconnect");
+    state = withFollowed(
+      followed({
+        responsibilityId: "other",
+        title: "Vendor summary",
+        waiting: {
+          code: "computer-none",
+          on: "you",
+          text: "No computer is set to run Harness tasks.",
+          next: [{ kind: "event", what: "x" }],
+        },
+      }),
+    );
+    await click("Sign in with UC San Diego");
+    await act(async () => finishPoll(Response.json({ ok: true, ...previousOwner })));
+    expect(container.textContent).toContain("No computer is set to run Harness tasks.");
+    expect(container.textContent).not.toContain(claimedText);
+  });
+
+  it("keeps the last status while disconnected and says when its own change time has passed", async () => {
+    state = withFollowed(
+      followed({
+        waiting: {
+          code: "claimed",
+          on: "computer",
+          text: claimedText,
+          next: [{ kind: "event", what: "Its result returns here" }],
+          changesAt: minutes(3),
+        },
+      }),
+    );
+    vi.setSystemTime(Date.parse(at));
+    const previousFetch = globalThis.fetch;
+    let offline = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>((input, init) =>
+        offline && new URL(String(input)).pathname === "/state"
+          ? Promise.reject(new TypeError("Failed to fetch"))
+          : previousFetch(input, init),
+      ),
+    );
+    await render();
+    offline = true;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2500);
+    });
+    expect(container.textContent).toContain(
+      "Connection interrupted. These are the last received updates.",
+    );
+    expect(container.textContent).toContain(claimedText);
+    expect(container.textContent).not.toContain("This was expected to change at");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3 * 60_000);
+    });
+    expect(container.textContent).toContain("This was expected to change at");
+  });
 });

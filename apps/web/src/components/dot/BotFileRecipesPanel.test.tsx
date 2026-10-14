@@ -375,3 +375,110 @@ describe("BotFileRecipesPanel", () => {
     );
   });
 });
+
+describe("BotFileRecipesPanel waiting reasons", () => {
+  let reactRoot: Root;
+  let container: HTMLDivElement;
+  beforeEach(() => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    container = document.createElement("div");
+    document.body.append(container);
+    reactRoot = createRoot(container);
+  });
+  afterEach(async () => {
+    await act(async () => reactRoot.unmount());
+    container.remove();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+  const pending: DotApproval = {
+    approvalId: "approval-1",
+    status: "pending",
+    summary: "Harness task: Inbox summaries: q3-report.md",
+    action: "harness-task",
+    payload: {},
+  };
+
+  it("resumes a paused recipe from its status and shows a file's authoritative decision over a stale label", async () => {
+    const onAction = vi.fn<BotFileRecipesPanelProps["onAction"]>(async () => ({}));
+    const onWaitingAction = vi.fn();
+    const paused = recipe({
+      status: "paused",
+      pausedReason: "owner",
+      waiting: {
+        code: "recipe-paused",
+        on: "you",
+        text: "Paused by you. It doesn't check the folder until you resume it.",
+        action: {
+          kind: "resume-recipe",
+          label: "Resume the recipe",
+          target: { kind: "recipe", id: "fr_0123456789ab" },
+        },
+        next: [{ kind: "none", what: "No checks while paused." }],
+      },
+      events: [
+        event({
+          status: "needs-decision",
+          approvalId: "approval-1",
+          waiting: {
+            code: "closed",
+            on: "nothing",
+            phase: "settled",
+            text: "This file's assignment was declined. Nothing from it ran.",
+            next: [{ kind: "none", what: "Nothing more happens to it." }],
+            notes: ["The recipe's list updates at its next check."],
+          },
+        }),
+      ],
+    });
+    await act(async () =>
+      reactRoot.render(
+        <BotFileRecipesPanel
+          recipes={[paused]}
+          approvals={[pending]}
+          tasks={[]}
+          onBrowse={vi.fn()}
+          onCreate={vi.fn()}
+          onEdit={vi.fn()}
+          onAction={onAction}
+          onStart={vi.fn()}
+          onWaitingAction={onWaitingAction}
+        />,
+      ),
+    );
+    const text = container.textContent ?? "";
+    // The stale pending copy in this snapshot would have said "Waiting in your decision inbox"; the service's reading wins.
+    expect(text).toContain("This file's assignment was declined. Nothing from it ran.");
+    expect(text).not.toContain("Waiting in your decision inbox");
+    expect(text).toContain("Next check: none. No checks while paused.");
+    const resume = [...container.querySelectorAll("button")].find(
+      (item) => item.textContent === "Resume the recipe",
+    )!;
+    await act(async () => resume.click());
+    expect(onAction).toHaveBeenCalledWith(paused, "resume");
+    expect(onWaitingAction).not.toHaveBeenCalled();
+  });
+
+  it("keeps an older service's wording, without claiming a decision outside the snapshot was recorded", async () => {
+    await act(async () =>
+      reactRoot.render(
+        <BotFileRecipesPanel
+          recipes={[
+            recipe({ events: [event({ status: "needs-decision", approvalId: "approval-9" })] }),
+          ]}
+          approvals={[]}
+          tasks={[]}
+          onBrowse={vi.fn()}
+          onCreate={vi.fn()}
+          onEdit={vi.fn()}
+          onAction={vi.fn()}
+          onStart={vi.fn()}
+        />,
+      ),
+    );
+    expect(container.textContent).toContain(
+      "This file's decision isn't in this view. Open it to see its current state.",
+    );
+    expect(container.textContent).not.toContain("Decision recorded");
+  });
+});

@@ -1,4 +1,5 @@
 import type { DotApproval, DotTask } from "./dotClient";
+import type { DotWaitingStatus } from "./dotWaiting";
 
 export type DotFileRecipeEventStatus =
   | "settling"
@@ -45,6 +46,8 @@ export interface DotFileRecipeEvent {
   readonly current: boolean;
   /** The owner may explicitly Start this file now. */
   readonly startable: boolean;
+  /** Where an unfinished file is, from its run, decision or assignment; absent for finished files and older services. */
+  readonly waiting?: DotWaitingStatus;
 }
 
 export interface DotFileRecipe {
@@ -58,6 +61,8 @@ export interface DotFileRecipe {
   readonly pausedReason?: "owner" | "connection-changed" | "folder-unavailable";
   /** Owner changes advance it; send it back so a stale screen cannot change a newer recipe. */
   readonly generation: number;
+  /** Advances on every write; a client keeps the newest it has seen. Absent on older services. */
+  readonly version?: number;
   readonly cadence: string;
   readonly coverage?: {
     readonly complete: boolean;
@@ -82,6 +87,9 @@ export interface DotFileRecipe {
   readonly lastCheckedAt?: string;
   readonly lastSuccessAt?: string;
   readonly lastError?: string;
+  readonly lastErrorCode?: string;
+  /** Why the recipe waits and its real next check; absent on older services. */
+  readonly waiting?: DotWaitingStatus;
   /** Newest first. */
   readonly events: readonly DotFileRecipeEvent[];
   readonly createdAt: string;
@@ -139,7 +147,8 @@ export function fileRecipeEventProgress(
 ): string | undefined {
   if (event.taskId) {
     const task = tasks.find((item) => item.taskId === event.taskId);
-    if (!task) return "Assignment created. Open your tasks for its current status.";
+    // Older assignments can fall outside the newest tasks in a snapshot; that says nothing about their state.
+    if (!task) return "This assignment isn't in this view. Open it to see its current state.";
     if (task.status === "completed") return "Harness returned a result.";
     if (task.status === "failed") return "Harness reported a failure.";
     if (task.status === "uncertain")
@@ -149,7 +158,8 @@ export function fileRecipeEventProgress(
   }
   if (event.approvalId && event.status === "needs-decision") {
     const approval = approvals.find((item) => item.approvalId === event.approvalId);
-    if (!approval) return "Decision recorded. Refresh to see the outcome.";
+    if (!approval)
+      return "This file's decision isn't in this view. Open it to see its current state.";
     return approval.notStartable
       ? `This assignment can no longer start: ${approval.notStartable} Decline it.`
       : "Waiting in your decision inbox. Nothing starts until you approve it.";
