@@ -1,5 +1,5 @@
 import { ArrowLeftIcon, ChartNoAxesColumnIcon, LightbulbIcon, SettingsIcon } from "lucide-react";
-import type { ReactNode } from "react";
+import type { ReactElement, ReactNode } from "react";
 import { memo, useCallback } from "react";
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
 
@@ -109,6 +109,7 @@ function SidebarUtilityItem({
   onClick,
   badge,
   tooltip = true,
+  render,
 }: {
   icon: ReactNode;
   label: string;
@@ -117,9 +118,10 @@ function SidebarUtilityItem({
   badge?: ReactNode;
   /** Off where the icon and its badge already say enough. */
   tooltip?: boolean;
+  render?: ReactElement;
 }) {
   const button = (
-    <SidebarMenuButton aria-label={label} onClick={onClick} size="icon">
+    <SidebarMenuButton aria-label={label} onClick={onClick} render={render} size="icon">
       {icon}
     </SidebarMenuButton>
   );
@@ -157,6 +159,7 @@ function SidebarIdeasItem({ onClick }: { onClick: () => void }) {
       onClick={onClick}
       badge={unseen > 0 ? <Badge size="sm">{unseen > 9 ? "9+" : unseen}</Badge> : undefined}
       tooltip={false}
+      render={<Link to="/ideas" />}
     />
   );
 }
@@ -189,11 +192,6 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   const handleSettingsClick = useCallback(() => {
     closeMobileSidebar();
     void navigate({ to: "/settings" });
-  }, [closeMobileSidebar, navigate]);
-
-  const handleIdeasClick = useCallback(() => {
-    closeMobileSidebar();
-    void navigate({ to: "/ideas" });
   }, [closeMobileSidebar, navigate]);
 
   const handleUsageClick = useCallback(() => {
@@ -236,7 +234,7 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
             label="Usage"
             onClick={handleUsageClick}
           />
-          <SidebarIdeasItem onClick={handleIdeasClick} />
+          <SidebarIdeasItem onClick={closeMobileSidebar} />
         </>
       )}
       <SidebarUpdatePill />

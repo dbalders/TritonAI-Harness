@@ -179,10 +179,10 @@ export function IdeasPage() {
   const handleOpen = useCallback(
     async (idea: Idea) => {
       setActionError(null);
-      // An existing thread's message count is the baseline for noticing the send, so the
+      // An existing thread's message identities are the baseline for noticing the send, so the
       // open is recorded before its composer can send anything.
       if (idea.action.kind === "resume-thread") {
-        await runFeedback(idea, "opened");
+        if (!(await runFeedback(idea, "opened"))) return;
         await openDraft(idea);
         return;
       }
