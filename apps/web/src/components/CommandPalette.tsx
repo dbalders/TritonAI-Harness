@@ -54,6 +54,7 @@ import {
   ChevronRightIcon,
   CornerLeftUpIcon,
   FileSearchIcon,
+  CircleDotIcon,
   FolderGit2Icon,
   FolderIcon,
   FolderPlusIcon,
@@ -212,6 +213,7 @@ import {
   buildSidebarProjectSnapshots,
 } from "../sidebarProjectGrouping";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
+import { readRecordSkillBridge, recordSkill } from "~/components/RecordSkill";
 import { readPullRequestListPreferences } from "~/components/pullRequest/pullRequestListPreferences";
 
 const EMPTY_BROWSE_ENTRIES: FilesystemBrowseResult["entries"] = [];
@@ -1835,6 +1837,35 @@ function OpenCommandPaletteDialog(props: {
           },
         });
         if (refreshed._tag === "Failure") throw squashAtomCommandFailure(refreshed);
+      },
+    });
+  }
+
+  if (readRecordSkillBridge()) {
+    actionItems.push({
+      kind: "action",
+      value: "action:record-skill",
+      searchTerms: ["record", "skill", "teach", "demonstrate", "workflow", "replay"],
+      title: "Record a skill",
+      icon: <CircleDotIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        // The recording comes back to the conversation on screen, if any.
+        await recordSkill(
+          activeThread
+            ? {
+                kind: "thread",
+                threadRef: scopeThreadRef(activeThread.environmentId, activeThread.id),
+              }
+            : activeDraftThread
+              ? {
+                  kind: "project",
+                  projectRef: {
+                    environmentId: activeDraftThread.environmentId,
+                    projectId: activeDraftThread.projectId,
+                  },
+                }
+              : null,
+        );
       },
     });
   }

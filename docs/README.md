@@ -17,6 +17,7 @@
 - [Usage and limits](./user/usage.md)
 - [Memory](./user/memory.md)
 - [Ideas](./user/ideas.md)
+- [Record a skill](./user/record-a-skill.md)
 - [UC San Diego account](./user/ucsd-account.md)
 - [Product usage data](./user/telemetry.md)
 - [Remote access](./user/remote-access.md)
