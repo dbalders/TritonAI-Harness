@@ -81,10 +81,13 @@ already running may continue, and finished results are still delivered.
 
 Results arrive in the conversation. A finished assignment is not proof that the
 intended outcome is correct; review its result and any returned files before
-relying on them. If a generated file can't be returned, the result says so and
-names the output folder to collect it from. On Windows, keep Harness's data
-folder on a local drive. If a result can't be delivered, the task computer keeps
-it and retries for up to 24 hours; the assignment is never run again. Open the
+relying on them. Generated files are uploaded for up to a day; a file that still
+can't be returned is listed in the result with the output folder to collect it
+from. On Windows, keep Harness's data folder on a local drive. If the result
+itself can't be delivered, for example while the bot service is unreachable, the
+task computer keeps it and keeps retrying, and it doesn't take new assignments
+until that result is delivered. If the bot refuses the result, Settings shows a
+notice and later assignments continue. The assignment is never run again. Open the
 assignment's Harness thread to see its complete reply.
 
 ## Developer diagnostics
