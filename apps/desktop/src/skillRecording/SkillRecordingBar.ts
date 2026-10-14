@@ -63,7 +63,7 @@ function barHtml(maxDurationMs: number): string {
 }
 
 /** Reads a choice the bar page wrote into its title. */
-export function parseSkillRecordingBarTitle(title: string): SkillRecordingBarAction | null {
+function parseSkillRecordingBarTitle(title: string): SkillRecordingBarAction | null {
   const action = title.split(":")[0];
   return action === "stop" || action === "discard" ? action : null;
 }

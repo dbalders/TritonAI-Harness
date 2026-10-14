@@ -1,7 +1,7 @@
 import type { DesktopSkillRecordingStep } from "@t3tools/contracts";
 
 /** Keeps a recording within a size an ordinary first message can carry. */
-export const RECORD_SKILL_MAX_STEPS_CHARS = 40_000;
+const RECORD_SKILL_MAX_STEPS_CHARS = 40_000;
 
 function formatOffset(atMs: number): string {
   const seconds = Math.floor(atMs / 1000);
