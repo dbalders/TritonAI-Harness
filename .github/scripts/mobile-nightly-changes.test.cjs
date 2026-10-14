@@ -15,7 +15,11 @@ function repository(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "mobile-changes-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const git = (...args) =>
-    execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+    execFileSync("git", args, {
+      cwd: root,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
   const write = (file, contents) => {
     fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
     fs.writeFileSync(path.join(root, file), contents);
@@ -30,7 +34,10 @@ function repository(t) {
   git("init", "--quiet");
   git("config", "user.name", "Test");
   git("config", "user.email", "test@example.com");
-  write("pnpm-workspace.yaml", "packages:\n  - apps/*\n  - packages/*\n\ncatalog:\n  react: 19.0.0\n");
+  write(
+    "pnpm-workspace.yaml",
+    "packages:\n  - apps/*\n  - packages/*\n\ncatalog:\n  react: 19.0.0\n",
+  );
   write("package.json", "{}\n");
   manifest("apps/mobile", "@t3tools/mobile", {
     "@t3tools/client-runtime": "workspace:*",
@@ -89,7 +96,10 @@ test("builds when the app, its shared packages, or build inputs change", (t) => 
 test("skips a source that already built and builds without a usable baseline", (t) => {
   const { root, baseline } = repository(t);
   assert.equal(decideMobileBuild({ root, sourceSha: baseline.sourceSha, baseline }).build, false);
-  assert.equal(decideMobileBuild({ root, sourceSha: baseline.sourceSha, baseline: null }).build, true);
+  assert.equal(
+    decideMobileBuild({ root, sourceSha: baseline.sourceSha, baseline: null }).build,
+    true,
+  );
   const unknown = { ...baseline, sourceSha: "f".repeat(40) };
   assert.match(
     decideMobileBuild({ root, sourceSha: baseline.sourceSha, baseline: unknown }).reason,
@@ -115,7 +125,12 @@ function github(commits, { failChecks = false } = {}) {
             const name = ref === "mobile-nightly" ? commits[0]?.name : ref.replace(/0+$/, "");
             const commit = commits.find((entry) => entry.name === name);
             if (!commit) throw Object.assign(new Error("No commit found"), { status: 422 });
-            return { data: { sha: sha(commit.name), parents: commit.parents.map((p) => ({ sha: sha(p) })) } };
+            return {
+              data: {
+                sha: sha(commit.name),
+                parents: commit.parents.map((p) => ({ sha: sha(p) })),
+              },
+            };
           },
           async getContent({ path: file, ref }) {
             assert.equal(file, "apps/mobile/ios/ci_scripts/nightly-source.json");
@@ -126,7 +141,8 @@ function github(commits, { failChecks = false } = {}) {
         },
         checks: {
           async listForRef({ ref }) {
-            if (failChecks) throw Object.assign(new Error("Resource not accessible"), { status: 403 });
+            if (failChecks)
+              throw Object.assign(new Error("Resource not accessible"), { status: 403 });
             const commit = commits.find((entry) => sha(entry.name) === ref);
             return {
               data: {

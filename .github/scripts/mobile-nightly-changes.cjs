@@ -38,7 +38,8 @@ function workspacePackages(root) {
       : [pattern];
     for (const directory of directories) {
       const file = path.join(root, directory, "package.json");
-      if (fs.existsSync(file)) packages.set(JSON.parse(fs.readFileSync(file, "utf8")).name, directory);
+      if (fs.existsSync(file))
+        packages.set(JSON.parse(fs.readFileSync(file, "utf8")).name, directory);
     }
   }
   return packages;
@@ -53,8 +54,15 @@ function mobileWorkspaceClosure(root) {
     const directory = pending.pop();
     if (closure.has(directory)) continue;
     closure.add(directory);
-    const manifest = JSON.parse(fs.readFileSync(path.join(root, directory, "package.json"), "utf8"));
-    for (const field of ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"]) {
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(root, directory, "package.json"), "utf8"),
+    );
+    for (const field of [
+      "dependencies",
+      "devDependencies",
+      "optionalDependencies",
+      "peerDependencies",
+    ]) {
       for (const [name, range] of Object.entries(manifest[field] ?? {})) {
         if (String(range).startsWith("workspace:") && packages.has(name)) {
           pending.push(packages.get(name));
@@ -163,7 +171,9 @@ async function resolveMobileBuild({ github, context, core, root, sourceSha, forc
     `- ${decision.reason}`,
     ...(baseline ? [`- Compared with: ${baseline.tag} (${baseline.sourceSha})`] : []),
     ...(decision.changed ?? []).slice(0, 25).map((file) => `- \`${file}\``),
-    ...((decision.changed?.length ?? 0) > 25 ? [`- …and ${decision.changed.length - 25} more`] : []),
+    ...((decision.changed?.length ?? 0) > 25
+      ? [`- …and ${decision.changed.length - 25} more`]
+      : []),
   ];
   await core.summary.addRaw(`${summary.join("\n")}\n`).write();
   return decision;
