@@ -3064,10 +3064,41 @@ export default function Sidebar() {
     (projectKey: string) => {
       const projectRef = projectNewThreadTargetByKey.get(projectKey);
       if (!projectRef) return;
+      // The new thread reads its project's settings from the target machine,
+      // so an unreachable machine would leave the click silently pending.
+      const environment = environments.find(
+        (candidate) => candidate.environmentId === projectRef.environmentId,
+      );
+      if (environment && environment.connection.phase !== "connected") {
+        toastManager.add(
+          stackedThreadToast({
+            type: "warning",
+            title: `Can't reach ${environment.label}`,
+            description: "Reconnect it to start a thread in this project.",
+          }),
+        );
+        return;
+      }
       if (isMobile) setOpenMobile(false);
-      focusComposerAfterNewThread(handleNewThreadRef.current(projectRef));
+      const request = handleNewThreadRef.current(projectRef);
+      focusComposerAfterNewThread(request);
+      void request.catch((error: unknown) => {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Could not create thread",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
+      });
     },
-    [focusComposerAfterNewThread, isMobile, projectNewThreadTargetByKey, setOpenMobile],
+    [
+      environments,
+      focusComposerAfterNewThread,
+      isMobile,
+      projectNewThreadTargetByKey,
+      setOpenMobile,
+    ],
   );
   const settledThreadKeys = useMemo(
     () =>
@@ -5220,9 +5251,19 @@ export default function Sidebar() {
                                           className="size-4 shrink-0 text-sidebar-muted-foreground"
                                         />
                                       )}
-                                      <span className="min-w-0 flex-1 truncate text-sm font-medium text-sidebar-muted-foreground">
+                                      <span className="min-w-0 truncate text-sm font-medium text-sidebar-muted-foreground">
                                         {project?.displayName ?? "Other threads"}
                                       </span>
+                                      {/* Same-named folders on two machines differ only
+                                          by where they live; the icon says which. */}
+                                      {project && showProjectEnvironments ? (
+                                        <ProjectEnvironmentBadge
+                                          group={project}
+                                          primaryEnvironmentId={primaryEnvironmentId}
+                                          machineByEnvironmentId={environmentMachineById}
+                                          className="ml-0 text-sidebar-muted-foreground"
+                                        />
+                                      ) : null}
                                     </button>
                                     {project ? (
                                       <button

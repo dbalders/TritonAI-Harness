@@ -508,10 +508,13 @@ export function SettingResetButton({
 export function SettingsPageContainer({
   children,
   className,
+  headerAction,
   width = "readable",
 }: {
   children: ReactNode;
   className?: string;
+  /** The page's main action, shown on the scope line's right. Use `size="sm"`. */
+  headerAction?: ReactNode;
   width?: WorkspacePageWidth;
 }) {
   const navigate = useNavigate();
@@ -541,7 +544,16 @@ export function SettingsPageContainer({
         data-settings-page-scroll
       >
         <WorkspacePageContainer width={width} className={cn("gap-8", className)}>
-          <SettingsScopeSentence />
+          {headerAction ? (
+            <div className="flex min-w-0 items-center gap-3">
+              <div className="min-w-0 flex-1">
+                <SettingsScopeSentence />
+              </div>
+              <div className="shrink-0 pr-3 sm:pr-4">{headerAction}</div>
+            </div>
+          ) : (
+            <SettingsScopeSentence />
+          )}
           {children}
         </WorkspacePageContainer>
       </div>

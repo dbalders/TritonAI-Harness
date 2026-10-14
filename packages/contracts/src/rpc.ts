@@ -301,6 +301,7 @@ import {
   ServerMemorySyncPollResult,
   ServerMemorySyncStartResult,
 } from "./memory.ts";
+import { IdeasError, IdeasFeedbackInput, IdeasSnapshot } from "./ideas.ts";
 import {
   ServerBotTaskComputerAllowInput,
   ServerBotTaskComputerError,
@@ -459,6 +460,10 @@ export const WS_METHODS = {
   serverAllowBotTaskComputer: "server.allowBotTaskComputer",
   serverStopBotTaskComputer: "server.stopBotTaskComputer",
   serverSetBotTaskProject: "server.setBotTaskProject",
+  ideasList: "ideas.list",
+  ideasMarkViewed: "ideas.markViewed",
+  ideasSuggestMore: "ideas.suggestMore",
+  ideasFeedback: "ideas.feedback",
   serverDiscoverSourceControl: "server.discoverSourceControl",
   serverGetTraceDiagnostics: "server.getTraceDiagnostics",
   serverGetProcessDiagnostics: "server.getProcessDiagnostics",
@@ -821,6 +826,30 @@ const WsServerSetBotTaskProjectRpc = Rpc.make(WS_METHODS.serverSetBotTaskProject
   payload: ServerBotTaskComputerProjectInput,
   success: ServerBotTaskComputerStatus,
   error: Schema.Union([ServerBotTaskComputerError, EnvironmentAuthorizationError]),
+});
+
+const WsIdeasListRpc = Rpc.make(WS_METHODS.ideasList, {
+  payload: Schema.Struct({}),
+  success: IdeasSnapshot,
+  error: Schema.Union([IdeasError, EnvironmentAuthorizationError]),
+});
+
+const WsIdeasMarkViewedRpc = Rpc.make(WS_METHODS.ideasMarkViewed, {
+  payload: Schema.Struct({}),
+  success: IdeasSnapshot,
+  error: Schema.Union([IdeasError, EnvironmentAuthorizationError]),
+});
+
+const WsIdeasSuggestMoreRpc = Rpc.make(WS_METHODS.ideasSuggestMore, {
+  payload: Schema.Struct({}),
+  success: IdeasSnapshot,
+  error: Schema.Union([IdeasError, EnvironmentAuthorizationError]),
+});
+
+const WsIdeasFeedbackRpc = Rpc.make(WS_METHODS.ideasFeedback, {
+  payload: IdeasFeedbackInput,
+  success: IdeasSnapshot,
+  error: Schema.Union([IdeasError, EnvironmentAuthorizationError]),
 });
 
 const WsServerDiscoverSourceControlRpc = Rpc.make(WS_METHODS.serverDiscoverSourceControl, {
@@ -1795,6 +1824,10 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerAllowBotTaskComputerRpc,
   WsServerStopBotTaskComputerRpc,
   WsServerSetBotTaskProjectRpc,
+  WsIdeasListRpc,
+  WsIdeasMarkViewedRpc,
+  WsIdeasSuggestMoreRpc,
+  WsIdeasFeedbackRpc,
   WsServerDiscoverSourceControlRpc,
   WsServerGetTraceDiagnosticsRpc,
   WsServerGetProcessDiagnosticsRpc,

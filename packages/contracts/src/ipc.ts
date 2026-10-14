@@ -624,6 +624,64 @@ export const DesktopComputerUseStateSchema = Schema.Struct({
   screenRecordingPermission: Schema.NullOr(Schema.Boolean),
 });
 
+/** An app the user can choose to demonstrate a task in. Local desktop only. */
+/**
+ * One step from a demonstration. Text typed into editable fields is never
+ * captured; `name` can still contain on-screen text, so the user reviews every
+ * step before it reaches an agent. A click's `value` names a non-plain click,
+ * such as "Right-click"; a shortcut's `value` is its keys, such as "Command+B".
+ * An `app` step marks the user moving to another app, named in `name`.
+ */
+export const DesktopSkillRecordingStep = Schema.Struct({
+  atMs: Schema.Int,
+  kind: Schema.Literals([
+    "app",
+    "focus",
+    "edit",
+    "toggle",
+    "select",
+    "window",
+    "menu",
+    "click",
+    "shortcut",
+  ]),
+  role: Schema.NullOr(Schema.String),
+  name: Schema.NullOr(Schema.String),
+  value: Schema.NullOr(Schema.String),
+});
+export type DesktopSkillRecordingStep = typeof DesktopSkillRecordingStep.Type;
+
+export const DesktopSkillRecordingStartResult = Schema.Union([
+  Schema.Struct({
+    status: Schema.Literal("recording"),
+    sessionId: Schema.String,
+    maxDurationMs: Schema.Int,
+    maxSteps: Schema.Int,
+  }),
+  Schema.Struct({
+    status: Schema.Literals(["busy", "permission-required", "unavailable"]),
+  }),
+]);
+export type DesktopSkillRecordingStartResult = typeof DesktopSkillRecordingStartResult.Type;
+
+export const DesktopSkillRecordingStopResult = Schema.Union([
+  Schema.Struct({
+    status: Schema.Literal("stopped"),
+    durationMs: Schema.Int,
+    steps: Schema.Array(DesktopSkillRecordingStep),
+    limitReached: Schema.NullOr(Schema.Literals(["time", "steps"])),
+  }),
+  Schema.Struct({ status: Schema.Literals(["not-found", "failed"]) }),
+]);
+export type DesktopSkillRecordingStopResult = typeof DesktopSkillRecordingStopResult.Type;
+
+/** A choice made on the floating recording bar, delivered to the window that started it. */
+export const DesktopSkillRecordingControl = Schema.Struct({
+  sessionId: Schema.String,
+  action: Schema.Literals(["stop", "discard"]),
+});
+export type DesktopSkillRecordingControl = typeof DesktopSkillRecordingControl.Type;
+
 export interface PickFolderOptions {
   initialPath?: string | null;
   // When set, the desktop dialog opens against the named backend's
@@ -1321,6 +1379,18 @@ export interface DesktopBridge {
   getAdvertisedEndpoints: () => Promise<readonly AdvertisedEndpoint[]>;
   getComputerUseState: () => Promise<DesktopComputerUseState>;
   setComputerUseEnabled: (enabled: boolean) => Promise<DesktopComputerUseState>;
+  // Skill recording members are optional while older desktop shells can host a newer web client.
+  /** Shows the OS accessibility prompt. Only call from an explicit user action. */
+  requestSkillRecordingPermission?: () => Promise<boolean>;
+  /** Records whichever app is in front, other than Harness, until stopped. */
+  startSkillRecording?: () => Promise<DesktopSkillRecordingStartResult>;
+  stopSkillRecording?: (sessionId: string) => Promise<DesktopSkillRecordingStopResult>;
+  /** Discards a recording without returning anything it captured. */
+  cancelSkillRecording?: (sessionId: string) => Promise<void>;
+  /** Stop or Discard chosen on the floating recording bar. Discard has already happened. */
+  onSkillRecordingControl?: (
+    listener: (control: DesktopSkillRecordingControl) => void,
+  ) => () => void;
   getWslState: () => Promise<DesktopWslState>;
   setWslBackendEnabled: (enabled: boolean) => Promise<DesktopWslState>;
   setWslDistro: (distro: string | null) => Promise<DesktopWslState>;

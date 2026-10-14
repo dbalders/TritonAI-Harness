@@ -54,9 +54,11 @@ import {
   ChevronRightIcon,
   CornerLeftUpIcon,
   FileSearchIcon,
+  CircleDotIcon,
   FolderGit2Icon,
   FolderIcon,
   FolderPlusIcon,
+  LightbulbIcon,
   MessageSquareDashedIcon,
   LinkIcon,
   MessageSquareIcon,
@@ -211,6 +213,7 @@ import {
   buildSidebarProjectSnapshots,
 } from "../sidebarProjectGrouping";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
+import { readRecordSkillBridge, recordSkill } from "~/components/RecordSkill";
 import { readPullRequestListPreferences } from "~/components/pullRequest/pullRequestListPreferences";
 
 const EMPTY_BROWSE_ENTRIES: FilesystemBrowseResult["entries"] = [];
@@ -1838,6 +1841,35 @@ function OpenCommandPaletteDialog(props: {
     });
   }
 
+  if (readRecordSkillBridge()) {
+    actionItems.push({
+      kind: "action",
+      value: "action:record-skill",
+      searchTerms: ["record", "skill", "teach", "demonstrate", "workflow", "replay"],
+      title: "Record a skill",
+      icon: <CircleDotIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        // The recording comes back to the conversation on screen, if any.
+        await recordSkill(
+          activeThread
+            ? {
+                kind: "thread",
+                threadRef: scopeThreadRef(activeThread.environmentId, activeThread.id),
+              }
+            : activeDraftThread
+              ? {
+                  kind: "project",
+                  projectRef: {
+                    environmentId: activeDraftThread.environmentId,
+                    projectId: activeDraftThread.projectId,
+                  },
+                }
+              : null,
+        );
+      },
+    });
+  }
+
   actionItems.push({
     kind: "action",
     value: "action:open-file-picker",
@@ -2050,6 +2082,17 @@ function OpenCommandPaletteDialog(props: {
       },
     });
   }
+
+  actionItems.push({
+    kind: "action",
+    value: "action:ideas",
+    searchTerms: ["ideas", "suggestions", "what can i do", "examples", "get started", "help"],
+    title: "Open ideas",
+    icon: <LightbulbIcon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await navigate({ to: "/ideas" });
+    },
+  });
 
   actionItems.push({
     kind: "action",

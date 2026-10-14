@@ -188,6 +188,7 @@ import { transcribeVoice } from "./voiceTranscription.ts";
 import { fetchTritonAiUsage } from "./tritonAiUsage.ts";
 import * as MemorySync from "./memory/sync/MemorySync.ts";
 import * as BotTaskComputer from "./bot/BotTaskComputer.ts";
+import * as Ideas from "./ideas/Ideas.ts";
 import * as ForgejoCli from "./sourceControl/ForgejoCli.ts";
 import * as SourceControlProviderRegistry from "./sourceControl/SourceControlProviderRegistry.ts";
 import * as Integrations from "./integrations/IntegrationRegistry.ts";
@@ -612,6 +613,7 @@ const makeWsRpcLayer = (
       const usageLimitSources = yield* UsageLimitSources.UsageLimitSources;
       const memorySync = yield* MemorySync.MemorySync;
       const botTaskComputer = yield* BotTaskComputer.BotTaskComputer;
+      const ideas = yield* Ideas.Ideas;
       const externalLauncher = yield* ExternalLauncher.ExternalLauncher;
       const remoteOpenTargets = yield* RemoteOpenTargets.RemoteOpenTargets;
       const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
@@ -3043,6 +3045,20 @@ const makeWsRpcLayer = (
             memorySync.signOut.pipe(Effect.andThen(memorySync.getStatus)),
             { "rpc.aggregate": "server" },
           ),
+        [WS_METHODS.ideasList]: (_input) =>
+          observeRpcEffect(WS_METHODS.ideasList, ideas.list, { "rpc.aggregate": "server" }),
+        [WS_METHODS.ideasMarkViewed]: (_input) =>
+          observeRpcEffect(WS_METHODS.ideasMarkViewed, ideas.markViewed, {
+            "rpc.aggregate": "server",
+          }),
+        [WS_METHODS.ideasSuggestMore]: (_input) =>
+          observeRpcEffect(WS_METHODS.ideasSuggestMore, ideas.suggestMore, {
+            "rpc.aggregate": "server",
+          }),
+        [WS_METHODS.ideasFeedback]: (input) =>
+          observeRpcEffect(WS_METHODS.ideasFeedback, ideas.feedback(input), {
+            "rpc.aggregate": "server",
+          }),
         [WS_METHODS.serverDiscoverSourceControl]: (_input) =>
           observeRpcEffect(
             WS_METHODS.serverDiscoverSourceControl,

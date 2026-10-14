@@ -74,6 +74,7 @@
         "src/snapShot/GlobalShiftShortcutWorker.ts!",
         "src/snapShot/RegionSnapShotWorker.ts!",
         "src/snapShot/SnapShotAccessibilityWorker.ts!",
+        "src/skillRecording/SkillRecordingWorker.ts!",
         "src/boot.ts!",
         "src/compileCache.ts!",
         "src/main.ts!",

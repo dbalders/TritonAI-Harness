@@ -1,11 +1,14 @@
-import { ArrowLeftIcon, ChartNoAxesColumnIcon, SettingsIcon } from "lucide-react";
-import type { ReactNode } from "react";
+import { ArrowLeftIcon, ChartNoAxesColumnIcon, LightbulbIcon, SettingsIcon } from "lucide-react";
+import type { ReactElement, ReactNode } from "react";
 import { memo, useCallback } from "react";
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
 
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
-import { useEnvironments } from "../../state/environments";
+import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
+import { useEnvironmentQuery } from "../../state/query";
+import { serverEnvironment } from "../../state/server";
+import { Badge } from "../ui/badge";
 import { T3Wordmark } from "../T3Wordmark";
 import {
   resolveEnvironmentIdentificationPillLabel,
@@ -104,24 +107,60 @@ function SidebarUtilityItem({
   icon,
   label,
   onClick,
+  badge,
+  tooltip = true,
+  render,
 }: {
   icon: ReactNode;
   label: string;
   onClick: () => void;
+  /** A small count over the icon's corner. */
+  badge?: ReactNode;
+  /** Off where the icon and its badge already say enough. */
+  tooltip?: boolean;
+  render?: ReactElement;
 }) {
+  const button = (
+    <SidebarMenuButton aria-label={label} onClick={onClick} render={render} size="icon">
+      {icon}
+    </SidebarMenuButton>
+  );
   return (
-    <SidebarMenuItem className="shrink-0">
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <SidebarMenuButton aria-label={label} onClick={onClick} size="icon">
-              {icon}
-            </SidebarMenuButton>
-          }
-        />
-        <TooltipPopup side="top">{label}</TooltipPopup>
-      </Tooltip>
+    <SidebarMenuItem className="relative shrink-0">
+      {tooltip ? (
+        <Tooltip>
+          <TooltipTrigger render={button} />
+          <TooltipPopup side="top">{label}</TooltipPopup>
+        </Tooltip>
+      ) : (
+        button
+      )}
+      {badge ? (
+        <span aria-hidden className="pointer-events-none absolute -top-1 -right-1">
+          {badge}
+        </span>
+      ) : null}
     </SidebarMenuItem>
+  );
+}
+
+/** Ideas, with a count of ideas added since the page was last opened. */
+function SidebarIdeasItem({ onClick }: { onClick: () => void }) {
+  const environmentId = usePrimaryEnvironmentId();
+  const { data } = useEnvironmentQuery(
+    environmentId ? serverEnvironment.ideas({ environmentId, input: {} }) : null,
+  );
+  if (environmentId === null) return null;
+  const unseen = data?.unseenCount ?? 0;
+  return (
+    <SidebarUtilityItem
+      icon={<LightbulbIcon />}
+      label={unseen > 0 ? `Ideas, ${unseen} new` : "Ideas"}
+      onClick={onClick}
+      badge={unseen > 0 ? <Badge size="sm">{unseen > 9 ? "9+" : unseen}</Badge> : undefined}
+      tooltip={false}
+      render={<Link to="/ideas" />}
+    />
   );
 }
 
@@ -195,6 +234,7 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
             label="Usage"
             onClick={handleUsageClick}
           />
+          <SidebarIdeasItem onClick={closeMobileSidebar} />
         </>
       )}
       <SidebarUpdatePill />
