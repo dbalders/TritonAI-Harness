@@ -3,6 +3,8 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
   type ExecutionEnvironmentDescriptor,
+  IdeaAction,
+  IdeaSource,
   type IdeasSnapshot,
   TextGenerationError,
   ThreadId,
@@ -32,6 +34,17 @@ const NOW = Date.parse("2026-10-13T16:00:00.000Z");
 const HOUR = 60 * 60_000;
 const DAY = 24 * HOUR;
 const iso = (ms: number) => new Date(ms).toISOString();
+const encodeIdeaContent = Schema.encodeEffect(
+  Schema.fromJsonString(
+    Schema.Struct({
+      icon: Schema.String,
+      title: Schema.String,
+      body: Schema.String,
+      sources: Schema.Array(IdeaSource),
+      action: IdeaAction,
+    }),
+  ),
+);
 
 const threadIdea = (overrides: Partial<GeneratedIdea> = {}): GeneratedIdea => ({
   ref: "thread:thread-1",
@@ -291,7 +304,7 @@ it.layer(NodeServices.layer)("Ideas", (it) => {
             [1, "sent", sentTitle],
           ] as const) {
             const old = iso(NOW - 61 * DAY);
-            const content = Schema.encodeSync(Schema.UnknownFromJsonString)({
+            const content = yield* encodeIdeaContent({
               icon: "💡",
               title,
               body: "An earlier suggestion.",
@@ -305,7 +318,7 @@ it.layer(NodeServices.layer)("Ideas", (it) => {
           }
           // Recent history must not displace permanent feedback from repeat validation.
           for (let index = 0; index < 60; index++) {
-            const content = Schema.encodeSync(Schema.UnknownFromJsonString)({
+            const content = yield* encodeIdeaContent({
               icon: "💡",
               title: `Recent unrelated idea ${index}`,
               body: "A different suggestion.",
