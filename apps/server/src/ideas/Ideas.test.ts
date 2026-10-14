@@ -653,6 +653,31 @@ it.layer(NodeServices.layer)("Ideas", (it) => {
     }),
   );
 
+  it.effect("counts a send in a thread that was reverted after the idea was opened", () =>
+    Effect.gen(function* () {
+      const { layer } = yield* makeHarness(() => Effect.succeed([threadIdea()]));
+      yield* TestClock.setTime(NOW);
+      yield* Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* seedWork;
+        const ideas = yield* Ideas.make;
+        yield* ideas.suggestMore;
+        yield* ideas.awaitIdle;
+        const resume = (yield* ideas.list).ideas.find((entry) => entry.section === "continue");
+        assert.isDefined(resume);
+        yield* ideas.feedback({ ideaId: resume!.id, kind: "opened" });
+        // The user reverts the thread, removing its only message, then sends the idea's draft.
+        yield* sql`DELETE FROM projection_thread_messages WHERE message_id = 'm1'`;
+        yield* TestClock.adjust(HOUR);
+        yield* sql`
+          INSERT INTO projection_thread_messages (message_id, thread_id, role, text, is_streaming, created_at, updated_at)
+          VALUES ('m-after-revert', 'thread-1', 'user', 'Please match the remaining lines.', 0, ${iso(NOW + HOUR)}, ${iso(NOW + HOUR)})
+        `;
+        assert.isUndefined((yield* ideas.list).ideas.find((entry) => entry.id === resume!.id));
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    }),
+  );
+
   it.effect("keeps a snoozed idea snoozed when asked to dismiss it", () =>
     Effect.gen(function* () {
       const { layer } = yield* makeHarness(() => Effect.succeed([]));

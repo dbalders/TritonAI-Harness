@@ -154,7 +154,7 @@ interface IdeaRow {
   readonly updatedAt: string;
   readonly openedAt: string | null;
   readonly draftThreadIdsJson: string | null;
-  readonly openedMessageCount: number | null;
+  readonly openedMessageIdsJson: string | null;
   readonly snoozedUntil: string | null;
   readonly hiddenAt: string | null;
 }
@@ -225,7 +225,7 @@ const ideaColumns = (sql: SqlClient.SqlClient) => sql`
   updated_at AS "updatedAt",
   opened_at AS "openedAt",
   draft_thread_ids_json AS "draftThreadIdsJson",
-  opened_message_count AS "openedMessageCount",
+  opened_message_ids_json AS "openedMessageIdsJson",
   snoozed_until AS "snoozedUntil",
   hidden_at AS "hiddenAt"
 `;
@@ -294,15 +294,20 @@ export const make = Effect.gen(function* () {
    * Whether a message was sent from an opened idea's draft, without trusting
    * message times, which can come from a client with a skewed clock:
    * - a draft thread recorded for the idea counts once it has any user message;
-   * - an existing thread counts once it has more user messages than when opened.
+   * - an existing thread counts once it has a user message it didn't have when opened.
    * Without either, a message after the open containing the prompt's fixed text counts.
    */
   const wasSent = (row: IdeaRow, content: IdeaContent, openedAt: string) => {
     if (content.action.kind === "resume-thread") {
-      if (row.openedMessageCount !== null) {
-        return userMessageCount(content.action.threadId).pipe(
-          Effect.map((count) => count > (row.openedMessageCount ?? 0)),
-        );
+      if (row.openedMessageIdsJson !== null) {
+        return sql<{ readonly found: number }>`
+          SELECT EXISTS (
+            SELECT 1 FROM projection_thread_messages
+            WHERE thread_id = ${content.action.threadId}
+              AND role = 'user'
+              AND message_id NOT IN (SELECT value FROM json_each(${row.openedMessageIdsJson}))
+          ) AS "found"
+        `.pipe(Effect.map(([found]) => Boolean(found?.found)));
       }
       return sql<{ readonly found: number }>`
         SELECT EXISTS (
@@ -331,12 +336,6 @@ export const make = Effect.gen(function* () {
       ) AS "found"
     `.pipe(Effect.map(([found]) => Boolean(found?.found)));
   };
-
-  const userMessageCount = (threadId: string) =>
-    sql<{ readonly count: number }>`
-      SELECT COUNT(*) AS "count" FROM projection_thread_messages
-      WHERE thread_id = ${threadId} AND role = 'user'
-    `.pipe(Effect.map(([row]) => row?.count ?? 0));
 
   const threadIsGone = (threadId: string) =>
     sql<{ readonly gone: number }>`
@@ -1058,17 +1057,19 @@ export const make = Effect.gen(function* () {
         if (!(yield* setStatus(row, "opened", nowIso, { openedAt: row.openedAt ?? nowIso }))) {
           return false;
         }
-        // The thread's size at the first open is the baseline a later send is measured against.
+        // The thread's messages at the first open are the ones a later send is not.
         const content = decodeContent(row.contentJson);
         if (
-          row.openedMessageCount === null &&
+          row.openedMessageIdsJson === null &&
           Option.isSome(content) &&
           content.value.action.kind === "resume-thread"
         ) {
-          const count = yield* userMessageCount(content.value.action.threadId);
           yield* sql`
-            UPDATE ideas SET opened_message_count = ${count}
-            WHERE idea_id = ${row.ideaId} AND opened_message_count IS NULL
+            UPDATE ideas SET opened_message_ids_json = (
+              SELECT json_group_array(message_id) FROM projection_thread_messages
+              WHERE thread_id = ${content.value.action.threadId} AND role = 'user'
+            )
+            WHERE idea_id = ${row.ideaId} AND opened_message_ids_json IS NULL
           `;
         }
         // Each client keeps its own draft; sending any of them uses the idea. One statement

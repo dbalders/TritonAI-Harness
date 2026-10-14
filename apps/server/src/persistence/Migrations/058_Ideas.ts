@@ -8,9 +8,9 @@ export default Effect.gen(function* () {
   // rejected, or used idea is not suggested again even when the model words it differently.
   // `content_json` holds the card (icon, title, body, sources, action). `previous_status` is what
   // an undo restores. `draft_thread_ids_json` lists the threads a new-thread idea's drafts become
-  // when sent, one per client that opened it. `opened_message_count` is how many messages a
-  // continue-in-thread idea's thread had when first opened, so a send is seen without comparing
-  // clocks.
+  // when sent, one per client that opened it. `opened_message_ids_json` lists the user messages a
+  // continue-in-thread idea's thread had when first opened; any other message is the send, which
+  // needs no clock comparison and survives the thread being reverted.
   yield* sql`
     CREATE TABLE IF NOT EXISTS ideas (
       idea_id TEXT PRIMARY KEY,
@@ -23,7 +23,7 @@ export default Effect.gen(function* () {
       updated_at TEXT NOT NULL,
       opened_at TEXT,
       draft_thread_ids_json TEXT,
-      opened_message_count INTEGER,
+      opened_message_ids_json TEXT,
       snoozed_until TEXT,
       hidden_at TEXT
     )
