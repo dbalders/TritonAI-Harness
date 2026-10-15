@@ -2,6 +2,7 @@ import { closestCenter, type CollisionDetection, type Modifier } from "@dnd-kit/
 import { verticalListSortingStrategy, type SortingStrategy } from "@dnd-kit/sortable";
 import {
   resolveSidebarDropTarget,
+  SIDEBAR_FOLDER_SCOPE,
   sidebarListItemId,
   sidebarMarkerId,
   type SidebarListItem,
@@ -95,6 +96,34 @@ export function createSidebarCollisionDetection(
   };
 }
 
+/** Folder drag scope: a folder sorts among folders, and a row only among the
+ * rows of its own folder. Draggables carry their scope as sortable data. */
+export const sidebarFolderCollisionDetection: CollisionDetection = (args) => {
+  const scope = args.active.data.current?.folder;
+  const droppableContainers = args.droppableContainers.filter(
+    (container) => container.data.current?.folder === scope,
+  );
+  if (scope !== SIDEBAR_FOLDER_SCOPE) return closestCenter({ ...args, droppableContainers });
+  // Folders differ widely in height, so their centers say little about
+  // where the lifted header is. Match the header to the nearest folder top.
+  return droppableContainers
+    .flatMap((container) => {
+      const rect = args.droppableRects.get(container.id);
+      return rect
+        ? [
+            {
+              id: container.id,
+              data: {
+                droppableContainer: container,
+                value: Math.abs(rect.top - args.collisionRect.top),
+              },
+            },
+          ]
+        : [];
+    })
+    .toSorted((left, right) => left.data.value - right.data.value);
+};
+
 /** Preview the committed section layout without moving or mounting DOM nodes.
  * A zero scaleY marks rows/markers to hide while retaining their measured nodes. */
 export function createSidebarSortingStrategy(input: {
@@ -185,7 +214,11 @@ export function createSidebarSortingStrategy(input: {
     marker("pinned-header");
     projected.push(...groups.pinned);
     marker("pinned-divider");
-    section("active");
+    // Folders keep their measured block; a row entering them stays under
+    // the pointer instead of opening a slot the folders could not show.
+    if (items.some((item) => item.kind === "marker" && item.marker === "active-folders")) {
+      marker("active-folders");
+    } else section("active");
     if (items.some((item) => item.kind === "marker" && item.marker === "working-header")) {
       marker("working-header");
       projected.push(...groups.working);
