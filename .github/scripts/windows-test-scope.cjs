@@ -30,6 +30,8 @@ function affectsWindowsTests(path) {
     /^(package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|vite\.config\.ts|tsconfig[^/]*\.json)$/.test(
       path,
     ) ||
+    // The Windows install consumes manifests outside the selected workspaces too.
+    /(^|\/)package\.json$/.test(path) ||
     /^(config|patches|packages|scripts\/lib)\//.test(path) ||
     /^apps\/(desktop|server)\//.test(path) ||
     /^\.github\/(workflows\/(ci|windows-tests)\.yml|scripts\/windows-test-scope(?:\.test)?\.cjs)$/.test(
