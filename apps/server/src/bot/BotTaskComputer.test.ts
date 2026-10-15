@@ -160,6 +160,7 @@ class FakeBot {
   resultStatuses: number[] = [];
   sessionValid = true;
   rejectedProgressTask: string | null = null;
+  supportsProgress = true;
   ownerId = "owner@ucsd.edu";
 
   handle(path: string, headers: Record<string, string>, body: Record<string, unknown>) {
@@ -242,7 +243,13 @@ class FakeBot {
         json: {
           ok: true,
           task: task
-            ? { ...task, userId: this.ownerId, claimId: `claim-${task.taskId}`, createdAt: "" }
+            ? {
+                ...task,
+                userId: this.ownerId,
+                claimId: `claim-${task.taskId}`,
+                createdAt: "",
+                ...(this.supportsProgress ? { progressVersion: 1 } : {}),
+              }
             : null,
         },
       };
@@ -2051,4 +2058,75 @@ it.layer(NodeServices.layer)("BotTaskComputer", (it) => {
       assert.strictEqual(turns[1]!.threadId, first.threadId);
     }).pipe(Effect.provide(services(bot, harness)));
   });
+  for (const legacy of ["retained-journal", "old-cloud"] as const) {
+    it.effect(
+      `keeps ${legacy} work locally observable without publishing unnegotiated progress`,
+      () => {
+        const bot = new FakeBot(),
+          harness = new FakeHarness();
+        bot.supportsProgress = legacy !== "old-cloud";
+        bot.tasks = [{ taskId: "legacy", title: "Legacy", prompt: "Inspect" }];
+        return Effect.gen(function* () {
+          yield* TestClock.setTime(START);
+          const config = yield* ServerConfig.ServerConfig;
+          harness.scratchRoot = NodePath.resolve(config.baseDir, "scratch");
+          const computer = yield* BotTaskComputer.BotTaskComputer;
+          yield* computer.allow({
+            apiUrl: API,
+            ownerToken: "owner-session",
+            projectId: SCRATCH_PROJECT,
+          });
+          const first = harness.commands.find((command) => command.type === "thread.create")!;
+          if (legacy === "retained-journal") {
+            const journal = yield* readRecoveryJournal;
+            const held = yield* decodeRecoveryHeld(journal.held);
+            const {
+              progressVersion: _marker,
+              projectId: _project,
+              workspaceKey: _workspace,
+              ...old
+            } = held[0] as Record<string, unknown>;
+            yield* writeRecoveryJournal({ ...journal, held: [old] });
+          }
+          harness.approvals.add(first.threadId);
+          bot.rejectedProgressTask = "legacy";
+          bot.tasks = [{ taskId: "next", title: "Next", prompt: "Inspect" }];
+          const restarted = yield* BotTaskComputer.make;
+          yield* TestClock.adjust("30 seconds");
+          yield* restarted.tick;
+          assert.lengthOf(
+            harness.commands,
+            4,
+            "legacy waiting task does not block an independent task",
+          );
+          const status = yield* restarted.getStatus;
+          assert.strictEqual(status.state, "running");
+          assert.strictEqual(
+            status.tasks?.find((task) => task.taskId === "legacy")?.phase,
+            "waiting-approval",
+          );
+          const heartbeat = bot.calls.filter((call) => call.path === "/harness/heartbeat").at(-1)!;
+          assert.deepEqual(heartbeat.body.tasks, []);
+          const held = yield* decodeRecoveryHeld((yield* readRecoveryJournal).held);
+          assert.isFalse(
+            Object.hasOwn(held[0] as object, "progressVersion"),
+            "legacy migration cannot infer negotiation",
+          );
+          harness.approvals.delete(first.threadId);
+          harness.finish(first.threadId, "Legacy completed");
+          yield* restarted.tick;
+          assert.deepInclude(bot.results[0]!, { taskId: "legacy", status: "completed" });
+          const nextHeartbeat = bot.calls
+            .filter((call) => call.path === "/harness/heartbeat")
+            .at(-1)!;
+          const published = nextHeartbeat.body.tasks as Array<{ taskId: string }>;
+          assert.isFalse(published.some((task) => task.taskId === "legacy"));
+          assert.strictEqual(
+            published.some((task) => task.taskId === "next"),
+            legacy !== "old-cloud",
+          );
+        }).pipe(Effect.provide(services(bot, harness, 1)));
+      },
+    );
+  }
 });

@@ -89,6 +89,8 @@ recent visible messages, activity, approval state, and completed result, with th
 time of the last report. These reports require the task computer to stay online;
 an old report cannot confirm current progress. Open its thread from Bot settings
 to answer a pending question or review a command approval.
+Assignments already running when you update may return only their final result;
+they do not prevent new independent assignments from starting.
 
 Ask the bot to continue a particular assignment to send new instructions to that
 same thread. A follow-up keeps the thread's workspace and permissions and waits

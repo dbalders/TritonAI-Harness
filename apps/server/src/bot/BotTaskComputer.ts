@@ -138,6 +138,7 @@ const ClaimedTask = Schema.Struct({
   taskId: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_-]{1,128}$/u)),
   userId: Schema.String,
   claimId: Schema.String.check(Schema.isMinLength(1)),
+  progressVersion: Schema.optional(Schema.Literal(1)),
   title: Schema.String,
   prompt: Schema.String,
   operation: Schema.optional(Schema.Unknown),
@@ -178,6 +179,8 @@ const Held = Schema.Struct({
   threadId: Schema.String,
   messageId: Schema.String,
   claimedAt: Schema.String,
+  /** Negotiated per claim; absent legacy claims never publish fenced progress. */
+  progressVersion: Schema.optional(Schema.Literal(1)),
   startedAt: Schema.optional(Schema.String),
   started: Schema.Boolean,
   outcome: Schema.NullOr(Outcome),
@@ -818,6 +821,7 @@ export const make = Effect.gen(function* () {
       let held: typeof Held.Type = {
         taskId: task.taskId,
         claimId: task.claimId,
+        ...(task.progressVersion === 1 ? { progressVersion: 1 as const } : {}),
         title: task.title,
         threadId: yield* crypto.randomUUIDv4,
         messageId: yield* crypto.randomUUIDv4,
@@ -1157,7 +1161,12 @@ export const make = Effect.gen(function* () {
     const rejectedProgress = new Map<string, string>();
     // Publish terminal progress before final delivery removes its active journal entry.
     if (initial.active) {
-      const tasks = yield* readProgress(initial, now);
+      const publishable = new Set(
+        initial.held.filter((task) => task.progressVersion === 1).map((task) => task.taskId),
+      );
+      const tasks = (yield* readProgress(initial, now)).filter((task) =>
+        publishable.has(task.taskId),
+      );
       const reply = yield* post(`${initial.apiUrl}/harness/heartbeat`, workerHeaders(initial), {
         capabilities: BOT_TASK_CAPABILITIES,
         tasks,
@@ -1172,7 +1181,7 @@ export const make = Effect.gen(function* () {
         const acknowledgements = Array.isArray(reply.value.json.tasks)
           ? reply.value.json.tasks
           : [];
-        for (const task of initial.held) {
+        for (const task of tasks) {
           const ack: unknown = acknowledgements.find(
             (value: unknown) =>
               typeof value === "object" &&

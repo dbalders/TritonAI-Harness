@@ -15,7 +15,7 @@ export const MAX_HELD_TASKS = 16;
 export const MAX_CLAIMS_PER_PASS = 4;
 
 /** Character and byte bounds apply before JSON encoding, including escaping. */
-export function clipTaskText(text: string, chars: number, bytes = chars * 3): string {
+function clipTaskText(text: string, chars: number, bytes = chars * 3): string {
   let clipped = text.slice(0, chars);
   if (/[\uD800-\uDBFF]$/u.test(clipped)) clipped = clipped.slice(0, -1);
   while (Buffer.byteLength(JSON.stringify(clipped)) > bytes) {
