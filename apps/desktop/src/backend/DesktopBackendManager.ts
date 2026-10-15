@@ -93,6 +93,7 @@ export interface DesktopBackendStartConfig extends BackendProcessContext {
   // when false `env` is passed verbatim. WSL mode opts out so a leaking
   // T3CODE_HOME can't pin the WSL backend to /mnt/c/...\.t3.
   readonly extendEnv: boolean;
+  readonly devBackendOwnersDirectory?: string;
   readonly bootstrap: DesktopBackendBootstrapValue;
   readonly bootstrapDelivery: DesktopBackendBootstrapDelivery;
   readonly httpBaseUrl: URL;
@@ -934,68 +935,110 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
           );
         });
 
-        const program = runBackendProcess({
-          ...config.value,
-          desktopTelemetryStream: desktopTelemetryPublisher.encoded,
-          onDesktopTelemetryControl: (message) =>
-            desktopTelemetryPublisher.handleControlForSource(spec.id, message),
-          onStarted: Effect.fn("desktop.backendInstance.onStarted")(function* (pid) {
-            yield* updateActiveRun(runId, (run) => ({
-              ...run,
-              pid: Option.some(pid),
-            }));
-            yield* backendOutputLog.beginSession({
-              details: `pid=${pid} port=${config.value.bootstrap.port} cwd=${config.value.cwd}`,
-            });
-          }),
-          onExitObserved: () =>
-            updateActiveRun(runId, (run) => ({
-              ...run,
-              exitObserved: true,
-            })),
-          onReady: Effect.fn("desktop.backendInstance.onReady")(function* () {
-            const isCurrentRun = yield* Ref.modify(state, (latest) => {
-              const activeRun = Option.getOrUndefined(latest.active);
-              if (activeRun?.id !== runId) {
-                return [false, latest] as const;
-              }
+        const ownersDirectory = config.value.devBackendOwnersDirectory;
+        const pendingFile =
+          ownersDirectory === undefined ? undefined : `${ownersDirectory}/pending-${runId}`;
+        const releaseRegistration =
+          pendingFile === undefined
+            ? Effect.void
+            : fileSystem.remove(pendingFile, { force: true }).pipe(Effect.orDie);
+        const beginRegistration =
+          pendingFile === undefined
+            ? Effect.void
+            : Effect.gen(function* () {
+                yield* fileSystem.writeFileString(pendingFile, "pending", { mode: 0o600 });
+                if (yield* fileSystem.exists(`${ownersDirectory}/stopping`)) {
+                  return yield* Effect.die("Development supervisor is stopping");
+                }
+              }).pipe(Effect.orDie);
+        const program = beginRegistration.pipe(
+          Effect.andThen(
+            runBackendProcess({
+              ...config.value,
+              desktopTelemetryStream: desktopTelemetryPublisher.encoded,
+              onDesktopTelemetryControl: (message) =>
+                desktopTelemetryPublisher.handleControlForSource(spec.id, message),
+              onStarted: Effect.fn("desktop.backendInstance.onStarted")(function* (pid) {
+                // Retain the backend's own process group for recovery/child cleanup.
+                // The dev supervisor also owns it through this per-launch receipt.
+                if (config.value.devBackendOwnersDirectory !== undefined) {
+                  yield* Effect.gen(function* () {
+                    const probe = yield* spawner.spawn(
+                      ChildProcess.make("ps", ["-p", String(pid), "-o", "lstart="], {
+                        env: { LC_ALL: "C" },
+                        stdout: "pipe",
+                      }),
+                    );
+                    const birth = (yield* probe.stdout.pipe(Stream.decodeText(), Stream.runCollect))
+                      .join("")
+                      .trim();
+                    if (!birth)
+                      return yield* Effect.die("Cannot record development backend ownership");
+                    yield* fileSystem.writeFileString(
+                      `${config.value.devBackendOwnersDirectory}/${pid}`,
+                      birth,
+                      { mode: 0o600 },
+                    );
+                  }).pipe(Effect.scoped, Effect.orDie);
+                  yield* releaseRegistration;
+                }
+                yield* updateActiveRun(runId, (run) => ({
+                  ...run,
+                  pid: Option.some(pid),
+                }));
+                yield* backendOutputLog.beginSession({
+                  details: `pid=${pid} port=${config.value.bootstrap.port} cwd=${config.value.cwd}`,
+                });
+              }),
+              onExitObserved: () =>
+                updateActiveRun(runId, (run) => ({
+                  ...run,
+                  exitObserved: true,
+                })),
+              onReady: Effect.fn("desktop.backendInstance.onReady")(function* () {
+                const isCurrentRun = yield* Ref.modify(state, (latest) => {
+                  const activeRun = Option.getOrUndefined(latest.active);
+                  if (activeRun?.id !== runId) {
+                    return [false, latest] as const;
+                  }
 
-              return [
-                true,
-                {
-                  ...latest,
-                  restartAttempt: 0,
-                  ready: true,
+                  return [
+                    true,
+                    {
+                      ...latest,
+                      restartAttempt: 0,
+                      ready: true,
+                    },
+                  ] as const;
+                });
+                if (!isCurrentRun) {
+                  return;
+                }
+
+                yield* spec.onReady?.(config.value.httpBaseUrl) ?? Effect.void;
+                if (
+                  config.value.runningDistro !== undefined &&
+                  config.value.wslRuntimeId !== undefined
+                ) {
+                  yield* wslEnvironment.pruneRuntimes(
+                    config.value.runningDistro,
+                    config.value.wslRuntimeId,
+                  );
+                }
+              }),
+              onReadinessFailure: Effect.fn("desktop.backendInstance.onReadinessFailure")(
+                function* (error) {
+                  yield* logInstanceWarning("backend readiness check failed during bootstrap", {
+                    error: error.message,
+                  });
+                  yield* backendOutputLog.persistFailureSnapshot({
+                    details: error.message,
+                  });
                 },
-              ] as const;
-            });
-            if (!isCurrentRun) {
-              return;
-            }
-
-            yield* spec.onReady?.(config.value.httpBaseUrl) ?? Effect.void;
-            if (
-              config.value.runningDistro !== undefined &&
-              config.value.wslRuntimeId !== undefined
-            ) {
-              yield* wslEnvironment.pruneRuntimes(
-                config.value.runningDistro,
-                config.value.wslRuntimeId,
-              );
-            }
-          }),
-          onReadinessFailure: Effect.fn("desktop.backendInstance.onReadinessFailure")(
-            function* (error) {
-              yield* logInstanceWarning("backend readiness check failed during bootstrap", {
-                error: error.message,
-              });
-              yield* backendOutputLog.persistFailureSnapshot({
-                details: error.message,
-              });
-            },
+              ),
+              onOutput: (streamName, chunk) => backendOutputLog.writeOutputChunk(streamName, chunk),
+            }),
           ),
-          onOutput: (streamName, chunk) => backendOutputLog.writeOutputChunk(streamName, chunk),
-        }).pipe(
           Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
           Effect.provideService(HttpClient.HttpClient, httpClient),
           Scope.provide(runScope),
@@ -1004,6 +1047,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
             onSuccess: (exit) => finalizeRun(exit.reason),
           }),
           Effect.ensuring(Scope.close(runScope, Exit.void).pipe(Effect.ignore)),
+          Effect.ensuring(releaseRegistration),
         );
 
         const fiber = yield* Effect.forkIn(program, parentScope);

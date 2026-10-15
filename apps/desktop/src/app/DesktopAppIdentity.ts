@@ -47,6 +47,11 @@ const normalizeCommitHash = (value: string): Option.Option<string> => {
 
 export const resolveUserDataPath = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
+  // Each dev app uses the same isolated home as its backend. Chromium and Clerk's
+  // single-instance lock must never fall back to another checkout's legacy profile.
+  if (environment.isDevelopment) {
+    return environment.path.join(environment.stateDir, "electron");
+  }
   const fileSystem = yield* FileSystem.FileSystem;
   const legacyPath = environment.path.join(
     environment.appDataDirectory,
@@ -120,9 +125,9 @@ export const make = Effect.gen(function* () {
 
   const configure = Effect.gen(function* () {
     const commitHash = yield* resolveAboutCommitHash;
-    yield* electronApp.setName(environment.displayName);
+    yield* electronApp.setName(environment.branding.displayName);
     yield* electronApp.setAboutPanelOptions({
-      applicationName: environment.displayName,
+      applicationName: environment.branding.displayName,
       applicationVersion: environment.appVersion,
       version: Option.getOrElse(commitHash, () => "unknown"),
     });

@@ -85,6 +85,7 @@ export class DesktopEnvironment extends Context.Service<
     readonly otlpProtocol: OtlpProtocol;
     readonly branding: DesktopAppBranding;
     readonly displayName: string;
+    readonly devBackendOwnersDirectory: Option.Option<string>;
     readonly appUserModelId: string;
     readonly linuxDesktopEntryName: string;
     readonly linuxWmClass: string;
@@ -192,7 +193,10 @@ const make = Effect.fn("desktop.environment.make")(function* (
     isDevelopment,
     appVersion: input.appVersion,
   });
-  const displayName = branding.displayName;
+  const displayName =
+    isDevelopment && Option.isSome(config.devInstanceName)
+      ? `${branding.displayName} (Dev: ${config.devInstanceName.value})`
+      : branding.displayName;
   const stateDir = resolveDesktopStateDir({
     baseDir,
     isDevelopment,
@@ -254,6 +258,7 @@ const make = Effect.fn("desktop.environment.make")(function* (
     otlpProtocol: config.otlpProtocol,
     branding,
     displayName,
+    devBackendOwnersDirectory: isDevelopment ? config.devBackendOwnersDirectory : Option.none(),
     appUserModelId: Option.getOrElse(config.appUserModelIdOverride, () =>
       isDevelopment ? `${TRITONAI_APP_ID_BASE}.dev` : identity.appId,
     ),

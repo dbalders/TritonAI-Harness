@@ -1,5 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as NetService from "@t3tools/shared/Net";
 import {
   DesktopBackendBootstrap,
   type DesktopBackendBootstrap as DesktopBackendBootstrapValue,
@@ -378,13 +379,20 @@ describe("DesktopBackendManager", () => {
   );
 
   it.effect.skipIf(HostProcessPlatform.defaultValue() === "win32")(
-    "force-kills a backend that ignores termination after readiness fails",
+    "force-kills a backend and its children when they ignore termination after readiness fails",
     () =>
       Effect.gen(function* () {
         const childReady = yield* Deferred.make<void>();
+        let grandchildPort = 0;
         const script = `
         process.on("SIGTERM", () => {});
-        process.stdout.write("ready\\n");
+        const child = require("node:child_process").spawn(process.execPath, ["-e",
+          'process.on("SIGTERM", () => {});' +
+          'const server = require("node:net").createServer();' +
+          'server.listen(0, "127.0.0.1", () => console.log("ready " + server.address().port));' +
+          'setTimeout(() => process.exit(42), 9000);'
+        ], {stdio:["ignore","pipe","ignore"]});
+        child.stdout.pipe(process.stdout);
         setTimeout(() => process.exit(42), 6000);
       `;
         const result = yield* DesktopBackendManager.runBackendProcess({
@@ -410,9 +418,13 @@ describe("DesktopBackendManager", () => {
           desktopTelemetryStream: Stream.empty,
           readinessTimeout: Duration.seconds(1),
           onOutput: (_stream, chunk) =>
-            new TextDecoder().decode(chunk).includes("ready")
-              ? Deferred.succeed(childReady, undefined).pipe(Effect.asVoid)
-              : Effect.void,
+            Effect.gen(function* () {
+              const match = /ready (\d+)/.exec(new TextDecoder().decode(chunk));
+              if (match) {
+                grandchildPort = Number(match[1]);
+                yield* Deferred.succeed(childReady, undefined);
+              }
+            }),
         }).pipe(Effect.provide(httpClientLayer(() => Effect.never)), Effect.exit);
         assert.isTrue(yield* Deferred.isDone(childReady));
         // A child that reaches its own exit(42) was never force-killed.
@@ -420,7 +432,13 @@ describe("DesktopBackendManager", () => {
         if (Exit.isFailure(result)) {
           assert.include(Cause.pretty(result.cause), "SIGKILL");
         }
-      }).pipe(Effect.provide(NodeServices.layer), TestClock.withLive),
+        const net = yield* NetService.NetService;
+        assert.isAbove(grandchildPort, 0);
+        assert.isTrue(yield* net.canListenOnHost(grandchildPort, "127.0.0.1"));
+      }).pipe(
+        Effect.provide(Layer.merge(NetService.layer, NodeServices.layer)),
+        TestClock.withLive,
+      ),
   );
 
   it.effect("reports bootstrap encoding failures with stable process context", () =>

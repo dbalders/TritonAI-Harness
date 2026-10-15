@@ -27,7 +27,15 @@ import { ChildProcess } from "effect/unstable/process";
 import { type DevShareError, shareDevServer, unshareDevServer } from "./lib/dev-share.ts";
 import { loadRepoEnv } from "./lib/public-config.ts";
 
-Object.assign(process.env, loadRepoEnv());
+export function loadDevRunnerEnv(options?: Parameters<typeof loadRepoEnv>[0]) {
+  const env = loadRepoEnv(options);
+  if (env.T3CODE_DEV_AUTO_PORT === "1") delete env.T3CODE_PORT;
+  return env;
+}
+
+const devRunnerEnv = loadDevRunnerEnv();
+if (devRunnerEnv.T3CODE_DEV_AUTO_PORT === "1") delete process.env.T3CODE_PORT;
+Object.assign(process.env, devRunnerEnv);
 
 const BASE_SERVER_PORT = 13773;
 const BASE_WEB_PORT = 5733;
