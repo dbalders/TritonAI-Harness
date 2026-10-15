@@ -5425,7 +5425,11 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
   it.effect("creates the Scratch project once and restores its folder on reuse", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
-      const created: Array<{ readonly projectId: ProjectId; readonly workspaceRoot: string }> = [];
+      const created: Array<{
+        readonly projectId: ProjectId;
+        readonly title: string;
+        readonly workspaceRoot: string;
+      }> = [];
       const iconUpdates: Array<unknown> = [];
       yield* buildAppUnderTest({
         layers: {
@@ -5435,6 +5439,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 if (command.type === "project.create") {
                   created.push({
                     projectId: command.projectId,
+                    title: command.title,
                     workspaceRoot: command.workspaceRoot,
                   });
                 }
@@ -5472,6 +5477,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             assert.isTrue(scratchRoot.endsWith("scratch"));
             assert.equal(created.length, 1);
             assert.equal(created[0]?.workspaceRoot, scratchRoot);
+            assert.equal(created[0]?.title, "Chats");
             assert.equal(first.projectId, created[0]?.projectId);
             assert.equal(second.projectId, first.projectId);
             // The icon is set once, at create.
@@ -5479,6 +5485,54 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               { kind: "lucide", name: "message-square-dashed", color: "gray" },
             ]);
             assert.isTrue(yield* fileSystem.exists(scratchRoot));
+          }),
+        ),
+      );
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  // TritonAI Harness renames Scratch from upstream's "No project" to "Chats".
+  it.effect("renames a Scratch project still titled No project, but not a user's title", () =>
+    Effect.gen(function* () {
+      const scratchProjectId = ProjectId.make("project-scratch-existing");
+      let title = "No project";
+      const renames: Array<string | undefined> = [];
+      yield* buildAppUnderTest({
+        layers: {
+          orchestrationEngine: {
+            dispatch: (command) =>
+              Effect.sync(() => {
+                if (command.type === "project.meta.update") {
+                  renames.push(command.title);
+                  title = command.title ?? title;
+                }
+                return { sequence: renames.length };
+              }),
+          },
+          projectionSnapshotQuery: {
+            getActiveProjectByWorkspaceRoot: (workspaceRoot) =>
+              Effect.sync(() =>
+                Option.some({
+                  ...makeDefaultOrchestrationReadModel().projects[0]!,
+                  id: scratchProjectId,
+                  title,
+                  workspaceRoot,
+                }),
+              ),
+          },
+        },
+      });
+
+      yield* Effect.scoped(
+        withWsRpcClient(yield* getWsServerUrl("/ws"), (client) =>
+          Effect.gen(function* () {
+            const first = yield* client[WS_METHODS.projectsEnsureScratch]({});
+            assert.equal(first.projectId, scratchProjectId);
+            assert.deepEqual(renames, ["Chats"]);
+
+            title = "My scratch";
+            yield* client[WS_METHODS.projectsEnsureScratch]({});
+            assert.deepEqual(renames, ["Chats"]);
           }),
         ),
       );
