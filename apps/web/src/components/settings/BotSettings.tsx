@@ -205,21 +205,26 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
     if (!environmentId) return;
     setBusy(true);
     setError(null);
-    const result = await stopHere({
-      environmentId,
-      input: {
-        ownerToken: localForService ? (session?.ownerToken ?? null) : null,
-        apiUrl: serviceUrl,
-      },
-    });
-    if (!mounted.current) return;
-    setBusy(false);
-    if (session && !isCurrentSession(session.ownerToken)) return;
-    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-      setError(failureMessage(result, "Could not stop running tasks here."));
+    try {
+      const result = await stopHere({
+        environmentId,
+        input: {
+          ownerToken: localForService ? (session?.ownerToken ?? null) : null,
+          apiUrl: serviceUrl,
+        },
+      });
+      if (!mounted.current || (session && !isCurrentSession(session.ownerToken))) return;
+      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+        setError(failureMessage(result, "Could not stop running tasks here."));
+      }
+      refreshLocal();
+      await loadState();
+    } catch (cause) {
+      if (!mounted.current || (session && !isCurrentSession(session.ownerToken))) return;
+      setError(cause instanceof Error ? cause.message : "Could not stop running tasks here.");
+    } finally {
+      if (mounted.current) setBusy(false);
     }
-    refreshLocal();
-    await loadState();
   };
 
   const chooseProject = async (value: string) => {

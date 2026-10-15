@@ -33,6 +33,7 @@ import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { BotReplyMarkdown } from "./BotReplyMarkdown";
 import { clearBotSessions, useBotDiagnostics, useBotServiceUrl } from "./botService";
 import { BotResultCard } from "./BotResultCard";
+import { BotReturnedFiles } from "./BotReturnedFiles";
 import { BotMemoryPanel, BotMemoryEditor } from "./BotMemoryPanel";
 import { BotResponsibilitiesPanel } from "./BotResponsibilitiesPanel";
 import type { DotRoutineInput } from "./BotRoutineEditor";
@@ -78,6 +79,19 @@ import {
 } from "./dotClient";
 
 const SIGNUPS_CLOSED = "TritonAI Bot isn't accepting new users right now.";
+
+/** A task ID on an approval receipt is queued work, not the assignment's returned reply. */
+function returnedTaskId(run: DotRun): string | undefined {
+  if (isPendingDotRun(run) || !run.result?.summary) return undefined;
+  if (
+    run.event.kind === "harness-answer" ||
+    run.event.kind === "harness-result" ||
+    (run.event.kind === "harness-update" &&
+      ["completed", "failed", "uncertain"].includes(run.event.phase ?? ""))
+  )
+    return run.result.taskId;
+  return undefined;
+}
 
 /**
  * Keeps the newer of two copies of each versioned record. Reads are ordered by request, but an older copy must never
@@ -277,6 +291,9 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
           recipe.events.flatMap((event) => (event.taskId ? [event.taskId] : [])),
         ),
       );
+      const returnedTasks = new Set(
+        [...merged.runs, ...runEvidence.current.values()].map(returnedTaskId),
+      );
       for (const [taskId, cached] of taskEvidence.current) {
         const evidence = followed.get(taskId);
         const recent = merged.tasks.find((task) => task.taskId === taskId);
@@ -285,8 +302,10 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
         );
         const recipeResult =
           recipeTasks.has(taskId) && ["completed", "failed", "cancelled"].includes(cached.status);
+        const returnedResult =
+          returnedTasks.has(taskId) && ["completed", "failed", "cancelled"].includes(cached.status);
         if (
-          (!followed.has(taskId) && !inbox && !recipeResult) ||
+          (!followed.has(taskId) && !inbox && !recipeResult && !returnedResult) ||
           (evidence && evidence.updatedAt !== (recent ?? cached).updatedAt) ||
           (inbox && inbox.version !== (recent ?? cached).updatedAt)
         )
@@ -421,6 +440,11 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
   const feedbackByRun = useMemo(
     () => new Map((state?.feedback ?? []).map((item) => [item.outputId, item])),
     [state],
+  );
+
+  const tasksById = useMemo(
+    () => new Map((state?.tasks ?? []).map((task) => [task.taskId, task])),
+    [state?.tasks],
   );
 
   useEffect(() => {
@@ -1137,6 +1161,13 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
                               </p>
                             ) : null}
                             <BotRunStatus run={run} />
+                            {returnedTaskId(run) && (
+                              <BotReturnedFiles
+                                task={tasksById.get(returnedTaskId(run)!)}
+                                onLoad={() => loadTaskEvidence(returnedTaskId(run)!)}
+                                onDownload={downloadAttachment}
+                              />
+                            )}
                             {run.result?.summary &&
                               !isPendingDotRun(run) &&
                               run.status !== "completed" && (

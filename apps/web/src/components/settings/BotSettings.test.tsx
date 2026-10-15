@@ -287,6 +287,44 @@ function projectPicker(): HTMLButtonElement {
   return container.querySelector('[aria-label="Project for tasks"]')!;
 }
 
+it("recovers the controls and reports a rejected Stop request so the owner can retry", async () => {
+  configuration.local = {
+    state: "idle",
+    deviceId: "synthetic-device",
+    deviceName: "This Mac",
+    apiUrl: firstUrl,
+    userId: firstSession.email,
+    projectId: "synthetic-project",
+    currentTask: null,
+    lastCheckInAt: null,
+    message: null,
+  };
+  vi.spyOn(DotClient.prototype, "state").mockResolvedValue(state(firstSession.email));
+  let rejectStop!: (cause: unknown) => void;
+  configuration.command.mockImplementationOnce(
+    () =>
+      new Promise((_resolve, reject) => {
+        rejectStop = reject;
+      }),
+  );
+  await act(async () => root.render(<BotSettings />));
+  const stop = Array.from(container.querySelectorAll("button")).find(
+    (button) => button.textContent === "Stop running tasks here",
+  )!;
+  await act(async () => stop.click());
+  expect(stop.disabled).toBe(true);
+  await act(async () => rejectStop(new Error("Could not reach this computer")));
+  expect(stop.disabled).toBe(false);
+  expect(container.textContent).toContain("Could not reach this computer");
+  await act(async () => stop.click());
+  expect(configuration.command).toHaveBeenCalledTimes(2);
+  expect(configuration.command).toHaveBeenLastCalledWith({
+    environmentId: "synthetic-environment",
+    input: { apiUrl: firstUrl, ownerToken: firstSession.ownerToken },
+  });
+  expect(container.textContent).not.toContain("Could not reach this computer");
+});
+
 async function publishLocal(local: ServerBotTaskComputerStatus | null) {
   await act(async () => {
     configuration.local = local;

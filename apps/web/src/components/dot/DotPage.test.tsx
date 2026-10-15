@@ -18,7 +18,7 @@ vi.mock("../../localApi", () => ({
 }));
 
 import { DotPage } from "./DotPage";
-import { saveDotSession, type DotState } from "./dotClient";
+import { saveDotSession, type DotState, type DotTask } from "./dotClient";
 import type { DotResponsibility } from "./dotEnhancements";
 import type { DotScheduledPrompt } from "./dotRoutines";
 
@@ -2658,6 +2658,201 @@ describe("waiting reasons", () => {
 describe("chat-only view", () => {
   beforeEach(() => {
     botView.diagnostics = false;
+  });
+
+  function returnedTask(taskId = "returned-task"): DotTask {
+    return {
+      taskId,
+      title: "Diagnostic assignment record",
+      detail: { kind: "harness-task" },
+      status: "completed",
+      createdAt: at,
+      updatedAt: at,
+      structuredResult: {
+        version: 1,
+        summary: "Diagnostic evidence summary",
+        execution: { status: "completed", threadId: "thread1", messageId: "message1" },
+        verification: { status: "unverified" },
+        artifacts: [
+          {
+            kind: "artifact",
+            label: "report.csv",
+            uri: "attachment:returned-file",
+            attachmentId: "returned-file",
+            provenance: "harness-upload",
+          },
+        ],
+        checks: [],
+        blockers: [],
+      },
+    };
+  }
+
+  function withReturnedReply(kind = "harness-update"): DotState {
+    return {
+      ...snapshot(),
+      tasks: [returnedTask(), returnedTask("unrelated-task")],
+      runs: [
+        {
+          runId: "assignment-reply",
+          threadId: "dot",
+          event: { kind, phase: "completed" },
+          status: "completed",
+          createdAt: at,
+          updatedAt: at,
+          result: { summary: "Your report is ready", taskId: "returned-task" },
+        },
+      ],
+    };
+  }
+
+  it.each(["harness-update", "harness-answer", "harness-result"])(
+    "downloads returned files beside the %s reply without showing diagnostic records",
+    async (kind) => {
+      state = withReturnedReply(kind);
+      const fetchBeforeDownload = fetch;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn<typeof fetch>(async (input, init) => {
+          if (String(input).endsWith("/attachments/returned-file")) {
+            expect(new Headers(init?.headers).get("Authorization")).toBe(
+              `Bearer ${session.ownerToken}`,
+            );
+            return Response.json({
+              ok: true,
+              attachment: { name: "report.csv", mimeType: "text/csv" },
+              dataBase64: btoa("total\n42"),
+            });
+          }
+          return fetchBeforeDownload(input, init);
+        }),
+      );
+      const createObjectURL = vi.fn<(blob: Blob | MediaSource) => string>(
+        () => "blob:returned-report",
+      );
+      vi.stubGlobal(
+        "URL",
+        class extends URL {
+          static override createObjectURL = createObjectURL;
+          static override revokeObjectURL = vi.fn();
+        },
+      );
+      const downloads: { name: string; href: string }[] = [];
+      vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
+        this: HTMLAnchorElement,
+      ) {
+        downloads.push({ name: this.download, href: this.href });
+      });
+      await render();
+      expect(container.textContent).toContain("Your report is ready");
+      expect(container.textContent).not.toContain("Diagnostic assignment record");
+      expect(container.textContent).not.toContain("Diagnostic evidence summary");
+      expect(container.querySelectorAll('[aria-label="Returned files"]')).toHaveLength(1);
+      await click("Download report.csv");
+      expect(downloads).toEqual([{ name: "report.csv", href: "blob:returned-report" }]);
+      const blob = createObjectURL.mock.calls[0]?.[0] as Blob | undefined;
+      expect(blob?.type).toBe("text/csv");
+      const content = new Promise<string>((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.readAsText(blob!);
+      });
+      await vi.runOnlyPendingTimersAsync();
+      expect(await content).toBe("total\n42");
+    },
+  );
+
+  it("loads an older reply's exact task, retries a failed read, and keeps its files across refreshes", async () => {
+    state = { ...withReturnedReply(), tasks: [] };
+    const taskReads: string[] = [];
+    onTaskRead = async (id) => {
+      taskReads.push(id);
+      return taskReads.length === 1
+        ? Response.json({ ok: false, error: "Try again" }, { status: 503 })
+        : Response.json({ ok: true, task: returnedTask(id) });
+    };
+    await render();
+    await click("Load returned files");
+    expect(container.textContent).toContain("Try again");
+    await click("Load returned files");
+    expect(taskReads).toEqual(["returned-task", "returned-task"]);
+    expect(button("Download report.csv")).toBeDefined();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2500);
+    });
+    expect(button("Download report.csv")).toBeDefined();
+    expect(container.querySelector('[id="bot-task-returned-task"]')).toBeNull();
+  });
+
+  it("does not show files from a different task returned by the detail route", async () => {
+    state = { ...withReturnedReply(), tasks: [] };
+    onTaskRead = async () => Response.json({ ok: true, task: returnedTask("wrong-task") });
+    await render();
+    await click("Load returned files");
+    expect(container.textContent).toContain("The selected task evidence is unavailable.");
+    expect(container.textContent).not.toContain("Download report.csv");
+    expect(button("Load returned files").disabled).toBe(false);
+  });
+
+  it("reports a failed download and lets the owner retry without enabling diagnostics", async () => {
+    state = withReturnedReply();
+    const fetchBeforeDownload = fetch;
+    let attempts = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async (input, init) => {
+        if (String(input).endsWith("/attachments/returned-file")) {
+          attempts += 1;
+          return attempts === 1
+            ? Response.json({ ok: false, error: "File temporarily unavailable" }, { status: 503 })
+            : Response.json({
+                ok: true,
+                attachment: { name: "report.csv", mimeType: "text/csv" },
+                dataBase64: btoa("42"),
+              });
+        }
+        return fetchBeforeDownload(input, init);
+      }),
+    );
+    vi.stubGlobal(
+      "URL",
+      class extends URL {
+        static override createObjectURL = vi.fn(() => "blob:retried-report");
+        static override revokeObjectURL = vi.fn();
+      },
+    );
+    const download = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(() => undefined);
+    await render();
+    await click("Download report.csv");
+    expect(
+      container.querySelector('[aria-label="Returned files"] [role="alert"]')?.textContent,
+    ).toBe("File temporarily unavailable");
+    expect(button("Download report.csv").disabled).toBe(false);
+    expect(download).not.toHaveBeenCalled();
+    await click("Download report.csv");
+    expect(attempts).toBe(2);
+    expect(download).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('[aria-label="Returned files"] [role="alert"]')).toBeNull();
+  });
+
+  it("does not attach returned files to a queued receipt or a progress update", async () => {
+    state = withReturnedReply("approval-response");
+    await render();
+    expect(container.textContent).not.toContain("Download report.csv");
+    state = {
+      ...withReturnedReply(),
+      runs: withReturnedReply().runs.map((run) => ({
+        ...run,
+        event: { kind: "harness-update", phase: "running" },
+      })),
+    };
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2500);
+    });
+    expect(container.textContent).not.toContain("Download report.csv");
+    expect(container.textContent).not.toContain("Load returned files");
   });
 
   function fullState(): DotState {
