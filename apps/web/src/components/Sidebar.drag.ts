@@ -1,4 +1,5 @@
 import { closestCenter, type CollisionDetection, type Modifier } from "@dnd-kit/core";
+import { restrictToParentElement } from "@dnd-kit/modifiers";
 import { verticalListSortingStrategy, type SortingStrategy } from "@dnd-kit/sortable";
 import {
   resolveSidebarDropTarget,
@@ -19,6 +20,13 @@ const isShelfHeader = (item: SidebarListItem | undefined) =>
   (item.marker === "working-header" ||
     item.marker === "snoozed-header" ||
     item.marker === "settled-header");
+
+/** Keep thread rows inside their folder without clamping a lifted folder's
+ * whole stack before its header can reach a lower folder. */
+export const restrictSidebarThreadToFolder: Modifier = (args) =>
+  args.active?.data.current?.folder === SIDEBAR_FOLDER_SCOPE
+    ? args.transform
+    : restrictToParentElement(args);
 
 /** Keep the lifted card below the Pins label, including when Pins is empty.
  * The container rect follows scrolling; the offset is measured once at pickup. */

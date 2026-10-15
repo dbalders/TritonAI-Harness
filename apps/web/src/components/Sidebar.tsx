@@ -14,11 +14,7 @@ import {
   type Modifier,
 } from "@dnd-kit/core";
 import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
-import {
-  restrictToFirstScrollableAncestor,
-  restrictToParentElement,
-  restrictToVerticalAxis,
-} from "@dnd-kit/modifiers";
+import { restrictToFirstScrollableAncestor, restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { CSS } from "@dnd-kit/utilities";
 import {
   canSnooze,
@@ -213,6 +209,7 @@ import {
   createSidebarCollisionDetection,
   createSidebarSortingStrategy,
   restrictBelowSidebarLabel,
+  restrictSidebarThreadToFolder,
   sidebarFolderCollisionDetection,
 } from "./Sidebar.drag";
 import { SidebarDragLifecycle, SidebarPointerSensor } from "./Sidebar.pointer";
@@ -5430,7 +5427,10 @@ export default function Sidebar() {
                                 <DndContext
                                   sensors={folderDndSensors}
                                   collisionDetection={sidebarFolderCollisionDetection}
-                                  modifiers={[restrictToVerticalAxis, restrictToParentElement]}
+                                  modifiers={[
+                                    restrictToVerticalAxis,
+                                    restrictSidebarThreadToFolder,
+                                  ]}
                                   onDragStart={handleFolderDragStart}
                                   onDragEnd={handleFolderDragEnd}
                                 >

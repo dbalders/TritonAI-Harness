@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import { closestCenter, type CollisionDetection } from "@dnd-kit/core";
+import { closestCenter, type CollisionDetection, type Modifier } from "@dnd-kit/core";
 import { verticalListSortingStrategy, type SortingStrategy } from "@dnd-kit/sortable";
 import {
   createSidebarCollisionDetection,
   createSidebarSortingStrategy,
   restrictBelowSidebarLabel,
+  restrictSidebarThreadToFolder,
   sidebarFolderCollisionDetection,
 } from "./Sidebar.drag";
 import {
@@ -256,6 +257,45 @@ describe("sidebar collision detection", () => {
 });
 
 describe("folder drag scope", () => {
+  function modifierArgs(scope: string, height: number, parentHeight: number) {
+    const rect = (height: number) => ({
+      top: 0,
+      bottom: height,
+      height,
+      left: 0,
+      right: 260,
+      width: 260,
+    });
+    const source = rect(height);
+    return {
+      active: {
+        id: "dragged",
+        data: { current: { folder: scope } },
+        rect: { current: { initial: source, translated: null } },
+      },
+      activatorEvent: null,
+      activeNodeRect: source,
+      draggingNodeRect: source,
+      containerNodeRect: rect(parentHeight),
+      over: null,
+      overlayNodeRect: null,
+      scrollableAncestors: [],
+      scrollableAncestorRects: [],
+      windowRect: null,
+      transform: { ...stationary, y: 400 },
+    } satisfies Parameters<Modifier>[0];
+  }
+
+  it("lets a 400px folder header reach a 40px folder below it", () => {
+    const args = modifierArgs(SIDEBAR_FOLDER_SCOPE, 400, 440);
+    expect(restrictSidebarThreadToFolder(args).y).toBe(400);
+  });
+
+  it("keeps a thread row within its own folder's bounds", () => {
+    const args = modifierArgs(sidebarFolderId("A"), 40, 400);
+    expect(restrictSidebarThreadToFolder(args).y).toBe(360);
+  });
+
   // Folder A holds a1 a2, folder B holds b1; rows stack 37px apart.
   const entries = [
     { id: sidebarFolderId("A"), folder: SIDEBAR_FOLDER_SCOPE, top: 0, height: 110 },
