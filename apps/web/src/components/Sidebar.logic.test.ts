@@ -37,6 +37,8 @@ import {
   sortLogicalProjectsForSidebar,
   sortInboxThreadsByReturn,
   resolveSidebarDropTarget,
+  moveSidebarThreadWithinFolder,
+  placeSidebarDropAtInboxTop,
   pinOrderKeyBetween,
   planSidebarThreadDrop,
   sidebarMarkerId,
@@ -1177,6 +1179,44 @@ describe("pinOrderKeyBetween", () => {
     expect(pinOrderKeyBetween("A!", null)).toBeNull();
     expect(pinOrderKeyBetween(null, "ma")).toBeNull();
     expect(pinOrderKeyBetween("m", "m")).toBeNull();
+  });
+});
+
+describe("moveSidebarThreadWithinFolder", () => {
+  // Folder A: a1 a2 a3, folder B: b1 b2, contiguous in inbox order.
+  const activeOrder = ["a1", "a2", "a3", "b1", "b2"];
+  const folderKeys = ["a1", "a2", "a3"];
+
+  it.each([
+    ["a1", "a3", ["a2", "a3", "a1", "b1", "b2"]],
+    ["a3", "a1", ["a3", "a1", "a2", "b1", "b2"]],
+    ["a2", "a3", ["a1", "a3", "a2", "b1", "b2"]],
+  ] as const)("moves %s onto %s inside its folder", (activeKey, overKey, expected) => {
+    expect(moveSidebarThreadWithinFolder({ activeOrder, folderKeys, activeKey, overKey })).toEqual(
+      expected,
+    );
+  });
+
+  it("refuses a drop on another folder's row or on itself", () => {
+    expect(
+      moveSidebarThreadWithinFolder({ activeOrder, folderKeys, activeKey: "a3", overKey: "b1" }),
+    ).toBeNull();
+    expect(
+      moveSidebarThreadWithinFolder({ activeOrder, folderKeys, activeKey: "a2", overKey: "a2" }),
+    ).toBeNull();
+  });
+});
+
+describe("placeSidebarDropAtInboxTop", () => {
+  it("puts a row entering the inbox first and leaves other targets alone", () => {
+    const target = { pinnedOrder: ["p1"], activeOrder: ["s1"] };
+    expect(
+      placeSidebarDropAtInboxTop({ ...target, section: "active" }, "s1", ["a1", "a2"]),
+    ).toEqual({ section: "active", pinnedOrder: ["p1"], activeOrder: ["s1", "a1", "a2"] });
+    expect(placeSidebarDropAtInboxTop({ ...target, section: "pinned" }, "s1", ["a1"])).toEqual({
+      ...target,
+      section: "pinned",
+    });
   });
 });
 

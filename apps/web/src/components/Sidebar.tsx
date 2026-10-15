@@ -13,7 +13,7 @@ import {
   type DragStartEvent,
   type Modifier,
 } from "@dnd-kit/core";
-import { SortableContext, useSortable } from "@dnd-kit/sortable";
+import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { restrictToFirstScrollableAncestor, restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { CSS } from "@dnd-kit/utilities";
 import {
@@ -129,7 +129,7 @@ import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
 import { isCommandPaletteOpen, openCommandPalette } from "../commandPaletteBus";
 import { useFocusComposerAfterNewThread } from "../composerHandleContext";
-import { useClientSettings } from "../hooks/useSettings";
+import { useClientSettings, useUpdateClientSettings } from "../hooks/useSettings";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { useNowMinute } from "../hooks/useNowMinute";
@@ -172,13 +172,16 @@ import {
   isSidebarNestedLinkClick,
   isSidebarThreadWorking,
   isTrailingDoubleClick,
+  moveSidebarThreadWithinFolder,
   orderItemsByPreferredIds,
+  placeSidebarDropAtInboxTop,
   planSidebarThreadDrop,
   reduceSidebarProjectScopeMenuState,
   resolveAdjacentThreadId,
   resolveSidebarDropTarget,
   resolveSidebarDropVerb,
   resolveSidebarRowAccessibility,
+  type SidebarDropTarget,
   type SidebarDropVerb,
   resolveSidebarThreadStatus,
   searchSidebarThreads,
@@ -186,6 +189,8 @@ import {
   shouldNavigateAfterThreadPark,
   shouldRecedeSidebarThread,
   resolveWorkingStartedAt,
+  SIDEBAR_FOLDER_SCOPE,
+  sidebarFolderId,
   sidebarListItemId,
   sidebarMarkerId,
   sortInboxThreadsByReturn,
@@ -204,6 +209,8 @@ import {
   createSidebarCollisionDetection,
   createSidebarSortingStrategy,
   restrictBelowSidebarLabel,
+  restrictSidebarThreadToFolder,
+  sidebarFolderCollisionDetection,
 } from "./Sidebar.drag";
 import { SidebarDragLifecycle, SidebarPointerSensor } from "./Sidebar.pointer";
 import { createSidebarListMotion } from "./Sidebar.motion";
@@ -555,10 +562,17 @@ type SortableThreadRowBag = Pick<
 function SortableThreadRow(props: {
   id: string;
   disabled: boolean;
+  /** Drag scope for rows inside a project folder. */
+  folder?: string;
   children: (bag: SortableThreadRowBag) => ReactNode;
 }) {
+  const data = useMemo(
+    () => (props.folder === undefined ? undefined : { folder: props.folder }),
+    [props.folder],
+  );
   const { listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: props.id,
+    ...(data === undefined ? {} : { data }),
     disabled: { draggable: props.disabled },
     animateLayoutChanges: animateSidebarLayoutChanges,
   });
@@ -569,6 +583,89 @@ function SortableThreadRow(props: {
     [listeners, setNodeRef, transform, transition, isDragging],
   );
   return props.children(bag);
+}
+
+type SidebarListMotion = ReturnType<typeof createSidebarListMotion>;
+
+/** A list whose rows glide between layout positions, like the sidebar list.
+ * Registered so a drag release can capture where its rows were left. */
+function SidebarMotionList(props: {
+  orderKey: string;
+  paused: boolean;
+  registry: Set<SidebarListMotion>;
+  className?: string;
+  children: ReactNode;
+}) {
+  const { registry } = props;
+  const motionRef = useRef<SidebarListMotion | null>(null);
+  const attach = useCallback(
+    (node: HTMLUListElement | null) => {
+      if (motionRef.current !== null) {
+        registry.delete(motionRef.current);
+        motionRef.current.dispose();
+      }
+      motionRef.current = node === null ? null : createSidebarListMotion(node);
+      if (motionRef.current !== null) {
+        registry.add(motionRef.current);
+        motionRef.current.update(false);
+      }
+    },
+    [registry],
+  );
+  useLayoutEffect(() => {
+    void props.orderKey;
+    motionRef.current?.update(!props.paused);
+  }, [props.orderKey, props.paused]);
+  return (
+    <ul
+      ref={attach}
+      // Presentational for the same VoiceOver reason as the sidebar list.
+      role="presentation"
+      className={cn("relative flex flex-col gap-px", props.className)}
+    >
+      {props.children}
+    </ul>
+  );
+}
+
+type SortableSidebarFolderHandle = Pick<
+  ReturnType<typeof useSortable>,
+  "listeners" | "setActivatorNodeRef"
+>;
+
+const SIDEBAR_FOLDER_SORTABLE_DATA = { folder: SIDEBAR_FOLDER_SCOPE };
+// Key of the folder holding rows whose project is not in the catalog.
+const ACTIVE_FALLBACK_FOLDER_KEY = "active-project-fallback";
+
+/** A project folder: its header lifts the folder with every row inside it. */
+function SortableSidebarFolder(props: {
+  projectKey: string;
+  disabled: boolean;
+  className?: string;
+  children: (handle: SortableSidebarFolderHandle) => ReactNode;
+}) {
+  const { listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } =
+    useSortable({
+      id: sidebarFolderId(props.projectKey),
+      data: SIDEBAR_FOLDER_SORTABLE_DATA,
+      disabled: { draggable: props.disabled },
+      animateLayoutChanges: animateSidebarLayoutChanges,
+    });
+  return (
+    <li
+      ref={setNodeRef}
+      data-thread-selection-safe
+      className={cn(
+        "list-none",
+        props.className,
+        // Opaque while lifted so the folders beneath never show through.
+        isDragging && "relative z-10 rounded-md bg-sidebar shadow-lg",
+      )}
+      style={{ transform: CSS.Translate.toString(transform), transition }}
+    >
+      {props.children({ listeners, setActivatorNodeRef })}
+    </li>
+  );
 }
 
 // Unsent work shares one look: the new-thread draft rows and thread rows
@@ -2978,7 +3075,7 @@ export default function Sidebar() {
   const visibleGroupedActiveThreads = useMemo(
     () =>
       activeThreadGroups.flatMap((group) =>
-        collapsedProjectKeys.includes(group.project?.projectKey ?? "active-project-fallback")
+        collapsedProjectKeys.includes(group.project?.projectKey ?? ACTIVE_FALLBACK_FOLDER_KEY)
           ? []
           : group.threads,
       ),
@@ -3453,6 +3550,8 @@ export default function Sidebar() {
     readonly targetSection: SidebarSection | null;
   } | null>(null);
   const dragTargetSection = dragState?.targetSection ?? null;
+  // A folder or a row inside one is lifted in the folders' own drag scope.
+  const [folderDragActive, setFolderDragActive] = useState(false);
   const dragSensorRef = useRef<SidebarPointerSensor | null>(null);
   const finishThreadDrag = useCallback((started: boolean) => {
     dragSensorRef.current = null;
@@ -3665,9 +3764,9 @@ export default function Sidebar() {
     const pinnedRows = rowsOf(pinnedThreads, "pinned");
     items.push(...pinnedRows);
     items.push({ kind: "marker", marker: "pinned-divider" });
-    const activeRows = rowsOf(visibleGroupedActiveThreads, "active");
     items.push({ kind: "marker", marker: "active-placeholder" });
-    items.push(...activeRows);
+    // Active rows sort inside their folders, in the folders' own drag scope.
+    if (activeThreadGroups.length > 0) items.push({ kind: "marker", marker: "active-folders" });
     if (workingThreads.length > 0) {
       items.push({ kind: "marker", marker: "working-header" });
       items.push(...rowsOf(visibleWorkingThreads, "working"));
@@ -3683,7 +3782,7 @@ export default function Sidebar() {
     return items;
   }, [
     activeThreads,
-    visibleGroupedActiveThreads,
+    activeThreadGroups.length,
     pinnedThreads,
     renderedSettledThreads,
     settledThreads.length,
@@ -3700,7 +3799,29 @@ export default function Sidebar() {
       cancelThreadDrag();
     }
   }, [cancelThreadDrag, dragState, sidebarListItems]);
-  const listMotionPaused = dragState !== null;
+  const listMotionPaused = dragState !== null || folderDragActive;
+  // The folder block resizes with its rows, which moves everything below it.
+  const activeFoldersOrderKey = useMemo(
+    () =>
+      activeThreadGroups
+        .map((group) => {
+          const groupKey = group.project?.projectKey ?? ACTIVE_FALLBACK_FOLDER_KEY;
+          return collapsedProjectKeys.includes(groupKey)
+            ? `${groupKey}:collapsed`
+            : `${groupKey}:${group.threads
+                .map((thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)))
+                .join(",")}`;
+        })
+        .join("\0"),
+    [activeThreadGroups, collapsedProjectKeys],
+  );
+  const activeFolderIds = useMemo(
+    () =>
+      activeThreadGroups.flatMap((group) =>
+        group.project === null ? [] : [sidebarFolderId(group.project.projectKey)],
+      ),
+    [activeThreadGroups],
+  );
   // Every shell event rebuilds sidebarListItems, but rows only move when the
   // rendered order or a row's section changes. Keying the motion pass on that
   // keeps ordinary updates from forcing a layout read and animating rows
@@ -3708,9 +3829,15 @@ export default function Sidebar() {
   const sidebarListOrderKey = useMemo(
     () =>
       sidebarListItems
-        .map((item) => (item.kind === "thread" ? `${item.key}:${item.section}` : item.marker))
+        .map((item) =>
+          item.kind === "thread"
+            ? `${item.key}:${item.section}`
+            : item.marker === "active-folders"
+              ? `${item.marker}:${activeFoldersOrderKey}`
+              : item.marker,
+        )
         .join("\0"),
-    [sidebarListItems],
+    [activeFoldersOrderKey, sidebarListItems],
   );
   const sidebarListHasRows = sidebarListItems.length + visibleDraftSessionCount > 0;
   useLayoutEffect(() => {
@@ -3831,7 +3958,7 @@ export default function Sidebar() {
             supportsSettlement:
               serverConfigs.get(source.environmentId)?.environment.capabilities.threadSettlement ===
               true,
-            target,
+            target: placeSidebarDropAtInboxTop(target, draggedThreadKey, activeKeys),
             pinnedOrder: pinnedKeys,
             pinnedKeysById,
             reorderableKeys: draggableThreadKeys,
@@ -3862,16 +3989,12 @@ export default function Sidebar() {
     threadByKey,
     workingShelfEnabled,
   ]);
-  const handleThreadDragEnd = useCallback(
-    (event: DragEndEvent) => {
-      const activeKey = String(event.active.id);
-      const activeSection = sectionByThreadKey.get(activeKey);
-      const target =
-        event.over === null
-          ? null
-          : resolveSidebarDropTarget(sidebarListItems, activeKey, String(event.over.id));
+  // Shared by the section list and the folders: write one drop's lifecycle
+  // change and order keys, holding the row in place until they land.
+  const commitThreadDrop = useCallback(
+    (activeKey: string, activeSection: SidebarSection, target: SidebarDropTarget) => {
       const activeThread = threadByKey.get(activeKey);
-      if (activeSection === undefined || target === null || activeThread === undefined) return;
+      if (activeThread === undefined) return;
       const threadRef = scopeThreadRef(activeThread.environmentId, activeThread.id);
       const plan = planSidebarThreadDrop({
         activeKey,
@@ -4013,14 +4136,114 @@ export default function Sidebar() {
       planForwardNavigation,
       reorderPinnedThread,
       reorderActiveThread,
-      sectionByThreadKey,
       settleThread,
-      sidebarListItems,
       threadByKey,
       unpinThread,
       unsettleThread,
       unsnoozeThread,
       workingShelfEnabled,
+    ],
+  );
+  const handleThreadDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const activeKey = String(event.active.id);
+      const activeSection = sectionByThreadKey.get(activeKey);
+      const target =
+        event.over === null
+          ? null
+          : resolveSidebarDropTarget(sidebarListItems, activeKey, String(event.over.id));
+      if (activeSection === undefined || target === null) return;
+      commitThreadDrop(
+        activeKey,
+        activeSection,
+        placeSidebarDropAtInboxTop(target, activeKey, activeKeys),
+      );
+    },
+    [activeKeys, commitThreadDrop, sectionByThreadKey, sidebarListItems],
+  );
+  // Folders sort in their own drag scope inside the active block: a header
+  // lifts its whole folder, and a row moves only among its folder's rows.
+  const folderMotionRegistry = useMemo(() => new Set<SidebarListMotion>(), []);
+  const folderDragSensorRef = useRef<SidebarPointerSensor | null>(null);
+  const finishFolderDrag = useCallback(
+    (started: boolean) => {
+      folderDragSensorRef.current = null;
+      if (started) {
+        for (const motion of folderMotionRegistry) motion.release();
+        setFolderDragActive(false);
+      }
+    },
+    [folderMotionRegistry],
+  );
+  const attachFolderDragSensor = useCallback((sensor: SidebarPointerSensor) => {
+    folderDragSensorRef.current = sensor;
+  }, []);
+  const cancelFolderDrag = useCallback(() => {
+    folderDragSensorRef.current?.cancel();
+  }, []);
+  const folderDndSensors = useSensors(
+    useSensor(SidebarPointerSensor, {
+      distance: 6,
+      onAttach: attachFolderDragSensor,
+      onFinish: finishFolderDrag,
+    }),
+  );
+  const handleFolderDragStart = useCallback(() => setFolderDragActive(true), []);
+  const reorderProjects = useUiStateStore((store) => store.reorderProjects);
+  const updateClientSettings = useUpdateClientSettings();
+  const handleFolderDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      if (event.over === null) return;
+      const activeId = String(event.active.id);
+      const overId = String(event.over.id);
+      const scope = event.active.data.current?.folder;
+      if (scope === SIDEBAR_FOLDER_SCOPE) {
+        const groupById = new Map(
+          projectGroups.map((group) => [sidebarFolderId(group.projectKey), group] as const),
+        );
+        const dragged = groupById.get(activeId);
+        const target = groupById.get(overId);
+        if (dragged === undefined || target === undefined || dragged === target) return;
+        // Every project takes part, so folders without active rows keep
+        // their place in the saved order.
+        const memberKeys = (group: SidebarProjectSnapshot) =>
+          group.memberProjects.map(getProjectOrderKey);
+        reorderProjects(projectGroups.flatMap(memberKeys), memberKeys(dragged), memberKeys(target));
+        // The arranged order only shows under manual project sorting.
+        if (sidebarProjectSortOrder !== "manual") {
+          void updateClientSettings({ sidebarProjectSortOrder: "manual" });
+        }
+        return;
+      }
+      const folder = activeThreadGroups.find(
+        (group) =>
+          sidebarFolderId(group.project?.projectKey ?? ACTIVE_FALLBACK_FOLDER_KEY) === scope,
+      );
+      if (folder === undefined) return;
+      const order = moveSidebarThreadWithinFolder({
+        activeOrder: activeKeys,
+        folderKeys: folder.threads.map((thread) =>
+          scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+        ),
+        activeKey: activeId,
+        overKey: overId,
+      });
+      if (order === null) return;
+      commitThreadDrop(activeId, "active", {
+        section: "active",
+        pinnedOrder: pinnedKeys,
+        activeOrder: order,
+      });
+    },
+    [
+      activeKeys,
+      activeThreadGroups,
+      commitThreadDrop,
+      pinnedKeys,
+      projectGroups,
+      reorderProjects,
+      sidebarProjectSortOrder,
+      updateClientSettings,
     ],
   );
   // One snooze per thread at a time — same double-dispatch guard as settle.
@@ -5110,6 +5333,8 @@ export default function Sidebar() {
                       const renderThreadRow = (
                         thread: EnvironmentThreadShell,
                         section: SidebarSection,
+                        /** Folder drag scope; active rows only reorder there. */
+                        folder?: string,
                       ) => {
                         const threadKey = scopedThreadKey(
                           scopeThreadRef(thread.environmentId, thread.id),
@@ -5118,11 +5343,16 @@ export default function Sidebar() {
                           <SortableThreadRow
                             key={threadKey}
                             id={threadKey}
+                            {...(folder === undefined ? {} : { folder })}
                             disabled={
                               renamingThreadKey === threadKey ||
                               section === "working" ||
-                              !draggableThreadKeys.has(threadKey) ||
-                              optimisticDrop !== null
+                              optimisticDrop !== null ||
+                              (folder === undefined
+                                ? !draggableThreadKeys.has(threadKey)
+                                : // A time-ordered inbox has no arrangement to change.
+                                  workingShelfEnabled ||
+                                  !activeReorderableThreadKeys.has(threadKey))
                             }
                           >
                             {(bag) => renderThreadRowInner(thread, section, bag)}
@@ -5187,94 +5417,178 @@ export default function Sidebar() {
                                 isDropTarget={dragTargetSection === "active"}
                               />,
                             );
-                            for (const [
-                              groupIndex,
-                              { project, threads: projectThreads },
-                            ] of activeThreadGroups.entries()) {
-                              const groupKey = project?.projectKey ?? "active-project-fallback";
-                              const isExpanded = !collapsedProjectKeys.includes(groupKey);
-                              items.push(
-                                <li
-                                  key={
-                                    project
-                                      ? `active-project:${project.projectKey}`
-                                      : "active-project-fallback"
-                                  }
-                                  data-thread-selection-safe
-                                  className={cn(
-                                    "list-none px-2.5 py-2",
-                                    // The list's 1px gap plus 7px above the first row's content
-                                    // keeps expanded folders 8px from their first thread.
-                                    isExpanded &&
-                                      "pb-0 [&+li[data-thread-item]]:pt-0 [&+li[data-thread-item]_[data-sidebar-row-content]]:pt-1.75",
-                                    groupIndex > 0 && "mt-1 border-t border-sidebar-border/60 pt-3",
-                                  )}
+                            if (activeThreadGroups.length === 0) break;
+                            items.push(
+                              <SortableSidebarMarker
+                                key="active-folders"
+                                marker="active-folders"
+                                data-testid="sidebar-active-folders"
+                              >
+                                <DndContext
+                                  sensors={folderDndSensors}
+                                  collisionDetection={sidebarFolderCollisionDetection}
+                                  modifiers={[
+                                    restrictToVerticalAxis,
+                                    restrictSidebarThreadToFolder,
+                                  ]}
+                                  onDragStart={handleFolderDragStart}
+                                  onDragEnd={handleFolderDragEnd}
                                 >
-                                  <div className="flex min-w-0 items-center gap-2">
-                                    <button
-                                      type="button"
-                                      aria-expanded={isExpanded}
-                                      aria-label={`${isExpanded ? "Collapse" : "Expand"} ${project?.displayName ?? "Other threads"}`}
-                                      onClick={() =>
-                                        setCollapsedProjectKeys((keys) =>
-                                          keys.includes(groupKey)
-                                            ? keys.filter((key) => key !== groupKey)
-                                            : [...keys, groupKey],
-                                        )
-                                      }
-                                      className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-sm text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                  <SidebarDragLifecycle onUnmount={cancelFolderDrag} />
+                                  <SortableContext
+                                    items={activeFolderIds}
+                                    strategy={verticalListSortingStrategy}
+                                  >
+                                    <SidebarMotionList
+                                      orderKey={activeFoldersOrderKey}
+                                      paused={listMotionPaused}
+                                      registry={folderMotionRegistry}
                                     >
-                                      {isExpanded ? (
-                                        <FolderOpenIcon
-                                          aria-hidden
-                                          className="size-4 shrink-0 text-sidebar-muted-foreground"
-                                        />
-                                      ) : (
-                                        <FolderIcon
-                                          aria-hidden
-                                          className="size-4 shrink-0 text-sidebar-muted-foreground"
-                                        />
+                                      {activeThreadGroups.map(
+                                        ({ project, threads: projectThreads }, groupIndex) => {
+                                          const groupKey =
+                                            project?.projectKey ?? ACTIVE_FALLBACK_FOLDER_KEY;
+                                          const folderScope = sidebarFolderId(groupKey);
+                                          const isExpanded =
+                                            !collapsedProjectKeys.includes(groupKey);
+                                          const threadKeys = projectThreads.map((thread) =>
+                                            scopedThreadKey(
+                                              scopeThreadRef(thread.environmentId, thread.id),
+                                            ),
+                                          );
+                                          const renderFolder = (
+                                            handle: SortableSidebarFolderHandle | null,
+                                          ) => (
+                                            <>
+                                              <div
+                                                ref={handle?.setActivatorNodeRef}
+                                                {...handle?.listeners}
+                                                className={cn(
+                                                  "flex min-w-0 items-center gap-2 px-2.5 py-2",
+                                                  handle !== null &&
+                                                    "cursor-grab active:cursor-grabbing",
+                                                  groupIndex > 0 && "pt-3",
+                                                  isExpanded && "pb-0",
+                                                )}
+                                              >
+                                                <button
+                                                  type="button"
+                                                  aria-expanded={isExpanded}
+                                                  aria-label={`${isExpanded ? "Collapse" : "Expand"} ${project?.displayName ?? "Other threads"}`}
+                                                  onClick={() =>
+                                                    setCollapsedProjectKeys((keys) =>
+                                                      keys.includes(groupKey)
+                                                        ? keys.filter((key) => key !== groupKey)
+                                                        : [...keys, groupKey],
+                                                    )
+                                                  }
+                                                  className={cn(
+                                                    "flex min-w-0 flex-1 items-center gap-2 rounded-sm text-left outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                                                    handle === null && "cursor-pointer",
+                                                  )}
+                                                >
+                                                  {isExpanded ? (
+                                                    <FolderOpenIcon
+                                                      aria-hidden
+                                                      className="size-4 shrink-0 text-sidebar-muted-foreground"
+                                                    />
+                                                  ) : (
+                                                    <FolderIcon
+                                                      aria-hidden
+                                                      className="size-4 shrink-0 text-sidebar-muted-foreground"
+                                                    />
+                                                  )}
+                                                  <span className="min-w-0 truncate text-sm font-medium text-sidebar-muted-foreground">
+                                                    {project?.displayName ?? "Other threads"}
+                                                  </span>
+                                                  {/* Same-named folders on two machines differ only
+                                                      by where they live; the icon says which. */}
+                                                  {project && showProjectEnvironments ? (
+                                                    <ProjectEnvironmentBadge
+                                                      group={project}
+                                                      primaryEnvironmentId={primaryEnvironmentId}
+                                                      machineByEnvironmentId={
+                                                        environmentMachineById
+                                                      }
+                                                      className="ml-0 text-sidebar-muted-foreground"
+                                                    />
+                                                  ) : null}
+                                                </button>
+                                                {project ? (
+                                                  <button
+                                                    type="button"
+                                                    aria-label={`New thread in ${project.displayName}`}
+                                                    onClick={() =>
+                                                      handleNewThreadInProject(project.projectKey)
+                                                    }
+                                                    className="flex size-6 shrink-0 items-center justify-center rounded-sm text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                                                  >
+                                                    <PlusIcon aria-hidden className="size-3.5" />
+                                                  </button>
+                                                ) : (
+                                                  <span className="shrink-0 text-xs text-sidebar-muted-foreground tabular-nums">
+                                                    <span aria-hidden>{projectThreads.length}</span>
+                                                    <span className="sr-only">
+                                                      {`${projectThreads.length} active ${projectThreads.length === 1 ? "thread" : "threads"}`}
+                                                    </span>
+                                                  </span>
+                                                )}
+                                              </div>
+                                              {isExpanded ? (
+                                                <SortableContext
+                                                  items={threadKeys}
+                                                  strategy={verticalListSortingStrategy}
+                                                >
+                                                  <SidebarMotionList
+                                                    orderKey={threadKeys.join("\0")}
+                                                    paused={listMotionPaused}
+                                                    registry={folderMotionRegistry}
+                                                    // The 1px gap plus 7px above the first row's
+                                                    // content keeps it 8px from the header.
+                                                    className="mt-px [&>li[data-thread-item]:first-child]:pt-0 [&>li[data-thread-item]:first-child_[data-sidebar-row-content]]:pt-1.75"
+                                                  >
+                                                    {projectThreads.map((thread) =>
+                                                      renderThreadRow(
+                                                        thread,
+                                                        "active",
+                                                        folderScope,
+                                                      ),
+                                                    )}
+                                                  </SidebarMotionList>
+                                                </SortableContext>
+                                              ) : null}
+                                            </>
+                                          );
+                                          const className = cn(
+                                            groupIndex > 0 &&
+                                              "mt-1 border-t border-sidebar-border/60",
+                                          );
+                                          // Rows outside the catalog have no saved place.
+                                          return project ? (
+                                            <SortableSidebarFolder
+                                              key={folderScope}
+                                              projectKey={project.projectKey}
+                                              disabled={optimisticDrop !== null}
+                                              className={className}
+                                            >
+                                              {renderFolder}
+                                            </SortableSidebarFolder>
+                                          ) : (
+                                            <li
+                                              key={folderScope}
+                                              data-thread-selection-safe
+                                              className={cn("list-none", className)}
+                                            >
+                                              {renderFolder(null)}
+                                            </li>
+                                          );
+                                        },
                                       )}
-                                      <span className="min-w-0 truncate text-sm font-medium text-sidebar-muted-foreground">
-                                        {project?.displayName ?? "Other threads"}
-                                      </span>
-                                      {/* Same-named folders on two machines differ only
-                                          by where they live; the icon says which. */}
-                                      {project && showProjectEnvironments ? (
-                                        <ProjectEnvironmentBadge
-                                          group={project}
-                                          primaryEnvironmentId={primaryEnvironmentId}
-                                          machineByEnvironmentId={environmentMachineById}
-                                          className="ml-0 text-sidebar-muted-foreground"
-                                        />
-                                      ) : null}
-                                    </button>
-                                    {project ? (
-                                      <button
-                                        type="button"
-                                        aria-label={`New thread in ${project.displayName}`}
-                                        onClick={() => handleNewThreadInProject(project.projectKey)}
-                                        className="flex size-6 shrink-0 items-center justify-center rounded-sm text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring"
-                                      >
-                                        <PlusIcon aria-hidden className="size-3.5" />
-                                      </button>
-                                    ) : (
-                                      <span className="shrink-0 text-xs text-sidebar-muted-foreground tabular-nums">
-                                        <span aria-hidden>{projectThreads.length}</span>
-                                        <span className="sr-only">
-                                          {`${projectThreads.length} active ${projectThreads.length === 1 ? "thread" : "threads"}`}
-                                        </span>
-                                      </span>
-                                    )}
-                                  </div>
-                                </li>,
-                              );
-                              if (isExpanded) {
-                                for (const thread of projectThreads) {
-                                  items.push(renderThreadRow(thread, "active"));
-                                }
-                              }
-                            }
+                                    </SidebarMotionList>
+                                  </SortableContext>
+                                </DndContext>
+                              </SortableSidebarMarker>,
+                            );
                             break;
                           case "working-header":
                             items.push(
