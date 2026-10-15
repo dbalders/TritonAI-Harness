@@ -2064,6 +2064,7 @@ const makeWsRpcLayer = (
                   commandId: yield* serverCommandId("scratch-project-rename"),
                   projectId: existingProject.value.id,
                   title: SCRATCH_PROJECT_TITLE,
+                  expectedTitle: UPSTREAM_SCRATCH_PROJECT_TITLE,
                 }),
               );
             }).pipe(Effect.ignore);

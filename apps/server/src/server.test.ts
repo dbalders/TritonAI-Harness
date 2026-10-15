@@ -5504,6 +5504,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               Effect.sync(() => {
                 if (command.type === "project.meta.update") {
                   renames.push(command.title);
+                  assert.equal(command.expectedTitle, "No project");
                   title = command.title ?? title;
                 }
                 return { sequence: renames.length };
