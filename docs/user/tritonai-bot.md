@@ -78,6 +78,24 @@ can chat and review approvals; only the computer you allow claims new
 assignments. Allowing another computer moves new assignments there. Keep Harness
 running for it to check in and collect work.
 
+Ask the bot to create a thread for an audit, investigation, or other long-running
+assignment. Independent assignments can run in parallel; **Parallel assignments**
+sets how many new executions the computer starts at once. An assignment waiting
+for approval or an answer leaves room for other work. Assignments that use the
+same project folder take turns so they do not edit that folder simultaneously.
+
+Ask what a delegated thread has done or why it is waiting. The bot can read its
+recent visible messages, activity, approval state, and completed result, with the
+time of the last report. These reports require the task computer to stay online;
+an old report cannot confirm current progress. Open its thread from Bot settings
+to answer a pending question or review a command approval.
+
+Ask the bot to continue a particular assignment to send new instructions to that
+same thread. A follow-up keeps the thread's workspace and permissions and waits
+for its current turn to finish. Existing execution is not restarted. The
+original task computer must still have the thread. These thread features require
+a service and task computer that both support them.
+
 **Stop running tasks here** stops new assignments on that environment. Work
 already running may continue, and finished results are still delivered.
 
@@ -87,8 +105,8 @@ relying on them. Generated files are uploaded for up to a day; a file that still
 can't be returned is listed in the result with the output folder to collect it
 from. On Windows, keep Harness's data folder on a local drive. If the result
 itself can't be delivered, for example while the bot service is unreachable, the
-task computer keeps it and keeps retrying, and it doesn't take new assignments
-until that result is delivered. If the bot refuses the result, Settings shows a
+task computer keeps it and keeps retrying. New work pauses if its retained
+execution and delivery backlog reaches capacity. If the bot refuses the result, Settings shows a
 notice and later assignments continue. The assignment is never run again. Open the
 assignment's Harness thread to see its complete reply.
 

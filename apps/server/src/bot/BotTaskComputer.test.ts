@@ -8,6 +8,7 @@ import type {
   OrchestrationCommand,
   OrchestrationProjectShell,
   OrchestrationThread,
+  OrchestrationThreadShell,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -56,18 +57,20 @@ const SavedOutputJournal = Schema.fromJsonString(
   Schema.Struct({
     held: Schema.Array(
       Schema.Struct({
-        outcome: Schema.Struct({
-          status: Schema.Literals(["completed", "failed"]),
-          structuredResult: Schema.optional(
-            Schema.Struct({
-              artifacts: Schema.Array(Schema.Struct({ label: Schema.String })),
-              blockers: Schema.Array(Schema.String),
-            }),
-          ),
-        }),
+        outcome: Schema.NullOr(
+          Schema.Struct({
+            status: Schema.Literals(["completed", "failed"]),
+            structuredResult: Schema.optional(
+              Schema.Struct({
+                artifacts: Schema.Array(Schema.Struct({ label: Schema.String })),
+                blockers: Schema.Array(Schema.String),
+              }),
+            ),
+          }),
+        ),
         pendingOutputs: Schema.Array(
           Schema.Struct({ name: Schema.String, dataBase64: Schema.String }),
-        ),
+        ).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
         outputRetryUntil: Schema.optional(Schema.Number),
       }),
     ),
@@ -142,6 +145,7 @@ class FakeBot {
     title: string;
     prompt: string;
     attachments?: Array<typeof screenshot>;
+    operation?: unknown;
   }> = [];
   corruptAttachment = false;
   artifactStatus = 200;
@@ -155,6 +159,7 @@ class FakeBot {
   resultStatus = 200;
   resultStatuses: number[] = [];
   sessionValid = true;
+  rejectedProgressTask: string | null = null;
   ownerId = "owner@ucsd.edu";
 
   handle(path: string, headers: Record<string, string>, body: Record<string, unknown>) {
@@ -216,7 +221,20 @@ class FakeBot {
         },
       };
     }
-    if (path === "/harness/heartbeat") return { status: 200, json: { ok: true } };
+    if (path === "/harness/heartbeat")
+      return {
+        status: 200,
+        json: {
+          ok: true,
+          tasks: ((body.tasks ?? []) as Array<{ taskId: string }>).map((task) => ({
+            taskId: task.taskId,
+            accepted: task.taskId !== this.rejectedProgressTask,
+            ...(task.taskId === this.rejectedProgressTask
+              ? { reason: "Claim worker changed" }
+              : {}),
+          })),
+        },
+      };
     if (path === "/harness/tasks/claim") {
       const task = this.tasks.shift();
       return {
@@ -224,7 +242,7 @@ class FakeBot {
         json: {
           ok: true,
           task: task
-            ? { ...task, userId: "owner@ucsd.edu", claimId: `claim-${task.taskId}`, createdAt: "" }
+            ? { ...task, userId: this.ownerId, claimId: `claim-${task.taskId}`, createdAt: "" }
             : null,
         },
       };
@@ -275,6 +293,8 @@ class FakeBot {
 class FakeHarness {
   readonly commands: Array<OrchestrationCommand> = [];
   readonly threads = new Map<string, OrchestrationThread>();
+  readonly approvals = new Set<string>();
+  readonly inputs = new Set<string>();
   rejectTurns = false;
   failAfterTurnPersisted = false;
   /** Set to offer the "No project" project at this folder. */
@@ -285,7 +305,7 @@ class FakeHarness {
     this.threads.set(threadId, {
       ...thread,
       latestTurn: {
-        turnId: "turn-1",
+        turnId: thread.latestTurn?.turnId ?? "turn-1",
         state,
         requestedAt: "",
         startedAt: "",
@@ -303,7 +323,7 @@ class FakeHarness {
           role: "assistant",
           text: reply,
           streaming: false,
-          turnId: "turn-1",
+          turnId: thread.latestTurn?.turnId ?? "turn-1",
           createdAt: "",
           updatedAt: "",
         },
@@ -324,6 +344,12 @@ class FakeHarness {
             if (command.type === "thread.create") {
               harness.threads.set(command.threadId, {
                 id: command.threadId,
+                projectId: command.projectId,
+                worktreePath: command.worktreePath,
+                modelSelection: command.modelSelection,
+                runtimeMode: command.runtimeMode,
+                interactionMode: command.interactionMode,
+                activities: [],
                 title: command.title,
                 deletedAt: null,
                 latestTurn: null,
@@ -335,9 +361,10 @@ class FakeHarness {
               const thread = harness.threads.get(command.threadId)!;
               harness.threads.set(command.threadId, {
                 ...thread,
-                latestTurn: { turnId: "turn-1", state: "running" },
+                latestTurn: { turnId: `turn-${harness.commands.length}`, state: "running" },
                 session: { status: "running", lastError: null },
                 messages: [
+                  ...thread.messages,
                   {
                     id: command.message.messageId,
                     role: "user",
@@ -370,6 +397,22 @@ class FakeHarness {
                   } as unknown as OrchestrationProjectShell)
                 : Option.none(),
           ),
+        getThreadShellById: (threadId) =>
+          Effect.sync(() => {
+            const thread = harness.threads.get(threadId);
+            return thread
+              ? Option.some({
+                  ...thread,
+                  hasPendingApprovals: harness.approvals.has(threadId),
+                  hasPendingUserInput: harness.inputs.has(threadId),
+                } as unknown as OrchestrationThreadShell)
+              : Option.none();
+          }),
+        getThreadDetailSnapshot: (threadId) =>
+          Effect.sync(() => {
+            const thread = harness.threads.get(threadId);
+            return thread ? Option.some({ snapshotSequence: 1, thread }) : Option.none();
+          }),
         getThreadDetailById: (threadId) =>
           Effect.sync(() => Option.fromNullishOr(harness.threads.get(threadId))),
       }),
@@ -377,12 +420,12 @@ class FakeHarness {
   }
 }
 
-const services = (bot: FakeBot, harness: FakeHarness) =>
+const services = (bot: FakeBot, harness: FakeHarness, maxParallel = 1) =>
   Layer.effect(BotTaskComputer.BotTaskComputer, BotTaskComputer.make).pipe(
     Layer.provideMerge(WorkspacePaths.layer),
     Layer.provideMerge(bot.layer()),
     Layer.provideMerge(harness.layer()),
-    Layer.provideMerge(ServerSettings.layerTest({})),
+    Layer.provideMerge(ServerSettings.layerTest({ botTaskMaxParallel: maxParallel })),
     Layer.provideMerge(ServerSecretStore.layer),
     Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-bot-task-test-" })),
   );
@@ -420,11 +463,11 @@ it.layer(NodeServices.layer)("BotTaskComputer", (it) => {
           const saved = yield* decodeSavedOutputJournal(
             new TextDecoder().decode(Option.getOrThrow(raw)),
           );
-          assert.lengthOf(saved.held, 1);
+          assert.lengthOf(saved.held, 2);
           assert.lengthOf(saved.held[0]!.pendingOutputs, 0);
-          assert.strictEqual(saved.held[0]!.outcome.status, "completed");
-          assert.lengthOf(harness.commands, 2);
-          assert.lengthOf(bot.tasks, 1);
+          assert.strictEqual(saved.held[0]!.outcome!.status, "completed");
+          assert.lengthOf(harness.commands, 4);
+          assert.lengthOf(bot.tasks, 0);
           assert.strictEqual(
             yield* Effect.tryPromise(() =>
               NodeFSP.readFile(NodePath.join(output, "a.txt"), "utf8"),
@@ -508,8 +551,8 @@ it.layer(NodeServices.layer)("BotTaskComputer", (it) => {
           const restarted = yield* BotTaskComputer.make;
           yield* restarted.tick;
           const status = yield* restarted.getStatus;
-          assert.strictEqual(status.state, "idle");
-          assert.isNull(status.currentTask);
+          assert.strictEqual(status.state, "running");
+          assert.strictEqual(status.currentTask?.taskId, "next");
           assert.include(status.message!, "Finished running “Report”");
           assert.include(status.message!, "saved result and files are awaiting delivery");
           assert.deepEqual(
@@ -522,13 +565,13 @@ it.layer(NodeServices.layer)("BotTaskComputer", (it) => {
           );
           assert.strictEqual(
             bot.calls.filter((call) => call.path === "/harness/tasks/claim").length,
-            claims,
+            claims + 1,
           );
           let raw = yield* secrets.get("tritonai-bot-task-computer");
           let saved = yield* decodeSavedOutputJournal(
             new TextDecoder().decode(Option.getOrThrow(raw)),
           );
-          assert.lengthOf(saved.held, 1);
+          assert.lengthOf(saved.held, 2);
           assert.strictEqual(
             saved.held[0]!.pendingOutputs[0]!.dataBase64,
             Buffer.from("Preserved bytes").toString("base64"),
@@ -538,7 +581,7 @@ it.layer(NodeServices.layer)("BotTaskComputer", (it) => {
           yield* TestClock.setTime(START + 12 * 3_600_000);
           const again = yield* BotTaskComputer.make;
           yield* again.tick;
-          assert.isNull((yield* again.getStatus).currentTask);
+          assert.strictEqual((yield* again.getStatus).currentTask?.taskId, "next");
           assert.include(
             (yield* again.getStatus).message!,
             "saved result and files are awaiting delivery",
@@ -560,17 +603,17 @@ it.layer(NodeServices.layer)("BotTaskComputer", (it) => {
           );
           assert.strictEqual(
             bot.calls.filter((call) => call.path === "/harness/tasks/claim").length,
-            claims,
+            claims + 1,
           );
           raw = yield* secrets.get("tritonai-bot-task-computer");
           saved = yield* decodeSavedOutputJournal(new TextDecoder().decode(Option.getOrThrow(raw)));
           assert.lengthOf(saved.held[0]!.pendingOutputs, 0);
-          assert.lengthOf(saved.held[0]!.outcome.structuredResult!.blockers, 10);
+          assert.lengthOf(saved.held[0]!.outcome!.structuredResult!.blockers, 10);
           assert.include(
-            saved.held[0]!.outcome.structuredResult!.blockers[0]!,
+            saved.held[0]!.outcome!.structuredResult!.blockers[0]!,
             "24 hours of retries",
           );
-          assert.strictEqual(saved.held[0]!.outcome.status, "completed");
+          assert.strictEqual(saved.held[0]!.outcome!.status, "completed");
           bot.resultStatus = 200;
           yield* again.tick;
           assert.deepEqual(
@@ -710,7 +753,7 @@ it.layer(NodeServices.layer)("BotTaskComputer", (it) => {
           const saved = yield* decodeSavedOutputJournal(
             new TextDecoder().decode(Option.getOrThrow(raw)),
           );
-          assert.strictEqual(saved.held[0]!.outcome.status, "completed");
+          assert.strictEqual(saved.held[0]!.outcome!.status, "completed");
           assert.strictEqual(
             saved.held[0]!.pendingOutputs[0]!.dataBase64,
             Buffer.from("Preserved bytes").toString("base64"),
@@ -765,7 +808,7 @@ it.layer(NodeServices.layer)("BotTaskComputer", (it) => {
           const saved = yield* decodeSavedOutputJournal(
             new TextDecoder().decode(Option.getOrThrow(raw)),
           );
-          assert.strictEqual(saved.held[0]!.outcome.status, "completed");
+          assert.strictEqual(saved.held[0]!.outcome!.status, "completed");
           assert.strictEqual(
             saved.held[0]!.pendingOutputs[0]!.dataBase64,
             Buffer.from("Original bytes").toString("base64"),
@@ -824,7 +867,7 @@ it.layer(NodeServices.layer)("BotTaskComputer", (it) => {
         const saved = yield* decodeSavedOutputJournal(
           new TextDecoder().decode(Option.getOrThrow(raw)),
         );
-        assert.strictEqual(saved.held[0]!.outcome.structuredResult!.artifacts[0]!.label, "a.txt");
+        assert.strictEqual(saved.held[0]!.outcome!.structuredResult!.artifacts[0]!.label, "a.txt");
         assert.deepEqual(
           saved.held[0]!.pendingOutputs.map((file) => file.name),
           ["b.txt"],
@@ -1303,7 +1346,9 @@ it.layer(NodeServices.layer)("BotTaskComputer", (it) => {
 
   for (const retryStatus of [408, 425, 429]) {
     it.effect(
-      "keeps result " + retryStatus + " for retry without archiving or claiming more work",
+      "keeps result " +
+        retryStatus +
+        " for retry without archiving while other assignments continue",
       () => {
         const bot = new FakeBot(),
           harness = new FakeHarness();
@@ -1323,15 +1368,15 @@ it.layer(NodeServices.layer)("BotTaskComputer", (it) => {
           yield* computer.tick;
           assert.isTrue(Option.isNone(yield* secrets.get(resultRecoveryKey("retryable"))));
           const held = yield* decodeRecoveryHeld((yield* readRecoveryJournal).held);
-          assert.lengthOf(held, 1);
+          assert.lengthOf(held, 2);
           assert.isFalse(Object.hasOwn(held[0] as object, "deliveryMode"));
-          assert.strictEqual(bot.tasks.length, 1);
-          assert.strictEqual(harness.commands.length, 2);
+          assert.strictEqual(bot.tasks.length, 0);
+          assert.strictEqual(harness.commands.length, 4);
           const restarted = yield* BotTaskComputer.make;
           yield* restarted.tick;
           assert.isTrue(Option.isNone(yield* secrets.get(resultRecoveryKey("retryable"))));
-          assert.strictEqual(bot.tasks.length, 1);
-          assert.strictEqual(harness.commands.length, 2);
+          assert.strictEqual(bot.tasks.length, 0);
+          assert.strictEqual(harness.commands.length, 4);
           const requests = bot.calls.filter((call) => call.path === "/harness/results");
           assert.lengthOf(requests, 2);
           assert.deepEqual(requests[0]!.body, requests[1]!.body);
@@ -1346,7 +1391,7 @@ it.layer(NodeServices.layer)("BotTaskComputer", (it) => {
   }
 
   it.effect(
-    "shows a current stalled delivery before an earlier rejection warning until new claims can resume",
+    "shows a current stalled delivery before an earlier rejection warning while new assignments continue",
     () => {
       const bot = new FakeBot(),
         harness = new FakeHarness();
@@ -1373,7 +1418,7 @@ it.layer(NodeServices.layer)("BotTaskComputer", (it) => {
         assert.include(status.message!, "saved result is awaiting delivery");
         assert.include(
           status.message!,
-          "New assignments wait until saved result delivery finishes",
+          "Saved delivery retries continue while other assignments can run",
         );
         assert.include(status.message!, "could not accept the result for “Earlier report”");
         assert.notInclude(status.message!, "Other assignments can continue");
@@ -1389,7 +1434,7 @@ it.layer(NodeServices.layer)("BotTaskComputer", (it) => {
         assert.include(status.message!, "Current report");
         assert.include(status.message!, "Earlier report");
         assert.notInclude(status.message!, "Other assignments can continue");
-        assert.strictEqual(bot.tasks.length, 1);
+        assert.strictEqual(bot.tasks.length, 0);
         bot.resultStatus = 200;
         yield* restarted.tick;
         status = yield* restarted.getStatus;
@@ -1573,10 +1618,10 @@ it.layer(NodeServices.layer)("BotTaskComputer", (it) => {
         yield* computer.tick;
         assert.deepEqual(
           bot.calls.slice(callsBefore).map((call) => call.path),
-          ["/harness/results"],
+          ["/harness/heartbeat", "/harness/results"],
         );
         assert.strictEqual((yield* computer.getStatus).state, "off");
-        assert.strictEqual(bot.tasks.length, 1);
+        assert.strictEqual(bot.tasks.length, 0);
         bot.resultStatus = 200;
         bot.current = "new-worker-token";
         yield* allow(computer);
@@ -1593,4 +1638,417 @@ it.layer(NodeServices.layer)("BotTaskComputer", (it) => {
       }).pipe(Effect.provide(services(bot, harness)));
     },
   );
+  it.effect("starts independent scratch tasks while approvals and input wait", () => {
+    const bot = new FakeBot(),
+      harness = new FakeHarness();
+    bot.tasks = ["first", "second", "third"].map((taskId) => ({
+      taskId,
+      title: taskId,
+      prompt: "Inspect",
+    }));
+    return Effect.gen(function* () {
+      yield* TestClock.setTime(START);
+      const config = yield* ServerConfig.ServerConfig;
+      harness.scratchRoot = NodePath.resolve(config.baseDir, "scratch");
+      const computer = yield* BotTaskComputer.BotTaskComputer;
+      yield* computer.allow({
+        apiUrl: API,
+        ownerToken: "owner-session",
+        projectId: SCRATCH_PROJECT,
+      });
+      let created = harness.commands.filter((command) => command.type === "thread.create");
+      assert.lengthOf(created, 2);
+      harness.approvals.add(created[0]!.threadId);
+      harness.inputs.add(created[1]!.threadId);
+      yield* TestClock.adjust("30 seconds");
+      yield* computer.tick;
+      created = harness.commands.filter((command) => command.type === "thread.create");
+      assert.lengthOf(created, 3);
+      assert.strictEqual(new Set(created.map((command) => command.worktreePath)).size, 3);
+      assert.lengthOf((yield* computer.getStatus).tasks!, 3);
+      const heartbeat = bot.calls.filter((call) => call.path === "/harness/heartbeat").at(-1)!;
+      const tasks = heartbeat.body.tasks as Array<{
+        taskId: string;
+        progress: { phase: string; threadId: string };
+      }>;
+      assert.deepInclude(tasks.find((item) => item.taskId === "first")!.progress, {
+        phase: "waiting-approval",
+        threadId: created[0]!.threadId,
+      });
+      assert.strictEqual(
+        tasks.find((item) => item.taskId === "second")!.progress.phase,
+        "waiting-input",
+      );
+      assert.includeMembers(heartbeat.body.capabilities as string[], [
+        "task-progress-v1",
+        "task-followup-v1",
+      ]);
+    }).pipe(Effect.provide(services(bot, harness, 2)));
+  });
+
+  it.effect("serializes tasks sharing a project checkout", () => {
+    const bot = new FakeBot(),
+      harness = new FakeHarness();
+    bot.tasks = ["first", "second", "third"].map((taskId) => ({
+      taskId,
+      title: taskId,
+      prompt: "Inspect",
+    }));
+    return Effect.gen(function* () {
+      yield* TestClock.setTime(START);
+      const computer = yield* BotTaskComputer.BotTaskComputer;
+      yield* allow(computer);
+      const first = harness.commands.find((command) => command.type === "thread.create")!;
+      assert.lengthOf(harness.commands, 2);
+      harness.approvals.add(first.threadId);
+      yield* TestClock.adjust("30 seconds");
+      yield* computer.tick;
+      assert.lengthOf(harness.commands, 2, "approval cannot release the shared checkout lane");
+      harness.approvals.delete(first.threadId);
+      harness.finish(first.threadId, "First finished");
+      yield* computer.tick;
+      assert.lengthOf(harness.commands, 4);
+      assert.deepInclude(bot.results[0]!, { taskId: "first", status: "completed" });
+    }).pipe(Effect.provide(services(bot, harness, 4)));
+  });
+
+  it.effect(
+    "continues a completed task in its exact thread after stop and re-pair, with separate files",
+    () => {
+      const bot = new FakeBot(),
+        harness = new FakeHarness();
+      bot.tasks = [{ taskId: "source", title: "Source", prompt: "Make source report" }];
+      return Effect.gen(function* () {
+        yield* TestClock.setTime(START);
+        const computer = yield* BotTaskComputer.BotTaskComputer;
+        const config = yield* ServerConfig.ServerConfig;
+        yield* allow(computer);
+        const first = harness.commands.find((command) => command.type === "thread.turn.start")!;
+        const oldOutput = taskOutputDirectory(config.stateDir, first.threadId);
+        yield* Effect.tryPromise(() =>
+          NodeFSP.writeFile(NodePath.join(oldOutput, "old.txt"), "Old file"),
+        );
+        harness.finish(first.threadId, 'ParentOnly.\n```bot-result\n{"summary":"ParentOnly"}\n```');
+        yield* computer.tick;
+        assert.strictEqual(bot.results[0]!.taskId, "source");
+        yield* computer.stop({ ownerToken: "owner-session", apiUrl: API });
+        bot.tasks = [
+          {
+            taskId: "follow",
+            title: "Followup",
+            prompt: "Make second report",
+            operation: { type: "followup", parentTaskId: "source" },
+          },
+        ];
+        const restarted = yield* BotTaskComputer.make;
+        yield* allow(restarted);
+        const turns = harness.commands.filter((command) => command.type === "thread.turn.start");
+        assert.lengthOf(turns, 2);
+        const second = turns[1]!;
+        assert.strictEqual(second.threadId, first.threadId);
+        assert.notStrictEqual(second.message.messageId, first.message.messageId);
+        assert.notStrictEqual(second.commandId, first.commandId);
+        assert.strictEqual(second.runtimeMode, first.runtimeMode);
+        assert.lengthOf(
+          harness.commands.filter((command) => command.type === "thread.create"),
+          1,
+        );
+        const newOutput = taskOutputDirectory(config.stateDir, second.message.messageId);
+        assert.include(second.message.text, newOutput);
+        yield* Effect.tryPromise(() =>
+          NodeFSP.writeFile(NodePath.join(newOutput, "new.txt"), "New file"),
+        );
+        harness.finish(second.threadId, 'ChildOnly.\n```bot-result\n{"summary":"ChildOnly"}\n```');
+        yield* restarted.tick;
+        assert.strictEqual(bot.results[1]!.taskId, "follow");
+        assert.include(String(bot.results[1]!.result), "ChildOnly");
+        assert.notInclude(String(bot.results[1]!.result), "ParentOnly");
+        const uploads = bot.calls.filter((call) => call.path === "/harness/tasks/follow/artifacts");
+        assert.deepEqual(
+          uploads.map((call) => call.body.name),
+          ["new.txt"],
+        );
+      }).pipe(Effect.provide(services(bot, harness)));
+    },
+  );
+
+  it.effect("queues a same-thread followup without superseding its active parent", () => {
+    const bot = new FakeBot(),
+      harness = new FakeHarness();
+    bot.tasks = [{ taskId: "parent", title: "Parent", prompt: "Read" }];
+    return Effect.gen(function* () {
+      yield* TestClock.setTime(START);
+      const config = yield* ServerConfig.ServerConfig;
+      harness.scratchRoot = NodePath.resolve(config.baseDir, "scratch");
+      const computer = yield* BotTaskComputer.BotTaskComputer;
+      yield* computer.allow({
+        apiUrl: API,
+        ownerToken: "owner-session",
+        projectId: SCRATCH_PROJECT,
+      });
+      const parent = harness.commands.find((command) => command.type === "thread.create")!;
+      bot.tasks = [
+        {
+          taskId: "child",
+          title: "Child",
+          prompt: "Continue",
+          operation: { type: "followup", parentTaskId: "parent" },
+        },
+        { taskId: "unrelated", title: "Unrelated", prompt: "Other work" },
+      ];
+      yield* TestClock.adjust("30 seconds");
+      yield* computer.tick;
+      assert.lengthOf(
+        harness.commands.filter((command) => command.type === "thread.turn.start"),
+        2,
+      );
+      assert.lengthOf(harness.threads.get(parent.threadId)!.messages, 1);
+      harness.finish(parent.threadId, "Original parent result");
+      yield* computer.tick;
+      assert.deepInclude(bot.results[0]!, { taskId: "parent", status: "completed" });
+      assert.notInclude(String(bot.results[0]!.result), "could not be confirmed");
+      const turns = harness.commands.filter((command) => command.type === "thread.turn.start");
+      assert.lengthOf(turns, 3);
+      assert.strictEqual(turns[2]!.threadId, parent.threadId);
+    }).pipe(Effect.provide(services(bot, harness, 4)));
+  });
+
+  it.effect("does not redispatch after an acknowledgement loss or duplicate claim", () => {
+    const bot = new FakeBot(),
+      harness = new FakeHarness();
+    const task = { taskId: "once", title: "Once", prompt: "Read" };
+    bot.tasks = [task];
+    harness.failAfterTurnPersisted = true;
+    return Effect.gen(function* () {
+      yield* TestClock.setTime(START);
+      const computer = yield* BotTaskComputer.BotTaskComputer;
+      yield* allow(computer);
+      const first = harness.commands.find((command) => command.type === "thread.create")!;
+      const restarted = yield* BotTaskComputer.make;
+      yield* TestClock.adjust("30 seconds");
+      yield* restarted.tick;
+      assert.lengthOf(harness.commands, 2);
+      harness.failAfterTurnPersisted = false;
+      harness.finish(first.threadId, "Completed once");
+      bot.tasks = [task];
+      yield* TestClock.adjust("30 seconds");
+      yield* restarted.tick;
+      yield* restarted.tick;
+      assert.lengthOf(harness.commands, 2);
+      assert.deepInclude(bot.results[1]!, { taskId: "once", status: "failed" });
+      assert.include(String(bot.results[1]!.result), "Nothing was replayed");
+    }).pipe(Effect.provide(services(bot, harness)));
+  });
+
+  for (const operation of [
+    { type: "unsupported" },
+    { type: "followup", parentTaskId: "missing" },
+  ]) {
+    it.effect(`fails ${operation.type} safely without creating a replacement thread`, () => {
+      const bot = new FakeBot(),
+        harness = new FakeHarness();
+      bot.tasks = [{ taskId: "invalid", title: "Invalid", prompt: "Read", operation }];
+      return Effect.gen(function* () {
+        yield* TestClock.setTime(START);
+        const computer = yield* BotTaskComputer.BotTaskComputer;
+        yield* allow(computer);
+        yield* computer.tick;
+        assert.lengthOf(harness.commands, 0);
+        assert.deepInclude(bot.results[0]!, { taskId: "invalid", status: "failed" });
+      }).pipe(Effect.provide(services(bot, harness)));
+    });
+  }
+
+  it.effect("does not resolve another owner's completed task binding", () => {
+    const bot = new FakeBot(),
+      harness = new FakeHarness();
+    bot.tasks = [{ taskId: "source", title: "Source", prompt: "Read" }];
+    return Effect.gen(function* () {
+      yield* TestClock.setTime(START);
+      const computer = yield* BotTaskComputer.BotTaskComputer;
+      yield* allow(computer);
+      const first = harness.commands.find((command) => command.type === "thread.create")!;
+      harness.finish(first.threadId, "Private owner result");
+      yield* computer.tick;
+      yield* computer.stop({ ownerToken: "owner-session", apiUrl: API });
+      bot.ownerId = "another@ucsd.edu";
+      bot.tasks = [
+        {
+          taskId: "follow",
+          title: "Other owner",
+          prompt: "Continue",
+          operation: { type: "followup", parentTaskId: "source" },
+        },
+      ];
+      yield* allow(computer);
+      yield* computer.tick;
+      assert.lengthOf(harness.commands, 2);
+      assert.deepInclude(bot.results[1]!, { taskId: "follow", status: "failed" });
+      assert.include(String(bot.results[1]!.result), "no saved thread on this computer");
+    }).pipe(Effect.provide(services(bot, harness)));
+  });
+
+  it.effect(
+    "bounds active and waiting journals at sixteen while claiming at most four each pass",
+    () => {
+      const bot = new FakeBot(),
+        harness = new FakeHarness();
+      bot.tasks = Array.from({ length: 20 }, (_, index) => ({
+        taskId: `task-${index}`,
+        title: `Task ${index}`,
+        prompt: "Inspect",
+      }));
+      return Effect.gen(function* () {
+        yield* TestClock.setTime(START);
+        const config = yield* ServerConfig.ServerConfig;
+        harness.scratchRoot = NodePath.resolve(config.baseDir, "scratch");
+        const computer = yield* BotTaskComputer.BotTaskComputer;
+        yield* computer.allow({
+          apiUrl: API,
+          ownerToken: "owner-session",
+          projectId: SCRATCH_PROJECT,
+        });
+        for (let pass = 0; pass < 6; pass++) {
+          for (const threadId of harness.threads.keys()) harness.approvals.add(threadId);
+          const claims = bot.calls.filter((call) => call.path === "/harness/tasks/claim").length;
+          yield* TestClock.adjust("30 seconds");
+          yield* computer.tick;
+          assert.isAtMost(
+            bot.calls.filter((call) => call.path === "/harness/tasks/claim").length - claims,
+            4,
+          );
+        }
+        assert.strictEqual(harness.threads.size, 16);
+        assert.strictEqual(bot.tasks.length, 4);
+        assert.lengthOf((yield* computer.getStatus).tasks!, 16);
+      }).pipe(Effect.provide(services(bot, harness, 4)));
+    },
+  );
+  it.effect(
+    "surfaces rejected progress and retains held work without launching more until recovery",
+    () => {
+      const bot = new FakeBot(),
+        harness = new FakeHarness();
+      bot.tasks = [{ taskId: "first", title: "First", prompt: "Inspect" }];
+      return Effect.gen(function* () {
+        yield* TestClock.setTime(START);
+        const config = yield* ServerConfig.ServerConfig;
+        harness.scratchRoot = NodePath.resolve(config.baseDir, "scratch");
+        const computer = yield* BotTaskComputer.BotTaskComputer;
+        yield* computer.allow({
+          apiUrl: API,
+          ownerToken: "owner-session",
+          projectId: SCRATCH_PROJECT,
+        });
+        bot.rejectedProgressTask = "first";
+        bot.tasks = [{ taskId: "second", title: "Second", prompt: "Inspect" }];
+        yield* TestClock.adjust("30 seconds");
+        yield* computer.tick;
+        const status = yield* computer.getStatus;
+        assert.strictEqual(status.state, "error");
+        assert.include(status.message!, "Claim worker changed");
+        assert.include(status.message!, "Existing work is retained");
+        assert.lengthOf(harness.commands, 2);
+        assert.lengthOf(bot.tasks, 1);
+        bot.rejectedProgressTask = null;
+        yield* computer.tick;
+        assert.strictEqual((yield* computer.getStatus).state, "running");
+        assert.lengthOf(harness.commands, 4);
+      }).pipe(Effect.provide(services(bot, harness, 4)));
+    },
+  );
+  for (const missing of ["deleted", "device"] as const) {
+    it.effect(`rejects a ${missing} source binding without a replacement thread`, () => {
+      const bot = new FakeBot(),
+        harness = new FakeHarness();
+      bot.tasks = [{ taskId: "source", title: "Source", prompt: "Inspect" }];
+      return Effect.gen(function* () {
+        yield* TestClock.setTime(START);
+        const computer = yield* BotTaskComputer.BotTaskComputer;
+        yield* allow(computer);
+        const source = harness.commands.find((command) => command.type === "thread.create")!;
+        harness.finish(source.threadId, "Source result");
+        yield* computer.tick;
+        if (missing === "deleted") harness.threads.delete(source.threadId);
+        else {
+          const secrets = yield* ServerSecretStore.ServerSecretStore;
+          const key =
+            "tritonai-bot-thread-" +
+            NodeCrypto.createHash("sha256")
+              .update(encodeReportedJson([API, bot.ownerId, "source"]))
+              .digest("hex");
+          const binding = yield* decodeRecoveryJournal(
+            new TextDecoder().decode(Option.getOrThrow(yield* secrets.get(key))),
+          );
+          yield* secrets.set(
+            key,
+            new TextEncoder().encode(
+              yield* encodeRecoveryJournal({ ...binding, deviceId: "another-device" }),
+            ),
+          );
+        }
+        bot.tasks = [
+          {
+            taskId: "follow",
+            title: "Follow",
+            prompt: "Continue",
+            operation: { type: "followup", parentTaskId: "source" },
+          },
+        ];
+        yield* TestClock.adjust("30 seconds");
+        yield* computer.tick;
+        yield* computer.tick;
+        assert.lengthOf(harness.commands, 2);
+        assert.deepInclude(bot.results[1]!, { taskId: "follow", status: "failed" });
+        assert.include(
+          String(bot.results[1]!.result),
+          missing === "deleted" ? "no longer exists" : "another computer",
+        );
+      }).pipe(Effect.provide(services(bot, harness)));
+    });
+  }
+
+  it.effect("binds a legacy in-flight task before result delivery for later followups", () => {
+    const bot = new FakeBot(),
+      harness = new FakeHarness();
+    bot.tasks = [{ taskId: "source", title: "Source", prompt: "Inspect" }];
+    return Effect.gen(function* () {
+      yield* TestClock.setTime(START);
+      const computer = yield* BotTaskComputer.BotTaskComputer;
+      const secrets = yield* ServerSecretStore.ServerSecretStore;
+      yield* allow(computer);
+      const first = harness.commands.find((command) => command.type === "thread.create")!;
+      const journal = yield* readRecoveryJournal;
+      const held = yield* decodeRecoveryHeld(journal.held);
+      const {
+        projectId: _oldProject,
+        workspaceKey: _oldWorkspace,
+        ...legacy
+      } = held[0] as Record<string, unknown>;
+      yield* writeRecoveryJournal({ ...journal, held: [legacy] });
+      const key =
+        "tritonai-bot-thread-" +
+        NodeCrypto.createHash("sha256")
+          .update(encodeReportedJson([API, bot.ownerId, "source"]))
+          .digest("hex");
+      yield* secrets.remove(key);
+      harness.finish(first.threadId, "Legacy task completed");
+      const restarted = yield* BotTaskComputer.make;
+      yield* restarted.tick;
+      assert.isTrue(Option.isSome(yield* secrets.get(key)));
+      bot.tasks = [
+        {
+          taskId: "follow",
+          title: "Follow",
+          prompt: "Continue",
+          operation: { type: "followup", parentTaskId: "source" },
+        },
+      ];
+      yield* TestClock.adjust("30 seconds");
+      yield* restarted.tick;
+      const turns = harness.commands.filter((command) => command.type === "thread.turn.start");
+      assert.lengthOf(turns, 2);
+      assert.strictEqual(turns[1]!.threadId, first.threadId);
+    }).pipe(Effect.provide(services(bot, harness)));
+  });
 });

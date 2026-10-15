@@ -121,6 +121,24 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     }).pipe(Effect.provide(makeManagedServerSettingsLayer())),
   );
 
+  it.effect("persists the Bot launch target across reload", () =>
+    Effect.gen(function* () {
+      const service = yield* ServerSettingsModule.ServerSettingsService;
+      assert.equal((yield* service.getSettings).botTaskMaxParallel, 4);
+      yield* service.updateSettings({ botTaskMaxParallel: 2 });
+      const settings = yield* Effect.gen(function* () {
+        return yield* (yield* ServerSettingsModule.ServerSettingsService).getSettings;
+      }).pipe(
+        Effect.provide(
+          Layer.fresh(
+            ServerSettingsModule.layerManagedTest({ TRITONAI_API_KEY: "managed-test-key" }),
+          ),
+        ),
+      );
+      assert.equal(settings.botTaskMaxParallel, 2);
+    }).pipe(Effect.provide(makeManagedServerSettingsLayer())),
+  );
+
   for (const defaultRuntimeMode of [
     "approval-required",
     "auto-accept-edits",

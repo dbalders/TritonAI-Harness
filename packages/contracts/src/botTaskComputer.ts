@@ -19,11 +19,52 @@ export const ServerBotTaskComputerState = Schema.Literals([
 ]);
 export type ServerBotTaskComputerState = typeof ServerBotTaskComputerState.Type;
 
+export const BotTaskPhase = Schema.Literals([
+  "starting",
+  "running",
+  "waiting-approval",
+  "waiting-input",
+  "idle",
+  "completed",
+  "failed",
+]);
+export type BotTaskPhase = typeof BotTaskPhase.Type;
+
+export const BotTaskThreadProgress = Schema.Struct({
+  version: Schema.Literal(1),
+  deviceId: TrimmedNonEmptyString,
+  threadId: TrimmedNonEmptyString,
+  projectId: TrimmedNonEmptyString,
+  title: TrimmedNonEmptyString,
+  phase: BotTaskPhase,
+  observedAt: Schema.String,
+  pendingApprovals: Schema.Number,
+  pendingUserInputs: Schema.Number,
+  messages: Schema.Array(
+    Schema.Struct({
+      role: Schema.Literals(["user", "assistant"]),
+      text: Schema.String,
+      createdAt: Schema.String,
+    }),
+  ),
+  activity: Schema.Array(
+    Schema.Struct({
+      kind: Schema.String,
+      summary: Schema.String,
+      createdAt: Schema.String,
+    }),
+  ),
+});
+export type BotTaskThreadProgress = typeof BotTaskThreadProgress.Type;
+
 export const ServerBotTaskComputerTask = Schema.Struct({
   taskId: TrimmedNonEmptyString,
   title: TrimmedNonEmptyString,
   threadId: Schema.NullOr(TrimmedNonEmptyString),
   startedAt: Schema.String,
+  phase: Schema.optional(BotTaskPhase),
+  pendingApprovals: Schema.optional(Schema.Number),
+  pendingUserInputs: Schema.optional(Schema.Number),
 });
 export type ServerBotTaskComputerTask = typeof ServerBotTaskComputerTask.Type;
 
@@ -38,6 +79,8 @@ export const ServerBotTaskComputerStatus = Schema.Struct({
   /** Project whose folder and defaults new task threads use. */
   projectId: Schema.NullOr(TrimmedNonEmptyString),
   currentTask: Schema.NullOr(ServerBotTaskComputerTask),
+  /** Older clients continue using currentTask. */
+  tasks: Schema.optional(Schema.Array(ServerBotTaskComputerTask)),
   lastCheckInAt: Schema.NullOr(Schema.String),
   message: Schema.NullOr(TrimmedNonEmptyString),
 });

@@ -150,6 +150,41 @@ describe("taskProgress", () => {
     expect(taskProgress(thread({ latestTurn: null }), held, NOW)).toEqual({ kind: "pending" });
   });
 
+  it("does not settle a followup from its prior completed turn", () => {
+    expect(
+      taskProgress(
+        thread({ latestTurn: { turnId: "old", state: "completed" } }),
+        { ...held, previousTurnId: "old" },
+        NOW,
+      ),
+    ).toEqual({ kind: "pending" });
+  });
+
+  it("uses followup dispatch time for startup grace and reports failed starts without replay", () => {
+    const previous = thread({ latestTurn: { turnId: "old", state: "completed" } });
+    const delayed = { ...held, previousTurnId: "old", startedAt: "2026-10-08T06:01:00.000Z" };
+    expect(taskProgress(previous, delayed, NOW)).toEqual({ kind: "pending" });
+    expect(taskProgress(previous, delayed, NOW + START_GRACE_MS + 1)).toMatchObject({
+      kind: "done",
+      status: "failed",
+      result: expect.stringContaining("Nothing was replayed"),
+    });
+    expect(
+      taskProgress(
+        thread({
+          latestTurn: { turnId: "old", state: "completed" },
+          session: { status: "error", lastError: "Could not resume provider" },
+        }),
+        delayed,
+        NOW,
+      ),
+    ).toMatchObject({
+      kind: "done",
+      status: "failed",
+      result: expect.stringContaining("Could not resume provider"),
+    });
+  });
+
   it("never treats an unstarted or vanished task as run", () => {
     expect(taskProgress(null, { ...held, started: false }, NOW)).toMatchObject({
       status: "failed",
@@ -166,11 +201,10 @@ describe("taskProgress", () => {
     });
   });
 
-  it("gives up waiting after a day and truncates long replies", () => {
+  it("keeps long-running work active and truncates long replies", () => {
     const stuck = thread({ latestTurn: { state: "running" }, session: { status: "running" } });
     expect(taskProgress(stuck, held, Date.parse(claimedAt) + 25 * 3_600_000)).toMatchObject({
-      status: "failed",
-      result: expect.stringContaining("after 24 hours"),
+      kind: "pending",
     });
     const long = thread({
       messages: [

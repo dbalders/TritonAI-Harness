@@ -19,6 +19,7 @@ import * as NodeCrypto from "node:crypto";
 
 import {
   BotTaskResult,
+  type BotTaskThreadProgress,
   CommandId,
   DEFAULT_MODEL,
   DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -79,6 +80,13 @@ import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSn
 import { forkParked } from "../serverActivation.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import {
+  BOT_TASK_CAPABILITIES,
+  MAX_HELD_TASKS,
+  MAX_CLAIMS_PER_PASS,
+  botTaskSnapshot,
+  consumesBotLaunchSlot,
+} from "./botTaskProgress.ts";
+import {
   type HeldTask,
   normalizeBotApiUrl,
   type TaskOutcome,
@@ -92,8 +100,6 @@ const DEVICE_SECRET = "tritonai-bot-device-id";
 const STARTUP_DELAY = Duration.seconds(20);
 const TICK_INTERVAL = Duration.seconds(10);
 const CLAIM_INTERVAL_MS = 20_000;
-/** The bot counts a computer online for three minutes after it checks in. */
-const HEARTBEAT_INTERVAL_MS = 60_000;
 /** The longest claim the bot grants; a late result is still accepted after it lapses. */
 const LEASE_SECONDS = 7200;
 const REQUEST_TIMEOUT = Duration.seconds(15);
@@ -111,6 +117,55 @@ function permanentResultRejection(status: number): boolean {
 }
 const PermanentResultRejection = Schema.Number.check(Schema.makeFilter(permanentResultRejection));
 
+const AttachmentMetadata = Schema.Struct({
+  attachmentId: Schema.String.check(Schema.isPattern(/^att_[a-f0-9]{64}$/u)),
+  name: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(180)),
+  mimeType: Schema.String,
+  size: Schema.Number.check(
+    Schema.isInt(),
+    Schema.isGreaterThan(0),
+    Schema.isLessThanOrEqualTo(4 * 1024 * 1024),
+  ),
+  sha256: Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/u)),
+});
+const AttachmentBytes = Schema.Struct({
+  attachment: AttachmentMetadata,
+  dataBase64: Schema.String,
+});
+const decodeAttachmentMetadata = Schema.decodeUnknownEffect(AttachmentMetadata);
+const decodeAttachmentBytes = Schema.decodeUnknownEffect(AttachmentBytes);
+const ClaimedTask = Schema.Struct({
+  taskId: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_-]{1,128}$/u)),
+  userId: Schema.String,
+  claimId: Schema.String.check(Schema.isMinLength(1)),
+  title: Schema.String,
+  prompt: Schema.String,
+  operation: Schema.optional(Schema.Unknown),
+  attachments: Schema.optional(Schema.Array(AttachmentMetadata).check(Schema.isMaxLength(3))),
+});
+const decodeClaimedTask = Schema.decodeUnknownEffect(ClaimedTask);
+
+const FollowupOperation = Schema.Struct({
+  type: Schema.Literal("followup"),
+  parentTaskId: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_-]{1,128}$/u)),
+});
+const decodeFollowupOperation = Schema.decodeUnknownEffect(FollowupOperation);
+const Binding = Schema.Struct({
+  taskId: Schema.String,
+  claimId: Schema.String,
+  threadId: Schema.String,
+  deviceId: Schema.String,
+  projectId: Schema.String,
+});
+const BindingJson = Schema.fromJsonString(Binding);
+const decodeBinding = Schema.decodeUnknownEffect(BindingJson);
+const encodeBinding = Schema.encodeEffect(BindingJson);
+function bindingKey(stored: Pick<Stored, "apiUrl" | "userId">, taskId: string): string {
+  return `tritonai-bot-thread-${NodeCrypto.createHash("sha256")
+    .update(JSON.stringify([stored.apiUrl, stored.userId, taskId]))
+    .digest("hex")}`;
+}
+
 const Outcome = Schema.Struct({
   status: Schema.Literals(["completed", "failed"]),
   result: Schema.String,
@@ -123,8 +178,17 @@ const Held = Schema.Struct({
   threadId: Schema.String,
   messageId: Schema.String,
   claimedAt: Schema.String,
+  startedAt: Schema.optional(Schema.String),
   started: Schema.Boolean,
   outcome: Schema.NullOr(Outcome),
+  /** Present only until a new operation is dispatched; legacy journals have no assignment. */
+  assignment: Schema.optional(ClaimedTask),
+  projectId: Schema.optional(Schema.String),
+  workspaceKey: Schema.optional(Schema.String),
+  outputId: Schema.optional(Schema.String),
+  turnCommandId: Schema.optional(Schema.String),
+  createCommandId: Schema.optional(Schema.String),
+  previousTurnId: Schema.optional(Schema.String),
   deliveryMode: Schema.optional(Schema.Literal("minimal")),
   minimalResult: Schema.optional(Schema.String.check(Schema.isMinLength(1))),
   pendingOutputs: Schema.optional(
@@ -202,33 +266,6 @@ function minimalTaskResult(task: HeldTask & { readonly outcome: TaskOutcome }): 
   return `${task.outcome.result.slice(0, 4000)}\n\n[Reply truncated for delivery.]\n${notice}`;
 }
 
-const AttachmentMetadata = Schema.Struct({
-  attachmentId: Schema.String.check(Schema.isPattern(/^att_[a-f0-9]{64}$/u)),
-  name: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(180)),
-  mimeType: Schema.String,
-  size: Schema.Number.check(
-    Schema.isInt(),
-    Schema.isGreaterThan(0),
-    Schema.isLessThanOrEqualTo(4 * 1024 * 1024),
-  ),
-  sha256: Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/u)),
-});
-const AttachmentBytes = Schema.Struct({
-  attachment: AttachmentMetadata,
-  dataBase64: Schema.String,
-});
-const decodeAttachmentMetadata = Schema.decodeUnknownEffect(AttachmentMetadata);
-const decodeAttachmentBytes = Schema.decodeUnknownEffect(AttachmentBytes);
-const ClaimedTask = Schema.Struct({
-  taskId: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_-]{1,128}$/u)),
-  userId: Schema.String,
-  claimId: Schema.String.check(Schema.isMinLength(1)),
-  title: Schema.String,
-  prompt: Schema.String,
-  attachments: Schema.optional(Schema.Array(AttachmentMetadata).check(Schema.isMaxLength(3))),
-});
-const decodeClaimedTask = Schema.decodeUnknownEffect(ClaimedTask);
-
 interface RunStatus {
   readonly state: Exclude<ServerBotTaskComputerState, "off" | "running"> | null;
   readonly message: string | null;
@@ -292,6 +329,13 @@ export const make = Effect.gen(function* () {
     lastCheckInMs: 0,
     lastClaimMs: 0,
   });
+  const snapshots = yield* Ref.make<
+    ReadonlyArray<{
+      readonly taskId: string;
+      readonly claimId: string;
+      readonly progress: BotTaskThreadProgress;
+    }>
+  >([]);
   const note = (patch: Partial<RunStatus>) =>
     Ref.update(status, (current) => ({ ...current, ...patch }));
 
@@ -351,6 +395,7 @@ export const make = Effect.gen(function* () {
   const getStatus = Effect.gen(function* () {
     const stored = yield* readStored.pipe(Effect.orElseSucceed(() => null));
     const run = yield* Ref.get(status);
+    const recent = yield* Ref.get(snapshots);
     const current = stored?.held.find((task) => task.outcome === null) ?? null;
     const state: ServerBotTaskComputerState = !stored
       ? "off"
@@ -358,14 +403,16 @@ export const make = Effect.gen(function* () {
         ? "replaced"
         : !stored.active
           ? "off"
-          : current
-            ? "running"
-            : (run.state ?? "idle");
+          : run.state === "error"
+            ? "error"
+            : current
+              ? "running"
+              : (run.state ?? "idle");
     const pendingDelivery = stored?.active
       ? stored.held.find((task) => task.outcome !== null)
       : undefined;
     const deliveryMessage = pendingDelivery
-      ? `Finished running “${taskThreadTitle(pendingDelivery.title)}”. Its saved result${pendingDelivery.pendingOutputs?.length ? " and files are" : " is"} awaiting delivery to your bot. Retrying automatically. New assignments wait until saved result delivery finishes.`
+      ? `Finished running “${taskThreadTitle(pendingDelivery.title)}”. Its saved result${pendingDelivery.pendingOutputs?.length ? " and files are" : " is"} awaiting delivery to your bot. Retrying automatically. Saved delivery retries continue while other assignments can run.`
       : null;
     const rejectedMessage =
       stored?.active && stored.deliveryWarning
@@ -378,12 +425,31 @@ export const make = Effect.gen(function* () {
       apiUrl: stored?.active ? stored.apiUrl : null,
       userId: stored?.userId ?? null,
       projectId: stored?.projectId ?? null,
+      tasks:
+        stored?.held
+          .filter((task) => task.outcome === null)
+          .map((task) => {
+            const progress = recent.find((item) => item.taskId === task.taskId)?.progress;
+            return {
+              taskId: task.taskId,
+              title: taskThreadTitle(task.title),
+              threadId: task.started ? task.threadId : null,
+              startedAt: task.startedAt ?? task.claimedAt,
+              ...(progress
+                ? {
+                    phase: progress.phase,
+                    pendingApprovals: progress.pendingApprovals,
+                    pendingUserInputs: progress.pendingUserInputs,
+                  }
+                : {}),
+            };
+          }) ?? [],
       currentTask: current
         ? {
             taskId: current.taskId,
             title: taskThreadTitle(current.title),
             threadId: current.started ? current.threadId : null,
-            startedAt: current.claimedAt,
+            startedAt: current.startedAt ?? current.claimedAt,
           }
         : null,
       lastCheckInAt: stored?.active ? run.lastCheckInAt : null,
@@ -484,6 +550,7 @@ export const make = Effect.gen(function* () {
             task = next;
           });
         if (task.outcome === null) {
+          if (!task.started && task.assignment) continue;
           const thread = task.started
             ? yield* projections
                 .getThreadDetailById(ThreadId.make(task.threadId), { activityKinds: [] })
@@ -501,7 +568,7 @@ export const make = Effect.gen(function* () {
           const outputs = outcome.structuredResult
             ? yield* Effect.tryPromise(() =>
                 collectTaskOutputFiles(
-                  taskOutputDirectory(serverConfig.stateDir, task.threadId),
+                  taskOutputDirectory(serverConfig.stateDir, task.outputId ?? task.threadId),
                   platform,
                   { architecture },
                 ),
@@ -671,11 +738,84 @@ export const make = Effect.gen(function* () {
       return stored;
     });
 
-  /** The thread inherits the project's model and permission defaults, as if the owner started it. */
-  const startTask = (stored: Stored, task: typeof ClaimedTask.Type) =>
+  const readBinding = (stored: Stored, taskId: string) =>
+    secrets
+      .get(bindingKey(stored, taskId))
+      .pipe(
+        Effect.flatMap((raw) =>
+          Option.isNone(raw)
+            ? Effect.succeed(null)
+            : decodeBinding(new TextDecoder().decode(raw.value)),
+        ),
+      );
+
+  /** Bindings outlive the active pairing and result delivery, scoped to this API and owner. */
+  const bindTask = (stored: Stored, task: typeof Held.Type, projectId: string) =>
+    Effect.gen(function* () {
+      const existing = yield* readBinding(stored, task.taskId);
+      if (existing) {
+        if (
+          existing.threadId !== task.threadId ||
+          existing.claimId !== task.claimId ||
+          existing.deviceId !== deviceId ||
+          existing.projectId !== projectId
+        )
+          return yield* failure(
+            "This task is already bound to another execution. Nothing was replayed.",
+          );
+        return;
+      }
+      const json = yield* encodeBinding({
+        taskId: task.taskId,
+        claimId: task.claimId,
+        threadId: task.threadId,
+        deviceId,
+        projectId,
+      });
+      yield* secrets.create(bindingKey(stored, task.taskId), new TextEncoder().encode(json));
+    });
+
+  const migrateHeldBindings = (initial: Stored) =>
+    Effect.gen(function* () {
+      const held = [...initial.held];
+      let changed = false;
+      for (const [index, task] of initial.held.entries()) {
+        if (!task.started || task.projectId !== undefined) continue;
+        const shell = yield* projections.getThreadShellById(ThreadId.make(task.threadId));
+        if (Option.isNone(shell)) continue;
+        const projectId = shell.value.projectId;
+        yield* bindTask(initial, task, projectId);
+        const project = yield* projections.getProjectShellById(projectId);
+        const scratch =
+          Option.isSome(project) &&
+          normalizeProjectPathForComparison(project.value.workspaceRoot) ===
+            normalizeProjectPathForComparison(scratchWorkspaceRootFor(path, serverConfig.baseDir));
+        const workspaceKey = scratch
+          ? `scratch:${task.threadId}`
+          : (shell.value.worktreePath ??
+            (Option.isSome(project) ? project.value.workspaceRoot : undefined));
+        held[index] = {
+          ...task,
+          projectId,
+          ...(workspaceKey
+            ? {
+                workspaceKey: scratch
+                  ? workspaceKey
+                  : normalizeProjectPathForComparison(workspaceKey),
+              }
+            : {}),
+        };
+        changed = true;
+      }
+      const stored = changed ? { ...initial, held } : initial;
+      if (changed) yield* writeStored(stored);
+      return stored;
+    });
+
+  const enqueueTask = (stored: Stored, task: typeof ClaimedTask.Type) =>
     Effect.gen(function* () {
       const now = yield* Clock.currentTimeMillis;
-      const held: HeldTask = {
+      let held: typeof Held.Type = {
         taskId: task.taskId,
         claimId: task.claimId,
         title: task.title,
@@ -684,29 +824,95 @@ export const make = Effect.gen(function* () {
         claimedAt: isoAt(now),
         started: false,
         outcome: null,
+        assignment: task,
+        projectId: stored.projectId,
+        turnCommandId: yield* crypto.randomUUIDv4,
+        createCommandId: yield* crypto.randomUUIDv4,
       };
-      let next: Stored = { ...stored, held: [...stored.held, held] };
-      yield* writeStored(next);
-      const markStarted = () => {
-        next = {
-          ...next,
-          held: next.held.map((item) =>
-            item.taskId === held.taskId ? { ...item, started: true } : item,
-          ),
+      let reason: string | null = null;
+      const duplicate = yield* readBinding(stored, task.taskId);
+      if (duplicate) reason = "This task already has a Harness thread. Nothing was replayed.";
+      if (task.operation !== undefined) {
+        const operation = yield* decodeFollowupOperation(task.operation).pipe(Effect.option);
+        if (Option.isNone(operation)) reason = "This task operation is not supported. Nothing ran.";
+        else {
+          const source = yield* readBinding(stored, operation.value.parentTaskId);
+          if (!source)
+            reason = "The source task has no saved thread on this computer. Nothing ran.";
+          else if (source.deviceId !== deviceId)
+            reason = "The source task belongs to another computer. Nothing ran.";
+          else {
+            const thread = yield* projections.getThreadShellById(ThreadId.make(source.threadId));
+            if (Option.isNone(thread))
+              reason = "The source task's Harness thread no longer exists. Nothing ran.";
+            else
+              held = {
+                ...held,
+                threadId: source.threadId,
+                projectId: source.projectId,
+                outputId: held.messageId,
+              };
+          }
+        }
+      }
+      const project = yield* projections.getProjectShellById(ProjectId.make(held.projectId!));
+      if (Option.isNone(project)) reason ??= PROJECT_GONE;
+      else {
+        const scratch =
+          normalizeProjectPathForComparison(project.value.workspaceRoot) ===
+          normalizeProjectPathForComparison(scratchWorkspaceRootFor(path, serverConfig.baseDir));
+        const thread =
+          task.operation === undefined
+            ? null
+            : Option.getOrNull(yield* projections.getThreadShellById(ThreadId.make(held.threadId)));
+        held = {
+          ...held,
+          workspaceKey: scratch
+            ? `scratch:${held.threadId}`
+            : normalizeProjectPathForComparison(
+                thread?.worktreePath ?? project.value.workspaceRoot,
+              ),
         };
-        return writeStored(next);
-      };
+      }
+      if (reason)
+        held = { ...held, assignment: undefined, outcome: { status: "failed", result: reason } };
+      const next = { ...stored, held: [...stored.held, held] };
+      yield* writeStored(next);
+      return next;
+    });
+
+  /** Dispatch one persisted assignment. A followup retains its thread's runtime and workspace. */
+  const startHeld = (stored: Stored, original: typeof Held.Type) =>
+    Effect.gen(function* () {
+      const task = original.assignment!;
+      let held = original;
+      let next = stored;
+      const save = (updated: typeof held) =>
+        Effect.gen(function* () {
+          next = {
+            ...next,
+            held: next.held.map((item) => (item.taskId === held.taskId ? updated : item)),
+          };
+          yield* writeStored(next);
+          held = updated;
+        });
       const started = yield* Effect.gen(function* () {
         const settings = yield* settingsService.getSettings;
-        const projectId = ProjectId.make(stored.projectId);
+        const projectId = ProjectId.make(held.projectId ?? stored.projectId);
         const project = yield* projections.getProjectShellById(projectId);
         if (Option.isNone(project)) return yield* Effect.fail(PROJECT_GONE);
         const resolved = resolveProjectSettings(settings, projectId, project.value).settings;
-        const createdAt = isoAt(now);
-        // Like any thread started in "No project", a task there works in its own folder.
+        const createdAt = isoAt(yield* Clock.currentTimeMillis);
+        const followup = task.operation !== undefined;
+        const source = followup
+          ? Option.getOrNull(yield* projections.getThreadShellById(ThreadId.make(held.threadId)))
+          : null;
+        if (followup && !source)
+          return yield* failure("The source thread no longer exists. Nothing ran.");
         const scratchRoot = scratchWorkspaceRootFor(path, serverConfig.baseDir);
         const worktreePath =
-          normalizeProjectPathForComparison(project.value.workspaceRoot) ===
+          source?.worktreePath ??
+          (normalizeProjectPathForComparison(project.value.workspaceRoot) ===
           normalizeProjectPathForComparison(scratchRoot)
             ? yield* claimScratchThreadFolder(scratchRoot, {
                 threadId: held.threadId,
@@ -716,13 +922,17 @@ export const make = Effect.gen(function* () {
                 Effect.provideService(FileSystem.FileSystem, fileSystem),
                 Effect.provideService(Path.Path, path),
               )
-            : null;
-        const modelSelection: ModelSelection = resolved.defaultModelSelection ??
+            : null);
+        const modelSelection: ModelSelection = source?.modelSelection ??
+          resolved.defaultModelSelection ??
           settings.defaultModelSelection ?? {
             instanceId: ProviderInstanceId.make("codex"),
             model: DEFAULT_MODEL,
           };
-        const outputDirectory = taskOutputDirectory(serverConfig.stateDir, held.threadId);
+        const outputDirectory = taskOutputDirectory(
+          serverConfig.stateDir,
+          held.outputId ?? held.threadId,
+        );
         yield* Effect.tryPromise(() => prepareTaskOutputDirectory(outputDirectory));
         const attachments: Array<UploadChatAttachment> = [];
         for (const attachment of task.attachments ?? []) {
@@ -777,22 +987,25 @@ export const make = Effect.gen(function* () {
             attachments.push(file);
           }
         }
-        yield* engine.dispatch({
-          type: "thread.create",
-          commandId: CommandId.make(`bot-task:create:${held.taskId}:${yield* crypto.randomUUIDv4}`),
-          threadId: ThreadId.make(held.threadId),
-          projectId,
-          title: taskThreadTitle(task.title),
-          modelSelection,
-          runtimeMode: resolved.defaultRuntimeMode,
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          branch: null,
-          worktreePath,
-          createdAt,
-        });
+
+        yield* bindTask(stored, held, projectId);
+        if (!followup)
+          yield* engine.dispatch({
+            type: "thread.create",
+            commandId: CommandId.make(held.createCommandId!),
+            threadId: ThreadId.make(held.threadId),
+            projectId,
+            title: taskThreadTitle(task.title),
+            modelSelection,
+            runtimeMode: resolved.defaultRuntimeMode,
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            branch: null,
+            worktreePath,
+            createdAt,
+          });
         const turn = yield* normalizeDispatchCommand({
           type: "thread.turn.start",
-          commandId: CommandId.make(`bot-task:turn:${held.taskId}:${yield* crypto.randomUUIDv4}`),
+          commandId: CommandId.make(held.turnCommandId!),
           threadId: ThreadId.make(held.threadId),
           message: {
             messageId: MessageId.make(held.messageId),
@@ -800,8 +1013,8 @@ export const make = Effect.gen(function* () {
             text: taskPrompt(task.title, task.prompt, outputDirectory),
             attachments,
           },
-          runtimeMode: resolved.defaultRuntimeMode,
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: source?.runtimeMode ?? resolved.defaultRuntimeMode,
+          interactionMode: source?.interactionMode ?? DEFAULT_PROVIDER_INTERACTION_MODE,
           createdAt,
         }).pipe(
           Effect.provideService(WorkspacePaths.WorkspacePaths, workspacePaths),
@@ -809,38 +1022,108 @@ export const make = Effect.gen(function* () {
           Effect.provideService(Path.Path, path),
           Effect.provideService(ServerConfig, serverConfig),
         );
-        // From here the turn may run, so a restart must wait for the thread rather than call it unstarted.
-        yield* markStarted();
+        // After this durable write, never redispatch on restart: reconcile the exact message instead.
+        yield* save({
+          ...held,
+          started: true,
+          startedAt: createdAt,
+          assignment: undefined,
+          ...(source?.latestTurn?.turnId ? { previousTurnId: source.latestTurn.turnId } : {}),
+        });
         yield* engine.dispatch(turn);
       }).pipe(
         Effect.as(null),
         Effect.catchCause((cause) => Effect.succeed(cause)),
       );
-      if (started !== null) {
-        // Dispatch can persist before its acknowledgement fails. Never report an attempted turn as unstarted.
-        if (next.held.find((item) => item.taskId === held.taskId)?.started) return;
-        // A rejected command did not run. Report it now rather than waiting for the start grace period.
-        yield* Effect.logWarning("bot task could not start", {
-          taskId: held.taskId,
-          cause: started,
-        });
+      if (started !== null && !held.started) {
         const reason =
           Cause.squash(started) === PROJECT_GONE
             ? PROJECT_GONE
-            : "Harness could not start a thread for it.";
-        next = {
-          ...next,
-          held: next.held.map((item) =>
-            item.taskId === held.taskId
-              ? {
-                  ...item,
-                  outcome: { status: "failed" as const, result: `${reason} Nothing ran.` },
-                }
-              : item,
-          ),
-        };
-        yield* writeStored(next);
+            : "Harness could not start this assignment. Nothing ran.";
+        yield* save({
+          ...held,
+          assignment: undefined,
+          outcome: { status: "failed", result: reason },
+        });
       }
+      return next;
+    });
+
+  const readProgress = (stored: Stored, now: number) =>
+    Effect.gen(function* () {
+      const progress = [];
+      for (const task of stored.held) {
+        const shell = task.started
+          ? yield* projections
+              .getThreadShellById(ThreadId.make(task.threadId))
+              .pipe(Effect.orElseSucceed(() => Option.none()))
+          : Option.none();
+        const detail = task.started
+          ? yield* projections
+              .getThreadDetailSnapshot(ThreadId.make(task.threadId), { turnLimit: 2 })
+              .pipe(Effect.orElseSucceed(() => Option.none()))
+          : Option.none();
+        progress.push({
+          taskId: task.taskId,
+          claimId: task.claimId,
+          progress: botTaskSnapshot(
+            task,
+            { deviceId, projectId: task.projectId ?? stored.projectId, observedAt: isoAt(now) },
+            Option.getOrNull(shell),
+            Option.getOrNull(detail)?.thread ?? null,
+          ),
+        });
+      }
+      yield* Ref.set(snapshots, progress);
+      return progress;
+    });
+
+  const startPending = (initial: Stored, now: number) =>
+    Effect.gen(function* () {
+      let stored = initial;
+      const target = (yield* settingsService.getSettings).botTaskMaxParallel;
+      let launches = 0;
+      for (const original of initial.held) {
+        if (!original.assignment || original.started || original.outcome !== null) continue;
+        const progress = yield* readProgress(stored, now);
+        if (
+          progress.filter(
+            (item) =>
+              stored.held.some(
+                (task) => task.taskId === item.taskId && task.started && task.outcome === null,
+              ) && consumesBotLaunchSlot(item.progress),
+          ).length >= target ||
+          launches >= MAX_CLAIMS_PER_PASS
+        )
+          break;
+        const sameWorkspace = stored.held.some(
+          (task) =>
+            task.taskId !== original.taskId &&
+            task.started &&
+            task.outcome === null &&
+            (task.threadId === original.threadId ||
+              task.workspaceKey === original.workspaceKey ||
+              (task.workspaceKey === undefined &&
+                !original.workspaceKey?.startsWith("scratch:") &&
+                (task.projectId ?? stored.projectId) === original.projectId)),
+        );
+        if (sameWorkspace) continue;
+        if (original.assignment.operation !== undefined) {
+          const shell = yield* projections.getThreadShellById(ThreadId.make(original.threadId));
+          if (
+            Option.isSome(shell) &&
+            (shell.value.session?.status === "running" ||
+              shell.value.session?.status === "starting" ||
+              shell.value.hasPendingApprovals ||
+              shell.value.hasPendingUserInput ||
+              shell.value.latestTurn?.state === "running")
+          )
+            continue;
+        }
+        stored = yield* startHeld(stored, original);
+        launches++;
+      }
+      return stored;
     });
 
   const stopClaiming = (stored: Stored, replaced: boolean, message: string) =>
@@ -866,52 +1149,113 @@ export const make = Effect.gen(function* () {
         ).pipe(Effect.as(true));
 
   const pass = Effect.gen(function* () {
-    const initial = yield* readStored;
-    if (!initial) return;
+    const saved = yield* readStored;
+    if (!saved) return;
+    const initial = yield* migrateHeldBindings(saved);
     const now = yield* Clock.currentTimeMillis;
-    const stored = yield* settleHeld(initial, now);
+    let reachable = true;
+    const rejectedProgress = new Map<string, string>();
+    // Publish terminal progress before final delivery removes its active journal entry.
+    if (initial.active) {
+      const tasks = yield* readProgress(initial, now);
+      const reply = yield* post(`${initial.apiUrl}/harness/heartbeat`, workerHeaders(initial), {
+        capabilities: BOT_TASK_CAPABILITIES,
+        tasks,
+      }).pipe(Effect.option);
+      if (Option.isSome(reply) && (yield* handleRejection(initial, reply.value))) {
+        const stopped = yield* readStored;
+        if (stopped) yield* settleHeld(stopped, now);
+        return;
+      }
+      reachable = Option.isSome(reply) && reply.value.status === 200;
+      if (reachable && Option.isSome(reply) && reply.value.json.tasks !== undefined) {
+        const acknowledgements = Array.isArray(reply.value.json.tasks)
+          ? reply.value.json.tasks
+          : [];
+        for (const task of initial.held) {
+          const ack: unknown = acknowledgements.find(
+            (value: unknown) =>
+              typeof value === "object" &&
+              value !== null &&
+              "taskId" in value &&
+              value.taskId === task.taskId,
+          );
+          if (
+            typeof ack !== "object" ||
+            ack === null ||
+            !("accepted" in ack) ||
+            ack.accepted !== true
+          ) {
+            const reason =
+              typeof ack === "object" &&
+              ack !== null &&
+              "reason" in ack &&
+              typeof ack.reason === "string"
+                ? ack.reason.slice(0, 200)
+                : "No valid progress acknowledgement";
+            rejectedProgress.set(task.taskId, reason);
+          }
+        }
+      }
+      yield* note(
+        reachable
+          ? { state: "idle", message: null, lastCheckInAt: isoAt(now), lastCheckInMs: now }
+          : { state: "error", message: "Could not reach TritonAI Bot. Retrying." },
+      );
+    }
+    let stored = yield* settleHeld(initial, now);
     if (!stored.active) {
       if (!stored.held.length && !stored.deliveryWarning) yield* writeStored(null);
       return;
     }
+    if (!reachable) return;
+    const rejected = stored.held.filter((task) => rejectedProgress.has(task.taskId));
+    if (rejected.length)
+      return yield* note({
+        state: "error",
+        message: `Your Bot could not accept progress for ${rejected.map((task) => `“${taskThreadTitle(task.title)}”: ${rejectedProgress.get(task.taskId)}`).join("; ")}. Existing work is retained. New assignments wait until progress sync recovers.`,
+      });
+    stored = yield* startPending(stored, now);
     const run = yield* Ref.get(status);
-    if (now - run.lastCheckInMs >= HEARTBEAT_INTERVAL_MS) {
-      const reply = yield* post(
-        `${stored.apiUrl}/harness/heartbeat`,
-        workerHeaders(stored),
-        {},
-      ).pipe(Effect.option);
-      if (Option.isNone(reply) || (reply.value.status !== 200 && reply.value.status !== 401)) {
-        return yield* note({ state: "error", message: "Could not reach TritonAI Bot. Retrying." });
-      }
-      if (yield* handleRejection(stored, reply.value)) return;
-      yield* note({ state: "idle", message: null, lastCheckInAt: isoAt(now), lastCheckInMs: now });
-    }
-    // Do not accumulate more byte journals or delivery receipts during a service outage.
-    if (stored.held.length) return;
-    if (now - run.lastClaimMs < CLAIM_INTERVAL_MS) return;
-    if (!(yield* projectExists(stored.projectId))) {
+    if (now - run.lastClaimMs < CLAIM_INTERVAL_MS || stored.held.length >= MAX_HELD_TASKS) return;
+    if (!(yield* projectExists(stored.projectId)))
       return yield* note({
         state: "error",
         message: "Choose a project for TritonAI Bot tasks in Settings.",
       });
-    }
     yield* note({ lastClaimMs: now });
-    const reply = yield* post(`${stored.apiUrl}/harness/tasks/claim`, workerHeaders(stored), {
-      leaseSeconds: LEASE_SECONDS,
-      capabilities: ["file-attachments-v1"],
-    }).pipe(Effect.option);
-    if (Option.isNone(reply) || (reply.value.status !== 200 && reply.value.status !== 401)) {
-      return yield* note({ state: "error", message: "Could not reach TritonAI Bot. Retrying." });
+    const target = (yield* settingsService.getSettings).botTaskMaxParallel;
+    for (
+      let claims = 0;
+      claims < MAX_CLAIMS_PER_PASS && stored.held.length < MAX_HELD_TASKS;
+      claims++
+    ) {
+      const progress = yield* readProgress(stored, now);
+      const running = progress.filter(
+        (item) =>
+          stored.held.some(
+            (task) => task.taskId === item.taskId && task.started && task.outcome === null,
+          ) && consumesBotLaunchSlot(item.progress),
+      ).length;
+      if (running >= target) break;
+      const reply = yield* post(`${stored.apiUrl}/harness/tasks/claim`, workerHeaders(stored), {
+        leaseSeconds: LEASE_SECONDS,
+        capabilities: BOT_TASK_CAPABILITIES,
+      }).pipe(Effect.option);
+      if (Option.isNone(reply) || (reply.value.status !== 200 && reply.value.status !== 401))
+        return yield* note({ state: "error", message: "Could not reach TritonAI Bot. Retrying." });
+      if (yield* handleRejection(stored, reply.value)) return;
+      if (reply.value.json.task === null || reply.value.json.task === undefined) break;
+      const task = yield* decodeClaimedTask(reply.value.json.task).pipe(Effect.option);
+      if (Option.isNone(task) || task.value.userId !== stored.userId) {
+        yield* Effect.logWarning("bot task claim had an unexpected shape");
+        break;
+      }
+      if (stored.held.some((held) => held.taskId === task.value.taskId)) break;
+      stored = yield* enqueueTask(stored, task.value);
+      stored = yield* startPending(stored, now);
     }
-    if (yield* handleRejection(stored, reply.value)) return;
-    yield* note({ state: "idle", message: null, lastCheckInAt: isoAt(now), lastCheckInMs: now });
-    if (reply.value.json.task === null || reply.value.json.task === undefined) return;
-    const task = yield* decodeClaimedTask(reply.value.json.task).pipe(Effect.option);
-    if (Option.isNone(task) || task.value.userId !== stored.userId) {
-      return yield* Effect.logWarning("bot task claim had an unexpected shape");
-    }
-    yield* startTask(stored, task.value);
+    yield* readProgress(stored, now);
   });
 
   const tick = locked(pass).pipe(

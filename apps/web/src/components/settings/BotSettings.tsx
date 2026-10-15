@@ -20,7 +20,13 @@ import {
   type DotState,
 } from "../dot/dotClient";
 import { useScratchProject } from "../../hooks/useScratchProject";
-import { useClientSettings, useUpdateClientSettings } from "../../hooks/useSettings";
+import {
+  useClientSettings,
+  usePrimarySettings,
+  usePrimarySettingsAvailable,
+  useUpdateClientSettings,
+  useUpdatePrimarySettings,
+} from "../../hooks/useSettings";
 import { ensureLocalApi } from "../../localApi";
 import { useBotServiceUrl } from "../dot/botService";
 import { Badge } from "../ui/badge";
@@ -72,6 +78,9 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
   const [busy, setBusy] = useState(false);
   const diagnostics = useClientSettings((settings) => settings.tritonAiBotDiagnostics);
   const updateSettings = useUpdateClientSettings();
+  const maxParallel = usePrimarySettings((settings) => settings.botTaskMaxParallel);
+  const serverSettingsAvailable = usePrimarySettingsAvailable();
+  const updateServerSettings = useUpdatePrimarySettings();
   const [chosenProjectId, setChosenProjectId] = useState<string | null>(null);
   const changingProject = useRef(false);
   const { data: local, refresh: refreshLocal } = useEnvironmentQuery(
@@ -381,6 +390,73 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
             </div>
           }
         />
+        <SettingsRow
+          title="Parallel assignments"
+          description="Independent tasks can run in separate threads. Waiting for approval or an answer leaves room for other work. Tasks sharing a project folder take turns."
+          control={
+            <Select
+              disabled={!serverSettingsAvailable}
+              value={String(maxParallel)}
+              onValueChange={(value) => {
+                const count = Number(value);
+                if (Number.isInteger(count) && count >= 1 && count <= 8) {
+                  void updateServerSettings({ botTaskMaxParallel: count });
+                }
+              }}
+            >
+              <SelectTrigger size="sm" className="w-full sm:w-56" aria-label="Parallel assignments">
+                <SelectValue>{maxParallel} at a time</SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                {[1, 2, 3, 4, 5, 6, 7, 8].map((count) => (
+                  <SelectItem key={count} value={String(count)}>
+                    {count} at a time
+                  </SelectItem>
+                ))}
+              </SelectPopup>
+            </Select>
+          }
+        />
+        {localForService?.tasks?.map((task) => {
+          const threadId = task.threadId;
+          const status =
+            task.phase === "waiting-approval"
+              ? "Waiting for your approval."
+              : task.phase === "waiting-input"
+                ? "Waiting for your answer."
+                : task.phase === "idle"
+                  ? "Waiting for the existing thread or shared project folder."
+                  : task.phase === "starting"
+                    ? "Preparing the thread."
+                    : task.phase === "completed"
+                      ? "Delivering the completed result."
+                      : task.phase === "failed"
+                        ? "Delivering the failure result."
+                        : "Running in Harness.";
+          return (
+            <SettingsRow
+              key={task.taskId}
+              title={task.title}
+              description={status}
+              control={
+                threadId && environmentId ? (
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    onClick={() =>
+                      void navigate({
+                        to: "/$environmentId/$threadId",
+                        params: { environmentId, threadId },
+                      })
+                    }
+                  >
+                    Open thread
+                  </Button>
+                ) : undefined
+              }
+            />
+          );
+        })}
         <SettingsRow
           title="Project for tasks"
           description={

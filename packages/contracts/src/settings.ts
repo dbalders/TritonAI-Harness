@@ -1186,6 +1186,12 @@ export const ServerSettings = Schema.Struct({
   defaultModelSelection: Schema.NullOr(ModelSelection).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
+  /** Target for new Bot launches; waiting approvals can resume above this target. */
+  botTaskMaxParallel: Schema.Number.check(
+    Schema.isInt(),
+    Schema.isGreaterThanOrEqualTo(1),
+    Schema.isLessThanOrEqualTo(8),
+  ).pipe(Schema.withDecodingDefault(Effect.succeed(4))),
   defaultRuntimeMode: RuntimeMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_RUNTIME_MODE)),
   ),
@@ -1559,6 +1565,13 @@ export const ServerSettingsPatch = Schema.Struct({
     Schema.Record(ProjectId, Schema.NullOr(Schema.Boolean)),
   ),
   defaultModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
+  botTaskMaxParallel: Schema.optionalKey(
+    Schema.Number.check(
+      Schema.isInt(),
+      Schema.isGreaterThanOrEqualTo(1),
+      Schema.isLessThanOrEqualTo(8),
+    ),
+  ),
   defaultRuntimeMode: Schema.optionalKey(RuntimeMode),
   /**
    * Per-project entry replacement: each entry replaces that project's whole

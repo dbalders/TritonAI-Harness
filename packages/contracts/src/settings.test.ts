@@ -1083,3 +1083,13 @@ it("validates remote device hosts and rejects ambiguous host ids", () => {
   ).toThrow();
   expect(() => decodeDeviceHostSettings({ deviceHosts: [{ ...host, port: 0 }] })).toThrow();
 });
+
+describe("Bot task launch target", () => {
+  it("defaults to four and accepts only integer targets from one through eight", () => {
+    expect(decodeServerSettings({}).botTaskMaxParallel).toBe(4);
+    expect(decodeServerSettingsPatch({ botTaskMaxParallel: 8 }).botTaskMaxParallel).toBe(8);
+    for (const botTaskMaxParallel of [0, 9, 1.5, "4"]) {
+      expect(() => decodeServerSettingsPatch({ botTaskMaxParallel })).toThrow();
+    }
+  });
+});

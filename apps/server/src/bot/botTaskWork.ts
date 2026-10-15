@@ -16,6 +16,7 @@ export interface HeldTask {
   readonly threadId: string;
   readonly messageId: string;
   readonly claimedAt: string;
+  readonly startedAt?: string | undefined;
   /**
    * Set after the thread exists and just before its turn is requested. Before
    * that, nothing can have run.
@@ -23,6 +24,8 @@ export interface HeldTask {
   readonly started: boolean;
   /** Saved before delivery so a failed delivery is retried, never rerun. */
   readonly outcome: TaskOutcome | null;
+  /** A followup must observe its own turn, never settle from the prior completed turn. */
+  readonly previousTurnId?: string | undefined;
   /** Exact staged bytes saved with the terminal receipt before the first upload. */
   readonly pendingOutputs?:
     | readonly {
@@ -41,8 +44,6 @@ export interface TaskOutcome {
 
 export type TaskProgress = { readonly kind: "pending" } | ({ readonly kind: "done" } & TaskOutcome);
 
-/** Work left this long is reported so the bot is not left waiting indefinitely. */
-const HELD_TASK_LIMIT_MS = 24 * 3_600_000;
 /** A thread that never received the task's message this long after the claim never started it. */
 export const START_GRACE_MS = 5 * 60_000;
 const NOTHING_RAN =
@@ -96,8 +97,9 @@ export function taskProgress(
     };
   }
   const reference = `Harness thread: ${thread.title} (${held.threadId})`;
+  const startAge = now - Date.parse(held.startedAt ?? held.claimedAt);
   const start = thread.messages.findIndex((message) => message.id === held.messageId);
-  if (start === -1 && now - Date.parse(held.claimedAt) > START_GRACE_MS) {
+  if (start === -1 && startAge > START_GRACE_MS) {
     return { kind: "done", status: "failed", result: `${NOTHING_RAN}\n\n${reference}` };
   }
   const following = start === -1 ? [] : thread.messages.slice(start + 1);
@@ -122,7 +124,8 @@ export function taskProgress(
   const sessionBusy = thread.session?.status === "running" || thread.session?.status === "starting";
   if (
     start !== -1 &&
-    thread.latestTurn === null &&
+    (thread.latestTurn === null ||
+      (held.previousTurnId !== undefined && thread.latestTurn.turnId === held.previousTurnId)) &&
     (thread.session?.status === "error" ||
       thread.session?.status === "stopped" ||
       thread.session?.status === "interrupted")
@@ -140,19 +143,25 @@ export function taskProgress(
       ),
     };
   }
-  const turnRunning = thread.latestTurn === null || thread.latestTurn.state === "running";
+  if (
+    held.previousTurnId !== undefined &&
+    thread.latestTurn?.turnId === held.previousTurnId &&
+    !sessionBusy &&
+    startAge > START_GRACE_MS
+  ) {
+    return {
+      kind: "done",
+      status: "failed",
+      result: `Harness could not confirm a new turn for this followup. Nothing was replayed; check the thread before asking again.\n\n${reference}`,
+    };
+  }
+  const turnRunning =
+    thread.latestTurn === null ||
+    thread.latestTurn.state === "running" ||
+    (held.previousTurnId !== undefined && thread.latestTurn.turnId === held.previousTurnId);
   const finished =
     start !== -1 && !sessionBusy && !turnRunning && replies.every((message) => !message.streaming);
   if (!finished) {
-    if (now - Date.parse(held.claimedAt) > HELD_TASK_LIMIT_MS) {
-      return {
-        kind: "done",
-        status: "failed",
-        result: capResult(
-          `This task was still unfinished after 24 hours. It may still be running; check it in Harness before asking again.\n\n${reference}`,
-        ),
-      };
-    }
     return { kind: "pending" };
   }
   const text = replies
