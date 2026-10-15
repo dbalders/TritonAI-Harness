@@ -236,6 +236,11 @@ const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchComma
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 const CONFIG_DISCOVERY_TIMEOUT = Duration.seconds(5);
+// TritonAI Harness decision: the sidebar group for threads without a project
+// reads "Chats" rather than upstream's "No project", which looked like a
+// project with that name.
+const SCRATCH_PROJECT_TITLE = "Chats";
+const UPSTREAM_SCRATCH_PROJECT_TITLE = "No project";
 
 const resolveDiscoveryForConfig = <A, E, R>(
   discovery: Effect.Effect<A, E, R>,
@@ -2033,10 +2038,9 @@ const makeWsRpcLayer = (
               }),
           ),
         );
-        const findScratchProjectId = projectionSnapshotQuery
+        const findScratchProject = projectionSnapshotQuery
           .getActiveProjectByWorkspaceRoot(workspaceRoot)
           .pipe(
-            Effect.map(Option.map((project) => project.id)),
             Effect.mapError(
               (cause) =>
                 new OrchestrationDispatchCommandError({
@@ -2045,9 +2049,27 @@ const makeWsRpcLayer = (
                 }),
             ),
           );
-        const existingProjectId = yield* findScratchProjectId;
-        if (Option.isSome(existingProjectId)) {
-          return { projectId: existingProjectId.value };
+        const findScratchProjectId = findScratchProject.pipe(
+          Effect.map(Option.map((project) => project.id)),
+        );
+        const existingProject = yield* findScratchProject;
+        if (Option.isSome(existingProject)) {
+          // Scratch made before the rename keeps upstream's title; move it to
+          // ours. A title the user chose is left alone.
+          if (existingProject.value.title === UPSTREAM_SCRATCH_PROJECT_TITLE) {
+            yield* Effect.gen(function* () {
+              yield* dispatchNormalizedCommand(
+                yield* normalizeDispatchCommand({
+                  type: "project.meta.update",
+                  commandId: yield* serverCommandId("scratch-project-rename"),
+                  projectId: existingProject.value.id,
+                  title: SCRATCH_PROJECT_TITLE,
+                  expectedTitle: UPSTREAM_SCRATCH_PROJECT_TITLE,
+                }),
+              );
+            }).pipe(Effect.ignore);
+          }
+          return { projectId: existingProject.value.id };
         }
         const projectId = ProjectId.make(yield* randomUUID);
         return yield* Effect.gen(function* () {
@@ -2055,7 +2077,7 @@ const makeWsRpcLayer = (
             type: "project.create",
             commandId: yield* serverCommandId("scratch-project-create"),
             projectId,
-            title: "No project",
+            title: SCRATCH_PROJECT_TITLE,
             workspaceRoot,
             createdAt: yield* nowIso,
           });

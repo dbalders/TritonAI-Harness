@@ -141,6 +141,9 @@ export type SidebarListMarker =
   /** Stand-in rows so an empty section has somewhere for the gap to open. */
   | "active-placeholder"
   | "settled-placeholder"
+  /** The project folders holding the active rows. They sort in their own
+      drag scope, so this list sees them as one block. */
+  | "active-folders"
   /** The boundary between pinned and active rows. */
   | "pinned-divider"
   | "working-header"
@@ -212,6 +215,51 @@ export function resolveSidebarDropTarget(
     else activeOrder.push(item.key);
   }
   return { section, pinnedOrder, activeOrder };
+}
+
+/** The active rows sort inside their folders, out of reach of this list, so
+    a row entering the inbox from another section lands first. Folders group
+    the inbox, which puts it at the top of its own folder. */
+export function placeSidebarDropAtInboxTop(
+  target: SidebarDropTarget,
+  activeKey: string,
+  activeOrder: readonly string[],
+): SidebarDropTarget {
+  return target.section === "active"
+    ? { ...target, activeOrder: [activeKey, ...activeOrder.filter((key) => key !== activeKey)] }
+    : target;
+}
+
+const SIDEBAR_FOLDER_PREFIX = "sidebar-folder-";
+
+/** Sortable id for a project folder, and the drag scope of its rows. */
+export function sidebarFolderId(projectKey: string): string {
+  return `${SIDEBAR_FOLDER_PREFIX}${projectKey}`;
+}
+
+/** Drag scope of the folders themselves; unlike any sidebarFolderId. */
+export const SIDEBAR_FOLDER_SCOPE = "sidebar-folders";
+
+/** Inbox order after dropping a row on a sibling in its own folder. A folder
+    keeps its rows contiguous in this order, so the move leaves every other
+    folder as it was. Null when nothing moves or the rows are in different
+    folders. */
+export function moveSidebarThreadWithinFolder(input: {
+  readonly activeOrder: readonly string[];
+  readonly folderKeys: readonly string[];
+  readonly activeKey: string;
+  readonly overKey: string;
+}): string[] | null {
+  const { activeOrder, folderKeys, activeKey, overKey } = input;
+  if (activeKey === overKey || !folderKeys.includes(activeKey) || !folderKeys.includes(overKey)) {
+    return null;
+  }
+  const from = activeOrder.indexOf(activeKey);
+  const to = activeOrder.indexOf(overKey);
+  if (from === -1 || to === -1) return null;
+  const order = activeOrder.filter((key) => key !== activeKey);
+  order.splice(to, 0, activeKey);
+  return order;
 }
 
 export type SidebarThreadDropPlan =

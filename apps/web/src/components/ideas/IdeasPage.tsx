@@ -86,7 +86,7 @@ export function IdeasPage() {
   const [requesting, setRequesting] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
-  // Opening the page clears the sidebar badge; a first visit also starts personal ideas.
+  // Opening the page records recent use; a first visit also starts personal ideas.
   const [viewedEnvironmentId, setViewedEnvironmentId] = useState<EnvironmentId | null>(null);
   useEffect(() => {
     if (environmentId === null) return;
@@ -96,7 +96,7 @@ export function IdeasPage() {
     });
   }, [environmentId, markViewed, refresh]);
 
-  // Ideas that arrive while the page is open have been seen, so they don't badge the sidebar.
+  // Keep view tracking current while new ideas arrive on the page.
   const unseenCount = data?.unseenCount ?? 0;
   useEffect(() => {
     if (environmentId === null || viewedEnvironmentId !== environmentId || unseenCount === 0) {
