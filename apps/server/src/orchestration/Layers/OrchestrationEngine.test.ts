@@ -130,6 +130,53 @@ const hasMetricSnapshot = (
   );
 
 describe("OrchestrationEngine", () => {
+  it.each(["user-first", "migration-first"] as const)(
+    "preserves a user title when the Scratch rename runs %s",
+    async (order) => {
+      const system = await createOrchestrationSystem();
+      try {
+        const projectId = ProjectId.make("scratch-title-race");
+        await system.run(
+          system.engine.dispatch({
+            type: "project.create",
+            commandId: CommandId.make("scratch-title-create"),
+            projectId,
+            title: "No project",
+            workspaceRoot: "/tmp/scratch-title-race",
+            createdAt: now(),
+          }),
+        );
+        const migrate = system.engine.dispatch({
+          type: "project.meta.update",
+          commandId: CommandId.make("scratch-title-migrate"),
+          projectId,
+          title: "Chats",
+          expectedTitle: "No project",
+        });
+        const userRename = system.engine.dispatch({
+          type: "project.meta.update",
+          commandId: CommandId.make("scratch-title-user"),
+          projectId,
+          title: "My scratch",
+        });
+        if (order === "user-first") {
+          await system.run(userRename);
+          const before = await system.run(system.engine.latestSequence);
+          const error = await system.run(migrate.pipe(Effect.flip));
+          expect(error._tag).toBe("OrchestrationCommandInvariantError");
+          expect(await system.run(system.engine.latestSequence)).toBe(before);
+        } else {
+          await system.run(migrate);
+          expect((await system.readModel()).projects[0]?.title).toBe("Chats");
+          await system.run(userRename);
+        }
+        expect((await system.readModel()).projects[0]?.title).toBe("My scratch");
+      } finally {
+        await system.dispose();
+      }
+    },
+  );
+
   it.each(["running", "stopped"] as const)(
     "sends async answers with a %s session and rejects old duplicate replies",
     async (status) => {

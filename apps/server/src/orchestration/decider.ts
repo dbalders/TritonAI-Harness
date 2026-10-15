@@ -268,6 +268,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         projectId: command.projectId,
       });
+      if (command.expectedTitle !== undefined && project.title !== command.expectedTitle) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Project title changed before the update was applied.",
+        });
+      }
       if (
         command.projectIcon?.kind === "monogram" &&
         Array.from(monogramSegmenter.segment(command.projectIcon.text)).length > 2

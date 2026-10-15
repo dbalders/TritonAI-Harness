@@ -43,7 +43,7 @@ import {
   type DotResponsibilityInput,
   replyRoutingText,
 } from "./dotEnhancements";
-import { BotRunStatus } from "./BotRunStatus";
+import { BotRunStatus, BotWorkingIndicator } from "./BotRunStatus";
 import { BotWaitingStatus } from "./BotWaitingStatus";
 import { usableWaiting, type DotWaitingAction } from "./dotWaiting";
 import { BotHandlingPanel } from "./BotHandlingPanel";
@@ -1124,7 +1124,7 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
                             <span id={`bot-run-${run.runId}`} tabIndex={-1} />
                             {run.result?.summary ? (
                               <BotReplyMarkdown text={run.result.summary} />
-                            ) : (
+                            ) : run.error || !isPendingDotRun(run) ? (
                               <p
                                 className={cn(
                                   "leading-relaxed whitespace-pre-wrap break-words",
@@ -1133,14 +1133,9 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
                                     : "text-muted-foreground",
                                 )}
                               >
-                                {run.error ??
-                                  (isPendingDotRun(run)
-                                    ? run.event.kind === "responsibility"
-                                      ? "Checking your followed task…"
-                                      : "Thinking…"
-                                    : runStatusLabel(run.status))}
+                                {run.error ?? runStatusLabel(run.status)}
                               </p>
-                            )}
+                            ) : null}
                             <BotRunStatus run={run} />
                             {run.result?.summary &&
                               !isPendingDotRun(run) &&
@@ -1332,6 +1327,7 @@ function BotWorkspace({ serviceUrl }: { readonly serviceUrl: string }) {
                       {replyStatus}
                     </p>
                   )}
+                  {sending && <BotWorkingIndicator phrase="Sending your message…" />}
                   <ComposerSurface.Shell>
                     <ComposerSurface.Host>
                       <ComposerSurface.Main>

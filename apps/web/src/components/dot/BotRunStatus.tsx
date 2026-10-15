@@ -1,3 +1,4 @@
+import { EllipsisIcon } from "lucide-react";
 import { useEffect, useReducer } from "react";
 
 import { BotWaitingStatus } from "./BotWaitingStatus";
@@ -5,6 +6,18 @@ import type { DotRun } from "./dotClient";
 import { usableWaiting, type DotWaitingStatus } from "./dotWaiting";
 
 const ACTIVITY_STALE_MS = 90_000;
+
+/** A quiet typing cue: phase changes provide feedback without an endless animation. */
+export function BotWorkingIndicator({ phrase }: { readonly phrase: string }) {
+  return (
+    <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
+      <span aria-hidden="true" className="rounded-full bg-muted px-2 py-0.5">
+        <EllipsisIcon className="size-5" />
+      </span>
+      <span>{phrase}</span>
+    </p>
+  );
+}
 
 export function botRunStatus(
   run: DotRun,
@@ -73,8 +86,9 @@ export function BotRunStatus({ run }: { readonly run: DotRun }) {
         <BotWaitingStatus waiting={status.waiting} subject="this message" />
       </div>
     );
+  if (status?.expiresAt !== undefined) return <BotWorkingIndicator phrase={status.phrase} />;
   return status ? (
-    <p role="status" className="mt-2 text-xs text-muted-foreground">
+    <p role="status" className="text-sm text-muted-foreground">
       {status.phrase}
     </p>
   ) : null;

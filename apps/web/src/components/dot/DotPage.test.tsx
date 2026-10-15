@@ -858,6 +858,93 @@ it("follows a task, shows evidence separately from completion, and versions snoo
   });
 });
 
+it("shows sending immediately, then the real run phase, and stops claiming work after progress expires", async () => {
+  const baseFetch = globalThis.fetch;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn<typeof fetch>((input, init) =>
+      new URL(String(input)).pathname === "/runs/message1"
+        ? Promise.resolve(Response.json({ ok: true, run: state.runs[0] }))
+        : baseFetch(input, init),
+    ),
+  );
+  let finishSend!: (response: Response) => void;
+  onPost = () =>
+    new Promise<Response>((resolve) => {
+      finishSend = resolve;
+    });
+  await render();
+  await fill("Message your bot", "Check my calendar");
+  await click("Send message");
+  expect(container.textContent).toContain("Sending your message…");
+  expect(button("Send message").disabled).toBe(true);
+  const run = {
+    runId: "message1",
+    threadId: "dot",
+    event: { kind: "message", text: "Check my calendar" },
+    status: "queued" as const,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  state = { ...state, runs: [run] };
+  await act(async () =>
+    finishSend(Response.json({ ok: true, runId: run.runId, status: "queued" })),
+  );
+  expect(container.textContent).not.toContain("Sending your message…");
+  expect(container.textContent).toContain("Queued");
+  expect(container.textContent).not.toContain("Thinking…");
+  const active = {
+    ...run,
+    status: "running" as const,
+    activityFresh: true,
+    activity: {
+      kind: "calendar",
+      phrase: "Checking your calendar",
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      step: 1,
+    },
+  };
+  state = { ...state, runs: [active] };
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(2500);
+  });
+  expect(container.textContent).toContain("Checking your calendar");
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(90_001);
+  });
+  expect(container.textContent).toContain("Status unavailable");
+  expect(container.textContent).not.toContain("Checking your calendar");
+  expect(container.textContent).not.toContain("Thinking…");
+  state = {
+    ...state,
+    runs: [{ ...active, status: "completed", result: { summary: "Your calendar is clear." } }],
+  };
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(2500);
+  });
+  expect(container.textContent).toContain("Your calendar is clear.");
+  expect(container.textContent).not.toContain("Status unavailable");
+});
+
+it("removes sending feedback after a failed request and keeps the message available to retry", async () => {
+  let failSend!: (cause: Error) => void;
+  onPost = () =>
+    new Promise<Response>((_resolve, reject) => {
+      failSend = reject;
+    });
+  await render();
+  await fill("Message your bot", "Check my calendar");
+  await click("Send message");
+  expect(container.textContent).toContain("Sending your message…");
+  await act(async () => failSend(new TypeError("Connection interrupted")));
+  expect(container.textContent).not.toContain("Sending your message…");
+  expect(container.textContent).toContain("Connection interrupted");
+  expect(
+    container.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message your bot"]')!.value,
+  ).toBe("Check my calendar");
+});
+
 it("keeps selected files on a failed send and retries the same message before clearing them", async () => {
   state = { ...snapshot(), enhancements: { attachments: true } };
   vi.stubGlobal(

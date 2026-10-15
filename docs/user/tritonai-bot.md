@@ -25,7 +25,8 @@ to see what your account can use and what still needs connecting. Ask the bot to
 remember or forget something, set a reminder, or check your calendar, email or
 files.
 
-While a reply is pending, a short status underneath it shows what the bot is
+While your message is being sent, **Sending your message…** appears above the
+composer. While a reply is pending, a status in the conversation shows what the bot is
 doing when the service supplies a recent update, or why it is waiting. After 90
 seconds without an update it changes to **Status unavailable**. **Needs your
 input** means the bot is waiting for your approval.
