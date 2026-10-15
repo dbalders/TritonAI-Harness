@@ -1,6 +1,6 @@
 # Ideas
 
-**Ideas**, the lightbulb at the bottom of the sidebar next to Usage, suggests things TritonAI can do for you next. The number on it counts ideas added since you last opened the page. You can also open it from the command palette.
+**Ideas**, the lightbulb at the bottom of the sidebar next to Usage, suggests things TritonAI can do for you next. You can also open it from the command palette.
 
 Ideas come from:
 
