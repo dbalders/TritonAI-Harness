@@ -9,10 +9,63 @@ import {
 import { act, createRef, useLayoutEffect, type ReactNode, type Ref } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { create, type ReactTestRenderer } from "react-test-renderer";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type { LegendListRef, MaintainScrollAtEndOptions } from "@legendapp/list/react";
 import { shouldUseRestingComposerLayout } from "../composerFooterLayout";
 import { useComposerFocusState } from "./useComposerFocusState";
+import { MessagesTimeline, resolvePreviewAnnotationImage } from "./MessagesTimeline";
+
+// Install browser globals before importing the component. Cold module loading belongs
+// to Vitest collection, not a timed hook competing with the other CI workspaces.
+const { stubDomGlobals } = vi.hoisted(() => {
+  function matchMedia() {
+    return {
+      matches: false,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    };
+  }
+
+  const ElementStub = class ElementStub {};
+
+  function stubDomGlobals() {
+    const classList = {
+      add: () => {},
+      remove: () => {},
+      toggle: () => {},
+      contains: () => false,
+    };
+
+    vi.stubGlobal("Element", ElementStub);
+    vi.stubGlobal("localStorage", {
+      getItem: () => null,
+      setItem: () => {},
+      removeItem: () => {},
+      clear: () => {},
+    });
+    vi.stubGlobal("window", {
+      Element: ElementStub,
+      matchMedia,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      requestAnimationFrame: (callback: FrameRequestCallback) => {
+        callback(0);
+        return 0;
+      },
+      cancelAnimationFrame: () => {},
+      desktopBridge: undefined,
+    });
+    vi.stubGlobal("document", {
+      documentElement: {
+        classList,
+        offsetHeight: 0,
+      },
+    });
+  }
+
+  stubDomGlobals();
+  return { stubDomGlobals };
+});
 
 vi.mock("@legendapp/list/react", async () => {
   const legendListTestId = "legend-list";
@@ -134,59 +187,6 @@ vi.mock("@pierre/diffs/react", () => {
 vi.mock("../DiffWorkerPoolProvider", () => ({
   DiffWorkerPoolProvider: ({ children }: { children?: ReactNode }) => children,
 }));
-
-function matchMedia() {
-  return {
-    matches: false,
-    addEventListener: () => {},
-    removeEventListener: () => {},
-  };
-}
-
-let MessagesTimeline: typeof import("./MessagesTimeline").MessagesTimeline;
-let resolvePreviewAnnotationImage: typeof import("./MessagesTimeline").resolvePreviewAnnotationImage;
-
-const ElementStub = class ElementStub {};
-
-function stubDomGlobals() {
-  const classList = {
-    add: () => {},
-    remove: () => {},
-    toggle: () => {},
-    contains: () => false,
-  };
-
-  vi.stubGlobal("Element", ElementStub);
-  vi.stubGlobal("localStorage", {
-    getItem: () => null,
-    setItem: () => {},
-    removeItem: () => {},
-    clear: () => {},
-  });
-  vi.stubGlobal("window", {
-    Element: ElementStub,
-    matchMedia,
-    addEventListener: () => {},
-    removeEventListener: () => {},
-    requestAnimationFrame: (callback: FrameRequestCallback) => {
-      callback(0);
-      return 0;
-    },
-    cancelAnimationFrame: () => {},
-    desktopBridge: undefined,
-  });
-  vi.stubGlobal("document", {
-    documentElement: {
-      classList,
-      offsetHeight: 0,
-    },
-  });
-}
-
-beforeAll(async () => {
-  stubDomGlobals();
-  ({ MessagesTimeline, resolvePreviewAnnotationImage } = await import("./MessagesTimeline"));
-}, 30_000);
 
 // The scroll-settling test clears every global stub; mounted timeline rows
 // still touch `window` through the tooltip's focus handling.

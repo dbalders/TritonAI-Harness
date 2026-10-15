@@ -19,6 +19,7 @@ import {
   PanelsTopLeftIcon,
   KeyboardIcon,
   Link2Icon,
+  MessageCircleIcon,
   PaletteIcon,
   PuzzleIcon,
   SearchIcon,
@@ -89,6 +90,7 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/source-control": GitBranchIcon,
   "/settings/storage": HardDriveIcon,
   "/settings/connections": Link2Icon,
+  "/settings/tritonai-bot": MessageCircleIcon,
   "/settings/archived": ArchiveIcon,
 };
 

@@ -342,6 +342,12 @@ describe("ClientSettings word wrap", () => {
     ).toBe(true);
   });
 
+  it("follows the build's TritonAI Bot service until the user changes or clears it", () => {
+    expect(decodeClientSettings({}).tritonAiBotUrl).toBeNull();
+    expect(decodeClientSettingsPatch({ tritonAiBotUrl: "" }).tritonAiBotUrl).toBe("");
+    expect(decodeClientSettingsPatch({ tritonAiBotUrl: null }).tritonAiBotUrl).toBeNull();
+  });
+
   it("defaults word wrap on", () => {
     expect(decodeClientSettings({}).wordWrap).toBe(true);
   });
@@ -1076,4 +1082,14 @@ it("validates remote device hosts and rejects ambiguous host ids", () => {
     decodeDeviceHostSettings({ deviceHosts: [{ ...host, target: "-oProxyCommand=bad" }] }),
   ).toThrow();
   expect(() => decodeDeviceHostSettings({ deviceHosts: [{ ...host, port: 0 }] })).toThrow();
+});
+
+describe("Bot task launch target", () => {
+  it("defaults to four and accepts only integer targets from one through eight", () => {
+    expect(decodeServerSettings({}).botTaskMaxParallel).toBe(4);
+    expect(decodeServerSettingsPatch({ botTaskMaxParallel: 8 }).botTaskMaxParallel).toBe(8);
+    for (const botTaskMaxParallel of [0, 9, 1.5, "4"]) {
+      expect(() => decodeServerSettingsPatch({ botTaskMaxParallel })).toThrow();
+    }
+  });
 });
