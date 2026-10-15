@@ -159,6 +159,10 @@ import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolve
 import * as WorktreeSetupTracker from "./project/WorktreeSetupTracker.ts";
 import * as AgentSessionScanner from "./project/AgentSessionScanner.ts";
 import { importRecentAgentThreads } from "./project/AgentSessionImporter.ts";
+import {
+  claimScratchThreadFolder,
+  scratchWorkspaceRootFor,
+} from "./project/scratchThreadFolder.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
@@ -1856,7 +1860,7 @@ const makeWsRpcLayer = (
         yield* Effect.cachedInvalidateWithTTL(
           gitWorkflow.isRepository(config.baseDir).pipe(
             Effect.map((isRepository) =>
-              isRepository ? undefined : path.resolve(config.baseDir, "scratch"),
+              isRepository ? undefined : scratchWorkspaceRootFor(path, config.baseDir),
             ),
             Effect.catchCause((cause) =>
               Cause.hasInterrupts(cause) ? Effect.interrupt : Effect.succeed(undefined),
@@ -1869,10 +1873,8 @@ const makeWsRpcLayer = (
       );
 
       const fileSystem = yield* FileSystem.FileSystem;
-      // Each Scratch thread gets its own folder under the Scratch root, named
-      // from its date, first words, and id. It rides in worktreePath like any
-      // thread that runs outside its project root, so the provider, terminal,
-      // and file tree all use it. Threads that already name a folder keep it.
+      // Each Scratch thread gets its own folder (see scratchThreadFolder).
+      // Threads that already name a folder keep it.
       const scratchThreadFolder = (input: {
         readonly threadId: ThreadId;
         readonly projectId: ProjectId;
@@ -1900,54 +1902,17 @@ const makeWsRpcLayer = (
           ) {
             return null;
           }
-          // Only [a-z0-9] reaches the name, so it stays one path segment inside
-          // the scratch root, and the words are capped so pasted data cannot
-          // outgrow a file name. Each leaf is created without `recursive`, so
-          // the create itself claims it: a taken short name falls back to the
-          // full id, which only the same thread can already hold.
-          const words = input.text
-            .toLowerCase()
-            .split(/[^a-z0-9]+/)
-            .filter(Boolean)
-            .slice(0, 5)
-            .join("-")
-            .slice(0, 48)
-            .replace(/-+$/, "");
-          const id = input.threadId.toLowerCase().replace(/[^a-z0-9]/g, "");
-          const folderFor = (idPart: string) =>
-            path.join(
-              scratchRoot,
-              [input.createdAt.slice(0, 10), words, idPart].filter(Boolean).join("-"),
-            );
-          yield* fileSystem.makeDirectory(scratchRoot, { recursive: true }).pipe(
+          return yield* claimScratchThreadFolder(scratchRoot, input).pipe(
+            Effect.provideService(FileSystem.FileSystem, fileSystem),
+            Effect.provideService(Path.Path, path),
             Effect.mapError(
               (cause) =>
                 new OrchestrationDispatchCommandError({
-                  message: "Failed to create the folder for threads without a project.",
+                  message: "Failed to create the thread's folder.",
                   cause,
                 }),
             ),
           );
-          const claim = (folder: string) =>
-            fileSystem.makeDirectory(folder).pipe(
-              Effect.as(true),
-              Effect.catchIf(
-                (error) => error.reason._tag === "AlreadyExists",
-                () => Effect.succeed(false),
-              ),
-              Effect.mapError(
-                (cause) =>
-                  new OrchestrationDispatchCommandError({
-                    message: "Failed to create the thread's folder.",
-                    cause,
-                  }),
-              ),
-            );
-          const shortFolder = folderFor(id.slice(0, 8));
-          if (yield* claim(shortFolder)) return shortFolder;
-          const fullFolder = folderFor(id);
-          yield* claim(fullFolder);
-          return fullFolder;
         });
       const withScratchThreadFolder = (
         command: OrchestrationCommand,

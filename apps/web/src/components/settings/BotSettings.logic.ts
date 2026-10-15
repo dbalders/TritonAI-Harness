@@ -48,6 +48,18 @@ export function describeThisComputer(status: ServerBotTaskComputerStatus | null)
   }
 }
 
+/** This computer's line while another computer runs the owner's tasks. */
+export function describeThisComputerBesideAnother(
+  status: ServerBotTaskComputerStatus | null,
+  otherComputer: string,
+): string {
+  const handoff = `Allow moves task running here from ${otherComputer}.`;
+  if (!status) return describeThisComputer(null);
+  // The generic "Choose Allow" line would only repeat the handoff.
+  if (status.state === "off" && !status.message) return handoff;
+  return `${describeThisComputer(status)} ${handoff}`;
+}
+
 /**
  * Whether this computer is the bot's task computer. The bot is the authority;
  * the local state only fills in before the bot's state loads.

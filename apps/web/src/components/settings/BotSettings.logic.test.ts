@@ -1,7 +1,12 @@
 import type { ServerBotTaskComputerStatus } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { describeTaskComputer, describeThisComputer, isTaskComputer } from "./BotSettings.logic";
+import {
+  describeTaskComputer,
+  describeThisComputer,
+  describeThisComputerBesideAnother,
+  isTaskComputer,
+} from "./BotSettings.logic";
 
 const local: ServerBotTaskComputerStatus = {
   state: "idle",
@@ -66,5 +71,20 @@ describe("bot settings wording", () => {
     const deliveryMessage =
       "Finished running “Report”. Its saved result and files are awaiting delivery to your bot. Retrying automatically.";
     expect(describeThisComputer({ ...local, message: deliveryMessage })).toBe(deliveryMessage);
+  });
+
+  it("offers the handoff while another computer runs tasks", () => {
+    const off = { ...local, state: "off" as const, apiUrl: null, userId: null, projectId: null };
+    expect(describeThisComputerBesideAnother(off, "Command-line worker")).toBe(
+      "Allow moves task running here from Command-line worker.",
+    );
+    expect(
+      describeThisComputerBesideAnother({ ...local, state: "replaced" }, "Command-line worker"),
+    ).toBe(
+      "Another computer now runs your TritonAI Bot tasks. Allow moves task running here from Command-line worker.",
+    );
+    expect(describeThisComputerBesideAnother(null, "Command-line worker")).toBe(
+      "Checking this computer…",
+    );
   });
 });

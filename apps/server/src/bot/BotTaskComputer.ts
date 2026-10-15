@@ -36,6 +36,7 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import { normalizeProjectPathForComparison } from "@t3tools/shared/path";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
@@ -60,6 +61,10 @@ import {
   resolveAttachmentPath,
 } from "../attachmentStore.ts";
 import { normalizeDispatchCommand } from "../orchestration/Normalizer.ts";
+import {
+  claimScratchThreadFolder,
+  scratchWorkspaceRootFor,
+} from "../project/scratchThreadFolder.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import { ServerConfig } from "../config.ts";
 import {
@@ -697,6 +702,21 @@ export const make = Effect.gen(function* () {
         const project = yield* projections.getProjectShellById(projectId);
         if (Option.isNone(project)) return yield* Effect.fail(PROJECT_GONE);
         const resolved = resolveProjectSettings(settings, projectId, project.value).settings;
+        const createdAt = isoAt(now);
+        // Like any thread started in "No project", a task there works in its own folder.
+        const scratchRoot = scratchWorkspaceRootFor(path, serverConfig.baseDir);
+        const worktreePath =
+          normalizeProjectPathForComparison(project.value.workspaceRoot) ===
+          normalizeProjectPathForComparison(scratchRoot)
+            ? yield* claimScratchThreadFolder(scratchRoot, {
+                threadId: held.threadId,
+                createdAt,
+                text: task.title,
+              }).pipe(
+                Effect.provideService(FileSystem.FileSystem, fileSystem),
+                Effect.provideService(Path.Path, path),
+              )
+            : null;
         const modelSelection: ModelSelection = resolved.defaultModelSelection ??
           settings.defaultModelSelection ?? {
             instanceId: ProviderInstanceId.make("codex"),
@@ -757,7 +777,6 @@ export const make = Effect.gen(function* () {
             attachments.push(file);
           }
         }
-        const createdAt = isoAt(now);
         yield* engine.dispatch({
           type: "thread.create",
           commandId: CommandId.make(`bot-task:create:${held.taskId}:${yield* crypto.randomUUIDv4}`),
@@ -768,7 +787,7 @@ export const make = Effect.gen(function* () {
           runtimeMode: resolved.defaultRuntimeMode,
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           branch: null,
-          worktreePath: null,
+          worktreePath,
           createdAt,
         });
         const turn = yield* normalizeDispatchCommand({

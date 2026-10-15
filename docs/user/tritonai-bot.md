@@ -71,7 +71,9 @@ not disconnect Microsoft or stop task running.
 When your service supports task computers, open **Settings → TritonAI Bot** on
 that computer, choose a project and select **Allow**. This authorizes that
 Harness environment to run approved bot assignments as ordinary threads in the
-chosen project, using its model and permission defaults. Every signed-in Harness
+chosen project, using its model and permission defaults. With **No project**, the
+default, each assignment gets its own new folder, so the bot can start something
+new without touching your existing projects. Every signed-in Harness
 can chat and review approvals; only the computer you allow claims new
 assignments. Allowing another computer moves new assignments there. Keep Harness
 running for it to check in and collect work.

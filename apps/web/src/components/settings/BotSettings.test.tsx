@@ -9,7 +9,14 @@ const configuration = vi.hoisted(() => ({
   serviceUrl: "https://bot.example.test" as string | null,
   local: null as ServerBotTaskComputerStatus | null,
   localListeners: new Set<() => void>(),
-  projects: [] as Array<{ id: string; title: string; environmentId: string }>,
+  projects: [] as Array<{
+    id: string;
+    title: string;
+    environmentId: string;
+    workspaceRoot?: string;
+  }>,
+  scratchRoot: null as string | null,
+  openScratchProject: vi.fn<(environmentId: string) => Promise<{ id: string } | null>>(),
   command: vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => ({ _tag: "Success" })),
 }));
 vi.mock("../dot/botService", () => ({ useBotServiceUrl: () => configuration.serviceUrl }));
@@ -45,6 +52,12 @@ vi.mock("../../state/query", async () => {
   };
 });
 vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => configuration.command }));
+vi.mock("../../hooks/useScratchProject", () => ({
+  useScratchProject: () => ({
+    scratchWorkspaceRootFor: () => configuration.scratchRoot,
+    openScratchProject: configuration.openScratchProject,
+  }),
+}));
 
 import {
   DotApiError,
@@ -82,6 +95,8 @@ beforeEach(() => {
   configuration.serviceUrl = firstUrl;
   configuration.local = null;
   configuration.projects = [];
+  configuration.scratchRoot = null;
+  configuration.openScratchProject.mockReset();
   configuration.command.mockReset();
   configuration.command.mockResolvedValue({ _tag: "Success" });
   sessionStorage.clear();
@@ -574,3 +589,67 @@ it.each(["different service", "different account"])(
     expect(container.textContent).toContain("Other Mac is online");
   },
 );
+
+function allowButton(): HTMLButtonElement | undefined {
+  return Array.from(container.querySelectorAll("button")).find(
+    (button) => button.textContent === "Allow",
+  );
+}
+
+it("defaults a new task computer to No project and creates it on Allow", async () => {
+  configuration.scratchRoot = "/synthetic/scratch";
+  configuration.openScratchProject.mockResolvedValue({ id: "scratch" });
+  configuration.local = {
+    state: "off",
+    deviceId: "local-device",
+    deviceName: "This Mac",
+    apiUrl: null,
+    userId: null,
+    projectId: null,
+    currentTask: null,
+    lastCheckInAt: null,
+    message: null,
+  };
+  vi.spyOn(DotClient.prototype, "state").mockResolvedValue(state(firstSession.email));
+  await act(async () => root.render(<BotSettings />));
+  expect(projectPicker().textContent).toContain("No project");
+  expect(container.textContent).toContain("Each task gets its own new folder");
+  expect(allowButton()!.disabled).toBe(false);
+  await act(async () => allowButton()!.click());
+  expect(configuration.openScratchProject).toHaveBeenCalledExactlyOnceWith("synthetic-environment");
+  expect(configuration.command).toHaveBeenCalledExactlyOnceWith({
+    environmentId: "synthetic-environment",
+    input: { apiUrl: firstUrl, ownerToken: firstSession.ownerToken, projectId: "scratch" },
+  });
+});
+
+it("does not pair when No project cannot be created", async () => {
+  configuration.scratchRoot = "/synthetic/scratch";
+  configuration.openScratchProject.mockResolvedValue(null);
+  vi.spyOn(DotClient.prototype, "state").mockResolvedValue(state(firstSession.email));
+  await act(async () => root.render(<BotSettings />));
+  await act(async () => allowButton()!.click());
+  expect(configuration.openScratchProject).toHaveBeenCalledOnce();
+  expect(configuration.command).not.toHaveBeenCalled();
+  expect(allowButton()!.disabled).toBe(false);
+});
+
+it("shows a saved Scratch project once, as No project", async () => {
+  setProjectSettings();
+  configuration.scratchRoot = "/synthetic/scratch";
+  configuration.projects.push({
+    id: "scratch",
+    title: "No project",
+    environmentId: "synthetic-environment",
+    workspaceRoot: "/synthetic/scratch",
+  });
+  configuration.local = { ...configuration.local!, projectId: "scratch" };
+  vi.spyOn(DotClient.prototype, "state").mockResolvedValue(state(firstSession.email));
+  await act(async () => root.render(<BotSettings />));
+  expect(projectPicker().textContent).toContain("No project");
+  await act(async () => projectPicker().click());
+  const options = Array.from(document.querySelectorAll<HTMLElement>('[role="option"]')).map(
+    (item) => item.textContent,
+  );
+  expect(options).toEqual(["No project", "Saved", "Chosen", "External"]);
+});

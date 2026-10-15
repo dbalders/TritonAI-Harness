@@ -1,3 +1,4 @@
+import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -18,6 +19,7 @@ import {
   type DotSession,
   type DotState,
 } from "../dot/dotClient";
+import { useScratchProject } from "../../hooks/useScratchProject";
 import { useClientSettings, useUpdateClientSettings } from "../../hooks/useSettings";
 import { ensureLocalApi } from "../../localApi";
 import { useBotServiceUrl } from "../dot/botService";
@@ -25,8 +27,16 @@ import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
-import { describeTaskComputer, describeThisComputer, isTaskComputer } from "./BotSettings.logic";
+import {
+  describeTaskComputer,
+  describeThisComputer,
+  describeThisComputerBesideAnother,
+  isTaskComputer,
+} from "./BotSettings.logic";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
+
+/** Picker value for "No project": tasks then work in their own folders. */
+const NO_PROJECT = "no-project";
 
 function failureMessage(result: Parameters<typeof squashAtomCommandFailure>[0], fallback: string) {
   const failure = squashAtomCommandFailure(result);
@@ -74,8 +84,22 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
   const setTaskProject = useAtomCommand(serverEnvironment.setBotTaskProject, {
     reportFailure: false,
   });
-  const projects = useProjects().filter((project) => project.environmentId === environmentId);
-  const projectId = chosenProjectId ?? local?.projectId ?? projects[0]?.id ?? null;
+  const { scratchWorkspaceRootFor, openScratchProject } = useScratchProject();
+  const scratchRoot = scratchWorkspaceRootFor(environmentId);
+  const environmentProjects = useProjects().filter(
+    (project) => project.environmentId === environmentId,
+  );
+  const scratchProject = environmentProjects.find((project) =>
+    isScratchProject(project, scratchRoot),
+  );
+  const projects = environmentProjects.filter((project) => project !== scratchProject);
+  const savedProjectId =
+    local?.projectId && local.projectId === scratchProject?.id ? NO_PROJECT : local?.projectId;
+  // A new task computer defaults to No project, where each task gets its own folder.
+  const projectId =
+    chosenProjectId ??
+    savedProjectId ??
+    (scratchRoot !== null ? NO_PROJECT : (projects[0]?.id ?? null));
   const localForService =
     local?.apiUrl === serviceUrl && local.userId === state?.user.userId ? local : null;
   const thisComputer = isTaskComputer(state?.taskComputer, localForService);
@@ -134,13 +158,27 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
     return () => clearInterval(timer);
   }, [loadState]);
 
+  /** "No project" becomes the environment's Scratch project, created on first use. */
+  const resolveProjectId = async (value: string) => {
+    if (value !== NO_PROJECT) return value;
+    if (!environmentId) return null;
+    return (await openScratchProject(environmentId))?.id ?? null;
+  };
+
   const allow = async () => {
     if (!session || !serviceUrl || !environmentId || !projectId) return;
     setBusy(true);
     setError(null);
+    const resolvedProjectId = await resolveProjectId(projectId);
+    if (!mounted.current) return;
+    if (!resolvedProjectId) {
+      // openScratchProject already reported why.
+      setBusy(false);
+      return;
+    }
     const result = await allowHere({
       environmentId,
-      input: { apiUrl: serviceUrl, ownerToken: session.ownerToken, projectId },
+      input: { apiUrl: serviceUrl, ownerToken: session.ownerToken, projectId: resolvedProjectId },
     });
     if (!mounted.current) return;
     setBusy(false);
@@ -194,7 +232,13 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
     setBusy(true);
     setError(null);
     try {
-      const result = await setTaskProject({ environmentId, input: { projectId: value } });
+      const resolvedProjectId = await resolveProjectId(value);
+      if (!mounted.current || (session && !isCurrentSession(session.ownerToken))) return;
+      if (!resolvedProjectId) return;
+      const result = await setTaskProject({
+        environmentId,
+        input: { projectId: resolvedProjectId },
+      });
       if (!mounted.current || (session && !isCurrentSession(session.ownerToken))) return;
       setChosenProjectId(null);
       if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
@@ -227,7 +271,11 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
     }
   };
 
-  const projectTitle = projects.find((project) => project.id === projectId)?.title;
+  const projectTitle =
+    projectId === NO_PROJECT
+      ? "No project"
+      : projects.find((project) => project.id === projectId)?.title;
+  const hasProjectChoices = scratchRoot !== null || projects.length > 0;
 
   return (
     <SettingsPageContainer>
@@ -308,7 +356,7 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
             local && state && !localForService && local.state !== "off"
               ? "This Harness is paired with a different Bot service or account. Choose Allow to pair it with the signed-in account."
               : otherComputer && !thisComputer
-                ? `${describeThisComputer(localForService)} Allow moves task running here from ${otherComputer}.`
+                ? describeThisComputerBesideAnother(local ?? null, otherComputer)
                 : describeThisComputer(local ?? null)
           }
           status={error ? <span className="text-destructive">{error}</span> : undefined}
@@ -334,12 +382,14 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
         <SettingsRow
           title="Project for tasks"
           description={
-            projects.length
-              ? "Task threads open in this project and use its model and permission settings."
-              : "Add a project first. Task threads open in a project and use its settings."
+            !hasProjectChoices
+              ? "Add a project first. Task threads open in a project and use its settings."
+              : projectId === NO_PROJECT
+                ? "Each task gets its own new folder, so the bot can start something from scratch."
+                : "Task threads open in this project and use its model and permission settings."
           }
           control={
-            projects.length ? (
+            hasProjectChoices ? (
               <Select
                 disabled={busy || !projectSelectionReady}
                 value={projectId ?? ""}
@@ -351,6 +401,9 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
                   <SelectValue>{projectTitle ?? "Choose a project"}</SelectValue>
                 </SelectTrigger>
                 <SelectPopup align="end" alignItemWithTrigger={false}>
+                  {scratchRoot !== null ? (
+                    <SelectItem value={NO_PROJECT}>No project</SelectItem>
+                  ) : null}
                   {projects.map((project) => (
                     <SelectItem key={project.id} value={project.id}>
                       {project.title}

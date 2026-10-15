@@ -30,6 +30,7 @@ import * as BotTaskComputer from "./BotTaskComputer.ts";
 const API = "https://bot.example.ucsd.edu";
 const START = Date.parse("2026-10-08T06:00:00.000Z");
 const PROJECT = "project-1";
+const SCRATCH_PROJECT = "scratch-project";
 const screenshotBytes = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a0pEAAAAASUVORK5CYII=",
   "base64",
@@ -276,6 +277,8 @@ class FakeHarness {
   readonly threads = new Map<string, OrchestrationThread>();
   rejectTurns = false;
   failAfterTurnPersisted = false;
+  /** Set to offer the "No project" project at this folder. */
+  scratchRoot: string | null = null;
 
   finish(threadId: string, reply: string, state: "completed" | "error" = "completed") {
     const thread = this.threads.get(threadId)!;
@@ -352,14 +355,20 @@ class FakeHarness {
       }),
       Layer.mock(ProjectionSnapshotQuery.ProjectionSnapshotQuery)({
         getProjectShellById: (projectId) =>
-          Effect.succeed(
+          Effect.sync(() =>
             projectId === PROJECT
               ? Option.some({
                   id: PROJECT,
                   title: "Tasks",
                   workspaceRoot: "/tmp/tasks",
                 } as unknown as OrchestrationProjectShell)
-              : Option.none(),
+              : projectId === SCRATCH_PROJECT && harness.scratchRoot !== null
+                ? Option.some({
+                    id: SCRATCH_PROJECT,
+                    title: "No project",
+                    workspaceRoot: harness.scratchRoot,
+                  } as unknown as OrchestrationProjectShell)
+                : Option.none(),
           ),
         getThreadDetailById: (threadId) =>
           Effect.sync(() => Option.fromNullishOr(harness.threads.get(threadId))),
@@ -961,6 +970,7 @@ it.layer(NodeServices.layer)("BotTaskComputer", (it) => {
       if (create?.type !== "thread.create" || turn?.type !== "thread.turn.start") return;
       assert.strictEqual(create.projectId, PROJECT);
       assert.strictEqual(create.title, "Check releases");
+      assert.isNull(create.worktreePath);
       assert.include(turn.message.text, "Check the latest releases.");
 
       // Still running: nothing is reported and no other task is claimed.
@@ -983,6 +993,32 @@ it.layer(NodeServices.layer)("BotTaskComputer", (it) => {
       yield* TestClock.adjust("30 seconds");
       yield* computer.tick;
       assert.lengthOf(bot.results, 1);
+    }).pipe(Effect.provide(services(bot, harness)));
+  });
+
+  it.effect("runs a task in No project in its own folder", () => {
+    const bot = new FakeBot(),
+      harness = new FakeHarness();
+    bot.tasks = [{ taskId: "task-1", title: "Sketch a parking map", prompt: "Build it." }];
+    return Effect.gen(function* () {
+      yield* TestClock.setTime(START);
+      const computer = yield* BotTaskComputer.BotTaskComputer;
+      const config = yield* ServerConfig.ServerConfig;
+      harness.scratchRoot = NodePath.resolve(config.baseDir, "scratch");
+      yield* computer.allow({
+        apiUrl: API,
+        ownerToken: "owner-session",
+        projectId: SCRATCH_PROJECT,
+      });
+
+      const create = harness.commands.find((command) => command.type === "thread.create");
+      if (create?.type !== "thread.create") return assert.fail("No task thread was created.");
+      assert.strictEqual(create.projectId, SCRATCH_PROJECT);
+      const folder = create.worktreePath;
+      assert.isNotNull(folder);
+      assert.strictEqual(NodePath.dirname(folder!), harness.scratchRoot);
+      assert.match(NodePath.basename(folder!), /^2026-10-08-sketch-a-parking-map-[a-z0-9]{8}$/u);
+      assert.isTrue((yield* Effect.tryPromise(() => NodeFSP.stat(folder!))).isDirectory());
     }).pipe(Effect.provide(services(bot, harness)));
   });
 
