@@ -23,12 +23,14 @@ const suites = [
 
 // Keep the transitive inputs broad: shared contracts, test setup and dependency
 // changes can break Windows even when none of the selected test files changed.
+// Include every workspace package so new transitive dependencies cannot silently
+// bypass the lane when the app manifests stop changing.
 function affectsWindowsTests(path) {
   return (
     /^(package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|vite\.config\.ts|tsconfig[^/]*\.json)$/.test(
       path,
     ) ||
-    /^(config|patches|packages\/(shared|contracts)|scripts\/lib)\//.test(path) ||
+    /^(config|patches|packages|scripts\/lib)\//.test(path) ||
     /^apps\/(desktop|server)\//.test(path) ||
     /^\.github\/(workflows\/(ci|windows-tests)\.yml|scripts\/windows-test-scope(?:\.test)?\.cjs)$/.test(
       path,

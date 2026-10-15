@@ -15,6 +15,12 @@ const refs = { eventName: "pull_request", base: "a".repeat(40), head: "b".repeat
 for (const changedPath of [
   "packages/shared/src/shell.ts",
   "packages/contracts/src/workspace.ts",
+  "packages/ssh/src/index.ts",
+  "packages/tailscale/src/index.ts",
+  "packages/effect-acp/src/index.ts",
+  "packages/effect-codex-app-server/src/index.ts",
+  "packages/client-runtime/src/index.ts",
+  "packages/future-workspace/src/windows-input.ts",
   "apps/server/src/workspace/WorkspaceFileSystem.ts",
   "apps/server/src/process/externalLauncher.ts",
   "apps/server/src/processRunner.test.ts",
