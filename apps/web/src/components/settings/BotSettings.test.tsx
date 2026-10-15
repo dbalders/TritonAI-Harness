@@ -653,3 +653,39 @@ it("shows a saved Scratch project once, as No project", async () => {
   );
   expect(options).toEqual(["No project", "Saved", "Chosen", "External"]);
 });
+
+it.each([
+  ["another account signs in", secondSession, false],
+  ["the owner signs out", null, false],
+  ["the session is unchanged", firstSession, true],
+] as const)(
+  "pairs with No project only if the session is still current when %s while it is created",
+  async (_scenario, sessionAfter, pairs) => {
+    configuration.scratchRoot = "/synthetic/scratch";
+    let resolveScratch!: (project: { id: string } | null) => void;
+    configuration.openScratchProject.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveScratch = resolve;
+        }),
+    );
+    vi.spyOn(DotClient.prototype, "state").mockResolvedValue(state(firstSession.email));
+    await act(async () => root.render(<BotSettings />));
+    await act(async () => allowButton()!.click());
+    expect(configuration.openScratchProject).toHaveBeenCalledOnce();
+    expect(allowButton()!.disabled).toBe(true);
+
+    saveDotSession(sessionStorage, firstUrl, sessionAfter);
+    await act(async () => resolveScratch({ id: "scratch" }));
+
+    if (pairs) {
+      expect(configuration.command).toHaveBeenCalledExactlyOnceWith({
+        environmentId: "synthetic-environment",
+        input: { apiUrl: firstUrl, ownerToken: firstSession.ownerToken, projectId: "scratch" },
+      });
+    } else {
+      expect(configuration.command).not.toHaveBeenCalled();
+    }
+    expect(allowButton()!.disabled).toBe(false);
+  },
+);

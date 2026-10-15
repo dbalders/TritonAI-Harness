@@ -169,23 +169,25 @@ function BotSettingsForService({ serviceUrl }: { serviceUrl: string | null }) {
     if (!session || !serviceUrl || !environmentId || !projectId) return;
     setBusy(true);
     setError(null);
-    const resolvedProjectId = await resolveProjectId(projectId);
-    if (!mounted.current) return;
-    if (!resolvedProjectId) {
-      // openScratchProject already reported why.
-      setBusy(false);
-      return;
+    let current = false;
+    try {
+      const resolvedProjectId = await resolveProjectId(projectId);
+      // openScratchProject already reported a failed create. A sign-out or
+      // account switch while it ran must not pair with the replaced session.
+      if (!resolvedProjectId || !isCurrentSession(session.ownerToken)) return;
+      const result = await allowHere({
+        environmentId,
+        input: { apiUrl: serviceUrl, ownerToken: session.ownerToken, projectId: resolvedProjectId },
+      });
+      if (!isCurrentSession(session.ownerToken)) return;
+      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+        setError(failureMessage(result, "Could not allow this computer."));
+      }
+      current = true;
+    } finally {
+      if (mounted.current) setBusy(false);
     }
-    const result = await allowHere({
-      environmentId,
-      input: { apiUrl: serviceUrl, ownerToken: session.ownerToken, projectId: resolvedProjectId },
-    });
-    if (!mounted.current) return;
-    setBusy(false);
-    if (session && !isCurrentSession(session.ownerToken)) return;
-    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-      setError(failureMessage(result, "Could not allow this computer."));
-    }
+    if (!current) return;
     refreshLocal();
     await loadState();
   };
