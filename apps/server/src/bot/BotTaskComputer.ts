@@ -106,6 +106,7 @@ const REQUEST_TIMEOUT = Duration.seconds(15);
 /** Retry uploads for one day after capturing the completed turn, then report the missing files. */
 const OUTPUT_RETRY_WINDOW_MS = 24 * 3_600_000;
 const PROJECT_GONE = "The project for TritonAI Bot tasks no longer exists.";
+const WORKSPACE_CHANGED = "The assignment workspace changed before dispatch.";
 
 function permanentResultRejection(status: number): boolean {
   return (
@@ -188,6 +189,8 @@ const Held = Schema.Struct({
   assignment: Schema.optional(ClaimedTask),
   projectId: Schema.optional(Schema.String),
   workspaceKey: Schema.optional(Schema.String),
+  /** Allocated scratch folder, retained if dispatch must wait for a later pass. */
+  executionWorkspacePath: Schema.optional(Schema.String),
   outputId: Schema.optional(Schema.String),
   turnCommandId: Schema.optional(Schema.String),
   createCommandId: Schema.optional(Schema.String),
@@ -553,7 +556,9 @@ export const make = Effect.gen(function* () {
             task = next;
           });
         if (task.outcome === null) {
-          if (!task.started && task.assignment) continue;
+          // Only active pairings may keep a definitively unstarted assignment queued.
+          // started:true includes an uncertain dispatch acknowledgement and is never replayed.
+          if (!task.started && task.assignment && stored.active) continue;
           const thread = task.started
             ? yield* projections
                 .getThreadDetailById(ThreadId.make(task.threadId), { activityKinds: [] })
@@ -596,6 +601,7 @@ export const make = Effect.gen(function* () {
           // Later thread edits, deletion, or staged-file changes cannot alter delivery.
           yield* saveTask({
             ...task,
+            assignment: undefined,
             outcome,
             pendingOutputs: outputs.files,
             outputRetryUntil: now + OUTPUT_RETRY_WINDOW_MS,
@@ -783,28 +789,25 @@ export const make = Effect.gen(function* () {
       const held = [...initial.held];
       let changed = false;
       for (const [index, task] of initial.held.entries()) {
-        if (!task.started || task.projectId !== undefined) continue;
+        if (
+          !task.started ||
+          (task.projectId !== undefined && !task.workspaceKey?.startsWith("scratch:"))
+        )
+          continue;
         const shell = yield* projections.getThreadShellById(ThreadId.make(task.threadId));
         if (Option.isNone(shell)) continue;
-        const projectId = shell.value.projectId;
-        yield* bindTask(initial, task, projectId);
+        const projectId = ProjectId.make(task.projectId ?? shell.value.projectId);
+        if (task.projectId === undefined) yield* bindTask(initial, task, projectId);
         const project = yield* projections.getProjectShellById(projectId);
-        const scratch =
-          Option.isSome(project) &&
-          normalizeProjectPathForComparison(project.value.workspaceRoot) ===
-            normalizeProjectPathForComparison(scratchWorkspaceRootFor(path, serverConfig.baseDir));
-        const workspaceKey = scratch
-          ? `scratch:${task.threadId}`
-          : (shell.value.worktreePath ??
-            (Option.isSome(project) ? project.value.workspaceRoot : undefined));
+        const workspacePath =
+          shell.value.worktreePath ??
+          (Option.isSome(project) ? project.value.workspaceRoot : undefined);
         held[index] = {
           ...task,
           projectId,
-          ...(workspaceKey
+          ...(workspacePath
             ? {
-                workspaceKey: scratch
-                  ? workspaceKey
-                  : normalizeProjectPathForComparison(workspaceKey),
+                workspaceKey: normalizeProjectPathForComparison(workspacePath),
               }
             : {}),
         };
@@ -885,6 +888,35 @@ export const make = Effect.gen(function* () {
       return next;
     });
 
+  const executionWorkspaceKey = (task: typeof Held.Type, fallbackProjectId: string) =>
+    Effect.gen(function* () {
+      const project = yield* projections.getProjectShellById(
+        ProjectId.make(task.projectId ?? fallbackProjectId),
+      );
+      if (Option.isNone(project)) return null;
+      const source = yield* projections.getThreadShellById(ThreadId.make(task.threadId));
+      if (Option.isSome(source) && source.value.worktreePath !== null)
+        return normalizeProjectPathForComparison(source.value.worktreePath);
+      const projectRoot = normalizeProjectPathForComparison(project.value.workspaceRoot);
+      if (task.assignment?.operation !== undefined)
+        return Option.isSome(source) ? projectRoot : null;
+      const scratchRoot = normalizeProjectPathForComparison(
+        scratchWorkspaceRootFor(path, serverConfig.baseDir),
+      );
+      return projectRoot === scratchRoot
+        ? task.executionWorkspacePath
+          ? normalizeProjectPathForComparison(task.executionWorkspacePath)
+          : `scratch:${task.threadId}`
+        : projectRoot;
+    });
+
+  const verifyExecutionWorkspace = (task: typeof Held.Type, fallbackProjectId: string) =>
+    Effect.gen(function* () {
+      const currentKey = yield* executionWorkspaceKey(task, fallbackProjectId);
+      if (currentKey !== null && currentKey !== task.workspaceKey)
+        return yield* Effect.fail(WORKSPACE_CHANGED);
+    });
+
   /** Dispatch one persisted assignment. A followup retains its thread's runtime and workspace. */
   const startHeld = (stored: Stored, original: typeof Held.Type) =>
     Effect.gen(function* () {
@@ -908,25 +940,36 @@ export const make = Effect.gen(function* () {
         const resolved = resolveProjectSettings(settings, projectId, project.value).settings;
         const createdAt = isoAt(yield* Clock.currentTimeMillis);
         const followup = task.operation !== undefined;
-        const source = followup
-          ? Option.getOrNull(yield* projections.getThreadShellById(ThreadId.make(held.threadId)))
-          : null;
+        const source = Option.getOrNull(
+          yield* projections.getThreadShellById(ThreadId.make(held.threadId)),
+        );
         if (followup && !source)
           return yield* failure("The source thread no longer exists. Nothing ran.");
         const scratchRoot = scratchWorkspaceRootFor(path, serverConfig.baseDir);
-        const worktreePath =
-          source?.worktreePath ??
-          (normalizeProjectPathForComparison(project.value.workspaceRoot) ===
-          normalizeProjectPathForComparison(scratchRoot)
-            ? yield* claimScratchThreadFolder(scratchRoot, {
+        const worktreePath = source
+          ? source.worktreePath
+          : normalizeProjectPathForComparison(project.value.workspaceRoot) ===
+              normalizeProjectPathForComparison(scratchRoot)
+            ? (held.executionWorkspacePath ??
+              (yield* claimScratchThreadFolder(scratchRoot, {
                 threadId: held.threadId,
                 createdAt,
                 text: task.title,
               }).pipe(
                 Effect.provideService(FileSystem.FileSystem, fileSystem),
                 Effect.provideService(Path.Path, path),
-              )
-            : null);
+              )))
+            : null;
+        if (
+          !followup &&
+          worktreePath !== null &&
+          held.workspaceKey !== normalizeProjectPathForComparison(worktreePath)
+        )
+          yield* save({
+            ...held,
+            executionWorkspacePath: worktreePath,
+            workspaceKey: normalizeProjectPathForComparison(worktreePath),
+          });
         const modelSelection: ModelSelection = source?.modelSelection ??
           resolved.defaultModelSelection ??
           settings.defaultModelSelection ?? {
@@ -993,6 +1036,7 @@ export const make = Effect.gen(function* () {
         }
 
         yield* bindTask(stored, held, projectId);
+        yield* verifyExecutionWorkspace(held, stored.projectId);
         if (!followup)
           yield* engine.dispatch({
             type: "thread.create",
@@ -1026,6 +1070,7 @@ export const make = Effect.gen(function* () {
           Effect.provideService(Path.Path, path),
           Effect.provideService(ServerConfig, serverConfig),
         );
+        yield* verifyExecutionWorkspace(held, stored.projectId);
         // After this durable write, never redispatch on restart: reconcile the exact message instead.
         yield* save({
           ...held,
@@ -1040,6 +1085,8 @@ export const make = Effect.gen(function* () {
         Effect.catchCause((cause) => Effect.succeed(cause)),
       );
       if (started !== null && !held.started) {
+        // Re-evaluate the new folder and conflicts on the next pass. No turn was requested.
+        if (Cause.squash(started) === WORKSPACE_CHANGED) return next;
         const reason =
           Cause.squash(started) === PROJECT_GONE
             ? PROJECT_GONE
@@ -1087,8 +1134,20 @@ export const make = Effect.gen(function* () {
       let stored = initial;
       const target = (yield* settingsService.getSettings).botTaskMaxParallel;
       let launches = 0;
-      for (const original of initial.held) {
-        if (!original.assignment || original.started || original.outcome !== null) continue;
+      for (const queued of initial.held) {
+        if (!queued.assignment || queued.started || queued.outcome !== null) continue;
+        const workspaceKey = yield* executionWorkspaceKey(queued, stored.projectId);
+        const original =
+          workspaceKey !== null && workspaceKey !== queued.workspaceKey
+            ? { ...queued, workspaceKey }
+            : queued;
+        if (original !== queued) {
+          stored = {
+            ...stored,
+            held: stored.held.map((task) => (task.taskId === original.taskId ? original : task)),
+          };
+          yield* writeStored(stored);
+        }
         const progress = yield* readProgress(stored, now);
         if (
           progress.filter(
@@ -1112,7 +1171,7 @@ export const make = Effect.gen(function* () {
                 (task.projectId ?? stored.projectId) === original.projectId)),
         );
         if (sameWorkspace) continue;
-        if (original.assignment.operation !== undefined) {
+        if (original.assignment?.operation !== undefined) {
           const shell = yield* projections.getThreadShellById(ThreadId.make(original.threadId));
           if (
             Option.isSome(shell) &&

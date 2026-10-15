@@ -148,6 +148,7 @@ class FakeBot {
     operation?: unknown;
   }> = [];
   corruptAttachment = false;
+  onAttachmentDownload: (() => void) | null = null;
   artifactStatus = 200;
   artifactStatuses: number[] = [];
   malformedArtifactMetadata = false;
@@ -162,6 +163,7 @@ class FakeBot {
   rejectedProgressTask: string | null = null;
   supportsProgress = true;
   ownerId = "owner@ucsd.edu";
+  apiOrigin = API;
 
   handle(path: string, headers: Record<string, string>, body: Record<string, unknown>) {
     this.calls.push({ path, headers, body });
@@ -187,6 +189,7 @@ class FakeBot {
       return { status: 401, json: { ok: false, replaced: this.replaced } };
     }
     if (/^\/harness\/tasks\/[^/]+\/attachments\//u.test(path)) {
+      this.onAttachmentDownload?.();
       const isDocument = path.endsWith(document.attachmentId);
       return {
         status: 200,
@@ -282,7 +285,7 @@ class FakeBot {
                 ]),
               );
               const url = new URL(request.url);
-              assert.strictEqual(url.origin, API);
+              assert.strictEqual(url.origin, this.apiOrigin);
               // @effect-diagnostics-next-line preferSchemaOverJson:off - reads the fake request body.
               const body = JSON.parse(raw) as Record<string, unknown>;
               const reply = this.handle(url.pathname, headers, body);
@@ -306,6 +309,7 @@ class FakeHarness {
   failAfterTurnPersisted = false;
   /** Set to offer the "No project" project at this folder. */
   scratchRoot: string | null = null;
+  workspaceRoot = "/tmp/tasks";
 
   finish(threadId: string, reply: string, state: "completed" | "error" = "completed") {
     const thread = this.threads.get(threadId)!;
@@ -394,7 +398,7 @@ class FakeHarness {
               ? Option.some({
                   id: PROJECT,
                   title: "Tasks",
-                  workspaceRoot: "/tmp/tasks",
+                  workspaceRoot: harness.workspaceRoot,
                 } as unknown as OrchestrationProjectShell)
               : projectId === SCRATCH_PROJECT && harness.scratchRoot !== null
                 ? Option.some({
@@ -2129,4 +2133,218 @@ it.layer(NodeServices.layer)("BotTaskComputer", (it) => {
       },
     );
   }
+  for (const stopKind of ["stopped", "replaced"] as const) {
+    for (const waitingOn of ["workspace", "prior-turn"] as const) {
+      it.effect(
+        `settles ${waitingOn} queued work as not run when ${stopKind}, retaining started receipts`,
+        () => {
+          const bot = new FakeBot(),
+            harness = new FakeHarness();
+          bot.tasks = [{ taskId: "running", title: "Running", prompt: "Inspect" }];
+          return Effect.gen(function* () {
+            yield* TestClock.setTime(START);
+            const computer = yield* BotTaskComputer.BotTaskComputer;
+            yield* allow(computer);
+            const running = harness.commands.find((command) => command.type === "thread.create")!;
+            bot.tasks = [
+              {
+                taskId: "queued",
+                title: "Queued",
+                prompt: "Continue",
+                ...(waitingOn === "prior-turn"
+                  ? { operation: { type: "followup", parentTaskId: "running" } }
+                  : {}),
+              },
+            ];
+            yield* TestClock.adjust("30 seconds");
+            yield* computer.tick;
+            assert.lengthOf(harness.commands, 2);
+            bot.resultStatus = 503;
+            if (stopKind === "stopped") yield* computer.stop({ ownerToken: null, apiUrl: null });
+            else bot.replaced = true;
+            yield* computer.tick;
+            let held = yield* decodeRecoveryHeld((yield* readRecoveryJournal).held);
+            const queued = held.find(
+              (item) => (item as Record<string, unknown>).taskId === "queued",
+            ) as Record<string, unknown>;
+            assert.deepInclude(queued, { started: false });
+            assert.deepInclude(queued.outcome as object, { status: "failed" });
+            assert.include(
+              String((queued.outcome as Record<string, unknown>).result),
+              "nothing ran",
+            );
+            assert.isFalse(Object.hasOwn(queued, "assignment"));
+            const active = held.find(
+              (item) => (item as Record<string, unknown>).taskId === "running",
+            ) as Record<string, unknown>;
+            assert.strictEqual(active.started, true);
+            assert.isNull(active.outcome, "a dispatched running turn remains recoverable");
+            bot.replaced = false;
+            const otherApi = "https://other-bot.example.ucsd.edu";
+            const serviceBlocked = yield* computer
+              .allow({ apiUrl: otherApi, ownerToken: "owner-session", projectId: PROJECT })
+              .pipe(Effect.flip);
+            assert.include(serviceBlocked.message, "previous bot");
+            bot.ownerId = "new-owner@ucsd.edu";
+            const blocked = yield* computer
+              .allow({ apiUrl: API, ownerToken: "owner-session", projectId: PROJECT })
+              .pipe(Effect.flip);
+            assert.include(
+              blocked.message,
+              "another account",
+              "unacknowledged receipts cannot be discarded to change owners",
+            );
+            bot.ownerId = "owner@ucsd.edu";
+            bot.resultStatus = 200;
+            harness.finish(running.threadId, "Running completed");
+            yield* computer.tick;
+            assert.deepEqual(bot.results.map((result) => result.taskId).sort(), [
+              "queued",
+              "running",
+            ]);
+            assert.lengthOf(harness.commands, 2, "the queued turn never starts");
+            bot.ownerId = "new-owner@ucsd.edu";
+            bot.apiOrigin = waitingOn === "workspace" ? otherApi : API;
+            const paired = yield* computer.allow({
+              apiUrl: bot.apiOrigin,
+              ownerToken: "owner-session",
+              projectId: PROJECT,
+            });
+            assert.strictEqual(paired.userId, "new-owner@ucsd.edu");
+            assert.strictEqual(paired.apiUrl, bot.apiOrigin);
+            held = yield* decodeRecoveryHeld((yield* readRecoveryJournal).held);
+            assert.lengthOf(held, 0);
+          }).pipe(Effect.provide(services(bot, harness, 4)));
+        },
+      );
+    }
+  }
+
+  it.effect(
+    "refreshes a queued assignment's execution folder before serializing later work",
+    () => {
+      const bot = new FakeBot(),
+        harness = new FakeHarness();
+      bot.tasks = ["first", "queued"].map((taskId) => ({
+        taskId,
+        title: taskId,
+        prompt: "Inspect",
+      }));
+      return Effect.gen(function* () {
+        yield* TestClock.setTime(START);
+        const computer = yield* BotTaskComputer.BotTaskComputer;
+        yield* allow(computer);
+        const first = harness.commands.find((command) => command.type === "thread.create")!;
+        assert.lengthOf(harness.commands, 2);
+        harness.workspaceRoot = "/tmp/changed-task-folder";
+        harness.finish(first.threadId, "First completed");
+        bot.tasks = [{ taskId: "later", title: "Later", prompt: "Inspect" }];
+        yield* TestClock.adjust("30 seconds");
+        yield* computer.tick;
+        assert.lengthOf(
+          harness.commands,
+          4,
+          "only one assignment may execute in the changed folder",
+        );
+        const held = yield* decodeRecoveryHeld((yield* readRecoveryJournal).held);
+        const queued = held.find(
+          (item) => (item as Record<string, unknown>).taskId === "queued",
+        ) as Record<string, unknown>;
+        const later = held.find(
+          (item) => (item as Record<string, unknown>).taskId === "later",
+        ) as Record<string, unknown>;
+        assert.deepInclude(queued, { started: true, workspaceKey: "/tmp/changed-task-folder" });
+        assert.deepInclude(later, { started: false, workspaceKey: "/tmp/changed-task-folder" });
+        const second = harness.commands.filter((command) => command.type === "thread.create")[1]!;
+        harness.finish(second.threadId, "Queued completed");
+        yield* computer.tick;
+        assert.lengthOf(harness.commands, 6);
+      }).pipe(Effect.provide(services(bot, harness, 4)));
+    },
+  );
+  it.effect("defers dispatch if attachment preparation changes the project folder", () => {
+    const bot = new FakeBot(),
+      harness = new FakeHarness();
+    bot.tasks = [
+      { taskId: "prepared", title: "Prepared", prompt: "Inspect", attachments: [screenshot] },
+    ];
+    bot.onAttachmentDownload = () => {
+      harness.workspaceRoot = "/tmp/changed-during-preparation";
+      bot.onAttachmentDownload = null;
+    };
+    return Effect.gen(function* () {
+      yield* TestClock.setTime(START);
+      const computer = yield* BotTaskComputer.BotTaskComputer;
+      yield* allow(computer);
+      assert.lengthOf(
+        harness.commands,
+        0,
+        "no thread/turn may dispatch with an outdated conflict key",
+      );
+      const before = yield* decodeRecoveryHeld((yield* readRecoveryJournal).held);
+      assert.deepInclude(before[0] as object, { started: false, outcome: null });
+      yield* computer.tick;
+      assert.lengthOf(harness.commands, 2);
+      const after = yield* decodeRecoveryHeld((yield* readRecoveryJournal).held);
+      assert.deepInclude(after[0] as object, {
+        started: true,
+        workspaceKey: "/tmp/changed-during-preparation",
+      });
+    }).pipe(Effect.provide(services(bot, harness, 4)));
+  });
+
+  it.effect(
+    "shares a physical scratch-folder lane with another project and source followups",
+    () => {
+      const bot = new FakeBot(),
+        harness = new FakeHarness();
+      bot.tasks = [{ taskId: "scratch", title: "Scratch", prompt: "Inspect" }];
+      return Effect.gen(function* () {
+        yield* TestClock.setTime(START);
+        const config = yield* ServerConfig.ServerConfig;
+        harness.scratchRoot = NodePath.resolve(config.baseDir, "scratch");
+        const computer = yield* BotTaskComputer.BotTaskComputer;
+        yield* computer.allow({
+          apiUrl: API,
+          ownerToken: "owner-session",
+          projectId: SCRATCH_PROJECT,
+        });
+        const first = harness.commands.find((command) => command.type === "thread.create")!;
+        harness.workspaceRoot = first.worktreePath!;
+        yield* computer.setProject({ projectId: PROJECT });
+        bot.tasks = [{ taskId: "shared", title: "Shared", prompt: "Inspect" }];
+        yield* TestClock.adjust("30 seconds");
+        yield* computer.tick;
+        assert.lengthOf(
+          harness.commands,
+          2,
+          "a second project pointing at the same folder must wait",
+        );
+        harness.finish(first.threadId, "Scratch finished");
+        yield* computer.tick;
+        assert.lengthOf(harness.commands, 4);
+        const second = harness.commands.filter((command) => command.type === "thread.create")[1]!;
+        bot.tasks = [
+          {
+            taskId: "follow",
+            title: "Follow",
+            prompt: "Continue",
+            operation: { type: "followup", parentTaskId: "scratch" },
+          },
+        ];
+        yield* TestClock.adjust("30 seconds");
+        yield* computer.tick;
+        assert.lengthOf(
+          harness.commands,
+          4,
+          "source worktreePath must win over its scratch project membership",
+        );
+        harness.finish(second.threadId, "Shared finished");
+        yield* computer.tick;
+        const turns = harness.commands.filter((command) => command.type === "thread.turn.start");
+        assert.lengthOf(turns, 3);
+        assert.strictEqual(turns[2]!.threadId, first.threadId);
+      }).pipe(Effect.provide(services(bot, harness, 4)));
+    },
+  );
 });
