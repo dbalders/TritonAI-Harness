@@ -1,6 +1,5 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-
 import { scrollToSettingsTarget, SettingsRow, SettingsUnavailableGroup } from "./settingsLayout";
 
 afterEach(() => {

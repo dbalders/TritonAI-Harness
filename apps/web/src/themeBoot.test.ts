@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-
 import indexHtml from "../index.html?raw";
 import {
   CUSTOM_THEMES_STORAGE_KEY,

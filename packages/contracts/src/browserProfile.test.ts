@@ -1,7 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
-
 import * as Schema from "effect/Schema";
-
 import {
   BrowserProfileId,
   BUILT_IN_BROWSER_PROFILES,

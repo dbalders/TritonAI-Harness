@@ -9,8 +9,8 @@ import { ServerConfig } from "../config.ts";
 import { forkParked } from "../serverActivation.ts";
 import { isTritonAiManagedCodexMaintenanceCapabilities } from "./managedCodexUpdate.ts";
 import { ProviderMaintenanceRunner } from "./providerMaintenanceRunner.ts";
-import { ProviderRegistry } from "./Services/ProviderRegistry.ts";
-import { ProviderService } from "./Services/ProviderService.ts";
+import { ProviderRegistry } from "./ProviderRegistry.ts";
+import { ProviderSessionManagerV2 } from "../orchestration-v2/ProviderSessionManager.ts";
 
 const CODEX_DRIVER = ProviderDriverKind.make("codex");
 
@@ -44,7 +44,7 @@ export function isManagedCodexAutoUpdateCandidate(provider: ServerProvider): boo
 export const makeManagedCodexAutoUpdater = Effect.fn("makeManagedCodexAutoUpdater")(function* () {
   const providerRegistry = yield* ProviderRegistry;
   const providerMaintenanceRunner = yield* ProviderMaintenanceRunner;
-  const providerService = yield* ProviderService;
+  const providerService = yield* ProviderSessionManagerV2;
   const decidedKeysRef = yield* Ref.make<ReadonlySet<string>>(new Set());
 
   const considerProvider = Effect.fn("ManagedCodexAutoUpdate.considerProvider")(function* (
@@ -77,8 +77,8 @@ export const makeManagedCodexAutoUpdater = Effect.fn("makeManagedCodexAutoUpdate
     };
     // Swapping the engine under a live Codex process can break it (Windows
     // locks the files outright), so defer to the manual action instead.
-    const liveCodexSessions = (yield* providerService.listSessions()).filter(
-      (session) => session.provider === CODEX_DRIVER,
+    const liveCodexSessions = (yield* providerService.liveInstances).filter(
+      (entry) => entry.driver === CODEX_DRIVER,
     );
     if (liveCodexSessions.length > 0) {
       yield* Effect.logInfo("Skipped automatic managed Codex update while Codex sessions run", {

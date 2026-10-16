@@ -122,10 +122,15 @@ describe("TritonAI image request budget", () => {
     }
   });
 
-  for (const [path, status] of [
-    ["responses", 200],
-    ["responses/compact", 429],
-  ] as const) {
+  describe.each(
+    Array.from(
+      [
+        ["responses", 200],
+        ["responses/compact", 429],
+      ] as const,
+      (scenario) => ({ scenario }),
+    ),
+  )("case $scenario", ({ scenario: [path, status] }) => {
     it.effect(`caps ${path} requests and preserves upstream status, headers, and streaming`, () =>
       Effect.gen(function* () {
         const f = yield* fixture(status);
@@ -142,7 +147,7 @@ describe("TritonAI image request budget", () => {
           expect(JSON.stringify(f.received[0]?.body)).toContain(`/${id}.png`);
       }).pipe(Effect.scoped),
     );
-  }
+  });
 
   it.effect("rejects unknown paths and invalid JSON before reaching upstream", () =>
     Effect.gen(function* () {
@@ -156,25 +161,32 @@ describe("TritonAI image request budget", () => {
     }).pipe(Effect.scoped),
   );
 
-  for (const endSession of [false, true]) {
-    it.effect(
-      `cancels upstream when ${endSession ? "the session ends" : "the client disconnects"}`,
-      () =>
-        Effect.gen(function* () {
-          const f = yield* fixture(200, true);
-          const response = yield* post(`${f.baseUrl}/responses`);
-          if (endSession) {
-            const drained = response.text().catch(() => "closed");
-            yield* f.close;
-            yield* Effect.promise(() => drained);
-            yield* Effect.promise(() => expect(fetch(`${f.baseUrl}/responses`)).rejects.toThrow());
-          } else yield* Effect.promise(() => response.body!.cancel());
-          yield* f.closed;
-        }).pipe(Effect.scoped),
-    );
-  }
+  describe.each(Array.from([false, true], (scenario) => ({ scenario })))(
+    "case $scenario",
+    ({ scenario: endSession }) => {
+      it.effect(
+        `cancels upstream when ${endSession ? "the session ends" : "the client disconnects"}`,
+        () =>
+          Effect.gen(function* () {
+            const f = yield* fixture(200, true);
+            const response = yield* post(`${f.baseUrl}/responses`);
+            if (endSession) {
+              const drained = response.text().catch(() => "closed");
+              yield* f.close;
+              yield* Effect.promise(() => drained);
+              yield* Effect.promise(() =>
+                expect(fetch(`${f.baseUrl}/responses`)).rejects.toThrow(),
+              );
+            } else yield* Effect.promise(() => response.body!.cancel());
+            yield* f.closed;
+          }).pipe(Effect.scoped),
+      );
+    },
+  );
 
-  for (const key of ["HTTP_PROXY", "http_proxy", "ALL_PROXY"] as const) {
+  describe.each(
+    Array.from(["HTTP_PROXY", "http_proxy", "ALL_PROXY"] as const, (scenario) => ({ scenario })),
+  )("case $scenario", ({ scenario: key }) => {
     it.effect(`honors ${key} for the upstream hop`, () =>
       Effect.gen(function* () {
         const f = yield* fixture();
@@ -188,7 +200,7 @@ describe("TritonAI image request budget", () => {
         expect(JSON.stringify(f.received[0]?.body).match(/input_image/g)).toHaveLength(4);
       }).pipe(Effect.scoped),
     );
-  }
+  });
 
   it.effect("preserves NO_PROXY and merges base query parameters with request overrides", () =>
     Effect.gen(function* () {

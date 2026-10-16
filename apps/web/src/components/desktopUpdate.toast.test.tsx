@@ -1,6 +1,7 @@
 import { isValidElement, type ReactElement, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import type { DesktopUpdateState } from "@t3tools/contracts";
+import { showDesktopUpdateDownloadedToast } from "./desktopUpdate.toast";
 
 const testState = vi.hoisted(() => ({
   addToast: vi.fn(),
@@ -9,8 +10,6 @@ const testState = vi.hoisted(() => ({
 vi.mock("./ui/toast", () => ({
   toastManager: { add: testState.addToast },
 }));
-
-import { showDesktopUpdateDownloadedToast } from "./desktopUpdate.toast";
 
 type ClickableElement = ReactElement<{ readonly onClick?: () => void }>;
 

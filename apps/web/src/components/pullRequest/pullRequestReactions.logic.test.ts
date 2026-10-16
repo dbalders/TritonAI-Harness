@@ -1,6 +1,5 @@
 import type { PullRequestReaction, PullRequestReactionContent } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
-
 import {
   applyPendingPullRequestReactions,
   PULL_REQUEST_REACTION_ORDER,

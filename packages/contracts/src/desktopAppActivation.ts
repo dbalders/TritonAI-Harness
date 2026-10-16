@@ -1,5 +1,4 @@
 import * as Schema from "effect/Schema";
-
 import { ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 export const DESKTOP_APP_ACTIVATION_PROTOCOL_VERSION = 1 as const;

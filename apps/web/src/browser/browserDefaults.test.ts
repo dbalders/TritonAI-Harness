@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import { DEFAULT_BROWSER_PROFILE_ID, INCOGNITO_BROWSER_PROFILE_ID } from "@t3tools/contracts";
-
 import { ensureClientSettingsHydrated } from "~/hooks/useSettings";
 
 const settings = vi.hoisted(() => ({ current: {} as Record<string, unknown> }));

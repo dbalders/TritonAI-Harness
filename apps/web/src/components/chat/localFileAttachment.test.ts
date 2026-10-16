@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-
 import { resolveDesktopLocalFilePath } from "./localFileAttachment";
 
 const file = new File(["a,b\n1,2\n"], "data.csv", { type: "text/csv" });

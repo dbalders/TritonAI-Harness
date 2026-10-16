@@ -1,8 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import type { ServerUpdateState } from "@t3tools/client-runtime/state/server";
-import { Atom } from "effect/unstable/reactivity";
+import { Atom } from "effect/reactivity";
 import { useMemo, useState } from "react";
-
 import type { EnvironmentPresentation } from "~/state/environments";
 import { serverEnvironment } from "~/state/server";
 import {
@@ -64,6 +63,7 @@ export function useAutoBalanceUpdateBanner(
         environmentId: environment.environmentId,
         serverLabel: environment.label,
         selfUpdate,
+        installation: environment.serverConfig?.environment.capabilities.serverInstallation,
         desktopAppUpdate,
         threadContinuation: supportsServerUpdateThreadContinuation(environment.serverConfig),
         continueThreadsAfterServerUpdate:

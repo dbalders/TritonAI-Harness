@@ -3,7 +3,6 @@ import type {
   DesktopTritonAiCredentialStatus,
 } from "@t3tools/contracts";
 import { useContext, useState } from "react";
-
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";

@@ -1,8 +1,6 @@
 import * as NodeNet from "node:net";
-
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-
 import * as NetService from "./Net.ts";
 
 const closeServer = (server: NodeNet.Server) =>

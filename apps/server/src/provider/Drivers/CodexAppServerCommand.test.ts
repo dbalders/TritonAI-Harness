@@ -1,8 +1,8 @@
 import {
-  HostProcessArchitecture,
-  HostProcessEnvironment,
-  HostProcessPlatform,
-} from "@t3tools/shared/hostProcess";
+  Architecture as HostProcessArchitecture,
+  Environment as HostProcessEnvironment,
+  Platform as HostProcessPlatform,
+} from "@t3tools/shared/HostProcess";
 import { SpawnExecutableResolution } from "@t3tools/shared/shell";
 import { it as effectIt } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -166,7 +166,9 @@ describe("resolveCodexAppServerCommand", () => {
 
       expect(resolved.shell).toBe(true);
       expect(resolved.command).toContain("codex.cmd");
-      expect(resolved.args).toEqual(['^"app-server^"', '^"value^ ^&^ calc^"']);
+      expect(resolved.args).toEqual([]);
+      expect(resolved.command).toContain('^"app-server^"');
+      expect(resolved.command).toContain('^"value^ ^&^ calc^"');
       expect(resolved.environment).toBe(windowsEnvironment);
       expect(resolved.extendEnv).toBe(false);
     }),

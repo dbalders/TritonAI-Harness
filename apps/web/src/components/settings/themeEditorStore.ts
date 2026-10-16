@@ -1,5 +1,4 @@
 import { create } from "zustand";
-
 import {
   getThemeDefinition,
   type ThemeAppearance,

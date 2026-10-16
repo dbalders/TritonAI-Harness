@@ -1,10 +1,6 @@
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import {
-  HostProcessEnvironment,
-  HostProcessExecutablePath,
-  HostProcessPlatform,
-} from "@t3tools/shared/hostProcess";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import { isCommandAvailable, resolveSpawnCommand } from "@t3tools/shared/shell";
 import * as Console from "effect/Console";
 import * as Crypto from "effect/Crypto";
@@ -13,8 +9,8 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import { Argument, Command } from "effect/unstable/cli";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { Argument, Command } from "effect/cli";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 export type NativePlatform = "ios" | "android";
 const NativeClientRecord = Schema.Struct({ fingerprint: Schema.String, binary: Schema.String });
@@ -33,6 +29,18 @@ const decodeSimulators = Schema.decodeUnknownEffect(
   ),
 );
 export type NativeClientRecord = typeof NativeClientRecord.Type;
+/** Expo derives these names from the app identity; downstream branding changes them. */
+export function iosBuildTarget(entries: ReadonlyArray<string>) {
+  const workspaces = entries.filter((entry) => entry.endsWith(".xcworkspace"));
+  if (workspaces.length !== 1)
+    throw new NativeClientError({
+      message: "Expected one generated iOS workspace after prebuild.",
+    });
+  const workspace = workspaces[0]!;
+  const scheme = workspace.slice(0, -".xcworkspace".length);
+  return { workspace, scheme, appFile: `${scheme}.app` };
+}
+
 export type NativeClientStatus = "compatible" | "missing" | "unknown" | "stale";
 export class NativeClientError extends Schema.TaggedError<NativeClientError>()(
   "NativeClientError",
@@ -139,7 +147,8 @@ export const hashBundle = Effect.fn("hashBundle")(function* (root: string) {
 });
 type FileSystemError = import("effect/PlatformError").PlatformError;
 
-const bundleId = "com.t3tools.t3code.dev";
+export const nativeClientAppId = (platform: NativePlatform) =>
+  platform === "ios" ? "edu.ucsd.tritonai.harness.dev" : "com.t3tools.t3code.dev";
 const roots = Effect.gen(function* () {
   const path = yield* Path.Path;
   const repo = yield* path.fromFileUrl(new URL("../", import.meta.url));
@@ -155,9 +164,9 @@ const collect = <E>(stream: Stream.Stream<Uint8Array, E>) =>
   );
 export const resolveAdb = Effect.gen(function* () {
   if (yield* isCommandAvailable("adb")) return "adb";
-  const environment = yield* HostProcessEnvironment;
+  const environment = yield* HostProcess.Environment;
   const path = yield* Path.Path;
-  const executable = (yield* HostProcessPlatform) === "win32" ? "adb.exe" : "adb";
+  const executable = (yield* HostProcess.Platform) === "win32" ? "adb.exe" : "adb";
   for (const sdk of [environment.ANDROID_SDK_ROOT, environment.ANDROID_HOME]) {
     if (!sdk) continue;
     const candidate = path.join(sdk, "platform-tools", executable);
@@ -176,7 +185,7 @@ const command = Effect.fn("nativeClient.command")(function* (
   cwd?: string,
 ) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  const environment = yield* HostProcessEnvironment;
+  const environment = yield* HostProcess.Environment;
   const spawn = yield* resolveSpawnCommand(program === "adb" ? yield* resolveAdb : program, args);
   const child = yield* spawner.spawn(
     ChildProcess.make(spawn.command, spawn.args, {
@@ -207,7 +216,7 @@ const command = Effect.fn("nativeClient.command")(function* (
 }, Effect.scoped);
 
 const fingerprint = Effect.fn("nativeClient.fingerprint")(function* (platform: NativePlatform) {
-  const output = yield* command(yield* HostProcessExecutablePath, [
+  const output = yield* command(yield* HostProcess.ExecutablePath, [
     "--eval",
     `require('expo/fingerprint').createFingerprintAsync(process.cwd(), { platforms: [process.argv[1]], silent: true }).then(fp => console.log('T3_NATIVE_FINGERPRINT=' + fp.hash)).catch(e => { console.error(e); process.exitCode = 1; });`,
     platform,
@@ -226,7 +235,7 @@ const validateDevice = Effect.fn("nativeClient.validateDevice")(function* (
   device: string,
 ) {
   if (platform === "ios") {
-    if ((yield* HostProcessPlatform) !== "darwin")
+    if ((yield* HostProcess.Platform) !== "darwin")
       return yield* new NativeClientError({
         message: "Run iOS check/ensure on the Mac that hosts the simulator.",
       });
@@ -259,6 +268,7 @@ export const installedBinary = Effect.fn("installedBinary")(function* (
   device: string,
   run: typeof command = command,
 ) {
+  const bundleId = nativeClientAppId(platform);
   if (platform === "ios") {
     const apps = yield* run("xcrun", ["simctl", "listapps", device]);
     if (!apps.includes(`"${bundleId}"`)) return null;
@@ -299,7 +309,7 @@ const main = Command.make(
     yield* validateDevice(platform, device);
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const environment = yield* HostProcessEnvironment;
+    const environment = yield* HostProcess.Environment;
     const home = environment.HOME ?? environment.USERPROFILE;
     if (!home)
       return yield* new NativeClientError({
@@ -316,7 +326,7 @@ const main = Command.make(
       installedBinary: installedBinary(platform, device),
       readRecord: fs.readFileString(recordPath).pipe(
         Effect.flatMap(decodeRecord),
-        Effect.catchTag("SchemaError", () => Effect.succeed(null)),
+        Effect.catchTags({ SchemaError: () => Effect.succeed(null) }),
         Effect.catchIf(
           (error) => error.reason._tag === "NotFound",
           () => Effect.succeed(null),
@@ -346,15 +356,23 @@ const main = Command.make(
           const output = yield* fs.makeTempDirectoryScoped({ prefix: "t3-native-client-" });
           const { mobile } = yield* roots;
           yield* command("pod", ["install"], true, path.join(mobile, "ios"));
+          const entries = yield* fs.readDirectory(path.join(mobile, "ios"));
+          const target = yield* Effect.try({
+            try: () => iosBuildTarget(entries),
+            catch: (cause) =>
+              Schema.is(NativeClientError)(cause)
+                ? cause
+                : new NativeClientError({ message: "Could not resolve generated iOS workspace." }),
+          });
           // Target this simulator only, without Expo's desktop activation or log streaming.
           yield* command(
             "xcrun",
             [
               "xcodebuild",
               "-workspace",
-              path.join(mobile, "ios/T3CodeDev.xcworkspace"),
+              path.join(mobile, "ios", target.workspace),
               "-scheme",
-              "T3CodeDev",
+              target.scheme,
               "-configuration",
               "Debug",
               "-destination",
@@ -371,7 +389,7 @@ const main = Command.make(
               "simctl",
               "install",
               device,
-              path.join(output, "Build/Products/Debug-iphonesimulator/T3CodeDev.app"),
+              path.join(output, "Build/Products/Debug-iphonesimulator", target.appFile),
             ],
             true,
           );

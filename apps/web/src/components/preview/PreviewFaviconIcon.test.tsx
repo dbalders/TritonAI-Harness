@@ -1,10 +1,9 @@
 import { act } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, expect, it, vi } from "vite-plus/test";
+import { FaviconImage } from "./PreviewFaviconIcon";
 
 vi.mock("~/browserFaviconStore", () => ({ useFaviconForThreadUrl: () => null }));
-
-import { FaviconImage } from "./PreviewFaviconIcon";
 
 let renderer: ReactTestRenderer | undefined;
 

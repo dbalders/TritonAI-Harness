@@ -2,7 +2,6 @@ import { EnvironmentId } from "@t3tools/contracts";
 import { act, useLayoutEffect } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
-
 import { useEnvironmentDisconnectDelay } from "./useEnvironmentDisconnectDelay";
 
 const environmentId = EnvironmentId.make("remote");

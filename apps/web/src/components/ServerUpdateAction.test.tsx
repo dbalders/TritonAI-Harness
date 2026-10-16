@@ -2,7 +2,6 @@ import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { EnvironmentId, ServerSelfUpdateCapability } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
-
 import { ServerUpdateAction, ServerUpdateProgress } from "./ServerUpdateAction";
 
 function renderAction(selfUpdate: ServerSelfUpdateCapability | null) {

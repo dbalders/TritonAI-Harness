@@ -6,7 +6,6 @@ import * as NodePath from "node:path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 import { EFFECT_HOST_PEER_RANGE } from "@t3tools/shared/pluginHostRuntime";
 import effectPackageJson from "effect/package.json" with { type: "json" };
-
 import { finalizeManagedPluginProof } from "./finalize-managed-plugin-proof.ts";
 import {
   createManagedPluginValidationReceipt,

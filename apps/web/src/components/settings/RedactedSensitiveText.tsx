@@ -1,11 +1,10 @@
 import { useMemo, useState } from "react";
-
 import { cn } from "../../lib/utils";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 const REDACTED_TEXT_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789";
 
-function redactedPlaceholder(value: string): string {
+export function redactedPlaceholder(value: string): string {
   let state = 0x811c9dc5;
   for (let index = 0; index < value.length; index += 1) {
     state ^= value.charCodeAt(index);

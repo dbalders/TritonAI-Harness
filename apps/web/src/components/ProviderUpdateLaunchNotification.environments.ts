@@ -1,7 +1,6 @@
 import type { ConnectionCatalogEntry } from "@t3tools/client-runtime/connection";
 import type { ProviderDriverKind, ServerConfig } from "@t3tools/contracts";
 import { useMemo } from "react";
-
 import { useEnvironments, usePrimaryEnvironmentId } from "~/state/environments";
 import { isDesktopLocalConnectionTarget } from "~/connection/desktopLocal";
 import {

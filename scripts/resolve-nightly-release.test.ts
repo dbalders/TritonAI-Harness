@@ -7,7 +7,6 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as PlatformError from "effect/PlatformError";
-
 import {
   readDesktopBaseVersion,
   prepareNightlyRelease,

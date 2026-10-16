@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - The envelope uses synchronous AES-GCM for its host-neutral API.
 import * as NodeCrypto from "node:crypto";
 
 const LEGACY_FINGERPRINT_DOMAIN = Buffer.from("T3SECRET-LEGACY\0", "utf8");

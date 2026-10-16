@@ -6,6 +6,7 @@ import * as NodePath from "node:path";
 import type { ChatAttachment } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import { htmlRenderFromToolItem, mcpAppFromToolItem } from "@t3tools/shared/toolOutput";
 
 import {
   normalizeAttachmentRelativePath,
@@ -97,7 +98,7 @@ function toCanonicalThreadAttachmentSegment(threadId: string): string | null {
   return prefix.length > 0 ? `${prefix}-${digest}` : digest;
 }
 
-export function createAttachmentId(
+export function createUploadAttachmentId(
   threadId: string,
   uploadId: string = NodeCrypto.randomUUID(),
   extension?: string,
@@ -108,6 +109,10 @@ export function createAttachmentId(
     return null;
   }
   return `${threadSegment}-${normalizedUploadId}${attachmentIdExtensionSuffix(extension)}`;
+}
+
+export function createAttachmentId(threadId: string, extension?: string): string | null {
+  return createUploadAttachmentId(threadId, undefined, extension);
 }
 
 export function isAttachmentIdOwnedByThread(attachmentId: string, threadId: string): boolean {
@@ -129,6 +134,35 @@ export function isCanonicalAttachmentIdOwnedByThread(
   );
 }
 
+export function createDeterministicAttachmentId(
+  threadId: string,
+  stableKey: string,
+): string | null {
+  const threadSegment = toSafeThreadAttachmentSegment(threadId);
+  if (!threadSegment) return null;
+  const hash = NodeCrypto.createHash("sha256")
+    .update(JSON.stringify([threadId, stableKey]))
+    .digest("hex")
+    .slice(0, 32);
+  const uuid = `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20)}`;
+  return `${threadSegment}-${uuid}`;
+}
+
+/**
+ * Stable key for an inline chat attachment. A retry resends the same bytes and
+ * keeps its id. Editing a queued message reuses the message id, so the bytes
+ * also stop a new image from taking an earlier image's id and file. Clients
+ * cache attachment images by id, which relies on ids never changing bytes.
+ */
+export function chatAttachmentStableKey(
+  messageId: string,
+  index: number,
+  bytes: Uint8Array,
+): string {
+  const digest = NodeCrypto.createHash("sha256").update(bytes).digest("hex");
+  return `${messageId}:${index}:${digest}`;
+}
+
 export function parseThreadSegmentFromAttachmentId(attachmentId: string): string | null {
   const normalizedId = normalizeAttachmentRelativePath(attachmentId);
   if (!normalizedId || normalizedId.includes("/") || normalizedId.includes(".")) {
@@ -139,6 +173,26 @@ export function parseThreadSegmentFromAttachmentId(attachmentId: string): string
     return null;
   }
   return match[1]?.toLowerCase() ?? null;
+}
+
+/**
+ * Attachments a thread's tool calls published: `html_render` pages and
+ * captured MCP App documents. Only ids minted for this thread count, so
+ * deleting a fork never removes its source's pages.
+ */
+export function threadHtmlRenderAttachmentIds(
+  threadId: string,
+  items: Iterable<{ readonly toolName: string | null | undefined; readonly output?: unknown }>,
+) {
+  const segment = toSafeThreadAttachmentSegment(threadId);
+  if (segment === null) return [];
+  return Array.from(items).flatMap((item) => {
+    const attachmentId =
+      htmlRenderFromToolItem(item)?.attachmentId ?? mcpAppFromToolItem(item)?.attachmentId;
+    return attachmentId !== undefined && isAttachmentIdOwnedByThread(attachmentId, threadId)
+      ? [attachmentId]
+      : [];
+  });
 }
 
 /** Null for attachment types this build does not know; callers skip those. */
@@ -162,6 +216,12 @@ export function resolveAttachmentPath(input: {
   readonly attachmentsDir: string;
   readonly attachment: ChatAttachment;
 }): string | null {
+  if (
+    input.attachment.type === "file" &&
+    "path" in input.attachment &&
+    typeof input.attachment.path === "string"
+  )
+    return input.attachment.path;
   const relativePath = attachmentRelativePath(input.attachment);
   if (!relativePath) {
     return null;
@@ -259,7 +319,7 @@ export const planAttachmentClaim = Effect.fn("planAttachmentClaim")(function* (i
     return { ok: false, reason: "attachment not found (removed or expired)" } as const;
   }
   const fileExtension = parseAttachmentFileExtension(input.attachmentId) ?? undefined;
-  const finalId = createAttachmentId(input.threadId, undefined, fileExtension);
+  const finalId = createUploadAttachmentId(input.threadId, undefined, fileExtension);
   if (!finalId) {
     return { ok: false, reason: "failed to create attachment id" } as const;
   }
@@ -324,7 +384,7 @@ export function sweepStalePendingAttachments(input: {
   return { deleted };
 }
 
-export function parseAttachmentIdFromRelativePath(relativePath: string): string | null {
+function parseAttachmentIdFromRelativePath(relativePath: string): string | null {
   const normalized = normalizeAttachmentRelativePath(relativePath);
   if (!normalized || normalized.includes("/")) {
     return null;

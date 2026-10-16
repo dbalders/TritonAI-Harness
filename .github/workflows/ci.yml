@@ -14,8 +14,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  check:
-    name: Check
+  preflight:
+    name: Preflight
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -53,7 +53,7 @@ jobs:
         run: node --test .github/scripts/*nightly*.test.cjs .github/scripts/*stable*.test.cjs .github/scripts/prepare-mobile-native.test.cjs .github/scripts/controlled-release-assets.test.cjs
       - name: Install browser secret helper build libraries
         run: |
-          sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config
+          sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config build-essential
 
       - name: Build and verify desktop pipeline
         run: vp run preflight:desktop
@@ -89,7 +89,7 @@ jobs:
 
       - name: Install browser secret helper build libraries
         run: |
-          sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config
+          sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config build-essential
 
       - name: Test preview artifact validation
         run: python3 -B .github/scripts/stage-preview-bundle.test.py
@@ -336,3 +336,29 @@ jobs:
 
       - name: Exercise release-only workflow steps
         run: node scripts/release-smoke.ts
+
+  # Keep the branch-protection name stable while requiring every CI result.
+  check:
+    name: Check
+    if: ${{ always() }}
+    needs:
+      [
+        preflight,
+        test,
+        test_server,
+        rust,
+        mobile_native_changes,
+        mobile_native_static_analysis,
+        release_smoke,
+      ]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every job to pass
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          echo "$RESULTS" | jq -e 'all(to_entries[];
+            .value.result == "success"
+            or (.key == "mobile_native_static_analysis" and .value.result == "skipped"))' > /dev/null

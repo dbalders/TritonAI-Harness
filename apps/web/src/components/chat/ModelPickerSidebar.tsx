@@ -1,5 +1,5 @@
 import { Toolbar } from "@base-ui/react/toolbar";
-import { type ProviderInstanceId } from "@t3tools/contracts";
+import type { ProviderInstanceId } from "@t3tools/contracts";
 import { memo, useLayoutEffect, useRef, useState } from "react";
 import { SparklesIcon, StarIcon } from "lucide-react";
 import { ProviderInstanceIcon } from "./ProviderInstanceIcon";
@@ -201,6 +201,8 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
                   instanceId={entry.instanceId}
                   displayName={entry.displayName}
                   accentColor={entry.accentColor}
+                  acpRegistryAgentId={entry.acpRegistryAgentId}
+                  acpRegistryIconUrl={entry.acpRegistryIconUrl}
                   showBadge={showInstanceBadge}
                   className="size-6 z-30"
                   iconClassName="size-5"

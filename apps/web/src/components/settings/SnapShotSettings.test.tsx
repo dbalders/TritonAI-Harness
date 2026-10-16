@@ -6,6 +6,10 @@ import {
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 import { reactHookHarness as hooks } from "../../test/reactHookHarness";
 import { visitElements } from "../../test/reactElementTree";
+import { SnapShotSettings } from "./SnapShotSettings";
+import { SnapShotSetupDialog } from "./SnapShotSetupDialog";
+import { CaptureShortcutConfig } from "./CaptureShortcutConfig";
+import { SnapShotShortcutKeys } from "../desktop/SnapShotShortcutKeys";
 
 const effects = vi.hoisted(() => [] as (() => void)[]);
 vi.mock("react", async (original) => {
@@ -25,6 +29,10 @@ vi.mock("react/compiler-runtime", async () => {
   return { c: reactHookHarness.useMemoCache };
 });
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => [] }));
+vi.mock("../../state/environments", () => ({
+  usePrimaryEnvironmentId: () => null,
+  useEnvironments: () => [],
+}));
 vi.mock("../../state/server", () => ({ primaryServerKeybindingsAtom: {} }));
 vi.mock("./SettingsScopeContext", () => ({ useOptionalSettingsScope: () => null }));
 vi.mock("./SettingsScopeSentence", () => ({ SettingsScopeSentence: () => null }));
@@ -50,11 +58,6 @@ vi.mock("../../hooks/useSettings", () => ({
   useClientSettings: () => settingsStore.current,
   useUpdateClientSettings: () => settingsStore.update,
 }));
-
-import { SnapShotSettings } from "./SnapShotSettings";
-import { SnapShotSetupDialog } from "./SnapShotSetupDialog";
-import { CaptureShortcutConfig } from "./CaptureShortcutConfig";
-import { SnapShotShortcutKeys } from "../desktop/SnapShotShortcutKeys";
 
 let state: DesktopSnapShotState;
 function render() {

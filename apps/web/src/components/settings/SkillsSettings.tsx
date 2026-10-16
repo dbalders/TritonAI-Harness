@@ -26,7 +26,6 @@ import {
   UsersIcon,
 } from "lucide-react";
 import { useCallback, useMemo, useState, type ReactNode } from "react";
-
 import {
   formatProviderSkillDisplayName,
   formatProviderSkillInstallSource,

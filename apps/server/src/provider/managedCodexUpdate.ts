@@ -15,7 +15,7 @@ import {
   normalizeCommandPath,
   type ProviderMaintenanceCapabilities,
   type ProviderMaintenanceCapabilitiesResolver,
-} from "./providerMaintenance.ts";
+} from "@t3tools/provider-core/server/maintenanceResolver";
 
 const MANAGED_CODEX_ROOT_MARKER = "/.agents/ucsd/runtime/codex/";
 const MANAGED_CODEX_DIRECTORY = /^openai-codex-[a-z0-9][a-z0-9._-]*$/u;

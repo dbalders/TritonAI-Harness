@@ -1,6 +1,5 @@
 import type { DesktopSshPasswordPromptRequest } from "@t3tools/contracts";
 import { useEffect, useId, useRef, useState } from "react";
-
 import { Button } from "../ui/button";
 import {
   Dialog,

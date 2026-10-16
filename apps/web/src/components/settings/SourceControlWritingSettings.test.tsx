@@ -2,8 +2,8 @@ import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
 import { act, StrictMode, type ReactNode } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-
 import type { ScopedSettingsPatch } from "./scopedSettings";
+import { SourceControlWritingSettingsSection } from "./SourceControlWritingSettings";
 
 type WritingStyle = typeof DEFAULT_UNIFIED_SETTINGS.sourceControlWritingStyle;
 const state = vi.hoisted(() => ({
@@ -17,7 +17,10 @@ vi.mock("./useScopedSettings", () => ({
     ...DEFAULT_UNIFIED_SETTINGS,
     sourceControlWritingStyle: state.styles[0],
   }),
-  useScopedSettingsMixed: () => JSON.stringify(state.styles[0]) !== JSON.stringify(state.styles[1]),
+  // Review guides stay off and agreed here, so their rows do not render beside the style's.
+  useScopedSettingsMixed: (keys: ReadonlyArray<string>) =>
+    !keys.includes("reviewGuidesEnabled") &&
+    JSON.stringify(state.styles[0]) !== JSON.stringify(state.styles[1]),
   useUpdateScopedSettings: () => state.updateSettings,
 }));
 vi.mock("./SettingsScopeContext", () => ({
@@ -69,8 +72,6 @@ vi.mock("../ui/select", () => ({
 vi.mock("../ui/switch", () => ({ Switch: "input" }));
 vi.mock("../ui/textarea", () => ({ Textarea: "textarea" }));
 vi.mock("../ui/button", () => ({ Button: "button" }));
-
-import { SourceControlWritingSettingsSection } from "./SourceControlWritingSettings";
 
 let renderer: ReactTestRenderer | null;
 

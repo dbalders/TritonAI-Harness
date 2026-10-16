@@ -1,7 +1,6 @@
 import { sha256 } from "@noble/hashes/sha2";
 import JSZip from "jszip";
 import { parse, type ParseError } from "jsonc-parser";
-
 import type { ThemeDefinition } from "./themePalette";
 import {
   isVsCodeThemeFile,
@@ -49,6 +48,10 @@ const USED_WORKBENCH_COLORS = new Set([
   "dropdown.border",
   "editor.background",
   "editor.foreground",
+  "editor.findMatchBackground",
+  "editor.findMatchForeground",
+  "editor.findMatchHighlightBackground",
+  "editor.findMatchHighlightForeground",
   "editor.selectionBackground",
   "editorCursor.foreground",
   "editorError.foreground",

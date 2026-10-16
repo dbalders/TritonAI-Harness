@@ -1,6 +1,5 @@
 import { EnvironmentId, PROVIDER_SEND_TURN_MAX_FILE_BYTES } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
-
 import type { ComposerFileAttachment, ComposerImageAttachment } from "../../composerDraftStore";
 import { isVideoAttachment, videoMimeType } from "../../types";
 import {

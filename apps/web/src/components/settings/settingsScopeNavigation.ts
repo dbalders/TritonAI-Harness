@@ -1,5 +1,4 @@
 import type { SearchMiddleware } from "@tanstack/react-router";
-
 import { validateSettingsScopeSearch, type SettingsScopeSearch } from "./settingsScope";
 
 /** Accept legacy provider links without replacing an explicit settings scope. */

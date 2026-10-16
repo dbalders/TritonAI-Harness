@@ -1,4 +1,10 @@
-import type { EnvironmentId, ServerSelfUpdateCapability } from "@t3tools/contracts";
+import type {
+  ServerInstallation,
+  AuthSessionState,
+  EnvironmentId,
+  ServerSelfUpdateCapability,
+} from "@t3tools/contracts";
+import type { AsyncResult } from "effect/reactivity";
 import type { ServerUpdateStage, ServerUpdateState } from "@t3tools/client-runtime/state/server";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
@@ -59,6 +65,7 @@ export function ServerUpdateAction({
   readonly environmentId: EnvironmentId;
   readonly serverLabel: string;
   readonly selfUpdate: ServerSelfUpdateCapability | null;
+  readonly installation?: ServerInstallation | undefined;
   readonly targetVersion: string;
   readonly label?: string;
   readonly desktopAppUpdate?: boolean;
@@ -81,6 +88,7 @@ export interface ServerUpdateTarget {
   readonly environmentId: EnvironmentId;
   readonly serverLabel: string;
   readonly selfUpdate: ServerSelfUpdateCapability | null;
+  readonly installation?: ServerInstallation | undefined;
   readonly targetVersion: string;
   readonly desktopAppUpdate?: boolean;
   readonly threadContinuation?: boolean;
@@ -98,6 +106,35 @@ export function ServerUpdatesAction(_props: {
   return (
     <span className="text-muted-foreground text-xs">
       Update each machine through its approved TritonAI Harness distribution.
+    </span>
+  );
+}
+
+export type ServerUpdateOutcome =
+  | { readonly status: "updated" | "skipped" }
+  | { readonly status: "failed"; readonly message: string };
+/** Harness servers update through the approved host distribution. */
+export function canUpdateServer(
+  _result: AsyncResult.AsyncResult<AuthSessionState, unknown>,
+): boolean {
+  return false;
+}
+export function useServerUpdate() {
+  return async (
+    _target: ServerUpdateTarget,
+    _options?: { readonly quiet?: boolean },
+  ): Promise<ServerUpdateOutcome> => ({ status: "skipped" });
+}
+export function OutdatedServerUpdateAction(_props: {
+  readonly environmentId: EnvironmentId;
+  readonly serverLabel: string;
+  readonly fromVersion: string | undefined;
+  readonly targetVersion: string;
+  readonly label?: string;
+}) {
+  return (
+    <span className="text-xs text-muted-foreground">
+      Update this machine through its approved TritonAI Harness distribution.
     </span>
   );
 }

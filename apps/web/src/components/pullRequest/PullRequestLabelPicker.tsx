@@ -1,3 +1,15 @@
+import { useAtomCommand } from "~/state/use-atom-command";
+import type { EnvironmentId, PullRequestLabelCandidate, PullRequestRef } from "@t3tools/contracts";
+import { CheckIcon, TagIcon } from "lucide-react";
+import { useMemo, useState } from "react";
+import { pullRequestEnvironment } from "~/state/pullRequests";
+import { useEnvironmentQuery } from "~/state/query";
+import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import { toastManager } from "../ui/toast";
+import { PullRequestCandidatePicker } from "./PullRequestCandidatePicker";
+import { readableFailure } from "./pullRequestDetail.logic";
+import { pullRequestLabelColor } from "./pullRequestList.logic";
+
 /**
  * Putting a label on, and taking one off, from the row that says which it already wears.
  *
@@ -5,19 +17,6 @@
  * reads its people then: they are worth a request when somebody wants them and worth nothing on
  * every pull request they merely open.
  */
-import type { EnvironmentId, PullRequestLabelCandidate, PullRequestRef } from "@t3tools/contracts";
-import { CheckIcon, TagIcon } from "lucide-react";
-import { useMemo, useState } from "react";
-
-import { pullRequestEnvironment } from "~/state/pullRequests";
-import { useEnvironmentQuery } from "~/state/query";
-import { useAtomCommand } from "~/state/use-atom-command";
-import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-
-import { toastManager } from "../ui/toast";
-import { PullRequestCandidatePicker } from "./PullRequestCandidatePicker";
-import { readableFailure } from "./pullRequestDetail.logic";
-import { pullRequestLabelColor } from "./pullRequestList.logic";
 
 /** Narrows only what arrived: the host is asked once, when the menu opens. */
 function matches(candidate: PullRequestLabelCandidate, query: string): boolean {
@@ -48,7 +47,9 @@ export function PullRequestLabelPicker({
   const candidatesQuery = useEnvironmentQuery(
     open ? pullRequestEnvironment.labelCandidates({ environmentId, input: reference }) : null,
   );
-  const setLabels = useAtomCommand(pullRequestEnvironment.setLabels, { reportFailure: false });
+  const setLabels = useAtomCommand(pullRequestEnvironment.setLabels, {
+    reportFailure: false,
+  });
 
   const candidates = useMemo(
     () => (candidatesQuery.data?.candidates ?? []).filter((entry) => matches(entry, query)),

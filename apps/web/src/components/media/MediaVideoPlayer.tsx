@@ -1,6 +1,5 @@
 import { PlayIcon, RotateCwIcon, TriangleAlertIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
-
 import { cn } from "../../lib/utils";
 import { prepareVideoFirstFrame } from "../../lib/videoFirstFrame";
 import { Button } from "../ui/button";
@@ -203,7 +202,7 @@ export function MediaVideoPlayer({
           type="button"
           aria-label={label ? `Play ${label}` : "Play video"}
           onClick={onOpen}
-          className="absolute inset-0 flex cursor-pointer items-center justify-center rounded-lg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+          className="absolute inset-0 flex cursor-pointer items-center justify-center rounded-lg focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
         >
           <span className="flex size-8 items-center justify-center rounded-full bg-black/50 text-white">
             <PlayIcon aria-hidden className="size-4 fill-current" />

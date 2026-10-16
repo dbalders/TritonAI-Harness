@@ -7,8 +7,9 @@ import {
 import { act, useState, type ReactNode } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-
 import type { AssistantCitationSourceAnchor } from "~/lib/assistantTextSelection";
+import { PopoverPopup } from "../ui/popover";
+import { AssistantCitationChip } from "./AssistantCitationChip";
 
 const mocks = vi.hoisted(() => ({ observeSource: vi.fn(), dispose: vi.fn() }));
 vi.mock("./AssistantCitationSource", () => ({
@@ -19,11 +20,6 @@ vi.mock("@tanstack/react-router", () => ({
   Link: ({ children }: { children: ReactNode }) => <a>{children}</a>,
 }));
 // Keep the real chip/editor lifecycle while replacing DOM positioning and floating layers.
-vi.mock("../ui/tooltip", () => ({
-  Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
-  TooltipTrigger: ({ render }: { render: ReactNode }) => render,
-  TooltipPopup: ({ children }: { children: ReactNode }) => <>{children}</>,
-}));
 vi.mock("../ui/popover", () => ({
   Popover: ({ children }: { children: ReactNode }) => <>{children}</>,
   PopoverTrigger: ({ children }: { children: ReactNode }) => <button>{children}</button>,
@@ -32,9 +28,6 @@ vi.mock("../ui/popover", () => ({
 vi.mock("../ui/button", () => ({
   Button: (props: React.ComponentProps<"button">) => <button {...props} />,
 }));
-
-import { PopoverPopup } from "../ui/popover";
-import { AssistantCitationChip } from "./AssistantCitationChip";
 
 const citation = {
   version: 1 as const,
@@ -62,6 +55,7 @@ function mount(onSave = vi.fn(() => true)) {
     return (
       <AssistantCitationChip
         citation={citation}
+        composer
         commentEditor={{ open, sourceAnchor, onOpenChange: setOpen, onSave }}
       />
     );

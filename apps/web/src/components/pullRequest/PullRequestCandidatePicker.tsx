@@ -7,7 +7,6 @@
  * a menu's typeahead claims every keypress to jump between rows, which a search box cannot share.
  */
 import type { ReactNode } from "react";
-
 import { Button } from "../ui/button";
 import {
   Combobox,

@@ -1933,21 +1933,36 @@ export class RegistryRuntime {
         },
       });
     });
-    this.#activeLifecycleWork.add(work);
+    // Waiters must observe finalization, not the already-settled provider promise:
+    // journal cleanup can still need I/O after the external operation returns.
+    let resolveSettlement!: () => void;
+    const settlement = new Promise<void>((resolve) => {
+      resolveSettlement = resolve;
+    });
+    this.#activeLifecycleWork.add(settlement);
     const providerWork = this.#activeProviderLifecycleWork.get(provider) ?? new Set();
-    providerWork.add(work);
+    providerWork.add(settlement);
     this.#activeProviderLifecycleWork.set(provider, providerWork);
+    let providerWorkSettled = false;
+    let finalizationFinished = false;
     const finishWork = (): void => {
+      if (!providerWorkSettled) return;
       clearTimeout(timeout);
       if (commitAbortTimeout) clearTimeout(commitAbortTimeout);
-      this.#activeLifecycleWork.delete(work);
-      providerWork.delete(work);
+      if (!finalizationFinished) return;
+      this.#activeLifecycleWork.delete(settlement);
+      providerWork.delete(settlement);
+      resolveSettlement();
       if (providerWork.size === 0) this.#activeProviderLifecycleWork.delete(provider);
       this.#activeLifecycleControllers.delete(controller);
       this.#committingLifecycleControllers.delete(controller);
       this.#invalidateProviderStatus(provider);
     };
-    void work.then(finishWork, finishWork);
+    const workSettled = (): void => {
+      providerWorkSettled = true;
+      finishWork();
+    };
+    void work.then(workSettled, workSettled);
     try {
       const result = await Promise.race([work, aborted]);
       if (commitAdmission) await commitAdmission;
@@ -1998,6 +2013,8 @@ export class RegistryRuntime {
       }
       throw error;
     } finally {
+      finalizationFinished = true;
+      finishWork();
       removeAbortListener();
       removeCallerAbortListener();
     }

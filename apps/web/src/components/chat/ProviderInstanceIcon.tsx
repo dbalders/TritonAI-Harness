@@ -2,22 +2,68 @@ import { type CSSProperties, memo } from "react";
 import {
   TRITONAI_FRONTIER_PROVIDER_INSTANCE_ID,
   TRITONAI_ONPREM_PROVIDER_INSTANCE_ID,
-  type ProviderDriverKind,
+  ProviderDriverKind,
   type ProviderInstanceId,
 } from "@t3tools/contracts";
 import { CloudyIcon, ServerIcon } from "lucide-react";
 import { providerInstanceInitials } from "@t3tools/client-runtime/state/provider-instance-display";
-
-import { PROVIDER_ICON_BY_PROVIDER } from "./providerIconUtils";
+import { AntigravityIcon, ClaudeAI, Icon, OpenAI } from "../Icons";
 import { cn } from "~/lib/utils";
+import { providerClients } from "../settings/providerDriverMeta";
+import { ProviderPackageIcon } from "./ProviderPackageIcon";
+import {
+  AcpRegistryAgentIcon,
+  officialAcpRegistryIconUrlForAgentId,
+  resolveOfficialAcpRegistryIconUrl,
+} from "../settings/AcpRegistryIcon";
 
-export { providerInstanceInitials };
+const PROVIDER_ICON_BY_PROVIDER: Partial<Record<ProviderDriverKind, Icon>> = {
+  [ProviderDriverKind.make("codex")]: OpenAI,
+  [ProviderDriverKind.make("claudeAgent")]: ClaudeAI,
+  [ProviderDriverKind.make("antigravity")]: AntigravityIcon,
+};
+
+const PROVIDER_TEXT_COLOR_BY_PROVIDER: Partial<Record<ProviderDriverKind, string>> = {
+  [ProviderDriverKind.make("codex")]: "text-black dark:text-white",
+  [ProviderDriverKind.make("claudeAgent")]: "text-[#d97757]",
+  [ProviderDriverKind.make("antigravity")]: "text-[#5b87bf]",
+};
+
+/** Brand text color for a provider label; package glyphs supply theirs as CSS variables. */
+export function providerTextColor(driverKind: ProviderDriverKind): {
+  readonly className?: string;
+  readonly style?: CSSProperties;
+} {
+  const icon = providerClients.get(driverKind)?.icon;
+  if (icon) {
+    return {
+      className: "text-(--icon-light) dark:text-(--icon-dark)",
+      style: { "--icon-light": icon.fill.light, "--icon-dark": icon.fill.dark } as CSSProperties,
+    };
+  }
+  const className = PROVIDER_TEXT_COLOR_BY_PROVIDER[driverKind];
+  return className ? { className } : {};
+}
+
+export function resolveProviderInstanceAcpRegistryIconUrl(input: {
+  readonly driverKind: ProviderDriverKind;
+  readonly agentId?: string | undefined;
+  readonly iconUrl?: string | undefined;
+}): string | null {
+  if (input.driverKind !== "acpRegistry") return null;
+  return (
+    resolveOfficialAcpRegistryIconUrl(input.iconUrl ?? null) ??
+    officialAcpRegistryIconUrlForAgentId(input.agentId?.trim() || null)
+  );
+}
 
 export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
   driverKind: ProviderDriverKind;
   instanceId?: ProviderInstanceId;
   displayName: string;
   accentColor?: string | undefined;
+  acpRegistryAgentId?: string | undefined;
+  acpRegistryIconUrl?: string | undefined;
   showBadge?: boolean;
   badgeContent?: "initials" | "none";
   className?: string;
@@ -33,11 +79,18 @@ export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
     : isFrontier
       ? CloudyIcon
       : (PROVIDER_ICON_BY_PROVIDER[props.driverKind] ?? null);
+  const packageIcon = providerClients.get(props.driverKind)?.icon;
   const indicatorBackground = props.indicatorBackground ?? "var(--card)";
   const accentStyle = props.accentColor
     ? ({ "--provider-accent": props.accentColor } as CSSProperties)
     : undefined;
   const badgeContent = props.badgeContent ?? "initials";
+  const isAcpRegistry = props.driverKind === "acpRegistry";
+  const acpRegistryIconUrl = resolveProviderInstanceAcpRegistryIconUrl({
+    driverKind: props.driverKind,
+    agentId: props.acpRegistryAgentId,
+    iconUrl: props.acpRegistryIconUrl,
+  });
 
   return (
     <span
@@ -48,7 +101,21 @@ export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
       style={accentStyle}
       data-provider-accent-color={props.accentColor}
     >
-      {Icon ? (
+      {isAcpRegistry ? (
+        <AcpRegistryAgentIcon
+          // The search-tile radius would crop most of the glyph at these
+          // inline sizes.
+          className={cn("size-5 rounded-none bg-transparent", props.iconClassName)}
+          fallbackClassName="size-full"
+          icon={acpRegistryIconUrl}
+        />
+      ) : packageIcon ? (
+        <ProviderPackageIcon
+          icon={packageIcon}
+          className={cn("size-5 shrink-0", props.iconClassName)}
+          aria-hidden
+        />
+      ) : Icon ? (
         <Icon className={cn("size-5 shrink-0", props.iconClassName)} aria-hidden />
       ) : (
         <span className={cn("text-3xs font-semibold leading-none", props.iconClassName)}>

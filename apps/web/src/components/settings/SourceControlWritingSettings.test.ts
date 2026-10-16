@@ -9,6 +9,10 @@ import { createModelSelection } from "@t3tools/shared/model";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import {
+  SourceControlWritingSettingsSection,
+  filterSupportedSourceControlWriterProviders,
+} from "./SourceControlWritingSettings";
 
 interface PickerProps {
   readonly activeInstanceId: ProviderInstanceId;
@@ -101,11 +105,6 @@ vi.mock("../chat/ProviderModelPicker", async () => {
     },
   };
 });
-
-import {
-  SourceControlWritingSettingsSection,
-  filterSupportedSourceControlWriterProviders,
-} from "./SourceControlWritingSettings";
 
 function provider(
   instanceId: string,
@@ -205,3 +204,8 @@ describe("source control writer provider policy", () => {
     expect(markup).not.toContain("Claude Persisted Choice");
   });
 });
+
+vi.mock("../../state/environments", () => ({
+  usePrimaryEnvironment: () => null,
+  usePrimaryEnvironmentId: () => null,
+}));

@@ -1,11 +1,19 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import { HttpClient } from "effect/http";
+import * as VcsProcess from "../vcs/VcsProcess.ts";
+import { PublicSkillRepository } from "./publicSkillRepository.ts";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 
-import { discardProviderSkillInstallRollback, installSkillBundle } from "./installProviderSkill.ts";
+import {
+  discardProviderSkillInstallRollback,
+  installSkillBundle,
+  installProviderSkill,
+} from "./installProviderSkill.ts";
 
 const skillMarkdown = (name: string, marker: string) =>
   `---\nname: ${name}\ndescription: Test skill.\n---\n\n${marker}\n`;
@@ -17,6 +25,77 @@ const bundle = (name: string, marker: string) => ({
 });
 
 describe("managed skill install ownership", () => {
+  it.live("installs support directories from a repository-root GitHub skill", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const process = yield* VcsProcess.VcsProcess;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "root-skill-git-" });
+      const repository = path.join(root, "repository");
+      yield* fs.makeDirectory(path.join(repository, "scripts"), { recursive: true });
+      yield* fs.makeDirectory(path.join(repository, "references"), { recursive: true });
+      const git = (args: readonly string[]) =>
+        process.run({
+          operation: "root-skill-fixture",
+          command: "git",
+          args,
+          cwd: root,
+          timeoutMs: 30000,
+          maxOutputBytes: 65536,
+        });
+      yield* git(["init", "-b", "main", repository]);
+      yield* git(["-C", repository, "config", "user.name", "Skill fixture"]);
+      yield* git(["-C", repository, "config", "user.email", "skill@example.invalid"]);
+      yield* fs.writeFileString(
+        path.join(repository, "SKILL.md"),
+        skillMarkdown("root-skill", "Read the support files."),
+      );
+      yield* fs.writeFileString(path.join(repository, "scripts/helper.py"), "print('fixture')\n");
+      yield* fs.writeFileString(
+        path.join(repository, "references/guide.md"),
+        "Fixture reference.\n",
+      );
+      yield* git(["-C", repository, "add", "."]);
+      yield* git(["-C", repository, "commit", "-m", "fixture"]);
+      const localProcess = {
+        run: (input: Parameters<typeof process.run>[0]) =>
+          process.run({
+            ...input,
+            args: input.args.map((arg) =>
+              arg.startsWith("https://github.com/fixture/root-skill") ? repository : arg,
+            ),
+          }),
+      };
+      const skillsDirectory = path.join(root, "installed");
+      const result = yield* installProviderSkill({
+        request: {
+          instanceId: "codex",
+          source: { type: "url", url: "https://github.com/fixture/root-skill" },
+        },
+        skillsDirectory,
+      }).pipe(Effect.provideService(VcsProcess.VcsProcess, localProcess));
+      expect(
+        yield* fs.readFileString(path.join(skillsDirectory, "root-skill/scripts/helper.py")),
+      ).toBe("print('fixture')\n");
+      expect(
+        yield* fs.readFileString(path.join(skillsDirectory, "root-skill/references/guide.md")),
+      ).toBe("Fixture reference.\n");
+      yield* discardProviderSkillInstallRollback(result.rollback);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(
+          VcsProcess.layer,
+          Layer.mock(PublicSkillRepository)({}),
+          Layer.succeed(
+            HttpClient.HttpClient,
+            HttpClient.make(() => Effect.die("Unexpected HTTP in local Git fixture")),
+          ),
+        ).pipe(Layer.provideMerge(NodeServices.layer)),
+      ),
+    ),
+  );
+
   it.effect("does not replace an Installer-owned skill from a valid manifest", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-
 import { observeSelectionActions, resolveSelectionActionPosition } from "./selectionActions";
 
 function event(type: string, values: Record<string, unknown> = {}) {

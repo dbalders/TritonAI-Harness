@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vite-plus/test";
-
 import { resolveSnoozePresets, snoozeWakeDescription } from "./Sidebar.snooze";
 
 // Local-time constructor so preset math is timezone-stable in tests.

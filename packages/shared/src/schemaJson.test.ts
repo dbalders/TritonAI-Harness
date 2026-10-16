@@ -3,7 +3,6 @@ import * as Exit from "effect/Exit";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
-
 import {
   decodeJsonResult,
   extractJsonObject,

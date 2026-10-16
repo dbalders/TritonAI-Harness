@@ -1,0 +1,263 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as Layer from "effect/Layer";
+import { ServerConfig } from "../config.ts";
+import {
+  EnvironmentId,
+  PreviewAutomationNoAvailableHostError,
+  ProviderInstanceId,
+  ThreadId,
+  type PreviewAutomationSnapshot,
+} from "@t3tools/contracts";
+import { expect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
+
+import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
+import * as PreviewAutomationBroker from "../mcp/PreviewAutomationBroker.ts";
+import type { PreviewAutomationInvokeInput } from "../mcp/PreviewAutomationBroker.ts";
+import {
+  CodexPreviewDynamicToolInvocationError,
+  CodexPreviewDynamicToolNotFoundError,
+  getCodexPreviewDynamicToolDefinitions,
+  invokeAuthorizedCodexPreviewDynamicTool,
+  invokeCodexPreviewDynamicTool,
+  makeCodexPreviewDynamicToolFailureResult,
+} from "./CodexPreviewDynamicTools.ts";
+
+const encodeUnknownJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
+const isInvocationError = Schema.is(CodexPreviewDynamicToolInvocationError);
+const isToolNotFoundError = Schema.is(CodexPreviewDynamicToolNotFoundError);
+
+const invocationScope = {
+  environmentId: EnvironmentId.make("environment-1"),
+  threadId: ThreadId.make("thread-1"),
+  providerSessionId: "provider-session-1",
+  providerInstanceId: ProviderInstanceId.make("codex"),
+  requestNamespace: "provider-session-1",
+  client: undefined,
+  thread: {
+    threadId: ThreadId.make("thread-1"),
+    providerSessionId: "provider-session-1",
+    providerInstanceId: ProviderInstanceId.make("codex"),
+  },
+  capabilities: new Set(["preview"] as const),
+  issuedAt: 1,
+  expiresAt: Number.MAX_SAFE_INTEGER,
+};
+
+const snapshot: PreviewAutomationSnapshot = {
+  url: "https://example.test/",
+  title: "Example",
+  loading: false,
+  visibleText: "Example source text",
+  interactiveElements: [],
+  accessibilityTree: {},
+  consoleEntries: [],
+  networkEntries: [],
+  actionTimeline: [],
+  screenshot: {
+    mimeType: "image/png",
+    data: Buffer.from("png").toString("base64"),
+    width: 10,
+    height: 5,
+  },
+};
+
+const status = {
+  available: true,
+  visible: false,
+  tabId: null,
+  url: null,
+  title: null,
+  loading: false,
+};
+
+function makeBroker(result: unknown) {
+  const invokeCalls: Array<PreviewAutomationInvokeInput> = [];
+  const invoke: PreviewAutomationBroker.PreviewAutomationBroker["Service"]["invoke"] = <A>(
+    request: PreviewAutomationInvokeInput,
+  ) => {
+    invokeCalls.push(request);
+    return Effect.succeed(result as A);
+  };
+  return {
+    broker: PreviewAutomationBroker.PreviewAutomationBroker.of({
+      connect: () => Effect.die("unused"),
+      focusHost: () => Effect.die("unused"),
+      respond: () => Effect.die("unused"),
+      invoke,
+    }),
+    invokeCalls,
+  };
+}
+
+it.effect("publishes the existing preview toolkit as flat dynamic tools", () =>
+  Effect.gen(function* () {
+    const codexPreviewDynamicToolDefinitions = yield* getCodexPreviewDynamicToolDefinitions;
+    expect(codexPreviewDynamicToolDefinitions.map(({ name }) => name)).toEqual([
+      "preview_status",
+      "preview_open",
+      "preview_navigate",
+      "preview_snapshot",
+      "preview_click",
+      "preview_type",
+      "preview_press",
+      "preview_scroll",
+      "preview_evaluate",
+      "preview_wait_for",
+    ]);
+    expect(
+      codexPreviewDynamicToolDefinitions.find(({ name }) => name === "preview_status")
+        ?.requiresApproval,
+    ).toBe(false);
+    expect(
+      codexPreviewDynamicToolDefinitions.find(({ name }) => name === "preview_click")
+        ?.requiresApproval,
+    ).toBe(true);
+    expect(
+      codexPreviewDynamicToolDefinitions.find(({ name }) => name === "preview_snapshot")
+        ?.description,
+    ).toContain("Screenshot image bytes are omitted");
+  }),
+);
+
+it.layer(
+  ServerConfig.layerTest(process.cwd(), process.cwd()).pipe(Layer.provideMerge(NodeServices.layer)),
+)("preview tools", (it) => {
+  it.effect("returns snapshot DOM context without screenshot image data", () => {
+    const { broker, invokeCalls } = makeBroker(snapshot);
+    return Effect.gen(function* () {
+      const result = yield* invokeAuthorizedCodexPreviewDynamicTool({
+        name: "preview_snapshot",
+        arguments: {},
+        invocationScope,
+        broker,
+      });
+
+      expect(result).toMatchObject({
+        url: "https://example.test/",
+        visibleText: "Example source text",
+        screenshot: { mimeType: "image/png", width: 10, height: 5, omitted: true },
+      });
+      const encodedResult = yield* encodeUnknownJson(result);
+      expect(encodedResult).not.toContain(snapshot.screenshot.data);
+      expect(invokeCalls).toHaveLength(1);
+    });
+  });
+
+  it.effect("models preview failures with structured errors and preserves the cause", () => {
+    const cause = new PreviewAutomationNoAvailableHostError({
+      operation: "status",
+      environmentId: invocationScope.environmentId,
+      threadId: invocationScope.threadId,
+      providerSessionId: invocationScope.providerSessionId,
+      providerInstanceId: invocationScope.providerInstanceId,
+    });
+    const broker = PreviewAutomationBroker.PreviewAutomationBroker.of({
+      connect: () => Effect.die("unused"),
+      focusHost: () => Effect.die("unused"),
+      respond: () => Effect.die("unused"),
+      invoke: () => Effect.fail(cause),
+    });
+
+    return Effect.gen(function* () {
+      const unknown = yield* invokeAuthorizedCodexPreviewDynamicTool({
+        name: "preview_unknown",
+        arguments: {},
+        invocationScope,
+        broker,
+      }).pipe(
+        Effect.match({
+          onFailure: (error) => error,
+          onSuccess: () => undefined,
+        }),
+      );
+      expect(isToolNotFoundError(unknown)).toBe(true);
+
+      const unavailable = yield* invokeAuthorizedCodexPreviewDynamicTool({
+        name: "preview_status",
+        arguments: {},
+        invocationScope: { ...invocationScope, capabilities: new Set() },
+        broker,
+      }).pipe(
+        Effect.match({
+          onFailure: (error) => error,
+          onSuccess: () => undefined,
+        }),
+      );
+      expect(unavailable?._tag).toBe("PreviewAutomationUnavailableError");
+
+      const failed = yield* invokeAuthorizedCodexPreviewDynamicTool({
+        name: "preview_status",
+        arguments: {},
+        invocationScope,
+        broker,
+      }).pipe(
+        Effect.match({
+          onFailure: (error) => error,
+          onSuccess: () => undefined,
+        }),
+      );
+      expect(isInvocationError(failed)).toBe(true);
+      if (isInvocationError(failed)) {
+        expect(failed.cause).toBe(cause);
+      }
+      expect(makeCodexPreviewDynamicToolFailureResult(failed)).toEqual({
+        success: false,
+        error: {
+          type: "PreviewAutomationNoAvailableHostError",
+          message: cause.message,
+        },
+      });
+    });
+  });
+
+  it.effect("uses the current provider session and rejects it after replacement", () =>
+    Effect.gen(function* () {
+      const { broker, invokeCalls } = makeBroker(status);
+      const sessions = yield* McpProviderSessions.McpProviderSessions;
+      const expectedSession = {
+        ...invocationScope.thread,
+        environmentId: invocationScope.environmentId,
+      };
+      const credential = {
+        ...expectedSession,
+        browserToolsAvailable: true,
+        endpoint: "http://127.0.0.1:43123/mcp",
+        capabilities: new Set(["preview"] as const),
+        authorizationHeader: "Bearer test-token",
+      };
+      yield* sessions.set(credential);
+      yield* invokeCodexPreviewDynamicTool({
+        name: "preview_status",
+        arguments: {},
+        sessionIdentity: expectedSession,
+        broker,
+      });
+      expect(invokeCalls).toHaveLength(1);
+      for (const revoked of [
+        { ...credential, browserToolsAvailable: false },
+        { ...credential, capabilities: new Set<"preview">() },
+      ]) {
+        yield* sessions.set(revoked);
+        const denied = yield* invokeCodexPreviewDynamicTool({
+          name: "preview_status",
+          arguments: {},
+          sessionIdentity: expectedSession,
+          broker,
+        }).pipe(Effect.match({ onFailure: (error) => error, onSuccess: () => undefined }));
+        expect(denied?._tag).toBe("PreviewAutomationUnavailableError");
+        expect(invokeCalls).toHaveLength(1);
+      }
+      yield* sessions.set({ ...credential, providerSessionId: "provider-session-replaced" });
+      const error = yield* invokeCodexPreviewDynamicTool({
+        name: "preview_status",
+        arguments: {},
+        sessionIdentity: expectedSession,
+        broker,
+      }).pipe(Effect.match({ onFailure: (error) => error, onSuccess: () => undefined }));
+      expect(error?._tag).toBe("PreviewAutomationUnavailableError");
+      expect(invokeCalls).toHaveLength(1);
+    }).pipe(Effect.provide(McpProviderSessions.layer)),
+  );
+});
