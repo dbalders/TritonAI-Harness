@@ -113,7 +113,7 @@ An empty database is a bad test. Seed your worktree's `.t3` with a copy of real 
 ## Verifying
 
 - Smallest proof that the change works. `vp test run <files>` for the tests you touched, targeted lint and typecheck for the scope you changed.
-- **TritonAI completion gate.** Before considering a change complete, run `vp check --fix`, `vp run typecheck`, and `vp test`. Start with focused checks, but do not substitute CI for this local gate.
+- **TritonAI completion gate.** Before considering a change complete, run `vp run preflight`. It runs the same unused-code, formatting/lint, type checks, and workspace test commands as CI. It preserves each package's test setup and the server's serial execution and timeout budget; a root `vp test` invocation does not. If fixes are needed, run `vp check --fix` and rerun preflight. Start with focused checks, but do not substitute CI for this local gate. Desktop build changes also need `vp run preflight:desktop`.
 - If native mobile code changes, also run `vp run lint:mobile`.
 - For release or packaging changes, run the relevant release smoke checks and record the exact source commit used.
 - Report checks that were not run and why; never imply that skipped checks passed.

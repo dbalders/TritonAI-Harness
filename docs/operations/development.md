@@ -106,10 +106,24 @@ vp lint <files>
 vp run --filter <package> typecheck
 ```
 
-Use `vp run lint:mobile` for native mobile changes. CI owns the full suite; see
-[ci.yml](../../.github/workflows/ci.yml) for its current jobs.
-The [manual Windows lane](../../.github/workflows/windows-tests.yml) is available for focused
-Windows investigation while that suite is not a required gate.
+Before handoff, run `vp run preflight`: the shared CI checks (including unused code),
+then the workspace test suites. It uses the same commands as CI so each package keeps its
+test setup, including the server's serial execution and longer timeout budget. Running
+`vp test` at the repository root bypasses that configuration. Run `vp check --fix` to apply
+formatting/lint fixes and rerun preflight. `vp run preflight:checks` runs only the shared
+checks; `preflight:tests` and `preflight:server` run the non-server and server suites separately.
+Desktop build changes also
+need `vp run preflight:desktop`. CI retains additional release, Rust, and platform lanes;
+see [ci.yml](../../.github/workflows/ci.yml) for their setup and prerequisites.
+
+Use `vp run lint:mobile` for native mobile changes. The
+[Windows lane](../../.github/workflows/windows-tests.yml) automatically runs focused shared
+path/shell, server filesystem/process/terminal, and desktop Windows/WSL tests when those
+surfaces or their shared configuration change. Server and desktop triggers cover their whole
+workspace so transitive source changes cannot silently bypass the focused suites.
+This includes a real PowerShell quoting test;
+the desktop native interfaces are mocked, so it does not prove packaged-app behavior.
+Manual dispatch still accepts a package and optional test files for broader investigation.
 
 ### Unused code
 
