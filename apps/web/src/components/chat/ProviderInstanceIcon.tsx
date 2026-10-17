@@ -59,7 +59,7 @@ export function resolveProviderInstanceAcpRegistryIconUrl(input: {
 
 export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
   driverKind: ProviderDriverKind;
-  instanceId?: ProviderInstanceId;
+  instanceId?: ProviderInstanceId | undefined;
   displayName: string;
   accentColor?: string | undefined;
   acpRegistryAgentId?: string | undefined;

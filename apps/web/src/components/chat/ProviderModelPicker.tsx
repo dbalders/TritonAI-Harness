@@ -232,6 +232,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
                   selection.entry ? (
                     <ProviderInstanceIcon
                       key={`${selection.instanceId}:${selection.model}`}
+                      instanceId={selection.instanceId}
                       driverKind={selection.entry.driverKind}
                       displayName={selection.entry.displayName}
                       accentColor={selection.entry.accentColor}
