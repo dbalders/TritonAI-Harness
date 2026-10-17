@@ -78,7 +78,7 @@ const processDetails = (pid) => ({
     .split("\n")
     .find((line) => line.startsWith("n"))
     ?.slice(1),
-  args: inspectProcess(pid, "ps", ["-p", String(pid), "-o", "command="]),
+  args: inspectProcess(pid, "ps", ["-ww", "-p", String(pid), "-o", "command="]),
   group: inspectProcess(pid, "ps", ["-p", String(pid), "-o", "pgid="]).trim(),
 });
 const isOwnedLauncher = (owner) => {

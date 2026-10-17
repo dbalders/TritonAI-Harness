@@ -35,7 +35,7 @@ function fixture(t, { lsof = true } = {}) {
   );
   const home = path.join(root, ".t3/desktop");
   fs.mkdirSync(home, { recursive: true });
-  const env = { PATH: bin, FIXTURE_ROOT: root, TRITONAI_HARNESS_REPO: root };
+  const env = { PATH: bin, COLUMNS: "40", FIXTURE_ROOT: root, TRITONAI_HARNESS_REPO: root };
   const children = [];
   t.after(() => {
     for (const child of children) {
