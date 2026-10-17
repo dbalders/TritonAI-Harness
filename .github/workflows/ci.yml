@@ -362,6 +362,9 @@ jobs:
           RESULTS: ${{ toJSON(needs) }}
         run: |
           echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
-          echo "$RESULTS" | jq -e 'all(to_entries[];
+          echo "$RESULTS" | jq -e '. as $needs | all(to_entries[];
             .value.result == "success"
-            or (.key == "mobile_native_static_analysis" and .value.result == "skipped"))' > /dev/null
+            or (.key == "mobile_native_static_analysis"
+              and .value.result == "skipped"
+              and $needs.mobile_native_changes.result == "success"
+              and $needs.mobile_native_changes.outputs.changed == "false"))' > /dev/null

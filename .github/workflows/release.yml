@@ -76,10 +76,12 @@ jobs:
           elif [[ "$version" == *-nightly* ]]; then
             echo "Nightly versions must use VERSION-nightly.YYYYMMDD.RUN." >&2
             exit 1
+          elif [[ "$version" == *-preview || "$version" == *-preview.* ]]; then
+            echo "release_channel=preview" >> "$GITHUB_OUTPUT"
           else
             echo "release_channel=stable" >> "$GITHUB_OUTPUT"
-            echo "name=TritonAI Harness v$version" >> "$GITHUB_OUTPUT"
           fi
+          echo "name=TritonAI Harness v$version" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=v$version" >> "$GITHUB_OUTPUT"
           if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then

@@ -4,11 +4,84 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const cp = require("node:child_process");
 const { createRequire } = require("node:module");
 const { parse } = createRequire(path.resolve("scripts/package.json"))("yaml");
 const {
   verifyControlledReleaseAssets,
 } = require("../../scripts/verify-controlled-release-assets.cjs");
+
+for (const [version, channel, prerelease] of [
+  ["1.2.3", "stable", "false"],
+  ["1.2.3-preview.1", "preview", "true"],
+  ["v1.2.3-preview", "preview", "true"],
+  ["1.2.3-nightly.20261017.1", null, null],
+  ["1.2.3-nightly-invalid", null, null],
+]) {
+  test(
+    `resolves ${version} before evaluating the announcement guard`,
+    { skip: os.platform() === "win32" },
+    (t) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "release-channel-"));
+      t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+      const output = path.join(root, "output");
+      const workflow = parse(
+        fs.readFileSync(path.resolve(".github/workflows/release.yml"), "utf8"),
+      );
+      const resolver = workflow.jobs.resolve_release.steps.find(
+        (step) => step.id === "release_meta",
+      );
+      const result = cp.spawnSync("bash", ["-e", "-o", "pipefail", "-c", resolver.run], {
+        encoding: "utf8",
+        timeout: 5_000,
+        env: {
+          PATH: process.env.PATH,
+          GITHUB_EVENT_NAME: "workflow_dispatch",
+          DISPATCH_VERSION: version,
+          GITHUB_OUTPUT: output,
+        },
+      });
+      if (channel === null) {
+        assert.notEqual(result.status, 0);
+        assert.match(result.stderr, /Nightly/);
+        return;
+      }
+      assert.equal(result.status, 0, result.stderr);
+      const resolved = Object.fromEntries(
+        fs
+          .readFileSync(output, "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => line.split("=")),
+      );
+      assert.equal(resolved.release_channel, channel);
+      assert.equal(resolved.is_prerelease, prerelease);
+      assert.equal(resolved.make_latest, prerelease === "false" ? "true" : "false");
+      const announce = new Function(
+        "github",
+        "inputs",
+        "needs",
+        "always",
+        "cancelled",
+        `return (${workflow.jobs.announce_discord.if});`,
+      );
+      assert.equal(
+        announce(
+          { event_name: "workflow_dispatch" },
+          { publish: true },
+          {
+            preflight: { result: "success", outputs: resolved },
+            release: { result: "success" },
+            finalize: { result: "success" },
+          },
+          () => true,
+          () => false,
+        ),
+        channel !== "preview",
+      );
+    },
+  );
+}
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "stable-assets-"));
