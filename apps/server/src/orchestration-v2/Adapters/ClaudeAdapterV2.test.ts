@@ -50,6 +50,7 @@ import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -14080,22 +14081,51 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           );
 
           const offered = harness.offeredMessages.length;
-          const steer = harness.runtime.steerTurn({
-            threadId: harness.threadId,
-            runId: input.runId,
-            providerThread: harness.providerThread,
-            providerTurnId: idAllocator.derive.providerTurn({
-              driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
-              nativeTurnId: `turn:${attemptId}`,
-            }),
-            message: {
-              createdBy: "user",
-              creationSource: "web",
-              messageId: MessageId.make("message-steer-foreground-subagent"),
-              text: "Also check the docs.",
-              attachments: [],
-            },
-          });
+          const clock = yield* Clock.Clock;
+          const steerTimeouts = yield* Queue.unbounded<{
+            readonly duration: Duration.Duration;
+            readonly resume: Deferred.Deferred<void>;
+          }>();
+          const expireSteerTimeout = (offeredCount: number) =>
+            Effect.gen(function* () {
+              const timeout = yield* Queue.take(steerTimeouts);
+              assert.equal(Duration.toMillis(timeout.duration), 5_000);
+              assert.equal(harness.offeredMessages.length, offeredCount);
+              yield* Deferred.succeed(timeout.resume, undefined);
+            });
+          const steer = harness.runtime
+            .steerTurn({
+              threadId: harness.threadId,
+              runId: input.runId,
+              providerThread: harness.providerThread,
+              providerTurnId: idAllocator.derive.providerTurn({
+                driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
+                nativeTurnId: `turn:${attemptId}`,
+              }),
+              message: {
+                createdBy: "user",
+                creationSource: "web",
+                messageId: MessageId.make("message-steer-foreground-subagent"),
+                text: "Also check the docs.",
+                attachments: [],
+              },
+            })
+            .pipe(
+              Effect.provideService(
+                Clock.Clock,
+                backgrounding === "never answers"
+                  ? {
+                      ...clock,
+                      sleep: (duration) =>
+                        Effect.gen(function* () {
+                          const resume = yield* Deferred.make<void>();
+                          yield* Queue.offer(steerTimeouts, { duration, resume });
+                          yield* Deferred.await(resume);
+                        }),
+                    }
+                  : clock,
+              ),
+            );
           const RERUN_TOOL_USE_ID = "toolu-steer-rerun";
           if (backgrounding === "answers after the subagent ran again") {
             // It ends and a SendMessage runs it again, in the foreground.
@@ -14127,7 +14157,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           ) {
             yield* awaitUntil(() => calls.length === 1, "background request");
             assert.equal(harness.offeredMessages.length, offered);
-            yield* TestClock.adjust("5 seconds");
+            if (backgrounding === "never answers") {
+              yield* expireSteerTimeout(offered);
+            } else {
+              yield* TestClock.adjust("5 seconds");
+            }
           }
           const steered = yield* Fiber.await(steering);
 
@@ -14149,12 +14183,10 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             // piling up another request for the same run.
             for (let repeat = 1; repeat <= 2; repeat++) {
               const again = yield* Effect.forkScoped(steer);
-              // The steer's 5 second wait starts once it reaches it; move the
-              // clock until the steer has gone out.
-              for (let tick = 0; tick < 100 && again.pollUnsafe() === undefined; tick++) {
-                yield* TestClock.adjust("1 second");
-                yield* Effect.yieldNow;
-              }
+              // Skill discovery uses real filesystem I/O before installing
+              // the deadline. Expire each observed wait instead of advancing
+              // virtual time before that I/O has finished.
+              yield* expireSteerTimeout(offered + repeat);
               assert.isTrue(Exit.isSuccess(yield* Fiber.await(again)));
               assert.equal(harness.offeredMessages.length, offered + 1 + repeat);
             }
