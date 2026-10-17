@@ -5,6 +5,15 @@ import * as NodeCrypto from "node:crypto";
 import * as NodeChildProcess from "node:child_process";
 
 const root = NodeFS.realpathSync(NodeURL.fileURLToPath(new URL("../../../../", import.meta.url)));
+if (
+  process.env.TRITONAI_HARNESS_REPO &&
+  NodeFS.realpathSync(process.env.TRITONAI_HARNESS_REPO) !== root
+)
+  throw new Error(
+    "Selected checkout differs from this launcher. Use the installed launch.sh wrapper.",
+  );
+if (!NodeFS.existsSync(NodePath.join(root, "apps/desktop/src/app/DesktopEnvironment.ts")))
+  throw new Error("Not a Harness checkout.");
 const home = NodePath.join(root, ".t3", "desktop");
 const profileRoot = NodePath.join(home, "electron");
 const ownerPath = NodePath.join(home, "launcher.json");
@@ -14,6 +23,7 @@ const debugPort =
     1000);
 const command = process.argv[2] ?? "start";
 const alive = (pid) => {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
   try {
     process.kill(pid, 0);
     return true;
@@ -47,60 +57,69 @@ const status = () => {
     profileRoot,
     debuggingUrl: `http://127.0.0.1:${debugPort}`,
     launcherPid: owner?.pid ?? null,
-    running: owner !== null && alive(owner.pid),
+    running: isOwnedLauncher(owner),
     backend,
   };
 };
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const inspectProcess = (pid, command, args, allowNoMatch = false) => {
+  const result = NodeChildProcess.spawnSync(command, args, { encoding: "utf8" });
+  if (!result.error && result.status === 1 && allowNoMatch) return "";
+  if (result.error || result.status !== 0) {
+    if (!alive(pid)) return "";
+    throw new Error(`Cannot inspect process ${pid} with ${command}; refusing to manage it.`, {
+      cause: result.error,
+    });
+  }
+  return result.stdout;
+};
 const processDetails = (pid) => ({
-  cwd: NodeChildProcess.spawnSync("/usr/sbin/lsof", ["-a", "-p", String(pid), "-d", "cwd", "-Fn"], {
-    encoding: "utf8",
-  })
-    .stdout.split("\n")
+  cwd: inspectProcess(pid, "lsof", ["-a", "-p", String(pid), "-d", "cwd", "-Fn"])
+    .split("\n")
     .find((line) => line.startsWith("n"))
     ?.slice(1),
-  args: NodeChildProcess.spawnSync("/bin/ps", ["-p", String(pid), "-o", "command="], {
-    encoding: "utf8",
-  }).stdout,
-  group: NodeChildProcess.spawnSync("/bin/ps", ["-p", String(pid), "-o", "pgid="], {
-    encoding: "utf8",
-  }).stdout.trim(),
+  args: inspectProcess(pid, "ps", ["-p", String(pid), "-o", "command="]),
+  group: inspectProcess(pid, "ps", ["-p", String(pid), "-o", "pgid="]).trim(),
 });
+const isOwnedLauncher = (owner) => {
+  if (!owner || owner.root !== root || !alive(owner.pid)) return false;
+  const details = processDetails(owner.pid);
+  return (
+    details.cwd === root &&
+    details.args.includes("dev:desktop") &&
+    details.args.includes(home) &&
+    details.group === String(owner.pid)
+  );
+};
+const isOwnedBackend = (backend) => {
+  if (!backend || !alive(backend.pid) || !Number.isSafeInteger(backend.port)) return false;
+  const details = processDetails(backend.pid);
+  const portOwner = inspectProcess(
+    backend.pid,
+    "lsof",
+    ["-nP", "-a", "-p", String(backend.pid), "-iTCP:" + backend.port, "-sTCP:LISTEN", "-t"],
+    true,
+  ).trim();
+  return (
+    details.cwd === root &&
+    details.args.includes(NodePath.join(root, "apps/server/dist/bin.mjs")) &&
+    details.args.includes("--bootstrap-fd") &&
+    portOwner === String(backend.pid)
+  );
+};
 const stop = async () => {
   const owner = readOwner();
   const backend = status().backend;
   if (owner && alive(owner.pid)) {
-    const details = processDetails(owner.pid);
-    if (
-      owner.root !== root ||
-      details.cwd !== root ||
-      !details.args.includes("dev:desktop") ||
-      details.group !== String(owner.pid)
-    )
+    if (!isOwnedLauncher(owner) && alive(owner.pid))
       throw new Error("Refusing to stop a process whose checkout or ownership changed.");
   }
-  const isOwnedBackend = () => {
-    if (!backend || !Number.isSafeInteger(backend.pid) || !Number.isSafeInteger(backend.port))
-      return false;
-    const details = processDetails(backend.pid);
-    const portOwner = NodeChildProcess.spawnSync(
-      "/usr/sbin/lsof",
-      ["-nP", "-a", "-p", String(backend.pid), "-iTCP:" + backend.port, "-sTCP:LISTEN", "-t"],
-      { encoding: "utf8" },
-    ).stdout.trim();
-    return (
-      details.cwd === root &&
-      details.args.includes(NodePath.join(root, "apps/server/dist/bin.mjs")) &&
-      details.args.includes("--bootstrap-fd") &&
-      portOwner === String(backend.pid)
-    );
-  };
-  if (backend?.pid && alive(backend.pid) && !isOwnedBackend())
+  if (backend?.pid && alive(backend.pid) && !isOwnedBackend(backend))
     throw new Error("Refusing to stop a backend whose checkout or listening port changed.");
   if (owner && alive(owner.pid)) process.kill(-owner.pid, "SIGTERM");
   // Electron starts its backend in a detached process group. A terminal signal
   // can bypass app quit cleanup, so stop that exact sandbox backend as well.
-  if (backend?.pid && alive(backend.pid) && isOwnedBackend()) {
+  if (backend?.pid && alive(backend.pid) && isOwnedBackend(backend)) {
     process.kill(backend.pid, "SIGTERM");
   }
   for (let attempt = 0; attempt < 100; attempt++) {
@@ -110,8 +129,6 @@ const stop = async () => {
   throw new Error("The owned desktop did not stop; its ownership record was retained.");
 };
 if (command === "--check-checkout") {
-  if (!NodeFS.existsSync(NodePath.join(root, "apps/desktop/src/app/DesktopEnvironment.ts")))
-    throw new Error("Not a Harness checkout.");
   console.log(JSON.stringify({ root, home, profileRoot, isolated: true }));
 } else if (command === "status") console.log(JSON.stringify(status()));
 else if (command === "stop") {
@@ -119,10 +136,15 @@ else if (command === "stop") {
   console.log(JSON.stringify(status()));
 } else if (command === "start" || command === "restart") {
   if (command === "restart") await stop();
-  if (status().running) {
-    console.log(JSON.stringify(status()));
+  const current = status();
+  if (current.running) {
+    console.log(JSON.stringify(current));
     process.exit(0);
   }
+  if (isOwnedBackend(current.backend))
+    throw new Error(
+      "A backend is still alive without an owned launcher. Stop it through this launcher first.",
+    );
   NodeFS.mkdirSync(home, { recursive: true, mode: 0o700 });
   const env = {
     ...process.env,

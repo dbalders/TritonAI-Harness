@@ -219,7 +219,7 @@ jobs:
       #   - no build matches → native drift, so cut and submit a new build.
       # A version bump also cuts a build even when native code is unchanged,
       # because only the major version is part of the fingerprint.
-      # An errored build for this fingerprint is not retried on push (it would
+      # An errored/canceled build for the current version is not retried on push (it would
       # rebuild on every merge); retry via workflow_dispatch mode=build.
       - id: reconcile
         name: Publish OTA or cut store build
@@ -239,7 +239,13 @@ jobs:
             finished="$(jq '[.[] | select(.status == "FINISHED")] | length' <<<"$matches")"
             active="$(jq '[.[] | select(.status == "NEW" or .status == "IN_QUEUE" or .status == "IN_PROGRESS")] | length' <<<"$matches")"
             errored="$(jq '[.[] | select(.status == "ERRORED")] | length' <<<"$matches")"
-            latest_version="$(eas build:list --platform "$platform" --build-profile production --limit 1 --json --non-interactive | jq -r '.[0].appVersion // "none"')"
+            recent="$(eas build:list --platform "$platform" --build-profile production --limit 20 --json --non-interactive)"
+            latest_version="$(jq -r '[.[] | select(.status == "FINISHED" or .status == "NEW" or .status == "IN_QUEUE" or .status == "IN_PROGRESS")][0].appVersion // "none"' <<<"$recent")"
+            if [ "$latest_version" = "none" ]; then
+              # Failed attempts must not hide a successful build beyond this page.
+              latest_version="$(eas build:list --platform "$platform" --build-profile production --status finished --limit 1 --json --non-interactive | jq -r '.[0].appVersion // "none"')"
+            fi
+            current_status="$(eas build:list --platform "$platform" --build-profile production --fingerprint-hash "$hash" --app-version "$version" --limit 1 --json --non-interactive | jq -r '.[0].status // "none"')"
 
             if [ "$finished" -gt 0 ]; then
               if eas update \
@@ -253,6 +259,12 @@ jobs:
                 failed=1
                 echo ":x: $platform: OTA publish failed (fingerprint \`$hash\`)" >> "$GITHUB_STEP_SUMMARY"
               fi
+            fi
+
+            if [ "$current_status" = "ERRORED" ] || [ "$current_status" = "CANCELED" ]; then
+              echo ":x: $platform: the production build for $version (fingerprint \`$hash\`) is $current_status — retry with workflow_dispatch mode=build" >> "$GITHUB_STEP_SUMMARY"
+              failed=1
+              continue
             fi
 
             reason=""

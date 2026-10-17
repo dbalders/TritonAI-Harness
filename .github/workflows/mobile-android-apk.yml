@@ -17,6 +17,9 @@ concurrency:
   group: mobile-android-apk
   cancel-in-progress: false
 
+permissions:
+  contents: read
+
 jobs:
   mirror:
     name: Mirror Play APK
@@ -48,6 +51,7 @@ jobs:
         if: steps.credentials.outputs.present == 'true'
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           sparse-checkout: .github/scripts
 
       - name: Mirror the newest APK

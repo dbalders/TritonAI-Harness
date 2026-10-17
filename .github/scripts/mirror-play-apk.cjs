@@ -51,24 +51,26 @@ async function play(token, method, url) {
   return response;
 }
 
-// Highest version code the track serves, with its release name. Play names a
-// release after the bundle's versionName unless the uploader sets one. This
-// endpoint reads without opening an edit; an edit would invalidate any open
-// EAS Submit edit made with the same service account.
+// This endpoint reads without opening an edit; creating an edit would invalidate
+// an open EAS Submit edit made with the same service account. Its PUBLISHED state
+// also includes halted releases, with no separate rollout status. Until Play
+// exposes a read-only source for that status, retain the existing mirror rather
+// than distribute a potentially halted build. Do not replace this with edits.insert.
 async function newestTrackBuild(token, appUrl, trackName) {
   const { releases = [] } = await (
     await play(token, "GET", `${appUrl}/tracks/${trackName}/releases`)
   ).json();
-  let newest;
-  for (const release of releases) {
-    if (release.releaseLifecycleState !== "RELEASE_LIFECYCLE_STATE_PUBLISHED") continue;
-    for (const { versionCode } of release.activeArtifacts ?? []) {
-      if (!newest || versionCode > newest.versionCode) {
-        newest = { versionCode, versionName: release.releaseName || String(versionCode) };
-      }
-    }
+  if (
+    releases.some(
+      (release) => release.releaseLifecycleState === "RELEASE_LIFECYCLE_STATE_PUBLISHED",
+    )
+  ) {
+    const error = new Error(
+      "Play does not expose this track's rollout status read-only; retaining the existing APK mirror.",
+    );
+    error.code = "PLAY_ROLLOUT_UNVERIFIED";
+    throw error;
   }
-  return newest;
 }
 
 function gh(...args) {
@@ -138,7 +140,15 @@ async function main() {
 
   const token = await playAccessToken(key);
   const appUrl = `${PLAY_API}/${packageName}`;
-  const build = await newestTrackBuild(token, appUrl, trackName);
+  let build;
+  try {
+    build = await newestTrackBuild(token, appUrl, trackName);
+  } catch (error) {
+    if (error.code !== "PLAY_ROLLOUT_UNVERIFIED") throw error;
+    console.warn(error.message);
+    summary(`:warning: ${error.message}`);
+    return;
+  }
   if (!build) {
     console.log(`The ${trackName} track has no live release.`);
     return;
@@ -183,7 +193,10 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+module.exports = { newestTrackBuild };
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+}

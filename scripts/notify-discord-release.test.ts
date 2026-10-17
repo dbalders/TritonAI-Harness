@@ -488,24 +488,23 @@ it.layer(NodeServices.layer)("Discord release CLI and workflow", (it) => {
       );
       assert.equal(readStatus, 0);
       assert.equal(yield* fs.readFileString(`${temp}/discord-release-notes.md`), publishedNotes);
-      const replacements: Record<string, string> = {
-        "needs.preflight.outputs.release_name": latestAnnouncement.releaseName,
-        "needs.preflight.outputs.version": latestAnnouncement.version,
-        "needs.preflight.outputs.tag": latestAnnouncement.tag,
-        "github.repository": "pingdotgg/t3code",
-      };
-      const announce = workflowRun(workflow, "Announce prerelease on Discord").replace(
-        /\$\{\{ (.*?) \}\}/g,
-        (_, key: string) => {
-          assert.ok(replacements[key], `Unexpected expression: ${key}`);
-          return replacements[key]!;
-        },
-      );
+      const releaseName = latestAnnouncement.releaseName + ' "$(touch "$RUNNER_TEMP/executed")"';
+      const announce = workflowRun(workflow, "Announce prerelease on Discord");
+      assert.ok(!announce.includes("${{"));
       const announceStatus = yield* spawner.exitCode(
         ChildProcess.make(
           "bash",
           ["-e", "-c", `node() { printf '%s\\0' "$@" > "$RUNNER_TEMP/args"; }\n${announce}`],
-          { env: { RUNNER_TEMP: temp, DISCORD_MENTION_ROLE_ID: latestAnnouncement.roleId } },
+          {
+            env: {
+              RUNNER_TEMP: temp,
+              DISCORD_MENTION_ROLE_ID: latestAnnouncement.roleId,
+              RELEASE_NAME: releaseName,
+              RELEASE_VERSION: latestAnnouncement.version,
+              RELEASE_TAG: latestAnnouncement.tag,
+              RELEASE_REPOSITORY: "pingdotgg/t3code",
+            },
+          },
         ),
       );
       assert.equal(announceStatus, 0);
@@ -513,6 +512,7 @@ it.layer(NodeServices.layer)("Discord release CLI and workflow", (it) => {
       const requests: string[] = [];
       yield* runCli(args).pipe(Effect.provide([configLayer, captureClient(requests)]));
       const payloads = requests.map((request) => decodePayload(request));
+      assert.equal(payloads[0]?.embeds[0]?.title, releaseName);
       assert.ok(payloads.length > 2);
       assert.equal(
         payloads.flatMap((payload) => payload.embeds.map((embed) => embed.description)).join(""),
