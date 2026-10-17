@@ -40,6 +40,7 @@ import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ProviderCredentialStore from "../ProviderCredentialStore.ts";
 import * as ProviderHostLive from "../ProviderHostLive.ts";
+import { decideProviderSessionTransition } from "../../orchestration-v2/ProviderSessionTransitionPolicy.ts";
 
 const layerDeps = ServerConfig.layerTest(process.cwd(), {
   prefix: "t3-codex-driver-maintenance-",
@@ -100,6 +101,83 @@ const noSpawn = ChildProcessSpawner.make(() =>
 const encodeCredentials = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
 it.layer(layerTest)("CodexDriver", (it) => {
+  it.effect.each([
+    ["codex_frontier", "gpt-6.1-sol", "codex", "api-glm-5.3-flash"],
+    ["codex", "api-glm-5.3-flash", "codex_frontier", "gpt-6.1-sol"],
+  ] as const)(
+    "hands off managed history from %s/%s to %s/%s even with a shared home",
+    ([currentId, currentModel, targetId, targetModel]) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const homePath = yield* fs.makeTempDirectoryScoped({ prefix: "managed-route-handoff-" });
+        const create = (id: string) =>
+          CodexDriver.create({
+            instanceId: ProviderInstanceId.make(id),
+            displayName: id,
+            enabled: false,
+            environment: [
+              {
+                name: "TRITONAI_API_KEY_SOURCE",
+                value: id === "codex" ? "TRITONAI_ONPREM_API_KEY" : "TRITONAI_FRONTIER_API_KEY",
+                sensitive: false,
+              },
+            ],
+            config: { ...CodexDriver.defaultConfig(), binaryPath: process.execPath, homePath },
+          });
+        const current = yield* create(currentId);
+        const target = yield* create(targetId);
+        const capabilities = yield* current.orchestrationAdapter.getCapabilities();
+        const state = {
+          driver: CodexDriver.driverKind,
+          runtimeMode: "approval-required" as const,
+          interactionMode: "default" as const,
+          workspace: "/repo",
+          capabilities,
+        };
+        expect(
+          decideProviderSessionTransition({
+            current: {
+              ...state,
+              continuationIdentity: current.continuationIdentity,
+              modelSelection: {
+                instanceId: ProviderInstanceId.make(currentId),
+                model: currentModel,
+              },
+            },
+            target: {
+              ...state,
+              continuationIdentity: target.continuationIdentity,
+              modelSelection: { instanceId: ProviderInstanceId.make(targetId), model: targetModel },
+              available: true,
+            },
+          }),
+        ).toEqual({ type: "create_with_handoff" });
+      }).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, noSpawn),
+        Effect.scoped,
+      ),
+  );
+
+  it.effect("keeps native continuation shared between compatible personal profiles", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const homePath = yield* fs.makeTempDirectoryScoped({
+        prefix: "personal-route-continuation-",
+      });
+      const create = (id: string) =>
+        CodexDriver.create({
+          instanceId: ProviderInstanceId.make(id),
+          displayName: id,
+          enabled: false,
+          environment: [],
+          config: { ...CodexDriver.defaultConfig(), binaryPath: process.execPath, homePath },
+        });
+      const current = yield* create("codex_personal");
+      const target = yield* create("codex_work");
+      expect(current.continuationIdentity).toEqual(target.continuationIdentity);
+    }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, noSpawn), Effect.scoped),
+  );
+
   it.effect("disconnect refreshes a restored managed account while its auth flow is idle", () =>
     Effect.gen(function* () {
       const instanceId = ProviderInstanceId.make("restored-managed-account");

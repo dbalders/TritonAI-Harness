@@ -208,7 +208,19 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv, Path.Pat
             : path.join(serverConfig.baseDir, "codex"),
       } satisfies CodexSettings;
       const homeLayout = yield* resolveCodexHomeLayout(managedConfig);
-      const continuationIdentity = codexContinuationIdentity(homeLayout);
+      const isManagedGateway =
+        ["codex", "codex_frontier"].includes(String(instanceId)) &&
+        environment?.some(
+          (variable) => variable.name.toUpperCase() === "TRITONAI_API_KEY_SOURCE",
+        ) === true;
+      // Managed gateways share runtime files, but their models cannot consume
+      // each other's native history. Route changes must use a portable handoff.
+      const continuationIdentity = {
+        ...codexContinuationIdentity(homeLayout),
+        ...(isManagedGateway
+          ? { continuationKey: `${homeLayout.continuationKey}:tritonai:${instanceId}` }
+          : {}),
+      };
       const stampIdentity = withInstanceIdentity({
         instanceId,
         driverKind: DRIVER_KIND,
@@ -279,8 +291,7 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv, Path.Pat
         {
           onUsageLimits: (update) => snapshot.applyUsageLimits(update),
           ...(modelCatalogPath ? { modelCatalogPath } : {}),
-          ...(["codex", "codex_frontier"].includes(String(instanceId)) &&
-          environment?.some((variable) => variable.name.toUpperCase() === "TRITONAI_API_KEY_SOURCE")
+          ...(isManagedGateway
             ? {
                 allowedModels: effectiveConfig.customModels.map((model) =>
                   typeof model === "string" ? model : model.slug,
