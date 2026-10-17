@@ -114,16 +114,17 @@ const stop = async () => {
     if (!isOwnedLauncher(owner) && alive(owner.pid))
       throw new Error("Refusing to stop a process whose checkout or ownership changed.");
   }
-  if (backend?.pid && alive(backend.pid) && !isOwnedBackend(backend))
+  const backendOwned = Boolean(backend?.pid && alive(backend.pid) && isOwnedBackend(backend));
+  if (backend?.pid && alive(backend.pid) && !backendOwned && !(owner && alive(owner.pid)))
     throw new Error("Refusing to stop a backend whose checkout or listening port changed.");
   if (owner && alive(owner.pid)) process.kill(-owner.pid, "SIGTERM");
   // Electron starts its backend in a detached process group. A terminal signal
   // can bypass app quit cleanup, so stop that exact sandbox backend as well.
-  if (backend?.pid && alive(backend.pid) && isOwnedBackend(backend)) {
+  if (backendOwned && alive(backend.pid) && isOwnedBackend(backend)) {
     process.kill(backend.pid, "SIGTERM");
   }
   for (let attempt = 0; attempt < 100; attempt++) {
-    if ((!owner || !alive(owner.pid)) && (!backend?.pid || !alive(backend.pid))) return;
+    if ((!owner || !alive(owner.pid)) && (!backendOwned || !alive(backend.pid))) return;
     await wait(100);
   }
   throw new Error("The owned desktop did not stop; its ownership record was retained.");

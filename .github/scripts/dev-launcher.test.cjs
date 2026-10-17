@@ -62,8 +62,8 @@ function fixture(t, { lsof = true } = {}) {
     owner(child.pid);
     return child;
   };
-  const start = async () => {
-    const child = cp.spawn(process.execPath, [script, "start"], {
+  const start = async (command = "start") => {
+    const child = cp.spawn(process.execPath, [script, command], {
       cwd: root,
       env,
       stdio: ["ignore", "pipe", "pipe"],
@@ -166,19 +166,31 @@ test("an orphan owned backend prevents a duplicate start and can be stopped", po
   assert.equal(JSON.parse((await f.runAsync("stop")).stdout).running, false);
 });
 
-test("a stale backend PID does not block start or receive a signal", posix, async (t) => {
-  const f = fixture(t);
-  const unrelated = f.foreign();
-  fs.unlinkSync(path.join(f.home, "launcher.json"));
-  fs.mkdirSync(path.join(f.home, "dev"));
-  fs.writeFileSync(
-    path.join(f.home, "dev/server-runtime.json"),
-    JSON.stringify({ pid: unrelated.pid, port: 43001 }),
-  );
-  const started = await f.start();
-  assert.equal(started.running, true);
-  process.kill(unrelated.pid, 0);
-  // A stale descriptor is retained rather than using it to stop an unrelated PID.
-  assert.notEqual(f.run("stop").status, 0);
-  process.kill(unrelated.pid, 0);
-});
+for (const command of ["stop", "restart"]) {
+  test(`a stale backend PID does not block an owned launcher ${command}`, posix, async (t) => {
+    const f = fixture(t);
+    const unrelated = f.foreign();
+    fs.unlinkSync(path.join(f.home, "launcher.json"));
+    fs.mkdirSync(path.join(f.home, "dev"));
+    fs.writeFileSync(
+      path.join(f.home, "dev/server-runtime.json"),
+      JSON.stringify({ pid: unrelated.pid, port: 43001 }),
+    );
+    const refused = f.run("stop");
+    assert.notEqual(refused.status, 0);
+    assert.match(refused.stderr, /backend whose checkout or listening port changed/);
+    const started = await f.start();
+    assert.equal(started.running, true);
+    process.kill(unrelated.pid, 0);
+    if (command === "restart") {
+      const restarted = await f.start("restart");
+      assert.equal(restarted.running, true);
+      assert.notEqual(restarted.launcherPid, started.launcherPid);
+      process.kill(unrelated.pid, 0);
+    }
+    const stopped = f.run("stop");
+    assert.equal(stopped.status, 0, stopped.stderr);
+    assert.equal(JSON.parse(stopped.stdout).running, false);
+    process.kill(unrelated.pid, 0);
+  });
+}

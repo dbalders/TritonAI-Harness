@@ -41,10 +41,11 @@ if (name === 'npx') console.log(JSON.stringify({version:'0.3.1'}));
 else if (name === 'git') console.log(args[0] === 'log' ? 'fixture commit' : 'abcdef123');
 else if (args[0] === 'fingerprint:generate') console.log(JSON.stringify({hash:'fixture-hash'}));
 else if (args[0] === 'build:list') {
- if (args.includes('--app-version')) console.log(JSON.stringify(data.current || []));
- else if (args.includes('--fingerprint-hash')) console.log(JSON.stringify(data.matches || []));
- else if (args.includes('--status')) console.log(JSON.stringify(data.latestFinished || []));
- else console.log(JSON.stringify(data.recent || []));
+ const query = args.includes('--app-version') ? 'current'
+   : args.includes('--fingerprint-hash') ? 'matches'
+   : args.includes('--status') ? 'latestFinished' : 'recent';
+ if (data.failQuery === query) process.exit(23);
+ console.log(JSON.stringify(data[query] || []));
 } else fs.appendFileSync(process.env.FIXTURE_COMMANDS, JSON.stringify(args) + '\\n');
 `,
   );
@@ -55,7 +56,7 @@ else if (args[0] === 'build:list') {
       { mode: 0o755 },
     );
   }
-  const result = cp.spawnSync("bash", ["-e", "-o", "pipefail", "-c", script], {
+  const result = cp.spawnSync("bash", ["-e", "-c", script], {
     cwd: root,
     encoding: "utf8",
     timeout: 15_000,
@@ -125,3 +126,11 @@ test("an active current-version build prevents duplicate store builds", posix, (
   assert.equal(result.calls.length, 0);
   assert.match(result.summary, /in progress/);
 });
+
+for (const failQuery of ["latestFinished", "current"]) {
+  test(`a failed ${failQuery} query stops before any publish or build`, posix, (t) => {
+    const result = reconcile(t, { matches: [build("FINISHED", "0.3.0")], failQuery });
+    assert.equal(result.status, 23, result.stderr);
+    assert.equal(result.calls.length, 0);
+  });
+}
