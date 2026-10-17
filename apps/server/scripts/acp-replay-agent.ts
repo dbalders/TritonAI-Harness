@@ -57,8 +57,11 @@ const pendingClientRequestIds = new Map<string, string | number>();
 const pendingAgentRequestMethods = new Map<string, string>();
 
 function writeStatus(failure?: unknown): void {
+  // Session shutdown can interrupt the child between filesystem calls. Keep
+  // the published snapshot intact until its replacement is complete.
+  const nextStatusPath = `${replayStatusPath}.tmp`;
   NodeFS.writeFileSync(
-    replayStatusPath,
+    nextStatusPath,
     JSON.stringify({
       scenario: transcript.scenario,
       cursor,
@@ -67,6 +70,7 @@ function writeStatus(failure?: unknown): void {
     }),
     "utf8",
   );
+  NodeFS.renameSync(nextStatusPath, replayStatusPath);
 }
 
 function stableStringify(value: unknown): string {
@@ -186,8 +190,11 @@ function materializeInbound(value: unknown): unknown {
 
 function emitInbound(recorded: LogicalFrame): void {
   const frame = materializeInbound(recorded) as LogicalFrame;
+  // An answer can trigger immediate session shutdown in the client. Publish
+  // consumed progress before making each inbound frame visible.
   switch (frame.kind) {
     case "notification":
+      advance();
       send({
         jsonrpc: "2.0",
         method: frame.method,
@@ -198,6 +205,7 @@ function emitInbound(recorded: LogicalFrame): void {
       const id = nextAgentRequestId;
       nextAgentRequestId += 1;
       pendingAgentRequestMethods.set(String(id), frame.method);
+      advance();
       send({
         jsonrpc: "2.0",
         id,
@@ -214,6 +222,7 @@ function emitInbound(recorded: LogicalFrame): void {
         return;
       }
       pendingClientRequestIds.delete(frame.method);
+      advance();
       send({
         jsonrpc: "2.0",
         id,
@@ -247,8 +256,6 @@ function flushInbound(): void {
       return;
     }
     emitInbound(frame);
-    if (stopped) return;
-    advance();
   }
 }
 

@@ -230,8 +230,8 @@ describe("AcpRegistryAdapterV2", () => {
           }),
         })
         .pipe(Effect.scoped);
-      // Closing the session stops the agent, which writes its replay status in
-      // the same tick as its last answer. The script must be consumed exactly.
+      // Progress is published before the last answer, so closing the session
+      // must preserve a complete status even when it immediately stops the agent.
       yield* makeAcpReplayCompletenessAssertion(fileSystem, statusPath, transcript);
     });
 
