@@ -1123,6 +1123,22 @@ export function createServerEnvironmentAtoms<R, E>(
       // Summaries finish in the background, so an open settings page catches up.
       refreshIntervalMs: 30_000,
     }),
+    projectBrief: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:project-brief:get",
+      tag: WS_METHODS.projectBriefGet,
+    }),
+    projectBriefLive: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:project-brief:live",
+      tag: WS_METHODS.projectBriefSubscribe,
+    }),
+    projectBriefArchive: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:project-brief:archive",
+      tag: WS_METHODS.projectBriefArchiveGet,
+    }),
+    executeProjectBrief: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:project-brief:execute",
+      tag: WS_METHODS.projectBriefExecute,
+    }),
     ideas: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:ideas:list",
       tag: WS_METHODS.ideasList,

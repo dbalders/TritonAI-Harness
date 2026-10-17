@@ -358,6 +358,14 @@ import {
 } from "./memory.ts";
 import { IdeasError, IdeasFeedbackInput, IdeasSnapshot } from "./ideas.ts";
 import {
+  ProjectBriefArchive,
+  ProjectBriefArchiveGetInput,
+  ProjectBriefCommand,
+  ProjectBriefError,
+  ProjectBriefGetInput,
+  ProjectBriefState,
+} from "./projectBrief.ts";
+import {
   StorageCleanupReport,
   ServerSettings,
   ServerSettingsError,
@@ -587,6 +595,11 @@ export const WS_METHODS = {
   serverGetBackgroundPolicy: "server.getBackgroundPolicy",
   serverGetUsageSummary: "server.getUsageSummary",
   serverRefreshUsageRates: "server.refreshUsageRates",
+
+  projectBriefGet: "projectBrief.get",
+  projectBriefArchiveGet: "projectBrief.archiveGet",
+  projectBriefSubscribe: "projectBrief.subscribe",
+  projectBriefExecute: "projectBrief.execute",
 
   // Scheduled tasks
   scheduledTasksList: "scheduledTasks.list",
@@ -2067,6 +2080,31 @@ const WsSubscribeServerLifecycleRpc = Rpc.make(WS_METHODS.subscribeServerLifecyc
   stream: true,
 });
 
+const WsProjectBriefGetRpc = Rpc.make(WS_METHODS.projectBriefGet, {
+  payload: ProjectBriefGetInput,
+  success: ProjectBriefState,
+  error: Schema.Union([ProjectBriefError, EnvironmentAuthorizationError]),
+});
+
+const WsProjectBriefSubscribeRpc = Rpc.make(WS_METHODS.projectBriefSubscribe, {
+  payload: ProjectBriefGetInput,
+  success: ProjectBriefState,
+  error: Schema.Union([ProjectBriefError, EnvironmentAuthorizationError]),
+  stream: true,
+});
+
+const WsProjectBriefArchiveGetRpc = Rpc.make(WS_METHODS.projectBriefArchiveGet, {
+  payload: ProjectBriefArchiveGetInput,
+  success: ProjectBriefArchive,
+  error: Schema.Union([ProjectBriefError, EnvironmentAuthorizationError]),
+});
+
+const WsProjectBriefExecuteRpc = Rpc.make(WS_METHODS.projectBriefExecute, {
+  payload: ProjectBriefCommand,
+  success: ProjectBriefState,
+  error: Schema.Union([ProjectBriefError, EnvironmentAuthorizationError]),
+});
+
 const WsScheduledTasksListRpc = Rpc.make(WS_METHODS.scheduledTasksList, {
   payload: ScheduledTaskListInput,
   success: ScheduledTaskListResult,
@@ -2253,6 +2291,10 @@ export const WsRpcGroup = RpcGroup.make(
   WsIntegrationsConnectRpc,
   WsIntegrationsPollRpc,
   WsIntegrationsDisconnectRpc,
+  WsProjectBriefGetRpc,
+  WsProjectBriefArchiveGetRpc,
+  WsProjectBriefSubscribeRpc,
+  WsProjectBriefExecuteRpc,
   WsScheduledTasksListRpc,
   WsScheduledTasksSubscribeRpc,
   WsScheduledTasksUpsertRpc,

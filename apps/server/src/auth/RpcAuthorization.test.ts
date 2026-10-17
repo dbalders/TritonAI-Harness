@@ -6,6 +6,7 @@ import {
   AuthSettingsWriteScope,
   DEFAULT_SERVER_SETTINGS,
   ProviderInstanceId,
+  ProjectId,
   ThreadId,
   AuthOrchestrationOperateScope,
   ORCHESTRATION_V2_WS_METHODS,
@@ -404,6 +405,108 @@ it.effect("requires task permission before attaching a prepared worktree to a th
         threadId: ThreadId.make("thread"),
       }).pipe(Effect.flip),
     ).toMatchObject({ requiredPermission: AuthOrchestrationOperateScope });
+    expect(handled).toBe(false);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("does not expose captured project files with only orchestration read access", () =>
+  Effect.gen(function* () {
+    const group = WsRpcGroup.omit(
+      ...[...WsRpcGroup.requests.keys()].filter(
+        (
+          tag,
+        ): tag is Exclude<keyof typeof RPC_REQUIRED_SCOPES, typeof WS_METHODS.projectBriefGet> =>
+          tag !== WS_METHODS.projectBriefGet,
+      ),
+    );
+    let handled = false;
+    const client = yield* RpcTest.makeClient(group).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          group.toLayerHandler(WS_METHODS.projectBriefGet, () =>
+            Effect.sync(() => {
+              handled = true;
+            }).pipe(Effect.andThen(Effect.never)),
+          ),
+          RpcAuthorization.layer([AuthOrchestrationReadScope]),
+        ),
+      ),
+    );
+    const result = yield* client[WS_METHODS.projectBriefGet]({
+      projectId: ProjectId.make("project"),
+    }).pipe(Effect.flip);
+    expect(result).toMatchObject({ requiredPermission: AuthFilesystemReadScope });
+    expect(handled).toBe(false);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("does not expose archived source snapshots without filesystem permission", () =>
+  Effect.gen(function* () {
+    const group = WsRpcGroup.omit(
+      ...[...WsRpcGroup.requests.keys()].filter(
+        (
+          tag,
+        ): tag is Exclude<
+          keyof typeof RPC_REQUIRED_SCOPES,
+          typeof WS_METHODS.projectBriefArchiveGet
+        > => tag !== WS_METHODS.projectBriefArchiveGet,
+      ),
+    );
+    let handled = false;
+    const client = yield* RpcTest.makeClient(group).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          group.toLayerHandler(WS_METHODS.projectBriefArchiveGet, () =>
+            Effect.sync(() => {
+              handled = true;
+            }).pipe(Effect.andThen(Effect.never)),
+          ),
+          RpcAuthorization.layer([AuthOrchestrationReadScope]),
+        ),
+      ),
+    );
+    const result = yield* client[WS_METHODS.projectBriefArchiveGet]({
+      projectId: ProjectId.make("project"),
+      archiveId: "archive-1",
+    }).pipe(Effect.flip);
+    expect(result).toMatchObject({ requiredPermission: AuthFilesystemReadScope });
+    expect(handled).toBe(false);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("requires filesystem permission before project-brief capture or dispatch", () =>
+  Effect.gen(function* () {
+    const group = WsRpcGroup.omit(
+      ...[...WsRpcGroup.requests.keys()].filter(
+        (
+          tag,
+        ): tag is Exclude<
+          keyof typeof RPC_REQUIRED_SCOPES,
+          typeof WS_METHODS.projectBriefExecute
+        > => tag !== WS_METHODS.projectBriefExecute,
+      ),
+    );
+    let handled = false;
+    const client = yield* RpcTest.makeClient(group).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          group.toLayerHandler(WS_METHODS.projectBriefExecute, () =>
+            Effect.sync(() => {
+              handled = true;
+            }).pipe(Effect.andThen(Effect.never)),
+          ),
+          RpcAuthorization.layer([AuthOrchestrationOperateScope]),
+        ),
+      ),
+    );
+    const result = yield* client[WS_METHODS.projectBriefExecute]({
+      projectId: ProjectId.make("project"),
+      requestId: "capture-1",
+      expectedRevision: 0,
+      action: "addSource",
+      source: { kind: "file", relativePath: "plan.md" },
+    }).pipe(Effect.flip);
+    expect(result).toMatchObject({ requiredPermission: AuthFilesystemReadScope });
     expect(handled).toBe(false);
   }).pipe(Effect.scoped),
 );

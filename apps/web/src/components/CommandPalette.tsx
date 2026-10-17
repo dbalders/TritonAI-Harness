@@ -657,6 +657,16 @@ function OpenCommandPaletteDialog(props: {
     strict: false,
     select: (params) => resolveThreadRouteTarget(params),
   });
+  const briefRouteProject = useParams({
+    strict: false,
+    select: (params) =>
+      params.projectId && params.environmentId
+        ? {
+            environmentId: params.environmentId as EnvironmentId,
+            projectId: params.projectId as ProjectId,
+          }
+        : null,
+  });
   const projects = useProjects();
   const referenceThreadRef =
     pathname === "/pull-requests"
@@ -882,13 +892,14 @@ function OpenCommandPaletteDialog(props: {
   );
   const contextualProjectRef = useMemo(
     () =>
+      briefRouteProject ??
       resolveThreadActionProjectRef({
         activeDraftThread,
         activeThread: activeThread ?? undefined,
         defaultProjectRef,
         handleNewThread,
       }),
-    [activeDraftThread, activeThread, defaultProjectRef, handleNewThread],
+    [briefRouteProject, activeDraftThread, activeThread, defaultProjectRef, handleNewThread],
   );
   const projectPickerEntries = useMemo(
     () =>
@@ -2254,6 +2265,24 @@ function OpenCommandPaletteDialog(props: {
     projectGroups[0] ??
     null;
   if (contextualProjectGroup) {
+    const briefProjectRef = contextualProjectRef ?? {
+      environmentId: contextualProjectGroup.environmentId,
+      projectId: contextualProjectGroup.id,
+    };
+    actionItems.push({
+      kind: "action",
+      value: "action:project-brief",
+      searchTerms: ["project", "brief", "sources", "decisions", "actions", "results"],
+      title: "Open project brief",
+      description: contextualProjectGroup.displayName,
+      icon: <FileSearchIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        await navigate({
+          to: "/project-brief/$environmentId/$projectId",
+          params: briefProjectRef,
+        });
+      },
+    });
     actionItems.push({
       kind: "action",
       value: "action:project-settings",

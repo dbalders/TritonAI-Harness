@@ -101,6 +101,7 @@ import {
   PinOffIcon,
   PlusIcon,
   SettingsIcon,
+  NotebookPenIcon,
   ShieldQuestionIcon,
   SquarePenIcon,
   TerminalIcon,
@@ -5484,6 +5485,30 @@ export default function Sidebar() {
                                 primaryEnvironmentId={primaryEnvironmentId}
                                 machineByEnvironmentId={environmentMachineById}
                               />
+                            ) : null}
+                            {project ? (
+                              <Button
+                                size="icon-xs"
+                                variant="ghost-muted"
+                                tabIndex={-1}
+                                title={`Open project brief for ${project.displayName}`}
+                                aria-label={`Open project brief for ${project.displayName}`}
+                                onPointerDown={(event) => event.stopPropagation()}
+                                onClick={(event) => {
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                  if (isMobile) setOpenMobile(false);
+                                  void router.navigate({
+                                    to: "/project-brief/$environmentId/$projectId",
+                                    params: {
+                                      environmentId: project.environmentId,
+                                      projectId: project.id,
+                                    },
+                                  });
+                                }}
+                              >
+                                <NotebookPenIcon className="size-3.5" />
+                              </Button>
                             ) : null}
                             {project ? (
                               <Button
