@@ -2,7 +2,6 @@ import { useAuth, useClerk } from "@clerk/react";
 import { ServerIcon, SmartphoneIcon } from "lucide-react";
 import { type ReactNode, useCallback, useState } from "react";
 import { createPortal } from "react-dom";
-
 import { MobileClientsUserProfilePage } from "./MobileClientsUserProfilePage";
 import { T3ConnectUserProfilePage } from "./T3ConnectUserProfilePage";
 

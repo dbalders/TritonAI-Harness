@@ -1,6 +1,5 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
-
 import { QRCodeSvg } from "./qr-code";
 
 describe("QRCodeSvg", () => {

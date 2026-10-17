@@ -6,6 +6,8 @@ import {
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 import { reactHookHarness as hooks } from "../../test/reactHookHarness";
 import { visitElements } from "../../test/reactElementTree";
+import { CaptureShortcutConfig } from "./CaptureShortcutConfig";
+import { toastManager } from "../ui/toast";
 
 vi.mock("react", async (original) => {
   const actual = await original<typeof import("react")>();
@@ -34,8 +36,6 @@ vi.mock("../../hooks/useCopyToClipboard", () => ({
   useCopyToClipboard: () => ({ copyToClipboard: vi.fn(), isCopied: false }),
 }));
 vi.mock("../ui/toast", () => ({ toastManager: { add: vi.fn() } }));
-import { CaptureShortcutConfig } from "./CaptureShortcutConfig";
-import { toastManager } from "../ui/toast";
 
 const preview: DesktopCaptureConfigPreview = {
   id: "approved-snapshot",

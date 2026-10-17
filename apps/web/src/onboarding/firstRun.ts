@@ -1,5 +1,4 @@
 import { useCallback } from "react";
-
 import { ensureClientSettingsHydrated, persistClientSettingsUpdate } from "../hooks/useSettings";
 
 /**

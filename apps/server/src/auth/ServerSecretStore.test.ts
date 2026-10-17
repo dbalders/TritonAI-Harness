@@ -373,6 +373,41 @@ it.layer(NodeServices.layer)("ServerSecretStore.layer", (it) => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect("rejects retired plaintext in an already initialized second store", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-live-legacy-replay-" });
+      const name = "legacy-live-replay";
+      const bytes = new TextEncoder().encode("one-time-fixture-value");
+      const fingerprints = { [name]: legacyFingerprint(name, bytes) };
+      const initialize = Effect.gen(function* () {
+        const store = yield* ServerSecretStore.ServerSecretStore;
+        const config = yield* ServerConfig.ServerConfig;
+        return { store, path: secretPath(config, name) };
+      });
+      const first = yield* initialize.pipe(
+        Effect.provide(
+          Layer.fresh(
+            makeServerSecretStoreLayer({ baseDir, legacySecretFingerprints: fingerprints }),
+          ),
+        ),
+      );
+      const second = yield* initialize.pipe(
+        Effect.provide(
+          Layer.fresh(
+            makeServerSecretStoreLayer({ baseDir, legacySecretFingerprints: fingerprints }),
+          ),
+        ),
+      );
+      yield* fs.writeFile(first.path, bytes);
+      assert.isTrue(Option.isSome(yield* first.store.get(name)));
+      yield* fs.writeFile(first.path, bytes);
+      const error = yield* second.store.get(name).pipe(Effect.flip);
+      assert.instanceOf(error, ServerSecretStore.SecretStoreDecodeError);
+      assert.deepEqual(Array.from(yield* fs.readFile(first.path)), Array.from(bytes));
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("serializes migration authorization retirement across store instances", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;

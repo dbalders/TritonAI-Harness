@@ -1,5 +1,4 @@
 import { useClerk } from "@clerk/react";
-
 import { isElectron } from "../../env";
 import { resolveClerkSignInProps } from "./authRedirect";
 

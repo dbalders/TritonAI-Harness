@@ -1,5 +1,6 @@
 import type { DiffsHighlighter } from "@pierre/diffs";
 import { expect, it, vi } from "vite-plus/test";
+import { getSyntaxHighlighterPromise } from "./syntaxHighlighting";
 
 const { getSharedHighlighter } = vi.hoisted(() => ({
   getSharedHighlighter: vi.fn(),
@@ -8,8 +9,6 @@ const { getSharedHighlighter } = vi.hoisted(() => ({
 vi.mock("@pierre/diffs", () => ({
   getSharedHighlighter,
 }));
-
-import { getSyntaxHighlighterPromise } from "./syntaxHighlighting";
 
 it("caches the recovered text highlighter for unsupported languages", async () => {
   const textHighlighter = {} as DiffsHighlighter;

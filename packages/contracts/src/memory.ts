@@ -1,5 +1,4 @@
 import * as Schema from "effect/Schema";
-
 import { TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 /** A local calendar day, `YYYY-MM-DD`. */

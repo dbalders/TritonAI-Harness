@@ -1,9 +1,9 @@
+import { OrchestratorMcpFailure } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
-import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import { McpSchema, McpServer } from "effect/unstable/ai";
+import { McpSchema } from "effect/ai";
 
 import * as Integrations from "../integrations/IntegrationRegistry.ts";
 import type { IntegrationProviderTool } from "../integrations/IntegrationRegistry.ts";
@@ -13,13 +13,14 @@ import {
   IntegrationToolUnavailableError,
 } from "../integrations/IntegrationToolFailure.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
+import * as McpToolAccess from "./McpToolAccess.ts";
 
 class IntegrationToolInvocationError extends Schema.TaggedError<IntegrationToolInvocationError>()(
   "IntegrationToolInvocationError",
   { cause: Schema.Defect() },
 ) {}
 
-class IntegrationToolRegistrationError extends Schema.TaggedError<IntegrationToolRegistrationError>()(
+export class IntegrationToolRegistrationError extends Schema.TaggedError<IntegrationToolRegistrationError>()(
   "IntegrationToolRegistrationError",
   { toolName: Schema.String },
 ) {
@@ -55,13 +56,12 @@ const invocationCanUseIntegrations = (): boolean => {
   );
 };
 
-function registerTool(
-  server: McpServer.McpServer["Service"],
+/** Runtime JSON schemas come from the plugin SDK; access declarations remain host-owned. */
+export function toolRegistration(
   definition: IntegrationProviderTool,
   isAvailable: (name: string) => boolean,
-  reservedToolNames: ReadonlySet<string>,
 ) {
-  const registration: Parameters<typeof server.addTool>[0] = {
+  const registration = {
     tool: new McpSchema.Tool({
       name: definition.name,
       description: definition.description,
@@ -78,7 +78,7 @@ function registerTool(
       McpSchema.EnabledWhen,
       () => invocationCanUseIntegrations() && isAvailable(definition.name),
     ),
-    handle: (payload) =>
+    handle: (payload: unknown) =>
       Effect.withFiber((fiber) => {
         const invocation = Context.getUnsafe(
           fiber.context,
@@ -126,47 +126,28 @@ function registerTool(
         }),
       ),
   };
-  return Effect.suspend(() => {
-    if (
-      reservedToolNames.has(definition.name) ||
-      server.tools.some(({ tool }) => tool.name === definition.name)
-    ) {
-      return Effect.fail(new IntegrationToolRegistrationError({ toolName: definition.name }));
-    }
-    return server.addTool(registration);
-  });
+  return {
+    tool: registration.tool,
+    annotations: registration.annotations,
+    handler: definition.readOnly
+      ? McpToolAccess.reads(registration.handle)
+      : McpToolAccess.writesWithCapability((payload: unknown) =>
+          McpInvocationContext.McpInvocationContext.pipe(
+            Effect.flatMap((scope) =>
+              scope.thread !== undefined || scope.client?.access === "full-access"
+                ? registration.handle(payload)
+                : Effect.fail(
+                    new OrchestratorMcpFailure({
+                      code: "capability_denied",
+                      message:
+                        "Plugin writes require a full-access outside MCP client or approval through a T3-launched provider.",
+                    }),
+                  ),
+            ),
+          ),
+        ),
+  };
 }
 
-const activeToolAvailable = (name: string) =>
+export const activeToolAvailable = (name: string) =>
   Boolean(Integrations.getIntegrationRegistryOptional()?.isToolAvailableSync(name));
-
-export const registrationLayerFor = (
-  definitions: ReadonlyArray<IntegrationProviderTool>,
-  isAvailable: (name: string) => boolean = activeToolAvailable,
-  reservedToolNames: ReadonlySet<string> = new Set(),
-) => {
-  return Layer.effectDiscard(
-    Effect.gen(function* () {
-      const server = yield* McpServer.McpServer;
-      for (const definition of definitions) {
-        yield* registerTool(server, definition, isAvailable, reservedToolNames);
-      }
-    }),
-  );
-};
-
-export const registrationLayer = (
-  reservedToolNames: ReadonlySet<string> = new Set(),
-  loadRegistry: () => Promise<
-    Pick<Integrations.RegistryRuntime, "toolDefinitions">
-  > = Integrations.awaitIntegrationRegistry,
-) =>
-  Layer.effectDiscard(
-    Effect.gen(function* () {
-      const server = yield* McpServer.McpServer;
-      const registry = yield* Effect.promise(loadRegistry);
-      for (const definition of registry.toolDefinitions()) {
-        yield* registerTool(server, definition, activeToolAvailable, reservedToolNames);
-      }
-    }),
-  );

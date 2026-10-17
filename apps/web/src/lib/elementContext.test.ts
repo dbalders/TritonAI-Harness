@@ -1,6 +1,5 @@
 import type { PickedElementPayload } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
-
 import { normalizeElementContextSelection } from "./elementContext";
 
 function makePayload(overrides?: Partial<PickedElementPayload>): PickedElementPayload {

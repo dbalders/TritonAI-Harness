@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vite-plus/test";
-
 import { collectComposerInlineTokens } from "./composerInlineTokens.ts";
 
 describe("collectComposerInlineTokens", () => {

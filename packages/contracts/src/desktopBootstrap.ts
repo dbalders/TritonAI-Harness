@@ -1,5 +1,4 @@
 import * as Schema from "effect/Schema";
-
 import { PortSchema, PositiveInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { DesktopComputerUseStateSchema } from "./ipc.ts";
 
@@ -9,6 +8,9 @@ export const DesktopMcpServerConfiguration = Schema.Struct({
   environment: Schema.Record(Schema.String, Schema.String),
 });
 export type DesktopMcpServerConfiguration = typeof DesktopMcpServerConfiguration.Type;
+
+// A supervisor must not restart a server refused by the state-directory owner.
+export const SERVER_EXIT_CODE_STATE_DIR_OWNED = 78;
 
 export const DesktopBackendBootstrap = Schema.Struct({
   // The first key encrypts new server-secret envelopes. Any remaining keys
@@ -28,6 +30,15 @@ export const DesktopBackendBootstrap = Schema.Struct({
   t3Home: Schema.optional(Schema.String),
   host: Schema.String,
   desktopBootstrapToken: Schema.String,
+  // Present when the desktop rotates the renderer's bootstrap token: the
+  // backend derives the accepted tokens from this secret instead of trusting
+  // `desktopBootstrapToken` for its whole run. See
+  // `@t3tools/shared/desktopBootstrapToken`.
+  desktopBootstrapSecret: Schema.optionalKey(Schema.String),
+  // Set only when the desktop already merged the user's shell environment into
+  // the environment it hands this backend. Absent means the backend hydrates
+  // PATH itself, which WSL and older desktops rely on.
+  shellEnvironmentPrepared: Schema.optionalKey(Schema.Boolean),
   tailscaleServeEnabled: Schema.Boolean,
   tailscaleServePort: PortSchema,
   otlpTracesUrl: Schema.optional(Schema.String),
@@ -35,6 +46,10 @@ export const DesktopBackendBootstrap = Schema.Struct({
   otlpLogsUrl: Schema.optional(Schema.String),
   desktopTelemetryFd: Schema.optionalKey(PositiveInt),
   desktopTelemetryControlFd: Schema.optionalKey(PositiveInt),
+  /** Desktop -> server: the desktop's browser tabs, as newline-delimited JSON. */
+  desktopBrowserFd: Schema.optionalKey(PositiveInt),
+  /** Server -> desktop: commands for those tabs. */
+  desktopBrowserControlFd: Schema.optionalKey(PositiveInt),
   resourceMonitorPath: Schema.optionalKey(TrimmedNonEmptyString),
   // Local-only process details supplied over the inherited bootstrap pipe.
   // This is intentionally omitted for WSL and non-desktop server launches.

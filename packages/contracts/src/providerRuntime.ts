@@ -14,8 +14,8 @@ import {
   TurnId,
 } from "./baseSchemas.ts";
 import { ProviderInstanceId, ProviderDriverKind } from "./providerInstance.ts";
-import { ProviderApprovalOption, ThreadGoal } from "./orchestration.ts";
 import { ProviderUsageLimitsUpdate } from "./providerUsageLimits.ts";
+import { ProviderApprovalOption } from "./providerPolicy.ts";
 
 const TrimmedNonEmptyStringSchema = TrimmedNonEmptyString;
 const UnknownRecordSchema = Schema.Record(Schema.String, Schema.Unknown);
@@ -157,8 +157,6 @@ const ThreadStartedType = Schema.Literal("thread.started");
 const ThreadStateChangedType = Schema.Literal("thread.state.changed");
 const ThreadMetadataUpdatedType = Schema.Literal("thread.metadata.updated");
 const ThreadTokenUsageUpdatedType = Schema.Literal("thread.token-usage.updated");
-const ThreadGoalUpdatedType = Schema.Literal("thread.goal.updated");
-const ThreadGoalClearedType = Schema.Literal("thread.goal.cleared");
 const ThreadRealtimeStartedType = Schema.Literal("thread.realtime.started");
 const ThreadRealtimeItemAddedType = Schema.Literal("thread.realtime.item-added");
 const ThreadRealtimeAudioDeltaType = Schema.Literal("thread.realtime.audio.delta");
@@ -279,6 +277,12 @@ export const ThreadTokenUsageSnapshot = Schema.Struct({
   durationMs: Schema.optional(NonNegativeInt),
   compactsAutomatically: Schema.optional(Schema.Boolean),
   autoCompactThreshold: Schema.optional(PositiveInt),
+  cost: Schema.optional(
+    Schema.Struct({
+      amount: Schema.Number.check(Schema.isFinite()),
+      currency: TrimmedNonEmptyStringSchema.check(Schema.isMaxLength(32)),
+    }),
+  ),
 });
 export type ThreadTokenUsageSnapshot = typeof ThreadTokenUsageSnapshot.Type;
 
@@ -487,6 +491,8 @@ export const UserInputQuestion = Schema.Struct({
   question: TrimmedNonEmptyStringSchema,
   options: Schema.Array(UserInputQuestionOption),
   allowCustomAnswer: Schema.optional(Schema.Boolean),
+  /** Editable initial text. Answers preserve whitespace and allow an empty string when present. */
+  initialAnswer: Schema.optional(Schema.String),
   multiSelect: Schema.optional(Schema.Boolean).pipe(
     Schema.withConstructorDefault(Effect.succeed(false)),
   ),
@@ -537,43 +543,6 @@ export const TaskRunHandles = Schema.Struct({
 export type TaskRunHandles = typeof TaskRunHandles.Type;
 
 /**
- * Watch-loop task types: Monitor-tool tasks plus background shells (a shell
- * that outlives its turn is in practice a watch loop). Canonical single copy —
- * the server liveness registry, ingestion's agentKind stamp, and the client
- * fold's legacy fallback all classify with these sets.
- */
-export const MONITOR_TASK_TYPES: ReadonlySet<string> = new Set([
-  "monitor",
-  "monitor_mcp",
-  "local_bash",
-  "shell",
-]);
-/** Task types that are neither agents nor watch loops (plan-mode bookkeeping). */
-export const INERT_TASK_TYPES: ReadonlySet<string> = new Set(["plan", "dream"]);
-
-/**
- * Agent-vs-background classification, stamped by ingestion as `agentKind` so
- * persisted rows are self-describing. A deliberate denylist: the SDK's
- * agent-flavored type names drift (subagent, local_agent, local_workflow, …)
- * and an allowlist silently dropped real subagents when "local_agent"
- * appeared. A task launched from inside a subagent (agentId set) is
- * agent-internal background work UNLESS it is itself agent-flavored — a
- * nested agent can outlive its parent and stays in the roster.
- */
-export function classifyTaskAgentKind(input: {
-  readonly taskType?: string | undefined;
-  readonly agentId?: string | undefined;
-}): "agent" | "background" {
-  const { taskType, agentId } = input;
-  const nonAgentType =
-    taskType !== undefined && (MONITOR_TASK_TYPES.has(taskType) || INERT_TASK_TYPES.has(taskType));
-  if (agentId !== undefined && agentId.trim().length > 0) {
-    return taskType === undefined || nonAgentType ? "background" : "agent";
-  }
-  return nonAgentType ? "background" : "agent";
-}
-
-/**
  * Optional agent-identity linkage carried on every task lifecycle payload.
  * Repeated on progress and terminal rows (not just start) so client folds can
  * reconstruct an agent even when its start row aged out of activity retention.
@@ -584,7 +553,7 @@ const taskAgentLinkageFields = {
    * every row so folds can classify without the start row. */
   taskType: Schema.optional(TrimmedNonEmptyStringSchema),
   /**
-   * Server-stamped classification (classifyTaskAgentKind at ingestion).
+   * Server-stamped classification, set at ingestion.
    * Clients trust this stamp outright; rows without it (legacy, pre-stamp)
    * fall back to client-side heuristics.
    */
@@ -877,22 +846,6 @@ const ProviderRuntimeThreadTokenUsageUpdatedEvent = Schema.Struct({
 });
 export type ProviderRuntimeThreadTokenUsageUpdatedEvent =
   typeof ProviderRuntimeThreadTokenUsageUpdatedEvent.Type;
-
-const ProviderRuntimeThreadGoalUpdatedEvent = Schema.Struct({
-  ...ProviderRuntimeEventBase.fields,
-  type: ThreadGoalUpdatedType,
-  payload: Schema.Struct({ goal: ThreadGoal }),
-});
-export type ProviderRuntimeThreadGoalUpdatedEvent =
-  typeof ProviderRuntimeThreadGoalUpdatedEvent.Type;
-
-const ProviderRuntimeThreadGoalClearedEvent = Schema.Struct({
-  ...ProviderRuntimeEventBase.fields,
-  type: ThreadGoalClearedType,
-  payload: Schema.Struct({}),
-});
-export type ProviderRuntimeThreadGoalClearedEvent =
-  typeof ProviderRuntimeThreadGoalClearedEvent.Type;
 
 const ProviderRuntimeThreadRealtimeStartedEvent = Schema.Struct({
   ...ProviderRuntimeEventBase.fields,
@@ -1202,8 +1155,6 @@ export const ProviderRuntimeEventV2 = Schema.Union([
   ProviderRuntimeThreadStateChangedEvent,
   ProviderRuntimeThreadMetadataUpdatedEvent,
   ProviderRuntimeThreadTokenUsageUpdatedEvent,
-  ProviderRuntimeThreadGoalUpdatedEvent,
-  ProviderRuntimeThreadGoalClearedEvent,
   ProviderRuntimeThreadRealtimeStartedEvent,
   ProviderRuntimeThreadRealtimeItemAddedEvent,
   ProviderRuntimeThreadRealtimeAudioDeltaEvent,

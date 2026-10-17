@@ -1,7 +1,6 @@
 import { useNavigate } from "@tanstack/react-router";
 import { CircleIcon } from "lucide-react";
 import { useState } from "react";
-
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { useHandleNewThread } from "../../hooks/useHandleNewThread";
 import { readRecordSkillBridge } from "../RecordSkill";

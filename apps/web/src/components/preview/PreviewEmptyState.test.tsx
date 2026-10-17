@@ -1,6 +1,7 @@
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vite-plus/test";
+import { PreviewEmptyState } from "./PreviewEmptyState";
 
 const mocks = vi.hoisted(() => ({
   servers: [] as Array<{
@@ -21,8 +22,6 @@ vi.mock("./useDiscoveredLocalServers", () => ({
 vi.mock("./PreviewFaviconIcon", () => ({
   PreviewFaviconIcon: () => <span data-favicon-icon />,
 }));
-
-import { PreviewEmptyState } from "./PreviewEmptyState";
 
 const environmentId = EnvironmentId.make("env-1");
 const threadRef = { environmentId, threadId: ThreadId.make("thread-1") };

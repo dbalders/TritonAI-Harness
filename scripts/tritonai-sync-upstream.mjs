@@ -338,8 +338,19 @@ ${JSON.stringify(report, null, 2)}
   };
 }
 
-function createPullRequest({ branch, title, body, labels, cwd }) {
-  const args = ["pr", "create", "--head", branch, "--title", title, "--body", body];
+function createPullRequest({ branch, baseBranch, title, body, labels, cwd }) {
+  const args = [
+    "pr",
+    "create",
+    "--head",
+    branch,
+    "--base",
+    baseBranch,
+    "--title",
+    title,
+    "--body",
+    body,
+  ];
   const repo = process.env.TRITONAI_SYNC_GITHUB_REPO ?? process.env.GH_REPO;
   if (repo) {
     args.push("--repo", repo);
@@ -519,6 +530,7 @@ function main() {
     if (args.createPr) {
       createPullRequest({
         branch,
+        baseBranch: downstreamBranch,
         cwd: worktree,
         labels,
         title: `Sync upstream ${upstreamBranch} into ${downstreamBranch}`,

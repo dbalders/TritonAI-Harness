@@ -1,11 +1,10 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Schema from "effect/Schema";
-
 import { AssetResource, AttachmentCreateUploadUrlInput } from "./assets.ts";
 import {
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
-} from "./orchestration.ts";
+} from "./chatAttachment.ts";
 
 const decodeAssetResource = Schema.decodeUnknownSync(AssetResource);
 const isUploadInput = Schema.is(AttachmentCreateUploadUrlInput);

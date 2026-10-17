@@ -1,6 +1,5 @@
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-
 import { useThreadActions } from "./useThreadActions";
 import { threadEnvironment } from "../state/threads";
 import { toastManager } from "../components/ui/toast";
@@ -19,6 +18,11 @@ const commands = vi.hoisted(() => ({
 const router = vi.hoisted(() => ({
   navigate: vi.fn(async () => {}),
   state: { matches: [{ params: {} as Record<string, string> }] },
+}));
+vi.mock("../state/use-atom-query-runner", () => ({ useAtomQueryRunner: () => vi.fn() }));
+vi.mock("../state/session", async (original) => ({
+  ...(await original<typeof import("../state/session")>()),
+  readEnvironmentScope: () => true,
 }));
 vi.mock("react", async (original) => ({
   ...(await original<typeof import("react")>()),

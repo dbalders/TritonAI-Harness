@@ -1,3 +1,6 @@
+import { describe } from "vite-plus/test";
+import { seedV2Activity } from "../persistence/HarnessActivity.testkit.ts";
+import { ProviderInstanceId, ProviderDriverKind } from "@t3tools/contracts";
 // @effect-diagnostics globalDate:off - fixtures are built from host-local times.
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
@@ -9,12 +12,12 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { ServerEnvironment } from "../environment/ServerEnvironment.ts";
-import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
+import { layerMemory as SqlitePersistenceMemory } from "../persistence/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import {
   type DailyMemoryGenerationInput,
@@ -123,7 +126,13 @@ const makeHarness = (options: {
         ? ServerSettings.layerUnmanagedTest.pipe(Layer.provide(ServerSecretStore.layer))
         : ServerSettings.layerTest({
             memoryEnabled: options.memoryEnabled,
-            providers: { codex: { homePath: codexHome } },
+            providerInstances: {
+              [ProviderInstanceId.make("codex")]: {
+                driver: ProviderDriverKind.make("codex"),
+                enabled: true,
+                config: { homePath: codexHome },
+              },
+            },
           });
     const layer = Layer.mergeAll(
       settingsLayer,
@@ -146,74 +155,166 @@ const makeHarness = (options: {
   });
 
 it.layer(NodeServices.layer)("DailyMemory", (it) => {
-  for (const profile of ["stable", "nightly"] as const) {
-    it.effect(`automatically backfills a full week for an existing ${profile} installation`, () =>
-      Effect.gen(function* () {
-        const { baseDir, codexHome, calls, layer, fs, path } = yield* makeHarness({ profile });
-        yield* TestClock.setTime(NOW);
+  it.effect("summarizes new V2 activity once alongside retained history", () =>
+    Effect.gen(function* () {
+      const captured: DailyMemoryGenerationInput[] = [];
+      const { layer, baseDir, codexHome, fs, path } = yield* makeHarness({
+        memoryEnabled: true,
+        generate: (input) =>
+          Effect.sync(() => {
+            captured.push(input);
+            return summaryFor(input);
+          }),
+      });
+      yield* TestClock.setTime(NOW);
+      yield* Effect.gen(function* () {
+        yield* seed;
+        yield* seedV2Activity({
+          threadId: "thread-1",
+          projectId: "project-1",
+          title: "Upgraded login task",
+          at: localIso(28, 10),
+          messages: [
+            { id: "m3", role: "user", text: "V2 authoritative request" },
+            { id: "m4", role: "assistant", text: "Unfinished V2 response", streaming: true },
+          ],
+        });
+        yield* seedV2Activity({
+          threadId: "thread-v2",
+          projectId: "project-1",
+          title: "New V2 task",
+          at: localIso(28, 12),
+          messages: [{ id: "v2-only", role: "assistant", text: "V2-only assistant reply" }],
+        });
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`INSERT INTO projection_threads (thread_id, project_id, title, created_at, updated_at)
+          VALUES ('deleted-v2', 'project-1', 'V1 tombstone fallback', ${localIso(28, 10)}, ${localIso(28, 10)})`;
+        yield* sql`INSERT INTO projection_thread_messages (message_id, thread_id, role, text, is_streaming, created_at, updated_at)
+          VALUES ('deleted-v2-message', 'deleted-v2', 'user', 'Deleted V2 activity', 0, ${localIso(28, 10)}, ${localIso(28, 10)})`;
+        yield* seedV2Activity({
+          threadId: "deleted-v2",
+          projectId: "project-1",
+          title: "V2 tombstone",
+          at: localIso(28, 10),
+          deletedAt: localIso(28, 12),
+          messages: [],
+        });
+        yield* sql`INSERT INTO orchestration_v2_projection_provider_threads
+          (provider_thread_id, thread_id, provider, status, updated_at, payload_json)
+          VALUES ('native-provider', 'thread-1', 'codex', 'ready', ${localIso(28, 10)},
+            '{"nativeThreadRef":{"nativeId":"native-v2-session"}}')`;
+        yield* sql`UPDATE orchestration_v2_projection_threads SET active_provider_thread_id = 'native-provider' WHERE thread_id = 'thread-1'`;
+        const nativeSession = path.join(
+          codexHome,
+          "sessions",
+          "rollout-2026-09-28-native-v2-session.jsonl",
+        );
+        const staleSession = path.join(
+          codexHome,
+          "sessions",
+          "rollout-2026-09-28-codex-thread-a.jsonl",
+        );
+        yield* fs.makeDirectory(path.dirname(nativeSession), { recursive: true });
+        yield* fs.writeFileString(nativeSession, "{}\n");
+        yield* fs.writeFileString(staleSession, "{}\n");
+        const memory = yield* DailyMemory.make;
+        yield* memory.runCatchUp;
+        const day = captured.find((input) => input.day === "2026-09-28");
+        assert.isDefined(day);
+        assert.strictEqual(day!.activity.split("V2 authoritative request").length - 1, 1);
+        assert.include(day!.activity, "V2-only assistant reply");
+        assert.notInclude(day!.activity, "Fix it and open a PR.");
+        assert.notInclude(day!.activity, "Unfinished V2 response");
+        assert.notInclude(day!.activity, "Fixed and opened PR 12.");
+        assert.notInclude(day!.activity, "Deleted V2 activity");
+        const note = yield* fs.readFileString(
+          files(path, path.join(baseDir, "memory", "general")).daily("2026-09-28"),
+        );
+        assert.include(note, nativeSession);
+        assert.notInclude(note, staleSession);
+      }).pipe(Effect.provide(layer));
+    }),
+  );
 
-        yield* Effect.gen(function* () {
-          const config = yield* ServerConfig.ServerConfig;
-          const settings = yield* ServerSettings.ServerSettingsService;
-          const sql = yield* SqlClient.SqlClient;
-          const legacySettings = yield* Schema.encodeUnknownEffect(
-            Schema.fromJsonString(Schema.Unknown),
-          )({ providers: { codex: { homePath: codexHome } } });
-          yield* fs.writeFileString(config.settingsPath, legacySettings);
-          yield* seed;
-          for (let day = 21; day <= 28; day++) {
-            const at = localIso(day, 12);
-            yield* sql`
+  describe.each(Array.from(["stable", "nightly"] as const, (scenario) => ({ scenario })))(
+    "case $scenario",
+    ({ scenario: profile }) => {
+      it.effect(`automatically backfills a full week for an existing ${profile} installation`, () =>
+        Effect.gen(function* () {
+          const { baseDir, codexHome, calls, layer, fs, path } = yield* makeHarness({ profile });
+          yield* TestClock.setTime(NOW);
+
+          yield* Effect.gen(function* () {
+            const config = yield* ServerConfig.ServerConfig;
+            const settings = yield* ServerSettings.ServerSettingsService;
+            const sql = yield* SqlClient.SqlClient;
+            const legacySettings = yield* Schema.encodeUnknownEffect(
+              Schema.fromJsonString(Schema.Unknown),
+            )({
+              providerInstances: {
+                [ProviderInstanceId.make("codex")]: {
+                  driver: ProviderDriverKind.make("codex"),
+                  enabled: true,
+                  config: { homePath: codexHome },
+                },
+              },
+            });
+            yield* fs.writeFileString(config.settingsPath, legacySettings);
+            yield* seed;
+            for (let day = 21; day <= 28; day++) {
+              const at = localIso(day, 12);
+              yield* sql`
               INSERT INTO projection_thread_messages (message_id, thread_id, role, text, is_streaming, created_at, updated_at)
               VALUES (${`history-${day}`}, 'thread-1', 'assistant', ${`Finished work on day ${day}.`}, 0, ${at}, ${at})
             `;
-          }
-          yield* settings.start;
-          assert.isTrue((yield* settings.getSettings).memoryEnabled);
+            }
+            yield* settings.start;
+            assert.isTrue((yield* settings.getSettings).memoryEnabled);
 
-          const memory = yield* DailyMemory.make;
-          yield* memory.runCatchUp;
-          const vault = path.join(baseDir, "memory", "general");
-          const vaultFiles = files(path, vault);
-          // The last seven finished days, then today so far.
-          assert.deepStrictEqual(calls, [
-            "2026-09-22",
-            "2026-09-23",
-            "2026-09-24",
-            "2026-09-25",
-            "2026-09-26",
-            "2026-09-27",
-            "2026-09-28",
-            "2026-09-29",
-          ]);
-          for (const day of calls) {
-            assert.isTrue(yield* fs.exists(vaultFiles.daily(day)));
-          }
-          assert.isFalse(yield* fs.exists(vaultFiles.daily("2026-09-21")));
-          assert.include(
-            yield* fs.readFileString(vaultFiles.daily("2026-09-29")),
-            "status: partial",
-          );
-          for (const directory of ["Projects", "Notes", "Inbox/3f2a/processed"]) {
-            assert.isTrue(yield* fs.exists(path.join(vault, directory)));
-          }
-          assert.isTrue(yield* fs.exists(path.join(vault, "AGENTS.md")));
-          assert.include(
-            yield* fs.readFileString(path.join(vault, ".devices", DEVICE_ID, "device.json")),
-            '"name": "Test Mac"',
-          );
-          assert.isTrue(
-            yield* fs.exists(path.join(codexHome, "skills", memorySkillName(vault), "SKILL.md")),
-          );
+            const memory = yield* DailyMemory.make;
+            yield* memory.runCatchUp;
+            const vault = path.join(baseDir, "memory", "general");
+            const vaultFiles = files(path, vault);
+            // The last seven finished days, then today so far.
+            assert.deepStrictEqual(calls, [
+              "2026-09-22",
+              "2026-09-23",
+              "2026-09-24",
+              "2026-09-25",
+              "2026-09-26",
+              "2026-09-27",
+              "2026-09-28",
+              "2026-09-29",
+            ]);
+            for (const day of calls) {
+              assert.isTrue(yield* fs.exists(vaultFiles.daily(day)));
+            }
+            assert.isFalse(yield* fs.exists(vaultFiles.daily("2026-09-21")));
+            assert.include(
+              yield* fs.readFileString(vaultFiles.daily("2026-09-29")),
+              "status: partial",
+            );
+            for (const directory of ["Projects", "Notes", "Inbox/3f2a/processed"]) {
+              assert.isTrue(yield* fs.exists(path.join(vault, directory)));
+            }
+            assert.isTrue(yield* fs.exists(path.join(vault, "AGENTS.md")));
+            assert.include(
+              yield* fs.readFileString(path.join(vault, ".devices", DEVICE_ID, "device.json")),
+              '"name": "Test Mac"',
+            );
+            assert.isTrue(
+              yield* fs.exists(path.join(codexHome, "skills", memorySkillName(vault), "SKILL.md")),
+            );
 
-          yield* settings.start;
-          yield* memory.runCatchUp;
-          assert.lengthOf(calls, 8);
-          assert.strictEqual((yield* memory.getStatus).lastSummarizedDay, "2026-09-28");
-        }).pipe(Effect.provide(layer));
-      }),
-    );
-  }
+            yield* settings.start;
+            yield* memory.runCatchUp;
+            assert.lengthOf(calls, 8);
+            assert.strictEqual((yield* memory.getStatus).lastSummarizedDay, "2026-09-28");
+          }).pipe(Effect.provide(layer));
+        }),
+      );
+    },
+  );
 
   it.effect("catches up on finished days and links notes, threads, and inbox notes", () =>
     Effect.gen(function* () {

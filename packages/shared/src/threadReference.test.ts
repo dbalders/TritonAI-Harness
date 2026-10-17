@@ -1,6 +1,5 @@
 import type { ThreadPullRequestLink } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
-
 import { resolveThreadReferenceCopyTarget } from "./threadReference.ts";
 
 const crossRepositoryPullRequest: ThreadPullRequestLink = {

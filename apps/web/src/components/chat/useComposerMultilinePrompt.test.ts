@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-
 import { measureComposerMultilinePrompt } from "./useComposerMultilinePrompt";
 
 function measure(input: { width: number; height: number; resting?: boolean; hidden?: boolean }) {

@@ -13,7 +13,6 @@ import {
   type ProjectId,
 } from "@t3tools/contracts";
 import { useCallback, useEffect, useRef } from "react";
-
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
 import { useRemoveClonedProject } from "../hooks/useRemoveClonedProject";
 import { useEnvironments } from "../state/environments";

@@ -1,6 +1,7 @@
 import type { DesktopUpdateState } from "@t3tools/contracts";
 import { isValidElement, type ReactElement, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { SidebarUpdateArchitectureWarningContent, SidebarUpdateControl } from "./SidebarUpdatePill";
 
 const testState = vi.hoisted(() => ({
   desktopUpdate: null as DesktopUpdateState | null,
@@ -56,8 +57,6 @@ vi.mock("../ui/toast", () => ({
   stackedThreadToast: (toast: unknown) => toast,
   toastManager: { add: testState.toast },
 }));
-
-import { SidebarUpdateArchitectureWarningContent, SidebarUpdateControl } from "./SidebarUpdatePill";
 
 const desktopUpdateBase: DesktopUpdateState = {
   enabled: true,
@@ -223,3 +222,19 @@ describe("SidebarUpdatePill", () => {
     expect(testState.installUpdate).not.toHaveBeenCalled();
   });
 });
+
+vi.mock("./useUpdateEverything", () => ({
+  useUpdateEverything: () => ({
+    hasUpdates: false,
+    summary: "",
+    lines: [],
+    restarts: [],
+    skipped: [],
+    run: vi.fn(),
+  }),
+}));
+vi.mock("./updateEverythingRun", () => ({
+  useUpdateEverythingRun: () => null,
+  clearSavedUpdateEverythingResult: vi.fn(),
+  saveUpdateEverythingResult: vi.fn(),
+}));

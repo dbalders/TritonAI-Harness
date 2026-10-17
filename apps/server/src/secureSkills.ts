@@ -1,3 +1,4 @@
+import { getManagedCodexSettings } from "./managedPolicy.ts";
 // @effect-diagnostics nodeBuiltinImport:off - SHA-256 verifies untrusted skill feed bytes.
 import * as NodeCrypto from "node:crypto";
 
@@ -139,10 +140,6 @@ export const synchronizeSecureSkillsFeed = Effect.fn("synchronizeSecureSkillsFee
         directory: skillsDirectory,
         prefix: ".secure-skills-stage.",
       });
-      const backup = yield* fs.makeTempDirectoryScoped({
-        directory: skillsDirectory,
-        prefix: ".secure-skills-backup.",
-      });
       for (const skill of feed.skills) {
         for (const file of skill.files) {
           const destination = path.join(staging, skill.name, ...file.path.split("/"));
@@ -151,6 +148,11 @@ export const synchronizeSecureSkillsFeed = Effect.fn("synchronizeSecureSkillsFee
         }
       }
 
+      const backup = yield* fs.makeTempDirectory({
+        directory: skillsDirectory,
+        prefix: ".secure-skills-backup.",
+      });
+      let backupCanBeRemoved = false;
       const installed: string[] = [];
       const backedUp: string[] = [];
       const nextNames = feed.skills.map((skill) => skill.name).toSorted();
@@ -183,6 +185,7 @@ export const synchronizeSecureSkillsFeed = Effect.fn("synchronizeSecureSkillsFee
           contents: `${manifest}\n`,
           mode: 0o600,
         });
+        backupCanBeRemoved = true;
       }).pipe(
         Effect.mapError((cause) =>
           isSecureSkillsSyncError(cause)
@@ -191,19 +194,39 @@ export const synchronizeSecureSkillsFeed = Effect.fn("synchronizeSecureSkillsFee
         ),
         Effect.catch((error) =>
           Effect.gen(function* () {
+            const recoveryErrors: unknown[] = [];
             for (const name of installed) {
-              yield* fs
+              const result = yield* fs
                 .remove(path.join(skillsDirectory, name), { recursive: true, force: true })
-                .pipe(Effect.ignore);
+                .pipe(Effect.result);
+              if (result._tag === "Failure") recoveryErrors.push(result.failure);
             }
             for (const name of backedUp) {
-              yield* fs
+              const result = yield* fs
                 .rename(path.join(backup, name), path.join(skillsDirectory, name))
-                .pipe(Effect.ignore);
+                .pipe(Effect.result);
+              if (result._tag === "Failure") recoveryErrors.push(result.failure);
             }
+            if (recoveryErrors.length > 0) {
+              return yield* syncError(
+                `Managed skill recovery is incomplete. Original files remain in ${backup}.`,
+                new AggregateError([error, ...recoveryErrors]),
+              );
+            }
+            backupCanBeRemoved = true;
             return yield* error;
           }),
         ),
+        Effect.ensuring(
+          Effect.suspend(() =>
+            backupCanBeRemoved
+              ? fs
+                  .remove(backup, { recursive: true, force: true })
+                  .pipe(Effect.ignore({ log: true }))
+              : Effect.void,
+          ),
+        ),
+        Effect.uninterruptible,
       );
       return { revision: feed.revision, skillNames: nextNames };
     }),
@@ -269,7 +292,7 @@ const pollSecureSkillsOnce = Effect.fn("pollSecureSkillsOnce")(function* (option
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
   const settings = yield* ServerSettingsService;
   const effective = yield* settings.getSettings;
-  const layout = yield* resolveCodexHomeLayout(effective.providers.codex);
+  const layout = yield* resolveCodexHomeLayout(getManagedCodexSettings(effective));
   const response = yield* Effect.tryPromise({
     try: () =>
       (options?.fetch ?? globalThis.fetch)(endpoint, {

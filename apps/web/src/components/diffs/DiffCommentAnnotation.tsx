@@ -1,9 +1,7 @@
 import { MessageCircle, Trash2 } from "lucide-react";
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
-
 import { Button } from "~/components/ui/button";
 import { Textarea } from "~/components/ui/textarea";
-
 import { isCommentSubmitShortcut } from "./commentSubmitShortcut";
 
 interface DiffCommentSecondaryAction {

@@ -5,7 +5,6 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as Effect from "effect/Effect";
-
 import { resolveGitWorktreePath, resolveWorktreeT3Home } from "./devHome.ts";
 
 const makeRepo = (

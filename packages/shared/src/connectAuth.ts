@@ -1,5 +1,4 @@
 import { TRITONAI_CONNECT_NAME } from "@t3tools/contracts";
-
 import { readHashParams } from "./remote.ts";
 
 const CONNECT_AUTH_STATE_PARAM = "state";

@@ -1,6 +1,5 @@
 import type { FileDiffMetadata } from "@pierre/diffs";
 import { describe, expect, it } from "vite-plus/test";
-
 import { orderDiffFiles } from "./pullRequestFileOrder.logic";
 
 /** Only the path and the patch's own lines matter here; the viewer fills the rest in. */

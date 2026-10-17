@@ -1,5 +1,4 @@
 import type { FileDiffMetadata } from "@pierre/diffs";
-
 import { resolveFileDiffPath } from "~/lib/diffRendering";
 
 /**

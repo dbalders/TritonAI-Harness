@@ -1,6 +1,5 @@
 import type { FileDiffMetadata } from "@pierre/diffs";
 import type { FileTreeBatchOperation, FileTreeSortComparator, GitStatus } from "@pierre/trees";
-
 import { resolveFileDiffPath } from "~/lib/diffRendering";
 
 /** One changed file as the tree shows it: its current path and how it changed. */

@@ -1,4 +1,4 @@
-import type * as NodeWorkerThreads from "node:worker_threads";
+import * as NodeWorkerThreads from "node:worker_threads";
 import {
   FileRenderer,
   getSharedHighlighter,
@@ -20,6 +20,8 @@ import {
 } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { StyledDiffCodeView } from "./StyledDiffCodeView";
+import { useCodeViewFileReveal } from "./useCodeViewFileReveal";
 
 const testState = vi.hoisted(() => ({
   workers: [] as NodeWorkerThreads.Worker[],
@@ -98,15 +100,12 @@ vi.mock("@pierre/diffs/worker/worker.js?worker", async () => {
 
 vi.mock("@pierre/diffs/react", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@pierre/diffs/react")>()),
-  CodeView: (props: CodeViewProps) => {
+  CodeView: (props: CodeViewProps<undefined, undefined>) => {
     return props.items?.map((item) =>
       item.type === "file" ? <FileOutput key={item.id} file={item.file} /> : null,
     );
   },
 }));
-
-import { StyledDiffCodeView } from "./StyledDiffCodeView";
-import { useCodeViewFileReveal } from "./useCodeViewFileReveal";
 
 function FileOutput({ file }: { file: FileContents }) {
   const pool = useWorkerPool();
@@ -115,6 +114,7 @@ function FileOutput({ file }: { file: FileContents }) {
     testState.renderPools.push(pool);
     const renderer = new FileRenderer(
       { theme: "pierre-dark", preferredHighlighter: "shiki-wasm" },
+      undefined,
       render,
       pool,
     );
@@ -301,8 +301,10 @@ describe("code-view worker lifecycle", () => {
     expect(pool.getStats().totalWorkers).toBe(2);
     expect(testState.terminations).toHaveLength(0);
     await act(async () => renderer!.update(renderViews(0)));
+    // Pierre gives up on a held startup after 10 seconds; the idle timer then tears the pool down.
+    const timedOut = expect(pending).rejects.toThrow("worker initialization timed out");
     await vi.advanceTimersByTimeAsync(30_000);
-    await pending;
+    await timedOut;
     await Promise.all(testState.terminations);
     await act(async () => {
       for (const deliver of testState.heldResponses) deliver();

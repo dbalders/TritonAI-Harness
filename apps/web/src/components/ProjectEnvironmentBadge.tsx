@@ -1,5 +1,4 @@
 import type { EnvironmentId, EnvironmentMachineKind } from "@t3tools/contracts";
-
 import { cn } from "~/lib/utils";
 import type { SidebarProjectSnapshot } from "~/sidebarProjectGrouping";
 import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";

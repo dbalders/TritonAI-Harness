@@ -1,7 +1,6 @@
 import { cloneElement, type ReactElement, type ReactNode } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, expect, it, vi } from "vite-plus/test";
-
 import { ComposerBannerStack } from "./ComposerBannerStack";
 
 vi.mock("../ui/popover", () => ({
@@ -36,10 +35,10 @@ it("only offers notice details when the description cannot fit", async () => {
   vi.stubGlobal(
     "ResizeObserver",
     class {
-      constructor(callback: () => void) {
-        resize = callback;
+      constructor(private readonly callback: (entries: { target: unknown }[]) => void) {}
+      observe(target: unknown) {
+        resize = () => this.callback([{ target }]);
       }
-      observe() {}
       disconnect() {}
     },
   );

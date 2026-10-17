@@ -1,8 +1,9 @@
 // @effect-diagnostics nodeBuiltinImport:off - Knip and the TypeScript compiler host use synchronous Node paths.
 import * as NodePath from "node:path";
 import type { Preprocessor } from "knip";
-// Knip needs the legacy compiler API, which TypeScript 7 no longer exports.
 import ts from "typescript-legacy";
+
+// Knip needs the legacy compiler API, which TypeScript 7 no longer exports.
 
 // Effect 4 schemas carry this marker, including aliases and Schema.Class constructors.
 // Checking the type avoids evaluating application modules or exempting schema factories/decoders.

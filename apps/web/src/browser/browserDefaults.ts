@@ -21,13 +21,11 @@ import {
   type PreviewAppearancePreference,
   type PreviewViewportSetting,
 } from "@t3tools/contracts";
-
 import {
   ensureClientSettingsHydrated,
   getClientSettings,
   useClientSettings,
 } from "~/hooks/useSettings";
-
 import { resolveResponsiveBrowserViewportSize } from "./browserViewportLayout";
 
 export interface BrowserDefaults {

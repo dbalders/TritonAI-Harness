@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-
 import { isMacPlatform } from "../lib/utils";
 
 // A released hold hint lingers for the original hold duration. Double-press

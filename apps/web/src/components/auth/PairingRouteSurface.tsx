@@ -1,7 +1,7 @@
+import { Alert, AlertDescription } from "../ui/alert";
 import type { AuthSessionState } from "@t3tools/contracts";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import React, { startTransition, useEffect, useRef, useState, useCallback } from "react";
-
 import { APP_DISPLAY_NAME } from "../../branding";
 import { connectPairing } from "../../connection/onboarding";
 import {
@@ -36,11 +36,11 @@ export function PairingRouteSurface({
   initialErrorMessage?: string;
   onAuthenticated: () => void;
 }) {
-  const autoPairTokenRef = useRef<string | null>(peekPairingTokenFromUrl());
-  const [credential, setCredential] = useState(() => autoPairTokenRef.current ?? "");
+  const [autoPairToken, setAutoPairToken] = useState(peekPairingTokenFromUrl);
+  const [credential, setCredential] = useState(() => autoPairToken ?? "");
   const [errorMessage, setErrorMessage] = useState(initialErrorMessage ?? "");
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const autoSubmitAttemptedRef = useRef(false);
+  const autoSubmittedTokens = useRef(new Set<string>());
 
   const submitCredential = useCallback(
     async (nextCredential: string) => {
@@ -75,15 +75,23 @@ export function PairingRouteSurface({
   );
 
   useEffect(() => {
-    const token = autoPairTokenRef.current;
-    if (!token || autoSubmitAttemptedRef.current) {
-      return;
-    }
+    const readToken = () => {
+      const token = peekPairingTokenFromUrl();
+      if (token) {
+        setCredential(token);
+        setAutoPairToken(token);
+      }
+    };
+    window.addEventListener("hashchange", readToken);
+    return () => window.removeEventListener("hashchange", readToken);
+  }, []);
 
-    autoSubmitAttemptedRef.current = true;
+  useEffect(() => {
+    if (!autoPairToken || autoSubmittedTokens.current.has(autoPairToken)) return;
+    autoSubmittedTokens.current.add(autoPairToken);
     stripPairingTokenFromUrl();
-    void submitCredential(token);
-  }, [submitCredential]);
+    void submitCredential(autoPairToken);
+  }, [autoPairToken, submitCredential]);
 
   return (
     <StandalonePage tone="pairing">
@@ -113,9 +121,9 @@ export function PairingRouteSurface({
         </div>
 
         {errorMessage ? (
-          <div className="rounded-lg border border-destructive/30 bg-destructive/6 px-3 py-2 text-sm text-destructive">
-            {errorMessage}
-          </div>
+          <Alert variant="error">
+            <AlertDescription>{errorMessage}</AlertDescription>
+          </Alert>
         ) : null}
 
         <div className="flex flex-wrap gap-2">
@@ -230,10 +238,12 @@ export function HostedPairingRouteSurface() {
       ) : null}
 
       {status === "error" ? (
-        <div className="mt-5 rounded-lg border border-destructive/30 bg-destructive/6 px-3 py-2 text-sm text-destructive">
-          Verify the backend is reachable from this browser, supports CORS for hosted clients, and
-          is served over HTTPS when opening this page from HTTPS.
-        </div>
+        <Alert variant="error" className="mt-5">
+          <AlertDescription>
+            Verify the backend is reachable from this browser, supports CORS for hosted clients, and
+            is served over HTTPS when opening this page from HTTPS.
+          </AlertDescription>
+        </Alert>
       ) : null}
 
       <div className="mt-6 flex flex-wrap gap-2">

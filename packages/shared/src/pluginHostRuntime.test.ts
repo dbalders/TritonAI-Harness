@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vite-plus/test";
-
 import {
   EFFECT_HOST_PEER_RANGE,
   resolvePluginHostRuntimeDependencies,
@@ -36,12 +35,24 @@ describe("managed plugin host runtime", () => {
     },
   );
 
+  it.each(["4.0.0", "4.0.4", "4.1.0", "4.0.4+build.1"])(
+    "supports stable Effect host %s with released and current declarations",
+    (host) => {
+      for (const metadata of [
+        { dependencies: { effect: "4.0.0-beta.78" } },
+        { peerDependencies: { effect: ">=4.0.0-beta.78 <4.0.0" } },
+        { peerDependencies: { effect: EFFECT_HOST_PEER_RANGE } },
+      ])
+        expect(resolvePluginHostRuntimeDependencies(metadata, host)[0]?.version).toBe(host);
+    },
+  );
+
   it.each([
     "4.0.0-beta.77",
     "4.0.0-alpha.112",
     "4.0.0-rc.01",
     "4.0.0-rc.NaN",
-    "4.0.0",
+    "5.0.0",
     "4.0.1-rc.1",
   ])("rejects unsupported host %s", (host) => {
     expect(() =>
@@ -76,7 +87,7 @@ describe("managed plugin host runtime", () => {
     [{ dependencies: { effect: "4.0.0-beta.78", other: "1.0.0" } }, "4.0.0-beta.102"],
     [{ peerDependencies: { effect: ">=4.0.0-beta.1 <5.0.0" } }, "4.0.0-beta.102"],
     [{ optionalDependencies: { effect: "4.0.0-beta.78" } }, "4.0.0-beta.102"],
-    [{ dependencies: { effect: "4.0.0-beta.78" } }, "4.0.0"],
+    [{ dependencies: { effect: "4.0.0-beta.78" } }, "5.0.0"],
   ])("rejects dependencies outside the narrow host contract", (packageJson, hostVersion) => {
     expect(() => resolvePluginHostRuntimeDependencies(packageJson, hostVersion)).toThrow();
   });

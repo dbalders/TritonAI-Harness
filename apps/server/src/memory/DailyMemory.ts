@@ -1,3 +1,4 @@
+import { getManagedCodexSettings } from "../managedPolicy.ts";
 /**
  * DailyMemory - writes this device's daily notes into the general memory
  * vault, and keeps the Codex memory skill in step with the Memory setting.
@@ -26,7 +27,7 @@ import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ServerConfig from "../config.ts";
 import { ServerEnvironment } from "../environment/ServerEnvironment.ts";
@@ -144,14 +145,10 @@ const loadDayActivity = Effect.fn("memory.loadDayActivity")(function* (range: {
       p.project_id AS "projectId",
       p.title AS "projectTitle",
       p.workspace_root AS "workspaceRoot",
-      CASE
-        WHEN json_valid(r.resume_cursor_json) THEN json_extract(r.resume_cursor_json, '$.threadId')
-      END AS "codexThreadId"
-    FROM projection_thread_messages AS m
-    JOIN projection_threads AS t ON t.thread_id = m.thread_id
+      t.codex_thread_id AS "codexThreadId"
+    FROM harness_activity_messages AS m
+    JOIN harness_activity_threads AS t ON t.thread_id = m.thread_id
     JOIN projection_projects AS p ON p.project_id = t.project_id
-    LEFT JOIN provider_session_runtime AS r
-      ON r.thread_id = t.thread_id AND r.provider_name = 'codex'
     WHERE m.created_at >= ${range.startIso}
       AND m.created_at < ${range.endIso}
       AND m.is_streaming = 0
@@ -205,7 +202,7 @@ const hasStreamingMessages = Effect.fn("memory.hasStreamingMessages")(function* 
   const sql = yield* SqlClient.SqlClient;
   const [row] = yield* sql<{ readonly streaming: number }>`
     SELECT EXISTS (
-      SELECT 1 FROM projection_thread_messages
+      SELECT 1 FROM harness_activity_messages
       WHERE created_at >= ${range.startIso}
         AND created_at < ${range.endIso}
         AND is_streaming = 1
@@ -226,8 +223,8 @@ const activityFingerprint = Effect.fn("memory.activityFingerprint")(function* (r
   const sql = yield* SqlClient.SqlClient;
   const [row] = yield* sql<{ readonly count: number; readonly latest: string | null }>`
     SELECT COUNT(*) AS "count", MAX(m.updated_at) AS "latest"
-    FROM projection_thread_messages AS m
-    JOIN projection_threads AS t ON t.thread_id = m.thread_id
+    FROM harness_activity_messages AS m
+    JOIN harness_activity_threads AS t ON t.thread_id = m.thread_id
     JOIN projection_projects AS p ON p.project_id = t.project_id
     WHERE m.created_at >= ${range.startIso}
       AND m.created_at < ${range.endIso}
@@ -709,7 +706,7 @@ export const make = Effect.gen(function* () {
   const catchUp = provide(
     Effect.gen(function* () {
       const settings = yield* settingsService.getSettings;
-      const codexHome = (yield* resolveCodexHomeLayout(settings.providers.codex).pipe(
+      const codexHome = (yield* resolveCodexHomeLayout(getManagedCodexSettings(settings)).pipe(
         Effect.provideService(Path.Path, path),
       )).sharedHomePath;
       const skillsDirectory = path.join(codexHome, "skills");

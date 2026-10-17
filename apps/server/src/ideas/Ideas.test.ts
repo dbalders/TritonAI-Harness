@@ -1,3 +1,4 @@
+import { seedV2Activity } from "../persistence/HarnessActivity.testkit.ts";
 // @effect-diagnostics globalDate:off - fixtures are fixed instants.
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
@@ -16,11 +17,11 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ServerConfig from "../config.ts";
 import { ServerEnvironment } from "../environment/ServerEnvironment.ts";
-import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
+import { layerMemory as SqlitePersistenceMemory } from "../persistence/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import {
   type GeneratedIdea,
@@ -111,6 +112,64 @@ const makeHarness = (
 const titles = (snapshot: IdeasSnapshot) => snapshot.ideas.map((idea) => idea.title);
 
 it.layer(NodeServices.layer)("Ideas", (it) => {
+  it.effect("uses V2-only threads and authoritative imported messages in generation", () =>
+    Effect.gen(function* () {
+      const { calls, layer } = yield* makeHarness(() =>
+        Effect.succeed([threadIdea({ ref: "thread:thread-v2", sources: ["thread:thread-v2"] })]),
+      );
+      yield* TestClock.setTime(NOW);
+      yield* Effect.gen(function* () {
+        yield* seedWork;
+        yield* seedV2Activity({
+          threadId: "thread-1",
+          projectId: "project-1",
+          title: "Upgraded budget task",
+          at: iso(NOW - DAY),
+          messages: [{ id: "m1", role: "user", text: "Authoritative V2 budget request" }],
+        });
+        yield* seedV2Activity({
+          threadId: "thread-v2",
+          projectId: "project-1",
+          title: "V2-only task",
+          at: iso(NOW - DAY),
+          messages: [
+            { id: "v2-only", role: "user", text: "V2-only work" },
+            { id: "v2-stream", role: "assistant", text: "Unfinished V2 idea", streaming: true },
+          ],
+        });
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`INSERT INTO projection_threads (thread_id, project_id, title, created_at, updated_at)
+          VALUES ('deleted-v2', 'project-1', 'Deleted legacy idea source', ${iso(NOW - DAY)}, ${iso(NOW - DAY)})`;
+        yield* sql`INSERT INTO projection_thread_messages (message_id, thread_id, role, text, is_streaming, created_at, updated_at)
+          VALUES ('deleted-source', 'deleted-v2', 'user', 'Deleted V2 idea source', 0, ${iso(NOW - DAY)}, ${iso(NOW - DAY)})`;
+        yield* seedV2Activity({
+          threadId: "deleted-v2",
+          projectId: "project-1",
+          title: "V2 tombstone",
+          at: iso(NOW - DAY),
+          deletedAt: iso(NOW),
+          messages: [],
+        });
+        const ideas = yield* Ideas.make;
+        yield* ideas.markViewed;
+        yield* ideas.awaitIdle;
+        const context = calls[0]?.context ?? "";
+        assert.include(context, "Authoritative V2 budget request");
+        assert.notInclude(context, "Match the travel lines.");
+        assert.include(context, "thread:thread-v2");
+        assert.notInclude(context, "Unfinished V2 idea");
+        assert.notInclude(context, "Deleted V2 idea source");
+        assert.notInclude(context, "thread:deleted-v2");
+        const snapshot = yield* ideas.list;
+        assert.isTrue(
+          snapshot.ideas.some(
+            (idea) => idea.action.kind === "resume-thread" && idea.action.threadId === "thread-v2",
+          ),
+        );
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    }),
+  );
+
   it.effect("shows starter ideas on a first visit without calling the model", () =>
     Effect.gen(function* () {
       const { calls, layer } = yield* makeHarness(() => Effect.succeed([]));

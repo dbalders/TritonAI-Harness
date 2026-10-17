@@ -5,7 +5,7 @@ import {
 import type { EnvironmentId } from "@t3tools/contracts";
 import Constants from "expo-constants";
 import * as Crypto from "expo-crypto";
-import * as Encoding from "effect/Encoding";
+import * as Encoding from "effect/encoding/Base64Url";
 import * as WebBrowser from "expo-web-browser";
 import { useFocusEffect } from "@react-navigation/native";
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
@@ -67,7 +67,7 @@ export function UcsdAccountSettings({ environmentId }: { readonly environmentId:
         createReturnUrl: () => {
           const configured = Constants.expoConfig?.scheme;
           const scheme = Array.isArray(configured) ? configured[0] : configured;
-          const id = Encoding.encodeBase64Url(Crypto.getRandomBytes(32));
+          const id = Encoding.encode(Crypto.getRandomBytes(32));
           return `${scheme}:///account/callback/${id}`;
         },
         openAuthSession: async (url, returnUrl) => {

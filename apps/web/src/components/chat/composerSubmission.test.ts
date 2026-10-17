@@ -10,7 +10,6 @@ import {
   serializeAssistantCitation,
 } from "@t3tools/shared/assistantCitations";
 import { describe, expect, it, vi } from "vite-plus/test";
-
 import { submitComposerDraft } from "./composerSubmission";
 
 const assistantCitation = {

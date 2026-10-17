@@ -18,7 +18,6 @@ import {
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { useEffect, useMemo, useState } from "react";
-
 import { isDesktopLocalConnectionTarget } from "~/connection/desktopLocal";
 import { isLoopbackHostname } from "~/environments/primary/target";
 import { useLocalStorage } from "~/hooks/useLocalStorage";

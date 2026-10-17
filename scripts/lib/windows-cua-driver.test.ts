@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vite-plus/test";
-
 import { prepareWindowsCuaDriver } from "./windows-cua-driver.ts";
 
 const PE_OFFSET = 0x80;

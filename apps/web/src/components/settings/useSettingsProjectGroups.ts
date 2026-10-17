@@ -1,5 +1,4 @@
 import { useMemo } from "react";
-
 import { useClientSettings } from "../../hooks/useSettings";
 import { selectProjectGroupingSettings } from "../../logicalProject";
 import { buildSidebarProjectSnapshots } from "../../sidebarProjectGrouping";

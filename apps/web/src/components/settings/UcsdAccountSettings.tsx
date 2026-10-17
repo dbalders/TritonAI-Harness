@@ -5,7 +5,6 @@ import {
 import type { EnvironmentId } from "@t3tools/contracts";
 import { accountCallbackId } from "@t3tools/shared/accountCallback";
 import { useEffect, useMemo, useSyncExternalStore } from "react";
-
 import { ensureLocalApi } from "../../localApi";
 import { serverEnvironment } from "../../state/server";
 import { usePreparedConnection } from "../../state/session";

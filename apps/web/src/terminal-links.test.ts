@@ -1,11 +1,10 @@
+import { resolvePathLinkTarget } from "@t3tools/shared/fileLinks";
 import { describe, expect, it } from "vite-plus/test";
-
 import {
   collectWrappedTerminalLinkLine,
   extractTerminalLinks,
   isTerminalLinkActivation,
   isTerminalUrl,
-  resolvePathLinkTarget,
   type TerminalBufferLineLike,
 } from "./terminal-links";
 

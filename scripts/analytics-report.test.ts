@@ -1,5 +1,4 @@
 import { assert, it } from "@effect/vitest";
-
 import { formatUsageReport, summarizeUsage } from "./analytics-report.ts";
 
 const row = (dimensions: ReadonlyArray<string>, events = 1) => ({ dimensions, metrics: [events] });
