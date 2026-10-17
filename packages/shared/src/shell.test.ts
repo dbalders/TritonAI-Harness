@@ -412,7 +412,12 @@ effectIt.layer(NodeServices.layer)("isCommandAvailable", (it) => {
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
-        const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "t3-command-trace-" });
+        // A Windows drive's colon would split an absolute directory in the Linux PATH case.
+        const directory = yield* fs.makeTempDirectoryScoped({
+          directory: ".",
+          prefix: "t3-command-trace-",
+        });
+        const cwd = path.relative(".", directory);
         const executable = path.join(cwd, platform === "win32" ? "available.cmd" : "available");
         yield* fs.writeFileString(executable, "");
         yield* fs.chmod(executable, 0o700);
