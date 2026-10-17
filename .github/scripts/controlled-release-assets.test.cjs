@@ -13,6 +13,7 @@ const {
 
 for (const [version, channel, prerelease] of [
   ["1.2.3", "stable", "false"],
+  ["1.2.3-rc.1", "stable", "true"],
   ["1.2.3-preview.1", "preview", "true"],
   ["v1.2.3-preview", "preview", "true"],
   ["1.2.3-nightly.20261017.1", null, null],
@@ -79,6 +80,70 @@ for (const [version, channel, prerelease] of [
         ),
         channel !== "preview",
       );
+    },
+  );
+}
+
+for (const [channel, tag, lookupFails] of [
+  ["stable", "v1.2.3-rc.1", false],
+  ["nightly", "v1.2.3-nightly.20261017.1", false],
+  ["stable", "v1.2.3-rc.1", true],
+]) {
+  test(
+    `handles published notes for ${tag} when lookup ${lookupFails ? "fails" : "succeeds"}`,
+    { skip: os.platform() === "win32" },
+    (t) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "discord-release-notes-"));
+      t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+      const argsFile = path.join(root, "gh-args");
+      fs.writeFileSync(
+        path.join(root, "gh"),
+        [
+          "#!/bin/sh",
+          'printf \'%s\\n\' "$@" > "$GH_STUB_ARGS"',
+          'if [ "$GH_STUB_FAIL" = true ]; then',
+          "  printf 'partial response'",
+          "  exit 1",
+          "fi",
+          "printf '%s\\n' 'Published release notes.'",
+          "",
+        ].join("\n"),
+        { mode: 0o700 },
+      );
+      const workflow = parse(
+        fs.readFileSync(path.resolve(".github/workflows/release.yml"), "utf8"),
+      );
+      const readNotes = workflow.jobs.announce_discord.steps.find(
+        (step) => step.name === "Read published release notes",
+      );
+      const result = cp.spawnSync("bash", ["-e", "-o", "pipefail", "-c", readNotes.run], {
+        encoding: "utf8",
+        timeout: 5_000,
+        env: {
+          PATH: `${root}${path.delimiter}${process.env.PATH}`,
+          RUNNER_TEMP: root,
+          RELEASE_TAG: tag,
+          RELEASE_CHANNEL: channel,
+          GH_STUB_ARGS: argsFile,
+          GH_STUB_FAIL: String(lookupFails),
+        },
+      });
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(fs.readFileSync(argsFile, "utf8").trim().split("\n"), [
+        "release",
+        "view",
+        tag,
+        "--json",
+        "body",
+        "--jq",
+        '.body // ""',
+      ]);
+      assert.equal(
+        fs.readFileSync(path.join(root, "discord-release-notes.md"), "utf8"),
+        lookupFails ? "" : "Published release notes.\n",
+      );
+      if (lookupFails)
+        assert.match(result.stdout, /::warning::Could not read published release notes/);
     },
   );
 }

@@ -1006,15 +1006,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
-          RELEASE_CHANNEL: ${{ needs.preflight.outputs.release_channel }}
         run: |
-          if [ "$RELEASE_CHANNEL" = 'nightly' ]; then
-            if ! gh release view "$RELEASE_TAG" --json body --jq '.body // ""' > "$RUNNER_TEMP/discord-release-notes.md"; then
-              : > "$RUNNER_TEMP/discord-release-notes.md"
-              echo '::warning::Could not read published release notes; announcing without a changelog.'
-            fi
-          else
+          if ! gh release view "$RELEASE_TAG" --json body --jq '.body // ""' > "$RUNNER_TEMP/discord-release-notes.md"; then
             : > "$RUNNER_TEMP/discord-release-notes.md"
+            echo '::warning::Could not read published release notes; announcing without a changelog.'
           fi
 
       - name: Announce prerelease on Discord
