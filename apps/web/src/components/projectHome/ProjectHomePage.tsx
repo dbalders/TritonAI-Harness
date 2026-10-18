@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useAtomValue } from "@effect/atom-react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
@@ -10,13 +11,17 @@ import { useThreadShellsForProjectRefs } from "../../state/entities";
 import { useEnvironment } from "../../state/environments";
 import { type EnvironmentQueryView, useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
+import { shellEnvironment } from "../../state/shell";
+import { useAtomCommand } from "../../state/use-atom-command";
 import { formatRelativeTimeLabel } from "../../timestampFormat";
-import { ArrowRightIcon, CheckIcon, PlusIcon, Settings2Icon } from "lucide-react";
+import { ArrowRightIcon, CheckIcon, FolderOpenIcon, PlusIcon } from "lucide-react";
 import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
 import { MiddleTruncate } from "../ui/middle-truncate";
 import { RefreshIcon } from "../ui/refresh-icon";
 import { Skeleton } from "../ui/skeleton";
+import { Spinner } from "../ui/spinner";
+import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { hasUnseenCompletion } from "../Sidebar.logic";
 import {
@@ -252,11 +257,9 @@ function ProjectMemory({
 
 function ProjectOverview({
   project,
-  projectKey,
   title,
 }: {
   project: SidebarProjectSnapshot["memberProjects"][number];
-  projectKey: string;
   title: string;
 }) {
   const navigate = useNavigate();
@@ -264,6 +267,62 @@ function ProjectOverview({
   const environment = useEnvironment(project.environmentId);
   const environmentLabel = environment?.label ?? project.environmentLabel ?? "this environment";
   const connected = environment?.connection.phase === "connected";
+  const canOpenInEditor = useAtomValue(
+    shellEnvironment.openInEditor.permissionAtom(project.environmentId),
+  );
+  const canOpenFolder =
+    connected &&
+    canOpenInEditor &&
+    environment?.serverConfig?.availableEditors.includes("file-manager") === true;
+  const openInEditor = useAtomCommand(shellEnvironment.openInEditor, "Open project folder");
+  const [openingFolder, setOpeningFolder] = useState(false);
+  const folderInFlight = useRef(false);
+  const [opening, setOpening] = useState<"thread" | "brief" | null>(null);
+  const navigationInFlight = useRef(false);
+  const openPage = async (action: "thread" | "brief", request: () => Promise<unknown>) => {
+    if (navigationInFlight.current) return;
+    navigationInFlight.current = true;
+    setOpening(action);
+    try {
+      await request();
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: action === "brief" ? "Could not open project brief" : "Could not open new thread",
+        description: error instanceof Error ? error.message : "Please try again.",
+      });
+    } finally {
+      navigationInFlight.current = false;
+      setOpening(null);
+    }
+  };
+  const openFolder = async () => {
+    if (!canOpenFolder || folderInFlight.current) return;
+    folderInFlight.current = true;
+    setOpeningFolder(true);
+    try {
+      const result = await openInEditor({
+        environmentId: project.environmentId,
+        input: { cwd: project.workspaceRoot, editor: "file-manager" },
+      });
+      if (result._tag === "Success") {
+        toastManager.add({
+          type: "success",
+          title: "Folder opened",
+          description: `Opened on ${environmentLabel}.`,
+        });
+      }
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Could not open project folder",
+        description: error instanceof Error ? error.message : "Please try again.",
+      });
+    } finally {
+      folderInFlight.current = false;
+      setOpeningFolder(false);
+    }
+  };
   const refs = useMemo(
     () => [scopeProjectRef(project.environmentId, project.id)],
     [project.environmentId, project.id],
@@ -304,7 +363,7 @@ function ProjectOverview({
     unread ? `${unread} unread` : null,
     view.recent[0] ? `last activity ${formatRelativeTimeLabel(view.recent[0].updatedAt)}` : null,
   ].filter(Boolean);
-  const createThread = () => void newThread(refs[0]!);
+  const createThread = () => void openPage("thread", () => newThread(refs[0]!));
 
   return (
     <>
@@ -329,28 +388,23 @@ function ProjectOverview({
         </div>
         <div className="flex items-center gap-2">
           <Button
-            variant="outline"
             size="sm"
-            onClick={() =>
-              void navigate({
-                to: "/settings/projects",
-                search: {
-                  project: projectKey,
-                  machine: project.environmentId,
-                  checkout: project.physicalProjectKey,
-                },
-              })
-            }
+            disabled={!connected || opening !== null}
+            aria-busy={opening === "thread"}
+            onClick={createThread}
           >
-            <Settings2Icon />
-            Settings
-          </Button>
-          <Button size="sm" disabled={!connected} onClick={createThread}>
-            <PlusIcon />
-            New thread
+            {opening === "thread" ? <Spinner aria-hidden /> : <PlusIcon />}
+            {opening === "thread" ? "Opening thread…" : "New thread"}
           </Button>
         </div>
       </header>
+      <p role="status" className="sr-only">
+        {opening === "brief"
+          ? "Opening project brief…"
+          : opening === "thread"
+            ? "Opening new thread…"
+            : ""}
+      </p>
       {!connected ? (
         <div
           role="status"
@@ -433,9 +487,15 @@ function ProjectOverview({
                 Threads you run in {title} appear here with their latest reports, so you can see
                 where things stand when you come back.
               </p>
-              <Button className="mt-5" size="sm" disabled={!connected} onClick={createThread}>
-                <PlusIcon />
-                New thread
+              <Button
+                className="mt-5"
+                size="sm"
+                disabled={!connected || opening !== null}
+                aria-busy={opening === "thread"}
+                onClick={createThread}
+              >
+                {opening === "thread" ? <Spinner aria-hidden /> : <PlusIcon />}
+                {opening === "thread" ? "Opening thread…" : "New thread"}
               </Button>
             </section>
           ) : null}
@@ -457,12 +517,32 @@ function ProjectOverview({
                   <Tooltip>
                     <TooltipTrigger
                       render={
-                        <span className="flex min-w-0 font-mono text-2xs text-foreground/80" />
+                        <button
+                          type="button"
+                          className="flex w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-sm text-left font-mono text-2xs text-foreground/80 underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-60"
+                          aria-label={`Open project folder on ${environmentLabel}`}
+                          aria-busy={openingFolder}
+                          disabled={!canOpenFolder || openingFolder}
+                          onClick={() => void openFolder()}
+                        />
                       }
                     >
                       <MiddleTruncate value={project.workspaceRoot} showTitle={false} />
+                      {openingFolder ? (
+                        <Spinner size="xs" aria-hidden />
+                      ) : (
+                        <FolderOpenIcon className="size-3 shrink-0" aria-hidden />
+                      )}
                     </TooltipTrigger>
-                    <TooltipPopup>{project.workspaceRoot}</TooltipPopup>
+                    <TooltipPopup>
+                      {project.workspaceRoot}
+                      <br />
+                      {!connected
+                        ? `Reconnect to ${environmentLabel} to open this folder.`
+                        : !canOpenFolder
+                          ? "Opening folders is unavailable on this connection."
+                          : `Open this folder on ${environmentLabel}.`}
+                    </TooltipPopup>
                   </Tooltip>
                 </dd>
               </div>
@@ -483,15 +563,19 @@ function ProjectOverview({
               className="mt-3"
               variant="outline"
               size="xs"
+              disabled={!connected || opening !== null}
+              aria-busy={opening === "brief"}
               onClick={() =>
-                void navigate({
-                  to: "/project-brief/$environmentId/$projectId",
-                  params: { environmentId: project.environmentId, projectId: project.id },
-                })
+                void openPage("brief", () =>
+                  navigate({
+                    to: "/project-brief/$environmentId/$projectId",
+                    params: { environmentId: project.environmentId, projectId: project.id },
+                  }),
+                )
               }
             >
-              Open project brief
-              <ArrowRightIcon />
+              {opening === "brief" ? "Opening brief…" : "Open project brief"}
+              {opening === "brief" ? <Spinner aria-hidden /> : <ArrowRightIcon />}
             </Button>
           </section>
         </aside>
@@ -545,7 +629,6 @@ export function ProjectHomePage({ projectKey }: { projectKey: string }) {
             <ProjectOverview
               key={project.physicalProjectKey}
               project={project}
-              projectKey={group.projectKey}
               title={group.displayName}
             />
           </>
