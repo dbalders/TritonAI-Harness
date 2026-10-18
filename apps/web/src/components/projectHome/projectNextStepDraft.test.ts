@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
+  EnvironmentId,
   IsoDateTime,
   ProviderInstanceId,
   ThreadId,
@@ -9,7 +10,7 @@ import { projectNextStepDraft } from "./projectNextStepDraft";
 import { mergeIdeaPrompt } from "../ideas/ideaDraft";
 
 describe("project next-step draft", () => {
-  it("carries only the selected evidence and preserves an existing draft without duplication", () => {
+  it("opens the selected action with source-thread references instead of pasting history", () => {
     const overview: ProjectOverview = {
       description: "A reviewed Teams pilot.",
       generatedAt: IsoDateTime.make("2026-10-17T12:00:00.000Z"),
@@ -20,8 +21,8 @@ describe("project next-step draft", () => {
           id: "review",
           title: "Review checklist",
           reason: "The draft needs review.",
-          prompt: "Review the pilot checklist.",
-          sources: ["thread:one"],
+          prompt: "A long generated instruction that should not become the user's request.",
+          sources: ["thread:one", "note:project-memory"],
         },
       ],
       sources: [
@@ -37,13 +38,29 @@ describe("project next-step draft", () => {
           threadId: ThreadId.make("two"),
           text: "Unreferenced evidence",
         },
+        {
+          ref: "note:project-memory",
+          title: "Project history",
+          threadId: null,
+          text: "Background notes should not be pasted into the message either.",
+        },
       ],
     };
-    const prompt = projectNextStepDraft(overview, overview.nextSteps[0]!);
-    expect(prompt).toContain("Review the pilot checklist.");
-    expect(prompt).toContain("The checklist is a draft.");
-    expect(prompt).toContain("2026-10-17T12:00:00.000Z");
-    expect(prompt).not.toContain("Unreferenced evidence");
+    const { prompt, threadContexts } = projectNextStepDraft(
+      EnvironmentId.make("project-environment"),
+      overview,
+      overview.nextSteps[0]!,
+    );
+    expect(prompt).toBe("Review checklist");
+    expect(threadContexts).toEqual([
+      expect.objectContaining({
+        kind: "thread",
+        environmentId: "project-environment",
+        threadId: "one",
+        title: "Checklist",
+      }),
+    ]);
+    expect(JSON.stringify(threadContexts)).not.toContain("The checklist is a draft.");
     const merged = mergeIdeaPrompt("Keep my existing request.", prompt);
     expect(merged).toContain("Keep my existing request.");
     expect(mergeIdeaPrompt(merged, prompt)).toBe(merged);

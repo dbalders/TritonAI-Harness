@@ -56,8 +56,9 @@ for new context automatically. Saved suggestions stay visible while an update ru
 unchanged context reuses the saved result. Suggestions need a Codex text generation
 model configured on the project's environment.
 
-Choose **Open in new thread** on a suggestion to prepare a message with its source
-context in that project. Review or edit the draft, then send it when ready.
+Choose **Open in new thread** on a suggestion to prepare a short request in that
+project. Its source conversations are attached as thread references so the agent can
+read their history when needed. Review or edit the draft, then send it when ready.
 
 Use the folder icon to expand or collapse its threads without leaving the overview.
 Thread activity updates live. Memory notes appear as the background summarizer

@@ -358,7 +358,7 @@ function ProjectOverview({
   const openNextStep = (step: ProjectNextStep) => {
     const saved = overview.snapshot?.overview;
     if (!saved || !connected) return;
-    const prompt = projectNextStepDraft(saved, step);
+    const { prompt, threadContexts } = projectNextStepDraft(project.environmentId, saved, step);
     void openPage(step.id, async () => {
       const opened = await newThread(refs[0]!, { newDraftPrompt: prompt });
       if (!opened) throw new Error("This project could not open a draft. Please try again.");
@@ -366,6 +366,7 @@ function ProjectOverview({
       const existing = store.getComposerDraft(opened.draftId)?.prompt ?? "";
       const merged = mergeIdeaPrompt(existing, prompt);
       if (merged !== existing) store.setPrompt(opened.draftId, merged);
+      store.addThreadContexts(opened.draftId, threadContexts, { insertAtCaret: false });
     });
   };
   const completionKey = view.recent

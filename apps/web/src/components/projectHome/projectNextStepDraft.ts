@@ -1,13 +1,20 @@
-import type { ProjectNextStep, ProjectOverview } from "@t3tools/contracts";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import type { EnvironmentId, ProjectNextStep, ProjectOverview } from "@t3tools/contracts";
+import { threadContextRecord } from "../../lib/composerContextRecords";
 
-/** Freeze the evidence behind a suggestion into its draft; never imply it is current acceptance. */
-export function projectNextStepDraft(overview: ProjectOverview, step: ProjectNextStep): string {
+/** Keep the chosen action in the user's voice; source history travels as thread references. */
+export function projectNextStepDraft(
+  environmentId: EnvironmentId,
+  overview: ProjectOverview,
+  step: ProjectNextStep,
+) {
   const sources = overview.sources.filter((source) => step.sources.includes(source.ref));
-  return [
-    step.prompt,
-    "Project context carried from the project overview:",
-    overview.description,
-    `Suggested from saved context on ${overview.generatedAt}. Check the current project before acting; an agent's report is not owner acceptance or proof of merge, deployment, or release.`,
-    ...sources.map((source) => `Source: ${source.title} (${source.ref})\n${source.text}`),
-  ].join("\n\n");
+  return {
+    prompt: step.title,
+    threadContexts: sources.flatMap((source) =>
+      source.threadId
+        ? [threadContextRecord(scopeThreadRef(environmentId, source.threadId), source.title)]
+        : [],
+    ),
+  };
 }
