@@ -1,75 +1,252 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import type { ServerProjectMemory } from "@t3tools/contracts";
 import type { SidebarProjectSnapshot } from "../../sidebarProjectGrouping";
 import { useSidebarProjectGroups } from "../../hooks/useSidebarProjectGroups";
 import { useNewThreadHandler } from "../../hooks/useHandleNewThread";
 import { useThreadShellsForProjectRefs } from "../../state/entities";
 import { useEnvironment } from "../../state/environments";
-import { useEnvironmentQuery } from "../../state/query";
+import { type EnvironmentQueryView, useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
-import {
-  ArrowUpRightIcon,
-  CheckIcon,
-  FolderOpenIcon,
-  MessageSquareIcon,
-  PlusIcon,
-  Settings2Icon,
-} from "lucide-react";
+import { formatRelativeTimeLabel } from "../../timestampFormat";
+import { ArrowRightIcon, CheckIcon, PlusIcon, Settings2Icon } from "lucide-react";
+import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
+import { MiddleTruncate } from "../ui/middle-truncate";
+import { RefreshIcon } from "../ui/refresh-icon";
+import { Skeleton } from "../ui/skeleton";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { resolveThreadStatusPill } from "../Sidebar.logic";
-import { projectHomeThreads, projectMemorySections, projectThreadExcerpt } from "./projectHomeView";
+import { hasUnseenCompletion } from "../Sidebar.logic";
+import {
+  projectHomeDays,
+  projectHomeHeadline,
+  projectHomeThreads,
+  projectMemoryNote,
+  projectThreadExcerpt,
+  projectThreadStatus,
+} from "./projectHomeView";
 
-function ThreadRow({
+const UPDATES_SHOWN = 6;
+
+type ProjectMemoryQuery = EnvironmentQueryView<ServerProjectMemory, unknown>;
+const HISTORY_SHOWN = 5;
+
+function memoryDayLabel(day: string) {
+  const [year, month, date] = day.split("-").map(Number);
+  const value = new Date(year!, month! - 1, date);
+  return value.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    ...(value.getFullYear() === new Date().getFullYear() ? {} : { year: "numeric" }),
+  });
+}
+
+function ThreadEntry({
   thread,
-  label,
   report,
+  framed = false,
 }: {
   thread: EnvironmentThreadShell;
-  label?: string | undefined;
-  report?: string | undefined;
+  report: string | undefined;
+  framed?: boolean;
+}) {
+  const status = projectThreadStatus(thread);
+  const excerpt = projectThreadExcerpt(thread, report);
+  const unread = hasUnseenCompletion(thread);
+  return (
+    <Link
+      to="/$environmentId/$threadId"
+      params={{ environmentId: thread.environmentId, threadId: thread.id }}
+      className={cn(
+        "group block min-w-0 px-4 py-3.5 transition-colors hover:bg-accent/60 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring",
+        framed ? null : "rounded-lg",
+      )}
+    >
+      <span className="flex items-baseline gap-3">
+        <span className="min-w-0 flex-1 break-words text-sm font-medium text-foreground">
+          {thread.title}
+        </span>
+        <span className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground tabular-nums">
+          {unread ? <span className="font-medium text-primary">Unread</span> : null}
+          {formatRelativeTimeLabel(thread.updatedAt)}
+        </span>
+      </span>
+      {status || thread.branch ? (
+        <span className="mt-1 flex min-w-0 items-center gap-1.5 text-xs">
+          {status ? (
+            <>
+              <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", status.dotClass)} />
+              <span className={cn("shrink-0", status.textClass)}>{status.label}</span>
+            </>
+          ) : null}
+          {status && thread.branch ? (
+            <span aria-hidden className="text-muted-foreground">
+              ·
+            </span>
+          ) : null}
+          {thread.branch ? (
+            <span className="flex min-w-0 font-mono text-2xs text-muted-foreground">
+              <MiddleTruncate value={thread.branch} showTitle={false} />
+            </span>
+          ) : null}
+        </span>
+      ) : null}
+      {excerpt ? (
+        <span className="mt-2 line-clamp-3 break-words text-sm leading-6 text-foreground/80">
+          {excerpt}
+        </span>
+      ) : null}
+    </Link>
+  );
+}
+
+function ProjectMemory({
+  memory,
+  connected,
+  environmentLabel,
+}: {
+  memory: ProjectMemoryQuery;
+  connected: boolean;
+  environmentLabel: string;
 }) {
   const navigate = useNavigate();
-  const status = resolveThreadStatusPill({ thread });
-  const failed = thread.runtime?.status === "failed" || thread.latestRun?.status === "failed";
-  const excerpt = projectThreadExcerpt(thread, report);
+  const [showAll, setShowAll] = useState(false);
+  const note = useMemo(
+    () => projectMemoryNote(memory.data?.markdown ?? ""),
+    [memory.data?.markdown],
+  );
+  const history = showAll ? note.history : note.history.slice(0, HISTORY_SHOWN);
+  const refreshing = memory.isPending && Boolean(memory.data);
   return (
-    <button
-      type="button"
-      onClick={() =>
-        void navigate({
-          to: "/$environmentId/$threadId",
-          params: { environmentId: thread.environmentId, threadId: thread.id },
-        })
-      }
-      className="group flex w-full min-w-0 gap-3 rounded-lg px-3 py-3 text-left transition-colors hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring"
-    >
-      <MessageSquareIcon aria-hidden className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-      <span className="min-w-0 flex-1">
-        <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
-          <span className="text-sm font-medium">{thread.title}</span>
-          <span className={`text-xs ${status?.colorClass ?? "text-muted-foreground"}`}>
-            {label ?? status?.label ?? (failed ? "Needs attention" : "Thread")}
-          </span>
-        </span>
-        {excerpt ? (
-          <span className="mt-1 block line-clamp-2 text-xs leading-5 text-muted-foreground">
-            {excerpt}
-          </span>
+    <section aria-labelledby="project-memory">
+      <div className="flex items-center justify-between gap-3">
+        <h2 id="project-memory" className="text-sm font-semibold">
+          Project history
+        </h2>
+        {connected && memory.data?.state !== "disabled" ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  aria-label="Reload project history"
+                  disabled={memory.isPending}
+                  onClick={memory.refresh}
+                />
+              }
+            >
+              <RefreshIcon refreshing={refreshing} />
+            </TooltipTrigger>
+            <TooltipPopup>Reload project history</TooltipPopup>
+          </Tooltip>
         ) : null}
-        {thread.branch ? (
-          <span className="mt-1 block truncate font-mono text-2xs text-muted-foreground">
-            {thread.branch}
-          </span>
-        ) : null}
-      </span>
-      <ArrowUpRightIcon
-        aria-hidden
-        className="mt-0.5 size-3.5 shrink-0 text-muted-foreground opacity-60 group-hover:opacity-100"
-      />
-    </button>
+      </div>
+      <p className="mt-1 text-xs leading-5 text-muted-foreground">
+        What Memory recorded about this project, one line per day of work.
+      </p>
+      <div className="mt-4">
+        {!connected ? (
+          <p className="text-sm text-muted-foreground">
+            Available when {environmentLabel} reconnects.
+          </p>
+        ) : memory.error ? (
+          <div role="alert" className="space-y-3">
+            <p className="text-sm">Could not read project history.</p>
+            <p className="break-words text-xs text-muted-foreground">{memory.error}</p>
+            <Button variant="outline" size="xs" onClick={memory.refresh}>
+              Try again
+            </Button>
+          </div>
+        ) : !memory.data ? (
+          <div role="status" aria-label="Loading project history" className="space-y-3">
+            <Skeleton className="h-4 w-full" />
+            <Skeleton className="h-4 w-4/5" />
+            <Skeleton className="h-4 w-3/5" />
+          </div>
+        ) : memory.data.state === "disabled" ? (
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              Memory is off, so no history is kept for this project.
+            </p>
+            <Button
+              variant="outline"
+              size="xs"
+              onClick={() => void navigate({ to: "/settings/general" })}
+            >
+              Memory settings
+            </Button>
+          </div>
+        ) : note.history.length || note.sections.length ? (
+          <div className="space-y-6">
+            {history.length ? (
+              <ol className="space-y-4">
+                {history.map((entry) => (
+                  <li
+                    key={`${entry.day ?? ""}:${entry.text}`}
+                    className="grid grid-cols-[3.25rem_minmax(0,1fr)] gap-3"
+                  >
+                    <span className="pt-0.5 text-xs text-muted-foreground tabular-nums">
+                      {entry.day ? memoryDayLabel(entry.day) : ""}
+                    </span>
+                    <p className="break-words text-sm leading-6">{entry.text}</p>
+                  </li>
+                ))}
+              </ol>
+            ) : null}
+            {note.history.length > HISTORY_SHOWN ? (
+              <Button variant="ghost" size="xs" onClick={() => setShowAll((value) => !value)}>
+                {showAll ? "Show fewer days" : `Show all ${note.history.length} days`}
+              </Button>
+            ) : null}
+            {note.sections.map((section) => (
+              <section key={section.heading}>
+                <h3 className="mb-2 text-xs font-medium text-muted-foreground">
+                  {section.heading}
+                </h3>
+                <ul className="space-y-2">
+                  {section.lines.map((line) => (
+                    <li key={line} className="break-words text-sm leading-6">
+                      {line}
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            Nothing recorded yet. Memory adds a line after it summarizes a day of work in this
+            project.
+          </p>
+        )}
+      </div>
+      {connected && memory.data?.state === "ready" && memory.data.markdown !== null ? (
+        <details className="group mt-5 text-xs text-muted-foreground">
+          <summary className="cursor-pointer rounded-sm hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring">
+            Source note
+            {memory.data.updatedAt
+              ? ` · updated ${formatRelativeTimeLabel(memory.data.updatedAt)}`
+              : ""}
+          </summary>
+          <dl className="mt-3 space-y-1">
+            <dt className="sr-only">File</dt>
+            <dd className="break-all font-mono text-2xs">{memory.data.relativePath}</dd>
+            {memory.data.updatedAt ? (
+              <>
+                <dt className="sr-only">Modified</dt>
+                <dd>{new Date(memory.data.updatedAt).toLocaleString()}</dd>
+              </>
+            ) : null}
+          </dl>
+          <pre className="mt-3 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted/40 p-3 text-xs leading-5 text-foreground">
+            {memory.data.markdown}
+          </pre>
+        </details>
+      ) : null}
+    </section>
   );
 }
 
@@ -85,6 +262,7 @@ function ProjectOverview({
   const navigate = useNavigate();
   const newThread = useNewThreadHandler();
   const environment = useEnvironment(project.environmentId);
+  const environmentLabel = environment?.label ?? project.environmentLabel ?? "this environment";
   const connected = environment?.connection.phase === "connected";
   const refs = useMemo(
     () => [scopeProjectRef(project.environmentId, project.id)],
@@ -110,33 +288,44 @@ function ProjectOverview({
     previousCompletionKey.current = completionKey;
     if (connected) refreshMemory();
   }, [completionKey, connected, refreshMemory]);
-  const sections = useMemo(
-    () => projectMemorySections(memory.data?.markdown ?? ""),
-    [memory.data?.markdown],
-  );
   const reports = new Map(
     memory.data?.recentUpdates.map((report) => [report.threadId, report.text]) ?? [],
   );
+  const [showAllUpdates, setShowAllUpdates] = useState(false);
+  const shownUpdates = showAllUpdates ? view.updates : view.updates.slice(0, UPDATES_SHOWN);
+  const days = projectHomeDays(shownUpdates);
+  const unread = view.recent.filter(hasUnseenCompletion).length;
+  const headline = projectHomeHeadline(view, connected);
+  const needsYouStatus = view.needsYou[0] && projectThreadStatus(view.needsYou[0]);
+  const workingStatus = view.working[0] && projectThreadStatus(view.working[0]);
+  const facts = [
+    `${view.recent.length} ${view.recent.length === 1 ? "thread" : "threads"}`,
+    view.needsYou.length && view.working.length ? `${view.working.length} working` : null,
+    unread ? `${unread} unread` : null,
+    view.recent[0] ? `last activity ${formatRelativeTimeLabel(view.recent[0].updatedAt)}` : null,
+  ].filter(Boolean);
+  const createThread = () => void newThread(refs[0]!);
+
   return (
     <>
-      <div className="mb-9 flex flex-wrap items-start justify-between gap-4">
+      <header className="mb-10 flex flex-wrap items-end justify-between gap-x-8 gap-y-5">
         <div className="min-w-0 basis-full sm:flex-1 sm:basis-auto">
-          <div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
-            <FolderOpenIcon aria-hidden className="size-3.5" />
-            Project overview<span aria-hidden>·</span>
-            {environment?.label ?? project.environmentLabel ?? "Environment"}
-          </div>
-          <h1 id="project-home-title" className="text-3xl font-semibold tracking-tight">
+          <h1 id="project-home-title" className="break-words text-3xl font-semibold tracking-tight">
             {title}
           </h1>
-          <Tooltip>
-            <TooltipTrigger
-              render={<p className="mt-2 max-w-2xl truncate text-xs text-muted-foreground" />}
-            >
-              {project.workspaceRoot}
-            </TooltipTrigger>
-            <TooltipPopup>{project.workspaceRoot}</TooltipPopup>
-          </Tooltip>
+          <p className="mt-3 flex items-center gap-2 text-base">
+            {view.needsYou.length ? (
+              <span aria-hidden className={cn("size-2 rounded-full", needsYouStatus?.dotClass)} />
+            ) : view.working.length ? (
+              <span aria-hidden className={cn("size-2 rounded-full", workingStatus?.dotClass)} />
+            ) : view.recent.length ? (
+              <CheckIcon aria-hidden className="size-4 text-muted-foreground" />
+            ) : null}
+            {headline}
+          </p>
+          {view.recent.length ? (
+            <p className="mt-1 text-sm text-muted-foreground">{facts.join(" · ")}</p>
+          ) : null}
         </div>
         <div className="flex items-center gap-2">
           <Button
@@ -152,215 +341,160 @@ function ProjectOverview({
                 },
               })
             }
-            aria-label="Project settings"
           >
             <Settings2Icon />
             Settings
           </Button>
-          <Button size="sm" disabled={!connected} onClick={() => void newThread(refs[0]!)}>
+          <Button size="sm" disabled={!connected} onClick={createThread}>
             <PlusIcon />
             New thread
           </Button>
         </div>
-      </div>
+      </header>
       {!connected ? (
         <div
           role="status"
-          className="mb-6 rounded-lg border border-border px-4 py-3 text-sm text-muted-foreground"
+          className="mb-8 rounded-lg border border-border bg-muted/30 px-4 py-3 text-sm text-muted-foreground"
         >
-          Reconnect to {environment?.label ?? "this environment"} to see current project activity.
-          Saved thread information may be out of date.
+          Showing saved activity. Reconnect to {environmentLabel} to see what agents are doing now.
         </div>
       ) : null}
-      <div className="mb-8 flex flex-wrap gap-x-5 gap-y-2 border-y border-border py-3 text-xs text-muted-foreground">
-        <span>
-          {view.recent.length} {view.recent.length === 1 ? "thread" : "threads"}
-        </span>
-        <span>{view.working.length} in progress</span>
-        <span>{view.needsYou.length} needing you</span>
-        <span className="sm:ml-auto">{connected ? "Activity updates live" : "Saved activity"}</span>
-      </div>
-      <div className="grid gap-x-12 gap-y-9 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">
-        <div className="min-w-0 space-y-9">
-          <section aria-labelledby="project-next">
-            <h2 id="project-next" className="mb-3 text-base font-semibold tracking-tight">
-              What’s next
-            </h2>
-            {view.needsYou.length ? (
-              <div className="-mx-3">
-                {view.needsYou.slice(0, 6).map((thread) => (
-                  <ThreadRow key={thread.id} thread={thread} report={reports.get(thread.id)} />
+      <div className="grid gap-x-14 gap-y-12 lg:grid-cols-[minmax(0,1fr)_18rem]">
+        <div className="min-w-0 space-y-10">
+          {view.needsYou.length ? (
+            <section aria-labelledby="project-needs-you">
+              <h2 id="project-needs-you" className="mb-3 text-base font-semibold tracking-tight">
+                Needs you
+              </h2>
+              <ul className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-card">
+                {view.needsYou.map((thread) => (
+                  <li key={thread.id}>
+                    <ThreadEntry thread={thread} report={reports.get(thread.id)} framed />
+                  </li>
                 ))}
-              </div>
-            ) : (
-              <div className="py-2">
-                <p className="flex items-center gap-2 text-sm">
-                  <CheckIcon aria-hidden className="size-4 text-muted-foreground" />
-                  {connected ? "Nothing waiting on you" : "No saved requests waiting on you"}
-                </p>
-                <p className="mt-2 text-xs leading-5 text-muted-foreground">
-                  {view.working.length
-                    ? "Agents are still working. Open a thread below to follow along."
-                    : "Pick up a recent conversation or start the next piece of work."}
-                </p>
-              </div>
-            )}
-          </section>
+              </ul>
+            </section>
+          ) : null}
           {view.working.length ? (
             <section aria-labelledby="project-working">
               <h2 id="project-working" className="mb-3 text-base font-semibold tracking-tight">
                 In progress
               </h2>
-              <div className="-mx-3">
-                {view.working.slice(0, 4).map((thread) => (
-                  <ThreadRow key={thread.id} thread={thread} report={reports.get(thread.id)} />
+              <ul className="divide-y divide-border overflow-hidden rounded-xl border border-border">
+                {view.working.map((thread) => (
+                  <li key={thread.id}>
+                    <ThreadEntry thread={thread} report={reports.get(thread.id)} framed />
+                  </li>
                 ))}
-              </div>
+              </ul>
             </section>
           ) : null}
-          <section aria-labelledby="project-recent">
-            <h2 id="project-recent" className="mb-1 text-base font-semibold tracking-tight">
-              Recent work
-            </h2>
-            <p className="mb-3 text-xs text-muted-foreground">
-              Latest conversations, with their original updates.
-            </p>
-            {view.recent.length ? (
-              <div className="-mx-3">
-                {view.recent.slice(0, 8).map((thread) => (
-                  <ThreadRow
-                    key={thread.id}
-                    thread={thread}
-                    report={reports.get(thread.id)}
-                    label={view.finished.includes(thread) ? "Agent finished" : undefined}
-                  />
+          {view.updates.length ? (
+            <section aria-labelledby="project-updates">
+              <h2 id="project-updates" className="text-base font-semibold tracking-tight">
+                Latest updates
+              </h2>
+              <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                Each agent’s own last report. “Agent finished” means its run ended, not that the
+                work was reviewed.
+              </p>
+              <div className="mt-5 space-y-7">
+                {days.map((day) => (
+                  <section key={day.label} aria-label={day.label}>
+                    <h3 className="mb-1 text-xs font-medium text-muted-foreground">{day.label}</h3>
+                    <ul className="-mx-4 space-y-1">
+                      {day.threads.map((thread) => (
+                        <li key={thread.id}>
+                          <ThreadEntry thread={thread} report={reports.get(thread.id)} />
+                        </li>
+                      ))}
+                    </ul>
+                  </section>
                 ))}
               </div>
-            ) : (
-              <div className="py-5 text-sm text-muted-foreground">
-                Your project starts here. Create a thread and its activity will appear
-                automatically.
-              </div>
-            )}
-          </section>
-        </div>
-        <section
-          className="min-w-0 lg:border-l lg:border-border lg:pl-9"
-          aria-labelledby="project-memory"
-        >
-          <div className="mb-1 flex items-center justify-between gap-3">
-            <h2 id="project-memory" className="text-base font-semibold tracking-tight">
-              Project memory
-            </h2>
-            <Button
-              variant="ghost"
-              size="xs"
-              disabled={!connected || memory.isPending}
-              onClick={memory.refresh}
-            >
-              Refresh
-            </Button>
-          </div>
-          <p className="mb-5 text-xs leading-5 text-muted-foreground">
-            Built in the background from your threads. Open a conversation to check the original
-            context.
-          </p>
-          {!connected ? (
-            <p className="text-sm text-muted-foreground">
-              Memory will be available when this environment reconnects.
-            </p>
-          ) : memory.error ? (
-            <div role="alert">
-              <p className="text-sm text-muted-foreground">Could not read project memory.</p>
-              <p className="mt-2 text-xs text-muted-foreground">{memory.error}</p>
-              <div className="mt-3">
-                <Button variant="outline" size="sm" onClick={memory.refresh}>
-                  Try again
-                </Button>
-              </div>
-            </div>
-          ) : !memory.data ? (
-            <p role="status" className="text-sm text-muted-foreground">
-              Loading project memory…
-            </p>
-          ) : memory.data.state === "disabled" ? (
-            <div>
-              <p className="text-sm text-muted-foreground">
-                Turn on Memory to build a lasting project history.
-              </p>
-              <div className="mt-3">
+              {view.updates.length > UPDATES_SHOWN ? (
                 <Button
-                  variant="outline"
+                  className="mt-4"
+                  variant="ghost"
                   size="sm"
-                  onClick={() => void navigate({ to: "/settings/general" })}
+                  onClick={() => setShowAllUpdates((value) => !value)}
                 >
-                  Open memory settings
+                  {showAllUpdates
+                    ? "Show fewer"
+                    : `Show ${view.updates.length - UPDATES_SHOWN} older`}
                 </Button>
-              </div>
-            </div>
-          ) : sections.length ? (
-            <div className="space-y-6">
-              {sections.map((section) => (
-                <section key={section.heading}>
-                  <h3 className="mb-2 text-xs font-medium text-muted-foreground">
-                    {section.heading}
-                  </h3>
-                  <ul className="space-y-3">
-                    {section.lines.map((line) => (
-                      <li key={line} className="break-words text-sm leading-6">
-                        {line}
-                      </li>
-                    ))}
-                  </ul>
-                </section>
-              ))}
-            </div>
-          ) : (
-            <div>
-              <p className="text-sm">Still getting to know this project</p>
-              <p className="mt-2 text-xs leading-5 text-muted-foreground">
-                As Memory processes your conversations, its summaries will appear here. Recent work
-                is already available on the left.
-              </p>
-            </div>
-          )}
-          {connected && memory.data?.state === "ready" ? (
-            <details className="mt-6 border-t border-border pt-4">
-              <summary className="cursor-pointer text-xs text-muted-foreground">
-                Memory source
-                {memory.data.updatedAt
-                  ? ` · ${new Date(memory.data.updatedAt).toLocaleString()}`
-                  : ""}
-              </summary>
-              <p className="mt-3 break-all font-mono text-2xs text-muted-foreground">
-                {memory.data.relativePath}
-              </p>
-              <pre className="mt-3 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted/40 p-3 text-xs leading-5">
-                {memory.data.markdown}
-              </pre>
-            </details>
+              ) : null}
+            </section>
           ) : null}
-          <div className="mt-7 border-t border-border pt-4">
-            <p className="text-xs leading-5 text-muted-foreground">
-              Have evidence to turn into a reviewed action?
-            </p>
-            <div className="mt-2">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() =>
-                  void navigate({
-                    to: "/project-brief/$environmentId/$projectId",
-                    params: { environmentId: project.environmentId, projectId: project.id },
-                  })
-                }
-              >
-                Open project brief
-                <ArrowUpRightIcon />
+          {!view.recent.length ? (
+            <section className="rounded-xl border border-dashed border-border px-6 py-10">
+              <h2 className="text-base font-semibold tracking-tight">Start the first thread</h2>
+              <p className="mt-2 max-w-md text-sm leading-6 text-muted-foreground">
+                Threads you run in {title} appear here with their latest reports, so you can see
+                where things stand when you come back.
+              </p>
+              <Button className="mt-5" size="sm" disabled={!connected} onClick={createThread}>
+                <PlusIcon />
+                New thread
               </Button>
-            </div>
-          </div>
-        </section>
+            </section>
+          ) : null}
+        </div>
+        <aside className="min-w-0 space-y-9 lg:border-l lg:border-border lg:pl-8">
+          <ProjectMemory
+            memory={memory}
+            connected={connected}
+            environmentLabel={environmentLabel}
+          />
+          <section aria-labelledby="project-details" className="border-t border-border pt-6">
+            <h2 id="project-details" className="sr-only">
+              Project details
+            </h2>
+            <dl className="space-y-3 text-xs">
+              <div>
+                <dt className="text-muted-foreground">Location</dt>
+                <dd className="mt-0.5 min-w-0">
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <span className="flex min-w-0 font-mono text-2xs text-foreground/80" />
+                      }
+                    >
+                      <MiddleTruncate value={project.workspaceRoot} showTitle={false} />
+                    </TooltipTrigger>
+                    <TooltipPopup>{project.workspaceRoot}</TooltipPopup>
+                  </Tooltip>
+                </dd>
+              </div>
+              <div>
+                <dt className="text-muted-foreground">Environment</dt>
+                <dd className="mt-0.5 text-foreground/80">{environmentLabel}</dd>
+              </div>
+            </dl>
+          </section>
+          <section aria-labelledby="project-brief-link" className="border-t border-border pt-6">
+            <h2 id="project-brief-link" className="text-sm font-semibold">
+              Project brief
+            </h2>
+            <p className="mt-1 text-xs leading-5 text-muted-foreground">
+              Turn evidence from this project into a reviewed action.
+            </p>
+            <Button
+              className="mt-3"
+              variant="outline"
+              size="xs"
+              onClick={() =>
+                void navigate({
+                  to: "/project-brief/$environmentId/$projectId",
+                  params: { environmentId: project.environmentId, projectId: project.id },
+                })
+              }
+            >
+              Open project brief
+              <ArrowRightIcon />
+            </Button>
+          </section>
+        </aside>
       </div>
     </>
   );
@@ -381,11 +515,18 @@ export function ProjectHomePage({ projectKey }: { projectKey: string }) {
       className="scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto"
       aria-labelledby="project-home-title"
     >
-      <div className="mx-auto w-full max-w-6xl px-5 pb-10 pt-16 sm:px-9 sm:pt-14">
+      <div className="mx-auto w-full max-w-5xl px-5 pb-12 pt-16 sm:px-9 sm:pt-12">
         {group && project ? (
           <>
             {group.memberProjects.length > 1 ? (
-              <div className="mb-6 flex flex-wrap gap-2" role="group" aria-label="Project copies">
+              <div
+                className="mb-6 flex flex-wrap items-center gap-1.5"
+                role="group"
+                aria-label="Project copies"
+              >
+                <span aria-hidden className="mr-1 text-xs text-muted-foreground">
+                  Copy
+                </span>
                 {group.memberProjects.map((member) => (
                   <Button
                     key={member.physicalProjectKey}
