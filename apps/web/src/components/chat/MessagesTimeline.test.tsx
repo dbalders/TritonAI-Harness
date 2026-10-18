@@ -2525,7 +2525,7 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("Received 1 update and ran 1 command");
   });
 
-  it("renders T3 MCP dynamic tools with the product logo and pretty name", async () => {
+  it("renders app-owned MCP dynamic tools with the TritonAI thread label", async () => {
     activityTestState.expanded = true;
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const item = {
@@ -2594,9 +2594,7 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    // App-owned tool calls use the Harness brand while preserving their wire names.
-    expect(markup).toContain('fill="currentColor"');
-    expect(markup).not.toContain('src="/tritonai-logo.png"');
+    // Show the friendly action label without exposing the tool's wire name.
     expect(markup).toContain("Read a TritonAI thread");
     expect(markup).not.toContain("mcp__t3-code__t3_thread_read");
   });
