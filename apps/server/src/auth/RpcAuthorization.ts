@@ -45,6 +45,7 @@ type WsRpcMethod = RpcGroup.Rpcs<typeof WsRpcGroup>["_tag"];
 export const RPC_REQUIRED_SCOPES = {
   ...CLIENT_GUARDED_RPC_SCOPES,
   [WS_METHODS.projectBriefGet]: AuthOrchestrationReadScope,
+  [WS_METHODS.serverGetProjectMemory]: AuthOrchestrationReadScope,
   [WS_METHODS.projectBriefArchiveGet]: AuthOrchestrationReadScope,
   [WS_METHODS.projectBriefSubscribe]: AuthOrchestrationReadScope,
   [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: AuthOrchestrationOperateScope,
@@ -292,6 +293,7 @@ const requiredScopesForRpcCall = (
 ): ReadonlyArray<AuthEnvironmentScope> => {
   if (
     method === WS_METHODS.projectBriefGet ||
+    method === WS_METHODS.serverGetProjectMemory ||
     method === WS_METHODS.projectBriefSubscribe ||
     method === WS_METHODS.projectBriefArchiveGet
   ) {

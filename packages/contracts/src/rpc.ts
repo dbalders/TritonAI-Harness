@@ -351,6 +351,9 @@ import {
 import { ServerTritonAiUsageError, ServerTritonAiUsageSnapshot } from "./tritonaiUsage.ts";
 import {
   ServerMemoryStatus,
+  ServerProjectMemory,
+  ServerProjectMemoryInput,
+  ServerProjectMemoryError,
   ServerMemorySyncError,
   ServerMemorySyncPollInput,
   ServerMemorySyncPollResult,
@@ -543,6 +546,7 @@ export const WS_METHODS = {
   serverTranscribeVoice: "server.transcribeVoice",
   serverGetTritonAiUsage: "server.getTritonAiUsage",
   serverGetMemoryStatus: "server.getMemoryStatus",
+  serverGetProjectMemory: "server.getProjectMemory",
   serverStartMemorySync: "server.startMemorySync",
   serverPollMemorySync: "server.pollMemorySync",
   serverSyncMemoryNow: "server.syncMemoryNow",
@@ -908,6 +912,12 @@ const WsServerGetMemoryStatusRpc = Rpc.make(WS_METHODS.serverGetMemoryStatus, {
   payload: Schema.Struct({}),
   success: ServerMemoryStatus,
   error: EnvironmentAuthorizationError,
+});
+
+const WsServerGetProjectMemoryRpc = Rpc.make(WS_METHODS.serverGetProjectMemory, {
+  payload: ServerProjectMemoryInput,
+  success: ServerProjectMemory,
+  error: Schema.Union([ServerProjectMemoryError, EnvironmentAuthorizationError]),
 });
 
 const WsServerStartMemorySyncRpc = Rpc.make(WS_METHODS.serverStartMemorySync, {
@@ -2242,6 +2252,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerTranscribeVoiceRpc,
   WsServerGetTritonAiUsageRpc,
   WsServerGetMemoryStatusRpc,
+  WsServerGetProjectMemoryRpc,
   WsServerStartMemorySyncRpc,
   WsServerPollMemorySyncRpc,
   WsServerSyncMemoryNowRpc,

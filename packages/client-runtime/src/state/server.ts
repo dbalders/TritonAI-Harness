@@ -1123,6 +1123,11 @@ export function createServerEnvironmentAtoms<R, E>(
       // Summaries finish in the background, so an open settings page catches up.
       refreshIntervalMs: 30_000,
     }),
+    projectMemory: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:project-memory",
+      tag: WS_METHODS.serverGetProjectMemory,
+      refreshIntervalMs: 60_000,
+    }),
     projectBrief: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:project-brief:get",
       tag: WS_METHODS.projectBriefGet,

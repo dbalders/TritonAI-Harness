@@ -171,6 +171,7 @@ import { isCommandPaletteOpen, openCommandPalette } from "../commandPaletteBus";
 import { useFocusComposerAfterNewThread } from "../composerHandleContext";
 import { useClientSettings, useUpdateClientSettings } from "../hooks/useSettings";
 import { useSidebarProjectGroups } from "../hooks/useSidebarProjectGroups";
+import { ProjectFolderHeading } from "./projectHome/ProjectFolderHeading";
 import { useTerminalFocus } from "../hooks/useTerminalFocus";
 import { registerSettleAndAdvance } from "../settleAndAdvance";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
@@ -5936,49 +5937,64 @@ export default function Sidebar() {
                                                   isExpanded && "pb-0",
                                                 )}
                                               >
-                                                <button
-                                                  type="button"
-                                                  aria-expanded={isExpanded}
-                                                  aria-label={`${isExpanded ? "Collapse" : "Expand"} ${project?.displayName ?? "Other threads"}`}
-                                                  onClick={() =>
-                                                    setCollapsedProjectKeys((keys) =>
-                                                      keys.includes(groupKey)
-                                                        ? keys.filter((key) => key !== groupKey)
-                                                        : [...keys, groupKey],
-                                                    )
-                                                  }
-                                                  className={cn(
-                                                    "flex min-w-0 flex-1 items-center gap-2 rounded-sm text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
-                                                    handle === null && "cursor-pointer",
-                                                  )}
-                                                >
-                                                  {isExpanded ? (
-                                                    <FolderOpenIcon
-                                                      aria-hidden
-                                                      className="size-4 shrink-0 text-sidebar-muted-foreground"
-                                                    />
-                                                  ) : (
-                                                    <FolderIcon
-                                                      aria-hidden
-                                                      className="size-4 shrink-0 text-sidebar-muted-foreground"
-                                                    />
-                                                  )}
-                                                  <span className="min-w-0 truncate text-sm font-medium text-sidebar-muted-foreground">
-                                                    {project?.displayName ?? "Other threads"}
-                                                  </span>
-                                                  {/* Same-named folders on two machines differ only
+                                                {project ? (
+                                                  <ProjectFolderHeading
+                                                    title={project.displayName}
+                                                    projectKey={project.projectKey}
+                                                    expanded={isExpanded}
+                                                    onOpen={() => {
+                                                      clearSelection();
+                                                      if (isMobile) setOpenMobile(false);
+                                                    }}
+                                                    onToggle={() =>
+                                                      setCollapsedProjectKeys((keys) =>
+                                                        keys.includes(groupKey)
+                                                          ? keys.filter((key) => key !== groupKey)
+                                                          : [...keys, groupKey],
+                                                      )
+                                                    }
+                                                  >
+                                                    {/* Same-named folders on two machines differ only
                                                       by where they live; the icon says which. */}
-                                                  {project && showProjectEnvironments ? (
-                                                    <ProjectEnvironmentBadge
-                                                      group={project}
-                                                      primaryEnvironmentId={primaryEnvironmentId}
-                                                      machineByEnvironmentId={
-                                                        environmentMachineById
-                                                      }
-                                                      className="ml-0 text-sidebar-muted-foreground"
-                                                    />
-                                                  ) : null}
-                                                </button>
+                                                    {project && showProjectEnvironments ? (
+                                                      <ProjectEnvironmentBadge
+                                                        group={project}
+                                                        primaryEnvironmentId={primaryEnvironmentId}
+                                                        machineByEnvironmentId={
+                                                          environmentMachineById
+                                                        }
+                                                        className="ml-0 text-sidebar-muted-foreground"
+                                                      />
+                                                    ) : null}
+                                                  </ProjectFolderHeading>
+                                                ) : (
+                                                  <button
+                                                    type="button"
+                                                    aria-expanded={isExpanded}
+                                                    aria-label={`${isExpanded ? "Collapse" : "Expand"} Other threads`}
+                                                    onClick={() =>
+                                                      setCollapsedProjectKeys((keys) =>
+                                                        keys.includes(groupKey)
+                                                          ? keys.filter((key) => key !== groupKey)
+                                                          : [...keys, groupKey],
+                                                      )
+                                                    }
+                                                    className="flex min-w-0 flex-1 items-center gap-2 rounded-sm text-left text-sm font-medium text-sidebar-muted-foreground focus-visible:outline-2 focus-visible:outline-ring"
+                                                  >
+                                                    {isExpanded ? (
+                                                      <FolderOpenIcon
+                                                        aria-hidden
+                                                        className="size-4 shrink-0"
+                                                      />
+                                                    ) : (
+                                                      <FolderIcon
+                                                        aria-hidden
+                                                        className="size-4 shrink-0"
+                                                      />
+                                                    )}
+                                                    Other threads
+                                                  </button>
+                                                )}
                                                 {project ? (
                                                   <button
                                                     type="button"

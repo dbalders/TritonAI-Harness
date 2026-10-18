@@ -7,6 +7,7 @@ import { getManagedPolicyDiagnostics, managedPolicyDiagnosticsChanges } from "./
 import { transcribeVoice } from "./voiceTranscription.ts";
 import { fetchTritonAiUsage } from "./tritonAiUsage.ts";
 import * as MemorySync from "./memory/sync/MemorySync.ts";
+import * as DailyMemory from "./memory/DailyMemory.ts";
 import * as Ideas from "./ideas/Ideas.ts";
 import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
@@ -1881,6 +1882,7 @@ const layerWsRpc = (
 
       const account = yield* Account.AccountService;
       const memorySync = yield* MemorySync.MemorySync;
+      const dailyMemory = yield* DailyMemory.DailyMemory;
       const ideas = yield* Ideas.Ideas;
       const handlers = ServerWsRpcGroup.of({
         [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command) =>
@@ -3226,6 +3228,7 @@ const layerWsRpc = (
         [WS_METHODS.serverPollAccountLogin]: (input) => account.pollLogin(currentSessionId, input),
         [WS_METHODS.serverSignOutAccount]: (_input) => account.signOut(currentSessionId),
         [WS_METHODS.serverGetMemoryStatus]: (_input) => memorySync.getStatus,
+        [WS_METHODS.serverGetProjectMemory]: (input) => dailyMemory.getProjectMemory(input),
         [WS_METHODS.serverStartMemorySync]: (_input) => memorySync.start,
         [WS_METHODS.serverPollMemorySync]: ({ flowId }) => memorySync.poll(flowId),
         [WS_METHODS.serverSyncMemoryNow]: (_input) =>

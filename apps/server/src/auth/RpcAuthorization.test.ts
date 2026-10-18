@@ -440,6 +440,39 @@ it.effect("does not expose captured project files with only orchestration read a
   }).pipe(Effect.scoped),
 );
 
+it.effect("does not expose project memory with only orchestration read access", () =>
+  Effect.gen(function* () {
+    const group = WsRpcGroup.omit(
+      ...[...WsRpcGroup.requests.keys()].filter(
+        (
+          tag,
+        ): tag is Exclude<
+          keyof typeof RPC_REQUIRED_SCOPES,
+          typeof WS_METHODS.serverGetProjectMemory
+        > => tag !== WS_METHODS.serverGetProjectMemory,
+      ),
+    );
+    let handled = false;
+    const client = yield* RpcTest.makeClient(group).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          group.toLayerHandler(WS_METHODS.serverGetProjectMemory, () =>
+            Effect.sync(() => {
+              handled = true;
+            }).pipe(Effect.andThen(Effect.never)),
+          ),
+          RpcAuthorization.layer([AuthOrchestrationReadScope]),
+        ),
+      ),
+    );
+    const result = yield* client[WS_METHODS.serverGetProjectMemory]({
+      projectId: ProjectId.make("project"),
+    }).pipe(Effect.flip);
+    expect(result).toMatchObject({ requiredPermission: AuthFilesystemReadScope });
+    expect(handled).toBe(false);
+  }).pipe(Effect.scoped),
+);
+
 it.effect("does not expose archived source snapshots without filesystem permission", () =>
   Effect.gen(function* () {
     const group = WsRpcGroup.omit(

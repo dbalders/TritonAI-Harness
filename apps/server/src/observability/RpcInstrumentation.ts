@@ -22,6 +22,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.serverTranscribeVoice]: "server",
   [WS_METHODS.serverGetTritonAiUsage]: "server",
   [WS_METHODS.serverGetMemoryStatus]: "server",
+  [WS_METHODS.serverGetProjectMemory]: "server",
   [WS_METHODS.serverStartMemorySync]: "server",
   [WS_METHODS.serverPollMemorySync]: "server",
   [WS_METHODS.serverSyncMemoryNow]: "server",
