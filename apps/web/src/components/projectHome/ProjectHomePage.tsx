@@ -76,7 +76,12 @@ function ThreadEntry({
       )}
     >
       <span className="flex items-baseline gap-3">
-        <span className="min-w-0 flex-1 break-words text-sm font-medium text-foreground">
+        <span
+          className={cn(
+            "min-w-0 flex-1 break-words text-sm text-foreground",
+            framed ? "font-medium" : "font-normal",
+          )}
+        >
           {thread.title}
         </span>
         <span className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground tabular-nums">
@@ -484,8 +489,12 @@ function ProjectOverview({
               </p>
               <div className="mt-5 space-y-7">
                 {days.map((day) => (
-                  <section key={day.label} aria-label={day.label}>
-                    <h3 className="mb-1 text-xs font-medium text-muted-foreground">{day.label}</h3>
+                  <section
+                    key={day.label}
+                    aria-label={day.label}
+                    className="border-l border-border pl-4"
+                  >
+                    <h3 className="mb-1 text-xs text-muted-foreground">{day.label}</h3>
                     <ul className="-mx-4 space-y-1">
                       {day.threads.map((thread) => (
                         <li key={thread.id}>
