@@ -12,6 +12,7 @@ import { WS_METHODS } from "./rpc.ts";
 
 /** Incremental client enforcement; the server still authorizes every request. */
 export const CLIENT_GUARDED_RPC_SCOPES = {
+  [WS_METHODS.projectOverviewEnsure]: AuthOrchestrationOperateScope,
   [WS_METHODS.projectBriefExecute]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverRunStorageCleanup]: AuthSettingsWriteScope,
   // Endpoint checks exist to configure exports, so they need the same grant as saving them.
@@ -58,7 +59,7 @@ export function clientRpcRequiredScopes(
   method: string,
   input: unknown,
 ): readonly AuthEnvironmentScope[] {
-  if (method === WS_METHODS.projectBriefExecute) {
+  if (method === WS_METHODS.projectBriefExecute || method === WS_METHODS.projectOverviewEnsure) {
     return [AuthOrchestrationOperateScope, AuthFilesystemReadScope];
   }
   if (method === WS_METHODS.gitPreparePullRequestThread && input !== undefined) {

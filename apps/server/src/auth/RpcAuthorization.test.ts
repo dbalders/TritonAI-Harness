@@ -23,6 +23,7 @@ import {
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Stream from "effect/Stream";
 import * as RpcTest from "effect/rpc/RpcTest";
 
 import {
@@ -623,6 +624,54 @@ it.effect("denies manual cleanup before the handler without settings permission"
     );
     expect(yield* client[WS_METHODS.serverRunStorageCleanup]({}).pipe(Effect.flip)).toMatchObject({
       requiredPermission: AuthSettingsWriteScope,
+    });
+    expect(handled).toBe(false);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("protects cached project overviews with filesystem permission", () =>
+  Effect.gen(function* () {
+    const group = WsRpcGroup.omit(
+      ...[...WsRpcGroup.requests.keys()].filter(
+        (
+          tag,
+        ): tag is Exclude<
+          keyof typeof RPC_REQUIRED_SCOPES,
+          | typeof WS_METHODS.projectOverviewGet
+          | typeof WS_METHODS.projectOverviewSubscribe
+          | typeof WS_METHODS.projectOverviewEnsure
+        > =>
+          tag !== WS_METHODS.projectOverviewGet &&
+          tag !== WS_METHODS.projectOverviewSubscribe &&
+          tag !== WS_METHODS.projectOverviewEnsure,
+      ),
+    );
+    let handled = false;
+    const denyHandler = () =>
+      Effect.sync(() => {
+        handled = true;
+      }).pipe(Effect.andThen(Effect.never));
+    const client = yield* RpcTest.makeClient(group).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          group.toLayerHandler(WS_METHODS.projectOverviewGet, denyHandler),
+          group.toLayerHandler(WS_METHODS.projectOverviewSubscribe, () =>
+            Stream.fromEffect(denyHandler()),
+          ),
+          group.toLayerHandler(WS_METHODS.projectOverviewEnsure, denyHandler),
+          RpcAuthorization.layer([AuthOrchestrationReadScope, AuthOrchestrationOperateScope]),
+        ),
+      ),
+    );
+    const input = { projectId: ProjectId.make("project") };
+    expect(yield* client[WS_METHODS.projectOverviewGet](input).pipe(Effect.flip)).toMatchObject({
+      requiredPermission: AuthFilesystemReadScope,
+    });
+    expect(
+      yield* client[WS_METHODS.projectOverviewSubscribe](input).pipe(Stream.runDrain, Effect.flip),
+    ).toMatchObject({ requiredPermission: AuthFilesystemReadScope });
+    expect(yield* client[WS_METHODS.projectOverviewEnsure](input).pipe(Effect.flip)).toMatchObject({
+      requiredPermission: AuthFilesystemReadScope,
     });
     expect(handled).toBe(false);
   }).pipe(Effect.scoped),

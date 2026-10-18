@@ -135,6 +135,7 @@ import * as ThreadMessageIntake from "./orchestration-v2/ThreadMessageIntake.ts"
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
 import * as ProjectBrief from "./projectBrief/ProjectBriefService.ts";
+import * as ProjectOverview from "./project/ProjectOverview.ts";
 import * as SecretRequests from "./secrets/SecretRequests.ts";
 import {
   archivedShellStreamItemFromThreadShell,
@@ -1287,6 +1288,7 @@ const layerWsRpc = (
       const providerSessionManager = yield* ProviderSessionManager.ProviderSessionManagerV2;
       const scheduledTasks = yield* ScheduledTasks.ScheduledTaskService;
       const projectBrief = yield* ProjectBrief.ProjectBriefService;
+      const projectOverview = yield* ProjectOverview.ProjectOverview;
       const secretRequests = yield* SecretRequests.SecretRequests;
       const pullRequests = yield* PullRequestService.PullRequestService;
       const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
@@ -2122,6 +2124,9 @@ const layerWsRpc = (
         [WS_METHODS.projectBriefArchiveGet]: (input) => projectBrief.archiveGet(input),
         [WS_METHODS.projectBriefSubscribe]: (input) => projectBrief.subscribe(input),
         [WS_METHODS.projectBriefExecute]: (input) => projectBrief.execute(input),
+        [WS_METHODS.projectOverviewGet]: (input) => projectOverview.get(input),
+        [WS_METHODS.projectOverviewSubscribe]: (input) => projectOverview.subscribe(input),
+        [WS_METHODS.projectOverviewEnsure]: (input) => projectOverview.ensure(input),
         [WS_METHODS.scheduledTasksList]: (_input) =>
           scheduledTasks.list().pipe(Effect.map(withVisibleWebhookUrls)),
         [WS_METHODS.scheduledTasksSubscribe]: (_input) =>

@@ -45,6 +45,7 @@ const POST_032_MIGRATION_IDENTITIES: Array<readonly [number, string]> = [
   [68, "ProjectBriefs"],
   [69, "ProjectBriefDispatches"],
   [70, "ProjectBriefArchives"],
+  [71, "ProjectOverviews"],
 ];
 
 it("keeps the migration registry unique and preserves shipped downstream identities", () => {

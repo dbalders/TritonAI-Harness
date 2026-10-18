@@ -3,7 +3,7 @@ import { useAtomValue } from "@effect/atom-react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
-import type { ServerProjectMemory } from "@t3tools/contracts";
+import type { ProjectNextStep, ServerProjectMemory } from "@t3tools/contracts";
 import type { SidebarProjectSnapshot } from "../../sidebarProjectGrouping";
 import { useSidebarProjectGroups } from "../../hooks/useSidebarProjectGroups";
 import { useNewThreadHandler } from "../../hooks/useHandleNewThread";
@@ -14,7 +14,7 @@ import { serverEnvironment } from "../../state/server";
 import { shellEnvironment } from "../../state/shell";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { formatRelativeTimeLabel } from "../../timestampFormat";
-import { ArrowRightIcon, CheckIcon, FolderOpenIcon, PlusIcon } from "lucide-react";
+import { CheckIcon, FolderOpenIcon, PlusIcon } from "lucide-react";
 import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
 import { MiddleTruncate } from "../ui/middle-truncate";
@@ -32,6 +32,12 @@ import {
   projectThreadExcerpt,
   projectThreadStatus,
 } from "./projectHomeView";
+
+import { useComposerDraftStore } from "../../composerDraftStore";
+import { mergeIdeaPrompt } from "../ideas/ideaDraft";
+import { ProjectDescription, ProjectNextSteps } from "./ProjectNextSteps";
+import { projectNextStepDraft } from "./projectNextStepDraft";
+import { useProjectOverview } from "./useProjectOverview";
 
 const UPDATES_SHOWN = 6;
 
@@ -262,7 +268,6 @@ function ProjectOverview({
   project: SidebarProjectSnapshot["memberProjects"][number];
   title: string;
 }) {
-  const navigate = useNavigate();
   const newThread = useNewThreadHandler();
   const environment = useEnvironment(project.environmentId);
   const environmentLabel = environment?.label ?? project.environmentLabel ?? "this environment";
@@ -277,9 +282,9 @@ function ProjectOverview({
   const openInEditor = useAtomCommand(shellEnvironment.openInEditor, "Open project folder");
   const [openingFolder, setOpeningFolder] = useState(false);
   const folderInFlight = useRef(false);
-  const [opening, setOpening] = useState<"thread" | "brief" | null>(null);
+  const [opening, setOpening] = useState<string | null>(null);
   const navigationInFlight = useRef(false);
-  const openPage = async (action: "thread" | "brief", request: () => Promise<unknown>) => {
+  const openPage = async (action: string, request: () => Promise<unknown>) => {
     if (navigationInFlight.current) return;
     navigationInFlight.current = true;
     setOpening(action);
@@ -288,7 +293,7 @@ function ProjectOverview({
     } catch (error) {
       toastManager.add({
         type: "error",
-        title: action === "brief" ? "Could not open project brief" : "Could not open new thread",
+        title: "Could not open new thread",
         description: error instanceof Error ? error.message : "Please try again.",
       });
     } finally {
@@ -337,6 +342,27 @@ function ProjectOverview({
         })
       : null,
   );
+  const overviewSupported =
+    environment?.serverConfig?.environment.capabilities.projectOverview === true;
+  const overview = useProjectOverview({
+    environmentId: project.environmentId,
+    projectId: project.id,
+    connected,
+    supported: overviewSupported,
+  });
+  const openNextStep = (step: ProjectNextStep) => {
+    const saved = overview.snapshot?.overview;
+    if (!saved || !connected) return;
+    const prompt = projectNextStepDraft(saved, step);
+    void openPage(step.id, async () => {
+      const opened = await newThread(refs[0]!, { newDraftPrompt: prompt });
+      if (!opened) throw new Error("This project could not open a draft. Please try again.");
+      const store = useComposerDraftStore.getState();
+      const existing = store.getComposerDraft(opened.draftId)?.prompt ?? "";
+      const merged = mergeIdeaPrompt(existing, prompt);
+      if (merged !== existing) store.setPrompt(opened.draftId, merged);
+    });
+  };
   const completionKey = view.recent
     .map((thread) => `${thread.id}:${thread.latestRun?.completedAt ?? ""}`)
     .join("|");
@@ -399,11 +425,7 @@ function ProjectOverview({
         </div>
       </header>
       <p role="status" className="sr-only">
-        {opening === "brief"
-          ? "Opening project brief…"
-          : opening === "thread"
-            ? "Opening new thread…"
-            : ""}
+        {opening ? "Opening new thread…" : ""}
       </p>
       {!connected ? (
         <div
@@ -429,6 +451,14 @@ function ProjectOverview({
               </ul>
             </section>
           ) : null}
+          <ProjectNextSteps
+            view={overview}
+            environmentId={project.environmentId}
+            connected={connected}
+            supported={overviewSupported}
+            opening={opening}
+            onOpen={openNextStep}
+          />
           {view.working.length ? (
             <section aria-labelledby="project-working">
               <h2 id="project-working" className="mb-3 text-base font-semibold tracking-tight">
@@ -501,6 +531,7 @@ function ProjectOverview({
           ) : null}
         </div>
         <aside className="min-w-0 space-y-9 lg:border-l lg:border-border lg:pl-8">
+          <ProjectDescription view={overview} />
           <ProjectMemory
             memory={memory}
             connected={connected}
@@ -551,32 +582,6 @@ function ProjectOverview({
                 <dd className="mt-0.5 text-foreground/80">{environmentLabel}</dd>
               </div>
             </dl>
-          </section>
-          <section aria-labelledby="project-brief-link" className="border-t border-border pt-6">
-            <h2 id="project-brief-link" className="text-sm font-semibold">
-              Project brief
-            </h2>
-            <p className="mt-1 text-xs leading-5 text-muted-foreground">
-              Turn evidence from this project into a reviewed action.
-            </p>
-            <Button
-              className="mt-3"
-              variant="outline"
-              size="xs"
-              disabled={!connected || opening !== null}
-              aria-busy={opening === "brief"}
-              onClick={() =>
-                void openPage("brief", () =>
-                  navigate({
-                    to: "/project-brief/$environmentId/$projectId",
-                    params: { environmentId: project.environmentId, projectId: project.id },
-                  }),
-                )
-              }
-            >
-              {opening === "brief" ? "Opening brief…" : "Open project brief"}
-              {opening === "brief" ? <Spinner aria-hidden /> : <ArrowRightIcon />}
-            </Button>
           </section>
         </aside>
       </div>

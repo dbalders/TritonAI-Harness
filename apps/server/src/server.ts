@@ -182,6 +182,7 @@ import * as CursorKeychain from "@t3tools/provider-cursor/server/CursorKeychain"
 import * as CursorUsageAccounts from "@t3tools/provider-cursor/server/CursorUsageAccounts";
 import * as UsageService from "./usage/UsageService.ts";
 import * as DailyMemory from "./memory/DailyMemory.ts";
+import * as ProjectOverview from "./project/ProjectOverview.ts";
 import * as Ideas from "./ideas/Ideas.ts";
 import * as MemorySync from "./memory/sync/MemorySync.ts";
 import * as MicrosoftSignIn from "./memory/sync/microsoftSignIn.ts";
@@ -715,6 +716,7 @@ const layerRuntimeDependencies = TritonAiCommonsAction.runtimeLayer.pipe(
   // Memory sync takes the summarizer's lock while it touches the vault.
   Layer.provideMerge(MemorySync.layer.pipe(Layer.provide(MicrosoftSignIn.layer))),
   // Ideas read threads, memory notes, and plugins, and call text generation.
+  Layer.provideMerge(ProjectOverview.layer),
   Layer.provideMerge(Ideas.layer),
   // Memory reads threads and calls text generation, so it sits above the core.
   Layer.provideMerge(DailyMemory.layer),

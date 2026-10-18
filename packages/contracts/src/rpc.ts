@@ -369,6 +369,12 @@ import {
   ProjectBriefState,
 } from "./projectBrief.ts";
 import {
+  ProjectOverviewError,
+  ProjectOverviewGetInput,
+  ProjectOverviewEnsureInput,
+  ProjectOverviewSnapshot,
+} from "./projectOverview.ts";
+import {
   StorageCleanupReport,
   ServerSettings,
   ServerSettingsError,
@@ -604,6 +610,9 @@ export const WS_METHODS = {
   projectBriefArchiveGet: "projectBrief.archiveGet",
   projectBriefSubscribe: "projectBrief.subscribe",
   projectBriefExecute: "projectBrief.execute",
+  projectOverviewGet: "projectOverview.get",
+  projectOverviewSubscribe: "projectOverview.subscribe",
+  projectOverviewEnsure: "projectOverview.ensure",
 
   // Scheduled tasks
   scheduledTasksList: "scheduledTasks.list",
@@ -2115,6 +2124,23 @@ const WsProjectBriefExecuteRpc = Rpc.make(WS_METHODS.projectBriefExecute, {
   error: Schema.Union([ProjectBriefError, EnvironmentAuthorizationError]),
 });
 
+const WsProjectOverviewGetRpc = Rpc.make(WS_METHODS.projectOverviewGet, {
+  payload: ProjectOverviewGetInput,
+  success: ProjectOverviewSnapshot,
+  error: Schema.Union([ProjectOverviewError, EnvironmentAuthorizationError]),
+});
+const WsProjectOverviewSubscribeRpc = Rpc.make(WS_METHODS.projectOverviewSubscribe, {
+  payload: ProjectOverviewGetInput,
+  success: ProjectOverviewSnapshot,
+  error: Schema.Union([ProjectOverviewError, EnvironmentAuthorizationError]),
+  stream: true,
+});
+const WsProjectOverviewEnsureRpc = Rpc.make(WS_METHODS.projectOverviewEnsure, {
+  payload: ProjectOverviewEnsureInput,
+  success: ProjectOverviewSnapshot,
+  error: Schema.Union([ProjectOverviewError, EnvironmentAuthorizationError]),
+});
+
 const WsScheduledTasksListRpc = Rpc.make(WS_METHODS.scheduledTasksList, {
   payload: ScheduledTaskListInput,
   success: ScheduledTaskListResult,
@@ -2306,6 +2332,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsProjectBriefArchiveGetRpc,
   WsProjectBriefSubscribeRpc,
   WsProjectBriefExecuteRpc,
+  WsProjectOverviewGetRpc,
+  WsProjectOverviewSubscribeRpc,
+  WsProjectOverviewEnsureRpc,
   WsScheduledTasksListRpc,
   WsScheduledTasksSubscribeRpc,
   WsScheduledTasksUpsertRpc,

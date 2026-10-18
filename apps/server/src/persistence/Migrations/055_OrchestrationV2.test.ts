@@ -37,6 +37,7 @@ layer("055_OrchestrationV2", (it) => {
         [68, "ProjectBriefs"],
         [69, "ProjectBriefDispatches"],
         [70, "ProjectBriefArchives"],
+        [71, "ProjectOverviews"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
 

@@ -1128,6 +1128,14 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.serverGetProjectMemory,
       refreshIntervalMs: 60_000,
     }),
+    projectOverview: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:project-overview:live",
+      tag: WS_METHODS.projectOverviewSubscribe,
+    }),
+    ensureProjectOverview: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:project-overview:ensure",
+      tag: WS_METHODS.projectOverviewEnsure,
+    }),
     projectBrief: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:project-brief:get",
       tag: WS_METHODS.projectBriefGet,
