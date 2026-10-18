@@ -4154,7 +4154,7 @@ function NativeLiveWorkEntryTimelineRow({
             row.active ? (
               "Thinking"
             ) : (
-              "Thought"
+              "Reasoning"
             )
           ) : row.entry.questionAnswer && hasQuestionAnswer(row.entry.questionAnswer) ? (
             <span className="flex min-w-0 gap-1.5">
@@ -4167,7 +4167,7 @@ function NativeLiveWorkEntryTimelineRow({
             <ReactMarkdown
               remarkPlugins={[
                 remarkGfm,
-                [remarkThoughtPreview, row.active ? "Thinking" : "Thought"],
+                [remarkThoughtPreview, row.active ? "Thinking" : "Reasoning"],
               ]}
             >
               {row.entry.detail ?? label}
@@ -5723,7 +5723,7 @@ function NativeWorkEntryLogRow(props: WorkEntryRowProps) {
     isReasoning && expanded
       ? workEntry.toolLifecycleStatus === "inProgress"
         ? "Thinking"
-        : "Thought"
+        : "Reasoning"
       : questionHeading || (displayLabel ?? workEntryDisplayLabel(workEntry, workspaceRoot));
   const answerPreview =
     workEntry.questionAnswer && hasQuestionAnswer(workEntry.questionAnswer)
@@ -5878,7 +5878,7 @@ function NativeWorkEntryLogRow(props: WorkEntryRowProps) {
                     remarkGfm,
                     [
                       remarkThoughtPreview,
-                      workEntry.toolLifecycleStatus === "inProgress" ? "Thinking" : "Thought",
+                      workEntry.toolLifecycleStatus === "inProgress" ? "Thinking" : "Reasoning",
                     ],
                   ]}
                 >

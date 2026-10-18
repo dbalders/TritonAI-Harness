@@ -150,7 +150,7 @@ describe("work entry labels", () => {
         undefined,
         false,
       ),
-    ).toBe("Thought");
+    ).toBe("Reasoning");
     expect(
       liveWorkEntryLabel({ ...thought, toolLifecycleStatus: "completed" }, undefined, false),
     ).toBe(thought.detail);

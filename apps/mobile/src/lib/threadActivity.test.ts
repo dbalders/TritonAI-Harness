@@ -2437,7 +2437,7 @@ it("uses a compact reasoning preview and a short expanded heading", () => {
   };
   expect(workEntryRowLabel(entry)).toBe("Check **ordering**. Then run the test.");
   expect(workEntryRowLabel(entry, true)).toBe("Thinking");
-  expect(workEntryRowLabel({ ...entry, toolLifecycleStatus: "completed" }, true)).toBe("Thought");
+  expect(workEntryRowLabel({ ...entry, toolLifecycleStatus: "completed" }, true)).toBe("Reasoning");
 });
 
 it("keeps search output in expanded details rather than the compact label", () => {
@@ -2554,7 +2554,9 @@ it("stops stranded thinking after a steer and follows the next thought or tool",
   const header = afterSteer.find((row) => row.type === "work-toggle");
   if (header?.type !== "work-toggle") throw new Error("Expected thought toggle");
   const expanded = rows([first, steer], new Set([header.groupId]));
-  expect(expanded.find((row) => row.type === "work-toggle")).toMatchObject({ summary: "Thought" });
+  expect(expanded.find((row) => row.type === "work-toggle")).toMatchObject({
+    summary: "Reasoning",
+  });
   expect(expanded.find((row) => row.type === "activity-group")).toMatchObject({
     activities: [{ lifecycleStatus: "completed", workEntry: { toolLifecycleStatus: "completed" } }],
   });
@@ -2603,7 +2605,7 @@ it("previews a settled thought in its collapsed header and labels its expanded h
     new Set([header.groupId]),
   );
   expect(expanded.find((row) => row.type === "work-toggle")).toMatchObject({
-    summary: "Thought",
+    summary: "Reasoning",
     continuesWorkLog: true,
   });
   const detail = expanded.find((row) => row.type === "activity-group");

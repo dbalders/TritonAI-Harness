@@ -218,9 +218,9 @@ describe("summarizeToolGroup", () => {
       hasFailure: false,
     });
     expect(toolGroupSummaryKind([thought, command])).toBe("command");
-    expect(summarizeToolGroup([thought]).summary).toBe("Thought");
+    expect(summarizeToolGroup([thought]).summary).toBe("Reasoning");
     expect(summarizeToolGroup([thought, { ...thought, id: "thought-2" }]).summary).toBe(
-      "Thought (×2)",
+      "Reasoning",
     );
     expect(toolGroupSummaryKind([thought])).toBe("reasoning");
   });

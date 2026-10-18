@@ -2845,8 +2845,8 @@ describe("MessagesTimeline", () => {
     ["- first\n- second", "first second", 0],
     ["first  \nsecond", "first second", 0],
     ["![image description](image.png)", "image description", 0],
-    ["![](image.png)", "Thought", 0],
-    ["---", "Thought", 0],
+    ["![](image.png)", "Reasoning", 0],
+    ["---", "Reasoning", 0],
   ] as const)(
     "shows plain text for a V2 reasoning preview: %s",
     async (markdown, expected, strongCount) => {
