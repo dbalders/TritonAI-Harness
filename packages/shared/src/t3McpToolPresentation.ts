@@ -1,3 +1,4 @@
+/** Stable upstream key; each client renders the Harness brand for app-owned tools. */
 export type T3McpToolLogo = "t3-code";
 
 export interface T3McpToolPresentation {
@@ -145,18 +146,18 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
     "schedule-delete",
   ),
   request_secret: tool(["Ask for", "Asking for", "Asked for", "a secret"], "secret-request"),
-  create_threads: tool(["Create", "Creating", "Created", "T3 threads"], "thread-create"),
-  t3_thread_start: tool(["Start", "Starting", "Started", "a T3 thread"], "thread-create"),
-  t3_thread_list: tool(["List", "Listing", "Listed", "T3 threads"], "thread-list"),
-  t3_thread_read: tool(["Read", "Reading", "Read", "a T3 thread"], "thread-read"),
-  t3_thread_send: tool(["Send", "Sending", "Sent", "to a T3 thread"], "thread-send"),
-  t3_thread_wait: tool(["Wait", "Waiting", "Waited", "for a T3 thread"], "thread-wait"),
+  create_threads: tool(["Create", "Creating", "Created", "TritonAI threads"], "thread-create"),
+  t3_thread_start: tool(["Start", "Starting", "Started", "a TritonAI thread"], "thread-create"),
+  t3_thread_list: tool(["List", "Listing", "Listed", "TritonAI threads"], "thread-list"),
+  t3_thread_read: tool(["Read", "Reading", "Read", "a TritonAI thread"], "thread-read"),
+  t3_thread_send: tool(["Send", "Sending", "Sent", "to a TritonAI thread"], "thread-send"),
+  t3_thread_wait: tool(["Wait", "Waiting", "Waited", "for a TritonAI thread"], "thread-wait"),
   t3_workflow_stop: tool(
     ["Stop", "Stopping", "Requested a stop for", "a workflow"],
     "workflow-stop",
   ),
   t3_thread_interrupt: tool(
-    ["Interrupt", "Interrupting", "Requested an interrupt of", "a T3 thread"],
+    ["Interrupt", "Interrupting", "Requested an interrupt of", "a TritonAI thread"],
     "thread-interrupt",
   ),
   t3_worktree_handoff: tool(
@@ -302,7 +303,10 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
   t3_thread_search: tool(["Search", "Searching", "Searched", "thread content"], "thread-search"),
   t3_thread_transfers: tool(["Read", "Reading", "Read", "thread transfers"], "thread-transfers"),
   t3_thread_organize: tool(["Organize", "Organizing", "Organized", "a thread"], "thread-organize"),
-  t3_thread_update: tool(["Update", "Updating", "Updated", "T3 thread metadata"], "thread-update"),
+  t3_thread_update: tool(
+    ["Update", "Updating", "Updated", "TritonAI thread metadata"],
+    "thread-update",
+  ),
   t3_worktree_list: tool(["List", "Listing", "Listed", "workspace branches"], "worktree-list"),
   t3_preview_list: tool(["List", "Listing", "Listed", "preview tabs"], "browser", "browser"),
   t3_preview_close: tool(["Close", "Closing", "Closed", "a preview tab"], "browser", "browser"),

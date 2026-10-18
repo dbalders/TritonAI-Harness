@@ -1445,9 +1445,9 @@ describe("buildThreadFeed", () => {
     const feed = buildThreadFeed([projected(toolItem, 0)]);
     const activity = feed[0]?.type === "activity-group" ? feed[0].activities[0] : null;
 
-    expect(activity?.summary).toBe("Read a T3 thread");
+    expect(activity?.summary).toBe("Read a TritonAI thread");
     expect(activity?.logo).toBe("t3-code");
-    expect(activity?.getCopyText().split("\n")[0]).toBe("Read a T3 thread");
+    expect(activity?.getCopyText().split("\n")[0]).toBe("Read a TritonAI thread");
   });
 
   it.each(["cua_repl.js", "node_repl.js", "js"])(

@@ -558,8 +558,9 @@ describe("resolveWorkEntryToolPresentation", () => {
       "Stopping recording the preview browser",
       "Stopped recording the preview browser",
     ],
-    ["t3_thread_read", "Reading a T3 thread", "Read a T3 thread"],
-    ["t3_thread_send", "Sending to a T3 thread", "Sent to a T3 thread"],
+    ["t3_thread_read", "Reading a TritonAI thread", "Read a TritonAI thread"],
+    ["t3_thread_wait", "Waiting for a TritonAI thread", "Waited for a TritonAI thread"],
+    ["t3_thread_send", "Sending to a TritonAI thread", "Sent to a TritonAI thread"],
     [
       "t3_worktree_handoff",
       "Handing off thread to a git worktree",
@@ -576,7 +577,7 @@ describe("resolveWorkEntryToolPresentation", () => {
     ).toBe(completed);
   });
 
-  it("keeps T3 branding for non-browser tools and falls back to the original tool label", () => {
+  it("keeps app branding for non-browser tools and falls back to the original tool label", () => {
     expect(
       resolveWorkEntryToolPresentation({
         label: "mcp__t3_code__task_status",
