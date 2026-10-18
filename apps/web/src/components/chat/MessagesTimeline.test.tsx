@@ -2595,7 +2595,8 @@ describe("MessagesTimeline", () => {
     );
 
     // App-owned tool calls use the Harness brand while preserving their wire names.
-    expect(markup).toContain('src="/tritonai-logo.png"');
+    expect(markup).toContain('fill="currentColor"');
+    expect(markup).not.toContain('src="/tritonai-logo.png"');
     expect(markup).toContain("Read a TritonAI thread");
     expect(markup).not.toContain("mcp__t3-code__t3_thread_read");
   });

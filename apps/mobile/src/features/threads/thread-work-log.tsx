@@ -57,7 +57,7 @@ import { isJavaScriptReplTool } from "@t3tools/shared/toolActivity";
 import { useMarkdownCodeHighlight } from "./markdownCodeHighlightState";
 
 import { AppText as Text } from "../../components/AppText";
-import { HarnessLogo } from "../../components/HarnessLogo";
+import { HarnessToolIcon } from "../../components/HarnessToolIcon";
 import { BrowserAppIcon } from "../../components/BrowserAppIcon";
 import { cn } from "../../lib/cn";
 import { THREAD_WORK_ROW_MIN_HEIGHT, type deriveThreadWorkLogSizing } from "../../lib/layout";
@@ -130,7 +130,12 @@ function WorkLogIcon(props: {
 }) {
   const colorClassName = props.highlighted ? "accent-foreground" : props.colorClassName;
   if (props.icon === "t3-code") {
-    return <HarnessLogo size={14} />;
+    return (
+      <HarnessToolIcon
+        size={14}
+        {...(colorClassName ? { colorClassName } : { color: props.color })}
+      />
+    );
   }
   if (props.icon === "computer") {
     return (
