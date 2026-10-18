@@ -22,7 +22,7 @@ import {
   getNewProjectPublishTargets,
   normalizePastedCloneUrl,
   resolveAddProjectPath,
-  sortAddProjectProviderSources,
+  getReadyAddProjectProviderSources,
 } from "./projects.ts";
 import type { EnvironmentProject } from "../state/models.ts";
 
@@ -227,7 +227,55 @@ describe("add project shared logic", () => {
       ready: false,
       hint: "Run glab auth login",
     });
-    expect(sortAddProjectProviderSources(readiness)[0]).toBe("github");
+    expect(getReadyAddProjectProviderSources(readiness)).toEqual(["github"]);
+  });
+
+  it.each([null, { versionControlSystems: [], sourceControlProviders: [] }])(
+    "offers no provider shortcuts before setup or discovery completes: %s",
+    (discovery) => {
+      const readiness = buildAddProjectRemoteSourceReadiness(discovery);
+      expect(getReadyAddProjectProviderSources(readiness)).toEqual([]);
+      expect(readiness("url").ready).toBe(true);
+    },
+  );
+
+  it("only offers installed, authenticated hosts and updates after setup changes", () => {
+    const provider = (
+      kind: string,
+      status: "available" | "missing",
+      authStatus: "authenticated" | "unauthenticated" | "unknown",
+    ) => ({
+      kind: SourceControlProviderKind.make(kind),
+      label: kind,
+      status,
+      installHint: "Install provider CLI",
+      version: Option.none(),
+      detail: Option.none(),
+      auth: {
+        status: authStatus,
+        account: Option.none(),
+        host: Option.none(),
+        detail: Option.none(),
+      },
+    });
+    const discovery = {
+      versionControlSystems: [],
+      sourceControlProviders: [
+        provider("github", "available", "authenticated"),
+        provider("gitlab", "available", "authenticated"),
+        provider("azure-devops", "missing", "authenticated"),
+        provider("bitbucket", "available", "unauthenticated"),
+        provider("forgejo", "available", "unknown"),
+      ],
+    };
+    expect(
+      getReadyAddProjectProviderSources(buildAddProjectRemoteSourceReadiness(discovery)),
+    ).toEqual(["github", "gitlab"]);
+    discovery.sourceControlProviders[1] = provider("gitlab", "available", "unauthenticated");
+    discovery.sourceControlProviders[3] = provider("bitbucket", "available", "authenticated");
+    expect(
+      getReadyAddProjectProviderSources(buildAddProjectRemoteSourceReadiness(discovery)),
+    ).toEqual(["bitbucket", "github"]);
   });
 
   it("finds existing projects by normalized path in the target environment", () => {

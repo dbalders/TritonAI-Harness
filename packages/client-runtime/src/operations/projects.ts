@@ -119,21 +119,13 @@ export function getDefaultCloneUrl(
     : repository.sshUrl;
 }
 
-export function sortAddProjectProviderSources(
+/** Only offer provider shortcuts that are set up on the selected environment. */
+export function getReadyAddProjectProviderSources(
   readiness: AddProjectRemoteSourceReadiness,
 ): ReadonlyArray<SourceControlProviderKind> {
   return Arr.sort(
-    ADD_PROJECT_REMOTE_PROVIDER_SOURCES,
-    Order.mapInput(
-      Order.Struct({
-        ready: Order.flip(Order.Boolean),
-        label: Order.String,
-      }),
-      (source: SourceControlProviderKind) => ({
-        ready: readiness(source).ready,
-        label: addProjectRemoteSourceLabel(source),
-      }),
-    ),
+    ADD_PROJECT_REMOTE_PROVIDER_SOURCES.filter((source) => readiness(source).ready),
+    Order.mapInput(Order.String, addProjectRemoteSourceLabel),
   );
 }
 
@@ -154,7 +146,7 @@ export function buildAddProjectRemoteSourceReadiness(
     const provider = providerByKind.get(source);
     if (!provider) return UNAVAILABLE;
     if (provider.status !== "available") return { ready: false, hint: provider.installHint };
-    if (provider.auth.status === "unauthenticated") {
+    if (provider.auth.status !== "authenticated") {
       return {
         ready: false,
         hint:

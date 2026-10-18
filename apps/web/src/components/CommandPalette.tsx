@@ -19,7 +19,7 @@ import {
   addProjectRemoteSourcePathHint,
   addProjectRemoteSourceProvider,
   buildAddProjectRemoteSourceReadiness,
-  sortAddProjectProviderSources,
+  getReadyAddProjectProviderSources,
   type AddProjectRemoteSource,
   type AddProjectRemoteSourceReadiness,
   addProjectRemoteSourceLabel as remoteProjectSourceLabel,
@@ -1544,10 +1544,6 @@ function OpenCommandPaletteDialog(props: {
       environmentId: EnvironmentId,
       readinessBySource: AddProjectRemoteSourceReadiness,
     ): CommandPaletteView["groups"] => {
-      const openSourceControlSettings = () => {
-        setOpen(false);
-        void navigate({ to: "/settings/source-control" });
-      };
       const sourceItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [
         {
           kind: "action",
@@ -1580,7 +1576,7 @@ function OpenCommandPaletteDialog(props: {
 
       const orderedSources: ReadonlyArray<AddProjectRemoteSource> = [
         "url",
-        ...sortAddProjectProviderSources(readinessBySource),
+        ...getReadyAddProjectProviderSources(readinessBySource),
       ];
 
       for (const source of orderedSources) {
@@ -1590,47 +1586,6 @@ function OpenCommandPaletteDialog(props: {
           source === "url"
             ? "Clone from a remote URL"
             : `Clone ${label} ${addProjectRemoteSourcePathHint(source)}`;
-        const readiness = readinessBySource(source);
-        const disabledHint = readiness.hint;
-
-        const titleTrailingContent = readiness.ready ? undefined : (
-          <span className="ml-auto">
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    variant="warning-outline"
-                    size="micro"
-                    onClick={() => {
-                      openSourceControlSettings();
-                    }}
-                  >
-                    Setup Required
-                  </Button>
-                }
-              />
-              <TooltipPopup align="end" side="left">
-                {disabledHint ?? "Open Settings -> Source Control to configure this provider."}
-              </TooltipPopup>
-            </Tooltip>
-          </span>
-        );
-
-        if (!readiness.ready) {
-          sourceItems.push({
-            kind: "action",
-            value: `action:add-project:${environmentId}:${source}:not-ready`,
-            searchTerms: ["clone", "remote", "repository", "repo", "git", label, "setup required"],
-            title,
-            description,
-            disabled: true,
-            icon: remoteProjectSourceIcon(source, ITEM_ICON_CLASS),
-            ...(titleTrailingContent ? { titleTrailingContent } : {}),
-            run: async () => {},
-          });
-          continue;
-        }
-
         sourceItems.push({
           kind: "action",
           value: `action:add-project:${environmentId}:${source}`,

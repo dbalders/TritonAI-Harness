@@ -8,7 +8,6 @@ import {
   type GitRunStackedActionResult,
   type GitStackedAction,
   type SourceControlCloneProtocol,
-  type SourceControlProviderDiscoveryItem,
   type SourceControlPublishRepositoryResult,
   type SourceControlRepositoryVisibility,
   type VcsStatusResult,
@@ -114,6 +113,10 @@ import {
 } from "./chat/threadDetailsPanelStyles";
 import { getSourceControlPresentation, sourceControlIcon } from "~/sourceControlPresentation";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
+import {
+  buildAddProjectRemoteSourceReadiness,
+  getReadyAddProjectProviderSources,
+} from "@t3tools/client-runtime/operations/projects";
 import { formatDiffCount } from "@t3tools/client-runtime/diff-count";
 import { useOpenLink } from "~/browser/useOpenLink";
 
@@ -193,33 +196,6 @@ function publishProviderOption(provider: SourceControlProviderKind) {
     PUBLISH_PROVIDER_OPTIONS.find((option) => option.value === provider) ??
     PUBLISH_PROVIDER_OPTIONS[0]!
   );
-}
-
-function getPublishProviderReadiness(input: {
-  provider: SourceControlProviderKind;
-  sourceControlProviders: ReadonlyArray<SourceControlProviderDiscoveryItem>;
-}): { readonly ready: boolean; readonly hint: string | null } {
-  const discovered = input.sourceControlProviders.find(
-    (provider) => provider.kind === input.provider,
-  );
-  if (!discovered) {
-    return {
-      ready: false,
-      hint: "Provider status unavailable. Open Settings -> Source Control and rescan.",
-    };
-  }
-  if (discovered.status !== "available") {
-    return { ready: false, hint: discovered.installHint };
-  }
-  if (discovered.auth.status === "unauthenticated") {
-    return {
-      ready: false,
-      hint:
-        Option.getOrNull(discovered.auth.detail) ??
-        `${discovered.label} is not authenticated. Open Settings -> Source Control for setup guidance.`,
-    };
-  }
-  return { ready: true, hint: null };
 }
 
 function getMenuActionDisabledReason({
@@ -503,36 +479,16 @@ function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
     }
     return accounts;
   }, [sourceControlDiscovery.data]);
-  const publishProviderReadiness = useMemo(() => {
-    const sourceControlProviders = sourceControlDiscovery.data?.sourceControlProviders ?? [];
-    const readiness = new Map(
-      PUBLISH_PROVIDER_OPTIONS.map((option) => [
-        option.value,
-        getPublishProviderReadiness({ provider: option.value, sourceControlProviders }),
-      ]),
-    );
-    return (provider: SourceControlProviderKind) =>
-      readiness.get(provider) ?? { ready: false, hint: null };
-  }, [sourceControlDiscovery.data]);
-  const hasReadyPublishProvider = useMemo(
-    () => PUBLISH_PROVIDER_OPTIONS.some((option) => publishProviderReadiness(option.value).ready),
+  const publishProviderReadiness = useMemo(
+    () => buildAddProjectRemoteSourceReadiness(sourceControlDiscovery.data),
+    [sourceControlDiscovery.data],
+  );
+  const readyPublishProviderOptions = useMemo(
+    () => getReadyAddProjectProviderSources(publishProviderReadiness).map(publishProviderOption),
     [publishProviderReadiness],
   );
-  const sortedPublishProviderOptions = useMemo(
-    () =>
-      PUBLISH_PROVIDER_OPTIONS.toSorted((left, right) => {
-        const leftReady = publishProviderReadiness(left.value).ready;
-        const rightReady = publishProviderReadiness(right.value).ready;
-        if (leftReady !== rightReady) {
-          return leftReady ? -1 : 1;
-        }
-        return left.label.localeCompare(right.label);
-      }),
-    [publishProviderReadiness],
-  );
-  const firstReadyPublishProvider = sortedPublishProviderOptions.find(
-    (option) => publishProviderReadiness(option.value).ready,
-  )?.value;
+  const hasReadyPublishProvider = readyPublishProviderOptions.length > 0;
+  const firstReadyPublishProvider = readyPublishProviderOptions[0]?.value;
   const publishProvider =
     selectedPublishProvider !== null && publishProviderReadiness(selectedPublishProvider).ready
       ? selectedPublishProvider
@@ -675,44 +631,8 @@ function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
               aria-labelledby="publish-provider-cards-label"
               className="grid grid-cols-2"
             >
-              {sortedPublishProviderOptions.map((option) => {
-                const readiness = publishProviderReadiness(option.value);
-                const isSelected = publishProvider === option.value && readiness.ready;
-                if (!readiness.ready) {
-                  return (
-                    <div
-                      key={option.value}
-                      className="relative flex cursor-not-allowed items-center gap-3 rounded-lg border border-border bg-background px-3 py-3 text-left opacity-64 dark:border-transparent dark:bg-white/[0.035]"
-                    >
-                      <option.Icon className="size-5 shrink-0 text-muted-foreground" aria-hidden />
-                      <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
-                        {option.label}
-                      </span>
-                      <Tooltip>
-                        <TooltipTrigger
-                          render={
-                            <Button
-                              variant="warning-outline"
-                              size="micro"
-                              onClick={(event) => {
-                                event.preventDefault();
-                                event.stopPropagation();
-                                openSourceControlSettings();
-                              }}
-                            >
-                              Setup Required
-                            </Button>
-                          }
-                        />
-                        <TooltipPopup side="top" align="end">
-                          {readiness.hint ??
-                            "Open Settings -> Source Control to configure this provider."}
-                        </TooltipPopup>
-                      </Tooltip>
-                    </div>
-                  );
-                }
-
+              {readyPublishProviderOptions.map((option) => {
+                const isSelected = publishProvider === option.value;
                 return (
                   <RadioPrimitive.Root
                     key={option.value}
@@ -733,6 +653,14 @@ function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
                 );
               })}
             </RadioGroup>
+            {!hasReadyPublishProvider && !sourceControlDiscovery.isPending ? (
+              <p className="text-xs text-muted-foreground">
+                Set up a provider in Settings to publish a repository.{" "}
+                <Button variant="link" size="micro" onClick={openSourceControlSettings}>
+                  Open Source Control settings
+                </Button>
+              </p>
+            ) : null}
           </div>
 
           <div className={cn("space-y-5", publishWizardStep !== 1 && "hidden")}>
