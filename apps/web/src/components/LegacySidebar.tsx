@@ -2436,6 +2436,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           projectKey={project.projectKey}
           leading={<ProjectFavicon project={project} />}
           expanded={projectExpanded}
+          canReorder={isManualProjectSorting && dragHandleProps !== null}
           onOpen={handleProjectButtonClick}
           onToggle={() => {
             if (dragInProgressRef.current) return;

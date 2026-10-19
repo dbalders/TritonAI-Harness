@@ -5942,6 +5942,9 @@ export default function Sidebar() {
                                                     title={project.displayName}
                                                     projectKey={project.projectKey}
                                                     expanded={isExpanded}
+                                                    canReorder={
+                                                      handle !== null && optimisticDrop === null
+                                                    }
                                                     onOpen={() => {
                                                       clearSelection();
                                                       if (isMobile) setOpenMobile(false);
