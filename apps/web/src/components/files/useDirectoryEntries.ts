@@ -2,7 +2,6 @@ import type { EnvironmentId, ProjectEntry } from "@t3tools/contracts";
 import { executeAtomQuery } from "@t3tools/client-runtime/state/runtime";
 import * as Cause from "effect/Cause";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { projectEnvironment } from "~/state/projects";
 
@@ -11,6 +10,8 @@ export function useDirectoryEntries(environmentId: EnvironmentId, cwd: string) {
   const [directories, setDirectories] = useState(new Map<string, readonly ProjectEntry[]>());
   const [errors, setErrors] = useState(new Map<string, string>());
   const [pending, setPending] = useState(0);
+  // First loads only: a refresh keeps showing the cached children, so it gets no row spinner.
+  const [loadingDirectories, setLoadingDirectories] = useState<ReadonlySet<string>>(new Set());
   const requests = useRef(new Map<string, Promise<void>>());
   const loaded = useRef(new Set<string>());
   const requested = useRef(new Set<string>());
@@ -28,6 +29,7 @@ export function useDirectoryEntries(environmentId: EnvironmentId, cwd: string) {
       requested.current.add(directoryPath);
       const atom = projectEnvironment.listEntries({ environmentId, input: { cwd, directoryPath } });
       setPending((count) => count + 1);
+      if (!refresh) setLoadingDirectories((previous) => new Set(previous).add(directoryPath));
       const request = (async () => {
         if (running.current >= 4)
           await new Promise<void>((resolve) => waiting.current.push(resolve));
@@ -75,7 +77,14 @@ export function useDirectoryEntries(environmentId: EnvironmentId, cwd: string) {
         })
         .finally(() => {
           requests.current.delete(directoryPath);
-          if (active.current) setPending((count) => count - 1);
+          if (!active.current) return;
+          setPending((count) => count - 1);
+          if (!refresh)
+            setLoadingDirectories((previous) => {
+              const next = new Set(previous);
+              next.delete(directoryPath);
+              return next;
+            });
         });
       requests.current.set(directoryPath, request);
       return request;
@@ -130,6 +139,7 @@ export function useDirectoryEntries(environmentId: EnvironmentId, cwd: string) {
     load,
     refresh,
     isPending: pending > 0,
+    loadingDirectories,
     ready: directories.has(""),
     error: [...errors].find(([path]) => reachableDirectories.has(path))?.[1] ?? null,
   };

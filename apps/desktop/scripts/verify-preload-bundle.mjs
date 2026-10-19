@@ -69,6 +69,7 @@ const createSandboxModules = (exposedGlobals) => {
       exposeInMainWorld: (name, api) => exposedGlobals.set(name, api),
     },
     ipcRenderer,
+    webFrame: { getZoomFactor: () => 1.25 },
     webUtils: {
       getPathForFile: () => "",
     },
@@ -88,6 +89,8 @@ const createSandboxModules = (exposedGlobals) => {
 };
 
 const executeBundle = (source, sandboxModules) => {
+  const listeners = new Map();
+  const styles = new Map();
   const sandboxProcess = {
     contextIsolated: true,
     // oxlint-disable-next-line t3code/no-global-process-runtime -- This standalone CI verifier supplies the preload's host platform without loading Effect.
@@ -108,12 +111,22 @@ const executeBundle = (source, sandboxModules) => {
     {
       process: sandboxProcess,
       require: requireSandboxModule,
+      window: {
+        addEventListener: (name, callback) => listeners.set(name, callback),
+        removeEventListener: (name) => listeners.delete(name),
+      },
+      document: {
+        documentElement: { style: { setProperty: (name, value) => styles.set(name, value) } },
+      },
     },
     {
       filename: "desktop-preload.cjs",
       timeout: preloadExecutionTimeoutMs,
     },
   );
+  if (sandboxProcess.platform === "darwin") {
+    listeners.get("DOMContentLoaded")?.();
+  }
 };
 
 export const verifyPreloadBundle = (source) => {

@@ -5,7 +5,6 @@ import {
 import type { ServerMemoryStatus, ServerMemorySyncStartResult } from "@t3tools/contracts";
 import { FolderOpenIcon, RefreshCwIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-
 import { resolveAndPersistPreferredEditor } from "../../editorPreferences";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";

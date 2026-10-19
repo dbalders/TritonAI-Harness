@@ -12,11 +12,23 @@ import {
 import { act, StrictMode, type ReactNode } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { IntegrationsSettingsPanel } from "./IntegrationsSettings";
+import { platformSetupStatus } from "../device/DeviceSetup";
 
 const { listBrowserImportSources } = vi.hoisted(() => ({
   listBrowserImportSources: vi.fn().mockResolvedValue([]),
 }));
 
+vi.mock("../ui/tooltip", () => ({
+  Tooltip: ({ children }: { children: ReactNode }) => children,
+  TooltipTrigger: ({ render, children }: { render: ReactNode; children: ReactNode }) => (
+    <>
+      {render}
+      {children}
+    </>
+  ),
+  TooltipPopup: () => null,
+}));
 vi.mock("../preview/previewBridge", () => ({
   previewBridge: { listBrowserImportSources },
 }));
@@ -24,6 +36,8 @@ vi.mock("../../env", () => ({ isElectron: true }));
 vi.mock("../../state/environments", () => ({
   useEnvironments: () => ({ environments: [], isReady: true }),
   usePrimaryEnvironment: () => null,
+  // Settings rows resolve the primary grant before rendering server controls.
+  usePrimaryEnvironmentId: () => null,
 }));
 vi.mock("../../hooks/useSettings", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../hooks/useSettings")>()),
@@ -54,9 +68,6 @@ vi.mock("./SettingsScopeContext", () => ({
   }),
   useOptionalSettingsScope: () => null,
 }));
-
-import { IntegrationsSettingsPanel } from "./IntegrationsSettings";
-import { platformSetupStatus } from "../device/DeviceSetup";
 
 let renderer: ReactTestRenderer | undefined;
 

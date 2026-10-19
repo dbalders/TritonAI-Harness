@@ -1,21 +1,22 @@
 import {
+  AuthProvidersManageScope,
+  type ChatGptHandoffInput,
+  type ChatGptTransferredProfile,
+  type EnvironmentId,
+  type ProviderInstanceId,
+  type ServerProvider,
+} from "@t3tools/contracts";
+import { useEnvironmentScope } from "../../state/session";
+import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
-import type {
-  ChatGptHandoffInput,
-  ChatGptTransferredProfile,
-  EnvironmentId,
-  ProviderInstanceId,
-  ServerProvider,
-} from "@t3tools/contracts";
 import { codexAuthHandoffUrl } from "@t3tools/shared/codexAuthHandoff";
 import { providerAuthReturnUrl } from "@t3tools/shared/providerAuthReturnUrl";
 import { isLoopbackHost } from "@t3tools/shared/preview";
 import { CheckIcon, ChevronRightIcon, ExternalLinkIcon } from "lucide-react";
 import { Children, useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
-
 import { ensureLocalApi } from "../../localApi";
 import {
   useEnvironmentHttpBaseUrl,
@@ -167,6 +168,7 @@ export function AddManagedCodexAccountDialog({
     | ((instanceId: ProviderInstanceId, displayName: string) => void)
     | undefined;
 }) {
+  const canManageProviders = useEnvironmentScope(environmentId, AuthProvidersManageScope);
   return (
     <AddCodexAccountDialog
       environmentId={environmentId}
@@ -180,6 +182,7 @@ export function AddManagedCodexAccountDialog({
           provider={provider}
           mode="managed"
           enabled
+          readOnly={!canManageProviders}
           autoStart
           onAutoStartConsumed={noop}
           onModeChange={noop}
@@ -1094,7 +1097,7 @@ function CodexSignInDescription({
   return (
     <button
       type="button"
-      className="inline-flex items-center gap-1.5 rounded-sm text-left leading-relaxed outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className="inline-flex items-center gap-1.5 rounded-sm text-left leading-relaxed outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
       aria-label="Having trouble signing in?"
       aria-expanded={expanded}
       aria-controls={controls}

@@ -1,5 +1,4 @@
 import { describe, expect, it } from "@effect/vitest";
-
 import {
   COMPOSER_MENTION_DRAG_TYPE,
   type ComposerMentionDropHost,

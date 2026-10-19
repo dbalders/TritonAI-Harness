@@ -8,11 +8,9 @@ import * as Option from "effect/Option";
 import { useMemo } from "react";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
-
 import { normalizeHostname } from "~/browser/browserTargetResolver";
 import { useThreadShell } from "~/state/entities";
 import { usePreparedConnection } from "~/state/session";
-
 import {
   BROWSER_FAVICON_MAX_ALIASES_PER_ENTRY,
   type BrowserFaviconEntry,

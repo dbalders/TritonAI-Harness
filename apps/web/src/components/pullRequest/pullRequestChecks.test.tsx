@@ -1,7 +1,6 @@
 import type { EnvironmentId, ProjectId, PullRequestCheck } from "@t3tools/contracts";
 import { Children, isValidElement, type ReactNode } from "react";
 import { describe, expect, it } from "vite-plus/test";
-
 import { PullRequestChecksPopover } from "./PullRequestChecksPopover";
 import type { EnvironmentPullRequestEntry } from "./pullRequestList.logic";
 import { PullRequestRow } from "./PullRequestRow";
@@ -102,6 +101,9 @@ function row(overrides: Partial<EnvironmentPullRequestEntry>): ReactNode {
     showProjectTitle: false,
     showProvider: false,
     onSelect: () => {},
+    speedMode: false,
+    hostActions: new Set(),
+    onActed: () => {},
   });
 }
 

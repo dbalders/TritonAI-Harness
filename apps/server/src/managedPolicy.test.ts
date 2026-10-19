@@ -1,5 +1,7 @@
+import * as Schema from "effect/Schema";
 import {
   DEFAULT_SERVER_SETTINGS,
+  CodexSettings,
   DEFAULT_TRITONAI_CODEX_HOME_PATH,
   ProjectId,
   ProviderDriverKind,
@@ -10,6 +12,7 @@ import { beforeEach, describe, expect, it } from "vite-plus/test";
 
 import {
   applyManagedHarnessPolicy,
+  getManagedCodexSettings,
   createManagedProfileSettings,
   getManagedProviderInstanceRenames,
   managedConfig,
@@ -71,7 +74,7 @@ describe("TritonAI managed Harness policy", () => {
     migrateLegacyInstallerManagedSettings({
       tritonAiManagedPolicy: {
         migrationVersion: 2,
-        codexBinaryPath: DEFAULT_SERVER_SETTINGS.providers.codex.binaryPath,
+        codexBinaryPath: Schema.decodeSync(CodexSettings)({}).binaryPath,
         codexHomePath: DEFAULT_TRITONAI_CODEX_HOME_PATH,
       },
     });
@@ -91,15 +94,6 @@ describe("TritonAI managed Harness policy", () => {
     const effective = applyManagedHarnessPolicy(
       {
         ...DEFAULT_SERVER_SETTINGS,
-        providers: {
-          ...DEFAULT_SERVER_SETTINGS.providers,
-          codex: {
-            ...DEFAULT_SERVER_SETTINGS.providers.codex,
-            enabled: false,
-            binaryPath: "/tmp/personal-codex",
-            homePath: "~/.codex",
-          },
-        },
         providerInstances: {
           [managedInstanceId]: {
             driver: ProviderDriverKind.make("opencode"),
@@ -118,7 +112,7 @@ describe("TritonAI managed Harness policy", () => {
       },
       fixtureConfig,
     );
-    expect(effective.providers.codex).toMatchObject({
+    expect(getManagedCodexSettings(effective)).toMatchObject({
       binaryPath: "codex",
       homePath: DEFAULT_TRITONAI_CODEX_HOME_PATH,
       customModels: ["on-prem-primary", "on-prem-fallback"],
@@ -256,9 +250,12 @@ describe("TritonAI managed Harness policy", () => {
           defaultModelSelection: selection,
           textGenerationModelSelection: selection,
           sourceControlWriterModelSelection: selection,
-          providers: {
-            ...DEFAULT_SERVER_SETTINGS.providers,
-            codex: { ...DEFAULT_SERVER_SETTINGS.providers.codex, customModels: [model] },
+          providerInstances: {
+            [managedInstanceId]: {
+              driver: ProviderDriverKind.make("codex"),
+              enabled: true,
+              config: { ...Schema.decodeSync(CodexSettings)({}), customModels: [model] },
+            },
           },
         });
         const expected = {
@@ -269,7 +266,7 @@ describe("TritonAI managed Harness policy", () => {
         expect(effective.defaultModelSelection).toEqual(expected);
         expect(effective.textGenerationModelSelection).toEqual(expected);
         expect(effective.sourceControlWriterModelSelection).toEqual(expected);
-        expect(effective.providers.codex.customModels).toEqual([
+        expect(getManagedCodexSettings(effective).customModels).toEqual([
           "api-glm-5.3-flash",
           "api-glm-5.3",
         ]);
@@ -299,16 +296,16 @@ describe("TritonAI managed Harness policy", () => {
     const nightlySettings = applyManagedHarnessPolicy(DEFAULT_SERVER_SETTINGS, managedConfig, {
       rawSettingsDocument: nightly,
     });
-    expect(stableSettings.providers.codex.homePath).toBe(stableHome);
-    expect(nightlySettings.providers.codex.homePath).toBe(nightlyHome);
+    expect(getManagedCodexSettings(stableSettings).homePath).toBe(stableHome);
+    expect(getManagedCodexSettings(nightlySettings).homePath).toBe(nightlyHome);
     expect(nightlySettings.providerInstances[frontierInstanceId]?.config).toMatchObject({
       homePath: nightlyHome,
     });
     const missingFile = applyManagedHarnessPolicy(DEFAULT_SERVER_SETTINGS, managedConfig, {
       rawSettingsDocument: createManagedProfileSettings("/profiles/third/codex"),
     });
-    expect(missingFile.providers.codex.homePath).toBe("/profiles/third/codex");
-    expect(missingFile.providers.codex.binaryPath).toBe("codex");
+    expect(getManagedCodexSettings(missingFile).homePath).toBe("/profiles/third/codex");
+    expect(getManagedCodexSettings(missingFile).binaryPath).toBe("codex");
   });
 
   it("anchors an unsaved Codex home to the profile's own directory, not production", () => {
@@ -323,7 +320,7 @@ describe("TritonAI managed Harness policy", () => {
     const effective = applyManagedHarnessPolicy(DEFAULT_SERVER_SETTINGS, managedConfig, {
       rawSettingsDocument: migrated.document,
     });
-    expect(effective.providers.codex.homePath).toBe("/profiles/nightly/codex");
+    expect(getManagedCodexSettings(effective).homePath).toBe("/profiles/nightly/codex");
 
     // A stamped marker keeps its home even when the profile default differs.
     const stamped = migrateLegacyInstallerManagedSettings(migrated.document, {
@@ -341,8 +338,8 @@ describe("TritonAI managed Harness policy", () => {
       const effective = applyManagedHarnessPolicy(DEFAULT_SERVER_SETTINGS, managedConfig, {
         rawSettingsDocument: migrated.document,
       });
-      expect(effective.providers.codex.homePath).toBe(savedHome);
-      expect(effective.providers.codex.binaryPath).toBe("/custom/codex");
+      expect(getManagedCodexSettings(effective).homePath).toBe(savedHome);
+      expect(getManagedCodexSettings(effective).binaryPath).toBe("/custom/codex");
     }
   });
 
@@ -470,7 +467,7 @@ describe("TritonAI managed Harness policy", () => {
       credentialEnvironment: {},
     });
 
-    expect(effective.providers.codex.customModels).toEqual([]);
+    expect(getManagedCodexSettings(effective).customModels).toEqual([]);
     expect(effective.providerInstances[managedInstanceId]?.enabled).toBe(false);
     expect(effective.providerInstances[frontierInstanceId]?.enabled).toBe(false);
     expect(effective.providerInstances[managedInstanceId]?.config).toMatchObject({
@@ -493,7 +490,7 @@ describe("TritonAI managed Harness policy", () => {
       },
     });
     const persisted = stripManagedFieldsForPersistence(effective);
-    expect(persisted.providers.codex.homePath).toBe("");
+    expect(persisted.providerInstances[managedInstanceId]?.config).not.toHaveProperty("homePath");
     expect(persisted.providerInstances[managedInstanceId]).toMatchObject({
       displayName: "UCSD account",
       config: { launchArgs: "--feature user-choice" },
@@ -605,6 +602,8 @@ describe("TritonAI managed Harness policy", () => {
       },
       tritonAiManagedPolicy: {
         migrationVersion: 2,
+        codexBinaryPath: "/managed/codex",
+        codexHomePath: "/managed/home",
         providerInstanceRenames: { codex_frontier: renamedInstanceId },
         providerInstanceReferenceRenames: {
           codex_frontier: renamedInstanceId,
@@ -641,4 +640,38 @@ describe("TritonAI managed Harness policy", () => {
       codex_frontier: "codex_frontier_personal_10",
     });
   });
+});
+
+it("locks V2 managed sign-in mode while preserving existing user launch and shadow-home choices", () => {
+  const configured = {
+    driver: ProviderDriverKind.make("codex"),
+    enabled: true,
+    config: {
+      setupMode: "managed",
+      launchArgs: "-c unsafe_override=true",
+      shadowHomePath: "/redirected",
+      binaryPath: "/untrusted/codex",
+    },
+    environment: [{ name: "T3CODE_CODEX_LAUNCH_ARGS", value: "override", sensitive: false }],
+  };
+  const settings = {
+    ...DEFAULT_SERVER_SETTINGS,
+    providerInstances: {
+      ...DEFAULT_SERVER_SETTINGS.providerInstances,
+      codex: configured,
+      codex_frontier: configured,
+      codex_personal: configured,
+    },
+  };
+  const effective = applyManagedHarnessPolicy(settings, fixtureConfig);
+  for (const id of ["codex", "codex_frontier"]) {
+    expect(effective.providerInstances[ProviderInstanceId.make(id)]?.config).toMatchObject({
+      setupMode: "existing",
+      launchArgs: "-c unsafe_override=true",
+      shadowHomePath: "/redirected",
+    });
+  }
+  expect(effective.providerInstances[ProviderInstanceId.make("codex_personal")]).toEqual(
+    configured,
+  );
 });

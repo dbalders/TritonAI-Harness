@@ -7,7 +7,6 @@ import type { EnvironmentId } from "@t3tools/contracts";
 import type { RelayClientEnvironmentRecord } from "@t3tools/contracts/relay";
 import { ServerIcon } from "lucide-react";
 import { useRef, useState } from "react";
-
 import {
   deregisterManagedRelayEnvironmentCommand,
   useManagedRelayEnvironments,

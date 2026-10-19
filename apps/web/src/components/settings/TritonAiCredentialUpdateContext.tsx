@@ -1,6 +1,5 @@
 import type { DesktopBridge } from "@t3tools/contracts";
 import { createContext, useCallback, useEffect, useState, type ReactNode } from "react";
-
 import { usePrimaryEnvironment } from "../../state/environments";
 
 type UpdateCredentials = DesktopBridge["updateTritonAiCredentials"];

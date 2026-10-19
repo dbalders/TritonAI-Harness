@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-
 import { createSidebarListMotion } from "./Sidebar.motion";
 
 class TestAnimation {

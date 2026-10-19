@@ -9,18 +9,23 @@ import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { McpSchema, McpServer } from "effect/unstable/ai";
+import * as Schema from "effect/Schema";
+import { McpSchema, McpServer, Tool, Toolkit } from "effect/ai";
 
 import {
   EmptyIntegrationToolInput,
   integrationToolJsonSchema,
 } from "../integrations/IntegrationTool.ts";
 import * as Integrations from "../integrations/IntegrationRegistry.ts";
+import { integrationToolInvocationContext } from "./IntegrationTools.ts";
 import {
-  integrationToolInvocationContext,
-  registrationLayer,
-  registrationLayerFor,
-} from "./IntegrationTools.ts";
+  integrationToolsRegistrationLayer as registrationLayer,
+  integrationToolsRegistrationLayerFor as registrationLayerFor,
+  toolkitRegistration,
+} from "./McpHttpServer.ts";
+import * as McpToolAccess from "./McpToolAccess.ts";
+import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
+import { liveThreadShell, liveThreadsLayer } from "./McpToolAccess.testkit.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 
 const client = McpSchema.McpServerClient.of({
@@ -40,9 +45,13 @@ const invocation = (
   capabilities: McpInvocationContext.McpInvocationScope["capabilities"],
 ): McpInvocationContext.McpInvocationScope => ({
   environmentId: EnvironmentId.make("environment-1"),
-  threadId: ThreadId.make("thread-1"),
-  providerSessionId: "provider-session-1",
-  providerInstanceId: ProviderInstanceId.make("codex"),
+  requestNamespace: "provider-session-1",
+  client: undefined,
+  thread: {
+    threadId: ThreadId.make("thread-1"),
+    providerSessionId: "provider-session-1",
+    providerInstanceId: ProviderInstanceId.make("codex"),
+  },
   capabilities,
   issuedAt: 1,
   expiresAt: 2,
@@ -70,32 +79,38 @@ const registryWith = (definitions: ReadonlyArray<typeof fixtureTool>) => ({
 });
 
 const testLayer = registrationLayerFor([fixtureTool], () => true).pipe(
-  Layer.provideMerge(McpServer.McpServer.layer),
+  Layer.provideMerge(
+    Layer.mergeAll(
+      McpServer.McpServer.layer,
+      Layer.succeed(ThreadManagementService.ThreadManagementService, {
+        getThreadShell: () => Effect.succeed(null),
+      } as unknown as ThreadManagementService.ThreadManagementService["Service"]),
+    ),
+  ),
 );
 
-const serverWithBuiltInFixture = Layer.effect(
-  McpServer.McpServer,
-  Effect.gen(function* () {
-    const server = yield* McpServer.McpServer;
-    yield* server.addTool({
-      tool: new McpSchema.Tool({
-        name: fixtureTool.name,
-        description: "Existing built-in fixture tool.",
-        inputSchema: integrationToolJsonSchema(fixtureTool),
-      }),
-      annotations: Context.empty(),
-      handle: () =>
-        Effect.succeed(
-          new McpSchema.CallToolResult({
-            isError: false,
-            structuredContent: { source: "built-in" },
-            content: [{ type: "text", text: "built-in" }],
-          }),
-        ),
-    });
-    return server;
+const builtInFixtureToolkit = Toolkit.make(
+  Tool.make(fixtureTool.name, {
+    description: "Existing built-in fixture tool.",
+    parameters: EmptyIntegrationToolInput,
+    success: Schema.Unknown,
   }),
-).pipe(Layer.provide(McpServer.McpServer.layer));
+);
+const serverWithBuiltInFixture = toolkitRegistration(
+  builtInFixtureToolkit,
+  McpToolAccess.toLayer(builtInFixtureToolkit, {
+    "fixture.read": McpToolAccess.reads(() => Effect.succeed({ existing: true })),
+  }),
+).pipe(
+  Layer.provideMerge(
+    Layer.mergeAll(
+      McpServer.McpServer.layer,
+      Layer.succeed(ThreadManagementService.ThreadManagementService, {
+        getThreadShell: () => Effect.succeed(null),
+      } as unknown as ThreadManagementService.ThreadManagementService["Service"]),
+    ),
+  ),
+);
 
 it.effect("registers provider-neutral tool definitions with MCP", () =>
   Effect.scoped(
@@ -119,7 +134,14 @@ it.effect("awaits the canonical registry catalog before the MCP layer becomes av
     }).pipe(
       Effect.provide(
         registrationLayer(new Set(), async () => registryWith([fixtureTool])).pipe(
-          Layer.provideMerge(McpServer.McpServer.layer),
+          Layer.provideMerge(
+            Layer.mergeAll(
+              McpServer.McpServer.layer,
+              Layer.succeed(ThreadManagementService.ThreadManagementService, {
+                getThreadShell: () => Effect.succeed(null),
+              } as unknown as ThreadManagementService.ThreadManagementService["Service"]),
+            ),
+          ),
         ),
       ),
     ),
@@ -133,7 +155,16 @@ it.effect("fails MCP startup when a catalog tool is reserved", () =>
         Effect.provide(
           registrationLayer(new Set([fixtureTool.name]), async () =>
             registryWith([fixtureTool]),
-          ).pipe(Layer.provideMerge(McpServer.McpServer.layer)),
+          ).pipe(
+            Layer.provideMerge(
+              Layer.mergeAll(
+                McpServer.McpServer.layer,
+                Layer.succeed(ThreadManagementService.ThreadManagementService, {
+                  getThreadShell: () => Effect.succeed(null),
+                } as unknown as ThreadManagementService.ThreadManagementService["Service"]),
+              ),
+            ),
+          ),
         ),
       ),
     );
@@ -158,7 +189,14 @@ it.effect("registers write-capable tools with conservative MCP annotations", () 
     }).pipe(
       Effect.provide(
         registrationLayerFor([writeFixtureTool], () => true).pipe(
-          Layer.provideMerge(McpServer.McpServer.layer),
+          Layer.provideMerge(
+            Layer.mergeAll(
+              McpServer.McpServer.layer,
+              Layer.succeed(ThreadManagementService.ThreadManagementService, {
+                getThreadShell: () => Effect.succeed(null),
+              } as unknown as ThreadManagementService.ThreadManagementService["Service"]),
+            ),
+          ),
         ),
       ),
     ),
@@ -202,7 +240,14 @@ it.effect("rejects reserved built-in names before built-in registration complete
       Effect.void.pipe(
         Effect.provide(
           registrationLayerFor([fixtureTool], () => true, new Set([fixtureTool.name])).pipe(
-            Layer.provideMerge(McpServer.McpServer.layer),
+            Layer.provideMerge(
+              Layer.mergeAll(
+                McpServer.McpServer.layer,
+                Layer.succeed(ThreadManagementService.ThreadManagementService, {
+                  getThreadShell: () => Effect.succeed(null),
+                } as unknown as ThreadManagementService.ThreadManagementService["Service"]),
+              ),
+            ),
           ),
         ),
       ),
@@ -378,7 +423,14 @@ it.effect("uses the same transport grant for active read and write integration t
     }).pipe(
       Effect.provide(
         registrationLayerFor([writeFixtureTool], () => true).pipe(
-          Layer.provideMerge(McpServer.McpServer.layer),
+          Layer.provideMerge(
+            Layer.mergeAll(
+              McpServer.McpServer.layer,
+              Layer.succeed(ThreadManagementService.ThreadManagementService, {
+                getThreadShell: () => Effect.succeed(null),
+              } as unknown as ThreadManagementService.ThreadManagementService["Service"]),
+            ),
+          ),
         ),
       ),
     ),
@@ -413,9 +465,98 @@ it.effect("hides and rejects an unavailable tool despite read authorization", ()
     }).pipe(
       Effect.provide(
         registrationLayerFor([fixtureTool], unavailable).pipe(
-          Layer.provideMerge(McpServer.McpServer.layer),
+          Layer.provideMerge(
+            Layer.mergeAll(
+              McpServer.McpServer.layer,
+              Layer.succeed(ThreadManagementService.ThreadManagementService, {
+                getThreadShell: () => Effect.succeed(null),
+              } as unknown as ThreadManagementService.ThreadManagementService["Service"]),
+            ),
+          ),
         ),
       ),
     ),
   );
 });
+
+it.effect.each(["read-only", "approval-required", "auto-accept-edits", "auto"] as const)(
+  "denies an outside plugin write without full-access approval: %s",
+  (access) => {
+    const invokeTool = vi
+      .fn<Integrations.RegistryRuntime["invokeTool"]>()
+      .mockResolvedValue({ ok: true });
+    const registrySpy = vi
+      .spyOn(Integrations, "getIntegrationRegistry")
+      .mockReturnValue({ invokeTool } as unknown as Integrations.RegistryRuntime);
+    const scope: McpInvocationContext.McpInvocationScope = {
+      ...invocation(new Set(["integrations.invoke"])),
+      thread: undefined,
+      client: { sessionId: "outside-read", label: "fixture", access },
+    };
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const server = yield* McpServer.McpServer;
+        const result = yield* server
+          .callTool({ name: writeFixtureTool.name, arguments: {} })
+          .pipe(
+            Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+            Effect.provideService(McpSchema.McpServerClient, client),
+          );
+        expect(result.isError).toBe(true);
+        expect(result.structuredContent).toEqual({ error: "capability_denied" });
+        expect(invokeTool).not.toHaveBeenCalled();
+      }).pipe(
+        Effect.provide(
+          registrationLayerFor([writeFixtureTool], () => true).pipe(
+            Layer.provideMerge(Layer.mergeAll(McpServer.McpServer.layer, liveThreadsLayer)),
+          ),
+        ),
+      ),
+    ).pipe(Effect.ensuring(Effect.sync(() => registrySpy.mockRestore())));
+  },
+);
+
+it.effect.each([true, false])(
+  "permits a plugin write only while the provider owns a live run: %s",
+  (active) => {
+    const invokeTool = vi
+      .fn<Integrations.RegistryRuntime["invokeTool"]>()
+      .mockResolvedValue({ ok: true });
+    const registrySpy = vi
+      .spyOn(Integrations, "getIntegrationRegistry")
+      .mockReturnValue({ invokeTool } as unknown as Integrations.RegistryRuntime);
+    const scope = invocation(new Set(["integrations.invoke"]));
+    const threads = Layer.mock(ThreadManagementService.ThreadManagementService)({
+      getThreadShell: (threadId) =>
+        Effect.succeed(liveThreadShell(threadId, active ? {} : { activeRunId: null })),
+    });
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const server = yield* McpServer.McpServer;
+        const result = yield* server
+          .callTool({ name: writeFixtureTool.name, arguments: {} })
+          .pipe(
+            Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+            Effect.provideService(McpSchema.McpServerClient, client),
+          );
+        expect(result.isError).toBe(!active);
+        if (active)
+          expect(invokeTool).toHaveBeenCalledWith(
+            writeFixtureTool.name,
+            {},
+            expect.objectContaining({ writeApproved: true }),
+          );
+        else {
+          expect(result.structuredContent).toEqual({ error: "parent_not_active" });
+          expect(invokeTool).not.toHaveBeenCalled();
+        }
+      }).pipe(
+        Effect.provide(
+          registrationLayerFor([writeFixtureTool], () => true).pipe(
+            Layer.provideMerge(Layer.mergeAll(McpServer.McpServer.layer, threads)),
+          ),
+        ),
+      ),
+    ).pipe(Effect.ensuring(Effect.sync(() => registrySpy.mockRestore())));
+  },
+);

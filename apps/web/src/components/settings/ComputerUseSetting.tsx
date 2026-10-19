@@ -1,7 +1,6 @@
 import { describeComputerUseReadiness, type DesktopComputerUseState } from "@t3tools/contracts";
 import { CheckIcon, CircleAlertIcon, MonitorIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
 import { SettingsRow } from "./settingsLayout";

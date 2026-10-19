@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vite-plus/test";
-
 import { resolveBrowserRecordingStopTarget } from "./browserRecordingScope";
 
 describe("resolveBrowserRecordingStopTarget", () => {

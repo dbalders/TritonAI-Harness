@@ -39,6 +39,8 @@ export interface UpdatesHarnessOptions {
   readonly env?: Record<string, string | undefined>;
   /** Contents of the resources/package-type marker a Linux package ships. */
   readonly packageType?: string | undefined;
+  /** Contents of the install record a previous run left behind. */
+  readonly installRecord?: string | undefined;
 }
 
 export function makeHarness(options: UpdatesHarnessOptions = {}) {
@@ -78,7 +80,7 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
     }
   };
 
-  const updaterLayer = Layer.succeed(ElectronUpdater.ElectronUpdater, {
+  const layerUpdater = Layer.succeed(ElectronUpdater.ElectronUpdater, {
     setFeedURL: (options) =>
       Effect.sync(() => {
         feedUrls.push(options);
@@ -132,7 +134,7 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
       ).pipe(Effect.asVoid),
   } satisfies ElectronUpdater.ElectronUpdater["Service"]);
 
-  const windowLayer = Layer.succeed(ElectronWindow.ElectronWindow, {
+  const layerWindow = Layer.succeed(ElectronWindow.ElectronWindow, {
     create: () => Effect.die("unexpected BrowserWindow creation"),
     main: Effect.succeedNone,
     currentMainOrFirst: Effect.succeedNone,
@@ -169,9 +171,9 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
     }),
     waitForReady: () => Effect.succeed(true),
   };
-  const backendLayer = DesktopBackendPool.layerTest([stubBackendInstance]);
+  const layerBackend = DesktopBackendPool.layerTest([stubBackendInstance]);
 
-  const environmentLayer = DesktopEnvironment.layer({
+  const layerEnvironment = DesktopEnvironment.layer({
     dirname: "/repo/apps/desktop/src",
     homeDirectory: `/tmp/t3-desktop-updates-home-${process.pid}`,
     platform: options.platform ?? "darwin",
@@ -199,7 +201,7 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
     ...DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS,
   };
   const setUpdateChannelError = options.setUpdateChannelError;
-  const settingsLayer =
+  const layerSettings =
     setUpdateChannelError || options.beforeSetUpdateChannel
       ? Layer.succeed(DesktopAppSettings.DesktopAppSettings, {
           get: Effect.sync(() => testSettings),
@@ -233,12 +235,21 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
         } satisfies DesktopAppSettings.DesktopAppSettings["Service"])
       : DesktopAppSettings.layer;
 
-  // Tracks the restart markers installs leave, so installs stay free of real
-  // disk I/O that would outrun the tests' settle loops.
+  // Tracks the restart markers and install records installs leave, so
+  // installs stay free of real disk I/O that would outrun the tests' settle loops.
   const updateRestartMarkers = new Set<string>();
-  const fileSystemLayer = FileSystem.layerNoop({
-    readFileString: (path) =>
-      path === "/missing/resources/package-type" && options.packageType !== undefined
+  // Contents of the install record, by path once an install writes one.
+  const installRecords = new Map<string, string>();
+  let previousInstallRecord = options.installRecord;
+  const isInstallRecord = (path: string) =>
+    path.endsWith(DesktopUpdates.DESKTOP_UPDATE_INSTALL_RECORD_FILE);
+  const layerFileSystem = FileSystem.layerNoop({
+    readFileString: (path) => {
+      const installRecord = isInstallRecord(path)
+        ? (installRecords.get(path) ?? previousInstallRecord)
+        : undefined;
+      if (installRecord !== undefined) return Effect.succeed(installRecord);
+      return path === "/missing/resources/package-type" && options.packageType !== undefined
         ? Effect.succeed(options.packageType)
         : Effect.fail(
             PlatformError.systemError({
@@ -247,25 +258,29 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
               _tag: "NotFound",
               pathOrDescriptor: path,
             }),
-          ),
+          );
+    },
     makeDirectory: () => Effect.void,
-    writeFileString: (path) =>
+    writeFileString: (path, data) =>
       Effect.sync(() => {
-        updateRestartMarkers.add(path);
+        if (isInstallRecord(path)) installRecords.set(path, data);
+        else updateRestartMarkers.add(path);
       }),
     remove: (path) =>
       Effect.sync(() => {
         updateRestartMarkers.delete(path);
+        installRecords.delete(path);
+        if (isInstallRecord(path)) previousInstallRecord = undefined;
       }),
   });
 
   const layer = DesktopUpdates.layer.pipe(
-    Layer.provide(fileSystemLayer),
-    Layer.provideMerge(updaterLayer),
-    Layer.provideMerge(windowLayer),
-    Layer.provideMerge(backendLayer),
+    Layer.provide(layerFileSystem),
+    Layer.provideMerge(layerUpdater),
+    Layer.provideMerge(layerWindow),
+    Layer.provideMerge(layerBackend),
     Layer.provideMerge(DesktopState.layer),
-    Layer.provideMerge(settingsLayer),
+    Layer.provideMerge(layerSettings),
     Layer.provideMerge(
       DesktopConfig.layerTest({
         T3CODE_HOME: `/tmp/t3-desktop-updates-test-${process.pid}`,
@@ -274,7 +289,7 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
         ...options.env,
       }),
     ),
-    Layer.provideMerge(environmentLayer),
+    Layer.provideMerge(layerEnvironment),
     Layer.provideMerge(NodeServices.layer),
   );
 
@@ -287,6 +302,9 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
     quitAndInstalls: () => quitAndInstallCount,
     installSteps,
     updateRestartMarkers,
+    installRecords,
+    /** The record the test started with, until the app removes it. */
+    previousInstallRecord: () => previousInstallRecord,
     downloadCount: () => downloadCount,
     feedUrls: (): ElectronUpdater.ElectronUpdaterFeedUrl[] => feedUrls,
     fullChangelog: () => fullChangelog,

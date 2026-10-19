@@ -93,7 +93,7 @@ const make = Effect.gen(function* () {
         Electron.systemPreferences.isTrustedAccessibilityClient(true),
     ),
     start: (ownerId) =>
-      crypto.randomUUIDv4.pipe(
+      crypto.randomUUIDv4().pipe(
         Effect.flatMap((sessionId) => Effect.promise(() => recorder.start(ownerId, sessionId))),
         Effect.orElseSucceed(() => ({ status: "unavailable" as const })),
       ),

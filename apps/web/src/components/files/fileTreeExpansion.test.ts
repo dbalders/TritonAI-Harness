@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "@effect/vitest";
-
 import { areAllDirectoriesExpanded, setAllDirectoriesExpanded } from "./fileTreeExpansion";
 
 type FakeDirectoryItem = {

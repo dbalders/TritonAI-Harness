@@ -2,6 +2,10 @@ import type { ThemeColors } from "@t3tools/shared/themePalettes";
 
 /** Neutral TritonAI surfaces with UC San Diego color reserved for actions. */
 export const QUIET_WORKSPACE_LIGHT_COLORS: ThemeColors = {
+  searchMatchActiveBackground: "#FFCD00",
+  searchMatchActiveForeground: "#182B49",
+  searchMatchBackground: "#E4BA3E55",
+  searchMatchForeground: "#886600",
   canvas: "#FCFCFD",
   chrome: "#FCFCFD",
   toolbar: "#FCFCFD",
@@ -62,6 +66,10 @@ export const QUIET_WORKSPACE_LIGHT_COLORS: ThemeColors = {
 };
 
 export const QUIET_WORKSPACE_DARK_COLORS: ThemeColors = {
+  searchMatchActiveBackground: "#FFCD00",
+  searchMatchActiveForeground: "#182B49",
+  searchMatchBackground: "#E4BA3E55",
+  searchMatchForeground: "#886600",
   canvas: "#17181C",
   chrome: "#17181C",
   toolbar: "#17181C",

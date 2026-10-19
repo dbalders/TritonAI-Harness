@@ -1,12 +1,14 @@
+import { getManagedCodexSettings } from "../managedPolicy.ts";
 // @effect-diagnostics nodeBuiltinImport:off cryptoRandomUUID:off
 import { CodexSettings, ProviderInstanceId, type ServerSettings } from "@t3tools/contracts";
 import { fromYaml } from "@t3tools/shared/schemaYaml";
 import * as Schema from "effect/Schema";
 import type * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
+import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
-import { expandHomePath } from "../pathExpansion.ts";
+import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 
 const MARKER = ".tritonai-integration-skill.json";
 const SWAP_UUID = "[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
@@ -77,7 +79,7 @@ export function resolveIntegrationCodexHomes(
   const rawConfigs: Array<unknown> = [];
   const defaultInstance = settings.providerInstances[defaultCodexInstanceId];
   if (defaultInstance?.driver === "codex") rawConfigs.push(defaultInstance.config ?? {});
-  else if (defaultInstance === undefined) rawConfigs.push(settings.providers.codex);
+  else if (defaultInstance === undefined) rawConfigs.push(getManagedCodexSettings(settings));
   for (const [instanceId, instance] of Object.entries(settings.providerInstances)) {
     if (instanceId !== "codex" && instance.driver === "codex")
       rawConfigs.push(instance.config ?? {});
@@ -88,7 +90,10 @@ export function resolveIntegrationCodexHomes(
       const configured = config.homePath.trim();
       return [
         NodePath.resolve(
-          expandHomePath(configured.length > 0 ? configured : NodePath.join(baseDir, "codex")),
+          expandHomePath(
+            configured.length > 0 ? configured : NodePath.join(baseDir, "codex"),
+            NodeOS.homedir(),
+          ),
         ),
       ];
     } catch {

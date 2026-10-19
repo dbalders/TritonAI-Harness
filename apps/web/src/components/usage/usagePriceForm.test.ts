@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vite-plus/test";
-
 import { parseUsagePriceForm, usagePriceForm } from "./usagePriceForm.ts";
 
 describe("model price entry", () => {

@@ -1,4 +1,10 @@
 import { RefreshIcon } from "~/components/ui/refresh-icon";
+import { PlusIcon, SearchIcon } from "lucide-react";
+import { openCommandPalette } from "../../commandPaletteBus";
+import { Button } from "../ui/button";
+import { PullRequestListGhost } from "./PullRequestGhosts";
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from "../ui/empty";
+
 /**
  * What the list shows when it has no rows to show.
  *
@@ -12,12 +18,6 @@ import { RefreshIcon } from "~/components/ui/refresh-icon";
  * with no project to read from — leave the button out, since pressing it could only repeat what
  * is already happening or ask nobody.
  */
-import { PlusIcon, SearchIcon } from "lucide-react";
-
-import { openCommandPalette } from "../../commandPaletteBus";
-import { Button } from "../ui/button";
-import { PullRequestListGhost } from "./PullRequestGhosts";
-import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from "../ui/empty";
 
 /**
  * Drawn at the weight of the icons beside it rather than as an illustration with its own

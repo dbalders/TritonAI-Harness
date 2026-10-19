@@ -1,7 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import { migrationManifest, runMigrations } from "./Migrations.ts";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
@@ -33,6 +33,15 @@ const POST_032_MIGRATION_IDENTITIES: Array<readonly [number, string]> = [
   [56, "PullRequestFilesViewed"],
   [57, "ProjectionThreadsAutoSettleDisabledAt"],
   [58, "Ideas"],
+  [59, "OrchestrationV2"],
+  [60, "RemoveRedundantProjectionIndexes"],
+  [61, "ScheduledTaskWebhooks"],
+  [62, "WebhookRelayDeliveries"],
+  [63, "McpAppModelContext"],
+  [64, "ThreadSnapshotWindowIndexes"],
+  [65, "PullRequestReviewGuides"],
+  [66, "ThreadFailureLookupIndex"],
+  [67, "HarnessActivityViews"],
 ];
 
 it("keeps the migration registry unique and preserves shipped downstream identities", () => {

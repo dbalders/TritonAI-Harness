@@ -1,7 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-
 import { COMPOSER_CONTEXT_CLIPBOARD_MIME } from "@t3tools/shared/composerContextClipboard";
-
 import {
   ClipboardApiUnavailableError,
   ClipboardWriteError,

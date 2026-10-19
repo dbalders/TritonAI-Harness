@@ -1,5 +1,4 @@
 import { createFileRoute } from "@tanstack/react-router";
-
 import { SnapShotSettings } from "../components/settings/SnapShotSettings";
 
 function SettingsSnapShotRoute() {

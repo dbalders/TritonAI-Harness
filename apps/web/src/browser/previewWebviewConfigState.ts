@@ -7,8 +7,7 @@ import type {
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { AsyncResult, Atom } from "effect/unstable/reactivity";
-
+import { AsyncResult, Atom } from "effect/reactivity";
 import { previewBridge } from "~/components/preview/previewBridge";
 
 const PREVIEW_CONFIG_STALE_TIME_MS = 5 * 60_000;

@@ -15,7 +15,6 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
-
 import { OtlpHeadersFromString, OtlpProtocol, type SignalExport } from "./observability.ts";
 
 /** The signals T3 Code exports, spelled as the variable names spell them. */
@@ -65,7 +64,9 @@ interface Flag {
 const TrimmedLowercase = Schema.String.pipe(
   Schema.decodeTo(
     Schema.String,
-    SchemaTransformation.trim().compose(SchemaTransformation.toLowerCase()),
+    SchemaTransformation.trim().pipe(
+      SchemaTransformation.composeTransformation(SchemaTransformation.toLowerCase()),
+    ),
   ),
 );
 

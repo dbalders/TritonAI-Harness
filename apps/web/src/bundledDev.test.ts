@@ -6,11 +6,9 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 import * as NodeUtil from "node:util";
-
 import react from "@vitejs/plugin-react";
 import { createLogger, createServer } from "vite-plus";
 import { expect, it } from "vite-plus/test";
-
 import { tailwindPlugins } from "../vite/tailwind";
 
 const execFile = NodeUtil.promisify(NodeChildProcess.execFile);

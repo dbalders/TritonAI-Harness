@@ -2,6 +2,22 @@ import type { QueuedThreadMessage } from "./thread-outbox";
 import { threadOutboxRevision, updateThreadOutboxMessage } from "./thread-outbox";
 import { getComposerDraftSnapshot, sameComposerDraftState } from "./use-composer-drafts";
 
+// Ownership survives provider remounts and is fenced per queued message.
+const editorGenerations = new Map<string, number>();
+let nextEditorGeneration = 0;
+
+export function beginPendingTaskEditor(messageId: string): number {
+  const generation = ++nextEditorGeneration;
+  editorGenerations.set(messageId, generation);
+  return generation;
+}
+
+export function releasePendingTaskEditor(messageId: string, generation: number): boolean {
+  if (editorGenerations.get(messageId) !== generation) return false;
+  editorGenerations.delete(messageId);
+  return true;
+}
+
 type PendingTaskEditorWriteResult =
   | {
       readonly status: "complete";

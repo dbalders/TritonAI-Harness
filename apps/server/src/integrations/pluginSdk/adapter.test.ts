@@ -114,6 +114,8 @@ function artifact(
     readonly nodeRange?: string;
     readonly configurationSchema?: JsonValue;
     readonly inputSchema?: JsonValue;
+    readonly effect?: "read" | "write";
+    readonly authorization?: boolean;
     readonly skillFrontmatter?: string;
     readonly extraPayloads?: ReadonlyArray<readonly [string, Uint8Array]>;
   } = {},
@@ -123,7 +125,15 @@ function artifact(
   const artifactManifest = {
     ...manifest,
     configurationSchema: artifactConfigurationSchema,
-    tools: manifest.tools.map((tool) => ({ ...tool, inputSchema: artifactInputSchema })),
+    capabilities: manifest.capabilities.map((capability) => ({
+      ...capability,
+      ...(options.authorization ? { access: "authorization" } : {}),
+    })),
+    tools: manifest.tools.map((tool) => ({
+      ...tool,
+      inputSchema: artifactInputSchema,
+      ...(options.effect ? { effect: options.effect } : {}),
+    })),
   };
   const manifestBytes = bytes(`${canonicalJson(artifactManifest as unknown as JsonValue)}\n`);
   const payloads = new Map([
@@ -492,6 +502,31 @@ describe("plugin SDK adapter", () => {
       PluginSdkQuarantineError,
     );
   });
+
+  it.each([
+    { hook: "async connect() { return {}; },", effect: "read" as const, authorization: false },
+    { hook: "async disconnect() {},", effect: "read" as const, authorization: false },
+    { hook: "async poll() { return {}; },", effect: "read" as const, authorization: false },
+    { hook: "", effect: "write" as const, authorization: false },
+    { hook: "", effect: "read" as const, authorization: true },
+  ])(
+    "quarantines incompatible lifecycle before registry admission: %j",
+    async ({ hook, effect, authorization }) => {
+      const entry = providerSource.replace(
+        "async status({ signal })",
+        `${hook} async status({ signal })`,
+      );
+      await expect(
+        loadPluginSdkIntegration({
+          files: artifact(entry, "# Fixture reader\n", { effect, authorization }),
+          secrets: secretStore(),
+          configuration: { prefix: "fixture" },
+          expected: { id, version: "1.0.0" },
+          hostNodeVersion: "24.13.1",
+        }),
+      ).rejects.toBeInstanceOf(PluginSdkQuarantineError);
+    },
+  );
 
   it("fails integrity before import and quarantines provider factory failures", async () => {
     const tampered = artifact().map((file) =>

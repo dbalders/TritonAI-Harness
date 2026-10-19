@@ -1,9 +1,8 @@
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import { chooseLoadBalancedEnvironment } from "@t3tools/client-runtime/load-balancing";
 import type { EnvironmentId } from "@t3tools/contracts";
-import { Atom } from "effect/unstable/reactivity";
+import { Atom } from "effect/reactivity";
 import { useCallback, useContext, useMemo } from "react";
-
 import { serverEnvironment } from "../state/server";
 
 /** Only mounted for unresolved automatic drafts, so idle clients do not poll hosts. */

@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vite-plus/test";
+import { ProjectIconPickerDialog } from "./ProjectIconPickerDialog";
 
 vi.mock("../ui/button", () => ({
   Button: ({ children }: { readonly children?: ReactNode }) => <button>{children}</button>,
@@ -35,8 +36,6 @@ vi.mock("../ui/toggle-group", () => ({
     readonly value: readonly string[];
   }) => <div data-current={value.join(",")}>{children}</div>,
 }));
-
-import { ProjectIconPickerDialog } from "./ProjectIconPickerDialog";
 
 describe("ProjectIconPickerDialog", () => {
   it("shows icons first and selects them for an automatic project", () => {

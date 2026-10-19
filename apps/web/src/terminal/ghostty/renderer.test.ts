@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vite-plus/test";
-
 import { GHOSTTY_CELL_WIDE, type GhosttyCell, type GhosttySnapshot } from "./core";
 import {
   ghosttyTextRunEnd,

@@ -1,3 +1,4 @@
+import { describe } from "vite-plus/test";
 // @effect-diagnostics nodeBuiltinImport:off - exercises the real sync script with local Git worktrees.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
@@ -8,6 +9,7 @@ import { assert, it } from "@effect/vitest";
 
 const repoRoot = NodePath.resolve(NodePath.dirname(NodeURL.fileURLToPath(import.meta.url)), "..");
 const syncScript = NodePath.resolve(repoRoot, "scripts/tritonai-sync-upstream.mjs");
+const releaseScript = NodePath.resolve(repoRoot, "scripts/tritonai-release-sync.mjs");
 
 interface Fixture {
   readonly fakeBin: string;
@@ -173,9 +175,14 @@ fs.writeFileSync(process.env.TRITONAI_SYNC_AGENT_RESPONSE_FILE, JSON.stringify({
   return { fakeBin, repo, root, trace, upstream };
 }
 
-function runSync(fixture: Fixture, installExit = 0, extraEnv: Record<string, string> = {}) {
+function runSync(
+  fixture: Fixture,
+  installExit = 0,
+  extraEnv: Record<string, string> = {},
+  args: string[] = [],
+) {
   NodeFS.writeFileSync(NodePath.join(fixture.trace, "install-exit"), String(installExit));
-  return NodeChildProcess.spawnSync(process.execPath, [syncScript], {
+  return NodeChildProcess.spawnSync(process.execPath, [syncScript, ...args], {
     cwd: fixture.repo,
     encoding: "utf8",
     env: {
@@ -187,7 +194,7 @@ function runSync(fixture: Fixture, installExit = 0, extraEnv: Record<string, str
       TRITONAI_SYNC_AGENT_COMMAND: "fixture-agent",
       TRITONAI_SYNC_AGENT_SECRET_ENV_ALLOWLIST: "",
       TRITONAI_SYNC_CHECKS: "fixture-check",
-      TRITONAI_SYNC_DOWNSTREAM_BRANCH: "main",
+      TRITONAI_SYNC_DOWNSTREAM_BRANCH: extraEnv.TRITONAI_SYNC_DOWNSTREAM_BRANCH ?? "main",
       TRITONAI_SYNC_DOWNSTREAM_REMOTE: "origin",
       TRITONAI_SYNC_UPSTREAM_BRANCH: "main",
       TRITONAI_SYNC_UPSTREAM_REMOTE: "upstream",
@@ -253,19 +260,22 @@ it("records the merge base and upstream commit count in the report", () => {
   }
 });
 
-for (const method of ["squash", "rebase"]) {
-  it(`refuses to run when the PR merge method is ${method}`, () => {
-    const fixture = createFixture();
-    try {
-      const result = runSync(fixture, 0, { TRITONAI_SYNC_PR_MERGE_METHOD: method });
-      assert.equal(result.status, 1);
-      assert.match(result.stderr, /squash and rebase are not allowed/u);
-      assert.ok(!NodeFS.existsSync(NodePath.join(fixture.trace, "install.json")));
-    } finally {
-      NodeFS.rmSync(fixture.root, { recursive: true, force: true });
-    }
-  });
-}
+describe.each(Array.from(["squash", "rebase"], (scenario) => ({ scenario })))(
+  "case $scenario",
+  ({ scenario: method }) => {
+    it(`refuses to run when the PR merge method is ${method}`, () => {
+      const fixture = createFixture();
+      try {
+        const result = runSync(fixture, 0, { TRITONAI_SYNC_PR_MERGE_METHOD: method });
+        assert.equal(result.status, 1);
+        assert.match(result.stderr, /squash and rebase are not allowed/u);
+        assert.ok(!NodeFS.existsSync(NodePath.join(fixture.trace, "install.json")));
+      } finally {
+        NodeFS.rmSync(fixture.root, { recursive: true, force: true });
+      }
+    });
+  },
+);
 
 it("fails closed before checks and review when the merged worktree install fails", () => {
   const fixture = createFixture();
@@ -279,6 +289,148 @@ it("fails closed before checks and review when the merged worktree install fails
     assert.equal(NodeFS.readFileSync(NodePath.join(fixture.trace, "order"), "utf8"), "install\n");
     assert.ok(!NodeFS.existsSync(NodePath.join(fixture.trace, "checks.json")));
     assert.ok(!NodeFS.existsSync(NodePath.join(fixture.trace, "review.json")));
+  } finally {
+    NodeFS.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+function installFakeGithub(fixture: Fixture): void {
+  writeExecutable(
+    NodePath.join(fixture.fakeBin, "gh"),
+    `#!/usr/bin/env node
+const fs = require("node:fs");
+const path = require("node:path");
+const trace = path.join(path.dirname(__filename), "..", "trace");
+const args = process.argv.slice(2);
+fs.appendFileSync(path.join(trace, "github.jsonl"), JSON.stringify(args) + "\\n");
+if (args[0] === "release" && args[1] === "list") {
+  console.log(JSON.stringify({tagName: "v9.9.9", publishedAt: "2026-10-16T00:00:00Z"}));
+} else if (args[0] === "pr" && args[1] === "create") {
+  console.log("https://github.com/fixture/harness/pull/1");
+} else if (!(args[0] === "pr" && args[1] === "list")) {
+  throw new Error("Unexpected fake GitHub operation");
+}
+`,
+  );
+}
+
+function githubCalls(fixture: Fixture): string[][] {
+  return NodeFS.readFileSync(NodePath.join(fixture.trace, "github.jsonl"), "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as string[]);
+}
+
+it("targets the configured downstream base when preparing a sync PR", () => {
+  const fixture = createFixture();
+  try {
+    installFakeGithub(fixture);
+    git(fixture.repo, "branch", "downstream-review", "main");
+    git(fixture.repo, "push", "origin", "downstream-review");
+    const result = runSync(
+      fixture,
+      0,
+      {
+        TRITONAI_SYNC_DOWNSTREAM_BRANCH: "downstream-review",
+      },
+      ["--create-pr", "--no-llm", "--allow-needs-review"],
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const create = githubCalls(fixture).find((args) => args[0] === "pr" && args[1] === "create");
+    assert.ok(create);
+    assert.equal(create[create.indexOf("--base") + 1], "downstream-review");
+  } finally {
+    NodeFS.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+function runReleaseSync(fixture: Fixture, args: string[] = [], installExit = 0) {
+  NodeFS.writeFileSync(NodePath.join(fixture.trace, "install-exit"), String(installExit));
+  const env = { ...process.env };
+  delete env.AWS_ACCESS_KEY_ID;
+  delete env.TEST_SENTINEL_SECRET;
+  delete env.TRITONAI_SYNC_AGENT_COMMAND;
+  return NodeChildProcess.spawnSync(process.execPath, [releaseScript, ...args], {
+    cwd: fixture.repo,
+    encoding: "utf8",
+    env: {
+      ...env,
+      PATH: `${fixture.fakeBin}${NodePath.delimiter}${process.env.PATH ?? ""}`,
+      TRITONAI_RELEASE_SYNC_PARENT_REPO: "fixture/parent",
+      TRITONAI_RELEASE_SYNC_PARENT_URL: fixture.upstream,
+      TRITONAI_RELEASE_SYNC_PARENT_REMOTE: "upstream",
+      TRITONAI_RELEASE_SYNC_DOWNSTREAM_REMOTE: "origin",
+      TRITONAI_RELEASE_SYNC_DOWNSTREAM_BRANCH: "main",
+      TRITONAI_RELEASE_SYNC_GITHUB_REPO: "fixture/harness",
+      TRITONAI_RELEASE_SYNC_CHECKS: "fixture-check",
+    },
+  });
+}
+
+function prepareReleaseFixture(fixture: Fixture): void {
+  installFakeGithub(fixture);
+  git(fixture.repo, "tag", "v9.9.9", "upstream-fixture");
+  git(fixture.repo, "push", "upstream", "v9.9.9");
+}
+
+it("installs the frozen release candidate before checks and reuses it on a later PR attempt", () => {
+  const fixture = createFixture();
+  try {
+    prepareReleaseFixture(fixture);
+    const initial = runReleaseSync(fixture);
+    assert.equal(initial.status, 0, initial.stderr);
+    assert.match(initial.stdout, /"installStatus": "passed"/u);
+    const branch = NodeChildProcess.execFileSync("git", ["branch", "--list", "sync/release-*"], {
+      cwd: fixture.repo,
+      encoding: "utf8",
+    }).trim();
+    assert.match(branch, /^sync\/release-v9\.9\.9-/u);
+    git(fixture.repo, "switch", branch);
+    NodeFS.writeFileSync(NodePath.join(fixture.repo, "retained-review-fix"), "preserve me\n");
+    git(fixture.repo, "add", "retained-review-fix");
+    git(fixture.repo, "commit", "-m", "candidate review fix");
+    git(fixture.repo, "switch", "main");
+    NodeFS.writeFileSync(NodePath.join(fixture.repo, "new-downstream-change"), "new base\n");
+    git(fixture.repo, "add", "new-downstream-change");
+    git(fixture.repo, "commit", "-m", "new downstream change");
+    git(fixture.repo, "push", "origin", "main");
+
+    const retry = runReleaseSync(fixture, ["--create-pr"]);
+    assert.equal(retry.status, 0, retry.stderr);
+    assert.match(retry.stdout, /"status": "review-ready"/u);
+    assert.equal(
+      NodeFS.readFileSync(NodePath.join(fixture.trace, "order"), "utf8"),
+      "install\nchecks\ninstall\nchecks\n",
+    );
+    const retained = NodeChildProcess.execFileSync(
+      "git",
+      ["show", `${branch}:retained-review-fix`],
+      {
+        cwd: fixture.repo,
+        encoding: "utf8",
+      },
+    );
+    assert.equal(retained, "preserve me\n");
+    git(fixture.repo, "merge-base", "--is-ancestor", "main", branch);
+    git(fixture.repo, "merge-base", "--is-ancestor", "v9.9.9", branch);
+    const create = githubCalls(fixture).find((args) => args[0] === "pr" && args[1] === "create");
+    assert.ok(create);
+    assert.equal(create[create.indexOf("--base") + 1], "main");
+    assert.match(create[create.indexOf("--body") + 1]!, /Dependencies: `passed`/u);
+  } finally {
+    NodeFS.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+it("does not run release checks after a failed frozen install", () => {
+  const fixture = createFixture();
+  try {
+    prepareReleaseFixture(fixture);
+    const result = runReleaseSync(fixture, [], 42);
+    assert.equal(result.status, 2, result.stderr);
+    assert.match(result.stdout, /"installStatus": "failed"/u);
+    assert.match(result.stdout, /"checkStatus": "not-run"/u);
+    assert.equal(NodeFS.readFileSync(NodePath.join(fixture.trace, "order"), "utf8"), "install\n");
   } finally {
     NodeFS.rmSync(fixture.root, { recursive: true, force: true });
   }

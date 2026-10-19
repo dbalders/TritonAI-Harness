@@ -4,7 +4,6 @@ import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Semaphore from "effect/Semaphore";
-
 import {
   createBrowserDpopProof,
   generateBrowserDpopKey,
@@ -13,7 +12,7 @@ import {
   type BrowserDpopKey,
 } from "./dpop";
 
-const relayDpopSignerLayer = Layer.effect(
+const layerRelayDpopSigner = Layer.effect(
   ManagedRelay.ManagedRelayDpopSigner,
   Effect.gen(function* () {
     const crypto = yield* Crypto.Crypto;
@@ -76,7 +75,7 @@ const relayDpopSignerLayer = Layer.effect(
   }),
 );
 
-export const managedRelayClientLayer = (relayUrl: string) =>
+export const layer = (relayUrl: string) =>
   ManagedRelay.layer({ relayUrl, clientId: RelayWebClientId }).pipe(
-    Layer.provideMerge(relayDpopSignerLayer),
+    Layer.provideMerge(layerRelayDpopSigner),
   );

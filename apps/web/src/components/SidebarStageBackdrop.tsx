@@ -1,6 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
 import { useId } from "react";
-
 import { APP_STAGE_LABEL } from "../branding";
 import { resolveServerBackedAppStageLabel } from "../branding.logic";
 import { primaryServerConfigAtom } from "../state/server";

@@ -1,6 +1,5 @@
 import { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
-
 import {
   handleDesktopAppActivationRequest,
   type DesktopAppActivationDependencies,

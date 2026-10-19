@@ -1,6 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
 import { useEffect } from "react";
-
 import { primaryEnvironmentIdAtom } from "../state/primaryEnvironment";
 import { primaryServerSettingsAtom } from "../state/server";
 import { getThemeDefinition, singleAppearanceOf } from "../themePalette";

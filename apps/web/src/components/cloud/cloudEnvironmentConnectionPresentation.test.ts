@@ -1,6 +1,5 @@
 import type { EnvironmentConnectionPresentation } from "@t3tools/client-runtime/connection";
 import { describe, expect, it } from "vite-plus/test";
-
 import { presentSavedCloudEnvironmentConnection } from "./cloudEnvironmentConnectionPresentation";
 
 function connection(

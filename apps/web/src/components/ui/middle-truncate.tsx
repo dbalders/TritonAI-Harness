@@ -1,5 +1,4 @@
 import type { ComponentProps } from "react";
-
 import { cn } from "~/lib/utils";
 
 /**
@@ -16,6 +15,7 @@ export function MiddleTruncate({
   value,
   tail,
   showTitle = true,
+  variant = "default",
   className,
   ...props
 }: Omit<ComponentProps<"span">, "children"> & {
@@ -24,12 +24,19 @@ export function MiddleTruncate({
   tail?: number;
   /** The full value on hover. Off where a tooltip already carries it. */
   showTitle?: boolean;
+  /** Align capital letters with adjacent icons while preserving accents and descenders. */
+  variant?: "default" | "cap-aligned";
 }) {
   const split = splitForMiddleTruncate(value, tail);
   return (
     <span
       {...(showTitle ? { title: value } : {})}
-      className={cn("inline-flex min-w-0 max-w-full overflow-hidden whitespace-nowrap", className)}
+      className={cn(
+        "inline-flex min-w-0 max-w-full overflow-hidden whitespace-nowrap",
+        variant === "cap-aligned" &&
+          "overflow-x-clip overflow-y-visible [&>span]:[text-box:trim-both_cap_alphabetic] [&>span]:overflow-x-clip [&>span]:overflow-y-visible",
+        className,
+      )}
       {...props}
     >
       {split ? (

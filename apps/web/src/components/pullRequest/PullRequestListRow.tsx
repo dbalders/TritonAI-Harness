@@ -4,10 +4,8 @@ import type {
   PullRequestState,
 } from "@t3tools/contracts";
 import type { ReactNode } from "react";
-
 import { cn } from "~/lib/utils";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
-
 import { MiddleTruncate } from "../ui/middle-truncate";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {

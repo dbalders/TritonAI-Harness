@@ -3,10 +3,8 @@ import type { ScopedThreadRef } from "@t3tools/contracts";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { useShallow } from "zustand/react/shallow";
-
 import { normalizePreviewUrl } from "@t3tools/shared/preview";
 import { readPreparedConnection } from "~/state/session";
-
 import { isLocalLoopbackHost, normalizeHostname } from "./browser/browserTargetResolver";
 import { resolveStorage } from "./lib/storage";
 

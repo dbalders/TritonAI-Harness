@@ -1,13 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
-
-const { readPreparedConnection } = vi.hoisted(() => ({
-  readPreparedConnection: vi.fn<() => { httpBaseUrl: string } | null>(() => null),
-}));
-
-vi.mock("~/state/session", () => ({ readPreparedConnection }));
-
 import {
   BROWSER_HISTORY_MAX_ENTRIES_PER_PROJECT,
   BROWSER_HISTORY_MAX_PROJECTS,
@@ -24,6 +16,12 @@ import {
   upsertHistoryEntry,
   useBrowserHistoryStore,
 } from "./browserHistoryStore";
+
+const { readPreparedConnection } = vi.hoisted(() => ({
+  readPreparedConnection: vi.fn<() => { httpBaseUrl: string } | null>(() => null),
+}));
+
+vi.mock("~/state/session", () => ({ readPreparedConnection }));
 
 function entry(overrides: Partial<BrowserHistoryEntry> = {}): BrowserHistoryEntry {
   return { url: "http://localhost:3000/", lastVisitedAt: 1000, ...overrides };

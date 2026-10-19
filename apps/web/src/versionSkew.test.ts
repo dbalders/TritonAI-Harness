@@ -1,12 +1,6 @@
 import { EnvironmentId } from "@t3tools/contracts";
 import type { ServerUpdateState } from "@t3tools/client-runtime/state/server";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
-
-// Pinned so the direction cases below read as fixed versions instead of
-// arithmetic on whatever version this checkout happens to be at.
-const branding = vi.hoisted(() => ({ APP_VERSION: "0.0.34" }));
-vi.mock("./branding", () => branding);
-
 import { APP_VERSION } from "./branding";
 import {
   appendVersionMismatchHint,
@@ -21,6 +15,11 @@ import {
   serverUpdateGuidance,
   supportsDesktopAppUpdate,
 } from "./versionSkew";
+
+// Pinned so the direction cases below read as fixed versions instead of
+// arithmetic on whatever version this checkout happens to be at.
+const branding = vi.hoisted(() => ({ APP_VERSION: "0.0.34" }));
+vi.mock("./branding", () => branding);
 
 const MISMATCH_HINT =
   "Version mismatch. Try syncing the client and server to the same TritonAI Harness version.";

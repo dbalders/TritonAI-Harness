@@ -19,7 +19,7 @@ import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
 import * as Stream from "effect/Stream";
-import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
+import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import {
@@ -629,16 +629,16 @@ function checkoutGitSkillPath(input: {
   readonly checkoutPath?: string;
 }): Effect.Effect<void, ServerProviderSkillInstallError, VcsProcess.VcsProcess> {
   const checkoutPath = input.checkoutPath;
-  if (!checkoutPath || checkoutPath === ".") {
-    return Effect.void;
-  }
   return Effect.gen(function* () {
     const process = yield* VcsProcess.VcsProcess;
     yield* process
       .run({
         operation: "installProviderSkill.gitSparseCheckout",
         command: "git",
-        args: ["-C", input.repositoryPath, "sparse-checkout", "set", checkoutPath],
+        args:
+          !checkoutPath || checkoutPath === "."
+            ? ["-C", input.repositoryPath, "sparse-checkout", "disable"]
+            : ["-C", input.repositoryPath, "sparse-checkout", "set", checkoutPath],
         cwd: input.repositoryPath,
         timeoutMs: GIT_CLONE_TIMEOUT_MS,
         maxOutputBytes: 256 * 1024,

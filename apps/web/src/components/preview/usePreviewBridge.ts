@@ -9,7 +9,6 @@ import type {
 import { parseScopedThreadKey, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import * as Option from "effect/Option";
 import { useEffect, useEffectEvent, useMemo, useRef } from "react";
-
 import {
   flushPendingFaviconsForThread,
   recordFaviconForThread,
@@ -20,7 +19,6 @@ import { applyPreviewDesktopState, type DesktopPreviewOverlay } from "~/previewS
 import { previewEnvironment } from "~/state/preview";
 import { usePreparedConnection } from "~/state/session";
 import { useAtomCommand } from "~/state/use-atom-command";
-
 import { previewBridge } from "./previewBridge";
 
 function originOf(url: string): string | null {
@@ -39,8 +37,10 @@ export function usePreviewBridge(input: {
   threadRef: ScopedThreadRef;
   tabId: string;
   runtimeTabId: string;
+  /** The server drives this tab and reports its navigation itself. */
+  serverDriven?: boolean;
 }): void {
-  const { threadRef, tabId, runtimeTabId } = input;
+  const { threadRef, tabId, runtimeTabId, serverDriven = false } = input;
   const clearBrowserPointer = useBrowserPointerStore((state) => state.clear);
   const reportStatus = useAtomCommand(previewEnvironment.reportStatus, "preview status report");
   const bridge = previewBridge;
@@ -79,7 +79,7 @@ export function usePreviewBridge(input: {
         lastReportedUrl: lastReportedUrl.current,
         lastReportedKind: lastReportedKind.current,
       });
-      if (!reported) return;
+      if (!reported || serverDriven) return;
       lastReportedUrl.current = reported.lastReportedUrl;
       lastReportedKind.current = reported.lastReportedKind;
       void reportStatus({
