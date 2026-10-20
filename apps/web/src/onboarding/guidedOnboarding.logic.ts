@@ -532,7 +532,7 @@ export function fileTaskMessage(
 }
 
 /** The plugin capability an account task reads with; both plugins use the same ids. */
-export function taskCapability(task: OnboardingTask): string | null {
+function taskCapability(task: OnboardingTask): string | null {
   switch (task.source) {
     case "mail":
       return "mail.read";

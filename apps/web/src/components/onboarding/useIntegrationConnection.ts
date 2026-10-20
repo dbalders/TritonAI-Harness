@@ -65,7 +65,7 @@ function errorMessage(error: unknown): string {
     : "Something went wrong. Try again.";
 }
 
-export function integrationSignInUrl(flow: IntegrationConnectResult | null): string | null {
+function integrationSignInUrl(flow: IntegrationConnectResult | null): string | null {
   if (!flow) return null;
   if (flow.kind === "device_code") return flow.verificationUriComplete ?? flow.verificationUri;
   if (flow.kind === "authorization_url") return flow.authorizationUrl;
@@ -73,7 +73,7 @@ export function integrationSignInUrl(flow: IntegrationConnectResult | null): str
 }
 
 /** Signed in is not enough: a disabled plugin, or one missing an approval, gives no tools. */
-export function integrationIsUsable(integration: IntegrationSummary | null): boolean {
+function integrationIsUsable(integration: IntegrationSummary | null): boolean {
   return (
     integration !== null &&
     integration.installed &&
