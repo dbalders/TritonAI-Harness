@@ -3276,7 +3276,10 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       const asarPath = path.join(resources, "server.asar");
       yield* packWindowsServerAsar({ sourceDir, asarPath, arch: "x64" });
       assert.equal(yield* fs.exists(path.join(`${asarPath}.unpacked`, linuxFile)), false);
-      assert.deepEqual([...extractFile(asarPath, linuxFile)], [0x7f, 0x45, 0x4c, 0x46]);
+      assert.deepEqual(
+        [...extractFile(asarPath, path.normalize(linuxFile))],
+        [0x7f, 0x45, 0x4c, 0x46],
+      );
       const options = {
         stageDistDir,
         platform: "win" as const,
