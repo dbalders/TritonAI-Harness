@@ -45,6 +45,13 @@ export interface IntegrationConnection {
   readonly connect: () => Promise<void>;
 }
 
+interface ConnectionSession {
+  readonly key: string;
+  readonly starting: boolean;
+  readonly scheduled: ScheduledIntegrationFlow | null;
+  readonly error: string | null;
+}
+
 function unwrap<A, E>(result: AtomCommandResult<A, E>): A {
   if (result._tag === "Success") return result.value;
   throw squashAtomCommandFailure(result);
@@ -116,23 +123,16 @@ export function useIntegrationConnection(
   const pollCommand = useAtomCommand(serverEnvironment.pollIntegration, { reportFailure: false });
 
   // Everything is stored with the environment and plugin it belongs to, so switching
-  // either shows a fresh connection instead of the previous one's state.
+  // either shows that connection's own state, and coming back resumes a sign-in.
   const key = environmentId === null ? null : `${environmentId}:${integrationId}`;
   const [loaded, setLoaded] = useState<{
     readonly key: string;
     readonly integration: IntegrationSummary | null;
   } | null>(null);
-  const [session, setSession] = useState<{
-    readonly key: string;
-    readonly starting: boolean;
-    readonly scheduled: ScheduledIntegrationFlow | null;
-    readonly error: string | null;
-  } | null>(null);
+  const [session, setSession] = useState<ConnectionSession | null>(null);
   // Results that arrive after unmounting or switching environments are ignored, so a
   // late response can never open a sign-in page or poll the wrong server.
   const generation = useRef(0);
-  // Only the latest sign-in may update state; "Start over" replaces the one in progress.
-  const activeFlowId = useRef<string | null>(null);
 
   const integration = loaded !== null && loaded.key === key ? loaded.integration : null;
   const loading = key !== null && loaded?.key !== key;
@@ -141,7 +141,6 @@ export function useIntegrationConnection(
 
   useEffect(() => {
     const owner = ++generation.current;
-    activeFlowId.current = null;
     if (!environmentId || key === null) return;
     void (async () => {
       let found: IntegrationSummary | null = null;
@@ -162,11 +161,14 @@ export function useIntegrationConnection(
   useEffect(() => {
     if (!environmentId || key === null || !scheduled) return;
     const owner = generation.current;
-    const stale = () => generation.current !== owner || activeFlowId.current !== scheduled.flowId;
-    const finish = (error: string | null) => {
-      activeFlowId.current = null;
-      setSession({ key, starting: false, scheduled: null, error });
-    };
+    const stale = () => generation.current !== owner;
+    // "Start over" replaces the flow, so a late answer for the old one changes nothing.
+    const updateIfCurrent = (next: ConnectionSession) =>
+      setSession((previous) =>
+        previous?.key === key && previous.scheduled?.flowId === scheduled.flowId ? next : previous,
+      );
+    const finish = (error: string | null) =>
+      updateIfCurrent({ key, starting: false, scheduled: null, error });
     const timer = window.setTimeout(
       async () => {
         if (stale()) return;
@@ -184,7 +186,7 @@ export function useIntegrationConnection(
           if (stale()) return;
           setLoaded({ key, integration: result.integration });
           if (result.state === "pending") {
-            setSession({
+            updateIfCurrent({
               key,
               starting: false,
               error: null,
@@ -202,7 +204,7 @@ export function useIntegrationConnection(
         } catch (cause) {
           if (stale()) return;
           if (integrationFlowCanRetryAfterPollError(scheduled, Date.now())) {
-            setSession({
+            updateIfCurrent({
               key,
               starting: false,
               error: null,
@@ -222,10 +224,16 @@ export function useIntegrationConnection(
     if (!environmentId || key === null || !integration) return;
     const owner = generation.current;
     const stale = () => generation.current !== owner;
-    const settle = (error: string | null) => {
-      if (!stale()) setSession({ key, starting: false, scheduled: null, error });
+    const settle = (next: Omit<ConnectionSession, "key" | "starting">) => {
+      // An attempt abandoned by switching environments must not stay "starting".
+      setSession((previous) =>
+        stale()
+          ? previous?.key === key && previous.starting
+            ? null
+            : previous
+          : { key, starting: false, ...next },
+      );
     };
-    activeFlowId.current = null;
     setSession({ key, starting: true, scheduled: null, error: null });
     try {
       let latest = integration;
@@ -235,41 +243,40 @@ export function useIntegrationConnection(
             ? enabledCommand({ environmentId, input: { id: integrationId, enabled: true } })
             : installCommand({ environmentId, input: { id: integrationId } })),
         );
-        if (stale()) return;
-        latest = result.integrations.find((item) => item.id === integrationId) ?? latest;
-        setLoaded({ key, integration: latest });
+        if (!stale()) {
+          latest = result.integrations.find((item) => item.id === integrationId) ?? latest;
+          setLoaded({ key, integration: latest });
+        }
       }
-      if (integrationIsUsable(latest)) {
-        settle(null);
+      if (stale() || integrationIsUsable(latest)) {
+        settle({ scheduled: null, error: null });
         return;
       }
       const started = unwrap(await connectCommand({ environmentId, input: { id: integrationId } }));
-      if (stale()) return;
+      if (stale()) {
+        settle({ scheduled: null, error: null });
+        return;
+      }
       if (started.kind === "connected") {
         const refreshed = unwrap(await listCommand({ environmentId, input: {} }));
-        if (stale()) return;
-        setLoaded({
-          key,
-          integration: refreshed.integrations.find((item) => item.id === integrationId) ?? null,
-        });
-        settle(null);
+        if (!stale()) {
+          setLoaded({
+            key,
+            integration: refreshed.integrations.find((item) => item.id === integrationId) ?? null,
+          });
+        }
+        settle({ scheduled: null, error: null });
         return;
       }
       if (!integrationConnectResultNeedsPolling(started)) {
-        settle("Finish connecting this account in Settings → Plugins.");
+        settle({ scheduled: null, error: "Finish connecting this account in Settings → Plugins." });
         return;
       }
-      activeFlowId.current = started.flowId;
-      setSession({
-        key,
-        starting: false,
-        scheduled: scheduleIntegrationFlow(started),
-        error: null,
-      });
+      settle({ scheduled: scheduleIntegrationFlow(started), error: null });
       // Take them straight to the provider's page instead of asking them to find it.
-      openSignIn(integrationSignInUrl(started));
+      if (!stale()) openSignIn(integrationSignInUrl(started));
     } catch (cause) {
-      settle(errorMessage(cause));
+      settle({ scheduled: null, error: errorMessage(cause) });
     }
   }, [
     connectCommand,

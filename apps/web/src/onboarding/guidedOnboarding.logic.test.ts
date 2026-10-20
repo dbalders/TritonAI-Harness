@@ -8,6 +8,7 @@ import {
   accountTaskMessage,
   connectionAccess,
   fileTaskMessage,
+  integrationCanRunTask,
   onboardingProgressLines,
   onboardingRole,
   onboardingTask,
@@ -134,6 +135,29 @@ describe("connectionAccess", () => {
 
   it("claims nothing without a plugin", () => {
     expect(connectionAccess(null)).toEqual({ reads: [], writes: [] });
+  });
+});
+
+describe("integrationCanRunTask", () => {
+  const signedIn = (calendarOn: boolean) =>
+    ({
+      id: MICROSOFT_365_ID,
+      capabilities: [
+        { ...capability("mail.read", "Read mail", true) },
+        { ...capability("calendar.read", "Read calendars", calendarOn) },
+      ],
+      tools: [],
+    }) as unknown as IntegrationSummary;
+  const [mail, , calendar] = onboardingRole("admin").tasks;
+
+  it("needs the capability the task reads with, not just a signed-in account", () => {
+    expect(integrationCanRunTask(signedIn(false), mail)).toBe(true);
+    expect(integrationCanRunTask(signedIn(false), calendar)).toBe(false);
+    expect(integrationCanRunTask(signedIn(true), calendar)).toBe(true);
+  });
+
+  it("never blocks a file task on an account", () => {
+    expect(integrationCanRunTask(null, onboardingRole("admin").tasks[1])).toBe(true);
   });
 });
 

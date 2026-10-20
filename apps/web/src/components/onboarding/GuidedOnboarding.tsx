@@ -10,7 +10,7 @@ import {
   type RuntimeMode,
 } from "@t3tools/contracts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
-import { useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import {
   ArrowLeftIcon,
   ArrowRightIcon,
@@ -31,6 +31,7 @@ import {
 } from "lucide-react";
 import {
   useCallback,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -59,6 +60,7 @@ import {
   accountTaskMessage,
   connectionAccess,
   fileTaskMessage,
+  integrationCanRunTask,
   onboardingRole,
   onboardingTask,
   parseSampleTable,
@@ -466,10 +468,11 @@ function TaskStep({
   const loading = microsoft.status === "loading" || google.status === "loading";
   const microsoftAvailable = microsoft.status !== "unavailable" && microsoft.status !== "loading";
   const googleAvailable = google.status !== "unavailable" && google.status !== "loading";
+  const firstTask = role.tasks[0];
   const recommended = recommendedTaskId(
     role,
-    microsoft.status === "connected" ||
-      (!taskNeedsMicrosoft(role.tasks[0]) && google.status === "connected"),
+    (microsoft.status === "connected" && integrationCanRunTask(microsoft.integration, firstTask)) ||
+      (google.status === "connected" && integrationCanRunTask(google.integration, firstTask)),
   );
   const available = (task: OnboardingTask) =>
     !taskNeedsAccount(task) ||
@@ -726,6 +729,9 @@ function ConnectStep({
     task.source === "calendar" ? "calendar" : task.source === "teams" ? "Teams chats" : "email";
   const status = connection.status;
   const connected = status === "connected";
+  // Signed in, but the capability this task reads with is turned off in Settings.
+  const capabilityOff = connected && !integrationCanRunTask(connection.integration, task);
+  const ready = connected && !capabilityOff;
   const busy = status === "loading" || status === "starting";
 
   return (
@@ -733,11 +739,19 @@ function ConnectStep({
       <BackButton onClick={onBack} />
       <StepHeading
         eyebrow="Step 3 of 3 · Connect"
-        title={connected ? "You're connected." : `Connect your ${thing}.`}
+        title={
+          ready
+            ? "You're connected."
+            : capabilityOff
+              ? `Turn on reading your ${thing}.`
+              : `Connect your ${thing}.`
+        }
       >
-        {connected
+        {ready
           ? `TritonAI can read your ${thing} when you ask it something.`
-          : `To ${task.title.charAt(0).toLowerCase()}${task.title.slice(1)}, TritonAI needs to read your ${thing}. You'll sign in on ${company}'s own page.`}
+          : capabilityOff
+            ? `Your ${PROVIDER_ACCOUNT[provider]} account is connected, but reading your ${thing} is turned off for it in Settings → Plugins.`
+            : `To ${task.title.charAt(0).toLowerCase()}${task.title.slice(1)}, TritonAI needs to read your ${thing}. You'll sign in on ${company}'s own page.`}
       </StepHeading>
 
       <div className="mt-8 rounded-2xl border border-border bg-card p-5 shadow-lg/5">
@@ -778,7 +792,11 @@ function ConnectStep({
         {status === "failed" && connection.error ? <ErrorText>{connection.error}</ErrorText> : null}
 
         <div className="mt-5 flex flex-wrap items-center gap-3">
-          {connected ? (
+          {capabilityOff ? (
+            <Button size="lg" variant="outline" render={<Link to="/settings/plugins" />}>
+              Open Settings → Plugins
+            </Button>
+          ) : ready ? (
             <Button size="xl" disabled={running} onClick={onRun}>
               {running ? <Spinner /> : null}
               {task.action}
@@ -808,7 +826,7 @@ function ConnectStep({
         Settings → Plugins. When you ask something, what it reads from your {thing} is sent to the
         AI model so it can answer.
       </FinePrint>
-      {!connected ? (
+      {!ready ? (
         <div className="mt-6">
           <Button variant="ghost-muted" onClick={onUseFile}>
             Not now. Try it on a file instead
@@ -983,6 +1001,15 @@ export function GuidedOnboarding() {
   const [running, setRunning] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
   const sending = useRef(false);
+  // A launch still in flight when the tour closes must not start the chat, move the
+  // person, or rewrite the tour they open next.
+  const launches = useRef(0);
+  useEffect(
+    () => () => {
+      launches.current++;
+    },
+    [],
+  );
   // Owned here, not by the Connect step, so a sign-in finishes even after Back.
   const microsoft = useIntegrationConnection(MICROSOFT_365_ID, environmentId);
   const google = useIntegrationConnection(GOOGLE_WORKSPACE_ID, environmentId);
@@ -1024,6 +1051,8 @@ export function GuidedOnboarding() {
     sending.current = true;
     setRunning(true);
     setRunError(null);
+    const launch = ++launches.current;
+    const abandoned = () => launches.current !== launch;
     let release = () => {};
     try {
       const project = await ensureProject();
@@ -1048,6 +1077,10 @@ export function GuidedOnboarding() {
       }
       const attached = input.attach ? await input.attach() : null;
       if (attached) release = attached.release;
+      if (abandoned()) {
+        release();
+        return;
+      }
       const threadId = newThreadId();
       const createdAt = new Date().toISOString();
       const started = await startTurn({
@@ -1081,6 +1114,8 @@ export function GuidedOnboarding() {
       release();
       release = () => {};
       if (started._tag === "Failure") throw new Error("The assistant couldn't start. Try again.");
+      // The conversation exists and stays in the sidebar; only a still-open tour follows it.
+      if (abandoned()) return;
       updateGuidedTourState({
         taskEnvironmentId: environmentId,
         taskThreadId: threadId,
@@ -1091,6 +1126,7 @@ export function GuidedOnboarding() {
       const threadRef = scopeThreadRef(environmentId, threadId);
       // The chat route treats a conversation it hasn't received yet as missing.
       await waitForThreadShell(threadRef).catch(() => false);
+      if (abandoned()) return;
       await navigate({
         to: "/$environmentId/$threadId",
         params: buildThreadRouteParams(threadRef),

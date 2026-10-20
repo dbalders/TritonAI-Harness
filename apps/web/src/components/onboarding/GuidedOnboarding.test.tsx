@@ -14,7 +14,10 @@ const mocks = vi.hoisted(() => ({
   unused: vi.fn(),
 }));
 
-vi.mock("@tanstack/react-router", () => ({ useNavigate: () => mocks.navigate }));
+vi.mock("@tanstack/react-router", () => ({
+  useNavigate: () => mocks.navigate,
+  Link: () => null,
+}));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => new Map() }));
 vi.mock("../../state/projects", () => ({ projectEnvironment: { create: "createProject" } }));
 vi.mock("../../state/threads", () => ({ threadEnvironment: { startTurn: "startTurn" } }));
@@ -143,6 +146,67 @@ describe("guided tour", () => {
         button.textContent?.includes("with the sample"),
       )?.disabled,
     ).toBe(false);
+  });
+
+  it("does not move someone back into the chat after they left the tour", async () => {
+    let finishStart: (value: unknown) => void = () => {};
+    mocks.startTurn.mockReturnValue(new Promise((resolve) => (finishStart = resolve)));
+    await openBudgetFileStep();
+    await click("Check a budget for overages");
+    await click("Check the budget with the sample");
+    expect(mocks.startTurn).toHaveBeenCalledTimes(1);
+
+    // Exit tour unmounts the route while the chat is still starting.
+    await act(async () => root.unmount());
+    await act(async () => finishStart({ _tag: "Success", value: { sequence: 1 } }));
+
+    expect(mocks.navigate).not.toHaveBeenCalled();
+    expect(readGuidedTourState().taskThreadId).toBeNull();
+    root = createRoot(container);
+  });
+
+  it("asks to turn on the calendar instead of claiming it can read it", async () => {
+    const capability = (id: string, enabled: boolean) => ({
+      id,
+      displayName: id,
+      description: id,
+      access: "default",
+      enabled,
+      granted: enabled,
+      available: enabled,
+    });
+    mocks.listIntegrations.mockResolvedValue({
+      _tag: "Success",
+      value: {
+        integrations: [
+          {
+            id: "microsoft-365",
+            installed: true,
+            enabled: true,
+            requiresConnection: true,
+            connectionState: "connected",
+            accountLabel: null,
+            capabilities: [capability("mail.read", true), capability("calendar.read", false)],
+            tools: [],
+          },
+        ],
+      },
+    });
+    await act(async () => root.render(<GuidedOnboarding />));
+    await click("Get started");
+    await click("Office & admin");
+    await click("Continue");
+    expect(
+      [...document.body.querySelectorAll("main button")].find((button) =>
+        button.textContent?.includes("Find emails"),
+      )?.textContent,
+    ).toContain("Recommended");
+
+    await click("See what's on my calendar this week");
+    expect(document.body.textContent).toContain("Turn on reading your calendar.");
+    expect(document.body.textContent).not.toContain("You're connected.");
+    expect(document.body.textContent).not.toContain("Show my week");
+    expect(document.body.textContent).toContain("Not now. Try it on a file instead");
   });
 
   it("leaves without changing anything", async () => {

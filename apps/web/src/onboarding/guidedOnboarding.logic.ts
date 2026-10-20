@@ -531,6 +531,31 @@ export function fileTaskMessage(
   return task.prompt.replaceAll("{file}", `the attached file "${input.attachedFileName}"`);
 }
 
+/** The plugin capability an account task reads with; both plugins use the same ids. */
+export function taskCapability(task: OnboardingTask): string | null {
+  switch (task.source) {
+    case "mail":
+      return "mail.read";
+    case "calendar":
+      return "calendar.read";
+    case "teams":
+      return "chat.read";
+    default:
+      return null;
+  }
+}
+
+/** Whether a signed-in plugin can do what this task needs: its capability is on and active. */
+export function integrationCanRunTask(
+  integration: IntegrationSummary | null,
+  task: OnboardingTask,
+): boolean {
+  const capabilityId = taskCapability(task);
+  if (capabilityId === null) return true;
+  const capability = integration?.capabilities.find((item) => item.id === capabilityId);
+  return capability !== undefined && capability.enabled && capability.available;
+}
+
 /** What a sign-in lets TritonAI do, from the plugin's own enabled capabilities. */
 export interface ConnectionAccess {
   readonly reads: ReadonlyArray<string>;
