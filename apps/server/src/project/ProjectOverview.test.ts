@@ -1,15 +1,23 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
-import { ProjectId, TextGenerationError } from "@t3tools/contracts";
+import {
+  type OrchestrationV2DomainEvent,
+  ProjectId,
+  type ProjectOverviewSnapshot,
+  TextGenerationError,
+  ThreadId,
+} from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as ServerConfig from "../config.ts";
 import * as DailyMemory from "../memory/DailyMemory.ts";
+import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import { layerMemory } from "../persistence/Sqlite.ts";
 import { seedV2Activity } from "../persistence/HarnessActivity.testkit.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -57,7 +65,9 @@ const harness = (
     const fs = yield* FileSystem.FileSystem;
     const dir = yield* fs.makeTempDirectoryScoped({ prefix: "project-overview-" });
     const calls: IdeasGenerationInput[] = [];
+    const events = yield* Queue.unbounded<OrchestrationV2DomainEvent>();
     const layer = Layer.mergeAll(
+      Layer.mock(Orchestrator.OrchestratorV2)({ streamDomainEvents: Stream.fromQueue(events) }),
       ServerSettings.layerTest({ memoryEnabled: false }),
       Layer.mock(DailyMemory.DailyMemory)({
         getProjectMemory: () =>
@@ -75,7 +85,7 @@ const harness = (
           Effect.sync(() => calls.push(request)).pipe(Effect.andThen(generate(request))),
       }),
     ).pipe(Layer.provideMerge(layerMemory), Layer.provideMerge(ServerConfig.layerTest(dir, dir)));
-    return { calls, layer };
+    return { calls, events, layer };
   });
 
 it.layer(NodeServices.layer)("ProjectOverview", (it) => {
@@ -219,6 +229,32 @@ it.layer(NodeServices.layer)("ProjectOverview", (it) => {
         assert.equal((yield* service.get(input)).overview?.nextSteps.length, 1);
         yield* sql`UPDATE orchestration_v2_projection_threads SET archived_at=${at} WHERE thread_id='thread-1'`;
         assert.isNull((yield* service.get(input)).overview);
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    }),
+  );
+
+  it.effect("republishes an open overview when a cited thread is archived", () =>
+    Effect.gen(function* () {
+      const { events, layer } = yield* harness(() => Effect.succeed(result()));
+      yield* Effect.gen(function* () {
+        yield* seed;
+        const service = yield* ProjectOverview.make;
+        yield* service.ensure(input);
+        yield* service.awaitIdle(projectId);
+        const snapshots = yield* Queue.unbounded<ProjectOverviewSnapshot>();
+        yield* service.subscribe(input).pipe(
+          Stream.runForEach((snapshot) => Queue.offer(snapshots, snapshot)),
+          Effect.forkScoped,
+        );
+        assert.isNotNull((yield* Queue.take(snapshots)).overview);
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`UPDATE projection_threads SET archived_at=${at} WHERE thread_id='thread-1'`;
+        // The service reads only the event type and thread id.
+        yield* Queue.offer(events, {
+          type: "thread.archived",
+          threadId: ThreadId.make("thread-1"),
+        } as OrchestrationV2DomainEvent);
+        assert.isNull((yield* Queue.take(snapshots)).overview);
       }).pipe(Effect.scoped, Effect.provide(layer));
     }),
   );

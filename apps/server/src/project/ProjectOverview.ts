@@ -23,6 +23,8 @@ import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as ServerConfig from "../config.ts";
 import * as DailyMemory from "../memory/DailyMemory.ts";
+import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
+import { forkParked } from "../serverActivation.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 
@@ -67,6 +69,7 @@ export const make = Effect.gen(function* () {
   const settings = yield* ServerSettings.ServerSettingsService;
   const generation = yield* TextGeneration.TextGeneration;
   const config = yield* ServerConfig.ServerConfig;
+  const orchestrator = yield* Orchestrator.OrchestratorV2;
   const scope = yield* Effect.scope;
   const locks = yield* KeyedLock.make<ProjectId>();
   const changes = yield* PubSub.sliding<ProjectId>(32);
@@ -335,6 +338,28 @@ export const make = Effect.gen(function* () {
       }),
     );
   });
+
+  // Archiving, restoring or deleting a cited thread changes what get() may show.
+  yield* forkParked(
+    orchestrator.streamDomainEvents.pipe(
+      Stream.filter(
+        (event) =>
+          event.type === "thread.archived" ||
+          event.type === "thread.unarchived" ||
+          event.type === "thread.deleted",
+      ),
+      Stream.runForEach((event) =>
+        sql<{ projectId: ProjectId }>`
+          SELECT project_id AS "projectId" FROM harness_activity_threads
+          WHERE thread_id=${event.threadId}
+        `.pipe(
+          Effect.flatMap(([row]) => (row ? PubSub.publish(changes, row.projectId) : Effect.void)),
+          Effect.ignore,
+        ),
+      ),
+      Effect.ignore,
+    ),
+  );
 
   return ProjectOverview.of({
     get,

@@ -15,13 +15,13 @@ import {
   type ProjectBriefExecution,
   type RunId,
 } from "@t3tools/contracts";
+import * as KeyedLock from "@t3tools/shared/KeyedLock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
-import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Runtime from "./ProjectBriefRuntime.ts";
@@ -121,7 +121,8 @@ export class ProjectBriefService extends Context.Service<
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const runtime = yield* Runtime.ProjectBriefRuntime;
-  const lock = yield* Semaphore.make(1);
+  // Serializes each project's brief revisions; other projects never wait on a slow launch.
+  const locks = yield* KeyedLock.make<ProjectId>();
   const changes = yield* PubSub.sliding<ProjectId>(32);
   const scope = yield* Effect.scope;
   const read = (projectId: ProjectId) =>
@@ -312,7 +313,8 @@ const make = Effect.gen(function* () {
       return next;
     });
   const get = (input: ProjectBriefGetInput) =>
-    lock.withPermit(
+    locks.withLock(
+      input.projectId,
       Effect.gen(function* () {
         const state = yield* read(input.projectId);
         const next = yield* observe(state);
@@ -385,7 +387,8 @@ const make = Effect.gen(function* () {
       return saved;
     });
   const execute = (raw: ProjectBriefCommand) =>
-    lock.withPermit(
+    locks.withLock(
+      raw.projectId,
       Effect.gen(function* () {
         const input = yield* decodeCommand(raw).pipe(
           Effect.mapError(() => fail("invalid_request", "The project request is invalid.")),
@@ -918,7 +921,8 @@ const make = Effect.gen(function* () {
       }),
     );
   const publishProposal = (raw: ProjectBriefPublishInput, caller: Caller) =>
-    lock.withPermit(
+    locks.withLock(
+      raw.projectId,
       Effect.gen(function* () {
         const input = yield* decodePublication(raw).pipe(
           Effect.mapError(() => fail("invalid_request", "The proposed brief is invalid.")),
@@ -1014,7 +1018,8 @@ const make = Effect.gen(function* () {
       }),
     );
   const returnResult = (raw: ProjectBriefReportInput, caller: Caller) =>
-    lock.withPermit(
+    locks.withLock(
+      raw.projectId,
       Effect.gen(function* () {
         const input = yield* decodeReport(raw).pipe(
           Effect.mapError(() => fail("invalid_request", "The action result is invalid.")),

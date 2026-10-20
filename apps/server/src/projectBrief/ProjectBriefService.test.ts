@@ -1,6 +1,8 @@
 import { assert, it } from "@effect/vitest";
 import { ProjectBriefError, ProjectId, RunId, type ProjectBriefState } from "@t3tools/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 import * as Sqlite from "../persistence/Sqlite.ts";
@@ -20,6 +22,10 @@ const fixture = () => {
     failCancel: false,
     cancelCommandIds: [] as string[],
     prompts: [] as string[],
+    launchGate: null as {
+      entered: Deferred.Deferred<void>;
+      release: Deferred.Deferred<void>;
+    } | null,
   };
   const runtime = Layer.succeed(
     Runtime.ProjectBriefRuntime,
@@ -41,6 +47,10 @@ const fixture = () => {
         Effect.gen(function* () {
           control.launches++;
           control.prompts.push(input.prompt);
+          if (control.launchGate) {
+            yield* Deferred.succeed(control.launchGate.entered, undefined);
+            yield* Deferred.await(control.launchGate.release);
+          }
           if (control.failBeforeCreate)
             return yield* new ProjectBriefError({
               code: "unavailable",
@@ -950,3 +960,19 @@ it.effect(
     }).pipe(Effect.provide(Layer.provideMerge(f.layer, Sqlite.layerMemory)));
   },
 );
+
+it.effect("a slow launch in one project does not block another project's brief", () => {
+  const f = fixture();
+  return Effect.gen(function* () {
+    const service = yield* Service.ProjectBriefService;
+    const state = yield* sourceAndBrief;
+    const gate = { entered: yield* Deferred.make<void>(), release: yield* Deferred.make<void>() };
+    f.control.launchGate = gate;
+    const launching = yield* Effect.forkChild(launch(state));
+    yield* Deferred.await(gate.entered);
+    const other = ProjectId.make("other-project");
+    assert.equal((yield* service.get({ projectId: other })).projectId, other);
+    yield* Deferred.succeed(gate.release, undefined);
+    yield* Fiber.join(launching);
+  }).pipe(Effect.provide(Layer.provideMerge(f.layer, Sqlite.layerMemory)));
+});
