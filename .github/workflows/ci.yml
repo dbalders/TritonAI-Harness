@@ -62,6 +62,9 @@ jobs:
       - name: Build and verify desktop pipeline
         run: vp run preflight:desktop
 
+      - name: Build and verify standalone server executable
+        run: VP_NODE_VERSION=26.8.2 node apps/server/scripts/cli.ts build-exe --verbose
+
   # Everything except `t3` (apps/server). `--parallel` drops the package
   # dependency ordering that `vp run` applies by default: these `test` tasks
   # declare no `dependsOn` and resolve workspace deps from source, so ordering

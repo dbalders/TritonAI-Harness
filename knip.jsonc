@@ -51,31 +51,10 @@
         "@napi-rs/keyring",
       ],
     },
-    // Deployment manifest: packages are staged and loaded by the packaged desktop/SEA runtime.
+    // Deployment-only manifest: no source imports its dependencies. The checked-in
+    // desktop runtime contract test validates its exact dependency set instead.
     "apps/desktop-runtime": {
-      "ignoreDependencies": [
-        "@anthropic-ai/claude-agent-sdk",
-        "@clerk/electron-passkeys",
-        "@crowecawcaw/xa11y",
-        "@effect/platform-node",
-        "@effect/platform-node-shared",
-        "@ff-labs/fff-node",
-        "@napi-rs/keyring",
-        "@opencode-ai/sdk",
-        "effect",
-        "ffi-rs",
-        "node-pty",
-        "playwright-core",
-        "stream-chain",
-        "stream-json",
-        "yaml",
-        "yauzl",
-        "@trycua/cua-driver",
-        "ajv",
-        "diff",
-        "jose",
-        "proper-lockfile",
-      ],
+      "ignoreDependencies": [".*"],
     },
     "apps/desktop": {
       // Electron loads these bundles by filename rather than importing them.
