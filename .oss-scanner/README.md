@@ -32,8 +32,9 @@ steps with `RUN --network=none`; the separate `docker run --network none` comman
 checks the finished image under the same restriction. Loopback remains usable
 for local HTTP and WebSocket test fixtures. No host ports need to be published.
 
-`verify.sh` checks the built CLI, loads its native runtime dependencies, and runs
-selected existing server tests covering authentication, session and secret
+`verify.sh` checks the built CLI, loads its native runtime dependencies, starts a
+real PTY shell with a ten-second timeout and checks its output and exit status,
+and runs selected existing server tests covering authentication, session and secret
 storage, attachment access, integration tool
 policy, MCP authorization, and terminal adaptation. This is an environment smoke
 check, not a complete security audit or the full repository test suite. Inside
