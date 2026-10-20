@@ -1,5 +1,13 @@
 import { assert, it } from "@effect/vitest";
-import { ProjectBriefError, ProjectId, RunId, type ProjectBriefState } from "@t3tools/contracts";
+import {
+  type ModelSelection,
+  ProjectBriefError,
+  ProjectId,
+  ProviderInstanceId,
+  RunId,
+  type ProjectBriefState,
+} from "@t3tools/contracts";
+import { createModelSelection } from "@t3tools/shared/model";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -22,6 +30,8 @@ const fixture = () => {
     failCancel: false,
     cancelCommandIds: [] as string[],
     prompts: [] as string[],
+    defaultModel: createModelSelection(ProviderInstanceId.make("codex"), "gpt-6.1-sol"),
+    launchModels: [] as Array<ModelSelection | undefined>,
     launchGate: null as {
       entered: Deferred.Deferred<void>;
       release: Deferred.Deferred<void>;
@@ -30,12 +40,12 @@ const fixture = () => {
   const runtime = Layer.succeed(
     Runtime.ProjectBriefRuntime,
     Runtime.ProjectBriefRuntime.of({
-      preflight: () =>
+      preflight: ({ modelSelection }) =>
         control.failPreflight
           ? Effect.fail(
               new ProjectBriefError({ code: "invalid_request", message: "No default model" }),
             )
-          : Effect.void,
+          : Effect.succeed(modelSelection ?? control.defaultModel),
       capture: ({ selection }) =>
         Effect.succeed({
           title: selection.kind === "excerpt" ? selection.title : "Selected source",
@@ -47,6 +57,7 @@ const fixture = () => {
         Effect.gen(function* () {
           control.launches++;
           control.prompts.push(input.prompt);
+          control.launchModels.push(input.modelSelection);
           if (control.launchGate) {
             yield* Deferred.succeed(control.launchGate.entered, undefined);
             yield* Deferred.await(control.launchGate.release);
@@ -974,5 +985,28 @@ it.effect("a slow launch in one project does not block another project's brief",
     assert.equal((yield* service.get({ projectId: other })).projectId, other);
     yield* Deferred.succeed(gate.release, undefined);
     yield* Fiber.join(launching);
+  }).pipe(Effect.provide(Layer.provideMerge(f.layer, Sqlite.layerMemory)));
+});
+
+it.effect("a retried launch keeps the default model resolved when it was approved", () => {
+  const f = fixture();
+  return Effect.gen(function* () {
+    const service = yield* Service.ProjectBriefService;
+    const proposed = yield* sourceAndBrief;
+    const approvedModel = f.control.defaultModel;
+    f.control.failBeforeCreate = true;
+    let state = yield* launch(proposed);
+    const execution = state.executions[0]!;
+    f.control.failBeforeCreate = false;
+    f.control.defaultModel = createModelSelection(ProviderInstanceId.make("claude"), "opus");
+    state = yield* service.execute({
+      projectId,
+      requestId: "retry",
+      expectedRevision: state.revision,
+      action: "retry",
+      executionId: execution.id,
+    });
+    assert.equal(state.executions[0]!.status, "running");
+    assert.deepEqual(f.control.launchModels.at(-1), approvedModel);
   }).pipe(Effect.provide(Layer.provideMerge(f.layer, Sqlite.layerMemory)));
 });

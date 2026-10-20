@@ -39,10 +39,11 @@ export class ProjectBriefRuntime extends Context.Service<
   ProjectBriefRuntime,
   {
     readonly changes: Stream.Stream<ProjectId, ProjectBriefError>;
+    /** Validates the requested model, or the project's default, and returns the one to launch with. */
     readonly preflight: (input: {
       projectId: ProjectId;
       modelSelection?: ModelSelection;
-    }) => Effect.Effect<void, ProjectBriefError>;
+    }) => Effect.Effect<ModelSelection, ProjectBriefError>;
     readonly capture: (input: {
       projectId: ProjectId;
       selection: ProjectBriefSourceSelection;
@@ -415,8 +416,7 @@ const make = Effect.gen(function* () {
     }
     return modelSelection;
   });
-  const preflight: ProjectBriefRuntime["Service"]["preflight"] = (input) =>
-    resolveModel(input).pipe(Effect.asVoid);
+  const preflight: ProjectBriefRuntime["Service"]["preflight"] = resolveModel;
 
   const launch: ProjectBriefRuntime["Service"]["launch"] = Effect.fn("ProjectBriefRuntime.launch")(
     function* (input) {
