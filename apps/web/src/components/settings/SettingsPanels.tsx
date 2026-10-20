@@ -148,6 +148,7 @@ import {
 } from "../ui/number-field";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
+import { restartGuidedTour } from "../../onboarding/guidedTourState";
 import { ScopedSwitch } from "./ScopedSwitch";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -2141,6 +2142,48 @@ function LegacyFeaturesSection() {
   );
 }
 
+/**
+ * Features still being tried out. Each stays off, with no other entry point, until it is
+ * turned on here.
+ */
+function ExperimentalFeaturesSection() {
+  const settings = useScopedSettings();
+  const updateSettings = useUpdateScopedSettings();
+  const navigate = useNavigate();
+  const guidedTourEnabled = settings.experimentalGuidedTourEnabled;
+  return (
+    <SettingsSection title="Experimental">
+      <SettingsRow
+        {...searchableSetting("experimental-guided-tour")}
+        description="A short walkthrough for people new to AI: it does one real task with you, then continues in a chat with suggestions. Turn it on to show Start tour."
+        control={
+          <div className="flex items-center gap-2">
+            {guidedTourEnabled ? (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  restartGuidedTour();
+                  void navigate({ to: "/guided-tour" });
+                }}
+              >
+                Start tour
+              </Button>
+            ) : null}
+            <Switch
+              checked={guidedTourEnabled}
+              onCheckedChange={(checked) =>
+                updateSettings({ experimentalGuidedTourEnabled: Boolean(checked) })
+              }
+              aria-label="Guided tour (experimental)"
+            />
+          </div>
+        }
+      />
+    </SettingsSection>
+  );
+}
+
 export function GeneralSettingsPanel() {
   const modifierLabel = isMacPlatform(navigator.platform) ? "⌘" : "Ctrl";
   const sendShortcutOptions = [
@@ -3399,6 +3442,8 @@ export function GeneralSettingsPanel() {
           }
         />
       </SettingsSection>
+
+      <ExperimentalFeaturesSection />
 
       <LegacyFeaturesSection />
     </SettingsPageContainer>
