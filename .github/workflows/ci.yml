@@ -114,7 +114,8 @@ jobs:
   test_server:
     name: Test Server ${{ matrix.shard }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    # Include dependency/browser setup and post-job cache/finalization around the serial tests.
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
