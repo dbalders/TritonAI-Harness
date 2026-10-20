@@ -129,19 +129,20 @@ export default mergeConfig(
         : {}),
       ...(packExecutable
         ? {
-            // SEA only imports builtins. A CommonJS bridge lets Node's disk
-            // require(esm) load the same Effect modules used by plugin peers.
+            // SEA only imports builtins. Bridge every disk-backed dependency,
+            // including transitive imports such as platform-node's Undici,
+            // through require while preserving the shared plugin runtime.
             plugins: [
               {
-                name: "sea-effect-runtime",
+                name: "sea-external-runtime",
                 resolveId(id, _importer, options) {
-                  if (id !== "effect" && !id.startsWith("effect/")) return;
+                  if (!isExternalCliDependency(id)) return;
                   return options.kind === "require-call"
                     ? { id, external: true }
-                    : `\0sea-effect-runtime:${id}.cjs`;
+                    : `\0sea-external-runtime:${id}.cjs`;
                 },
                 load(id) {
-                  const prefix = "\0sea-effect-runtime:";
+                  const prefix = "\0sea-external-runtime:";
                   if (!id.startsWith(prefix)) return;
                   return `module.exports = require(${JSON.stringify(id.slice(prefix.length, -4))});`;
                 },
@@ -157,11 +158,8 @@ export default mergeConfig(
         // dependency would still be bundled — which silently inlined native
         // loaders such as node-gyp-build, losing native acceleration.
         alwaysBundle: (id: string) =>
-          (packExecutable && (id === "effect" || id.startsWith("effect/"))) ||
-          shouldBundleCliDependency(id),
-        neverBundle: (id: string) =>
-          !(packExecutable && (id === "effect" || id.startsWith("effect/"))) &&
-          isExternalCliDependency(id),
+          (packExecutable && isExternalCliDependency(id)) || shouldBundleCliDependency(id),
+        neverBundle: (id: string) => !packExecutable && isExternalCliDependency(id),
         onlyBundle: false,
       },
       banner: {

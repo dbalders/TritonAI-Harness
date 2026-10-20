@@ -16,6 +16,10 @@ import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { vi } from "vite-plus/test";
 import { parse as parseYaml } from "yaml";
+import desktopPackageJson from "../apps/desktop/package.json" with { type: "json" };
+import desktopRuntimePackageJson from "../apps/desktop-runtime/package.json" with { type: "json" };
+import serverPackageJson from "../apps/server/package.json" with { type: "json" };
+import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
 import {
   ancestorNodeModulesPaths,
   assertDesktopUpdatePublishConfiguration,
@@ -68,6 +72,7 @@ import {
   resolveClerkPasskeyNativeArtifacts,
   resolveMacPasskeySigningConfiguration,
   resolveDesktopRuntimeDependencies,
+  resolveDesktopRuntimeNativeDependencies,
   resolveMergedStageDependencies,
   resolveFffNativeDependencies,
   resolveBuildOptions,
@@ -634,6 +639,27 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         ),
       ),
     ),
+  );
+
+  it.effect("keeps the checked-in desktop runtime manifest aligned with the packaged runtime", () =>
+    Effect.gen(function* () {
+      const { catalog = {} } = yield* readWorkspaceConfig();
+      assert.deepStrictEqual(
+        resolveCatalogDependencies(
+          desktopRuntimePackageJson.dependencies,
+          catalog,
+          "apps/desktop-runtime",
+        ),
+        {
+          ...resolveCatalogDependencies(serverPackageJson.dependencies, catalog, "apps/server"),
+          ...resolveDesktopRuntimeDependencies(desktopPackageJson.dependencies, catalog),
+        },
+      );
+      assert.deepStrictEqual(
+        desktopRuntimePackageJson.optionalDependencies,
+        resolveDesktopRuntimeNativeDependencies(),
+      );
+    }),
   );
 
   it("stages only the desktop main-process externals", () => {
