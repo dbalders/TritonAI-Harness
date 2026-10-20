@@ -11,7 +11,7 @@ const DEFAULT_PARENT_URL = "https://github.com/pingdotgg/t3code.git";
 const DEFAULT_DOWNSTREAM_REMOTE = "origin";
 const DEFAULT_DOWNSTREAM_BRANCH = "main";
 const DEFAULT_SYNC_BRANCH_PREFIX = "sync/release-";
-const DEFAULT_CHECKS = "vp check && vp run typecheck";
+const DEFAULT_CHECKS = "vp run gitlinks:check && vp check && vp run typecheck";
 const SYNC_LABEL = "automation:release-sync";
 
 function parseArgs(args) {
