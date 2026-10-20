@@ -128,6 +128,50 @@ describe("useIntegrationConnection", () => {
     expect(latest?.status).toBe("connected");
   });
 
+  it("keeps a finished sign-in when an earlier attempt's poll answers late", async () => {
+    let answerFirstPoll: (value: unknown) => void = () => {};
+    mocks.poll.mockReturnValueOnce(new Promise((resolve) => (answerFirstPoll = resolve)));
+    await render("local");
+    await act(async () => {
+      await latest?.connect();
+    });
+    await act(async () => vi.advanceTimersByTimeAsync(5_000));
+
+    // Start over, and the new sign-in completes.
+    mocks.connect.mockResolvedValueOnce({
+      _tag: "Success",
+      value: {
+        kind: "device_code",
+        flowId: "flow-2",
+        verificationUri: "https://microsoft.com/devicelogin",
+        verificationUriComplete: null,
+        userCode: "WXYZ-9876",
+        message: "Enter the code",
+        expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(),
+        intervalSeconds: 5,
+      },
+    });
+    await act(async () => {
+      await latest?.connect();
+    });
+    await act(async () => vi.advanceTimersByTimeAsync(5_000));
+    expect(latest?.status).toBe("connected");
+
+    await act(async () =>
+      answerFirstPoll({
+        _tag: "Success",
+        value: {
+          state: "failed",
+          retryAfterSeconds: null,
+          message: "The old code expired.",
+          integration: outlook("not_connected"),
+        },
+      }),
+    );
+    expect(latest?.status).toBe("connected");
+    expect(latest?.integration?.connectionState).toBe("connected");
+  });
+
   it("ignores a late answer for a sign-in that Start over replaced", async () => {
     let answerFirstPoll: (value: unknown) => void = () => {};
     mocks.poll.mockReturnValueOnce(new Promise((resolve) => (answerFirstPoll = resolve)));

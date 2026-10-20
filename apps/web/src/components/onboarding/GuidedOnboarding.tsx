@@ -1043,6 +1043,8 @@ export function GuidedOnboarding() {
    * it, so the answer and the follow-ups live in the real chat rather than in the tour.
    */
   const run = async (input: {
+    /** The task being started; its follow-ups belong to this conversation. */
+    readonly task: OnboardingTask;
     readonly text: string;
     readonly attach?: () => Promise<{ attachment: ChatAttachment; release: () => void }>;
     readonly provider?: OnboardingMailProvider | null;
@@ -1056,6 +1058,7 @@ export function GuidedOnboarding() {
     let release = () => {};
     try {
       const project = await ensureProject();
+      if (abandoned()) return;
       if (!project) throw new Error("Couldn't open your TritonAI folder. Try again.");
       const serverConfig = serverConfigs.get(environmentId);
       const projectSettings = resolveProjectSettings(
@@ -1094,13 +1097,13 @@ export function GuidedOnboarding() {
             attachments: attached ? [attached.attachment] : [],
           },
           modelSelection,
-          titleSeed: task.title,
+          titleSeed: input.task.title,
           runtimeMode: TOUR_RUNTIME_MODE,
           interactionMode: "default",
           bootstrap: {
             createThread: {
               projectId: project.id,
-              title: task.title,
+              title: input.task.title,
               modelSelection,
               runtimeMode: TOUR_RUNTIME_MODE,
               interactionMode: "default",
@@ -1117,6 +1120,8 @@ export function GuidedOnboarding() {
       // The conversation exists and stays in the sidebar; only a still-open tour follows it.
       if (abandoned()) return;
       updateGuidedTourState({
+        roleId: role.id,
+        taskId: input.task.id,
         taskEnvironmentId: environmentId,
         taskThreadId: threadId,
         provider: input.provider ?? null,
@@ -1142,15 +1147,17 @@ export function GuidedOnboarding() {
   };
 
   const fileTask = task.source === "file" ? task : role.tasks[1];
-  const runSample = () => void run({ text: fileTaskMessage(fileTask, { sample: true }) });
+  const runSample = () =>
+    void run({ task: fileTask, text: fileTaskMessage(fileTask, { sample: true }) });
   const runOwnFile = (file: File) => {
     if (!environmentId) return;
     void run({
+      task: fileTask,
       text: fileTaskMessage(fileTask, { attachedFileName: file.name || "file" }),
       attach: () => attachOwnFile(environmentId, file),
     });
   };
-  const runConnected = () => void run({ text: accountTaskMessage(task, provider), provider });
+  const runConnected = () => void run({ task, text: accountTaskMessage(task, provider), provider });
 
   const progressIndex = PROGRESS_INDEX[step];
 

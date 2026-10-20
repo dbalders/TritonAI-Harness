@@ -3,7 +3,11 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { readGuidedTourState, restartGuidedTour } from "../../onboarding/guidedTourState";
+import {
+  readGuidedTourState,
+  restartGuidedTour,
+  updateGuidedTourState,
+} from "../../onboarding/guidedTourState";
 import { GuidedOnboarding } from "./GuidedOnboarding";
 
 const mocks = vi.hoisted(() => ({
@@ -12,6 +16,8 @@ const mocks = vi.hoisted(() => ({
   createProject: vi.fn(),
   listIntegrations: vi.fn(),
   unused: vi.fn(),
+  startUpload: vi.fn(),
+  projects: [] as Array<{ id: string; environmentId: string; workspaceRoot: string }>,
 }));
 
 vi.mock("@tanstack/react-router", () => ({
@@ -36,10 +42,13 @@ vi.mock("../../state/use-atom-command", () => ({
           ? mocks.listIntegrations
           : mocks.unused,
 }));
+const TRITONAI_PROJECT = {
+  id: "tritonai",
+  environmentId: "local",
+  workspaceRoot: "/Users/test/TritonAI",
+};
 vi.mock("../../state/entities", () => ({
-  useProjects: () => [
-    { id: "tritonai", environmentId: "local", workspaceRoot: "/Users/test/TritonAI" },
-  ],
+  useProjects: () => mocks.projects,
   waitForThreadShell: async () => true,
 }));
 vi.mock("../../state/environments", () => ({ usePrimaryEnvironmentId: () => "local" }));
@@ -54,8 +63,20 @@ vi.mock("../../composerDraftStore", () => ({
     getState: () => ({ stickyActiveProvider: null, stickyModelSelectionByProvider: {} }),
   },
 }));
-vi.mock("../../lib/attachmentUploadQueue", () => ({}));
-vi.mock("../../firstRunOnboarding", () => ({ waitForProject: async () => null }));
+vi.mock("../../lib/attachmentUploadQueue", () => ({
+  startAttachmentUpload: mocks.startUpload,
+  awaitAttachmentUploads: async () => {},
+  getUploadedAttachments: () => null,
+  readAttachmentUpload: () => undefined,
+  releaseAttachmentUpload: () => {},
+}));
+vi.mock("../../firstRunOnboarding", () => ({
+  waitForProject: async () => ({
+    id: "tritonai",
+    environmentId: "local",
+    workspaceRoot: "/Users/test/TritonAI",
+  }),
+}));
 vi.mock("../settings/PluginsSettings", () => ({ integrationNeedsConnectionAction: () => false }));
 
 let container: HTMLDivElement;
@@ -83,6 +104,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.listIntegrations.mockResolvedValue({ _tag: "Success", value: { integrations: [] } });
   mocks.startTurn.mockResolvedValue({ _tag: "Success", value: { sequence: 1 } });
+  mocks.projects = [TRITONAI_PROJECT];
   restartGuidedTour();
   container = document.createElement("div");
   document.body.append(container);
@@ -163,6 +185,40 @@ describe("guided tour", () => {
     expect(mocks.navigate).not.toHaveBeenCalled();
     expect(readGuidedTourState().taskThreadId).toBeNull();
     root = createRoot(container);
+  });
+
+  it("does not start uploading someone's file after they left the tour", async () => {
+    let finishCreate: (value: unknown) => void = () => {};
+    mocks.projects = [];
+    mocks.createProject.mockReturnValue(new Promise((resolve) => (finishCreate = resolve)));
+    await openBudgetFileStep();
+    await click("Check a budget for overages");
+    const input = document.body.querySelector<HTMLInputElement>("input[type=file]")!;
+    const file = new File(["Line,Budget,Actual\nTravel,1,2\n"], "Mine.csv", { type: "text/csv" });
+    Object.defineProperty(input, "files", { value: [file] });
+    await act(async () => input.dispatchEvent(new Event("change", { bubbles: true })));
+    expect(mocks.createProject).toHaveBeenCalledTimes(1);
+
+    await act(async () => root.unmount());
+    await act(async () => finishCreate({ _tag: "Success", value: { sequence: 1 } }));
+
+    expect(mocks.startUpload).not.toHaveBeenCalled();
+    expect(mocks.startTurn).not.toHaveBeenCalled();
+    root = createRoot(container);
+  });
+
+  it("keeps the started task's suggestions even if the selection changes while it starts", async () => {
+    let finishStart: (value: unknown) => void = () => {};
+    mocks.startTurn.mockReturnValue(new Promise((resolve) => (finishStart = resolve)));
+    await openBudgetFileStep();
+    await click("Check a budget for overages");
+    await click("Check the budget with the sample");
+
+    // Going back and choosing something else while the first chat is still starting.
+    await act(async () => updateGuidedTourState({ roleId: "it", taskId: "it-ticket" }));
+    await act(async () => finishStart({ _tag: "Success", value: { sequence: 1 } }));
+
+    expect(readGuidedTourState()).toMatchObject({ roleId: "finance", taskId: "finance-budget" });
   });
 
   it("asks to turn on the calendar instead of claiming it can read it", async () => {

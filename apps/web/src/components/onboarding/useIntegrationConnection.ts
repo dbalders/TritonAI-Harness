@@ -47,6 +47,8 @@ export interface IntegrationConnection {
 
 interface ConnectionSession {
   readonly key: string;
+  /** Which sign-in attempt this is; see `attempts` in the hook. */
+  readonly attempt: number;
   readonly starting: boolean;
   readonly scheduled: ScheduledIntegrationFlow | null;
   readonly error: string | null;
@@ -157,21 +159,22 @@ export function useIntegrationConnection(
     };
   }, [environmentId, integrationId, key, listCommand]);
 
+  // The latest sign-in attempt for each environment. "Start over" begins a new attempt,
+  // so a late answer for an earlier one changes neither the sign-in nor the plugin.
+  const attempts = useRef(new Map<string, number>());
+  const nextAttempt = useRef(0);
+  const attempt = current?.attempt ?? null;
+
   // Follow the sign-in until the provider reports it finished, failed, or expired.
   useEffect(() => {
-    if (!environmentId || key === null || !scheduled) return;
+    if (!environmentId || key === null || !scheduled || attempt === null) return;
     const owner = generation.current;
-    const stale = () => generation.current !== owner;
-    // "Start over" replaces the flow, so a late answer for the old one changes nothing.
-    const updateIfCurrent = (next: ConnectionSession) =>
-      setSession((previous) =>
-        previous?.key === key && previous.scheduled?.flowId === scheduled.flowId ? next : previous,
-      );
+    const live = () => generation.current === owner && attempts.current.get(key) === attempt;
     const finish = (error: string | null) =>
-      updateIfCurrent({ key, starting: false, scheduled: null, error });
+      setSession({ key, attempt, starting: false, scheduled: null, error });
     const timer = window.setTimeout(
       async () => {
-        if (stale()) return;
+        if (!live()) return;
         if (!integrationFlowIsActive(scheduled, Date.now())) {
           finish("The sign-in expired. Try again.");
           return;
@@ -183,11 +186,12 @@ export function useIntegrationConnection(
               input: { id: integrationId, flowId: scheduled.flowId },
             }),
           );
-          if (stale()) return;
+          if (!live()) return;
           setLoaded({ key, integration: result.integration });
           if (result.state === "pending") {
-            updateIfCurrent({
+            setSession({
               key,
+              attempt,
               starting: false,
               error: null,
               scheduled: scheduleIntegrationFlow(
@@ -202,10 +206,11 @@ export function useIntegrationConnection(
               : (result.message ?? "The sign-in did not finish. Try again."),
           );
         } catch (cause) {
-          if (stale()) return;
+          if (!live()) return;
           if (integrationFlowCanRetryAfterPollError(scheduled, Date.now())) {
-            updateIfCurrent({
+            setSession({
               key,
+              attempt,
               starting: false,
               error: null,
               scheduled: scheduleIntegrationFlow(scheduled),
@@ -218,23 +223,25 @@ export function useIntegrationConnection(
       Math.max(0, scheduled.nextPollAtMilliseconds - Date.now()),
     );
     return () => window.clearTimeout(timer);
-  }, [environmentId, integrationId, key, pollCommand, scheduled]);
+  }, [attempt, environmentId, integrationId, key, pollCommand, scheduled]);
 
   const connect = useCallback(async () => {
     if (!environmentId || key === null || !integration) return;
     const owner = generation.current;
-    const stale = () => generation.current !== owner;
-    const settle = (next: Omit<ConnectionSession, "key" | "starting">) => {
+    const attempt = ++nextAttempt.current;
+    attempts.current.set(key, attempt);
+    const live = () => generation.current === owner && attempts.current.get(key) === attempt;
+    const settle = (next: Pick<ConnectionSession, "scheduled" | "error">) => {
+      if (live()) {
+        setSession({ key, attempt, starting: false, ...next });
+        return;
+      }
       // An attempt abandoned by switching environments must not stay "starting".
       setSession((previous) =>
-        stale()
-          ? previous?.key === key && previous.starting
-            ? null
-            : previous
-          : { key, starting: false, ...next },
+        previous?.key === key && previous.attempt === attempt ? null : previous,
       );
     };
-    setSession({ key, starting: true, scheduled: null, error: null });
+    setSession({ key, attempt, starting: true, scheduled: null, error: null });
     try {
       let latest = integration;
       if (!latest.installed || !latest.enabled) {
@@ -243,23 +250,23 @@ export function useIntegrationConnection(
             ? enabledCommand({ environmentId, input: { id: integrationId, enabled: true } })
             : installCommand({ environmentId, input: { id: integrationId } })),
         );
-        if (!stale()) {
+        if (live()) {
           latest = result.integrations.find((item) => item.id === integrationId) ?? latest;
           setLoaded({ key, integration: latest });
         }
       }
-      if (stale() || integrationIsUsable(latest)) {
+      if (!live() || integrationIsUsable(latest)) {
         settle({ scheduled: null, error: null });
         return;
       }
       const started = unwrap(await connectCommand({ environmentId, input: { id: integrationId } }));
-      if (stale()) {
+      if (!live()) {
         settle({ scheduled: null, error: null });
         return;
       }
       if (started.kind === "connected") {
         const refreshed = unwrap(await listCommand({ environmentId, input: {} }));
-        if (!stale()) {
+        if (live()) {
           setLoaded({
             key,
             integration: refreshed.integrations.find((item) => item.id === integrationId) ?? null,
@@ -274,7 +281,7 @@ export function useIntegrationConnection(
       }
       settle({ scheduled: scheduleIntegrationFlow(started), error: null });
       // Take them straight to the provider's page instead of asking them to find it.
-      if (!stale()) openSignIn(integrationSignInUrl(started));
+      if (live()) openSignIn(integrationSignInUrl(started));
     } catch (cause) {
       settle({ scheduled: null, error: errorMessage(cause) });
     }
