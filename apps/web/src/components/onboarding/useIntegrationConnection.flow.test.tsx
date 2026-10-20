@@ -106,6 +106,20 @@ afterEach(async () => {
 });
 
 describe("useIntegrationConnection", () => {
+  it("lets someone try again after the plugin list couldn't be read", async () => {
+    mocks.list.mockResolvedValueOnce({ _tag: "Failure", cause: new Error("offline") });
+    await render("local");
+    expect(latest?.status).toBe("failed");
+    expect(latest?.error).toContain("Try again");
+
+    await act(async () => {
+      await latest?.connect();
+    });
+    await act(async () => vi.advanceTimersByTimeAsync(0));
+    expect(mocks.list).toHaveBeenCalledTimes(2);
+    expect(latest?.status).toBe("ready");
+  });
+
   it("picks a sign-in back up after switching to another environment and back", async () => {
     await render("local");
     expect(latest?.status).toBe("ready");

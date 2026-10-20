@@ -85,6 +85,8 @@ function integrationIsUsable(integration: IntegrationSummary | null): boolean {
 
 export function connectionStatusFor(input: {
   readonly loading: boolean;
+  /** The plugin list couldn't be read; unknown is not the same as "not installed". */
+  readonly loadFailed?: boolean;
   readonly integration: IntegrationSummary | null;
   readonly starting: boolean;
   readonly flow: IntegrationConnectResult | null;
@@ -94,6 +96,7 @@ export function connectionStatusFor(input: {
   if (input.starting) return "starting";
   if (input.flow && integrationConnectResultNeedsPolling(input.flow)) return "waiting";
   if (input.loading) return "loading";
+  if (input.loadFailed) return "failed";
   if (!input.integration) return "unavailable";
   if (input.error) return "failed";
   return "ready";
@@ -130,6 +133,7 @@ export function useIntegrationConnection(
   const [loaded, setLoaded] = useState<{
     readonly key: string;
     readonly integration: IntegrationSummary | null;
+    readonly failed: boolean;
   } | null>(null);
   const [session, setSession] = useState<ConnectionSession | null>(null);
   // Results that arrive after unmounting or switching environments are ignored, so a
@@ -140,16 +144,17 @@ export function useIntegrationConnection(
   const requests = useRef(0);
   const appliedRequest = useRef(new Map<string, number>());
   const applyLoaded = useCallback(
-    (forKey: string, request: number, next: IntegrationSummary | null) => {
+    (forKey: string, request: number, next: IntegrationSummary | null, failed = false) => {
       if ((appliedRequest.current.get(forKey) ?? 0) > request) return;
       appliedRequest.current.set(forKey, request);
-      setLoaded({ key: forKey, integration: next });
+      setLoaded({ key: forKey, integration: next, failed });
     },
     [],
   );
 
   const integration = loaded !== null && loaded.key === key ? loaded.integration : null;
   const loading = key !== null && loaded?.key !== key;
+  const loadFailed = loaded !== null && loaded.key === key && loaded.failed;
   const current = session !== null && session.key === key ? session : null;
   const scheduled = current?.scheduled ?? null;
 
@@ -159,13 +164,14 @@ export function useIntegrationConnection(
     const request = ++requests.current;
     void (async () => {
       let found: IntegrationSummary | null = null;
+      let failed = false;
       try {
         const result = unwrap(await listCommand({ environmentId, input: {} }));
         found = result.integrations.find((item) => item.id === integrationId) ?? null;
       } catch {
-        found = null;
+        failed = true;
       }
-      if (generation.current === owner) applyLoaded(key, request, found);
+      if (generation.current === owner) applyLoaded(key, request, found, failed);
     })();
     return () => {
       if (generation.current === owner) generation.current++;
@@ -240,7 +246,24 @@ export function useIntegrationConnection(
   }, [applyLoaded, attempt, environmentId, integrationId, key, pollCommand, scheduled]);
 
   const connect = useCallback(async () => {
-    if (!environmentId || key === null || !integration) return;
+    if (!environmentId || key === null) return;
+    if (!integration) {
+      // "Try again" after the plugin list couldn't be read checks again.
+      if (!loadFailed) return;
+      const owner = generation.current;
+      const request = ++requests.current;
+      setLoaded((previous) => (previous?.key === key ? null : previous));
+      let found: IntegrationSummary | null = null;
+      let failed = false;
+      try {
+        const result = unwrap(await listCommand({ environmentId, input: {} }));
+        found = result.integrations.find((item) => item.id === integrationId) ?? null;
+      } catch {
+        failed = true;
+      }
+      if (generation.current === owner) applyLoaded(key, request, found, failed);
+      return;
+    }
     const owner = generation.current;
     const attempt = ++nextAttempt.current;
     attempts.current.set(key, attempt);
@@ -312,13 +335,15 @@ export function useIntegrationConnection(
     integrationId,
     key,
     listCommand,
+    loadFailed,
   ]);
 
   const flow = scheduled;
   const starting = current?.starting ?? false;
-  const error = current?.error ?? null;
+  const error =
+    current?.error ?? (loadFailed ? "Couldn't check this account with TritonAI. Try again." : null);
   return {
-    status: connectionStatusFor({ loading, integration, starting, flow, error }),
+    status: connectionStatusFor({ loading, loadFailed, integration, starting, flow, error }),
     integration,
     flow,
     error,

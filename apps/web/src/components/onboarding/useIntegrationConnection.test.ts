@@ -45,6 +45,19 @@ describe("connectionStatusFor", () => {
     ).toBe("ready");
   });
 
+  it("is failed, not unavailable, when the plugin list couldn't be read", () => {
+    expect(
+      connectionStatusFor({
+        loading: false,
+        loadFailed: true,
+        integration: null,
+        starting: false,
+        flow: null,
+        error: null,
+      }),
+    ).toBe("failed");
+  });
+
   it("is unavailable when this environment has no such plugin", () => {
     expect(status(null)).toBe("unavailable");
   });
