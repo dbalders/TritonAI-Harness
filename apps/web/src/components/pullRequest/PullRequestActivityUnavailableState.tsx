@@ -1,7 +1,5 @@
 import { RefreshIcon } from "~/components/ui/refresh-icon";
-
 import { cn } from "~/lib/utils";
-
 import { Button } from "../ui/button";
 
 export function PullRequestActivityUnavailableState({

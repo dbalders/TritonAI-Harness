@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it } from "vite-plus/test";
-
 import { useBrowserPointerStore } from "./browserPointerStore";
 
 beforeEach(() => {

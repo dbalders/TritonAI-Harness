@@ -1,6 +1,5 @@
 import type { DesktopEnvironmentBootstrap } from "@t3tools/contracts";
 import { useEffect, useState } from "react";
-
 import { readDesktopSecondaryBootstraps } from "./desktopLocal";
 
 const DESKTOP_LOCAL_BOOTSTRAP_POLL_MS = 2_000;

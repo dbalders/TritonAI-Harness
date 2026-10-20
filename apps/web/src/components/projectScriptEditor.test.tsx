@@ -1,9 +1,20 @@
+import { EnvironmentId } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
-import { AsyncResult } from "effect/unstable/reactivity";
+import { AsyncResult } from "effect/reactivity";
 import { act, StrictMode, type ReactNode } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import {
+  EMPTY_PROJECT_SCRIPT_INPUT,
+  ProjectScriptEditorDialog,
+  type ProjectScriptActionResult,
+  type ProjectScriptEditorRequest,
+} from "./projectScriptEditor";
 
+vi.mock("~/state/session", () => ({
+  readEnvironmentScope: () => true,
+  useEnvironmentScope: () => true,
+}));
 vi.mock("./ui/dialog", () => ({
   Dialog: ({ open, children }: { open: boolean; children: ReactNode }) => (open ? children : null),
   DialogDescription: "p",
@@ -34,13 +45,6 @@ vi.mock("./ui/popover", () => ({
 vi.mock("./ui/switch", () => ({ Switch: "input" }));
 vi.mock("./ui/textarea", () => ({ Textarea: "textarea" }));
 
-import {
-  EMPTY_PROJECT_SCRIPT_INPUT,
-  ProjectScriptEditorDialog,
-  type ProjectScriptActionResult,
-  type ProjectScriptEditorRequest,
-} from "./projectScriptEditor";
-
 const onSubmit = vi.fn<Parameters<typeof ProjectScriptEditorDialog>[0]["onSubmit"]>();
 const onClose = vi.fn();
 const onDelete = vi.fn();
@@ -58,6 +62,7 @@ function editor(nextRequest: ProjectScriptEditorRequest) {
   return (
     <StrictMode>
       <ProjectScriptEditorDialog
+        environmentId={EnvironmentId.make("test")}
         request={nextRequest}
         scripts={[]}
         onSubmit={onSubmit}

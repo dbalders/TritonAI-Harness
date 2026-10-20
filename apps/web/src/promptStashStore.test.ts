@@ -4,9 +4,7 @@ import {
   collectAssistantCitations,
   serializeAssistantCitation,
 } from "@t3tools/shared/assistantCitations";
-
 import { removeLocalStorageItem } from "./hooks/useLocalStorage";
-
 import {
   MAX_STASH_ENTRIES,
   PROMPT_STASH_STORAGE_KEY,

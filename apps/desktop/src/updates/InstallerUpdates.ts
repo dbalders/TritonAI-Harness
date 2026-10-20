@@ -13,7 +13,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
+import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as ElectronShell from "../electron/ElectronShell.ts";

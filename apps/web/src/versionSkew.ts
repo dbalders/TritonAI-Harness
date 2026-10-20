@@ -1,8 +1,12 @@
-import type { EnvironmentId, ServerConfig, ServerSelfUpdateCapability } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  ServerConfig,
+  ServerInstallation,
+  ServerSelfUpdateCapability,
+} from "@t3tools/contracts";
 import type { ServerUpdateState } from "@t3tools/client-runtime/state/server";
 import { compareSemverVersions, parseSemver } from "@t3tools/shared/semver";
 import * as Schema from "effect/Schema";
-
 import { APP_VERSION } from "./branding";
 import { getLocalStorageItem, setLocalStorageItem } from "./hooks/useLocalStorage";
 
@@ -44,7 +48,8 @@ function versionCore(version: string): string {
 
 /**
  * The skew a user can act on: the connected server runs an older T3 Code than
- * this client, so the server is the side that needs updating.
+ * this client (or than `clientVersion`, the version this client is about to
+ * update to), so the server is the side that needs updating.
  *
  * Two nightly builds compare their full versions, including the date and run.
  * Other combinations compare their core `major.minor.patch` only, so a stable
@@ -54,8 +59,9 @@ function versionCore(version: string): string {
  */
 export function resolveVersionMismatch(
   serverVersion: string | null | undefined,
+  clientVersion: string = APP_VERSION,
 ): VersionMismatch | null {
-  const normalizedClientVersion = normalizeVersion(APP_VERSION);
+  const normalizedClientVersion = normalizeVersion(clientVersion);
   const normalizedServerVersion = normalizeVersion(serverVersion);
   if (!normalizedClientVersion || !normalizedServerVersion) {
     return null;
@@ -189,5 +195,8 @@ export function appendVersionMismatchHint(
   if (!normalizedMessage) {
     return mismatch?.hint ?? null;
   }
-  return mismatch ? `${normalizedMessage} Hint: ${mismatch.hint}` : normalizedMessage;
+  if (!mismatch) {
+    return normalizedMessage;
+  }
+  return `${normalizedMessage} Hint: ${mismatch.hint}`;
 }

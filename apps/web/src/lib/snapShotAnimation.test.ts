@@ -1,6 +1,5 @@
 import type { EnvironmentId, ScopedThreadRef, ThreadId } from "@t3tools/contracts";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
-
 import type { DraftId } from "../composerDraftStore";
 import {
   beginSnapShotAnimation,

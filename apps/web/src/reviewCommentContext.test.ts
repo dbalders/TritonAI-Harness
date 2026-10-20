@@ -1,6 +1,5 @@
 import { parsePatchFiles } from "@pierre/diffs/utils/parsePatchFiles";
 import { describe, expect, it } from "vite-plus/test";
-
 import {
   buildDiffReviewComment,
   buildFileReviewComment,

@@ -17,7 +17,6 @@ import type {
 } from "@t3tools/contracts";
 import { ChevronRightIcon, ClockIcon, EllipsisIcon, SparklesIcon, XIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-
 import { isElectron } from "../../env";
 import { useClientSettings } from "../../hooks/useSettings";
 import { useEnvironmentQuery } from "../../state/query";

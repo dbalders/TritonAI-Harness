@@ -1,3 +1,5 @@
+import * as HostProcess from "@t3tools/shared/HostProcess";
+import { getManagedCodexSettings } from "../managedPolicy.ts";
 import {
   CodexSettings,
   defaultInstanceIdForDriver,
@@ -18,7 +20,7 @@ import {
   ServerSetProviderSkillEnabledInput,
   ServerTritonAiCommonsError,
 } from "@t3tools/contracts";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import { Platform as HostProcessPlatform } from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -26,20 +28,20 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
 import * as Scope from "effect/Scope";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as CodexClient from "effect-codex-app-server/client";
 import * as CodexErrors from "effect-codex-app-server/errors";
 import type * as CodexSchema from "effect-codex-app-server/schema";
 
 import * as ServerConfig from "../config.ts";
-import { buildCodexInitializeParams } from "./Layers/CodexProvider.ts";
-import { expandHomePath } from "../pathExpansion.ts";
+import { buildCodexInitializeParams } from "./CodexProvider.ts";
+import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import * as ProcessRunner from "../processRunner.ts";
 import { resolveManagedCodexBinary } from "./managedCodexRuntime.ts";
 import { materializeCodexShadowHome, resolveCodexHomeLayout } from "./Drivers/CodexHomeLayout.ts";
 import { makeTritonAiCodexConfigArgs } from "./Drivers/TritonAiCodexConfig.ts";
 import { resolveCodexAppServerCommand } from "./Drivers/CodexAppServerCommand.ts";
-import { mergeProviderInstanceEnvironment } from "./ProviderInstanceEnvironment.ts";
+import { mergeCodexProviderEnvironment } from "./CodexEnvironment.ts";
 import {
   discardProviderSkillInstallRollback,
   installProviderSkill,
@@ -59,7 +61,7 @@ import {
   removeProviderSkillFolder,
   resolveProviderSkillRemovalTarget,
 } from "./removeProviderSkill.ts";
-import * as ProviderRegistry from "./Services/ProviderRegistry.ts";
+import * as ProviderRegistry from "./ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
 
 const CODEX_DRIVER = ProviderDriverKind.make("codex");
@@ -248,17 +250,18 @@ const resolveCodexManagementTarget = Effect.fn("resolveCodexManagementTarget")(f
     return yield* pluginError(`Codex provider instance '${instanceId}' was not found.`);
   }
 
-  const rawConfig = instanceConfig?.config ?? settings.providers.codex;
+  const rawConfig = instanceConfig?.config ?? getManagedCodexSettings(settings);
   const codexSettings = yield* decodeCodexSettings(rawConfig).pipe(
     Effect.mapError((cause) =>
       pluginError(`Codex settings were invalid: ${schemaIssue(cause)}`, cause),
     ),
   );
   const hostPlatform = yield* HostProcessPlatform;
-  const environment = mergeProviderInstanceEnvironment(
+  const environment = yield* mergeCodexProviderEnvironment(
     instanceConfig?.environment,
     process.env,
     hostPlatform,
+    String(instanceId),
   );
   const configuredHomePath = codexSettings.homePath.trim();
   const managedConfig = {
@@ -322,15 +325,18 @@ function withCodexClient<A>(
 > {
   return Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const resolvedHomePath = expandHomePath(target.effectiveHomePath);
+    const resolvedHomePath = expandHomePath(
+      target.effectiveHomePath,
+      yield* HostProcess.HomeDirectory,
+    );
     const environment = {
       ...target.environment,
       CODEX_HOME: resolvedHomePath,
     };
     const processRunner = yield* ProcessRunner.make();
     const binaryPath = yield* resolveManagedCodexBinary({
-      binaryPath: expandHomePath(target.binaryPath),
-      homeDirectory: expandHomePath("~"),
+      binaryPath: expandHomePath(target.binaryPath, yield* HostProcess.HomeDirectory),
+      homeDirectory: yield* HostProcess.HomeDirectory,
       platform: yield* HostProcessPlatform,
       environment,
       run: processRunner.run,
@@ -340,7 +346,7 @@ function withCodexClient<A>(
       ["app-server", ...makeTritonAiCodexConfigArgs(environment)],
       {
         env: environment,
-        extendEnv: true,
+        extendEnv: false,
       },
     ).pipe(Effect.mapError((cause) => codexOperationError(operation, cause)));
     const child = yield* spawner

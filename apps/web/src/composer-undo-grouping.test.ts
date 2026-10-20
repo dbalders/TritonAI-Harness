@@ -3,7 +3,6 @@ import { history, undo } from "@tiptap/pm/history";
 import { EditorState, TextSelection, type Transaction } from "@tiptap/pm/state";
 import StarterKit from "@tiptap/starter-kit";
 import { describe, expect, it } from "vite-plus/test";
-
 import {
   COMPOSER_UNDO_GROUP_DELAY,
   type ComposerChangeKind,

@@ -2,10 +2,10 @@ import { useRouter } from "@tanstack/react-router";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type { ScopedProjectRef } from "@t3tools/contracts";
 import { useCallback } from "react";
-
 import { useComposerDraftStore } from "../composerDraftStore";
 import { resolveThreadRouteTarget } from "../threadRoutes";
 import { releaseProjectDraftUploads } from "../lib/composerDraftUploads";
+import { waitForProjectRemoval } from "../state/entities";
 import { projectEnvironment } from "../state/projects";
 import { useAtomCommand } from "../state/use-atom-command";
 import { stackedThreadToast, toastManager } from "../components/ui/toast";
@@ -41,6 +41,7 @@ export function useRemoveClonedProject() {
         );
         return false;
       }
+      await waitForProjectRemoval(projectRef);
       // Read the route after the await: the user may have moved on while the
       // delete was in flight, and only a draft of this project needs to go.
       const routeParams = router.state.matches[router.state.matches.length - 1]?.params ?? {};

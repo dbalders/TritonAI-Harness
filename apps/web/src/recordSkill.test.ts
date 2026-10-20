@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vite-plus/test";
-
 import { buildRecordSkillPrompt, formatRecordedSteps } from "./recordSkill";
 
 describe("formatRecordedSteps", () => {

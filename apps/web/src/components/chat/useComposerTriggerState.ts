@@ -1,5 +1,4 @@
 import { useCallback, useRef, useState } from "react";
-
 import type { ComposerTrigger } from "../../composer-logic";
 
 /** Keep a dismissed suggestion closed until the caret leaves its token. */

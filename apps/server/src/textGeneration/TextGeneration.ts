@@ -1,178 +1,39 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import type { ChatAttachment, ModelSelection, ProviderInstanceId } from "@t3tools/contracts";
+import type { ProviderInstanceId } from "@t3tools/contracts";
+import type { ProviderTextGeneration } from "@t3tools/provider-core/server/textGeneration";
 import { TextGenerationError } from "@t3tools/contracts";
 
-import * as ProviderInstanceRegistry from "../provider/Services/ProviderInstanceRegistry.ts";
-import type { ProviderInstance } from "../provider/ProviderDriver.ts";
+import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
+import type { ProviderInstance } from "@t3tools/provider-core/server/driver";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as ThreadTitleLinks from "./ThreadTitleLinks.ts";
-import type { TextGenerationPolicy } from "./TextGenerationPolicy.ts";
 
-export interface CommitMessageGenerationInput {
-  cwd: string;
-  branch: string | null;
-  stagedSummary: string;
-  stagedPatch: string;
-  /** When true, the model also returns a semantic branch name for the change. */
-  includeBranch?: boolean;
-  policy?: TextGenerationPolicy | undefined;
-  /** What model and provider to use for generation. */
-  modelSelection: ModelSelection;
-}
-
-export interface CommitMessageGenerationResult {
-  subject: string;
-  body: string;
-  /** Only present when `includeBranch` was set on the input. */
-  branch?: string | undefined;
-}
-
-export interface PrContentGenerationInput {
-  cwd: string;
-  baseBranch: string;
-  headBranch: string;
-  commitSummary: string;
-  diffSummary: string;
-  diffPatch: string;
-  changeRequestTemplate?: string | undefined;
-  policy?: TextGenerationPolicy | undefined;
-  /** What model and provider to use for generation. */
-  modelSelection: ModelSelection;
-}
-
-export interface PrContentGenerationResult {
-  title: string;
-  body: string;
-}
-
-export interface BranchNameGenerationInput {
-  cwd: string;
-  message: string;
-  attachments?: ReadonlyArray<ChatAttachment> | undefined;
-  /** What model and provider to use for generation. */
-  modelSelection: ModelSelection;
-}
-
-export interface BranchNameGenerationResult {
-  branch: string;
-}
-
-export interface ThreadTitleGenerationInput {
-  linkedContext?: string | undefined;
-  cwd: string;
-  message: string;
-  /** Present when replacing an existing title from the current thread history. */
-  previousTitle?: string | undefined;
-  attachments?: ReadonlyArray<ChatAttachment> | undefined;
-  /** What model and provider to use for generation. */
-  modelSelection: ModelSelection;
-}
-
-export interface ThreadTitleGenerationResult {
-  title: string;
-  needsRefinement?: boolean | undefined;
-}
-
-export interface DailyMemoryGenerationInput {
-  /** Working directory for the generation process. Nothing in it is read. */
-  cwd: string;
-  /** The local day being summarized, `YYYY-MM-DD`. */
-  day: string;
-  projectNames: ReadonlyArray<string>;
-  activity: string;
-  inboxNotes: string;
-  modelSelection: ModelSelection;
-}
-
-export interface DailyMemoryGenerationResult {
-  overview: string;
-  projects: ReadonlyArray<{
-    readonly project: string;
-    readonly workedOn: ReadonlyArray<string>;
-    readonly recent: string;
-  }>;
-  decisions: ReadonlyArray<string>;
-  openLoops: ReadonlyArray<string>;
-}
-
-export interface IdeasGenerationInput {
-  /** Working directory for the generation process. Nothing in it is read. */
-  cwd: string;
-  /** How many ideas to return at most. */
-  count: number;
-  /** Everything the model may draw on, already formatted and trimmed by the Ideas service. */
-  context: string;
-  modelSelection: ModelSelection;
-}
-
-/** One idea as the model wrote it, before the Ideas service checks it against the context. */
-export interface GeneratedIdea {
-  /** The context reference the idea is mainly about, such as `thread:<id>`. */
-  readonly ref: string;
-  /** A few words naming what the idea does; tells apart ideas about the same reference. */
-  readonly topic: string;
-  readonly sources: ReadonlyArray<string>;
-  readonly icon: string;
-  readonly title: string;
-  readonly body: string;
-  readonly action: "new-thread" | "resume-thread";
-  /** A project id from the context, or empty. */
-  readonly projectId: string;
-  readonly prompt: string;
-}
-
-export interface IdeasGenerationResult {
-  ideas: ReadonlyArray<GeneratedIdea>;
-}
+export type {
+  DailyMemoryGenerationInput,
+  DailyMemoryGenerationResult,
+  IdeasGenerationInput,
+  IdeasGenerationResult,
+  GeneratedIdea,
+  BranchNameGenerationInput,
+  BranchNameGenerationResult,
+  CommitMessageGenerationInput,
+  CommitMessageGenerationResult,
+  PrContentGenerationInput,
+  PrContentGenerationResult,
+  ReviewGuideGenerationInput,
+  ReviewGuideGenerationResult,
+  ThreadTitleGenerationInput,
+  ThreadTitleGenerationResult,
+} from "@t3tools/provider-core/server/textGeneration";
 
 /**
  * TextGeneration - Service tag for commit and change request text generation.
  */
-export class TextGeneration extends Context.Service<
-  TextGeneration,
-  {
-    /**
-     * Generate a commit message from staged change context.
-     */
-    readonly generateCommitMessage: (
-      input: CommitMessageGenerationInput,
-    ) => Effect.Effect<CommitMessageGenerationResult, TextGenerationError>;
-
-    /**
-     * Generate change request title/body from branch and diff context.
-     */
-    readonly generatePrContent: (
-      input: PrContentGenerationInput,
-    ) => Effect.Effect<PrContentGenerationResult, TextGenerationError>;
-
-    /**
-     * Generate a concise branch name from a user message.
-     */
-    readonly generateBranchName: (
-      input: BranchNameGenerationInput,
-    ) => Effect.Effect<BranchNameGenerationResult, TextGenerationError>;
-
-    /** Generate a concise thread title from a first message or thread history. */
-    readonly generateThreadTitle: (
-      input: ThreadTitleGenerationInput,
-    ) => Effect.Effect<ThreadTitleGenerationResult, TextGenerationError>;
-
-    /**
-     * Summarize one day of thread work for the memory vault. Only Codex
-     * implements this; other providers leave it undefined.
-     */
-    readonly generateDailyMemory?: (
-      input: DailyMemoryGenerationInput,
-    ) => Effect.Effect<DailyMemoryGenerationResult, TextGenerationError>;
-
-    /** Suggest ideas for the Ideas page. Only Codex implements this. */
-    readonly generateIdeas?: (
-      input: IdeasGenerationInput,
-    ) => Effect.Effect<IdeasGenerationResult, TextGenerationError>;
-  }
->()("t3/textGeneration/TextGeneration") {}
+export class TextGeneration extends Context.Service<TextGeneration, ProviderTextGeneration>()(
+  "t3/textGeneration/TextGeneration",
+) {}
 
 type TextGenerationOp =
   | "generateCommitMessage"
@@ -180,7 +41,8 @@ type TextGenerationOp =
   | "generateBranchName"
   | "generateThreadTitle"
   | "generateDailyMemory"
-  | "generateIdeas";
+  | "generateIdeas"
+  | "generateReviewGuide";
 
 const resolveInstance = (
   registry: ProviderInstanceRegistry.ProviderInstanceRegistry["Service"],
@@ -216,6 +78,10 @@ export const make = Effect.gen(function* () {
     generateBranchName: (input) =>
       resolveInstance(registry, "generateBranchName", input.modelSelection.instanceId).pipe(
         Effect.flatMap((textGeneration) => textGeneration.generateBranchName(input)),
+      ),
+    generateReviewGuide: (input) =>
+      resolveInstance(registry, "generateReviewGuide", input.modelSelection.instanceId).pipe(
+        Effect.flatMap((textGeneration) => textGeneration.generateReviewGuide(input)),
       ),
     generateThreadTitle: (input) =>
       resolveInstance(registry, "generateThreadTitle", input.modelSelection.instanceId).pipe(

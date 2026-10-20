@@ -1,6 +1,5 @@
 import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
-
 import { getProviderSummary, getProviderVersionAdvisoryPresentation } from "./providerStatus";
 
 const provider: ServerProvider = {
@@ -137,5 +136,22 @@ it("shows compatibility in the version popover even when the installed version i
     updateCommand: null,
     emphasis: "normal",
     targetVersion: null,
+  });
+});
+
+describe("provider status copy", () => {
+  it("surfaces an ACP-advertised authentication method", () => {
+    const provider = {
+      enabled: true,
+      installed: true,
+      status: "error",
+      auth: { status: "unauthenticated", type: "agent", label: "Company login" },
+      message: "Complete this authentication method on the server.",
+    } as ServerProvider;
+
+    expect(getProviderSummary(provider)).toEqual({
+      headline: "Not authenticated · Company login",
+      detail: "Complete this authentication method on the server.",
+    });
   });
 });

@@ -1,11 +1,10 @@
 import { ConnectionTraceId } from "./ConnectionTraceId";
 import { SymbolView } from "../../components/AppSymbol";
-import { connectionStatusText } from "@t3tools/client-runtime/connection";
 import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
 import { type EnvironmentId, resolveEnvironmentMachineKind } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import * as Cause from "effect/Cause";
-import { AsyncResult } from "effect/unstable/reactivity";
+import { AsyncResult } from "effect/reactivity";
 import { useCallback, useState } from "react";
 import { Platform, Alert, Pressable, View } from "react-native";
 import Animated, { FadeIn, FadeOut, LinearTransition } from "react-native-reanimated";
@@ -20,12 +19,13 @@ import type { ConnectedEnvironmentSummary } from "../../state/remote-runtime-typ
 import { serverEnvironment } from "../../state/server";
 import { ConnectionFormField } from "./ConnectionFormField";
 import { ConnectionStatusDot } from "./ConnectionStatusDot";
+import { environmentStatusText } from "./environmentStatusText";
 
 function connectionStatusLabel(environment: ConnectedEnvironmentSummary): string | null {
   if (!environment.isEnabled && environment.connectionState !== "unsupported") {
     return "Off";
   }
-  return connectionStatusText({
+  return environmentStatusText({
     phase: environment.connectionState,
     error: environment.connectionError,
     traceId: environment.connectionErrorTraceId,

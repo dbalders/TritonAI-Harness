@@ -3,7 +3,7 @@ import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 
 import * as NetService from "@t3tools/shared/Net";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import { Platform as HostProcessPlatform } from "@t3tools/shared/HostProcess";
 import {
   OtlpHeadersFromString,
   OtlpProtocol,
@@ -29,11 +29,13 @@ import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
 import * as SchemaTransformation from "effect/SchemaTransformation";
-import { Argument, Flag } from "effect/unstable/cli";
+import { Argument, Flag } from "effect/cli";
+import * as CliError from "effect/cli/CliError";
 
 import { readBootstrapEnvelope } from "../bootstrap.ts";
 import * as ServerConfig from "../config.ts";
 import { expandHomePath, resolveBaseDir } from "../os-jank.ts";
+import { isProcessAlive, readPersistedServerRuntimeState } from "../serverRuntimeState.ts";
 
 const modeFlag = Flag.Literals("mode", ServerConfig.RuntimeMode.literals).pipe(
   Flag.withDescription("Runtime mode. `desktop` keeps loopback defaults unless overridden."),
@@ -440,6 +442,7 @@ export const resolveServerConfig = (
   options?: {
     readonly startupPresentation?: ServerConfig.StartupPresentation;
     readonly forceAutoBootstrapProjectFromCwd?: boolean;
+    readonly rejectRunningServer?: boolean;
   },
 ) =>
   Effect.gen(function* () {
@@ -516,10 +519,20 @@ export const resolveServerConfig = (
           );
     const rawCwd = Option.getOrElse(normalizedFlags.cwd, () => process.cwd());
     const cwd = path.resolve(yield* expandHomePath(rawCwd.trim()));
-    yield* fs.makeDirectory(cwd, { recursive: true });
     const derivedPaths = yield* ServerConfig.deriveServerPaths(baseDir, devUrl, {
       baseDirIsExplicit: Option.isSome(explicitBaseDir),
     });
+    // An interactive CLI must not start over a discovered server. Lifetime locking
+    // and supervisor handoff are separate; this preflight cannot arbitrate two starts.
+    if (options?.rejectRunningServer && mode === "web") {
+      const runtime = yield* readPersistedServerRuntimeState(derivedPaths.serverRuntimeStatePath);
+      if (Option.isSome(runtime) && runtime.value.pid > 0 && isProcessAlive(runtime.value.pid)) {
+        return yield* new CliError.UserError({
+          cause: `A T3 Code server is already running for ${baseDir} (pid ${runtime.value.pid}, ${runtime.value.origin}). Connect to that server, stop it before starting another, or use a different --base-dir.`,
+        });
+      }
+    }
+    yield* fs.makeDirectory(cwd, { recursive: true });
     yield* ServerConfig.ensureServerDirectories(derivedPaths);
     const persistedObservabilitySettings = yield* loadPersistedObservabilitySettings(
       derivedPaths.settingsPath,
@@ -538,8 +551,12 @@ export const resolveServerConfig = (
       () => mode === "desktop",
     );
     const desktopBootstrapToken = bootstrap?.desktopBootstrapToken;
+    const desktopBootstrapSecret = bootstrap?.desktopBootstrapSecret;
+    const shellEnvironmentPrepared = bootstrap?.shellEnvironmentPrepared;
     const desktopTelemetryFd = bootstrap?.desktopTelemetryFd;
     const desktopTelemetryControlFd = bootstrap?.desktopTelemetryControlFd;
+    const desktopBrowserFd = bootstrap?.desktopBrowserFd;
+    const desktopBrowserControlFd = bootstrap?.desktopBrowserControlFd;
     const resourceMonitorPath = bootstrap?.resourceMonitorPath;
     const computerUseMcp = bootstrap?.computerUseMcp;
     const autoBootstrapProjectFromCwd = Option.getOrElse(
@@ -650,8 +667,12 @@ export const resolveServerConfig = (
       ...(externalSecretStore === undefined
         ? {}
         : { secretStoreKeyFilePath: externalSecretStore.path }),
+      ...(desktopBootstrapSecret === undefined ? {} : { desktopBootstrapSecret }),
+      ...(shellEnvironmentPrepared === undefined ? {} : { shellEnvironmentPrepared }),
       desktopTelemetryFd,
       desktopTelemetryControlFd,
+      desktopBrowserFd,
+      desktopBrowserControlFd,
       resourceMonitorPath,
       computerUseMcp,
       computerUseState: bootstrap?.computerUseState,

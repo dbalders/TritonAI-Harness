@@ -1,5 +1,4 @@
 import * as Schema from "effect/Schema";
-
 import { IsoDateTime, PositiveInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 export const IntegrationCapabilityId = TrimmedNonEmptyString;

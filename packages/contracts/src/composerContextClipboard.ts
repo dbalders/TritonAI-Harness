@@ -1,8 +1,6 @@
 import * as Schema from "effect/Schema";
-
-import { EnvironmentId, MessageId, ThreadId } from "./baseSchemas.ts";
+import { EnvironmentId, MessageId, ThreadId, ForwardCompatibleArray } from "./baseSchemas.ts";
 import { COMPOSER_CONTEXT_MAX_RECORDS, ComposerContextRecord } from "./composerContext.ts";
-import { ForwardCompatibleArray } from "./baseSchemas.ts";
 
 /**
  * Structured clipboard payload for context copied between drafts and messages. Carries the

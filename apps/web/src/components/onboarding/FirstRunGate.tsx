@@ -1,9 +1,8 @@
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { useAtomValue } from "@effect/atom-react";
 import { useLocation, useNavigate } from "@tanstack/react-router";
-import { Atom } from "effect/unstable/reactivity";
+import { Atom } from "effect/reactivity";
 import { useEffect, useState } from "react";
-
 import { WELCOME_WIZARD_ENABLED } from "../../branding";
 import {
   ensureClientSettingsHydrated,

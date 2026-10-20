@@ -4,6 +4,7 @@
   "ios.deploymentTarget": "18.0",
   "expo.inlineModules.watchedDirectories": "[]",
   "expo.inlineModules.xcodeProjectTargets": "{\"mainTarget\":\"TritonAIHarnessPreview\",\"targets\":[]}",
+  "MOTION_PERMISSION": "false",
   "ios.forceStaticLinking": "[]",
   "apple.extraPods": "[{\"name\":\"GoogleUtilities\",\"modular_headers\":true},{\"name\":\"RecaptchaInterop\",\"modular_headers\":true}]",
   "apple.privacyManifestAggregationEnabled": "true",

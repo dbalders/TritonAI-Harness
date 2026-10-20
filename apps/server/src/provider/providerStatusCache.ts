@@ -10,18 +10,21 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
-import { writeFileStringAtomically } from "../atomicWrite.ts";
+import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
 
 const decodeProviderStatusCache = Schema.decodeUnknownEffect(
   Schema.fromJsonString(ServerProviderSchema),
 );
 
 const mergeProviderModels = (
-  provider: ProviderDriverKind,
+  provider: Pick<ServerProvider, "driver" | "instanceId">,
   fallbackModels: ReadonlyArray<ServerProvider["models"][number]>,
   cachedModels: ReadonlyArray<ServerProvider["models"][number]>,
 ): ReadonlyArray<ServerProvider["models"][number]> => {
-  if (provider === ProviderDriverKind.make("codex")) {
+  if (
+    provider.driver === ProviderDriverKind.make("codex") &&
+    (provider.instanceId === "codex" || provider.instanceId === "codex_frontier")
+  ) {
     return fallbackModels;
   }
 
@@ -90,7 +93,7 @@ export const hydrateCachedProvider = (input: {
   const hydratedProvider: ServerProvider = {
     ...fallbackWithoutMessage,
     models: mergeProviderModels(
-      input.fallbackProvider.driver,
+      input.fallbackProvider,
       input.fallbackProvider.models,
       input.cachedProvider.models,
     ),

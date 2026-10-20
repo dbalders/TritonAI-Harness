@@ -3,6 +3,7 @@ import { mergeUsage } from "@t3tools/shared/usageMerge";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { UsagePage } from "./UsagePage";
 
 const testState = vi.hoisted(() => ({
   useUsage: vi.fn(),
@@ -33,28 +34,19 @@ vi.mock("../WorkspaceBreadcrumb", () => ({
   WorkspaceBreadcrumb: "div",
   WorkspaceBreadcrumbItem: "div",
   WorkspaceBreadcrumbSeparator: "span",
+  WorkspaceBreadcrumbText: "span",
 }));
 vi.mock("../WorkspacePageContainer", () => ({ WorkspacePageContainer: "main" }));
 vi.mock("../WorkspacePageHeader", () => ({ WorkspacePageHeader: "header" }));
 vi.mock("./UsageProviderChart", () => ({ UsageProviderChart: "div" }));
 vi.mock("./UsagePriceOverrides", () => ({ UsagePriceOverrides: () => null }));
-vi.mock("./usageProviders", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./usageProviders")>();
-  return {
-    ...actual,
-    PROVIDER_PRESENTATION: {
-      codex: { color: "white", label: "Codex", mark: "span" },
-      claude: { color: "orange", label: "Claude Code", mark: "span" },
-    },
-  };
-});
 
-import { UsagePage } from "./UsagePage";
 const environments = [
   {
     environmentId: EnvironmentId.make("test-environment"),
     label: "Test environment",
     isPending: false,
+    canReadDiagnostics: true,
     error: null,
     summary: {
       contractVersion: USAGE_CONTRACT_VERSION,
@@ -76,6 +68,7 @@ beforeEach(() => {
     environments,
     selectedEnvironments: environments,
     isPending: false,
+    shown: null,
     isPartial: false,
     refresh: vi.fn(),
   });
@@ -106,7 +99,11 @@ describe("UsagePage TritonAI usage", () => {
   });
 
   it("requests Codex-only transcript aggregation", () => {
-    expect(testState.useUsage).toHaveBeenCalledWith(expect.anything(), null, "codex");
+    expect(testState.useUsage).toHaveBeenCalledWith(
+      expect.anything(),
+      null,
+      new Set(["claude", "grok", "cursor", "opencode", "antigravity", "pi"]),
+    );
   });
 });
 

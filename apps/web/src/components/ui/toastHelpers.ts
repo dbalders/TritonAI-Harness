@@ -2,7 +2,6 @@
 
 import type { ToastManagerAddOptions } from "@base-ui/react/toast";
 import type { ComponentPropsWithoutRef, ReactNode } from "react";
-
 import type { ThreadToastData } from "./toast";
 
 export type StackedThreadToastOptions = {

@@ -1,7 +1,6 @@
 import { act, createElement, useLayoutEffect } from "react";
 import { create } from "react-test-renderer";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-
 import { ComposerHandleContext, type ComposerHandleRef } from "../../composerHandleContext";
 import {
   isInsideCollapsedComposerControls,

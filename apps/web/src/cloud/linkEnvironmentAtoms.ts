@@ -2,7 +2,6 @@ import {
   createAtomCommandScheduler,
   createRuntimeCommand,
 } from "@t3tools/client-runtime/state/runtime";
-
 import { connectionAtomRuntime } from "../connection/runtime";
 import {
   linkPrimaryEnvironmentToCloud,
@@ -41,6 +40,9 @@ export const updatePrimaryEnvironmentPreferences = createRuntimeCommand(connecti
   label: "web:cloud:update-primary-environment-preferences",
   scheduler: cloudLinkScheduler,
   concurrency: cloudLinkConcurrency,
-  execute: (input: { readonly target: CloudLinkTarget; readonly publishAgentActivity: boolean }) =>
-    updatePrimaryCloudPreferences(input),
+  execute: (input: {
+    readonly target: CloudLinkTarget;
+    readonly publishAgentActivity: boolean;
+    readonly holdWebhooksWhileOffline?: boolean;
+  }) => updatePrimaryCloudPreferences(input),
 });

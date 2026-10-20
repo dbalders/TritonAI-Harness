@@ -1,6 +1,5 @@
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-
 import {
   navigateAfterThreadDeletion,
   requestThreadUnpinConfirmation,
@@ -47,7 +46,7 @@ describe("ThreadArchiveBlockedError", () => {
       environmentId: "environment-1",
       threadId: "thread-1",
     });
-    expect(error.message).toBe("Cannot archive a running thread.");
+    expect(error.message).toBe("Cannot archive while the provider is active.");
   });
 });
 

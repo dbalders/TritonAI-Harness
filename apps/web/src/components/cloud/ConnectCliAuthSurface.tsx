@@ -2,7 +2,6 @@ import { TRITONAI_CONNECT_NAME } from "@t3tools/contracts";
 import { useAuth, useClerk } from "@clerk/react";
 import { readConnectAuthorizeRequest } from "@t3tools/shared/connectAuth";
 import { useCallback, useEffect, useRef, useState } from "react";
-
 import {
   buildConnectCliClerkAuthorizeUrl,
   connectCliSignInRedirectUrl,

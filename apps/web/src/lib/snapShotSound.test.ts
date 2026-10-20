@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
-
 import { playSnapShotSound } from "./snapShotSound";
 
 afterEach(() => {

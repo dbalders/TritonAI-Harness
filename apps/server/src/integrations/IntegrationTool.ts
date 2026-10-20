@@ -1,5 +1,6 @@
 import * as Schema from "effect/Schema";
-import type * as SchemaAST from "effect/SchemaAST";
+import * as Effect from "effect/Effect";
+import * as SchemaAST from "effect/SchemaAST";
 import * as SchemaIssue from "effect/SchemaIssue";
 
 // Effect's empty Struct currently accepts arrays in its encoded form. This
@@ -24,10 +25,44 @@ export interface IntegrationProviderTool {
 type ToolInputDecoder = (input: unknown) => Promise<unknown>;
 const toolInputDecoders = new WeakMap<object, ToolInputDecoder>();
 
+// Effect AST parsers return runtime-local sentinels. Rehome node methods for
+// the host decoder without changing the provider's schema or its checks.
+function hostToolSchemaAst(ast: SchemaAST.AST): SchemaAST.AST {
+  const copies = new WeakMap<object, unknown>();
+  const visit = (value: unknown): unknown => {
+    if (typeof value !== "object" || value === null) return value;
+    const existing = copies.get(value);
+    if (existing !== undefined) return existing;
+    if (Array.isArray(value)) {
+      const copy: unknown[] = [];
+      copies.set(value, copy);
+      for (const item of value) copy.push(visit(item));
+      return copy;
+    }
+    if (Effect.isEffect(value) || Object.prototype.toString.call(value) !== "[object Object]")
+      return value;
+    const node = SchemaAST.isAST(value) ? value : null;
+    const prototype = node ? SchemaAST[node._tag].prototype : Object.getPrototypeOf(value);
+    const copy = Object.create(prototype) as Record<string, unknown>;
+    copies.set(value, copy);
+    for (const [key, child] of Object.entries(value)) {
+      copy[key] =
+        key === "annotations" || key === "checks" || key === "encodingChecks"
+          ? child
+          : visit(child);
+    }
+    if (node?._tag === "Suspend") copy.thunk = () => visit(node.thunk());
+    return copy;
+  };
+  return visit(ast) as SchemaAST.AST;
+}
+
 export function prepareIntegrationToolInput(definition: IntegrationProviderTool): void {
   const key = definition.input as object;
   if (toolInputDecoders.has(key)) return;
-  const compiled = Schema.decodeUnknownPromise(definition.input);
+  const compiled = Schema.decodeUnknownPromise(
+    Schema.make<Schema.Decoder<unknown>>(hostToolSchemaAst(definition.input.ast)),
+  );
   toolInputDecoders.set(key, (value) =>
     compiled(value, {
       errors: "all",

@@ -2,7 +2,6 @@ import type { DeviceHubAccess } from "@t3tools/client-runtime/state/deviceHubAcc
 import type { DevicePermission, DeviceSummary, DeviceTextSize } from "@t3tools/contracts";
 import { ChevronDown, X } from "lucide-react";
 import { useEffect, useState } from "react";
-
 import { Button } from "~/components/ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "~/components/ui/collapsible";
 import { Input } from "~/components/ui/input";

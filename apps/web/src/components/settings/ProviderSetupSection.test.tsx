@@ -1,4 +1,4 @@
-import { isValidElement, type FunctionComponent, type ReactElement } from "react";
+import { cloneElement, isValidElement, type FunctionComponent, type ReactElement } from "react";
 import {
   EnvironmentId,
   ProviderDriverKind,
@@ -8,9 +8,10 @@ import {
   type ServerProvider,
 } from "@t3tools/contracts";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
-
 import { visitElements } from "../../test/reactElementTree";
 import { reactHookHarness as hooks } from "../../test/reactHookHarness";
+import { ProviderAuthenticationSection } from "./ProviderAuthenticationSection";
+import { ProviderSetupSection } from "./ProviderSetupSection";
 
 const setup = vi.hoisted(() => ({
   auth: null as ProviderAuthState | null,
@@ -19,6 +20,7 @@ const setup = vi.hoisted(() => ({
   installState: vi.fn(() => "installation"),
   startAuth: vi.fn(),
   completeAuth: vi.fn(),
+  respondAuth: vi.fn(),
   cancelAuth: vi.fn(),
   logoutAuth: vi.fn(),
   startInstall: vi.fn(),
@@ -48,6 +50,7 @@ vi.mock("../../state/server", () => ({
     providerInstallState: setup.installState,
     startProviderAuth: setup.startAuth,
     completeProviderAuth: setup.completeAuth,
+    respondProviderAuth: setup.respondAuth,
     cancelProviderAuth: setup.cancelAuth,
     logoutProviderAuth: setup.logoutAuth,
     startProviderInstall: setup.startInstall,
@@ -72,8 +75,6 @@ vi.mock("../../state/query", () => ({
 vi.mock("../../localApi", () => ({
   ensureLocalApi: () => ({ dialogs: { confirm: setup.confirm } }),
 }));
-
-import { ProviderSetupSection } from "./ProviderSetupSection";
 
 const environmentId = EnvironmentId.make("remote-google");
 const instanceId = ProviderInstanceId.make("antigravity_work");
@@ -132,7 +133,19 @@ function renderSetup(
   );
   if (!actions) return view;
   const Actions = actions.type as FunctionComponent<Record<string, unknown>>;
-  return Actions(actions.props) as ReactElement<Record<string, unknown>>;
+  function expand(node: unknown): unknown {
+    if (Array.isArray(node)) return node.map(expand);
+    if (!isValidElement<Record<string, unknown>>(node)) return node;
+    if (node.type === ProviderAuthenticationSection)
+      return ProviderAuthenticationSection(
+        node.props as Parameters<typeof ProviderAuthenticationSection>[0],
+      );
+    return cloneElement(
+      node,
+      Object.fromEntries(Object.entries(node.props).map(([key, value]) => [key, expand(value)])),
+    );
+  }
+  return expand(Actions(actions.props));
 }
 
 function button(view: unknown, label: string) {
@@ -232,9 +245,7 @@ describe("Antigravity setup", () => {
       input: { instanceId, flowId: "flow-1", callbackUrl },
     });
     let view = renderSetup();
-    expect(
-      visitElements(view, (element) => element.props.children === "Signed in with Google."),
-    ).toBeNull();
+    expect(visitElements(view, (element) => element.props.children === "Signed in.")).toBeNull();
     expect(
       visitElements(view, (element) => element.props.id === `provider-callback-${instanceId}`)
         ?.props.value,
@@ -242,17 +253,14 @@ describe("Antigravity setup", () => {
 
     setup.auth = authState({ phase: "verifying", authorizationUrl: null });
     expect(
-      visitElements(
-        renderSetup(),
-        (element) => element.props.children === "Signed in with Google.",
-      ),
+      visitElements(renderSetup(), (element) => element.props.children === "Signed in."),
     ).toBeNull();
     setup.auth = authState({ phase: "succeeded", authorizationUrl: null });
     view = renderSetup({
       provider: { ...provider, status: "ready", auth: { status: "authenticated" } },
     });
     expect(
-      visitElements(view, (element) => element.props.children === "Signed in with Google."),
+      visitElements(view, (element) => element.props.children === "Signed in."),
     ).not.toBeNull();
   });
 
@@ -266,18 +274,24 @@ describe("Antigravity setup", () => {
       provider: { ...provider, status: "ready", auth: { status: "authenticated" } },
     });
     const expired = renderSetup();
-    expect(button(expired, "Sign in with Google")).not.toBeNull();
-    expect(
-      visitElements(expired, (element) => element.props.children === "Signed in with Google."),
-    ).toBeNull();
+    expect(button(expired, "Sign in")).not.toBeNull();
+    expect(visitElements(expired, (element) => element.props.children === "Signed in.")).toBeNull();
     expect(
       visitElements(expired, (element) => element.props.children === "Google sign-in complete."),
     ).toBeNull();
   });
 
   it("does not send a callback left over from a replaced sign-in flow", async () => {
+    const interaction = {
+      type: "browser" as const,
+      id: "same-interaction",
+      url: "https://example.com/login",
+      requiresConsent: false,
+      acceptsCallback: true,
+    };
+    setup.auth = authState({ interaction });
     setCallback(renderSetup(), "http://127.0.0.1:5555/?state=old-flow&code=test-only");
-    setup.auth = authState({ flowId: "flow-2" });
+    setup.auth = authState({ flowId: "flow-2", interaction });
     submitCallback(renderSetup());
     await flushPromises();
 
@@ -295,8 +309,8 @@ describe("Antigravity setup", () => {
     });
     setup.startAuth.mockReturnValueOnce(pending);
     const view = renderSetup();
-    click(view, "Sign in with Google");
-    click(view, "Sign in with Google");
+    click(view, "Sign in");
+    click(view, "Sign in");
 
     expect(setup.startAuth).toHaveBeenCalledTimes(1);
     expect(setup.startAuth).toHaveBeenCalledWith({ environmentId, input: { instanceId } });
@@ -341,7 +355,7 @@ describe("Antigravity setup", () => {
   });
 
   it.each([true, false])(
-    "can sign out an unchecked account when its instance is enabled=%s",
+    "can sign out a verified account when its instance is enabled=%s",
     async (enabled) => {
       setup.auth = authState({ phase: "idle", flowId: null, authorizationUrl: null });
       setup.confirm.mockResolvedValue(true);
@@ -352,14 +366,35 @@ describe("Antigravity setup", () => {
           enabled,
           installed: false,
           status: enabled ? "warning" : "disabled",
-          auth: { status: "unknown" },
+          auth: { status: "authenticated" },
         },
       });
-      click(view, "Sign out of Google");
+      click(view, "Sign out");
       await flushPromises();
       expect(setup.logoutAuth).toHaveBeenCalledWith({ environmentId, input: { instanceId } });
     },
   );
+
+  it.each(["unauthenticated", "unknown"] as const)(
+    "does not offer sign-out for an unverified %s account",
+    (status) => {
+      setup.auth = authState({ phase: "idle", flowId: null, authorizationUrl: null });
+      const view = renderSetup({
+        provider: { ...provider, auth: { status, canLogout: true } },
+      });
+      expect(button(view, "Sign in")).not.toBeNull();
+      expect(button(view, "Sign out")).toBeNull();
+      expect(button(view, "Change account")).toBeNull();
+    },
+  );
+
+  it("offers account actions after verified login when discovery cannot identify auth", () => {
+    setup.auth = authState({ phase: "succeeded", flowId: null, authorizationUrl: null });
+    const view = renderSetup({ provider: { ...provider, auth: { status: "unknown" } } });
+    expect(button(view, "Change account")).not.toBeNull();
+    expect(button(view, "Sign out")).not.toBeNull();
+    expect(button(view, "Sign in")).toBeNull();
+  });
 
   it("does not let a shared managed install hide an invalid custom binary path", () => {
     setup.auth = authState({ phase: "idle", flowId: null, authorizationUrl: null });
@@ -372,7 +407,7 @@ describe("Antigravity setup", () => {
       provider: { ...provider, installed: false },
       binaryPath: "/missing/antigravity",
     });
-    expect(button(view, "Sign in with Google")?.props.disabled).toBe(true);
+    expect(button(view, "Sign in")?.props.disabled).toBe(true);
     expect(setup.startAuth).not.toHaveBeenCalled();
   });
 

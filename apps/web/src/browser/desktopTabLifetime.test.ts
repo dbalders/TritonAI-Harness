@@ -6,6 +6,10 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { acquireDesktopTab } from "./desktopTabLifetime";
+import * as browserDefaults from "./browserDefaults";
+import { __setClientSettingsForTests } from "~/hooks/useSettings";
+import { previewRuntimeTabId } from "./previewRuntimeTabId";
 
 const { closeTab, createTab, stopBrowserRecording } = vi.hoisted(() => ({
   closeTab: vi.fn<(tabId: string) => Promise<void>>(async () => undefined),
@@ -21,16 +25,11 @@ vi.mock("./browserRecording", () => ({
   stopBrowserRecording,
 }));
 
-import { acquireDesktopTab } from "./desktopTabLifetime";
-import * as browserDefaults from "./browserDefaults";
-import { __setClientSettingsForTests } from "~/hooks/useSettings";
-
 /** Tests load default settings unless they select other preferences. */
 const DEFAULT_TAB_STATE = {
   zoomFactor: DEFAULT_PREVIEW_ZOOM_FACTOR,
   colorScheme: DEFAULT_PREVIEW_APPEARANCE,
 };
-import { previewRuntimeTabId } from "./previewRuntimeTabId";
 
 describe("desktopTabLifetime", () => {
   beforeEach(() => {

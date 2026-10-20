@@ -1,10 +1,6 @@
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-
-vi.mock("~/state/entities", () => ({ useThreadShell: () => null }));
-vi.mock("~/state/session", () => ({ usePreparedConnection: () => ({ _tag: "None" }) }));
-
 import {
   flushPendingFaviconsForThread,
   lookupFavicon,
@@ -20,6 +16,9 @@ import {
   BROWSER_FAVICON_MAX_ENTRIES,
   migratePersistedBrowserFaviconState,
 } from "./browserFaviconLogic";
+
+vi.mock("~/state/entities", () => ({ useThreadShell: () => null }));
+vi.mock("~/state/session", () => ({ usePreparedConnection: () => ({ _tag: "None" }) }));
 
 const environmentId = EnvironmentId.make("env-1");
 const projectRef = scopeProjectRef(environmentId, ProjectId.make("project-1"));

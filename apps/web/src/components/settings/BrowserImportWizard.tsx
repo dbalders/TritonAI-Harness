@@ -1,12 +1,9 @@
 import { PermissionChecklist, PermissionContinueButton } from "../permissions/PermissionChecklist";
 import { usePermissionStatus } from "../permissions/usePermissionStatus";
-import type { BrowserImportSource } from "@t3tools/contracts";
-import { BROWSER_IMPORT_FAILURE_COPY } from "@t3tools/contracts";
+import { type BrowserImportSource, BROWSER_IMPORT_FAILURE_COPY } from "@t3tools/contracts";
 import { ArrowDownIcon, ArrowRightIcon, CheckIcon, HardDriveIcon } from "lucide-react";
 import { useRef, useState } from "react";
-
 import { cn, randomUUID } from "~/lib/utils";
-
 import { Button } from "../ui/button";
 import {
   Dialog,
@@ -457,7 +454,7 @@ function SelectableTile({
       aria-pressed={selected}
       onClick={onSelect}
       className={cn(
-        "flex w-full cursor-pointer items-center justify-between gap-3 rounded-lg border px-3 py-2 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
+        "flex w-full cursor-pointer items-center justify-between gap-3 rounded-lg border px-3 py-2 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
         selected
           ? "border-primary bg-primary/8"
           : "border-border/60 hover:border-border hover:bg-muted/40",

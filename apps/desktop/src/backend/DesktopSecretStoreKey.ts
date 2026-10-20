@@ -1,9 +1,10 @@
+// @effect-diagnostics nodeBuiltinImport:off - protected key verification requires native constant-time byte comparison.
 import * as NodeCrypto from "node:crypto";
 
 import * as Crypto from "effect/Crypto";
 import * as SecretEnvelope from "@t3tools/shared/secretEnvelope";
 import * as Effect from "effect/Effect";
-import * as Encoding from "effect/Encoding";
+import * as Encoding from "effect/encoding/Base64";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
@@ -66,7 +67,7 @@ const validateKeyring = Effect.fn("desktop.secretStoreKey.validate")(function* (
   const normalized: string[] = [];
   const seen = new Set<string>();
   for (const encoded of [record.active, ...record.previous]) {
-    const decoded = yield* Effect.fromResult(Encoding.decodeBase64(encoded)).pipe(
+    const decoded = yield* Effect.fromResult(Encoding.decode(encoded)).pipe(
       Effect.mapError(() => keyError("decode", "Secret-store key data is not valid base64.")),
     );
     if (decoded.byteLength !== DATA_KEY_BYTES) {
@@ -75,7 +76,7 @@ const validateKeyring = Effect.fn("desktop.secretStoreKey.validate")(function* (
         `Secret-store keys must contain exactly ${DATA_KEY_BYTES} bytes.`,
       );
     }
-    const canonical = Encoding.encodeBase64(decoded);
+    const canonical = Encoding.encode(decoded);
     if (!seen.has(canonical)) {
       normalized.push(canonical);
       seen.add(canonical);
@@ -83,7 +84,7 @@ const validateKeyring = Effect.fn("desktop.secretStoreKey.validate")(function* (
   }
   const legacySecretFingerprints = Object.create(null) as Record<string, string>;
   for (const [name, encoded] of Object.entries(record.legacySecretFingerprints)) {
-    const decoded = yield* Effect.fromResult(Encoding.decodeBase64(encoded)).pipe(
+    const decoded = yield* Effect.fromResult(Encoding.decode(encoded)).pipe(
       Effect.mapError(() =>
         keyError("decode", "Legacy secret fingerprint data is not valid base64."),
       ),
@@ -91,7 +92,7 @@ const validateKeyring = Effect.fn("desktop.secretStoreKey.validate")(function* (
     if (decoded.byteLength !== 32) {
       return yield* keyError("decode", "Legacy secret fingerprints must contain 32 bytes.");
     }
-    legacySecretFingerprints[name] = Encoding.encodeBase64(decoded);
+    legacySecretFingerprints[name] = Encoding.encode(decoded);
   }
   return {
     keys: [normalized[0]!, ...normalized.slice(1)] as const,
@@ -203,7 +204,7 @@ export const authorizeLegacySecretValues = Effect.fn(
   }
 
   for (const { name, value } of legacyValues) {
-    fingerprints[name] = Encoding.encodeBase64(
+    fingerprints[name] = Encoding.encode(
       SecretEnvelope.fingerprintLegacyServerSecret(name, value, keys[0]),
     );
   }
@@ -287,7 +288,7 @@ const persistWrappedKey = Effect.fn("desktop.secretStoreKey.persist")(function* 
         ),
       ),
     );
-  const uuid = yield* crypto.randomUUIDv4;
+  const uuid = yield* crypto.randomUUIDv4();
   const tempPath = `${wrappedKeyPath}.${uuid}.tmp`;
 
   yield* Effect.scoped(
@@ -361,7 +362,7 @@ const persistInitializedMarker = Effect.fn("desktop.secretStoreKey.persistInitia
       return;
     }
 
-    const uuid = yield* crypto.randomUUIDv4;
+    const uuid = yield* crypto.randomUUIDv4();
     const tempPath = `${initializedPath}.${uuid}.tmp`;
     yield* Effect.scoped(
       Effect.gen(function* () {
@@ -405,13 +406,13 @@ const migrateLegacyValue = Effect.fn("desktop.secretStoreKey.migrateLegacyValue"
   const keys: Uint8Array[] = [];
   for (const encoded of material.keys) {
     keys.push(
-      yield* Effect.fromResult(Encoding.decodeBase64(encoded)).pipe(
+      yield* Effect.fromResult(Encoding.decode(encoded)).pipe(
         Effect.mapError(() => keyError("migration", "Secret-store key data is invalid.")),
       ),
     );
   }
   const stored = Uint8Array.from(storedOption.value);
-  const actualFingerprint = Encoding.encodeBase64(
+  const actualFingerprint = Encoding.encode(
     SecretEnvelope.fingerprintLegacyServerSecret(name, stored, keys[0]!),
   );
   const matchesApprovedLegacyValue =
@@ -435,7 +436,7 @@ const migrateLegacyValue = Effect.fn("desktop.secretStoreKey.migrateLegacyValue"
     try: () => SecretEnvelope.encodeServerSecretEnvelope(name, stored, keys[0]!),
     catch: () => keyError("migration", "A legacy secret could not be encrypted."),
   });
-  const uuid = yield* crypto.randomUUIDv4;
+  const uuid = yield* crypto.randomUUIDv4();
   const tempPath = `${secretPath}.${uuid}.tmp`;
   yield* Effect.scoped(
     Effect.gen(function* () {
@@ -524,7 +525,7 @@ export const resolve = Effect.fn("desktop.secretStoreKey.resolve")(function* () 
           activeKey,
         );
         return {
-          keys: [Encoding.encodeBase64(activeKey)] as const,
+          keys: [Encoding.encode(activeKey)] as const,
           legacySecretFingerprints,
         } satisfies DesktopSecretStoreKeyMaterial;
       }),
