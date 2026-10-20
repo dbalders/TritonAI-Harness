@@ -511,6 +511,44 @@ describe("Project brief owner review", () => {
     expect(text(renderer!.root)).toContain("the page is not imported or refreshed");
   });
 
+  it("does not submit a previously chosen message after switching source types", async () => {
+    const state = fixture();
+    await act(() => {
+      renderer = create(
+        <ProjectBriefContent
+          state={{
+            ...state,
+            sources: [],
+            snapshots: [],
+            brief: null,
+            proposals: [],
+            synthesis: null,
+          }}
+          busy={false}
+          canWrite
+          error={null}
+          run={run}
+          modelControl={null}
+          modelReady
+          openThread={() => {}}
+          renderMessagePicker={(onSelect) => (
+            <button type="button" onClick={() => onSelect("thread-1", "message-1")}>
+              Pick message
+            </button>
+          )}
+        />,
+      );
+    });
+    await act(() => button("Choose sources").props.onClick());
+    const sourceType = () => renderer!.root.findByProps({ "aria-label": "Source type" });
+    await act(() => sourceType().props.onChange({ target: { value: "message" } }));
+    await act(() => button("Pick message").props.onClick());
+    await act(() => sourceType().props.onChange({ target: { value: "file" } }));
+    await act(() => sourceType().props.onChange({ target: { value: "message" } }));
+    await act(() => renderer!.root.findByType("form").props.onSubmit({ preventDefault() {} }));
+    expect(run).not.toHaveBeenCalled();
+  });
+
   it("removes mutation access when the environment permission changes", async () => {
     const state = fixture();
     await mount(state);

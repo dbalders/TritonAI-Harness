@@ -84,7 +84,12 @@ function SourceForm({
           aria-label="Source type"
           value={kind}
           disabled={disabled}
-          onChange={(event) => setKind(event.target.value as typeof kind)}
+          onChange={(event) => {
+            setKind(event.target.value as typeof kind);
+            // The message picker remounts empty, so a hidden earlier choice must not submit.
+            setThreadId("");
+            setMessageId("");
+          }}
           className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
         >
           <option value="file">Project file</option>
