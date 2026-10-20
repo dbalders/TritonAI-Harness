@@ -128,6 +128,26 @@ describe("useIntegrationConnection", () => {
     expect(latest?.status).toBe("connected");
   });
 
+  it("keeps a finished sign-in when an older plugin list answers after it", async () => {
+    await render("local");
+    await act(async () => {
+      await latest?.connect();
+    });
+    await render("remote");
+
+    // Coming back starts a fresh list that is slower than the resumed sign-in check.
+    let answerList: (value: unknown) => void = () => {};
+    mocks.list.mockReturnValueOnce(new Promise((resolve) => (answerList = resolve)));
+    await render("local");
+    await act(async () => vi.advanceTimersByTimeAsync(5_000));
+    expect(latest?.status).toBe("connected");
+
+    await act(async () =>
+      answerList({ _tag: "Success", value: { integrations: [outlook("not_connected")] } }),
+    );
+    expect(latest?.status).toBe("connected");
+  });
+
   it("keeps a finished sign-in when an earlier attempt's poll answers late", async () => {
     let answerFirstPoll: (value: unknown) => void = () => {};
     mocks.poll.mockReturnValueOnce(new Promise((resolve) => (answerFirstPoll = resolve)));

@@ -812,8 +812,8 @@ function ConnectStep({
               {status === "failed" ? "Try again" : `Connect ${accountName(provider)}`}
             </Button>
           ) : null}
-          {!connected && canSwitch && status !== "waiting" ? (
-            <Button variant="ghost-muted" onClick={() => onProvider(other)}>
+          {canSwitch && status !== "waiting" ? (
+            <Button variant="ghost-muted" disabled={running} onClick={() => onProvider(other)}>
               Use {accountName(other)} instead
             </Button>
           ) : null}
@@ -1015,23 +1015,29 @@ export function GuidedOnboarding() {
   const google = useIntegrationConnection(GOOGLE_WORKSPACE_ID, environmentId);
 
   // Moving to a step puts focus at the top of the new step for keyboard and screen readers.
-  const goTo = useCallback((next: GuidedTourStep) => {
+  const goTo = (next: GuidedTourStep) => {
     setRunError(null);
     updateGuidedTourState({ step: next });
     mainRef.current?.focus();
-  }, []);
+  };
 
   const exit = useCallback(() => {
     void navigate({ to: "/settings/general" });
   }, [navigate]);
 
+  // Outlook first, unless only Google can already do this task or Microsoft isn't here.
+  const canRun = (connection: IntegrationConnection) =>
+    connection.status === "connected" && integrationCanRunTask(connection.integration, task);
   const provider: OnboardingMailProvider =
     task.source === "teams"
       ? MICROSOFT_365_ID
       : (tour.provider ??
-        (microsoft.status === "unavailable" && google.status !== "unavailable"
-          ? GOOGLE_WORKSPACE_ID
-          : MICROSOFT_365_ID));
+        (canRun(microsoft)
+          ? MICROSOFT_365_ID
+          : canRun(google) ||
+              (microsoft.status === "unavailable" && google.status !== "unavailable")
+            ? GOOGLE_WORKSPACE_ID
+            : MICROSOFT_365_ID));
 
   const pickTask = (picked: OnboardingTask) => {
     updateGuidedTourState({ taskId: picked.id });

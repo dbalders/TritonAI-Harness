@@ -135,6 +135,18 @@ export function useIntegrationConnection(
   // Results that arrive after unmounting or switching environments are ignored, so a
   // late response can never open a sign-in page or poll the wrong server.
   const generation = useRef(0);
+  // Plugin summaries are applied newest-request-first: a slow list that started before a
+  // sign-in finished must not put back the "not connected" it saw.
+  const requests = useRef(0);
+  const appliedRequest = useRef(new Map<string, number>());
+  const applyLoaded = useCallback(
+    (forKey: string, request: number, next: IntegrationSummary | null) => {
+      if ((appliedRequest.current.get(forKey) ?? 0) > request) return;
+      appliedRequest.current.set(forKey, request);
+      setLoaded({ key: forKey, integration: next });
+    },
+    [],
+  );
 
   const integration = loaded !== null && loaded.key === key ? loaded.integration : null;
   const loading = key !== null && loaded?.key !== key;
@@ -144,6 +156,7 @@ export function useIntegrationConnection(
   useEffect(() => {
     const owner = ++generation.current;
     if (!environmentId || key === null) return;
+    const request = ++requests.current;
     void (async () => {
       let found: IntegrationSummary | null = null;
       try {
@@ -152,12 +165,12 @@ export function useIntegrationConnection(
       } catch {
         found = null;
       }
-      if (generation.current === owner) setLoaded({ key, integration: found });
+      if (generation.current === owner) applyLoaded(key, request, found);
     })();
     return () => {
       if (generation.current === owner) generation.current++;
     };
-  }, [environmentId, integrationId, key, listCommand]);
+  }, [applyLoaded, environmentId, integrationId, key, listCommand]);
 
   // The latest sign-in attempt for each environment. "Start over" begins a new attempt,
   // so a late answer for an earlier one changes neither the sign-in nor the plugin.
@@ -179,6 +192,7 @@ export function useIntegrationConnection(
           finish("The sign-in expired. Try again.");
           return;
         }
+        const request = ++requests.current;
         try {
           const result = unwrap(
             await pollCommand({
@@ -187,7 +201,7 @@ export function useIntegrationConnection(
             }),
           );
           if (!live()) return;
-          setLoaded({ key, integration: result.integration });
+          applyLoaded(key, request, result.integration);
           if (result.state === "pending") {
             setSession({
               key,
@@ -223,7 +237,7 @@ export function useIntegrationConnection(
       Math.max(0, scheduled.nextPollAtMilliseconds - Date.now()),
     );
     return () => window.clearTimeout(timer);
-  }, [attempt, environmentId, integrationId, key, pollCommand, scheduled]);
+  }, [applyLoaded, attempt, environmentId, integrationId, key, pollCommand, scheduled]);
 
   const connect = useCallback(async () => {
     if (!environmentId || key === null || !integration) return;
@@ -245,6 +259,7 @@ export function useIntegrationConnection(
     try {
       let latest = integration;
       if (!latest.installed || !latest.enabled) {
+        const request = ++requests.current;
         const result = unwrap(
           await (latest.installed
             ? enabledCommand({ environmentId, input: { id: integrationId, enabled: true } })
@@ -252,7 +267,7 @@ export function useIntegrationConnection(
         );
         if (live()) {
           latest = result.integrations.find((item) => item.id === integrationId) ?? latest;
-          setLoaded({ key, integration: latest });
+          applyLoaded(key, request, latest);
         }
       }
       if (!live() || integrationIsUsable(latest)) {
@@ -265,12 +280,14 @@ export function useIntegrationConnection(
         return;
       }
       if (started.kind === "connected") {
+        const request = ++requests.current;
         const refreshed = unwrap(await listCommand({ environmentId, input: {} }));
         if (live()) {
-          setLoaded({
+          applyLoaded(
             key,
-            integration: refreshed.integrations.find((item) => item.id === integrationId) ?? null,
-          });
+            request,
+            refreshed.integrations.find((item) => item.id === integrationId) ?? null,
+          );
         }
         settle({ scheduled: null, error: null });
         return;
@@ -286,6 +303,7 @@ export function useIntegrationConnection(
       settle({ scheduled: null, error: errorMessage(cause) });
     }
   }, [
+    applyLoaded,
     connectCommand,
     enabledCommand,
     environmentId,

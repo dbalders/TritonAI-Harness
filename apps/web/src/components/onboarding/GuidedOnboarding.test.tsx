@@ -221,6 +221,47 @@ describe("guided tour", () => {
     expect(readGuidedTourState()).toMatchObject({ roleId: "finance", taskId: "finance-budget" });
   });
 
+  it("uses the account that can do the task, and lets you switch accounts", async () => {
+    const capability = (id: string, enabled: boolean) => ({
+      id,
+      displayName: id,
+      description: id,
+      access: "default",
+      enabled,
+      granted: enabled,
+      available: enabled,
+    });
+    const account = (id: string, calendarOn: boolean) => ({
+      id,
+      installed: true,
+      enabled: true,
+      requiresConnection: true,
+      connectionState: "connected",
+      accountLabel: null,
+      capabilities: [capability("mail.read", true), capability("calendar.read", calendarOn)],
+      tools: [],
+    });
+    mocks.listIntegrations.mockResolvedValue({
+      _tag: "Success",
+      value: {
+        integrations: [account("microsoft-365", false), account("google-workspace", true)],
+      },
+    });
+    await act(async () => root.render(<GuidedOnboarding />));
+    await click("Get started");
+    await click("Office & admin");
+    await click("Continue");
+    await click("See what's on my calendar this week");
+
+    expect(document.body.textContent).toContain("You're connected.");
+    expect(document.body.textContent).toContain("Gmail & Google");
+    expect(document.body.textContent).toContain("Show my week");
+
+    await click("Use Outlook instead");
+    expect(document.body.textContent).toContain("Turn on reading your calendar.");
+    expect(document.body.textContent).toContain("Use Gmail instead");
+  });
+
   it("asks to turn on the calendar instead of claiming it can read it", async () => {
     const capability = (id: string, enabled: boolean) => ({
       id,
