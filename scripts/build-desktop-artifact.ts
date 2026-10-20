@@ -99,6 +99,7 @@ type WorkspaceConfig = typeof WorkspaceConfig.Type;
 
 const StageWorkspaceConfig = Schema.Struct({
   supportedArchitectures: SupportedArchitectures,
+  verifyDepsBeforeRun: Schema.optional(Schema.Boolean),
   // pnpm 11 only reads these from pnpm-workspace.yaml (not package.json#pnpm).
   // Without allowBuilds the staged `vp install --prod` fails with
   // ERR_PNPM_IGNORED_BUILDS for packages that have lifecycle scripts.
@@ -2163,6 +2164,11 @@ export const assertPackagedFfiRsNativeBinaries = Effect.fn("assertPackagedFfiRsN
     );
 
     for (const artifact of resolveFfiRsNativeArtifacts(input.platform, input.arch)) {
+      // Only Windows PE addons are unpacked from server.asar. Linux addons stay
+      // archived, and WSL executes the separately validated Linux CLI archive.
+      if (input.platform === "win" && artifact.packageName.startsWith("@yuuang/ffi-rs-linux-")) {
+        continue;
+      }
       const binaryPath = path.join(
         resourcesDir,
         input.platform === "win" ? `${WINDOWS_SERVER_ASAR_RESOURCE}.unpacked` : "app.asar.unpacked",
@@ -2209,6 +2215,10 @@ export function createStageWorkspaceConfig(input: {
 
   return {
     supportedArchitectures,
+    // Electron Builder probes the workspace with `pnpm exec pwd`. pnpm 11's
+    // default auto-install can purge this already deployed runtime after its
+    // packaging manifest is rewritten, then fail against the source catalogs.
+    verifyDepsBeforeRun: false,
     ...(allowBuilds && Object.keys(allowBuilds).length > 0 ? { allowBuilds } : {}),
     ...(patchedDependencies && Object.keys(patchedDependencies).length > 0
       ? { patchedDependencies }

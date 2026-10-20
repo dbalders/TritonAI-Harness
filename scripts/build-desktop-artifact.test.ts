@@ -15,7 +15,9 @@ import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { vi } from "vite-plus/test";
-import { parse as parseYaml } from "yaml";
+import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
+import { resolveSpawnCommand } from "@t3tools/shared/shell";
+import rootPackageJson from "../package.json" with { type: "json" };
 import desktopPackageJson from "../apps/desktop/package.json" with { type: "json" };
 import desktopRuntimePackageJson from "../apps/desktop-runtime/package.json" with { type: "json" };
 import serverPackageJson from "../apps/server/package.json" with { type: "json" };
@@ -747,6 +749,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         os: ["darwin"],
         cpu: ["x64"],
       },
+      verifyDepsBeforeRun: false,
       packageExtensions: stagePackageExtensions,
     });
     assert.deepStrictEqual(createStageWorkspaceConfig({ platform: "linux", arch: "x64" }), {
@@ -755,6 +758,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         cpu: ["x64"],
         libc: ["glibc"],
       },
+      verifyDepsBeforeRun: false,
       packageExtensions: stagePackageExtensions,
     });
     // Windows stages only win32 natives; WSL runs the separately built Linux
@@ -764,6 +768,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         os: ["win32"],
         cpu: ["x64"],
       },
+      verifyDepsBeforeRun: false,
       packageExtensions: stagePackageExtensions,
     });
     assert.deepStrictEqual(createStageWorkspaceConfig({ platform: "win", arch: "arm64" }), {
@@ -771,6 +776,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         os: ["win32"],
         cpu: ["arm64"],
       },
+      verifyDepsBeforeRun: false,
       packageExtensions: stagePackageExtensions,
     });
     assert.deepStrictEqual(createStageWorkspaceConfig({ platform: "mac", arch: "universal" }), {
@@ -778,6 +784,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         os: ["darwin"],
         cpu: ["arm64", "x64"],
       },
+      verifyDepsBeforeRun: false,
       packageExtensions: stagePackageExtensions,
     });
     assert.deepStrictEqual(
@@ -867,6 +874,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           cpu: ["x64"],
           libc: ["glibc"],
         },
+        verifyDepsBeforeRun: false,
         packageExtensions: stagePackageExtensions,
         allowBuilds: {
           electron: true,
@@ -898,6 +906,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           os: ["darwin"],
           cpu: ["arm64"],
         },
+        verifyDepsBeforeRun: false,
         packageExtensions: stagePackageExtensions,
       },
     );
@@ -3182,6 +3191,105 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       "@ubjs/node@0.31.0-3": "patches/@ubjs__node@0.31.0-3.patch",
     });
   });
+
+  it.effect("keeps deployed dependencies intact during the packager workspace probe in CI", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "immutable-packaging-stage-" });
+      const marker = path.join(root, "node_modules/retained-runtime/index.js");
+      yield* fs.makeDirectory(path.dirname(marker), { recursive: true });
+      yield* fs.writeFileString(marker, "deployed-runtime");
+      yield* fs.writeFileString(
+        path.join(root, "package.json"),
+        JSON.stringify({
+          name: "rewritten-packaging-stage",
+          version: "1.0.0",
+          private: true,
+          packageManager: rootPackageJson.packageManager,
+        }),
+      );
+      // A deployed lock retains source catalogs while packaging rewrites the
+      // manifest/workspace. A workspace probe must never try to reinstall it.
+      yield* fs.copyFile(
+        NodePath.join(import.meta.dirname, "../pnpm-lock.yaml"),
+        path.join(root, "pnpm-lock.yaml"),
+      );
+      yield* fs.writeFileString(
+        path.join(root, "pnpm-workspace.yaml"),
+        stringifyYaml(createStageWorkspaceConfig({ platform: "mac", arch: "arm64" })),
+      );
+      const command = yield* resolveSpawnCommand("vp", [
+        "exec",
+        "pnpm",
+        "--workspace-root",
+        "exec",
+        process.execPath,
+        "-e",
+        "process.stdout.write('stage-probe')",
+      ]);
+      const child = yield* spawner.spawn(
+        ChildProcess.make(command.command, command.args, {
+          cwd: root,
+          shell: command.shell,
+          env: { ...process.env, CI: "true" },
+          stdout: "ignore",
+          stderr: "pipe",
+        }),
+      );
+      const [exitCode, stderr] = yield* Effect.all(
+        [
+          child.exitCode,
+          child.stderr.pipe(
+            Stream.decodeText(),
+            Stream.runFold(
+              () => "",
+              (acc, chunk) => acc + chunk,
+            ),
+          ),
+        ],
+        { concurrency: "unbounded" },
+      );
+      assert.equal(Number(exitCode), 0, stderr);
+      assert.equal(yield* fs.readFileString(marker), "deployed-runtime");
+    }),
+  );
+
+  it.effect("validates Windows FFI without requiring packed Linux addons to be unpacked", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const stageDistDir = yield* fs.makeTempDirectoryScoped({ prefix: "ffi-windows-layout-" });
+      const sourceDir = path.join(stageDistDir, "source");
+      const resources = path.join(stageDistDir, "win-unpacked/resources");
+      const winFile = "node_modules/@yuuang/ffi-rs-win32-x64-msvc/ffi-rs.win32-x64-msvc.node";
+      const linuxFile = "node_modules/@yuuang/ffi-rs-linux-x64-gnu/ffi-rs.linux-x64-gnu.node";
+      for (const [file, header] of [
+        [winFile, [0x4d, 0x5a]],
+        [linuxFile, [0x7f, 0x45, 0x4c, 0x46]],
+      ] as const) {
+        yield* fs.makeDirectory(path.dirname(path.join(sourceDir, file)), { recursive: true });
+        yield* fs.writeFile(path.join(sourceDir, file), new Uint8Array(header));
+      }
+      yield* fs.makeDirectory(resources, { recursive: true });
+      const asarPath = path.join(resources, "server.asar");
+      yield* packWindowsServerAsar({ sourceDir, asarPath, arch: "x64" });
+      assert.equal(yield* fs.exists(path.join(`${asarPath}.unpacked`, linuxFile)), false);
+      assert.deepEqual([...extractFile(asarPath, linuxFile)], [0x7f, 0x45, 0x4c, 0x46]);
+      const options = {
+        stageDistDir,
+        platform: "win" as const,
+        arch: "x64" as const,
+        productName: "TritonAI Harness",
+      };
+      yield* assertPackagedFfiRsNativeBinaries(options);
+      yield* fs.remove(path.join(`${asarPath}.unpacked`, winFile));
+      const error = yield* assertPackagedFfiRsNativeBinaries(options).pipe(Effect.flip);
+      assert.instanceOf(error, PackagedNativeDependencyMissingError);
+      assert.equal(error.packageName, "@yuuang/ffi-rs-win32-x64-msvc");
+    }),
+  );
 
   it.effect("fails closed when an assembled app omits an ffi-rs native binary", () =>
     Effect.gen(function* () {
