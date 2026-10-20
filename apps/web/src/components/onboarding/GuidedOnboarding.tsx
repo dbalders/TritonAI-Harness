@@ -1182,7 +1182,10 @@ export function GuidedOnboarding() {
           initialFocus={mainRef}
           className="fixed inset-0 z-60 flex flex-col overflow-y-auto bg-background outline-none"
         >
-          <div aria-hidden="true" className="guided-onboarding-glow" />
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-x-0 -top-1/2 h-full bg-radial from-primary/8 to-transparent to-70%"
+          />
           <header className="relative grid grid-cols-[1fr_auto_1fr] items-center gap-3 px-5 py-4 sm:px-8 sm:py-5">
             <div className="flex min-w-0 items-center gap-2.5 font-semibold text-foreground">
               <img src="/tritonai-logo.png" alt="" className="size-7 rounded-lg" />

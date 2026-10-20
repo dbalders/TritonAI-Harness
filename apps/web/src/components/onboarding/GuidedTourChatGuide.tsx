@@ -13,6 +13,7 @@ import {
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import { useClientSettings } from "../../hooks/useSettings";
+import { useStableCallback } from "../../hooks/useStableCallback";
 import {
   onboardingProgressLines,
   onboardingRole,
@@ -69,11 +70,16 @@ function runWorkLog(
   );
 }
 
-/** The last thing the person asked, which "Try again" sends again. */
+/**
+ * The last thing the person asked, which "Try again" sends again. A retry is text only,
+ * so a message that carried a file can't be repeated this way.
+ */
 function latestUserMessageText(entries: ReadonlyArray<TimelineEntry>): string | null {
   for (let index = entries.length - 1; index >= 0; index--) {
     const entry = entries[index];
-    if (entry?.kind === "message" && entry.message.role === "user") return entry.message.text;
+    if (entry?.kind === "message" && entry.message.role === "user") {
+      return (entry.message.attachments?.length ?? 0) > 0 ? null : entry.message.text;
+    }
   }
   return null;
 }
@@ -138,7 +144,7 @@ export function useGuidedTourChatGuide(
     [active, stopped, timelineEntries],
   );
 
-  const sendOnce = async (text: string, onSent?: () => void) => {
+  const sendOnce = useStableCallback(async (text: string, onSent?: () => void) => {
     if (sending) return;
     setSending(true);
     try {
@@ -146,7 +152,7 @@ export function useGuidedTourChatGuide(
     } finally {
       setSending(false);
     }
-  };
+  });
 
   return useMemo<ComposerBannerStackItem | null>(() => {
     if (!active || input.threadId === null) return null;
@@ -220,10 +226,11 @@ export function useGuidedTourChatGuide(
         variant: "warning",
         icon: <RotateCcwIcon />,
         title: "It stopped before finishing",
-        description:
-          run.status === "failed"
+        description: latestUserMessage
+          ? run.status === "failed"
             ? "Something went wrong on its side. You can send the same request again."
-            : "You can send the same request again, or ask it something else below.",
+            : "You can send the same request again, or ask it something else below."
+          : "Ask it again below. If you used your own file, attach it again with the paperclip.",
         actions: latestUserMessage ? (
           <Button
             size="xs"

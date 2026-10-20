@@ -180,6 +180,22 @@ describe("guided tour chat guide", () => {
     expect(send).toHaveBeenCalledWith("Which line?");
   });
 
+  it("does not offer a text-only retry for a request that carried a file", async () => {
+    const withFile = {
+      ...userMessage('Check the attached file "Mine.csv"'),
+    } as unknown as { message: Record<string, unknown> };
+    withFile.message = { ...withFile.message, attachments: [{ type: "file", id: "a1" }] };
+    await render(
+      baseInput({
+        run: { runId: "run-3", status: "failed", startedAt: null, requestedAt: null },
+        timelineEntries: [withFile as unknown as TimelineEntry],
+      }),
+    );
+    expect(container.textContent).toContain("It stopped before finishing");
+    expect(container.textContent).toContain("attach it again with the paperclip");
+    expect(buttons()).not.toContain("Try again");
+  });
+
   it("stays hidden once dismissed", async () => {
     await render(baseInput());
     await click("Hide tour suggestions");

@@ -75,19 +75,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   mix-blend-mode: normal;
 }
 
-/* Experimental guided tour: a soft wash behind the steps; entrances run once. */
-.guided-onboarding-glow {
-  pointer-events: none;
-  position: absolute;
-  inset: -20% -10% auto;
-  height: 70%;
-  background: radial-gradient(
-    60% 60% at 50% 0%,
-    color-mix(in srgb, var(--primary) 8%, transparent),
-    transparent 70%
-  );
-}
-
+/* Experimental guided tour: each step and popped-in card enters once. */
 @media (prefers-reduced-motion: no-preference) {
   .guided-onboarding-step {
     animation: guided-onboarding-rise 500ms cubic-bezier(0.2, 0.8, 0.2, 1);
