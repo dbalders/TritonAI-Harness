@@ -760,6 +760,8 @@ jobs:
     steps:
       - *a2
       - *a3
+      - name: Install Chromium for server browser integration tests
+        run: node apps/server/node_modules/playwright-core/cli.js install --with-deps --only-shell chromium
       - name: Test
         run: vp run --filter t3 test --shard ${{ matrix.shard }}/${{ strategy.job-total }}
   # Scheduled runs have no watcher. Keep one open issue per failure streak so a
