@@ -18,6 +18,12 @@ update commands. See [Server Update Architecture](../architecture/server-updates
 
 ## Workflow contract
 
+Run `vp run gitlinks:check` after updating vendored reference repositories. Every tracked
+gitlink must have exactly one matching path and URL in the root `.gitmodules`; remove stale
+mappings when references move or disappear. Upstream sync defaults, local preflight, and CI enforce this, and CI's
+Preflight checkout uses the same immediate credential cleanup as Nightly. Excluding `.repos`
+with sparse checkout does not exclude its gitlinks from that cleanup.
+
 The workflow runs for:
 
 - a pushed stable tag matching `v*.*.*`, excluding upstream nightly tags;

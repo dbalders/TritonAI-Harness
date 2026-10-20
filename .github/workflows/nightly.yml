@@ -48,6 +48,8 @@ jobs:
             /*
             !/.repos/
           sparse-checkout-cone-mode: false
+      - name: Validate Git submodule mappings
+        run: node .github/scripts/check-gitlinks.cjs
       - id: resolve
         uses: actions/github-script@v8
         env:
@@ -105,7 +107,7 @@ jobs:
       - name: Typecheck
         run: vp run typecheck
       - name: Release publication guards
-        run: node --test .github/scripts/*nightly*.test.cjs .github/scripts/controlled-release-assets.test.cjs
+        run: node --test .github/scripts/check-gitlinks.test.cjs .github/scripts/*nightly*.test.cjs .github/scripts/controlled-release-assets.test.cjs
   prepare_managed_plugins:
     name: Prepare immutable managed plugin composition
     needs:

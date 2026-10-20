@@ -22,10 +22,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           sparse-checkout: |
             /*
             !/.repos/
           sparse-checkout-cone-mode: false
+
+      - name: Validate Git submodule mappings
+        run: node .github/scripts/check-gitlinks.cjs
 
       - name: Reject repository-owned PR assets
         run: |
