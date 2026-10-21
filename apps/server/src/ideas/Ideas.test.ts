@@ -624,6 +624,22 @@ it.layer(NodeServices.layer)("Ideas", (it) => {
           (idea) => idea.action.kind === "resume-thread",
         );
         assert.strictEqual(fromProject.length, 2);
+
+        // Snoozed ideas keep their place, so the third can't take it and leave three after they wake.
+        for (const idea of fromProject) {
+          yield* ideas.feedback({
+            ideaId: idea.id,
+            kind: "snoozed",
+            snoozedUntil: iso(NOW + HOUR),
+          });
+        }
+        yield* ideas.suggestMore;
+        yield* ideas.awaitIdle;
+        yield* TestClock.adjust(2 * HOUR);
+        const woken = (yield* ideas.list).ideas.filter(
+          (idea) => idea.action.kind === "resume-thread",
+        );
+        assert.strictEqual(woken.length, 2);
       }).pipe(Effect.scoped, Effect.provide(layer));
     }),
   );

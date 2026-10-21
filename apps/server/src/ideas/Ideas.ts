@@ -885,9 +885,10 @@ export const make = Effect.gen(function* () {
   });
 
   /** What each visible idea is about, so a new batch can't pile onto the same project or tool. */
+  // Snoozed ideas keep their place, so waking them can't push a subject past the limit.
   const loadVisibleSubjects = Effect.gen(function* () {
     const rows = yield* sql<IdeaRow>`
-      SELECT ${ideaColumns(sql)} FROM ideas WHERE status IN ('active', 'opened')
+      SELECT ${ideaColumns(sql)} FROM ideas WHERE status IN ('active', 'opened', 'snoozed')
     `;
     const subjects: string[] = [];
     for (const row of rows) {
