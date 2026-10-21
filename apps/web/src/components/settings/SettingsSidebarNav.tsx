@@ -11,6 +11,7 @@ import {
 } from "react";
 import {
   ArchiveIcon,
+  MessageCircleIcon,
   BookOpenIcon,
   BotIcon,
   createLucideIcon,
@@ -91,6 +92,7 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/source-control": GitBranchIcon,
   "/settings/storage": HardDriveIcon,
   "/settings/connections": Link2Icon,
+  "/settings/tritonai-bot": MessageCircleIcon,
   "/settings/archived": ArchiveIcon,
 };
 

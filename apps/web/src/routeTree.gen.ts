@@ -15,11 +15,13 @@ import { Route as TeamsRouteImport } from './routes/teams'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as PairRouteImport } from './routes/pair'
 import { Route as GuidedTourRouteImport } from './routes/guided-tour'
+import { Route as DotRouteImport } from './routes/dot'
 import { Route as ConnectAgentRouteImport } from './routes/connect-agent'
 import { Route as ConnectRouteImport } from './routes/connect'
 import { Route as ChatRouteImport } from './routes/_chat'
 import { Route as ChatIndexRouteImport } from './routes/_chat.index'
 import { Route as SettingsUsageRouteImport } from './routes/settings.usage'
+import { Route as SettingsTritonaiBotRouteImport } from './routes/settings.tritonai-bot'
 import { Route as SettingsStorageRouteImport } from './routes/settings.storage'
 import { Route as SettingsSourceControlRouteImport } from './routes/settings.source-control'
 import { Route as SettingsSnapShotRouteImport } from './routes/settings.snap-shot'
@@ -75,6 +77,11 @@ const GuidedTourRoute = GuidedTourRouteImport.update({
   path: '/guided-tour',
   getParentRoute: () => rootRouteImport,
 } as any)
+const DotRoute = DotRouteImport.update({
+  id: '/dot',
+  path: '/dot',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ConnectAgentRoute = ConnectAgentRouteImport.update({
   id: '/connect-agent',
   path: '/connect-agent',
@@ -97,6 +104,11 @@ const ChatIndexRoute = ChatIndexRouteImport.update({
 const SettingsUsageRoute = SettingsUsageRouteImport.update({
   id: '/usage',
   path: '/usage',
+  getParentRoute: () => SettingsRoute,
+} as any)
+const SettingsTritonaiBotRoute = SettingsTritonaiBotRouteImport.update({
+  id: '/tritonai-bot',
+  path: '/tritonai-bot',
   getParentRoute: () => SettingsRoute,
 } as any)
 const SettingsStorageRoute = SettingsStorageRouteImport.update({
@@ -227,6 +239,7 @@ export interface FileRoutesByFullPath {
   '/': typeof ChatIndexRoute
   '/connect': typeof ConnectRoute
   '/connect-agent': typeof ConnectAgentRoute
+  '/dot': typeof DotRoute
   '/guided-tour': typeof GuidedTourRoute
   '/pair': typeof PairRoute
   '/settings': typeof SettingsRouteWithChildren
@@ -254,6 +267,7 @@ export interface FileRoutesByFullPath {
   '/settings/snap-shot': typeof SettingsSnapShotRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
   '/settings/storage': typeof SettingsStorageRoute
+  '/settings/tritonai-bot': typeof SettingsTritonaiBotRoute
   '/settings/usage': typeof SettingsUsageRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
@@ -262,6 +276,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/connect': typeof ConnectRoute
   '/connect-agent': typeof ConnectAgentRoute
+  '/dot': typeof DotRoute
   '/guided-tour': typeof GuidedTourRoute
   '/pair': typeof PairRoute
   '/settings': typeof SettingsRouteWithChildren
@@ -289,6 +304,7 @@ export interface FileRoutesByTo {
   '/settings/snap-shot': typeof SettingsSnapShotRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
   '/settings/storage': typeof SettingsStorageRoute
+  '/settings/tritonai-bot': typeof SettingsTritonaiBotRoute
   '/settings/usage': typeof SettingsUsageRoute
   '/': typeof ChatIndexRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
@@ -300,6 +316,7 @@ export interface FileRoutesById {
   '/_chat': typeof ChatRouteWithChildren
   '/connect': typeof ConnectRoute
   '/connect-agent': typeof ConnectAgentRoute
+  '/dot': typeof DotRoute
   '/guided-tour': typeof GuidedTourRoute
   '/pair': typeof PairRoute
   '/settings': typeof SettingsRouteWithChildren
@@ -327,6 +344,7 @@ export interface FileRoutesById {
   '/settings/snap-shot': typeof SettingsSnapShotRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
   '/settings/storage': typeof SettingsStorageRoute
+  '/settings/tritonai-bot': typeof SettingsTritonaiBotRoute
   '/settings/usage': typeof SettingsUsageRoute
   '/_chat/': typeof ChatIndexRoute
   '/_chat/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
@@ -339,6 +357,7 @@ export interface FileRouteTypes {
     | '/'
     | '/connect'
     | '/connect-agent'
+    | '/dot'
     | '/guided-tour'
     | '/pair'
     | '/settings'
@@ -366,6 +385,7 @@ export interface FileRouteTypes {
     | '/settings/snap-shot'
     | '/settings/source-control'
     | '/settings/storage'
+    | '/settings/tritonai-bot'
     | '/settings/usage'
     | '/$environmentId/$threadId'
     | '/draft/$draftId'
@@ -374,6 +394,7 @@ export interface FileRouteTypes {
   to:
     | '/connect'
     | '/connect-agent'
+    | '/dot'
     | '/guided-tour'
     | '/pair'
     | '/settings'
@@ -401,6 +422,7 @@ export interface FileRouteTypes {
     | '/settings/snap-shot'
     | '/settings/source-control'
     | '/settings/storage'
+    | '/settings/tritonai-bot'
     | '/settings/usage'
     | '/'
     | '/$environmentId/$threadId'
@@ -411,6 +433,7 @@ export interface FileRouteTypes {
     | '/_chat'
     | '/connect'
     | '/connect-agent'
+    | '/dot'
     | '/guided-tour'
     | '/pair'
     | '/settings'
@@ -438,6 +461,7 @@ export interface FileRouteTypes {
     | '/settings/snap-shot'
     | '/settings/source-control'
     | '/settings/storage'
+    | '/settings/tritonai-bot'
     | '/settings/usage'
     | '/_chat/'
     | '/_chat/$environmentId/$threadId'
@@ -449,6 +473,7 @@ export interface RootRouteChildren {
   ChatRoute: typeof ChatRouteWithChildren
   ConnectRoute: typeof ConnectRoute
   ConnectAgentRoute: typeof ConnectAgentRoute
+  DotRoute: typeof DotRoute
   GuidedTourRoute: typeof GuidedTourRoute
   PairRoute: typeof PairRoute
   SettingsRoute: typeof SettingsRouteWithChildren
@@ -504,6 +529,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof GuidedTourRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/dot': {
+      id: '/dot'
+      path: '/dot'
+      fullPath: '/dot'
+      preLoaderRoute: typeof DotRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/connect-agent': {
       id: '/connect-agent'
       path: '/connect-agent'
@@ -537,6 +569,13 @@ declare module '@tanstack/react-router' {
       path: '/usage'
       fullPath: '/settings/usage'
       preLoaderRoute: typeof SettingsUsageRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/tritonai-bot': {
+      id: '/settings/tritonai-bot'
+      path: '/tritonai-bot'
+      fullPath: '/settings/tritonai-bot'
+      preLoaderRoute: typeof SettingsTritonaiBotRouteImport
       parentRoute: typeof SettingsRoute
     }
     '/settings/storage': {
@@ -747,6 +786,7 @@ interface SettingsRouteChildren {
   SettingsSnapShotRoute: typeof SettingsSnapShotRoute
   SettingsSourceControlRoute: typeof SettingsSourceControlRoute
   SettingsStorageRoute: typeof SettingsStorageRoute
+  SettingsTritonaiBotRoute: typeof SettingsTritonaiBotRoute
   SettingsUsageRoute: typeof SettingsUsageRoute
 }
 
@@ -767,6 +807,7 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsSnapShotRoute: SettingsSnapShotRoute,
   SettingsSourceControlRoute: SettingsSourceControlRoute,
   SettingsStorageRoute: SettingsStorageRoute,
+  SettingsTritonaiBotRoute: SettingsTritonaiBotRoute,
   SettingsUsageRoute: SettingsUsageRoute,
 }
 
@@ -778,6 +819,7 @@ const rootRouteChildren: RootRouteChildren = {
   ChatRoute: ChatRouteWithChildren,
   ConnectRoute: ConnectRoute,
   ConnectAgentRoute: ConnectAgentRoute,
+  DotRoute: DotRoute,
   GuidedTourRoute: GuidedTourRoute,
   PairRoute: PairRoute,
   SettingsRoute: SettingsRouteWithChildren,

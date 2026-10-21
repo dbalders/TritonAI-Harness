@@ -124,10 +124,10 @@ test("workflow keeps the key private while packaging usable app permissions", po
     (step) => step.name === "Sign, notarize, and verify packaged app",
   ).run;
   const { root } = fixture(t);
-  const finalizer = path.join(root, ".release-input/installer/scripts/local-release-mac.cjs");
+  const finalizer = path.join(root, ".github/scripts/finalize-macos-release.cjs");
   fs.mkdirSync(path.dirname(finalizer), { recursive: true });
   fs.mkdirSync(path.join(root, "scripts"));
-  // Replace the external signing tool, then measure permissions inherited from
+  // Replace the signing tool, then measure permissions inherited from
   // the real workflow shell. This never loads a signing identity or real key.
   fs.writeFileSync(
     finalizer,

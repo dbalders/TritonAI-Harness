@@ -189,6 +189,7 @@ import * as DailyMemory from "./memory/DailyMemory.ts";
 import * as ProjectOverview from "./project/ProjectOverview.ts";
 import * as Ideas from "./ideas/Ideas.ts";
 import * as MemorySync from "./memory/sync/MemorySync.ts";
+import * as BotTaskComputer from "./bot/BotTaskComputer.ts";
 import * as MicrosoftSignIn from "./memory/sync/microsoftSignIn.ts";
 import * as RuntimeLayer from "./orchestration-v2/runtimeLayer.ts";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
@@ -724,6 +725,8 @@ const layerRuntimeDependencies = TritonAiCommonsAction.runtimeLayer.pipe(
   Layer.provideMerge(MemorySync.teamMirrorHostLayer),
   Layer.provideMerge(DailyMemory.teamDailyHostLayer),
   Layer.provideMerge(MemorySync.layer.pipe(Layer.provide(MicrosoftSignIn.layer))),
+  // Runs approved TritonAI Bot tasks as Harness threads when the owner allows this computer.
+  Layer.provideMerge(BotTaskComputer.layer),
   // Ideas read threads, memory notes, and plugins, and call text generation.
   Layer.provideMerge(ProjectOverview.layer),
   Layer.provideMerge(Ideas.layer),
