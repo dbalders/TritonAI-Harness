@@ -50,6 +50,10 @@ It brings together requests waiting on you, work in progress, recent agent updat
 and the project's background memory notes. Follow a thread to see its full context;
 an agent finishing a turn does not mean its work was reviewed or released.
 
+The **In progress** list keeps a fixed order, with newer threads first. Progress
+reports and tool activity update each row without moving it. **Latest updates**
+stays ordered by recent activity.
+
 The overview also suggests **What’s next** from this project's conversations and
 keeps a short project description alongside its history. Opening the project checks
 for new context automatically. Saved suggestions stay visible while an update runs;
