@@ -819,15 +819,17 @@ export const make = Effect.gen(function* () {
     Effect.flatMap((raw) => decodeTeamMirrorState(raw)),
     Effect.map((state): Record<string, TeamMirrorEntry> =>
       Object.fromEntries(
-        Object.entries(state.teams).map(([folder, entry]) => [
-          folder,
-          {
-            teamId: entry.teamId,
-            synced: { ...entry.synced },
-            skippedReads: { ...entry.skippedReads },
-            pendingDownloads: { ...entry.pendingDownloads },
-          },
-        ]),
+        Object.entries(state.teams)
+          .filter(([folder]) => TEAM_MIRROR_FOLDER.test(folder))
+          .map(([folder, entry]) => [
+            folder,
+            {
+              teamId: entry.teamId,
+              synced: { ...entry.synced },
+              skippedReads: { ...entry.skippedReads },
+              pendingDownloads: { ...entry.pendingDownloads },
+            },
+          ]),
       ),
     ),
     Effect.orElseSucceed((): Record<string, TeamMirrorEntry> => ({})),
@@ -841,20 +843,22 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-  const removeTeamCopy = (folder: string) =>
-    fs.remove(path.join(teamsDirectory, folder), { recursive: true }).pipe(
-      Effect.catchIf(isNotFound, () => Effect.void),
-      Effect.mapError(
-        () =>
-          new MemorySyncFailure({
-            message: `Could not remove the local copy in teams/${folder}.`,
-          }),
-      ),
-    );
+  const removeTeamCopy = (folder: string, teams: Record<string, TeamMirrorEntry>) =>
+    teams[folder]
+      ? fs.remove(path.join(teamsDirectory, folder), { recursive: true }).pipe(
+          Effect.catchIf(isNotFound, () => Effect.void),
+          Effect.mapError(
+            () =>
+              new MemorySyncFailure({
+                message: `Could not remove the local copy in teams/${folder}.`,
+              }),
+          ),
+        )
+      : Effect.void;
 
   /**
-   * Leaves only the active teams' folders in `teams/`. Harness manages that
-   * folder, so anything else in it goes too.
+   * Removes inactive copies only from the ownership record. Other content in
+   * the vault's teams/ folder was never reserved for Harness.
    */
   const pruneTeamCopies = (
     teams: Record<string, TeamMirrorEntry>,
@@ -862,17 +866,10 @@ export const make = Effect.gen(function* () {
   ) =>
     Effect.gen(function* () {
       const keep = new Map(active.map((team) => [team.folder, team.teamId]));
-      const entries = yield* fs.readDirectory(teamsDirectory).pipe(
-        Effect.catchIf(isNotFound, () => Effect.succeed<ReadonlyArray<string>>([])),
-        Effect.mapError(
-          () => new MemorySyncFailure({ message: "Could not read the teams folder." }),
-        ),
-      );
-      for (const name of entries) if (!keep.has(name)) yield* removeTeamCopy(name);
       for (const [folder, entry] of Object.entries(teams)) {
         // A folder handed to another team starts over.
         if (keep.get(folder) !== entry.teamId) {
-          if (keep.has(folder)) yield* removeTeamCopy(folder);
+          yield* removeTeamCopy(folder, teams);
           delete teams[folder];
         }
       }
@@ -896,8 +893,15 @@ export const make = Effect.gen(function* () {
     team: TeamMirrorTeam,
     teams: Record<string, TeamMirrorEntry>,
   ) {
+    // A missing or unreadable journal cannot make existing user content ours.
+    if (!teams[team.folder] && (yield* fs.exists(path.join(teamsDirectory, team.folder)))) {
+      return yield* source.report(team.teamId, {
+        kind: "failed",
+        message: `A folder already exists at teams/${team.folder}, and Harness can't confirm it is a team copy. Move it somewhere safe, then choose Check again.`,
+      });
+    }
     const detach = Effect.gen(function* () {
-      yield* removeTeamCopy(team.folder);
+      yield* removeTeamCopy(team.folder, teams);
       delete teams[team.folder];
     });
     const listing = yield* source.list(team.teamId);

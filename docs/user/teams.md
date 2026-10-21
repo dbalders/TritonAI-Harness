@@ -224,6 +224,11 @@ when. Team skills are never copied; they reach an agent only after you turn one
 on for a project in **Settings → Skills**. Harness replaces any change made
 inside the copy.
 
+Existing folders in `teams/` that Harness cannot confirm are its copies are left
+alone. If a new copy would use one of those folders, Harness shows an error
+instead of replacing its contents. Move the existing folder somewhere safe,
+then choose **Check again**.
+
 The copy is updated about every five minutes. Recent months of daily memory
 are checked each time, and an older day that a member's Harness rewrote, for
 example after they chose **Don't share this thread**, is updated on the next

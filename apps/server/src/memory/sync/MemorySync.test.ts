@@ -1433,9 +1433,10 @@ it.layer(NodeServices.layer)("MemorySync", (it) => {
         const remote = "Memory/a/d/interrupted.md";
         const relative = `${FOLDER}/${remote}`;
         const unmanaged = `${FOLDER}/Memory/a/d/local.md`;
-        yield* mac.write(unmanaged, "Local note never copied by Harness");
         const sync = yield* MemorySync.MemorySync.pipe(Effect.provide(mac.layer));
         yield* sync.teams.attach(team.source);
+        yield* sync.teams.sync;
+        yield* mac.write(unmanaged, "Local note never copied by Harness");
         team.files.set(remote, { eTag: "e1", text: "Team content later withdrawn" });
         // The file lands, but persisting the completed pass fails, as at a crash boundary.
         mac.hooks.afterRename = (_from, to) => {
@@ -1469,9 +1470,10 @@ it.layer(NodeServices.layer)("MemorySync", (it) => {
         const team = fakeTeamSource();
         const remote = "Memory/a/d/interrupted.md";
         const relative = `${FOLDER}/${remote}`;
-        yield* mac.write(relative, localText);
         const sync = yield* MemorySync.MemorySync.pipe(Effect.provide(mac.layer));
         yield* sync.teams.attach(team.source);
+        yield* sync.teams.sync;
+        yield* mac.write(relative, localText);
         team.files.set(remote, { eTag: "e1", text: "Team text" });
         team.beforeRead = () => mac.denied.set(mac.path.join(mac.vault, FOLDER), "writes");
         yield* sync.teams.sync;
@@ -1529,15 +1531,15 @@ it.layer(NodeServices.layer)("MemorySync", (it) => {
       }),
   );
 
-  it.effect("prunes copies of teams no longer kept, without reaching the team", () =>
+  it.effect("prunes only recorded team copies, without reaching the team", () =>
     Effect.gen(function* () {
       const mac = yield* setup(new FakeOneDrive(), MAC);
       const team = fakeTeamSource();
       const sync = yield* MemorySync.MemorySync.pipe(Effect.provide(mac.layer));
       // Before the Teams side attaches, nothing in the teams folder is touched.
-      yield* mac.write(`${FOLDER}/Memory/a/d/1.md`, "Earlier copy");
+      yield* mac.write("teams/personal/note.md", "Personal team notes");
       yield* sync.teams.prune;
-      assert.strictEqual(yield* mac.read(`${FOLDER}/Memory/a/d/1.md`), "Earlier copy");
+      assert.strictEqual(yield* mac.read("teams/personal/note.md"), "Personal team notes");
 
       yield* sync.teams.attach(team.source);
       team.files.set("Memory/a/d/1.md", { eTag: "e1", text: "First" });
@@ -1547,9 +1549,73 @@ it.layer(NodeServices.layer)("MemorySync", (it) => {
       const reads = team.reads.length;
       yield* sync.teams.prune;
       assert.isFalse(yield* mac.fs.exists(mac.path.join(mac.vault, FOLDER)));
-      assert.isFalse(yield* mac.fs.exists(mac.path.join(mac.vault, "teams/stray")));
+      assert.strictEqual(yield* mac.read("teams/stray/note.md"), "Not a team copy");
+      assert.strictEqual(yield* mac.read("teams/personal/note.md"), "Personal team notes");
       assert.strictEqual(team.reads.length, reads);
       assert.strictEqual(team.lists, 1);
+    }),
+  );
+
+  it.effect.each(["missing", "invalid", "unreadable"])(
+    "preserves pre-existing teams content with a %s ownership record and no active teams",
+    (record) =>
+      Effect.gen(function* () {
+        const mac = yield* setup(new FakeOneDrive(), MAC);
+        const team = fakeTeamSource();
+        team.kept = false;
+        yield* mac.write("teams/personal/note.md", "My own notes");
+        yield* mac.write("teams/roster.md", "My own roster");
+        if (record !== "missing") yield* mac.write(".sync/teams.json", "unreadable as JSON");
+        if (record === "unreadable")
+          mac.denied.set(mac.path.join(mac.vault, ".sync/teams.json"), "everything");
+        const sync = yield* MemorySync.MemorySync.pipe(Effect.provide(mac.layer));
+        yield* sync.teams.attach(team.source);
+        yield* sync.teams.prune;
+        yield* sync.teams.sync;
+        assert.strictEqual(yield* mac.read("teams/personal/note.md"), "My own notes");
+        assert.strictEqual(yield* mac.read("teams/roster.md"), "My own roster");
+        assert.strictEqual(team.lists, 0);
+      }),
+  );
+
+  it.effect.each(["files", "detached"] as const)(
+    "does not adopt or remove an unrecorded folder at the next copy's path (%s)",
+    (kind) =>
+      Effect.gen(function* () {
+        const mac = yield* setup(new FakeOneDrive(), MAC);
+        const team = fakeTeamSource();
+        const file = "Memory/a/d/personal.md";
+        yield* mac.write(`${FOLDER}/${file}`, "Pre-existing personal note");
+        team.files.set(file, { eTag: "e1", text: "Team copy" });
+        if (kind === "detached") team.listing = { kind: "detached" };
+        const sync = yield* MemorySync.MemorySync.pipe(Effect.provide(mac.layer));
+        yield* sync.teams.attach(team.source);
+        yield* sync.teams.sync;
+        assert.strictEqual(yield* mac.read(`${FOLDER}/${file}`), "Pre-existing personal note");
+        assert.deepInclude(team.reports.at(-1), { kind: "failed" });
+        team.kept = false;
+        yield* sync.teams.prune;
+        assert.strictEqual(yield* mac.read(`${FOLDER}/${file}`), "Pre-existing personal note");
+      }),
+  );
+
+  it.effect("ignores ownership entries outside the team-copy namespace", () =>
+    Effect.gen(function* () {
+      const mac = yield* setup(new FakeOneDrive(), MAC);
+      const team = fakeTeamSource();
+      team.kept = false;
+      yield* mac.write("personal/note.md", "Outside team copies");
+      yield* mac.write(
+        ".sync/teams.json",
+        JSON.stringify({
+          version: 1,
+          teams: { "../personal": { teamId: "old", synced: {} } },
+        }),
+      );
+      const sync = yield* MemorySync.MemorySync.pipe(Effect.provide(mac.layer));
+      yield* sync.teams.attach(team.source);
+      yield* sync.teams.prune;
+      assert.strictEqual(yield* mac.read("personal/note.md"), "Outside team copies");
     }),
   );
 });
