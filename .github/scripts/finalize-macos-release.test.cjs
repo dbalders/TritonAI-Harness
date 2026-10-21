@@ -824,9 +824,8 @@ function packagingMocks(f, status = "Accepted") {
         "zip-blockmap",
       );
     }
-    if (program.endsWith("ditto") && args[0] === "-c") {
-      fs.writeFileSync(args.at(-1), "app-submission");
-    } else if (program.endsWith("ditto")) {
+    if (program.endsWith("ditto")) {
+      assert.notEqual(args[0], "-c", "the signed app must not be archived again");
       const target =
         args[0] === "-x" ? path.join(args.at(-1), `${f.productName}.app`) : args.at(-1);
       fs.cpSync(args[0] === "-x" ? signedApp : args.at(-2), target, { recursive: true });
@@ -941,7 +940,7 @@ test("full finalization binds metadata after stapling, verifies payload and boot
     (call) =>
       call.program === "xcrun" &&
       call.args[0] === "notarytool" &&
-      call.args[2].endsWith("notarize-app.zip"),
+      call.args[2] === path.join(f.stageApp, "dist", `TritonAI-Harness-${f.version}-arm64.zip`),
   );
   const appStaple = mock.calls.findIndex(
     (call) =>

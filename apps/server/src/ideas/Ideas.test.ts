@@ -23,13 +23,17 @@ import * as ServerConfig from "../config.ts";
 import { ServerEnvironment } from "../environment/ServerEnvironment.ts";
 import { layerMemory as SqlitePersistenceMemory } from "../persistence/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { AnalyticsService } from "../telemetry/AnalyticsService.ts";
 import {
   type GeneratedIdea,
   type IdeasGenerationInput,
   TextGeneration,
 } from "../textGeneration/TextGeneration.ts";
 import * as Ideas from "./Ideas.ts";
-import { STARTER_IDEAS } from "./starterIdeas.ts";
+import { availableStarters } from "./starterIdeas.ts";
+
+// Tests run without plugins, so only the general starter ideas are offered.
+const GENERAL_STARTERS = availableStarters(new Set());
 
 const NOW = Date.parse("2026-10-13T16:00:00.000Z");
 const HOUR = 60 * 60_000;
@@ -86,7 +90,12 @@ const makeHarness = (
     const fs = yield* FileSystem.FileSystem;
     const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-ideas-test-" });
     const calls: IdeasGenerationInput[] = [];
+    const events: Array<{ readonly event: string; readonly properties: unknown }> = [];
     const layer = Layer.mergeAll(
+      Layer.mock(AnalyticsService)({
+        record: (event, properties) => Effect.sync(() => events.push({ event, properties })),
+        flush: Effect.void,
+      }),
       ServerSettings.layerTest({ memoryEnabled: false }),
       Layer.mock(ServerEnvironment)({
         getDescriptor: Effect.succeed({
@@ -106,7 +115,7 @@ const makeHarness = (
       Layer.provideMerge(SqlitePersistenceMemory),
       Layer.provideMerge(ServerConfig.layerTest(baseDir, baseDir)),
     );
-    return { calls, layer };
+    return { calls, events, layer };
   });
 
 const titles = (snapshot: IdeasSnapshot) => snapshot.ideas.map((idea) => idea.title);
@@ -170,6 +179,47 @@ it.layer(NodeServices.layer)("Ideas", (it) => {
     }),
   );
 
+  it.effect("reports visits, presses, sends, and runs as anonymous counts", () =>
+    Effect.gen(function* () {
+      const { events, layer } = yield* makeHarness(() => Effect.succeed([threadIdea()]));
+      yield* TestClock.setTime(NOW);
+      yield* Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* seedWork;
+        const ideas = yield* Ideas.make;
+        yield* ideas.markViewed;
+        yield* ideas.awaitIdle;
+        // Marking the page viewed again as ideas arrive is the same visit.
+        yield* ideas.markViewed;
+        const [idea] = (yield* ideas.list).ideas.filter((entry) => entry.section === "continue");
+        yield* ideas.feedback({ ideaId: idea!.id, kind: "opened" });
+        yield* sql`
+          INSERT INTO projection_thread_messages (message_id, thread_id, role, text, is_streaming, created_at, updated_at)
+          VALUES ('m-send', 'thread-1', 'user', 'Please match the rest.', 0, ${iso(NOW + 1)}, ${iso(NOW + 1)})
+        `;
+        yield* TestClock.adjust(HOUR);
+        yield* ideas.list;
+        assert.deepStrictEqual(events, [
+          {
+            event: "ideas.viewed",
+            properties: { visibleCount: 6, personalCount: 0, toolCount: 0, starterCount: 6 },
+          },
+          {
+            event: "ideas.generated",
+            properties: {
+              requested: false,
+              outcome: "generated",
+              generatedCount: 1,
+              starterCount: 0,
+            },
+          },
+          { event: "ideas.feedback", properties: { kind: "opened", section: "continue" } },
+          { event: "ideas.sent", properties: { section: "continue" } },
+        ]);
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    }),
+  );
+
   it.effect("shows starter ideas on a first visit without calling the model", () =>
     Effect.gen(function* () {
       const { calls, layer } = yield* makeHarness(() => Effect.succeed([]));
@@ -179,7 +229,7 @@ it.layer(NodeServices.layer)("Ideas", (it) => {
         const snapshot = yield* ideas.list;
         assert.deepStrictEqual(
           titles(snapshot),
-          STARTER_IDEAS.slice(0, 6).map((starter) => starter.title),
+          GENERAL_STARTERS.slice(0, 6).map((starter) => starter.title),
         );
         assert.isTrue(snapshot.ideas.every((idea) => idea.section === "starter"));
         assert.strictEqual(snapshot.unseenCount, 6);
@@ -306,38 +356,28 @@ it.layer(NodeServices.layer)("Ideas", (it) => {
 
   it.effect("brings dismissed ideas back after two weeks but never rejected ones", () =>
     Effect.gen(function* () {
-      const { layer } = yield* makeHarness(() =>
-        Effect.succeed([
-          threadIdea({ ref: "starter:brainstorm", title: "Brainstorm a team offsite with me" }),
-          threadIdea({ ref: "starter:faq", title: "Turn your help desk questions into an FAQ" }),
-        ]),
-      );
+      const { layer } = yield* makeHarness(() => Effect.succeed([]));
       yield* TestClock.setTime(NOW);
       yield* Effect.gen(function* () {
         const ideas = yield* Ideas.make;
-        yield* ideas.suggestMore;
-        yield* ideas.awaitIdle;
-        const first = yield* ideas.list;
-        const brainstorm = first.ideas.find((idea) => idea.title.startsWith("Brainstorm"));
-        const faq = first.ideas.find((idea) => idea.title.startsWith("Turn your help desk"));
-        assert.isDefined(brainstorm);
-        assert.isDefined(faq);
-        yield* ideas.feedback({ ideaId: brainstorm!.id, kind: "dismissed" });
-        yield* ideas.feedback({ ideaId: faq!.id, kind: "rejected" });
+        const [dismissed, rejected] = (yield* ideas.list).ideas;
+        yield* ideas.feedback({ ideaId: dismissed!.id, kind: "dismissed" });
+        yield* ideas.feedback({ ideaId: rejected!.id, kind: "rejected" });
 
         yield* TestClock.adjust(DAY);
         yield* ideas.suggestMore;
         yield* ideas.awaitIdle;
         const soon = titles(yield* ideas.list);
-        assert.notInclude(soon, "Brainstorm a team offsite with me");
-        assert.notInclude(soon, "Turn your help desk questions into an FAQ");
+        assert.notInclude(soon, dismissed!.title);
+        assert.notInclude(soon, rejected!.title);
 
+        // Once the unshown starters run out, those whose cooldown ended come back.
         yield* TestClock.adjust(15 * DAY);
         yield* ideas.suggestMore;
         yield* ideas.awaitIdle;
         const later = titles(yield* ideas.list);
-        assert.include(later, "Brainstorm a team offsite with me");
-        assert.notInclude(later, "Turn your help desk questions into an FAQ");
+        assert.include(later, dismissed!.title);
+        assert.notInclude(later, rejected!.title);
       }).pipe(Effect.scoped, Effect.provide(layer));
     }),
   );
@@ -351,7 +391,7 @@ it.layer(NodeServices.layer)("Ideas", (it) => {
         const { layer } = yield* makeHarness(() =>
           Effect.succeed([
             threadIdea({ title: rejectedTitle, topic: "map onboarding" }),
-            threadIdea({ ref: "starter:faq", title: sentTitle, topic: "describe purchasing" }),
+            threadIdea({ title: sentTitle, topic: "describe purchasing" }),
           ]),
         );
         yield* TestClock.setTime(NOW);
@@ -433,21 +473,19 @@ it.layer(NodeServices.layer)("Ideas", (it) => {
     }),
   );
 
-  it.effect("counts a starter idea as used after its placeholders are filled in", () =>
+  it.effect("counts a starter idea as used when its prompt is sent", () =>
     Effect.gen(function* () {
       const { layer } = yield* makeHarness(() => Effect.succeed([]));
       yield* TestClock.setTime(NOW);
       yield* Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
         const ideas = yield* Ideas.make;
-        const idea = (yield* ideas.list).ideas.find(
-          (entry) => entry.title === "Ask me questions about a long document",
-        );
+        const starter = GENERAL_STARTERS[1]!;
+        const idea = (yield* ideas.list).ideas.find((entry) => entry.title === starter.title);
         assert.isDefined(idea);
         yield* ideas.feedback({ ideaId: idea!.id, kind: "opened" });
         yield* TestClock.adjust(HOUR);
-        const sent =
-          "Read the parking policy PDF and answer my questions about it. Quote the exact passage you relied on for each answer, and tell me when the document doesn't say.";
+        const sent = `${starter.prompt} Keep it short.`;
         yield* sql`
           INSERT INTO projection_thread_messages (message_id, thread_id, role, text, is_streaming, created_at, updated_at)
           VALUES ('m-sent', 'thread-x', 'user', ${sent}, 0, ${iso(NOW + HOUR)}, ${iso(NOW + HOUR)})
@@ -507,35 +545,173 @@ it.layer(NodeServices.layer)("Ideas", (it) => {
     }),
   );
 
-  it.effect("never counts an all-placeholder prompt as used by an unrelated message", () =>
+  it.effect(
+    "retires cards from before the update that leave a blank or are no longer offered",
+    () =>
+      Effect.gen(function* () {
+        const { layer } = yield* makeHarness(() => Effect.succeed([]));
+        yield* TestClock.setTime(NOW);
+        yield* Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          const rows = [
+            [
+              "old-template",
+              "starter:meeting-follow-up",
+              "starter",
+              "Turn these notes into an email: [paste your notes here]",
+            ],
+            [
+              "old-adapted",
+              "starter:decision-memo",
+              "starter",
+              "Write a one-page memo on the course filter.",
+            ],
+            [
+              "blank-tool",
+              "plugin:microsoft-365#draft-reply",
+              "tools",
+              "Search my mail for [topic or sender] and draft a reply.",
+            ],
+            [
+              "complete-tool",
+              "plugin:microsoft-365#digest",
+              "tools",
+              "Summarize my last three days of email.",
+            ],
+          ] as const;
+          for (const [id, key, section, prompt] of rows) {
+            const content = yield* encodeIdeaContent({
+              icon: "💡",
+              title: `Idea ${id}`,
+              body: "An earlier suggestion.",
+              sources: [],
+              action: { kind: "new-thread", projectId: null, prompt },
+            });
+            yield* sql`
+            INSERT INTO ideas (idea_id, idea_key, section, content_json, status, created_at, updated_at)
+            VALUES (${id}, ${key}, ${section}, ${content}, 'active', ${iso(NOW)}, ${iso(NOW)})
+          `;
+          }
+          const ideas = yield* Ideas.make;
+          // The retired starters are replaced once with ready-made ones.
+          const upgraded = yield* ideas.list;
+          assert.deepStrictEqual(
+            titles(upgraded).toSorted(),
+            [
+              "Idea complete-tool",
+              ...GENERAL_STARTERS.slice(0, 5).map((starter) => starter.title),
+            ].toSorted(),
+          );
+          for (const idea of upgraded.ideas.filter((entry) => entry.section === "starter")) {
+            yield* ideas.feedback({ ideaId: idea.id, kind: "dismissed" });
+          }
+          assert.deepStrictEqual(titles(yield* ideas.list), ["Idea complete-tool"]);
+        }).pipe(Effect.scoped, Effect.provide(layer));
+      }),
+  );
+
+  it.effect("lets ideas about tools go stale like ideas about the user's own work", () =>
     Effect.gen(function* () {
-      const { layer } = yield* makeHarness(() =>
-        Effect.succeed([
-          threadIdea({
-            ref: "starter:proofread",
-            title: "Proofread whatever you paste",
-            action: "new-thread",
-            prompt: "[paste your text]",
-          }),
-        ]),
-      );
+      const { layer } = yield* makeHarness(() => Effect.succeed([]));
       yield* TestClock.setTime(NOW);
       yield* Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
+        const content = yield* encodeIdeaContent({
+          icon: "🎫",
+          title: "I can report the Jira access problem",
+          body: "Issue searches were denied.",
+          sources: [{ kind: "plugin", label: "Plugin · UC San Diego Jira" }],
+          action: { kind: "new-thread", projectId: null, prompt: "Report the Jira search error." },
+        });
+        yield* sql`
+          INSERT INTO ideas (idea_id, idea_key, section, content_json, status, created_at, updated_at)
+          VALUES ('jira', 'plugin:jira-data-center#report-access', 'tools', ${content}, 'active', ${iso(NOW)}, ${iso(NOW)})
+        `;
+        const ideas = yield* Ideas.make;
+        assert.include(titles(yield* ideas.list), "I can report the Jira access problem");
+        yield* TestClock.adjust(3 * DAY + HOUR);
+        const later = yield* ideas.list;
+        assert.notInclude(titles(later), "I can report the Jira access problem");
+        assert.isTrue(later.ideas.every((idea) => idea.section === "starter"));
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    }),
+  );
+
+  it.effect("keeps one project to two ideas on the page", () =>
+    Effect.gen(function* () {
+      const { layer } = yield* makeHarness(() =>
+        Effect.succeed(
+          (
+            [
+              ["thread-1", "I can finish the travel reconciliation"],
+              ["thread-2", "I can chart the parking budget"],
+              ["thread-3", "I can summarize the vendor contracts"],
+            ] as const
+          ).map(([id, title]) =>
+            threadIdea({ ref: `thread:${id}`, sources: [`thread:${id}`], topic: title, title }),
+          ),
+        ),
+      );
+      yield* TestClock.setTime(NOW);
+      yield* Effect.gen(function* () {
+        yield* seedWork;
+        for (const id of ["thread-2", "thread-3"]) {
+          yield* seedV2Activity({
+            threadId: id,
+            projectId: "project-1",
+            title: `Budget task ${id}`,
+            at: iso(NOW - DAY),
+            messages: [{ id: `${id}-m`, role: "user", text: `Work on ${id}` }],
+          });
+        }
         const ideas = yield* Ideas.make;
         yield* ideas.suggestMore;
         yield* ideas.awaitIdle;
-        const idea = (yield* ideas.list).ideas.find(
-          (entry) => entry.title === "Proofread whatever you paste",
+        const fromProject = (yield* ideas.list).ideas.filter(
+          (idea) => idea.action.kind === "resume-thread",
         );
-        assert.isDefined(idea);
-        yield* ideas.feedback({ ideaId: idea!.id, kind: "opened" });
-        yield* TestClock.adjust(HOUR);
-        yield* sql`
-          INSERT INTO projection_thread_messages (message_id, thread_id, role, text, is_streaming, created_at, updated_at)
-          VALUES ('m-other', 'thread-y', 'user', 'Unrelated question.', 0, ${iso(NOW + HOUR)}, ${iso(NOW + HOUR)})
-        `;
-        assert.isDefined((yield* ideas.list).ideas.find((entry) => entry.id === idea!.id));
+        assert.strictEqual(fromProject.length, 2);
+
+        // Snoozed ideas keep their place, so the third can't take it and leave three after they wake.
+        for (const idea of fromProject) {
+          yield* ideas.feedback({
+            ideaId: idea.id,
+            kind: "snoozed",
+            snoozedUntil: iso(NOW + HOUR),
+          });
+        }
+        yield* ideas.suggestMore;
+        yield* ideas.awaitIdle;
+        yield* TestClock.adjust(2 * HOUR);
+        const woken = (yield* ideas.list).ideas.filter(
+          (idea) => idea.action.kind === "resume-thread",
+        );
+        assert.strictEqual(woken.length, 2);
+      }).pipe(Effect.scoped, Effect.provide(layer));
+    }),
+  );
+
+  it.effect("stops background runs after two days away and checks again on the next visit", () =>
+    Effect.gen(function* () {
+      const { calls, layer } = yield* makeHarness(() => Effect.succeed([threadIdea()]));
+      yield* TestClock.setTime(NOW);
+      yield* Effect.gen(function* () {
+        yield* seedWork;
+        const ideas = yield* Ideas.make;
+        yield* ideas.markViewed;
+        yield* ideas.awaitIdle;
+        assert.strictEqual(calls.length, 1);
+        yield* TestClock.adjust(2 * DAY + HOUR);
+        yield* ideas.refresh;
+        assert.strictEqual(calls.length, 1);
+        const viewed = yield* ideas.markViewed;
+        assert.strictEqual(viewed.state, "generating");
+        yield* ideas.awaitIdle;
+        assert.strictEqual(calls.length, 2);
+        // A fresh page doesn't start another run on every visit.
+        yield* ideas.markViewed;
+        yield* ideas.awaitIdle;
+        assert.strictEqual(calls.length, 2);
       }).pipe(Effect.scoped, Effect.provide(layer));
     }),
   );
@@ -586,21 +762,13 @@ it.layer(NodeServices.layer)("Ideas", (it) => {
 
   it.effect("never brings back an idea whose draft was sent after its card was dismissed", () =>
     Effect.gen(function* () {
-      const { layer } = yield* makeHarness(() =>
-        Effect.succeed([
-          threadIdea({
-            ref: "starter:meeting-follow-up",
-            title: "Draft the follow-up email from your meeting notes",
-            action: "new-thread",
-          }),
-        ]),
-      );
+      const { layer } = yield* makeHarness(() => Effect.succeed([]));
       yield* TestClock.setTime(NOW);
       yield* Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
         const ideas = yield* Ideas.make;
         const idea = (yield* ideas.list).ideas.find(
-          (entry) => entry.title === "I can turn meeting notes into a follow-up email",
+          (entry) => entry.title === GENERAL_STARTERS[0]!.title,
         );
         assert.isDefined(idea);
         yield* ideas.feedback({
@@ -615,12 +783,12 @@ it.layer(NodeServices.layer)("Ideas", (it) => {
           VALUES ('m-late', 'draft-thread-3', 'user', 'Here are my notes.', 0, ${iso(NOW + HOUR)}, ${iso(NOW + HOUR)})
         `;
         yield* TestClock.adjust(15 * DAY);
-        yield* ideas.suggestMore;
-        yield* ideas.awaitIdle;
-        assert.notInclude(
-          titles(yield* ideas.list),
-          "Draft the follow-up email from your meeting notes",
-        );
+        // Past every unshown starter, so only the recorded send can keep this one away.
+        for (let round = 0; round < 3; round++) {
+          yield* ideas.suggestMore;
+          yield* ideas.awaitIdle;
+        }
+        assert.notInclude(titles(yield* ideas.list), GENERAL_STARTERS[0]!.title);
       }).pipe(Effect.scoped, Effect.provide(layer));
     }),
   );
@@ -715,21 +883,13 @@ it.layer(NodeServices.layer)("Ideas", (it) => {
 
   it.effect("keeps Not relevant permanent when a background run retired the card first", () =>
     Effect.gen(function* () {
-      const { layer } = yield* makeHarness(() =>
-        Effect.succeed([
-          threadIdea({
-            ref: "starter:meeting-follow-up",
-            title: "Draft the follow-up email from your meeting notes",
-            action: "new-thread",
-          }),
-        ]),
-      );
+      const { layer } = yield* makeHarness(() => Effect.succeed([]));
       yield* TestClock.setTime(NOW);
       yield* Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
         const ideas = yield* Ideas.make;
         const idea = (yield* ideas.list).ideas.find(
-          (entry) => entry.title === "I can turn meeting notes into a follow-up email",
+          (entry) => entry.title === GENERAL_STARTERS[0]!.title,
         );
         assert.isDefined(idea);
         // A background batch retires the card while it is still on the user's screen.
@@ -739,12 +899,11 @@ it.layer(NodeServices.layer)("Ideas", (it) => {
         `;
         yield* ideas.feedback({ ideaId: idea!.id, kind: "rejected" });
         yield* TestClock.adjust(20 * DAY);
-        yield* ideas.suggestMore;
-        yield* ideas.awaitIdle;
-        assert.notInclude(
-          titles(yield* ideas.list),
-          "Draft the follow-up email from your meeting notes",
-        );
+        for (let round = 0; round < 3; round++) {
+          yield* ideas.suggestMore;
+          yield* ideas.awaitIdle;
+        }
+        assert.notInclude(titles(yield* ideas.list), GENERAL_STARTERS[0]!.title);
       }).pipe(Effect.scoped, Effect.provide(layer));
     }),
   );

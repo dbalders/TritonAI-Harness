@@ -249,7 +249,6 @@ import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReact
 import * as SourceControlDiscovery from "./sourceControl/SourceControlDiscovery.ts";
 import * as OtlpEndpointCheck from "./observability/OtlpEndpointCheck.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
-import * as BotTaskComputer from "./bot/BotTaskComputer.ts";
 import * as SourceControlBuiltInDrivers from "./sourceControl/builtInDrivers.ts";
 import * as SourceControlProviderRegistry from "./sourceControl/SourceControlProviderRegistry.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
@@ -1347,7 +1346,6 @@ const layerWsRpc = (
       const providerInstallation = yield* makeProviderInstallation();
       const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
       const config = yield* ServerConfig.ServerConfig;
-      const botTaskComputer = yield* BotTaskComputer.BotTaskComputer;
       const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
       const storageCleanup = yield* StorageCleanup.StorageCleanup;
       const serverSettings = yield* ServerSettings.ServerSettingsService;
@@ -3236,10 +3234,6 @@ const layerWsRpc = (
           account.startLogin(currentSessionId, input),
         [WS_METHODS.serverPollAccountLogin]: (input) => account.pollLogin(currentSessionId, input),
         [WS_METHODS.serverSignOutAccount]: (_input) => account.signOut(currentSessionId),
-        [WS_METHODS.serverGetBotTaskComputer]: (_input) => botTaskComputer.getStatus,
-        [WS_METHODS.serverAllowBotTaskComputer]: (input) => botTaskComputer.allow(input),
-        [WS_METHODS.serverStopBotTaskComputer]: (input) => botTaskComputer.stop(input),
-        [WS_METHODS.serverSetBotTaskProject]: (input) => botTaskComputer.setProject(input),
         [WS_METHODS.serverGetMemoryStatus]: (_input) => memorySync.getStatus,
         [WS_METHODS.serverGetProjectMemory]: (input) => dailyMemory.getProjectMemory(input),
         [WS_METHODS.serverStartMemorySync]: (_input) => memorySync.start,

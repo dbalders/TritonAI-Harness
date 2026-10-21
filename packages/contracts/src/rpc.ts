@@ -1,11 +1,4 @@
 import {
-  ServerBotTaskComputerAllowInput,
-  ServerBotTaskComputerError,
-  ServerBotTaskComputerProjectInput,
-  ServerBotTaskComputerStatus,
-  ServerBotTaskComputerStopInput,
-} from "./botTaskComputer.ts";
-import {
   OrchestrationV2SearchThreadError,
   OrchestrationV2SearchThreadInput,
   OrchestrationV2SearchThreadResult,
@@ -560,10 +553,6 @@ export const WS_METHODS = {
   serverUpdateSettings: "server.updateSettings",
   serverTranscribeVoice: "server.transcribeVoice",
   serverGetTritonAiUsage: "server.getTritonAiUsage",
-  serverGetBotTaskComputer: "server.getBotTaskComputer",
-  serverAllowBotTaskComputer: "server.allowBotTaskComputer",
-  serverStopBotTaskComputer: "server.stopBotTaskComputer",
-  serverSetBotTaskProject: "server.setBotTaskProject",
   serverGetMemoryStatus: "server.getMemoryStatus",
   serverGetProjectMemory: "server.getProjectMemory",
   serverStartMemorySync: "server.startMemorySync",
@@ -930,30 +919,6 @@ const WsServerGetTritonAiUsageRpc = Rpc.make(WS_METHODS.serverGetTritonAiUsage, 
   payload: Schema.Struct({}),
   success: ServerTritonAiUsageSnapshot,
   error: Schema.Union([ServerTritonAiUsageError, EnvironmentAuthorizationError]),
-});
-
-const WsServerGetBotTaskComputerRpc = Rpc.make(WS_METHODS.serverGetBotTaskComputer, {
-  payload: Schema.Struct({}),
-  success: ServerBotTaskComputerStatus,
-  error: EnvironmentAuthorizationError,
-});
-
-const WsServerAllowBotTaskComputerRpc = Rpc.make(WS_METHODS.serverAllowBotTaskComputer, {
-  payload: ServerBotTaskComputerAllowInput,
-  success: ServerBotTaskComputerStatus,
-  error: Schema.Union([ServerBotTaskComputerError, EnvironmentAuthorizationError]),
-});
-
-const WsServerStopBotTaskComputerRpc = Rpc.make(WS_METHODS.serverStopBotTaskComputer, {
-  payload: ServerBotTaskComputerStopInput,
-  success: ServerBotTaskComputerStatus,
-  error: Schema.Union([ServerBotTaskComputerError, EnvironmentAuthorizationError]),
-});
-
-const WsServerSetBotTaskProjectRpc = Rpc.make(WS_METHODS.serverSetBotTaskProject, {
-  payload: ServerBotTaskComputerProjectInput,
-  success: ServerBotTaskComputerStatus,
-  error: Schema.Union([ServerBotTaskComputerError, EnvironmentAuthorizationError]),
 });
 
 const WsServerGetMemoryStatusRpc = Rpc.make(WS_METHODS.serverGetMemoryStatus, {
@@ -2326,10 +2291,6 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerUpdateSettingsRpc,
   WsServerTranscribeVoiceRpc,
   WsServerGetTritonAiUsageRpc,
-  WsServerGetBotTaskComputerRpc,
-  WsServerAllowBotTaskComputerRpc,
-  WsServerStopBotTaskComputerRpc,
-  WsServerSetBotTaskProjectRpc,
   WsServerGetMemoryStatusRpc,
   WsServerGetProjectMemoryRpc,
   WsServerStartMemorySyncRpc,
