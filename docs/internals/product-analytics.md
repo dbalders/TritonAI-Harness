@@ -61,8 +61,9 @@ turns without a send request, and interrupted or cancelled turns also complete. 
 is best effort, with no scan or backfill of provider history.
 
 The Ideas page reports `ideas.viewed` once per visit (a view at least 30 minutes after the
-previous one) with how many cards of each kind were showing, `ideas.feedback` for each press
-with its kind and the card's section, `ideas.sent` when a card's draft is sent, and
+previous one) with how many cards of each kind were showing, `ideas.feedback` for each recorded action
+(the first open of a card, dismiss, not relevant, less like this, or snooze; undo and reopening
+are not counted) with its kind and the card's section, `ideas.sent` when a card's draft is sent, and
 `ideas.generated` for each batch with whether the user asked for it, its outcome, and how many
 generated and starter cards it added. Card text, prompts, and file or thread names are never sent.
 
