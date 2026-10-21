@@ -20,6 +20,13 @@ export const makeProcessProbe = Effect.gen(function* () {
         }
       }
     });
+    socket.on("error", (error: NodeJS.ErrnoException) => {
+      // Windows can reset this connection when the fixture process is killed.
+      // Its close event still proves exit; surface other probe failures to the test.
+      if (error.code === "ECONNRESET") return;
+      Deferred.doneUnsafe(started, Effect.die(error));
+      Deferred.doneUnsafe(exited, Effect.die(error));
+    });
     socket.on("close", () => {
       sockets.delete(socket);
       Deferred.doneUnsafe(exited, Effect.void);
